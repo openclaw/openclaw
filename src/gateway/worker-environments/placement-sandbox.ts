@@ -1,11 +1,14 @@
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import type { SandboxBackendHandle } from "../../agents/sandbox/backend-handle.types.js";
 import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
 import { createSandboxFsBridge } from "../../agents/sandbox/fs-bridge.js";
 import { createPreprovisionedSshSandboxBackend } from "../../agents/sandbox/ssh-backend.js";
 import type { SandboxConfig, SandboxContext } from "../../agents/sandbox/types.js";
+import { resolveSessionSkillResourceMounts } from "../../agents/session-placement-skill-resources.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
+import { isWorkerEnvironmentAttachedTo } from "./placement-target.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import { resolveWorkerSshSandboxSettings } from "./ssh.js";
 
@@ -26,6 +29,7 @@ type RemoteExecPlacementSandbox = SandboxContext & {
       }
     | {
         backendId: "ssh";
+        backend: SandboxBackendHandle;
         placementNodeId?: never;
         placementEnvironmentId?: never;
         placementSessionId?: never;
@@ -53,7 +57,7 @@ function requireRemoteWorkspaceDir(value: string, nodeCarrier: boolean): string 
 export async function createRemoteExecPlacementSandbox(params: {
   config?: OpenClawConfig;
   environments: PlacementSandboxEnvironmentService;
-  localWorkspaceDir: string;
+  workspaceDir: string;
   placement: ActiveRemoteExecPlacement;
 }): Promise<RemoteExecPlacementSandbox> {
   const { placement } = params;
@@ -62,12 +66,8 @@ export async function createRemoteExecPlacementSandbox(params: {
   }
   const environment = params.environments.get(placement.environmentId);
   if (
-    !environment ||
-    environment.state !== "attached" ||
+    !isWorkerEnvironmentAttachedTo(environment, placement) ||
     environment.environmentId !== placement.environmentId ||
-    environment.ownerEpoch !== placement.activeOwnerEpoch ||
-    environment.attachedSessionIds.length !== 1 ||
-    environment.attachedSessionIds[0] !== placement.sessionId ||
     !environment.leaseId ||
     Boolean(environment.nodeDeviceId) === Boolean(environment.sshEndpoint)
   ) {
@@ -79,14 +79,14 @@ export async function createRemoteExecPlacementSandbox(params: {
   const assertCurrentEnvironment = () => {
     const current = params.environments.get(environment.environmentId);
     if (
-      current?.state !== "attached" ||
+      !isWorkerEnvironmentAttachedTo(current, {
+        sessionId: placement.sessionId,
+        activeOwnerEpoch: environment.ownerEpoch,
+      }) ||
       current.environmentId !== environment.environmentId ||
-      current.ownerEpoch !== environment.ownerEpoch ||
       current.leaseId !== environment.leaseId ||
       current.nodeDeviceId !== environment.nodeDeviceId ||
-      !isDeepStrictEqual(current.sshEndpoint, environment.sshEndpoint) ||
-      current.attachedSessionIds.length !== 1 ||
-      current.attachedSessionIds[0] !== placement.sessionId
+      !isDeepStrictEqual(current.sshEndpoint, environment.sshEndpoint)
     ) {
       throw new Error(`Remote-exec placement ${placement.sessionId} lost its exact environment`);
     }
@@ -107,9 +107,10 @@ export async function createRemoteExecPlacementSandbox(params: {
     enabled: true,
     placementExecutionMode: "remote-exec" as const,
     sessionKey: placement.sessionKey,
-    workspaceDir: params.localWorkspaceDir,
-    agentWorkspaceDir: params.localWorkspaceDir,
+    workspaceDir: params.workspaceDir,
+    agentWorkspaceDir: params.workspaceDir,
     workspaceAccess: "rw" as const,
+    readOnlyResourceMounts: resolveSessionSkillResourceMounts(),
     runtimeId,
     runtimeLabel: runtimeId,
     containerName: runtimeId,
@@ -157,8 +158,8 @@ export async function createRemoteExecPlacementSandbox(params: {
     {
       sessionKey: placement.sessionKey,
       scopeKey: placement.sessionKey,
-      workspaceDir: params.localWorkspaceDir,
-      agentWorkspaceDir: params.localWorkspaceDir,
+      workspaceDir: params.workspaceDir,
+      agentWorkspaceDir: params.workspaceDir,
       cfg,
     },
     { runtimeId, remoteWorkspaceDir },

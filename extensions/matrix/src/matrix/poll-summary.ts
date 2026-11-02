@@ -1,23 +1,16 @@
-// Matrix plugin module implements poll summary behavior.
 import type { MatrixMessageSummary } from "./actions/types.js";
 import {
   buildPollResultsSummary,
-  formatPollAsText,
   formatPollResultsAsText,
   isPollEventType,
   isPollStartType,
-  parsePollStartContent,
+  parsePollStart,
   resolvePollReferenceEventId,
   type PollStartContent,
 } from "./poll-types.js";
 import type { MatrixClient, MatrixRawEvent } from "./sdk.js";
 
-export type MatrixPollSnapshot = {
-  pollEventId: string;
-  triggerEvent: MatrixRawEvent;
-  rootEvent: MatrixRawEvent;
-  text: string;
-};
+export type MatrixPollSnapshot = NonNullable<Awaited<ReturnType<typeof fetchMatrixPollSnapshot>>>;
 
 export function resolveMatrixPollRootEventId(
   event: Pick<MatrixRawEvent, "event_id" | "type" | "content">,
@@ -35,6 +28,7 @@ async function readAllPollRelations(
   pollEventId: string,
 ): Promise<MatrixRawEvent[]> {
   const relationEvents: MatrixRawEvent[] = [];
+  const seenCursors = new Set<string>();
   let nextBatch: string | undefined;
   do {
     const page = await client.getRelations(roomId, pollEventId, "m.reference", undefined, {
@@ -42,6 +36,13 @@ async function readAllPollRelations(
     });
     relationEvents.push(...page.events);
     nextBatch = page.nextBatch ?? undefined;
+    // Encrypted pages may be empty; only a repeated cursor proves pagination cannot progress.
+    if (nextBatch && seenCursors.has(nextBatch)) {
+      throw new Error("Matrix poll pagination returned a repeated cursor");
+    }
+    if (nextBatch) {
+      seenCursors.add(nextBatch);
+    }
   } while (nextBatch);
   return relationEvents;
 }
@@ -50,7 +51,7 @@ export async function fetchMatrixPollSnapshot(
   client: MatrixClient,
   roomId: string,
   event: MatrixRawEvent,
-): Promise<MatrixPollSnapshot | null> {
+) {
   if (!isPollEventType(event.type)) {
     return null;
   }
@@ -62,24 +63,21 @@ export async function fetchMatrixPollSnapshot(
 
   const rootEvent = isPollStartType(event.type)
     ? event
-    : ((await client.getEvent(roomId, pollEventId)) as MatrixRawEvent);
+    : await client.getEvent(roomId, pollEventId);
   if (!isPollStartType(rootEvent.type)) {
     return null;
   }
 
   const pollStartContent = rootEvent.content as PollStartContent;
-  const pollSummary = parsePollStartContent(pollStartContent);
+  const pollSummary = parsePollStart(pollStartContent);
   if (!pollSummary) {
     return null;
   }
 
   const relationEvents = await readAllPollRelations(client, roomId, pollEventId);
   const pollResults = buildPollResultsSummary({
-    pollEventId,
-    roomId,
     sender: rootEvent.sender,
-    senderName: rootEvent.sender,
-    content: pollStartContent,
+    poll: pollSummary,
     relationEvents,
   });
 
@@ -87,7 +85,7 @@ export async function fetchMatrixPollSnapshot(
     pollEventId,
     triggerEvent: event,
     rootEvent,
-    text: pollResults ? formatPollResultsAsText(pollResults) : formatPollAsText(pollSummary),
+    text: formatPollResultsAsText(pollResults),
   };
 }
 

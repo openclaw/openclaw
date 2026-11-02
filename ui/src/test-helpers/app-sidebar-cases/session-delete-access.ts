@@ -1,36 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
-import {
-  createGatewayHarness,
-  createSessionsHarness,
-  mountSidebar,
-  type SidebarLifecycleState,
-  type TestSessionMenu,
-} from "../app-sidebar.ts";
+import { openRowSessionMenu as openSessionMenu } from "../app-sidebar-menu.ts";
+import { createGatewayHarness, createSessionsHarness, mountSidebar } from "../app-sidebar.ts";
 import {
   answerConfirmDialog,
   installDialogPolyfill,
   waitForConfirmDialogActions,
 } from "../modal-dialog.ts";
+import { openSubmenu, selectMenuValue } from "../session-menu.ts";
 import { waitForFast } from "../wait-for.ts";
-
-async function openSessionMenu(sidebar: SidebarLifecycleState, key: string) {
-  const button = sidebar.querySelector<HTMLButtonElement>(
-    `[data-session-key="${key}"] [data-session-menu="true"]`,
-  );
-  if (!button) {
-    throw new Error(`expected menu button for ${key}`);
-  }
-  button.click();
-  await sidebar.updateComplete;
-  const menu = sidebar.querySelector<TestSessionMenu>("openclaw-session-menu");
-  if (!menu) {
-    throw new Error("expected session menu");
-  }
-  await menu.updateComplete;
-  return menu;
-}
 
 describe("AppSidebar session delete access", () => {
   it("keeps preserved worktrees when the operator lacks admin access", async () => {
@@ -73,7 +52,8 @@ describe("AppSidebar session delete access", () => {
     const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => undefined);
     try {
       const menu = await openSessionMenu(sidebar, archived.key);
-      menu.querySelector<HTMLButtonElement>('[data-shortcut="d"]')?.click();
+      await openSubmenu(menu, "Advanced");
+      await selectMenuValue(menu, "delete");
       answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
       await waitForFast(() => expect(harness.deleteSession).toHaveBeenCalledOnce());
       await waitForFast(() => expect(alertSpy).toHaveBeenCalledOnce());

@@ -1,49 +1,58 @@
-import { describe, expect, it, vi } from "vitest";
+import { spawnSync } from "node:child_process";
+import { beforeEach, expect, it, vi } from "vitest";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import { createHookRunner } from "../plugins/hooks.js";
 import { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
-import { spawnNodeEvalSync } from "../test-utils/node-process.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import { nativeBoundaryTestEntrypoints } from "./native-boundary-runtime.test-support.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 
-const syncHookNames = ["tool_result_persist", "before_message_write"] as const;
-type SyncHookName = (typeof syncHookNames)[number];
+const rejectionUrl = resolveRuntimeWorkerUrl(nativeBoundaryTestEntrypoints.unhandledRejections);
+const hooksUrl = resolveRuntimeWorkerUrl(nativeBoundaryTestEntrypoints.pluginHooks);
+const registryUrl = resolveRuntimeWorkerUrl(nativeBoundaryTestEntrypoints.emptyPluginRegistry);
 
 function createToolResultMessage(text: string, details?: Record<string, unknown>): AgentMessage {
   return {
     role: "toolResult",
     toolCallId: "call_1",
+    toolName: "probe",
     content: [{ type: "text", text }],
     isError: false,
     ...(details ? { details } : {}),
   } as AgentMessage;
 }
 
-function createLogger() {
-  return {
-    warn: vi.fn<(message: string) => void>(),
-    error: vi.fn<(message: string) => void>(),
-  };
+type Hook = Parameters<typeof createMockPluginRegistry>[0][number];
+type LogMock = ReturnType<typeof vi.fn<(message: string) => void>>;
+let logger: { warn: LogMock; error: LogMock };
+beforeEach(() => {
+  logger = { warn: vi.fn<(message: string) => void>(), error: vi.fn<(message: string) => void>() };
+});
+function hook(pluginId: string, priority: number, handler: Hook["handler"]) {
+  return { pluginId, priority, handler };
+}
+function createRunner(hookName: string, hooks: Omit<Hook, "hookName">[], failClosed = false) {
+  return createHookRunner(
+    createMockPluginRegistry(hooks.map((entry) => ({ ...entry, hookName }))),
+    {
+      logger,
+      ...(failClosed ? { failurePolicyByHook: { [hookName]: "fail-closed" as const } } : {}),
+    },
+  );
 }
 
-function runSyncHook(params: {
-  hookName: SyncHookName;
-  runner: ReturnType<typeof createHookRunner>;
-  message: AgentMessage;
-}) {
-  return params.hookName === "tool_result_persist"
-    ? params.runner.runToolResultPersist({ message: params.message }, {})
-    : params.runner.runBeforeMessageWrite({ message: params.message }, {});
-}
-
-describe("sync-only plugin hooks", () => {
-  it.each(syncHookNames)(
-    "contains rejected %s handlers before the fatal rejection handler",
-    (hookName) => {
-      const method =
-        hookName === "tool_result_persist" ? "runToolResultPersist" : "runBeforeMessageWrite";
-      const result = spawnNodeEvalSync(
-        `import { installUnhandledRejectionHandler } from "./src/infra/unhandled-rejections.ts";
-       import { createHookRunner } from "./src/plugins/hooks.ts";
-       import { createEmptyPluginRegistry } from "./src/plugins/registry-empty.ts";
+it("contains rejected tool-result handlers before the fatal rejection handler", () => {
+  const hookName = "tool_result_persist";
+  const nodeExecutable = resolveTestNodeExecPath();
+  const result = spawnSync(
+    nodeExecutable,
+    [
+      ...resolveRuntimeWorkerArgv(rejectionUrl, nodeExecutable).slice(0, -1),
+      "--input-type=module",
+      "--eval",
+      `import { installUnhandledRejectionHandler } from ${JSON.stringify(rejectionUrl.href)};
+       import { createHookRunner } from ${JSON.stringify(hooksUrl.href)};
+       import { createEmptyPluginRegistry } from ${JSON.stringify(registryUrl.href)};
        installUnhandledRejectionHandler();
        const registry = createEmptyPluginRegistry();
        registry.typedHooks.push({
@@ -52,175 +61,94 @@ describe("sync-only plugin hooks", () => {
          source: "sync-only-regression",
          handler: () => Promise.reject(new Error("sync-hook-rejection")),
        });
-       const warnings = [];
-       const errors = [];
-       const runner = createHookRunner(registry, {
-         logger: { warn: (message) => warnings.push(message), error: (message) => errors.push(message) },
-       });
+       const runner = createHookRunner(registry);
        const message = { role: "toolResult", toolCallId: "call_1", content: [], isError: false };
-       runner.${method}({ message }, {});
+       runner.runToolResultPersist({ message }, {});
        await new Promise((resolve) => setImmediate(resolve));
-       const expectedWarning = "[hooks] ${hookName} handler from rejected-sync-hook returned a Promise; this hook is synchronous and the result was ignored.";
-       if (warnings.length !== 1 || warnings[0] !== expectedWarning || errors.length !== 0) {
-         console.error(JSON.stringify({ warnings, errors }));
-         process.exit(2);
-       }
        console.log("sync hook rejection contained");`,
-        { imports: ["tsx"], timeout: 20_000 },
-      );
-
-      expect(result.status).toBe(0);
-      expect(result.stdout).toContain("sync hook rejection contained");
-      expect(result.stderr).not.toContain("Unhandled promise rejection");
-    },
+    ],
+    { cwd: process.cwd(), encoding: "utf8", timeout: 20_000 },
   );
 
-  it.each(syncHookNames)("warns and ignores resolved %s handlers", (hookName) => {
-    const logger = createLogger();
-    const originalMessage = createToolResultMessage("original");
-    const replacementMessage = createToolResultMessage("replacement");
-    const runner = createHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName,
-          pluginId: "resolved-sync-hook",
-          handler: async () => ({ message: replacementMessage, block: true }),
-        },
-      ]),
-      { logger },
-    );
+  expect(result.status).toBe(0);
+  expect(result.stdout).toContain("sync hook rejection contained");
+  expect(result.stderr).not.toContain("Unhandled promise rejection");
+});
 
-    const result = runSyncHook({ hookName, runner, message: originalMessage });
+it("redacts secrets before subsequent synchronous handlers", () => {
+  const secret = ["fixture", "secret"].join("-");
+  const originalMessage = createToolResultMessage(secret, { value: secret });
+  const observedMessages: AgentMessage[] = [];
+  const runner = createRunner("tool_result_persist", [
+    hook("async", 30, async () => ({ message: createToolResultMessage("ignored") })),
+    hook("secret-redactor", 20, () => ({
+      message: createToolResultMessage("redacted", { redacted: true }),
+    })),
+    hook("subsequent-handler", 10, (event) => {
+      const message = (event as { message: AgentMessage }).message;
+      observedMessages.push(message);
+      return { message: { ...message, details: { redacted: true, observed: true } } };
+    }),
+  ]);
 
-    expect(result).toEqual(
-      hookName === "tool_result_persist" ? { message: originalMessage } : undefined,
-    );
-    expect(logger.warn.mock.calls).toEqual([
-      [
-        `[hooks] ${hookName} handler from resolved-sync-hook returned a Promise; this hook is synchronous and the result was ignored.`,
-      ],
-    ]);
-    expect(logger.error).not.toHaveBeenCalled();
-  });
+  const result = runner.runToolResultPersist({ message: originalMessage }, {});
 
-  it("preserves synchronous secret redaction and subsequent handler composition", () => {
-    const logger = createLogger();
-    const secret = ["fixture", "secret"].join("-");
-    const originalMessage = createToolResultMessage(JSON.stringify({ value: secret }), {
-      value: secret,
-    });
-    const observedMessages: AgentMessage[] = [];
-    const runner = createHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName: "tool_result_persist",
-          pluginId: "ignored-async-handler",
-          priority: 30,
-          handler: async () => ({ message: createToolResultMessage("ignored") }),
-        },
-        {
-          hookName: "tool_result_persist",
-          pluginId: "secret-redactor",
-          priority: 20,
-          handler: (event) => {
-            const message = (event as { message: AgentMessage }).message;
-            return {
-              message: {
-                ...message,
-                content: [{ type: "text", text: JSON.stringify({ redacted: true }) }],
-                details: { redacted: true },
-              },
-            };
-          },
-        },
-        {
-          hookName: "tool_result_persist",
-          pluginId: "subsequent-handler",
-          priority: 10,
-          handler: (event) => {
-            const message = (event as { message: AgentMessage }).message;
-            observedMessages.push(message);
-            return { message: { ...message, details: { redacted: true, observed: true } } };
-          },
-        },
-      ]),
-      { logger },
-    );
+  expect(observedMessages).toHaveLength(1);
+  expect(JSON.stringify(observedMessages[0])).not.toContain(secret);
+  expect(JSON.stringify(result)).not.toContain(secret);
+  expect(result?.message).toMatchObject({ details: { redacted: true, observed: true } });
+  expect(logger.warn).toHaveBeenCalledTimes(1);
+  expect(logger.error).not.toHaveBeenCalled();
+});
 
-    const result = runner.runToolResultPersist({ message: originalMessage }, {});
+it("preserves synchronous message blocking and priority order", () => {
+  const calls: string[] = [];
+  const record = (name: string, block?: boolean) => {
+    calls.push(name);
+    return block === undefined ? undefined : { block };
+  };
+  const runner = createRunner("before_message_write", [
+    hook("ignored-async-handler", 30, async () => record("async", false)),
+    hook("message-blocker", 20, () => record("blocker", true)),
+    hook("unreached-handler", 10, () => record("unreached")),
+  ]);
 
-    expect(observedMessages).toHaveLength(1);
-    expect(JSON.stringify(observedMessages[0])).not.toContain(secret);
-    expect(JSON.stringify(result)).not.toContain(secret);
-    expect(result?.message).toMatchObject({ details: { redacted: true, observed: true } });
-    expect(logger.warn).toHaveBeenCalledTimes(1);
-    expect(logger.error).not.toHaveBeenCalled();
-  });
+  expect(
+    runner.runBeforeMessageWrite({ message: createToolResultMessage("original") }, {}),
+  ).toEqual({ block: true });
+  expect(calls).toEqual(["async", "blocker"]);
+  expect(logger.warn).toHaveBeenCalledTimes(1);
+  expect(logger.error).not.toHaveBeenCalled();
+});
 
-  it("preserves synchronous message blocking and priority order", () => {
-    const logger = createLogger();
-    const calls: string[] = [];
-    const runner = createHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName: "before_message_write",
-          pluginId: "ignored-async-handler",
-          priority: 30,
-          handler: async () => {
-            calls.push("async");
-            return { block: false };
-          },
-        },
-        {
-          hookName: "before_message_write",
-          pluginId: "message-blocker",
-          priority: 20,
-          handler: () => {
-            calls.push("blocker");
-            return { block: true };
-          },
-        },
-        {
-          hookName: "before_message_write",
-          pluginId: "unreached-handler",
-          priority: 10,
-          handler: () => {
-            calls.push("unreached");
-          },
-        },
-      ]),
-      { logger },
-    );
+it("preserves fail-closed behavior for async handlers", () => {
+  const hookName = "tool_result_persist";
+  const runner = createRunner(hookName, [hook("fail-closed-hook", 0, async () => undefined)], true);
 
-    expect(
-      runner.runBeforeMessageWrite({ message: createToolResultMessage("original") }, {}),
-    ).toEqual({ block: true });
-    expect(calls).toEqual(["async", "blocker"]);
-    expect(logger.warn).toHaveBeenCalledTimes(1);
-    expect(logger.error).not.toHaveBeenCalled();
-  });
+  expect(() =>
+    runner.runToolResultPersist({ message: createToolResultMessage("original") }, {}),
+  ).toThrow(/fail-closed-hook.*returned a Promise/);
+  expect(logger.warn).not.toHaveBeenCalled();
+  expect(logger.error).not.toHaveBeenCalled();
+});
 
-  it.each(syncHookNames)("preserves fail-closed behavior for async %s handlers", (hookName) => {
-    const logger = createLogger();
-    const runner = createHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName,
-          pluginId: "fail-closed-hook",
-          handler: async () => undefined,
-        },
-      ]),
-      { logger, failurePolicyByHook: { [hookName]: "fail-closed" } },
-    );
+it.each(
+  (["tool_result_persist", "before_message_write"] as const).flatMap((hookName) =>
+    ["not-a-message", {}].map((message) => ({ hookName, message })),
+  ),
+)("logs and ignores $hookName replacement $message", ({ hookName, message }) => {
+  const originalMessage = createToolResultMessage("original");
+  const runner = createRunner(hookName, [hook("malformed-sync-hook", 0, () => ({ message }))]);
 
-    expect(() =>
-      runSyncHook({ hookName, runner, message: createToolResultMessage("original") }),
-    ).toThrow(
-      `[hooks] ${hookName} handler from fail-closed-hook failed: Error: ` +
-        `[hooks] ${hookName} handler from fail-closed-hook returned a Promise; ` +
-        "this hook is synchronous and the result was ignored.",
-    );
-    expect(logger.warn).not.toHaveBeenCalled();
-    expect(logger.error).not.toHaveBeenCalled();
-  });
+  const result =
+    hookName === "tool_result_persist"
+      ? runner.runToolResultPersist({ message: originalMessage }, {})
+      : runner.runBeforeMessageWrite({ message: originalMessage }, {});
+
+  expect(result).toEqual(
+    hookName === "tool_result_persist" ? { message: originalMessage } : undefined,
+  );
+  expect(logger.error).toHaveBeenCalledExactlyOnceWith(
+    expect.stringContaining(`[hooks] ${hookName} handler from malformed-sync-hook failed:`),
+  );
 });

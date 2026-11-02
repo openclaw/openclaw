@@ -1,5 +1,3 @@
-// Gateway WebSocket node connects reconcile the approved command/capability surface.
-import type { ConnectParams } from "../../../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfig } from "../../../config/io.js";
 import {
   approveNodePairing,
@@ -7,11 +5,13 @@ import {
   requestNodePairing,
 } from "../../../infra/device-pairing-node.js";
 import { getPairedDevice } from "../../../infra/device-pairing.js";
+import { normalizeNodeApprovalSurfaceList } from "../../../infra/node-pairing-surface.js";
 import { AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING } from "../../auth-rate-limit.js";
 import { ADMIN_SCOPE, PAIRING_SCOPE, WRITE_SCOPE } from "../../method-scopes.js";
 import { resolveEffectiveComputerUseDescriptor } from "../../node-computer-use-descriptor.js";
 import { reconcileNodePairingOnConnect } from "../../node-connect-reconcile.js";
 import { filterLegacyNodeProtocolFeatures } from "../../node-legacy-protocol-filter.js";
+import type { NodeSessionConnectParams } from "../../node-registry.js";
 import { withSerializedRateLimitAttempt } from "../../rate-limit-attempt-serialization.js";
 import type {
   DeviceAuthorizedGatewayConnect,
@@ -22,43 +22,6 @@ class NodePairingRateLimitError extends Error {
   constructor(readonly retryAfterMs: number) {
     super("node pairing rate limited");
   }
-}
-
-async function requestNodePairingFromConnect(params: {
-  input: Parameters<typeof requestNodePairing>[0];
-  rateLimiter?: import("../../auth-rate-limit.js").AuthRateLimiter;
-  clientIp?: string;
-  pairedReconnect?: boolean;
-  cleanupClaim?: import("../../../infra/device-pairing-node.js").NodePairingCleanupClaim;
-  reapprovalCoordinator?: import("../../node-reapproval-coordinator.js").NodeReapprovalCoordinator;
-}): Promise<Awaited<ReturnType<typeof requestNodePairing>> | null> {
-  if (params.pairedReconnect) {
-    return params.reapprovalCoordinator
-      ? await params.reapprovalCoordinator.request({
-          input: params.input,
-          cleanupClaim: params.cleanupClaim,
-        })
-      : await requestNodePairing(params.input);
-  }
-  if (!params.rateLimiter) {
-    return await requestNodePairing(params.input);
-  }
-  return await withSerializedRateLimitAttempt({
-    ip: params.clientIp,
-    scope: AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING,
-    run: async () => {
-      const rateCheck = params.rateLimiter?.check(
-        params.clientIp,
-        AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING,
-      );
-      if (rateCheck && !rateCheck.allowed) {
-        throw new NodePairingRateLimitError(rateCheck.retryAfterMs);
-      }
-      const result = await requestNodePairing(params.input);
-      params.rateLimiter?.recordFailure(params.clientIp, AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING);
-      return result;
-    },
-  });
 }
 
 export async function prepareGatewayNodeConnect(
@@ -115,13 +78,35 @@ export async function prepareGatewayNodeConnect(
       reportedClientIp,
       initialSurfaceSilent: deviceApprovedNonInteractively,
       requestPairing: async (input) => {
-        return await requestNodePairingFromConnect({
-          input,
-          rateLimiter: authRateLimiter,
-          clientIp: browserRateLimitClientIp,
-          pairedReconnect: pairedNode !== null,
-          cleanupClaim: pendingNodePairingCleanup.value,
-          reapprovalCoordinator: nodeReapprovalCoordinator,
+        if (pairedNode !== null) {
+          return nodeReapprovalCoordinator
+            ? await nodeReapprovalCoordinator.request({
+                input,
+                cleanupClaim: pendingNodePairingCleanup.value,
+              })
+            : await requestNodePairing(input);
+        }
+        if (!authRateLimiter) {
+          return await requestNodePairing(input);
+        }
+        return await withSerializedRateLimitAttempt({
+          ip: browserRateLimitClientIp,
+          scope: AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING,
+          run: async () => {
+            const rateCheck = authRateLimiter.check(
+              browserRateLimitClientIp,
+              AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING,
+            );
+            if (!rateCheck.allowed) {
+              throw new NodePairingRateLimitError(rateCheck.retryAfterMs);
+            }
+            const result = await requestNodePairing(input);
+            authRateLimiter.recordFailure(
+              browserRateLimitClientIp,
+              AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING,
+            );
+            return result;
+          },
         });
       },
     });
@@ -138,17 +123,34 @@ export async function prepareGatewayNodeConnect(
     }
     throw error;
   }
-  // SSH verification proves machine ownership, while an admin-minted setup code
-  // records that admin's consent to this machine's initial declared surface.
-  // Approve either initial surface directly; later manifest upgrades still prompt.
+  // Same-host silent pairing trusts the local user; SSH proves machine ownership,
+  // and an admin-minted setup code records consent. Stored local provenance alone
+  // cannot authorize a later remote/browser connection or override the local opt-out.
+  const isLocalApprovalCurrent = () =>
+    !context.handler.isClosed() &&
+    getRuntimeConfig().gateway?.nodes?.pairing?.autoApproveLocal !== false;
+  const approveLocalSurface =
+    deviceApprovedVia === "silent" &&
+    isLocalApprovalCurrent() &&
+    (state.pairingLocality === "direct_local" ||
+      state.pairingLocality === "shared_secret_loopback_local") &&
+    !context.hasProxyHeaders &&
+    !context.hasBrowserOriginHeader &&
+    !state.isControlUi &&
+    !state.isWebchat;
+  // Only the initial surface inherits device approval; manifest upgrades still prompt.
   if (
-    (deviceApprovedVia === "ssh-verified" || deviceApprovedVia === "bootstrap") &&
+    (approveLocalSurface ||
+      deviceApprovedVia === "ssh-verified" ||
+      deviceApprovedVia === "bootstrap") &&
     !pairedNode &&
     reconciliation.pendingPairing
   ) {
     const surfaceRequestId = reconciliation.pendingPairing.request.requestId;
     const approvedSurface = await approveNodePairing(surfaceRequestId, {
       callerScopes: [ADMIN_SCOPE, PAIRING_SCOPE, WRITE_SCOPE],
+      initialOnly: true,
+      isApprovalCurrent: approveLocalSurface ? isLocalApprovalCurrent : undefined,
     });
     if (approvedSurface && "node" in approvedSurface) {
       logGateway.info(
@@ -180,28 +182,24 @@ export async function prepareGatewayNodeConnect(
   if (reconciliation.pendingPairing) {
     broadcastNodePairingResult(reconciliation.pendingPairing);
   }
-  const nodeConnectParams = connectParams as ConnectParams & {
-    declaredCaps?: string[];
-    declaredCommands?: string[];
-    declaredComputerUse?: unknown;
-    declaredPermissions?: Record<string, boolean>;
-    sessionCapsCeiling?: string[];
-    sessionCommandsCeiling?: string[];
-  };
+  const nodeConnectParams = connectParams as NodeSessionConnectParams;
   nodeConnectParams.declaredCaps = reconciliation.declaredCaps;
   nodeConnectParams.declaredCommands = reconciliation.declaredCommands;
+  nodeConnectParams.withheldCommands = reconciliation.withheldCommands;
   nodeConnectParams.declaredComputerUse = reconciliation.declaredComputerUse;
   nodeConnectParams.declaredPermissions = reconciliation.declaredPermissions;
   const pluginSurfaces = pluginNodeCapabilities.map((surface) => surface.surface);
-  if (usesLegacyNodeProtocol) {
-    const sessionCeiling = filterLegacyNodeProtocolFeatures({
-      caps: reconciliation.declaredCaps,
-      commands: reconciliation.declaredCommands,
-      pluginSurfaces,
-    });
-    nodeConnectParams.sessionCapsCeiling = sessionCeiling.caps;
-    nodeConnectParams.sessionCommandsCeiling = sessionCeiling.commands;
-  }
+  // Policy may later restore an approved command, but neither config nor an
+  // approval can exceed the declaration or this connection's protocol ceiling.
+  const declaredFeatures = {
+    caps: normalizeNodeApprovalSurfaceList(connectParams.caps),
+    commands: normalizeNodeApprovalSurfaceList(connectParams.commands),
+  };
+  const sessionCeiling = usesLegacyNodeProtocol
+    ? filterLegacyNodeProtocolFeatures({ ...declaredFeatures, pluginSurfaces })
+    : declaredFeatures;
+  nodeConnectParams.sessionCapsCeiling = sessionCeiling.caps;
+  nodeConnectParams.sessionCommandsCeiling = sessionCeiling.commands;
   const effectiveFeatures = usesLegacyNodeProtocol
     ? filterLegacyNodeProtocolFeatures({
         caps: reconciliation.effectiveCaps,

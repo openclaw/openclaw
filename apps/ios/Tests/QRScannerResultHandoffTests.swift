@@ -70,52 +70,50 @@ struct QRScannerResultHandoffTests {
     }
 }
 
-struct GatewaySetupLinkStagingTests {
-    private static func link() -> GatewayConnectDeepLink {
-        GatewayConnectDeepLink(
-            host: "gateway.example.com",
-            port: 443,
-            tls: true,
-            bootstrapToken: "bootstrap",
-            token: "token",
-            password: "password")
+struct OnboardingQRCodeCompletionTests {
+    private static let link = GatewayConnectDeepLink(
+        host: "gateway.example.com",
+        port: 443,
+        tls: true,
+        contextPath: "/openclaw",
+        bootstrapToken: "bootstrap",
+        token: nil,
+        password: nil)
+
+    @Test func `matching scanned gateway completes directly into app`() {
+        var completion = OnboardingQRCodeCompletion()
+        completion.stage(Self.link)
+
+        #expect(completion.destination(
+            connectedStableID: "manual|gateway.example.com|443|/openclaw") == .mainUI)
+        #expect(completion.destination(
+            connectedStableID: "manual|gateway.example.com|443|/openclaw") == .successScreen)
     }
 
-    @Test func `staged link is consumed once`() {
-        var staging = GatewaySetupLinkStaging()
-        let link = Self.link()
+    @Test func `different gateway falls back to success screen and consumes scanned completion`() {
+        var completion = OnboardingQRCodeCompletion()
+        completion.stage(Self.link)
 
-        staging.stage(link)
-
-        #expect(staging.take() == link)
-        #expect(staging.take() == nil)
+        #expect(completion.destination(
+            connectedStableID: "manual|different.example.com|443") == .successScreen)
+        #expect(completion.destination(
+            connectedStableID: "manual|gateway.example.com|443|/openclaw") == .successScreen)
     }
 
-    @Test func `cancel discards staged credentials`() {
-        var staging = GatewaySetupLinkStaging()
-        staging.stage(Self.link())
+    @Test func `cancelled scanned completion retains success screen for same gateway`() {
+        var completion = OnboardingQRCodeCompletion()
+        completion.stage(Self.link)
+        completion.cancel()
 
-        let cancelled = staging.cancel()
-
-        #expect(cancelled)
-        #expect(staging.link == nil)
-        let cancelledAgain = staging.cancel()
-        #expect(!cancelledAgain)
+        #expect(completion.destination(
+            connectedStableID: "manual|gateway.example.com|443|/openclaw") == .successScreen)
     }
 
-    @Test func `new setup link replaces the pending candidate`() {
-        var staging = GatewaySetupLinkStaging()
-        let replacement = GatewayConnectDeepLink(
-            host: "replacement.example.com",
-            port: 8443,
-            tls: true,
-            bootstrapToken: nil,
-            token: nil,
-            password: nil)
-        staging.stage(Self.link())
-        staging.stage(replacement)
+    @Test func `manual connection retains success screen`() {
+        var completion = OnboardingQRCodeCompletion()
 
-        #expect(staging.take() == replacement)
+        #expect(completion.destination(
+            connectedStableID: "manual|gateway.example.com|443") == .successScreen)
     }
 }
 

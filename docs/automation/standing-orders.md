@@ -19,7 +19,7 @@ Standing orders grant your agent **permanent operating authority** for defined p
 
 Standing orders are defined in your [agent workspace](/concepts/agent-workspace) files. The recommended approach is to include them directly in `AGENTS.md` (which is auto-injected every session) so the agent always has them in context. For larger configurations, you can also place them in a dedicated file like `standing-orders.md` and reference it from `AGENTS.md`.
 
-For a strict, ephemeral CI or scripting entry point, use [`openclaw agent exec`](/cli/agent#agent-exec). It skips workspace bootstrap files, so each one-shot run is self-contained rather than governed by standing orders.
+For an ephemeral CI or scripting entry point, use [`openclaw agent exec`](/cli/agent#agent-exec). It skips creation of workspace bootstrap files, but existing files such as `AGENTS.md` are still injected by default, including any standing orders they contain. To omit automatic workspace-context injection in the embedded runtime, set [`agents.defaults.contextInjection: "never"`](/gateway/config-agents/workspace-and-bootstrap#agents.defaults.contextinjection), unless overridden per agent.
 
 Each program specifies:
 
@@ -238,3 +238,4 @@ Each program should have:
 - [Hooks](/automation/hooks): event-driven scripts for agent lifecycle events.
 - [Webhooks](/automation/cron-jobs#webhooks): inbound HTTP event triggers.
 - [Agent workspace](/concepts/agent-workspace): where standing orders live, including the full list of auto-injected bootstrap files (`AGENTS.md`, `SOUL.md`, etc.).
+- [Goal](/tools/goal) — durable per-session objectives and the `/goal` controls

@@ -1,20 +1,20 @@
-/** Store-backed SecretRef provisioning for gateway auth tokens setup generates itself. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { randomToken } from "../commands/random-token.js";
 import type { SecretRef } from "../config/types.secrets.js";
 import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
-import { readSecretStoreValue, writeSecretStoreEntry } from "../secrets/store/secret-store.js";
+import {
+  assertSecretStoreValue,
+  readSecretStoreValue,
+  writeSecretStoreEntry,
+} from "../secrets/store/secret-store.js";
 
 /** Store entry name for the gateway token; mirrors the documented env-var contract. */
 const GATEWAY_AUTH_TOKEN_STORE_NAME = "OPENCLAW_GATEWAY_TOKEN";
 
 const GATEWAY_AUTH_TOKEN_STORE_SCOPE = { kind: "team" } as const;
 
-/** Minimal config shape needed to pick the store provider alias. */
-type GatewayTokenStoreRefConfig = Parameters<typeof resolveDefaultSecretProviderAlias>[0];
-
-function readStoredGatewayToken(): string | undefined {
-  const existing = readSecretStoreValue({
+async function readStoredGatewayToken(): Promise<string | undefined> {
+  const existing = await readSecretStoreValue({
     scope: GATEWAY_AUTH_TOKEN_STORE_SCOPE,
     name: GATEWAY_AUTH_TOKEN_STORE_NAME,
   });
@@ -32,14 +32,15 @@ function readStoredGatewayToken(): string | undefined {
  * the gateway unauthenticatable, while an entry whose config write later fails is simply
  * picked up by the next run.
  */
-export function provisionGatewayTokenStoreRef(params: {
-  config: GatewayTokenStoreRefConfig;
+export async function provisionGatewayTokenStoreRef(params: {
+  config: Parameters<typeof resolveDefaultSecretProviderAlias>[0];
   token?: string;
-}): { ref: SecretRef; token: string } {
-  const stored = params.token ? undefined : readStoredGatewayToken();
+}): Promise<{ ref: SecretRef; token: string }> {
+  const stored = params.token ? undefined : await readStoredGatewayToken();
   const token = params.token ?? stored ?? randomToken();
+  assertSecretStoreValue(token, "secret", GATEWAY_AUTH_TOKEN_STORE_NAME);
   if (token !== stored) {
-    writeSecretStoreEntry({
+    await writeSecretStoreEntry({
       scope: GATEWAY_AUTH_TOKEN_STORE_SCOPE,
       name: GATEWAY_AUTH_TOKEN_STORE_NAME,
       value: token,

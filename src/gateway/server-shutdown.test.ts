@@ -1,29 +1,74 @@
-import { describe, expect, it, vi } from "vitest";
-import { runGatewayShutdownSteps } from "./server-shutdown.js";
+import { expect, it, vi } from "vitest";
+import { createDeferredCore } from "../shared/deferred.js";
+import {
+  hasGatewayCleanupRetainedError,
+  isGatewayCleanupRetainedError,
+  resolveGatewayShutdownNotice,
+  runGatewayCloseSteps,
+} from "./server-shutdown.js";
+import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
 
-describe("gateway shutdown steps", () => {
-  it("names an unavailable module step and continues the remaining shutdown", async () => {
-    const missingModule = Object.assign(new Error("Cannot find module 'rotated-chunk.js'"), {
-      code: "ERR_MODULE_NOT_FOUND",
-    });
-    const loadStopModule = vi.fn(async () => {
-      throw missingModule;
-    });
-    const closeGateway = vi.fn(async () => {});
-    const messages: string[] = [];
-
-    await runGatewayShutdownSteps({
-      steps: [
-        { name: "gateway lifetime sidecars", run: loadStopModule },
-        { name: "gateway close", run: closeGateway },
-      ],
-      onError: (message) => messages.push(message),
-    });
-
-    expect(closeGateway).toHaveBeenCalledOnce();
-    expect(messages).toEqual([
-      "shutdown step failed (gateway lifetime sidecars): Cannot find module 'rotated-chunk.js'",
-    ]);
-    expect(messages.join("\n")).not.toContain("shutdown error");
+it("omits invalid restart metadata and normalizes the reason", () => {
+  expect(
+    resolveGatewayShutdownNotice({ reason: "  upgrade  ", restartExpectedMs: Number.NaN }),
+  ).toEqual({
+    reason: "upgrade",
+  });
+  expect(resolveGatewayShutdownNotice({ restartExpectedMs: -2 })).toEqual({
+    reason: "gateway stopping",
+    restartExpectedMs: 0,
   });
 });
+
+it.for(["optional", "fatal", "required"])(
+  "joins required work and preserves fatal close status (%s)",
+  async (mode) => {
+    const fatal = mode === "fatal";
+    const required = mode === "required";
+    vi.useFakeTimers();
+    const sidecar = createDeferredCore();
+    const sidecars = createGatewaySidecarStopOwner();
+    sidecars.publish({ name: "synthetic-held-worker", stop: () => sidecar.promise });
+    const close = vi.fn(async () => {
+      if (fatal) {
+        throw new Error("synthetic persistence failure");
+      }
+    });
+    const onError = vi.fn();
+    const noWork = async () => undefined;
+    const closing = runGatewayCloseSteps({
+      owner: {
+        connectionWork: { drain: required ? sidecars.stop : noWork },
+        stopConnectionDependentSidecars: noWork,
+        stopRegisteredGatewayLifetimeSidecars: required ? noWork : sidecars.stop,
+        stopRegisteredPostReadySidecars: noWork,
+        runClosePrelude: noWork,
+        sealAndJoinRegisteredSidecarStops: noWork,
+      },
+      exitAfterClose: true,
+      close,
+      onError,
+    }).catch((error: unknown) => error);
+    try {
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(close).toHaveBeenCalledTimes(required ? 0 : 1);
+      sidecar.resolve();
+      const failure = await closing;
+      if (required) {
+        expect(failure).toBeUndefined();
+        expect(close).toHaveBeenCalledOnce();
+      } else {
+        expect(hasGatewayCleanupRetainedError(failure)).toBe(true);
+        expect(isGatewayCleanupRetainedError(failure)).toBe(!fatal);
+        expect(failure).toHaveProperty("message", expect.stringContaining("synthetic-held-worker"));
+      }
+      expect(onError).toHaveBeenCalledWith(
+        expect.stringMatching(/cleanup exceeded 5000ms; resources remain; pending: shutdown\./),
+      );
+    } finally {
+      sidecar.resolve();
+      await closing;
+      vi.useRealTimers();
+    }
+  },
+);

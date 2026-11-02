@@ -1,12 +1,12 @@
-// Qa Lab plugin module implements generic QA evidence gallery data.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { pathToFileURL } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
+import { isPathInside, readFileWindowFully } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   asNullableRecord as readRecord,
   readStringValue,
@@ -19,17 +19,23 @@ import type {
   QaEvidenceProducerContext,
   QaEvidenceProducerContextFile,
 } from "../shared/evidence-gallery-types.js";
-import { toRepoPath, toRepoRelativePath } from "./cli-paths.js";
 import {
+  repoRootTokenArtifactPath,
+  resolveQaArtifactPath,
+  toRepoPath,
+  toRepoRelativePath,
+} from "./cli-paths.js";
+import {
+  getEffectiveQaEvidenceEntries,
   QA_EVIDENCE_FILENAME,
   validateQaEvidenceSummaryJson,
   type QaEvidenceStatus,
   type QaEvidenceSummaryEntry,
+  type QaEvidenceSummaryJson,
 } from "./evidence-summary.js";
 
 const TEXT_PREVIEW_BYTES = 12 * 1024;
 const ARTIFACT_VIEW_CONCURRENCY = 8;
-const REPO_ROOT_ARTIFACT_PATH_PREFIX = "<repo-root>/";
 
 const UX_MATRIX_PRODUCER_FILES = [
   { key: "commands", path: "commands.txt", previewKind: "text" },
@@ -54,17 +60,9 @@ export class QaEvidenceGalleryError extends Error {
   }
 }
 
-function evidenceError(message: string, statusCode: number): QaEvidenceGalleryError {
-  return new QaEvidenceGalleryError(message, statusCode);
-}
+type GalleryRoots = { extraRoots?: readonly string[]; repoRoot: string };
 
-function sanitizeGalleryText(
-  value: string,
-  params: {
-    extraRoots?: readonly string[];
-    repoRoot: string;
-  },
-) {
+function sanitizeGalleryText(value: string, params: GalleryRoots) {
   const localRoots = [...new Set([params.repoRoot, ...(params.extraRoots ?? [])])];
   const roots = [
     ...localRoots.flatMap((root) => [
@@ -79,13 +77,7 @@ function sanitizeGalleryText(
     .reduce((text, entry) => text.replaceAll(entry.from, entry.to), value);
 }
 
-function displayGalleryPath(
-  value: string,
-  params: {
-    extraRoots?: readonly string[];
-    repoRoot: string;
-  },
-) {
+function displayGalleryPath(value: string, params: GalleryRoots) {
   if (path.isAbsolute(value)) {
     const absolute = path.resolve(value);
     for (const root of [params.repoRoot, ...(params.extraRoots ?? [])]) {
@@ -98,23 +90,11 @@ function displayGalleryPath(
   return sanitizeGalleryText(value, params);
 }
 
-function sanitizeGalleryPreview(
-  value: string | null,
-  params: {
-    extraRoots?: readonly string[];
-    repoRoot: string;
-  },
-) {
+function sanitizeGalleryPreview(value: string | null, params: GalleryRoots) {
   return value === null ? null : sanitizeGalleryText(value, params);
 }
 
-function sanitizeGalleryStringArray(
-  values: Iterable<unknown>,
-  params: {
-    extraRoots?: readonly string[];
-    repoRoot: string;
-  },
-) {
+function sanitizeGalleryStringArray(values: Iterable<unknown>, params: GalleryRoots) {
   return readOrderedStringArray(
     Array.from(values)
       .filter((value): value is string => typeof value === "string")
@@ -145,18 +125,18 @@ async function resolveQaEvidenceFile(params: {
   inputPath: string;
   repoRoot: string;
 }): Promise<string> {
-  const repoRoot = await fs.realpath(path.resolve(params.repoRoot));
+  const repoRoot = params.repoRoot;
   const raw = params.inputPath.trim();
   if (!raw) {
-    throw evidenceError("Evidence path is required.", 400);
+    throw new QaEvidenceGalleryError("Evidence path is required.", 400);
   }
   const candidate = path.resolve(repoRoot, raw);
   const realCandidate = await realpathIfExists(candidate);
   if (!realCandidate) {
-    throw evidenceError("Evidence path not found.", 404);
+    throw new QaEvidenceGalleryError("Evidence path not found.", 404);
   }
   if (!isPathInside(repoRoot, realCandidate)) {
-    throw evidenceError("Evidence path must stay inside the repo root.", 403);
+    throw new QaEvidenceGalleryError("Evidence path must stay inside the repo root.", 403);
   }
   const stats = await fs.stat(realCandidate);
   const evidencePath = stats.isDirectory()
@@ -164,10 +144,10 @@ async function resolveQaEvidenceFile(params: {
     : realCandidate;
   const realEvidencePath = await realpathIfExists(evidencePath);
   if (!realEvidencePath) {
-    throw evidenceError("qa-evidence.json not found.", 404);
+    throw new QaEvidenceGalleryError("qa-evidence.json not found.", 404);
   }
   if (!isPathInside(repoRoot, realEvidencePath)) {
-    throw evidenceError("qa-evidence.json must stay inside the repo root.", 403);
+    throw new QaEvidenceGalleryError("qa-evidence.json must stay inside the repo root.", 403);
   }
   return realEvidencePath;
 }
@@ -180,7 +160,7 @@ export async function resolveQaEvidenceArtifactFile(params: {
   const repoRoot = await fs.realpath(path.resolve(params.repoRoot));
   const evidencePath = await resolveQaEvidenceFile({ inputPath: params.evidencePath, repoRoot });
   if (!params.artifactPath.trim()) {
-    throw evidenceError("Artifact path is required.", 400);
+    throw new QaEvidenceGalleryError("Artifact path is required.", 400);
   }
   const summary = validateQaEvidenceSummaryJson(
     JSON.parse(await fs.readFile(evidencePath, "utf8")) as unknown,
@@ -191,17 +171,47 @@ export async function resolveQaEvidenceArtifactFile(params: {
     repoRoot,
   });
   if (!artifactFile) {
-    throw evidenceError("Evidence artifact not found.", 404);
+    throw new QaEvidenceGalleryError("Evidence artifact not found.", 404);
   }
-  const allowedArtifactFiles = await collectDeclaredQaEvidenceArtifactFiles({
+  const artifacts = await projectQaEvidenceArtifacts({ evidencePath, repoRoot, summary });
+  const evidenceDir = path.dirname(evidencePath);
+  const allowedArtifactFiles = new Set<string>();
+  for (const entryArtifacts of artifacts) {
+    for (const artifact of entryArtifacts) {
+      const artifactPath = await resolveArtifactFileWithinRoots({
+        artifactPath: artifact.path,
+        evidenceDir,
+        repoRoot,
+      });
+      if (artifactPath) {
+        allowedArtifactFiles.add(artifactPath);
+      }
+    }
+  }
+  const producerRoot = await findUxMatrixProducerRoot({
     evidencePath,
     repoRoot,
     summaryEntries: summary.entries,
   });
+  if (producerRoot) {
+    const producerFiles = [
+      ...UX_MATRIX_PRODUCER_FILES.map((file) => file.path),
+      QA_EVIDENCE_FILENAME,
+    ];
+    for (const producerFile of producerFiles) {
+      const realProducerFile = await realpathIfExists(path.join(producerRoot, producerFile));
+      if (realProducerFile) {
+        allowedArtifactFiles.add(realProducerFile);
+      }
+    }
+  }
   if (allowedArtifactFiles.has(artifactFile)) {
     return artifactFile;
   }
-  throw evidenceError("Evidence artifact is not declared by this evidence summary.", 403);
+  throw new QaEvidenceGalleryError(
+    "Evidence artifact is not declared by this evidence summary.",
+    403,
+  );
 }
 
 export async function resolveQaEvidenceArtifactFileByIndex(params: {
@@ -218,14 +228,15 @@ export async function resolveQaEvidenceArtifactFileByIndex(params: {
     !Number.isSafeInteger(params.artifactIndex) ||
     params.artifactIndex < 0
   ) {
-    throw evidenceError("Evidence artifact index is invalid.", 400);
+    throw new QaEvidenceGalleryError("Evidence artifact index is invalid.", 400);
   }
   const summary = validateQaEvidenceSummaryJson(
     JSON.parse(await fs.readFile(evidencePath, "utf8")) as unknown,
   );
-  const artifact = summary.entries[params.entryIndex]?.execution?.artifacts[params.artifactIndex];
+  const artifacts = await projectQaEvidenceArtifacts({ evidencePath, repoRoot, summary });
+  const artifact = artifacts[params.entryIndex]?.[params.artifactIndex];
   if (!artifact) {
-    throw evidenceError("Evidence artifact not found.", 404);
+    throw new QaEvidenceGalleryError("Evidence artifact not found.", 404);
   }
   const artifactFile = await resolveArtifactFileWithinRoots({
     artifactPath: artifact.path,
@@ -233,7 +244,7 @@ export async function resolveQaEvidenceArtifactFileByIndex(params: {
     repoRoot,
   });
   if (!artifactFile) {
-    throw evidenceError("Evidence artifact not found.", 404);
+    throw new QaEvidenceGalleryError("Evidence artifact not found.", 404);
   }
   return artifactFile;
 }
@@ -247,7 +258,7 @@ export async function resolveQaEvidenceProducerFile(params: {
   const evidencePath = await resolveQaEvidenceFile({ inputPath: params.evidencePath, repoRoot });
   const producerFile = UX_MATRIX_PRODUCER_FILES.find((file) => file.key === params.producerFile);
   if (!producerFile) {
-    throw evidenceError("Evidence producer file is unknown.", 400);
+    throw new QaEvidenceGalleryError("Evidence producer file is unknown.", 400);
   }
   const summary = validateQaEvidenceSummaryJson(
     JSON.parse(await fs.readFile(evidencePath, "utf8")) as unknown,
@@ -258,7 +269,7 @@ export async function resolveQaEvidenceProducerFile(params: {
     summaryEntries: summary.entries,
   });
   if (!producerRoot) {
-    throw evidenceError("Evidence producer context not found.", 404);
+    throw new QaEvidenceGalleryError("Evidence producer context not found.", 404);
   }
   const evidenceDir = path.dirname(evidencePath);
   const producerPath = path.join(producerRoot, producerFile.path);
@@ -267,21 +278,9 @@ export async function resolveQaEvidenceProducerFile(params: {
     evidenceDir,
   ]);
   if (!realProducerFile) {
-    throw evidenceError("Evidence producer file not found.", 404);
+    throw new QaEvidenceGalleryError("Evidence producer file not found.", 404);
   }
   return realProducerFile;
-}
-
-function isExplicitRepoRootArtifactPath(raw: string): boolean {
-  const normalized = raw.split(/[\\/]+/u).join("/");
-  return normalized.startsWith(".artifacts/");
-}
-
-function repoRootTokenArtifactPath(raw: string): string | null {
-  const normalized = raw.split(/[\\/]+/u).join("/");
-  return normalized.startsWith(REPO_ROOT_ARTIFACT_PATH_PREFIX)
-    ? normalized.slice(REPO_ROOT_ARTIFACT_PATH_PREFIX.length)
-    : null;
 }
 
 // Resolve an artifact path against pre-resolved roots without re-reading the evidence file.
@@ -301,94 +300,144 @@ async function resolveArtifactFileWithinRoots(params: {
     : path.isAbsolute(raw)
       ? [raw]
       : [path.resolve(params.evidenceDir, raw)];
-  if (!tokenPath && !path.isAbsolute(raw) && isExplicitRepoRootArtifactPath(raw)) {
+  if (
+    !tokenPath &&
+    !path.isAbsolute(raw) &&
+    raw
+      .split(/[\\/]+/u)
+      .join("/")
+      .startsWith(".artifacts/")
+  ) {
     candidates.push(path.resolve(params.repoRoot, raw));
   }
   for (const candidate of candidates) {
-    const realCandidate = await realpathIfExists(candidate);
-    if (!realCandidate) {
-      continue;
-    }
-    if (
-      !isPathInside(params.repoRoot, realCandidate) &&
-      !isPathInside(params.evidenceDir, realCandidate)
-    ) {
-      continue;
-    }
-    const stats = await fs.stat(realCandidate).catch(() => null);
-    if (stats?.isFile()) {
+    const realCandidate = await resolveContainedFileIfExists(candidate, [
+      params.repoRoot,
+      params.evidenceDir,
+    ]);
+    if (realCandidate) {
       return realCandidate;
     }
   }
   return null;
 }
 
-async function collectDeclaredQaEvidenceArtifactFiles(params: {
+async function projectQaEvidenceArtifacts(params: {
   evidencePath: string;
   repoRoot: string;
-  summaryEntries: readonly QaEvidenceSummaryEntry[];
-}): Promise<Set<string>> {
-  const repoRoot = await fs.realpath(path.resolve(params.repoRoot));
+  summary: QaEvidenceSummaryJson;
+}): Promise<QaEvidenceArtifact[][]> {
   const evidenceDir = path.dirname(params.evidencePath);
-  const allowed = new Set<string>();
-  for (const entry of params.summaryEntries) {
-    for (const artifact of entry.execution?.artifacts ?? []) {
-      const artifactPath = await resolveArtifactFileWithinRoots({
-        artifactPath: artifact.path,
-        evidenceDir,
-        repoRoot,
-      });
-      if (artifactPath) {
-        allowed.add(artifactPath);
-      }
+  const allowedRoots = [params.repoRoot, evidenceDir];
+  const publishedPath = path.join(evidenceDir, "qa-suite-summary.json");
+  const summaries = new Map<string, ReturnType<typeof readJsonIfExists>>();
+  const readSummary = (summaryPath: string) => {
+    let pending = summaries.get(summaryPath);
+    if (!pending) {
+      pending = readJsonIfExists(summaryPath, allowedRoots);
+      summaries.set(summaryPath, pending);
     }
-  }
-  const producerRoot = await findUxMatrixProducerRoot({
-    evidencePath: params.evidencePath,
-    repoRoot: params.repoRoot,
-    summaryEntries: params.summaryEntries,
+    return pending;
+  };
+  const published = await readSummary(publishedPath);
+  // An enclosing publisher may add its own presentation without changing child
+  // rows. Bind it to this exact canonical snapshot, never to a nearby filename.
+  const publishedHere = isDeepStrictEqual(published?.evidence, params.summary);
+  const { results } = await runTasksWithConcurrency({
+    limit: ARTIFACT_VIEW_CONCURRENCY,
+    errorMode: "continue",
+    throwOnError: true,
+    tasks: params.summary.entries.map((entry) => async () => {
+      const artifacts = [...(entry.execution?.artifacts ?? [])];
+      if (!entry.execution) {
+        return artifacts;
+      }
+      const append = (artifact: QaEvidenceArtifact) => {
+        if (
+          !artifacts.some(
+            (existing) =>
+              existing.kind === artifact.kind &&
+              existing.source === artifact.source &&
+              resolveQaArtifactPath(params.repoRoot, evidenceDir, existing.path) === artifact.path,
+          )
+        ) {
+          artifacts.push(artifact);
+        }
+      };
+      if (publishedHere) {
+        append({ kind: "summary", path: publishedPath, source: "qa-suite" });
+        append({
+          kind: "report",
+          path: path.join(evidenceDir, "qa-suite-report.md"),
+          source: "qa-suite",
+        });
+      }
+      const summaryArtifacts = artifacts.filter(
+        (artifact) => artifact.source === "qa-suite" && artifact.kind === "summary",
+      );
+      for (const artifact of summaryArtifacts) {
+        const summaryPath = await resolveArtifactFileWithinRoots({
+          artifactPath: artifact.path,
+          evidenceDir,
+          repoRoot: params.repoRoot,
+        });
+        if (!summaryPath) {
+          continue;
+        }
+        const run = readRecord((await readSummary(summaryPath))?.run);
+        for (const [kind, field] of [
+          ["channel-capability-matrix", "channelCapabilityMatrixPath"],
+          ["channel-driver-smoke", "channelDriverSmokePath"],
+        ] as const) {
+          const declared = readStringValue(run?.[field]);
+          if (declared) {
+            const target = await resolveArtifactFileWithinRoots({
+              artifactPath: declared,
+              evidenceDir: path.dirname(summaryPath),
+              repoRoot: params.repoRoot,
+            });
+            if (target) {
+              append({ kind, path: target, source: "qa-suite" });
+            }
+          }
+        }
+      }
+      return artifacts;
+    }),
   });
-  if (producerRoot) {
-    const producerFiles = [
-      ...UX_MATRIX_PRODUCER_FILES.map((file) => file.path),
-      QA_EVIDENCE_FILENAME,
-    ];
-    for (const producerFile of producerFiles) {
-      const realProducerFile = await realpathIfExists(path.join(producerRoot, producerFile));
-      if (realProducerFile) {
-        allowed.add(realProducerFile);
-      }
-    }
-  }
-  return allowed;
+  return results;
 }
 
 function classifyArtifact(kind: string, filePath: string): QaEvidenceArtifactView["mediaKind"] {
-  const normalizedKind = kind.toLowerCase();
   const ext = path.extname(filePath).toLowerCase();
-  if (
-    normalizedKind.includes("screenshot") ||
-    normalizedKind.includes("gif") ||
-    [".png", ".jpg", ".jpeg", ".gif", ".webp"].includes(ext)
-  ) {
+  if ([".png", ".jpg", ".jpeg", ".gif", ".webp"].includes(ext)) {
     return "image";
   }
-  if (normalizedKind.includes("video") || [".webm", ".mp4", ".mov"].includes(ext)) {
+  if ([".webm", ".mp4", ".mov"].includes(ext)) {
     return "video";
   }
-  if (
-    normalizedKind.includes("validation") ||
-    normalizedKind.includes("json") ||
-    ext === ".json" ||
-    ext === ".jsonl"
-  ) {
+  if (ext === ".json" || ext === ".jsonl") {
     return "json";
   }
-  if (
-    normalizedKind.includes("log") ||
-    normalizedKind.includes("report") ||
-    [".log", ".md", ".txt"].includes(ext)
-  ) {
+  if ([".log", ".md", ".txt"].includes(ext)) {
+    return "text";
+  }
+
+  // Kinds are free-form labels; use their hints only without a known file format.
+  // Callers sometimes pass a path-like kind, so match only its final segment:
+  // otherwise an unrelated directory name (".../qa-evidence-gallery-gif-XX/log")
+  // decides the media type and a text artifact loses its preview.
+  const normalizedKind = (kind.toLowerCase().split(/[\\/]/).pop() ?? "").trim();
+  if (normalizedKind.includes("screenshot") || normalizedKind.includes("gif")) {
+    return "image";
+  }
+  if (normalizedKind.includes("video")) {
+    return "video";
+  }
+  if (normalizedKind.includes("validation") || normalizedKind.includes("json")) {
+    return "json";
+  }
+  if (normalizedKind.includes("log") || normalizedKind.includes("report")) {
     return "text";
   }
   return "file";
@@ -401,14 +450,7 @@ async function readPreview(filePath: string, mediaKind: QaEvidenceArtifactView["
   const handle = await fs.open(filePath, "r");
   try {
     const buffer = Buffer.alloc(TEXT_PREVIEW_BYTES + 1);
-    let bytesRead = 0;
-    while (bytesRead < buffer.length) {
-      const result = await handle.read(buffer, bytesRead, buffer.length - bytesRead, bytesRead);
-      if (result.bytesRead === 0) {
-        break;
-      }
-      bytesRead += result.bytesRead;
-    }
+    const bytesRead = await readFileWindowFully(handle, buffer, 0);
     const decoder = new StringDecoder("utf8");
     let text = decoder.write(buffer.subarray(0, Math.min(bytesRead, TEXT_PREVIEW_BYTES)));
     // The sentinel distinguishes a capped preview from real EOF. Only real EOF should
@@ -449,9 +491,6 @@ function artifactHref(
   evidencePath: string,
   artifact:
     | {
-        artifactPath: string;
-      }
-    | {
         artifactIndex: number;
         entryIndex: number;
       }
@@ -460,109 +499,13 @@ function artifactHref(
       },
 ) {
   const params = new URLSearchParams({ evidencePath });
-  if ("artifactPath" in artifact) {
-    params.set("artifactPath", artifact.artifactPath);
-  } else if ("producerFile" in artifact) {
+  if ("producerFile" in artifact) {
     params.set("producerFile", artifact.producerFile);
   } else {
     params.set("entryIndex", String(artifact.entryIndex));
     params.set("artifactIndex", String(artifact.artifactIndex));
   }
   return `/api/evidence/artifact?${params.toString()}`;
-}
-
-async function buildProducerContextFile(params: {
-  allowedRoots: readonly string[];
-  extraRoots: readonly string[];
-  filePath: string;
-  hrefEvidencePath: string;
-  previewKind: "json" | "text";
-  producerFile: UxMatrixProducerFileKey;
-  repoRoot: string;
-}): Promise<QaEvidenceProducerContextFile | null> {
-  const realFile = await resolveContainedFileIfExists(params.filePath, params.allowedRoots);
-  if (!realFile) {
-    return null;
-  }
-  return {
-    href: artifactHref(params.hrefEvidencePath, { producerFile: params.producerFile }),
-    path: displayGalleryPath(params.filePath, params),
-    preview: await readPreview(realFile, params.previewKind)
-      .then((preview) =>
-        sanitizeGalleryPreview(preview, {
-          extraRoots: params.extraRoots,
-          repoRoot: params.repoRoot,
-        }),
-      )
-      .catch(() => null),
-  };
-}
-
-async function buildArtifactView(params: {
-  allowedArtifactFiles: ReadonlySet<string>;
-  artifactIndex: number;
-  artifact: QaEvidenceArtifact;
-  evidenceDir: string;
-  entryIndex: number;
-  extraRoots: readonly string[];
-  hrefEvidencePath: string;
-  repoRoot: string;
-}): Promise<QaEvidenceArtifactView> {
-  const mediaKind = classifyArtifact(params.artifact.kind, params.artifact.path);
-  const realFile = await resolveArtifactFileWithinRoots({
-    artifactPath: params.artifact.path,
-    evidenceDir: params.evidenceDir,
-    repoRoot: params.repoRoot,
-  }).catch(() => null);
-  const realFileRepoPath =
-    realFile && isPathInside(params.repoRoot, realFile)
-      ? toRepoRelativePath(params.repoRoot, realFile)
-      : null;
-  const displayPath =
-    (realFileRepoPath ? sanitizeGalleryText(realFileRepoPath, params) : null) ??
-    sanitizeGalleryText(params.artifact.path, {
-      extraRoots: params.extraRoots,
-      repoRoot: params.repoRoot,
-    });
-  if (!realFile || !params.allowedArtifactFiles.has(realFile)) {
-    return {
-      exists: false,
-      error: realFile
-        ? "Evidence artifact is not declared by this evidence summary."
-        : "Evidence artifact not found.",
-      href: null,
-      kind: sanitizeGalleryText(params.artifact.kind, params),
-      mediaKind,
-      path: displayPath,
-      preview: null,
-      source: sanitizeGalleryText(params.artifact.source, params),
-    };
-  }
-  return {
-    exists: true,
-    error: null,
-    href: artifactHref(params.hrefEvidencePath, {
-      artifactIndex: params.artifactIndex,
-      entryIndex: params.entryIndex,
-    }),
-    kind: sanitizeGalleryText(params.artifact.kind, params),
-    mediaKind,
-    path: displayPath,
-    preview: await readPreview(realFile, mediaKind)
-      .then((preview) =>
-        sanitizeGalleryPreview(preview, {
-          extraRoots: params.extraRoots,
-          repoRoot: params.repoRoot,
-        }),
-      )
-      .catch((error: unknown) =>
-        sanitizeGalleryText(`Preview unavailable: ${formatErrorMessage(error)}`, {
-          extraRoots: params.extraRoots,
-          repoRoot: params.repoRoot,
-        }),
-      ),
-    source: sanitizeGalleryText(params.artifact.source, params),
-  };
 }
 
 function readCountRecord(value: unknown): Record<string, number> {
@@ -596,22 +539,15 @@ function readMatrixDimensionIds(params: {
   if (!Array.isArray(params.value)) {
     return sanitizeGalleryStringArray(params.fallback, params);
   }
-  const ids = sanitizeGalleryStringArray(
-    params.value.map((entry) => {
-      if (typeof entry === "string") {
-        return entry;
-      }
-      return readStringValue(readRecord(entry)?.id) ?? null;
-    }),
+  return sanitizeGalleryStringArray(
+    [
+      ...params.value.map((entry) =>
+        typeof entry === "string" ? entry : (readStringValue(readRecord(entry)?.id) ?? null),
+      ),
+      ...params.fallback,
+    ],
     params,
   );
-  for (const rawFallbackId of params.fallback) {
-    const fallbackId = sanitizeGalleryText(rawFallbackId, params);
-    if (!ids.includes(fallbackId)) {
-      ids.push(fallbackId);
-    }
-  }
-  return ids;
 }
 
 function uxMatrixEntryKey(
@@ -634,89 +570,12 @@ function uxMatrixEntryKey(
   return null;
 }
 
-function buildUxMatrixEvidenceEntryIndex(entries: readonly QaEvidenceSummaryEntry[]) {
-  const indexed = new Map<string, QaEvidenceSummaryEntry>();
-  for (const entry of entries) {
-    const key = uxMatrixEntryKey(entry);
-    if (key) {
-      indexed.set(`${key.surface}:${key.stage}`, entry);
-    }
-  }
-  return indexed;
-}
-
-function readMatrixCells(params: {
-  extraRoots: readonly string[];
-  matrix: Record<string, unknown> | null;
-  repoRoot: string;
-  summaryEntries: readonly QaEvidenceSummaryEntry[];
-}): QaEvidenceMatrixCellView[] {
-  const rawCells = Array.isArray(params.matrix?.cells)
-    ? params.matrix.cells
-        .map(readRecord)
-        .filter((cell): cell is Record<string, unknown> => Boolean(cell))
-    : [];
-  const entriesByCell = buildUxMatrixEvidenceEntryIndex(params.summaryEntries);
-  return rawCells.flatMap((cell): QaEvidenceMatrixCellView[] => {
-    const rawSurface = readStringValue(cell.surface) ?? null;
-    const rawStage = readStringValue(cell.stage) ?? null;
-    const rawStatus = readStringValue(cell.status) ?? "proof-gap";
-    if (!rawSurface || !rawStage) {
-      return [];
-    }
-    const entry =
-      rawStatus === "proof-gap" ? null : (entriesByCell.get(`${rawSurface}:${rawStage}`) ?? null);
-    const artifacts = entry?.execution?.artifacts ?? [];
-    const runner = readRecord(cell.runner);
-    const sanitizeCellString = (value: string) =>
-      sanitizeGalleryText(value, {
-        extraRoots: params.extraRoots,
-        repoRoot: params.repoRoot,
-      });
-    const readRunnerString = (value: unknown) => {
-      const text = readStringValue(value);
-      return text ? sanitizeCellString(text) : null;
-    };
-    return [
-      {
-        artifactKinds: readStringArray(
-          artifacts.map((artifact) => sanitizeCellString(artifact.kind)),
-        ),
-        artifactPaths: artifacts.map((artifact) =>
-          displayGalleryPath(artifact.path, {
-            extraRoots: params.extraRoots,
-            repoRoot: params.repoRoot,
-          }),
-        ),
-        coverageIds: readStringArray(
-          (Array.isArray(cell.coverageIds) ? cell.coverageIds : []).map((coverageId) =>
-            typeof coverageId === "string" ? sanitizeCellString(coverageId) : coverageId,
-          ),
-        ),
-        runner: runner
-          ? {
-              availability: readRunnerString(runner.availability),
-              command: readRunnerString(runner.command),
-              lane: readRunnerString(runner.lane),
-              workflow: readRunnerString(runner.workflow),
-            }
-          : null,
-        stage: sanitizeCellString(rawStage),
-        status: sanitizeCellString(rawStatus),
-        surface: sanitizeCellString(rawSurface),
-        testId: entry?.test.id ? sanitizeCellString(entry.test.id) : null,
-        title: entry?.test.title ? sanitizeCellString(entry.test.title) : null,
-      },
-    ];
-  });
-}
-
-async function candidateProducerRoots(params: {
+async function findUxMatrixProducerRoot(params: {
   evidencePath: string;
   repoRoot: string;
   summaryEntries: readonly QaEvidenceSummaryEntry[];
 }) {
-  const repoRoot = await fs.realpath(path.resolve(params.repoRoot));
+  const repoRoot = params.repoRoot;
   const evidenceDir = path.dirname(params.evidencePath);
   const roots = new Set<string>([evidenceDir]);
   for (const entry of params.summaryEntries) {
@@ -740,15 +599,7 @@ async function candidateProducerRoots(params: {
       }
     }
   }
-  return Array.from(roots);
-}
-
-async function findUxMatrixProducerRoot(params: {
-  evidencePath: string;
-  repoRoot: string;
-  summaryEntries: readonly QaEvidenceSummaryEntry[];
-}) {
-  for (const candidate of await candidateProducerRoots(params)) {
+  for (const candidate of roots) {
     const [manifest, matrix] = await Promise.all([
       realpathIfExists(path.join(candidate, "manifest.json")),
       realpathIfExists(path.join(candidate, "matrix.json")),
@@ -758,105 +609,6 @@ async function findUxMatrixProducerRoot(params: {
     }
   }
   return null;
-}
-
-async function buildProducerContext(params: {
-  evidencePath: string;
-  extraRoots: readonly string[];
-  hrefEvidencePath: string;
-  repoRoot: string;
-  summaryEntries: readonly QaEvidenceSummaryEntry[];
-}): Promise<QaEvidenceProducerContext | null> {
-  const rootPath = await findUxMatrixProducerRoot(params);
-  if (!rootPath) {
-    return null;
-  }
-  const repoRoot = await fs.realpath(path.resolve(params.repoRoot));
-  const evidenceDir = path.dirname(
-    await resolveQaEvidenceFile({ inputPath: params.evidencePath, repoRoot }),
-  );
-  const allowedRoots = [repoRoot, evidenceDir];
-  const producerPaths = Object.fromEntries(
-    UX_MATRIX_PRODUCER_FILES.map((file) => [file.key, path.join(rootPath, file.path)]),
-  ) as Record<(typeof UX_MATRIX_PRODUCER_FILES)[number]["key"], string>;
-  const manifestPath = producerPaths.manifest;
-  const matrixPath = producerPaths.matrix;
-  const releaseLedgerPath = producerPaths.releaseLedger;
-  const manifest = await readJsonIfExists(manifestPath, allowedRoots);
-  const matrix = await readJsonIfExists(matrixPath, allowedRoots);
-  const releaseLedger = await readJsonIfExists(releaseLedgerPath, allowedRoots);
-  const run = readRecord(manifest?.run);
-  const runId = readStringValue(run?.runId) ?? null;
-  const runStatus = readStringValue(run?.status) ?? null;
-  const producerFiles = Object.fromEntries(
-    await Promise.all(
-      UX_MATRIX_PRODUCER_FILES.map(async (file) => [
-        file.key,
-        await buildProducerContextFile({
-          allowedRoots,
-          extraRoots: params.extraRoots,
-          filePath: producerPaths[file.key],
-          hrefEvidencePath: params.hrefEvidencePath,
-          previewKind: file.previewKind,
-          producerFile: file.key,
-          repoRoot,
-        }),
-      ]),
-    ),
-  ) as Record<
-    (typeof UX_MATRIX_PRODUCER_FILES)[number]["key"],
-    QaEvidenceProducerContextFile | null
-  >;
-  const matrixCells = readMatrixCells({
-    extraRoots: params.extraRoots,
-    matrix,
-    repoRoot,
-    summaryEntries: params.summaryEntries,
-  });
-  return {
-    commands: producerFiles.commands,
-    kind: "ux-matrix",
-    manifest:
-      manifest && producerFiles.manifest
-        ? {
-            ...producerFiles.manifest,
-            runId: runId ? sanitizeGalleryText(runId, params) : null,
-            runStatus: runStatus ? sanitizeGalleryText(runStatus, params) : null,
-          }
-        : null,
-    matrix: matrix
-      ? {
-          cells: matrixCells,
-          counts: readCountRecord(matrix.counts),
-          path: displayGalleryPath(matrixPath, { extraRoots: params.extraRoots, repoRoot }),
-          stages: readMatrixDimensionIds({
-            extraRoots: params.extraRoots,
-            fallback: matrixCells.map((cell) => cell.stage),
-            repoRoot,
-            value: matrix.stages,
-          }),
-          surfaces: readMatrixDimensionIds({
-            extraRoots: params.extraRoots,
-            fallback: matrixCells.map((cell) => cell.surface),
-            repoRoot,
-            value: matrix.surfaces,
-          }),
-        }
-      : null,
-    preflight: {
-      adbDevices: producerFiles.adbDevices,
-      memory: producerFiles.memory,
-    },
-    releaseLedger:
-      releaseLedger && producerFiles.releaseLedger
-        ? {
-            ...producerFiles.releaseLedger,
-            counts: readCountRecord(releaseLedger.counts),
-          }
-        : null,
-    rootPath: displayGalleryPath(rootPath, { extraRoots: params.extraRoots, repoRoot }),
-    scorecard: producerFiles.scorecard,
-  };
 }
 
 export async function buildQaEvidenceGalleryModel(params: {
@@ -870,6 +622,8 @@ export async function buildQaEvidenceGalleryModel(params: {
     repoRoot,
   });
   const hrefEvidencePath = toRepoRelativePath(repoRoot, evidencePath);
+  const viewContext = { extraRoots: [requestedRepoRoot], hrefEvidencePath, repoRoot };
+  const sanitizeEntryText = (value: string) => sanitizeGalleryText(value, viewContext);
   const summary = validateQaEvidenceSummaryJson(
     JSON.parse(await fs.readFile(evidencePath, "utf8")) as unknown,
   );
@@ -879,28 +633,45 @@ export async function buildQaEvidenceGalleryModel(params: {
     blocked: 0,
     skipped: 0,
   };
-  // Resolve the declared-artifact allowlist once; buildArtifactView then only checks membership
-  // instead of re-reading the evidence file and re-collecting the allowlist per artifact.
+  const effectiveEntries = new Set(getEffectiveQaEvidenceEntries(summary));
+  const projectedArtifacts = await projectQaEvidenceArtifacts({ evidencePath, repoRoot, summary });
   const evidenceDir = path.dirname(evidencePath);
-  const allowedArtifactFiles = await collectDeclaredQaEvidenceArtifactFiles({
-    evidencePath,
-    repoRoot,
-    summaryEntries: summary.entries,
-  });
-  const artifactTasks = summary.entries.flatMap((entry, entryIndex) =>
-    (entry.execution?.artifacts ?? []).map(
-      (artifact, artifactIndex) => () =>
-        buildArtifactView({
-          allowedArtifactFiles,
-          artifact,
-          artifactIndex,
-          evidenceDir,
-          entryIndex,
-          extraRoots: [requestedRepoRoot],
-          hrefEvidencePath,
-          repoRoot,
-        }),
-    ),
+  const artifactTasks = projectedArtifacts.flatMap((entryArtifacts, entryIndex) =>
+    entryArtifacts.map((artifact, artifactIndex) => async (): Promise<QaEvidenceArtifactView> => {
+      const mediaKind = classifyArtifact(artifact.kind, artifact.path);
+      const realFile = await resolveArtifactFileWithinRoots({
+        artifactPath: artifact.path,
+        evidenceDir,
+        repoRoot,
+      }).catch(() => null);
+      const realFileRepoPath =
+        realFile && isPathInside(repoRoot, realFile)
+          ? toRepoRelativePath(repoRoot, realFile)
+          : null;
+      const displayPath =
+        (realFileRepoPath ? sanitizeGalleryText(realFileRepoPath, viewContext) : null) ??
+        sanitizeGalleryText(artifact.path, viewContext);
+      const exists = realFile !== null;
+      return {
+        exists,
+        error: exists ? null : "Evidence artifact not found.",
+        href: exists ? artifactHref(hrefEvidencePath, { artifactIndex, entryIndex }) : null,
+        kind: sanitizeGalleryText(artifact.kind, viewContext),
+        mediaKind,
+        path: displayPath,
+        preview: exists
+          ? await readPreview(realFile, mediaKind)
+              .then((preview) => sanitizeGalleryPreview(preview, viewContext))
+              .catch((error: unknown) =>
+                sanitizeGalleryText(
+                  `Preview unavailable: ${formatErrorMessage(error)}`,
+                  viewContext,
+                ),
+              )
+          : null,
+        source: sanitizeGalleryText(artifact.source, viewContext),
+      };
+    }),
   );
   const { results: artifactViews } = await runTasksWithConcurrency({
     tasks: artifactTasks,
@@ -909,18 +680,18 @@ export async function buildQaEvidenceGalleryModel(params: {
     throwOnError: true,
   });
   let artifactOffset = 0;
-  const entries = summary.entries.map((entry): QaEvidenceGalleryEntryView => {
-    counts[entry.result.status] += 1;
-    const artifactCount = entry.execution?.artifacts?.length ?? 0;
+  const entries = summary.entries.map((entry, entryIndex): QaEvidenceGalleryEntryView => {
+    const effective = effectiveEntries.has(entry);
+    if (effective) {
+      counts[entry.result.status] += 1;
+    }
+    const artifactCount = projectedArtifacts[entryIndex]!.length;
     const artifacts = artifactViews.slice(artifactOffset, artifactOffset + artifactCount);
     artifactOffset += artifactCount;
-    const sanitizeEntryText = (value: string) =>
-      sanitizeGalleryText(value, {
-        extraRoots: [requestedRepoRoot],
-        repoRoot,
-      });
     return {
       artifacts,
+      key: String(entryIndex),
+      effective,
       coverage: entry.coverage.map((coverage) => ({
         id: sanitizeEntryText(coverage.id),
         role: sanitizeEntryText(coverage.role),
@@ -931,31 +702,166 @@ export async function buildQaEvidenceGalleryModel(params: {
       id: sanitizeEntryText(entry.test.id),
       kind: sanitizeEntryText(entry.test.kind),
       sourcePath: entry.test.source?.path
-        ? displayGalleryPath(entry.test.source.path, {
-            extraRoots: [requestedRepoRoot],
-            repoRoot,
-          })
+        ? displayGalleryPath(entry.test.source.path, viewContext)
         : null,
       status: entry.result.status,
       title: sanitizeEntryText(entry.test.title),
     };
   });
+  let producerContext: QaEvidenceProducerContext | null = null;
+  const rootPath = await findUxMatrixProducerRoot({
+    evidencePath,
+    repoRoot,
+    summaryEntries: summary.entries,
+  });
+  if (rootPath) {
+    const allowedRoots = [repoRoot, evidenceDir];
+    const producerPaths = Object.fromEntries(
+      UX_MATRIX_PRODUCER_FILES.map((file) => [file.key, path.join(rootPath, file.path)]),
+    ) as Record<(typeof UX_MATRIX_PRODUCER_FILES)[number]["key"], string>;
+    const manifestPath = producerPaths.manifest;
+    const matrixPath = producerPaths.matrix;
+    const releaseLedgerPath = producerPaths.releaseLedger;
+    const manifest = await readJsonIfExists(manifestPath, allowedRoots);
+    const matrix = await readJsonIfExists(matrixPath, allowedRoots);
+    const releaseLedger = await readJsonIfExists(releaseLedgerPath, allowedRoots);
+    const run = readRecord(manifest?.run);
+    const runId = readStringValue(run?.runId) ?? null;
+    const runStatus = readStringValue(run?.status) ?? null;
+    const producerFiles = Object.fromEntries(
+      await Promise.all(
+        UX_MATRIX_PRODUCER_FILES.map(async (file) => {
+          const key = file.key;
+          const filePath = producerPaths[key];
+          const realFile = await resolveContainedFileIfExists(filePath, allowedRoots);
+          const producerView: QaEvidenceProducerContextFile | null = !realFile
+            ? null
+            : {
+                href: artifactHref(hrefEvidencePath, { producerFile: key }),
+                path: displayGalleryPath(filePath, viewContext),
+                preview: await readPreview(realFile, file.previewKind)
+                  .then((preview) => sanitizeGalleryPreview(preview, viewContext))
+                  .catch(() => null),
+              };
+          return [key, producerView];
+        }),
+      ),
+    ) as Record<
+      (typeof UX_MATRIX_PRODUCER_FILES)[number]["key"],
+      QaEvidenceProducerContextFile | null
+    >;
+    const rawCells = Array.isArray(matrix?.cells)
+      ? matrix.cells
+          .map(readRecord)
+          .filter((cell): cell is Record<string, unknown> => Boolean(cell))
+      : [];
+    const entriesByCell = new Map<string, { entry: QaEvidenceSummaryEntry; key: string }>();
+    for (const [index, entry] of summary.entries.entries()) {
+      const key = uxMatrixEntryKey(entry);
+      if (key && effectiveEntries.has(entry)) {
+        entriesByCell.set(`${key.surface}:${key.stage}`, { entry, key: String(index) });
+      }
+    }
+    const matrixCells = rawCells.flatMap((cell): QaEvidenceMatrixCellView[] => {
+      const rawSurface = readStringValue(cell.surface) ?? null;
+      const rawStage = readStringValue(cell.stage) ?? null;
+      const rawStatus = readStringValue(cell.status) ?? "proof-gap";
+      if (!rawSurface || !rawStage) {
+        return [];
+      }
+      const selected =
+        rawStatus === "proof-gap" ? null : (entriesByCell.get(`${rawSurface}:${rawStage}`) ?? null);
+      const entry = selected?.entry;
+      const artifacts = entry?.execution?.artifacts ?? [];
+      const runner = readRecord(cell.runner);
+      const sanitizeCellString = (value: string) => sanitizeGalleryText(value, viewContext);
+      const readRunnerString = (value: unknown) => {
+        const text = readStringValue(value);
+        return text ? sanitizeCellString(text) : null;
+      };
+      return [
+        {
+          artifactKinds: readStringArray(
+            artifacts.map((artifact) => sanitizeCellString(artifact.kind)),
+          ),
+          artifactPaths: artifacts.map((artifact) =>
+            displayGalleryPath(artifact.path, viewContext),
+          ),
+          coverageIds: readStringArray(
+            (Array.isArray(cell.coverageIds) ? cell.coverageIds : []).map((coverageId) =>
+              typeof coverageId === "string" ? sanitizeCellString(coverageId) : coverageId,
+            ),
+          ),
+          runner: runner
+            ? {
+                availability: readRunnerString(runner.availability),
+                command: readRunnerString(runner.command),
+                lane: readRunnerString(runner.lane),
+                workflow: readRunnerString(runner.workflow),
+              }
+            : null,
+          stage: sanitizeCellString(rawStage),
+          status: sanitizeCellString(rawStatus),
+          surface: sanitizeCellString(rawSurface),
+          entryKey: selected?.key ?? null,
+          testId: entry?.test.id ? sanitizeCellString(entry.test.id) : null,
+          title: entry?.test.title ? sanitizeCellString(entry.test.title) : null,
+        },
+      ];
+    });
+    producerContext = {
+      commands: producerFiles.commands,
+      kind: "ux-matrix",
+      manifest:
+        manifest && producerFiles.manifest
+          ? {
+              ...producerFiles.manifest,
+              runId: runId ? sanitizeGalleryText(runId, viewContext) : null,
+              runStatus: runStatus ? sanitizeGalleryText(runStatus, viewContext) : null,
+            }
+          : null,
+      matrix: matrix
+        ? {
+            cells: matrixCells,
+            counts: readCountRecord(matrix.counts),
+            path: displayGalleryPath(matrixPath, viewContext),
+            stages: readMatrixDimensionIds({
+              extraRoots: viewContext.extraRoots,
+              fallback: matrixCells.map((cell) => cell.stage),
+              repoRoot,
+              value: matrix.stages,
+            }),
+            surfaces: readMatrixDimensionIds({
+              extraRoots: viewContext.extraRoots,
+              fallback: matrixCells.map((cell) => cell.surface),
+              repoRoot,
+              value: matrix.surfaces,
+            }),
+          }
+        : null,
+      preflight: {
+        adbDevices: producerFiles.adbDevices,
+        memory: producerFiles.memory,
+      },
+      releaseLedger:
+        releaseLedger && producerFiles.releaseLedger
+          ? {
+              ...producerFiles.releaseLedger,
+              counts: readCountRecord(releaseLedger.counts),
+            }
+          : null,
+      rootPath: displayGalleryPath(rootPath, viewContext),
+      scorecard: producerFiles.scorecard,
+    };
+  }
   return {
     counts,
     entries,
     evidenceMode: summary.evidenceMode,
     evidencePath: hrefEvidencePath,
     generatedAt: summary.generatedAt,
-    profile: summary.profile
-      ? sanitizeGalleryText(summary.profile, { extraRoots: [requestedRepoRoot], repoRoot })
-      : null,
-    producerContext: await buildProducerContext({
-      evidencePath,
-      extraRoots: [requestedRepoRoot],
-      hrefEvidencePath,
-      repoRoot,
-      summaryEntries: summary.entries,
-    }),
+    profile: summary.profile ? sanitizeEntryText(summary.profile) : null,
+    producerContext,
     schemaVersion: summary.schemaVersion,
   };
 }

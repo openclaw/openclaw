@@ -6,7 +6,7 @@ import {
   renderCronView as renderView,
 } from "./view.test-support.ts";
 
-it("labels an auto-disabled job distinctly from an operator pause", () => {
+it("labels an auto-disabled job distinctly from an operator pause", async () => {
   const paused = createJob("job-paused", { enabled: false });
   const autoDisabled = createJob("job-auto", {
     enabled: false,
@@ -16,17 +16,18 @@ it("labels an auto-disabled job distinctly from an operator pause", () => {
       autoDisabled: { reason: "consecutive-failures", atMs: 1, consecutiveErrors: 10 },
     },
   });
-  const container = renderView({ jobs: [paused, autoDisabled] });
-  const rows = Array.from(container.querySelectorAll(".cron-table__row"));
-  expect(rows[0]?.textContent).toContain("Paused");
-  expect(rows[0]?.querySelector(".cron-table__state--paused")?.getAttribute("aria-label")).toBe(
+  const container = await renderView({ jobs: [paused, autoDisabled] });
+  const pausedRow = container.querySelector("[data-test-id='cron-row-job-paused']");
+  expect(pausedRow?.textContent).toContain("Paused");
+  expect(pausedRow?.querySelector(".cron-table__state--paused")?.getAttribute("aria-label")).toBe(
     "Paused",
   );
-  const note = rows[1]?.querySelector("[data-test-id='cron-row-auto-disabled-job-auto']");
+  const autoDisabledRow = container.querySelector("[data-test-id='cron-row-job-auto']");
+  const note = autoDisabledRow?.querySelector("[data-test-id='cron-row-auto-disabled-job-auto']");
   expect(note?.textContent?.trim()).toBe("Auto-disabled · 10 run failures");
   expect(note?.getAttribute("title")).toBe("provider exploded");
   // Escalated failure keeps a visible error marker even though the job is disabled.
-  expect(rows[1]?.querySelector(".cron-table__state--error")?.getAttribute("aria-label")).toBe(
-    "Auto-disabled · 10 run failures",
-  );
+  expect(
+    autoDisabledRow?.querySelector(".cron-table__state--error")?.getAttribute("aria-label"),
+  ).toBe("Auto-disabled · 10 run failures");
 });

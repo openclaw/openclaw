@@ -1,9 +1,15 @@
-import type { SessionEntry } from "./types.js";
+import type { ResolvedSessionEntryRow } from "./session-entry-storage.types.js";
+import type { SessionEntryWindowFacts } from "./session-entry-window.types.js";
+import { SqliteSessionMutationConflictError } from "./session-mutation-conflict-error.js";
+import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
-type SqliteLifecycleTargetSnapshot = {
-  primary: { entry: SessionEntry; key: string } | undefined;
-  rows: Array<{ entry: SessionEntry; sessionKey: string }>;
-};
+export type SqliteLifecycleTargetSnapshot = Array<{
+  entry: InternalSessionEntry;
+  sessionKey: string;
+  window?: SessionEntryWindowFacts;
+  sideTables?: { memberIdsJson: string; hasBoard: boolean };
+  row?: ResolvedSessionEntryRow["row"];
+}>;
 
 export function sqliteSessionEntriesEqual(
   left: SessionEntry | undefined,
@@ -12,24 +18,25 @@ export function sqliteSessionEntriesEqual(
   if (!left || !right) {
     return left === right;
   }
-  const {
-    participants: _leftParticipants,
-    participantCount: _leftParticipantCount,
-    ...leftEntry
-  } = left;
-  const {
-    participants: _rightParticipants,
-    participantCount: _rightParticipantCount,
-    ...rightEntry
-  } = right;
-  // Participant history is a separately mutable SQLite projection. It must not
-  // invalidate logical-session compare-and-swap or leak into entry_json writes.
-  return JSON.stringify(leftEntry) === JSON.stringify(rightEntry);
+  // Participant history is a separately mutable projection. All other fields
+  // retain JSON omission semantics, but replica deltas may change top-level order.
+  const keys = new Set([...Object.keys(left), ...Object.keys(right)]);
+  for (const key of keys) {
+    if (key === "participants" || key === "participantCount") {
+      continue;
+    }
+    const leftValue = Reflect.get(left, key);
+    const rightValue = Reflect.get(right, key);
+    if (leftValue !== rightValue && JSON.stringify(leftValue) !== JSON.stringify(rightValue)) {
+      return false;
+    }
+  }
+  return true;
 }
 
-export function sqliteSessionSnapshotRowsEqual(
-  left: Array<{ entry: SessionEntry; sessionKey: string }>,
-  right: Array<{ entry: SessionEntry; sessionKey: string }>,
+export function sqliteLifecycleTargetSnapshotsEqual(
+  left: SqliteLifecycleTargetSnapshot,
+  right: SqliteLifecycleTargetSnapshot,
 ): boolean {
   return (
     left.length === right.length &&
@@ -41,13 +48,12 @@ export function sqliteSessionSnapshotRowsEqual(
   );
 }
 
-export function sqliteLifecycleTargetSnapshotsEqual(
+export function assertLifecycleTargetSnapshotUnchanged(
   expected: SqliteLifecycleTargetSnapshot,
   current: SqliteLifecycleTargetSnapshot,
-): boolean {
-  return (
-    expected.primary?.key === current.primary?.key &&
-    sqliteSessionEntriesEqual(expected.primary?.entry, current.primary?.entry) &&
-    sqliteSessionSnapshotRowsEqual(expected.rows, current.rows)
-  );
+  operationLabel: string,
+): void {
+  if (!sqliteLifecycleTargetSnapshotsEqual(expected, current)) {
+    throw new SqliteSessionMutationConflictError(operationLabel);
+  }
 }

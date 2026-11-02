@@ -23,7 +23,7 @@ a workspace file. The plugin understands four file kinds:
 
 Self-hosters and editor extensions use the CLI to read or write a single leaf
 without scripting against the SDK directly; agents and hooks treat it as a
-deterministic substrate so byte-fidelity round-trips and the redaction
+predictable foundation so byte-fidelity round-trips and the redaction
 sentinel guard apply uniformly across kinds. See the
 [CLI reference](/cli/path) for the full grammar, verb-by-verb flag list, and
 worked examples per file kind; this page covers why and how to enable the
@@ -103,9 +103,9 @@ the verb pay no cost.
 openclaw plugins enable oc-path
 ```
 
-Restart the Gateway (if you run one) so the manifest snapshot picks up the new
-state. Bare `openclaw path` invocations work immediately on the same host;
-the CLI loads the plugin on demand.
+Bare `openclaw path` invocations work immediately on the same host; the CLI
+loads the plugin on demand. A running Gateway applies enablement automatically;
+see [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 Disable with:
 
@@ -132,7 +132,7 @@ dependency, and the per-line parse already goes through `jsonc-parser`.
 
 | Surface                        | Provided by                                             |
 | ------------------------------ | ------------------------------------------------------- |
-| `openclaw path` CLI            | `extensions/oc-path/cli-registration.ts`                |
+| `openclaw path` CLI            | `extensions/oc-path/index.ts`                           |
 | `oc://` parser / formatter     | `extensions/oc-path/src/oc-path/oc-path.ts`             |
 | Per-kind parse / emit / edit   | `extensions/oc-path/src/oc-path/{md,jsonc,jsonl,yaml}`  |
 | Universal resolve / find / set | `extensions/oc-path/src/oc-path/{resolve,find,edit}.ts` |

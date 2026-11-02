@@ -3,9 +3,10 @@ import type { BoardOp } from "@openclaw/gateway-protocol";
 export type BoardGrantDecision = "granted" | "rejected";
 export type BoardWidgetAppViewState =
   | { status: "ready"; viewId: string; expiresAtMs: number }
-  | { status: "stale"; error: string };
+  | { status: "stale" };
 
 export type BoardViewCallbacks = {
+  appViewGeneration?: number;
   applyOps: (ops: BoardOp[]) => Promise<void>;
   grant: (name: string, decision: BoardGrantDecision) => Promise<void>;
   selectTab: (tabId: string) => void;

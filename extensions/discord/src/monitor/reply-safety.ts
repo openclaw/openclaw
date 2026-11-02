@@ -1,4 +1,3 @@
-// Discord plugin module implements reply safety behavior.
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import {
@@ -26,15 +25,6 @@ function hasInteractiveOrPresentationBlocks(value: unknown): boolean {
     return true;
   }
   return Array.isArray(record.blocks) && record.blocks.length > 0;
-}
-
-function hasNonTextReplyPayloadContent(payload: ReplyPayload): boolean {
-  return (
-    payload.audioAsVoice === true ||
-    hasNonEmptyRecord(payload.channelData) ||
-    hasInteractiveOrPresentationBlocks(payload.interactive) ||
-    hasInteractiveOrPresentationBlocks(payload.presentation)
-  );
 }
 
 function collapseExcessBlankLines(text: string): string {
@@ -88,7 +78,15 @@ export function sanitizeDiscordFrontChannelReplyPayloads(
     const nextPayload =
       safeText === payload.text ? payload : { ...payload, text: safeText || undefined };
     const nextParts = resolveSendableOutboundReplyParts(nextPayload);
-    if (!nextParts.hasContent && !hasNonTextReplyPayloadContent(nextPayload)) {
+    if (
+      !nextParts.hasContent &&
+      !(
+        nextPayload.audioAsVoice === true ||
+        hasNonEmptyRecord(nextPayload.channelData) ||
+        hasInteractiveOrPresentationBlocks(nextPayload.interactive) ||
+        hasInteractiveOrPresentationBlocks(nextPayload.presentation)
+      )
+    ) {
       continue;
     }
     safePayloads.push(nextPayload);

@@ -7,48 +7,51 @@ import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-util
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
 
-const buildWorkspaceSkillsPrompt = (
+const buildWorkspaceSkillsPrompt = async (
   workspaceDir: string,
   opts?: Parameters<typeof buildSkillSnapshot>[1],
-): string => buildSkillSnapshot(workspaceDir, opts).prompt;
+): Promise<string> => (await buildSkillSnapshot(workspaceDir, opts)).prompt;
 
 describe("buildWorkspaceSkillsPrompt", () => {
-  it("applies bundled allowlist without affecting workspace skills", async () => {
-    const env = captureEnv(["HOME", "USERPROFILE", "OPENCLAW_HOME", "OPENCLAW_STATE_DIR"]);
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-"));
-    try {
-      setTestEnvValue("HOME", workspaceDir);
-      setTestEnvValue("USERPROFILE", workspaceDir);
-      deleteTestEnvValue("OPENCLAW_HOME");
-      deleteTestEnvValue("OPENCLAW_STATE_DIR");
-      const bundledDir = path.join(workspaceDir, ".bundled");
-      const bundledSkillDir = path.join(bundledDir, "peekaboo");
-      const workspaceSkillDir = path.join(workspaceDir, "skills", "demo-skill");
+  it.each([{ allowBundled: ["missing-skill"] }, { allowBundled: [] }])(
+    "applies bundled allowlist $allowBundled without affecting workspace skills",
+    async ({ allowBundled }) => {
+      const env = captureEnv(["HOME", "USERPROFILE", "OPENCLAW_HOME", "OPENCLAW_STATE_DIR"]);
+      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-"));
+      try {
+        setTestEnvValue("HOME", workspaceDir);
+        setTestEnvValue("USERPROFILE", workspaceDir);
+        deleteTestEnvValue("OPENCLAW_HOME");
+        deleteTestEnvValue("OPENCLAW_STATE_DIR");
+        const bundledDir = path.join(workspaceDir, ".bundled");
+        const bundledSkillDir = path.join(bundledDir, "peekaboo");
+        const workspaceSkillDir = path.join(workspaceDir, "skills", "demo-skill");
 
-      await writeSkill({
-        dir: bundledSkillDir,
-        name: "peekaboo",
-        description: "Capture UI",
-        body: "# Peekaboo\n",
-      });
-      await writeSkill({
-        dir: workspaceSkillDir,
-        name: "demo-skill",
-        description: "Workspace version",
-        body: "# Workspace\n",
-      });
+        await writeSkill({
+          dir: bundledSkillDir,
+          name: "peekaboo",
+          description: "Capture UI",
+          body: "# Peekaboo\n",
+        });
+        await writeSkill({
+          dir: workspaceSkillDir,
+          name: "demo-skill",
+          description: "Workspace version",
+          body: "# Workspace\n",
+        });
 
-      const prompt = buildWorkspaceSkillsPrompt(workspaceDir, {
-        bundledSkillsDir: bundledDir,
-        managedSkillsDir: path.join(workspaceDir, ".managed"),
-        config: { skills: { allowBundled: ["missing-skill"] } },
-      });
+        const prompt = await buildWorkspaceSkillsPrompt(workspaceDir, {
+          bundledSkillsDir: bundledDir,
+          managedSkillsDir: path.join(workspaceDir, ".managed"),
+          config: { skills: { allowBundled } },
+        });
 
-      expect(prompt).toContain("Workspace version");
-      expect(prompt).not.toContain("peekaboo");
-    } finally {
-      env.restore();
-      await fs.rm(workspaceDir, { recursive: true, force: true });
-    }
-  });
+        expect(prompt).toContain("Workspace version");
+        expect(prompt).not.toContain("peekaboo");
+      } finally {
+        env.restore();
+        await fs.rm(workspaceDir, { recursive: true, force: true });
+      }
+    },
+  );
 });

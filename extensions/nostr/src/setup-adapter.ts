@@ -1,4 +1,3 @@
-// Nostr plugin module implements setup adapter behavior.
 import {
   defineChannelSetupContract,
   type ChannelSetupAdapter,
@@ -13,7 +12,7 @@ import {
 } from "openclaw/plugin-sdk/setup";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { DEFAULT_RELAYS } from "./default-relays.js";
-import { NOSTR_PRIVATE_KEY_ENV_VAR } from "./private-key.js";
+import { NOSTR_PRIVATE_KEY_ENV_VAR, validatePrivateKey } from "./private-key.js";
 
 const channel = "nostr" as const;
 
@@ -34,13 +33,12 @@ export function buildNostrSetupPatch(accountId: string, patch: Record<string, un
 export function parseRelayUrls(raw: string): { relays: string[]; error?: string } {
   const relays: string[] = [];
   for (const entry of splitSetupEntries(raw)) {
-    try {
-      const parsed = new URL(entry);
-      if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
-        return { relays: [], error: `Relay must use ws:// or wss:// (${entry})` };
-      }
-    } catch {
+    const parsed = URL.parse(entry);
+    if (!parsed) {
       return { relays: [], error: `Invalid relay URL: ${entry}` };
+    }
+    if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
+      return { relays: [], error: `Relay must use ws:// or wss:// (${entry})` };
     }
     relays.push(entry);
   }
@@ -49,7 +47,6 @@ export function parseRelayUrls(raw: string): { relays: string[]; error?: string 
 
 export function createNostrSetupAdapter(params: {
   resolveAccountId: (cfg: OpenClawConfig, accountId?: string | null) => string;
-  validatePrivateKey: (privateKey: string) => boolean;
 }): ChannelSetupAdapter<NostrSetupInput> {
   return {
     resolveAccountId: ({ cfg, accountId }) => params.resolveAccountId(cfg, accountId),
@@ -65,7 +62,9 @@ export function createNostrSetupAdapter(params: {
         if (!privateKey) {
           return "Nostr requires --private-key or --use-env.";
         }
-        if (!params.validatePrivateKey(privateKey)) {
+        try {
+          validatePrivateKey(privateKey);
+        } catch {
           return "Nostr private key must be valid nsec or 64-character hex.";
         }
       }

@@ -1,9 +1,99 @@
 import Foundation
+import OpenClawKit
 import Testing
 @testable import OpenClawChatUI
 
 @Suite("Managed chat image attachments")
 struct ChatMessageMediaAttachmentTests {
+    @Test(arguments: [
+        ("document", "application/pdf", "report.pdf", OpenClawChatMediaKind.file),
+        ("audio", "audio/mpeg", "recording.mp3", OpenClawChatMediaKind.audio),
+        ("video", "video/mp4", "clip.mp4", OpenClawChatMediaKind.video),
+        ("image", "image/png", "chart.png", OpenClawChatMediaKind.image),
+    ])
+    func `sent media facts remain visible after history and cache reload`(
+        kind: String,
+        mimeType: String,
+        fileName: String,
+        expectedKind: OpenClawChatMediaKind) throws
+    {
+        let message = try JSONDecoder().decode(OpenClawChatMessage.self, from: Data("""
+        {"role":"user","content":[{"type":"text","text":"See attached."}],"__openclaw":{
+          "id":"user-turn","idempotencyKey":"send-1:user","media":[{
+            "url":"media://inbound/\(fileName)","kind":"\(kind)","contentType":"\(mimeType)",
+            "fileName":"\(fileName)","sizeBytes":1200,"durationMs":1500,"width":640,"height":480
+          }]}}
+        """.utf8))
+        let attachment = try #require(message.content.last)
+        #expect(message.content.count == 2)
+        #expect(attachment.isInlineAttachment)
+        #expect(attachment.fileName == fileName)
+        #expect(attachment.mimeType == mimeType)
+        #expect(attachment.url == "media://inbound/\(fileName)")
+        #expect(attachment.artifactId == nil)
+        #expect(attachment.sizeBytes == 1200)
+        #expect(attachment.durationSeconds == 1.5)
+        #expect(attachment.width == 640)
+        #expect(attachment.height == 480)
+        #expect(attachment.mediaKind == expectedKind)
+
+        let cached = try #require(OpenClawChatSQLiteTranscriptCache.cacheableMessages([message]).first)
+        let reloaded = try JSONDecoder().decode(OpenClawChatMessage.self, from: JSONEncoder().encode(cached))
+        #expect(reloaded.content == message.content)
+        #expect(reloaded.idempotencyKey == "send-1:user")
+        #expect(reloaded.transcriptMessageID == "user-turn")
+    }
+
+    @Test(arguments: ["null", "false", #"{"url":42}"#])
+    @MainActor
+    func `media facts do not duplicate existing file rows or inline image slots`(malformedFact: String) throws {
+        let raw = try JSONDecoder().decode(AnyCodable.self, from: Data("""
+        {"role":"user","content":[
+          {"type":"file","url":"media://inbound/report.pdf","mimeType":"application/pdf",
+           "fileName":"report.pdf"},
+          {"type":"image","mimeType":"image/png","content":"aW1hZ2U="},
+          {"type":"image","mimeType":"image/png","content":"b3RoZXI="}
+        ],"__openclaw":{"media":[
+          {"url":"media://inbound/report.pdf","contentType":"application/pdf","fileName":"report.pdf"},
+          \(malformedFact),
+          {"url":"media://inbound/chart.png","kind":"image","contentType":"image/png"},
+          {"url":"media://inbound/recording.mp3","kind":"audio","contentType":"audio/mpeg"}
+        ],"mediaImageLayout":{"slots":[{"kind":"inline"},{"kind":"inline","factIndex":2}]}}}
+        """.utf8))
+
+        let messages = OpenClawChatViewModel.decodeMessages([raw])
+        #expect(messages.count == 1)
+        let message = try #require(messages.first)
+        #expect(message.content.count == 4)
+        #expect(message.content.map(\.mediaKind) == [.file, .image, .image, .audio])
+        #expect(message.content.last?.fileName == "recording.mp3")
+        let cached = try #require(OpenClawChatSQLiteTranscriptCache.cacheableMessages([message]).first)
+        let reloaded = try JSONDecoder().decode(OpenClawChatMessage.self, from: JSONEncoder().encode(cached))
+        #expect(reloaded.content.map(\.mediaKind) == [.file, .image, .image, .audio])
+        #expect(reloaded.content.last?.fileName == "recording.mp3")
+    }
+
+    @Test func `decodes managed document envelope through history and cache`() throws {
+        let message = try JSONDecoder().decode(OpenClawChatMessage.self, from: Data("""
+        {"role":"assistant","content":[{"type":"attachment","attachment":{
+          "kind":"document","label":"report.csv","mimeType":"text/csv","sizeBytes":12,
+          "artifactId":"artifact_managed_media_11111111-1111-4111-8111-111111111111",
+          "url":"/api/chat/media/outgoing/main/11111111-1111-4111-8111-111111111111/full"
+        }}]}
+        """.utf8))
+        let attachment = try #require(message.content.first)
+        #expect(attachment.fileName == "report.csv")
+        #expect(attachment.mimeType == "text/csv")
+        #expect(attachment.sizeBytes == 12)
+        #expect(attachment.artifactId == "artifact_managed_media_11111111-1111-4111-8111-111111111111")
+        #expect(attachment.isInlineAttachment)
+        #expect(attachment.mediaKind == .file)
+        #expect(attachment.mediaKind?.acceptsManagedArtifactID(attachment.artifactId ?? "") == true)
+        let cached = try #require(OpenClawChatSQLiteTranscriptCache.cacheableMessages([message]).first)
+        let reloaded = try JSONDecoder().decode(OpenClawChatMessage.self, from: JSONEncoder().encode(cached))
+        #expect(reloaded.content.first == attachment)
+    }
+
     @Test func `decodes canonical managed image fields`() throws {
         let message = try JSONDecoder().decode(
             OpenClawChatMessage.self,
@@ -64,6 +154,8 @@ struct ChatMessageMediaAttachmentTests {
     }
 
     @Test(arguments: [
+        (OpenClawChatMediaKind.file, "artifact_managed_media_11111111-1111-4111-8111-111111111111", true),
+        (OpenClawChatMediaKind.file, "/tmp/report.csv", false),
         (OpenClawChatMediaKind.image, "artifact_managed_image_11111111-1111-4111-8111-111111111111", true),
         (OpenClawChatMediaKind.image, "artifact_managed_media_11111111-1111-4111-8111-111111111111", false),
         (OpenClawChatMediaKind.audio, "artifact_managed_media_11111111-1111-4111-8111-111111111111", true),

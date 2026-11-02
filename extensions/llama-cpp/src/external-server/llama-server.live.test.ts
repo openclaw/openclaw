@@ -5,12 +5,16 @@ import {
   type Context,
   type Model,
   type SimpleStreamOptions,
-  type Tool,
 } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { extractNonEmptyAssistantText, isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
-import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
+import {
+  createLiveValueTool,
+  createLiveToolReplayContext,
+  requireLiveToolCall,
+} from "../../../test-support/live-value-tool.test-support.js";
+import { makeUserMessage } from "../../../test-support/message-fixtures.test-support.js";
 import { discoverLlamaServer } from "./discovery.js";
 import { wrapLlamaServerStream } from "./stream.js";
 
@@ -40,7 +44,6 @@ async function resolveLiveModel(): Promise<{
   const discovery = await discoverLlamaServer({
     baseUrl: LIVE_URL,
     apiKey: LIVE_KEY,
-    cacheTtlMs: 0,
   });
   if (discovery.kind !== "success") {
     throw new Error(`llama-server discovery failed: ${discovery.kind}`);
@@ -65,22 +68,6 @@ async function resolveLiveModel(): Promise<{
   };
 }
 
-function echoTool(): Tool {
-  return {
-    name: "live_echo",
-    description: "Return the supplied value.",
-    parameters: Type.Object({ value: Type.String() }, { additionalProperties: false }),
-  };
-}
-
-function requireToolCall(message: AssistantMessage) {
-  const toolCall = message.content.find((block) => block.type === "toolCall");
-  if (toolCall?.type !== "toolCall") {
-    throw new Error(`llama-server model did not call a tool: ${message.stopReason}`);
-  }
-  return toolCall;
-}
-
 describeLive("llama-server live", () => {
   it("discovers and completes through the OpenAI completions transport", async () => {
     const { model } = await resolveLiveModel();
@@ -89,13 +76,7 @@ describeLive("llama-server live", () => {
         completeViaPlugin(
           model,
           {
-            messages: [
-              {
-                role: "user",
-                content: `Reply with exactly: ${word}`,
-                timestamp: Date.now(),
-              },
-            ],
+            messages: [makeUserMessage(`Reply with exactly: ${word}`, Date.now())],
           },
           {
             apiKey: LIVE_KEY || "llama-cpp-local",
@@ -119,13 +100,7 @@ describeLive("llama-server live", () => {
     const response = await completeViaPlugin(
       model,
       {
-        messages: [
-          {
-            role: "user",
-            content: "Return a JSON object with ok set to true.",
-            timestamp: Date.now(),
-          },
-        ],
+        messages: [makeUserMessage("Return a JSON object with ok set to true.", Date.now())],
       },
       {
         apiKey: LIVE_KEY || "llama-cpp-local",
@@ -150,13 +125,7 @@ describeLive("llama-server live", () => {
     const pending = completeViaPlugin(
       model,
       {
-        messages: [
-          {
-            role: "user",
-            content: "Write a detailed 2000-word history of computing.",
-            timestamp: Date.now(),
-          },
-        ],
+        messages: [makeUserMessage("Write a detailed 2000-word history of computing.", Date.now())],
       },
       {
         apiKey: LIVE_KEY || "llama-cpp-local",
@@ -175,12 +144,11 @@ describeLive("llama-server live", () => {
       ctx.skip();
       return;
     }
-    const tool = echoTool();
-    const user = {
-      role: "user" as const,
-      content: "Call live_echo with value llama-server. Do not answer directly.",
-      timestamp: Date.now() - 2,
-    };
+    const tool = createLiveValueTool("live_echo");
+    const user = makeUserMessage(
+      "Call live_echo with value llama-server. Do not answer directly.",
+      Date.now() - 2,
+    );
     const first = await completeViaPlugin(
       model,
       { messages: [user], tools: [tool] },
@@ -192,28 +160,13 @@ describeLive("llama-server live", () => {
     if (first.stopReason === "error") {
       throw new Error(first.errorMessage || "llama-server tool turn returned an error");
     }
-    const toolCall = requireToolCall(first);
+    const toolCall = requireLiveToolCall(first, "llama-server model did not call a tool: ");
     expect(toolCall.name).toBe("live_echo");
     expect(toolCall.arguments).toEqual({ value: "llama-server" });
 
     const second = await completeViaPlugin(
       model,
-      {
-        messages: [
-          user,
-          first,
-          {
-            role: "toolResult",
-            toolCallId: toolCall.id,
-            toolName: toolCall.name,
-            content: [{ type: "text", text: "ok" }],
-            isError: false,
-            timestamp: Date.now() - 1,
-          },
-          { role: "user", content: "Reply with exactly: ok", timestamp: Date.now() },
-        ],
-        tools: [tool],
-      },
+      createLiveToolReplayContext(user, first, toolCall, tool),
       {
         apiKey: LIVE_KEY || "llama-cpp-local",
         maxTokens: 128,

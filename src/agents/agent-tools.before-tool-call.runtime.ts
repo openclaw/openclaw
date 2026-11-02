@@ -5,7 +5,7 @@ import { markDiagnosticArgumentChurnObservation } from "../logging/diagnostic-ru
  * replace without loading the full runtime graph.
  */
 import { getDiagnosticSessionState } from "../logging/diagnostic-session-state.js";
-import { logToolLoopAction } from "../logging/diagnostic.js";
+import { logToolLoopAction } from "../logging/diagnostic-tool-loop.js";
 import { getArgumentChurnNoProgressStreak } from "./tool-loop-argument-churn.js";
 import { reconcileToolCallExecutionParams } from "./tool-loop-call-reconciliation.js";
 import {
@@ -13,9 +13,7 @@ import {
   recordToolCall,
   recordToolCallOutcome,
 } from "./tool-loop-detection.js";
-import { resolveToolLoopWarningThreshold } from "./tool-loop-thresholds.js";
 
-/** Runtime seam for before_tool_call diagnostics and loop detection. */
 export const beforeToolCallRuntime = {
   getArgumentChurnNoProgressStreak,
   markDiagnosticArgumentChurnObservation,
@@ -25,5 +23,4 @@ export const beforeToolCallRuntime = {
   reconcileToolCallExecutionParams,
   recordToolCall,
   recordToolCallOutcome,
-  resolveToolLoopWarningThreshold,
 };

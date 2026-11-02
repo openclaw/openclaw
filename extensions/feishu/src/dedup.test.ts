@@ -1,120 +1,77 @@
-// Feishu tests cover dedup plugin behavior.
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { feishuDedupeState } from "./dedup-state.js";
 import {
-  claimUnprocessedFeishuMessage,
-  finalizeFeishuMessageProcessing,
+  claimUnprocessedFeishuMessage as claimMessage,
+  finalizeFeishuMessageProcessing as finalizeMessage,
   hasProcessedFeishuMessage,
   warmupDedupFromPluginState,
 } from "./dedup.js";
 
 let tempDir: string | undefined;
-let previousStateDir: string | undefined;
+const message = (messageId: string) => ({ messageId, namespace: "account-a" });
 
 beforeEach(() => {
-  previousStateDir = process.env.OPENCLAW_STATE_DIR;
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-feishu-dedup-"));
-  process.env.OPENCLAW_STATE_DIR = tempDir;
+  vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
   feishuDedupeState.reset();
 });
 
-afterEach(() => {
+afterEach(async () => {
   vi.useRealTimers();
+  await closeOpenClawStateDatabaseAsync();
   resetPluginStateStoreForTests();
-  if (previousStateDir === undefined) {
-    delete process.env.OPENCLAW_STATE_DIR;
-  } else {
-    process.env.OPENCLAW_STATE_DIR = previousStateDir;
-  }
+  vi.unstubAllEnvs();
   if (tempDir) {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
   tempDir = undefined;
 });
 
-// Simulates a process restart: a fresh guard has empty memory and no in-flight
-// claims, so any duplicate verdict must come from the persisted SQLite rows.
+// Reopen SQLite with an empty guard so replay detection must read committed rows.
 async function restartFeishuDedup(): Promise<void> {
+  await closeOpenClawStateDatabaseAsync();
   feishuDedupeState.reset();
 }
 
 describe("Feishu claimable dedupe", () => {
-  it("prevents replay after a restart once a message is committed", async () => {
-    await expect(
-      finalizeFeishuMessageProcessing({ messageId: "msg-4", namespace: "account-a" }),
-    ).resolves.toBe(true);
+  it("preserves committed marks but not pending claims across a restart", async () => {
+    const params = message("msg-4");
+    await expect(claimMessage(params)).resolves.toMatchObject({ kind: "claimed" });
+    await restartFeishuDedup();
+    await expect(finalizeMessage(params)).resolves.toBe(true);
 
     await restartFeishuDedup();
-    await expect(
-      claimUnprocessedFeishuMessage({ messageId: "msg-4", namespace: "account-a" }),
-    ).resolves.toEqual({ kind: "duplicate" });
-    await expect(
-      finalizeFeishuMessageProcessing({ messageId: "msg-4", namespace: "account-a" }),
-    ).resolves.toBe(false);
+    await expect(claimMessage(params)).resolves.toEqual({ kind: "duplicate" });
+    await expect(finalizeMessage(params)).resolves.toBe(false);
   });
 
   it("commits a held claim without reclaiming it", async () => {
-    const claim = await claimUnprocessedFeishuMessage({
-      messageId: "msg-5",
-      namespace: "account-a",
-    });
-    expect(claim.kind).toBe("claimed");
-    if (claim.kind !== "claimed") {
-      throw new Error(`expected claimed result, received ${claim.kind}`);
-    }
-    await expect(
-      finalizeFeishuMessageProcessing({
-        messageId: "msg-5",
-        namespace: "account-a",
-        processingClaim: claim.handle,
-      }),
-    ).resolves.toBe(true);
-    await expect(
-      finalizeFeishuMessageProcessing({
-        messageId: "msg-5",
-        namespace: "account-a",
-      }),
-    ).resolves.toBe(false);
-  });
-
-  it("dedupes cross-account broadcast claims through the shared namespace", async () => {
-    // Multi-account groups deliver the same event once per bot account; the
-    // shared "broadcast" namespace lets the first account claim dispatch.
-    await expect(
-      finalizeFeishuMessageProcessing({ messageId: "msg-6", namespace: "broadcast" }),
-    ).resolves.toBe(true);
-    await expect(
-      finalizeFeishuMessageProcessing({ messageId: "msg-6", namespace: "broadcast" }),
-    ).resolves.toBe(false);
-
-    await restartFeishuDedup();
-    await expect(
-      finalizeFeishuMessageProcessing({ messageId: "msg-6", namespace: "broadcast" }),
-    ).resolves.toBe(false);
+    const params = message("msg-5");
+    const claim = await claimMessage(params);
+    assert(claim.kind === "claimed");
+    await expect(finalizeMessage({ ...params, processingClaim: claim.handle })).resolves.toBe(true);
+    await expect(finalizeMessage(params)).resolves.toBe(false);
   });
 
   it("warms memory from persisted plugin state", async () => {
-    await expect(
-      finalizeFeishuMessageProcessing({ messageId: "msg-7", namespace: "account-a" }),
-    ).resolves.toBe(true);
+    const params = message("msg-7");
+    await expect(finalizeMessage(params)).resolves.toBe(true);
     await restartFeishuDedup();
 
     await expect(warmupDedupFromPluginState("account-a")).resolves.toBe(1);
-    await expect(
-      finalizeFeishuMessageProcessing({ messageId: "msg-7", namespace: "account-a" }),
-    ).resolves.toBe(false);
+    await expect(finalizeMessage(params)).resolves.toBe(false);
   });
 
   it("ignores committed messages after the TTL expires", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
-    await expect(
-      finalizeFeishuMessageProcessing({ messageId: "msg-8", namespace: "account-a" }),
-    ).resolves.toBe(true);
+    await expect(finalizeMessage(message("msg-8"))).resolves.toBe(true);
     await restartFeishuDedup();
 
     vi.setSystemTime(1_000 + 24 * 60 * 60 * 1000 + 1);
@@ -127,13 +84,10 @@ describe("Feishu claimable dedupe", () => {
     fs.writeFileSync(blockedPath, "x", "utf8");
     process.env.OPENCLAW_STATE_DIR = path.join(blockedPath, "nested");
     const log = vi.fn();
+    const params = { ...message("msg-9"), log };
 
-    await expect(
-      finalizeFeishuMessageProcessing({ messageId: "msg-9", namespace: "account-a", log }),
-    ).resolves.toBe(true);
-    await expect(
-      claimUnprocessedFeishuMessage({ messageId: "msg-9", namespace: "account-a", log }),
-    ).resolves.toEqual({ kind: "duplicate" });
+    await expect(finalizeMessage(params)).resolves.toBe(true);
+    await expect(claimMessage(params)).resolves.toEqual({ kind: "duplicate" });
     expect(log).toHaveBeenCalledWith(
       expect.stringContaining("feishu-dedup: persistent state error"),
     );

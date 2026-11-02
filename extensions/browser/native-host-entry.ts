@@ -1,9 +1,9 @@
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { fileURLToPath } from "node:url";
 import {
   parseBrowserNativeHostOrigins,
   runBrowserNativeHost,
 } from "./src/browser/extension-native-host.js";
-import { buildBrowserExtensionPairing } from "./src/browser/extension-pairing.js";
+import { encodeBrowserNativeResponse } from "./src/browser/extension-native-protocol.js";
 
 function requiredArgument(name: string): string {
   const index = process.argv.indexOf(name);
@@ -16,28 +16,38 @@ function requiredArgument(name: string): string {
 
 async function main(): Promise<void> {
   const { callerOrigin, expectedOrigins } = parseBrowserNativeHostOrigins(process.argv.slice(2));
-  let responseFrame: Buffer | undefined;
-  await runBrowserNativeHost({
+  const response = await runBrowserNativeHost({
     manifestPath: requiredArgument("--manifest"),
     launcherPath: requiredArgument("--launcher"),
     callerOrigin,
     expectedOrigins,
     input: process.stdin,
-    write: (frame) => {
-      responseFrame = frame;
+    buildPairing: async (boundProfile) => {
+      // Config and relay-key work must remain behind the host's validation boundary.
+      const { buildBrowserNativeHostPairing } =
+        await import("./src/browser/extension-native-host.runtime.js");
+      const profileIndex = process.argv.indexOf("--browser-profile");
+      const profile = profileIndex >= 0 ? requiredArgument("--browser-profile") : undefined;
+      return await buildBrowserNativeHostPairing(boundProfile ?? profile);
     },
-    buildPairing: async () =>
-      await buildBrowserExtensionPairing({
-        cfg: getRuntimeConfig(),
-        localTransport: "gateway",
-      }),
+    ensureRelay: async (port) => {
+      const { createPluginRuntimeProcessEntrypoint, resolveRuntimeWorkerUrl } =
+        await import("openclaw/plugin-sdk/process-runtime");
+      const { ensureBrowserNativeRelay } =
+        await import("./src/browser/extension-native-host.runtime.js");
+      // Resolve the sibling entry here, not relative to a shared runtime chunk.
+      return await ensureBrowserNativeRelay(
+        port,
+        fileURLToPath(
+          resolveRuntimeWorkerUrl(
+            createPluginRuntimeProcessEntrypoint("browserRelayDaemon", import.meta.url),
+          ),
+        ),
+      );
+    },
   });
-  const response = responseFrame;
-  if (!response) {
-    throw new Error("Native host produced no response frame");
-  }
   await new Promise<void>((resolve) => {
-    process.stdout.write(response, () => resolve());
+    process.stdout.write(encodeBrowserNativeResponse(response), () => resolve());
   });
 }
 

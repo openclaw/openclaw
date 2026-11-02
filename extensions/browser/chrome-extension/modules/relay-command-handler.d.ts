@@ -1,16 +1,28 @@
-import type { TabAccessEpoch } from "./tab-access.js";
-import type { AccessibleBrowserTabSnapshot, BrowserTabSnapshot } from "./tab-eligibility.js";
+import type { CreatedTabOperation, TabAccessEpoch, TabAccessPolicy } from "./tab-access.js";
+import type { BrowserTabSnapshot } from "./tab-eligibility.js";
+
+type RequireRelayTab = (
+  tabId: number,
+  epoch: TabAccessEpoch,
+) => ReturnType<TabAccessPolicy["requireTab"]>;
 
 export function createRelayCommandHandler(params: {
+  isCurrent: () => boolean;
   send: (message: Record<string, unknown>) => void;
-  attachDebugger: (tabId: number) => Promise<unknown>;
+  attachDebugger: CreatedTabOperation["attachDebugger"];
   detachDebugger: (tabId: number) => Promise<void>;
-  addTabToOpenClawGroup: (tabId: number) => Promise<void>;
+  createTab: (message: Record<string, unknown>, operation: CreatedTabOperation) => Promise<void>;
   focusWindowForTab: (tab: BrowserTabSnapshot) => Promise<void>;
   scheduleTabsSync: () => void;
-  captureAccess: (tabId: number) => TabAccessEpoch;
-  requireAccessibleTab: (
+  captureDebugger: (tabId: number) => () => void;
+  captureAccess: (tabId: number, method?: string) => TabAccessEpoch;
+  navigateTab: (
     tabId: number,
     epoch: TabAccessEpoch,
-  ) => Promise<AccessibleBrowserTabSnapshot>;
+    params: Record<string, unknown>,
+    isCurrent: () => boolean,
+    sendCommand: (method: string, params: Record<string, unknown>) => Promise<unknown>,
+  ) => Promise<unknown>;
+  requireNavigatedTab: RequireRelayTab;
+  requireAccessibleTab: RequireRelayTab;
 }): (message: Record<string, unknown>) => Promise<void>;

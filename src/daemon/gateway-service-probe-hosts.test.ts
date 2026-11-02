@@ -14,7 +14,7 @@ const mocks = vi.hoisted(() => ({
   pickPrimaryTailnetIPv4: vi.fn<() => string | undefined>(() => undefined),
 }));
 
-vi.mock("../config/io.js", () => ({
+vi.mock("../config/io.runtime.js", () => ({
   createConfigIO: (options: unknown) => mocks.createConfigIO(options),
 }));
 
@@ -91,6 +91,11 @@ describe("resolveGatewayServiceProbeHosts", () => {
           suppressFutureVersionWarning: true,
         }),
       );
+      mocks.createConfigIO.mockClear();
+      await expect(resolveGatewayServiceProbeHosts({ config: mocks.cfg })).resolves.toEqual(
+        testCase.expected,
+      );
+      expect(mocks.createConfigIO).not.toHaveBeenCalled();
     },
   );
 });

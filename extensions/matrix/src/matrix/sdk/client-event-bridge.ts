@@ -1,10 +1,11 @@
 import { EventEmitter } from "node:events";
 import {
   ClientEvent,
+  SyncState,
   type MatrixClient as MatrixJsClient,
   type MatrixEvent,
 } from "matrix-js-sdk/lib/matrix.js";
-import type { Room } from "matrix-js-sdk/lib/models/room.js";
+import { RoomEvent, type Room } from "matrix-js-sdk/lib/models/room.js";
 import type { MatrixSyncState } from "../sync-state.js";
 import type { MatrixDecryptBridge } from "./decrypt-bridge.js";
 import { matrixEventToRaw } from "./event-helpers.js";
@@ -16,8 +17,21 @@ export function registerMatrixClientBridge(params: {
   emitter: EventEmitter;
   emitMembershipForRoom: (room: Room) => void;
   getSelfUserId: () => string;
-  setCurrentSyncState: (state: MatrixSyncState, error?: unknown) => void;
+  setCurrentSyncState: (state: MatrixSyncState, error: unknown, fromCache: boolean) => void;
 }): void {
+  let initialSyncComplete = false;
+  const joinTransitions = new WeakSet<MatrixEvent>();
+  params.client.on(RoomEvent.MyMembership, (room, membership, previousMembership) => {
+    // The SDK records transitions before raw events. Missing prev_content alone
+    // cannot distinguish a new join from state replay or a profile update.
+    if (!initialSyncComplete || membership !== "join" || previousMembership === "join") {
+      return;
+    }
+    const event = room.currentState.getStateEvents("m.room.member", params.getSelfUserId());
+    if (event) {
+      joinTransitions.add(event);
+    }
+  });
   params.client.on(ClientEvent.Event, (event: MatrixEvent) => {
     const roomId = event.getRoomId();
     if (!roomId) {
@@ -43,7 +57,14 @@ export function registerMatrixClientBridge(params: {
       if (membership === "invite") {
         params.emitter.emit("room.invite", roomId, raw);
       } else if (membership === "join") {
-        params.emitter.emit("room.join", roomId, raw);
+        params.emitter.emit("room.join", roomId, {
+          ...raw,
+          membershipProvenance: joinTransitions.delete(event)
+            ? "transition"
+            : initialSyncComplete
+              ? "update"
+              : "snapshot",
+        } satisfies MatrixRawEvent);
       }
     }
 
@@ -54,24 +75,20 @@ export function registerMatrixClientBridge(params: {
 
   // Some SDK invite transitions are surfaced as room lifecycle events instead of raw timeline events.
   params.client.on(ClientEvent.Room, params.emitMembershipForRoom);
-  params.client.on(
-    ClientEvent.Sync,
-    (state: MatrixSyncState, prevState: string | null, data?: unknown) => {
-      const error =
-        data && typeof data === "object" && "error" in data
-          ? (data as { error?: unknown }).error
-          : undefined;
-      params.setCurrentSyncState(state, error);
-      params.emitter.emit("sync.state", state, prevState, error);
-    },
-  );
+  params.client.on(ClientEvent.Sync, (state, prevState, data) => {
+    // CATCHUP can precede the first successful sync after startup connection errors.
+    initialSyncComplete ||= state === SyncState.Prepared || state === SyncState.Syncing;
+    const error = data?.error;
+    const fromCache = data?.fromCache === true;
+    params.setCurrentSyncState(state, error, fromCache);
+    params.emitter.emit("sync.state", state, prevState, error);
+  });
   params.client.on(ClientEvent.SyncUnexpectedError, (error: Error) => {
     params.emitter.emit("sync.unexpected_error", error);
   });
 }
 
 export function emitMatrixMembershipForRoom(params: {
-  client: MatrixJsClient;
   emitter: EventEmitter;
   room: Room;
   selfUserId: string;
@@ -89,6 +106,7 @@ export function emitMatrixMembershipForRoom(params: {
     content: { membership },
     origin_server_ts: Date.now(),
     unsigned: { age: 0 },
+    membershipProvenance: "snapshot",
   };
   if (membership === "invite") {
     params.emitter.emit("room.invite", roomId, raw);

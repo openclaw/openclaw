@@ -1,16 +1,16 @@
-// Qa Lab plugin module implements gateway log redaction behavior.
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
-import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
+import { escapeRegExp, sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   QA_PROVIDER_SECRET_ENV_KEY_PATTERNS,
   QA_PROVIDER_SECRET_ENV_VARS,
 } from "./providers/env.js";
 
-const QA_GATEWAY_DEBUG_SECRET_ENV_VARS = Object.freeze([
+const QA_GATEWAY_DEBUG_SECRET_ENV_VARS: readonly string[] = [
   ...QA_PROVIDER_SECRET_ENV_VARS,
   "OPENCLAW_GATEWAY_TOKEN",
-]);
-const QA_GATEWAY_DEBUG_SECRET_VALUE_KEYS = Object.freeze([
+];
+const QA_GATEWAY_DEBUG_SECRET_VALUE_KEYS: readonly string[] = [
   "accessToken",
   "access_token",
   "apiKey",
@@ -28,8 +28,8 @@ const QA_GATEWAY_DEBUG_SECRET_VALUE_KEYS = Object.freeze([
   "refresh_token",
   "set-cookie",
   "x-api-key",
-]);
-const QA_GATEWAY_DEBUG_SECRET_QUERY_KEYS = Object.freeze([
+];
+const QA_GATEWAY_DEBUG_SECRET_QUERY_KEYS: readonly string[] = [
   "access_token",
   "api_key",
   "apiKey",
@@ -40,22 +40,25 @@ const QA_GATEWAY_DEBUG_SECRET_QUERY_KEYS = Object.freeze([
   "password",
   "refresh_token",
   "token",
-]);
-const QA_GATEWAY_DEBUG_SECRET_HEADER_KEYS = Object.freeze(["cookie", "set-cookie", "x-api-key"]);
+];
+const QA_GATEWAY_DEBUG_SECRET_HEADER_KEYS = ["cookie", "set-cookie", "x-api-key"] as const;
 const TELEGRAM_BOT_TOKEN_RE = /\d{6,}:[A-Za-z0-9_-]{20,}/gu;
 
 function redactTelegramBotTokens(text: string) {
   return text.replace(TELEGRAM_BOT_TOKEN_RE, (token) => `${token.slice(0, 6)}…${token.slice(-4)}`);
 }
 
-function redactSecretEnvKeyPattern(text: string, pattern: RegExp) {
-  const source = pattern.source.replace(/^\^/u, "").replace(/\$$/u, "");
+function redactSecretEnvKey(text: string, source: string, preserveSpacing: boolean) {
+  const jsonKey = preserveSpacing ? `("${source}"\\s*:\\s*)` : `"(${source})"\\s*:\\s*`;
   return text
     .replace(
       new RegExp(`\\b(${source})(\\s*[=:]\\s*)([^\\s"';,]+|"[^"]*"|'[^']*')`, "g"),
       `$1$2<redacted>`,
     )
-    .replace(new RegExp(`"(${source})"\\s*:\\s*"[^"]*"`, "g"), `"$1":"<redacted>"`);
+    .replace(
+      new RegExp(`${jsonKey}"[^"]*"`, "g"),
+      preserveSpacing ? `$1"<redacted>"` : `"$1":"<redacted>"`,
+    );
 }
 
 function redactSecretValueKey(text: string, key: string) {
@@ -103,18 +106,11 @@ export function redactQaGatewayDebugText(text: string) {
     );
   }
   for (const envVar of QA_GATEWAY_DEBUG_SECRET_ENV_VARS) {
-    const escapedEnvVar = escapeRegExp(envVar);
-    redacted = redacted.replace(
-      new RegExp(`\\b(${escapedEnvVar})(\\s*[=:]\\s*)([^\\s"';,]+|"[^"]*"|'[^']*')`, "g"),
-      `$1$2<redacted>`,
-    );
-    redacted = redacted.replace(
-      new RegExp(`("${escapedEnvVar}"\\s*:\\s*)"[^"]*"`, "g"),
-      `$1"<redacted>"`,
-    );
+    redacted = redactSecretEnvKey(redacted, escapeRegExp(envVar), true);
   }
   for (const pattern of QA_PROVIDER_SECRET_ENV_KEY_PATTERNS) {
-    redacted = redactSecretEnvKeyPattern(redacted, pattern);
+    const source = pattern.source.replace(/^\^/u, "").replace(/\$$/u, "");
+    redacted = redactSecretEnvKey(redacted, source, false);
   }
   for (const key of QA_GATEWAY_DEBUG_SECRET_VALUE_KEYS) {
     redacted = redactSecretValueKey(redacted, key);
@@ -139,4 +135,20 @@ export function redactQaGatewayDebugText(text: string) {
 export function formatQaGatewayLogsForError(logs: string) {
   const sanitized = redactQaGatewayDebugText(logs).trim();
   return sanitized.length > 0 ? `\nGateway logs:\n${sanitized}` : "";
+}
+
+export function createQaGatewayCliError(error: unknown): Error {
+  // Candidate errors can carry credentials in nested causes, spawnargs, or output.
+  // Retain only a bounded, redacted message, including for lifecycle-held failures.
+  let message = redactQaGatewayDebugText(coerceErrorMessage(error));
+  const maxChars = 2_048;
+  if (message.length > maxChars) {
+    // Doctor can print setup panels before its terminal error. Preserve both
+    // ends after redaction so the bounded diagnostic retains the failure.
+    // Keep the tail on this line so slicing cannot create a workflow command.
+    const marker = "\n… output omitted … ";
+    const edgeChars = Math.floor((maxChars - marker.length) / 2);
+    message = `${sliceUtf16Safe(message, 0, edgeChars)}${marker}${sliceUtf16Safe(message, -edgeChars)}`;
+  }
+  return new Error(message);
 }

@@ -1,0 +1,134 @@
+/* @vitest-environment jsdom */
+import { createRoot } from "solid-js";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
+import { MockWebSocket, wsInstances } from "../../api/gateway-socket.test-support.ts";
+import { GatewayBrowserClient } from "../../api/gateway.ts";
+import * as deviceIdentity from "../../lib/nodes/index.ts";
+import { createStorageMock } from "../../test-helpers/storage.ts";
+import { createModelSetupDetectRequest, createModelSetupVerifyRequest } from "./rpc.ts";
+
+type RequestFrame = { id: string; method: string; params?: unknown };
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  wsInstances.length = 0;
+  vi.stubGlobal("localStorage", createStorageMock());
+  vi.stubGlobal("WebSocket", MockWebSocket);
+  vi.spyOn(deviceIdentity, "loadOrCreateDeviceIdentity").mockResolvedValue({
+    deviceId: "test-device",
+    privateKey: "test-private-key", // pragma: allowlist secret
+    publicKey: "test-public-key",
+  });
+  vi.spyOn(deviceIdentity, "signDevicePayload").mockResolvedValue("test-signature");
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+
+it.each([
+  { outcome: "reply", modelTarget: "utility" },
+  { outcome: "abort", modelTarget: "utility" },
+  { outcome: "deadline", modelTarget: undefined },
+] as const)(
+  "keeps verification through a healthy slow model response while preserving $outcome settlement for target $modelTarget",
+  async ({ outcome, modelTarget }) => {
+    const client = new GatewayBrowserClient({ url: "ws://localhost", token: "test-token" });
+    let stop: (() => void) | undefined;
+    try {
+      client.start();
+      const socket = wsInstances[0]!;
+      const frames = () => socket.sent.map((raw): RequestFrame => JSON.parse(raw));
+      socket.emitOpen();
+      socket.emitConnectChallenge({ nonce: "test-nonce", ts: Date.now() });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(frames().some((frame) => frame.method === "connect")).toBe(true);
+      const connect = frames().find((frame) => frame.method === "connect")!;
+      socket.emitMessage({
+        type: "res",
+        id: connect.id,
+        ok: true,
+        payload: {
+          type: "hello-ok",
+          protocol: 4,
+          auth: { role: "operator", scopes: ["operator.admin"] },
+          policy: { tickIntervalMs: 10_000 },
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      const runVerification = createRoot((dispose) => {
+        stop = dispose;
+        return createModelSetupVerifyRequest();
+      });
+      const settled = vi.fn();
+      const verification = runVerification([client, "main", modelTarget]);
+      void verification.then(settled, settled);
+      const request: RequestFrame = JSON.parse(socket.sent.at(-1)!);
+      expect(request.method).toBe("openclaw.setup.verify");
+      expect(request.params).toEqual(
+        modelTarget ? { agentId: "main", modelTarget: "utility" } : { agentId: "main" },
+      );
+      let tick = 0;
+      const advanceHealthy = async (durationMs: number) => {
+        for (let remaining = durationMs; remaining > 0; remaining -= 5_000) {
+          await vi.advanceTimersByTimeAsync(Math.min(remaining, 5_000));
+          socket.emitMessage({ type: "event", event: "tick", seq: ++tick, payload: {} });
+        }
+      };
+      // A healthy model may still be executing inside the Gateway's 90-second probe.
+      await advanceHealthy(45_000);
+      expect(client.connected).toBe(true);
+      expect(settled).not.toHaveBeenCalled();
+      const result = { ok: true, modelRef: "provider/local-model", latencyMs: 45_000 };
+      if (outcome === "abort") {
+        await runVerification([null, null, undefined]);
+        await expect(verification).resolves.toBeUndefined();
+      } else if (outcome === "deadline") {
+        await advanceHealthy(105_000);
+        await expect(verification).resolves.toEqual({
+          client,
+          error: expect.objectContaining({ message: expect.stringContaining("timed out") }),
+        });
+      }
+      socket.emitMessage({ type: "res", id: request.id, ok: true, payload: result });
+      if (outcome === "reply") {
+        await expect(verification).resolves.toEqual({ client, value: result });
+      }
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toHaveBeenCalledOnce();
+    } finally {
+      stop?.();
+      client.stop();
+    }
+  },
+);
+
+it.each(["disconnected", "owner-rejected"])(
+  "retires a %s detection before returning its transport response",
+  async (reason) => {
+    const response = createDeferred<import("../../api/types.ts").SystemAgentSetupDetectResult>();
+    let stop!: () => void;
+    const onComplete = vi.fn(() => (reason === "owner-rejected" ? false : undefined));
+    const client = { request: () => response.promise } as unknown as GatewayBrowserClient;
+    const runDetection = createRoot((dispose) => {
+      stop = dispose;
+      return createModelSetupDetectRequest({ getHello: () => null, onComplete });
+    });
+    const running = runDetection([client, "main", {}]);
+    if (reason === "disconnected") {
+      stop();
+    }
+    response.resolve({
+      candidates: [],
+      manualProviders: [],
+      workspace: "/tmp/setup",
+      setupComplete: false,
+    });
+    await expect(running).resolves.toBeUndefined();
+    expect(onComplete).toHaveBeenCalledTimes(reason === "disconnected" ? 0 : 1);
+    stop();
+  },
+);

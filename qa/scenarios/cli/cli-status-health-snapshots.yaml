@@ -1,0 +1,38 @@
+title: CLI status and health snapshots
+
+scenario:
+  id: cli-status-health-snapshots
+  surface: cli
+  category: cli.cli-observability
+  coverage:
+    primary:
+      - cli.status-snapshots
+      - cli.health-snapshots
+  objective: >-
+    Verify the shipped status and health commands truthfully report one real,
+    isolated Gateway while it is healthy and after it has stopped.
+  successCriteria:
+    - Status JSON reports the running Gateway as reachable and health JSON reports a successful snapshot.
+    - After the same Gateway stops, status JSON remains parseable and reports it unreachable with an error.
+    - Stopped-Gateway health JSON remains parseable, exits nonzero, and reports a transport error for the same target.
+    - Human status output names the unavailable Gateway and gives an actionable recovery command.
+    - No status, health, or evidence output contains the Gateway authentication token.
+  docsRefs:
+    - docs/cli/status.md
+    - docs/cli/health.md
+  codeRefs:
+    - src/commands/status.command.ts
+    - src/commands/health.ts
+    - extensions/qa-lab/src/gateway-child.ts
+    - test/e2e/qa-lab/runtime/cli-status-health-snapshots.ts
+  execution:
+    kind: script
+    parallelSafe: true
+    timeoutMs: 180000
+    path: test/e2e/qa-lab/runtime/cli-status-health-snapshots.ts
+    summary: >-
+      Starts one isolated real Gateway, executes the shipped status and health
+      commands, stops that Gateway, and repeats the operator-facing probes.
+    args:
+      - --artifact-base
+      - ${outputDir}

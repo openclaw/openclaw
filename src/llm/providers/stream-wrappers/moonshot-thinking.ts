@@ -1,9 +1,10 @@
-// Moonshot thinking wrapper normalizes reasoning output from Moonshot streams.
 import { asOptionalRecord as asPayloadRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { StreamFn } from "../../../agents/runtime/index.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
-import { streamSimple } from "../../stream.js";
+import { createLazyRuntimeModule } from "../../../shared/lazy-runtime.js";
+
+const loadDefaultStream = createLazyRuntimeModule(() => import("../../stream.js"));
 
 type MoonshotThinkingType = "enabled" | "disabled";
 type MoonshotThinkingKeep = "all";
@@ -12,6 +13,8 @@ const MOONSHOT_ALWAYS_THINKING = {
   "kimi-k2.7-code": "low",
   "kimi-k2.7-code-highspeed": "low",
   "kimi-k3": "max",
+  "kimi-k3.1-pro": "max",
+  "kimi-k3.1-pro-highspeed": "max",
 } as const;
 const FIXED_SAMPLING_FIELDS = "temperature top_p n presence_penalty frequency_penalty".split(" ");
 type MoonshotAlwaysThinkingEffort = "low" | "max";
@@ -54,7 +57,8 @@ function resolveAlwaysThinkingEffort(
   directMoonshotModel: boolean,
 ): MoonshotAlwaysThinkingEffort | undefined {
   const effort = MOONSHOT_ALWAYS_THINKING[modelId as keyof typeof MOONSHOT_ALWAYS_THINKING];
-  return effort && (modelId !== "kimi-k3" || directMoonshotModel) ? effort : undefined;
+  // K3-family max effort is the direct Moonshot API contract; proxies map effort themselves.
+  return effort && (effort !== "max" || directMoonshotModel) ? effort : undefined;
 }
 
 function sanitizeAlwaysThinkingPayload(
@@ -143,7 +147,10 @@ export function createMoonshotThinkingWrapper(
   thinkingKeep?: MoonshotThinkingKeep,
   finalizePayload?: MoonshotPayloadFinalizer,
 ): StreamFn {
-  const underlying = baseStreamFn ?? streamSimple;
+  // Catalog imports need only the policy. Resolve the default transport when a stream starts;
+  // an explicitly supplied stream keeps its synchronous invocation contract.
+  const underlying: StreamFn =
+    baseStreamFn ?? (async (...args) => (await loadDefaultStream()).streamSimple(...args));
   return function moonshotThinkingStream(model, context, options) {
     const modelId = model.id.trim().toLowerCase();
     const directMoonshotModel = normalizeOptionalLowercaseString(model.provider) === "moonshot";

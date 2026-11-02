@@ -1,0 +1,77 @@
+import type {
+  ChannelDoctorConfigMutation,
+  ChannelDoctorLegacyConfigRule,
+} from "openclaw/plugin-sdk/channel-contract";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  defineChannelAliasMigration,
+  normalizeChannelConfigEntries,
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+
+// Disabled `channels.imessage.catchup` blocks are retired. Enabled blocks stay
+// as a compatibility contract: older configs that opted into replay still get
+// downtime recovery, while new/default installs use the always-on recovery
+// cursor plus stale-backlog fence.
+function isEnabledCatchup(value: unknown): boolean {
+  return isRecord(value) && value.enabled === true;
+}
+
+function imessageEntryHasRetiredCatchup(entry: unknown): boolean {
+  if (!isRecord(entry)) {
+    return false;
+  }
+  if (Object.hasOwn(entry, "catchup") && !isEnabledCatchup(entry.catchup)) {
+    return true;
+  }
+  const accounts = entry.accounts;
+  if (!isRecord(accounts)) {
+    return false;
+  }
+  return Object.values(accounts).some(
+    (account) =>
+      isRecord(account) && Object.hasOwn(account, "catchup") && !isEnabledCatchup(account.catchup),
+  );
+}
+
+// iMessage's nested streaming schema is delivery-only ({chunkMode, block}); it
+// has no preview mode, so only the delivery flat aliases are legal legacy input.
+const streamingAliasMigration = defineChannelAliasMigration({
+  channelId: "imessage",
+  streaming: { defaultMode: "partial", deliveryOnly: true },
+});
+
+export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
+  {
+    path: ["channels", "imessage"],
+    message:
+      "disabled channels.imessage.catchup config is retired; iMessage now recovers via always-on inbound dedupe and a stale-backlog age fence. " +
+      'Run "openclaw doctor --fix" to remove disabled catchup blocks.',
+    match: (value) => imessageEntryHasRetiredCatchup(value),
+  },
+  ...streamingAliasMigration.legacyConfigRules,
+];
+
+export function normalizeCompatibilityConfig({
+  cfg,
+}: {
+  cfg: OpenClawConfig;
+}): ChannelDoctorConfigMutation {
+  const catchup = normalizeChannelConfigEntries({
+    cfg,
+    channelId: "imessage",
+    normalizeEntry: ({ entry, pathPrefix, changes }) => {
+      if (!Object.hasOwn(entry, "catchup") || isEnabledCatchup(entry.catchup)) {
+        return { entry, changed: false };
+      }
+      const next = { ...entry };
+      delete next.catchup;
+      changes.push(`Removed disabled retired ${pathPrefix}.catchup.`);
+      return { entry: next, changed: true };
+    },
+  });
+  return streamingAliasMigration.normalizeChannelConfig({
+    cfg: catchup.config,
+    changes: catchup.changes,
+  });
+}

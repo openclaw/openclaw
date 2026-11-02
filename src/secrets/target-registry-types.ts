@@ -1,30 +1,25 @@
-/** Config document that owns a registered secret-bearing target. */
+import type { ConcreteConfigPathSegment } from "../shared/dot-path.js";
+
 export type SecretTargetConfigFile = "openclaw.json" | "auth-profile-store"; // pragma: allowlist secret
 /** Storage shape used by a target: inline SecretInput or a sibling `*Ref` field. */
 export type SecretTargetShape = "secret_input" | "sibling_ref"; // pragma: allowlist secret
-/** Resolved value shape accepted by runtime and apply validation. */
 export type SecretTargetExpected = "string" | "string-or-object"; // pragma: allowlist secret
-/** Auth profile families that have separate secret target coverage. */
 type AuthProfileType = "api_key" | "token";
 
-/**
- * Registry metadata for one configurable secret-bearing value.
- */
 export type SecretTargetRegistryEntry = {
   /** Stable id used by plans, audits, docs, and targeted discovery filters. */
   id: string;
   /** Plan/configure target family; aliases keep CLI-facing names additive. */
   targetType: string;
   targetTypeAliases?: string[];
-  /** Config document where the value is discovered or rewritten. */
   configFile: SecretTargetConfigFile;
   /** Dot-path pattern for the secret-bearing value; `*` captures path segments. */
   pathPattern: string;
+  /** Structured pattern segments preserve literal plugin IDs containing dots. */
+  pathPatternSegments?: string[];
   /** Optional sibling SecretRef path materialized from the same captures as `pathPattern`. */
   refPathPattern?: string;
-  /** Whether the registered value stores a SecretInput directly or via a sibling ref field. */
   secretShape: SecretTargetShape;
-  /** Runtime value shape accepted after SecretRef resolution. */
   expectedResolvedValue: SecretTargetExpected;
   /** Enables `openclaw secrets apply` targeting for this entry. */
   includeInPlan: boolean;
@@ -36,30 +31,27 @@ export type SecretTargetRegistryEntry = {
   providerIdPathSegmentIndex?: number;
   /** Captured path segment that names the owning account/profile, when applicable. */
   accountIdPathSegmentIndex?: number;
-  /** Auth-profile family for auth-profiles.json entries. */
   authProfileType?: AuthProfileType;
   /** Enables provider-shadowing diagnostics for provider-auth surfaces with fallback order. */
   trackProviderShadowing?: boolean;
 };
 
-/**
- * Concrete plan/config target after registry pattern matching and capture resolution.
- */
 export type ResolvedPlanTarget = {
   entry: SecretTargetRegistryEntry;
   /** Concrete path to the secret-bearing value in the owning config document. */
   pathSegments: string[];
+  /** Internal mutation path preserving the registered record-key versus array-index shape. */
+  pathTokens: ConcreteConfigPathSegment[];
   /** Concrete sibling SecretRef path when `entry.secretShape` is `sibling_ref`. */
   refPathSegments?: string[];
+  /** Internal sibling mutation path preserving captured container shape. */
+  refPathTokens?: ConcreteConfigPathSegment[];
   /** Provider id captured from `pathSegments`, if the registry entry declares one. */
   providerId?: string;
   /** Account/profile id captured from `pathSegments`, if the registry entry declares one. */
   accountId?: string;
 };
 
-/**
- * A configured secret target discovered during audit/config scanning.
- */
 export type DiscoveredConfigSecretTarget = {
   entry: SecretTargetRegistryEntry;
   /** Dot path for display, audit output, and CLI targeting. */

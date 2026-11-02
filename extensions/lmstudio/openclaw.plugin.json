@@ -1,11 +1,12 @@
 {
   "id": "lmstudio",
-  "icon": "https://cdn.simpleicons.org/lmstudio",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },
   "enabledByDefault": true,
   "providers": ["lmstudio"],
+  "providerCatalogEntry": "./provider-discovery.ts",
   "modelCatalog": {
     "discovery": {
       "lmstudio": "refreshable"

@@ -1,0 +1,117 @@
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import {
+  getSqliteDatabaseAdmission,
+  publishSqliteDatabaseAdmission,
+  type SqliteDatabaseAdmissionKey,
+} from "../infra/sqlite-database-admission.js";
+import { assertCanonicalSessionValidationSchema } from "./openclaw-agent-canonical-validation-schema.js";
+import { CANONICAL_READY_COLUMN_DEFINITION } from "./openclaw-agent-db-additive-columns.js";
+import { findOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
+import type { DB } from "./openclaw-agent-db.generated.js";
+import { ensureColumn, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
+
+type ReceiptDatabase = { db: EngineConnection; agentId: string };
+const canonicalReceiptAdmission: SqliteDatabaseAdmissionKey<string | null> = {
+  name: "agent.canonical-validation-receipt",
+  lifetime: "process",
+  // Canonical writers preserve proof; only schema changes and offline repair revoke it.
+  schemaDependent: true,
+  read: (value) => (value === null || typeof value === "string" ? value : undefined),
+};
+
+export function hasOpenClawAgentCanonicalValidationReceiptColumn(db: EngineConnection): boolean {
+  const { tableName, columnName } = CANONICAL_READY_COLUMN_DEFINITION;
+  return tableHasColumn(db, tableName, columnName);
+}
+
+function physicalReceipt(database: ReceiptDatabase): string | undefined {
+  const physical = findOpenClawAgentDatabaseIdentity(database);
+  if (!physical || typeof physical.identity !== "string") {
+    return undefined;
+  }
+  // Advance the receipt revision when canonical validation rules change.
+  return JSON.stringify([1, database.agentId, physical.identity, physical.birthtime]);
+}
+
+/** Canonical proof follows this file generation; it never certifies physical integrity. */
+export function hasPersistedOpenClawAgentCanonicalValidation(database: ReceiptDatabase): boolean {
+  const receipt = physicalReceipt(database);
+  return (
+    receipt !== undefined &&
+    getSqliteDatabaseAdmission(database.db, canonicalReceiptAdmission) === receipt
+  );
+}
+
+/** Load proof from the contract row; a published repair/certification wins over an earlier read. */
+export function loadOpenClawAgentCanonicalValidationReceipt(
+  database: ReceiptDatabase,
+  observation?: { canonicalReady: string | null },
+): boolean {
+  const receipt = physicalReceipt(database);
+  if (!receipt) {
+    return false;
+  }
+  let persisted = getSqliteDatabaseAdmission(database.db, canonicalReceiptAdmission);
+  if (persisted === undefined) {
+    if (!hasOpenClawAgentCanonicalValidationReceiptColumn(database.db)) {
+      return false;
+    }
+    assertCanonicalSessionValidationSchema(database.db);
+    persisted = observation
+      ? observation.canonicalReady
+      : (executeSqliteQueryTakeFirstSync(
+          database.db,
+          getNodeSqliteKysely<Pick<DB, "session_key_contract">>(database.db)
+            .selectFrom("session_key_contract")
+            .select("canonical_ready")
+            .where("id", "=", 1),
+        )?.canonical_ready ?? null);
+    publishSqliteDatabaseAdmission(database.db, canonicalReceiptAdmission, persisted);
+  }
+  return persisted === receipt;
+}
+
+/** The certifying writer records proof in the same authorized transaction as its final batch. */
+export function recordOpenClawAgentCanonicalValidation(database: ReceiptDatabase): void {
+  if (!database.db.isTransaction) {
+    throw new Error("Canonical validation receipt requires write admission");
+  }
+  const receipt = physicalReceipt(database);
+  if (!receipt) {
+    throw new Error("Canonical validation database owner is no longer current");
+  }
+  assertCanonicalSessionValidationSchema(database.db);
+  if (!hasOpenClawAgentCanonicalValidationReceiptColumn(database.db)) {
+    const { tableName, columnName, dataType } = CANONICAL_READY_COLUMN_DEFINITION;
+    ensureColumn(database.db, tableName, `${columnName} ${dataType}`);
+  }
+  executeSqliteQuerySync(
+    database.db,
+    getNodeSqliteKysely<Pick<DB, "session_key_contract">>(database.db)
+      .updateTable("session_key_contract")
+      .set({ canonical_ready: receipt })
+      .where("id", "=", 1),
+  );
+  publishSqliteDatabaseAdmission(database.db, canonicalReceiptAdmission, receipt);
+}
+
+/** Offline repair revokes imported-row proof without changing physical integrity admission. */
+export function clearPersistedOpenClawAgentCanonicalValidation(database: ReceiptDatabase): void {
+  if (!hasOpenClawAgentCanonicalValidationReceiptColumn(database.db)) {
+    return;
+  }
+  executeSqliteQuerySync(
+    database.db,
+    getNodeSqliteKysely<Pick<DB, "session_key_contract">>(database.db)
+      .updateTable("session_key_contract")
+      .set({ canonical_ready: null })
+      .where("id", "=", 1)
+      .where("canonical_ready", "is not", null),
+  );
+  publishSqliteDatabaseAdmission(database.db, canonicalReceiptAdmission, null);
+}

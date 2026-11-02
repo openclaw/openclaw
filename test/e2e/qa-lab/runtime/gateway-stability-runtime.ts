@@ -10,8 +10,8 @@ import {
 } from "../../../../src/infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../../../src/infra/errors.js";
 import {
-  resetDiagnosticStabilityBundleForTest,
-  writeDiagnosticStabilityBundleSync,
+  uninstallDiagnosticStabilityFatalHook,
+  writeDiagnosticStabilityBundleForFailureSync,
 } from "../../../../src/logging/diagnostic-stability-bundle.js";
 import {
   getDiagnosticStabilitySnapshot,
@@ -128,7 +128,7 @@ function resetStabilityState(): void {
   stopDiagnosticStabilityRecorder();
   resetDiagnosticStabilityRecorderForTest();
   resetDiagnosticEventsForTest();
-  resetDiagnosticStabilityBundleForTest();
+  uninstallDiagnosticStabilityFatalHook();
 }
 
 function writeBoundedStabilityBundle(stateDir: string) {
@@ -149,8 +149,7 @@ function writeBoundedStabilityBundle(stateDir: string) {
   assert.equal(snapshot.dropped, SYNTHETIC_EVENT_COUNT - snapshot.capacity);
   assert.equal(JSON.stringify(snapshot).includes(PRIVATE_CHAT_ID), false);
 
-  const result = writeDiagnosticStabilityBundleSync({
-    reason: "qa_gateway_stability",
+  const result = writeDiagnosticStabilityBundleForFailureSync("qa_gateway_stability", undefined, {
     stateDir,
   });
   if (result.status !== "written") {

@@ -3,10 +3,18 @@
  *
  * Timer ticks, hook dispatch queues, and heartbeat wakeups have no Gateway
  * request of their own, so trusted built-in tools (terminal, dashboard) resolve
- * no context and fail mid-run. RPC-triggered runs already inherit a scope from
- * their caller and must keep it.
+ * no context and fail mid-run. RPC admission keeps its caller scope; accepted
+ * scheduler-owned execution replaces that scope for work that can outlive the request.
  */
-import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
+import { withoutGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
+import { captureSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker-context.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
+import {
+  bindGatewayContextResolver,
+  withPluginRuntimeGatewayContextResolver,
+  withPluginRuntimeRegistryScope,
+} from "../plugins/runtime/gateway-request-scope.js";
+import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 
 type ScheduledGatewayContextResolver = () => GatewayRequestContext | undefined;
@@ -20,32 +28,51 @@ type ScheduledGatewayContextResolver = () => GatewayRequestContext | undefined;
  * retired one, because a missing context fails visibly.
  */
 export function fenceScheduledGatewayContextResolver(
+  resolveGatewayContext: ScheduledGatewayContextResolver,
+): ScheduledGatewayContextResolver;
+export function fenceScheduledGatewayContextResolver(resolveGatewayContext: undefined): undefined;
+export function fenceScheduledGatewayContextResolver(
+  resolveGatewayContext: ScheduledGatewayContextResolver | undefined,
+): ScheduledGatewayContextResolver | undefined;
+export function fenceScheduledGatewayContextResolver(
   resolveGatewayContext: ScheduledGatewayContextResolver | undefined,
 ): ScheduledGatewayContextResolver | undefined {
   if (!resolveGatewayContext) {
     return undefined;
   }
-  return () => {
+  const resolveScheduledContext = () => {
     const context = resolveGatewayContext();
     return context?.resolveGatewayContext?.() ?? undefined;
   };
+  // Keep the execution fence while retaining the host identity used by shutdown.
+  bindGatewayContextResolver(resolveScheduledContext, resolveGatewayContext);
+  return resolveScheduledContext;
 }
 
-/**
- * Runs scheduler-owned work with a Gateway context.
- *
- * Detached work replaces any request scope inherited when it was queued or
- * armed. Caller-owned work must stay outside this boundary.
- */
-export async function runWithScheduledGatewayContext<T>(params: {
-  resolveGatewayContext?: ScheduledGatewayContextResolver;
-  run: () => Promise<T>;
-}): Promise<T> {
-  const resolveGatewayContext = params.resolveGatewayContext;
-  if (!resolveGatewayContext) {
-    return await params.run();
-  }
-  return await withPluginRuntimeGatewayContextResolver(resolveGatewayContext, params.run, {
-    inheritRequestScope: false,
-  });
+/** Capture host resources; detached runs replace inherited request and tool-caller scopes. */
+export function createScheduledGatewayRunner(
+  resolveGatewayContext?: ScheduledGatewayContextResolver,
+  resolvePluginRegistry?: () => PluginRegistry | undefined,
+) {
+  const spawnBroker = getSpawnBroker();
+  const runWithReadOnlyWorkers = captureSqliteReadOnlyWorkerScope();
+  return async <T>(run: () => Promise<T>): Promise<T> =>
+    await withoutGatewayToolCallerIdentity(() =>
+      runWithSpawnBroker(spawnBroker, async () => {
+        const runWithRegistry = () =>
+          withPluginRuntimeRegistryScope(resolvePluginRegistry?.(), () =>
+            runWithReadOnlyWorkers(run),
+          );
+        if (!resolveGatewayContext) {
+          return await runWithRegistry();
+        }
+        return await withPluginRuntimeGatewayContextResolver(
+          resolveGatewayContext,
+          runWithRegistry,
+          {
+            inheritRequestScope: false,
+          },
+        );
+      }),
+    );
 }

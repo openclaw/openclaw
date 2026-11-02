@@ -116,11 +116,11 @@ alias in the CLI. Check the proxy's current README before relying on a
 specific mapping.
 </Note>
 
-| Model ID          | CLI alias | Current mapping |
-| ----------------- | --------- | --------------- |
-| `claude-opus-4`   | `opus`    | Claude Opus 4.5 |
-| `claude-sonnet-4` | `sonnet`  | Claude Sonnet 4 |
-| `claude-haiku-4`  | `haiku`   | Claude Haiku 4  |
+| Model ID          | CLI alias |
+| ----------------- | --------- |
+| `claude-opus-4`   | `opus`    |
+| `claude-sonnet-4` | `sonnet`  |
+| `claude-haiku-4`  | `haiku`   |
 
 ## Advanced configuration
 

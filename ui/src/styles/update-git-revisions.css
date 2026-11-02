@@ -1,0 +1,38 @@
+.update-confirmation-details {
+  white-space: normal;
+}
+
+.update-git-revisions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  color: var(--muted);
+  font-family: var(--font-body);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: normal;
+}
+
+.update-git-revisions__range {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--mono);
+  white-space: nowrap;
+}
+
+.update-git-revisions a {
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.update-run-dialog .update-git-revisions {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.sidebar-update-card > .update-git-revisions {
+  padding: 0 10px 8px;
+}

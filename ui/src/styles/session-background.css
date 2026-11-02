@@ -1,0 +1,137 @@
+/* A single decorative canvas; content and controls keep their own layout. */
+.new-session-page,
+.sidebar-region--background {
+  position: relative;
+  isolation: isolate;
+}
+
+.sidebar-region__background {
+  position: relative;
+  z-index: -1;
+  min-width: 0;
+  min-height: 0;
+  pointer-events: none;
+}
+
+:is(.new-session-page, .sidebar-region)[data-background-custom] {
+  --muted: color-mix(in srgb, var(--text) 88%, var(--bg-content, var(--bg)));
+}
+
+openclaw-session-background {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  display: block;
+  overflow: hidden;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* Bleed only the decoration through the shell inset; draft geometry stays shared with Chat. */
+.new-session-page > openclaw-session-background {
+  inset-inline: calc(0px - var(--content-inline-padding));
+}
+
+openclaw-session-background[hidden] {
+  display: none;
+}
+
+/* The solid underpaint plus bounded image opacity is the permanent overlay,
+   including in the Settings preview and at maximum visibility. */
+openclaw-session-background[data-presentation="full-bleed"] {
+  background: var(--bg-content, var(--bg));
+}
+
+.session-background__image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center top;
+}
+
+.session-background__image--theme {
+  background-image: var(--app-background-image);
+  background-position: center top;
+  background-size: cover;
+  background-repeat: no-repeat;
+}
+
+/* Ease one full-width fade into the canvas, without a content-sized scrim.
+   The shallow ends avoid a visible cutoff; recents stay plain below the composer. */
+openclaw-session-background[data-presentation="faded"]:is(
+    [data-surface="new-session"],
+    [data-surface="preview"]
+  )
+  .session-background__image {
+  height: calc(var(--session-background-fade-end, 55vh) + 128px);
+  mask-image: linear-gradient(
+    to bottom,
+    rgb(0 0 0),
+    rgb(0 0 0 / 96%) calc(var(--session-background-fade-end, 55vh) * 0.125),
+    rgb(0 0 0 / 84%) calc(var(--session-background-fade-end, 55vh) * 0.25),
+    rgb(0 0 0 / 68%) calc(var(--session-background-fade-end, 55vh) * 0.375),
+    rgb(0 0 0 / 50%) calc(var(--session-background-fade-end, 55vh) * 0.5),
+    rgb(0 0 0 / 32%) calc(var(--session-background-fade-end, 55vh) * 0.625),
+    rgb(0 0 0 / 16%) calc(var(--session-background-fade-end, 55vh) * 0.75),
+    rgb(0 0 0 / 4%) calc(var(--session-background-fade-end, 55vh) * 0.875),
+    transparent var(--session-background-fade-end, 55vh)
+  );
+}
+
+openclaw-session-background[data-presentation="faded"][data-surface="session"]
+  .session-background__image:not(.session-background__image--theme) {
+  mask-image: linear-gradient(to bottom, currentColor, rgb(0 0 0 / 68%));
+}
+
+/* One blend belongs to the header. Keep it inside the chrome so it cannot
+   paint a second band over the transcript or its scrollbar. */
+.sidebar-region[data-background-painted] > .sidebar-region__header {
+  position: relative;
+  isolation: isolate;
+  z-index: 2;
+}
+
+.sidebar-region[data-background-painted] > .sidebar-region__header::before {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  background: linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--bg-content, var(--bg)) 80%, transparent),
+    color-mix(in srgb, var(--bg-content, var(--bg)) 30%, transparent) 50%,
+    transparent
+  );
+  content: "";
+  pointer-events: none;
+}
+
+.sidebar-region[data-background-painted] > .sidebar-region__header .chat-pane__header {
+  background: transparent;
+}
+
+/* The plain-canvas fade assumes an opaque header. With artwork it becomes an
+   inset white stripe underneath the header's own blend. */
+.sidebar-region[data-background-painted] .chat-main__conversation::before {
+  content: none;
+}
+
+/* Extend the old transcript-edge fade through the writing area. Ending an
+   opaque strip above a transparent footer creates a visible horizontal seam. */
+.sidebar-region[data-background-painted] .chat-footer::before {
+  inset: -56px 0 0;
+  height: auto;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    color-mix(in srgb, var(--bg-content, var(--bg)) 85%, transparent)
+  );
+}
+
+@media (forced-colors: active), (prefers-contrast: more), (prefers-reduced-transparency: reduce) {
+  .session-background__image {
+    display: none;
+    background-image: none;
+  }
+}

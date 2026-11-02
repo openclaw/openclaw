@@ -1,45 +1,37 @@
 /** Tests configured ACP binding lifecycle behavior. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { AcpSessionResolution } from "./control-plane/manager.types.js";
 import {
   buildConfiguredAcpSessionKey,
   type ConfiguredAcpBindingSpec,
 } from "./persistent-bindings.types.js";
 
 const managerMocks = vi.hoisted(() => ({
-  resolveSession: vi.fn(),
+  resolveSessionAsync: vi.fn<(params: { sessionKey: string }) => Promise<AcpSessionResolution>>(),
   closeSession: vi.fn(),
   initializeSession: vi.fn(),
-  updateSessionRuntimeOptions: vi.fn(),
+  setSessionConfigOption: vi.fn(),
 }));
 
+// mock-isolation: lifecycle assertions must not create real ACP sessions or workers.
 vi.mock("./control-plane/manager.js", () => ({
-  getAcpSessionManager: () => ({
-    resolveSession: managerMocks.resolveSession,
-    closeSession: managerMocks.closeSession,
-    initializeSession: managerMocks.initializeSession,
-    updateSessionRuntimeOptions: managerMocks.updateSessionRuntimeOptions,
-  }),
+  getAcpSessionManager: () => managerMocks,
 }));
 
 const baseCfg = {
   session: { mainKey: "main", scope: "per-sender" },
-  agents: {
-    list: [{ id: "codex" }, { id: "claude" }],
-  },
+  agents: { entries: { codex: {}, claude: {} } },
 } satisfies OpenClawConfig;
 
 let ensureConfiguredAcpBindingSession: typeof import("./persistent-bindings.lifecycle.js").ensureConfiguredAcpBindingSession;
 
 beforeEach(async () => {
   vi.resetModules();
-  managerMocks.resolveSession.mockReset().mockReturnValue({ kind: "none" });
-  managerMocks.closeSession.mockReset().mockResolvedValue({
-    runtimeClosed: true,
-    metaCleared: false,
-  });
+  managerMocks.resolveSessionAsync.mockReset();
+  managerMocks.closeSession.mockReset().mockResolvedValue(undefined);
   managerMocks.initializeSession.mockReset().mockResolvedValue(undefined);
-  managerMocks.updateSessionRuntimeOptions.mockReset().mockResolvedValue(undefined);
+  managerMocks.setSessionConfigOption.mockReset().mockResolvedValue(undefined);
   ({ ensureConfiguredAcpBindingSession } = await import("./persistent-bindings.lifecycle.js"));
 });
 
@@ -60,12 +52,14 @@ function mockReadySession(params: {
   spec: ConfiguredAcpBindingSpec;
   cwd: string;
   model?: string;
+  thinking?: string;
   state?: "idle" | "running" | "error";
 }) {
   const sessionKey = buildConfiguredAcpSessionKey(params.spec);
-  managerMocks.resolveSession.mockReturnValue({
+  managerMocks.resolveSessionAsync.mockResolvedValue({
     kind: "ready",
     sessionKey,
+    agentId: params.spec.agentId,
     meta: {
       backend: "acpx",
       agent: params.spec.acpAgentId ?? params.spec.agentId,
@@ -74,6 +68,7 @@ function mockReadySession(params: {
       runtimeOptions: {
         cwd: params.cwd,
         ...(params.model ? { model: params.model } : {}),
+        ...(params.thinking ? { thinking: params.thinking } : {}),
       },
       state: params.state ?? "idle",
       lastActivityAt: Date.now(),
@@ -82,129 +77,76 @@ function mockReadySession(params: {
   return sessionKey;
 }
 
-function expectCloseArgs(): Record<string, unknown> {
-  expect(managerMocks.closeSession).toHaveBeenCalledTimes(1);
-  const call = managerMocks.closeSession.mock.calls[0];
-  if (!call) {
-    throw new Error("expected closeSession call");
-  }
-  return call[0] as Record<string, unknown>;
+function expectNotReplaced() {
+  expect(managerMocks.closeSession).not.toHaveBeenCalled();
+  expect(managerMocks.initializeSession).not.toHaveBeenCalled();
 }
 
-function expectInitializeArgs(): Record<string, unknown> {
-  expect(managerMocks.initializeSession).toHaveBeenCalledTimes(1);
-  const call = managerMocks.initializeSession.mock.calls[0];
-  if (!call) {
-    throw new Error("expected initializeSession call");
-  }
-  return call[0] as Record<string, unknown>;
-}
+const ensure = (spec: ConfiguredAcpBindingSpec) =>
+  ensureConfiguredAcpBindingSession({ cfg: baseCfg, spec });
 
 describe("ensureConfiguredAcpBindingSession", () => {
-  it("keeps an existing ready session when configured binding omits cwd", async () => {
-    const spec = createPersistentSpec();
-    const sessionKey = mockReadySession({
-      spec,
-      cwd: "/workspace/openclaw",
-      model: "manual/selected-model",
-    });
-
-    const ensured = await ensureConfiguredAcpBindingSession({
-      cfg: baseCfg,
-      spec,
-    });
-
-    expect(ensured).toEqual({ ok: true, sessionKey });
-    expect(managerMocks.closeSession).not.toHaveBeenCalled();
-    expect(managerMocks.initializeSession).not.toHaveBeenCalled();
-    expect(managerMocks.updateSessionRuntimeOptions).not.toHaveBeenCalled();
-  });
-
-  it("updates a configured model in place for a structurally matching session", async () => {
-    const spec = createPersistentSpec({
-      model: "anthropic/claude-sonnet-4-6",
-    });
+  it("updates configured runtime options in place", async () => {
+    const runtimeOptions = { model: "anthropic/claude-sonnet-4-6", thinking: "off" };
+    const spec = createPersistentSpec(runtimeOptions);
     const sessionKey = mockReadySession({
       spec,
       cwd: "/workspace/openclaw",
       model: "anthropic/claude-haiku-4-5",
+      thinking: "high",
     });
+    expect(await ensure(spec)).toEqual({ ok: true, sessionKey });
+    expect(managerMocks.setSessionConfigOption.mock.calls).toEqual(
+      Object.entries(runtimeOptions).map(([key, value]) => [
+        { cfg: baseCfg, sessionKey, agentId: spec.agentId, key, value },
+      ]),
+    );
+    expectNotReplaced();
+  });
 
-    const ensured = await ensureConfiguredAcpBindingSession({
-      cfg: baseCfg,
-      spec,
-    });
+  it("reports rejected live thinking without replacing or overwriting the existing session", async () => {
+    const spec = createPersistentSpec({ thinking: "off" });
+    const sessionKey = mockReadySession({ spec, cwd: "/workspace/openclaw", thinking: "high" });
+    managerMocks.setSessionConfigOption.mockRejectedValue(new Error("Live off is unsupported"));
 
-    expect(ensured).toEqual({ ok: true, sessionKey });
-    expect(managerMocks.updateSessionRuntimeOptions).toHaveBeenCalledWith({
-      cfg: baseCfg,
-      sessionKey,
-      patch: { model: "anthropic/claude-sonnet-4-6" },
-    });
-    expect(managerMocks.closeSession).not.toHaveBeenCalled();
-    expect(managerMocks.initializeSession).not.toHaveBeenCalled();
+    for (let attempt = 0; attempt < 2; attempt++) {
+      expect(await ensure(spec)).toEqual({
+        ok: false,
+        sessionKey,
+        error: "Live off is unsupported",
+      });
+    }
+    expect(managerMocks.setSessionConfigOption).toHaveBeenCalledTimes(2);
+    expectNotReplaced();
   });
 
   it("reinitializes a ready session when binding config explicitly sets mismatched cwd", async () => {
     const spec = createPersistentSpec({
       cwd: "/workspace/repo-a",
-    });
-    const sessionKey = mockReadySession({
-      spec,
-      cwd: "/workspace/other-repo",
-    });
-
-    const ensured = await ensureConfiguredAcpBindingSession({
-      cfg: baseCfg,
-      spec,
-    });
-
-    expect(ensured).toEqual({ ok: true, sessionKey });
-    const closeArgs = expectCloseArgs();
-    expect(closeArgs.sessionKey).toBe(sessionKey);
-    expect(closeArgs.clearMeta).toBe(false);
-    expect(managerMocks.initializeSession).toHaveBeenCalledTimes(1);
-  });
-
-  it("reinitializes a matching session when the stored ACP session is in error state", async () => {
-    const spec = createPersistentSpec({
-      cwd: "/home/bob/clawd",
-    });
-    const sessionKey = mockReadySession({
-      spec,
-      cwd: "/home/bob/clawd",
-      state: "error",
-    });
-
-    const ensured = await ensureConfiguredAcpBindingSession({
-      cfg: baseCfg,
-      spec,
-    });
-
-    expect(ensured).toEqual({ ok: true, sessionKey });
-    expect(managerMocks.closeSession).toHaveBeenCalledTimes(1);
-    expect(managerMocks.initializeSession).toHaveBeenCalledTimes(1);
-  });
-
-  it("initializes ACP session with runtime agent override and configured model", async () => {
-    const spec = createPersistentSpec({
       agentId: "coding",
       acpAgentId: "codex",
       model: "anthropic/claude-sonnet-4-6",
+      thinking: "off",
     });
-    managerMocks.resolveSession.mockReturnValue({ kind: "none" });
+    const sessionKey = mockReadySession({ spec, cwd: "/workspace/other-repo" });
+    expect(await ensure(spec)).toEqual({ ok: true, sessionKey });
+    expect(managerMocks.closeSession).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ sessionKey, clearMeta: false }),
+    );
+    expect(managerMocks.initializeSession).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        agent: "codex",
+        runtimeOptions: { model: "anthropic/claude-sonnet-4-6", thinking: "off" },
+      }),
+    );
+    expect(managerMocks.initializeSession.mock.calls[0]?.[0]).not.toHaveProperty("modelExplicit");
+  });
 
-    const ensured = await ensureConfiguredAcpBindingSession({
-      cfg: baseCfg,
-      spec,
-    });
-
-    expect(ensured.ok).toBe(true);
-    const initializeArgs = expectInitializeArgs();
-    expect(initializeArgs.agent).toBe("codex");
-    expect(initializeArgs.runtimeOptions).toEqual({
-      model: "anthropic/claude-sonnet-4-6",
-    });
-    expect(initializeArgs).not.toHaveProperty("modelExplicit");
+  it("reinitializes a matching session when the stored ACP session is in error state", async () => {
+    const spec = createPersistentSpec({ cwd: "/home/bob/clawd" });
+    const sessionKey = mockReadySession({ spec, cwd: "/home/bob/clawd", state: "error" });
+    expect(await ensure(spec)).toEqual({ ok: true, sessionKey });
+    expect(managerMocks.closeSession).toHaveBeenCalledTimes(1);
+    expect(managerMocks.initializeSession).toHaveBeenCalledTimes(1);
   });
 });

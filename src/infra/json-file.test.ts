@@ -8,10 +8,6 @@ import { loadJsonFileThroughSymlink, writeJsonTarget } from "./json-file.js";
 const SAVED_PAYLOAD = { enabled: true, count: 2 };
 const PREVIOUS_JSON = '{"enabled":false}\n';
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 function writeExistingJson(pathname: string) {
   fs.writeFileSync(pathname, PREVIOUS_JSON, "utf8");
 }
@@ -78,6 +74,25 @@ describe("json-file helpers", () => {
     });
   });
 
+  it.runIf(process.platform !== "win32")("ignores links through a regular file", async () => {
+    await withJsonSymlink(({ root, linkPath }) => {
+      const target = path.join(root, "regular");
+      fs.writeFileSync(target, "regular file");
+      fs.symlinkSync(path.join(target, "credentials.json"), linkPath);
+      expect(loadJsonFileThroughSymlink(linkPath)).toBeUndefined();
+    });
+  });
+
+  it.each(["EACCES", "EISDIR", "EPERM"])("propagates path resolution errors: %s", (code) => {
+    const error = Object.assign(new Error(`synthetic ${code}`), { code });
+    vi.spyOn(fs, "realpathSync").mockImplementationOnce(() => {
+      throw error;
+    });
+    expect(() => loadJsonFileThroughSymlink("credentials.json")).toThrow(
+      expect.objectContaining({ code }),
+    );
+  });
+
   it("creates parent dirs, writes a trailing newline, and loads the saved object", async () => {
     await withTestDir({ prefix: "openclaw-json-file-" }, async (root) => {
       const pathname = path.join(root, "nested", "config.json");
@@ -98,23 +113,6 @@ describe("json-file helpers", () => {
     });
   });
 
-  it.each([
-    {
-      name: "new files",
-      setup: () => {},
-    },
-    {
-      name: "existing JSON files",
-      setup: writeExistingJson,
-    },
-  ])("writes the latest payload for $name", async ({ setup }) => {
-    await withJsonPath(({ pathname }) => {
-      setup(pathname);
-      writeJsonTarget(pathname, SAVED_PAYLOAD);
-      expect(loadJsonFileThroughSymlink(pathname)).toEqual(SAVED_PAYLOAD);
-    });
-  });
-
   it("writes through a sibling temp file before replacing the destination", async () => {
     await withJsonPath(({ pathname }) => {
       writeExistingJson(pathname);
@@ -123,23 +121,29 @@ describe("json-file helpers", () => {
       writeJsonTarget(pathname, SAVED_PAYLOAD);
 
       const renameCall = renameSpy.mock.calls.find(([, target]) => target === pathname);
-      expect(renameCall?.[0]).toMatch(new RegExp(`^${escapeRegExp(pathname)}\\..+\\.tmp$`));
-      expect(renameSpy).toHaveBeenCalledWith(renameCall?.[0], pathname);
+      expect(renameCall).toEqual([expect.any(String), pathname]);
+      const temporaryPath = String(renameCall?.[0]);
+      expect(path.dirname(temporaryPath)).toBe(path.dirname(pathname));
+      expect(temporaryPath).not.toBe(pathname);
       expect(loadJsonFileThroughSymlink(pathname)).toEqual(SAVED_PAYLOAD);
     });
   });
 
-  it.runIf(process.platform !== "win32")(
-    "preserves symlink destinations when replacing existing JSON files",
-    async () => {
-      await withJsonSymlink(({ targetDir, targetPath, linkPath }) => {
+  it.runIf(process.platform !== "win32").each([1, 2])(
+    "preserves %i-level symlink destinations when replacing existing JSON files",
+    async (levels) => {
+      await withJsonSymlink(({ root, targetDir, targetPath, linkPath }) => {
         fs.mkdirSync(targetDir, { recursive: true });
         writeExistingJson(targetPath);
         fs.symlinkSync(targetPath, linkPath);
+        const configuredPath = levels === 1 ? linkPath : path.join(root, "config-outer.json");
+        if (levels === 2) {
+          fs.symlinkSync(path.basename(linkPath), configuredPath);
+        }
 
-        writeJsonTarget(linkPath, SAVED_PAYLOAD);
+        writeJsonTarget(configuredPath, SAVED_PAYLOAD);
 
-        expectSavedPayloadThroughSymlink(linkPath, targetPath);
+        expectSavedPayloadThroughSymlink(configuredPath, targetPath);
       });
     },
   );

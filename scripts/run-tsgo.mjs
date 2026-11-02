@@ -1,6 +1,8 @@
-import { runTsxCliShim } from "./lib/tsx-cli-shim.mjs";
+import { runNodeCliShim } from "./lib/tsx-cli-shim.mjs";
 
-await runTsxCliShim(import.meta.url, {
+await runNodeCliShim(import.meta.url, {
   implementation: "./run-tsgo.mts",
   failureTool: "tsgo",
+  // The implementation must join its compiler group before releasing artifact ownership.
+  terminationOwner: "implementation",
 });

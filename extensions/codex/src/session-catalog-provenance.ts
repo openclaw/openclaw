@@ -1,41 +1,53 @@
+import { lstat } from "node:fs/promises";
 import path from "node:path";
-import { createZstdDecompress } from "node:zlib";
+import { constants, createZstdDecompress } from "node:zlib";
 import { root as openSafeFilesystemRoot } from "openclaw/plugin-sdk/file-access-runtime";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { CodexThread } from "./app-server/protocol.js";
+import { isJsonObject, type JsonObject } from "./app-server/protocol.js";
+import type { CodexCatalogPageDiagnostics } from "./session-catalog-diagnostics.js";
+import type { CodexCatalogNativeThread } from "./session-catalog-types.js";
 
 const MAX_SESSION_META_BYTES = 1024 * 1024;
 const SESSION_META_READ_CHUNK_BYTES = 64 * 1024;
+const MAX_COMPRESSED_META_BYTES = 8 * 1024 * 1024;
+const SESSION_META_DEADLINE_MS = 5_000;
 const MAX_PROVENANCE_CACHE_ENTRIES = 20_000;
+const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
 
 const provenanceByPath = new Map<string, boolean>();
 
 function cacheProvenance(key: string, value: boolean): void {
   provenanceByPath.delete(key);
   provenanceByPath.set(key, value);
-  while (provenanceByPath.size > MAX_PROVENANCE_CACHE_ENTRIES) {
-    const oldest = provenanceByPath.keys().next().value;
-    if (oldest === undefined) {
-      break;
-    }
-    provenanceByPath.delete(oldest);
+  if (provenanceByPath.size > MAX_PROVENANCE_CACHE_ENTRIES) {
+    provenanceByPath.delete(provenanceByPath.keys().next().value!);
   }
 }
 
 /** Undefined means the metadata line is not durable enough to cache yet. */
-async function readOpenClawOriginator(
+export async function readCodexSessionMeta(
   sessionsRoot: string,
   rolloutPath: string,
   threadId: string,
-): Promise<boolean | undefined> {
+  options: { canonicalSource?: boolean } = {},
+): Promise<JsonObject | null | undefined> {
+  const deadline = options.canonicalSource
+    ? performance.now() + SESSION_META_DEADLINE_MS
+    : Infinity;
   let safeRoot: Awaited<ReturnType<typeof openSafeFilesystemRoot>>;
   try {
+    if (options.canonicalSource) {
+      const stat = await lstat(sessionsRoot);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) {
+        return undefined;
+      }
+    }
     safeRoot = await openSafeFilesystemRoot(sessionsRoot, {
       hardlinks: "reject",
       maxBytes: Number.MAX_SAFE_INTEGER,
       symlinks: "reject",
     });
   } catch {
+    // Unavailable metadata cannot establish native provenance.
     return undefined;
   }
   const candidates = rolloutPath.endsWith(".zst")
@@ -45,82 +57,131 @@ async function readOpenClawOriginator(
     let opened: Awaited<ReturnType<typeof safeRoot.open>>;
     try {
       opened = await safeRoot.open(path.relative(sessionsRoot, candidate));
-    } catch {
-      continue;
+    } catch (error) {
+      if (isJsonObject(error) && (error.code === "not-found" || error.code === "ENOENT")) {
+        continue;
+      }
+      return undefined;
     }
-    const input = opened.handle.createReadStream({
-      autoClose: false,
-      highWaterMark: SESSION_META_READ_CHUNK_BYTES,
-    });
-    const reader = candidate.endsWith(".zst") ? input.pipe(createZstdDecompress()) : input;
     try {
+      const compressed = candidate.endsWith(".zst");
+      if (
+        !opened.stat.size ||
+        (options.canonicalSource && compressed && opened.stat.size > MAX_COMPRESSED_META_BYTES) ||
+        performance.now() >= deadline
+      ) {
+        return undefined;
+      }
+      const input = opened.handle.createReadStream({
+        autoClose: false,
+        highWaterMark: SESSION_META_READ_CHUNK_BYTES,
+        end: opened.stat.size - 1,
+      });
+      const decoder = compressed
+        ? createZstdDecompress({
+            chunkSize: SESSION_META_READ_CHUNK_BYTES,
+            params: options.canonicalSource ? { [constants.ZSTD_d_windowLogMax]: 25 } : undefined,
+          })
+        : undefined;
+      if (decoder) {
+        input.on("error", (error) => decoder.destroy(error));
+        input.pipe(decoder);
+      }
+      const reader = decoder ?? input;
+      const timer = options.canonicalSource
+        ? setTimeout(
+            () => reader.destroy(new Error("Codex rollout metadata observation timed out")),
+            Math.floor(Math.max(1, deadline - performance.now())),
+          )
+        : undefined;
       const chunks: Buffer[] = [];
       let bytesReadTotal = 0;
       let line: string | undefined;
-      for await (const value of reader) {
-        const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
-        const remaining = MAX_SESSION_META_BYTES - bytesReadTotal;
-        if (remaining <= 0) {
-          break;
+      try {
+        for await (const value of reader) {
+          const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
+          const newline = chunk.indexOf(0x0a);
+          const prefix = newline >= 0 ? chunk.subarray(0, newline) : chunk;
+          bytesReadTotal += prefix.length;
+          if (bytesReadTotal > MAX_SESSION_META_BYTES) {
+            return undefined;
+          }
+          chunks.push(prefix);
+          if (newline >= 0) {
+            line = utf8Decoder.decode(Buffer.concat(chunks));
+            break;
+          }
         }
-        const bounded = chunk.subarray(0, remaining);
-        bytesReadTotal += bounded.length;
-        const newline = bounded.indexOf(0x0a);
-        chunks.push(newline >= 0 ? bounded.subarray(0, newline) : bounded);
-        if (newline >= 0) {
-          line = Buffer.concat(chunks).toString("utf8");
-          break;
-        }
+      } finally {
+        clearTimeout(timer);
+        reader.destroy();
+        input.destroy();
       }
       if (!line) {
-        continue;
+        return undefined;
       }
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(line) as unknown;
-      } catch {
-        continue;
-      }
-      if (!isRecord(parsed) || parsed.type !== "session_meta" || !isRecord(parsed.payload)) {
-        return false;
+      const parsed: unknown = JSON.parse(line);
+      if (
+        !isJsonObject(parsed) ||
+        parsed.type !== "session_meta" ||
+        !isJsonObject(parsed.payload)
+      ) {
+        return null;
       }
       const payload = parsed.payload;
-      const recordedId = payload.id ?? payload.session_id;
-      return recordedId === threadId && payload.originator === "openclaw";
+      return payload.id === threadId ? payload : null;
     } catch {
-      continue;
+      // Incomplete or unreadable metadata cannot establish native provenance.
+      return undefined;
     } finally {
-      reader.destroy();
-      input.destroy();
       await opened.handle.close().catch(() => undefined);
     }
   }
   return undefined;
 }
 
-/**
- * Codex 0.147 reports OpenClaw app-server rollouts as `vscode`, so the rollout's
- * immutable session metadata is the authoritative historical provenance.
- */
+/** Passive local listing uses native creation provenance, with rollout fallback for older records. */
 export async function isOpenClawManagedCodexThread(
-  thread: CodexThread,
+  thread: CodexCatalogNativeThread,
   localSessionsRoot: string | undefined,
+  diagnostics?: CodexCatalogPageDiagnostics | null,
 ): Promise<boolean> {
-  const rolloutPath = typeof thread.path === "string" ? thread.path.trim() : "";
-  if (!localSessionsRoot || !rolloutPath) {
-    return false;
+  const started = diagnostics ? performance.now() : 0;
+  if (diagnostics) {
+    diagnostics.fields.provenanceChecks++;
   }
-  const cacheKey = `${localSessionsRoot}\0${rolloutPath}`;
-  const cached = provenanceByPath.get(cacheKey);
-  if (cached !== undefined) {
-    return cached;
+  try {
+    const rolloutPath = thread.path?.trim();
+    if (!localSessionsRoot || !rolloutPath) {
+      return false;
+    }
+    if (thread.originator) {
+      return thread.originator === "openclaw";
+    }
+    const cacheKey = `${localSessionsRoot}\0${rolloutPath}`;
+    const cached = provenanceByPath.get(cacheKey);
+    if (cached !== undefined) {
+      if (diagnostics) {
+        diagnostics.fields.provenanceCacheHits++;
+      }
+      return cached;
+    }
+    if (diagnostics) {
+      diagnostics.fields.provenanceReadCalls++;
+    }
+    const metadata = await readCodexSessionMeta(localSessionsRoot, rolloutPath, thread.id);
+    const managed = metadata === undefined ? undefined : metadata?.originator === "openclaw";
+    // A missing or still-being-written rollout must not become a permanent false
+    // negative. Newly created sessions are additionally covered by the durable
+    // ownership store, while a completed metadata line can be cached safely.
+    if (managed !== undefined) {
+      cacheProvenance(cacheKey, managed);
+    }
+    return managed ?? false;
+  } finally {
+    if (diagnostics) {
+      diagnostics.fields.provenanceMs =
+        (diagnostics.fields.provenanceMs ?? 0) + performance.now() - started;
+    }
   }
-  const managed = await readOpenClawOriginator(localSessionsRoot, rolloutPath, thread.id);
-  // A missing or still-being-written rollout must not become a permanent false
-  // negative. Newly created sessions are additionally covered by the durable
-  // ownership store, while a completed metadata line can be cached safely.
-  if (managed !== undefined) {
-    cacheProvenance(cacheKey, managed);
-  }
-  return managed ?? false;
 }

@@ -1,5 +1,4 @@
-import { isAbortError } from "../../infra/abort-signal.js";
-import type { ReplyPayload } from "../reply-payload.js";
+import { isAbortError, racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
 
 export class DispatchReplyOperationAbortedError extends Error {
@@ -23,41 +22,13 @@ export function runWithDispatchAbortSignal<T>(
   if (signal?.aborted) {
     return Promise.reject(new DispatchReplyOperationAbortedError());
   }
-  const shouldStopForAbort = () => signal?.aborted === true;
-  let settled = false;
-  let abortHandler: (() => void) | undefined;
-  const work = Promise.resolve()
-    .then(run)
-    .then(
-      (value) => {
-        settled = true;
-        return value;
-      },
-      (error: unknown) => {
-        settled = true;
-        if (shouldStopForAbort() && isAbortError(error)) {
-          throw new DispatchReplyOperationAbortedError();
-        }
-        throw error;
-      },
-    );
+  const work = Promise.resolve().then(run);
   onWorkStarted?.(work);
-  if (!signal) {
-    return work;
-  }
-  const aborted = new Promise<never>((_, reject) => {
-    abortHandler = () => {
-      if (!settled && shouldStopForAbort()) {
-        reject(new DispatchReplyOperationAbortedError());
-      }
-    };
-    signal.addEventListener("abort", abortHandler, { once: true });
-  });
-  return Promise.race([work, aborted]).finally(() => {
-    settled = true;
-    if (abortHandler) {
-      signal.removeEventListener("abort", abortHandler);
+  return racePromiseWithAbortSignal(work, signal).catch((error: unknown) => {
+    if (signal?.aborted && isAbortError(error)) {
+      throw new DispatchReplyOperationAbortedError();
     }
+    throw error;
   });
 }
 
@@ -66,14 +37,18 @@ export function createAbortAwareDispatcher(params: {
   isAborted: () => boolean;
 }): ReplyDispatcher {
   const sendIfActive =
-    (send: (payload: ReplyPayload) => boolean) =>
-    (payload: ReplyPayload): boolean =>
-      params.isAborted() ? false : send(payload);
-  const getCancelledCounts = params.dispatcher.getCancelledCounts;
-  const dispatcher: ReplyDispatcher = {
+    <Args extends unknown[]>(send: (...args: Args) => boolean) =>
+    (...args: Args): boolean =>
+      params.isAborted() ? false : send(...args);
+  const { getCancelledCounts, prepareReplyPayload, sendPreparedReply } = params.dispatcher;
+  return {
+    ...(prepareReplyPayload
+      ? { prepareReplyPayload: prepareReplyPayload.bind(params.dispatcher) }
+      : {}),
     sendToolResult: sendIfActive(params.dispatcher.sendToolResult),
     sendBlockReply: sendIfActive(params.dispatcher.sendBlockReply),
     sendFinalReply: sendIfActive(params.dispatcher.sendFinalReply),
+    ...(sendPreparedReply ? { sendPreparedReply: sendIfActive(sendPreparedReply) } : {}),
     ...(params.dispatcher.supportsSettledReceipt ? { supportsSettledReceipt: true } : {}),
     waitForIdle: () => params.dispatcher.waitForIdle(),
     getQueuedCounts: () => params.dispatcher.getQueuedCounts(),
@@ -85,5 +60,4 @@ export function createAbortAwareDispatcher(params: {
       }
     },
   };
-  return dispatcher;
 }

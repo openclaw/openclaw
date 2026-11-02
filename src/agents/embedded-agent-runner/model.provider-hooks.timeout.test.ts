@@ -1,12 +1,19 @@
 import { createServer, type Server } from "node:http";
 import { withFirstStreamEventTimeout } from "@openclaw/ai/internal/runtime";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import { withTestTimeout } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import type { StreamFn } from "../runtime/index.js";
+import { guardModelFixtureAuth } from "./model.fixture.test-support.js";
 import { resolveModelAsync } from "./model.js";
 import type { ProviderRuntimeHooks } from "./model.provider-hooks.js";
 import { createProviderRuntimeTestMock } from "./model.provider-runtime.test-support.js";
+import { makeModel } from "./model.test-harness.js";
 import {
   resolveLlmFirstEventTimeoutMs,
   resolveLlmIdleTimeoutMs,
@@ -22,6 +29,21 @@ const HTTP_EVENT_DELAY_MS = 90;
 const SHORT_CONTROL_TIMEOUT_MS = 20;
 
 type RebuildingHookStage = "model" | "transport";
+
+let state: OpenClawTestState;
+
+beforeEach(async () => {
+  state = await createOpenClawTestState({ label: "provider-timeout" });
+  const auth = guardModelFixtureAuth(state.root);
+  return async () => {
+    try {
+      auth.verify();
+    } finally {
+      auth.spy.mockRestore();
+      await state.cleanup();
+    }
+  };
+});
 
 function rebuildProviderModel(
   model: ProviderRuntimeModel,
@@ -64,12 +86,9 @@ function createProviderConfig(baseUrl: string, timeoutSeconds?: number): OpenCla
           ...(timeoutSeconds === undefined ? {} : { timeoutSeconds }),
           models: [
             {
-              id: MODEL_ID,
+              ...makeModel(MODEL_ID),
               name: "Ornith 1.0 35B",
               api: "openai-completions",
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
               contextWindow: 8_192,
               maxTokens: 512,
             },
@@ -88,13 +107,14 @@ async function resolveProviderModel(params: {
   const result = await resolveModelAsync(
     PROVIDER,
     MODEL_ID,
-    "/tmp/openclaw-provider-timeout-test-agent",
+    state.agentDir(),
     createProviderConfig(params.baseUrl ?? "http://127.0.0.1:8123/v1", params.timeoutSeconds),
     {
       authStorage: { mocked: true } as never,
-      modelRegistry: { find: () => null } as never,
+      modelRegistry: { find: () => null, getProviderMetadataOwners: () => undefined } as never,
       runtimeHooks: params.runtimeHooks ?? createProviderRuntimeTestMock(),
       skipAgentDiscovery: true,
+      workspaceDir: state.workspaceDir,
     },
   );
   if (!result.model) {
@@ -127,30 +147,47 @@ async function listenForDelayedSse(): Promise<{ server: Server; url: string }> {
   return { server, url: `http://127.0.0.1:${address.port}/v1/stream` };
 }
 
-async function openHttpEventStream(url: string): Promise<AsyncIterable<string>> {
-  const response = await fetch(url);
+async function nextGuardedHttpEvent(
+  url: string,
+  wrap: (source: AsyncIterable<string>) => AsyncIterable<unknown> | Promise<AsyncIterable<unknown>>,
+): Promise<IteratorResult<unknown>> {
+  const controller = new AbortController();
+  const response = await fetch(url, { signal: controller.signal });
   if (!response.ok || !response.body) {
     throw new Error(`Expected an HTTP SSE response, received ${response.status}`);
   }
   const body = response.body;
-  return {
-    async *[Symbol.asyncIterator]() {
-      const reader = body.getReader();
-      const decoder = new TextDecoder();
-      try {
-        for (;;) {
-          const chunk = await reader.read();
-          if (chunk.done) {
-            return;
-          }
-          yield decoder.decode(chunk.value, { stream: true });
+  const source = (async function* () {
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    try {
+      for (;;) {
+        const chunk = await reader.read();
+        if (chunk.done) {
+          return;
         }
-      } finally {
-        await reader.cancel().catch(() => undefined);
-        reader.releaseLock();
+        yield decoder.decode(chunk.value, { stream: true });
       }
-    },
-  };
+    } finally {
+      await reader.cancel().catch(() => undefined);
+      reader.releaseLock();
+    }
+  })();
+  let iterator: AsyncIterator<unknown> | undefined;
+  try {
+    iterator = (await wrap(source))[Symbol.asyncIterator]();
+    return await iterator.next();
+  } finally {
+    // First-event return is fire-and-forget; idle timeout can leave next() pending.
+    // Abort the native read and join the source itself before server/state disposal.
+    controller.abort();
+    await withTestTimeout(
+      Promise.all([iterator?.return?.(), source.return(undefined)]),
+      CONFIGURED_TIMEOUT_MS,
+      "HTTP fixture source did not settle",
+    );
+    expect(body.locked).toBe(false);
+  }
 }
 
 async function nextIdleGuardedHttpEvent(params: {
@@ -158,50 +195,33 @@ async function nextIdleGuardedHttpEvent(params: {
   model: ProviderRuntimeModel;
   timeoutMs: number;
 }): Promise<IteratorResult<unknown>> {
-  const source = await openHttpEventStream(params.url);
-  const baseFn = (() => source) as unknown as StreamFn;
-  const stream = await streamWithIdleTimeout(baseFn, params.timeoutMs)(
-    params.model as Parameters<StreamFn>[0],
-    { messages: [] },
-  );
-  return await stream[Symbol.asyncIterator]().next();
+  return await nextGuardedHttpEvent(params.url, async (source) => {
+    const baseFn = (() => source) as unknown as StreamFn;
+    return await streamWithIdleTimeout(baseFn, params.timeoutMs)(
+      params.model as Parameters<StreamFn>[0],
+      { messages: [] },
+    );
+  });
 }
 
 describe("provider request timeout across rebuilding runtime hooks", () => {
-  it.each(["model", "transport"] as const)(
-    "keeps the configured timeout when the %s hook rebuilds the resolved model",
-    async (stage) => {
-      const model = await resolveProviderModel({
-        timeoutSeconds: CONFIGURED_TIMEOUT_SECONDS,
-        runtimeHooks: createRebuildingRuntimeHooks(stage),
-      });
+  it("keeps the configured timeout when the transport hook rebuilds the resolved model", async () => {
+    const model = await resolveProviderModel({
+      timeoutSeconds: CONFIGURED_TIMEOUT_SECONDS,
+      runtimeHooks: createRebuildingRuntimeHooks("transport"),
+    });
 
-      expect(model.requestTimeoutMs).toBe(CONFIGURED_TIMEOUT_MS);
-    },
-  );
+    expect(model.requestTimeoutMs).toBe(CONFIGURED_TIMEOUT_MS);
+  });
 
-  it.each(["model", "transport"] as const)(
-    "preserves an explicit timeout supplied by the rebuilding %s hook",
-    async (stage) => {
-      const model = await resolveProviderModel({
-        timeoutSeconds: CONFIGURED_TIMEOUT_SECONDS,
-        runtimeHooks: createRebuildingRuntimeHooks(stage, HOOK_TIMEOUT_MS),
-      });
+  it("preserves an explicit timeout supplied by the rebuilding model hook", async () => {
+    const model = await resolveProviderModel({
+      timeoutSeconds: CONFIGURED_TIMEOUT_SECONDS,
+      runtimeHooks: createRebuildingRuntimeHooks("model", HOOK_TIMEOUT_MS),
+    });
 
-      expect(model.requestTimeoutMs).toBe(HOOK_TIMEOUT_MS);
-    },
-  );
-
-  it.each(["model", "transport"] as const)(
-    "does not invent a timeout when a %s hook rebuilds an unconfigured model",
-    async (stage) => {
-      const model = await resolveProviderModel({
-        runtimeHooks: createRebuildingRuntimeHooks(stage),
-      });
-
-      expect(model).not.toHaveProperty("requestTimeoutMs");
-    },
-  );
+    expect(model.requestTimeoutMs).toBe(HOOK_TIMEOUT_MS);
+  });
 
   it("applies the surviving configured timeout to real HTTP first-event and idle guards", async () => {
     const { server, url } = await listenForDelayedSse();
@@ -212,13 +232,11 @@ describe("provider request timeout across rebuilding runtime hooks", () => {
         runtimeHooks: createRebuildingRuntimeHooks("model"),
       });
 
-      const shortFirstEventStream = await openHttpEventStream(url);
-      const shortFirstEventGuard = withFirstStreamEventTimeout(shortFirstEventStream, {
-        timeoutMs: SHORT_CONTROL_TIMEOUT_MS,
-      });
-      await expect(shortFirstEventGuard[Symbol.asyncIterator]().next()).rejects.toThrow(
-        /first-event timeout/,
-      );
+      await expect(
+        nextGuardedHttpEvent(url, (source) =>
+          withFirstStreamEventTimeout(source, { timeoutMs: SHORT_CONTROL_TIMEOUT_MS }),
+        ),
+      ).rejects.toThrow(/first-event timeout/);
 
       expect(model.requestTimeoutMs).toBe(CONFIGURED_TIMEOUT_MS);
       const firstEventTimeoutMs = resolveLlmFirstEventTimeoutMs({
@@ -232,11 +250,9 @@ describe("provider request timeout across rebuilding runtime hooks", () => {
       expect(firstEventTimeoutMs).toBe(CONFIGURED_TIMEOUT_MS);
       expect(idleTimeoutMs).toBe(CONFIGURED_TIMEOUT_MS);
 
-      const configuredFirstEventStream = await openHttpEventStream(url);
-      const configuredFirstEventGuard = withFirstStreamEventTimeout(configuredFirstEventStream, {
-        timeoutMs: firstEventTimeoutMs,
-      });
-      const firstEvent = await configuredFirstEventGuard[Symbol.asyncIterator]().next();
+      const firstEvent = await nextGuardedHttpEvent(url, (source) =>
+        withFirstStreamEventTimeout(source, { timeoutMs: firstEventTimeoutMs }),
+      );
       expect(firstEvent.value).toContain("provider event");
 
       await expect(

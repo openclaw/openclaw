@@ -4,17 +4,18 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { performance } from "node:perf_hooks";
 import pMap from "p-map";
-import prettyMilliseconds from "pretty-ms";
 import {
   MAX_TIMER_TIMEOUT_MS,
   resolveTimerTimeoutMs,
 } from "../packages/normalization-core/src/number-coercion.ts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
+import { formatDurationElapsed } from "./lib/format-duration.mts";
 import {
   inspectManagedProcessGroup,
   terminateManagedChild,
   waitForManagedProcessGroupExit,
 } from "./lib/managed-child-process.mts";
+import { decodeUtf8Tail } from "./lib/output-tail.mts";
 
 const DEFAULT_CHECK_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_OUTPUT_MAX_BYTES = 512 * 1024;
@@ -22,18 +23,17 @@ const DEFAULT_OUTPUT_MAX_BYTES = 512 * 1024;
 const TIMEOUT_KILL_GRACE_MS = 250;
 const POST_FORCE_KILL_WAIT_MS = 250;
 
-type ProcessSignal = `SIG${string}`;
 type TimerHandle = ReturnType<typeof setTimeout>;
-type BoundaryCheck = { args: string[]; command: string; label: string };
+type BoundaryCheck = (typeof BOUNDARY_CHECKS)[number];
 
-type BoundaryShard = { count: number; index: number; label: string };
+type BoundaryShard = NonNullable<ReturnType<typeof parseShardSpec>>;
 type OutputWriter = { write(chunk: string): boolean };
 type BoundaryCheckResult = {
   check: BoundaryCheck;
   code: number;
   durationMs: number;
   output: string;
-  signal: ProcessSignal | null;
+  signal: NodeJS.Signals | null;
   timedOut: boolean;
 };
 type CheckExecutionOptions = {
@@ -55,74 +55,39 @@ type RunChecksOptions = Partial<CheckExecutionOptions> & {
 export const BOUNDARY_CHECKS = (
   [
     ["plugin-extension-boundary", "pnpm", ["run", "lint:plugins:no-extension-imports"]],
-    ["lint:docker-e2e", "pnpm", ["run", "lint:docker-e2e"]],
-    ["lint:tmp:no-random-messaging", "pnpm", ["run", "lint:tmp:no-random-messaging"]],
-    [
-      "lint:tmp:channel-agnostic-boundaries",
-      "pnpm",
-      ["run", "lint:tmp:channel-agnostic-boundaries"],
-    ],
-    ["lint:tmp:tsgo-core-boundary", "pnpm", ["run", "lint:tmp:tsgo-core-boundary"]],
-    ["lint:tmp:no-raw-channel-fetch", "pnpm", ["run", "lint:tmp:no-raw-channel-fetch"]],
-    ["lint:tmp:no-raw-http2-imports", "pnpm", ["run", "lint:tmp:no-raw-http2-imports"]],
-    ["lint:agent:ingress-owner", "pnpm", ["run", "lint:agent:ingress-owner"]],
-    ["lint:no-chained-type-assertions", "pnpm", ["run", "lint:no-chained-type-assertions"]],
-    ["lint:no-widen-then-assert", "pnpm", ["run", "lint:no-widen-then-assert"]],
-    [
-      "lint:plugins:no-register-http-handler",
-      "pnpm",
-      ["run", "lint:plugins:no-register-http-handler"],
-    ],
-    [
-      "lint:plugins:no-monolithic-plugin-sdk-entry-imports",
-      "pnpm",
-      ["run", "lint:plugins:no-monolithic-plugin-sdk-entry-imports"],
-    ],
-    [
-      "lint:plugins:no-extension-src-imports",
-      "pnpm",
-      ["run", "lint:plugins:no-extension-src-imports"],
-    ],
-    [
-      "lint:plugins:no-extension-test-core-imports",
-      "pnpm",
-      ["run", "lint:plugins:no-extension-test-core-imports"],
-    ],
-    [
-      "lint:plugins:plugin-sdk-subpaths-exported",
-      "pnpm",
-      ["run", "lint:plugins:plugin-sdk-subpaths-exported"],
-    ],
+    "lint:docker-e2e",
+    "lint:tmp:no-random-messaging",
+    "lint:tmp:channel-agnostic-boundaries",
+    "lint:tmp:tsgo-core-boundary",
+    "lint:tmp:no-raw-channel-fetch",
+    "lint:tmp:no-raw-http2-imports",
+    "lint:agent:ingress-owner",
+    // One pass owns all focused AST guards, including forced process exits in
+    // runtime sources and shipped launchers, not unrelated developer tooling.
+    "lint:no-chained-type-assertions",
+    "lint:plugins:no-monolithic-plugin-sdk-entry-imports",
+    "lint:plugins:no-extension-src-imports",
+    "lint:plugins:no-extension-test-core-imports",
+    "lint:plugins:plugin-sdk-subpaths-exported",
     ["deps:root-ownership:check", "pnpm", ["deps:root-ownership:check"]],
+    ["deps:pins:check", "pnpm", ["deps:pins:check"]],
     ["web-fetch-provider-boundary", "pnpm", ["run", "lint:web-fetch-provider-boundaries"]],
     [
-      "extension-src-outside-plugin-sdk-boundary",
-      "pnpm",
-      ["run", "lint:extensions:no-src-outside-plugin-sdk"],
+      "extension-plugin-sdk-boundaries",
+      "node",
+      ["--import", "./scripts/tsx.mjs", "scripts/check-extension-plugin-sdk-boundary.mts", "--all"],
     ],
-    [
-      "extension-normalization-core-bypass-boundary",
-      "pnpm",
-      ["run", "lint:extensions:no-normalization-core-bypass"],
-    ],
-    [
-      "extension-relative-outside-package-boundary",
-      "pnpm",
-      ["run", "lint:extensions:no-relative-outside-package"],
-    ],
-    [
-      "lint:extensions:telegram-grammy-types",
-      "pnpm",
-      ["run", "lint:extensions:telegram-grammy-types"],
-    ],
-    ["lint:ui:no-raw-window-open", "pnpm", ["lint:ui:no-raw-window-open"]],
+    "lint:extensions:telegram-grammy-types",
     ["native-state-schema-version", "node", ["scripts/check-native-state-schema-version.mjs"]],
-  ] satisfies Array<[label: string, command: string, args: string[]]>
-).map(([label, command, args]) => ({ label, command, args }));
+  ] satisfies Array<string | [label: string, command: string, args: string[]]>
+).map((check) => {
+  if (typeof check === "string") {
+    return { label: check, command: "pnpm", args: ["run", check] };
+  }
+  const [label, command, args] = check;
+  return { label, command, args };
+});
 
-/**
- * Resolves the configured boundary-check concurrency.
- */
 export function resolveConcurrency(value: unknown, fallback = 4, label = "concurrency") {
   return resolvePositiveInteger(value, fallback, label);
 }
@@ -140,9 +105,6 @@ function displayValue(value: unknown): string {
   return scalarText(value) ?? JSON.stringify(value) ?? "<unserializable>";
 }
 
-/**
- * Parses positive integer CLI/env options with a fallback.
- */
 export function resolvePositiveInteger(value: unknown, fallback: number, label = "value") {
   if (value === undefined || value === null || value === "") {
     return fallback;
@@ -158,10 +120,7 @@ export function resolvePositiveInteger(value: unknown, fallback: number, label =
   return parsed;
 }
 
-/**
- * Parses one N/TOTAL shard selector into zero-based index form.
- */
-export function parseShardSpec(value: unknown): BoundaryShard | null {
+export function parseShardSpec(value: unknown) {
   if (!value) {
     return null;
   }
@@ -183,9 +142,6 @@ export function parseShardSpec(value: unknown): BoundaryShard | null {
   return { count, index: index - 1, label: `${index}/${count}` };
 }
 
-/**
- * Parses a comma-separated list of N/TOTAL shard selectors.
- */
 export function parseShardSelection(value: unknown) {
   if (!value) {
     return null;
@@ -207,12 +163,10 @@ export function parseShardSelection(value: unknown) {
     });
 }
 
-/**
- * Selects checks whose ordinal belongs to the requested shard set.
- */
 export function selectChecksForShard(
   checks: BoundaryCheck[],
   shardSpec: string | BoundaryShard | BoundaryShard[] | null,
+  coreTestBoundaryOwner: "additional" | "test-types" = "additional",
 ) {
   const shards =
     typeof shardSpec === "string"
@@ -222,33 +176,18 @@ export function selectChecksForShard(
         : shardSpec
           ? [shardSpec]
           : null;
-  if (!shards || shards.length === 0) {
-    return checks;
-  }
-  return checks.filter((_check, index) =>
-    shards.some((shard) => index % shard.count === shard.index),
+  // Transfer only this obligation, after partitioning so other checks keep their owner.
+  return checks.filter(
+    (check, index) =>
+      (!shards?.length || shards.some((shard) => index % shard.count === shard.index)) &&
+      (coreTestBoundaryOwner !== "test-types" || check.label !== "lint:tmp:tsgo-core-boundary"),
   );
 }
 
-/**
- * Formats a check command for CI group output.
- */
 export function formatCommand({ command, args }: Pick<BoundaryCheck, "args" | "command">) {
   return [command, ...args].join(" ");
 }
 
-function decodeUtf8Tail(buffer: Buffer) {
-  let start = 0;
-  while (start < buffer.length && (buffer[start]! & 0b1100_0000) === 0b1000_0000) {
-    start += 1;
-  }
-  // Appends are complete JS strings; only a byte slice's leading boundary can be partial.
-  return buffer.subarray(start).toString("utf8");
-}
-
-/**
- * Keeps only the tail of noisy check output so failure logs stay bounded.
- */
 export function createBoundedOutputBuffer(maxBytes = DEFAULT_OUTPUT_MAX_BYTES) {
   const limit = Math.max(1, maxBytes);
   const chunks: string[] = [];
@@ -297,8 +236,8 @@ export function createBoundedOutputBuffer(maxBytes = DEFAULT_OUTPUT_MAX_BYTES) {
   };
 }
 
-function terminateChild(child: ChildProcess, signal: ProcessSignal) {
-  terminateManagedChild(child, signal as NodeJS.Signals, {
+function terminateChild(child: ChildProcess, signal: NodeJS.Signals) {
+  terminateManagedChild(child, signal, {
     onChildSignalError(error) {
       throw error;
     },
@@ -327,7 +266,7 @@ async function finishTerminatedProcessTree(
   }
 }
 
-function terminateActiveChildren(activeChildren: Iterable<ChildProcess>, signal: ProcessSignal) {
+function terminateActiveChildren(activeChildren: Iterable<ChildProcess>, signal: NodeJS.Signals) {
   for (const child of activeChildren) {
     terminateChild(child, signal);
   }
@@ -354,7 +293,7 @@ function installActiveChildCleanup(activeChildren: Set<ChildProcess>) {
     resolveShutdownForceKill?.();
   };
   const cleanup = (
-    signal: ProcessSignal,
+    signal: NodeJS.Signals,
     { waitForExit = false }: { waitForExit?: boolean } = {},
   ) => {
     if (!active) {
@@ -380,8 +319,8 @@ function installActiveChildCleanup(activeChildren: Set<ChildProcess>) {
       .then(() => undefined);
     return shutdownPromise;
   };
-  const signalHandlers = new Map<ProcessSignal, () => void>();
-  const signals: ProcessSignal[] =
+  const signalHandlers = new Map<NodeJS.Signals, () => void>();
+  const signals: NodeJS.Signals[] =
     process.platform === "win32" ? ["SIGINT", "SIGTERM"] : ["SIGINT", "SIGTERM", "SIGHUP"];
   for (const signal of signals) {
     const handler = () => {
@@ -391,7 +330,7 @@ function installActiveChildCleanup(activeChildren: Set<ChildProcess>) {
       }
       void cleanup(signal, { waitForExit: true }).finally(() => {
         removeHandlers();
-        process.kill(process.pid, signal as NodeJS.Signals);
+        process.kill(process.pid, signal);
       });
     };
     signalHandlers.set(signal, handler);
@@ -411,9 +350,6 @@ function installActiveChildCleanup(activeChildren: Set<ChildProcess>) {
   };
 }
 
-/**
- * Runs one boundary check with timeout and process-group termination.
- */
 export function runSingleCheck(
   check: BoundaryCheck,
   {
@@ -439,7 +375,7 @@ export function runSingleCheck(
     let settled = false;
     let timedOut = false;
     let forceKillTimer: TimerHandle | null = null;
-    const finish = (code: number | null, signal: ProcessSignal | null) => {
+    const finish = (code: number | null, signal: NodeJS.Signals | null) => {
       if (settled) {
         return;
       }
@@ -458,13 +394,6 @@ export function runSingleCheck(
         output: output.read(),
       });
     };
-    const finishAfterTimeoutTeardown = async (
-      code: number | null,
-      signal: ProcessSignal | null,
-    ) => {
-      await finishTerminatedProcessTree(child, TIMEOUT_KILL_GRACE_MS);
-      finish(code, signal);
-    };
     const timeout = setTimeout(() => {
       timedOut = true;
       output.append(
@@ -477,9 +406,9 @@ export function runSingleCheck(
         );
         terminateChild(child, "SIGKILL");
       }, TIMEOUT_KILL_GRACE_MS);
-      forceKillTimer.unref?.();
+      forceKillTimer.unref();
     }, resolvedCheckTimeoutMs);
-    timeout.unref?.();
+    timeout.unref();
 
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
@@ -491,7 +420,7 @@ export function runSingleCheck(
     });
     child.on("close", (code, signal) => {
       if (timedOut) {
-        void finishAfterTimeoutTeardown(code, signal);
+        void finishTerminatedProcessTree(child).then(() => finish(code, signal));
         return;
       }
       finish(code, signal);
@@ -504,7 +433,7 @@ function formatDuration(ms: number) {
     return "";
   }
   const roundedMs = ms < 1000 ? Math.round(ms) : Math.round(ms / 100) * 100;
-  return prettyMilliseconds(Math.max(0, roundedMs), {
+  return formatDurationElapsed(Math.max(0, roundedMs), {
     unitCount: 1,
   });
 }
@@ -540,9 +469,6 @@ function writeTimingSummary(results: BoundaryCheckResult[], output: OutputWriter
   }
 }
 
-/**
- * Runs boundary checks with bounded concurrency and returns the failure count.
- */
 export async function runChecks(
   checks: BoundaryCheck[] = BOUNDARY_CHECKS,
   {
@@ -593,6 +519,7 @@ Runs supplemental architecture and boundary checks with bounded concurrency.
 
 Options:
   --shard <spec>    Run only checks selected by one or more N/TOTAL shard specs
+  --core-test-boundary-owner=test-types  The required type job owns the core graph boundary
   -h, --help        Show this help
 `;
 }
@@ -600,8 +527,13 @@ Options:
 export function parseCliArgs(args: string[], env: NodeJS.ProcessEnv = process.env) {
   let shardSpec = env.OPENCLAW_ADDITIONAL_BOUNDARY_SHARD ?? "";
   let help = false;
+  let coreTestBoundaryOwner: "additional" | "test-types" = "additional";
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index]!;
+    if (arg === "--core-test-boundary-owner=test-types") {
+      coreTestBoundaryOwner = "test-types";
+      continue;
+    }
     if (arg === "-h" || arg === "--help") {
       help = true;
       continue;
@@ -625,7 +557,7 @@ export function parseCliArgs(args: string[], env: NodeJS.ProcessEnv = process.en
     }
     throw new Error(`Unknown argument: ${arg}`);
   }
-  return { help, shardSpec };
+  return { help, shardSpec, coreTestBoundaryOwner };
 }
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
@@ -654,7 +586,7 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
         "OPENCLAW_ADDITIONAL_BOUNDARY_OUTPUT_MAX_BYTES",
       );
       const shards = parseShardSelection(cliArgs.shardSpec);
-      const checks = selectChecksForShard(BOUNDARY_CHECKS, shards);
+      const checks = selectChecksForShard(BOUNDARY_CHECKS, shards, cliArgs.coreTestBoundaryOwner);
       if (shards) {
         process.stdout.write(
           `Running ${checks.length}/${BOUNDARY_CHECKS.length} additional boundary checks (shard ${shards.map((shard) => shard.label).join(",")})\n`,

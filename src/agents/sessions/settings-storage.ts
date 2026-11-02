@@ -1,8 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { acquireFileLockSyncWithRetry } from "../../infra/file-lock-sync.js";
-import type { Transport } from "../../llm/types.js";
-import { CONFIG_DIR_NAME } from "../config.js";
+import { readFileSync } from "node:fs";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { ThinkingBudgets, Transport } from "../../llm/types.js";
 
 interface CompactionSettings {
   enabled?: boolean; // default: true
@@ -10,49 +8,43 @@ interface CompactionSettings {
   keepRecentTokens?: number; // default: 20000
 }
 
-export interface BranchSummarySettings {
+interface BranchSummarySettings {
   reserveTokens?: number; // default: 16384 (tokens reserved for prompt + LLM response)
   skipPrompt?: boolean; // default: false - when true, skips "Summarize branch?" prompt and defaults to no summary
 }
 
-export interface ProviderRetrySettings {
+interface ProviderRetrySettings {
   timeoutMs?: number; // SDK/provider request timeout in milliseconds
-  maxRetries?: number; // SDK/provider retry attempts
+  maxRetries?: number; // transient provider retry attempts
   maxRetryDelayMs?: number; // default: 60000 (max server-requested delay before failing)
 }
 
-export interface RetrySettings {
+interface RetrySettings {
   enabled?: boolean; // default: true
   maxRetries?: number; // default: 3
   baseDelayMs?: number; // default: 2000 (exponential backoff: 2s, 4s, 8s)
   provider?: ProviderRetrySettings;
 }
 
-export interface TerminalSettings {
+interface TerminalSettings {
   showImages?: boolean; // default: true (only relevant if terminal supports images)
   imageWidthCells?: number; // default: 60 (preferred inline image width in terminal cells)
   clearOnShrink?: boolean; // default: false (clear empty rows when content shrinks)
   showTerminalProgress?: boolean; // default: false (OSC 9;4 terminal progress indicators)
 }
 
-export interface ImageSettings {
+interface ImageSettings {
   autoResize?: boolean; // default: true (resize images to 2000x2000 max for better model compatibility)
   blockImages?: boolean; // default: false - when true, prevents all images from being sent to LLM providers
 }
 
-export interface ThinkingBudgetsSettings {
-  minimal?: number;
-  low?: number;
-  medium?: number;
-  high?: number;
-  max?: number;
-}
+export interface ThinkingBudgetsSettings extends ThinkingBudgets {}
 
-export interface MarkdownSettings {
+interface MarkdownSettings {
   codeBlockIndent?: string; // default: "  "
 }
 
-export interface WarningSettings {
+interface WarningSettings {
   anthropicExtraUsage?: boolean; // default: true
 }
 
@@ -63,7 +55,7 @@ export type TransportSetting = Transport;
  * - String form: load all resources from the package
  * - Object form: filter which resources to load
  */
-export type PackageSource =
+type PackageSource =
   | string
   | {
       source: string;
@@ -115,66 +107,13 @@ export interface Settings {
 
 export type SettingsScope = "global" | "project";
 
-export const SETTINGS_SCOPES: SettingsScope[] = ["global", "project"];
-
-export interface SettingsStorage {
-  withLock(scope: SettingsScope, fn: (current: string | undefined) => string | undefined): void;
-}
-
-export interface SettingsError {
-  scope: SettingsScope;
-  error: Error;
-}
-
-export class FileSettingsStorage implements SettingsStorage {
-  private paths: Record<SettingsScope, string>;
-
-  constructor(cwd: string, agentDir: string) {
-    this.paths = {
-      global: join(agentDir, "settings.json"),
-      project: join(cwd, CONFIG_DIR_NAME, "settings.json"),
-    };
-  }
-
-  withLock(scope: SettingsScope, fn: (current: string | undefined) => string | undefined): void {
-    const path = this.paths[scope];
-    const dir = dirname(path);
-
-    let release: (() => void) | undefined;
-    try {
-      // Only create directory and lock if file exists or we need to write
-      const fileExists = existsSync(path);
-      if (fileExists) {
-        release = acquireFileLockSyncWithRetry(path);
-      }
-      const current = fileExists ? readFileSync(path, "utf-8") : undefined;
-      const next = fn(current);
-      if (next !== undefined) {
-        // Only create directory when we actually need to write
-        if (!existsSync(dir)) {
-          mkdirSync(dir, { recursive: true });
-        }
-        if (!release) {
-          release = acquireFileLockSyncWithRetry(path);
-        }
-        writeFileSync(path, next, "utf-8");
-      }
-    } finally {
-      release?.();
-    }
-  }
-}
-
-export class InMemorySettingsStorage implements SettingsStorage {
-  private values: Record<SettingsScope, string | undefined> = {
-    global: undefined,
-    project: undefined,
-  };
-
-  withLock(scope: SettingsScope, fn: (current: string | undefined) => string | undefined): void {
-    const next = fn(this.values[scope]);
-    if (next !== undefined) {
-      this.values[scope] = next;
-    }
+/** Read one settings file without applying runtime-specific validation or defaults. */
+export function readSettingsScope(path: string): Settings {
+  try {
+    const content = readFileSync(path, "utf-8");
+    const settings: unknown = content ? JSON.parse(content) : {};
+    return isRecord(settings) ? settings : {};
+  } catch {
+    return {};
   }
 }

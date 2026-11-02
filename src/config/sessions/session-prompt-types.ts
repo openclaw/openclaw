@@ -8,6 +8,7 @@ export type SessionSkillPromptRef = {
 };
 
 export type SessionSkillSnapshot = {
+  librarySelections?: import("../../../packages/gateway-protocol/src/schema/skill-library.js").SkillLibrarySelection[];
   prompt: string;
   /** Persisted stores may replace large duplicate prompts with a content-addressed blob ref. */
   promptRef?: SessionSkillPromptRef;
@@ -24,5 +25,7 @@ export type SessionSkillSnapshot = {
    * src/skills/runtime/embedded-run-entries.ts rebuilds it from disk.
    */
   resolvedSkills?: Skill[];
+  /** Runtime-only model-discoverable catalog before prompt budgeting; never persisted. */
+  discoverySkills?: Skill[];
   version?: number;
 };

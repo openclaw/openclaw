@@ -11,17 +11,17 @@ const unbindMock = vi.hoisted(() => vi.fn());
 const getManagerMock = vi.hoisted(() => vi.fn());
 const listAllBindingsMock = vi.hoisted(() => vi.fn((): any[] => []));
 const listBindingsForAccountMock = vi.hoisted(() => vi.fn((): any[] => []));
-const removeBindingRecordMock = vi.hoisted(() => vi.fn(() => false));
+const removeBindingsMock = vi.hoisted(() => vi.fn(async () => []));
 
 vi.mock("openclaw/plugin-sdk/conversation-binding-runtime", () => ({
   getSessionBindingService: () => ({ unbind: unbindMock }),
 }));
 
+// mock-isolation: Hook fixtures own binding indexes and managers independently of process-global bindings.
 vi.mock("./thread-bindings-shared.js", () => ({
   getMatrixThreadBindingManager: getManagerMock,
   listAllBindings: listAllBindingsMock,
   listBindingsForAccount: listBindingsForAccountMock,
-  removeBindingRecord: removeBindingRecordMock,
   resolveBindingKey: (params: {
     accountId: string;
     conversationId: string;
@@ -124,19 +124,6 @@ describe("handleMatrixSubagentDeliveryTarget", () => {
     expect(handleMatrixSubagentDeliveryTarget(makeDeliveryEvent())).toBeUndefined();
   });
 
-  it("returns the bound Matrix room and thread", () => {
-    listBindingsForAccountMock.mockReturnValue([makeBinding()]);
-
-    expect(handleMatrixSubagentDeliveryTarget(makeDeliveryEvent())).toEqual({
-      origin: {
-        channel: "matrix",
-        accountId: "ops",
-        to: `room:${ROOM_ID}`,
-        threadId: "$thread",
-      },
-    });
-  });
-
   it("omits threadId for a top-level room binding", () => {
     listBindingsForAccountMock.mockReturnValue([
       makeBinding({ conversationId: ROOM_ID, parentConversationId: ROOM_ID }),
@@ -182,17 +169,15 @@ describe("handleMatrixSubagentEnded", () => {
     getManagerMock.mockReset();
     listAllBindingsMock.mockReset();
     listBindingsForAccountMock.mockReset();
-    removeBindingRecordMock.mockReset();
+    removeBindingsMock.mockReset();
   });
 
   it("removes matching bindings and persists each affected account once", async () => {
-    const persist = vi.fn(async () => {});
     listBindingsForAccountMock.mockReturnValue([
       makeBinding(),
       makeBinding({ targetSessionKey: "agent:ops:subagent:other" }),
     ]);
-    removeBindingRecordMock.mockReturnValue(true);
-    getManagerMock.mockReturnValue({ persist });
+    getManagerMock.mockReturnValue({ removeBindingsAsync: removeBindingsMock });
 
     await handleMatrixSubagentEnded({
       targetSessionKey: CHILD_SESSION_KEY,
@@ -200,8 +185,7 @@ describe("handleMatrixSubagentEnded", () => {
       accountId: "ops",
     });
 
-    expect(removeBindingRecordMock).toHaveBeenCalledTimes(1);
-    expect(persist).toHaveBeenCalledTimes(1);
+    expect(removeBindingsMock).toHaveBeenCalledExactlyOnceWith([makeBinding()]);
   });
 
   it("uses the binding service for requested farewell cleanup", async () => {
@@ -220,7 +204,8 @@ describe("handleMatrixSubagentEnded", () => {
     expect(unbindMock).toHaveBeenCalledWith({
       bindingId: "ops:!room:example:$thread",
       reason: "subagent-complete",
+      scope: { channel: "matrix", accountId: "ops" },
     });
-    expect(removeBindingRecordMock).not.toHaveBeenCalled();
+    expect(removeBindingsMock).not.toHaveBeenCalled();
   });
 });

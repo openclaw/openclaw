@@ -8,7 +8,6 @@ export function createAgentsCoreVitestConfig(env?: Record<string, string | undef
     dir: owner.dir,
     env,
     exclude: owner.exclude,
-    fileParallelism: false,
     name: owner.name,
   });
 }

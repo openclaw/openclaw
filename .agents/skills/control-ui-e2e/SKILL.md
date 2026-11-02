@@ -1,77 +1,74 @@
 ---
 name: control-ui-e2e
-description: Use when testing, fixing, or extending the OpenClaw Control UI GUI with Vitest + Playwright end-to-end checks, mocked Gateway WebSocket flows, mocked dashboard runs, screenshots/videos, or agent-verifiable browser proof.
+description: Control UI browser tests, visual reviews and recordings, interaction performance audits, and Run Inspector evidence.
 ---
 
 # Control UI E2E
 
-Use this for Control UI changes that need a real browser flow with deterministic Gateway data.
+## Workflow
 
-## Test Shape
+1. **Select proof.** Use the existing browser E2E lane for routing, boot, Gateway
+   handshake, and complete user flows; use browser/unit tests for isolated render
+   logic. Read each branch below that matches the requested outcome.
+   **Done:** every changed behavior has a named scenario and proof boundary.
+2. **Prepare fixtures.** Reuse `ui/src/test-helpers/control-ui-e2e.ts` with synthetic
+   Gateway data. Extend its typed scenario options for missing responses. Use the
+   existing dependency installation; preserve installs used by other jobs.
+   Real Gateway/provider credentials require explicit live-proof authorization.
+   Follow [testing policy](../openclaw-testing/SKILL.md) for execution placement.
+   **Done:** the target flow runs against the intended source or production build
+   and each required fixture response is defined.
+3. **Exercise behavior.** Install the mock before navigation. Act through visible
+   controls and assert both the rendered outcome and relevant Gateway requests.
+   Resolve unexpected behavior at the product or fixture owner before replaying.
+   **Done:** each scenario reaches its asserted outcome, or has a retained failure
+   identifying the unmet assertion.
+4. **Deliver evidence.** Apply the artifact rules below and the selected branch's
+   checks. Report verified results, failures, and untested states separately.
+   **Done:** every claimed result has inspectable evidence; remaining gaps are named.
 
-- Use `ui/src/**/*.e2e.test.ts` for full GUI flows.
-- Use `ui/src/test-helpers/control-ui-e2e.ts` to start the Vite Control UI and install a mocked Gateway WebSocket.
-- Keep scenarios deterministic. Do not use live provider keys, real channel credentials, or a real Gateway unless the user explicitly asks for live proof.
-- Prefer existing `.browser.test.ts` or unit tests for narrow rendering logic; use this E2E lane when the proof should cover routing, app boot, Gateway handshake, requests, and visible UI behavior together.
+## UI Stress Test
 
-## Commands
+For substantial layout/component changes or multi-state design feedback, read
+[visual proof](references/visual-proof.md#ui-stress-test) before building the
+stress-test gallery. Small copy/icon changes may use focused proof.
 
-- Target one E2E test in a Codex worktree:
+## Visual Proof Default
+
+For appearance changes, screenshots, transient-state capture, or video, read
+[visual proof](references/visual-proof.md). Appearance changes require inspected
+before/after evidence; behavior assertions alone can suffice for nonvisual fixes.
+
+## Interaction Performance Audits
+
+For UI slowness, responsiveness audits, or automatic Chrome trace collection,
+read [interaction profiling](references/interaction-performance.md) before
+choosing the build, fixtures, and measurement boundaries.
+
+## Run Inspector evidence
+
+For run/execution/decision evidence, read
+[Run Inspector capture](references/run-inspector.md) before selecting a receipt.
+
+## Artifacts
+
+- Allocate with `createControlUiE2eArtifactDir(scope, parentDir?)`, once per attempt
+  or standalone invocation. Pass the directory to capture helpers; keep distinct
+  stage filenames and the report, screenshots, traces, and video together.
+- The helper owns parent selection. Preserve existing output controls, gates,
+  viewport, and recording options; use its returned path in the final report.
+- Retain failed and successful attempts. Clean up only exact owned directories
+  after review; never clear shared artifact parents or overwrite earlier proof.
+- Timeout diagnostics use fresh children of their existing diagnostic parent.
+  Mantis retains every attempt. Real-Gateway, `chat-outbox-*`, and
+  `chat-attachment-read-lifecycle` suites have separate owners: verify their
+  retention behavior before claiming replay-safe capture.
+
+## Running a focused test
+
+Use the current scripts in `package.json` and
+[testing policy](../openclaw-testing/SKILL.md). For a worktree's focused browser test:
 
 ```bash
 node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/chat-flow.messaging.e2e.test.ts
 ```
-
-- Run the whole local lane in a normal checkout:
-
-```bash
-pnpm test:ui:e2e
-```
-
-Do not install dependencies into a linked/sparse worktree. For broad GUI proof
-or dependency-heavy checks, use a prepared normal checkout on the current
-dedicated Linux worker when it has browser support; otherwise use
-Testbox/Crabbox instead of running a wide lane on a workstation.
-
-## Visual Proof Default
-
-When running mocked Control UI/dashboard validation for a user-facing feature, produce visual proof by default unless the user explicitly opts out.
-
-- Keep the Vitest E2E assertions deterministic; do not commit generated screenshots or videos.
-- After or alongside the focused E2E test, run the mocked Control UI app when available, for example `pnpm dev:ui:mock -- --port <port>`.
-- Drive Chromium with Playwright against the local mock URL and capture a video plus screenshots for each meaningful state: initial view, interaction input, result state, and final/paginated/selected state.
-- Use `browser.newContext({ recordVideo: { dir, size }, viewport })`, `page.screenshot({ path })`, and close the context before reporting the video path.
-- Put artifacts under `.artifacts/control-ui-e2e/<short-feature-name>/` or another clearly named local temp directory, and report the absolute paths in the final answer.
-- Treat recording as validation, not only demo capture. If the recorder fails or shows surprising behavior, stop, fix the behavior, add or update a regression test, then rerecord.
-- If visual proof is blocked, state the exact blocker and still report the textual E2E evidence.
-
-## Mock Pattern
-
-Start the app server, install the mock before `page.goto`, then assert both Gateway traffic and visible UI:
-
-```ts
-const server = await startControlUiE2eServer();
-const page = await context.newPage();
-const gateway = await installMockGateway(page, {
-  historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
-});
-
-await page.goto(`${server.baseUrl}chat`);
-await page.locator(".agent-chat__composer-combobox textarea").fill("hello");
-await page.getByRole("button", { name: "Send message" }).click();
-
-const request = await gateway.waitForRequest("chat.send");
-await gateway.emitChatFinal({ runId: String(request.params.idempotencyKey), text: "Done." });
-await page.getByText("Done.").waitFor();
-```
-
-Extend `installMockGateway` with typed scenario options or method responses when a new flow needs more Gateway surface.
-
-## Standalone Recording
-
-When recording an already-running mocked Control UI URL, use a temporary Playwright script or `playwright test` spec and keep the recording flow focused:
-
-- Open the mock URL, interact through stable `data-*` selectors or user-facing role selectors, and wait on asserted states instead of relying on fixed sleeps.
-- Assert both visible UI state and mocked Gateway traffic for request-driven flows. For example, verify the expected count/row is visible and that `sessions.list` was called with the expected `search`, `offset`, and `limit`.
-- Use short sleeps only after assertions to make the captured video readable.
-- Store the generated video under `.artifacts/control-ui-e2e/<feature>/`; do not commit it.

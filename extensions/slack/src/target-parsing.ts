@@ -1,4 +1,3 @@
-// Slack plugin module implements target parsing behavior.
 import {
   buildMessagingTarget,
   ensureTargetId,
@@ -75,8 +74,29 @@ export function formatSlackTarget(params: {
   return `team:${encodeURIComponent(teamId)}:${params.kind}:${encodeURIComponent(id)}`;
 }
 
-function isUnambiguousSlackUserId(rawId: string): boolean {
-  const id = rawId.trim();
+export function resolveWorkspaceQualifiedSlackTarget(
+  input: string,
+  kind: SlackTargetKind,
+): { input: string; resolved: true; id: string } | undefined {
+  if (!/^team:/i.test(input)) {
+    return undefined;
+  }
+  try {
+    const target = parseSlackTarget(input);
+    if (target?.kind !== kind || !target.teamId) {
+      return undefined;
+    }
+    return {
+      input,
+      resolved: true,
+      id: formatSlackTarget({ teamId: target.teamId, kind, id: target.id }),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function isUnambiguousSlackUserId(id: string): boolean {
   return /^[UW][A-Z0-9]+$/.test(id) || /^[uw][0-9][a-z0-9]{7,}$/.test(id);
 }
 
@@ -156,23 +176,12 @@ export function slackTargetsMatch(left: string, right: string): boolean {
 
 export function looksLikeSlackTargetId(raw: string): boolean {
   const trimmed = raw.trim();
-  if (!trimmed) {
-    return false;
-  }
-  if (/^<@([A-Z0-9]+)>$/i.test(trimmed)) {
-    return true;
-  }
-  if (/^(user|channel):/i.test(trimmed)) {
-    return true;
-  }
-  if (/^slack:/i.test(trimmed)) {
-    return true;
-  }
-  if (/^team:/i.test(trimmed)) {
-    return true;
-  }
-  if (/^[@#]/.test(trimmed)) {
-    return true;
-  }
-  return /^[CUWGD][A-Z0-9]{8,}$/i.test(trimmed);
+  return (
+    /^<@([A-Z0-9]+)>$/i.test(trimmed) ||
+    /^(user|channel):/i.test(trimmed) ||
+    /^slack:/i.test(trimmed) ||
+    /^team:/i.test(trimmed) ||
+    /^[@#]/.test(trimmed) ||
+    /^[CUWGD][A-Z0-9]{8,}$/i.test(trimmed)
+  );
 }

@@ -1,18 +1,19 @@
-// Nextcloud Talk helper module supports config schema behavior.
 import {
   DmPolicySchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
   ReplyRuntimeConfigSchemaShape,
+  ReplyToModeSchema,
+  buildChannelConfigSchema,
   buildGroupEntrySchema,
   buildMultiAccountChannelSchema,
   requireOpenAllowFrom,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { requireChannelOpenAllowFrom } from "openclaw/plugin-sdk/extension-shared";
+import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
 import { z } from "zod";
-import { buildSecretInputSchema } from "./secret-input.js";
 
-const NextcloudTalkRoomSchema = buildGroupEntrySchema({
+export const NextcloudTalkRoomSchema = buildGroupEntrySchema({
   allowFrom: z.array(z.string()).optional(),
 }).omit({ toolsBySender: true });
 
@@ -24,11 +25,12 @@ const NextcloudTalkNetworkSchema = z
   .strict()
   .optional();
 
-const NextcloudTalkAccountSchemaBase = z
+export const NextcloudTalkAccountSchemaBase = z
   .object({
     name: z.string().optional(),
     enabled: z.boolean().optional(),
     configWrites: z.boolean().optional(),
+    replyToMode: ReplyToModeSchema.optional(),
     markdown: MarkdownConfigSchema,
     baseUrl: z.string().optional(),
     botSecret: buildSecretInputSchema().optional(),
@@ -37,11 +39,21 @@ const NextcloudTalkAccountSchemaBase = z
     apiPassword: buildSecretInputSchema().optional(),
     apiPasswordFile: z.string().optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
-    webhookPort: z.number().int().positive().optional(),
-    webhookHost: z.string().optional(),
+    legacyWebhook: z
+      .union([
+        z.literal(false),
+        z
+          .object({
+            port: z.number().int().min(1).max(65535),
+            host: z.string().optional(),
+          })
+          .strict(),
+      ])
+      .optional(),
     webhookPath: z.string().optional(),
     webhookPublicUrl: z.string().optional(),
     allowFrom: z.array(z.string()).optional(),
+    mediaAllowFrom: z.array(z.string()).optional(),
     groupAllowFrom: z.array(z.string()).optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     rooms: z.record(z.string(), NextcloudTalkRoomSchema.optional()).optional(),
@@ -63,6 +75,22 @@ export const NextcloudTalkConfigSchema = buildMultiAccountChannelSchema(
         ctx,
         requireOpenAllowFrom,
       });
+    },
+  },
+);
+
+export const NextcloudTalkChannelConfigSchema = buildChannelConfigSchema(
+  NextcloudTalkConfigSchema,
+  {
+    uiHints: {
+      mediaAllowFrom: {
+        label: "Nextcloud Talk Inbound Media Allowlist",
+        help: 'User IDs whose attachments may be processed after ordinary access and mention checks. Omitted or empty denies all media; use ["*"] for every otherwise-authorized sender.',
+      },
+      "accounts.*.mediaAllowFrom": {
+        label: "Nextcloud Talk Account Inbound Media Allowlist",
+        help: 'Per-account attachment allowlist. Omitted inherits the root allowlist; an empty list denies all media; use ["*"] for every otherwise-authorized sender.',
+      },
     },
   },
 );

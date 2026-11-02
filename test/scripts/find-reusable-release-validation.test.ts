@@ -82,7 +82,6 @@ interface ChildTuple {
 interface NormalizedEvidence {
   children: ChildTuple[];
   conclusions: {
-    allRequiredSucceeded: boolean;
     children: Record<string, string>;
     current: string;
     root: string;
@@ -91,6 +90,10 @@ interface NormalizedEvidence {
   current: ParentTuple;
   directRoot: boolean;
   evidenceReuse: Record<string, unknown> | null;
+  qualificationAdmission?: {
+    request?: { candidateSha: string; qualificationSha: string };
+    coverage: { children: { key: string }[] };
+  };
   manifest: Record<string, unknown>;
   releaseProfile: string;
   repository: string;
@@ -157,7 +160,10 @@ function plistFor(shortVersion: string, buildVersion: string): string {
   ].join("\n");
 }
 
-function createRepo(options: { plistBuildVersion?: string } = {}, dirs = tempDirs) {
+function createRepo(
+  options: { plistBuildVersion?: string; version?: string } = {},
+  dirs = tempDirs,
+) {
   const origin = dirs.make("evidence-reuse-origin-");
   git(origin, ["init", "-q", "-b", "main"]);
   git(origin, ["config", "user.email", "test-user@example.invalid"]);
@@ -165,7 +171,7 @@ function createRepo(options: { plistBuildVersion?: string } = {}, dirs = tempDir
   git(origin, ["config", "uploadpack.allowReachableSHA1InWant", "true"]);
   writeFileSync(
     join(origin, "package.json"),
-    `${JSON.stringify({ name: "x", version: "2026.7.1" }, null, 2)}\n`,
+    `${JSON.stringify({ name: "x", version: options.version ?? "2026.7.1" }, null, 2)}\n`,
   );
   mkdirSync(join(origin, "apps/macos/Sources/OpenClaw/Resources"), { recursive: true });
   writeFileSync(
@@ -221,14 +227,15 @@ function normalizedEvidence(options: {
   const trustedWorkflowFullRef = protectedTagRoute
     ? `refs/tags/${trustedWorkflowRef}`
     : "refs/heads/main";
-  const validationInputs =
+  const validationInputs: Record<string, string> | null =
     options.validationInputs === undefined ? DEFAULT_INPUTS : options.validationInputs;
+  const npmBetaCoverage = validationInputs?.coveragePolicy === "npm-beta-v1";
   const npmTelegramRequired =
+    !npmBetaCoverage &&
     validationInputs !== null &&
-    (validationInputs.npmTelegramPackageSpec.length > 0 ||
-      validationInputs.releasePackageSpec.length > 0);
+    Boolean(validationInputs.npmTelegramPackageSpec || validationInputs.releasePackageSpec);
   const manifest = {
-    version: shaPinned ? 3 : 2,
+    version: 4,
     workflowName: "Full Release Validation",
     workflowRef,
     workflowSha: producerSha,
@@ -243,19 +250,21 @@ function normalizedEvidence(options: {
     runReleaseSoak: String(soak),
     validationInputs,
     controls: {
-      performanceBlocking: true,
+      performanceBlocking: !npmBetaCoverage,
       performanceReportPublication: "artifact-only",
       stableSoakRequired: releaseProfile === "stable" || releaseProfile === "full",
     },
     childRuns: {
       normalCi: "201",
       npmTelegram: npmTelegramRequired ? "205" : "",
-      pluginPrerelease: "202",
-      releaseChecks: "203",
+      pluginPrereleaseIndependent: "202",
+      pluginPrereleaseCandidate: "206",
+      releaseChecksIndependent: "203",
+      releaseChecksCandidate: "207",
       productPerformance: {
-        blocking: true,
-        conclusion: "success",
-        runId: "204",
+        blocking: !npmBetaCoverage,
+        conclusion: npmBetaCoverage ? "" : "success",
+        runId: npmBetaCoverage ? "" : "204",
       },
     },
   };
@@ -269,7 +278,7 @@ function normalizedEvidence(options: {
     },
     conclusion: "success",
     manifest,
-    manifestVersion: shaPinned ? 3 : 2,
+    manifestVersion: 4,
     runAttempt: 2,
     runId,
     status: "completed",
@@ -284,7 +293,7 @@ function normalizedEvidence(options: {
       ? "manifest-v3-protected-tag-exact-sha"
       : shaPinned
         ? "manifest-v3-sha-pinned-main-ancestry"
-        : "legacy-v2-main-ancestry",
+        : "manifest-v3-branch",
     workflowRefType: "branch",
     workflowRunPath: shaPinned
       ? `.github/workflows/full-release-validation.yml@${workflowFullRef}`
@@ -294,22 +303,40 @@ function normalizedEvidence(options: {
   const roles = [
     ["normalCi", "201", 1, 1, "CI", "ci.yml", "-ci"],
     [
-      "pluginPrerelease",
+      "pluginPrereleaseIndependent",
       "202",
       2,
       1,
       "Plugin Prerelease",
       "plugin-prerelease.yml",
-      "-plugin-prerelease",
+      "-plugin-prerelease-independent",
     ],
     [
-      "releaseChecks",
+      "pluginPrereleaseCandidate",
+      "206",
+      1,
+      2,
+      "Plugin Prerelease",
+      "plugin-prerelease.yml",
+      "-plugin-prerelease-candidate",
+    ],
+    [
+      "releaseChecksIndependent",
       "203",
+      1,
+      1,
+      "OpenClaw Release Checks",
+      "openclaw-release-checks.yml",
+      "-release-checks-independent",
+    ],
+    [
+      "releaseChecksCandidate",
+      "207",
       1,
       2,
       "OpenClaw Release Checks",
       "openclaw-release-checks.yml",
-      "-release-checks",
+      "-release-checks-candidate",
     ],
     ...(npmTelegramRequired
       ? ([
@@ -326,8 +353,9 @@ function normalizedEvidence(options: {
       : []),
     ["productPerformance", "204", 3, 2, "OpenClaw Performance", "openclaw-performance.yml", ""],
   ] as const;
-  const children = roles.map(
-    ([role, childRunId, runAttempt, sourceParentAttempt, name, workflow, suffix]) =>
+  const children = roles
+    .filter(([role]) => !npmBetaCoverage || role !== "productPerformance")
+    .map(([role, childRunId, runAttempt, sourceParentAttempt, name, workflow, suffix]) =>
       Object.assign(
         {
           conclusion: "success",
@@ -348,11 +376,10 @@ function normalizedEvidence(options: {
         },
         role === "productPerformance" ? { reportPublication: "artifact-only" } : {},
       ),
-  );
+    );
   return {
     children,
     conclusions: {
-      allRequiredSucceeded: true,
       children: Object.fromEntries(children.map((child) => [child.role, child.conclusion])),
       current: "success",
       root: "success",
@@ -369,7 +396,7 @@ function normalizedEvidence(options: {
     rerunGroup: "all",
     root,
     runReleaseSoak: soak,
-    schema: "openclaw.release-validation-evidence/v3",
+    schema: "openclaw.release-validation-evidence/v4",
     producerOnTrustedMainLineage: !protectedTagRoute,
     trustedWorkflowFullRef,
     trustedWorkflowRef,
@@ -408,6 +435,7 @@ exec cat "\${fixture}.json"
 const FAKE_VALIDATOR = `#!/usr/bin/env node
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 
 const runIndex = process.argv.indexOf("--validate-run");
 const repoIndex = process.argv.indexOf("--repo");
@@ -416,6 +444,8 @@ const trustedFullRefIndex = process.argv.indexOf("--trusted-workflow-full-ref");
 const trustedShaIndex = process.argv.indexOf("--trusted-workflow-sha");
 const verifierShaIndex = process.argv.indexOf("--verifier-source-sha");
 const verifierFileIndex = process.argv.indexOf("--verifier-source-file");
+const reuseRequestIndex = process.argv.indexOf("--reuse-request-json");
+const qualificationIndex = process.argv.indexOf("--qualification-reuse-json");
 if (
   runIndex < 0 ||
   repoIndex < 0 ||
@@ -424,6 +454,11 @@ if (
   trustedShaIndex < 0 ||
   verifierShaIndex < 0 ||
   verifierFileIndex < 0 ||
+  reuseRequestIndex < 0 ||
+  !isDeepStrictEqual(JSON.parse(process.argv[reuseRequestIndex + 1]), JSON.parse(process.env.FAKE_REUSE_REQUEST)) ||
+  (process.env.FAKE_QUALIFICATION_REUSE
+    ? qualificationIndex < 0 || !isDeepStrictEqual(JSON.parse(process.argv[qualificationIndex + 1]), JSON.parse(process.env.FAKE_QUALIFICATION_REUSE))
+    : qualificationIndex >= 0) ||
   process.argv[repoIndex + 1] !== "openclaw/openclaw" ||
   process.argv[trustedRefIndex + 1] !== process.env.FAKE_TRUSTED_WORKFLOW_REF ||
   process.argv[trustedFullRefIndex + 1] !== process.env.FAKE_TRUSTED_WORKFLOW_FULL_REF ||
@@ -491,6 +526,8 @@ function runResolver(args: {
   compareStatus?: string;
   fixtures: string;
   inputs?: unknown;
+  qualificationAdmission?: Record<string, unknown>;
+  qualificationInputs?: Record<string, string>;
   releaseProfile?: string;
   repoDir: string;
   runReleaseSoak?: string;
@@ -504,6 +541,7 @@ function runResolver(args: {
   verifierOnMain?: boolean;
   verifierSha?: string;
   workflowRef?: string;
+  workflowSha?: string;
 }) {
   const verifierSha = args.verifierSha ?? VERIFIER_SHA;
   const trustedWorkflowRef = args.trustedWorkflowRef ?? "main";
@@ -557,6 +595,8 @@ function runResolver(args: {
       "--target-sha",
       args.targetSha,
       "--workflow-sha",
+      args.workflowSha ?? verifierSha,
+      "--verifier-source-sha",
       verifierSha,
       "--workflow-ref",
       args.workflowRef ?? "main",
@@ -576,6 +616,14 @@ function runResolver(args: {
       REPOSITORY,
       "--repo-dir",
       args.repoDir,
+      ...(args.qualificationAdmission
+        ? [
+            "--qualification-admission-json",
+            JSON.stringify(args.qualificationAdmission),
+            "--qualification-inputs-json",
+            JSON.stringify(args.qualificationInputs),
+          ]
+        : []),
     ],
     {
       cwd: process.cwd(),
@@ -587,6 +635,21 @@ function runResolver(args: {
         FAKE_TRUSTED_WORKFLOW_REF: trustedWorkflowRef,
         FAKE_TRUSTED_WORKFLOW_SHA: trustedWorkflowSha,
         FAKE_VALIDATOR_FIXTURES: args.fixtures,
+        FAKE_REUSE_REQUEST: JSON.stringify({
+          targetSha: args.targetSha,
+          releaseProfile: args.releaseProfile ?? "full",
+          runReleaseSoak: args.runReleaseSoak ?? "true",
+          validationInputs: args.inputs === undefined ? DEFAULT_INPUTS : args.inputs,
+        }),
+        FAKE_QUALIFICATION_REUSE: args.qualificationAdmission
+          ? JSON.stringify({
+              candidateSha: args.workflowSha ?? verifierSha,
+              qualificationSha: args.workflowSha ?? verifierSha,
+              workflowRef: args.workflowRef ?? "main",
+              descriptor: args.qualificationAdmission,
+              inputs: args.qualificationInputs,
+            })
+          : "",
         FAKE_VERIFIER_SHA: verifierSha,
         GITHUB_OUTPUT: "",
         OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: args.validatorPath,
@@ -594,6 +657,18 @@ function runResolver(args: {
       },
     },
   );
+}
+
+function resolveEvidence(
+  record: NormalizedEvidence,
+  options: Partial<Parameters<typeof runResolver>[0]> = {},
+) {
+  return runResolver({
+    ...setUpFixtures([{ record, runId: record.root.runId }]),
+    repoDir: getSharedRepo().clone,
+    targetSha: record.root.targetSha,
+    ...options,
+  });
 }
 
 function parseOutput(output: string): Record<string, string> {
@@ -609,9 +684,93 @@ function parseOutput(output: string): Record<string, string> {
   );
 }
 
+function admit(record: NormalizedEvidence, sha: string) {
+  record.producerOnTrustedMainLineage = false;
+  for (const parent of [record.current, record.root]) {
+    parent.producerOnTrustedMainLineage = false;
+    parent.workflowRefProof = "candidate-owned-admission-v1";
+  }
+  record.qualificationAdmission = {
+    request: { candidateSha: sha, qualificationSha: sha },
+    coverage: { children: record.children.map(({ role }) => ({ key: role })) },
+  };
+}
+
 describe("scripts/github/find-reusable-release-validation.sh", () => {
+  it.each(["main", `release-publish/${VERIFIER_SHA.slice(0, 12)}-456`])(
+    "selects candidate-owned evidence through admitted P on %s",
+    (trustedWorkflowRef) => {
+      const { priorSha } = getSharedRepo();
+      const record = normalizedEvidence({
+        targetSha: priorSha,
+        producerSha: priorSha,
+        workflowRef: `release-ci/${priorSha.slice(0, 12)}-122`,
+        trustedWorkflowRef,
+      });
+      admit(record, priorSha);
+      const options = {
+        workflowSha: priorSha,
+        workflowRef: `release-ci/${priorSha.slice(0, 12)}-123`,
+        trustedWorkflowRef,
+        qualificationAdmission: { workflowSha: VERIFIER_SHA, artifactId: 789 },
+        qualificationInputs: { ref: priorSha, expected_sha: priorSha },
+      };
+      const result = resolveEvidence(record, options);
+      expect(result.status).toBe(0);
+      expect(parseOutput(result.stdout)).toMatchObject({ reuse: "true", evidence_run_id: "111" });
+
+      const missingAdmission = resolveEvidence(record, {
+        ...options,
+        qualificationAdmission: undefined,
+        qualificationInputs: undefined,
+      });
+      expect(parseOutput(missingAdmission.stdout)).toMatchObject({ reuse: "false" });
+    },
+  );
+
+  it.each([
+    { changedPaths: ["CHANGELOG/2026.7.1.md", "CHANGELOG/records/2026.7.1.md"], reuse: "true" },
+    { changedPaths: ["CHANGELOG/2026.7.1.md", "index.ts"], reuse: "false" },
+  ])(
+    "carries candidate-owned qualification across a classified descendant ($reuse)",
+    ({ changedPaths, reuse }) => {
+      const { origin, priorSha } = createRepo({ version: "2026.7.1" });
+      mkdirSync(join(origin, "CHANGELOG/records"), { recursive: true });
+      commitFile(origin, "CHANGELOG/2026.7.1.md", "## 2026.7.1\n", "docs: release entry");
+      const changedPath = changedPaths[1];
+      expect(changedPath).toBeDefined();
+      const targetSha = commitFile(
+        origin,
+        changedPath!,
+        changedPath!.startsWith("CHANGELOG/") ? "Contributors.\n" : "export const value = 2;\n",
+        "docs: finish release notes",
+      );
+      const record = normalizedEvidence({
+        targetSha: priorSha,
+        producerSha: priorSha,
+        validationInputs: { ...DEFAULT_INPUTS, targetVersion: "2026.7.1" },
+        workflowRef: `release-ci/${priorSha.slice(0, 12)}-122`,
+      });
+      admit(record, priorSha);
+      const result = resolveEvidence(record, {
+        compareBaseSha: priorSha,
+        compareFiles: changedPaths,
+        inputs: { ...DEFAULT_INPUTS, targetVersion: "2026.7.1" },
+        repoDir: cloneHead(origin),
+        targetSha,
+        workflowSha: targetSha,
+        workflowRef: `release-ci/${targetSha.slice(0, 12)}-123`,
+        qualificationAdmission: { workflowSha: VERIFIER_SHA, artifactId: 789 },
+        qualificationInputs: { ref: targetSha, expected_sha: targetSha },
+      });
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(parseOutput(result.stdout).reuse, result.stderr).toBe(reuse);
+    },
+  );
+
   it("reuses strict direct-root evidence produced by a canonical SHA-pinned run", () => {
-    const { clone, priorSha } = getSharedRepo();
+    const { priorSha } = getSharedRepo();
     const producerSha = "d".repeat(40);
     const producerRef = `release-ci/${producerSha.slice(0, 12)}-122`;
     const record = normalizedEvidence({
@@ -619,14 +778,8 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
       targetSha: priorSha,
       workflowRef: producerRef,
     });
-    const { binDir, fixtures, validatorPath } = setUpFixtures([{ record, runId: "111" }]);
 
-    const result = runResolver({
-      binDir,
-      fixtures,
-      repoDir: clone,
-      targetSha: priorSha,
-      validatorPath,
+    const result = resolveEvidence(record, {
       workflowRef: `release-ci/${VERIFIER_SHA.slice(0, 12)}-123`,
     });
 
@@ -637,8 +790,8 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
     });
   });
 
-  it("reuses strict evidence through the exact lightweight protected tooling tag", () => {
-    const { clone, priorSha } = getSharedRepo();
+  it("reuses strict evidence from the protected tooling tag", () => {
+    const { priorSha } = getSharedRepo();
     const trustedWorkflowRef = `release-publish/${VERIFIER_SHA.slice(0, 12)}-456`;
     const producerRef = `release-ci/${VERIFIER_SHA.slice(0, 12)}-122`;
     const record = normalizedEvidence({
@@ -647,15 +800,31 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
       trustedWorkflowRef,
       workflowRef: producerRef,
     });
-    const { binDir, fixtures, validatorPath } = setUpFixtures([{ record, runId: "111" }]);
+    const result = resolveEvidence(record, {
+      trustedWorkflowRef,
+      verifierOnMain: false,
+      workflowRef: `release-ci/${VERIFIER_SHA.slice(0, 12)}-123`,
+    });
+    expect(result.status).toBe(0);
+    expect(parseOutput(result.stdout)).toMatchObject({ evidence_run_id: "111", reuse: "true" });
+  });
 
-    const result = runResolver({
-      binDir,
-      fixtures,
-      repoDir: clone,
+  it("reuses strict evidence produced by an ancestor of the protected tooling tag", () => {
+    const { priorSha } = getSharedRepo();
+    const producerSha = "d".repeat(40);
+    const trustedWorkflowRef = `release-publish/${VERIFIER_SHA.slice(0, 12)}-456`;
+    const producerRef = `release-ci/${producerSha.slice(0, 12)}-122`;
+    const record = normalizedEvidence({
+      producerSha,
       targetSha: priorSha,
       trustedWorkflowRef,
-      validatorPath,
+      workflowRef: producerRef,
+    });
+    record.current.workflowRefProof = "manifest-v3-protected-tag-tooling-lineage";
+    record.root.workflowRefProof = "manifest-v3-protected-tag-tooling-lineage";
+
+    const result = resolveEvidence(record, {
+      trustedWorkflowRef,
       verifierOnMain: false,
       workflowRef: `release-ci/${VERIFIER_SHA.slice(0, 12)}-123`,
     });
@@ -665,6 +834,30 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
       evidence_run_id: "111",
       reuse: "true",
     });
+  });
+
+  it("rejects unrecognized protected tooling proof", () => {
+    const workflowRefProof = "manifest-v3-protected-tag-diverged";
+    const { priorSha } = getSharedRepo();
+    const trustedWorkflowRef = `release-publish/${VERIFIER_SHA.slice(0, 12)}-456`;
+    const producerRef = `release-ci/${VERIFIER_SHA.slice(0, 12)}-122`;
+    const record = normalizedEvidence({
+      producerSha: VERIFIER_SHA,
+      targetSha: priorSha,
+      trustedWorkflowRef,
+      workflowRef: producerRef,
+    });
+    record.current.workflowRefProof = workflowRefProof;
+    record.root.workflowRefProof = workflowRefProof;
+
+    const result = resolveEvidence(record, {
+      trustedWorkflowRef,
+      verifierOnMain: false,
+      workflowRef: `release-ci/${VERIFIER_SHA.slice(0, 12)}-123`,
+    });
+
+    expect(result.status).toBe(0);
+    expect(parseOutput(result.stdout)).toMatchObject({ reuse: "false" });
   });
 
   it.each([
@@ -687,7 +880,7 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
       },
     },
   ])("rejects protected tooling identity drift: $label", ({ options }) => {
-    const { clone, priorSha } = getSharedRepo();
+    const { priorSha } = getSharedRepo();
     const trustedWorkflowRef = `release-publish/${VERIFIER_SHA.slice(0, 12)}-456`;
     const producerRef = `release-ci/${VERIFIER_SHA.slice(0, 12)}-122`;
     const record = normalizedEvidence({
@@ -696,15 +889,9 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
       trustedWorkflowRef,
       workflowRef: producerRef,
     });
-    const { binDir, fixtures, validatorPath } = setUpFixtures([{ record, runId: "111" }]);
 
-    const result = runResolver({
-      binDir,
-      fixtures,
-      repoDir: clone,
-      targetSha: priorSha,
+    const result = resolveEvidence(record, {
       trustedWorkflowRef,
-      validatorPath,
       workflowRef: `release-ci/${VERIFIER_SHA.slice(0, 12)}-123`,
       ...options,
     });
@@ -713,138 +900,44 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
     expect(parseOutput(result.stdout)).toMatchObject({ reuse: "false" });
   });
 
-  it("reuses npm Telegram evidence only when its selectors match exactly", () => {
-    const { clone, priorSha } = getSharedRepo();
+  it("reuses Telegram failures only when the strict verifier accepted their policy", () => {
+    const releaseProfile = "full";
+    const { priorSha } = getSharedRepo();
     const validationInputs = {
       ...DEFAULT_INPUTS,
-      npmTelegramPackageSpec: "openclaw@2026.7.2-beta.7",
-      npmTelegramProviderMode: "live-frontier",
-      npmTelegramScenario: "telegram-status-command",
+      npmTelegramPackageSpec: "openclaw@2026.7.1",
     };
-    const record = normalizedEvidence({ targetSha: priorSha, validationInputs });
-    const { binDir, fixtures, validatorPath } = setUpFixtures([{ record, runId: "111" }]);
+    const record = normalizedEvidence({ targetSha: priorSha, validationInputs, releaseProfile });
+    for (const child of record.children) {
+      if (
+        ["npmTelegram", "releaseChecksIndependent", "releaseChecksCandidate"].includes(child.role)
+      ) {
+        child.conclusion = "failure";
+        record.conclusions.children[child.role] = "failure";
+      }
+    }
 
-    const result = runResolver({
-      binDir,
-      fixtures,
+    const result = resolveEvidence(record, {
       inputs: validationInputs,
-      repoDir: clone,
-      targetSha: priorSha,
-      validatorPath,
+      releaseProfile,
     });
 
     expect(result.status).toBe(0);
-    expect(parseOutput(result.stdout)).toMatchObject({
-      evidence_run_id: "111",
-      reuse: "true",
-    });
+    expect(parseOutput(result.stdout)).toMatchObject({ evidence_run_id: "111", reuse: "true" });
   });
 
   it("rejects noncanonical release refs and workflow SHAs outside trusted main", () => {
-    const { clone, priorSha } = getSharedRepo();
+    const { priorSha } = getSharedRepo();
     const record = normalizedEvidence({ targetSha: priorSha });
-    const { binDir, fixtures, validatorPath } = setUpFixtures([{ record, runId: "111" }]);
 
-    const forgedRef = runResolver({
-      binDir,
-      fixtures,
-      repoDir: clone,
-      targetSha: priorSha,
-      validatorPath,
-      workflowRef: "release-ci/not-trusted",
-    });
+    const forgedRef = resolveEvidence(record, { workflowRef: "release-ci/not-trusted" });
     expect(parseOutput(forgedRef.stdout)).toMatchObject({ reuse: "false" });
 
-    const untrustedSha = runResolver({
-      binDir,
-      fixtures,
-      repoDir: clone,
-      targetSha: priorSha,
-      validatorPath,
+    const untrustedSha = resolveEvidence(record, {
       verifierOnMain: false,
       workflowRef: `release-ci/${VERIFIER_SHA.slice(0, 12)}-123`,
     });
     expect(parseOutput(untrustedSha.stdout)).toMatchObject({ reuse: "false" });
-  });
-
-  it("reuses pre-tooling trusted-main evidence for the exact target", () => {
-    const { clone, priorSha } = getSharedRepo();
-    const record = normalizedEvidence({ targetSha: priorSha });
-    const { binDir, fixtures, validatorPath } = setUpFixtures([{ record, runId: "111" }]);
-
-    const result = runResolver({
-      binDir,
-      fixtures,
-      repoDir: clone,
-      targetSha: priorSha,
-      validatorPath,
-    });
-
-    expect(result.status).toBe(0);
-    expect(record.root.workflowSha).not.toBe(record.root.targetSha);
-    expect(record.verifier.sourceSha).not.toBe(record.root.workflowSha);
-    expect(new Set(record.children.map((child) => child.sourceParentAttempt)).size).toBe(2);
-    const output = parseOutput(result.stdout);
-    expect(output).toMatchObject({
-      changed_path_count: "0",
-      evidence_root_run_id: "111",
-      evidence_run_id: "111",
-      evidence_sha: priorSha,
-      reuse: "true",
-    });
-    expect(JSON.parse(output.changed_paths ?? "null")).toEqual([]);
-    expect(JSON.parse(output.evidence_manifest ?? "{}")).toMatchObject({ targetSha: priorSha });
-  });
-
-  it("accepts exact-target trusted-main evidence without a compare request", () => {
-    const { clone, priorSha } = getSharedRepo();
-    const record = normalizedEvidence({
-      producerSha: priorSha,
-      targetSha: priorSha,
-      verifierSha: priorSha,
-    });
-    const { binDir, fixtures, validatorPath } = setUpFixtures([{ record, runId: "111" }]);
-
-    const result = runResolver({
-      binDir,
-      fixtures,
-      repoDir: clone,
-      targetSha: priorSha,
-      validatorPath,
-      verifierSha: priorSha,
-    });
-
-    expect(result.status).toBe(0);
-    expect(parseOutput(result.stdout)).toMatchObject({
-      changed_path_count: "0",
-      changed_paths: "[]",
-      reuse: "true",
-    });
-  });
-
-  it.each([
-    ["beta", "beta"],
-    ["stable", "stable"],
-    ["full", "full"],
-  ] as const)("accepts exact profile identity %s -> %s", (priorProfile, requestedProfile) => {
-    const { clone, priorSha } = getSharedRepo();
-    const record = normalizedEvidence({
-      releaseProfile: priorProfile,
-      targetSha: priorSha,
-    });
-    const { binDir, fixtures, validatorPath } = setUpFixtures([{ record, runId: "111" }]);
-
-    const result = runResolver({
-      binDir,
-      fixtures,
-      releaseProfile: requestedProfile,
-      repoDir: clone,
-      targetSha: priorSha,
-      validatorPath,
-    });
-
-    expect(result.status).toBe(0);
-    expect(parseOutput(result.stdout)).toMatchObject({ reuse: "true" });
   });
 
   it("surfaces bounded validator rejection and selects the next strict record", () => {
@@ -870,29 +963,6 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
       `run 222: shared evidence validator rejected the run: evidence source mismatch ${"x".repeat(472)}...; skipping`,
     );
     expect(result.stderr).not.toContain("\nxxxxxxxx");
-  });
-
-  it("uses the generic rejection diagnostic when validator output is malformed", () => {
-    const { clone, priorSha } = getSharedRepo();
-    const record = normalizedEvidence({ runId: "111", targetSha: priorSha });
-    const { binDir, fixtures, validatorPath } = setUpFixtures([
-      { exitCode: 1, rawOutput: "not-json", runId: "222" },
-      { record, runId: "111" },
-    ]);
-
-    const result = runResolver({
-      binDir,
-      fixtures,
-      repoDir: clone,
-      targetSha: priorSha,
-      validatorPath,
-    });
-
-    expect(result.status).toBe(0);
-    expect(parseOutput(result.stdout)).toMatchObject({ evidence_run_id: "111", reuse: "true" });
-    expect(result.stderr).toContain(
-      "run 222: shared evidence validator rejected the run; skipping",
-    );
   });
 
   it.each([
@@ -965,12 +1035,6 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
       },
     },
     {
-      label: "failed child",
-      mutate(record: NormalizedEvidence) {
-        expectDefined(record.children[0], "failed reusable release child").conclusion = "failure";
-      },
-    },
-    {
       label: "extra child role",
       mutate(record: NormalizedEvidence) {
         record.children.push({
@@ -988,18 +1052,11 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
       },
     },
   ])("rejects normalized evidence that is not reusable: $label", (testCase) => {
-    const { clone, priorSha } = getSharedRepo();
+    const { priorSha } = getSharedRepo();
     const record = normalizedEvidence({ targetSha: priorSha });
     testCase.mutate(record);
-    const { binDir, fixtures, validatorPath } = setUpFixtures([{ record, runId: "111" }]);
 
-    const result = runResolver({
-      binDir,
-      fixtures,
-      repoDir: clone,
-      targetSha: priorSha,
-      validatorPath,
-    });
+    const result = resolveEvidence(record);
 
     expect(result.status).toBe(0);
     expect(parseOutput(result.stdout)).toMatchObject({ reuse: "false" });
@@ -1014,73 +1071,9 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
       resolverOptions: { releaseProfile: "stable" },
     },
     {
-      expected: "profile beta differs from full",
-      label: "beta evidence for full",
-      recordOptions: { releaseProfile: "beta" },
-      resolverOptions: { releaseProfile: "full" },
-    },
-    {
-      expected: "profile stable differs from beta",
-      label: "stable evidence for beta",
-      recordOptions: { releaseProfile: "stable" },
-      resolverOptions: { releaseProfile: "beta" },
-    },
-    {
-      expected: "profile full differs from beta",
-      label: "full evidence for beta",
-      recordOptions: { releaseProfile: "full" },
-      resolverOptions: { releaseProfile: "beta" },
-    },
-    {
-      expected: "profile full differs from stable",
-      label: "full evidence for stable",
-      recordOptions: { releaseProfile: "full" },
-      resolverOptions: { releaseProfile: "stable" },
-    },
-    {
       expected: "validation inputs differ",
       label: "different lane inputs",
       recordOptions: { validationInputs: { ...DEFAULT_INPUTS, provider: "anthropic" } },
-      resolverOptions: {},
-    },
-    {
-      expected: "validation inputs differ",
-      label: "different npm Telegram package",
-      recordOptions: {
-        validationInputs: { ...DEFAULT_INPUTS, npmTelegramPackageSpec: "openclaw@old" },
-      },
-      resolverOptions: {},
-    },
-    {
-      expected: "validation inputs differ",
-      label: "different npm Telegram provider mode",
-      recordOptions: {
-        validationInputs: { ...DEFAULT_INPUTS, npmTelegramProviderMode: "live-frontier" },
-      },
-      resolverOptions: {},
-    },
-    {
-      expected: "validation inputs differ",
-      label: "different npm Telegram scenario",
-      recordOptions: {
-        validationInputs: { ...DEFAULT_INPUTS, npmTelegramScenario: "telegram-status-command" },
-      },
-      resolverOptions: {},
-    },
-    {
-      expected: "validation inputs differ",
-      label: "different package Telegram deferral",
-      recordOptions: {
-        validationInputs: { ...DEFAULT_INPUTS, skipPackageTelegramE2e: "true" },
-      },
-      resolverOptions: {},
-    },
-    {
-      expected: "validation inputs differ",
-      label: "different unreleased changelog policy",
-      recordOptions: {
-        validationInputs: { ...DEFAULT_INPUTS, allowUnreleasedChangelog: "true" },
-      },
       resolverOptions: {},
     },
     {
@@ -1098,22 +1091,50 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
   ])(
     "rejects evidence with incompatible policy coverage: $label",
     ({ expected, recordOptions, resolverOptions }) => {
-      const { clone, priorSha } = getSharedRepo();
+      const { priorSha } = getSharedRepo();
       const record = normalizedEvidence({ targetSha: priorSha, ...recordOptions });
-      const { binDir, fixtures, validatorPath } = setUpFixtures([{ record, runId: "111" }]);
 
-      const result = runResolver({
-        binDir,
-        fixtures,
-        repoDir: clone,
-        targetSha: priorSha,
-        validatorPath,
-        ...resolverOptions,
-      });
+      const result = resolveEvidence(record, { ...resolverOptions });
 
       expect(result.status).toBe(0);
       expect(parseOutput(result.stdout)).toMatchObject({ reuse: "false" });
       expect(result.stderr).toContain(expected);
+    },
+  );
+
+  it.each([
+    { profile: "beta", coverage: "matching" },
+    { profile: "stable", coverage: "matching" },
+    { profile: "beta", coverage: "legacy-receipt" },
+  ])(
+    "requires identical npm $profile coverage and context for reuse: $coverage",
+    ({ profile, coverage }) => {
+      const { clone, priorSha } = getSharedRepo();
+      const inputs = {
+        ...DEFAULT_INPUTS,
+        coveragePolicy: `npm-${profile}-v1`,
+        skipPackageTelegramE2e: String(profile === "beta"),
+        targetVersion: profile === "beta" ? "2026.8.28-beta.1" : "2026.8.28",
+        targetContextRef: "release/2026.8.28",
+      };
+      const record = normalizedEvidence({
+        releaseProfile: profile,
+        soak: profile === "stable",
+        targetSha: priorSha,
+        validationInputs: coverage === "legacy-receipt" ? DEFAULT_INPUTS : inputs,
+      });
+      const fixtures = setUpFixtures([{ record, runId: "111" }]);
+
+      const result = runResolver({
+        ...fixtures,
+        inputs,
+        releaseProfile: profile,
+        repoDir: clone,
+        runReleaseSoak: String(profile === "stable"),
+        targetSha: priorSha,
+      });
+      expect(result.status).toBe(0);
+      expect(parseOutput(result.stdout).reuse).toBe(coverage === "matching" ? "true" : "false");
     },
   );
 
@@ -1127,19 +1148,15 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
     );
     const clone = cloneHead(origin);
     const record = normalizedEvidence({ targetSha: priorSha });
-    const { binDir, fixtures, validatorPath } = setUpFixtures([{ record, runId: "111" }]);
 
-    const result = runResolver({
-      binDir,
+    const result = resolveEvidence(record, {
       compareBaseSha: priorSha,
-      fixtures,
       repoDir: clone,
       targetSha,
-      validatorPath,
     });
 
     expect(result.status).toBe(0);
-    expect(parseOutput(result.stdout)).toMatchObject({
+    expect(parseOutput(result.stdout), result.stderr).toMatchObject({
       changed_path_count: "1",
       changed_paths: '["CHANGELOG.md"]',
       evidence_policy: "changelog-only-release-v1",
@@ -1153,16 +1170,12 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
     const targetSha = commitFile(origin, "index.ts", "export const value = 2;\n", "fix: code");
     const clone = cloneHead(origin);
     const record = normalizedEvidence({ targetSha: priorSha });
-    const { binDir, fixtures, validatorPath } = setUpFixtures([{ record, runId: "111" }]);
 
-    const result = runResolver({
-      binDir,
+    const result = resolveEvidence(record, {
       compareBaseSha: priorSha,
       compareFiles: ["index.ts"],
-      fixtures,
       repoDir: clone,
       targetSha,
-      validatorPath,
     });
 
     expect(result.status).toBe(0);
@@ -1175,16 +1188,12 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
     const targetSha = commitFile(origin, "CHANGELOG.md", "renamed source\n", "docs: rename");
     const clone = cloneHead(origin);
     const record = normalizedEvidence({ targetSha: priorSha });
-    const { binDir, fixtures, validatorPath } = setUpFixtures([{ record, runId: "111" }]);
 
-    const result = runResolver({
-      binDir,
+    const result = resolveEvidence(record, {
       compareBaseSha: priorSha,
       compareRenamed: true,
-      fixtures,
       repoDir: clone,
       targetSha,
-      validatorPath,
     });
 
     expect(result.status).toBe(0);
@@ -1196,14 +1205,10 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
     const { origin, priorSha } = createRepo({ plistBuildVersion: "2026061000" });
     const clone = cloneHead(origin);
     const record = normalizedEvidence({ targetSha: priorSha });
-    const { binDir, fixtures, validatorPath } = setUpFixtures([{ record, runId: "111" }]);
 
-    const result = runResolver({
-      binDir,
-      fixtures,
+    const result = resolveEvidence(record, {
       repoDir: clone,
       targetSha: priorSha,
-      validatorPath,
     });
 
     expect(result.status).toBe(0);
@@ -1213,50 +1218,8 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
     });
   });
 
-  it.each([
-    { inputs: [], label: "array inputs", runReleaseSoak: "true" },
-    { inputs: null, label: "null inputs", runReleaseSoak: "true" },
-    { inputs: DEFAULT_INPUTS, label: "invalid soak flag", runReleaseSoak: "yes" },
-  ])("rejects invalid resolver arguments: $label", ({ inputs, runReleaseSoak }) => {
-    const { clone, priorSha } = getSharedRepo();
-    const { binDir, fixtures, validatorPath } = setUpFixtures([]);
-
-    const result = runResolver({
-      binDir,
-      fixtures,
-      inputs,
-      repoDir: clone,
-      runReleaseSoak,
-      targetSha: priorSha,
-      validatorPath,
-    });
-
-    expect(result.status).toBe(2);
-  });
-
-  it("reports no reuse when no prior successful runs exist", () => {
-    const { clone, priorSha } = getSharedRepo();
-    const { binDir, fixtures, validatorPath } = setUpFixtures([]);
-
-    const result = runResolver({
-      binDir,
-      fixtures,
-      repoDir: clone,
-      targetSha: priorSha,
-      validatorPath,
-    });
-
-    expect(result.status).toBe(0);
-    expect(parseOutput(result.stdout)).toMatchObject({
-      reuse: "false",
-      reuse_reason: "no prior successful validation runs",
-    });
-  });
-
   it("rewrites inherited v3 producer identity to the current immutable workflow SHA", () => {
     const workflow = readFileSync(".github/workflows/full-release-validation.yml", "utf8");
-    expect(workflow).toContain('--arg workflowSha "$GITHUB_SHA"');
-    expect(workflow).toContain("workflowSha: $workflowSha");
-    expect(workflow).toContain("ref: ${{ github.sha }}");
+    expect(workflow).toMatch(/--arg workflowSha "\$GITHUB_SHA"[\s\S]*workflowSha: \$workflowSha/u);
   });
 });

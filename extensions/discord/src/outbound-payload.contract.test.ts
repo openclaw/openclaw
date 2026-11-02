@@ -1,274 +1,261 @@
-// Discord tests cover outbound payload.contract plugin behavior.
-import {
-  installChannelOutboundPayloadContractSuite,
-  primeChannelOutboundSendMock,
-  type OutboundPayloadHarnessParams,
-} from "openclaw/plugin-sdk/channel-contract-testing";
-import { describe, expect, it, vi } from "vitest";
-import { DiscordError, RateLimitError } from "./internal/discord.js";
-import { discordOutbound } from "./outbound-adapter.js";
+import { ChannelType } from "discord-api-types/v10";
+import { resetGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { DiscordError } from "./internal/rest-errors.js";
+import { RequestClient } from "./internal/rest.js";
+import { discordOutbound } from "./outbound-payload.js";
 import { recordDiscordMessageCreateAmbiguity } from "./retry.js";
+import { sendMessageDiscord } from "./send.outbound.js";
 
-type DiscordSendPayload = NonNullable<typeof discordOutbound.sendPayload>;
-
-function requireDiscordSendPayload(): DiscordSendPayload {
-  const sendPayload = discordOutbound.sendPayload;
-  if (!sendPayload) {
+const sendPayload = (() => {
+  const handler = discordOutbound.sendPayload;
+  if (!handler) {
     throw new Error("Expected Discord outbound sendPayload");
   }
-  return sendPayload;
-}
+  return handler;
+})();
 
-function createDiscordHarness(params: OutboundPayloadHarnessParams) {
-  const sendDiscord = vi.fn();
-  primeChannelOutboundSendMock(
-    sendDiscord,
-    { messageId: "dc-1", channelId: "123456" },
-    params.sendResults,
-  );
-  const ctx = {
+it("plain text delegates to sendText", async () => {
+  resetGlobalHookRunner();
+  const sendDiscord = vi.fn().mockResolvedValue({ messageId: "dc-1", channelId: "123456" });
+  const result = await sendPayload({
     cfg: {},
     to: "channel:123456",
     text: "",
-    payload: params.payload,
-    deps: {
-      sendDiscord,
-    },
-  };
-  const sendPayload = requireDiscordSendPayload();
-  return {
-    run: async () => await sendPayload(ctx),
-    sendMock: sendDiscord,
-    to: ctx.to,
-  };
-}
-
-describe("Discord outbound payload contract", () => {
-  installChannelOutboundPayloadContractSuite({
-    channel: "discord",
-    chunking: { mode: "split", longTextLength: 3000, maxChunkLength: 2000 },
-    createHarness: createDiscordHarness,
+    payload: { text: "hello" },
+    deps: { sendDiscord },
   });
+  expect(sendDiscord).toHaveBeenCalledExactlyOnceWith("channel:123456", "hello", expect.anything());
+  expect(result.channel).toBe("discord");
 });
 
-describe("Discord voice fallback delivery safety", () => {
-  function runVoicePayload(
-    error: unknown,
-    options: { deliveredText?: boolean; messageCreateAmbiguous?: boolean } = {},
-  ) {
-    const voiceDelivery = vi.fn(async () => {
-      if (options.messageCreateAmbiguous) {
-        recordDiscordMessageCreateAmbiguity(error);
+describe("Discord forum outbound payload ownership", () => {
+  afterEach(() => vi.restoreAllMocks());
+  function createForumDelivery(params: {
+    channelType?: ChannelType;
+    channelData: Record<string, unknown>;
+  }) {
+    const requests: string[] = [];
+    let threadCount = 0;
+    let mediaCount = 0;
+    const fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(
+        typeof input === "string" ? input : input instanceof URL ? input : input.url,
+      );
+      const route = url.pathname.replace("/api/v10", "");
+      const method = init?.method ?? "GET";
+      requests.push(`${method} ${route}`);
+      let response: Record<string, unknown>;
+      if (method === "GET") {
+        response = {
+          type:
+            route === "/channels/forum1"
+              ? (params.channelType ?? ChannelType.GuildForum)
+              : ChannelType.PublicThread,
+        };
+      } else if (route === "/channels/forum1/threads") {
+        threadCount += 1;
+        const threadId = `thread${threadCount}`;
+        response = { id: threadId, message: { id: `starter${threadCount}`, channel_id: threadId } };
+      } else {
+        mediaCount += 1;
+        response = { id: `media${mediaCount}`, channel_id: route.split("/")[2] };
       }
-      throw error;
+      return Response.json(response);
     });
-    const textDelivery = vi.fn(async () => ({
-      messageId: "fallback-text",
-      channelId: "123456",
-    }));
-    const sendPayload = requireDiscordSendPayload();
-    const promise = sendPayload({
-      cfg: {},
-      to: "channel:123456",
-      text: "",
-      payload: {
-        ...(options.deliveredText
-          ? { ttsSupplement: { spokenText: "answer", visibleTextAlreadyDelivered: true } }
-          : { text: "answer" }),
-        mediaUrls: ["https://example.test/voice.ogg"],
-        audioAsVoice: true,
-      },
-      deps: {
-        discord: textDelivery,
-        discordVoice: voiceDelivery,
-      },
-    });
-    return { promise, textDelivery, voiceDelivery };
+    const rest = new RequestClient("discord-fixture-token", { fetch, queueRequests: false });
+    const readFile = vi.fn(async () => Buffer.from("forum attachment"));
+    const mediaAccess = { localRoots: [process.cwd()], readFile, workspaceDir: process.cwd() };
+    const onDeliveryResult = vi.fn();
+    const sendDiscord: typeof sendMessageDiscord = async (target, text, options) =>
+      await sendMessageDiscord(target, text, { ...options, rest, token: "discord-fixture-token" });
+    const run = () =>
+      sendPayload({
+        cfg: { channels: { discord: { token: "discord-fixture-token" } } },
+        to: "channel:forum1",
+        text: "",
+        payload: {
+          text: "one forum conversation",
+          mediaUrls: ["./package.json", "./package.json"],
+          channelData: { discord: params.channelData },
+        },
+        mediaAccess,
+        mediaLocalRoots: mediaAccess.localRoots,
+        mediaReadFile: readFile,
+        deps: { discord: sendDiscord },
+        onDeliveryResult,
+      });
+    vi.spyOn(globalThis, "fetch").mockImplementation(fetch);
+    return { fetch, onDeliveryResult, requests, run };
   }
 
   it.each([
     {
-      label: "a request timeout",
-      error: Object.assign(new Error("voice create timed out"), { status: 408 }),
+      label: "embedded forum attachments",
+      channelData: { embeds: [{ description: "forum embed" }] },
     },
     {
-      label: "an actual Discord HTTP error",
-      error: new DiscordError(new Response(null, { status: 502 }), {
-        message: "voice create failed after acceptance",
-      }),
+      label: "classic text components downgraded to forum messages",
+      channelData: {
+        presentationComponents: {
+          text: "one forum conversation",
+          blocks: [{ type: "text", text: "classic component body" }],
+        },
+      },
     },
-    {
-      label: "a wrapped server error with a pre-connect cause",
-      error: Object.assign(new Error("voice create failed after acceptance"), {
-        status: 502,
-        cause: Object.assign(new Error("proxy refused"), { code: "ECONNREFUSED" }),
-      }),
-    },
-    {
-      label: "a connection reset",
-      error: Object.assign(new Error("voice create connection reset"), { code: "ECONNRESET" }),
-    },
-    {
-      label: "an undici response body timeout",
-      error: Object.assign(new Error("voice create response timed out"), {
-        code: "UND_ERR_BODY_TIMEOUT",
-      }),
-    },
-    {
-      label: "a wrapped socket timeout",
-      error: new Error("Discord voice request failed", {
-        cause: Object.assign(new Error("socket timeout"), { code: "ETIMEDOUT" }),
-      }),
-    },
-    {
-      label: "an aborted request",
-      error: Object.assign(new Error("voice request aborted"), { name: "AbortError" }),
-    },
-    {
-      label: "an actual message-only fetch failure",
-      error: new TypeError("fetch failed"),
-    },
-    {
-      label: "a wrapped message-only fetch failure",
-      error: new Error("Discord voice request failed", { cause: new TypeError("fetch failed") }),
-    },
-    ...[
-      "network error",
-      "NetworkError",
-      "socket hang up",
-      "bad gateway",
-      "service unavailable",
-      "temporarily unavailable",
-      "timed out",
-      "timeout",
-      "connection closed",
-      "connection reset",
-      "connection refused",
-    ].map((message) => ({
-      label: `the existing Discord retry owner's message-only ${message} transport error`,
-      error: new Error(message),
-    })),
-  ])("does not replay a potentially accepted voice message after $label", async ({ error }) => {
-    const { promise, textDelivery, voiceDelivery } = runVoicePayload(error, {
-      messageCreateAmbiguous: true,
+  ])("keeps $label and their complete receipt in their first created thread", async (params) => {
+    const delivery = createForumDelivery(params);
+    const result = await delivery.run();
+    expect(delivery.requests.filter((request) => request.startsWith("POST"))).toEqual([
+      "POST /channels/forum1/threads",
+      "POST /channels/thread1/messages",
+      "POST /channels/thread1/messages",
+    ]);
+    expect(result).toMatchObject({
+      target: { kind: "channel", id: "thread1" },
+      receipt: {
+        threadId: "thread1",
+        platformMessageIds: ["starter1", "media1", "media2"],
+        primaryPlatformMessageId: "starter1",
+      },
     });
-
-    await expect(promise).rejects.toBe(error);
-    expect(voiceDelivery).toHaveBeenCalledOnce();
-    expect(textDelivery).not.toHaveBeenCalled();
-  });
-
-  it("does not conceal an ambiguous voice failure behind an already-delivered transcript", async () => {
-    const error = Object.assign(new Error("voice create failed after acceptance"), { status: 503 });
-    const { promise, textDelivery, voiceDelivery } = runVoicePayload(error, {
-      deliveredText: true,
-      messageCreateAmbiguous: true,
-    });
-
-    await expect(promise).rejects.toBe(error);
-    expect(voiceDelivery).toHaveBeenCalledOnce();
-    expect(textDelivery).not.toHaveBeenCalled();
-  });
-
-  it("does not replay after an ambiguous create retry ends with a pre-connect failure", async () => {
-    const error = Object.assign(new Error("final retry could not connect"), {
-      code: "ECONNREFUSED",
-    });
-    const { promise, textDelivery, voiceDelivery } = runVoicePayload(error, {
-      messageCreateAmbiguous: true,
-    });
-
-    await expect(promise).rejects.toBe(error);
-    expect(voiceDelivery).toHaveBeenCalledOnce();
-    expect(textDelivery).not.toHaveBeenCalled();
+    expect(
+      delivery.onDeliveryResult.mock.calls.map(([progressResult]) => progressResult.messageId),
+    ).toEqual(["starter1", "media1", "media2"]);
   });
 
   it.each([
     {
-      label: "remote audio download failed with a server error",
-      error: new DiscordError(new Response(null, { status: 503 }), {
-        message: "audio source unavailable",
-      }),
+      label: "classic component overrides",
+      components: { blocks: [{ type: "file", file: "attachment://declared.txt" }] },
     },
     {
-      label: "attachment negotiation failed before message creation",
-      error: Object.assign(new Error("voice upload unavailable"), { status: 502 }),
+      label: "matching Components V2 overrides",
+      components: {
+        container: { accentColor: 0x123456 },
+        blocks: [{ type: "file", file: "attachment://first.txt" }],
+      },
     },
-    {
-      label: "the source fetch failed before message creation",
-      error: new TypeError("fetch failed"),
-    },
-    {
-      label: "voice preparation was aborted before message creation",
-      error: Object.assign(new Error("audio source aborted"), { name: "AbortError" }),
-    },
-  ])("preserves text fallback when $label", async ({ error }) => {
-    const { promise, textDelivery, voiceDelivery } = runVoicePayload(error);
-
-    await expect(promise).resolves.toMatchObject({ messageId: "fallback-text" });
-    expect(voiceDelivery).toHaveBeenCalledOnce();
-    expect(textDelivery).toHaveBeenCalledOnce();
+  ])("applies $label only to the first media upload", async ({ components }) => {
+    const delivery = createForumDelivery({
+      channelType: ChannelType.GuildText,
+      channelData: { components, filename: " first.txt " },
+    });
+    await delivery.run();
+    const filenames = delivery.fetch.mock.calls.flatMap(([, init]) => {
+      if (!(init?.body instanceof FormData)) {
+        return [];
+      }
+      const file = init.body.get("files[0]");
+      return file && typeof file !== "string" ? [file.name] : [];
+    });
+    expect(filenames).toEqual(["first.txt", "package.json"]);
   });
 
   it.each([
     {
-      label: "an unavailable audio encoder",
-      error: new Error("ffmpeg unavailable"),
+      name: "interactive components on a forum parent",
+      channelType: ChannelType.GuildForum,
+      channelData: {
+        presentationComponents: {
+          text: "interactive message",
+          blocks: [{ type: "actions", buttons: [] }],
+        },
+      },
+      error: "Discord components are not supported in forum-style channels",
     },
     {
-      label: "a definitive voice rejection",
-      error: Object.assign(new Error("voice payload rejected"), { status: 400 }),
+      name: "a conflicting Components V2 filename",
+      channelType: ChannelType.GuildText,
+      channelData: {
+        filename: "other.txt",
+        components: {
+          container: { accentColor: 0x123456 },
+          blocks: [{ type: "file", file: "attachment://declared.txt" }],
+        },
+      },
+      error:
+        'Component file block expects attachment "declared.txt", but the uploaded file is "other.txt"',
     },
-    {
-      label: "an expired attachment",
-      error: Object.assign(new Error("voice attachment not found"), { statusCode: 404 }),
-    },
-    {
-      label: "a rate-limit rejection",
-      error: new RateLimitError(new Response(null, { status: 429 }), {
-        message: "voice create rate limited",
-        retry_after: 1,
-        global: false,
-      }),
-    },
-    {
-      label: "a pre-connect failure",
-      error: Object.assign(new Error("voice connect refused"), { code: "ECONNREFUSED" }),
-    },
-    {
-      label: "a wrapped DNS failure",
-      error: new Error("voice connection failed", {
-        cause: Object.assign(new Error("DNS lookup failed"), { code: "ENOTFOUND" }),
-      }),
-    },
-    {
-      label: "a fetch failure whose nested DNS error proves pre-connect rejection",
-      error: new TypeError("fetch failed", {
-        cause: Object.assign(new Error("DNS lookup failed"), { code: "ENOTFOUND" }),
-      }),
-    },
-  ])("retains the text fallback after $label", async ({ error }) => {
-    const { promise, textDelivery, voiceDelivery } = runVoicePayload(error);
+  ])("rejects $name before uploading", async ({ error, ...params }) => {
+    const delivery = createForumDelivery(params);
+    await expect(delivery.run()).rejects.toThrow(error);
+    expect(delivery.requests.filter((request) => request.startsWith("POST"))).toEqual([]);
+  });
+});
 
-    await expect(promise).resolves.toMatchObject({ messageId: "fallback-text" });
-    expect(voiceDelivery).toHaveBeenCalledOnce();
-    expect(textDelivery).toHaveBeenCalledWith(
+function runVoicePayload(mode: "ambiguous" | "source" | "remaining" | "encoder") {
+  const deliveredText = mode === "ambiguous" || mode === "encoder";
+  const error =
+    mode === "source"
+      ? new DiscordError(new Response(null, { status: 503 }), {
+          message: "audio source unavailable",
+        })
+      : mode === "ambiguous"
+        ? Object.assign(new Error("voice create failed after acceptance"), { status: 503 })
+        : new Error("ffmpeg unavailable");
+  const onDeliveryResult = vi.fn();
+  const voiceDelivery = vi.fn(async () => {
+    if (mode === "ambiguous") {
+      recordDiscordMessageCreateAmbiguity(error);
+    }
+    throw error;
+  });
+  let textDeliveryCalls = 0;
+  const textDelivery = vi.fn(async (_to: string, _text: string, sendOptions?: unknown) => {
+    const callIndex = textDeliveryCalls++;
+    if (mode === "remaining" && callIndex > 0) {
+      throw new Error("remaining media unavailable");
+    }
+    const result = { messageId: "fallback-text", channelId: "123456" };
+    await (
+      sendOptions as
+        | { onDeliveryResult?: (deliveryResult: typeof result) => Promise<void> }
+        | undefined
+    )?.onDeliveryResult?.(result);
+    return result;
+  });
+  const promise = sendPayload({
+    cfg: {},
+    to: "channel:123456",
+    text: "",
+    payload: {
+      ...(deliveredText
+        ? { ttsSupplement: { spokenText: "answer", visibleTextAlreadyDelivered: true } }
+        : { text: "answer" }),
+      mediaUrls: [
+        "https://example.test/voice.ogg",
+        ...(mode === "remaining" ? ["https://example.test/remaining.png"] : []),
+      ],
+      audioAsVoice: true,
+    },
+    deps: { discord: textDelivery, discordVoice: voiceDelivery },
+    onDeliveryResult,
+  });
+  return { error, onDeliveryResult, promise, textDelivery, voiceDelivery };
+}
+
+it.each([
+  ["ambiguous", 0],
+  ["source", 1],
+  ["remaining", 2],
+  ["encoder", 0],
+] as const)("preserves %s voice failure and fallback delivery", async (mode, textCalls) => {
+  const { error, promise, textDelivery, voiceDelivery, onDeliveryResult } = runVoicePayload(mode);
+  await expect(promise).rejects.toBe(error);
+  expect(voiceDelivery).toHaveBeenCalledOnce();
+  expect(textDelivery).toHaveBeenCalledTimes(textCalls);
+  if (textCalls === 1) {
+    expect(textDelivery).toHaveBeenCalledExactlyOnceWith(
       "channel:123456",
       "answer",
       expect.objectContaining({ cfg: {} }),
     );
-  });
-
-  it("keeps an existing transcript when an audio encoder fails before voice delivery", async () => {
-    const { promise, textDelivery, voiceDelivery } = runVoicePayload(
-      new Error("ffmpeg unavailable"),
-      {
-        deliveredText: true,
-      },
+    expect(onDeliveryResult).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ channel: "discord", messageId: "fallback-text" }),
     );
-
-    await expect(promise).resolves.toMatchObject({ messageId: "" });
-    expect(voiceDelivery).toHaveBeenCalledOnce();
-    expect(textDelivery).not.toHaveBeenCalled();
-  });
+  }
+  if (mode === "encoder") {
+    expect(onDeliveryResult).not.toHaveBeenCalled();
+  }
 });

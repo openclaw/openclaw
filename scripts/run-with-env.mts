@@ -1,6 +1,7 @@
 // Runs a command with inline KEY=value assignments while preserving signal behavior.
 import { spawn } from "node:child_process";
 import { terminateManagedChild } from "./lib/managed-child-process.mts";
+import { parsePositiveInt } from "./lib/numeric-options.mjs";
 
 const ENV_ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*=/u;
 const USAGE =
@@ -8,9 +9,6 @@ const USAGE =
 const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 type ForwardedSignal = "SIGHUP" | "SIGINT" | "SIGTERM";
 
-/**
- * Detects help requests before the command separator.
- */
 export function isRunWithEnvHelpRequest(argv: readonly string[]) {
   for (const arg of argv) {
     if (arg === "--") {
@@ -23,9 +21,6 @@ export function isRunWithEnvHelpRequest(argv: readonly string[]) {
   return false;
 }
 
-/**
- * Parses KEY=value assignments and the command following --.
- */
 export function parseRunWithEnvArgs(argv: string[]) {
   const separatorIndex = argv.indexOf("--");
   if (separatorIndex <= 0 || separatorIndex === argv.length - 1) {
@@ -62,34 +57,19 @@ export function resolveSpawnCommand(
   const normalizedCommand = platform === "win32" ? command.toLowerCase() : command;
   const isNodeCommand =
     normalizedCommand === "node" || (platform === "win32" && normalizedCommand === "node.exe");
-  if (isNodeCommand) {
-    return {
-      command: execPath,
-      args,
-    };
-  }
   return {
-    command,
+    command: isNodeCommand ? execPath : command,
     args,
   };
 }
 
-/**
- * Reads the signal-forwarding force-kill grace period.
- */
 export function resolveForceKillDelayMs(env: NodeJS.ProcessEnv = process.env) {
   const raw = env.OPENCLAW_RUN_WITH_ENV_FORCE_KILL_MS;
   const text = raw?.trim();
   if (!text) {
     return 5_000;
   }
-  if (!/^\d+$/u.test(text)) {
-    throw new Error("OPENCLAW_RUN_WITH_ENV_FORCE_KILL_MS must be a positive integer");
-  }
-  const parsed = Number(text);
-  if (!Number.isSafeInteger(parsed) || parsed < 1) {
-    throw new Error("OPENCLAW_RUN_WITH_ENV_FORCE_KILL_MS must be a positive integer");
-  }
+  const parsed = parsePositiveInt(text, "OPENCLAW_RUN_WITH_ENV_FORCE_KILL_MS");
   return Math.min(parsed, MAX_TIMER_TIMEOUT_MS);
 }
 
@@ -103,15 +83,9 @@ function main(argv: string[] = process.argv.slice(2)) {
   }
 
   let parsed: ReturnType<typeof parseRunWithEnvArgs>;
+  let forceKillDelayMs: number;
   try {
     parsed = parseRunWithEnvArgs(argv);
-  } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exit(2);
-  }
-
-  let forceKillDelayMs;
-  try {
     forceKillDelayMs = resolveForceKillDelayMs();
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));

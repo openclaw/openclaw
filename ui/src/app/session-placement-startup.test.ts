@@ -1,16 +1,27 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../api/gateway.ts";
-import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
-import type { SessionCapability } from "../lib/sessions/index.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
+import type { GatewaySessionRow } from "../api/types.ts";
 import { sessionPlacementRecoveryExactStorageKey } from "../lib/sessions/session-placement-recovery-storage-key.ts";
 import {
   readSessionPlacementRecovery,
+  pauseSessionPlacementRecovery,
   type SessionPlacementRecovery,
   writeSessionPlacementRecovery,
 } from "../lib/sessions/session-placement-recovery.ts";
-import type { ApplicationGateway } from "./gateway.ts";
-import { createInitialUserMessageHandoff } from "./initial-user-message-handoff.ts";
+import { makeChatHost } from "../pages/chat/chat-host.test-support.ts";
+import { applyChatPendingInputs, getChatPendingInputs } from "../pages/chat/chat-pending-inputs.ts";
+import { admitChatSubmission, reduceChatSessionProjection } from "../pages/chat/history-merge.ts";
+import { restoreMocksAndGlobals } from "../test-helpers/mock-cleanup.ts";
+import {
+  createPlacementStartupHarness,
+  readStartupRecovery,
+  startupCalls,
+  startupRequest,
+  createStartupPlacement,
+  flushStartupMicrotasks,
+} from "./session-placement-startup.test-support.ts";
 import {
   createApplicationPlacementStartup,
   type ApplicationPlacementStartupStatus,
@@ -19,120 +30,37 @@ import {
 
 type PlacementStartupInput = Parameters<ApplicationPlacementStartupRuntime["start"]>[0];
 
-function placement(state: string, generation: number, updatedAtMs = generation) {
-  return {
-    state,
-    generation,
-    createdAtMs: 1,
-    updatedAtMs,
-    stateChangedAtMs: updatedAtMs,
-    ...(state === "active"
-      ? {
-          environmentId: "environment-1",
-          activeOwnerEpoch: 1,
-          workerBundleHash: "a".repeat(64),
-          workspaceBaseManifestRef: "manifest",
-          remoteWorkspaceDir: "/workspace",
-        }
-      : {}),
-  };
-}
-
-function harness(
-  request: ReturnType<typeof vi.fn>,
-  options: {
-    loadRuntime?: Parameters<typeof createApplicationPlacementStartup>[1];
-    recoveryBeforeStartup?: boolean;
-  } = {},
-) {
-  const sessionKey = "agent:cloud:startup";
-  const client = {
-    request,
-    recoveryScope: "principal-a",
-    recoveryScopeReady: true,
-  };
-  const gateway = {
-    connection: { gatewayUrl: "ws://gateway.example" },
-    snapshot: { phase: "connected", client, hello: {} },
-    subscribe: vi.fn(() => () => undefined),
-  } as unknown as ApplicationGateway;
-  const row = { key: sessionKey, placement: placement("requested", 1) } as GatewaySessionRow;
-  const state = { result: { sessions: [row] } as SessionsListResult };
-  const sessions = {
-    get state() {
-      return state;
-    },
-    refresh: vi.fn(async () => undefined),
-    subscribe: vi.fn(() => () => undefined),
-  } as unknown as SessionCapability;
-  const recovery: SessionPlacementRecovery = {
-    sessionKey,
-    messageId: "message-stable",
-    message: "fix the cloud task",
-    target: { kind: "profile", profileId: "aws" },
-    agentId: "cloud",
-    gatewayUrl: "ws://gateway.example",
-    recoveryScope: "principal-a",
-    phase: "dispatching",
-  };
-  if (options.recoveryBeforeStartup) {
-    expect(writeSessionPlacementRecovery(recovery)).toBe(true);
-  }
-  const initialUserMessage = createInitialUserMessageHandoff();
-  const dependencies = { gateway, sessions, initialUserMessage };
-  const startup = createApplicationPlacementStartup(dependencies, options.loadRuntime);
-  if (!options.recoveryBeforeStartup) {
-    expect(writeSessionPlacementRecovery(recovery)).toBe(true);
-  }
-  return {
-    startup,
-    input: { recovery, persistRecovery: true, recovering: false, createdAt: 1_000 },
-    client,
-    gateway,
-    sessions,
-    state,
-    initialUserMessage,
-    dependencies,
-  };
-}
-
-async function flush() {
-  for (let index = 0; index < 8; index += 1) {
-    await Promise.resolve();
-  }
-}
-
 type RuntimeModule = Awaited<
   ReturnType<NonNullable<Parameters<typeof createApplicationPlacementStartup>[1]>>
 >;
 
 function createFakeRuntime() {
   let status: ApplicationPlacementStartupStatus | null = null;
-  const listeners = new Set<() => void>();
-  const publish = () => listeners.forEach((listener) => listener());
+  let publish = () => {};
   const runtime: ApplicationPlacementStartupRuntime = {
     get: () => status,
+    hasPendingTurn: () => status !== null,
+    resumeRecovery: vi.fn(),
     start: vi.fn((input: PlacementStartupInput) => {
       status = {
         sessionKey: input.recovery.sessionKey,
         phase: "pending",
+        targetKind: input.recovery.target.kind,
         startedAt: input.createdAt,
       };
       publish();
     }),
     retry: vi.fn(),
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    discard: vi.fn(),
+    pause: vi.fn(),
     dispose: vi.fn(),
   };
   return {
     runtime,
-    setStatus(next: ApplicationPlacementStartupStatus) {
-      status = next;
-      publish();
-    },
+    factory: vi.fn<RuntimeModule["default"]>((_dependencies, onChange) => {
+      publish = onChange;
+      return runtime;
+    }),
   };
 }
 
@@ -141,45 +69,92 @@ describe("application session placement startup", () => {
     sessionStorage.clear();
   });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-  });
+  afterEach(() => restoreMocksAndGlobals());
 
-  it("publishes pending status synchronously and bridges it into the loaded runtime", async () => {
+  it("keeps empty connections lazy until a memory-only Start", async () => {
     const moduleLoad = createDeferred<RuntimeModule>();
     const fake = createFakeRuntime();
-    const factory = vi.fn(() => fake.runtime);
-    const { startup, input } = harness(vi.fn(), {
-      loadRuntime: () => moduleLoad.promise,
+    const loader = vi.fn(() => moduleLoad.promise);
+    const request = vi.fn();
+    const { startup, input, key, gateway } = createPlacementStartupHarness(request, {
+      loadRuntime: loader,
     });
-    const listener = vi.fn();
-    startup.subscribe(listener);
+    sessionStorage.clear();
 
-    startup.start(input);
-    expect(startup.get(input.recovery.sessionKey)?.phase).toBe("pending");
-    expect(listener).toHaveBeenCalledOnce();
-    moduleLoad.resolve({ default: factory });
-    await flush();
+    startup.resumeRecovery();
+    const onSnapshot = expectDefined(
+      vi.mocked(gateway.subscribe).mock.calls[0]?.[0],
+      "gateway snapshot subscription",
+    );
+    onSnapshot(gateway.snapshot);
+    expect(loader).not.toHaveBeenCalled();
+    expect(startup.hasPendingTurn(key)).toBe(false);
+    expect(startup.get(key)).toBeNull();
 
-    expect(factory).toHaveBeenCalledWith(expect.anything());
-    expect(startup.get(input.recovery.sessionKey)?.phase).toBe("pending");
-    expect(listener).toHaveBeenCalledTimes(2);
-    fake.setStatus({
-      sessionKey: input.recovery.sessionKey,
-      phase: "sending",
-      startedAt: input.createdAt,
-    });
-    expect(startup.get(input.recovery.sessionKey)?.phase).toBe("sending");
-    expect(listener).toHaveBeenCalledTimes(3);
-    startup.dispose();
+    for (const otherOwner of [
+      { gatewayUrl: "ws://other.example" },
+      { recoveryScope: "principal-b" },
+    ]) {
+      expect(writeSessionPlacementRecovery({ ...input.recovery, ...otherOwner })).toBe(true);
+    }
+    onSnapshot(gateway.snapshot);
+    expect(loader).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
+
+    startup.start({ ...input, persistRecovery: false });
+    expect(loader).toHaveBeenCalledOnce();
+    expect(startup.hasPendingTurn(key)).toBe(true);
+    expect(startup.get(key)?.initialTurn?.text).toBe(input.recovery.message);
+    moduleLoad.resolve({ default: fake.factory });
+    await flushStartupMicrotasks();
+    expect(fake.runtime.start).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ ...input, persistRecovery: false }),
+    );
   });
+
+  it.each([false, true])(
+    "discovers recovery added after an empty connection (required=%s)",
+    async (required) => {
+      const moduleLoad = createDeferred<RuntimeModule>();
+      const fake = createFakeRuntime();
+      const loader = vi.fn(() => moduleLoad.promise);
+      const { startup, input, key, gateway } = createPlacementStartupHarness(vi.fn(), {
+        loadRuntime: loader,
+      });
+      sessionStorage.clear();
+      startup.resumeRecovery();
+      expect(loader).not.toHaveBeenCalled();
+
+      expect(
+        writeSessionPlacementRecovery({
+          ...input.recovery,
+          target: required
+            ? { kind: "profile", profileId: "aws", required: true }
+            : input.recovery.target,
+        }),
+      ).toBe(true);
+      const onSnapshot = expectDefined(
+        vi.mocked(gateway.subscribe).mock.calls[0]?.[0],
+        "gateway snapshot subscription",
+      );
+      onSnapshot(gateway.snapshot);
+      onSnapshot(gateway.snapshot);
+      expect(loader).toHaveBeenCalledOnce();
+      expect(startup.hasPendingTurn(key)).toBe(true);
+      expect(startup.get(key)).toMatchObject({ phase: "pending" });
+
+      moduleLoad.resolve({ default: fake.factory });
+      await flushStartupMicrotasks();
+      expect(fake.factory).toHaveBeenCalledOnce();
+      expect(fake.runtime.resumeRecovery).toHaveBeenCalledOnce();
+    },
+  );
 
   it("does not install a runtime that finishes loading after disposal", async () => {
     const moduleLoad = createDeferred<RuntimeModule>();
     const fake = createFakeRuntime();
-    const factory = vi.fn(() => fake.runtime);
-    const { startup, input } = harness(vi.fn(), {
+    const factory = fake.factory;
+    const { key, startup, input } = createPlacementStartupHarness(vi.fn(), {
       loadRuntime: () => moduleLoad.promise,
     });
     const listener = vi.fn();
@@ -189,19 +164,19 @@ describe("application session placement startup", () => {
     expect(listener).toHaveBeenCalledOnce();
     startup.dispose();
     moduleLoad.resolve({ default: factory });
-    await flush();
+    await flushStartupMicrotasks();
 
     expect(factory).not.toHaveBeenCalled();
     expect(fake.runtime.start).not.toHaveBeenCalled();
     expect(listener).toHaveBeenCalledOnce();
-    expect(startup.get(input.recovery.sessionKey)).toBeNull();
+    expect(startup.get(key)).toBeNull();
   });
 
   it("bounds coalesced starts and fences an older same-session completion", async () => {
     const moduleLoad = createDeferred<RuntimeModule>();
     const fake = createFakeRuntime();
     const loader = vi.fn(() => moduleLoad.promise);
-    const { startup, input } = harness(vi.fn(), { loadRuntime: loader });
+    const { startup, input } = createPlacementStartupHarness(vi.fn(), { loadRuntime: loader });
     const starts: PlacementStartupInput[] = [];
     for (let index = 0; index < 32; index += 1) {
       const next = {
@@ -224,168 +199,87 @@ describe("application session placement startup", () => {
 
     expect(loader).toHaveBeenCalledOnce();
     expect(startup.get(starts[0]!.recovery.sessionKey)).toBeNull();
-    moduleLoad.resolve({ default: () => fake.runtime });
-    await flush();
+    moduleLoad.resolve({ default: fake.factory });
+    await flushStartupMicrotasks();
 
     expect(fake.runtime.start).toHaveBeenCalledTimes(32);
-    expect(fake.runtime.start).not.toHaveBeenCalledWith(replaced);
-    expect(fake.runtime.start).toHaveBeenCalledWith(replacement);
+    expect(fake.runtime.start).not.toHaveBeenCalledWith(expect.objectContaining(replaced));
+    expect(fake.runtime.start).toHaveBeenCalledWith(expect.objectContaining(replacement));
     startup.dispose();
   });
 
-  it("keeps get and retry inert before any runtime load", async () => {
-    const loader = vi.fn<NonNullable<Parameters<typeof createApplicationPlacementStartup>[1]>>();
-    const { startup, input, gateway } = harness(vi.fn(), { loadRuntime: loader });
-
-    expect(startup.get(input.recovery.sessionKey)).toBeNull();
-    startup.retry(input.recovery.sessionKey);
-    expect(loader).not.toHaveBeenCalled();
-    expect(gateway.subscribe).not.toHaveBeenCalled();
-    startup.dispose();
-  });
-
-  it("prewarms the runtime on connection even when recovery storage is empty", async () => {
-    const request = vi.fn();
-    const loader = vi.fn(() => import("./session-placement-startup.runtime.ts"));
-    const { startup } = harness(request, { loadRuntime: loader });
-    sessionStorage.clear();
-
-    startup.resumeRecovery();
-    await flush();
-
-    expect(loader).toHaveBeenCalledOnce();
-    expect(request).not.toHaveBeenCalled();
-    startup.dispose();
-  });
-
-  it("lets Start own recovery when it arrives during connection prewarm", async () => {
+  it("lets Start own recovery when it arrives during a restored recovery load", async () => {
     const moduleLoad = createDeferred<RuntimeModule>();
     const fake = createFakeRuntime();
-    const factory = vi.fn(() => fake.runtime);
+    const factory = fake.factory;
     const loader = vi.fn(() => moduleLoad.promise);
-    const { startup, input } = harness(vi.fn(), { loadRuntime: loader });
+    const { startup, input } = createPlacementStartupHarness(vi.fn(), { loadRuntime: loader });
 
     startup.resumeRecovery();
     startup.start(input);
     moduleLoad.resolve({ default: factory });
-    await flush();
+    await flushStartupMicrotasks();
 
     expect(loader).toHaveBeenCalledOnce();
-    expect(factory).toHaveBeenCalledWith(expect.anything());
-    expect(fake.runtime.start).toHaveBeenCalledWith(input);
+    expect(factory).toHaveBeenCalledWith(expect.anything(), expect.any(Function));
+    expect(fake.runtime.start).toHaveBeenCalledWith(expect.objectContaining(input));
     startup.dispose();
   });
 
-  it("keeps durable recovery available after a background load rejection", async () => {
-    const fake = createFakeRuntime();
-    const factory = vi.fn(() => fake.runtime);
-    const loader = vi
-      .fn<NonNullable<Parameters<typeof createApplicationPlacementStartup>[1]>>()
-      .mockRejectedValueOnce(new Error("cloud startup chunk unavailable"))
-      .mockResolvedValueOnce({ default: factory });
-    const { startup } = harness(vi.fn(), { loadRuntime: loader });
-
-    startup.resumeRecovery();
-    await flush();
-    expect(loader).toHaveBeenCalledOnce();
-
-    startup.resumeRecovery();
-    await flush();
-    expect(loader).toHaveBeenCalledTimes(2);
-    expect(factory).toHaveBeenCalledOnce();
-    startup.dispose();
-  });
-
-  it("fresh-imports on Start after a connection prewarm rejection", async () => {
-    const fake = createFakeRuntime();
-    const factory = vi.fn(() => fake.runtime);
-    const loader = vi
-      .fn<NonNullable<Parameters<typeof createApplicationPlacementStartup>[1]>>()
-      .mockRejectedValueOnce(new Error("cloud startup chunk unavailable"))
-      .mockResolvedValueOnce({ default: factory });
-    const { startup, input } = harness(vi.fn(), { loadRuntime: loader });
-
-    startup.resumeRecovery();
-    await flush();
-    expect(loader).toHaveBeenCalledOnce();
-
-    startup.start(input);
-    await flush();
-    expect(loader).toHaveBeenCalledTimes(2);
-    expect(factory).toHaveBeenCalledWith(expect.anything());
-    expect(fake.runtime.start).toHaveBeenCalledWith(input);
-    startup.dispose();
-  });
-
-  it("surfaces a runtime load failure and fresh-imports on retry", async () => {
-    const fake = createFakeRuntime();
-    const factory = vi.fn(() => fake.runtime);
-    const loader = vi
-      .fn<NonNullable<Parameters<typeof createApplicationPlacementStartup>[1]>>()
-      .mockRejectedValueOnce(new Error("cloud startup chunk unavailable"))
-      .mockResolvedValueOnce({ default: factory });
-    const { startup, input } = harness(vi.fn(), { loadRuntime: loader });
-    const listener = vi.fn();
-    startup.subscribe(listener);
-
-    startup.start(input);
-    expect(startup.get(input.recovery.sessionKey)?.phase).toBe("pending");
-    await flush();
-    expect(startup.get(input.recovery.sessionKey)).toMatchObject({
-      phase: "failed",
-      error: "cloud startup chunk unavailable",
-      retryable: true,
-    });
-    expect(listener).toHaveBeenCalledTimes(2);
-
-    startup.retry(input.recovery.sessionKey);
-    await flush();
-    expect(loader).toHaveBeenCalledTimes(2);
-    expect(factory).toHaveBeenCalledWith(expect.anything());
-    expect(fake.runtime.start).toHaveBeenCalledWith(input);
-    expect(startup.get(input.recovery.sessionKey)?.phase).toBe("pending");
-    expect(listener).toHaveBeenCalledTimes(4);
-    startup.dispose();
-  });
-
-  it("loads and reconciles recovery when resumed on an existing connection", async () => {
-    const activePlacement = placement("active", 2);
-    const request = vi.fn((method: string) => {
-      if (method === "sessions.describe") {
-        return Promise.resolve({ session: { placement: activePlacement } });
+  it.each([false, true])(
+    "shows a failed restored startup and reloads its runtime through Retry (required=%s)",
+    async (required) => {
+      const fake = createFakeRuntime();
+      const factory = fake.factory;
+      const loader = vi
+        .fn<NonNullable<Parameters<typeof createApplicationPlacementStartup>[1]>>()
+        .mockRejectedValueOnce(new Error("cloud startup chunk unavailable"))
+        .mockResolvedValueOnce({ default: factory });
+      const { key, startup, input } = createPlacementStartupHarness(vi.fn(), {
+        loadRuntime: loader,
+      });
+      if (required) {
+        expect(
+          writeSessionPlacementRecovery({
+            ...input.recovery,
+            target: { kind: "profile", profileId: "aws", required: true },
+          }),
+        ).toBe(true);
       }
-      if (method === "sessions.send") {
-        return Promise.resolve({ messageSeq: 11 });
-      }
-      throw new Error(`unexpected method ${method}`);
-    });
-    const loader = vi.fn(() => import("./session-placement-startup.runtime.ts"));
-    const { startup, input } = harness(request, {
-      loadRuntime: loader,
-      recoveryBeforeStartup: true,
-    });
-    startup.resumeRecovery();
 
-    await vi.waitFor(() => {
-      expect(request).toHaveBeenCalledWith(
-        "sessions.send",
-        expect.objectContaining({ idempotencyKey: input.recovery.messageId }),
-      );
-    });
-    expect(loader).toHaveBeenCalledOnce();
-    expect(request).not.toHaveBeenCalledWith("sessions.dispatch", expect.anything());
-    startup.dispose();
-  });
+      startup.resumeRecovery();
+      await flushStartupMicrotasks();
+      expect(loader).toHaveBeenCalledOnce();
+      expect(startup.hasPendingTurn(key)).toBe(true);
+      expect(startup.get(key)).toMatchObject({
+        phase: "failed",
+        error: "cloud startup chunk unavailable",
+        retryable: true,
+      });
+      expect(startup.get(key)).not.toHaveProperty("targetKind");
+      expect(startup.get(key)).not.toHaveProperty("initialTurn");
+
+      startup.retry(key);
+      expect(startup.get(key)?.phase).toBe("pending");
+      expect(startup.hasPendingTurn(key)).toBe(true);
+      await flushStartupMicrotasks();
+      expect(loader).toHaveBeenCalledTimes(2);
+      expect(factory).toHaveBeenCalledOnce();
+      startup.dispose();
+    },
+  );
 
   it("resumes every persisted session once and clears them independently", async () => {
     const secondSend = createDeferred<{ messageSeq: number }>();
-    const activePlacement = placement("active", 2);
+    const activePlacement = createStartupPlacement("active", 2);
     const request = vi.fn((method: string, params?: unknown) => {
-      const key = (params as { key?: string } | undefined)?.key;
+      const key =
+        (params as { key?: string; sessionKey?: string } | undefined)?.sessionKey ??
+        (params as { key?: string } | undefined)?.key;
       if (method === "sessions.describe") {
         return Promise.resolve({ session: { placement: activePlacement } });
       }
-      if (method === "sessions.send") {
+      if (method === "chat.send") {
         return key === "agent:cloud:startup"
           ? Promise.resolve({ messageSeq: 11 })
           : secondSend.promise;
@@ -393,7 +287,7 @@ describe("application session placement startup", () => {
       throw new Error(`unexpected method ${method}`);
     });
     const loader = vi.fn(() => import("./session-placement-startup.runtime.ts"));
-    const { startup, input } = harness(request, {
+    const { key, startup, input } = createPlacementStartupHarness(request, {
       loadRuntime: loader,
       recoveryBeforeStartup: true,
     });
@@ -407,116 +301,147 @@ describe("application session placement startup", () => {
 
     startup.resumeRecovery();
     await vi.waitFor(() => {
-      expect(request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(2);
+      expect(startupCalls(request, "chat.send")).toHaveLength(2);
     });
-    expect(
-      readSessionPlacementRecovery(
-        input.recovery.gatewayUrl,
-        input.recovery.recoveryScope,
-        input.recovery.sessionKey,
-      ),
-    ).toBeNull();
-    expect(
-      readSessionPlacementRecovery(
-        secondRecovery.gatewayUrl,
-        secondRecovery.recoveryScope,
-        secondRecovery.sessionKey,
-      ),
-    ).toMatchObject({ phase: "sending", messageId: secondRecovery.messageId });
+    expect(readStartupRecovery(input.recovery)).toBeNull();
+    expect(readStartupRecovery(secondRecovery)).toMatchObject({
+      phase: "sending",
+      messageId: secondRecovery.messageId,
+    });
 
     secondSend.resolve({ messageSeq: 12 });
     await vi.waitFor(() => {
-      expect(
-        readSessionPlacementRecovery(
-          secondRecovery.gatewayUrl,
-          secondRecovery.recoveryScope,
-          secondRecovery.sessionKey,
-        ),
-      ).toBeNull();
+      expect(readStartupRecovery(secondRecovery)).toBeNull();
     });
-    const sends = request.mock.calls.filter(([method]) => method === "sessions.send");
-    expect(sends.map(([, params]) => (params as { key: string }).key).toSorted()).toEqual([
-      input.recovery.sessionKey,
-      secondRecovery.sessionKey,
-    ]);
+    const sends = startupCalls(request, "chat.send");
+    expect(
+      sends.map(([, params]) => (params as { sessionKey: string }).sessionKey).toSorted(),
+    ).toEqual([key, secondRecovery.sessionKey]);
     startup.dispose();
   });
 
-  it("derives durable progress from canonical sessions and sends only after active", async () => {
-    const dispatch = createDeferred<{ placement: ReturnType<typeof placement> }>();
-    const request = vi.fn((method: string, _params?: unknown) => {
-      if (method === "sessions.dispatch") {
-        return dispatch.promise;
-      }
-      if (method === "sessions.send") {
-        return Promise.resolve({ messageSeq: 7 });
-      }
-      throw new Error(`unexpected method ${method}`);
-    });
-    const { startup, input, client, sessions, state, initialUserMessage } = harness(request);
-    const published = vi.fn();
-    startup.subscribe(published);
-    startup.start(input);
-    expect(published).toHaveBeenCalledTimes(1);
-    await vi.waitFor(() => {
-      expect(request.mock.calls.filter(([method]) => method === "sessions.dispatch")).toHaveLength(
-        1,
-      );
-    });
-    const publishedBeforePlacementChanges = published.mock.calls.length;
-
-    for (const [phase, generation] of [
-      ["requested", 1],
-      ["provisioning", 2],
-      ["syncing", 3],
-      ["starting", 4],
-    ] as const) {
-      state.result.sessions[0] = {
-        ...state.result.sessions[0],
-        placement: placement(phase, generation),
-      } as GatewaySessionRow;
-      expect(startup.get(input.recovery.sessionKey)?.phase).toBe(phase);
-      expect(request).not.toHaveBeenCalledWith("sessions.send", expect.anything());
-    }
-    expect(published).toHaveBeenCalledTimes(publishedBeforePlacementChanges);
-    expect(request).not.toHaveBeenCalledWith("sessions.describe", expect.anything());
-
-    dispatch.resolve({ placement: placement("active", 5) });
-    await vi.waitFor(() => {
-      expect(request).toHaveBeenCalledWith("sessions.send", {
-        key: input.recovery.sessionKey,
-        agentId: input.recovery.agentId,
-        message: input.recovery.message,
-        attachments: undefined,
-        idempotencyKey: input.recovery.messageId,
+  it.each([{ kind: "device", deviceId: "test-device" }] as const)(
+    "retains $kind targeting through lazy and loaded progress, sending only after active",
+    async (target) => {
+      const dispatch = createDeferred<{ placement: ReturnType<typeof createStartupPlacement> }>();
+      const request = startupRequest({
+        "sessions.dispatch": () => dispatch.promise,
+        "chat.send": () => Promise.resolve({ messageSeq: 7 }),
       });
-    });
-    expect(startup.get(input.recovery.sessionKey)).toBeNull();
-    expect(initialUserMessage.read(input.recovery.sessionKey, client)).toMatchObject({
-      pendingRunId: "message-stable",
-      message: {
-        role: "user",
-        __openclaw: { idempotencyKey: "message-stable:user", seq: 7 },
-      },
-    });
-    expect(sessions.refresh).not.toHaveBeenCalled();
-    startup.dispose();
-  });
+      const { key, startup, input, client, sessions, state, chatSubmissions } =
+        createPlacementStartupHarness(request);
+      input.recovery = { ...input.recovery, target };
+      const published = vi.fn();
+      startup.subscribe(published);
+      startup.start(input);
+      expect(startup.get(key)).toMatchObject({
+        phase: "pending",
+        targetKind: target.kind,
+      });
+      expect(published).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => {
+        expect(startupCalls(request, "sessions.dispatch")).toHaveLength(1);
+      });
+      const publishedBeforePlacementChanges = published.mock.calls.length;
+
+      for (const [phase, generation] of [
+        ["requested", 1],
+        ["provisioning", 2],
+        ["syncing", 3],
+        ["starting", 4],
+      ] as const) {
+        state.result.sessions[0] = {
+          ...state.result.sessions[0],
+          placement: createStartupPlacement(phase, generation),
+        } as GatewaySessionRow;
+        expect(startup.get(key)).toMatchObject({
+          phase,
+          targetKind: target.kind,
+        });
+        expect(startupCalls(request, "chat.send")).toHaveLength(0);
+      }
+      expect(published).toHaveBeenCalledTimes(publishedBeforePlacementChanges);
+      expect(request).not.toHaveBeenCalledWith("sessions.describe", expect.anything());
+
+      dispatch.resolve({ placement: createStartupPlacement("active", 5) });
+      await vi.waitFor(() => {
+        expect(request).toHaveBeenCalledWith(
+          "chat.send",
+          {
+            sessionKey: key,
+            sessionId: input.recovery.sessionId,
+            expectedLeafEntryId: null,
+            agentId: input.recovery.agentId,
+            message: input.recovery.message,
+            attachments: undefined,
+            idempotencyKey: input.recovery.messageId,
+          },
+          expect.anything(),
+        );
+      });
+      expect(startup.get(key)).toBeNull();
+      expect(chatSubmissions.readInitial(key, client)).toMatchObject({
+        pendingRunId: "message-stable",
+        message: {
+          role: "user",
+          __openclaw: { idempotencyKey: "message-stable:user" },
+        },
+      });
+      const handoff = chatSubmissions.readInitial(key, client)!;
+      const handoffMessage = expectDefined(handoff.message, "pending initial display");
+      expect(handoffMessage["__openclaw"]).not.toHaveProperty("seq");
+      const pane = makeChatHost({
+        sessionKey: key,
+        chatSubmissions,
+        client: client as never,
+      });
+      admitChatSubmission(pane, getChatPendingInputs(pane)?.page.items);
+      expect(pane.chatMessages).toHaveLength(1);
+      applyChatPendingInputs(pane, {
+        total: 1,
+        items: [
+          {
+            id: "remote-custody",
+            runId: input.recovery.messageId,
+            acceptedAt: 1000,
+            state: "queued",
+            message: handoffMessage,
+          },
+        ],
+      });
+      expect(pane.chatMessages).toEqual([]);
+      reduceChatSessionProjection(
+        pane,
+        { type: "snapshotLoaded", messages: [] },
+        { runActive: true },
+      );
+      expect(admitChatSubmission(pane, getChatPendingInputs(pane)?.page.items)).toBe(false);
+      expect(pane.chatMessages).toEqual([]);
+      expect(sessions.invalidate).not.toHaveBeenCalled();
+      startup.dispose();
+    },
+  );
 
   it("advances two sessions in one recovery scope without replacing either owner", async () => {
-    const firstDispatch = createDeferred<{ placement: ReturnType<typeof placement> }>();
-    const secondDispatch = createDeferred<{ placement: ReturnType<typeof placement> }>();
+    const firstDispatch = createDeferred<{
+      placement: ReturnType<typeof createStartupPlacement>;
+    }>();
+    const secondDispatch = createDeferred<{
+      placement: ReturnType<typeof createStartupPlacement>;
+    }>();
     const request = vi.fn((method: string, params?: unknown) => {
-      const key = (params as { key?: string } | undefined)?.key;
+      const key =
+        (params as { key?: string; sessionKey?: string } | undefined)?.sessionKey ??
+        (params as { key?: string } | undefined)?.key;
       if (method === "sessions.dispatch") {
         return key === "agent:cloud:startup" ? firstDispatch.promise : secondDispatch.promise;
       }
-      if (method === "sessions.send") {
+      if (method === "chat.send") {
         return Promise.resolve({ messageSeq: key === "agent:cloud:startup" ? 7 : 8 });
       }
       throw new Error(`unexpected method ${method}`);
     });
-    const { startup, input, client, initialUserMessage } = harness(request);
+    const { key, startup, input, client, chatSubmissions } = createPlacementStartupHarness(request);
     const secondInput = {
       ...input,
       recovery: {
@@ -530,21 +455,17 @@ describe("application session placement startup", () => {
     startup.start(input);
     startup.start(secondInput);
     await vi.waitFor(() => {
-      expect(request.mock.calls.filter(([method]) => method === "sessions.dispatch")).toHaveLength(
-        2,
-      );
+      expect(startupCalls(request, "sessions.dispatch")).toHaveLength(2);
     });
-    expect(startup.get(input.recovery.sessionKey)?.phase).toBe("requested");
+    expect(startup.get(key)?.phase).toBe("requested");
     expect(startup.get(secondInput.recovery.sessionKey)?.phase).toBe("pending");
-    expect(request.mock.calls.filter(([method]) => method === "sessions.delete")).toHaveLength(0);
-    expect(request.mock.calls.filter(([method]) => method === "sessions.abort")).toHaveLength(0);
-    expect(request.mock.calls.filter(([method]) => method === "environments.destroy")).toHaveLength(
-      0,
-    );
+    expect(startupCalls(request, "sessions.delete")).toHaveLength(0);
+    expect(startupCalls(request, "sessions.abort")).toHaveLength(0);
+    expect(startupCalls(request, "environments.destroy")).toHaveLength(0);
 
-    firstDispatch.resolve({ placement: placement("active", 2) });
+    firstDispatch.resolve({ placement: createStartupPlacement("active", 2) });
     await vi.waitFor(() => {
-      expect(request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(1);
+      expect(startupCalls(request, "chat.send")).toHaveLength(1);
     });
     expect(
       readSessionPlacementRecovery(
@@ -556,16 +477,16 @@ describe("application session placement startup", () => {
       messageId: secondInput.recovery.messageId,
       phase: "dispatching",
     });
-    expect(initialUserMessage.read(input.recovery.sessionKey, client)).not.toBeNull();
+    expect(chatSubmissions.readInitial(key, client)).not.toBeNull();
     expect(startup.get(secondInput.recovery.sessionKey)).not.toBeNull();
 
-    secondDispatch.resolve({ placement: placement("active", 3) });
+    secondDispatch.resolve({ placement: createStartupPlacement("active", 3) });
     await vi.waitFor(() => {
-      expect(request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(2);
+      expect(startupCalls(request, "chat.send")).toHaveLength(2);
     });
-    const sends = request.mock.calls.filter(([method]) => method === "sessions.send");
-    expect(sends.map(([, params]) => (params as { key: string }).key)).toEqual([
-      input.recovery.sessionKey,
+    const sends = startupCalls(request, "chat.send");
+    expect(sends.map(([, params]) => (params as { sessionKey: string }).sessionKey)).toEqual([
+      key,
       secondInput.recovery.sessionKey,
     ]);
     expect(
@@ -575,98 +496,174 @@ describe("application session placement startup", () => {
         secondInput.recovery.sessionKey,
       ),
     ).toBeNull();
-    expect(initialUserMessage.read(secondInput.recovery.sessionKey, client)).not.toBeNull();
+    expect(chatSubmissions.readInitial(secondInput.recovery.sessionKey, client)).not.toBeNull();
     for (const method of ["sessions.delete", "sessions.abort", "environments.destroy"]) {
       expect(request.mock.calls.filter(([candidate]) => candidate === method)).toHaveLength(0);
     }
     startup.dispose();
   });
 
-  it("keeps a definitive dispatch failure visible and refreshes canonical sessions once", async () => {
-    const request = vi.fn((method: string) => {
-      if (method === "sessions.dispatch") {
-        return Promise.reject(
-          new GatewayRequestError({
-            code: "INVALID_REQUEST",
-            message: "cloud profile was removed",
-            retryable: false,
-          }),
-        );
-      }
-      throw new Error(`unexpected method ${method}`);
-    });
-    const { startup, input, sessions } = harness(request);
-    startup.start(input);
-    await vi.waitFor(() => {
-      expect(startup.get(input.recovery.sessionKey)).toMatchObject({
-        phase: "failed",
-        error: "cloud profile was removed",
-        retryable: false,
+  it.each([
+    {
+      target: {
+        kind: "profile",
+        profileId: "aws",
+        os: "windows/wsl2",
+        machineClass: "fast",
+      } as const,
+      message: "retain this submission",
+      wire: { profileId: "aws", os: "windows/wsl2", machineClass: "fast" },
+    },
+    { target: { kind: "auto-device" } as const, message: "", wire: { autoDevice: true } },
+  ])(
+    "retains a rejected $target.kind submission across reload until explicit retry",
+    async ({ target, message, wire }) => {
+      const retryDispatch = createDeferred<{
+        placement: ReturnType<typeof createStartupPlacement>;
+      }>();
+      let dispatches = 0;
+      const request = startupRequest({
+        "sessions.describe": () => Promise.resolve({ session: { sessionId: "session-startup" } }),
+        "sessions.dispatch": () => {
+          if (++dispatches > 1) {
+            return retryDispatch.promise;
+          }
+          return Promise.reject(
+            new GatewayRequestError({
+              code: "INVALID_REQUEST",
+              message: "cloud profile was removed",
+              retryable: false,
+            }),
+          );
+        },
+        "chat.send": () => Promise.resolve({ messageSeq: 19 }),
       });
-    });
-    expect(sessions.refresh).toHaveBeenCalledOnce();
-    expect(request).not.toHaveBeenCalledWith("sessions.send", expect.anything());
-    startup.dispose();
-  });
+      const { key, startup, input, sessions, dependencies, chatSubmissions, client } =
+        createPlacementStartupHarness(request);
+      const attachments = [
+        { type: "file", mimeType: "text/plain", fileName: "note.txt", content: "SGk=" },
+      ];
+      input.recovery = {
+        ...input.recovery,
+        sessionId: "session-startup",
+        target,
+        message,
+        attachments,
+      };
+      expect(writeSessionPlacementRecovery(input.recovery)).toBe(true);
+      startup.start(input);
+      const pendingTurn = startup.get(key)?.initialTurn;
+      expect(pendingTurn).toMatchObject({
+        text: message,
+        attachments: [{ fileName: "note.txt", dataUrl: "data:text/plain;base64,SGk=" }],
+      });
+      await vi.waitFor(() => {
+        expect(startup.get(key)).toMatchObject({
+          phase: "failed",
+          targetKind: target.kind,
+          error: "cloud profile was removed",
+          retryable: true,
+          initialTurn: {
+            text: message,
+            attachments: [{ fileName: "note.txt", dataUrl: "data:text/plain;base64,SGk=" }],
+          },
+        });
+      });
+      expect(startup.get(key)?.initialTurn?.attachments).toBe(pendingTurn?.attachments);
+      expect(readStartupRecovery(input.recovery)).toMatchObject({
+        phase: "paused",
+        message,
+        attachments,
+        target,
+        messageId: input.recovery.messageId,
+      });
+      expect(sessions.invalidate).toHaveBeenCalledOnce();
+      expect(sessions.refresh).not.toHaveBeenCalled();
+      expect(startupCalls(request, "chat.send")).toHaveLength(0);
+      startup.dispose();
+      const reloaded = createApplicationPlacementStartup(dependencies);
+      reloaded.resumeRecovery();
+      await vi.waitFor(() =>
+        expect(reloaded.get(key)).toMatchObject({
+          phase: "failed",
+          targetKind: target.kind,
+          error: "cloud profile was removed",
+        }),
+      );
+      expect(request).toHaveBeenCalledTimes(1);
+      reloaded.retry(key);
+      reloaded.retry(key);
+      await vi.waitFor(() => expect(dispatches).toBe(2));
+      expect(request).toHaveBeenLastCalledWith("sessions.dispatch", {
+        key,
+        agentId: input.recovery.agentId,
+        ...wire,
+      });
+      expect(startupCalls(request, "chat.send")).toHaveLength(0);
+      retryDispatch.resolve({ placement: createStartupPlacement("active", 2) });
+      await vi.waitFor(() => expect(reloaded.get(key)).toBeNull());
+      expect(startupCalls(request, "chat.send")).toHaveLength(1);
+      expect(request).toHaveBeenLastCalledWith(
+        "chat.send",
+        {
+          sessionKey: key,
+          sessionId: input.recovery.sessionId,
+          expectedLeafEntryId: null,
+          agentId: input.recovery.agentId,
+          message,
+          attachments,
+          idempotencyKey: input.recovery.messageId,
+        },
+        expect.anything(),
+      );
+      expect(chatSubmissions.readInitial(key, client)).not.toBeNull();
+      expect(readStartupRecovery(input.recovery)).toBeNull();
+      reloaded.dispose();
+    },
+  );
 
-  it("retries incognito startup in memory with the same message identity", async () => {
-    let sendAttempt = 0;
-    const activePlacement = placement("active", 2);
-    const request = vi.fn((method: string, _params?: unknown) => {
-      if (method === "sessions.dispatch") {
-        return Promise.resolve({ placement: activePlacement });
-      }
-      if (method === "sessions.describe") {
-        return Promise.resolve({ session: { placement: activePlacement } });
-      }
-      if (method === "sessions.send") {
-        sendAttempt += 1;
-        return sendAttempt === 1
+  it("resends incognito delivery in memory with the same message identity", async () => {
+    const activePlacement = createStartupPlacement("active", 2);
+    let sends = 0;
+    const request = startupRequest({
+      "sessions.dispatch": () => Promise.resolve({ placement: activePlacement }),
+      "chat.send": () =>
+        ++sends === 1
           ? Promise.reject(new Error("send response lost"))
-          : Promise.resolve({ messageSeq: 9 });
-      }
-      throw new Error(`unexpected method ${method}`);
+          : Promise.resolve({ runId: "message-stable", status: "ok" }),
     });
-    const { startup, input } = harness(request);
+    const { key, startup, input, client, gateway } = createPlacementStartupHarness(request);
     sessionStorage.clear();
     startup.start({ ...input, persistRecovery: false });
     await vi.waitFor(() => {
-      expect(startup.get(input.recovery.sessionKey)).toMatchObject({
-        phase: "failed",
-        retryable: true,
+      expect(startup.get(key)).toMatchObject({
+        phase: "reconnecting",
+        initialTurn: { sendState: "waiting-reconnect" },
       });
     });
 
-    startup.retry(input.recovery.sessionKey);
-    await vi.waitFor(() => expect(startup.get(input.recovery.sessionKey)).toBeNull());
-    const sends = request.mock.calls.filter(([method]) => method === "sessions.send");
-    expect(sends).toHaveLength(2);
-    expect(sends.map(([, payload]) => payload)).toEqual([
-      expect.objectContaining({ idempotencyKey: input.recovery.messageId }),
-      expect.objectContaining({ idempotencyKey: input.recovery.messageId }),
-    ]);
+    Object.assign(gateway.snapshot, { client: { ...client } });
+    startup.resumeRecovery();
+    await vi.waitFor(() => expect(startup.get(key)).toBeNull());
+    const attempts = startupCalls(request, "chat.send");
+    expect(attempts).toHaveLength(2);
+    expect(attempts[1]?.[1]).toEqual(attempts[0]?.[1]);
+    expect(attempts[1]?.[1]).toMatchObject({ idempotencyKey: input.recovery.messageId });
     expect(sessionStorage.length).toBe(0);
     startup.dispose();
   });
 
-  it("uses retained recovery identity and refuses retry after gateway identity changes", async () => {
-    const activePlacement = placement("active", 2);
-    const request = vi.fn((method: string) => {
-      if (method === "sessions.dispatch") {
-        return Promise.resolve({ placement: activePlacement });
-      }
-      if (method === "sessions.describe") {
-        return Promise.resolve({ session: { placement: activePlacement } });
-      }
-      if (method === "sessions.send") {
-        return Promise.reject(new Error("send response lost"));
-      }
-      throw new Error(`unexpected method ${method}`);
+  it("uses retained recovery identity and refuses resend after gateway identity changes", async () => {
+    const activePlacement = createStartupPlacement("active", 2);
+    const request = startupRequest({
+      "sessions.dispatch": () => Promise.resolve({ placement: activePlacement }),
+      "sessions.describe": () => Promise.resolve({ session: { placement: activePlacement } }),
+      "chat.send": () => Promise.reject(new Error("send response lost")),
     });
-    const { startup, input, client, gateway } = harness(request);
+    const { key, startup, input, client, gateway } = createPlacementStartupHarness(request);
     startup.start(input);
     await vi.waitFor(() => {
-      expect(startup.get(input.recovery.sessionKey)?.phase).toBe("failed");
+      expect(startup.get(key)?.phase).toBe("reconnecting");
     });
 
     const storage = sessionStorage;
@@ -676,107 +673,63 @@ describe("application session placement startup", () => {
       setItem: storage.setItem.bind(storage),
       removeItem: storage.removeItem.bind(storage),
     });
-    startup.retry(input.recovery.sessionKey);
-    await vi.waitFor(() => {
-      expect(request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(2);
-    });
+    expect(startup.get(key)?.initialTurn?.sendRunId).toBe(input.recovery.messageId);
     expect(storageRead).toHaveBeenCalledWith(
-      sessionPlacementRecoveryExactStorageKey(
-        "ws://gateway.example",
-        "principal-a",
-        input.recovery.sessionKey,
-      ),
+      sessionPlacementRecoveryExactStorageKey("ws://gateway.example", "principal-a", key),
     );
-    expect(request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(2);
+    expect(startupCalls(request, "chat.send")).toHaveLength(1);
 
     const requestCount = request.mock.calls.length;
     (gateway.connection as { gatewayUrl: string }).gatewayUrl = "ws://other.example";
-    startup.retry(input.recovery.sessionKey);
-    await flush();
+    expect(startup.get(key)).toBeNull();
+    startup.retry(key);
+    startup.resumeRecovery();
+    await flushStartupMicrotasks();
     expect(request).toHaveBeenCalledTimes(requestCount);
 
     (gateway.connection as { gatewayUrl: string }).gatewayUrl = input.recovery.gatewayUrl;
     client.recoveryScope = "principal-b";
-    startup.retry(input.recovery.sessionKey);
-    await flush();
+    expect(startup.get(key)).toBeNull();
+    startup.retry(key);
+    startup.resumeRecovery();
+    await flushStartupMicrotasks();
     expect(request).toHaveBeenCalledTimes(requestCount);
     startup.dispose();
   });
 
-  it("refreshes after active placement failure without replacing the visible error", async () => {
-    const activePlacement = placement("active", 2);
-    const request = vi.fn((method: string) => {
-      if (method === "sessions.dispatch") {
-        return Promise.resolve({ placement: activePlacement });
-      }
-      if (method === "sessions.send") {
-        return Promise.reject(new Error("send response lost"));
-      }
-      throw new Error(`unexpected method ${method}`);
-    });
-    const { startup, input, sessions, state } = harness(request);
-    state.result.sessions[0] = {
-      ...state.result.sessions[0],
-      placement: activePlacement,
-    } as GatewaySessionRow;
-    vi.mocked(sessions.refresh).mockRejectedValueOnce(new Error("refresh unavailable"));
-
-    startup.start(input);
-    await vi.waitFor(() => {
-      expect(startup.get(input.recovery.sessionKey)).toMatchObject({
-        phase: "failed",
-        error: "send response lost",
-        retryable: true,
-      });
-    });
-    expect(sessions.refresh).toHaveBeenCalledOnce();
-    startup.dispose();
-  });
-
   it("does not start a duplicate operation for an equivalent session key", async () => {
-    const dispatch = createDeferred<{ placement: ReturnType<typeof placement> }>();
-    const request = vi.fn((method: string) => {
-      if (method === "sessions.dispatch") {
-        return dispatch.promise;
-      }
-      throw new Error(`unexpected method ${method}`);
+    const dispatch = createDeferred<{ placement: ReturnType<typeof createStartupPlacement> }>();
+    const request = startupRequest({
+      "sessions.dispatch": () => dispatch.promise,
     });
-    const { startup, input } = harness(request);
+    const { startup, input } = createPlacementStartupHarness(request);
     startup.start({
       ...input,
       recovery: { ...input.recovery, sessionKey: "agent:main:main" },
     });
     startup.start({ ...input, recovery: { ...input.recovery, sessionKey: "main" } });
     await vi.waitFor(() => {
-      expect(request.mock.calls.filter(([method]) => method === "sessions.dispatch")).toHaveLength(
-        1,
-      );
+      expect(startupCalls(request, "sessions.dispatch")).toHaveLength(1);
     });
     startup.dispose();
   });
 
   it("replaces a stale persistent operation without letting its settlement clean up", async () => {
-    const oldDispatch = createDeferred<{ placement: ReturnType<typeof placement> }>();
-    const oldRequest = vi.fn((method: string) => {
-      if (method === "sessions.dispatch") {
-        return oldDispatch.promise;
-      }
-      throw new Error(`unexpected old-client method ${method}`);
+    const oldDispatch = createDeferred<{ placement: ReturnType<typeof createStartupPlacement> }>();
+    const oldRequest = startupRequest({
+      "sessions.dispatch": () => oldDispatch.promise,
     });
-    const { startup, input, gateway, initialUserMessage } = harness(oldRequest);
+    const { key, startup, input, gateway, chatSubmissions } =
+      createPlacementStartupHarness(oldRequest);
     startup.start(input);
     await vi.waitFor(() => {
       expect(oldRequest).toHaveBeenCalledWith("sessions.dispatch", expect.anything());
     });
 
-    const newRequest = vi.fn((method: string) => {
-      if (method === "sessions.describe") {
-        return Promise.resolve({ session: { placement: placement("active", 3) } });
-      }
-      if (method === "sessions.send") {
-        return Promise.resolve({ messageSeq: 21 });
-      }
-      throw new Error(`unexpected replacement-client method ${method}`);
+    const newRequest = startupRequest({
+      "sessions.describe": () =>
+        Promise.resolve({ session: { placement: createStartupPlacement("active", 3) } }),
+      "chat.send": () => Promise.resolve({ messageSeq: 21 }),
     });
     const newClient = {
       request: newRequest,
@@ -791,84 +744,121 @@ describe("application session placement startup", () => {
 
     await vi.waitFor(() => {
       expect(newRequest).toHaveBeenCalledWith(
-        "sessions.send",
+        "chat.send",
         expect.objectContaining({ idempotencyKey: input.recovery.messageId }),
+        expect.anything(),
       );
     });
-    expect(startup.get(input.recovery.sessionKey)).toBeNull();
-    expect(initialUserMessage.read(input.recovery.sessionKey, newClient as never)).not.toBeNull();
+    expect(startup.get(key)).toBeNull();
+    expect(chatSubmissions.readInitial(key, newClient as never)).not.toBeNull();
 
-    oldDispatch.resolve({ placement: placement("active", 2) });
-    await flush();
+    oldDispatch.resolve({ placement: createStartupPlacement("active", 2) });
+    await flushStartupMicrotasks();
     for (const method of ["sessions.delete", "sessions.abort", "environments.destroy"]) {
       expect(oldRequest.mock.calls.filter(([candidate]) => candidate === method)).toHaveLength(0);
     }
-    expect(startup.get(input.recovery.sessionKey)).toBeNull();
-    expect(initialUserMessage.read(input.recovery.sessionKey, newClient as never)).not.toBeNull();
+    expect(startup.get(key)).toBeNull();
+    expect(chatSubmissions.readInitial(key, newClient as never)).not.toBeNull();
     startup.dispose();
   });
 
-  it("reclaims the worker and deletes the session when incognito startup is interrupted", async () => {
-    const dispatch = createDeferred<{ placement: ReturnType<typeof placement> }>();
-    const request = vi.fn((method: string) => {
-      if (method === "sessions.dispatch") {
-        return dispatch.promise;
+  it.each(["client replacement"])(
+    "reclaims the worker and deletes incognito startup after %s",
+    async (interruption) => {
+      const dispatch = createDeferred<{ placement: ReturnType<typeof createStartupPlacement> }>();
+      const request = vi.fn((method: string) => {
+        if (method === "sessions.dispatch") {
+          return dispatch.promise;
+        }
+        if (method === "sessions.describe") {
+          return Promise.resolve({
+            session: {
+              sessionId: "session-cloud-startup",
+              placement: createStartupPlacement("active", 2),
+            },
+          });
+        }
+        if (method === "sessions.delete") {
+          return Promise.resolve({ ok: true, deleted: true });
+        }
+        if (method === "sessions.reclaim" || method === "sessions.patch") {
+          return Promise.resolve({ ok: true });
+        }
+        throw new Error(`unexpected method ${method}`);
+      });
+      const { key, startup, input, gateway } = createPlacementStartupHarness(request);
+      sessionStorage.clear();
+      startup.start({ ...input, persistRecovery: false });
+      await vi.waitFor(() => {
+        expect(request).toHaveBeenCalledWith("sessions.dispatch", expect.anything());
+      });
+
+      if (interruption === "transport reconnect") {
+        gateway.snapshot.phase = "reconnecting";
+        vi.mocked(gateway.subscribe).mock.calls[0]?.[0](gateway.snapshot);
+        gateway.snapshot.phase = "connected";
+        vi.mocked(gateway.subscribe).mock.calls[0]?.[0](gateway.snapshot);
+      } else {
+        const nextSnapshot = {
+          ...gateway.snapshot,
+          client: {
+            request: vi.fn(),
+            recoveryScope: "principal-a",
+            recoveryScopeReady: true,
+          },
+        };
+        (gateway as unknown as { snapshot: typeof nextSnapshot }).snapshot = nextSnapshot;
+        vi.mocked(gateway.subscribe).mock.calls[0]?.[0](nextSnapshot as never);
       }
-      if (method === "sessions.describe") {
-        return Promise.resolve({
-          session: { sessionId: "session-cloud-startup", placement: placement("active", 2) },
+      dispatch.resolve({ placement: createStartupPlacement("active", 2) });
+
+      await vi.waitFor(() => {
+        expect(request).toHaveBeenCalledWith("sessions.reclaim", {
+          key,
+          agentId: input.recovery.agentId,
         });
-      }
-      if (
-        method === "sessions.reclaim" ||
-        method === "sessions.patch" ||
-        method === "sessions.delete"
-      ) {
-        return Promise.resolve({ ok: true });
-      }
-      throw new Error(`unexpected method ${method}`);
-    });
-    const { startup, input, gateway } = harness(request);
-    sessionStorage.clear();
-    startup.start({ ...input, persistRecovery: false });
-    await vi.waitFor(() => {
-      expect(request).toHaveBeenCalledWith("sessions.dispatch", expect.anything());
-    });
-
-    const nextSnapshot = {
-      ...gateway.snapshot,
-      client: {
-        request: vi.fn(),
-        recoveryScope: "principal-a",
-        recoveryScopeReady: true,
-      },
-    };
-    (gateway as unknown as { snapshot: typeof nextSnapshot }).snapshot = nextSnapshot;
-    vi.mocked(gateway.subscribe).mock.calls[0]?.[0](nextSnapshot as never);
-    dispatch.resolve({ placement: placement("active", 2) });
-
-    await vi.waitFor(() => {
-      expect(request).toHaveBeenCalledWith("sessions.reclaim", {
-        key: input.recovery.sessionKey,
-        agentId: input.recovery.agentId,
+        expect(request).toHaveBeenCalledWith("sessions.patch", {
+          key,
+          agentId: input.recovery.agentId,
+          archived: true,
+          expectedSessionId: "session-cloud-startup",
+        });
+        expect(request).toHaveBeenCalledWith("sessions.delete", {
+          key,
+          agentId: input.recovery.agentId,
+          deleteTranscript: true,
+          expectedSessionId: "session-cloud-startup",
+          archivedOnly: true,
+        });
+        expect(startup.hasPendingTurn(key)).toBe(false);
       });
-      expect(request).toHaveBeenCalledWith("sessions.patch", {
-        key: input.recovery.sessionKey,
-        agentId: input.recovery.agentId,
-        archived: true,
-        expectedSessionId: "session-cloud-startup",
+      expect(startup.get(key)).toMatchObject({
+        phase: "cancelled",
+        retryable: false,
+        initialTurn: { text: input.recovery.message, sendState: "failed" },
+        error: expect.stringContaining("Session setup was interrupted"),
       });
-      expect(request).toHaveBeenCalledWith("sessions.delete", {
-        key: input.recovery.sessionKey,
-        agentId: input.recovery.agentId,
-        deleteTranscript: true,
-        expectedSessionId: "session-cloud-startup",
-        archivedOnly: true,
+      expect(request).not.toHaveBeenCalledWith(
+        "sessions.patch",
+        expect.objectContaining({ archived: false }),
+      );
+      expect(request).not.toHaveBeenCalledWith("sessions.abort", expect.anything());
+      expect(request).not.toHaveBeenCalledWith("environments.destroy", expect.anything());
+      expect(sessionStorage.length).toBe(0);
+      const completedRequests = request.mock.calls.length;
+      startup.retry(key);
+      startup.pause(key, "late pause", {
+        readSessionPlacementRecovery,
+        pauseSessionPlacementRecovery,
       });
-    });
-    expect(request).not.toHaveBeenCalledWith("sessions.abort", expect.anything());
-    expect(request).not.toHaveBeenCalledWith("environments.destroy", expect.anything());
-    expect(sessionStorage.length).toBe(0);
-    startup.dispose();
-  });
+      startup.resumeRecovery();
+      startup.start({ ...input, persistRecovery: false });
+      await flushStartupMicrotasks();
+      expect(request).toHaveBeenCalledTimes(completedRequests);
+      expect(startup.get(key)?.phase).toBe("cancelled");
+      Object.assign(gateway, { connectionRevision: gateway.connectionRevision + 1 });
+      expect(startup.get(key)).toBeNull();
+      startup.dispose();
+    },
+  );
 });

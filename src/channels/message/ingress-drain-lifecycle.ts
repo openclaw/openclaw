@@ -1,7 +1,14 @@
+import type { ChannelIngressQueueRecord } from "./ingress-queue.types.js";
+
 /** Full pre-adoption -> adoption ownership lifecycle for one claimed event. */
 export type ChannelIngressDispatchLifecycle = {
   /** Pre-adoption only. After adopt the drain treats this signal as inert. */
   abortSignal: AbortSignal;
+  /**
+   * Same-lane rows admitted but not yet handed off, excluding this event.
+   * Lets channel buffers that span lane rows wait for input that is already durable.
+   */
+  readLaneBacklog?: () => Promise<readonly ChannelIngressQueueRecord<unknown>[]>;
   /**
    * Fires when recovery-relevant session/run state is durable.
    * Drain completes (tombstones) the claim here -- never at settle.
@@ -12,6 +19,9 @@ export type ChannelIngressDispatchLifecycle = {
    * Claim remains held until adopted or abandoned.
    */
   onDeferred: () => void;
+  /** Pre-adoption liveness while waiting for reply-lane admission or preflight compaction. */
+  onDeferredHeartbeat?: () => void;
+  deferredHeartbeatIntervalMs?: number;
   /**
    * Durable adoption finalization is in progress (e.g. settlement hold while
    * committing dedupe). Clears the pre-adoption stall watchdog so a timeout
@@ -32,19 +42,18 @@ export type ChannelIngressDispatchLifecycle = {
 
 /** Maps a drain lifecycle onto the reply-lane ownership surface. */
 export function bindIngressLifecycleToReplyOptions(lifecycle: ChannelIngressDispatchLifecycle): {
-  turnAdoptionLifecycle: {
-    admission: "exclusive";
-    onAdopted: () => void | Promise<void>;
-    onDeferred: () => void;
-    onAbandoned: () => void | Promise<void>;
-    abortSignal: AbortSignal;
-  };
+  turnAdoptionLifecycle: Omit<
+    ChannelIngressDispatchLifecycle,
+    "onAdoptionFinalizing" | "onFailed" | "onCancelled" | "readLaneBacklog"
+  > & { admission: "exclusive" };
 } {
   return {
     turnAdoptionLifecycle: {
       admission: "exclusive",
       onAdopted: lifecycle.onAdopted,
       onDeferred: lifecycle.onDeferred,
+      onDeferredHeartbeat: lifecycle.onDeferredHeartbeat,
+      deferredHeartbeatIntervalMs: lifecycle.deferredHeartbeatIntervalMs,
       onAbandoned: lifecycle.onAbandoned,
       abortSignal: lifecycle.abortSignal,
     },

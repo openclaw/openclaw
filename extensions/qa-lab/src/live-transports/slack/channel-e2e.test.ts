@@ -1,0 +1,405 @@
+import fs from "node:fs/promises";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createSlackChannelE2e } from "./channel-e2e.js";
+import { runSlackScenario } from "./scenario-runtime.js";
+import { slackRequest, slackResponse } from "./slack-capture.test-helpers.js";
+import { readSlackQaNativeWrites, type SlackNativeWrite } from "./slack-live.capture.js";
+import type { SlackMessage } from "./slack-live.contracts.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const nativeWrite = (
+  requestEventId: number,
+  messageId: string,
+  threadId?: string,
+  channelId = "C_QA",
+): SlackNativeWrite => ({
+  evidence: "api-accepted",
+  requestEventId,
+  method: "chat.postMessage",
+  channelId,
+  messageId,
+  threadId,
+});
+
+function fixture(capturedEvents?: Array<Record<string, unknown>>) {
+  const messages: SlackMessage[] = [];
+  const writes: SlackNativeWrite[] = [];
+  let leaseAlive = true;
+  let nextId = 1;
+  const deleteMessage = async ({ ts }: { ts: string }) => {
+    const index = messages.findIndex((message) => message.ts === ts);
+    if (index >= 0) {
+      messages.splice(index, 1);
+    }
+    return { ok: true };
+  };
+  const driverClient = {
+    auth: { test: vi.fn(async () => ({ user_id: "U_DRIVER", team_id: "T_QA" })) },
+    conversations: { history: vi.fn(async () => ({ messages: [] })) },
+    chat: {
+      postMessage: vi.fn(async (input: { text: string; thread_ts?: string }) => {
+        const ts = `${nextId++}.000000`;
+        messages.push({ ts, text: input.text, thread_ts: input.thread_ts, user: "U_DRIVER" });
+        return { channel: "C_QA", ts };
+      }),
+      update: vi.fn(async () => ({ ok: true })),
+      delete: vi.fn(deleteMessage),
+    },
+    reactions: {
+      add: vi.fn(async () => ({ ok: true })),
+      remove: vi.fn(async () => ({ ok: true })),
+      get: vi.fn(async () => ({ message: { reactions: [] } })),
+    },
+    files: { delete: vi.fn(async () => ({ ok: true })) },
+  };
+  const sutClient = {
+    auth: { test: vi.fn(async () => ({ user_id: "U_SUT", team_id: "T_QA" })) },
+    conversations: {
+      history: vi.fn(async () => ({ messages })),
+      replies: vi.fn(async () => ({ messages })),
+    },
+    chat: { delete: vi.fn(async (_input: { channel: string; ts: string }) => ({ ok: true })) },
+    files: { delete: vi.fn(async () => ({ ok: true })) },
+  };
+  const assertLease = () => {
+    if (!leaseAlive) {
+      throw new Error("lease expired");
+    }
+  };
+  const session = createSlackChannelE2e({
+    channelId: "C_QA",
+    driverIdentity: { userId: "U_DRIVER" },
+    sutIdentity: { userId: "U_SUT" },
+    driverClient: driverClient as never,
+    sutClient: sutClient as never,
+    sutWriteClient: sutClient as never,
+    cleanupDriverClient: driverClient as never,
+    cleanupSutClient: sutClient as never,
+    assertActive: assertLease,
+    assertLease,
+    waitReady: async () => {},
+    outputDir: tempDirs.make("slack-e2e-"),
+    scenarioId: "ownership",
+    readNativeWrites: async () =>
+      capturedEvents
+        ? readSlackQaNativeWrites({
+            afterRequestEventId: 0,
+            sessionId: "qa-slack",
+            store: {
+              getSessionEvents: async () => capturedEvents.toReversed(),
+              readBlob: async () => null,
+            },
+          })
+        : writes,
+  });
+  return {
+    session,
+    deleteMessage,
+    driverClient,
+    sutClient,
+    messages,
+    writes,
+    expire: () => {
+      leaseAlive = false;
+    },
+    artifact: () => fs.readFile(session.artifactPath, "utf8"),
+  };
+}
+
+describe("Slack agent E2E ownership", () => {
+  it("refuses foreign mutations and cleans only exact driver and correlated Gateway receipts", async () => {
+    const f = fixture();
+    f.messages.push({ ts: "0.000001", user: "U_OTHER", text: "keep me" });
+    const root = await f.session.driver.send({ text: "owned", mention: false });
+    await expect(f.session.driver.delete({ messageId: "0.000001" })).rejects.toThrow(
+      "owned by this run",
+    );
+    await expect(f.session.driver.edit({ messageId: "0.000001", text: "wrong" })).rejects.toThrow(
+      "owned by this run",
+    );
+    await expect(
+      f.session.driver.react({ messageId: root.id, emoji: "eyes", remove: true }),
+    ).rejects.toThrow("add receipt");
+    f.writes.push(
+      nativeWrite(1, "2.000000", root.id),
+      nativeWrite(2, "3.000000", root.id, "C_OTHER"),
+      nativeWrite(3, "4.000000", "0.000001"),
+    );
+    await f.session.cleanup();
+    expect(f.messages).toEqual([{ ts: "0.000001", user: "U_OTHER", text: "keep me" }]);
+    expect(f.sutClient.chat.delete.mock.calls.map(([input]) => input)).toEqual([
+      { channel: "C_QA", ts: "2.000000" },
+    ]);
+  });
+
+  it("cleans standalone scenario progress and final receipts after an assertion fails", async () => {
+    const f = fixture();
+    const outputs = ["COMMENTARY", "Ran Exec", "TOOL OUTPUT", "FINAL"].map((text, index) => ({
+      ts: `${index + 2}.000000`,
+      text,
+    }));
+    const unrelated = [
+      { ts: "6.000000", text: "Ran Exec", user: "U_OTHER" },
+      { ts: "7.000000", text: "other channel", user: "U_SUT" },
+      { ts: "8.000000", text: "other thread", user: "U_SUT", thread_ts: "foreign" },
+    ];
+    f.messages.push(...outputs.map((message) => ({ ...message, user: "U_SUT" })), ...unrelated);
+    for (const message of [...outputs, ...unrelated.slice(1)]) {
+      f.writes.push(
+        nativeWrite(
+          Number(message.ts),
+          message.ts,
+          message.ts === "8.000000" ? "foreign" : undefined,
+          message.ts === "7.000000" ? "C_OTHER" : "C_QA",
+        ),
+      );
+    }
+    f.sutClient.chat.delete.mockImplementation(f.deleteMessage);
+    const run = {
+      expectReply: true,
+      input: "owned scenario",
+      matchText: "FINAL",
+      verify: () => {
+        throw new Error("intentional assertion failure");
+      },
+    };
+    try {
+      await expect(
+        runSlackScenario(
+          {
+            channelId: "C_QA",
+            channelE2e: f.session.driver,
+            recordScenarioMessages: f.session.recordScenarioMessages,
+            configureScenario: async () => ({ cfg: {}, primaryModel: "mock-openai/test", run }),
+            context: { driverClient: f.driverClient, sutReadClient: f.sutClient },
+            getMessageWriteCursor: async () => 0,
+            observedMessages: [],
+            readMessageWrites: async () =>
+              f.messages.map((message) => ({ ...message, channelId: "C_QA" })),
+            scenario: { id: "ownership", title: "ownership", timeoutMs: 1000 },
+            sutIdentity: { userId: "U_SUT" },
+          } as never,
+          { buildRun: () => run },
+        ),
+      ).rejects.toThrow("intentional assertion failure");
+    } finally {
+      await f.session.cleanup();
+    }
+    expect(f.messages).toEqual(unrelated);
+    const artifact = JSON.parse(await f.artifact());
+    expect(artifact.ownedMessages).toMatchObject(
+      Array.from({ length: 5 }, () => ({ deleted: true })),
+    );
+    expect(f.sutClient.chat.delete.mock.calls.map(([input]) => input.ts).toSorted()).toEqual(
+      outputs.map((message) => message.ts),
+    );
+  });
+
+  it.each([
+    { stage: "readiness", operation: "driver auth.test" },
+    { stage: "mutation", operation: "chat.postMessage" },
+  ])("preserves only sanitized SDK failure context during $stage", async ({ stage, operation }) => {
+    const f = fixture();
+    const failure = Object.assign(new Error("Authorization: secret-fixture"), {
+      data: { error: "missing_scope", needed: "chat:write" },
+      headers: { authorization: "secret-fixture" },
+      cause: new Error("secret-fixture"),
+    });
+    const action =
+      stage === "readiness" ? f.driverClient.auth.test : f.driverClient.chat.postMessage;
+    action.mockRejectedValueOnce(failure);
+
+    await expect(f.session.driver.send({ text: "sanitized failure" })).rejects.toMatchObject({
+      message: `Slack ${operation}: missing_scope; needed=chat:write`,
+      cause: "missing_scope; needed=chat:write",
+    });
+  });
+
+  it.each([
+    { terminal: "server-error", outcome: "uncertain", reason: "response-indeterminate" },
+    { terminal: "partial-failure", outcome: "uncertain", reason: "response-indeterminate" },
+    { terminal: "rejected", outcome: undefined, reason: undefined },
+    { terminal: "accepted-after-error", outcome: "api-accepted", reason: undefined },
+  ])(
+    "preserves Gateway $terminal evidence without guessing cleanup targets",
+    async ({ terminal, outcome, reason }) => {
+      const events: Array<Record<string, unknown>> = [];
+      const f = fixture(events);
+      const root = await f.session.driver.send({ text: "owned root", mention: false });
+      events.push(
+        slackRequest(1, "chat.postMessage", {
+          channel: "C_QA",
+          thread_ts: root.id,
+          ts: "2.000000",
+          text: "private-body",
+          token: "private-token",
+        }),
+      );
+      if (terminal === "accepted-after-error") {
+        events.push({
+          id: 2,
+          flowId: "1",
+          kind: "error",
+          errorText: "Authorization: private-token",
+        });
+      }
+      events.push(
+        slackResponse(
+          1,
+          {
+            ok: terminal === "accepted-after-error",
+            channel: "C_QA",
+            ts: "2.000000",
+            error: terminal === "partial-failure" ? "fatal_error" : "missing_scope",
+            detail: "private-error",
+          },
+          terminal === "server-error" ? 503 : 200,
+        ),
+      );
+
+      if (outcome === "uncertain") {
+        await expect(f.session.cleanup()).rejects.toThrow("1 uncertain operations");
+      } else {
+        await f.session.cleanup();
+      }
+      expect(f.driverClient.chat.delete).toHaveBeenCalledWith({ channel: "C_QA", ts: root.id });
+      if (outcome === "api-accepted") {
+        expect(f.sutClient.chat.delete).toHaveBeenCalledWith({ channel: "C_QA", ts: "2.000000" });
+      } else {
+        expect(f.sutClient.chat.delete).not.toHaveBeenCalled();
+      }
+      expect(f.sutClient.files.delete).not.toHaveBeenCalled();
+      const content = await f.artifact();
+      expect(content).not.toContain("private-");
+      const artifact = JSON.parse(content);
+      const gatewayEvidence = artifact.evidence.filter(
+        (entry: { operation: string }) => entry.operation === "Gateway chat.postMessage",
+      );
+      expect(gatewayEvidence).toEqual(
+        outcome
+          ? [
+              expect.objectContaining({
+                outcome,
+                requestEventId: 1,
+                channelId: "C_QA",
+                threadId: root.id,
+                messageId: "2.000000",
+                ...(reason ? { detail: reason } : {}),
+              }),
+            ]
+          : [],
+      );
+    },
+  );
+
+  it("performs no cleanup writes after lease authority is lost", async () => {
+    const f = fixture();
+    await f.session.driver.send({ text: "retained" });
+    f.expire();
+    await expect(f.session.cleanup()).rejects.toThrow("cleanup incomplete");
+    expect(f.driverClient.chat.delete).not.toHaveBeenCalled();
+    expect(f.messages[0]?.text).toContain("retained");
+  });
+
+  it("reports failed cleanup without leaking SDK headers or discarding the owned receipt", async () => {
+    const f = fixture();
+    const sent = await f.session.driver.send({ text: "keep recovery evidence" });
+    f.driverClient.chat.delete.mockRejectedValueOnce(
+      Object.assign(new Error("Authorization: secret-fixture"), {
+        data: { error: "missing_scope", needed: "chat:write" },
+      }),
+    );
+    await expect(f.session.cleanup()).rejects.toThrow("cleanup incomplete");
+    const content = await f.artifact();
+    expect(content).not.toContain("secret-fixture");
+    const artifact = JSON.parse(content);
+    expect(artifact.evidence).toContainEqual(
+      expect.objectContaining({
+        operation: "cleanup chat.delete",
+        outcome: "failed",
+        detail: "missing_scope; needed=chat:write",
+      }),
+    );
+    expect(artifact.ownedMessages).toContainEqual({
+      message: expect.objectContaining({ id: sent.id }),
+    });
+  });
+
+  it("does not mistake reaction API acceptance for stored state", async () => {
+    const f = fixture();
+    const sent = await f.session.driver.send({ text: "reaction target", mention: false });
+    await expect(f.session.driver.react({ messageId: sent.id, emoji: "eyes" })).rejects.toThrow(
+      "did not match stored",
+    );
+    await f.session.cleanup();
+    expect(f.driverClient.reactions.remove).toHaveBeenCalledWith({
+      channel: "C_QA",
+      timestamp: sent.id,
+      name: "eyes",
+    });
+  });
+
+  it("correlates paginated SUT replies and preserves merely observed file identities", async () => {
+    const f = fixture();
+    const root = await f.session.driver.send({ text: "root", mention: false });
+    f.sutClient.conversations.replies
+      .mockResolvedValueOnce({
+        messages: [{ ts: "2.000000", thread_ts: root.id, user: "U_OTHER", text: "EXACT" }],
+        response_metadata: { next_cursor: "next-page" },
+      } as never)
+      .mockResolvedValueOnce({
+        messages: [
+          { ts: "3.000000", thread_ts: "different-root", user: "U_SUT", text: "EXACT" },
+          {
+            ts: "4.000000",
+            thread_ts: root.id,
+            user: "U_SUT",
+            text: "EXACT",
+            files: [{ id: "F_EXISTING", name: "existing.txt" }],
+          },
+        ],
+      });
+    const reply = await f.session.driver.waitForReply({
+      afterMessageId: root.id,
+      threadId: root.id,
+      textIncludes: "EXACT",
+    });
+    expect(reply).toMatchObject({
+      id: "4.000000",
+      actor: "sut",
+      attachments: [{ id: "F_EXISTING", name: "existing.txt" }],
+    });
+    await f.session.cleanup();
+    expect(f.sutClient.files.delete).not.toHaveBeenCalled();
+    expect(f.sutClient.chat.delete).toHaveBeenCalledWith({ channel: "C_QA", ts: "4.000000" });
+  });
+
+  it("reports optional missing scopes while allowing text and refusing unavailable native effects", async () => {
+    const f = fixture();
+    f.driverClient.auth.test.mockResolvedValueOnce({
+      user_id: "U_DRIVER",
+      team_id: "T_QA",
+      response_metadata: { scopes: ["chat:write", "groups:history"] },
+    } as never);
+    const doctor = await f.session.driver.doctor();
+    expect(doctor.ok).toBe(false);
+    expect(doctor.capabilities.unavailable).toContainEqual(
+      expect.objectContaining({ capability: "driver files:write" }),
+    );
+    expect(f.driverClient.chat.postMessage).not.toHaveBeenCalled();
+    const sent = await f.session.driver.send({
+      text: "basic text remains available",
+      mention: false,
+    });
+    expect(sent.text).toBe("basic text remains available");
+    await expect(f.session.driver.react({ messageId: sent.id, emoji: "eyes" })).rejects.toThrow(
+      "driver missing_scope; needed=reactions:read, reactions:write",
+    );
+    expect(f.driverClient.reactions.add).not.toHaveBeenCalled();
+    await expect(
+      f.session.driver.upload({ path: "/not-read-with-missing-scopes" }),
+    ).rejects.toThrow("driver missing_scope; needed=files:read, files:write");
+    await f.session.cleanup();
+  });
+});

@@ -1,209 +1,148 @@
-import type { ProgressCard } from "@openclaw/gateway-protocol";
-import { html, nothing } from "lit";
-import type {
-  ControlUiSessionPullRequest,
-  ControlUiSessionPullRequestSnapshot,
-} from "../../../src/gateway/control-ui-contract.js";
-import { t } from "../i18n/index.ts";
-import { formatRelativeTimestamp } from "../lib/format.ts";
-import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
-import { sessionOwnerInitials } from "./session-owner-chip.ts";
-import { renderSessionProgressCard } from "./session-progress-card.ts";
+import { bucketRelativeTimeMs, type RelativeTimeUnit } from "@openclaw/normalization-core";
+import type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
+import { i18n, t } from "../i18n/index.ts";
+import { takeGraphemes } from "../lib/graphemes.ts";
+import type { SidebarSessionHovercardRow } from "./app-sidebar-session-types.ts";
 
-const MAX_VISIBLE_PULL_REQUESTS = 3;
+// Above what three lines hold in any theme, so a long transcript never reaches layout.
+const EXCERPT_MAX_GRAPHEMES = 320;
 
-type SessionHovercardAvatarAuth = {
-  authTokens: readonly string[];
-  authReady: boolean;
-};
-
-let channelAvatarElementLoad: Promise<unknown> | undefined;
-function ensureChannelAvatarElement(): void {
-  channelAvatarElementLoad ??= import("./channel-avatar.ts");
+function cutExcerpt(text: string, graphemes: number): string {
+  return `${takeGraphemes(text, graphemes).replace(/[\s\p{Po}]+$/u, "")}…`;
 }
 
-function pullRequestStateLabel(state: ControlUiSessionPullRequest["state"]): string {
-  return t(`sessionHovercard.states.${state}`);
-}
-
-function checksPresentation(checks: NonNullable<ControlUiSessionPullRequest["checks"]>): {
-  glyph: string;
-  label: string;
-} {
-  switch (checks.state) {
-    case "passing":
-      return { glyph: "✓", label: t("sessionHovercard.checks.passing") };
-    case "failing":
-      return { glyph: "✗", label: t("sessionHovercard.checks.failing") };
-    case "pending":
-      return { glyph: "○", label: t("sessionHovercard.checks.pending") };
-    default:
-      return checks.state satisfies never;
+/**
+ * Writes only the part of the source that fits the element's line clamp, as one text node.
+ * The first write and the search share a task, so only the final text is painted.
+ */
+export function writeHovercardExcerpt(element: HTMLElement, source: string): void {
+  const text = source.replace(/\s+/gu, " ").trim();
+  const fits = () => element.scrollHeight <= element.clientHeight;
+  element.textContent =
+    takeGraphemes(text, EXCERPT_MAX_GRAPHEMES) === text
+      ? text
+      : cutExcerpt(text, EXCERPT_MAX_GRAPHEMES);
+  if (fits()) {
+    return;
   }
-}
-
-function changedFilesLabel(changedFiles: number): string {
-  return t(changedFiles === 1 ? "sessionHovercard.changedFile" : "sessionHovercard.changedFiles", {
-    count: String(changedFiles),
-  });
-}
-
-function renderDiffStats(item: { additions?: number; deletions?: number; changedFiles?: number }) {
-  if (
-    item.additions === undefined &&
-    item.deletions === undefined &&
-    item.changedFiles === undefined
-  ) {
-    return nothing;
+  let fitting = 0;
+  let overflowing = Math.min(text.length, EXCERPT_MAX_GRAPHEMES);
+  while (overflowing - fitting > 1) {
+    const middle = Math.floor((fitting + overflowing) / 2);
+    element.textContent = cutExcerpt(text, middle);
+    if (fits()) {
+      fitting = middle;
+    } else {
+      overflowing = middle;
+    }
   }
-  return html`<span class="session-hovercard__diff">
-    ${item.changedFiles === undefined
-      ? nothing
-      : html`<span class="session-hovercard__files">${changedFilesLabel(item.changedFiles)}</span>`}
-    ${item.additions === undefined
-      ? nothing
-      : html`<span class="session-hovercard__additions">+${item.additions.toLocaleString()}</span>`}
-    ${item.deletions === undefined
-      ? nothing
-      : html`<span class="session-hovercard__deletions">−${item.deletions.toLocaleString()}</span>`}
-  </span>`;
+  element.textContent = cutExcerpt(text, fitting);
 }
 
-function renderHeader(
-  row: SidebarRecentSession | undefined,
-  channelAvatarAuth: SessionHovercardAvatarAuth | undefined,
+export function participantLabel(participant: SessionParticipant): string {
+  return participant.label?.trim() || participant.identity.id;
+}
+
+type SessionAgeUnit = RelativeTimeUnit | "week" | "month" | "year";
+
+function sessionAgeBucket(diffMs: number): { value: number; unit: SessionAgeUnit } {
+  const days = Math.abs(diffMs) / (24 * 60 * 60_000);
+  if (days >= 365) {
+    return { value: Math.round(days / 365), unit: "year" };
+  }
+  if (days >= 28) {
+    return { value: Math.round(days / 30), unit: "month" };
+  }
+  if (days >= 7) {
+    return { value: Math.round(days / 7), unit: "week" };
+  }
+  if (days >= 1) {
+    return { value: Math.round(days), unit: "day" };
+  }
+  return bucketRelativeTimeMs(Math.abs(diffMs));
+}
+
+export function formatSessionAge(timestamp: number | null | undefined, suffix: boolean): string {
+  if (typeof timestamp !== "number" || !Number.isFinite(timestamp)) {
+    return "";
+  }
+  const diff = timestamp - Date.now();
+  const { value, unit } = sessionAgeBucket(diff);
+  if (suffix) {
+    if (unit === "second" && diff <= 0) {
+      return t("common.justNow");
+    }
+    return new Intl.RelativeTimeFormat(i18n.getLocale(), {
+      numeric: "always",
+      style: "narrow",
+    }).format(diff <= 0 ? -value : value, unit);
+  }
+  if (i18n.getLocale().toLowerCase().startsWith("en")) {
+    const compactSuffix: Record<SessionAgeUnit, string> = {
+      second: "s",
+      minute: "m",
+      hour: "h",
+      day: "d",
+      week: "w",
+      month: "mo",
+      year: "y",
+    };
+    return `${value}${compactSuffix[unit]}`;
+  }
+  return new Intl.NumberFormat(i18n.getLocale(), {
+    style: "unit",
+    unit,
+    unitDisplay: "short",
+    maximumFractionDigits: 0,
+  }).format(value);
+}
+
+export function sessionAttribution(
+  row: SidebarSessionHovercardRow,
+  selfUserId: string | undefined,
 ) {
-  if (!row) {
-    return nothing;
-  }
-  const owner = row.owner?.actor ?? row.createdActor;
-  const ownerLabel = owner?.label?.trim() || owner?.id?.trim();
-  const initials = owner ? sessionOwnerInitials(owner) : "";
-  const avatarFallback = initials
-    ? html`<span class="session-hovercard__avatar-fallback" aria-hidden="true">${initials}</span>`
-    : nothing;
-  const created = formatRelativeTimestamp(row.startedAt, { fallback: "" });
-  const updated = formatRelativeTimestamp(row.updatedAt, { fallback: "" });
-  const metadata = [
-    ownerLabel,
-    created ? t("sessionHovercard.created", { time: created }) : undefined,
-    updated ? t("sessionHovercard.updated", { time: updated }) : undefined,
-  ].filter((value): value is string => Boolean(value));
-  if (row.channelAvatarUrl) {
-    ensureChannelAvatarElement();
-  }
-  return html`<header class="session-hovercard__header">
-    ${row.channelAvatarUrl
-      ? html`<openclaw-channel-avatar
-          class="session-hovercard__avatar"
-          .routeUrl=${row.channelAvatarUrl}
-          .authTokens=${channelAvatarAuth?.authTokens ?? []}
-          .authReady=${channelAvatarAuth?.authReady ?? false}
-          .fallback=${avatarFallback}
-        ></openclaw-channel-avatar>`
-      : initials
-        ? html`<span class="session-hovercard__avatar" aria-hidden="true">${initials}</span>`
-        : nothing}
-    <span class="session-hovercard__heading">
-      <span class="session-hovercard__title">${row.label}</span>
-      ${metadata.length > 0
-        ? html`<span class="session-hovercard__meta">${metadata.join(" · ")}</span>`
-        : nothing}
-    </span>
-  </header>`;
-}
-
-function renderPullRequestChip(pullRequest: ControlUiSessionPullRequest) {
-  const state = pullRequestStateLabel(pullRequest.state);
-  const checks = pullRequest.checks ? checksPresentation(pullRequest.checks) : null;
-  return html`<a
-    class="session-hovercard__chip session-hovercard__pr-chip"
-    data-state=${pullRequest.state}
-    href=${pullRequest.url}
-    target="_blank"
-    rel="noopener noreferrer"
-    aria-label=${t("sessionHovercard.pullRequestLabel", {
-      number: String(pullRequest.number),
-      state,
-    })}
-  >
-    <span class="session-hovercard__pr-number">#${pullRequest.number}</span>
-    <span class="session-hovercard__pr-state">${state}</span>
-    ${checks
-      ? html`<span
-          class="session-hovercard__checks"
-          data-checks=${pullRequest.checks?.state}
-          aria-label=${checks.label}
-          title=${checks.label}
-          >${checks.glyph}</span
-        >`
-      : nothing}
-    ${renderDiffStats(pullRequest)}
-  </a>`;
-}
-
-function renderPullRequestDetails(snapshot: ControlUiSessionPullRequestSnapshot | undefined) {
-  if (!snapshot) {
-    return nothing;
-  }
-  if (snapshot.pullRequests.length > 0) {
-    const visible = snapshot.pullRequests.slice(0, MAX_VISIBLE_PULL_REQUESTS);
-    const hiddenCount = snapshot.pullRequests.length - visible.length;
-    return html`<div class="session-hovercard__chips">
-      ${visible.map(renderPullRequestChip)}
-      ${hiddenCount > 0
-        ? html`<span class="session-hovercard__more"
-            >${t("sessionHovercard.more", { count: String(hiddenCount) })}</span
-          >`
-        : nothing}
-    </div>`;
-  }
-  const branch = snapshot.branch;
-  if (!branch) {
-    return nothing;
-  }
-  const noPullRequest = t("sessionHovercard.noPrYet");
-  return html`
-    <div class="session-hovercard__chips">
-      <span class="session-hovercard__chip session-hovercard__branch-chip"
-        >${branch.owner}/${branch.repo} · ${branch.branch}</span
-      >
-      ${renderDiffStats(branch)}
-    </div>
-    <div class="session-hovercard__no-pr">
-      ${branch.createUrl
-        ? html`<a href=${branch.createUrl} target="_blank" rel="noopener noreferrer"
-            >${noPullRequest}</a
-          >`
-        : noPullRequest}
-    </div>
-  `;
-}
-
-export function renderSessionHovercard(input: {
-  row?: SidebarRecentSession;
-  channelAvatarAuth?: SessionHovercardAvatarAuth;
-  pullRequests?: ControlUiSessionPullRequestSnapshot;
-  progressCard?: ProgressCard | null;
-}) {
-  const hasPullRequestDetails = Boolean(
-    input.pullRequests && (input.pullRequests.pullRequests.length > 0 || input.pullRequests.branch),
+  const creator = row.createdActor;
+  const creatorLabel = creator?.label?.trim() || creator?.id?.trim();
+  const participantIds = new Set<string>();
+  let excludedProjectedCount = 0;
+  const participants = (row.expandedParticipants ?? row.participants ?? []).filter(
+    (participant) => {
+      const id = JSON.stringify(participant.identity);
+      if (participantIds.has(id)) {
+        return false;
+      }
+      participantIds.add(id);
+      if (
+        (participant.identity.type === "profile" && participant.identity.id === selfUserId) ||
+        id === JSON.stringify(creator?.identity)
+      ) {
+        excludedProjectedCount += 1;
+        return false;
+      }
+      return true;
+    },
   );
-  const lastMessagePreview = input.progressCard
-    ? undefined
-    : input.row?.lastMessagePreview?.trim() || undefined;
-  if (!input.row && !hasPullRequestDetails && !input.progressCard) {
-    return nothing;
+  const participantCount = Math.max(
+    participants.length,
+    (row.participantCount ?? 0) - excludedProjectedCount,
+  );
+  if (creator && creatorLabel) {
+    return {
+      creator,
+      primaryIdentity: creator.identity,
+      primaryLabel: creatorLabel,
+      participants,
+      otherCount: participantCount,
+    };
   }
-  return html`<div class="session-hovercard">
-    ${renderHeader(input.row, input.channelAvatarAuth)}
-    ${renderPullRequestDetails(input.pullRequests)}
-    ${input.progressCard
-      ? html`<div class="session-hovercard__divider" role="presentation"></div>
-          ${renderSessionProgressCard(input.progressCard, "hovercard")}`
-      : lastMessagePreview
-        ? html`<div class="session-hovercard__divider" role="presentation"></div>
-            <div class="session-hovercard__excerpt">${lastMessagePreview}</div>`
-        : nothing}
-  </div>`;
+  const primary = participants[0];
+  if (!primary) {
+    return undefined;
+  }
+  return {
+    primaryIdentity: primary.identity,
+    primaryLabel: participantLabel(primary),
+    participants,
+    otherCount: Math.max(0, participantCount - 1),
+  };
 }

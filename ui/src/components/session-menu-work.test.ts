@@ -1,9 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ControlUiSessionPullRequest } from "../../../src/gateway/control-ui-contract.js";
+import { isLoopbackHostname } from "../lib/gateway-locality.ts";
 import {
-  fetchSessionMenuWork,
-  resolveSessionPullRequestIndicatorState,
-} from "./session-menu-work.ts";
+  clearNativeGatewayTestState,
+  setNativeGatewayTestState,
+} from "../test-helpers/native-gateways.ts";
+import { fetchSessionMenuWork } from "./session-menu-work.ts";
 
 function pullRequest(overrides: Partial<ControlUiSessionPullRequest>): ControlUiSessionPullRequest {
   return {
@@ -19,73 +21,61 @@ function pullRequest(overrides: Partial<ControlUiSessionPullRequest>): ControlUi
 }
 
 function sessionMenuClient(request: (method: string, params: unknown) => Promise<unknown>) {
-  return {
-    request: request as never,
-  };
+  return { request: request as never };
 }
 
-describe("session pull request indicators", () => {
+beforeEach(() => {
+  setNativeGatewayTestState("local");
+});
+
+afterEach(() => {
+  clearNativeGatewayTestState();
+  vi.restoreAllMocks();
+});
+
+describe("isLoopbackHostname", () => {
   it.each([
-    {
-      name: "prioritizes an active PR over merged history",
-      pullRequests: [
-        pullRequest({ number: 1, state: "merged" }),
-        pullRequest({ number: 2, state: "draft" }),
-      ],
-      expected: "open",
-    },
-    {
-      name: "shows merged history",
-      pullRequests: [pullRequest({ state: "merged" })],
-      expected: "merged",
-    },
-    {
-      name: "ignores closed history",
-      pullRequests: [pullRequest({ state: "closed" })],
-      expected: "none",
-    },
-  ] as const)("$name", ({ pullRequests, expected }) => {
-    expect(resolveSessionPullRequestIndicatorState(pullRequests)).toBe(expected);
+    ["127.0.0.5", true],
+    ["[::1]", true],
+    ["127.0.0.1.evil.com", false],
+  ])("classifies %s as loopback: %s", (hostname, expected) => {
+    expect(isLoopbackHostname(hostname)).toBe(expected);
   });
 });
 
 describe("fetchSessionMenuWork", () => {
-  it("resolves the PR URL and worktree path in one pass", async () => {
-    const request = vi.fn((_method: string) => {
-      return Promise.resolve({
-        worktrees: [
-          {
-            id: "wt-1",
-            path: "/work/trees/demo",
-            removedAt: undefined,
-          },
-          {
-            id: "wt-removed",
-            path: "/work/trees/stale",
-            removedAt: 123,
-          },
-        ],
-      });
-    });
+  it.each([
+    { name: "plain browser", nativeGateway: null, expectedPath: null },
+    { name: "native local gateway", nativeGateway: "local", expectedPath: "/work/trees/demo" },
+    { name: "native remote gateway", nativeGateway: "remote", expectedPath: null },
+    {
+      name: "remote execution node",
+      nativeGateway: "local",
+      execNode: "build-mac",
+      expectedPath: null,
+    },
+  ] as const)("exposes editor paths only for native-local files: $name", async (testCase) => {
+    setNativeGatewayTestState(testCase.nativeGateway);
+    const request = vi.fn(async () => ({
+      worktrees: [{ id: "wt-1", path: "/work/trees/demo" }],
+    }));
 
     await expect(
       fetchSessionMenuWork({
         client: sessionMenuClient(request),
-        pullRequestsAvailable: true,
-        sessionKey: "agent:main:demo",
-        agentId: "main",
         loadPullRequests: async () => ({
           pullRequests: [pullRequest({ url: "https://example.test/pr" })],
           rateLimited: false,
           status: "ready",
         }),
         worktreeId: "wt-1",
+        execNode: "execNode" in testCase ? testCase.execNode : undefined,
       }),
     ).resolves.toEqual({
       pullRequestUrl: "https://example.test/pr",
-      worktreePath: "/work/trees/demo",
+      worktreePath: testCase.expectedPath,
     });
-    expect(request).toHaveBeenCalledWith("worktrees.list", {});
+    expect(request).toHaveBeenCalledTimes(testCase.expectedPath ? 1 : 0);
   });
 
   it("returns nulls when the PR surface is absent, the worktree is removed, or requests fail", async () => {
@@ -93,8 +83,6 @@ describe("fetchSessionMenuWork", () => {
     await expect(
       fetchSessionMenuWork({
         client: sessionMenuClient(failing),
-        pullRequestsAvailable: true,
-        sessionKey: "agent:main:demo",
         loadPullRequests: async () => {
           throw new Error("offline");
         },
@@ -108,8 +96,6 @@ describe("fetchSessionMenuWork", () => {
     await expect(
       fetchSessionMenuWork({
         client: sessionMenuClient(request),
-        pullRequestsAvailable: false,
-        sessionKey: "agent:main:demo",
         worktreeId: "wt-1",
       }),
     ).resolves.toEqual({ pullRequestUrl: null, worktreePath: null });

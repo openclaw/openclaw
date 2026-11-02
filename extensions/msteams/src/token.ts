@@ -1,198 +1,113 @@
-// Msteams plugin module implements token behavior.
+import { createHash } from "node:crypto";
 import { isFutureDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { MSTeamsConfig } from "../runtime-api.js";
-import { loadMSTeamsDelegatedTokens, saveMSTeamsDelegatedTokens } from "./delegated-state.js";
-import type { MSTeamsDelegatedTokens } from "./oauth.shared.js";
-import { refreshMSTeamsDelegatedTokens } from "./oauth.token.js";
 import {
-  hasConfiguredSecretInput,
-  normalizeResolvedSecretInputString,
-  normalizeSecretInputString,
-} from "./secret-input.js";
+  createOAuthRefreshError,
+  isRecoverableOAuthRefreshFailure,
+} from "openclaw/plugin-sdk/provider-oauth-runtime";
+import {
+  claimMSTeamsDelegatedTokenRefresh,
+  loadMSTeamsDelegatedTokenState,
+  normalizeMSTeamsDelegatedTokens,
+} from "./delegated-state.js";
+import { refreshMSTeamsDelegatedTokens } from "./oauth.token.js";
+import { getMSTeamsRuntime } from "./runtime.js";
+import { resolveMSTeamsAccountStateNamespace } from "./sqlite-state.js";
 
-// ── Credential types ───────────────────────────────────────────────────────
-
-type MSTeamsSecretCredentials = {
-  type: "secret";
-  appId: string;
-  appPassword: string;
-  tenantId: string;
-};
-
-export type MSTeamsFederatedCredentials = {
-  type: "federated";
-  appId: string;
-  tenantId: string;
-  certificatePath?: string;
-  certificateThumbprint?: string;
-  useManagedIdentity?: boolean;
-  managedIdentityClientId?: string;
-};
-
-export type MSTeamsCredentials = MSTeamsSecretCredentials | MSTeamsFederatedCredentials;
-
-// ── Helpers ────────────────────────────────────────────────────────────────
-
-function resolveAuthType(cfg?: MSTeamsConfig): "secret" | "federated" {
-  const fromCfg = cfg?.authType;
-  if (fromCfg === "secret" || fromCfg === "federated") {
-    return fromCfg;
-  }
-
-  const fromEnv = process.env.MSTEAMS_AUTH_TYPE;
-  if (fromEnv === "federated") {
-    return "federated";
-  }
-
-  return "secret";
-}
-
-function resolveFederatedPath(configValue?: string, envValue?: string): string | undefined {
-  // Reject blank settings without trimming a real path: surrounding whitespace
-  // can be part of the certificate filename on the filesystem.
-  if (normalizeOptionalString(configValue)) {
-    return configValue;
-  }
-  if (normalizeOptionalString(envValue)) {
-    return envValue;
-  }
-  return undefined;
-}
-
-// ── hasConfiguredMSTeamsCredentials ────────────────────────────────────────
-
-export function hasConfiguredMSTeamsCredentials(cfg?: MSTeamsConfig): boolean {
-  const authType = resolveAuthType(cfg);
-
-  const hasAppId = Boolean(
-    normalizeSecretInputString(cfg?.appId) ||
-    normalizeSecretInputString(process.env.MSTEAMS_APP_ID),
-  );
-  const hasTenantId = Boolean(
-    normalizeSecretInputString(cfg?.tenantId) ||
-    normalizeSecretInputString(process.env.MSTEAMS_TENANT_ID),
-  );
-
-  if (authType === "federated") {
-    const hasCert = Boolean(
-      resolveFederatedPath(cfg?.certificatePath, process.env.MSTEAMS_CERTIFICATE_PATH),
-    );
-    const hasManagedIdentity =
-      cfg?.useManagedIdentity ?? process.env.MSTEAMS_USE_MANAGED_IDENTITY === "true";
-
-    return hasAppId && hasTenantId && (hasCert || hasManagedIdentity);
-  }
-
-  // "secret" (default) — original logic
-  return Boolean(
-    normalizeSecretInputString(cfg?.appId) &&
-    hasConfiguredSecretInput(cfg?.appPassword) &&
-    normalizeSecretInputString(cfg?.tenantId),
-  );
-}
-
-// ── resolveMSTeamsCredentials ─────────────────────────────────────────────
-
-export function resolveMSTeamsCredentials(cfg?: MSTeamsConfig): MSTeamsCredentials | undefined {
-  const authType = resolveAuthType(cfg);
-
-  const appId =
-    normalizeSecretInputString(cfg?.appId) ||
-    normalizeSecretInputString(process.env.MSTEAMS_APP_ID);
-
-  const tenantId =
-    normalizeSecretInputString(cfg?.tenantId) ||
-    normalizeSecretInputString(process.env.MSTEAMS_TENANT_ID);
-
-  if (!appId || !tenantId) {
-    return undefined;
-  }
-
-  if (authType === "federated") {
-    const certificatePath = resolveFederatedPath(
-      cfg?.certificatePath,
-      process.env.MSTEAMS_CERTIFICATE_PATH,
-    );
-
-    const certificateThumbprint =
-      cfg?.certificateThumbprint || process.env.MSTEAMS_CERTIFICATE_THUMBPRINT || undefined;
-
-    const useManagedIdentity =
-      cfg?.useManagedIdentity ?? process.env.MSTEAMS_USE_MANAGED_IDENTITY === "true";
-
-    const managedIdentityClientId =
-      cfg?.managedIdentityClientId || process.env.MSTEAMS_MANAGED_IDENTITY_CLIENT_ID || undefined;
-
-    // At least one federated mechanism must be configured.
-    if (!certificatePath && !useManagedIdentity) {
-      return undefined;
-    }
-
-    return {
-      type: "federated",
-      appId,
-      tenantId,
-      certificatePath,
-      certificateThumbprint,
-      useManagedIdentity: useManagedIdentity || undefined,
-      managedIdentityClientId,
-    };
-  }
-
-  // "secret" (default) — original logic
-  const appPassword =
-    normalizeResolvedSecretInputString({
-      value: cfg?.appPassword,
-      path: "channels.msteams.appPassword",
-    }) || normalizeSecretInputString(process.env.MSTEAMS_APP_PASSWORD);
-
-  if (!appPassword) {
-    return undefined;
-  }
-
-  return { type: "secret", appId, appPassword, tenantId };
-}
-
-// ---------------------------------------------------------------------------
-// Delegated token storage / resolution
-// ---------------------------------------------------------------------------
-
-export function loadDelegatedTokens(): MSTeamsDelegatedTokens | undefined {
-  return loadMSTeamsDelegatedTokens();
-}
-
-export function saveDelegatedTokens(tokens: MSTeamsDelegatedTokens): void {
-  saveMSTeamsDelegatedTokens(tokens);
-}
+const refreshes = new WeakMap<object, Map<string, Promise<string | undefined>>>();
 
 export async function resolveDelegatedAccessToken(params: {
   tenantId: string;
   clientId: string;
   clientSecret: string;
+  accountId?: string | null;
 }): Promise<string | undefined> {
-  const tokens = loadDelegatedTokens();
-  if (!tokens) {
-    return undefined;
+  const runtime = getMSTeamsRuntime();
+  const callerKey = createHash("sha256")
+    .update(
+      JSON.stringify([
+        runtime.state.resolveStateDir(),
+        resolveMSTeamsAccountStateNamespace("delegated-token", params.accountId),
+        params.tenantId,
+        params.clientId,
+        params.clientSecret,
+      ]),
+    )
+    .digest("hex");
+  const state = await loadMSTeamsDelegatedTokenState(params.accountId);
+  const tokens = normalizeMSTeamsDelegatedTokens(state);
+  const active = refreshes.get(runtime) ?? new Map<string, Promise<string | undefined>>();
+  refreshes.set(runtime, active);
+  if (state && "refreshClaim" in state && state.callerKey === callerKey) {
+    const pending = active.get(state.requestKey);
+    if (pending) {
+      return await pending;
+    }
   }
-
-  // Token still valid (5-min buffer already baked into expiresAt)
+  if (!tokens) {
+    // A stranded claim stays fenced; only this caller's exact live owner can be joined.
+    return state && "refreshClaim" in state && state.callerKey === callerKey
+      ? await active.get(state.requestKey)
+      : undefined;
+  }
   if (isFutureDateTimestampMs(tokens.expiresAt)) {
     return tokens.accessToken;
   }
-
-  // Attempt refresh
+  const key = createHash("sha256")
+    .update(JSON.stringify([callerKey, tokens]))
+    .digest("hex");
+  const pending = active.get(key);
+  if (pending) {
+    return await pending;
+  }
+  const task = (async () => {
+    try {
+      const claim = await claimMSTeamsDelegatedTokenRefresh(
+        tokens,
+        key,
+        callerKey,
+        params.accountId,
+      );
+      if (!claim) {
+        return undefined;
+      }
+      let refreshed;
+      try {
+        if (getMSTeamsRuntime() !== runtime) {
+          throw createOAuthRefreshError(
+            "Microsoft Teams token owner changed before refresh dispatch",
+            {
+              version: 1,
+              phase: "before-dispatch",
+              outcome: "not-attempted",
+              recovery: { kind: "later", evidence: "dispatch-not-started" },
+            },
+          );
+        }
+        refreshed = await refreshMSTeamsDelegatedTokens({
+          ...params,
+          refreshToken: tokens.refreshToken,
+          scopes: tokens.scopes,
+        });
+      } catch (error) {
+        if (isRecoverableOAuthRefreshFailure(error)) {
+          await claim.settle(tokens);
+        } else {
+          await claim.reject();
+        }
+        return undefined;
+      }
+      // A failed publication returns no access; the retained Microsoft grant remains safely reusable.
+      return (await claim.settle({ ...tokens, ...refreshed })) ? refreshed.accessToken : undefined;
+    } catch {
+      return undefined;
+    }
+  })();
+  active.set(key, task);
   try {
-    const refreshed = await refreshMSTeamsDelegatedTokens({
-      tenantId: params.tenantId,
-      clientId: params.clientId,
-      clientSecret: params.clientSecret,
-      refreshToken: tokens.refreshToken,
-      scopes: tokens.scopes,
-    });
-    saveDelegatedTokens(refreshed);
-    return refreshed.accessToken;
-  } catch {
-    return undefined;
+    return await task;
+  } finally {
+    if (active.get(key) === task) {
+      active.delete(key);
+    }
   }
 }

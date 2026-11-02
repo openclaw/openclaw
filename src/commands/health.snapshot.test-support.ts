@@ -1,21 +1,44 @@
-import type { collectGatewayHealthSnapshot } from "../gateway/health/collector.js";
-import type { HealthSummary } from "../gateway/health/types.js";
+import { vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
+import { createSessionStoreSummaryReaderStub } from "../config/sessions/session-store-summary.test-support.js";
 
-export type LegacyHealthSnapshotParams = Partial<
-  Omit<Parameters<typeof collectGatewayHealthSnapshot>[0], "audience">
-> & {
-  includeSensitive?: boolean;
-};
+export type HealthTestPlugin = Pick<
+  ChannelPlugin,
+  "id" | "meta" | "capabilities" | "config" | "status"
+>;
 
-export function createLegacyHealthSnapshotCollector(
-  collectSnapshot: typeof collectGatewayHealthSnapshot,
-) {
-  return (params: LegacyHealthSnapshotParams = {}): Promise<HealthSummary> => {
-    const { includeSensitive, probe, ...rest } = params;
-    return collectSnapshot({
-      ...rest,
-      audience: includeSensitive === false ? "public" : "admin",
-      probe: probe !== false,
-    });
+export async function loadFreshHealthModulesForTest(params: {
+  getConfig: () => Record<string, unknown>;
+  getSessionStorePath: () => string;
+  getPlugins: () => HealthTestPlugin[];
+}) {
+  vi.doMock("../config/config.js", () => ({
+    getRuntimeConfig: params.getConfig,
+    loadConfig: params.getConfig,
+  }));
+  vi.doMock("../config/sessions/paths.js", () => ({
+    resolveSessionStorePathCore: params.getSessionStorePath,
+  }));
+  vi.doMock("../config/sessions/session-entry-read-runtime.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../config/sessions/session-entry-read-runtime.js")>()),
+    withSessionStoreReaderInWorker: createSessionStoreSummaryReaderStub(),
+  }));
+  vi.doMock("../channels/plugins/read-only.js", () => ({
+    listReadOnlyChannelPluginsForConfig: params.getPlugins,
+  }));
+
+  const [pluginsRuntime, pluginDegradedState, channelTestUtils, health] = await Promise.all([
+    import("../plugins/runtime.js"),
+    import("../plugins/runtime-degraded-state.js"),
+    import("../test-utils/channel-plugins.js"),
+    import("../gateway/health/collector.js"),
+  ]);
+  return {
+    setActivePluginRegistry: pluginsRuntime.setActivePluginRegistry,
+    setActiveDegradedPlugins: pluginDegradedState.setActiveDegradedPlugins,
+    createChannelTestPluginBase: channelTestUtils.createChannelTestPluginBase,
+    createTestRegistry: channelTestUtils.createTestRegistry,
+    collectGatewayHealthSnapshot: health.collectGatewayHealthSnapshot,
   };
 }

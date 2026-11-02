@@ -1,5 +1,5 @@
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
-// Line plugin module implements setup core behavior.
 import type {
   ChannelSetupAdapter,
   ChannelSetupInput,
@@ -9,13 +9,8 @@ import {
   createSetupInputPresenceValidator,
   patchScopedAccountConfig,
 } from "openclaw/plugin-sdk/setup";
-import { hasLineCredentials, parseLineAllowFromId } from "./account-helpers.js";
-import {
-  DEFAULT_ACCOUNT_ID,
-  listLineAccountIds,
-  normalizeAccountId,
-  resolveLineAccount,
-} from "./setup-runtime-api.js";
+import { hasLineCredentials } from "./account-helpers.js";
+import { resolveLineAccount } from "./accounts.js";
 
 type LineSetupInput = ChannelSetupInput & {
   channelAccessToken?: string;
@@ -49,9 +44,11 @@ export function isLineConfigured(cfg: OpenClawConfig, accountId: string): boolea
   return hasLineCredentials(resolveLineAccount({ cfg, accountId }));
 }
 
-export { parseLineAllowFromId };
+const accountCredentialKeys = ["channelAccessToken", "channelSecret", "tokenFile", "secretFile"];
 
 export const lineSetupAdapter: ChannelSetupAdapter = {
+  singleAccountKeysToMove: accountCredentialKeys,
+  namedAccountPromotionKeys: accountCredentialKeys,
   resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
   applyAccountName: ({ cfg, accountId, name }) =>
     patchLineAccountConfig({
@@ -79,27 +76,45 @@ export const lineSetupAdapter: ChannelSetupAdapter = {
     const accessToken = typedInput.channelAccessToken ?? typedInput.token;
     const normalizedAccountId = normalizeAccountId(accountId);
     const useEnv = normalizedAccountId === DEFAULT_ACCOUNT_ID && Boolean(typedInput.useEnv);
+    // A credential resolves from the inline value first and only then from its
+    // file, so writing one form has to retire the other. Leaving both behind
+    // makes a rotation onto a file a silent no-op: the stale inline value keeps
+    // winning and setup still reports success.
+    const credentials = [
+      {
+        fileKey: "tokenFile",
+        file: typedInput.tokenFile,
+        inlineKey: "channelAccessToken",
+        inline: accessToken,
+      },
+      {
+        fileKey: "secretFile",
+        file: typedInput.secretFile,
+        inlineKey: "channelSecret",
+        inline: typedInput.channelSecret,
+      },
+    ] as const;
+    const patch: Record<string, string> = {};
+    const retired: string[] = [];
+    for (const credential of credentials) {
+      if (credential.file) {
+        patch[credential.fileKey] = credential.file;
+        retired.push(credential.inlineKey);
+      } else if (credential.inline) {
+        patch[credential.inlineKey] = credential.inline;
+        retired.push(credential.fileKey);
+      }
+    }
     return patchLineAccountConfig({
       cfg,
       accountId: normalizedAccountId,
       enabled: true,
       clearFields: useEnv
         ? ["channelAccessToken", "channelSecret", "tokenFile", "secretFile"]
-        : undefined,
-      patch: useEnv
-        ? {}
-        : {
-            ...(typedInput.tokenFile
-              ? { tokenFile: typedInput.tokenFile }
-              : accessToken
-                ? { channelAccessToken: accessToken }
-                : {}),
-            ...(typedInput.secretFile
-              ? { secretFile: typedInput.secretFile }
-              : typedInput.channelSecret
-                ? { channelSecret: typedInput.channelSecret }
-                : {}),
-          },
+        : retired.length > 0
+          ? retired
+          : undefined,
+      patch: useEnv ? {} : patch,
     });
   },
 };
@@ -141,5 +156,3 @@ export const lineSetupContract = defineChannelSetupContract({
   },
   legacyAdapter: lineSetupAdapter,
 });
-
-export { listLineAccountIds };

@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import { configForProviders } from "../agents/model-auth.fixtures.test-support.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { discoverOpenAICompatibleLocalModels } from "./provider-self-hosted-discovery.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
@@ -19,7 +22,163 @@ function guarded(response: Response) {
   };
 }
 
+const rawDiscovery = {
+  baseUrl: "http://127.0.0.1:8080/v1",
+  label: "llama-server",
+  rawResult: true,
+} as const;
+const routerDiscovery = {
+  ...rawDiscovery,
+  healthPath: "/health",
+  modelsPathOrder: "server-first",
+  routerModelProps: true,
+} as const;
+
+function mockRouterModels(
+  count: number,
+  props: (url: string) => Promise<Record<string, unknown>> = async () => ({ n_ctx: 8192 }),
+) {
+  const models = Array.from({ length: count }, (_, index) => ({
+    id: `model-${index}`,
+    status: { value: "loaded" },
+  }));
+  fetchWithSsrFGuardMock.mockImplementation(async ({ url }: { url: string }) => {
+    if (url.endsWith("/health")) {
+      return guarded(new Response(null, { status: 200 }));
+    }
+    return guarded(Response.json(url.endsWith("/models") ? { data: models } : await props(url)));
+  });
+  return models;
+}
+
+async function discoverModelContexts(
+  data: Record<string, unknown>[],
+  contextWindow?: number,
+): Promise<Record<string, number | undefined>> {
+  fetchWithSsrFGuardMock.mockResolvedValueOnce(
+    guarded(new Response(JSON.stringify({ data }), { status: 200 })),
+  );
+  const models = await discoverOpenAICompatibleLocalModels({
+    baseUrl: "http://127.0.0.1:8080/v1",
+    label: "self-hosted",
+    contextWindow,
+    discoverRuntimeContext: false,
+    env: {},
+  });
+  return Object.fromEntries(models.map((model) => [model.id, model.contextWindow]));
+}
+
 describe("discoverOpenAICompatibleLocalModels raw discovery", () => {
+  it("resolves only the configured provider's request secrets and preserves its transport policy", async () => {
+    const config = configForProviders({
+      litellm: {
+        baseUrl: "https://192.168.1.2/v1",
+        headers: {
+          "X-Tenant": { source: "env", provider: "default", id: "PROXY_TENANT" },
+        },
+        request: {
+          allowPrivateNetwork: false,
+          headers: { "X-Request": "discovery" },
+          proxy: {
+            mode: "explicit-proxy",
+            url: "https://proxy.example:8443",
+            tls: { ca: { source: "env", provider: "default", id: "PROXY_CA" } },
+          },
+        },
+        models: [],
+      },
+      unrelated: {
+        baseUrl: "https://other.example/v1",
+        headers: {
+          "X-Unavailable": { source: "env", provider: "default", id: "MISSING_OTHER_KEY" },
+        },
+        models: [],
+      },
+    }) satisfies OpenClawConfig;
+    const source = structuredClone(config);
+    fetchWithSsrFGuardMock.mockResolvedValueOnce(
+      guarded(Response.json({ data: [{ id: "local-qwen" }] })),
+    );
+
+    const result = await discoverOpenAICompatibleLocalModels({
+      baseUrl: "https://192.168.1.2/v1",
+      apiKey: "fixture-key",
+      configuredProvider: { config, id: "litellm" },
+      env: { PROXY_TENANT: "fixture-tenant", PROXY_CA: "fixture-proxy-ca" },
+      label: "LiteLLM",
+      rawResult: true,
+      discoverRuntimeContext: false,
+    });
+
+    expect(result).toMatchObject({ kind: "success", rows: [{ model: { id: "local-qwen" } }] });
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        url: "https://192.168.1.2/v1/models",
+        init: {
+          headers: {
+            Authorization: "Bearer fixture-key",
+            "X-Tenant": "fixture-tenant",
+            "X-Request": "discovery",
+          },
+        },
+        policy: undefined,
+        dispatcherPolicy: {
+          mode: "explicit-proxy",
+          proxyUrl: "https://proxy.example:8443",
+          proxyTls: { ca: "fixture-proxy-ca" },
+        },
+      }),
+    );
+    expect(config).toEqual(source);
+  });
+
+  it("retains discovered total parameter counts and display names", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValueOnce(
+      guarded(
+        Response.json({
+          data: [
+            { id: "compact-chat", name: "Compact Chat", parameterCount: 4_000_000_000 },
+            { id: "alias", name: "Qwen3 4B" },
+            { id: "invalid", parameterCount: 0 },
+          ],
+        }),
+      ),
+    );
+    const models = await discoverOpenAICompatibleLocalModels({
+      baseUrl: "http://127.0.0.1:8080/v1",
+      label: "self-hosted",
+      discoverRuntimeContext: false,
+      env: {},
+    });
+    expect(models.map(({ id, name, parameterCount }) => ({ id, name, parameterCount }))).toEqual([
+      { id: "compact-chat", name: "Compact Chat", parameterCount: 4_000_000_000 },
+      { id: "alias", name: "Qwen3 4B", parameterCount: undefined },
+      { id: "invalid", name: "invalid", parameterCount: undefined },
+    ]);
+  });
+
+  it("recognizes reasoning aliases without enabling legacy chat models", async () => {
+    const expected = [
+      { id: "yk_nemotron-3-super", reasoning: true },
+      { id: "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16", reasoning: true },
+      { id: "nvidia/nemotron-3-8b-chat-4k-sft", reasoning: false },
+      { id: "yk_deepseek_v4", reasoning: true },
+      { id: "DeepSeek-V4-Flash", reasoning: true },
+      { id: "deepseek-chat", reasoning: false },
+      { id: "plain-chat", reasoning: false },
+    ];
+    fetchWithSsrFGuardMock.mockResolvedValueOnce(
+      guarded(new Response(JSON.stringify({ data: expected.map(({ id }) => ({ id })) }))),
+    );
+    const models = await discoverOpenAICompatibleLocalModels({
+      baseUrl: "http://127.0.0.1:8080/v1",
+      label: "vLLM",
+      discoverRuntimeContext: false,
+      env: {},
+    });
+    expect(models.map(({ id, reasoning }) => ({ id, reasoning }))).toEqual(expected);
+  });
+
   it("preserves health and falls back from root /models to /v1/models", async () => {
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce(guarded(new Response(null, { status: 503 })))
@@ -35,13 +194,8 @@ describe("discoverOpenAICompatibleLocalModels raw discovery", () => {
 
     await expect(
       discoverOpenAICompatibleLocalModels({
-        baseUrl: "http://127.0.0.1:8080/v1",
+        ...routerDiscovery,
         serverBaseUrl: "http://127.0.0.1:8080",
-        label: "llama-server",
-        healthPath: "/health",
-        modelsPathOrder: "server-first",
-        routerModelProps: true,
-        rawResult: true,
       }),
     ).resolves.toMatchObject({
       kind: "success",
@@ -60,35 +214,42 @@ describe("discoverOpenAICompatibleLocalModels raw discovery", () => {
     fetchWithSsrFGuardMock.mockRejectedValueOnce(new Error("connection refused"));
     await expect(
       discoverOpenAICompatibleLocalModels({
-        baseUrl: "http://127.0.0.1:8080/v1",
-        label: "llama-server",
+        ...rawDiscovery,
         healthPath: "/health",
-        rawResult: true,
       }),
     ).resolves.toMatchObject({ kind: "unreachable" });
 
     fetchWithSsrFGuardMock.mockResolvedValueOnce(guarded(new Response(null, { status: 401 })));
     await expect(
       discoverOpenAICompatibleLocalModels({
-        baseUrl: "http://127.0.0.1:8080/v1",
-        label: "llama-server",
+        ...rawDiscovery,
         healthPath: "/health",
-        rawResult: true,
       }),
     ).resolves.toEqual({ kind: "http-error", path: "/health", status: 401 });
 
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce(guarded(new Response(null, { status: 200 })))
+      .mockResolvedValueOnce(guarded(new Response("<html></html>", { status: 200 })))
       .mockResolvedValueOnce(guarded(new Response("{", { status: 200 })));
     await expect(
       discoverOpenAICompatibleLocalModels({
-        baseUrl: "http://127.0.0.1:8080/v1",
-        label: "llama-server",
+        ...rawDiscovery,
         healthPath: "/health",
         modelsPathOrder: "server-first",
-        rawResult: true,
       }),
-    ).resolves.toMatchObject({ kind: "invalid-response", path: "/models" });
+    ).resolves.toMatchObject({ kind: "invalid-response", path: "/v1/models" });
+  });
+
+  it.each([401, 503])("keeps root model-list HTTP %s failures terminal", async (status) => {
+    fetchWithSsrFGuardMock.mockResolvedValueOnce(guarded(new Response(null, { status })));
+
+    await expect(
+      discoverOpenAICompatibleLocalModels({
+        ...rawDiscovery,
+        modelsPathOrder: "server-first",
+      }),
+    ).resolves.toEqual({ kind: "http-error", path: "/models", status });
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
   });
 
   it("probes only available router models without autoloading", async () => {
@@ -108,14 +269,7 @@ describe("discoverOpenAICompatibleLocalModels raw discovery", () => {
       )
       .mockResolvedValueOnce(guarded(new Response(JSON.stringify({ n_ctx: 16_384 }))));
 
-    const result = await discoverOpenAICompatibleLocalModels({
-      baseUrl: "http://127.0.0.1:8080/v1",
-      label: "llama-server",
-      healthPath: "/health",
-      modelsPathOrder: "server-first",
-      routerModelProps: true,
-      rawResult: true,
-    });
+    const result = await discoverOpenAICompatibleLocalModels(routerDiscovery);
 
     expect(result).toMatchObject({
       kind: "success",
@@ -131,103 +285,114 @@ describe("discoverOpenAICompatibleLocalModels raw discovery", () => {
     ]);
   });
 
-  it("stops scheduling router property probes after the shared deadline", async () => {
-    const models = Array.from({ length: 17 }, (_, index) => ({
-      id: `model-${index}`,
-      status: { value: "loaded" },
-    }));
-    fetchWithSsrFGuardMock.mockImplementation(async ({ url }: { url: string }) => {
-      if (url.endsWith("/health")) {
-        return guarded(new Response(null, { status: 200 }));
-      }
-      if (url.endsWith("/models")) {
-        return guarded(new Response(JSON.stringify({ data: models })));
-      }
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 20);
+  it.each([
+    { clock: "monotonic", timeoutMs: 10, advanceMs: 20, expectedProbes: 8 },
+    { clock: "wall", timeoutMs: 1_000, advanceMs: 60_000, expectedProbes: 17 },
+  ] as const)(
+    "schedules $expectedProbes router probes after a $clock clock step",
+    async ({ clock, timeoutMs, advanceMs, expectedProbes }) => {
+      const started = createDeferred();
+      const release = createDeferred();
+      const readClock = clock === "monotonic" ? () => 0 : Date.now;
+      let offset = 0;
+      const now = vi
+        .spyOn(clock === "monotonic" ? performance : Date, "now")
+        .mockImplementation(() => readClock() + offset);
+      let active = 0;
+      mockRouterModels(17, async () => {
+        if (++active === 8) {
+          started.resolve();
+        }
+        await release.promise;
+        return { n_ctx: 8192 };
       });
-      return guarded(new Response(JSON.stringify({ n_ctx: 8192 })));
-    });
+      const resultPromise = discoverOpenAICompatibleLocalModels({ ...routerDiscovery, timeoutMs });
 
-    const result = await discoverOpenAICompatibleLocalModels({
-      baseUrl: "http://127.0.0.1:8080/v1",
-      label: "llama-server",
-      healthPath: "/health",
-      modelsPathOrder: "server-first",
-      routerModelProps: true,
-      timeoutMs: 10,
-      rawResult: true,
-    });
+      try {
+        await withTestTimeout(
+          started.promise,
+          1_000,
+          "initial eight property probes did not start",
+        );
+        // Advance only after the first wave: elapsed time stops work; wall-clock changes do not.
+        offset = advanceMs;
+        release.resolve();
+        const result = await withTestTimeout(resultPromise, 1_000, "discovery did not finish");
 
-    expect(result.kind === "success" ? result.rows : []).toHaveLength(17);
-    expect(
-      fetchWithSsrFGuardMock.mock.calls.filter(([call]) => call.url.includes("/props?")).length,
-    ).toBe(8);
-  });
+        expect(result.kind === "success" ? result.rows : []).toHaveLength(17);
+        expect(
+          fetchWithSsrFGuardMock.mock.calls.filter(([call]) => call.url.includes("/props?")).length,
+        ).toBe(expectedProbes);
+      } finally {
+        release.resolve();
+        now.mockRestore();
+        await withTestTimeout(
+          resultPromise,
+          1_000,
+          "property probes did not settle during cleanup",
+        );
+      }
+    },
+  );
 
   it("bounds concurrent property probes and keeps results associated by model", async () => {
-    const models = Array.from({ length: 10 }, (_, index) => ({
-      id: `model-${index}`,
-      status: { value: "loaded" },
-    }));
+    const started = Array.from({ length: 10 }, () => createDeferred());
+    const releases = started.map(() => createDeferred());
     let active = 0;
     let maxActive = 0;
-    fetchWithSsrFGuardMock.mockImplementation(async ({ url }: { url: string }) => {
-      if (url.endsWith("/health")) {
-        return guarded(new Response(null, { status: 200 }));
-      }
-      if (url.endsWith("/models")) {
-        return guarded(new Response(JSON.stringify({ data: models })));
-      }
+    const models = mockRouterModels(10, async (url) => {
       const modelId = new URL(url).searchParams.get("model");
       const index = Number(modelId?.replace("model-", ""));
       active += 1;
       maxActive = Math.max(maxActive, active);
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 10 - index);
-      });
+      started[index]!.resolve();
+      await releases[index]!.promise;
       active -= 1;
-      return guarded(new Response(JSON.stringify({ n_ctx: 8_000 + index })));
+      return { n_ctx: 8_000 + index };
     });
 
-    const result = await discoverOpenAICompatibleLocalModels({
-      baseUrl: "http://127.0.0.1:8080/v1",
-      label: "llama-server",
-      healthPath: "/health",
-      modelsPathOrder: "server-first",
-      routerModelProps: true,
-      rawResult: true,
-    });
+    const resultPromise = discoverOpenAICompatibleLocalModels(routerDiscovery);
 
-    expect(maxActive).toBe(8);
-    expect(result.kind === "success" ? result.rows.map((row) => row.props?.n_ctx) : []).toEqual(
-      models.map((_, index) => 8_000 + index),
-    );
+    try {
+      await withTestTimeout(
+        started[7]!.promise,
+        1_000,
+        "initial eight property probes did not start",
+      );
+      // Finish later models first so completion order cannot stand in for model identity.
+      releases[7]!.resolve();
+      await withTestTimeout(
+        started[8]!.promise,
+        1_000,
+        "model-8 probe did not start after model-7",
+      );
+      releases[6]!.resolve();
+      await withTestTimeout(
+        started[9]!.promise,
+        1_000,
+        "model-9 probe did not start after model-6",
+      );
+      for (const release of releases.toReversed()) {
+        release.resolve();
+      }
+      const result = await withTestTimeout(resultPromise, 1_000, "discovery did not finish");
+
+      expect(maxActive).toBe(8);
+      expect(result.kind === "success" ? result.rows.map((row) => row.props?.n_ctx) : []).toEqual(
+        models.map((_, index) => 8_000 + index),
+      );
+    } finally {
+      for (const release of releases) {
+        release.resolve();
+      }
+      await withTestTimeout(resultPromise, 1_000, "property probes did not settle during cleanup");
+    }
   });
 
   it("caps property probes at 200 models", async () => {
-    const models = Array.from({ length: 201 }, (_, index) => ({
-      id: `model-${index}`,
-      status: { value: "loaded" },
-    }));
-    fetchWithSsrFGuardMock.mockImplementation(async ({ url }: { url: string }) => {
-      if (url.endsWith("/health")) {
-        return guarded(new Response(null, { status: 200 }));
-      }
-      if (url.endsWith("/models")) {
-        return guarded(new Response(JSON.stringify({ data: models })));
-      }
-      return guarded(new Response(JSON.stringify({ n_ctx: 8192 })));
-    });
+    mockRouterModels(201);
 
-    const result = await discoverOpenAICompatibleLocalModels({
-      baseUrl: "http://127.0.0.1:8080/v1",
-      label: "llama-server",
-      healthPath: "/health",
-      modelsPathOrder: "server-first",
-      routerModelProps: true,
-      rawResult: true,
-    });
+    const result = await discoverOpenAICompatibleLocalModels(routerDiscovery);
 
     expect(result.kind === "success" ? result.rows : []).toHaveLength(201);
     expect(
@@ -241,13 +406,11 @@ describe("discoverOpenAICompatibleLocalModels raw discovery", () => {
       .mockResolvedValueOnce(guarded(new Response(JSON.stringify({ data: [] }))));
 
     await discoverOpenAICompatibleLocalModels({
-      baseUrl: "http://127.0.0.1:8080/v1",
+      ...rawDiscovery,
       apiKey: "ambient-key",
       headers: { Authorization: "Bearer explicit-key" },
-      label: "llama-server",
       healthPath: "/health",
       modelsPathOrder: "server-first",
-      rawResult: true,
     });
 
     for (const [call] of fetchWithSsrFGuardMock.mock.calls) {
@@ -256,5 +419,89 @@ describe("discoverOpenAICompatibleLocalModels raw discovery", () => {
         Authorization: "Bearer explicit-key",
       });
     }
+  });
+});
+
+describe("discoverOpenAICompatibleLocalModels context metadata", () => {
+  it("uses explicit, metadata, own, parent, then default context precedence", async () => {
+    await expect(
+      discoverModelContexts([
+        { id: "context-length", context_length: 4_096 },
+        { id: "context-window", context_window: 8_192 },
+        { id: "context-size", context_size: 12_288 },
+        { id: "invalid-first", context_length: "invalid", context_window: 8_192 },
+        { id: "floored-zero-first", context_length: 0.5, context_window: 8_192 },
+        { id: " Base/Model ", max_model_len: 32_768 },
+        {
+          id: "metadata",
+          meta: { n_ctx_train: 24_576 },
+          max_model_len: 16_384,
+          parent: "Base/Model",
+        },
+        { id: "own", max_model_len: 16_384, parent: "Base/Model" },
+        { id: "child", parent: " Base/Model " },
+        { id: "default" },
+      ]),
+    ).resolves.toEqual({
+      "context-length": 4_096,
+      "context-window": 8_192,
+      "context-size": 12_288,
+      "invalid-first": 8_192,
+      "floored-zero-first": 0,
+      "Base/Model": 32_768,
+      metadata: 24_576,
+      own: 16_384,
+      child: 32_768,
+      default: 128_000,
+    });
+
+    await expect(
+      discoverModelContexts(
+        [
+          { id: "base", max_model_len: 32_768 },
+          {
+            id: "configured",
+            meta: { n_ctx_train: 24_576 },
+            max_model_len: 16_384,
+            parent: "base",
+          },
+        ],
+        2_048,
+      ),
+    ).resolves.toEqual({ base: 2_048, configured: 2_048 });
+  });
+
+  it("inherits only one exact direct parent top-level context", async () => {
+    await expect(
+      discoverModelContexts([
+        { id: "Parent", max_model_len: 8_192 },
+        { id: "case-mismatch", parent: "parent" },
+        { id: "self", parent: "self" },
+        { id: "cycle-a", parent: "cycle-b" },
+        { id: "cycle-b", parent: "cycle-a" },
+        { id: "grandparent", max_model_len: 4_096 },
+        { id: "middle", parent: "grandparent" },
+        { id: "child", parent: "middle" },
+        { id: "root-only", root: "Parent" },
+        { id: "metadata-parent", meta: { n_ctx_train: 6_144 } },
+        { id: "metadata-child", parent: "metadata-parent" },
+        { id: "invalid-parent", max_model_len: 0 },
+        { id: "invalid-child", parent: "invalid-parent" },
+      ]),
+    ).resolves.toEqual({
+      Parent: 8_192,
+      "case-mismatch": 128_000,
+      self: 128_000,
+      "cycle-a": 128_000,
+      "cycle-b": 128_000,
+      grandparent: 4_096,
+      middle: 4_096,
+      child: 128_000,
+      "root-only": 128_000,
+      "metadata-parent": 6_144,
+      "metadata-child": 128_000,
+      "invalid-parent": 128_000,
+      "invalid-child": 128_000,
+    });
   });
 });

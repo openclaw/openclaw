@@ -40,10 +40,6 @@
     "target": "LINE"
   },
   {
-    "source": "Mintlify",
-    "target": "Mintlify"
-  },
-  {
     "source": "Node",
     "target": "Node"
   },
@@ -54,6 +50,10 @@
   {
     "source": "Pi",
     "target": "Pi"
+  },
+  {
+    "source": "Plugin",
+    "target": "Plugin"
   },
   {
     "source": "Skills",

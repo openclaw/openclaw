@@ -1,6 +1,6 @@
 {
   "id": "copilot-proxy",
-  "icon": "https://cdn.simpleicons.org/githubcopilot",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },

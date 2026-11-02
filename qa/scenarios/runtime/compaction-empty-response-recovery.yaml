@@ -8,8 +8,8 @@ scenario:
       - session-memory.compaction-empty-response-recovery
   objective: Verify an empty overflow-compaction summary is rejected, retried by the compaction owner, and persisted only after a non-empty summary is returned.
   successCriteria:
-    - The OpenClaw compaction owner issues exactly two ordered summary requests.
-    - The first summary response is the typed empty-output fault and the second returns a durable non-empty summary.
+    - Two ordered history summary attempts are followed by one split-turn prefix summary.
+    - The first history response is the typed empty-output fault; its retry and the prefix summary succeed before persistence.
     - Every provider request stays on one model with explicit default-mode compaction; no model fallback or safeguard retry owns recovery.
     - Exactly one compaction and one final visible answer are persisted without generic incomplete-turn recovery.
   gatewayConfigPatch:
@@ -32,7 +32,7 @@ scenario:
       faultMarkerPrefix: QA-COMPACTION-EMPTY-OUTPUT-ONCE
       summaryMarker: QA-COMPACTION-EMPTY-RECOVERED-SUMMARY
       finalMarker: QA-COMPACTION-EMPTY-FINAL-OK
-      emptyRetryNeedle: The previous attempt did not produce a user-visible answer.
+      emptyRetryNeedle: Continue from the current state
       reasoningRetryNeedle: The previous assistant turn recorded reasoning but did not produce a user-visible answer.
 
 flow:
@@ -113,11 +113,11 @@ flow:
             message:
               expr: "`expected one overflow and one compacted final request: ${JSON.stringify(scenarioRequests.map((request) => ({ cursor: request.cursor, kind: request.requestKind, outcome: request.outcome, code: request.errorCode ?? null })))}`"
         - assert:
-            expr: "compactionSummaryRequests.length === 2 && compactionSummaryRequests[0].cursor < compactionSummaryRequests[1].cursor"
+            expr: "compactionSummaryRequests.length === 3 && compactionSummaryRequests[0].cursor < compactionSummaryRequests[1].cursor && compactionSummaryRequests[1].cursor < compactionSummaryRequests[2].cursor && compactionSummaryRequests[0].allInputText === compactionSummaryRequests[1].allInputText && !String(compactionSummaryRequests[0].allInputText ?? '').includes('## Original Request') && String(compactionSummaryRequests[2].allInputText ?? '').includes('## Original Request')"
             message:
-              expr: "`expected two ordered compaction summary requests: ${JSON.stringify(scenarioRequests.map((request) => ({ cursor: request.cursor, kind: request.requestKind, mode: request.compactionSummaryFaultMode })))}`"
+              expr: "`expected one identical history-summary retry followed by the split-turn prefix: ${JSON.stringify(scenarioRequests.map((request) => ({ cursor: request.cursor, kind: request.requestKind, mode: request.compactionSummaryFaultMode })))}`"
         - assert:
-            expr: "compactionSummaryRequests[0].compactionSummaryFaultMode === config.faultMode && compactionSummaryRequests[1].compactionSummaryFaultMode === 'none'"
+            expr: "compactionSummaryRequests[0].compactionSummaryFaultMode === config.faultMode && compactionSummaryRequests[1].compactionSummaryFaultMode === 'none' && compactionSummaryRequests[2].compactionSummaryFaultMode === 'none'"
             message:
               expr: "`unexpected compaction response modes: ${JSON.stringify(compactionSummaryRequests)}`"
         - assert:

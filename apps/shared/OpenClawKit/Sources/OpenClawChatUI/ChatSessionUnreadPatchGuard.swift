@@ -2,15 +2,16 @@ import Foundation
 
 struct ChatSessionUnreadPatchGuard {
     private var activeSessionKey = ""
+    private var activationObserved = false
+    private var activationMarkedUnreadAt: Double?
     private var requested = false
     private var activeExplicitUnread: Bool?
     private var confirmedUnreadByKey: [String: Bool] = [:]
-    private var pendingExplicitUnreadByKey: [String: Bool] = [:]
-    private var pendingExplicitRevisions: [String: Int] = [:]
+    private var pendingExplicitPatches: [String: (revision: Int, unread: Bool)] = [:]
     private var revisions: [String: Int] = [:]
 
     mutating func observe(key: String, unread: Bool?) {
-        guard self.pendingExplicitRevisions[key] == nil,
+        guard self.pendingExplicitPatches[key] == nil,
               !(key == self.activeSessionKey && self.activeExplicitUnread != nil)
         else { return }
         if let unread {
@@ -21,11 +22,19 @@ struct ChatSessionUnreadPatchGuard {
         }
     }
 
-    mutating func shouldPatch(key: String, unread: Bool?) -> Int? {
+    mutating func shouldPatch(key: String, unread: Bool?, markedUnreadAt: Double?) -> Int? {
         guard !key.isEmpty else { return nil }
         self.activate(key: key)
+        if !self.activationObserved {
+            self.activationObserved = true
+            self.activationMarkedUnreadAt = markedUnreadAt
+        }
         if unread == false {
+            self.activationMarkedUnreadAt = nil
             self.requested = false
+            return nil
+        }
+        if let markedUnreadAt, markedUnreadAt != self.activationMarkedUnreadAt {
             return nil
         }
         guard unread == true, !self.requested else { return nil }
@@ -36,14 +45,15 @@ struct ChatSessionUnreadPatchGuard {
     mutating func activate(key: String) {
         guard key != self.activeSessionKey else { return }
         self.activeSessionKey = key
+        self.activationObserved = false
+        self.activationMarkedUnreadAt = nil
         self.requested = false
         self.activeExplicitUnread = nil
     }
 
     mutating func beginExplicitPatch(key: String, unread: Bool, isActive: Bool) -> Int {
         let revision = self.advanceRevision(key: key)
-        self.pendingExplicitRevisions[key] = revision
-        self.pendingExplicitUnreadByKey[key] = unread
+        self.pendingExplicitPatches[key] = (revision, unread)
         if isActive {
             self.activeSessionKey = key
             // The explicit action owns this activation. Only navigation opens
@@ -56,9 +66,8 @@ struct ChatSessionUnreadPatchGuard {
 
     mutating func patchSucceeded(key: String, unread: Bool, revision: Int) -> Bool {
         guard self.revisions[key] == revision else { return false }
-        if self.pendingExplicitRevisions[key] == revision {
-            self.pendingExplicitRevisions.removeValue(forKey: key)
-            self.pendingExplicitUnreadByKey.removeValue(forKey: key)
+        if self.pendingExplicitPatches[key]?.revision == revision {
+            self.pendingExplicitPatches.removeValue(forKey: key)
         }
         self.confirmedUnreadByKey[key] = unread
         return true
@@ -66,9 +75,8 @@ struct ChatSessionUnreadPatchGuard {
 
     mutating func patchFailed(key: String, revision: Int) -> Bool {
         guard self.revisions[key] == revision else { return false }
-        if self.pendingExplicitRevisions[key] == revision {
-            self.pendingExplicitRevisions.removeValue(forKey: key)
-            self.pendingExplicitUnreadByKey.removeValue(forKey: key)
+        if self.pendingExplicitPatches[key]?.revision == revision {
+            self.pendingExplicitPatches.removeValue(forKey: key)
         }
         if key == self.activeSessionKey {
             self.requested = false
@@ -77,12 +85,17 @@ struct ChatSessionUnreadPatchGuard {
         return true
     }
 
+    mutating func confirmReceipt(key: String, unread: Bool) {
+        self.confirmedUnreadByKey[key] = unread
+        if key == self.activeSessionKey, self.activeExplicitUnread != nil { self.activeExplicitUnread = unread }
+    }
+
     func confirmedUnread(key: String) -> Bool? {
         self.confirmedUnreadByKey[key]
     }
 
     func localUnreadOverride(key: String) -> Bool? {
-        if let unread = self.pendingExplicitUnreadByKey[key] {
+        if let unread = self.pendingExplicitPatches[key]?.unread {
             return unread
         }
         guard key == self.activeSessionKey else { return nil }
@@ -98,44 +111,38 @@ struct ChatSessionUnreadPatchGuard {
 
 @MainActor
 final class ChatSessionUnreadMutationQueue {
-    private struct Tail {
-        let id: Int
-        let task: Task<Void, Never>
-    }
-
-    private var nextID = 0
-    private var tails: [String: Tail] = [:]
+    private var tails: [String: Task<Void, Never>] = [:]
 
     func reserve(
         routeLease: Task<OpenClawChatSessionMutationRouteLease?, Never>,
         queueKey: String,
         routeKey: String,
-        unread: Bool) -> Task<Void, Error>
+        agentID: String? = nil,
+        expectedMarkedUnreadAt: Double?? = nil,
+        expectedSessionID: String? = nil,
+        unread: Bool) -> Task<OpenClawChatSessionPatchReceipt?, Error>
     {
-        let previous = self.tails[queueKey]?.task
-        self.nextID += 1
-        let id = self.nextID
+        let previous = self.tails[queueKey]
         let operation = Task { @MainActor in
             let resolvedRouteLease = await routeLease.value
             await previous?.value
             guard let resolvedRouteLease else {
                 throw OpenClawChatTransportSendError.notDispatched
             }
-            try await resolvedRouteLease.patchSession(
+            return try await resolvedRouteLease.patchSession(
                 key: routeKey,
-                label: nil,
-                category: nil,
-                pinned: nil,
-                archived: nil,
+                agentID: agentID,
+                expectedSessionID: expectedSessionID,
+                expectedMarkedUnreadAt: expectedMarkedUnreadAt,
                 unread: unread)
         }
         let tail = Task { @MainActor in
             _ = try? await operation.value
         }
-        self.tails[queueKey] = Tail(id: id, task: tail)
+        self.tails[queueKey] = tail
         Task { @MainActor in
             await tail.value
-            if self.tails[queueKey]?.id == id {
+            if self.tails[queueKey] == tail {
                 self.tails.removeValue(forKey: queueKey)
             }
         }

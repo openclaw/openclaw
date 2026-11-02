@@ -6,25 +6,37 @@ import {
 } from "./tool-hook-matcher.js";
 
 describe("plugin tool hook matchers", () => {
+  it("keeps shipped dispatcher matchers scoped to the renamed dispatcher", () => {
+    expect(pluginToolMatcherCoversTool(["tool_call"], "dispatch_action")).toBe(true);
+    expect(pluginToolMatcherCoversTool(["tool_call"], "exec")).toBe(false);
+    expect(createPluginToolMatcherScope([["tool_call", "dispatch_action"]])).toEqual({
+      matchAll: false,
+      toolNames: ["dispatch_action"],
+    });
+  });
   it("normalizes canonical OpenClaw tool ids without provider alias expansion", () => {
     expect(normalizePluginToolMatcher([" EXEC ", "apply_patch", "exec"])).toEqual([
       "apply_patch",
       "exec",
     ]);
+    expect(normalizePluginToolMatcher(["read", "write", "edit"])).toEqual([
+      "edit",
+      "read",
+      "write",
+    ]);
     expect(pluginToolMatcherCoversTool(["exec"], "exec")).toBe(true);
     expect(pluginToolMatcherCoversTool(["exec"], "Bash")).toBe(false);
     expect(pluginToolMatcherCoversTool(["apply_patch"], "Write")).toBe(false);
+    expect(pluginToolMatcherCoversTool(["write"], "write")).toBe(true);
+    expect(pluginToolMatcherCoversTool(["edit"], "edit")).toBe(true);
     expect(pluginToolMatcherCoversTool(["spawn_agent"], "Agent")).toBe(false);
   });
 
-  it.each(["Bash", "exec_command", "apply-patch", "Write", "Edit", "Agent"])(
-    "rejects non-canonical provider spelling %s",
-    (toolName) => {
-      expect(() => normalizePluginToolMatcher([toolName])).toThrow(
-        "tool hook matcher entries must use canonical OpenClaw tool ids",
-      );
-    },
-  );
+  it.each(["Bash", "Write"])("rejects non-canonical provider spelling %s", (toolName) => {
+    expect(() => normalizePluginToolMatcher([toolName])).toThrow(
+      "tool hook matcher entries must use canonical OpenClaw tool ids",
+    );
+  });
 
   it("keeps only an omitted matcher as match-all", () => {
     expect(pluginToolMatcherCoversTool(undefined, "web_search")).toBe(true);

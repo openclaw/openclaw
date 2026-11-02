@@ -1,17 +1,15 @@
 /* @vitest-environment jsdom */
 
-import type { RouteLoaderOptions, RouteLocation } from "@openclaw/uirouter";
-import { render } from "lit";
-import { afterEach, describe, expect, it } from "vitest";
-import type {
-  ApplicationContext,
-  ApplicationGateway,
-  ApplicationGatewaySnapshot,
-} from "../../app/context.ts";
-import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
-import "./custodian-page.ts";
-import { renderCustodianRoute } from "./route-view.ts";
-import { page, type CustodianRouteData } from "./route.ts";
+import type { RouteLocation } from "@openclaw/uirouter";
+import { createComponent, createSignal, flush } from "solid-js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ApplicationContext } from "../../app/context.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createRouteLoaderOptions } from "../../test-helpers/route-loader-options.ts";
+import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
+import { createContext as createCustodianContext } from "./custodian-page.test-harness.ts";
+import { CustodianRoute } from "./custodian-page.tsx";
+import { page, type CustodianRouteData } from "./route.tsx";
 
 function location(search: string): RouteLocation {
   return { pathname: "/custodian", search, hash: "" };
@@ -21,46 +19,17 @@ function loadRoute(search: string): CustodianRouteData {
   if (!page.loader) {
     throw new Error("custodian route has no loader");
   }
-  return page.loader({} as ApplicationContext, {
-    signal: new AbortController().signal,
-    shouldRun: () => true,
-    revalidating: false,
-    location: location(search),
-    deps: search,
-    cause: "navigation",
-  } satisfies RouteLoaderOptions) as CustodianRouteData;
+  return page.loader(
+    {} as ApplicationContext,
+    createRouteLoaderOptions(location(search), search),
+  ) as CustodianRouteData;
 }
 
 function createContext(): ApplicationContext {
-  const snapshot: ApplicationGatewaySnapshot = {
-    client: null,
-    phase: "stopped",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    hello: null,
-    assistantAgentId: "main",
-    sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
-  };
-  const gateway = {
-    snapshot,
-    connection: {
-      gatewayUrl: "ws://gateway.test/control",
-      token: "",
-      bootstrapToken: "",
-      password: "",
-    },
-    subscribe: () => () => undefined,
-    subscribeEvents: () => () => undefined,
-  } as unknown as ApplicationGateway;
-  return {
-    gateway,
-    agents: {
-      state: { agentsList: null },
-      subscribe: () => () => undefined,
-    },
-  } as unknown as ApplicationContext;
+  const harness = createCustodianContext(vi.fn(), []);
+  harness.setGatewaySnapshot({ client: null, phase: "stopped", hello: null });
+  harness.context.agents.state.agentsList = null;
+  return harness.context;
 }
 
 afterEach(() => {
@@ -77,11 +46,24 @@ describe("custodian route", () => {
   });
 
   it("renders mode-specific framing", async () => {
-    const provider = createApplicationContextProvider(createContext());
-    document.body.append(provider);
+    const provider = createSolidApplicationContextProvider(createContext());
 
-    render(renderCustodianRoute({ onboarding: false, intent: null }), provider);
-    const normalPage = provider.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
+    const [data, setData] = createSignal<CustodianRouteData>();
+    const { container } = mountSolid(
+      () =>
+        createComponent(CustodianRoute, {
+          get data() {
+            return data();
+          },
+        }),
+      { wrapper: provider.wrapper },
+    );
+    flush();
+    expect(container.querySelector("openclaw-custodian-page")).toBeNull();
+
+    setData({ onboarding: false, intent: null });
+    flush();
+    const normalPage = container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
       "openclaw-custodian-page",
     );
     await normalPage?.updateComplete;
@@ -90,8 +72,9 @@ describe("custodian route", () => {
       "System setup and care.",
     );
 
-    render(renderCustodianRoute({ onboarding: true, intent: null }), provider);
-    const onboardingPage = provider.querySelector<
+    setData({ onboarding: true, intent: null });
+    flush();
+    const onboardingPage = container.querySelector<
       HTMLElement & { updateComplete: Promise<boolean> }
     >("openclaw-custodian-page");
     await onboardingPage?.updateComplete;

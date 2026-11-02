@@ -1,0 +1,177 @@
+{
+  "version": 3,
+  "declaredCapabilities": [" location ", "camera", "camera"],
+  "expectedCapabilities": ["camera", "location"],
+  "declaredCommands": [
+    " example.allowed ",
+    "example.local-denied",
+    "example.approval-pending",
+    "example.policy-withheld"
+  ],
+  "expectedCommands": [
+    "example.allowed",
+    "example.approval-pending",
+    "example.local-denied",
+    "example.policy-withheld"
+  ],
+  "authoritySnapshots": [
+    {
+      "name": "baseline",
+      "declaredCommands": [
+        "example.allowed",
+        "example.local-denied",
+        "example.policy-withheld"
+      ],
+      "effectiveCommands": ["example.allowed", "example.local-denied"],
+      "withheldCommands": ["example.policy-withheld"],
+      "gatewayPolicy": {
+        "allow": [
+          "example.allowed",
+          "example.local-denied",
+          "example.approval-pending",
+          "example.policy-withheld",
+          "example.undeclared"
+        ],
+        "deny": ["example.policy-withheld"]
+      },
+      "expectedStates": [
+        { "command": "example.allowed", "state": "invocable" },
+        { "command": "example.local-denied", "state": "invocable" },
+        { "command": "example.approval-pending", "state": "undeclared" },
+        { "command": "example.policy-withheld", "state": "unauthorized" },
+        { "command": "example.undeclared", "state": "undeclared" }
+      ]
+    },
+    {
+      "name": "widened-pending",
+      "declaredCommands": [
+        "example.allowed",
+        "example.local-denied",
+        "example.approval-pending",
+        "example.policy-withheld"
+      ],
+      "effectiveCommands": ["example.allowed", "example.local-denied"],
+      "withheldCommands": ["example.policy-withheld"],
+      "gatewayPolicy": {
+        "allow": [
+          "example.allowed",
+          "example.local-denied",
+          "example.approval-pending",
+          "example.policy-withheld",
+          "example.undeclared"
+        ],
+        "deny": ["example.policy-withheld"]
+      },
+      "expectedStates": [
+        { "command": "example.allowed", "state": "invocable" },
+        { "command": "example.approval-pending", "state": "pending-approval" },
+        { "command": "example.policy-withheld", "state": "unauthorized" },
+        { "command": "example.undeclared", "state": "undeclared" }
+      ]
+    },
+    {
+      "name": "reapproved",
+      "declaredCommands": [
+        "example.allowed",
+        "example.local-denied",
+        "example.approval-pending",
+        "example.policy-withheld"
+      ],
+      "effectiveCommands": [
+        "example.allowed",
+        "example.local-denied",
+        "example.approval-pending"
+      ],
+      "withheldCommands": ["example.policy-withheld"],
+      "gatewayPolicy": {
+        "allow": [
+          "example.allowed",
+          "example.local-denied",
+          "example.approval-pending",
+          "example.policy-withheld",
+          "example.undeclared"
+        ],
+        "deny": ["example.policy-withheld"]
+      },
+      "expectedStates": [
+        { "command": "example.allowed", "state": "invocable" },
+        { "command": "example.approval-pending", "state": "invocable" },
+        { "command": "example.policy-withheld", "state": "unauthorized" },
+        { "command": "example.undeclared", "state": "undeclared" }
+      ]
+    },
+    {
+      "name": "policy-revoked",
+      "declaredCommands": [
+        "example.allowed",
+        "example.local-denied",
+        "example.approval-pending",
+        "example.policy-withheld"
+      ],
+      "effectiveCommands": ["example.local-denied", "example.approval-pending"],
+      "withheldCommands": ["example.allowed", "example.policy-withheld"],
+      "gatewayPolicy": {
+        "allow": [
+          "example.allowed",
+          "example.local-denied",
+          "example.approval-pending",
+          "example.policy-withheld",
+          "example.undeclared"
+        ],
+        "deny": ["example.allowed", "example.policy-withheld"]
+      },
+      "expectedStates": [
+        { "command": "example.allowed", "state": "unauthorized" },
+        { "command": "example.approval-pending", "state": "invocable" },
+        { "command": "example.policy-withheld", "state": "unauthorized" },
+        { "command": "example.undeclared", "state": "undeclared" }
+      ]
+    },
+    {
+      "name": "policy-restored",
+      "declaredCommands": [
+        "example.allowed",
+        "example.local-denied",
+        "example.approval-pending",
+        "example.policy-withheld"
+      ],
+      "effectiveCommands": [
+        "example.allowed",
+        "example.local-denied",
+        "example.approval-pending",
+        "example.policy-withheld"
+      ],
+      "withheldCommands": [],
+      "gatewayPolicy": {
+        "allow": [
+          "example.allowed",
+          "example.local-denied",
+          "example.approval-pending",
+          "example.policy-withheld",
+          "example.undeclared"
+        ],
+        "deny": []
+      },
+      "expectedStates": [
+        { "command": "example.allowed", "state": "invocable" },
+        { "command": "example.approval-pending", "state": "invocable" },
+        { "command": "example.policy-withheld", "state": "invocable" },
+        { "command": "example.undeclared", "state": "undeclared" }
+      ]
+    }
+  ],
+  "invocations": [
+    {
+      "command": "example.allowed",
+      "localAdmission": "allow",
+      "expected": "success"
+    },
+    {
+      "command": "example.local-denied",
+      "localAdmission": "deny",
+      "expected": "failure",
+      "errorCode": "LOCAL_POLICY_DENIED",
+      "errorMessage": "command is outside the embedding's current local policy"
+    }
+  ]
+}

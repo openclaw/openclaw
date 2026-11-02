@@ -1,16 +1,21 @@
-// Control UI module implements cron status behavior.
 import type { CronJob, CronRunStatus } from "../api/types.ts";
 
 type CronJobLastRunStatus = CronRunStatus | "unknown";
+type CronStatusJob = {
+  enabled: boolean;
+  state?: Pick<CronJob["state"], "lastRunStatus" | "lastStatus" | "runningAtMs" | "autoDisabled">;
+};
 
-export function resolveCronJobLastRunStatus(job: CronJob): CronJobLastRunStatus {
+export function resolveCronJobLastRunStatus(
+  job: Pick<CronStatusJob, "state">,
+): CronJobLastRunStatus {
   return job.state?.lastRunStatus ?? job.state?.lastStatus ?? "unknown";
 }
 
 // The gateway intentionally leaves nextRunAtMs past-due while a run executes
 // (it only advances on the outcome), so "overdue" surfaces must not flag a
 // job that is actively running. runningAtMs is the recorded fact for that.
-export function isCronJobRunning(job: CronJob): boolean {
+export function isCronJobRunning(job: Pick<CronStatusJob, "state">): boolean {
   const runningAtMs = job.state?.runningAtMs;
   return typeof runningAtMs === "number" && Number.isFinite(runningAtMs);
 }
@@ -21,7 +26,7 @@ export function isCronJobRunning(job: CronJob): boolean {
 // an operator pause, so hiding them would drop the problem from every failure
 // surface exactly when it became permanent. Operator-paused jobs keep their
 // historical `lastRunStatus: "error"` for detail views without being flagged.
-export function isCronJobActiveFailure(job: CronJob): boolean {
+export function isCronJobActiveFailure(job: CronStatusJob): boolean {
   if (job.state?.autoDisabled) {
     return true;
   }

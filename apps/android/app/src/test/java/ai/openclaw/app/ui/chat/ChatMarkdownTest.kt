@@ -54,36 +54,23 @@ class ChatMarkdownTest {
   }
 
   @Test
-  fun authoredDetailsSummaryDoesNotUseLocalizedFallback() {
+  fun authoredDetailsSummaryStaysVerbatim() {
     val disclosure =
       parseChatMarkdownBlocks("<details>\n<summary>Details</summary>\n\nBody\n\n</details>")
         .single() as ChatMarkdownRenderBlock.Disclosure
-    var fallbackEvaluated = false
-    val rendered =
-      chatMarkdownDisclosureSummarySource(disclosure.summary) {
-        fallbackEvaluated = true
-        "Localized details"
-      }
-
     assertEquals("Details", disclosure.summary)
-    assertEquals("Details", rendered)
-    assertEquals(false, fallbackEvaluated)
   }
 
   @Test
-  fun detailsWithoutSummaryUseLocalizedDefaultLabel() {
+  fun detailsWithoutSummaryLeaveDefaultToRenderer() {
     val disclosure =
       parseChatMarkdownBlocks("<details>\n\nBody\n\n</details>").single() as ChatMarkdownRenderBlock.Disclosure
 
     assertNull(disclosure.summary)
-    assertEquals(
-      "Localized details",
-      chatMarkdownDisclosureSummarySource(disclosure.summary) { "Localized details" },
-    )
   }
 
   @Test
-  fun emptyDetailsSummaryAfterProseUsesLocalizedDefault() {
+  fun emptyDetailsSummaryAfterProseLeavesDefaultToRenderer() {
     val blocks =
       parseChatMarkdownBlocks(
         "Intro\n\n<details>\n<summary></summary>\n\nBody\n\n</details>",
@@ -93,10 +80,6 @@ class ChatMarkdownTest {
 
     assertEquals("Intro", (intro.firstChild as org.commonmark.node.Text).literal)
     assertNull(disclosure.summary)
-    assertEquals(
-      "Localized details",
-      chatMarkdownDisclosureSummarySource(disclosure.summary) { "Localized details" },
-    )
   }
 
   @Test
@@ -493,6 +476,17 @@ class ChatMarkdownTest {
     // messages highlight regardless because CommonMark allows fences to end at EOF.
     assertNull(open.closingFenceLength)
     assertNotNull(closed.closingFenceLength)
+  }
+
+  @Test
+  fun mermaidOnlyClaimsExplicitCompletedFences() {
+    for ((language, diagram) in listOf("mermaid" to true, "MeRmAiD title" to true, "mermaid\ttitle" to true, "bash" to false, "mermaidjs" to false, "" to false)) {
+      val open = parseChatMarkdown("```$language\nflowchart LR\nA --> B\n").firstChild as FencedCodeBlock
+      val closed = parseChatMarkdown("```$language\nflowchart LR\nA --> B\n```\n").firstChild as FencedCodeBlock
+      assertEquals(false, isChatMermaidFence(open, isStreaming = true))
+      assertEquals(diagram, isChatMermaidFence(open, isStreaming = false))
+      assertEquals(diagram, isChatMermaidFence(closed, isStreaming = true))
+    }
   }
 
   @Test

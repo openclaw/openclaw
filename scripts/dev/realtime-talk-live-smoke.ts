@@ -1,4 +1,3 @@
-// Realtime Talk Live Smoke script supports OpenClaw repository automation.
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -9,7 +8,8 @@ import {
   previewForDevToolLog,
   redactJsonValueForDevToolLog,
 } from "../lib/dev-tooling-safety.ts";
-import { toErrorObject as toLintErrorObject } from "../lib/error-format.mts";
+import { CliArgumentError } from "../lib/error-format.mts";
+import { sleep as delay } from "../lib/sleep.mjs";
 
 const OPENAI_REALTIME_MODEL =
   process.env.OPENCLAW_REALTIME_OPENAI_MODEL?.trim() || "gpt-realtime-2.1";
@@ -22,17 +22,14 @@ const OPENAI_AUDIO_CHUNK_BYTES = 960;
 const OPENAI_AUDIO_CHUNK_DELAY_MS = 5;
 const OPENAI_AUDIO_ROUNDTRIP_TIMEOUT_MS = 60_000;
 const OPENAI_AUDIO_TRAILING_SILENCE_MS = 750;
+// Match the shared TalkAudioLevel meter's -50 dBFS floor (TalkPlaybackLevelMeters.swift).
+const OPENAI_BROWSER_SPEECH_MIN_RMS = 10 ** (-50 / 20);
+const OPENAI_BROWSER_SPEECH_MIN_SECONDS = 0.1;
 const GOOGLE_REALTIME_MODEL =
   process.env.OPENCLAW_REALTIME_GOOGLE_MODEL?.trim() || "gemini-3.1-flash-live-preview";
 const GOOGLE_REALTIME_VOICE = process.env.OPENCLAW_REALTIME_GOOGLE_VOICE?.trim() || "Kore";
 const GOOGLE_LIVE_WS_URL =
   "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained";
-
-type RealtimeSmokeCliOptions = {
-  help: boolean;
-  openAIAudioCycles: number;
-  openAIOnly: boolean;
-};
 
 // Keep live stacks behind their owning smoke paths so help and safety helpers stay lightweight.
 type Browser = import("playwright").Browser;
@@ -56,19 +53,9 @@ type OpenAIHttpOptions = {
   timeoutMs?: number;
 };
 
-type OpenAIRealtimeBrowserResponseReader = (
-  response: Response,
-  label: string,
-  maxBytes: number,
-) => Promise<string>;
-
 type OpenAIWebRtcSmokeGlobal = typeof globalThis & {
-  openclawReadBoundedRealtimeResponseText?: OpenAIRealtimeBrowserResponseReader;
+  openclawReadBoundedRealtimeResponseText?: typeof readOpenAIRealtimeBrowserResponseText;
 };
-
-class CliArgumentError extends Error {
-  override name = "CliArgumentError";
-}
 
 function usage(): string {
   return [
@@ -85,7 +72,7 @@ function usage(): string {
   ].join("\n");
 }
 
-function parseRealtimeSmokeArgs(argv = process.argv.slice(2)): RealtimeSmokeCliOptions {
+function parseRealtimeSmokeArgs(argv = process.argv.slice(2)) {
   let openAIAudioCycles = DEFAULT_OPENAI_AUDIO_CYCLES;
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -135,19 +122,7 @@ async function readBoundedText(
   maxBytes = OPENAI_HTTP_RESPONSE_MAX_BYTES,
   signal?: AbortSignal,
 ): Promise<string> {
-  return await readBoundedResponseText(response, label, maxBytes, {
-    createTooLargeError: (message: string) => new Error(message),
-    signal,
-  });
-}
-
-async function readBoundedJsonResponse(
-  response: Response,
-  label: string,
-  signal?: AbortSignal,
-): Promise<Record<string, unknown>> {
-  const text = await readBoundedText(response, label, OPENAI_HTTP_RESPONSE_MAX_BYTES, signal);
-  return JSON.parse(text) as Record<string, unknown>;
+  return await readBoundedResponseText(response, label, maxBytes, { signal });
 }
 
 function resolveOpenAIHttpTimeoutMs(
@@ -191,12 +166,6 @@ function compareStrings(left: string | undefined, right: string | undefined): nu
   return (left ?? "").localeCompare(right ?? "");
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
 function appendBounded<T>(items: T[], item: T, maxItems: number): void {
   if (items.length < maxItems) {
     items.push(item);
@@ -215,7 +184,7 @@ function transcriptIncludesMarker(transcripts: string[], marker: string): boolea
 }
 
 function resolveGatewayRelayModulePath(repoRoot = process.cwd()): string {
-  return `/@fs/${repoRoot.replaceAll("\\", "/")}/ui/src/pages/chat/realtime-talk-gateway-relay.ts`;
+  return `/@fs/${repoRoot.replaceAll("\\", "/")}/ui/src/pages/chat/talk/gateway-relay.ts`;
 }
 
 async function sendPcmAudioInChunks(
@@ -320,6 +289,8 @@ async function createOpenAIClientSecret(
             type: "realtime",
             model: OPENAI_REALTIME_MODEL,
             audio: {
+              // Synthetic microphone input must not compete with the requested spoken marker.
+              input: { turn_detection: null },
               output: { voice: OPENAI_REALTIME_VOICE },
             },
           },
@@ -339,7 +310,14 @@ async function createOpenAIClientSecret(
           )}`,
         );
       }
-      return await readBoundedJsonResponse(response, "OpenAI Realtime client secret", signal);
+      return JSON.parse(
+        await readBoundedText(
+          response,
+          "OpenAI Realtime client secret",
+          OPENAI_HTTP_RESPONSE_MAX_BYTES,
+          signal,
+        ),
+      ) as Record<string, unknown>;
     },
   });
   const nested =
@@ -392,7 +370,7 @@ async function smokeOpenAIBackendBridge(apiKey: string): Promise<SmokeResult> {
       details: { model: OPENAI_REALTIME_MODEL, error: shortError(error) },
     };
   } finally {
-    bridge.close();
+    await bridge.close();
   }
 }
 
@@ -411,7 +389,7 @@ async function smokeOpenAIAudioRoundtrip(apiKey: string, cycleCount: number): Pr
     const speechProvider = buildOpenAISpeechProvider();
     const synthesized = await speechProvider.synthesizeTelephony?.({
       text: "Please reply with the single word glacier.",
-      cfg: { plugins: { enabled: true } } as never,
+      cfg: { plugins: { enabled: true } },
       providerConfig: {
         apiKey,
         baseUrl: "https://api.openai.com/v1",
@@ -526,8 +504,7 @@ async function smokeOpenAIAudioRoundtrip(apiKey: string, cycleCount: number): Pr
         throw error;
       } finally {
         closed = true;
-        bridge.close();
-        bridge.close();
+        await Promise.all([bridge.close(), bridge.close()]);
         bridgeRef.current = undefined;
         await delay(100);
       }
@@ -582,7 +559,14 @@ async function smokeOpenAIWebRtc(browser: Browser, apiKey: string): Promise<Smok
       await page.evaluate("globalThis.__name = (fn) => fn");
       await page.evaluate(openAIRealtimeBrowserResponseReaderInitScript());
       const result = await page.evaluate(
-        async ({ clientSecret: secret, sdpAnswerMaxBytes, timeoutMs }) => {
+        async ({
+          clientSecret: secret,
+          sdpAnswerMaxBytes,
+          timeoutMs,
+          audioTimeoutMs,
+          minSpeechRms,
+          minSpeechSeconds,
+        }) => {
           const readBoundedTextLocal = (globalThis as OpenAIWebRtcSmokeGlobal)
             .openclawReadBoundedRealtimeResponseText;
           if (!readBoundedTextLocal) {
@@ -591,15 +575,16 @@ async function smokeOpenAIWebRtc(browser: Browser, apiKey: string): Promise<Smok
           const withBrowserTimeout = async <T>(
             label: string,
             run: (signal: AbortSignal) => Promise<T>,
+            durationMs = timeoutMs,
           ): Promise<T> => {
             const controller = new AbortController();
             let timeout: number | undefined;
             const timeoutPromise = new Promise<T>((_resolve, reject) => {
               timeout = window.setTimeout(() => {
-                const error = new Error(`${label} exceeded timeout of ${timeoutMs}ms`);
+                const error = new Error(`${label} exceeded timeout of ${durationMs}ms`);
                 reject(error);
                 controller.abort(error);
-              }, timeoutMs);
+              }, durationMs);
             });
             try {
               return await Promise.race([run(controller.signal), timeoutPromise]);
@@ -611,37 +596,61 @@ async function smokeOpenAIWebRtc(browser: Browser, apiKey: string): Promise<Smok
           };
           let media: MediaStream | undefined;
           let peer: RTCPeerConnection | undefined;
+          let audioContext: AudioContext | undefined;
+          let oscillator: OscillatorNode | undefined;
+          const playback = new Audio();
+          let providerError: string | undefined;
+          let transcriptMarker = false;
+          let responseDone = false;
           try {
             if (navigator.mediaDevices?.getUserMedia) {
               media = await navigator.mediaDevices.getUserMedia({ audio: true });
             } else {
-              const audioContext = new AudioContext();
+              audioContext = new AudioContext();
               const destination = audioContext.createMediaStreamDestination();
-              const oscillator = audioContext.createOscillator();
+              oscillator = audioContext.createOscillator();
               oscillator.connect(destination);
               oscillator.start();
               media = destination.stream;
             }
             peer = new RTCPeerConnection();
+            peer.addEventListener("track", (event) => {
+              playback.srcObject = event.streams[0] ?? new MediaStream([event.track]);
+              void playback.play().catch((error: unknown) => {
+                providerError = error instanceof Error ? error.message : String(error);
+              });
+            });
             for (const track of media.getAudioTracks()) {
               peer.addTrack(track, media);
             }
             const channel = peer.createDataChannel("oai-events");
-            const connectionState = new Promise<string>((resolve) => {
-              const timeout = window.setTimeout(
-                () => resolve(peer?.connectionState ?? "timeout"),
-                12_000,
+            channel.addEventListener("open", () => {
+              channel.send(
+                JSON.stringify({
+                  type: "response.create",
+                  response: { instructions: "Say only the word glacier." },
+                }),
               );
-              peer?.addEventListener("connectionstatechange", () => {
-                if (peer?.connectionState === "connected" || peer?.connectionState === "failed") {
-                  window.clearTimeout(timeout);
-                  resolve(peer.connectionState);
+            });
+            channel.addEventListener("message", (event: MessageEvent<string>) => {
+              const message = JSON.parse(event.data) as {
+                type?: string;
+                transcript?: string;
+                response?: { status?: string };
+                error?: { message?: string };
+              };
+              if (message.type === "response.output_audio_transcript.done") {
+                transcriptMarker = /\bglacier\b/iu.test(message.transcript ?? "");
+              }
+              if (message.type === "response.done") {
+                responseDone = message.response?.status === "completed";
+                if (!responseDone) {
+                  providerError = `OpenAI browser response ${message.response?.status ?? "missing status"}`;
                 }
-              });
-              channel.addEventListener("open", () => {
-                window.clearTimeout(timeout);
-                resolve(peer?.connectionState || "data-channel-open");
-              });
+              }
+              if (message.type === "error") {
+                providerError = message.error?.message ?? "OpenAI browser realtime error";
+              }
             });
             const offer = await peer.createOffer();
             await peer.setLocalDescription(offer);
@@ -672,31 +681,105 @@ async function smokeOpenAIWebRtc(browser: Browser, apiKey: string): Promise<Smok
               },
             );
             await peer.setRemoteDescription({ type: "answer", sdp: answer });
-            const state = await connectionState;
+            let outputAudioBytes = 0;
+            let outputAudioEnergy = 0;
+            let outputAudioSamplesDuration = 0;
+            let outputAudioSpeechDuration = 0;
+            let outputAudioPeakRms = 0;
+            const mediaPeer = peer;
+            await withBrowserTimeout(
+              "OpenAI Realtime browser audio",
+              async (signal) => {
+                while (!signal.aborted) {
+                  if (providerError) {
+                    throw new Error(providerError);
+                  }
+                  if (["failed", "closed"].includes(mediaPeer.connectionState)) {
+                    return;
+                  }
+                  const stats = await mediaPeer.getStats();
+                  const previousEnergy = outputAudioEnergy;
+                  const previousDuration = outputAudioSamplesDuration;
+                  outputAudioBytes = 0;
+                  outputAudioEnergy = 0;
+                  outputAudioSamplesDuration = 0;
+                  stats.forEach((entry: RTCInboundRtpStreamStats) => {
+                    if (entry.type === "inbound-rtp" && entry.kind === "audio") {
+                      outputAudioBytes += entry.bytesReceived ?? 0;
+                      outputAudioEnergy += entry.totalAudioEnergy ?? 0;
+                      outputAudioSamplesDuration += entry.totalSamplesDuration ?? 0;
+                    }
+                  });
+                  const energyDelta = outputAudioEnergy - previousEnergy;
+                  const durationDelta = outputAudioSamplesDuration - previousDuration;
+                  if (energyDelta >= 0 && durationDelta > 0) {
+                    const rms = Math.sqrt(energyDelta / durationDelta);
+                    outputAudioPeakRms = Math.max(outputAudioPeakRms, rms);
+                    if (rms >= minSpeechRms) {
+                      outputAudioSpeechDuration += durationDelta;
+                    }
+                  }
+                  if (
+                    mediaPeer.connectionState === "connected" &&
+                    transcriptMarker &&
+                    responseDone &&
+                    outputAudioBytes > 512 &&
+                    outputAudioSpeechDuration >= minSpeechSeconds
+                  ) {
+                    return;
+                  }
+                  await new Promise((resolve) => {
+                    window.setTimeout(resolve, 50);
+                  });
+                }
+                signal.throwIfAborted();
+              },
+              audioTimeoutMs,
+            );
             return {
               answerHasAudio: answer.includes("m=audio"),
               remoteDescriptionApplied: peer.remoteDescription?.type === "answer",
-              connectionState: state,
+              connectionState: peer.connectionState,
+              transcriptMarker,
+              responseDone,
+              outputAudioBytes,
+              outputAudioEnergy,
+              outputAudioSamplesDuration,
+              outputAudioSpeechDuration,
+              outputAudioPeakRms,
             };
           } finally {
+            playback.pause();
+            playback.srcObject = null;
             peer?.close();
             media?.getTracks().forEach((track) => track.stop());
+            oscillator?.stop();
+            await audioContext?.close();
           }
         },
         {
           clientSecret,
           sdpAnswerMaxBytes: OPENAI_HTTP_RESPONSE_MAX_BYTES,
           timeoutMs: openAIHttpTimeoutMs,
+          audioTimeoutMs: OPENAI_AUDIO_ROUNDTRIP_TIMEOUT_MS,
+          minSpeechRms: OPENAI_BROWSER_SPEECH_MIN_RMS,
+          minSpeechSeconds: OPENAI_BROWSER_SPEECH_MIN_SECONDS,
         },
       );
       return {
         name: "openai-webrtc-browser",
-        ok: result.answerHasAudio && result.remoteDescriptionApplied,
+        ok:
+          result.answerHasAudio &&
+          result.remoteDescriptionApplied &&
+          result.connectionState === "connected" &&
+          result.transcriptMarker &&
+          result.responseDone &&
+          result.outputAudioBytes > 512 &&
+          result.outputAudioSpeechDuration >= OPENAI_BROWSER_SPEECH_MIN_SECONDS,
         details: {
           model: OPENAI_REALTIME_MODEL,
-          answerHasAudio: result.answerHasAudio,
-          remoteDescriptionApplied: result.remoteDescriptionApplied,
-          connectionState: result.connectionState,
+          protocol: "ga-realtime",
+          ...result,
         },
       };
     } finally {
@@ -852,7 +935,18 @@ async function smokeGoogleLiveBrowserWs(browser: Browser, apiKey: string): Promi
               }
             })().catch((error: unknown) => {
               window.clearTimeout(timeout);
-              reject(toLintErrorObject(error, "Non-Error rejection"));
+              // This callback is serialized into the browser without module imports.
+              if (error instanceof Error) {
+                reject(error);
+              } else if (typeof error === "string") {
+                reject(new Error(error));
+              } else {
+                const failure = new Error("Non-Error rejection", { cause: error });
+                if ((typeof error === "object" && error !== null) || typeof error === "function") {
+                  Object.assign(failure, error);
+                }
+                reject(failure);
+              }
             });
           });
           ws.addEventListener("error", () => {

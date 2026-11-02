@@ -1,327 +1,270 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { MSTeamsConfig } from "../../config/types.msteams.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
 import {
+  createNonExitingRuntimeEnv,
+  createRuntimeEnv,
+} from "../../test-utils/plugin-runtime-env.js";
+import {
   applyPreparedChannelAccountConfiguration,
-  applyPreparedChannelAccountRemoval,
   prepareChannelAccountConfiguration,
-  prepareChannelAccountRemoval,
 } from "./account-config-mutation.js";
 import { defineChannelSetupContract } from "./setup-contract.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 
-const runtime = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(),
-} as never;
+const runtime = createNonExitingRuntimeEnv();
 
-describe("channel account config mutations", () => {
-  it("prepares, validates, applies, and reports lifecycle changes in order", async () => {
-    const callOrder: string[] = [];
-    const beforePersistentEffect = vi.fn(async () => {
-      callOrder.push("authority");
-    });
-    const cfg = {
-      channels: {
-        "test-chat": {
-          enabled: true,
-          token: "old-token",
-        },
+function prepare(
+  plugin: ChannelPlugin,
+  input: unknown,
+  overrides: Partial<Parameters<typeof prepareChannelAccountConfiguration>[0]> = {},
+) {
+  return prepareChannelAccountConfiguration({
+    cfg: {},
+    plugin,
+    resolveInput: () => input,
+    runtime,
+    ...overrides,
+  });
+}
+
+it("prepares, validates, applies, and reports lifecycle changes in order", async () => {
+  const callOrder: string[] = [];
+  function record<T>(name: string, result: T) {
+    callOrder.push(name);
+    return result;
+  }
+  const beforePersistentEffect = async () => record("authority", undefined);
+  const cfg = { channels: { "test-chat": { token: "old-token" } } } satisfies OpenClawConfig;
+  const plugin = {
+    ...createChannelTestPluginBase({ id: "test-chat" }),
+    setup: {
+      singleAccountKeysToMove: ["token"],
+      prepareAccountConfigInput: ({ input }: { input: Record<string, unknown> }) =>
+        record("prepare", { ...input, token: "prepared-token" }),
+      validateInput: ({ input }: { input: Record<string, unknown> }) =>
+        record("validate", input.token === "prepared-token" ? null : "input was not prepared"),
+      applyAccountConfig: ({ cfg: inputCfg, accountId, input }) => {
+        callOrder.push("apply");
+        const accounts: Record<string, { token: string }> =
+          inputCfg.channels?.["test-chat"]?.accounts ?? {};
+        const updated = { ...accounts, [accountId]: { token: (input as { token: string }).token } };
+        return { channels: { "test-chat": { accounts: updated } } };
       },
-    } satisfies OpenClawConfig;
-    const plugin = {
-      ...createChannelTestPluginBase({ id: "test-chat" }),
-      setup: {
-        singleAccountKeysToMove: ["token"],
-        prepareAccountConfigInput: ({ input }: { input: Record<string, unknown> }) => {
-          callOrder.push("prepare");
-          return { ...input, token: "prepared-token" };
-        },
-        validateInput: ({ input }: { input: Record<string, unknown> }) => {
-          callOrder.push("validate");
-          return input.token === "prepared-token" ? null : "input was not prepared";
-        },
-        applyAccountConfig: ({ cfg: inputCfg, accountId, input }) => {
-          callOrder.push("apply");
-          const channel = inputCfg.channels?.["test-chat"] as
-            | {
-                enabled?: boolean;
-                accounts?: Record<string, Record<string, unknown>>;
-              }
-            | undefined;
-          return {
-            ...inputCfg,
-            channels: {
-              ...inputCfg.channels,
-              "test-chat": {
-                ...channel,
-                accounts: {
-                  ...channel?.accounts,
-                  [accountId]: { token: (input as { token: string }).token },
-                },
-              },
-            },
-          };
-        },
+    },
+    lifecycle: {
+      onAccountConfigChanged: ({ prevCfg, nextCfg, accountId }) => {
+        callOrder.push("lifecycle");
+        expect(prevCfg).toBe(cfg);
+        expect(accountId).toBe("work");
+        expect(nextCfg.channels?.["test-chat"]).toMatchObject({
+          accounts: {
+            default: { token: "old-token" },
+            work: { token: "prepared-token" },
+          },
+        });
       },
-      lifecycle: {
-        onAccountConfigChanged: ({ prevCfg, nextCfg, accountId }) => {
-          callOrder.push("lifecycle");
-          expect(prevCfg).toBe(cfg);
-          expect(accountId).toBe("work");
-          expect(nextCfg.channels?.["test-chat"]).toMatchObject({
-            accounts: {
-              default: { token: "old-token" },
-              work: { token: "prepared-token" },
-            },
-          });
-        },
-      },
-    } as ChannelPlugin;
+    },
+  } as ChannelPlugin;
 
-    const prepared = await prepareChannelAccountConfiguration({
-      cfg,
-      plugin,
-      requestedAccountId: "Work",
-      resolveInput: () => ({ token: "raw-token" }),
-      runtime,
-      beforePersistentEffect,
-    });
-    expect(prepared.ok).toBe(true);
-    if (!prepared.ok) {
-      return;
-    }
+  const options = { cfg, runtime, requestedAccountId: "Work", beforePersistentEffect };
+  const prepared = await prepare(plugin, { token: "raw-token" }, options);
+  assert(prepared.ok, "expected prepared account configuration");
 
-    const applied = await applyPreparedChannelAccountConfiguration({
-      cfg,
-      channel: "test-chat",
-      prepared: prepared.value,
-      runtime,
-      beforePersistentEffect,
-    });
-
-    expect(callOrder).toEqual([
-      "authority",
-      "prepare",
-      "validate",
-      "apply",
-      "authority",
-      "lifecycle",
-    ]);
-    expect(applied.accountId).toBe("work");
-    expect(applied.input).toEqual({ token: "prepared-token" });
+  const applied = await applyPreparedChannelAccountConfiguration({
+    ...options,
+    channel: "test-chat",
+    prepared: prepared.value,
   });
 
-  it("returns channel-owned setup parse errors before config mutation", async () => {
-    const applyAccountConfig = vi.fn(({ cfg }) => cfg);
-    const plugin = {
-      ...createChannelTestPluginBase({ id: "typed-chat" }),
-      setupContract: defineChannelSetupContract({
-        fields: {
-          token: {
-            kind: "string",
-            cli: { flags: "--token <token>", description: "Bot token" },
-          },
+  expect(callOrder).toEqual([
+    "authority",
+    "prepare",
+    "validate",
+    "apply",
+    "authority",
+    "lifecycle",
+  ]);
+  expect(applied.accountId).toBe("work");
+  expect(applied.input).toEqual({ token: "prepared-token" });
+});
+
+it.each([
+  ["rejects unknown options before mutation", "token", "string", { unknownOption: true }, false],
+  ["accepts use-env without env metadata", "useEnv", "boolean", { useEnv: true }, true],
+] as const)("setup contract %s", async (_name, key, kind, input, ok) => {
+  const applyAccountConfig = vi.fn(({ cfg }) => cfg);
+  const plugin = {
+    ...createChannelTestPluginBase({ id: "typed-chat" }),
+    setupContract: defineChannelSetupContract({
+      fields: {
+        [key]: {
+          kind,
+          cli: { flags: key === "token" ? "--token <token>" : "--use-env", description: key },
         },
-        adapter: { applyAccountConfig },
-      }),
-    } as ChannelPlugin;
+      },
+      adapter: { applyAccountConfig },
+    }),
+  } as ChannelPlugin;
 
-    const prepared = await prepareChannelAccountConfiguration({
-      cfg: {},
-      plugin,
-      resolveInput: () => ({ unknownOption: true }),
-      runtime,
-    });
-
+  const prepared = await prepare(plugin, input);
+  expect(prepared.ok).toBe(ok);
+  if (!ok) {
     expect(prepared).toEqual({
       ok: false,
-      error: {
-        kind: "invalid-input",
-        message: "Unsupported setup option: unknownOption",
-      },
+      error: { kind: "invalid-input", message: "Unsupported setup option: unknownOption" },
     });
     expect(applyAccountConfig).not.toHaveBeenCalled();
+  }
+});
+
+it("does not resolve input when the channel has no account setup capability", async () => {
+  const resolveInput = vi.fn(() => {
+    throw new Error("input should stay lazy");
+  });
+  const plugin = createChannelTestPluginBase({ id: "read-only-chat" }) as ChannelPlugin;
+
+  const prepared = await prepare(plugin, undefined, { resolveInput });
+
+  expect(prepared).toEqual({ ok: false, error: { kind: "unsupported" } });
+  expect(resolveInput).not.toHaveBeenCalled();
+});
+
+describe("MSTeams account configuration", () => {
+  let msteamsSetupPlugin: ChannelPlugin<unknown>;
+  beforeAll(async () => {
+    ({ msteamsSetupPlugin } = await loadBundledPluginFacade<{
+      msteamsSetupPlugin: ChannelPlugin<unknown>;
+    }>({ pluginId: "msteams", artifactBasename: "setup-plugin-api.js" }));
   });
 
-  it("preserves --use-env behavior for contracts without env metadata", async () => {
-    const applyAccountConfig = vi.fn(({ cfg }) => cfg);
-    const plugin = {
-      ...createChannelTestPluginBase({ id: "third-party-chat" }),
-      setupContract: defineChannelSetupContract({
-        fields: {
-          useEnv: {
-            kind: "boolean",
-            cli: { flags: "--use-env", description: "Use plugin environment credentials" },
-          },
-        },
-        adapter: { applyAccountConfig },
-      }),
-    } as ChannelPlugin;
+  const teamsRuntime = createRuntimeEnv();
+  const credentials = (id: string) => ({ appId: `${id}-app`, appPassword: `${id}-secret` });
+  const webhookPath = "/teams/messages";
 
-    const prepared = await prepareChannelAccountConfiguration({
-      cfg: {},
-      plugin,
-      resolveInput: () => ({ useEnv: true }),
-      runtime,
-    });
-
-    expect(prepared.ok).toBe(true);
+  const policy = () => ({
+    tenantId: "shared-tenant",
+    dmPolicy: "allowlist" as const,
+    allowFrom: ["owner"],
+    groupPolicy: "allowlist" as const,
+    webhook: { path: webhookPath },
   });
+  const storedAuth = { ...credentials("stored"), tenantId: "stored-tenant" };
+  function teamsConfig(section: MSTeamsConfig): OpenClawConfig {
+    return { channels: { msteams: section } };
+  }
+  function account(cfg: OpenClawConfig, id = "default") {
+    return msteamsSetupPlugin.config.resolveAccount(cfg, id);
+  }
+  function expectAvailable(cfg: OpenClawConfig, config: object, id = "default") {
+    expect(account(cfg, id)).toMatchObject({ configured: true, tokenStatus: "available", config });
+  }
 
-  it("normalizes plugin-resolved account IDs only at the config mutation boundary", async () => {
-    const applyAccountConfig = vi.fn(({ cfg }) => cfg);
-    const onAccountConfigChanged = vi.fn();
-    const plugin = {
-      ...createChannelTestPluginBase({ id: "test-chat" }),
-      setup: {
-        resolveAccountId: () => "Work",
-        applyAccountConfig,
-      },
-      lifecycle: { onAccountConfigChanged },
-    } as ChannelPlugin;
-
-    const prepared = await prepareChannelAccountConfiguration({
-      cfg: {},
-      plugin,
-      requestedAccountId: "ignored",
-      resolveInput: () => ({ token: "token-1" }),
-      runtime,
-    });
-    expect(prepared.ok).toBe(true);
-    if (!prepared.ok) {
-      return;
-    }
-
-    const applied = await applyPreparedChannelAccountConfiguration({
-      cfg: {},
-      channel: "test-chat",
-      prepared: prepared.value,
-      runtime,
-    });
-
-    expect(applyAccountConfig).toHaveBeenCalledWith({
-      cfg: {},
-      accountId: "work",
-      input: { token: "token-1" },
-    });
-    expect(onAccountConfigChanged).toHaveBeenCalledWith({
-      prevCfg: {},
-      nextCfg: {},
-      accountId: "Work",
-      runtime,
-    });
-    expect(applied.accountId).toBe("Work");
-  });
-
-  it("does not resolve input when the channel has no account setup capability", async () => {
-    const resolveInput = vi.fn(() => {
-      throw new Error("input should stay lazy");
-    });
-    const plugin = createChannelTestPluginBase({ id: "read-only-chat" }) as ChannelPlugin;
-
-    const prepared = await prepareChannelAccountConfiguration({
-      cfg: {},
-      plugin,
-      resolveInput,
-      runtime,
-    });
-
-    expect(prepared).toEqual({
-      ok: false,
-      error: { kind: "unsupported" },
-    });
-    expect(resolveInput).not.toHaveBeenCalled();
-  });
-
-  it("deletes an account and runs its owner lifecycle hook", async () => {
-    const onAccountRemoved = vi.fn();
-    const cfg = {
-      channels: {
-        "test-chat": {
-          accounts: {
-            default: { token: "default-token" },
-            work: { token: "work-token" },
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-    const plugin = {
-      ...createChannelTestPluginBase({
-        id: "test-chat",
-        config: {
-          deleteAccount: ({ cfg: inputCfg, accountId }) => {
-            const channel = inputCfg.channels?.["test-chat"] as {
-              accounts?: Record<string, Record<string, unknown>>;
-            };
-            const accounts = { ...channel.accounts };
-            delete accounts[accountId];
-            return {
-              ...inputCfg,
-              channels: {
-                ...inputCfg.channels,
-                "test-chat": { ...channel, accounts },
-              },
-            };
-          },
-        },
-      }),
-      gateway: { startAccount: vi.fn() },
-      lifecycle: { onAccountRemoved },
-    } as ChannelPlugin;
-    const prepared = prepareChannelAccountRemoval({
-      plugin,
-      accountId: "Work",
-      action: "delete",
-    });
-
-    expect(prepared).toMatchObject({
-      accountId: "work",
-      accountKey: "work",
-      shouldStopRuntime: true,
-    });
-    const result = await applyPreparedChannelAccountRemoval({
+  async function configure(cfg: OpenClawConfig, accountId: string, input: unknown) {
+    const prepared = await prepare(msteamsSetupPlugin, input, {
       cfg,
-      prepared,
-      runtime,
+      runtime: teamsRuntime,
+      requestedAccountId: accountId,
     });
-
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.value.nextConfig.channels?.["test-chat"]).toMatchObject({
-        accounts: { default: { token: "default-token" } },
-      });
+    if (!prepared.ok) {
+      throw new Error(JSON.stringify(prepared.error));
     }
-    expect(onAccountRemoved).toHaveBeenCalledWith({
-      prevCfg: cfg,
-      accountId: "work",
-      runtime,
+    const { nextConfig } = await applyPreparedChannelAccountConfiguration({
+      cfg,
+      runtime: teamsRuntime,
+      channel: "msteams",
+      prepared: prepared.value,
     });
+    return nextConfig;
+  }
+
+  beforeEach(() => {
+    for (const key of [
+      "APP_ID",
+      "APP_PASSWORD",
+      "TENANT_ID",
+      "AUTH_TYPE",
+      "CERTIFICATE_PATH",
+      "USE_MANAGED_IDENTITY",
+    ]) {
+      vi.stubEnv(`MSTEAMS_${key}`, "");
+    }
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  it.each([true, false])(
+    "preserves root policy and enabled=%s through host promotion",
+    async (enabled) => {
+      const cfg = teamsConfig({
+        ...policy(),
+        enabled,
+        ...credentials("default"),
+        legacyWebhook: { port: 3978 },
+      });
+      const next = await configure(cfg, "support", credentials("support"));
+      expect(next.channels?.msteams).toMatchObject({
+        ...policy(),
+        accounts: { default: credentials("default"), support: credentials("support") },
+      });
+      expect(account(next)).toMatchObject({ enabled, config: { webhook: { path: webhookPath } } });
+      const support = account(next, "support");
+      expect(support).toMatchObject({
+        enabled: true,
+        config: {
+          tenantId: "shared-tenant",
+          allowFrom: ["owner"],
+          groupPolicy: "allowlist",
+          webhook: { path: "/teams/messages/support" },
+        },
+      });
+      expect(support).not.toHaveProperty("config.legacyWebhook");
+    },
+  );
+
+  it("selects environment auth and retains the requested path without changing sibling authority", async () => {
+    vi.stubEnv("MSTEAMS_APP_ID", "environment-app");
+    vi.stubEnv("MSTEAMS_TENANT_ID", "environment-tenant");
+    vi.stubEnv("MSTEAMS_AUTH_TYPE", "federated");
+    vi.stubEnv("MSTEAMS_USE_MANAGED_IDENTITY", "true");
+    const cfg = teamsConfig({
+      ...storedAuth,
+      tenantId: "shared-tenant",
+      authType: "secret",
+      webhook: { path: webhookPath },
+      accounts: { sibling: credentials("sibling") },
+    });
+    const next = await configure(cfg, "default", {
+      useEnv: true,
+      webhookPath: "/teams/environment",
+    });
+    expectAvailable(next, { webhook: { path: "/teams/environment" } });
+    vi.stubEnv("MSTEAMS_APP_ID", "");
+    expect(account(next)).toMatchObject({ configured: false, tokenStatus: "missing" });
+    expectAvailable(
+      next,
+      {
+        webhook: { path: "/teams/messages/sibling" },
+        ...credentials("sibling"),
+        tenantId: "shared-tenant",
+      },
+      "sibling",
+    );
+    expect(next.channels?.msteams?.webhook?.path).toBe(webhookPath);
   });
 
-  it("reports unsupported removal actions without running lifecycle hooks", async () => {
-    const onAccountConfigChanged = vi.fn();
-    const plugin = {
-      ...createChannelTestPluginBase({ id: "test-chat" }),
-      lifecycle: { onAccountConfigChanged },
-    } as ChannelPlugin;
-    const prepared = prepareChannelAccountRemoval({
-      plugin,
-      accountId: "default",
-      action: "disable",
-    });
+  it("rejects incomplete environment auth even when persisted credentials are complete", async () => {
+    vi.stubEnv("MSTEAMS_APP_ID", "partial-env-app");
+    await expect(configure(teamsConfig(storedAuth), "default", { useEnv: true })).rejects.toThrow(
+      "requires complete secret, certificate, or managed-identity environment credentials",
+    );
+  });
 
-    const result = await applyPreparedChannelAccountRemoval({
-      cfg: {},
-      prepared,
-      runtime,
-    });
-
-    expect(result).toEqual({
-      ok: false,
-      error: { kind: "unsupported-action", action: "disable" },
-    });
-    expect(onAccountConfigChanged).not.toHaveBeenCalled();
+  it("accepts a complete explicit secret replacement over federated environment auth", async () => {
+    vi.stubEnv("MSTEAMS_AUTH_TYPE", "federated");
+    const replacement = { ...credentials("new"), tenantId: "new-tenant" };
+    const next = await configure({}, "default", { useEnv: true, ...replacement });
+    expectAvailable(next, { authType: "secret", ...replacement });
   });
 });

@@ -1,5 +1,9 @@
-// Qa Channel plugin module implements channel actions behavior.
 import { jsonResult, readStringParam } from "openclaw/plugin-sdk/channel-actions";
+import type {
+  ChannelMessageActionAdapter,
+  ChannelMessageActionName,
+} from "openclaw/plugin-sdk/channel-contract";
+import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import { Type } from "typebox";
 import { resolveQaChannelAccount } from "./accounts.js";
@@ -16,7 +20,7 @@ import {
   sendQaBusMessage,
   type QaBusMessage,
 } from "./bus-client.js";
-import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "./runtime-api.js";
+import { QA_CHANNEL_ID } from "./channel-base.js";
 import type { CoreConfig } from "./types.js";
 
 function listQaChannelActions(
@@ -71,16 +75,9 @@ function readQaSendTarget(params: Record<string, unknown>) {
   return undefined;
 }
 
-type QaMessageTarget = {
-  conversationId: string;
-  conversationKind: QaBusMessage["conversation"]["kind"];
-  threadId: string | null;
-};
+type QaMessageTarget = ReturnType<typeof readQaMessageTarget>;
 
-function readQaMessageTarget(
-  params: Record<string, unknown>,
-  action: ChannelMessageActionName,
-): QaMessageTarget {
+function readQaMessageTarget(params: Record<string, unknown>, action: ChannelMessageActionName) {
   const rawTarget = readQaSendTarget(params);
   if (!rawTarget) {
     throw new Error(`qa-channel ${action} requires a target`);
@@ -97,16 +94,12 @@ function readQaMessageTarget(
   };
 }
 
-function qaMessageMatchesTarget(message: QaBusMessage, target: QaMessageTarget): boolean {
-  return (
-    message.conversation.id === target.conversationId &&
-    message.conversation.kind === target.conversationKind &&
-    (message.threadId ?? null) === target.threadId
-  );
-}
-
 function assertQaMessageMatchesTarget(message: QaBusMessage, target: QaMessageTarget): void {
-  if (!qaMessageMatchesTarget(message, target)) {
+  if (
+    message.conversation.id !== target.conversationId ||
+    message.conversation.kind !== target.conversationKind ||
+    (message.threadId ?? null) !== target.threadId
+  ) {
     throw new Error("qa-channel message is not in the selected conversation");
   }
 }
@@ -142,10 +135,15 @@ export const qaChannelMessageActions: ChannelMessageActionAdapter = {
     if (action === "sendMessage") {
       return extractToolSend(args, "sendMessage") ?? null;
     }
-    if (action === "threadReply") {
+    if (action === "thread-reply") {
       const channelId = typeof args.channelId === "string" ? args.channelId.trim() : "";
       const threadId = typeof args.threadId === "string" ? args.threadId.trim() : "";
-      return channelId && threadId ? { to: `thread:${channelId}/${threadId}` } : null;
+      return channelId && threadId
+        ? {
+            to: buildQaTarget({ chatType: "channel", conversationId: channelId }),
+            threadId,
+          }
+        : null;
     }
     return null;
   },
@@ -189,7 +187,6 @@ export const qaChannelMessageActions: ChannelMessageActionAdapter = {
           to: buildQaTarget({
             chatType: parsed.chatType,
             conversationId: parsed.conversationId,
-            threadId: resolved.threadId,
           }),
           text,
           senderId: account.botUserId,
@@ -215,7 +212,11 @@ export const qaChannelMessageActions: ChannelMessageActionAdapter = {
         });
         return jsonResult({
           thread,
-          target: `thread:${target.conversationId}/${thread.id}`,
+          target: buildQaTarget({
+            chatType: target.conversationKind,
+            conversationId: target.conversationId,
+          }),
+          threadId: thread.id,
         });
       }
       case "thread-reply": {
@@ -232,14 +233,20 @@ export const qaChannelMessageActions: ChannelMessageActionAdapter = {
           to: buildQaTarget({
             chatType: target.conversationKind,
             conversationId: target.conversationId,
-            threadId: target.threadId,
           }),
           text,
           senderId: account.botUserId,
           senderName: account.botDisplayName,
           threadId: target.threadId,
         });
-        return jsonResult({ message });
+        return jsonResult({
+          message,
+          receipt: createMessageReceiptFromOutboundResults({
+            results: [{ channel: QA_CHANNEL_ID, messageId: message.id }],
+            threadId: target.threadId,
+            kind: "text",
+          }),
+        });
       }
       case "react": {
         const messageId = readStringParam(params, "messageId");

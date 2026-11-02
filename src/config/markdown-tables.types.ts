@@ -1,4 +1,3 @@
-// Defines markdown table config types used by rendering surfaces.
 import type { MarkdownTableMode } from "./types.base.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 

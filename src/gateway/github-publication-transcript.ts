@@ -1,87 +1,119 @@
 import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
-import { SessionManager } from "../agents/sessions/session-manager.js";
+import { makeZeroUsageSnapshot } from "../agents/usage.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { withTranscriptWriteTransaction } from "../config/sessions/session-accessor.js";
-import type { GitHubPublicationCoordinator } from "./github-publication.js";
+import { appendSessionTranscriptReport } from "../config/sessions/session-accessor.js";
+import {
+  captureSessionActorStorageOwner,
+  readCapturedSessionActorEntry,
+} from "../config/sessions/session-actor-storage-binding.js";
+import { attachSessionTranscriptRunId } from "../sessions/transcript-events.js";
+import type {
+  GitHubPublicationCoordinator,
+  GitHubPublicationTranscriptReport,
+} from "./github-publication.js";
+import type { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
+import type { resolveCanonicalSessionEntryFromStoreKeys } from "./session-utils.js";
 
 const GITHUB_PUBLICATION_RESPONSE_PREFIX = "github-publication:";
 
 function formatGitHubPublicationResult(result: SessionGitHubPublicationResult): string {
+  const publisher = result.publisher;
+  const source =
+    publisher?.source === "personal"
+      ? "My GitHub"
+      : publisher?.source === "agent-override"
+        ? "Agent override"
+        : "System";
+  const acting = publisher ? ` Using @${publisher.login} (${source}).` : "";
   switch (result.status) {
     case "published":
-      return `Published ${result.repository} branch ${result.branch}: ${result.url}`;
+      return `Published ${result.repository} branch ${result.branch}: ${result.url}${acting}`;
     case "failed":
-      return `GitHub publication failed: ${result.message} ${result.nextAction}`;
+      return `${result.message} ${result.nextAction}${acting}`;
     case "publishing":
     case "requested":
-      return result.message;
+    case "needs_confirmation":
+      return `${result.message}${acting}`;
   }
   return result satisfies never;
 }
 
-export function createGitHubPublicationTranscriptReporter(
+export async function reportGitHubPublicationTranscript(
   loadSessionRuntime: () => Promise<{
-    resolveCanonicalSessionEntryFromStoreKeys: typeof import("./session-utils.js").resolveCanonicalSessionEntryFromStoreKeys;
-    resolveGatewaySessionStoreTargetWithStore: typeof import("./session-utils.js").resolveGatewaySessionStoreTargetWithStore;
+    resolveCanonicalSessionEntryFromStoreKeys: typeof resolveCanonicalSessionEntryFromStoreKeys;
+    resolveGatewaySessionStoreTargetInWorker: typeof resolveGatewaySessionStoreTargetInWorker;
   }>,
-  coordinator: Pick<GitHubPublicationCoordinator, "markReported">,
-) {
-  return async (params: {
-    sessionId: string;
-    sessionKey: string;
-    agentId: string;
-    result: SessionGitHubPublicationResult;
-  }): Promise<void> => {
-    const runtime = await loadSessionRuntime();
-    const target = runtime.resolveGatewaySessionStoreTargetWithStore({
-      cfg: getRuntimeConfig(),
-      key: params.sessionKey,
-      agentId: params.agentId,
-      clone: false,
-    });
-    const entry = runtime.resolveCanonicalSessionEntryFromStoreKeys(target.store, target.storeKeys);
-    if (entry?.sessionId !== params.sessionId || target.canonicalKey !== params.sessionKey) {
-      throw new Error("GitHub publication transcript owner changed");
-    }
-    await withTranscriptWriteTransaction(
-      {
-        agentId: target.agentId,
-        sessionId: params.sessionId,
-        sessionKey: target.canonicalKey,
-        storePath: target.storePath,
-      },
-      (transcriptTarget) => {
-        const manager = SessionManager.open(transcriptTarget);
-        const exists = manager.getBranch().some((transcriptEntry) => {
-          return (
-            transcriptEntry.type === "message" &&
-            transcriptEntry.message.role === "assistant" &&
-            transcriptEntry.message.responseId ===
-              `${GITHUB_PUBLICATION_RESPONSE_PREFIX}${params.result.requestId}`
-          );
+  coordinator: Pick<GitHubPublicationCoordinator, "markReportedAsync" | "readReportLifecycleAsync">,
+  params: GitHubPublicationTranscriptReport,
+): Promise<void> {
+  const lifecycleRevision = await coordinator.readReportLifecycleAsync(params);
+  const memory = captureSessionActorStorageOwner(params, {
+    assertCurrent() {},
+    authorize() {},
+  });
+  const selected = memory
+    ? {
+        target: {
+          agentId: memory.agentId,
+          canonicalKey: params.sessionKey,
+          storePath: memory.path,
+        },
+        entry: readCapturedSessionActorEntry(memory, params.sessionKey),
+      }
+    : await (async () => {
+        const runtime = await loadSessionRuntime();
+        const target = await runtime.resolveGatewaySessionStoreTargetInWorker({
+          cfg: getRuntimeConfig(),
+          key: params.sessionKey,
+          agentId: params.agentId,
         });
-        if (!exists) {
-          manager.appendMessage({
-            role: "assistant",
-            content: [{ type: "text", text: formatGitHubPublicationResult(params.result) }],
-            api: "openai-responses",
-            provider: "openclaw",
-            model: "gateway-publication",
-            responseId: `${GITHUB_PUBLICATION_RESPONSE_PREFIX}${params.result.requestId}`,
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            stopReason: "stop",
-            timestamp: Date.now(),
-          });
-        }
-      },
-    );
-    coordinator.markReported(params.result.requestId);
-  };
+        return {
+          target,
+          entry: runtime.resolveCanonicalSessionEntryFromStoreKeys(target.store, target.storeKeys),
+        };
+      })();
+  const { target, entry } = selected;
+  // A reset or rotation ended that transcript for good; the receipt stays readable by request id.
+  if (
+    entry &&
+    target.canonicalKey === params.sessionKey &&
+    (entry.sessionId !== params.sessionId ||
+      (entry.lifecycleRevision ?? null) !== lifecycleRevision)
+  ) {
+    await coordinator.markReportedAsync(params.result.requestId);
+    return;
+  }
+  if (entry?.sessionId !== params.sessionId || target.canonicalKey !== params.sessionKey) {
+    throw new Error("GitHub publication transcript owner changed");
+  }
+  const appended = await appendSessionTranscriptReport(
+    {
+      agentId: target.agentId,
+      sessionId: params.sessionId,
+      sessionKey: target.canonicalKey,
+      storePath: target.storePath,
+      expectedLifecycleRevision: lifecycleRevision ?? undefined,
+    },
+    {
+      kind: "assistant",
+      message: attachSessionTranscriptRunId(
+        {
+          role: "assistant",
+          content: [{ type: "text", text: formatGitHubPublicationResult(params.result) }],
+          api: "openai-responses",
+          provider: "openclaw",
+          model: "gateway-publication",
+          responseId: `${GITHUB_PUBLICATION_RESPONSE_PREFIX}${params.result.requestId}`,
+          usage: makeZeroUsageSnapshot(),
+          stopReason: "stop",
+          timestamp: Date.now(),
+        },
+        params.runId,
+      ),
+    },
+  );
+  if (!appended.ok) {
+    throw new Error("GitHub publication transcript owner changed", { cause: appended.error });
+  }
+  await coordinator.markReportedAsync(params.result.requestId);
 }

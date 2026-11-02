@@ -1,4 +1,3 @@
-// Msteams plugin module implements presentation behavior.
 import {
   adaptMessagePresentationForChannel,
   resolveMessagePresentationButtonAction,

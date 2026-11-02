@@ -1,0 +1,10 @@
+{
+  "api": "anthropic-messages",
+  "apiKey": {
+    "source": "env",
+    "provider": "default",
+    "id": "ANTHROPIC_API_KEY"
+  },
+  "baseUrl": "https://api.anthropic.com",
+  "models": []
+}

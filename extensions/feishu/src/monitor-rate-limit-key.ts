@@ -9,11 +9,10 @@ function normalizeFeishuWebhookRateLimitClient(clientIp: string | undefined): st
 }
 
 export function buildFeishuWebhookRateLimitKey(params: {
-  accountId: string;
+  accountId?: string;
   path: string;
   clientIp?: string;
 }): string {
-  return `${params.accountId}:${params.path}:${normalizeFeishuWebhookRateLimitClient(
-    params.clientIp,
-  )}`;
+  const route = params.accountId === undefined ? params.path : `${params.accountId}:${params.path}`;
+  return `${route}:${normalizeFeishuWebhookRateLimitClient(params.clientIp)}`;
 }

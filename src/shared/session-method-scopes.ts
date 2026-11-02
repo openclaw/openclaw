@@ -16,9 +16,13 @@ export function resolveDynamicSessionMutationRequiredScope(
     if (!validateSessionsDispatchParams(params)) {
       return "operator.write";
     }
-    // Only an explicit device target stays write-scoped. Both an explicit profile and the
-    // target-less configured-default lookup can allocate cloud infrastructure.
-    return params.deviceId === undefined ? "operator.admin" : "operator.write";
+    // The dispatch owner checks explicit profiles against the live role and creator.
+    // Target-less configured defaults still require an administrator.
+    return params.profileId !== undefined ||
+      params.deviceId !== undefined ||
+      params.autoDevice === true
+      ? "operator.write"
+      : "operator.admin";
   }
   if (method === "sessions.move") {
     return validateSessionsMoveParams(params) && params.target.kind === "profile"

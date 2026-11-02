@@ -8,14 +8,19 @@ import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.i18n.verbatimText
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.job
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -44,6 +49,200 @@ class GatewayExecApprovalRuntimeTest {
   }
 
   @Test
+  fun globalApprovalKindsKeepSessionAttributionAcrossDetailRefreshAndResolve() =
+    runBlocking {
+      val runtime = connectedRuntime(unifiedMethods + setOf("plugin.approval.list", "openclaw.approval.list"))
+      val resolveRequests = mutableListOf<String>()
+      val pluginReads = AtomicInteger()
+
+      fun payload(
+        kind: GatewayApprovalKind,
+        terminal: Boolean = false,
+        title: String = "Review ${kind.wireValue}",
+      ): String {
+        val base = Json.parseToJsonElement(approval(if (terminal) "denied" else "pending", if (terminal) "deny" else null, kind.wireValue)).jsonObject
+        val presentation =
+          if (kind == GatewayApprovalKind.Exec) {
+            base.getValue("presentation")
+          } else {
+            buildJsonObject {
+              put("kind", kind.wireValue)
+              put("title", title)
+              put("description", "Prepared action")
+              put("allowedDecisions", Json.parseToJsonElement("""["allow-once","deny"]"""))
+              if (kind == GatewayApprovalKind.Plugin) put("severity", "info") else put("proposalHash", "a".repeat(64))
+            }
+          }
+        return JsonObject(base + ("presentation" to presentation)).toString()
+      }
+      runtime.gatewayDataRequestOverrideForTests = { _, method, params ->
+        when {
+          method.endsWith(".approval.list") -> {
+            val kind = GatewayApprovalKind.entries.first { method == "${it.eventPrefix}.approval.list" }
+            """[{"id":"${kind.wireValue}","createdAtMs":100,"expiresAtMs":4000000000000,"request":{"sessionKey":"agent:main:inactive","command":"private runtime input"}}]"""
+          }
+
+          method == "approval.get" -> {
+            val id =
+              Json
+                .parseToJsonElement(requireNotNull(params))
+                .jsonObject
+                .getValue("id")
+                .jsonPrimitive.content
+            val kind = GatewayApprovalKind.entries.first { it.wireValue == id }
+            val title = if (kind == GatewayApprovalKind.Plugin && pluginReads.incrementAndGet() > 1) "Refreshed plugin review" else "Review ${kind.wireValue}"
+            """{"approval":${payload(kind, title = title)}}"""
+          }
+
+          method == "approval.resolve" -> {
+            resolveRequests += requireNotNull(params)
+            """{"applied":true,"approval":${payload(GatewayApprovalKind.Plugin, terminal = true)}}"""
+          }
+
+          else -> {
+            error("unexpected method $method")
+          }
+        }
+      }
+      runtime.refreshExecApprovals()
+      waitUntil { runtime.execApprovalInbox.value.approvals.size == 3 }
+      assertEquals(
+        GatewayApprovalKind.entries.toSet(),
+        runtime.execApprovalInbox.value.approvals
+          .map { it.kind }
+          .toSet(),
+      )
+      assertTrue(
+        runtime.execApprovalInbox.value.approvals
+          .all { it.sessionKey == "agent:main:inactive" },
+      )
+      invokeApprovalEvent(runtime, "plugin.approval.requested", """{"id":"plugin"}""")
+      waitUntil {
+        runtime.execApprovalInbox.value.approvals
+          .firstOrNull { it.kind == GatewayApprovalKind.Plugin }
+          ?.title == "Refreshed plugin review"
+      }
+      assertEquals(
+        "agent:main:inactive",
+        runtime.execApprovalInbox.value.approvals
+          .first { it.kind == GatewayApprovalKind.Plugin }
+          .sessionKey,
+      )
+      runtime.resolveExecApproval("plugin", "deny")
+      waitUntil { runtime.execApprovalInbox.value.approvals.size == 2 }
+      assertEquals(
+        "plugin",
+        Json
+          .parseToJsonElement(resolveRequests.single())
+          .jsonObject
+          .getValue("kind")
+          .jsonPrimitive.content,
+      )
+      invokeClearOperatorState(runtime, retirePendingRuns = true)
+      assertTrue(
+        runtime.execApprovalInbox.value.approvals
+          .isEmpty(),
+      )
+    }
+
+  @Test
+  fun approvalListFailuresPreserveFailedFamiliesWhileExecRefreshes() =
+    runBlocking {
+      for (failedKinds in listOf(setOf(GatewayApprovalKind.Plugin), setOf(GatewayApprovalKind.SystemAgent), setOf(GatewayApprovalKind.Plugin, GatewayApprovalKind.SystemAgent))) {
+        val retained =
+          GatewayApprovalKind.entries.map { kind ->
+            approvalSummary(id = "${kind.wireValue}-old").copy(kind = kind, sessionKey = "agent:main:inactive")
+          }
+        val runtime =
+          approvalRuntime(
+            unifiedMethods + setOf("plugin.approval.list", "openclaw.approval.list"),
+            retained + retained.map { it.copy(id = "${it.id}-expired", expiresAtMs = 1) },
+          )
+        val listRequests = mutableListOf<String>()
+        val detailRequests = mutableListOf<String>()
+        runtime.gatewayDataRequestOverrideForTests = { _, method, params ->
+          when {
+            method.endsWith(".approval.list") -> {
+              listRequests += method
+              val kind = GatewayApprovalKind.entries.first { method == "${it.eventPrefix}.approval.list" }
+              if (kind in failedKinds) throw rejected("UNAVAILABLE", "$method unavailable")
+              if (kind == GatewayApprovalKind.Exec) {
+                """[{"id":"exec-new","createdAtMs":200,"expiresAtMs":4000000000000}]"""
+              } else {
+                "[]"
+              }
+            }
+
+            method == "approval.get" -> {
+              val id =
+                Json
+                  .parseToJsonElement(requireNotNull(params))
+                  .jsonObject
+                  .getValue("id")
+                  .jsonPrimitive.content
+              detailRequests += id
+              unifiedGet("pending", null, id)
+            }
+
+            else -> {
+              error("unexpected method $method")
+            }
+          }
+        }
+
+        runtime.refreshExecApprovals()
+        waitUntil { runtime.execApprovalInbox.value.errorText != null && !runtime.execApprovalInbox.value.refreshing }
+
+        val approvals = runtime.execApprovalInbox.value.approvals
+        assertEquals(
+          "Successful exec discovery must publish despite failures in $failedKinds",
+          setOf("exec-new") + failedKinds.map { "${it.wireValue}-old" },
+          approvals.map { it.id }.toSet(),
+        )
+        assertEquals(retained.filter { it.kind in failedKinds }, approvals.filter { it.kind in failedKinds })
+        assertEquals(listOf("exec-new"), detailRequests)
+        assertEquals(GatewayApprovalKind.entries.map { "${it.eventPrefix}.approval.list" }, listRequests)
+        invokeClearOperatorState(runtime, retirePendingRuns = true)
+      }
+    }
+
+  @Test
+  fun bulkRefreshExpiresEveryPendingDeadlineWithoutAnotherGatewayEvent() =
+    runBlocking {
+      val runtime = connectedRuntime()
+      val now = System.currentTimeMillis()
+      runtime.gatewayDataRequestOverrideForTests = { _, method, params ->
+        when (method) {
+          "exec.approval.list" -> {
+            """[{"id":"approval-1","createdAtMs":100,"expiresAtMs":${now + 500}},{"id":"approval-2","createdAtMs":101,"expiresAtMs":${now + 1500}}]"""
+          }
+
+          "approval.get" -> {
+            val id =
+              Json
+                .parseToJsonElement(requireNotNull(params))
+                .jsonObject
+                .getValue("id")
+                .jsonPrimitive.content
+            unifiedGet("pending", null, id).replace("4000000000000", (now + if (id == "approval-1") 500 else 1500).toString())
+          }
+
+          else -> {
+            error("unexpected method $method")
+          }
+        }
+      }
+      runtime.refreshExecApprovals()
+      waitUntil { runtime.execApprovalInbox.value.approvals.size == 2 }
+      delay(2000)
+      assertTrue(
+        "Every pending approval deadline must retire without a refresh",
+        runtime.execApprovalInbox.value.approvals
+          .isEmpty(),
+      )
+    }
+
+  @Test
   fun anotherSurfaceWinnerClosesLocalCardFromCanonicalResolveResult() =
     runBlocking {
       val runtime = approvalRuntime()
@@ -55,14 +254,21 @@ class GatewayExecApprovalRuntimeTest {
       }
 
       runtime.resolveExecApproval("approval-1", "allow-once")
-      waitUntil { runtime.execApprovals.value.isEmpty() }
+      waitUntil {
+        runtime.execApprovalInbox.value.approvals
+          .isEmpty()
+      }
 
       assertEquals(listOf("approval.resolve"), requests.map { it.first })
       assertEquals(
         """{"id":"approval-1","kind":"exec","decision":"allow-once"}""",
         requests.single().second,
       )
-      assertEquals("A prior response already denied this approval.", runtime.execApprovalsNotice.value?.message)
+      assertEquals(
+        "A prior response already denied this approval.",
+        runtime.execApprovalInbox.value.notice
+          ?.message,
+      )
     }
 
   @Test
@@ -96,13 +302,16 @@ class GatewayExecApprovalRuntimeTest {
 
       runtime.resolveExecApproval(controlPrefixedId, "deny")
       val params = Json.parseToJsonElement(withTimeout(2_000) { requestParams.await() }).jsonObject
-      waitUntil { runtime.execApprovals.value.map { it.id } == listOf("approval-1") }
+      waitUntil {
+        runtime.execApprovalInbox.value.approvals
+          .map { it.id } == listOf("approval-1")
+      }
 
       assertEquals(1, requestCount.get())
       assertEquals(controlPrefixedId, params["id"]?.jsonPrimitive?.content)
       assertEquals(
         "approval-1",
-        runtime.execApprovals.value
+        runtime.execApprovalInbox.value.approvals
           .single()
           .id,
       )
@@ -123,8 +332,14 @@ class GatewayExecApprovalRuntimeTest {
             requestedIds += requireNotNull(parsed["id"]?.jsonPrimitive?.content)
             unifiedGet(status = "pending", decision = null, id = controlPrefixedId)
           }
-          "exec.approval.list" -> "[]"
-          else -> error("unexpected method $method")
+
+          "exec.approval.list" -> {
+            "[]"
+          }
+
+          else -> {
+            error("unexpected method $method")
+          }
         }
       }
 
@@ -134,7 +349,7 @@ class GatewayExecApprovalRuntimeTest {
         """{"id":${JsonPrimitive(controlPrefixedId)}}""",
       )
       waitUntil {
-        runtime.execApprovals.value
+        runtime.execApprovalInbox.value.approvals
           .singleOrNull()
           ?.id == controlPrefixedId
       }
@@ -154,18 +369,24 @@ class GatewayExecApprovalRuntimeTest {
         when (method) {
           // `applied=true` cannot claim a different decision than this phone sent.
           "approval.resolve" -> unifiedResolve(applied = true, status = "allowed", decision = "allow-always")
+
           "approval.get" -> unifiedGet(status = "allowed", decision = "allow-always")
+
           else -> error("unexpected method $method")
         }
       }
 
       runtime.resolveExecApproval("approval-1", "allow-once")
-      waitUntil { runtime.execApprovals.value.isEmpty() }
+      waitUntil {
+        runtime.execApprovalInbox.value.approvals
+          .isEmpty()
+      }
 
       assertEquals(listOf("approval.resolve", "approval.get"), methods)
       assertEquals(
         "A prior response already allowed this command and saved the choice.",
-        runtime.execApprovalsNotice.value?.message,
+        runtime.execApprovalInbox.value.notice
+          ?.message,
       )
     }
 
@@ -182,12 +403,14 @@ class GatewayExecApprovalRuntimeTest {
 
       runtime.resolveExecApproval("approval-1", "deny")
       waitUntil {
-        runtime.execApprovals.value
+        runtime.execApprovalInbox.value.approvals
           .singleOrNull()
           ?.errorText
           ?.startsWith("Resolution outcome unknown") == true
       }
-      val frozen = runtime.execApprovals.value.single()
+      val frozen =
+        runtime.execApprovalInbox.value.approvals
+          .single()
       assertEquals("deny", frozen.resolvingDecision)
 
       invokeClearOperatorState(runtime, retirePendingRuns = false)
@@ -203,31 +426,46 @@ class GatewayExecApprovalRuntimeTest {
       }
 
       runtime.refreshExecApprovals()
-      waitUntil { reconnectMethods.contains("approval.get") && runtime.execApprovalsNotice.value != null }
+      waitUntil { reconnectMethods.contains("approval.get") && runtime.execApprovalInbox.value.notice != null }
 
-      assertTrue(runtime.execApprovals.value.isEmpty())
-      assertEquals("A prior response already denied this approval.", runtime.execApprovalsNotice.value?.message)
+      assertTrue(
+        runtime.execApprovalInbox.value.approvals
+          .isEmpty(),
+      )
+      assertEquals(
+        "A prior response already denied this approval.",
+        runtime.execApprovalInbox.value.notice
+          ?.message,
+      )
     }
 
   @Test
   fun cancelledApprovalRefreshPreservesOwnerStateWithoutPublishingFailure() =
     runBlocking {
-      val runtime = approvalRuntime()
-      val requestStarted = CompletableDeferred<Unit>()
-      runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
-        check(method == "exec.approval.list")
-        requestStarted.complete(Unit)
-        throw CancellationException("approval gateway generation retired")
+      for (cancelledKind in GatewayApprovalKind.entries) {
+        val runtime = approvalRuntime(unifiedMethods + setOf("plugin.approval.list", "openclaw.approval.list"))
+        val requestStarted = CompletableDeferred<Unit>()
+        runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
+          check(method.endsWith(".approval.list"))
+          if (method == "${cancelledKind.eventPrefix}.approval.list") {
+            requestStarted.complete(Unit)
+            throw CancellationException("approval gateway generation retired")
+          }
+          """[{"id":"replacement","createdAtMs":200,"expiresAtMs":4000000000000}]"""
+        }
+
+        runtime.refreshExecApprovals()
+        withTimeout(2_000) { requestStarted.await() }
+        waitUntil { !runtime.execApprovalInbox.value.refreshing }
+
+        val retainedApproval =
+          runtime.execApprovalInbox.value.approvals
+            .single()
+        assertNull(runtime.execApprovalInbox.value.errorText)
+        assertEquals("approval-1", retainedApproval.id)
+        assertNull(retainedApproval.errorText)
+        invokeClearOperatorState(runtime, retirePendingRuns = true)
       }
-
-      runtime.refreshExecApprovals()
-      withTimeout(2_000) { requestStarted.await() }
-      waitUntil { !runtime.execApprovalsRefreshing.value }
-
-      val retainedApproval = runtime.execApprovals.value.single()
-      assertNull(runtime.execApprovalsErrorText.value)
-      assertEquals("approval-1", retainedApproval.id)
-      assertNull(retainedApproval.errorText)
     }
 
   @Test
@@ -243,7 +481,7 @@ class GatewayExecApprovalRuntimeTest {
 
       runtime.resolveExecApproval("approval-1", "deny")
       waitUntil {
-        runtime.execApprovals.value
+        runtime.execApprovalInbox.value.approvals
           .singleOrNull()
           ?.errorText
           ?.startsWith("Resolution outcome unknown") == true
@@ -253,18 +491,32 @@ class GatewayExecApprovalRuntimeTest {
       seedConnectedRuntime(runtime, unifiedMethods)
       runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
         when (method) {
-          "exec.approval.list" ->
+          "exec.approval.list" -> {
             """[{"id":"approval-1","createdAtMs":100,"expiresAtMs":4000000000000}]"""
-          "approval.get" -> unifiedGet(status = "denied", decision = "deny")
-          else -> error("unexpected method $method")
+          }
+
+          "approval.get" -> {
+            unifiedGet(status = "denied", decision = "deny")
+          }
+
+          else -> {
+            error("unexpected method $method")
+          }
         }
       }
 
       runtime.refreshExecApprovals()
-      waitUntil { runtime.execApprovalsNotice.value != null }
+      waitUntil { runtime.execApprovalInbox.value.notice != null }
 
-      assertTrue(runtime.execApprovals.value.isEmpty())
-      assertEquals("A prior response already denied this approval.", runtime.execApprovalsNotice.value?.message)
+      assertTrue(
+        runtime.execApprovalInbox.value.approvals
+          .isEmpty(),
+      )
+      assertEquals(
+        "A prior response already denied this approval.",
+        runtime.execApprovalInbox.value.notice
+          ?.message,
+      )
     }
 
   @Test
@@ -284,8 +536,11 @@ class GatewayExecApprovalRuntimeTest {
             releaseUnknownOutcome.await()
             throw GatewayRequestOutcomeUnknown("disconnected before response")
           }
-          "exec.approval.list" ->
+
+          "exec.approval.list" -> {
             """[{"id":"approval-1","createdAtMs":100,"expiresAtMs":4000000000000}]"""
+          }
+
           "approval.get" -> {
             if (approvalReads.incrementAndGet() == 1) {
               pendingReadCompleted.complete(Unit)
@@ -296,7 +551,10 @@ class GatewayExecApprovalRuntimeTest {
               unifiedGet(status = "denied", decision = "deny")
             }
           }
-          else -> error("unexpected method $method")
+
+          else -> {
+            error("unexpected method $method")
+          }
         }
       }
 
@@ -309,9 +567,11 @@ class GatewayExecApprovalRuntimeTest {
       seedConnectedRuntime(runtime, unifiedMethods)
       runtime.refreshExecApprovals()
       withTimeout(2_000) { pendingReadCompleted.await() }
-      waitUntil { !runtime.execApprovalsRefreshing.value }
+      waitUntil { !runtime.execApprovalInbox.value.refreshing }
 
-      val reconnected = runtime.execApprovals.value.single()
+      val reconnected =
+        runtime.execApprovalInbox.value.approvals
+          .single()
       assertEquals("deny", reconnected.resolvingDecision)
       assertTrue(reconnected.errorText?.startsWith("Resolution outcome unknown") == true)
       assertFalse(releaseUnknownOutcome.isCompleted)
@@ -321,9 +581,16 @@ class GatewayExecApprovalRuntimeTest {
       withTimeout(2_000) { winnerReadStarted.await() }
       releaseWinnerRead.complete(Unit)
 
-      waitUntil { runtime.execApprovals.value.isEmpty() }
+      waitUntil {
+        runtime.execApprovalInbox.value.approvals
+          .isEmpty()
+      }
       assertTrue(approvalReads.get() >= 2)
-      assertEquals("A prior response already denied this approval.", runtime.execApprovalsNotice.value?.message)
+      assertEquals(
+        "A prior response already denied this approval.",
+        runtime.execApprovalInbox.value.notice
+          ?.message,
+      )
     }
 
   @Test
@@ -341,14 +608,20 @@ class GatewayExecApprovalRuntimeTest {
             releaseResolve.await()
             unifiedResolve(applied = true, status = "denied", decision = "deny")
           }
-          "exec.approval.list" ->
+
+          "exec.approval.list" -> {
             """[{"id":"approval-1","createdAtMs":100,"expiresAtMs":4000000000000}]"""
+          }
+
           "approval.get" -> {
             approvalReads.incrementAndGet()
             refreshReadCompleted.complete(Unit)
             unifiedGet(status = "pending", decision = null)
           }
-          else -> error("unexpected method $method")
+
+          else -> {
+            error("unexpected method $method")
+          }
         }
       }
 
@@ -356,17 +629,26 @@ class GatewayExecApprovalRuntimeTest {
       withTimeout(10_000) { resolveStarted.await() }
       runtime.refreshExecApprovals()
       withTimeout(2_000) { refreshReadCompleted.await() }
-      waitUntil { !runtime.execApprovalsRefreshing.value }
+      waitUntil { !runtime.execApprovalInbox.value.refreshing }
       delay(100)
 
-      val inFlight = runtime.execApprovals.value.single()
+      val inFlight =
+        runtime.execApprovalInbox.value.approvals
+          .single()
       assertEquals("deny", inFlight.resolvingDecision)
       assertNull(inFlight.errorText)
       assertEquals(1, approvalReads.get())
 
       releaseResolve.complete(Unit)
-      waitUntil { runtime.execApprovals.value.isEmpty() }
-      assertEquals("Approval denied.", runtime.execApprovalsNotice.value?.message)
+      waitUntil {
+        runtime.execApprovalInbox.value.approvals
+          .isEmpty()
+      }
+      assertEquals(
+        "Approval denied.",
+        runtime.execApprovalInbox.value.notice
+          ?.message,
+      )
     }
 
   @Test
@@ -386,13 +668,16 @@ class GatewayExecApprovalRuntimeTest {
             releaseUnknownOutcome.await()
             throw GatewayRequestOutcomeUnknown("response lost")
           }
-          "exec.approval.list" ->
+
+          "exec.approval.list" -> {
             """
             [
               {"id":"approval-1","createdAtMs":100,"expiresAtMs":4000000000000},
               {"id":"approval-2","createdAtMs":101,"expiresAtMs":4000000000000}
             ]
             """.trimIndent()
+          }
+
           "approval.get" -> {
             val id =
               Json
@@ -412,7 +697,10 @@ class GatewayExecApprovalRuntimeTest {
               throw GatewayRequestOutcomeUnknown("readback unavailable")
             }
           }
-          else -> error("unexpected method $method")
+
+          else -> {
+            error("unexpected method $method")
+          }
         }
       }
 
@@ -423,7 +711,7 @@ class GatewayExecApprovalRuntimeTest {
 
       releaseUnknownOutcome.complete(Unit)
       waitUntil {
-        runtime.execApprovals.value
+        runtime.execApprovalInbox.value.approvals
           .firstOrNull { it.id == "approval-1" }
           ?.errorText
           ?.startsWith("Resolution outcome unknown") == true
@@ -433,10 +721,15 @@ class GatewayExecApprovalRuntimeTest {
       withTimeout(2_000) { retainedReadReturning.await() }
       delay(100)
 
-      val selected = runtime.execApprovals.value.first { it.id == "approval-1" }
+      val selected =
+        runtime.execApprovalInbox.value.approvals
+          .first { it.id == "approval-1" }
       assertEquals("deny", selected.resolvingDecision)
       assertTrue(selected.errorText?.startsWith("Resolution outcome unknown") == true)
-      assertTrue(runtime.execApprovals.value.any { it.id == "approval-2" })
+      assertTrue(
+        runtime.execApprovalInbox.value.approvals
+          .any { it.id == "approval-2" },
+      )
       assertTrue(selectedReads.get() >= 2)
     }
 
@@ -452,25 +745,38 @@ class GatewayExecApprovalRuntimeTest {
       val approvalReads = AtomicInteger()
       runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
         when (method) {
-          "approval.resolve" -> throw GatewayRequestOutcomeUnknown("response lost")
-          "exec.approval.list" ->
+          "approval.resolve" -> {
+            throw GatewayRequestOutcomeUnknown("response lost")
+          }
+
+          "exec.approval.list" -> {
             """[{"id":"approval-1","createdAtMs":100,"expiresAtMs":4000000000000}]"""
-          "approval.get" ->
+          }
+
+          "approval.get" -> {
             when (approvalReads.incrementAndGet()) {
               1 -> {
                 pendingReadStarted.complete(Unit)
                 releasePendingRead.await()
                 unifiedGet(status = "pending", decision = null)
               }
+
               2 -> {
                 staleRefreshReadStarted.complete(Unit)
                 releaseStaleRefreshRead.await()
                 staleRefreshResponseReturning.complete(Unit)
                 unifiedGet(status = "pending", decision = null)
               }
-              else -> error("unexpected extra approval.get")
+
+              else -> {
+                error("unexpected extra approval.get")
+              }
             }
-          else -> error("unexpected method $method")
+          }
+
+          else -> {
+            error("unexpected method $method")
+          }
         }
       }
 
@@ -481,7 +787,7 @@ class GatewayExecApprovalRuntimeTest {
 
       releasePendingRead.complete(Unit)
       waitUntil {
-        runtime.execApprovals.value.singleOrNull()?.let { row ->
+        runtime.execApprovalInbox.value.approvals.singleOrNull()?.let { row ->
           row.resolvingDecision == null &&
             row.errorText == "The Gateway still shows this approval as pending. Review it before trying again."
         } == true
@@ -491,7 +797,9 @@ class GatewayExecApprovalRuntimeTest {
       withTimeout(2_000) { staleRefreshResponseReturning.await() }
       delay(100)
 
-      val finalRow = runtime.execApprovals.value.single()
+      val finalRow =
+        runtime.execApprovalInbox.value.approvals
+          .single()
       assertNull(finalRow.resolvingDecision)
       assertEquals(
         "The Gateway still shows this approval as pending. Review it before trying again.",
@@ -504,23 +812,36 @@ class GatewayExecApprovalRuntimeTest {
   fun legacyUnknownWriteUnlocksAfterReconnectProvesApprovalStillPending() =
     runBlocking {
       val runtime = approvalRuntime(legacyMethods)
+      val initialResolutionFinished = CompletableDeferred<Unit>()
       runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
         when (method) {
-          "exec.approval.resolve", "exec.approval.get" -> throw GatewayRequestOutcomeUnknown("disconnected")
-          else -> error("unexpected method $method")
+          "exec.approval.resolve" -> {
+            currentCoroutineContext().job.invokeOnCompletion { initialResolutionFinished.complete(Unit) }
+            throw GatewayRequestOutcomeUnknown("disconnected")
+          }
+
+          "exec.approval.get" -> {
+            throw GatewayRequestOutcomeUnknown("disconnected")
+          }
+
+          else -> {
+            error("unexpected method $method")
+          }
         }
       }
 
       runtime.resolveExecApproval("approval-1", "deny")
       waitUntil {
-        runtime.execApprovals.value
-          .singleOrNull()
-          ?.errorText
-          ?.startsWith("Resolution outcome unknown") == true
+        // The unknown-outcome message appears before the immediate verification read.
+        initialResolutionFinished.isCompleted &&
+          runtime.execApprovalInbox.value.approvals
+            .singleOrNull()
+            ?.errorText
+            ?.startsWith("Resolution outcome unknown") == true
       }
       assertEquals(
         "deny",
-        runtime.execApprovals.value
+        runtime.execApprovalInbox.value.approvals
           .single()
           .resolvingDecision,
       )
@@ -531,24 +852,37 @@ class GatewayExecApprovalRuntimeTest {
       runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
         reconnectMethods += method
         when (method) {
-          "exec.approval.list" ->
+          "exec.approval.list" -> {
             """[{"id":"approval-1","createdAtMs":100,"expiresAtMs":4000000000000}]"""
-          "exec.approval.get" -> legacyGet()
-          "exec.approval.resolve" -> """{"ok":true}"""
-          else -> error("unexpected method $method")
+          }
+
+          "exec.approval.get" -> {
+            legacyGet()
+          }
+
+          "exec.approval.resolve" -> {
+            """{"ok":true}"""
+          }
+
+          else -> {
+            error("unexpected method $method")
+          }
         }
       }
 
       runtime.refreshExecApprovals()
       waitUntil {
-        runtime.execApprovals.value.singleOrNull()?.let { row ->
+        runtime.execApprovalInbox.value.approvals.singleOrNull()?.let { row ->
           row.resolvingDecision == null &&
             row.errorText == "The Gateway still shows this approval as pending. Review it before trying again."
         } == true
       }
 
       runtime.resolveExecApproval("approval-1", "deny")
-      waitUntil { runtime.execApprovals.value.isEmpty() }
+      waitUntil {
+        runtime.execApprovalInbox.value.approvals
+          .isEmpty()
+      }
 
       assertEquals(
         listOf(
@@ -571,9 +905,16 @@ class GatewayExecApprovalRuntimeTest {
       }
 
       runtime.resolveExecApproval("approval-1", "allow-once")
-      waitUntil { runtime.execApprovals.value.isEmpty() }
+      waitUntil {
+        runtime.execApprovalInbox.value.approvals
+          .isEmpty()
+      }
 
-      assertEquals("Gateway recorded approval once.", runtime.execApprovalsNotice.value?.message)
+      assertEquals(
+        "Gateway recorded approval once.",
+        runtime.execApprovalInbox.value.notice
+          ?.message,
+      )
     }
 
   @Test
@@ -589,8 +930,14 @@ class GatewayExecApprovalRuntimeTest {
             releaseResolve.await()
             unifiedResolve(applied = true, status = "allowed", decision = "allow-once")
           }
-          "approval.get" -> unifiedGet(status = "denied", decision = "deny")
-          else -> error("unexpected method $method")
+
+          "approval.get" -> {
+            unifiedGet(status = "denied", decision = "deny")
+          }
+
+          else -> {
+            error("unexpected method $method")
+          }
         }
       }
 
@@ -601,12 +948,23 @@ class GatewayExecApprovalRuntimeTest {
         "exec.approval.resolved",
         """{"id":"approval-1","decision":"deny","resolvedBy":"other","ts":150}""",
       )
-      waitUntil { runtime.execApprovals.value.isEmpty() }
-      assertEquals("A prior response already denied this approval.", runtime.execApprovalsNotice.value?.message)
+      waitUntil {
+        runtime.execApprovalInbox.value.approvals
+          .isEmpty()
+      }
+      assertEquals(
+        "A prior response already denied this approval.",
+        runtime.execApprovalInbox.value.notice
+          ?.message,
+      )
 
       releaseResolve.complete(Unit)
       delay(100)
-      assertEquals("A prior response already denied this approval.", runtime.execApprovalsNotice.value?.message)
+      assertEquals(
+        "A prior response already denied this approval.",
+        runtime.execApprovalInbox.value.notice
+          ?.message,
+      )
     }
 
   @Test
@@ -624,9 +982,14 @@ class GatewayExecApprovalRuntimeTest {
             releaseResolve.await()
             """{"ok":true}"""
           }
-          "exec.approval.list", "exec.approval.get" ->
+
+          "exec.approval.list", "exec.approval.get" -> {
             throw rejected("UNAVAILABLE", "$method failed")
-          else -> error("unexpected method $method")
+          }
+
+          else -> {
+            error("unexpected method $method")
+          }
         }
       }
 
@@ -638,20 +1001,40 @@ class GatewayExecApprovalRuntimeTest {
         """{"id":"approval-1","decision":"deny","resolvedBy":"other","ts":150,"request":{}}""",
       )
 
-      assertEquals(listOf("approval-2"), runtime.execApprovals.value.map { it.id })
-      assertEquals("approval-1", runtime.execApprovalsNotice.value?.approvalId)
-      assertEquals("A prior response already denied this approval.", runtime.execApprovalsNotice.value?.message)
+      assertEquals(
+        listOf("approval-2"),
+        runtime.execApprovalInbox.value.approvals
+          .map { it.id },
+      )
+      assertEquals(
+        "approval-1",
+        runtime.execApprovalInbox.value.notice
+          ?.approvalId,
+      )
+      assertEquals(
+        "A prior response already denied this approval.",
+        runtime.execApprovalInbox.value.notice
+          ?.message,
+      )
       assertEquals(listOf("exec.approval.resolve"), methods)
 
       releaseResolve.complete(Unit)
       delay(100)
-      assertEquals("A prior response already denied this approval.", runtime.execApprovalsNotice.value?.message)
+      assertEquals(
+        "A prior response already denied this approval.",
+        runtime.execApprovalInbox.value.notice
+          ?.message,
+      )
 
       runtime.refreshExecApprovals()
-      waitUntil { runtime.execApprovalsErrorText.value != null && !runtime.execApprovalsRefreshing.value }
+      waitUntil { runtime.execApprovalInbox.value.errorText != null && !runtime.execApprovalInbox.value.refreshing }
 
       assertEquals(listOf("exec.approval.resolve", "exec.approval.list"), methods)
-      assertEquals(listOf("approval-2"), runtime.execApprovals.value.map { it.id })
+      assertEquals(
+        listOf("approval-2"),
+        runtime.execApprovalInbox.value.approvals
+          .map { it.id },
+      )
     }
 
   @Test
@@ -673,15 +1056,29 @@ class GatewayExecApprovalRuntimeTest {
       }
 
       runtime.resolveExecApproval("approval-1", "allow-once")
-      waitUntil { runtime.execApprovals.value.map { it.id } == listOf("approval-2") }
+      waitUntil {
+        runtime.execApprovalInbox.value.approvals
+          .map { it.id } == listOf("approval-2")
+      }
 
-      assertEquals("approval-1", runtime.execApprovalsNotice.value?.approvalId)
-      assertEquals("A prior response already resolved this approval.", runtime.execApprovalsNotice.value?.message)
-      assertTrue(runtime.execApprovalsNotice.value?.warning == true)
+      assertEquals(
+        "approval-1",
+        runtime.execApprovalInbox.value.notice
+          ?.approvalId,
+      )
+      assertEquals(
+        "A prior response already resolved this approval.",
+        runtime.execApprovalInbox.value.notice
+          ?.message,
+      )
+      assertTrue(
+        runtime.execApprovalInbox.value.notice
+          ?.warning == true,
+      )
 
       runtime.resolveExecApproval("approval-2", "deny")
       waitUntil {
-        runtime.execApprovals.value.singleOrNull()?.let { row ->
+        runtime.execApprovalInbox.value.approvals.singleOrNull()?.let { row ->
           row.id == "approval-2" &&
             row.resolvingDecision == null &&
             row.errorText == "Could not resolve approval. Refresh and try again."
@@ -706,8 +1103,14 @@ class GatewayExecApprovalRuntimeTest {
             releaseResolve.await()
             throw rejected("INVALID_REQUEST", "approval rejected", "APPROVAL_ALREADY_RESOLVED")
           }
-          "exec.approval.get" -> legacyGet()
-          else -> error("unexpected method $method")
+
+          "exec.approval.get" -> {
+            legacyGet()
+          }
+
+          else -> {
+            error("unexpected method $method")
+          }
         }
       }
 
@@ -721,7 +1124,7 @@ class GatewayExecApprovalRuntimeTest {
       // The settled rejection must reconcile through current canonical state instead
       // of freezing until a perfectly timed manual refresh.
       waitUntil {
-        runtime.execApprovals.value.singleOrNull()?.let { row ->
+        runtime.execApprovalInbox.value.approvals.singleOrNull()?.let { row ->
           row.resolvingDecision == null &&
             row.errorText == "The Gateway still shows this approval as pending. Review it before trying again."
         } == true
@@ -740,30 +1143,56 @@ class GatewayExecApprovalRuntimeTest {
       }
 
       runtime.resolveExecApproval("approval-1", "allow-once")
-      waitUntil { runtime.execApprovals.value.map { it.id } == listOf("approval-2") }
-      assertEquals("A prior response already denied this approval.", runtime.execApprovalsNotice.value?.message)
+      waitUntil {
+        runtime.execApprovalInbox.value.approvals
+          .map { it.id } == listOf("approval-2")
+      }
+      assertEquals(
+        "A prior response already denied this approval.",
+        runtime.execApprovalInbox.value.notice
+          ?.message,
+      )
 
       val refreshMethods = mutableListOf<String>()
       runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
         refreshMethods += method
         when (method) {
-          "exec.approval.list" ->
+          "exec.approval.list" -> {
             """[{"id":"approval-2","createdAtMs":101,"expiresAtMs":4000000000000}]"""
-          "approval.get" -> unifiedGet(status = "pending", decision = null, id = "approval-2")
-          else -> error("unexpected method $method")
+          }
+
+          "approval.get" -> {
+            unifiedGet(status = "pending", decision = null, id = "approval-2")
+          }
+
+          else -> {
+            error("unexpected method $method")
+          }
         }
       }
       runtime.refreshExecApprovals()
-      waitUntil { refreshMethods.contains("approval.get") && !runtime.execApprovalsRefreshing.value }
-      assertEquals(listOf("approval-2"), runtime.execApprovals.value.map { it.id })
+      waitUntil { refreshMethods.contains("approval.get") && !runtime.execApprovalInbox.value.refreshing }
+      assertEquals(
+        listOf("approval-2"),
+        runtime.execApprovalInbox.value.approvals
+          .map { it.id },
+      )
 
       // A refresh must not wipe an unacknowledged losing outcome; only the user (or a
       // replacement terminal notice) clears the banner.
-      assertEquals("A prior response already denied this approval.", runtime.execApprovalsNotice.value?.message)
-      assertEquals("approval-1", runtime.execApprovalsNotice.value?.approvalId)
+      assertEquals(
+        "A prior response already denied this approval.",
+        runtime.execApprovalInbox.value.notice
+          ?.message,
+      )
+      assertEquals(
+        "approval-1",
+        runtime.execApprovalInbox.value.notice
+          ?.approvalId,
+      )
 
-      runtime.dismissExecApprovalsNotice(requireNotNull(runtime.execApprovalsNotice.value))
-      assertNull(runtime.execApprovalsNotice.value)
+      runtime.dismissExecApprovalsNotice(requireNotNull(runtime.execApprovalInbox.value.notice))
+      assertNull(runtime.execApprovalInbox.value.notice)
     }
 
   @Test
@@ -774,20 +1203,34 @@ class GatewayExecApprovalRuntimeTest {
         check(method == "approval.resolve")
         val request = Json.parseToJsonElement(requireNotNull(params)).jsonObject
         when (val id = request["id"]?.jsonPrimitive?.content) {
-          "approval-1" -> unifiedResolve(applied = false, status = "denied", decision = "deny")
-          "approval-2" ->
+          "approval-1" -> {
+            unifiedResolve(applied = false, status = "denied", decision = "deny")
+          }
+
+          "approval-2" -> {
             throw rejected("UNAVAILABLE", "resolve failed")
-          else -> error("unexpected approval id $id")
+          }
+
+          else -> {
+            error("unexpected approval id $id")
+          }
         }
       }
 
       runtime.resolveExecApproval("approval-1", "allow-once")
-      waitUntil { runtime.execApprovals.value.map { it.id } == listOf("approval-2") }
-      assertEquals("approval-1", runtime.execApprovalsNotice.value?.approvalId)
+      waitUntil {
+        runtime.execApprovalInbox.value.approvals
+          .map { it.id } == listOf("approval-2")
+      }
+      assertEquals(
+        "approval-1",
+        runtime.execApprovalInbox.value.notice
+          ?.approvalId,
+      )
 
       runtime.resolveExecApproval("approval-2", "deny")
       waitUntil {
-        runtime.execApprovals.value.singleOrNull()?.let { row ->
+        runtime.execApprovalInbox.value.approvals.singleOrNull()?.let { row ->
           row.id == "approval-2" &&
             row.resolvingDecision == null &&
             row.errorText == "Could not resolve approval. Refresh and try again."
@@ -796,8 +1239,16 @@ class GatewayExecApprovalRuntimeTest {
 
       // Starting (and failing) a write for approval-2 must not clear the unacknowledged
       // losing outcome for approval-1; only the user or a replacement terminal clears it.
-      assertEquals("approval-1", runtime.execApprovalsNotice.value?.approvalId)
-      assertEquals("A prior response already denied this approval.", runtime.execApprovalsNotice.value?.message)
+      assertEquals(
+        "approval-1",
+        runtime.execApprovalInbox.value.notice
+          ?.approvalId,
+      )
+      assertEquals(
+        "A prior response already denied this approval.",
+        runtime.execApprovalInbox.value.notice
+          ?.message,
+      )
     }
 
   @Test
@@ -807,31 +1258,39 @@ class GatewayExecApprovalRuntimeTest {
       runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
         when (method) {
           "approval.resolve" -> unifiedResolve(applied = false, status = "denied", decision = "deny")
+
           // Readback for the approval-2 resolved event: this terminal-notice publisher
           // does not hold execApprovalsStateLock, the exact writer the atomic dismiss
           // must not race.
           "approval.get" -> unifiedGet(status = "denied", decision = "deny", id = "approval-2")
+
           else -> error("unexpected method $method")
         }
       }
 
       runtime.resolveExecApproval("approval-1", "allow-once")
-      waitUntil { runtime.execApprovals.value.map { it.id } == listOf("approval-2") }
-      val staleNotice = requireNotNull(runtime.execApprovalsNotice.value)
+      waitUntil {
+        runtime.execApprovalInbox.value.approvals
+          .map { it.id } == listOf("approval-2")
+      }
+      val staleNotice = requireNotNull(runtime.execApprovalInbox.value.notice)
       assertEquals("approval-1", staleNotice.approvalId)
 
       invokeApprovalEvent(runtime, "exec.approval.resolved", """{"id":"approval-2"}""")
-      waitUntil { runtime.execApprovals.value.isEmpty() }
-      val replacement = requireNotNull(runtime.execApprovalsNotice.value)
+      waitUntil {
+        runtime.execApprovalInbox.value.approvals
+          .isEmpty()
+      }
+      val replacement = requireNotNull(runtime.execApprovalInbox.value.notice)
       assertEquals("approval-2", replacement.approvalId)
 
       // compareAndSet semantics: a close tap captured for the first notice must leave
       // the replacement untouched; only dismissing the rendered notice clears it.
       runtime.dismissExecApprovalsNotice(staleNotice)
-      assertEquals(replacement, runtime.execApprovalsNotice.value)
+      assertEquals(replacement, runtime.execApprovalInbox.value.notice)
 
       runtime.dismissExecApprovalsNotice(replacement)
-      assertNull(runtime.execApprovalsNotice.value)
+      assertNull(runtime.execApprovalInbox.value.notice)
     }
 
   @Test
@@ -847,16 +1306,25 @@ class GatewayExecApprovalRuntimeTest {
       }
 
       runtime.resolveExecApproval("approval-1", "allow-once")
-      waitUntil { runtime.execApprovals.value.isEmpty() }
-      val staleNotice = requireNotNull(runtime.execApprovalsNotice.value)
+      waitUntil {
+        runtime.execApprovalInbox.value.approvals
+          .isEmpty()
+      }
+      val staleNotice = requireNotNull(runtime.execApprovalInbox.value.notice)
 
       // The same approval id is re-requested and loses again: the replacement notice
       // carries identical id/message/warning but is a distinct publication.
       invokeApprovalEvent(runtime, "exec.approval.requested", """{"id":"approval-1"}""")
-      waitUntil { runtime.execApprovals.value.map { it.id } == listOf("approval-1") }
+      waitUntil {
+        runtime.execApprovalInbox.value.approvals
+          .map { it.id } == listOf("approval-1")
+      }
       runtime.resolveExecApproval("approval-1", "allow-once")
-      waitUntil { runtime.execApprovals.value.isEmpty() }
-      val replacement = requireNotNull(runtime.execApprovalsNotice.value)
+      waitUntil {
+        runtime.execApprovalInbox.value.approvals
+          .isEmpty()
+      }
+      val replacement = requireNotNull(runtime.execApprovalInbox.value.notice)
       assertEquals(staleNotice.approvalId, replacement.approvalId)
       assertEquals(staleNotice.message, replacement.message)
       assertEquals(staleNotice.warning, replacement.warning)
@@ -865,10 +1333,10 @@ class GatewayExecApprovalRuntimeTest {
       // A close tap captured for the first banner must not clear the equal-looking
       // replacement outcome the user has not acknowledged yet.
       runtime.dismissExecApprovalsNotice(staleNotice)
-      assertEquals(replacement, runtime.execApprovalsNotice.value)
+      assertEquals(replacement, runtime.execApprovalInbox.value.notice)
 
       runtime.dismissExecApprovalsNotice(replacement)
-      assertNull(runtime.execApprovalsNotice.value)
+      assertNull(runtime.execApprovalInbox.value.notice)
     }
 
   @Test
@@ -882,22 +1350,35 @@ class GatewayExecApprovalRuntimeTest {
       runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
         methods += method
         when (method) {
-          "exec.approval.list" ->
+          "exec.approval.list" -> {
             """[{"id":"approval-1","createdAtMs":100,"expiresAtMs":4000000000000}]"""
-          "exec.approval.get" -> legacyGet()
-          "exec.approval.resolve" -> """{"ok":true}"""
-          else -> error("unexpected method $method")
+          }
+
+          "exec.approval.get" -> {
+            legacyGet()
+          }
+
+          "exec.approval.resolve" -> {
+            """{"ok":true}"""
+          }
+
+          else -> {
+            error("unexpected method $method")
+          }
         }
       }
 
       runtime.refreshExecApprovals()
       waitUntil {
-        runtime.execApprovals.value
+        runtime.execApprovalInbox.value.approvals
           .singleOrNull()
           ?.allowedDecisions == listOf("allow-once", "deny")
       }
       runtime.resolveExecApproval("approval-1", "deny")
-      waitUntil { runtime.execApprovals.value.isEmpty() }
+      waitUntil {
+        runtime.execApprovalInbox.value.approvals
+          .isEmpty()
+      }
 
       assertEquals(
         listOf("exec.approval.list", "exec.approval.get", "exec.approval.resolve"),
@@ -915,22 +1396,26 @@ class GatewayExecApprovalRuntimeTest {
       runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
         methods += method
         when (method) {
-          "exec.approval.list" ->
+          "exec.approval.list" -> {
             """[{"id":"approval-1","createdAtMs":100,"expiresAtMs":4000000000000}]"""
-          else -> error("an inconsistent hello must not select approval RPC $method")
+          }
+
+          else -> {
+            error("an inconsistent hello must not select approval RPC $method")
+          }
         }
       }
 
       runtime.refreshExecApprovals()
       waitUntil {
-        runtime.execApprovals.value
+        runtime.execApprovalInbox.value.approvals
           .singleOrNull()
           ?.errorText ==
           "Could not load approval details. Refresh and try again."
       }
       runtime.resolveExecApproval("approval-1", "deny")
       waitUntil {
-        runtime.execApprovals.value
+        runtime.execApprovalInbox.value.approvals
           .singleOrNull()
           ?.let { row ->
             row.resolvingDecision == null && row.errorText == "Could not resolve approval. Refresh and try again."
@@ -948,18 +1433,27 @@ class GatewayExecApprovalRuntimeTest {
       runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
         methods += method
         when (method) {
-          "exec.approval.list" ->
+          "exec.approval.list" -> {
             """[{"id":"approval-1","createdAtMs":100,"expiresAtMs":4000000000000}]"""
-          "approval.get" ->
+          }
+
+          "approval.get" -> {
             throw rejected("INVALID_REQUEST", "unknown method: approval.get")
-          "exec.approval.get" -> error("canonical hello must never downgrade")
-          else -> error("unexpected method $method")
+          }
+
+          "exec.approval.get" -> {
+            error("canonical hello must never downgrade")
+          }
+
+          else -> {
+            error("unexpected method $method")
+          }
         }
       }
 
       runtime.refreshExecApprovals()
       waitUntil {
-        runtime.execApprovals.value
+        runtime.execApprovalInbox.value.approvals
           .singleOrNull()
           ?.errorText ==
           "Could not load approval details. Refresh and try again."
@@ -976,16 +1470,23 @@ class GatewayExecApprovalRuntimeTest {
       runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
         methods += method
         when (method) {
-          "approval.resolve" ->
+          "approval.resolve" -> {
             throw rejected("INVALID_REQUEST", "unknown method: approval.resolve")
-          "exec.approval.resolve" -> error("canonical hello must never downgrade")
-          else -> error("unexpected method $method")
+          }
+
+          "exec.approval.resolve" -> {
+            error("canonical hello must never downgrade")
+          }
+
+          else -> {
+            error("unexpected method $method")
+          }
         }
       }
 
       runtime.resolveExecApproval("approval-1", "deny")
       waitUntil {
-        runtime.execApprovals.value
+        runtime.execApprovalInbox.value.approvals
           .singleOrNull()
           ?.let { row ->
             row.resolvingDecision == null && row.errorText == "Could not resolve approval. Refresh and try again."
@@ -1015,8 +1516,14 @@ class GatewayExecApprovalRuntimeTest {
             }
             unifiedResolve(applied = true, status = "denied", decision = "deny")
           }
-          "exec.approval.resolve" -> error("stale rejection must not trigger legacy fallback")
-          else -> error("unexpected method $method")
+
+          "exec.approval.resolve" -> {
+            error("stale rejection must not trigger legacy fallback")
+          }
+
+          else -> {
+            error("unexpected method $method")
+          }
         }
       }
 
@@ -1030,7 +1537,10 @@ class GatewayExecApprovalRuntimeTest {
       delay(100)
 
       runtime.resolveExecApproval("approval-1", "deny")
-      waitUntil { runtime.execApprovals.value.isEmpty() }
+      waitUntil {
+        runtime.execApprovalInbox.value.approvals
+          .isEmpty()
+      }
 
       assertEquals(listOf("approval.resolve", "approval.resolve"), methods)
     }
@@ -1084,8 +1594,8 @@ class GatewayExecApprovalRuntimeTest {
     runtime: NodeRuntime,
     approvals: List<GatewayExecApprovalSummary>,
   ) {
-    readField<MutableStateFlow<List<GatewayExecApprovalSummary>>>(runtime, "_execApprovals").value =
-      approvals
+    readField<MutableStateFlow<GatewayExecApprovalInboxState>>(runtime, "mutableExecApprovalInbox").value =
+      runtime.execApprovalInbox.value.copy(approvals = approvals)
   }
 
   private fun approvalSummary(
@@ -1139,9 +1649,9 @@ class GatewayExecApprovalRuntimeTest {
     methods: Set<String>,
   ) {
     runtime.javaClass
-      .getDeclaredMethod("replaceGatewayMethods", Set::class.java)
+      .getDeclaredMethod("replaceGatewayMethods", Set::class.java, java.lang.Boolean.TYPE)
       .apply { isAccessible = true }
-      .invoke(runtime, methods)
+      .invoke(runtime, methods, true)
   }
 
   private fun writeField(

@@ -9,6 +9,7 @@ vi.mock("../../globals.js", () => ({
   logVerbose: logVerboseMock,
 }));
 
+import { AcpRuntimeError } from "../runtime/errors.js";
 import type { AcpRuntimeBackend } from "../runtime/registry.js";
 import { tryPrepareFreshManagerRuntimeSession } from "./manager.runtime-resume-state.js";
 import type { SessionAcpMeta } from "./manager.types.js";
@@ -28,6 +29,7 @@ function callParams(backend: AcpRuntimeBackend | null) {
     cfg: {},
     meta,
     sessionKey: "agent:main:acp:test",
+    agentId: "main",
     logPrefix: "sessions.session-reset",
   };
 }
@@ -61,46 +63,26 @@ describe("tryPrepareFreshManagerRuntimeSession", () => {
       ),
     );
   });
+});
 
-  it("invokes the hook and stays silent when preparation applies", async () => {
-    logVerboseMock.mockClear();
-    const prepareFreshSession = vi.fn(async () => {});
-    const backend = {
-      id: "acpx",
-      runtime: {
-        ensureSession: vi.fn(),
-        async *runTurn() {},
-        prepareFreshSession,
-        cancel: vi.fn(async () => {}),
-        close: vi.fn(async () => {}),
-      },
-    } as AcpRuntimeBackend;
-    await tryPrepareFreshManagerRuntimeSession(callParams(backend));
-    expect(prepareFreshSession).toHaveBeenCalledWith({ sessionKey: "agent:main:acp:test" });
-    expect(logVerboseMock).not.toHaveBeenCalled();
+it("does not turn an owner migration rejection into successful fresh preparation", async () => {
+  const error = new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "run doctor --fix", {
+    detailCode: "SESSION_OWNER_MIGRATION_REQUIRED",
   });
-
-  it("records preparation failures without throwing", async () => {
-    logVerboseMock.mockClear();
-    const backend = {
-      id: "acpx",
-      runtime: {
-        ensureSession: vi.fn(),
-        async *runTurn() {},
-        prepareFreshSession: vi.fn(async () => {
-          throw new Error("backend exploded");
-        }),
-        cancel: vi.fn(async () => {}),
-        close: vi.fn(async () => {}),
-      },
-    } as AcpRuntimeBackend;
-    await expect(
-      tryPrepareFreshManagerRuntimeSession(callParams(backend)),
-    ).resolves.toBeUndefined();
-    expect(logVerboseMock).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "unable to prepare fresh session for agent:main:acp:test: backend exploded",
-      ),
-    );
-  });
+  const backend: AcpRuntimeBackend = {
+    id: "acpx",
+    runtime: {
+      ownerAwareSessions: 1,
+      ensureSession: vi.fn(),
+      async *runTurn() {},
+      cancel: vi.fn(async () => {}),
+      close: vi.fn(async () => {}),
+      prepareFreshSession: vi.fn(async () => {
+        throw error;
+      }),
+    },
+  };
+  await expect(
+    tryPrepareFreshManagerRuntimeSession({ ...callParams(backend), sessionKey: "global" }),
+  ).rejects.toBe(error);
 });

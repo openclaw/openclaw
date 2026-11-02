@@ -1,4 +1,3 @@
-// Telegram plugin module implements allow from behavior.
 export function normalizeTelegramAllowFromEntry(raw: unknown): string {
   const base = typeof raw === "string" ? raw : typeof raw === "number" ? String(raw) : "";
   return base

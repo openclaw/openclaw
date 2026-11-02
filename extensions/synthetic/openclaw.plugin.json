@@ -1,10 +1,16 @@
 {
   "id": "synthetic",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },
   "enabledByDefault": true,
   "providers": ["synthetic"],
+  "modelCatalog": {
+    "discovery": {
+      "synthetic": "refreshable"
+    }
+  },
   "setup": {
     "providers": [
       {

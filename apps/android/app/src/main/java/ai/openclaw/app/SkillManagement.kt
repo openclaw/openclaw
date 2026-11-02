@@ -7,9 +7,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.contentOrNull
 
-private const val CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED = "clawhub_risk_acknowledgement_required"
 internal const val CLAWHUB_INSTALL_REQUEST_TIMEOUT_MS = 125_000L
 internal const val CLAWHUB_SKILL_GATEWAY_UNAVAILABLE = "Update the Gateway to search and install ClawHub skills from Android."
 internal val CLAWHUB_SKILL_GATEWAY_METHODS = setOf("skills.search", "skills.detail", "skills.install")
@@ -22,8 +20,6 @@ data class GatewayClawHubSkillSearchState(
   val reviewingSlug: String? = null,
   val installReview: GatewayClawHubInstallReview? = null,
   val installingSlugs: Set<String> = emptySet(),
-  val acknowledgeSlug: String? = null,
-  val acknowledgeVersion: String? = null,
   val errorText: String? = null,
   val messageText: String? = null,
 )
@@ -68,8 +64,6 @@ data class GatewayClawHubInstallReview(
 internal data class GatewayClawHubInstallRejection(
   val message: String,
   val warning: String?,
-  val acknowledgeVersion: String?,
-  val requiresAcknowledgement: Boolean,
 )
 
 internal fun parseClawHubSearchResults(
@@ -78,20 +72,19 @@ internal fun parseClawHubSearchResults(
 ): List<GatewayClawHubSkillSummary> {
   val root = json.parseToJsonElement(raw) as? JsonObject ?: return emptyList()
   return (root["results"] as? JsonArray)
-    ?.mapNotNull { item ->
-      val value = item as? JsonObject ?: return@mapNotNull null
-      val slug = value.string("slug") ?: return@mapNotNull null
-      val displayName = value.string("displayName") ?: return@mapNotNull null
+    .mapObjects { value ->
+      val slug = value.nonBlankString("slug") ?: return@mapObjects null
+      val displayName = value.nonBlankString("displayName") ?: return@mapObjects null
       GatewayClawHubSkillSummary(
         slug = slug,
-        installRef = value.string("installRef"),
+        installRef = value.nonBlankString("installRef"),
         installOnly = (value["installOnly"] as? JsonPrimitive)?.booleanOrNull,
-        trustState = value.string("trustState"),
+        trustState = value.nonBlankString("trustState"),
         displayName = displayName,
-        summary = value.string("summary"),
-        version = value.string("version"),
+        summary = value.nonBlankString("summary"),
+        version = value.nonBlankString("version"),
       )
-    }.orEmpty()
+    }
 }
 
 internal fun parseClawHubInstallReview(
@@ -105,54 +98,39 @@ internal fun parseClawHubInstallReview(
   val owner = root["owner"] as? JsonObject
   // The detail response is the install review boundary. Prefer its current
   // version over the potentially stale search result shown before review.
-  val version = latestVersion?.string("version") ?: fallback.version ?: return null
-  val ownerDisplayName = owner?.string("displayName")
-  val ownerHandle = owner?.string("handle")
+  val version = latestVersion?.nonBlankString("version") ?: fallback.version ?: return null
+  val ownerDisplayName = owner?.nonBlankString("displayName")
+  val ownerHandle = owner?.nonBlankString("handle")
   val reviewedSlug =
     canonicalClawHubSkillReference(
-      slug = skill?.string("slug") ?: fallback.slug,
+      slug = skill?.nonBlankString("slug") ?: fallback.slug,
       ownerHandle = ownerHandle,
     ) ?: return null
   val author =
     when {
-      ownerDisplayName != null && ownerHandle != null && !ownerDisplayName.equals(ownerHandle, ignoreCase = true) ->
-        "$ownerDisplayName (@$ownerHandle)"
+      ownerDisplayName != null && ownerHandle != null && !ownerDisplayName.equals(ownerHandle, ignoreCase = true) -> "$ownerDisplayName (@$ownerHandle)"
       ownerDisplayName != null -> ownerDisplayName
       ownerHandle != null -> "@$ownerHandle"
       else -> "Unknown publisher"
     }
   return GatewayClawHubInstallReview(
     slug = reviewedSlug,
-    displayName = skill?.string("displayName") ?: fallback.displayName,
-    summary = skill?.string("summary") ?: fallback.summary,
+    displayName = skill?.nonBlankString("displayName") ?: fallback.displayName,
+    summary = skill?.nonBlankString("summary") ?: fallback.summary,
     version = version,
     author = author,
   )
 }
 
-internal fun clawHubInstallRejection(
-  error: GatewaySession.ErrorShape,
-  attemptedVersion: String?,
-): GatewayClawHubInstallRejection {
-  val details = error.details
-  val reviewedVersion = attemptedVersion?.trim()?.takeIf(String::isNotEmpty)
-  val gatewayVersion = details?.clawhubVersion?.trim()?.takeIf(String::isNotEmpty)
-  val acknowledgementRequested =
-    details?.clawhubTrustCode == CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED
-  val requiresAcknowledgement =
-    acknowledgementRequested && reviewedVersion != null && gatewayVersion == reviewedVersion
-  return GatewayClawHubInstallRejection(
-    message =
-      if (acknowledgementRequested && !requiresAcknowledgement) {
-        "The Gateway evaluated a different ClawHub release. Review the skill again before installing."
-      } else {
-        error.message.ifBlank { "The Gateway rejected this ClawHub install." }
-      },
-    warning = details?.clawhubWarning?.trim()?.takeIf(String::isNotEmpty),
-    acknowledgeVersion = reviewedVersion.takeIf { requiresAcknowledgement },
-    requiresAcknowledgement = requiresAcknowledgement,
+internal fun clawHubInstallRejection(error: GatewaySession.ErrorShape): GatewayClawHubInstallRejection =
+  GatewayClawHubInstallRejection(
+    message = error.message.ifBlank { "The Gateway rejected this ClawHub install." },
+    warning =
+      error.details
+        ?.clawhubWarning
+        ?.trim()
+        ?.takeIf(String::isNotEmpty),
   )
-}
 
 internal fun supportsClawHubSkillManagement(methods: Set<String>): Boolean = methods.containsAll(CLAWHUB_SKILL_GATEWAY_METHODS)
 
@@ -167,13 +145,11 @@ internal fun clawHubDetailParams(slug: String): String = buildJsonObject { put("
 internal fun clawHubInstallParams(
   slug: String,
   version: String?,
-  acknowledgeRisk: Boolean,
 ): String =
   buildJsonObject {
     put("source", JsonPrimitive("clawhub"))
     put("slug", JsonPrimitive(slug))
     version?.trim()?.takeIf(String::isNotEmpty)?.let { put("version", JsonPrimitive(it)) }
-    if (acknowledgeRisk) put("acknowledgeClawHubRisk", JsonPrimitive(true))
     put("timeoutMs", JsonPrimitive(120_000))
   }.toString()
 
@@ -194,9 +170,10 @@ internal fun formatClawHubInstallMessage(
 internal fun isClawHubSkillInstalled(
   skills: List<GatewaySkillSummary>,
   slug: String,
+  version: String? = null,
 ): Boolean {
   val reference = parseClawHubSkillReference(slug) ?: return false
-  return skills.any { it.matchesClawHubReference(reference) }
+  return skills.any { it.matchesClawHubReference(reference) && (version == null || it.clawHubInstalledVersion == version) }
 }
 
 internal fun isClawHubSkillInstalled(
@@ -206,9 +183,7 @@ internal fun isClawHubSkillInstalled(
   if (!searchResult.canReadDetails) {
     isClawHubSkillInstalledByReference(skills, searchResult.reference)
   } else {
-    searchResult.version?.let { version ->
-      isClawHubSkillInstalled(skills, searchResult.reference, version)
-    } ?: isClawHubSkillInstalled(skills, searchResult.reference)
+    isClawHubSkillInstalled(skills, searchResult.reference, searchResult.version)
   }
 
 /**
@@ -223,15 +198,6 @@ internal fun isClawHubSkillInstalledByReference(
   if (reference.isEmpty()) return false
   return skills.any { it.clawHubValid && it.clawHubRequestedReference == reference }
 }
-
-internal fun isClawHubSkillInstalled(
-  skills: List<GatewaySkillSummary>,
-  slug: String,
-  version: String,
-): Boolean =
-  parseClawHubSkillReference(slug)?.let { reference ->
-    skills.any { it.matchesClawHubReference(reference) && it.clawHubInstalledVersion == version }
-  } ?: false
 
 internal fun isClawHubSkillOperationActive(
   activeSlugs: Set<String>,
@@ -282,9 +248,3 @@ private fun GatewaySkillSummary.matchesClawHubReference(reference: ClawHubSkillR
 }
 
 internal fun clawHubInstallOutcomeUnknownMessage(slug: String): String = "The result for $slug is unknown. Reconnect, refresh Skills, then retry; the Gateway safely joins a matching install that is still running."
-
-private fun JsonObject.string(key: String): String? =
-  (get(key) as? JsonPrimitive)
-    ?.contentOrNull
-    ?.trim()
-    ?.takeIf(String::isNotEmpty)

@@ -1,0 +1,658 @@
+import assert from "node:assert/strict";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
+import {
+  withGatewayPersonalToolUser,
+  withGatewayToolCallerIdentity,
+} from "../agents/tools/gateway-caller-context.js";
+import { createGitHubIdentityStatusTool } from "../agents/tools/github-identity-status-tool.js";
+import {
+  callAgentToolGatewayRequest,
+  runWithGatewayToolContinuationContext,
+} from "../agents/tools/in-process-gateway.js";
+import { runSessionsSendA2AFlow } from "../agents/tools/sessions-send-tool.a2a.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { createReplyTurnParticipants } from "../sessions/session-controller.tool-authority.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  captureGatewayDeviceRevocation,
+  invalidateGatewayDeviceRevocation,
+  readGatewayDeviceSourceAuthority,
+} from "./device-revocation.js";
+import * as operatorCapture from "./operator-run-authority.js";
+import { retainGatewayOperatorRun } from "./operator-run-cancellation.js";
+import { createOperatorRecoveryFixture } from "./operator-run-recovery.test-support.js";
+import type {
+  GatewayRequestHandler,
+  GatewayRequestHandlerOptions,
+} from "./server-methods/types.js";
+import {
+  captureOperatorToolGatewayContinuationContext,
+  captureOperatorToolGatewayRequestContinuationContext,
+  withOperatorToolGatewayAuthority,
+} from "./server-plugin-in-process-dispatch.js";
+import {
+  createContext,
+  createOperatorClient,
+} from "./server-plugin-in-process-dispatch.test-support.js";
+
+const startTurn = vi.hoisted(() => vi.fn());
+const waitForTurn = vi.hoisted(() => vi.fn());
+type RequestScope = Parameters<typeof withPluginRuntimeGatewayRequestScope>[0];
+
+function inScope<T>(scope: Omit<RequestScope, "isWebchatConnect">, callback: () => T) {
+  return withPluginRuntimeGatewayRequestScope(
+    { isWebchatConnect: () => false, ...scope },
+    callback,
+  );
+}
+
+function callAgent(
+  params: Parameters<typeof callAgentToolGatewayRequest>[0]["params"],
+  expectFinal = false,
+) {
+  return callAgentToolGatewayRequest({ method: "agent", params, expectFinal });
+}
+
+function putSession(sessionKey: string, entry: Parameters<typeof upsertSessionEntryCore>[1]) {
+  return upsertSessionEntryCore({ agentId: "main", sessionKey }, entry);
+}
+
+function createOperatorScope(profileName: string, scopes = ["operator.write"]) {
+  const client = createOperatorClient({ profileName, scopes });
+  const context = createContext();
+  return {
+    client,
+    context,
+    run: <T>(callback: () => T, overrides: Partial<RequestScope> = {}) =>
+      inScope({ client, context, ...overrides }, callback),
+  };
+}
+
+vi.mock("./agent-turn/agent-turn-service.js", () => ({
+  createAgentTurnService: (_params: unknown, assertContextCurrent?: () => void) => ({
+    startTurn: (input: unknown) => startTurn(input, assertContextCurrent),
+    waitForTurn,
+  }),
+}));
+
+describe("typed in-process agent continuation authorization", () => {
+  beforeEach(() => {
+    startTurn.mockReset();
+    waitForTurn.mockReset();
+  });
+
+  it("dispatches only the captured plugin reload once", () =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const requests: unknown[] = [];
+      const reload: GatewayRequestHandler = async ({ params, respond }) => {
+        requests.push(params);
+        respond(true, { ok: true });
+      };
+      const context = createContext([["plugins.reload", "operator.admin", "plugins", reload]]);
+      await inScope({ context }, async () => {
+        const plugin = { pluginId: "original" };
+        const request = {
+          method: "plugins.reload",
+          params: { plugins: [plugin] },
+        };
+        const captured = await captureOperatorToolGatewayRequestContinuationContext(
+          { sessionKey: "agent:main:reload" },
+          request,
+        );
+        assert(captured, "Expected reload continuation");
+        try {
+          plugin.pluginId = "replacement";
+          const options = { assertCurrent: () => {}, signal: new AbortController().signal };
+          await expect(captured.dispatch(options)).resolves.toEqual({ ok: true });
+          await expect(captured.dispatch(options)).rejects.toThrow("already dispatched");
+          expect(requests).toEqual([{ plugins: [{ pluginId: "original" }] }]);
+        } finally {
+          captured.release();
+        }
+      });
+    }));
+
+  it.each(["parent settled", "parent retired before acceptance"] as const)(
+    "checks an accepted child independently of recovered parent work: %s",
+    (boundary) =>
+      withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
+        setRuntimeConfigSnapshot({});
+        const context = createContext();
+        context.resolveGatewayContext = () => context;
+        const profile = ensureProfileForEmail("recovered-facade-parent@example.test");
+        const fixture = await createOperatorRecoveryFixture({
+          stateDir,
+          context,
+          profileId: profile.id,
+          config: {},
+        });
+        const restored = await fixture.restore();
+        assert(restored, "Expected recovered parent authority");
+        const childKey = "agent:main:facade-child";
+        await putSession(childKey, {
+          sessionId: "facade-child-session",
+          updatedAt: Date.now(),
+          spawnedBy: fixture.target.sessionKey,
+          parentSessionId: fixture.target.sessionId,
+        });
+        const client = {
+          ...fixture.client,
+          internal: { ...fixture.client.internal, operatorRunAuthority: restored.authority },
+        };
+        const entered = createDeferredCore();
+        const resume = createDeferredCore();
+        const outcome = createDeferredCore<unknown>();
+        let child: Awaited<ReturnType<typeof retainGatewayOperatorRun>> | undefined;
+        let effects = 0;
+        startTurn.mockImplementation(
+          async (
+            { principal, io, assertAdmissionCurrent, preflight: { request } },
+            assertGatewayLifetimeCurrent,
+          ) => {
+            try {
+              if (boundary === "parent retired before acceptance") {
+                fixture.retire();
+              }
+              assertAdmissionCurrent?.();
+              child = await retainGatewayOperatorRun({
+                client: principal,
+                context,
+                runId: request.idempotencyKey,
+                spawnedBy: fixture.target.sessionKey,
+              });
+              child.authority?.assertCurrent();
+              io.emitAcceptance([
+                true,
+                { runId: request.idempotencyKey, status: "accepted" },
+                undefined,
+              ]);
+              entered.resolve();
+              await resume.promise;
+              // The execution boundary checks its facade binding before its admitted principal.
+              assertGatewayLifetimeCurrent?.();
+              child.authority?.assertCurrent();
+              effects += 1;
+              io.emitFinal([true, { runId: request.idempotencyKey, status: "ok" }, undefined]);
+              outcome.resolve(undefined);
+            } catch (error) {
+              entered.resolve();
+              outcome.resolve(error);
+              throw error;
+            }
+          },
+        );
+        try {
+          const pending = inScope({ client, context, resolveGatewayContext: () => context }, () =>
+            callAgent({
+              agentId: "main",
+              sessionKey: childKey,
+              message: "Continue independently",
+              idempotencyKey: "accepted-recovered-facade-child",
+            }),
+          );
+          if (boundary === "parent retired before acceptance") {
+            await expect(pending).rejects.toThrow("Recovery claim retired");
+            expect(effects).toBe(0);
+            return;
+          }
+          await pending;
+          await entered.promise;
+          assert(child?.authority, "Expected independently retained child policy");
+          fixture.retire();
+          restored.release();
+          expect(restored.authority.assertCurrent).toThrow("Recovery claim retired");
+          expect(child.authority.assertCurrent).not.toThrow();
+          resume.resolve();
+          expect(await outcome.promise).toBeUndefined();
+          expect(effects).toBe(1);
+        } finally {
+          resume.resolve();
+          await startTurn.mock.results.at(-1)?.value.catch(() => undefined);
+          child?.release();
+          restored.release();
+        }
+      }),
+  );
+
+  it.each(["invocation", "receipt"] as const)(
+    "rejects continuation transfer when its %s closes during preparation",
+    async (closed) => {
+      const { client, context, run } = createOperatorScope("preparing-continuation");
+      context.resolveGatewayContext = () => context;
+      const source = await operatorCapture.captureGatewayOperatorRunAuthority({ client, context });
+      assert(source, "Expected operator source");
+      client.internal = { operatorRunAuthority: source.authority };
+      const entered = createDeferredCore();
+      const resume = createDeferredCore();
+      let receiptCurrent = true;
+      let pending: ReturnType<typeof captureOperatorToolGatewayContinuationContext>;
+      let settled:
+        | Promise<Awaited<ReturnType<typeof captureOperatorToolGatewayContinuationContext>>>
+        | undefined;
+      const capture = operatorCapture.captureGatewayOperatorRunAuthority;
+      try {
+        await run(() =>
+          withOperatorToolGatewayAuthority({ scopes: ["operator.write"] }, async () => {
+            using _ = vi
+              .spyOn(operatorCapture, "captureGatewayOperatorRunAuthority")
+              .mockImplementationOnce(async (...args) => {
+                const captured = await capture(...args);
+                entered.resolve();
+                await resume.promise;
+                return captured;
+              });
+            await withGatewayToolCallerIdentity(
+              {
+                agentId: "main",
+                sessionKey: "agent:main:main",
+                operationalRunInstance: createOperationalRunInstanceRef("preparing-continuation"),
+                receiptAuthority: () => receiptCurrent,
+              },
+              async () => {
+                pending = captureOperatorToolGatewayContinuationContext();
+                assert(pending, "Expected continuation preparation");
+                settled = pending.catch(() => undefined);
+                await entered.promise;
+                if (closed === "receipt") {
+                  receiptCurrent = false;
+                  resume.resolve();
+                  await expect(pending).rejects.toThrow("agent tool caller authority");
+                }
+              },
+            );
+          }),
+        );
+        if (closed === "invocation") {
+          resume.resolve();
+          assert(pending, "Expected continuation preparation");
+          await expect(pending).rejects.toThrow("operator tool invocation authority expired");
+        }
+        source.release();
+        expect(source.authority.assertCurrent).toThrow();
+      } finally {
+        resume.resolve();
+        (await settled)?.release();
+        source.release();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "preserves roles-enabled dispatch without promoting scoped unknown callers (%s)",
+    (scopedUnknown) =>
+      withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const context = createContext();
+        context.getRuntimeConfig = () => ({
+          agents: { entries: { main: {} } },
+          gateway: {
+            roles: {
+              default: "limited",
+              definitions: {
+                limited: {
+                  sessions: { others: "none" },
+                  agents: ["guest"],
+                  scopes: ["operator.write"],
+                },
+              },
+            },
+          },
+        });
+        setRuntimeConfigSnapshot(context.getRuntimeConfig());
+        const sessionKey = "agent:main:requester";
+        await putSession(sessionKey, {
+          sessionId: "requester-session",
+          updatedAt: 1,
+          visibility: "shared",
+          createdActor: { type: "human", source: "profile", id: "session-owner" },
+        });
+        const unknownClient = {
+          ...createOperatorClient({ profileId: "unknown", scopes: ["operator.write"] }),
+          authenticatedUserId: undefined,
+          authenticatedUserProfile: undefined,
+        };
+        const result = { runId: "system-reply", status: "ok" };
+        startTurn.mockImplementation(async ({ io }) =>
+          io.emitAcceptance([true, result, undefined]),
+        );
+        await inScope(
+          {
+            context,
+            resolveGatewayContext: () => context,
+            ...(scopedUnknown ? { client: unknownClient } : {}),
+          },
+          async () => {
+            const dispatch = () =>
+              callAgent({
+                sessionKey,
+                message: "Return the accepted result",
+                idempotencyKey: "system-reply",
+              });
+            const continuation = runWithGatewayToolContinuationContext(dispatch);
+            if (scopedUnknown) {
+              await expect(continuation).rejects.toThrow(/not found|cannot create|identity/i);
+              expect(startTurn).not.toHaveBeenCalled();
+            } else {
+              await expect(continuation).resolves.toEqual(result);
+            }
+          },
+        );
+      }),
+  );
+
+  it.each(["disconnected", "device revoked", "gateway replaced"] as const)(
+    "settles sessions_send after its requester ends (%s)",
+    async (boundary) =>
+      withOpenClawTestState({ scenario: "minimal" }, async () => {
+        setRuntimeConfigSnapshot({});
+        await putSession("agent:main:child", {
+          sessionId: "target-session",
+          updatedAt: Date.now(),
+        });
+        const fixture = createOperatorScope("reply-owner", ["operator.read", "operator.write"]);
+        const { client: owner, context, run } = fixture;
+        let connected = true;
+        let gatewayCurrent = true;
+        const resolveGatewayContext = () => (gatewayCurrent ? context : undefined);
+        context.resolveGatewayContext = resolveGatewayContext;
+        const source = captureGatewayDeviceRevocation(
+          context,
+          { deviceId: "reply-device", role: "operator" },
+          () => connected,
+          undefined,
+          { isCurrent: () => true, subscribe: () => () => {} },
+        );
+        const operator = await operatorCapture.captureGatewayOperatorRunAuthority({
+          client: owner,
+          context,
+          hasCurrentClientAuthority: source.isCurrent,
+        });
+        assert(operator, "Expected operator source");
+        const participants = createReplyTurnParticipants({ operatorAuthority: operator.authority });
+        let receiptCurrent = true;
+        const dispatchErrors: string[] = [];
+        const waitStarted = createDeferredCore();
+        const targetFinished = createDeferredCore();
+        const targetSettled = createDeferredCore();
+        let targetError: string | undefined;
+        waitForTurn.mockImplementation(async ({ runId }) => {
+          if (runId === "target-followup") {
+            waitStarted.resolve();
+            await targetSettled.promise;
+            if (targetError) {
+              return { result: { status: "error", error: targetError } };
+            }
+          }
+          return {
+            result: {
+              status: "ok",
+              terminalReply: { disposition: "visible", text: "Target work finished" },
+            },
+          };
+        });
+        startTurn.mockImplementation(
+          async ({ principal, io, preflight: { request } }, assertCurrent) => {
+            expect(principal.connect.scopes).toEqual(["operator.write"]);
+            expect(principal.authenticatedUserProfile?.profileId).toBe(
+              owner.authenticatedUserProfile!.profileId,
+            );
+            io.emitAcceptance([
+              true,
+              { runId: request.idempotencyKey, status: "accepted" },
+              undefined,
+            ]);
+            if (request.idempotencyKey === "target-followup") {
+              await targetFinished.promise;
+              try {
+                assertCurrent();
+              } catch (error) {
+                targetError = String(error);
+                dispatchErrors.push(targetError);
+              } finally {
+                targetSettled.resolve();
+              }
+            }
+            io.emitFinal([true, { runId: request.idempotencyKey, status: "ok" }, undefined]);
+          },
+        );
+        const beginReply = async () => {
+          await callAgent({
+            agentId: "main",
+            sessionKey: "agent:main:child",
+            message: "Finish the task",
+            idempotencyKey: "target-followup",
+          });
+          startTurn.mockClear();
+          const pending = runWithGatewayToolContinuationContext(() =>
+            runSessionsSendA2AFlow({
+              targetAgentId: "main",
+              targetSessionKey: "agent:main:child",
+              displayKey: "agent:main:child",
+              requesterAgentId: "main",
+              requesterSessionKey: "agent:main:requester",
+              requesterChannel: "webchat",
+              replyMode: "one-way",
+              runId: "target-followup",
+              replyTimeoutMs: 10_000,
+              callGateway: async (request) => {
+                try {
+                  return await callAgentToolGatewayRequest(request);
+                } catch (error) {
+                  dispatchErrors.push(String(error));
+                  throw error;
+                }
+              },
+            }),
+          );
+          await waitStarted.promise;
+          return { pending };
+        };
+        const requester = {
+          agentId: "main",
+          sessionKey: "agent:main:requester",
+          operationalRunInstance: createOperationalRunInstanceRef("reply-requester"),
+          receiptAuthority: () => receiptCurrent,
+          operatorAuthority: operator.authority,
+          personalToolParticipants: participants,
+        };
+        try {
+          const { pending: replyFlow } = await run(
+            () =>
+              withOperatorToolGatewayAuthority(
+                {
+                  authenticatedUserProfile: owner.authenticatedUserProfile,
+                  scopes: owner.connect.scopes ?? [],
+                },
+                () =>
+                  withGatewayToolCallerIdentity(requester, () =>
+                    withGatewayPersonalToolUser(undefined, beginReply),
+                  ),
+              ),
+            { hasCurrentClientAuthority: source.isCurrent, resolveGatewayContext },
+          );
+          participants.close();
+          receiptCurrent = false;
+          operator.release();
+          connected = false;
+          source.release();
+          if (boundary === "device revoked") {
+            invalidateGatewayDeviceRevocation(context, "reply-device", "operator");
+          }
+          if (boundary === "gateway replaced") {
+            gatewayCurrent = false;
+          }
+          targetFinished.resolve();
+          await replyFlow;
+          expect(readGatewayDeviceSourceAuthority(source.isCurrent)?.()).toBe(false);
+          if (boundary !== "disconnected") {
+            expect(dispatchErrors.length).toBeGreaterThan(0);
+            expect(startTurn).not.toHaveBeenCalled();
+            return;
+          }
+          expect(dispatchErrors).toEqual([]);
+          expect(startTurn).toHaveBeenCalledOnce();
+          expect(startTurn.mock.calls[0]?.[0].preflight.request).toMatchObject({
+            sessionKey: "agent:main:requester",
+            message: expect.stringContaining("Target work finished"),
+            deliver: false,
+            sourceReplyDeliveryMode: "message_tool_only",
+            inputProvenance: {
+              sourceTool: "subagent_announce",
+              sourceSessionKey: "agent:main:child",
+              sourceRole: "subagent",
+            },
+          });
+        } finally {
+          participants.close();
+          operator.release();
+          source.release();
+          targetFinished.resolve();
+        }
+      }),
+  );
+
+  it.each(["sessions_send", "subagent_announce"] as const)(
+    "preserves GitHub identity access after %s admits a write-only continuation",
+    async (sourceTool) => {
+      const owner = createOperatorClient({
+        profileName: "continuation-owner",
+        scopes: ["operator.read", "operator.write"],
+      });
+      const readResult = { effective: { credentialState: "available", refreshState: "idle" } };
+      const readHandler = vi.fn(({ client, respond }: GatewayRequestHandlerOptions) => {
+        expect(client?.connect.scopes).toEqual(["operator.read"]);
+        expect(client?.authenticatedUserProfile?.profileId).toBe(
+          owner.authenticatedUserProfile!.profileId,
+        );
+        respond(true, readResult);
+      });
+      const context = createContext([
+        ["tools.github.status", "operator.read", "sessions", readHandler],
+      ]);
+      const runId = `continuation-${sourceTool}`;
+      startTurn.mockImplementation(async ({ principal, io }) => {
+        expect(principal.connect.scopes).toEqual(["operator.write"]);
+        io.emitAcceptance([true, { runId, status: "accepted" }, undefined]);
+        const result = await withGatewayToolCallerIdentity(
+          { agentId: "main", sessionKey: "agent:main:continuation" },
+          () => createGitHubIdentityStatusTool().execute("identity-status", {}),
+        );
+        expect(result.details).toEqual(readResult);
+        io.emitFinal([true, { runId, status: "ok" }, undefined]);
+      });
+      const params = {
+        message: "Continue the delegated task",
+        idempotencyKey: runId,
+        inputProvenance: {
+          kind: "inter_session" as const,
+          sourceSessionKey: "agent:main:child",
+          sourceTool,
+        },
+      };
+      await expect(
+        inScope({ client: owner, context }, async () => {
+          if (sourceTool === "sessions_send") {
+            return await callAgent(params, true);
+          }
+          const { runAnnounceAgentCall } =
+            await import("../agents/subagents/announce/subagent-announce-completion-delivery.js");
+          return await runAnnounceAgentCall({
+            agentParams: params,
+            expectFinal: true,
+            isExecutionAllowed: () => true,
+            resolveGatewayContext: () => context,
+          });
+        }),
+      ).resolves.toEqual({ runId, status: "ok" });
+    },
+  );
+
+  it.each(["finished invocation", "revoked source", "provenance only"] as const)(
+    "checks %s for a settle wake after the spawning tool ends",
+    async (state) => {
+      const { runAnnounceAgentCall } =
+        await import("../agents/subagents/announce/subagent-announce-completion-delivery.js");
+      const { client: owner, context, run } = createOperatorScope("settle-owner");
+      const sourceSignal = new AbortController();
+      const source = await operatorCapture.captureGatewayOperatorRunAuthority({
+        client: owner,
+        context,
+        sourceAuthority: {
+          signal: sourceSignal.signal,
+          assertCurrent: () => sourceSignal.signal.throwIfAborted(),
+        },
+      });
+      assert(source, "expected original operator authority");
+      const runId = "announce:owned-settle-wake";
+      const result = { runId, status: "ok" };
+      startTurn.mockImplementation(async ({ principal, io }) => {
+        expect(principal.connect.scopes).toEqual(["operator.write"]);
+        expect(principal.internal.operatorRunAuthority).toBe(source.authority);
+        io.emitAcceptance([true, { runId, status: "accepted" }, undefined]);
+        io.emitFinal([true, result, undefined]);
+      });
+      try {
+        if (state === "revoked source") {
+          sourceSignal.abort(new Error("original operator source revoked"));
+        }
+        const dispatch = run(() =>
+          withGatewayToolCallerIdentity(
+            {
+              agentId: "main",
+              sessionKey: "agent:main:requester",
+              operationalRunInstance: createOperationalRunInstanceRef("finished-spawner"),
+              receiptAuthority: () => false,
+              operatorAuthority: source.authority,
+            },
+            () => {
+              const announce = () =>
+                runAnnounceAgentCall({
+                  agentParams: {
+                    message: "Continue after the children settled",
+                    idempotencyKey: runId,
+                    inputProvenance: {
+                      kind: "inter_session",
+                      sourceSessionKey: "agent:main:child",
+                      sourceTool: "subagent_settle",
+                    },
+                  },
+                  settleWakeSourceSessionKeys:
+                    state === "provenance only" ? undefined : ["agent:main:child"],
+                  expectFinal: true,
+                  isExecutionAllowed: () => true,
+                  resolveGatewayContext: () => context,
+                });
+              if (state !== "finished invocation") {
+                return announce();
+              }
+              const ready = createDeferredCore();
+              return withOperatorToolGatewayAuthority(
+                { scopes: source.authority.scopes, operatorRunAuthority: source.authority },
+                async () => ({ pending: ready.promise.then(announce) }),
+              ).then(({ pending }) => {
+                ready.resolve();
+                return pending;
+              });
+            },
+          ),
+        );
+        if (state === "finished invocation") {
+          await expect(dispatch).resolves.toEqual(result);
+        } else {
+          const error = {
+            "revoked source": "original operator source revoked",
+            "provenance only": "agent tool caller authority is no longer active",
+          }[state];
+          await expect(dispatch).rejects.toThrow(error);
+          expect(startTurn).not.toHaveBeenCalled();
+        }
+      } finally {
+        source.release();
+      }
+    },
+  );
+});

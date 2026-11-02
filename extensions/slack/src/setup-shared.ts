@@ -1,24 +1,52 @@
-// Slack plugin module implements setup shared behavior.
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
-import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
-import { patchChannelConfigForAccount } from "openclaw/plugin-sdk/setup-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  createSetupTranslator,
+  parseMentionOrPrefixedId,
+  patchChannelConfigForAccount,
+} from "openclaw/plugin-sdk/setup-runtime";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
-import { isSlackPluginAccountConfigured } from "./account-configured.js";
+import { isSlackSetupAccountConfigured } from "./account-configured.js";
 import type { ResolvedSlackAccount } from "./accounts.js";
-import type { OpenClawConfig } from "./channel-api.js";
+import { DEFAULT_SLACK_SUGGESTED_PROMPTS } from "./channel-meta.js";
 
 export const SLACK_CHANNEL = "slack" as const;
 
-export function buildSlackManifest(botName = "OpenClaw") {
-  const safeName = botName.trim() || "OpenClaw";
+export function buildSlackAllowFromPrompt() {
+  const t = createSetupTranslator();
+  return {
+    helpTitle: t("wizard.slack.allowlistTitle"),
+    helpLines: [
+      t("wizard.slack.allowlistIntro"),
+      t("wizard.slack.examples"),
+      "- U12345678",
+      "- @alice",
+      t("wizard.slack.multipleEntries"),
+      t("wizard.channels.docs", { link: formatDocsLink("/slack", "slack") }),
+    ],
+    message: t("wizard.slack.allowFromPrompt"),
+    placeholder: "@alice, U12345678",
+    invalidWithoutCredentialNote: t("wizard.slack.allowFromInvalidWithoutToken"),
+    parseId: (value: string) =>
+      parseMentionOrPrefixedId({
+        value,
+        mentionPattern: /^<@([A-Z0-9]+)>$/i,
+        prefixPattern: /^(slack:|user:)/i,
+        idPattern: /^[A-Z][A-Z0-9]+$/i,
+        normalizeId: (id) => id.toUpperCase(),
+      }),
+  };
+}
+
+export function buildSlackManifest() {
   const manifest = {
     display_information: {
-      name: safeName,
-      description: `${safeName} connector for OpenClaw`,
+      name: "OpenClaw",
+      description: "OpenClaw app for OpenClaw",
     },
     features: {
       bot_user: {
-        display_name: safeName,
+        display_name: "OpenClaw",
         always_online: true,
       },
       app_home: {
@@ -27,21 +55,8 @@ export function buildSlackManifest(botName = "OpenClaw") {
         messages_tab_read_only_enabled: false,
       },
       agent_view: {
-        agent_description: `${safeName} connects Slack Agent View conversations to OpenClaw agents.`,
-        suggested_prompts: [
-          {
-            title: "What can you do?",
-            message: "What can you help me with?",
-          },
-          {
-            title: "Summarize this channel",
-            message: "Summarize the recent activity in this channel.",
-          },
-          {
-            title: "Draft a reply",
-            message: "Help me draft a reply.",
-          },
-        ],
+        agent_description: "OpenClaw connects Slack Agent View conversations to OpenClaw agents.",
+        suggested_prompts: DEFAULT_SLACK_SUGGESTED_PROMPTS,
       },
       slash_commands: [
         {
@@ -57,7 +72,9 @@ export function buildSlackManifest(botName = "OpenClaw") {
           "app_mentions:read",
           "assistant:write",
           "channels:history",
+          "channels:manage",
           "channels:read",
+          "channels:write.invites",
           "chat:write",
           "commands",
           "emoji:read",
@@ -87,6 +104,8 @@ export function buildSlackManifest(botName = "OpenClaw") {
           "app_home_opened",
           "app_mention",
           "app_context_changed",
+          "agent_session_stopped",
+          "agent_session_title_changed",
           "channel_rename",
           "member_joined_channel",
           "member_left_channel",
@@ -107,13 +126,13 @@ export function buildSlackManifest(botName = "OpenClaw") {
 
 export function buildSlackSetupLines(): string[] {
   return [
-    "1) Slack API -> Create App -> From scratch or From manifest (with the JSON below)",
-    "2) Add Socket Mode + enable it to get the app-level token (xapp-...)",
-    "3) Install App to workspace to get the xoxb- bot token",
-    "4) Enable Event Subscriptions (socket) for message, App Home, and Agent View events",
-    "5) App Home -> enable the Home tab, Messages tab for DMs, and Agent View",
-    "Manifest JSON follows as plain text for copy/paste.",
-    "Tip: set SLACK_BOT_TOKEN + SLACK_APP_TOKEN in your env.",
+    "1) Slack API -> Create App -> From scratch or a transport-specific manifest",
+    "2) Install App to workspace to get the xoxb- bot token",
+    "3) Socket Mode: enable it and create an app-level token (xapp-...)",
+    "4) HTTP: configure a public HTTPS Request URL and copy the app Signing Secret",
+    "5) Enable Event Subscriptions for message, App Home, and Agent View events",
+    "6) App Home -> enable the Home tab, Messages tab for DMs, and Agent View",
+    "Tip: Socket Mode can use SLACK_BOT_TOKEN + SLACK_APP_TOKEN in your env.",
     `Docs: ${formatDocsLink("/slack", "slack")}`,
   ];
 }
@@ -130,26 +149,6 @@ export function setSlackChannelAllowlist(
     accountId,
     patch: { channels },
   });
-}
-
-export function isSlackSetupAccountConfigured(account: ResolvedSlackAccount): boolean {
-  if (account.config.mode === "relay") {
-    return isSlackPluginAccountConfigured(account);
-  }
-  const hasConfiguredUserToken =
-    Boolean(account.userToken?.trim()) || hasConfiguredSecretInput(account.config.userToken);
-  const hasConfiguredBotToken =
-    Boolean(account.botToken?.trim()) || hasConfiguredSecretInput(account.config.botToken);
-  const hasConfiguredAppToken =
-    Boolean(account.appToken?.trim()) || hasConfiguredSecretInput(account.config.appToken);
-  if (account.identity === "user") {
-    const hasTransportCredential =
-      account.config.mode === "http"
-        ? hasConfiguredSecretInput(account.config.signingSecret)
-        : hasConfiguredAppToken;
-    return hasConfiguredUserToken && hasTransportCredential;
-  }
-  return hasConfiguredBotToken && hasConfiguredAppToken;
 }
 
 export function describeSlackSetupAccount(account: ResolvedSlackAccount) {

@@ -1,0 +1,752 @@
+import { isDeepStrictEqual } from "node:util";
+import type { AgentHarnessSessionRuntimeOwnership } from "../agents/harness/types.js";
+import { resolveSessionParentSessionKey } from "../channels/plugins/session-conversation.js";
+import { projectGatewaySessionEntry } from "../config/sessions/combined-store-gateway.js";
+import type { GatewayStoredSessionTargets } from "../config/sessions/combined-store-model-sources.js";
+import type { SessionEntryPublicationSource } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
+import type { SessionActorVersion } from "../config/sessions/session-actor-contract.js";
+import type { SessionTitleFields } from "../config/sessions/session-history-read.types.js";
+import type { SessionRowDatabaseFacts } from "../config/sessions/session-row-facts.types.js";
+import type { SessionStoreTarget } from "../config/sessions/targets.js";
+import type {
+  InternalSessionEntry as SessionEntry,
+  SessionAcpMeta,
+} from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveProjectedAgentRunModel } from "../infra/agent-run-registry.js";
+import type { PluginStateReadDependency } from "../plugin-state/plugin-state-publication.js";
+import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
+import { resolveSessionPinnedHarnessId } from "../sessions/agent-harness-session-key.js";
+import type { OpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
+import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
+import type { readSessionRowFacts } from "./server-methods/session-placement-read-projection.js";
+import { compareSessionEntryPairs } from "./session-list-order.js";
+import { readSessionListSelectionFacts } from "./session-list-target.js";
+import { sameSelectionFacts, type SelectionRow } from "./session-row-selection-facts.js";
+import { selectStoredSessionLineage } from "./session-store-key.js";
+import { sessionTitleRequests } from "./session-title-state.js";
+import type { SessionChildActivity, SessionListRowContext } from "./session-utils-contracts.js";
+import * as rowProjection from "./session-utils-row.js";
+import type { GatewaySessionRow } from "./session-utils.types.js";
+import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
+
+export type { SelectionRow } from "./session-row-selection-facts.js";
+
+export type ProjectionOptions = {
+  cfg: OpenClawConfig;
+  getConfig?: () => OpenClawConfig;
+  getPolicyConfig?: () => OpenClawConfig;
+  modelCatalog?: Inputs["modelCatalog"];
+  getModelCatalog?: () => Promise<Inputs["modelCatalog"]>;
+  context?: Parameters<typeof readSessionRowFacts>[0]["context"];
+  placementFactsReader?: Pick<WorkerSessionPlacementStore, "readProjection">;
+};
+
+export type PreparedSessionRowDatabaseFacts = SessionRowDatabaseFacts & {
+  acpMeta: SessionAcpMeta | null;
+  runtimeOwnership: AgentHarnessSessionRuntimeOwnership | null;
+  runtimeOwnershipDependencies: readonly PluginStateReadDependency[];
+  repositoryWorkspace: SessionRepositoryWorkspaceRecord | null;
+};
+
+/** Undefined shared facets await their owner; null is acknowledged absence. */
+export type RetainedSessionRowDatabaseFacts = SessionRowDatabaseFacts &
+  Partial<
+    Pick<
+      PreparedSessionRowDatabaseFacts,
+      "acpMeta" | "runtimeOwnership" | "runtimeOwnershipDependencies" | "repositoryWorkspace"
+    >
+  >;
+
+export function isPreparedSessionRowDatabaseFacts(
+  facts: RetainedSessionRowDatabaseFacts | undefined,
+): facts is PreparedSessionRowDatabaseFacts {
+  return (
+    facts !== undefined &&
+    facts.acpMeta !== undefined &&
+    facts.runtimeOwnership !== undefined &&
+    facts.runtimeOwnershipDependencies !== undefined &&
+    facts.repositoryWorkspace !== undefined
+  );
+}
+
+/** Opaque legacy/external ownership must be prepared again whenever its row becomes dirty. */
+export function canRetainSessionRowRuntimeOwnership(facts: PreparedSessionRowDatabaseFacts) {
+  return (
+    facts.runtimeOwnershipDependencies.length > 0 ||
+    resolveSessionPinnedHarnessId(facts.entry) === undefined
+  );
+}
+
+export type SessionRowStore = {
+  target: SessionStoreTarget;
+  agentId: string;
+  discoveryAgentId: string | null;
+  discoveryOrder?: number;
+  identity: OpenClawAgentDatabaseIdentity;
+  birthtime: string | undefined;
+  filename: string;
+};
+
+export type Row = {
+  key: string;
+  agentId: string;
+  storeTarget: SessionStoreTarget;
+  storedEntry?: SessionEntry;
+  /** Committed archive metadata awaits the lineage registry before entry acquisition. */
+  entryAcquisitionPending?: true;
+  /** Accepted under retained database custody; presentation consumes the whole snapshot. */
+  pendingDatabaseFacts?: PreparedSessionRowDatabaseFacts;
+  /** Presentation retains committed facets until their owner publishes or the row is demoted. */
+  retainedDatabaseFacts?: RetainedSessionRowDatabaseFacts;
+  /** Durable search metadata survives archive demotion, until its owner invalidates it. */
+  preparedAcpMeta?: SessionAcpMeta | null;
+  preparedRuntimeOwnership?: AgentHarnessSessionRuntimeOwnership | null;
+  runtimeOwnershipDependencies?: readonly PluginStateReadDependency[];
+  databaseFactsRevision: number;
+  publishedSource?: SessionEntryPublicationSource;
+  /** Category uncertainty keeps identity resident; earlier structural uncertainty dominates. */
+  unresolvedDatabaseFacts?: true | "category";
+  /** Current committed sharing facts remain usable while display materialization is dirty. */
+  sharingEntry?: SessionEntry;
+  entry?: SessionEntry;
+  selection: ReturnType<typeof readSessionListSelectionFacts>;
+  /** One accepted selection snapshot shared by recents and list consumers. */
+  selectionSnapshot?: SelectionRow;
+  materialized?: ReturnType<typeof rowProjection.materializeSessionRow>;
+  materializedSequence?: number;
+  profileRevision?: number;
+  subagentRevision?: number;
+  lastMessagePreview?: string;
+  lastAssistantMessage?: GatewaySessionRow["lastAssistantMessage"];
+  fallbackModel?: ReturnType<
+    typeof rowProjection.readSessionRowInputs
+  >["presentation"]["activeModel"];
+  facts?: ReturnType<typeof readSessionRowFacts>;
+  hasBoard?: boolean;
+  membership: ReadonlySet<string>;
+  parents: Set<string>;
+  generation: string | symbol;
+  /** Exact private reads retain their session claim only for the consuming frame. */
+  privateSource?: { identity: SessionActorVersion["epoch"]; assertCurrent(): void };
+  preparedPrivate?: {
+    relatedRows: Record<string, Pick<EntryRow, "key" | "agentId" | "storeTarget" | "entry">>;
+    entries: Record<string, SessionEntry>;
+    databaseFacts: PreparedSessionRowDatabaseFacts;
+    titleFields?: SessionTitleFields;
+    terminalModel?: { modelProvider: string; model: string };
+  };
+};
+
+export type SelectionChange =
+  | { kind: "reset" }
+  | {
+      kind: "row";
+      id: string;
+      key: string;
+      agentId: string;
+      row: SelectionRow | undefined;
+      /** Synchronous internal publication scope; deferred refreshes have no causal label. */
+      scope?: string;
+    };
+
+export function selectionRow(row: Row): SelectionRow | undefined {
+  if (!row.entry) {
+    row.selectionSnapshot = undefined;
+    return undefined;
+  }
+  const previous = row.selectionSnapshot;
+  if (
+    previous &&
+    previous.entry === row.entry &&
+    previous.selection === row.selection &&
+    previous.hasBoard === row.hasBoard &&
+    previous.generation === row.generation &&
+    previous.key === row.key &&
+    previous.agentId === row.agentId &&
+    previous.storeTarget.storePath === row.storeTarget.storePath
+  ) {
+    return previous;
+  }
+  const next: SelectionRow = {
+    key: row.key,
+    agentId: row.agentId,
+    storeTarget: row.storeTarget,
+    entry: row.entry,
+    selection: row.selection,
+    hasBoard: row.hasBoard,
+    generation: row.generation,
+  };
+  next.selectionFactsRevision =
+    previous && sameSelectionFacts(previous, next) ? previous.selectionFactsRevision : {};
+  row.selectionSnapshot = next;
+  return next;
+}
+
+export type Query = {
+  agentId?: string;
+  storePath?: string;
+  key?: string;
+  sessionIdOrKey?: string;
+  candidateSessionIdsOrKeys?: ReadonlySet<string>;
+  /** Prepared qualified rows carry identity; raw keys retain alias resolution. */
+  parentSessionKey?: string | Pick<Row, "key" | "agentId">;
+  sortBy?: Parameters<typeof compareSessionEntryPairs>[2] | null;
+};
+export type Inputs = Parameters<typeof rowProjection.readSessionRowInputs>[0];
+export type SnapshotOptions = Pick<Inputs, "now" | "excludedChildKeys"> & {
+  childActivity?: SessionChildActivity;
+  includeDerivedTitles?: boolean;
+  includeLastMessage?: boolean;
+  active?: boolean;
+  subagentRuns?: SessionListRowContext["subagentRuns"];
+  preparedFacts?: ReturnType<NonNullable<Row["facts"]>["present"]>;
+};
+export type Lookup = { agentId: string; key: string; storePath?: string };
+type RowTarget = Pick<Row, "agentId" | "key" | "storeTarget">;
+export const identity = (row: RowTarget) =>
+  `${row.agentId}\0${row.storeTarget.storePath}\0${row.key}`;
+export const physical = (storePath: string, key: string) => `physical:${storePath}\0${key}`;
+export const logicalSessionRowIdentity = (agentId: string, key: string) =>
+  `logical:${agentId}\0${key}`;
+export function dependents(row: Row, byParent: ReadonlyMap<string, Set<string>>) {
+  return new Set([
+    ...(byParent.get(logicalSessionRowIdentity(row.agentId, row.key)) ?? []),
+    ...(byParent.get(physical(row.storeTarget.storePath, row.key)) ?? []),
+  ]);
+}
+export function markRelated(
+  row: Row,
+  indexes: {
+    byParent: ReadonlyMap<string, Set<string>>;
+    byKey: ReadonlyMap<string, Set<string>>;
+  },
+  dirty: Set<string>,
+  includeChildren = true,
+  cfg?: Inputs["cfg"],
+) {
+  if (includeChildren) {
+    for (const id of dependents(row, indexes.byParent)) {
+      dirty.add(id);
+    }
+    if (cfg && parseAgentSessionKey(row.key)) {
+      // A new literal parent must wake children still indexed under its absent-row alias.
+      for (const id of indexes.byParent.get(parentReference(cfg, row.key, row.agentId)) ?? []) {
+        dirty.add(id);
+      }
+    }
+  }
+  for (const parent of row.parents) {
+    for (const id of indexes.byKey.get(parent) ?? []) {
+      dirty.add(id);
+    }
+  }
+}
+
+/** Children consume parent model overrides, not its changing progress or display metadata. */
+export function changesSessionRowDependents(before: Row["storedEntry"], after: Row["storedEntry"]) {
+  return (
+    !before ||
+    !after ||
+    before.sessionId !== after.sessionId ||
+    before.lifecycleRevision !== after.lifecycleRevision ||
+    before.providerOverride !== after.providerOverride ||
+    before.modelOverride !== after.modelOverride ||
+    before.modelOverrideSource !== after.modelOverrideSource ||
+    before.modelOverrideRouteResolution !== after.modelOverrideRouteResolution ||
+    before.modelOverrideFallbackOriginProvider !== after.modelOverrideFallbackOriginProvider ||
+    before.modelOverrideFallbackOriginModel !== after.modelOverrideFallbackOriginModel
+  );
+}
+
+/** Expire accepted facts and pending replies, retaining only installed owner facts. */
+export function invalidateDatabaseFacts(row: Row, retained?: RetainedSessionRowDatabaseFacts) {
+  row.databaseFactsRevision++;
+  row.pendingDatabaseFacts = undefined;
+  row.retainedDatabaseFacts = retained;
+  row.preparedAcpMeta = retained?.acpMeta;
+  row.preparedRuntimeOwnership = retained?.runtimeOwnership;
+  row.runtimeOwnershipDependencies = retained?.runtimeOwnershipDependencies;
+}
+
+export function create(target: RowTarget, entry?: SessionEntry): Row {
+  return {
+    ...target,
+    storedEntry: entry,
+    sharingEntry: entry,
+    selection: readSessionListSelectionFacts(target.key, entry),
+    parents: new Set(),
+    membership: new Set(),
+    generation: Symbol("row"),
+    databaseFactsRevision: 0,
+  };
+}
+
+/** Memory acquisition and prepared actor facts share one transient row constructor. */
+export function createIncognitoSessionRow(params: {
+  cfg: Inputs["cfg"];
+  key: string;
+  agentId: string;
+  storePath: string;
+  entry: NonNullable<Row["storedEntry"]>;
+  membership?: ReadonlySet<string>;
+  source: NonNullable<Row["privateSource"]>;
+  prepared?: {
+    relatedRows: NonNullable<Row["preparedPrivate"]>["relatedRows"];
+    databaseFacts: PreparedSessionRowDatabaseFacts;
+    titleFields?: SessionTitleFields;
+    terminalModel?: { modelProvider: string; model: string };
+  };
+}): Row {
+  const { cfg, key, agentId, storePath, source, entry: storedEntry } = params;
+  source.assertCurrent();
+  const row = create({ key, agentId, storeTarget: { agentId, storePath } });
+  const entry = projectGatewaySessionEntry(cfg, storedEntry);
+  return Object.assign(row, {
+    generation: source.identity,
+    privateSource: source,
+    storedEntry,
+    entry,
+    membership: new Set(params.membership),
+    selection: readSessionListSelectionFacts(key, entry),
+    ...(params.prepared
+      ? {
+          preparedPrivate: {
+            relatedRows: params.prepared.relatedRows,
+            entries: {
+              ...Object.fromEntries(
+                Object.entries(params.prepared.relatedRows).map(([relatedKey, relatedRow]) => [
+                  relatedKey,
+                  relatedRow.entry,
+                ]),
+              ),
+              [key]: storedEntry,
+            },
+            databaseFacts: params.prepared.databaseFacts,
+            titleFields: params.prepared.titleFields,
+            terminalModel: params.prepared.terminalModel,
+          },
+        }
+      : {}),
+  });
+}
+
+/** Seed the complete identity inventory before any row selects its stored lineage. */
+export function seedSessionRowEntries(params: {
+  targets: GatewayStoredSessionTargets;
+  rows: ReadonlyMap<string, Row>;
+  replaced: ReadonlySet<string>;
+  remove: (id: string) => void;
+  put: (row: Row) => void;
+}) {
+  const { targets, rows, replaced, remove, put } = params;
+  const admitted = new Set<string>();
+  const acquisitions: Array<{ row: Row; entry: SessionEntry }> = [];
+  for (const [key, target] of targets) {
+    const entry = target.entry;
+    if (!entry || entry.incognito || isIncognitoSessionKey(key)) {
+      continue;
+    }
+    const fields = {
+      key: target.storeKey ?? key,
+      agentId: target.agentId,
+      storeTarget: target.storeTarget,
+    };
+    const id = identity(fields);
+    admitted.add(id);
+    if (!rows.has(id) || replaced.has(target.storeTarget.storePath)) {
+      remove(id);
+      const row = create(fields, entry);
+      put(row);
+      acquisitions.push({ row, entry });
+    }
+  }
+  for (const id of rows.keys()) {
+    if (!admitted.has(id)) {
+      remove(id);
+    }
+  }
+  return acquisitions;
+}
+
+export function renewGeneration(row: Row): Row {
+  return {
+    ...row,
+    entry: undefined,
+    selectionSnapshot: undefined,
+    storedEntry: undefined,
+    entryAcquisitionPending: undefined,
+    pendingDatabaseFacts: undefined,
+    retainedDatabaseFacts: undefined,
+    preparedAcpMeta: undefined,
+    preparedRuntimeOwnership: undefined,
+    runtimeOwnershipDependencies: undefined,
+    unresolvedDatabaseFacts: undefined,
+    publishedSource: undefined,
+    sharingEntry: undefined,
+    materialized: undefined,
+    lastMessagePreview: undefined,
+    lastAssistantMessage: undefined,
+    fallbackModel: undefined,
+    generation: Symbol("row"),
+  };
+}
+
+export type EntryRow = Row & Required<Pick<Row, "entry">>;
+export type MaterializedRow = EntryRow & Required<Pick<Row, "materialized">>;
+export function hasEntry(row: Row | undefined): row is EntryRow {
+  return Boolean(row?.entry);
+}
+export function ready(row: Row | undefined): row is MaterializedRow {
+  // Acquisition can advance metadata before rendering, including after pending facts expire.
+  return Boolean(
+    row?.entry &&
+    row.unresolvedDatabaseFacts !== "category" &&
+    row.materialized?.source.entry === row.entry,
+  );
+}
+
+export function publishTranscriptFields(
+  row: MaterializedRow,
+  fields: Pick<Row, "lastMessagePreview" | "lastAssistantMessage" | "fallbackModel">,
+  cfg: Inputs["cfg"],
+  context: SessionListRowContext,
+): boolean {
+  // Same-generation metadata may change while transcript work is awaiting publication.
+  const fallbackModel = rowProjection.resolveGatewaySessionActiveModel({
+    cfg,
+    agentId: row.agentId,
+    sessionId: row.entry.sessionId,
+    sessionKey: row.key,
+    storePath: row.storeTarget.storePath,
+    entry: row.entry,
+    selectedModel: row.materialized.source.selectedModel,
+    projectedAgentRuns: context.projectedAgentRuns!,
+    active: false,
+    activeModel: fields.fallbackModel ?? null,
+  });
+  if (
+    row.lastMessagePreview === fields.lastMessagePreview &&
+    isDeepStrictEqual(row.lastAssistantMessage, fields.lastAssistantMessage) &&
+    isDeepStrictEqual(row.fallbackModel, fallbackModel)
+  ) {
+    return false;
+  }
+  Object.assign(row, {
+    lastMessagePreview: fields.lastMessagePreview,
+    lastAssistantMessage: fields.lastAssistantMessage,
+    fallbackModel,
+  });
+  const transcript = {
+    lastMessagePreview: fields.lastMessagePreview,
+    lastAssistantMessage: fields.lastAssistantMessage,
+  };
+  row.materialized = rowProjection.replaceSessionRowFacts(row.materialized, transcript, transcript);
+  return true;
+}
+
+export function sort<T extends EntryRow>(rows: T[], sortBy: Query["sortBy"]): T[] {
+  return sortBy === null
+    ? rows
+    : rows.toSorted((a, b) => compareSessionEntryPairs([a.key, a.entry], [b.key, b.entry], sortBy));
+}
+
+function sameFallbackModelFacts(previous: Row["storedEntry"], current: SessionEntry) {
+  return (
+    previous?.modelProvider === current.modelProvider &&
+    previous?.model === current.model &&
+    previous?.lastRunId === current.lastRunId &&
+    isDeepStrictEqual(previous?.fallbackNotice, current.fallbackNotice)
+  );
+}
+
+export function first(candidates: Row[], storePaths: Iterable<string>) {
+  if (candidates.length < 2) {
+    return candidates[0];
+  }
+  for (const sourcePath of storePaths) {
+    const row = candidates.find((candidate) => candidate.storeTarget.storePath === sourcePath);
+    if (row) {
+      return row;
+    }
+  }
+  return undefined;
+}
+
+export function firstReferenced(
+  ref: string,
+  rows: ReadonlyMap<string, Row>,
+  byKey: ReadonlyMap<string, ReadonlySet<string>>,
+  storePaths: Iterable<string>,
+) {
+  return first(
+    [...(byKey.get(ref) ?? [])].flatMap((id) => rows.get(id) ?? []),
+    storePaths,
+  );
+}
+
+export function present(
+  record: MaterializedRow,
+  context: SessionListRowContext,
+  options: SnapshotOptions = {},
+) {
+  const now = options.now ?? Date.now();
+  const live = resolveProjectedAgentRunModel({
+    agentId: record.agentId,
+    sessionId: record.entry.sessionId,
+    index: context.projectedAgentRuns!,
+  });
+  const active = options.active ?? live !== undefined;
+  const row = rowProjection.presentSessionRow(record.materialized, {
+    now,
+    subagentRuns: options.subagentRuns ?? context.subagentRuns.atTime(now),
+    projectedAgentRuns: context.projectedAgentRuns,
+    projectedSubagentActivity: context.projectedSubagentActivity,
+    activeModel: active ? (live ?? undefined) : record.fallbackModel,
+    excludedChildKeys: options.excludedChildKeys,
+    childActivity: options.childActivity,
+  });
+  Object.assign(row, options.preparedFacts ?? record.facts?.present());
+  row.hasBoard = record.hasBoard;
+  // Naming belongs to the in-flight owner, not persisted or materialized row state.
+  row.titlePending =
+    sessionTitleRequests.get({
+      storePath: record.storeTarget.storePath,
+      sessionKey: record.key,
+      sessionId: record.entry.sessionId,
+    }) !== undefined;
+  // Undefined omits wire fields without converting each presented row to dictionary storage.
+  if (!options.includeDerivedTitles) {
+    row.derivedTitle = undefined;
+  }
+  if (!options.includeLastMessage) {
+    row.lastMessagePreview = undefined;
+    row.lastAssistantMessage = undefined;
+  }
+  return row;
+}
+
+/** The wire snapshot and lifecycle identity come from the same materialized record. */
+export function snapshot(
+  row: MaterializedRow | undefined,
+  context: SessionListRowContext,
+  options: SnapshotOptions,
+) {
+  return row
+    ? { row: present(row, context, options), lifecycleRunId: row.entry.lifecycleRunId }
+    : { row: null };
+}
+
+export function isPrivateSourceCurrent(source: NonNullable<Row["privateSource"]>): boolean {
+  try {
+    source.assertCurrent();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function isCurrentGeneration(row: Row, current: Row | undefined): boolean {
+  return (
+    current?.generation === row.generation &&
+    (!isIncognitoSessionKey(row.key) ||
+      (current.entry?.sessionId === row.entry?.sessionId &&
+        current.entry?.lifecycleRevision === row.entry?.lifecycleRevision))
+  );
+}
+
+export function parentReference(
+  cfg: Inputs["cfg"],
+  key: string,
+  fallbackAgentId: string,
+  sourcePath?: string,
+  referenced?: (reference: string) => Row | undefined,
+) {
+  return selectSessionRowParent(cfg, key, fallbackAgentId, sourcePath, referenced).reference;
+}
+
+function selectSessionRowParent(
+  cfg: Inputs["cfg"],
+  key: string,
+  fallbackAgentId: string,
+  sourcePath?: string,
+  referenced?: (reference: string) => Row | undefined,
+) {
+  if (sourcePath && (key === "global" || key === "unknown")) {
+    return { key, reference: physical(sourcePath, key) };
+  }
+  const selected = selectStoredSessionLineage({
+    cfg,
+    agentId: fallbackAgentId,
+    sessionKey: key,
+    read: (agentId, sessionKey) =>
+      referenced?.(logicalSessionRowIdentity(agentId, sessionKey))?.storedEntry,
+  });
+  return {
+    key: selected.key,
+    reference: logicalSessionRowIdentity(selected.agentId, selected.key),
+  };
+}
+
+/** Drop reader-only graphs while retaining cold metadata and index identity. */
+export function dematerialize(row: Row): Row {
+  return {
+    ...row,
+    materialized: undefined,
+    materializedSequence: undefined,
+    facts: undefined,
+    pendingDatabaseFacts: undefined,
+    retainedDatabaseFacts: undefined,
+    databaseFactsRevision: row.databaseFactsRevision + 1,
+    membership: new Set<string>(),
+    lastMessagePreview: undefined,
+    lastAssistantMessage: undefined,
+    fallbackModel: undefined,
+  };
+}
+
+export function readSessionRowParents(
+  row: Row,
+  storedEntry: SessionEntry,
+  cfg: Inputs["cfg"],
+  context: SessionListRowContext,
+  referenced?: (reference: string) => Row | undefined,
+) {
+  const parents = new Set<string>();
+  const addParent = (key: string | null | undefined) => {
+    if (key && key !== row.key) {
+      parents.add(parentReference(cfg, key, row.agentId, row.storeTarget.storePath, referenced));
+    }
+  };
+  addParent(storedEntry.parentSessionKey ?? resolveSessionParentSessionKey(row.key));
+  addParent(storedEntry.spawnedBy);
+  for (const run of context.subagentRunsByChildSessionKey.get(row.key) ?? []) {
+    addParent(run.controllerSessionKey || run.requesterSessionKey);
+  }
+  if (parents.size !== row.parents.size) {
+    return parents;
+  }
+  for (const parent of parents) {
+    if (!row.parents.has(parent)) {
+      return parents;
+    }
+  }
+  return row.parents;
+}
+
+/** Reproject held lineage without acquiring board, transcript, or database facts. */
+export function readSessionRowLineage(
+  row: Row,
+  storedEntry: SessionEntry,
+  cfg: Inputs["cfg"],
+  context: SessionListRowContext,
+  referenced?: (reference: string) => Row | undefined,
+) {
+  const projected = projectGatewaySessionEntry(
+    cfg,
+    storedEntry,
+    (key) =>
+      selectSessionRowParent(cfg, key, row.agentId, row.storeTarget.storePath, referenced).key,
+  );
+  // Accepted source identity covers every field except the two projected lineage keys.
+  // Deferred archives have newer stored metadata but have not accepted its projection yet.
+  const entry =
+    row.entry &&
+    (!row.entryAcquisitionPending && row.storedEntry === storedEntry
+      ? row.entry.parentSessionKey === projected.parentSessionKey &&
+        row.entry.spawnedBy === projected.spawnedBy
+      : isDeepStrictEqual(row.entry, projected))
+      ? row.entry
+      : projected;
+  const parents = readSessionRowParents(row, storedEntry, cfg, context, referenced);
+  const selection =
+    entry === row.entry ? row.selection : readSessionListSelectionFacts(row.key, entry);
+  return {
+    entry,
+    parents,
+    selection: isDeepStrictEqual(row.selection, selection) ? row.selection : selection,
+  };
+}
+
+export function acquireSessionRowEntry(params: {
+  row: Row;
+  rows: ReadonlyMap<string, Row>;
+  storedEntry: SessionEntry | undefined;
+  cfg: Inputs["cfg"];
+  context: SessionListRowContext;
+  referenced?: (reference: string) => Row | undefined;
+  remove: (id: string) => void;
+  put: (row: Row) => void;
+  markRelated: (row: Row, includeChildren: boolean) => void;
+  archive: { demote: (row: Row) => Row; forget: (id: string) => void };
+}) {
+  const { row, storedEntry, cfg, context, remove, put, archive } = params;
+  if (!storedEntry || storedEntry.incognito) {
+    remove(identity(row));
+    return undefined;
+  }
+  const lineage = readSessionRowLineage(row, storedEntry, cfg, context, params.referenced);
+  const entryChanged = lineage.entry !== row.entry;
+  const { entry, parents } = lineage;
+  // Equal timestamps still need the full metadata comparison.
+  const changed =
+    row.parents !== parents || !isDeepStrictEqual(storedEntry, row.storedEntry) || entryChanged;
+  if (!changed && row.sharingEntry === row.storedEntry && !row.entryAcquisitionPending) {
+    if (params.rows.get(identity(row)) !== row) {
+      put(row);
+    }
+    return row;
+  }
+  // Archive custody can retain new stored metadata before its lineage is acquired.
+  const includeChildren =
+    changesSessionRowDependents(row.storedEntry, storedEntry) ||
+    changesSessionRowDependents(row.entry, entry);
+  if (changed) {
+    params.markRelated(row, includeChildren);
+  }
+  const generation =
+    !row.entry ||
+    (row.entry.sessionId === entry.sessionId &&
+      row.entry.lifecycleRevision === entry.lifecycleRevision)
+      ? row.generation
+      : Symbol("row");
+  const retainedDatabaseFacts =
+    row.retainedDatabaseFacts?.entry === storedEntry ? row.retainedDatabaseFacts : undefined;
+  let next: Row = {
+    ...row,
+    storedEntry,
+    entryAcquisitionPending: undefined,
+    pendingDatabaseFacts: undefined,
+    retainedDatabaseFacts,
+    databaseFactsRevision: row.databaseFactsRevision + (retainedDatabaseFacts ? 0 : 1),
+    ...lineage,
+    sharingEntry: storedEntry,
+    generation,
+    fallbackModel:
+      sameFallbackModelFacts(row.storedEntry, storedEntry) &&
+      sameFallbackModelFacts(row.entry, entry)
+        ? row.fallbackModel
+        : undefined,
+    ...(generation !== row.generation
+      ? {
+          lastMessagePreview: undefined,
+          lastAssistantMessage: undefined,
+          fallbackModel: undefined,
+          materialized: undefined,
+          preparedAcpMeta: undefined,
+          preparedRuntimeOwnership: undefined,
+          runtimeOwnershipDependencies: undefined,
+        }
+      : {}),
+  };
+  put(next);
+  if (entry.archivedAt !== undefined && row.entry?.archivedAt === undefined) {
+    next = archive.demote(next);
+  } else if (entry.archivedAt === undefined) {
+    archive.forget(identity(next));
+  }
+  if (changed) {
+    params.markRelated(next, includeChildren);
+  }
+  return next;
+}

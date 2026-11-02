@@ -1,14 +1,10 @@
-/**
- * Subagent registry cleanup decisions.
- *
- * Decides whether completed runs can be cleaned up, deferred for descendants, retried, or abandoned.
- */
-import { getDeliveryAttemptCount } from "./subagent-delivery-state.js";
-import {
-  SUBAGENT_ENDED_REASON_COMPLETE,
-  type SubagentLifecycleEndedReason,
-} from "./subagent-lifecycle-events.js";
+import { SUBAGENT_ENDED_REASON_COMPLETE } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+
+export const shouldSuspendPendingFinalDelivery = (entry: SubagentRunRecord) =>
+  entry.expectsCompletionMessage === true &&
+  entry.endedReason === SUBAGENT_ENDED_REASON_COMPLETE &&
+  entry.execution.outcome?.status === "ok";
 
 type DeferredCleanupDecision =
   | {
@@ -26,18 +22,18 @@ type DeferredCleanupDecision =
       resumeDelayMs?: number;
     };
 
-/** Resolve the lifecycle ended reason used when cleaning up a subagent run. */
-export function resolveCleanupCompletionReason(
+/** Required-delivery retries renew their window; optional delivery expires from completion. */
+export function resolveAnnounceDeliveryDeadline(
   entry: SubagentRunRecord,
-): SubagentLifecycleEndedReason {
-  return entry.endedReason ?? SUBAGENT_ENDED_REASON_COMPLETE;
+  now: number,
+  expiryMs: number,
+): number {
+  const delivery = entry.expectsCompletionMessage === true ? entry.delivery : undefined;
+  return (
+    delivery?.deadlineAt ?? (delivery?.windowStartedAt ?? entry.execution.endedAt ?? now) + expiryMs
+  );
 }
 
-function resolveEndedAgoMs(entry: SubagentRunRecord, now: number): number {
-  return typeof entry.execution.endedAt === "number" ? now - entry.execution.endedAt : 0;
-}
-
-/** Decide whether deferred subagent cleanup should retry, defer, or give up. */
 export function resolveDeferredCleanupDecision(params: {
   entry: SubagentRunRecord;
   now: number;
@@ -47,21 +43,20 @@ export function resolveDeferredCleanupDecision(params: {
   deferDescendantDelayMs: number;
   resolveAnnounceRetryDelayMs: (retryCount: number) => number;
 }): DeferredCleanupDecision {
-  const endedAgo = resolveEndedAgoMs(params.entry, params.now);
   const isCompletionMessageFlow = params.entry.expectsCompletionMessage === true;
-  const completionHardExpiryExceeded =
-    isCompletionMessageFlow && endedAgo > params.announceCompletionHardExpiryMs;
+  const expiryMs = isCompletionMessageFlow
+    ? params.announceCompletionHardExpiryMs
+    : params.announceExpiryMs;
+  const expiryExceeded =
+    params.now >= resolveAnnounceDeliveryDeadline(params.entry, params.now, expiryMs);
   if (isCompletionMessageFlow && params.activeDescendantRuns > 0) {
-    if (completionHardExpiryExceeded) {
+    if (expiryExceeded) {
       return { kind: "give-up", reason: "expiry" };
     }
     return { kind: "defer-descendants", delayMs: params.deferDescendantDelayMs };
   }
 
-  const retryCount = getDeliveryAttemptCount(params.entry) + 1;
-  const expiryExceeded = isCompletionMessageFlow
-    ? completionHardExpiryExceeded
-    : endedAgo > params.announceExpiryMs;
+  const retryCount = (params.entry.delivery?.attemptCount ?? 0) + 1;
   if (params.entry.delivery?.disposition === "permanent_failure" || expiryExceeded) {
     return {
       kind: "give-up",

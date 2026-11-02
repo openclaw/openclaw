@@ -1,7 +1,8 @@
-// Migrate Hermes plugin module implements apply behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
+  applyMigrationConfigPatchItem,
+  applyMigrationManualItem,
   markMigrationItemConflict,
   markMigrationItemError,
   summarizeMigrationItems,
@@ -10,6 +11,7 @@ import {
   archiveMigrationItem,
   copyMemoryMigrationFileItem,
   copyMigrationFileItem,
+  resolvePlannedMigrationTargets,
   withCachedMigrationConfigRuntime,
   writeMigrationReport,
 } from "openclaw/plugin-sdk/migration-runtime";
@@ -22,7 +24,6 @@ import type {
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { applyAuthItem } from "./auth.js";
-import { applyConfigItem, applyManualItem } from "./config.js";
 import { appendItem } from "./helpers.js";
 import {
   findHermesModelProviderDependency,
@@ -32,7 +33,6 @@ import {
 import { applyModelItem } from "./model.js";
 import { buildHermesPlan } from "./plan.js";
 import { applySecretItem } from "./secrets.js";
-import { resolveTargets } from "./targets.js";
 
 const HERMES_SQLITE_SNAPSHOT_PREFIX = "openclaw-migrate-hermes-sqlite-";
 
@@ -146,7 +146,7 @@ export async function applyHermesPlan(params: {
   const plan = params.plan ?? (await buildHermesPlan(params.ctx));
   assertConsistentMemoryPlan(plan);
   const reportDir = params.ctx.reportDir ?? path.join(params.ctx.stateDir, "migration", "hermes");
-  const targets = resolveTargets(params.ctx);
+  const targets = resolvePlannedMigrationTargets(params.ctx);
   // Item ids are report labels, not unique execution keys. Preserve object identity so
   // providers can report repeated source items without cross-wiring their results.
   const appliedByItem = new Map<MigrationItem, MigrationItem>();
@@ -181,9 +181,9 @@ export async function applyHermesPlan(params: {
         appliedItem = await applyModelItem(applyCtx, item);
       }
     } else if (item.kind === "config") {
-      appliedItem = await applyConfigItem(applyCtx, item);
+      appliedItem = await applyMigrationConfigPatchItem(applyCtx, item);
     } else if (item.kind === "manual") {
-      appliedItem = applyManualItem(item);
+      appliedItem = applyMigrationManualItem(item);
     } else if (item.action === "archive") {
       appliedItem = await archiveHermesItem(item, reportDir);
     } else if (item.kind === "auth") {

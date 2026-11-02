@@ -106,7 +106,7 @@ function exactCounts(actualValue: unknown, expected: Record<string, number>, lab
   }
 }
 
-function exactStrings(actualValue: unknown, expected: unknown[], label: string) {
+function exactValues(actualValue: unknown, expected: unknown[], label: string) {
   const actual = array(actualValue, label);
   check(
     actual.length === expected.length && actual.every((value, index) => value === expected[index]),
@@ -120,6 +120,25 @@ function validateCommandResult(value: unknown, label: string) {
 }
 
 function validateCollectorOnlyPhase(phase: JsonRecord) {
+  if (phase.id === "pre-cleanup-timeline") {
+    check(
+      phase.driverKind === "kova" && phase.measurementScope === "cleanup",
+      "historical timeline phase identity was invalid",
+    );
+    const timeline = object(
+      object(phase.metrics, "historical timeline metrics").timeline,
+      "historical timeline",
+    );
+    check(
+      timeline.schemaVersion === "kova.timelineCollector.v1" &&
+        timeline.commandStatus === 0 &&
+        typeof timeline.available === "boolean",
+      "historical timeline collector was invalid",
+    );
+    array(timeline.openSpans, "historical timeline open spans");
+    object(timeline.keySpans, "historical timeline key spans");
+    return;
+  }
   check(
     phase.driverKind === "none" && phase.collectionIntent === "post-ready-health",
     "commandless phase was not a collector-only phase",
@@ -171,11 +190,19 @@ function validateRecord(recordValue: unknown) {
   check(profiling.schemaVersion === SCHEMA.profiling, "wrong profiling schema");
   const phases = array(record.phases, "record phases");
   check(phases.length > 0, "record had no phases");
+  let scenarioPhaseCount = 0;
   for (const phaseValue of phases) {
     const phase = object(phaseValue, "phase");
     const commands = array(phase.commands, "phase commands");
     const results = array(phase.results, "phase results");
     check(commands.length === results.length, "phase command/result counts did not match");
+    if (phase.id === "pre-cleanup-timeline") {
+      // Historical attribution cannot substitute for scenario work.
+      check(commands.length === 0, "historical timeline phase contained commands");
+      validateCollectorOnlyPhase(phase);
+      continue;
+    }
+    scenarioPhaseCount += 1;
     if (commands.length === 0) {
       validateCollectorOnlyPhase(phase);
       continue;
@@ -190,6 +217,7 @@ function validateRecord(recordValue: unknown) {
       validateCommandResult(result, `phase result ${index}`);
     });
   }
+  check(scenarioPhaseCount > 0, "record had no scenario phases");
   validateCleanup(
     record.cleanup,
     record.cleanupResult,
@@ -263,7 +291,6 @@ function sampledMetric(metrics: JsonRecord, ids: string[], sampleCount: number, 
   for (const id of ids) {
     if (metrics[id] !== undefined) {
       const samples = validateMetric(metrics[id], sampleCount, `${label}.${id}`);
-      check(samples.length === sampleCount, `${label}.${id} did not cover every record`);
       return { id, samples };
     }
   }
@@ -333,16 +360,17 @@ function validatePerformance(report: JsonRecord, records: ValidatedRecord[], rep
     );
     const rss = sampledMetric(metrics, RSS_METRICS, sampleCount, "group RSS");
     const cpu = sampledMetric(metrics, CPU_METRICS, sampleCount, "group CPU");
-    for (const record of matching) {
-      check(
-        rss.samples.includes(measured(record, RSS_METRICS, "record RSS")),
-        "record RSS was not sampled",
-      );
-      check(
-        cpu.samples.includes(measured(record, CPU_METRICS, "record CPU")),
-        "record CPU was not sampled",
-      );
-    }
+    // Repeated measurements each need a sample; membership alone loses multiplicity.
+    exactValues(
+      rss.samples.toSorted((a, b) => a - b),
+      matching.map((entry) => measured(entry, RSS_METRICS, "record RSS")).toSorted((a, b) => a - b),
+      "record RSS samples",
+    );
+    exactValues(
+      cpu.samples.toSorted((a, b) => a - b),
+      matching.map((entry) => measured(entry, CPU_METRICS, "record CPU")).toSorted((a, b) => a - b),
+      "record CPU samples",
+    );
     groupsByKey.set(key, group);
   }
   check(
@@ -706,7 +734,7 @@ function validateProfiledFailure(record: ValidatedRecord, card: JsonRecord, grou
     "blocking card identity was invalid",
   );
   check(card.summary === messages[0], "blocking card summary did not match");
-  exactStrings(card.violations, messages, "blocking card violations");
+  exactValues(card.violations, messages, "blocking card violations");
   const cardMeasurements = object(card.measurements, "blocking card measurements");
   check(
     cardMeasurements.peakRssMb === record.measurements.peakRssMb &&

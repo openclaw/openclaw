@@ -1,5 +1,9 @@
 export * from "./agent.ts";
 export * from "./config.ts";
+export {
+  buildGatewayStatusArgsFromHelpText,
+  waitForGatewayWithStartupRecovery,
+} from "./gateway-readiness.ts";
 export * from "./install.ts";
 export * from "./installed.ts";
 export * from "./lanes.ts";
@@ -9,3 +13,4 @@ export * from "./process.ts";
 export * from "./reporting.ts";
 export * from "./runtime.ts";
 export * from "./shared.ts";
+export * from "./suite-filter.mjs";

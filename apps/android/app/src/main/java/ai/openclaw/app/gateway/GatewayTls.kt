@@ -1,8 +1,17 @@
 package ai.openclaw.app.gateway
 
 import android.annotation.SuppressLint
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import okio.ByteString.Companion.toByteString
 import java.io.EOFException
 import java.net.ConnectException
 import java.net.InetSocketAddress
@@ -10,7 +19,6 @@ import java.net.Socket
 import java.net.SocketException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
-import java.security.MessageDigest
 import java.security.SecureRandom
 import java.security.cert.CertificateException
 import java.security.cert.X509Certificate
@@ -29,12 +37,9 @@ import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509ExtendedTrustManager
 import javax.net.ssl.X509TrustManager
 
-/** TLS pinning inputs for a discovered or manually configured gateway endpoint. */
+/** A non-null value enables TLS; a null fingerprint selects platform trust. */
 data class GatewayTlsParams(
-  val required: Boolean,
   val expectedFingerprint: String?,
-  val allowTOFU: Boolean,
-  val stableId: String,
 )
 
 /** SSL primitives and accepted route trust installed into OkHttp. */
@@ -85,6 +90,52 @@ sealed interface GatewayTlsTrustDecision {
 internal const val GATEWAY_TLS_PROBE_CONNECT_TIMEOUT_MS = 3_000
 internal const val GATEWAY_TLS_PROBE_HANDSHAKE_TIMEOUT_MS = 10_000
 private const val GATEWAY_TLS_FALLBACK_TIMEOUT_FLOOR_MS = 250
+
+/** Bounds the caller's wait without accumulating workers when native DNS ignores cancellation. */
+internal class GatewayTlsProbeRunner(
+  private val scope: CoroutineScope,
+  private val probe: suspend (String, Int) -> GatewayTlsProbeResult,
+  private val timeoutMs: Long =
+    GATEWAY_TLS_PROBE_CONNECT_TIMEOUT_MS.toLong() + GATEWAY_TLS_PROBE_HANDSHAKE_TIMEOUT_MS,
+) {
+  private val worker = AtomicReference<Deferred<GatewayTlsProbeResult>?>(null)
+
+  fun cancel() {
+    worker.get()?.cancel()
+  }
+
+  suspend fun probe(
+    host: String,
+    port: Int,
+    onStarted: () -> Unit = {},
+  ): GatewayTlsProbeResult {
+    while (true) {
+      currentCoroutineContext().ensureActive()
+      val previous = worker.get()
+      if (previous != null) {
+        // Occupancy says nothing about this endpoint. Wait cancellably for the physical
+        // worker to exit; superseded requests must never start another native DNS call.
+        previous.join()
+        continue
+      }
+      val task = scope.async(Dispatchers.IO, start = CoroutineStart.LAZY) { probe.invoke(host, port) }
+      if (!worker.compareAndSet(null, task)) {
+        task.cancel()
+        continue
+      }
+      // Cancellation cannot free the slot until blocking DNS actually returns.
+      task.invokeOnCompletion { worker.compareAndSet(task, null) }
+      return try {
+        currentCoroutineContext().ensureActive()
+        onStarted()
+        withTimeoutOrNull(timeoutMs) { task.await() }
+          ?: GatewayTlsProbeResult(failure = GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE)
+      } finally {
+        task.cancel()
+      }
+    }
+  }
+}
 
 internal data class GatewayTlsProbeTimeouts(
   val connectTimeoutMs: Int,
@@ -153,6 +204,9 @@ internal fun decideGatewayTlsTrust(
     }
   }
   if (stored != null) return GatewayTlsTrustDecision.PinnedTrust(stored)
+  if (probeResult.failure == GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE) {
+    return GatewayTlsTrustDecision.Failed(GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE)
+  }
   return GatewayTlsTrustDecision.PromptRequired(
     fingerprintSha256 = null,
     previousFingerprintSha256 = null,
@@ -160,35 +214,20 @@ internal fun decideGatewayTlsTrust(
   )
 }
 
-/** Builds a TLS config that supports pinned fingerprints and trust-on-first-use. */
-fun buildGatewayTlsConfig(
-  params: GatewayTlsParams?,
-  onStore: ((String) -> Unit)? = null,
-): GatewayTlsConfig? {
-  if (params == null) return null
-  return buildGatewayTlsConfig(
-    params = params,
-    defaultTrust = defaultTrustManager(),
-    onStore = onStore,
-  )
-}
+/** Builds a TLS config using a stored fingerprint or platform trust. */
+fun buildGatewayTlsConfig(params: GatewayTlsParams?): GatewayTlsConfig? = params?.let { buildGatewayTlsConfig(it, defaultTrustManager()) }
 
 internal fun buildGatewayTlsConfig(
   params: GatewayTlsParams,
   defaultTrust: X509TrustManager,
-  onStore: ((String) -> Unit)? = null,
 ): GatewayTlsConfig {
   val expectedInput = params.expectedFingerprint?.takeIf { it.isNotBlank() }
-  val expected =
-    expectedInput
-      ?.let(::normalizeGatewayTlsFingerprint)
-      ?.takeIf { it.isNotBlank() }
+  val expected = expectedInput?.let(::normalizeGatewayTlsFingerprintInput)
   val effectiveFingerprint = AtomicReference(expected)
-  val usesPlatformTrust = expectedInput == null && !params.allowTOFU
 
   fun recordAcceptedFingerprint(chain: Array<X509Certificate>) {
     val certificate = chain.firstOrNull() ?: return
-    effectiveFingerprint.set(sha256Hex(certificate.encoded))
+    effectiveFingerprint.set(certificate.sha256Fingerprint())
   }
 
   @SuppressLint("CustomX509TrustManager")
@@ -230,7 +269,7 @@ internal fun buildGatewayTlsConfig(
         authType: String,
       ) {
         if (chain.isEmpty()) throw CertificateException("empty certificate chain")
-        val fingerprint = sha256Hex(chain[0].encoded)
+        val fingerprint = chain[0].sha256Fingerprint()
         if (expectedInput != null) {
           if (expected == null) {
             throw CertificateException("invalid gateway TLS fingerprint")
@@ -238,14 +277,6 @@ internal fun buildGatewayTlsConfig(
           if (fingerprint != expected) {
             throw CertificateException("gateway TLS fingerprint mismatch")
           }
-          effectiveFingerprint.set(fingerprint)
-          return
-        }
-        if (params.allowTOFU) {
-          // Store only after the TLS stack presents a concrete server cert; the
-          // caller persists the fingerprint against the endpoint's stable id,
-          // and later connects must come back through the pinned branch above.
-          onStore?.invoke(fingerprint)
           effectiveFingerprint.set(fingerprint)
           return
         }
@@ -258,7 +289,7 @@ internal fun buildGatewayTlsConfig(
         authType: String,
         socket: Socket,
       ) {
-        if (usesPlatformTrust && defaultTrust is X509ExtendedTrustManager) {
+        if (expectedInput == null && defaultTrust is X509ExtendedTrustManager) {
           // Preserve the connected hostname for Android's domain-aware platform trust manager.
           defaultTrust.checkServerTrusted(chain, authType, socket)
           recordAcceptedFingerprint(chain)
@@ -272,7 +303,7 @@ internal fun buildGatewayTlsConfig(
         authType: String,
         engine: SSLEngine,
       ) {
-        if (usesPlatformTrust && defaultTrust is X509ExtendedTrustManager) {
+        if (expectedInput == null && defaultTrust is X509ExtendedTrustManager) {
           defaultTrust.checkServerTrusted(chain, authType, engine)
           recordAcceptedFingerprint(chain)
         } else {
@@ -286,7 +317,7 @@ internal fun buildGatewayTlsConfig(
   val context = SSLContext.getInstance("TLS")
   context.init(null, arrayOf(trustManager), SecureRandom())
   val verifier =
-    if (expectedInput != null || params.allowTOFU) {
+    if (expectedInput != null) {
       // When pinning, we intentionally ignore hostname mismatch (service discovery often yields IPs).
       HostnameVerifier { _, _ -> true }
     } else {
@@ -324,6 +355,7 @@ internal suspend fun probeGatewayTlsFingerprint(
   if (connectTimeoutMs <= 0 || handshakeTimeoutMs <= 0) return GatewayTlsProbeResult(failure = GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE)
 
   return withContext(Dispatchers.IO) {
+    val probeContext = currentCoroutineContext()
     val probeDeadlineNanos =
       System.nanoTime() +
         (connectTimeoutMs.toLong() + handshakeTimeoutMs.toLong()) * 1_000_000L
@@ -335,6 +367,7 @@ internal suspend fun probeGatewayTlsFingerprint(
           port = port,
           connectTimeoutMs = connectTimeoutMs,
           handshakeTimeoutMs = handshakeTimeoutMs,
+          checkActive = { probeContext.ensureActive() },
         )
       if (fingerprintSha256 != null) {
         return@withContext GatewayTlsProbeResult(fingerprintSha256 = fingerprintSha256, systemTrusted = true)
@@ -357,7 +390,7 @@ internal suspend fun probeGatewayTlsFingerprint(
         override fun checkClientTrusted(
           chain: Array<X509Certificate>,
           authType: String,
-        ): Unit = throw CertificateException("gateway TLS probe does not accept client certificates")
+        ): Unit = throw CertificateException("gateway TLS check does not accept client certificates")
 
         override fun checkClientTrusted(
           chain: Array<X509Certificate>,
@@ -376,9 +409,9 @@ internal suspend fun probeGatewayTlsFingerprint(
           authType: String,
         ) {
           if (chain.isEmpty()) throw CertificateException("empty certificate chain")
-          fingerprintRef.set(sha256Hex(chain[0].encoded))
+          fingerprintRef.set(chain[0].sha256Fingerprint())
           // Abort validation after capture; the probe is not deciding trust.
-          throw CertificateException("gateway TLS probe captured fingerprint")
+          throw CertificateException("gateway TLS check captured fingerprint")
         }
 
         override fun checkServerTrusted(
@@ -406,8 +439,12 @@ internal suspend fun probeGatewayTlsFingerprint(
       // tailnets; keep the budgets separate so a reachable-but-slow secure
       // endpoint does not collapse into generic gateway unreachable guidance.
       socket.soTimeout = fallbackTimeouts.handshakeTimeoutMs
-      socket.connect(InetSocketAddress(trimmedHost, port), fallbackTimeouts.connectTimeoutMs)
+      val address = InetSocketAddress(trimmedHost, port)
+      // Native DNS can outlive cancellation; never open a socket for a retired attempt afterward.
+      probeContext.ensureActive()
+      socket.connect(address, fallbackTimeouts.connectTimeoutMs)
       connected = true
+      probeContext.ensureActive()
 
       // Best-effort SNI for hostnames (avoid crashing on IP literals).
       try {
@@ -425,38 +462,22 @@ internal suspend fun probeGatewayTlsFingerprint(
       val cert =
         socket.session.peerCertificates.firstOrNull() as? X509Certificate
           ?: return@withContext GatewayTlsProbeResult(failure = GatewayTlsProbeFailure.TLS_UNAVAILABLE)
-      GatewayTlsProbeResult(fingerprintSha256 = sha256Hex(cert.encoded))
+      GatewayTlsProbeResult(fingerprintSha256 = cert.sha256Fingerprint())
+    } catch (err: CancellationException) {
+      throw err
     } catch (err: Throwable) {
       fingerprintRef.get()?.let { return@withContext GatewayTlsProbeResult(fingerprintSha256 = it) }
       val failure =
-        when (err) {
-          is SSLException,
-          is EOFException,
-          -> GatewayTlsProbeFailure.TLS_UNAVAILABLE
-          is SocketTimeoutException ->
-            if (connected) {
-              GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT
-            } else {
-              GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE
-            }
-          is ConnectException,
-          is UnknownHostException,
-          -> GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE
-          is SocketException ->
-            if (connected) {
-              GatewayTlsProbeFailure.TLS_UNAVAILABLE
-            } else {
-              GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE
-            }
+        when {
+          err is SSLException || err is EOFException -> GatewayTlsProbeFailure.TLS_UNAVAILABLE
+          !connected || err is ConnectException || err is UnknownHostException -> GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE
+          err is SocketTimeoutException -> GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT
+          err is SocketException -> GatewayTlsProbeFailure.TLS_UNAVAILABLE
           else -> GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE
         }
       GatewayTlsProbeResult(failure = failure)
     } finally {
-      try {
-        socket.close()
-      } catch (_: Throwable) {
-        // ignore
-      }
+      runCatching { socket.close() }
     }
   }
 }
@@ -466,6 +487,7 @@ private fun probeGatewayTlsSystemTrust(
   port: Int,
   connectTimeoutMs: Int,
   handshakeTimeoutMs: Int,
+  checkActive: () -> Unit,
 ): String? {
   val dnsHost = normalizedGatewayTlsDnsHost(host) ?: return null
   val context = SSLContext.getInstance("TLS")
@@ -477,10 +499,15 @@ private fun probeGatewayTlsSystemTrust(
     parameters.endpointIdentificationAlgorithm = "HTTPS"
     parameters.serverNames = listOf(SNIHostName(dnsHost))
     socket.sslParameters = parameters
-    socket.connect(InetSocketAddress(dnsHost, port), connectTimeoutMs)
+    val address = InetSocketAddress(dnsHost, port)
+    checkActive()
+    socket.connect(address, connectTimeoutMs)
+    checkActive()
     socket.startHandshake()
     val certificate = socket.session.peerCertificates.firstOrNull() as? X509Certificate ?: return null
-    sha256Hex(certificate.encoded)
+    certificate.sha256Fingerprint()
+  } catch (err: CancellationException) {
+    throw err
   } catch (_: Exception) {
     null
   } finally {
@@ -488,21 +515,14 @@ private fun probeGatewayTlsSystemTrust(
   }
 }
 
+private fun X509Certificate.sha256Fingerprint(): String = encoded.toByteString().sha256().hex()
+
 private fun defaultTrustManager(): X509TrustManager {
   val factory = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
   factory.init(null as java.security.KeyStore?)
   val trust =
     factory.trustManagers.firstOrNull { it is X509TrustManager } as? X509TrustManager
   return trust ?: throw IllegalStateException("No default X509TrustManager found")
-}
-
-private fun sha256Hex(data: ByteArray): String {
-  val digest = MessageDigest.getInstance("SHA-256").digest(data)
-  val out = StringBuilder(digest.size * 2)
-  for (byte in digest) {
-    out.append(String.format(Locale.US, "%02x", byte))
-  }
-  return out.toString()
 }
 
 /** Normalizes accepted fingerprint text to lowercase bare SHA-256 hex. */
@@ -520,9 +540,6 @@ fun normalizeGatewayTlsFingerprintInput(raw: String): String? {
   }
 }
 
-/** Normalizes internal fingerprint text; invalid values become empty. */
-fun normalizeGatewayTlsFingerprint(raw: String): String = normalizeGatewayTlsFingerprintInput(raw).orEmpty()
-
 private fun normalizedGatewayTlsDnsHost(rawHost: String): String? {
   val trimmed = rawHost.trim()
   if (trimmed.startsWith('[') || trimmed.endsWith(']')) return null
@@ -530,12 +547,7 @@ private fun normalizedGatewayTlsDnsHost(rawHost: String): String? {
   if (host.isEmpty() || host.length > 253 || host.endsWith(".local")) return null
   if (host.contains(':')) return null
   val labels = host.split('.')
-  if (labels.size < 2 || labels.any { !isGatewayTlsDnsLabel(it) }) return null
+  if (labels.size < 2 || labels.any { !isDnsHostnameLabel(it) }) return null
   if (labels.all { label -> label.all { it in '0'..'9' } }) return null
   return host
-}
-
-private fun isGatewayTlsDnsLabel(label: String): Boolean {
-  if (label.isEmpty() || label.length > 63 || label.first() == '-' || label.last() == '-') return false
-  return label.all { it in 'a'..'z' || it in '0'..'9' || it == '-' }
 }

@@ -1,0 +1,15 @@
+{
+  "version": "2026.10.0",
+  "repository": "https://github.com/cloudflare/cloudflared",
+  "licenseSha256": "58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd",
+  "artifacts": {
+    "arm64": {
+      "asset": "cloudflared-darwin-arm64.tgz",
+      "sha256": "a2f79ff7b9420aa537d74af239f376da170bbabeb529aec416002adac6a72e70"
+    },
+    "x86_64": {
+      "asset": "cloudflared-darwin-amd64.tgz",
+      "sha256": "903845b81828c8cb3c5d13d816a2de71c06a3da5785469df8eb0e1b736d92f9f"
+    }
+  }
+}

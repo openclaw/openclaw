@@ -1,56 +1,54 @@
-const PLUGIN_CANDIDATE_INSTALL_OWNER = Symbol.for("openclaw.pluginCandidateInstallOwner");
-const PLUGIN_INSTALL_OWNER_LOOKUP = Symbol.for("openclaw.pluginInstallOwnerLookup");
+import type { PluginInstallRecord } from "../config/types.plugins.js";
+import type { PluginOrigin } from "./plugin-origin.types.js";
 
-type PluginCandidateInstallOwner = { installOwner?: string; ambiguous?: true };
+type InstallOwner = { installOwner?: string; ambiguous?: true };
 
-export function recordPluginCandidateInstallOwner<T extends object>(
-  candidate: T,
-  installOwner: string | undefined,
-  ambiguous = false,
-): T {
-  if (!installOwner && !ambiguous) {
-    return candidate;
+export function createPluginInstallOwnerMetadata(key: string, configurable: boolean) {
+  const symbol = Symbol.for(key);
+  function read(value: object): InstallOwner | undefined {
+    return (value as { [symbol]?: InstallOwner })[symbol];
   }
-  Object.defineProperty(candidate, PLUGIN_CANDIDATE_INSTALL_OWNER, {
-    configurable: true,
-    enumerable: true,
-    value: ambiguous ? { ambiguous: true } : { installOwner },
-  });
-  return candidate;
+  return {
+    record: <T extends object>(
+      value: T,
+      installOwner: string | undefined,
+      ambiguous = false,
+    ): T => {
+      if (installOwner || ambiguous) {
+        Object.defineProperty(value, symbol, {
+          configurable,
+          enumerable: true,
+          value: ambiguous ? { ambiguous: true } : { installOwner },
+        });
+      }
+      return value;
+    },
+    resolve: (value: object): string | undefined => read(value)?.installOwner,
+    isAmbiguous: (value: object): boolean => read(value)?.ambiguous === true,
+  };
 }
 
-function readPluginCandidateInstallOwner(
-  candidate: object,
-): PluginCandidateInstallOwner | undefined {
-  return (candidate as { [PLUGIN_CANDIDATE_INSTALL_OWNER]?: PluginCandidateInstallOwner })[
-    PLUGIN_CANDIDATE_INSTALL_OWNER
-  ];
-}
+export const {
+  record: recordPluginCandidateInstallOwner,
+  resolve: resolvePluginCandidateInstallOwner,
+  isAmbiguous: isPluginCandidateInstallOwnerAmbiguous,
+} = createPluginInstallOwnerMetadata("openclaw.pluginCandidateInstallOwner", true);
 
-export function resolvePluginCandidateInstallOwner(candidate: object): string | undefined {
-  return readPluginCandidateInstallOwner(candidate)?.installOwner;
-}
-
-export function isPluginCandidateInstallOwnerAmbiguous(candidate: object): boolean {
-  return readPluginCandidateInstallOwner(candidate)?.ambiguous === true;
-}
-
-export function recordPluginInstallOwnerLookup<T extends object>(
-  params: T,
-  installOwnerByPluginId: ReadonlyMap<string, string>,
-): T {
-  Object.defineProperty(params, PLUGIN_INSTALL_OWNER_LOOKUP, {
-    configurable: false,
-    enumerable: true,
-    value: installOwnerByPluginId,
-  });
-  return params;
-}
-
-export function resolvePluginInstallOwnerLookup(
-  params: object,
-): ReadonlyMap<string, string> | undefined {
-  return (params as { [PLUGIN_INSTALL_OWNER_LOOKUP]?: ReadonlyMap<string, string> })[
-    PLUGIN_INSTALL_OWNER_LOOKUP
-  ];
+/** Editable installs have no reusable identity; npm replacement records invalidate installed code. */
+export function resolveImmutableInstallIdentity(
+  origin: PluginOrigin,
+  installOwner: string | undefined,
+  installRecords: Readonly<Record<string, PluginInstallRecord>>,
+): string | undefined {
+  const install = installOwner ? installRecords[installOwner] : undefined;
+  if (origin !== "global" || install?.source !== "npm" || !install.integrity) {
+    return undefined;
+  }
+  return JSON.stringify([
+    installOwner,
+    install.installPath ?? "",
+    install.resolvedSpec ?? install.spec ?? "",
+    install.integrity,
+    install.installedAt ?? "",
+  ]);
 }

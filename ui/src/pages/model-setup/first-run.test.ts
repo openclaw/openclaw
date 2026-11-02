@@ -1,101 +1,122 @@
-import { describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { routeIdFromPath } from "../../app-routes.ts";
-import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { consumeCachedModelSetupDetection } from "./detect-cache.ts";
+import { createStorageMock } from "../../test-helpers/storage.ts";
+import {
+  clearFirstRunActivationReceipt,
+  persistFirstRunActivationReceipt,
+  readFirstRunActivationReceipt as readReceipt,
+} from "./first-run-activation-receipt.ts";
 import { isDefaultChatLanding, startModelSetupFirstRunRedirectAfterLocation } from "./first-run.ts";
+
+const receiptKey = "openclaw.modelSetup.pendingActivation.v1";
+const deviceKey = "openclaw-device-identity-v1";
+const privateKey = "high-entropy-device-private-key-never-in-receipts";
+const candidate = { kind: "openai-api-key", modelRef: "openai/expected" };
+const setDeviceKey = (key: string) =>
+  localStorage.setItem(deviceKey, JSON.stringify({ version: 1, privateKey: key }));
 
 const defaultLanding = { pathname: "/chat/main", search: "", hash: "" };
 
-async function startRedirect(
-  context: ApplicationContext<RouteId>,
-  currentLocation = defaultLanding,
-): Promise<() => void> {
+function startRedirect(context: ApplicationContext, onInitialDecision?: () => void) {
   return startModelSetupFirstRunRedirectAfterLocation({
     context,
     enabled: true,
-    history: { location: () => currentLocation, replace: () => undefined },
+    history: { location: () => defaultLanding, replace: () => undefined },
     initialLocationReady: Promise.resolve(defaultLanding),
+    onInitialDecision,
   });
 }
 
+function createConnectedContext({
+  selectedId = "main",
+  modelConfigured = false,
+  admin = true,
+  stopped = false,
+  token = "gateway-auth-token",
+  deviceToken,
+}: {
+  selectedId?: string | null;
+  modelConfigured?: boolean;
+  admin?: boolean;
+  stopped?: boolean;
+  token?: string;
+  deviceToken?: string;
+} = {}) {
+  const request = vi.fn();
+  const replace = vi.fn();
+  const subscribe = vi.fn(() => () => undefined);
+  const context = {
+    gateway: {
+      snapshot: {
+        phase: stopped ? "stopped" : "connected",
+        client: stopped ? null : { request },
+        hello: stopped
+          ? null
+          : {
+              auth: {
+                role: "operator",
+                scopes: [admin ? "operator.admin" : "operator.read"],
+                deviceToken,
+              },
+              features: { methods: ["openclaw.setup.detect"] },
+              snapshot: { sessionDefaults: { defaultAgentId: "main", modelConfigured } },
+            },
+      },
+      connection: {
+        gatewayUrl: "wss://gateway.example/control?profile=work",
+        token,
+        password: "",
+        bootstrapToken: "",
+      },
+      subscribe,
+    },
+    agentSelection: { state: { selectedId } },
+    replace,
+  } as unknown as ApplicationContext;
+  return { context, replace, request, subscribe };
+}
+
+beforeEach(() => {
+  vi.stubGlobal("localStorage", createStorageMock());
+  setDeviceKey(privateKey);
+});
+afterEach(() => vi.unstubAllGlobals());
+
 describe("model setup first-run redirect", () => {
-  it("recognizes only the implicit chat landing without a session deep link", () => {
-    expect(isDefaultChatLanding({ pathname: "/", search: "", hash: "" }, "", routeIdFromPath)).toBe(
-      true,
-    );
-    expect(
-      isDefaultChatLanding({ pathname: "/chat", search: "", hash: "" }, "", routeIdFromPath),
-    ).toBe(true);
-    expect(
-      isDefaultChatLanding(
-        { pathname: "/chat", search: "?session=agent%3Amain%3Amain", hash: "" },
-        "",
-        routeIdFromPath,
-      ),
-    ).toBe(false);
-    expect(
-      isDefaultChatLanding(
-        { pathname: "/chat", search: "", hash: "#session=agent%3Amain%3Amain" },
-        "",
-        routeIdFromPath,
-      ),
-    ).toBe(false);
-    expect(
-      isDefaultChatLanding({ pathname: "/chat/main", search: "", hash: "" }, "", routeIdFromPath),
-    ).toBe(false);
-    expect(
-      isDefaultChatLanding(
-        { pathname: "/dashboard/main", search: "", hash: "" },
-        "",
-        routeIdFromPath,
-      ),
-    ).toBe(false);
-    expect(
-      isDefaultChatLanding(
-        { pathname: "/settings/appearance", search: "", hash: "" },
-        "",
-        routeIdFromPath,
-      ),
-    ).toBe(false);
+  it("recognizes default chat landings without accepting session deep links", () => {
+    const cases = [
+      ["/", "", "", "", true],
+      ["/chat", "", "", "", true],
+      ["/chat", "?session=agent%3Amain%3Amain", "", "", false],
+      ["/chat", "", "#session=agent%3Amain%3Amain", "", false],
+      ["/chat/main/", "", "", "", true],
+      ["/openclaw/chat/main/", "", "", "/openclaw", true],
+      ["/chat/research", "", "", "", false],
+      ["/chat/main/existing-session", "", "", "", false],
+      ["/dashboard/main", "", "", "", false],
+      ["/settings/appearance", "", "", "", false],
+    ] as const;
+    for (const [pathname, search, hash, basePath, expected] of cases) {
+      expect(isDefaultChatLanding({ pathname, search, hash }, basePath, routeIdFromPath)).toBe(
+        expected,
+      );
+    }
   });
 
-  it("installs a released session deep link without registering first-run detection", async () => {
+  it("installs a released session deep link without registering the first-run gate", async () => {
     const releasedLocation = {
       pathname: "/chat",
       search: "?session=agent%3Aresearch%3Atelegram%3A12345",
       hash: "",
     };
-    const canonicalLocation = {
-      pathname: "/chat/research/telegram/12345",
-      search: "",
-      hash: "",
-    };
+    const canonicalLocation = { ...defaultLanding, pathname: "/chat/research/telegram/12345" };
     let currentLocation = releasedLocation;
     const replaceLocation = vi.fn((location: typeof releasedLocation) => {
       currentLocation = location;
     });
-    const subscribe = vi.fn(() => () => undefined);
-    const replaceRoute = vi.fn();
-    const context = {
-      gateway: {
-        snapshot: {
-          phase: "connected",
-          client: { request: vi.fn() },
-          hello: {
-            auth: { role: "operator", scopes: ["operator.admin"] },
-            features: { methods: ["openclaw.setup.detect"] },
-          },
-        },
-        subscribe,
-      },
-      agentSelection: {
-        state: { selectedId: "main" },
-        subscribe: () => () => undefined,
-      },
-      replace: replaceRoute,
-    } as unknown as ApplicationContext<RouteId>;
+    const { context, replace: replaceRoute, subscribe } = createConnectedContext();
 
     await startModelSetupFirstRunRedirectAfterLocation({
       context,
@@ -109,307 +130,91 @@ describe("model setup first-run redirect", () => {
     expect(replaceRoute).not.toHaveBeenCalled();
   });
 
-  it("detects once, caches the result, and redirects once", async () => {
-    const result = {
-      candidates: [],
-      manualProviders: [],
-      workspace: "/tmp/workspace",
-      setupComplete: false,
-    };
-    const request = vi.fn().mockResolvedValue(result);
-    const client = { request } as unknown as GatewayBrowserClient;
-    type GatewayListener = Parameters<ApplicationContext<RouteId>["gateway"]["subscribe"]>[0];
-    let listener: GatewayListener | null = null;
-    const snapshot = {
-      phase: "connected",
-      client,
-      hello: {
-        type: "hello-ok" as const,
-        protocol: 1,
-        auth: { role: "operator", scopes: ["operator.admin"] },
-        features: { methods: ["openclaw.setup.detect"] },
-      },
-    };
-    const replace = vi.fn();
-    const context = {
-      gateway: {
-        snapshot,
-        subscribe: (next: GatewayListener) => {
-          listener = next;
-          return () => undefined;
-        },
-      },
-      agentSelection: {
-        state: { selectedId: "main" },
-        subscribe: () => () => undefined,
-      },
-      replace,
-    } as unknown as ApplicationContext<RouteId>;
+  it.each([
+    ["agent selection is unset", { selectedId: null }, true],
+    ["the operator lacks admin access", { admin: false }, false],
+    ["the initial connection stopped", { stopped: true }, false],
+  ] as const)("decides synchronously when %s", async (_name, options, shouldRedirect) => {
+    const { context, replace, request } = createConnectedContext(options);
 
-    await startRedirect(context);
-    expect(listener).not.toBeNull();
-    listener!(snapshot as Parameters<GatewayListener>[0]);
-    listener!(snapshot as Parameters<GatewayListener>[0]);
-    await vi.waitFor(() => expect(replace).toHaveBeenCalledOnce());
-
-    expect(request).toHaveBeenCalledOnce();
-    expect(request).toHaveBeenCalledWith(
-      "openclaw.setup.detect",
-      { agentId: "main" },
-      expect.objectContaining({ timeoutMs: 40_000 }),
-    );
-    expect(replace).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
-    expect(
-      consumeCachedModelSetupDetection({ client, hello: snapshot.hello, agentId: "main" }),
-    ).toEqual(result);
-  });
-
-  it("retries one transient detection failure without duplicating either attempt", async () => {
-    const result = {
-      candidates: [],
-      manualProviders: [],
-      workspace: "/tmp/workspace",
-      setupComplete: false,
-    };
-    let rejectFirst!: (error: Error) => void;
-    const request = vi
-      .fn()
-      .mockImplementationOnce(
-        () =>
-          new Promise((_, reject) => {
-            rejectFirst = reject;
-          }),
-      )
-      .mockResolvedValueOnce(result);
-    const client = { request } as unknown as GatewayBrowserClient;
-    type GatewayListener = Parameters<ApplicationContext<RouteId>["gateway"]["subscribe"]>[0];
-    let listener: GatewayListener | null = null;
-    const snapshot = {
-      phase: "connected" as const,
-      client,
-      hello: {
-        auth: { role: "operator", scopes: ["operator.admin"] },
-        features: { methods: ["openclaw.setup.detect"] },
-      },
-    };
-    const replace = vi.fn();
-    const context = {
-      gateway: {
-        snapshot,
-        subscribe: (next: GatewayListener) => {
-          listener = next;
-          return () => undefined;
-        },
-      },
-      agentSelection: {
-        state: { selectedId: "main" },
-        subscribe: () => () => undefined,
-      },
-      replace,
-    } as unknown as ApplicationContext<RouteId>;
-
-    await startRedirect(context);
-    listener!(snapshot as Parameters<GatewayListener>[0]);
-    expect(request).toHaveBeenCalledOnce();
-
-    rejectFirst(new Error("temporary gateway failure"));
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
-    listener!(snapshot as Parameters<GatewayListener>[0]);
-    await vi.waitFor(() => expect(replace).toHaveBeenCalledOnce());
-
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(replace).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
-  });
-
-  it("stops after the same connection rejects detection twice", async () => {
-    const request = vi.fn().mockRejectedValue(new Error("gateway unavailable"));
-    const client = { request } as unknown as GatewayBrowserClient;
-    type GatewayListener = Parameters<ApplicationContext<RouteId>["gateway"]["subscribe"]>[0];
-    let listener: GatewayListener | null = null;
-    const snapshot = {
-      phase: "connected" as const,
-      client,
-      hello: {
-        auth: { role: "operator", scopes: ["operator.admin"] },
-        features: { methods: ["openclaw.setup.detect"] },
-      },
-    };
-    const context = {
-      gateway: {
-        snapshot,
-        subscribe: (next: GatewayListener) => {
-          listener = next;
-          return () => undefined;
-        },
-      },
-      agentSelection: {
-        state: { selectedId: "main" },
-        subscribe: () => () => undefined,
-      },
-      replace: vi.fn(),
-    } as unknown as ApplicationContext<RouteId>;
-
-    await startRedirect(context);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
-    listener!(snapshot as Parameters<GatewayListener>[0]);
-    await Promise.resolve();
-
-    expect(request).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not redirect after the operator leaves the default landing", async () => {
-    const result = {
-      candidates: [],
-      manualProviders: [],
-      workspace: "/tmp/workspace",
-      setupComplete: false,
-    };
-    const request = vi.fn().mockResolvedValue(result);
-    const client = { request } as unknown as GatewayBrowserClient;
-    type GatewayListener = Parameters<ApplicationContext<RouteId>["gateway"]["subscribe"]>[0];
-    let listener: GatewayListener | null = null;
-    const snapshot = {
-      phase: "connected",
-      client,
-      hello: {
-        type: "hello-ok" as const,
-        protocol: 1,
-        auth: { role: "operator", scopes: ["operator.admin"] },
-        features: { methods: ["openclaw.setup.detect"] },
-      },
-    };
-    const replace = vi.fn();
-    const context = {
-      gateway: {
-        snapshot,
-        subscribe: (next: GatewayListener) => {
-          listener = next;
-          return () => undefined;
-        },
-      },
-      agentSelection: {
-        state: { selectedId: "main" },
-        subscribe: () => () => undefined,
-      },
-      replace,
-    } as unknown as ApplicationContext<RouteId>;
-
-    await startRedirect(context, { pathname: "/chat/other", search: "", hash: "" });
-    listener!(snapshot as Parameters<GatewayListener>[0]);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-
-    expect(replace).not.toHaveBeenCalled();
-    expect(
-      consumeCachedModelSetupDetection({ client, hello: snapshot.hello, agentId: "main" }),
-    ).toEqual(result);
-  });
-
-  it("rejects stale detection and retries first-run guidance after a same-client reconnect", async () => {
-    const stale = {
-      candidates: [],
-      manualProviders: [],
-      workspace: "/tmp/stale-workspace",
-      setupComplete: false,
-    };
-    const current = {
-      ...stale,
-      workspace: "/tmp/current-workspace",
-    };
-    let resolveStale!: (result: typeof stale) => void;
-    const request = vi
-      .fn()
-      .mockImplementationOnce(
-        () =>
-          new Promise<typeof stale>((resolve) => {
-            resolveStale = resolve;
-          }),
-      )
-      .mockResolvedValueOnce(current);
-    const client = { request } as unknown as GatewayBrowserClient;
-    type GatewayListener = Parameters<ApplicationContext<RouteId>["gateway"]["subscribe"]>[0];
-    let listener: GatewayListener | null = null;
-    const firstHello = {
-      type: "hello-ok" as const,
-      protocol: 1,
-      auth: { role: "operator", scopes: ["operator.admin"] },
-      features: { methods: ["openclaw.setup.detect"] },
-    };
-    const gateway = {
-      snapshot: { phase: "connected", client, hello: firstHello as typeof firstHello | null },
-      subscribe: (next: GatewayListener) => {
-        listener = next;
-        return () => undefined;
-      },
-    };
-    const replace = vi.fn();
-    const context = {
-      gateway,
-      agentSelection: {
-        state: { selectedId: "main" },
-        subscribe: () => () => undefined,
-      },
-      replace,
-    } as unknown as ApplicationContext<RouteId>;
-    await startRedirect(context);
-    expect(request).toHaveBeenCalledOnce();
-
-    gateway.snapshot = { phase: "reconnecting", client, hello: null };
-    listener!(gateway.snapshot as Parameters<GatewayListener>[0]);
-    const nextHello = { ...firstHello };
-    gateway.snapshot = { phase: "connected", client, hello: nextHello };
-    listener!(gateway.snapshot as Parameters<GatewayListener>[0]);
-    await vi.waitFor(() => expect(replace).toHaveBeenCalledOnce());
-    resolveStale(stale);
-    await Promise.resolve();
-
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(consumeCachedModelSetupDetection({ client, hello: nextHello, agentId: "main" })).toEqual(
-      current,
-    );
-    expect(
-      consumeCachedModelSetupDetection({ client, hello: firstHello, agentId: "main" }),
-    ).toBeNull();
-    expect(replace).toHaveBeenCalledOnce();
-  });
-
-  it("does not detect without admin scope or an advertised setup method", async () => {
-    const request = vi.fn();
-    const client = { request } as unknown as GatewayBrowserClient;
-    type GatewayListener = Parameters<ApplicationContext<RouteId>["gateway"]["subscribe"]>[0];
-    let listener: GatewayListener | null = null;
-    const context = {
-      gateway: {
-        snapshot: {},
-        subscribe: (next: GatewayListener) => {
-          listener = next;
-          return () => undefined;
-        },
-      },
-      agentSelection: {
-        state: { selectedId: "main" },
-        subscribe: () => () => undefined,
-      },
-      replace: vi.fn(),
-    } as unknown as ApplicationContext<RouteId>;
-
-    await startRedirect(context);
-    listener!({
-      phase: "connected" as const,
-      client,
-      hello: {
-        auth: { role: "operator", scopes: ["operator.read"] },
-        features: { methods: ["openclaw.setup.detect"] },
-      },
-    } as Parameters<GatewayListener>[0]);
-    listener!({
-      phase: "connected" as const,
-      client,
-      hello: {
-        auth: { role: "operator", scopes: ["operator.admin"] },
-        features: { methods: [] },
-      },
-    } as unknown as Parameters<GatewayListener>[0]);
+    const onInitialDecision = vi.fn();
+    const dispose = await startRedirect(context, onInitialDecision);
 
     expect(request).not.toHaveBeenCalled();
+    expect(onInitialDecision).toHaveBeenCalledOnce();
+    expect(replace).toHaveBeenCalledTimes(shouldRedirect ? 1 : 0);
+    if (shouldRedirect) {
+      expect(replace).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
+    }
+    dispose();
   });
+
+  it("restores unfinished onboarding after its activation already configured the model", async () => {
+    const { context, replace } = createConnectedContext({ modelConfigured: true });
+    persistFirstRunActivationReceipt(context, candidate);
+
+    const decision = createDeferred();
+    const dispose = await startRedirect(context, decision.resolve);
+
+    await decision.promise;
+    expect(replace).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
+    dispose();
+  });
+});
+
+function tamperReceipt(patch: object) {
+  const receipt = JSON.parse(localStorage.getItem(receiptKey)!);
+  localStorage.setItem(receiptKey, JSON.stringify({ ...receipt, ...patch }));
+}
+it.each<[string, (context: ApplicationContext) => void]>([
+  ["Gateway token", (ctx) => Object.assign(ctx.gateway.connection, { token: "replacement" })],
+  ["Gateway URL", (ctx) => Object.assign(ctx.gateway.connection, { gatewayUrl: "wss://other" })],
+  ["selected agent", (ctx) => Object.assign(ctx.agentSelection.state, { selectedId: "research" })],
+  ["browser device identity", () => setDeviceKey("replacement")],
+  ["role", () => tamperReceipt({ modelTarget: "utility" })],
+  ["wizard", () => tamperReceipt({ wizard: { sessionId: "replacement", authChoice: "other" } })],
+])("rejects a receipt after its %s changes", (_name, replace) => {
+  const { context } = createConnectedContext();
+  persistFirstRunActivationReceipt(context, {
+    kind: "provider-auth",
+    modelRef: "openai/expected",
+    wizard: { sessionId: "original", authChoice: "custom-api-key", authKind: "secret" },
+  });
+  replace(context);
+  expect([readReceipt(context), localStorage.getItem(receiptKey)]).toEqual([null, null]);
+});
+
+it("binds paired-device authentication when no explicit Gateway credential exists", () => {
+  const { context } = createConnectedContext({ token: "", deviceToken: "paired-device-token" });
+  persistFirstRunActivationReceipt(context, candidate);
+
+  const persisted = localStorage.getItem(receiptKey) ?? "";
+  expect(persisted).not.toContain("paired-device-token");
+  expect(persisted).not.toContain(privateKey);
+  expect(readReceipt(context)?.modelRef).toBe("openai/expected");
+  context.gateway.snapshot.hello!.auth!.deviceToken = "replacement-device-token";
+
+  expect([readReceipt(context), localStorage.getItem(receiptKey)]).toEqual([null, null]);
+});
+
+it("fails closed without durable storage, a persisted device key, or authenticated credentials", () => {
+  const { context } = createConnectedContext({ token: "" });
+
+  expect(persistFirstRunActivationReceipt(context, candidate)).toBeNull();
+
+  context.gateway.connection.token = "gateway-auth-token";
+  localStorage.removeItem(deviceKey);
+  expect(persistFirstRunActivationReceipt(context, candidate)).toBeNull();
+
+  const unavailable = () => {
+    throw new Error("Browser storage disabled");
+  };
+  vi.stubGlobal("localStorage", {
+    getItem: unavailable,
+    setItem: unavailable,
+    removeItem: unavailable,
+  });
+  expect(persistFirstRunActivationReceipt(context, candidate)).toBeNull();
+  expect(readReceipt(context)).toBeNull();
+  expect(() => clearFirstRunActivationReceipt()).not.toThrow();
 });

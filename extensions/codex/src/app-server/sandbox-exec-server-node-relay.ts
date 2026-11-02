@@ -6,6 +6,7 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { RawData, WebSocket } from "ws";
 import type { CodexNodeExecServerLease } from "./sandbox-exec-server/types.js";
+import { codexWebSocketDataToBuffer } from "./websocket-data.js";
 
 const CODEX_NODE_EXEC_SERVER_MAX_MESSAGE_BYTES = 64 * 1024 * 1024;
 const CODEX_NODE_EXEC_SERVER_MAX_FAILURE_DETAIL_CHARS = 240;
@@ -37,6 +38,15 @@ const CODEX_NODE_HTTP_CREDENTIAL_FIELD_NAME_PATTERN =
   /^(?:(?:[a-z\d]+_)*(?:token|secret|password|passwd|pwd|passphrase|passcode|credentials?|authorization|api_?key|private_key|secret_key|secret_access_key|jwt|assertion|verifier|signature|hmac|bearer|ticket|(?:oauth|consumer|auth|access)_key|otp|totp|pin)|(?:device|authorization|auth|verification|mfa)_code|session(?:_id)?|jsessionid|saml(?:_?response|_?assertion)?|auth|jwt|code|sig|signature|hmac|key|pass)$/u;
 const nodeExecServerTextDecoder = new TextDecoder("utf-8", { fatal: true });
 
+class CodexNodeExecServerDisconnectedError extends Error {
+  readonly code = "codex_node_disconnected";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "CodexNodeExecServerDisconnectedError";
+  }
+}
+
 /** Produces the bounded, redacted terminal failure shared by pending and claimed node leases. */
 export function createCodexNodeExecServerDisconnectError(reason: string, cause?: unknown): Error {
   const detail =
@@ -46,8 +56,8 @@ export function createCodexNodeExecServerDisconnectError(reason: string, cause?:
           redactSensitiveText(formatErrorMessage(cause), { mode: "tools" }),
           CODEX_NODE_EXEC_SERVER_MAX_FAILURE_DETAIL_CHARS,
         )}`;
-  return new Error(
-    `Codex paired execution device disconnected; start a fresh attempt. (${reason}${detail})`,
+  return new CodexNodeExecServerDisconnectedError(
+    `Codex execution node disconnected; start a fresh attempt. (${reason}${detail})`,
   );
 }
 
@@ -92,7 +102,7 @@ export async function startCodexNodeExecServerRelay(params: {
   params.lease.onChannelClosed = ({ failed, error }) =>
     failUnexpectedly(
       failed ? 1011 : 1001,
-      failed ? "execution device failed" : "execution device disconnected",
+      failed ? "execution node failed" : "execution node disconnected",
       error,
     );
   socket.once("close", () => failUnexpectedly(1001, "execution socket closed"));
@@ -153,13 +163,7 @@ function sendCodexExecServerFrame(socket: WebSocket, frame: Buffer): Promise<voi
 }
 
 function normalizeCodexExecServerFrame(data: RawData | Uint8Array): Buffer {
-  const frame = Array.isArray(data)
-    ? Buffer.concat(data)
-    : Buffer.isBuffer(data)
-      ? data
-      : data instanceof Uint8Array
-        ? Buffer.from(data.buffer, data.byteOffset, data.byteLength)
-        : Buffer.from(data);
+  const frame = codexWebSocketDataToBuffer(data);
   if (frame.length > CODEX_NODE_EXEC_SERVER_MAX_MESSAGE_BYTES) {
     throw new RangeError("Codex exec-server message exceeds its 64 MiB limit.");
   }
@@ -223,10 +227,8 @@ function rejectCredentialedCodexNodeHttpRequest(
 }
 
 function hasCredentialedCodexNodeHttpUrl(value: string): boolean {
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
+  const url = URL.parse(value);
+  if (!url) {
     throw new Error("Codex http/request URL must be valid.");
   }
   if (url.username || url.password || hasSensitiveCodexNodeText(value)) {
@@ -456,7 +458,7 @@ function createCredentialedCodexNodeHttpRejection(request: Record<string, unknow
       error: {
         code: -32602,
         message:
-          "Authenticated remote HTTP is unavailable on paired devices; run on Gateway or use an intentionally credential-free endpoint.",
+          "Authenticated remote HTTP is unavailable on execution nodes; run on Gateway or use an intentionally credential-free endpoint.",
       },
     }),
   );
@@ -495,13 +497,9 @@ function sanitizeCodexExecServerEnvironment(
     if (typeof value !== "string") {
       throw new Error(`Codex process/start ${key} values must be strings.`);
     }
-    try {
-      const url = new URL(value);
-      if (url.username || url.password) {
-        continue;
-      }
-    } catch {
-      // Ordinary environment values need not be URLs.
+    const url = URL.parse(value);
+    if (url?.username || url?.password) {
+      continue;
     }
     values[name] = value;
   }

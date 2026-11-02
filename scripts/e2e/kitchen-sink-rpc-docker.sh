@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
+source "$ROOT_DIR/scripts/lib/frozen-target-compat.sh"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-kitchen-sink-rpc-e2e" OPENCLAW_KITCHEN_SINK_RPC_E2E_IMAGE)"
 MAX_MEMORY_MIB="$(docker_e2e_read_nonnegative_decimal_env OPENCLAW_KITCHEN_SINK_MAX_MEMORY_MIB 2048)"
@@ -13,10 +18,11 @@ DOCKER_RUN_TIMEOUT="${OPENCLAW_KITCHEN_SINK_RPC_DOCKER_RUN_TIMEOUT:-1500s}"
 CONTAINER_NAME="openclaw-kitchen-sink-rpc-e2e-$$"
 RUN_LOG="$(mktemp "${TMPDIR:-/tmp}/openclaw-kitchen-sink-rpc.XXXXXX")"
 STATS_LOG="$(mktemp "${TMPDIR:-/tmp}/openclaw-kitchen-sink-rpc-stats.XXXXXX")"
+LIMITS_SUMMARY="$(mktemp "${TMPDIR:-/tmp}/openclaw-kitchen-sink-rpc-limits.XXXXXX")"
 
 cleanup() {
   docker_e2e_docker_cmd rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
-  rm -f "$RUN_LOG" "$STATS_LOG"
+  rm -f "$RUN_LOG" "$STATS_LOG" "$LIMITS_SUMMARY"
 }
 trap cleanup EXIT
 
@@ -26,6 +32,20 @@ DOCKER_ENV_ARGS=(
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0
   -e OPENCLAW_ENTRY=/app/openclaw.mjs
 )
+if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+  # The container's appuser writes only task-owned, non-secret limit diagnostics.
+  chmod 666 "$LIMITS_SUMMARY"
+  DOCKER_ENV_ARGS+=(
+    -e GITHUB_ACTIONS
+    -e GITHUB_STEP_SUMMARY=/tmp/openclaw-limits-summary.md
+    -v "$LIMITS_SUMMARY:/tmp/openclaw-limits-summary.md"
+  )
+fi
+capability_status=0
+openclaw_resolve_frozen_plugin_harness_capabilities \
+  "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}" || capability_status=$?
+[ "$capability_status" -eq 0 ] || exit "$capability_status"
+openclaw_append_frozen_plugin_harness_docker_env
 
 for env_name in \
   OPENCLAW_KITCHEN_SINK_NPM_SPEC \
@@ -69,6 +89,9 @@ run_status="$?"
 set -e
 
 docker_e2e_print_log "$RUN_LOG"
+if [[ -n "${GITHUB_STEP_SUMMARY:-}" && -s "$LIMITS_SUMMARY" ]]; then
+  cat "$LIMITS_SUMMARY" >> "$GITHUB_STEP_SUMMARY"
+fi
 
 if [ "$run_status" -eq 0 ]; then
   node scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs "$STATS_LOG" "$MAX_MEMORY_MIB" "$MAX_CPU_PERCENT" kitchen-sink-rpc

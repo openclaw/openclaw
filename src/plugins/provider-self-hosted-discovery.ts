@@ -1,18 +1,41 @@
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
+import {
+  asPositiveSafeInteger,
+  floorPositiveFiniteNumber as readPositiveInteger,
+} from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { omitNullRequestHeaders } from "../../packages/llm-core/src/utils/request-headers.js";
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
+import { parseConfiguredModelVisibilityEntries } from "../agents/model-selection-shared.js";
 import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
+import { resolveProviderTransportSsrFPolicy } from "../agents/provider-network-policy.js";
+import {
+  buildProviderRequestDispatcherPolicy,
+  resolveProviderRequestPolicyConfig,
+  sanitizeConfiguredModelProviderRequest,
+} from "../agents/provider-request-config.js";
 import {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
   SELF_HOSTED_DEFAULT_COST,
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "../agents/self-hosted-provider-defaults.js";
-import type { ModelDefinitionConfig } from "../config/types.models.js";
+import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { cancelUnreadResponseBody } from "../infra/http-body.js";
-import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
-import { ssrfPolicyFromHttpBaseUrlAllowedOrigin } from "../infra/net/ssrf.js";
+import {
+  fetchWithSsrFGuard,
+  withTrustedEnvProxyGuardedFetchMode,
+} from "../infra/net/fetch-guard.js";
+import { shouldUseEnvHttpProxyForUrl } from "../infra/net/proxy-env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
+import { readParsedField } from "../utils/string-readers.js";
+import { recordLiveServingContextLimit } from "./provider-catalog-expiry.js";
+import type { ProviderCatalogContext } from "./types.js";
 
 const log = createSubsystemLogger("plugins/self-hosted-provider-discovery");
 
@@ -43,38 +66,22 @@ type DiscoveryResponse =
   | { kind: "unreachable"; error: unknown }
   | { kind: "invalid-response"; error: unknown };
 
-function readPositiveInteger(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    return undefined;
-  }
-  return Math.trunc(value);
-}
-
 const OPENAI_COMPAT_CONTEXT_WINDOW_FIELDS = [
   "context_length",
   "context_window",
   "context_size",
+  "max_model_len",
 ] as const;
 
-function readOpenAICompatibleContextWindow(
-  model: Record<string, unknown> | undefined,
-): number | undefined {
-  for (const field of OPENAI_COMPAT_CONTEXT_WINDOW_FIELDS) {
-    const contextWindow = readPositiveInteger(model?.[field]);
-    if (contextWindow !== undefined) {
-      return contextWindow;
-    }
-  }
-  return undefined;
+function readOpenAICompatibleContextWindow(model: Record<string, unknown>): number | undefined {
+  return readParsedField(model, OPENAI_COMPAT_CONTEXT_WINDOW_FIELDS, readPositiveInteger);
 }
 
 function buildSelfHostedDiscoveryHeaders(params: {
   apiKey?: string;
   headers?: Record<string, string>;
-  acceptJson?: boolean;
 }): Record<string, string> | undefined {
   const headers: Record<string, string> = {
-    ...(params.acceptJson ? { Accept: "application/json" } : {}),
     ...params.headers,
   };
   const hasAuthorization = Object.keys(headers).some(
@@ -89,25 +96,38 @@ function buildSelfHostedDiscoveryHeaders(params: {
 
 async function fetchSelfHostedDiscoveryJson(params: {
   url: string;
-  origin: string;
-  apiKey?: string;
-  headers?: Record<string, string>;
+  requestPolicy: ReturnType<typeof resolveProviderRequestPolicyConfig>;
   acceptJson?: boolean;
   timeoutMs: number;
   signal?: AbortSignal;
+  beforeRequest?: () => void;
   readBody: boolean;
   label: string;
 }): Promise<DiscoveryResponse> {
   let guarded: Awaited<ReturnType<typeof fetchWithSsrFGuard>>;
   try {
-    guarded = await fetchWithSsrFGuard({
+    const dispatcherPolicy = buildProviderRequestDispatcherPolicy(params.requestPolicy);
+    const request = {
       url: params.url,
-      init: { headers: buildSelfHostedDiscoveryHeaders(params) },
-      policy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(params.origin),
+      init: {
+        headers: omitNullRequestHeaders(
+          params.acceptJson
+            ? { Accept: "application/json", ...params.requestPolicy.headers }
+            : params.requestPolicy.headers,
+        ),
+      },
+      policy: resolveProviderTransportSsrFPolicy({ ...params.requestPolicy, url: params.url }),
+      dispatcherPolicy,
       timeoutMs: params.timeoutMs,
       signal: params.signal,
+      beforeRequest: params.beforeRequest,
       auditContext: "self-hosted-provider-discovery",
-    });
+    };
+    guarded = await fetchWithSsrFGuard(
+      !dispatcherPolicy && shouldUseEnvHttpProxyForUrl(params.url)
+        ? withTrustedEnvProxyGuardedFetchMode(request)
+        : request,
+    );
   } catch (error) {
     return { kind: "unreachable", error };
   }
@@ -143,10 +163,7 @@ function readDiscoveryRows(body: unknown): Record<string, unknown>[] {
   if (!Array.isArray(bodyRecord?.data)) {
     throw new Error("model list must contain data[]");
   }
-  return bodyRecord.data.flatMap((entry) => {
-    const row = asOptionalRecord(entry);
-    return row ? [row] : [];
-  });
+  return bodyRecord.data.filter(isRecord);
 }
 
 function shouldProbeRuntimeProps(model: Record<string, unknown>): boolean {
@@ -156,48 +173,38 @@ function shouldProbeRuntimeProps(model: Record<string, unknown>): boolean {
 
 function resolveRuntimePropsUrl(params: { serverBaseUrl: string; modelId?: string }): string {
   const url = new URL(`${params.serverBaseUrl.replace(/\/+$/, "")}/props`);
-  const modelId = normalizeOptionalString(params.modelId);
-  if (modelId) {
-    url.searchParams.set("model", modelId);
+  if (params.modelId) {
+    url.searchParams.set("model", params.modelId);
     url.searchParams.set("autoload", "false");
   }
   return url.toString();
 }
 
 /** Guarded model-row discovery for OpenAI-compatible self-hosted servers. */
-async function discoverOpenAICompatibleModelRows(params: {
-  inferenceBaseUrl: string;
-  serverBaseUrl?: string;
-  apiKey?: string;
-  headers?: Record<string, string>;
-  label: string;
-  healthPath?: string;
-  modelsPathOrder?: "inference" | "server-first";
-  routerModelProps?: boolean;
-  discoverRuntimeContext?: boolean;
-  timeoutMs?: number;
-  propsTimeoutMs?: number;
-  signal?: AbortSignal;
-}): Promise<OpenAICompatibleModelDiscoveryResult> {
-  const inferenceBaseUrl = params.inferenceBaseUrl.trim().replace(/\/+$/, "");
+async function discoverOpenAICompatibleModelRows(
+  params: OpenAICompatibleLocalModelsParams,
+): Promise<OpenAICompatibleModelDiscoveryResult> {
+  const inferenceBaseUrl = params.baseUrl.trim().replace(/\/+$/, "");
   const inferredServerBaseUrl = inferenceBaseUrl.replace(/\/v1$/u, "");
   const serverBaseUrl = (params.serverBaseUrl ?? inferredServerBaseUrl).replace(/\/+$/, "");
-  const origin = new URL(serverBaseUrl).origin;
   const timeoutMs = params.timeoutMs ?? 5_000;
+  const requestPolicy = await resolveDiscoveryRequestPolicy(params, inferenceBaseUrl);
+  const request = {
+    ...params,
+    requestPolicy,
+    timeoutMs,
+    acceptJson: params.modelsPathOrder === "server-first",
+    readBody: true,
+  };
   let health: "ready" | "loading" | "unknown" = "unknown";
 
   if (params.healthPath) {
     const path = params.healthPath;
     const healthResult = await fetchSelfHostedDiscoveryJson({
+      ...request,
       url: `${serverBaseUrl}${path}`,
-      origin,
-      apiKey: params.apiKey,
-      headers: params.headers,
       acceptJson: true,
-      timeoutMs,
-      signal: params.signal,
       readBody: false,
-      label: params.label,
     });
     if (healthResult.kind === "unreachable") {
       return healthResult;
@@ -219,94 +226,80 @@ async function discoverOpenAICompatibleModelRows(params: {
           { path: "/v1/models", url: `${inferenceBaseUrl}/models` },
         ]
       : [{ path: "/v1/models", url: `${inferenceBaseUrl}/models` }];
-  let modelsPath = modelCandidates[0]?.path ?? "/v1/models";
-  let modelsResult: DiscoveryResponse | undefined;
-  for (const [index, candidate] of modelCandidates.entries()) {
-    modelsPath = candidate.path;
-    modelsResult = await fetchSelfHostedDiscoveryJson({
+  let modelList:
+    | { kind: "success"; models: Record<string, unknown>[] }
+    | Exclude<OpenAICompatibleModelDiscoveryResult, { kind: "success" }>
+    | undefined;
+  for (const candidate of modelCandidates) {
+    const result = await fetchSelfHostedDiscoveryJson({
+      ...request,
       url: candidate.url,
-      origin,
-      apiKey: params.apiKey,
-      headers: params.headers,
-      acceptJson: params.modelsPathOrder === "server-first",
-      timeoutMs,
-      signal: params.signal,
-      readBody: true,
-      label: params.label,
     });
+    if (result.kind === "unreachable") {
+      return result;
+    }
+    if (result.kind === "invalid-response") {
+      modelList = { ...result, path: candidate.path };
+    } else if (!result.ok) {
+      modelList = { kind: "http-error", path: candidate.path, status: result.status };
+    } else {
+      try {
+        modelList = { kind: "success", models: readDiscoveryRows(result.body) };
+      } catch (error) {
+        modelList = { kind: "invalid-response", path: candidate.path, error };
+      }
+    }
+    // A root endpoint may serve a web app instead of a model list. Try the
+    // inference endpoint, while keeping auth and service failures terminal.
     if (
-      modelsResult.kind !== "response" ||
-      modelsResult.status !== 404 ||
-      index === modelCandidates.length - 1
+      modelList.kind === "success" ||
+      (modelList.kind === "http-error" && modelList.status !== 404)
     ) {
       break;
     }
   }
-  if (!modelsResult || modelsResult.kind === "unreachable") {
-    return modelsResult ?? { kind: "unreachable", error: new Error("missing model response") };
+  if (!modelList || modelList.kind !== "success") {
+    return modelList ?? { kind: "unreachable", error: new Error("missing model response") };
   }
-  if (modelsResult.kind === "invalid-response") {
-    return { ...modelsResult, path: modelsPath };
-  }
-  if (!modelsResult.ok) {
-    return { kind: "http-error", path: modelsPath, status: modelsResult.status };
-  }
-
-  let models: Record<string, unknown>[];
-  try {
-    models = readDiscoveryRows(modelsResult.body);
-  } catch (error) {
-    return { kind: "invalid-response", path: modelsPath, error };
-  }
-  const rows: OpenAICompatibleModelDiscoveryRow[] = models.map((model) => ({ model }));
+  const rows: OpenAICompatibleModelDiscoveryRow[] = modelList.models.map((model) => ({ model }));
   if (params.discoverRuntimeContext !== false) {
     const routerMode =
       params.routerModelProps &&
-      models.some((model) => asOptionalRecord(model.status) !== undefined);
-    const queryByModel = routerMode || (!params.routerModelProps && models.length > 1);
-    const probeIndexes = models
-      .map((model, index) => (shouldProbeRuntimeProps(model) ? index : -1))
-      .filter((index) => index >= 0)
+      rows.some(({ model }) => asOptionalRecord(model.status) !== undefined);
+    const queryByModel = routerMode || (!params.routerModelProps && rows.length > 1);
+    const probeRows = rows
+      .filter(({ model }) => shouldProbeRuntimeProps(model))
       .slice(0, SELF_HOSTED_RUNTIME_CONTEXT_MAX_MODELS);
-    const deadline = Date.now() + timeoutMs;
-    const { results } = await runTasksWithConcurrency({
+    const deadline = performance.now() + timeoutMs;
+    await runTasksWithConcurrency({
       limit: SELF_HOSTED_RUNTIME_CONTEXT_CONCURRENCY,
       errorMode: "stop",
       throwOnError: true,
-      tasks: probeIndexes.map((index) => async () => {
-        const remainingMs = deadline - Date.now();
+      tasks: probeRows.map((row) => async () => {
+        const remainingMs = deadline - performance.now();
         if (remainingMs <= 0) {
-          return undefined;
+          return;
         }
-        const model = models[index];
-        const modelId = normalizeOptionalString(model?.id);
-        if (!model || !modelId) {
-          return undefined;
+        const modelId = normalizeOptionalString(row.model.id);
+        if (!modelId) {
+          return;
         }
         const result = await fetchSelfHostedDiscoveryJson({
+          ...request,
           url: resolveRuntimePropsUrl({
             serverBaseUrl,
             modelId: queryByModel ? modelId : undefined,
           }),
-          origin,
-          apiKey: params.apiKey,
-          headers: params.headers,
-          acceptJson: params.modelsPathOrder === "server-first",
           timeoutMs: Math.min(params.propsTimeoutMs ?? timeoutMs, remainingMs),
-          signal: params.signal,
-          readBody: true,
           label: `${params.label} /props`,
         });
         const props =
           result.kind === "response" && result.ok ? asOptionalRecord(result.body) : undefined;
-        return props ? ([index, props] as const) : undefined;
+        if (props) {
+          row.props = props;
+        }
       }),
     });
-    for (const result of results) {
-      if (result) {
-        rows[result[0]] = { model: models[result[0]]!, props: result[1] };
-      }
-    }
   }
 
   return { kind: "success", health, rows, fetchedAt: Date.now() };
@@ -314,6 +307,11 @@ async function discoverOpenAICompatibleModelRows(params: {
 
 type OpenAICompatibleLocalModelsParams = {
   baseUrl: string;
+  /** Resolve only this configured provider's headers and transport settings for setup discovery. */
+  configuredProvider?: { config: OpenClawConfig; id: string };
+  /** Revalidate the caller's live authority immediately before each request. */
+  beforeRequest?: () => void;
+  allowPrivateNetwork?: boolean;
   serverBaseUrl?: string;
   apiKey?: string;
   headers?: Record<string, string>;
@@ -331,6 +329,63 @@ type OpenAICompatibleLocalModelsParams = {
   rawResult?: boolean;
 };
 
+async function resolveDiscoveryRequestPolicy(
+  params: OpenAICompatibleLocalModelsParams,
+  baseUrl: string,
+) {
+  const configured = params.configuredProvider;
+  const source = configured?.config.models?.providers?.[configured.id];
+  let provider: ModelProviderConfig | undefined;
+  if (configured && source) {
+    // Resolve a private transport projection so persisted SecretRefs remain intact.
+    provider = structuredClone({
+      baseUrl,
+      models: [],
+      headers: source.headers,
+      request: source.request,
+    });
+    const projection: OpenClawConfig = { models: { providers: { [configured.id]: provider } } };
+    const [
+      { collectCoreConfigAssignments },
+      { createResolverContext },
+      { resolveAndApplySecretAssignments },
+    ] = await Promise.all([
+      import("../secrets/runtime-config-collectors-core.js"),
+      import("../secrets/runtime-shared.js"),
+      import("../secrets/runtime-owner-assignments.js"),
+    ]);
+    const context = createResolverContext({
+      sourceConfig: configured.config,
+      env: params.env ?? process.env,
+    });
+    collectCoreConfigAssignments({
+      config: projection,
+      defaults: configured.config.secrets?.defaults,
+      context,
+    });
+    await resolveAndApplySecretAssignments({
+      assignments: context.assignments,
+      context,
+      options: { config: configured.config, env: context.env, cache: context.cache },
+    });
+  }
+  const request = sanitizeConfiguredModelProviderRequest(
+    provider
+      ? {
+          ...provider.request,
+          headers: { ...provider.headers, ...provider.request?.headers },
+        }
+      : undefined,
+  );
+  return resolveProviderRequestPolicyConfig({
+    provider: configured?.id,
+    baseUrl,
+    allowPrivateNetwork: params.allowPrivateNetwork,
+    providerHeaders: buildSelfHostedDiscoveryHeaders(params),
+    request,
+  });
+}
+
 /** Discovers normalized model configs from a conventional OpenAI-compatible endpoint. */
 export function discoverOpenAICompatibleLocalModels(
   params: OpenAICompatibleLocalModelsParams & { rawResult: true },
@@ -347,19 +402,10 @@ export async function discoverOpenAICompatibleLocalModels(
   }
 
   const result = await discoverOpenAICompatibleModelRows({
-    inferenceBaseUrl: params.baseUrl,
-    serverBaseUrl: params.serverBaseUrl,
-    apiKey: params.apiKey,
-    headers: params.headers,
-    label: params.label,
-    healthPath: params.healthPath,
-    modelsPathOrder: params.modelsPathOrder,
-    routerModelProps: params.routerModelProps,
+    ...params,
     discoverRuntimeContext:
       params.contextWindow === undefined && params.discoverRuntimeContext !== false,
-    timeoutMs: params.timeoutMs,
     propsTimeoutMs: params.propsTimeoutMs ?? 2_500,
-    signal: params.signal,
   });
   if (params.rawResult) {
     return result;
@@ -378,29 +424,98 @@ export async function discoverOpenAICompatibleLocalModels(
     return [];
   }
 
+  const topLevelContextByModelId = new Map<string, number>();
+  for (const { model } of result.rows) {
+    const modelId = normalizeOptionalString(model.id);
+    const contextWindow = readOpenAICompatibleContextWindow(model);
+    if (modelId && contextWindow !== undefined) {
+      topLevelContextByModelId.set(modelId, contextWindow);
+    }
+  }
+
   return result.rows.flatMap(({ model, props }) => {
     const modelId = normalizeOptionalString(model.id);
     if (!modelId) {
       return [];
     }
+    // max_model_len describes the serving instance, not the model training window.
+    // Do not promote defaults, generic metadata, or malformed values to live ceilings.
+    const servingTokens = model.max_model_len;
+    if (
+      typeof servingTokens === "number" &&
+      Number.isSafeInteger(servingTokens) &&
+      servingTokens > 0
+    ) {
+      recordLiveServingContextLimit({
+        id: modelId,
+        api: "openai-completions",
+        baseUrl: params.baseUrl,
+        tokens: servingTokens,
+      });
+    }
     const meta = asOptionalRecord(model.meta);
+    const parentId = normalizeOptionalString(model.parent);
+    const parentContextWindow =
+      parentId && parentId !== modelId ? topLevelContextByModelId.get(parentId) : undefined;
     const generationSettings = asOptionalRecord(props?.default_generation_settings);
     const runtimeContextTokens =
       readPositiveInteger(generationSettings?.n_ctx) ?? readPositiveInteger(props?.n_ctx);
+    const parameterCount = asPositiveSafeInteger(model.parameterCount);
     const modelConfig: ModelDefinitionConfig = {
       id: modelId,
-      name: modelId,
-      reasoning: /r1|reasoning|think|reason/i.test(modelId),
+      name:
+        normalizeOptionalString(model.display_name) ??
+        normalizeOptionalString(model.displayName) ??
+        normalizeOptionalString(model.name) ??
+        modelId,
+      ...(parameterCount !== undefined ? { parameterCount } : {}),
+      reasoning: /r1|reason|think|deepseek[-_]?v4|nemotron-3[-_](?:nano|super|ultra)\b/i.test(
+        modelId,
+      ),
       input: ["text"],
       cost: SELF_HOSTED_DEFAULT_COST,
       contextWindow:
         params.contextWindow ??
         readPositiveInteger(meta?.n_ctx_train) ??
         readOpenAICompatibleContextWindow(model) ??
+        parentContextWindow ??
         SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
       maxTokens: params.maxTokens ?? SELF_HOSTED_DEFAULT_MAX_TOKENS,
       ...(runtimeContextTokens ? { contextTokens: runtimeContextTokens } : {}),
     };
     return [modelConfig];
   });
+}
+
+export async function discoverOpenAICompatibleSelfHostedProvider<
+  T extends Record<string, unknown>,
+>(params: {
+  ctx: ProviderCatalogContext;
+  providerId: string;
+  buildProvider: (params: { apiKey?: string; baseUrl?: string }) => Promise<T>;
+}): Promise<{ provider: T & { apiKey: string } } | null> {
+  const configuredProvider = findNormalizedProviderValue(
+    params.ctx.config.models?.providers,
+    params.providerId,
+  );
+  const configuredBaseUrl = normalizeOptionalString(configuredProvider?.baseUrl);
+  if (configuredProvider) {
+    const visibility = parseConfiguredModelVisibilityEntries({ cfg: params.ctx.config });
+    if (!visibility.providerWildcards.has(normalizeProviderId(params.providerId))) {
+      return null;
+    }
+  }
+  const { apiKey, discoveryApiKey } = params.ctx.resolveProviderApiKey(params.providerId);
+  if (!apiKey) {
+    return null;
+  }
+  return {
+    provider: {
+      ...(await params.buildProvider({
+        apiKey: discoveryApiKey,
+        ...(configuredBaseUrl ? { baseUrl: configuredBaseUrl } : {}),
+      })),
+      apiKey,
+    },
+  };
 }

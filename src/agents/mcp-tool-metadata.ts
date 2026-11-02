@@ -1,13 +1,11 @@
 import {
-  ErrorCode,
-  McpError,
+  ProtocolErrorCode,
+  ProtocolError,
   type CallToolResult,
   type Tool,
-} from "@modelcontextprotocol/sdk/types.js";
-import type {
-  JsonSchemaValidator,
-  jsonSchemaValidator,
-} from "@modelcontextprotocol/sdk/validation/types.js";
+  type JsonSchemaValidator,
+  type jsonSchemaValidator,
+} from "@modelcontextprotocol/client";
 
 type McpToolResultValidator = (result: CallToolResult) => void;
 
@@ -25,6 +23,7 @@ export function normalizeMcpToolCatalog(
 ): {
   tools: Tool[];
   deniedTools: Tool[];
+  excludedTools: Tool[];
   metadata: McpToolCatalogMetadata;
 } {
   const canonicalNames = tools.map((tool) => tool.name.trim());
@@ -37,23 +36,25 @@ export function normalizeMcpToolCatalog(
 
   const included: Tool[] = [];
   const deniedTools: Tool[] = [];
+  const excludedTools: Tool[] = [];
   const resultValidators = new Map<string, McpToolResultValidator>();
   for (const [index, sourceTool] of tools.entries()) {
     const toolName = canonicalNames[index] ?? "";
     // One wire name is one operation. Ambiguous aliases are safer omitted than
     // published under multiple model names with conflicting metadata.
-    if (
-      !toolName ||
-      nameCounts.get(toolName) !== 1 ||
-      sourceTool.execution?.taskSupport === "required"
-    ) {
+    if (!toolName) {
+      continue;
+    }
+    const tool = { ...sourceTool, name: toolName };
+    if (nameCounts.get(toolName) !== 1 || sourceTool.execution?.taskSupport === "required") {
+      excludedTools.push(tool);
       continue;
     }
     const disposition = classify(toolName);
     if (disposition === "exclude") {
+      excludedTools.push(tool);
       continue;
     }
-    const tool = { ...sourceTool, name: toolName };
     if (disposition === "include") {
       included.push(tool);
       if (tool.outputSchema) {
@@ -61,19 +62,19 @@ export function normalizeMcpToolCatalog(
           tool.outputSchema,
         );
         resultValidators.set(toolName, (result) => {
-          if (result.structuredContent === undefined && result.isError !== true) {
-            throw new McpError(
-              ErrorCode.InvalidRequest,
+          if (result.isError === true) {
+            return;
+          }
+          if (result.structuredContent === undefined) {
+            throw new ProtocolError(
+              ProtocolErrorCode.InvalidRequest,
               `Tool ${toolName} has an output schema but did not return structured content`,
             );
           }
-          if (result.structuredContent === undefined) {
-            return;
-          }
           const validation = validator(result.structuredContent);
           if (!validation.valid) {
-            throw new McpError(
-              ErrorCode.InvalidParams,
+            throw new ProtocolError(
+              ProtocolErrorCode.InvalidParams,
               `Structured content does not match the tool's output schema: ${validation.errorMessage}`,
             );
           }
@@ -86,6 +87,7 @@ export function normalizeMcpToolCatalog(
 
   return {
     tools: included,
+    excludedTools,
     metadata: {
       validatorForCall(toolName) {
         return resultValidators.get(toolName);

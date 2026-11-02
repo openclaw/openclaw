@@ -2,11 +2,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { startQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
-import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
+import { createQaGatewayChild, type QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import type { HealthSummary } from "../../../../src/gateway/health/types.js";
 import { healthHandlers } from "../../../../src/gateway/server-methods/health.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { withFixturePlugin } from "./fixture-plugin-config.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
+import { parseQaArtifactBase } from "./script-options.js";
 
 const SOURCE_PATH = "test/e2e/qa-lab/runtime/cached-health-snapshot-boundaries.ts";
 const SCENARIO_PATH = "qa/scenarios/observability/cached-health-snapshot-boundaries.yaml";
@@ -184,7 +186,7 @@ export async function runHandlerBoundaryProof() {
   };
 }
 
-export async function createFixturePlugin() {
+async function createFixturePlugin() {
   // openclaw-temp-dir: standalone producer removes this fixture root in its finally block
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cached-health-tool-"));
   const pluginDir = path.join(root, FIXTURE_PLUGIN_ID);
@@ -229,25 +231,6 @@ export async function createFixturePlugin() {
   return { pluginDir, cleanup: () => fs.rm(root, { recursive: true, force: true }) };
 }
 
-export function withFixturePlugin(config: OpenClawConfig, pluginDir: string): OpenClawConfig {
-  return {
-    ...config,
-    plugins: {
-      ...config.plugins,
-      enabled: true,
-      allow: [...new Set([...(config.plugins?.allow ?? []), FIXTURE_PLUGIN_ID])],
-      load: {
-        ...config.plugins?.load,
-        paths: [...new Set([...(config.plugins?.load?.paths ?? []), pluginDir])],
-      },
-      entries: {
-        ...config.plugins?.entries,
-        [FIXTURE_PLUGIN_ID]: { enabled: true },
-      },
-    },
-  };
-}
-
 function containsString(value: unknown, needle: string): boolean {
   if (typeof value === "string") {
     return value.includes(needle);
@@ -263,15 +246,17 @@ function containsString(value: unknown, needle: string): boolean {
 
 async function runPluginToolProof(repoRoot: string) {
   const fixture = await createFixturePlugin();
-  let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
+  const gatewayOwner = createQaGatewayChild();
+  let gateway: QaGatewayChild | undefined;
   try {
-    gateway = await startQaGatewayChild({
+    gateway = await gatewayOwner.start({
       repoRoot,
+      initializeCurrentRuntimeState: true,
       useRepoCli: true,
       transportBaseUrl: "http://127.0.0.1",
       providerMode: "mock-openai",
       controlUiEnabled: false,
-      mutateConfig: (config) => withFixturePlugin(config, fixture.pluginDir),
+      mutateConfig: (config) => withFixturePlugin(config, fixture.pluginDir, FIXTURE_PLUGIN_ID),
     });
     const before = (await gateway.call("health", { probe: true })) as HealthSummary;
     const catalog = await gateway.call("tools.catalog", { includePlugins: true });
@@ -288,7 +273,7 @@ async function runPluginToolProof(repoRoot: string) {
       healthAfterTool: after.ok && Boolean(after.plugins?.loaded.includes(FIXTURE_PLUGIN_ID)),
     };
   } finally {
-    await gateway?.stop().catch(() => undefined);
+    await stopQaGatewayFixture(gatewayOwner).catch(() => undefined);
     await fixture.cleanup();
   }
 }
@@ -302,17 +287,8 @@ export async function runCachedHealthSnapshotBoundariesProof(
   };
 }
 
-function parseArtifactBase(argv: readonly string[]) {
-  const index = argv.indexOf("--artifact-base");
-  const value = index >= 0 ? argv[index + 1] : undefined;
-  if (!value) {
-    throw new Error("--artifact-base is required");
-  }
-  return path.resolve(value);
-}
-
 export async function main(argv = process.argv.slice(2)) {
-  const artifactBase = parseArtifactBase(argv);
+  const artifactBase = parseQaArtifactBase(argv);
   const repoRoot = path.resolve(import.meta.dirname, "../../../..");
   const writer = createQaScriptEvidenceWriter({
     artifactBase,

@@ -1,0 +1,428 @@
+<?xml version="1.0" standalone="yes"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>OpenClaw</title>
+        <item>
+            <title>2026.10.9</title>
+            <pubDate>Thu, 29 Oct 2026 16:07:53 +0000</pubDate>
+            <link>https://raw.githubusercontent.com/openclaw/openclaw/main/appcast-arm64.xml</link>
+            <sparkle:version>2610000990</sparkle:version>
+            <sparkle:shortVersionString>2026.10.9</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description><![CDATA[<h2>OpenClaw 2026.10.9</h2>
+<h3>Highlights</h3>
+<ul>
+<li>Patch vulnerable runtime dependencies: fast-uri 4.2.3 rejects malformed URI schemes and hosts in MCP schema validation, oversized Zod collections are rejected early in A2UI and the Discord embedded app SDK, IMAP sender parsing uses nodemailer 10.1.4 so spoofed senders cannot pass the sender token gate, and Microsoft Teams uses patched MSAL Node 7.1.1. (#187294) Thanks @RomneyDa.</li>
+<li>Apply <code>tools.fs.workspaceOnly</code> to Gateway-built tools, so delegate changes still require approval and media tools stay inside the workspace. (#185094) Thanks @eleqtrizit, @RomneyDa, and @shakkernerd.</li>
+<li>Keep live credentials out of MCP CLI inspection and mask Google OAuth client secrets in logs. (#180321, #180308, #183193) Thanks @brandon-julio-t, @wr-web, @LeizhenZhang, and @RomneyDa.</li>
+<li>Make failed update rollbacks safe: Git-source rollbacks preserve operator edits instead of resetting the checkout, and npm rollbacks retry transient Windows denials and report the exact move that restores a bootable install instead of stranding the package root. (#185201, #184887, #185160, #184889) Thanks @wr-web, @syxscott, @LiuwqGit, @shakkernerd, and @RomneyDa.</li>
+<li>Recover intact agent databases and stale full-text indexes after SQLite tokenizer changes, including update snapshots. (#176234, #176220, #176833, #181206) Thanks @ndakota79 and @RomneyDa.</li>
+<li>Repair publication-complete updates after a remount while retaining the original launcher and sealed recovery helper. (#186557, #186527) Thanks @ericcaiwx-star, @sennyhoney, and @RomneyDa.</li>
+<li>Migrate large transcript archives without exceeding Node.js string limits. (#170853, #170847) Thanks @iamonlv426 and @RomneyDa.</li>
+<li>Allow agents to recover after a full disk once space becomes available, without requiring a restart. (#176902) Thanks @RomneyDa.</li>
+</ul>
+<h3>Changes</h3>
+This maintenance release focuses on security dependency patches, recovery, data preservation, and reliability fixes.
+<h3>Fixes</h3>
+<ul>
+<li>Resolve local media in Codex steering messages from the session's own workspace instead of the agent's default workspace. (#181528) Thanks @RomneyDa.</li>
+<li>Report uncertain process cleanup from buffered commands, such as local CLI speech providers, instead of presenting it as an ordinary command failure. (#184270, #184237) Thanks @shakkernerd and @RomneyDa.</li>
+<li>Keep reapproved node connections alive by publishing the approval with its committed pairing facts before the request resumes. Thanks @RomneyDa.</li>
+<li>Recover stopped Gateways when service activation cannot be verified; retain untouched-recovery behavior in Windows triage. (#172784, #181577, #181698) Thanks @SMF12138 and @RomneyDa.</li>
+<li>Avoid uninstalling a Gateway service during a passive macOS stop when no service is installed. (#181257) Thanks @shakkernerd, @LiuwqGit, @eleqtrizit, @syxscott, and @RomneyDa.</li>
+<li>Recover CLI Node runtimes when launched from the filesystem root, including launchd jobs. (#178112, #177739) Thanks @downingkeys and @RomneyDa.</li>
+<li>Start new ACP sessions in the requested working directory instead of the default workspace. (#176852, #123557) Thanks @yinx65588-boop, @crappier, and @RomneyDa.</li>
+<li>Prevent overlapping model refreshes from failing requests. (#179144) Thanks @RomneyDa.</li>
+<li>Honor an explicit SSH port 22 in <code>openclaw gateway probe --ssh</code> instead of the alias's configured port. (#171092) Thanks @zhangguiping-xydt, @obviyus, and @RomneyDa.</li>
+<li>Keep skill metadata such as icons and homepages when an inline YAML metadata value has a trailing comment. (#171224) Thanks @zhangguiping-xydt, @Takhoffman, and @RomneyDa.</li>
+<li>Show provider-ignored options in <code>openclaw infer video generate</code> text and JSON output. (#171172) Thanks @ly85206559, @obviyus, and @RomneyDa.</li>
+</ul>
+<h3>Complete contribution record</h3>
+This audited record covers the complete v2026.10.8..c213740c8338a05ac1a6db036e0d11060e70bf5d history: 48 in-range PRs + 0 retained seed-only PRs = 48 unique PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
+Shipped baseline exclusions: v2026.10.8 (3 PRs: #180390, #180668, #181596).
+<h4>Pull requests</h4>
+<ul>
+<li><strong>PR #185538</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #170853</strong> Related #170847. Thanks @iamonlv426 and @RomneyDa.</li>
+<li><strong>PR #185201</strong> Related #184887. Thanks @wr-web and @RomneyDa and @syxscott.</li>
+<li><strong>PR #176902</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #176852</strong> Related #123557. Thanks @yinx65588-boop and @RomneyDa and @crappier.</li>
+<li><strong>PR #178112</strong> Related #177739. Thanks @RomneyDa and @downingkeys.</li>
+<li><strong>PR #179144</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #180321</strong> Related #180308. Thanks @brandon-julio-t and @wr-web and @RomneyDa.</li>
+<li><strong>PR #183193</strong> Thanks @LeizhenZhang and @RomneyDa.</li>
+<li><strong>PR #176833</strong> Related #176220. Thanks @RomneyDa and @ndakota79.</li>
+<li><strong>PR #181698</strong> Related #181577. Thanks @RomneyDa and @SMF12138.</li>
+<li><strong>PR #172784</strong> Related #181577. Thanks @RomneyDa and @SMF12138.</li>
+<li><strong>PR #185541</strong> Related #181577. Thanks @RomneyDa and @SMF12138.</li>
+<li><strong>PR #176234</strong> Related #176220. Thanks @RomneyDa and @ndakota79.</li>
+<li><strong>PR #181206</strong> Related #176220. Thanks @RomneyDa and @ndakota79.</li>
+<li><strong>PR #186557</strong> Related #186527. Thanks @ericcaiwx-star and @RomneyDa and @sennyhoney.</li>
+<li><strong>PR #181257</strong> Related #184889, #184237. Thanks @shakkernerd and @RomneyDa and @LiuwqGit and @eleqtrizit and @syxscott.</li>
+<li><strong>PR #171224</strong> Thanks @zhangguiping-xydt and @Takhoffman and @RomneyDa.</li>
+<li><strong>PR #171172</strong> Thanks @ly85206559 and @RomneyDa and @obviyus.</li>
+<li><strong>PR #171092</strong> Thanks @zhangguiping-xydt and @RomneyDa and @obviyus.</li>
+<li><strong>PR #181528</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #185692</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #179085</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #179097</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #179104</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #179125</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #179077</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #179112</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #179109</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #179083</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #179093</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #179079</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #180250</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #180238</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #180257</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #180245</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #180249</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #185160</strong> Related #184889. Thanks @LiuwqGit and @RomneyDa and @shakkernerd and @syxscott.</li>
+<li><strong>PR #187259</strong> Thanks @RomneyDa and @shakkernerd.</li>
+<li><strong>PR #182010</strong> Thanks @RomneyDa and @shakkernerd.</li>
+<li><strong>PR #184270</strong> Related #184237. Thanks @shakkernerd and @RomneyDa.</li>
+<li><strong>PR #185094</strong> Thanks @eleqtrizit and @RomneyDa and @shakkernerd.</li>
+<li><strong>PR #187412</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #187430</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #187459</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #187487</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #187294</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #187496</strong> Thanks @RomneyDa.</li>
+</ul>
+<p><a href="https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md">View full changelog</a></p>
+]]></description>
+            <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.10.9/OpenClaw-2026.10.9-arm64.zip" length="321729233" type="application/octet-stream" sparkle:edSignature="OD3jXaopv0nFLj0PSm4UnUAY9cvHtbf9/IQHn2tNBzlEwS10uXl7pmrEkBWQEoe8omQg1q2zK0DstI2sDX4/CQ=="/>
+        </item>
+        <item>
+            <title>2026.10.8</title>
+            <pubDate>Tue, 27 Oct 2026 21:38:18 +0000</pubDate>
+            <link>https://raw.githubusercontent.com/openclaw/openclaw/main/appcast-arm64.xml</link>
+            <sparkle:version>2610000890</sparkle:version>
+            <sparkle:shortVersionString>2026.10.8</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description><![CDATA[<h2>OpenClaw 2026.10.8</h2>
+<h3>Highlights</h3>
+<ul>
+<li><strong>Updates that finish and recover:</strong> an ordinary post-update Doctor failure restarts the Gateway instead of leaving it stopped, an orphaned maintenance worker no longer blocks every CLI command and Gateway start, and updates no longer abort on ACL filesystems, Windows pnpm optional-dependency links, pnpm 10 global installs, debug console logging, or a missing legacy OAuth directory. (#180668, #181695, #181141, #181596, #181456, #182850, #180174) Thanks @hannesrudolph, @SMF12138, @rayluo88, @PonySlayer28, and @VN77-77VN.</li>
+<li><strong>Gateway service installs on every desktop:</strong> macOS recovers a loaded launchd registration whose plist was deleted, Linux installs under the Ubuntu default umask create a private state directory instead of being refused, and the macOS updater waits for the serving Gateway to release its databases before Doctor runs. (#180390, #179538, #182055) Thanks @avnishkirnalli and @XiaoPengYouCode.</li>
+<li><strong>Conversations keep accepting messages:</strong> killed runs release their restart-recovery fence, interrupted and just-accepted child sessions recover after a Gateway restart, inbound messages stop retrying forever when the reply runtime cannot publish, and the Control UI forgotten-send retry delivers the reply instead of an authoring error. (#181992, #178888, #181871, #181300, #182219) Thanks @najef1979-code, @handcraftrc-pixel, @sukhdeepjohar, and @teddashh.</li>
+<li><strong>Startup and database resilience:</strong> startup work no longer inherits a closed SQLite reader scope, so models, chat metadata and channel replies stay available; transient lock contention during agent database startup is retried; and model catalogs stay available during skill runs. (#182615, #182446, #182385)</li>
+<li><strong>Security hardening:</strong> exec allowlist mode requires approval for <code>test -v</code> operand expansion, generic node invoke refuses browser proxy commands, sandboxed spawned children cannot run host CLI backends, the secret egress proxy rejects distrusted eMudhra chains, Fish Audio and Gradium errors no longer expose API keys, and deeply nested Tlon content can no longer stall the channel. (#180880, #179880, #178742, #179249, #178877, #177536) Thanks @eleqtrizit and @joshavant.</li>
+<li><strong>Windows exec and plugins:</strong> agent exec works under S4U scheduled tasks while Store PowerShell is installed, native plugins load on machines with Endpoint DLP, and Doctor recovers dangling dependency junctions and plugins on another filesystem. (#182898, #179949, #179549, #179445) Fixes #182652 Thanks @RomneyDa, @tre1d, @coaiMax, @paulcam206, @JIRBOY, and @ceckert.</li>
+<li><strong>Provider and model continuity:</strong> Codex turns keep their budget with older runtime plugins instead of silently falling back, Codex native child inference works after startup, OpenAI OAuth works with stale catalogs, Anthropic PDF analysis works with setup-token OAuth, a timed-out MCP session close no longer fails the next turn, and CLI history owner changes stop instead of silently replaying on another provider. (#182995, #176311, #181356, #178420, #182189, #180075) Fixes #181619 Thanks @RomneyDa, @kip-claw, @enki, @sasan1200, @sunlit-deng, @khensthoth, @aniketkrs, @goslingmanagment, @wr-web, and @teddashh.</li>
+</ul>
+<h3>Changes</h3>
+<ul>
+<li><strong>Fresh OpenAI setup:</strong> first-run model metadata no longer restricts the model picker to one model. (#175945) Thanks @matthematics1137 and @jb-dev1.</li>
+</ul>
+<h3>Fixes</h3>
+<ul>
+<li><strong>Channel accounts:</strong> default Slack, Google Chat, X, Nextcloud Talk and Zalo accounts keep starting and keep their secrets after a named account is added. (#176267, #180450, #182608) Thanks @555aaditya, @progerjkd, and @masatohoshino.</li>
+<li><strong>Slack:</strong> an isolated <code>invalid_auth</code> is retried before a socket-mode channel is disabled, and silent relay network drops reconnect. (#181056, #182368) Thanks @mushuiyu886 and @marns.</li>
+<li><strong>Matrix, Twitch, Zalo, iMessage and Feishu delivery:</strong> ordinary Matrix messages are no longer treated as text commands, Twitch sends normalize channel targets, Zalo DMs with URLs are handled, iMessage recovers after the Messages bridge dies, and Feishu quick-action cards send again. (#179506, #178480, #178938, #180900, #79832) Thanks @xiaopan-xydt, @doomy, @HeZ2z, @Takhoffman, @zzrs-xxxr, @namchamvinhcuu, and @xiabee.</li>
+<li><strong>Agent runs and providers:</strong> heartbeat loops stop when background commands finish, temporary Codex probe workers no longer accumulate, Codex native turns stay alive during host work, Claude CLI turns no longer stall 15 minutes when stream output hits its limit, provider stream errors surface immediately, and session admission races no longer trigger model fallback. (#179060, #167390, #181839, #159931, #117397, #179347) Fixes #178937, #181805, and #178000 Thanks @maxdjohnson, @sunlit-deng, @Terwox, @AINCHORS, @robertmsale, and @davidcittadini.</li>
+<li><strong>Voice and meetings:</strong> Discord realtime voice consults initialize their runtime, voice calls use the configured agent model, and long meeting talk-back replies keep their audio. (#179462, #181451, #178254) Thanks @shoaibulhaque, @yagizkus, @potoior, @BeyonceBot, and @sukhdeepjohar.</li>
+<li><strong>Remote access and history:</strong> Tailscale Serve and Funnel recover after tailscaled restarts, and cron history stays readable after provider changes. (#180081, #181311) Thanks @enki, @saariuslystoned, and @xtimor.</li>
+<li><strong>Doctor repairs:</strong> retained transcripts verify after heading repairs, and repair keeps the Codex host compaction model. (#179089, #179914) Thanks @mrsavingsblogspot-rgb and @LiuwqGit.</li>
+<li><strong>Plugins and nodes:</strong> older plugin debounce callbacks keep working, computer use accepts input results from older Mac nodes, and Memory Wiki keeps user Notes when OKF concepts disappear. (#118011, #137755, #179657)</li>
+<li><strong>Secrets and hooks:</strong> the 1Password secret provider accepts group-writable OpenClaw files, and concurrent session-memory captures no longer overwrite each other. (#181127, #181081) Thanks @jalehman, @jason-allen-oneal, and @yetval.</li>
+<li><strong>Doctor recovery messages:</strong> when Doctor cannot restore a Gateway it stopped, it prints the failure and how to start the Gateway. (#181941)</li>
+<li><strong>Codex native children and replies:</strong> completed or undeliverable child completions no longer replay or wedge parents, replies unblock after native children finish, are interrupted, or complete follow-ups, final answers survive transient retries, settled turns without a mirrored prompt finalize, native tool declarations stay stable, queued chats recover after plugin reloads, submitted steering commits before terminal release, and Codex accepts managed loopback proxy defaults. (#173018, #175246, #177577, #179099, #179050, #183286, #181779, #183077, #182104, #184062, #183232) Thanks @quqi1599, @Stronggenetics, @linancn, @wtfichigo, @mmartoccia, @Marvinthebored, @sukhdeepjohar, @jjjhenriksen, @aatreya, @ermaxinc, and @RomneyDa.</li>
+<li><strong>Claude CLI sessions:</strong> unrelated native tasks no longer hold the final answer, parent replies finish after nested background agents, a stopped first turn keeps its conversation, room events no longer reset sessions, operators can keep native Agent and Workflow tools, resumed sessions see conversation updates, and Claude CLI models stay available with saved subscriptions. (#170322, #182267, #181966, #182273, #183765, #183059, #179203) Thanks @cassthebandit, @VACInc, @goslingmanagment, @holgergruenhagen, @xiaopan-xydt, @Marvinthebored, @scarabone, @atomsmasher81, @josh-cornelius, and @teddashh.</li>
+<li><strong>Subagents and agent turns:</strong> model fallback stops after local runtime faults, recovered child results deliver after session reuse, private completion receipts reconcile after a restart, parents keep waiting for active collectors, batched tool calls settle before <code>sessions_yield</code>, delayed <code>sessions_send</code> replies are no longer cut at 4,096 characters, turns finish after tool-result recovery, messages sent during transcript rebuilds are recovered, and completed attempt callbacks are released. (#180042, #184069, #184041, #172959, #184021, #178271, #175685, #182666, #164843, #183884) Thanks @sunlit-deng, @danielsiemers, @johan-eilertsen, @jailbirt, @rjdotdev, @wr-web, @seriouslysean, @MSNexploder, and @PollyBot13.</li>
+<li><strong>Gateway stability and streaming:</strong> long HTML and JSX answers, crafted Teams HTML, and replies that look like tool calls no longer stall the Gateway; reasoning tags are withheld before streaming; silent turns no longer send rich payloads; channel restarts survive exited-run cancellation; the Gateway closes after forced plugin retirement; plugin service schedules outlive the scope that created them; and cold tool inventories no longer grow memory. (#175472, #183438, #183252, #182454, #129244, #182433, #181270, #182207, #178596) Thanks @JasonBuildAI, @LeizhenZhang, @zax0rz, @JOY, @0xtc23, @bguliano, @obviyus, and @wuqxuan.</li>
+<li><strong>Updates, installs and Doctor:</strong> Windows managed updates no longer lock themselves on TEMP aliases, the Windows installer runs through <code>iex</code>, updates complete during channel outages and keep accepted policy pins, stopped database backups allow readers, Doctor restores the Gateway after SIGHUP, keeps valid reseeded configs and inherited logins, repairs unsupported Node runtimes, recovers agents after deletion journal loss, restores plugin host links, handles very large retained histories, and uses less memory on large fleets. (#183622, #183145, #179471, #180505, #180827, #182901, #183703, #179726, #181618, #181804, #181140, #180414, #180792, #181465) Thanks @ryandle, @duyufansh2008, @waynegault, @csabatatrai, @samueltardieu, @4140leal-cw, @rybing7, @RomneyDa, @LiuwqGit, @sukhdeepjohar, and @teddashh.</li>
+<li><strong>Sessions and storage:</strong> relative session stores resolve against the state directory, sessions archive through symlinked state paths, stale restart-recovery sources no longer wedge sessions, cron cleanup keeps live child sessions, archived Discord slash-command sessions restore in place, background plugin work keeps its SQLite reader, and session deletes reuse warm archive workers. (#182444, #181554, #180853, #179057, #168596, #179031, #171156, #175091, #183410) Thanks @erickj92, @Cloud-Ocean, @Oldrich333, and @PollyBot13.</li>
+<li><strong>Auth and providers:</strong> rate-limited profiles cool down only as long as the provider asks, shared OAuth refreshes past deleted peers, concurrent agents keep MCP tool access while an OAuth credential is leased, utility models no longer return thinking-only replies, custom GLM providers generate session titles, Kimi K3.1 Pro gets the K3 thinking and video controls, Bedrock Mantle GPT models route through Responses, Google streams recover, and native conversations survive a compaction fallback model. (#180280, #179205, #179997, #169920, #172580, #181923, #182437, #117194, #183282) Thanks @fuller-stack-dev, @WG-Mojo, @maliv2, @danielsiemers, @jacobtomlinson, @TommyLei666, @obviyus, @rayvader, and @pstarkgit.</li>
+<li><strong>Channels:</strong> Telegram and Mattermost default accounts keep their tokens after a named account is added, X accounts with capitalized keys can be managed and synced, iMessage stops answering its own self-chat replies, Feishu keeps streamed text across tool calls, Google Chat delivers remote attachments as links, Synology Chat stops reporting false delivery failures, Tlon recovers after network drops, and channel images a turn could not read are retried. (#183618, #182706, #183263, #183461, #183383, #182438, #182416, #177654, #178358, #183390) Thanks @555aaditya, @rodricksz4h5, @wangmiao0668000666, @nxmxbbd, @sukhdeepjohar, @felirami, @kentuscn, @jailbirt, @HootRock, @masatohoshino, @yetval, and @teddashh.</li>
+<li><strong>Voice, apps and browser:</strong> realtime Talk survives early output and brief Gateway stalls, GPT-Live Talk and Bun realtime voice use the managed proxy, oversized macOS recordings error instead of disconnecting the node, Android chat binds to an allowed agent, the Tauri app no longer crashes before the dashboard is ready, FaceTime accepts new calls after a disconnect, the Control UI detects dead Gateway links, and browser control no longer rewrites trusted-proxy Gateway auth or holds profile leases after timeouts. (#182919, #180572, #175886, #176567, #182593, #182767, #183841, #154230, #179101, #181620, #154246) Thanks @anmol0b, @StatsR4Losers, @kybrcore, @MertBasar0, @jalehman, @CheatosBu, @xiaopan-xydt, @dawidkulpa, @Solvely-Colin, @fuller-stack-dev, and @LLagoon3.</li>
+<li><strong>Config, cron and workspaces:</strong> Control UI saves accept fully masked SecretRefs, short session URLs with navigation hints load, cron jobs keep running after sending to their own target and after a hook plugin is replaced, provisioned workspaces work without templates, Windows workspace sync no longer fails before lease acquisition, trusted-proxy readiness probes succeed without forwarded headers, and restart-recovery notices no longer claim a Gateway restart. (#183571, #183148, #177518, #177825, #120943, #183064, #182823, #172843) Thanks @lonexreb, @Valkster70, @xiaopan-xydt, @2991495215, @masatohoshino, @jlapenna, @shakkernerd, @ericcaiwx-star, @treez-admin, and @obviyus.</li>
+</ul>
+<h3>Complete contribution record</h3>
+This audited record covers the complete v2026.10.7..fdd5997b8fa1c0b69159adcadd1d6ca191416e09 history: 162 in-range PRs + 0 retained seed-only PRs = 162 unique PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
+Shipped baseline exclusions: v2026.10.7 (5 PRs: #147085, #164823, #165982, #167459, #181801).
+<h4>Pull requests</h4>
+<ul>
+<li><strong>PR #181465</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #182898</strong> Related #182652. Thanks @RomneyDa and @tre1d.</li>
+<li><strong>PR #178480</strong> Thanks @HeZ2z and @Takhoffman.</li>
+<li><strong>PR #179506</strong> Related #179441. Thanks @xiaopan-xydt and @doomy.</li>
+<li><strong>PR #180174</strong> Related #179769. Thanks @VN77-77VN.</li>
+<li><strong>PR #179949</strong> Related #179923. Thanks @coaiMax and @paulcam206.</li>
+<li><strong>PR #180880</strong> Thanks @eleqtrizit.</li>
+<li><strong>PR #181456</strong> Related #180688. Thanks @rayluo88.</li>
+<li><strong>PR #181056</strong> Related #180942. Thanks @mushuiyu886 and @marns.</li>
+<li><strong>PR #181127</strong> Related #181115. Thanks @jalehman.</li>
+<li><strong>PR #176311</strong> Thanks @enki.</li>
+<li><strong>PR #181356</strong> Related #181353. Thanks @sasan1200.</li>
+<li><strong>PR #178420</strong> Related #178387. Thanks @sunlit-deng and @khensthoth.</li>
+<li><strong>PR #182189</strong> Related #182174. Thanks @aniketkrs and @goslingmanagment.</li>
+<li><strong>PR #182446</strong></li>
+<li><strong>PR #179089</strong> Related #178960. Thanks @LiuwqGit and @mrsavingsblogspot-rgb.</li>
+<li><strong>PR #182055</strong></li>
+<li><strong>PR #179445</strong> Thanks @ceckert.</li>
+<li><strong>PR #179914</strong></li>
+<li><strong>PR #137755</strong></li>
+<li><strong>PR #179657</strong></li>
+<li><strong>PR #179462</strong> Related #179398. Thanks @shoaibulhaque and @yagizkus.</li>
+<li><strong>PR #181451</strong> Related #181345. Thanks @potoior and @BeyonceBot.</li>
+<li><strong>PR #79832</strong> Related #79824. Thanks @xiabee.</li>
+<li><strong>PR #178254</strong> Related #178275. Thanks @sukhdeepjohar.</li>
+<li><strong>PR #179549</strong> Related #179404. Thanks @JIRBOY.</li>
+<li><strong>PR #181300</strong> Related #181152. Thanks @handcraftrc-pixel.</li>
+<li><strong>PR #181695</strong> Related #181649. Thanks @PonySlayer28.</li>
+<li><strong>PR #181596</strong> Related #181577. Thanks @SMF12138.</li>
+<li><strong>PR #181141</strong> Related #181050. Thanks @hannesrudolph.</li>
+<li><strong>PR #182995</strong> Related #181619. Thanks @RomneyDa and @kip-claw.</li>
+<li><strong>PR #179880</strong> Thanks @eleqtrizit.</li>
+<li><strong>PR #178742</strong> Thanks @eleqtrizit.</li>
+<li><strong>PR #181081</strong> Related #159826. Thanks @jason-allen-oneal and @yetval.</li>
+<li><strong>PR #175945</strong> Related #175533. Thanks @matthematics1137 and @jb-dev1.</li>
+<li><strong>PR #181311</strong> Related #180920. Thanks @xtimor.</li>
+<li><strong>PR #180081</strong> Related #148308. Thanks @enki and @saariuslystoned.</li>
+<li><strong>PR #180900</strong></li>
+<li><strong>PR #180075</strong> Thanks @wr-web.</li>
+<li><strong>PR #181992</strong> Related #181952. Thanks @najef1979-code.</li>
+<li><strong>PR #182615</strong></li>
+<li><strong>PR #178888</strong></li>
+<li><strong>PR #181871</strong></li>
+<li><strong>PR #182385</strong></li>
+<li><strong>PR #182219</strong> Related #182206. Thanks @sukhdeepjohar.</li>
+<li><strong>PR #180668</strong></li>
+<li><strong>PR #180390</strong> Related #180301. Thanks @avnishkirnalli.</li>
+<li><strong>PR #179538</strong> Related #179493. Thanks @XiaoPengYouCode.</li>
+<li><strong>PR #182850</strong></li>
+<li><strong>PR #181941</strong></li>
+<li><strong>PR #177536</strong> Thanks @eleqtrizit.</li>
+<li><strong>PR #179249</strong> Thanks @joshavant.</li>
+<li><strong>PR #178877</strong></li>
+<li><strong>PR #178938</strong> Related #175421. Thanks @zzrs-xxxr and @namchamvinhcuu.</li>
+<li><strong>PR #118011</strong></li>
+<li><strong>PR #176267</strong> Related #121446. Thanks @555aaditya and @progerjkd.</li>
+<li><strong>PR #180450</strong> Thanks @555aaditya.</li>
+<li><strong>PR #182608</strong> Related #179472. Thanks @555aaditya and @masatohoshino.</li>
+<li><strong>PR #182368</strong></li>
+<li><strong>PR #179060</strong> Related #178937. Thanks @AINCHORS.</li>
+<li><strong>PR #167390</strong> Thanks @maxdjohnson.</li>
+<li><strong>PR #159931</strong> Thanks @Terwox.</li>
+<li><strong>PR #117397</strong></li>
+<li><strong>PR #181839</strong> Related #181805. Thanks @sunlit-deng and @robertmsale.</li>
+<li><strong>PR #179347</strong> Related #178000. Thanks @davidcittadini.</li>
+<li><strong>PR #180042</strong> Related #179979. Thanks @sunlit-deng and @danielsiemers.</li>
+<li><strong>PR #171156</strong></li>
+<li><strong>PR #175091</strong></li>
+<li><strong>PR #183410</strong></li>
+<li><strong>PR #169920</strong> Thanks @jacobtomlinson.</li>
+<li><strong>PR #172580</strong> Related #171068. Thanks @TommyLei666.</li>
+<li><strong>PR #173018</strong> Thanks @quqi1599 and @Stronggenetics.</li>
+<li><strong>PR #175246</strong> Thanks @quqi1599 and @Stronggenetics.</li>
+<li><strong>PR #179050</strong> Related #178395. Thanks @mmartoccia.</li>
+<li><strong>PR #179099</strong> Thanks @wtfichigo.</li>
+<li><strong>PR #170322</strong> Thanks @cassthebandit and @VACInc.</li>
+<li><strong>PR #182267</strong> Related #182175. Thanks @goslingmanagment.</li>
+<li><strong>PR #181966</strong> Related #181945. Thanks @holgergruenhagen.</li>
+<li><strong>PR #182273</strong> Related #182177. Thanks @xiaopan-xydt and @goslingmanagment.</li>
+<li><strong>PR #183765</strong> Related #183638. Thanks @VACInc and @holgergruenhagen.</li>
+<li><strong>PR #179726</strong> Thanks @sukhdeepjohar.</li>
+<li><strong>PR #179471</strong> Thanks @duyufansh2008.</li>
+<li><strong>PR #180827</strong></li>
+<li><strong>PR #182444</strong> Related #181660. Thanks @erickj92.</li>
+<li><strong>PR #179031</strong></li>
+<li><strong>PR #181270</strong> Related #181106. Thanks @0xtc23.</li>
+<li><strong>PR #179997</strong> Related #179980. Thanks @maliv2 and @danielsiemers.</li>
+<li><strong>PR #179205</strong> Related #178908. Thanks @WG-Mojo.</li>
+<li><strong>PR #179203</strong> Related #178549. Thanks @josh-cornelius.</li>
+<li><strong>PR #175472</strong> Related #175439. Thanks @JasonBuildAI and @obviyus.</li>
+<li><strong>PR #129244</strong></li>
+<li><strong>PR #182454</strong> Related #89473. Thanks @zax0rz.</li>
+<li><strong>PR #182433</strong> Related #109659. Thanks @wuqxuan and @JOY.</li>
+<li><strong>PR #181620</strong> Thanks @fuller-stack-dev.</li>
+<li><strong>PR #180505</strong> Related #180474. Thanks @waynegault.</li>
+<li><strong>PR #180792</strong></li>
+<li><strong>PR #177518</strong> Thanks @masatohoshino and @obviyus.</li>
+<li><strong>PR #177825</strong> Thanks @jlapenna.</li>
+<li><strong>PR #178271</strong> Related #175597. Thanks @rjdotdev and @wr-web and @seriouslysean.</li>
+<li><strong>PR #175685</strong> Thanks @wr-web and @rjdotdev.</li>
+<li><strong>PR #120943</strong></li>
+<li><strong>PR #182207</strong></li>
+<li><strong>PR #177654</strong> Thanks @HootRock.</li>
+<li><strong>PR #178358</strong> Related #178357. Thanks @rodricksz4h5.</li>
+<li><strong>PR #117194</strong></li>
+<li><strong>PR #154246</strong> Thanks @LLagoon3.</li>
+<li><strong>PR #175886</strong> Related #175794. Thanks @MertBasar0 and @jalehman and @CheatosBu.</li>
+<li><strong>PR #180572</strong> Related #180426. Thanks @kybrcore.</li>
+<li><strong>PR #179101</strong></li>
+<li><strong>PR #183622</strong></li>
+<li><strong>PR #183703</strong> Related #183641. Thanks @csabatatrai.</li>
+<li><strong>PR #172959</strong> Thanks @johan-eilertsen.</li>
+<li><strong>PR #182438</strong> Related #84486. Thanks @felirami and @kentuscn.</li>
+<li><strong>PR #164843</strong> Thanks @PollyBot13.</li>
+<li><strong>PR #183145</strong> Related #183088. Thanks @LiuwqGit and @ryandle.</li>
+<li><strong>PR #182823</strong> Related #182798. Thanks @ericcaiwx-star and @treez-admin.</li>
+<li><strong>PR #182901</strong></li>
+<li><strong>PR #182706</strong> Thanks @wangmiao0668000666 and @555aaditya.</li>
+<li><strong>PR #182416</strong> Related #89430. Thanks @jailbirt.</li>
+<li><strong>PR #182437</strong> Related #108216. Thanks @rayvader.</li>
+<li><strong>PR #182593</strong> Related #127569. Thanks @anmol0b.</li>
+<li><strong>PR #182767</strong> Related #182638. Thanks @xiaopan-xydt and @dawidkulpa.</li>
+<li><strong>PR #183064</strong> Thanks @shakkernerd.</li>
+<li><strong>PR #183841</strong></li>
+<li><strong>PR #182919</strong> Related #134798. Thanks @anmol0b and @StatsR4Losers.</li>
+<li><strong>PR #183618</strong> Related #179369. Thanks @555aaditya and @rodricksz4h5.</li>
+<li><strong>PR #183263</strong> Related #183262. Thanks @nxmxbbd.</li>
+<li><strong>PR #183461</strong> Thanks @nxmxbbd.</li>
+<li><strong>PR #183282</strong> Related #183273. Thanks @pstarkgit.</li>
+<li><strong>PR #183571</strong> Related #183562. Thanks @lonexreb and @Valkster70.</li>
+<li><strong>PR #183148</strong> Related #183056. Thanks @xiaopan-xydt and @2991495215.</li>
+<li><strong>PR #183390</strong> Related #127968. Thanks @masatohoshino and @yetval.</li>
+<li><strong>PR #183438</strong> Thanks @LeizhenZhang.</li>
+<li><strong>PR #183252</strong> Thanks @LeizhenZhang.</li>
+<li><strong>PR #184021</strong> Related #128416. Thanks @jailbirt.</li>
+<li><strong>PR #184062</strong> Related #181385. Thanks @aatreya.</li>
+<li><strong>PR #183884</strong></li>
+<li><strong>PR #182104</strong> Thanks @jjjhenriksen and @RomneyDa.</li>
+<li><strong>PR #172843</strong></li>
+<li><strong>PR #177577</strong> Thanks @linancn.</li>
+<li><strong>PR #183286</strong> Thanks @Marvinthebored.</li>
+<li><strong>PR #183059</strong> Related #182649, #182711. Thanks @Marvinthebored and @scarabone and @atomsmasher81.</li>
+<li><strong>PR #181779</strong> Thanks @sukhdeepjohar.</li>
+<li><strong>PR #183077</strong></li>
+<li><strong>PR #182666</strong> Thanks @MSNexploder.</li>
+<li><strong>PR #183232</strong> Related #180719. Thanks @ermaxinc.</li>
+<li><strong>PR #176567</strong> Thanks @MertBasar0.</li>
+<li><strong>PR #183383</strong> Thanks @sukhdeepjohar.</li>
+<li><strong>PR #184069</strong></li>
+<li><strong>PR #184041</strong></li>
+<li><strong>PR #154230</strong> Related #154228. Thanks @Solvely-Colin.</li>
+<li><strong>PR #181923</strong> Thanks @obviyus.</li>
+<li><strong>PR #181140</strong> Related #180903. Thanks @rybing7.</li>
+<li><strong>PR #181618</strong> Related #181611. Thanks @samueltardieu.</li>
+<li><strong>PR #181804</strong> Related #181765. Thanks @4140leal-cw.</li>
+<li><strong>PR #180414</strong></li>
+<li><strong>PR #180853</strong> Related #180802. Thanks @Cloud-Ocean.</li>
+<li><strong>PR #179057</strong> Related #178180. Thanks @Oldrich333.</li>
+<li><strong>PR #181554</strong></li>
+<li><strong>PR #178596</strong> Related #178548. Thanks @bguliano.</li>
+<li><strong>PR #168596</strong> Related #168540. Thanks @PollyBot13.</li>
+<li><strong>PR #180280</strong> Thanks @fuller-stack-dev.</li>
+</ul>
+<p><a href="https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md">View full changelog</a></p>
+]]></description>
+            <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.10.8/OpenClaw-2026.10.8-arm64.zip" length="322049109" type="application/octet-stream" sparkle:edSignature="fLcxfgt09gz5DBPLifm4O7rM8uPUG/JvxDZW6AflHBkP7pSs9ROuec0LqoL4LlnXJYUfNpEbdQbqpocys7FjCw=="/>
+        </item>
+        <item>
+            <title>2026.10.7</title>
+            <pubDate>Sat, 24 Oct 2026 19:48:44 +0000</pubDate>
+            <link>https://raw.githubusercontent.com/openclaw/openclaw/main/appcast-arm64.xml</link>
+            <sparkle:version>2610000790</sparkle:version>
+            <sparkle:shortVersionString>2026.10.7</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description><![CDATA[<h2>OpenClaw 2026.10.7</h2>
+<h3>Highlights</h3>
+<ul>
+<li><strong>Replay-safe session recovery:</strong> interrupted sessions now retain recovery provenance and unfinished tool outcomes, stopped conversations retire terminal recovery residue before accepting the next message, rejected Claude CLI drafts stay out of final replies, large child-completion batches stay within requester context, and Codex previews no longer block replies after a context refresh. (#153728, #168764, #172068, #177716, #176682, #176783, #176675, #159715, #181801) Thanks @zhangguiping-xydt, @ruel225, @Oliver4Spot, @jjjhenriksen, @enki, @PennyVibe, @mbelinky, @RomneyDa, and @krjcolby-svg.</li>
+<li><strong>Safer update activation and recovery:</strong> verified activations remain successful through later maintenance or ledger errors, interrupted package updates resume safely, post-activation Doctor waits are bounded, stale receipts cannot veto a valid repair, and Windows deep or 8.3 state paths no longer abort onboarding or migration. (#181166, #181307, #173862, #167459, #172768, #172769, #181389) Thanks @najef1979-code, @agroman1993, @shanselman, @RomneyDa, @dor-sr, @wangmiao0668000666, and @brucemccurdy.</li>
+<li><strong>Database and worker continuity:</strong> maintenance refusals preserve peer readers and borrowers, incompatible retained agent databases stay isolated, empty transcript deletions skip unnecessary archive materialization, Bun admission deadlines remain thread-local, and worker shutdown completes after inventory retirement. (#175987, #179320, #170122, #171372, #172756, #168862) Thanks @LifeViwer, @Captain69G, @RomneyDa, @shanselman, @dor-sr, @wangmiao0668000666, and @brucemccurdy.</li>
+<li><strong>Backup and state durability:</strong> snapshots retain supported legacy exec-approval policies, interrupted R2 verification and restores resume safely, config observation keeps the last-known-good snapshot during truncated writes, failed multi-file patches preserve earlier files, and Memory Wiki re-imports preserve human-authored notes. (#164297, #171292, #152565, #160409, #175707) Thanks @wangmiao0668000666, @davidcittadini, @LiuwqGit, @yetval, @masatohoshino, @YangManBOBO, @RomneyDa, @shanselman, @dor-sr, @cristianoc, and @brucemccurdy.</li>
+<li><strong>Operator control continuity:</strong> native computer control recovers after session expiry, late-attached GitHub operators can publish PRs, synchronous node output is not duplicated as a completion wake, cron announcements preserve CLI chats, and history maintenance reads identities before payloads. (#169385, #169400, #164511, #176218, #174530) Thanks @stackingrockss, @Gigaxel, @holgergruenhagen, @eliavb43, @wangmiao0668000666, @asikorskiy, and @RomneyDa.</li>
+<li><strong>Provider and plugin continuity:</strong> model refresh, configured-account readiness, GPT-5.6 tool turns, OpenRouter onboarding, incremental plugin loading, and faster external TypeScript plugin startup retain current state instead of rejecting valid setup or discarding providers. (#176709, #178522, #173366, #173292, #162226, #161267, #168391) Thanks @ericcaiwx-star, @eduardonunesfreire-rgb, @chandraveshchaudhari, @netcrazed, @obviyus, @jakeaadams, and @RomneyDa.</li>
+<li><strong>Managed integration reliability:</strong> saved Linux Gateway dashboards preserve pairing across restarts, slow macOS Talk runs retain their replies, app upgrades converge official plugins, Copilot setup verifies SDK-backed agents correctly, Claude CLI cache prefixes stay stable after child completion and retain context when caller-only tools appear or disappear, and passkey prompts no longer block headless browser clicks. (#158908, #164485, #174257, #163578, #172026, #178955, #170857) Thanks @dor-sr, @PollyBot13, @kazuyuki-eguchi, @lifuyue, @Marvinthebored, @VACInc, @trukhinyuri, @Peetiegonzalez, @RomneyDa, @shanselman, @wangmiao0668000666, @brucemccurdy, and @rsaeks.</li>
+<li><strong>Cross-platform app-managed upgrades:</strong> native state repair, recovery snapshots, Gateway runtime admission, and post-upgrade service recovery now converge without losing agent access across macOS and Windows. (#171508, #174297, #175007, #176174, #178155, #178779, #180010, #180576, #180769) Thanks @tjarrau-dev, @DonnieFi, @jayzhou2309, @lostsock1, @sglion777, @Almost-Certified-ops, @billpang1-sketch, and @RomneyDa.</li>
+</ul>
+<h3>Changes</h3>
+<ul>
+<li><strong>Google models:</strong> add Gemini 4 Argon support. (#171852) Thanks @RomneyDa.</li>
+</ul>
+<h3>Fixes</h3>
+<ul>
+<li><strong>Update guidance:</strong> avoid irrelevant database-repair advice when a package manager is missing, and remove superseded warnings after a successful update. (#173293, #173395) Thanks @DonnieFi, @RomneyDa, @wangmiao0668000666, @sunlit-deng, and @bhedanikhilkumar-code.</li>
+<li><strong>macOS onboarding:</strong> allow fresh profiles to start the Gateway and complete automatic setup. (#173246) Thanks @RomneyDa.</li>
+<li><strong>Gateway logging:</strong> prevent a deleted or stale temporary log directory from wedging the Gateway at full CPU during date rollover. (#160433) Fixes #130807 Thanks @masatohoshino, @WadeOwenWatts, and @RomneyDa.</li>
+<li><strong>Control UI queue state:</strong> clear slash-steer chips after the queued command is consumed. (#180024) Thanks @RomneyDa.</li>
+</ul>
+<h3>Complete contribution record</h3>
+This audited record covers the complete v2026.10.6..5c4a797362e0d9c94ce82ed0b6be2c9827ad9c45 history: 49 in-range PRs + 21 retained seed-only PRs = 70 unique PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
+<h4>Pull requests</h4>
+<ul>
+<li><strong>PR #181867</strong> Backports #181801. Thanks @RomneyDa.</li>
+<li><strong>PR #181487</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #181801</strong> Related #181770. Thanks @najef1979-code and @RomneyDa.</li>
+<li><strong>PR #173293</strong> Related #173084. Thanks @DonnieFi and @RomneyDa and @wangmiao0668000666 and @sunlit-deng.</li>
+<li><strong>PR #173395</strong> Related #173089. Thanks @DonnieFi and @RomneyDa and @bhedanikhilkumar-code.</li>
+<li><strong>PR #178155</strong> Related #177697. Thanks @DonnieFi and @RomneyDa.</li>
+<li><strong>PR #175707</strong> Related #175700. Thanks @YangManBOBO and @RomneyDa.</li>
+<li><strong>PR #180024</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #180010</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #178779</strong> Related #167385. Thanks @jayzhou2309 and @RomneyDa and @lostsock1.</li>
+<li><strong>PR #180576</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #176675</strong> Thanks @enki and @RomneyDa.</li>
+<li><strong>PR #176682</strong> Thanks @RomneyDa and @enki.</li>
+<li><strong>PR #172026</strong> Thanks @Marvinthebored and @VACInc and @RomneyDa and @Peetiegonzalez.</li>
+<li><strong>PR #170122</strong></li>
+<li><strong>PR #178955</strong> Thanks @Marvinthebored.</li>
+<li><strong>PR #179933</strong></li>
+<li><strong>PR #179951</strong></li>
+<li><strong>PR #182030</strong></li>
+<li><strong>PR #176892</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #159715</strong> Thanks @mbelinky and @RomneyDa.</li>
+<li><strong>PR #162226</strong> Thanks @netcrazed and @RomneyDa.</li>
+<li><strong>PR #161267</strong> Thanks @obviyus and @RomneyDa.</li>
+<li><strong>PR #171852</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #176709</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #180769</strong> Related #180636, #180701, #180707. Thanks @RomneyDa and @sglion777 and @Almost-Certified-ops and @billpang1-sketch.</li>
+<li><strong>PR #178522</strong> Related #178502. Thanks @ericcaiwx-star and @RomneyDa and @eduardonunesfreire-rgb.</li>
+<li><strong>PR #152565</strong> Related #152509. Thanks @LiuwqGit and @RomneyDa and @yetval.</li>
+<li><strong>PR #160409</strong> Thanks @masatohoshino and @RomneyDa.</li>
+<li><strong>PR #163578</strong> Thanks @lifuyue and @RomneyDa.</li>
+<li><strong>PR #180482</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #180989</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #164297</strong> Related #164146, #156945. Thanks @wangmiao0668000666 and @RomneyDa and @shanselman and @dor-sr and @cristianoc and @brucemccurdy.</li>
+<li><strong>PR #158908</strong> Related #156945. Thanks @dor-sr and @RomneyDa and @shanselman and @wangmiao0668000666 and @brucemccurdy.</li>
+<li><strong>PR #175987</strong> Related #156945. Thanks @RomneyDa and @shanselman and @dor-sr and @wangmiao0668000666 and @brucemccurdy.</li>
+<li><strong>PR #179320</strong> Related #156945. Thanks @RomneyDa and @shanselman and @dor-sr and @wangmiao0668000666 and @brucemccurdy.</li>
+<li><strong>PR #181389</strong> Related #156945. Thanks @shanselman and @RomneyDa and @dor-sr and @wangmiao0668000666 and @brucemccurdy.</li>
+<li><strong>PR #167459</strong> Related #167441, #156945. Thanks @RomneyDa and @shanselman and @dor-sr and @wangmiao0668000666 and @brucemccurdy.</li>
+<li><strong>PR #153728</strong> Related #144842. Thanks @zhangguiping-xydt and @RomneyDa and @krjcolby-svg.</li>
+<li><strong>PR #164485</strong> Related #153145. Thanks @PollyBot13 and @RomneyDa and @rsaeks.</li>
+<li><strong>PR #168391</strong> Related #168130. Thanks @RomneyDa and @jakeaadams.</li>
+<li><strong>PR #168629</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #168764</strong> Related #168676. Thanks @ruel225 and @RomneyDa and @Oliver4Spot.</li>
+<li><strong>PR #168862</strong> Related #158126. Thanks @RomneyDa and @Captain69G.</li>
+<li><strong>PR #169385</strong> Related #169353. Thanks @stackingrockss and @RomneyDa.</li>
+<li><strong>PR #169400</strong> Related #169377. Thanks @Gigaxel and @RomneyDa.</li>
+<li><strong>PR #171292</strong> Related #171165. Thanks @RomneyDa and @davidcittadini.</li>
+<li><strong>PR #171372</strong> Related #171348. Thanks @RomneyDa and @LifeViwer.</li>
+<li><strong>PR #172068</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #164511</strong> Thanks @holgergruenhagen and @RomneyDa.</li>
+<li><strong>PR #172756</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #172768</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #172769</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #173862</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #176218</strong> Related #176208. Thanks @eliavb43 and @RomneyDa.</li>
+<li><strong>PR #177716</strong> Thanks @jjjhenriksen and @RomneyDa.</li>
+<li><strong>PR #174530</strong> Related #174078. Thanks @wangmiao0668000666 and @RomneyDa and @asikorskiy.</li>
+<li><strong>PR #181166</strong> Related #181020. Thanks @najef1979-code.</li>
+<li><strong>PR #181307</strong> Related #181235. Thanks @RomneyDa and @agroman1993.</li>
+<li><strong>PR #176783</strong> Related #176669. Thanks @RomneyDa and @PennyVibe.</li>
+<li><strong>PR #173366</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #173292</strong> Thanks @chandraveshchaudhari and @RomneyDa.</li>
+<li><strong>PR #174257</strong> Related #174120. Thanks @RomneyDa and @kazuyuki-eguchi.</li>
+<li><strong>PR #170857</strong> Thanks @trukhinyuri and @RomneyDa.</li>
+<li><strong>PR #171508</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #174297</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #175007</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #176174</strong> Related #176163. Thanks @RomneyDa and @tjarrau-dev.</li>
+<li><strong>PR #173246</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #160433</strong> Related #130807. Thanks @masatohoshino and @RomneyDa and @WadeOwenWatts.</li>
+</ul>
+<p><a href="https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md">View full changelog</a></p>
+]]></description>
+            <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.10.7/OpenClaw-2026.10.7-arm64.zip" length="321906241" type="application/octet-stream" sparkle:edSignature="w6sUoa1deJeWL8QCgiERXUUqB76pH2jafrG0a3bFH5LIUCJpS8a/oi/FXYgCT6IzNl1rk84ntvCBcKP/OAj2CQ=="/>
+        </item>
+    </channel>
+</rss>

@@ -30,6 +30,7 @@ Options:
   --advisory-repo <r>    GitHub owner/repo used in advisory-url metadata.
                          Default: ${REPO_BASENAME}
   --replace-precise      Replace precise.yml instead of appending new rule ids.
+  --update-existing      Update only supplied existing rule ids; reject invalid input.
   --help                 Show this help.
 `);
 }
@@ -40,6 +41,7 @@ function parseArgs(argv) {
     outDir: "",
     advisoryRepo: REPO_BASENAME,
     replacePrecise: false,
+    updateExisting: false,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -63,6 +65,9 @@ function parseArgs(argv) {
       case "--replace-precise":
         opts.replacePrecise = true;
         break;
+      case "--update-existing":
+        opts.updateExisting = true;
+        break;
       case "--help":
       case "-h":
         printHelp();
@@ -70,6 +75,9 @@ function parseArgs(argv) {
       default:
         throw new Error(`Unknown argument: ${arg}`);
     }
+  }
+  if (opts.updateExisting && opts.replacePrecise) {
+    throw new Error("--update-existing cannot be combined with --replace-precise");
   }
   if (!opts.rulesDir) {
     printHelp();
@@ -519,8 +527,72 @@ async function pruneInvalidRulesForBucket(rules, manifest, bucket, outDir, maxIt
   return { rules: working, droppedDetails };
 }
 
+async function updateExistingRules(buckets, manifest, outDir) {
+  const generatedRules = buckets.precise.rules;
+  if (buckets.precise.skipped.length > 0 || generatedRules.length === 0) {
+    throw new Error(
+      "--update-existing requires nonempty, valid source rules; no rules were written",
+    );
+  }
+  const precisePath = path.join(outDir, "precise.yml");
+  const original = await fs.readFile(precisePath, "utf8");
+  const document = parseDocument(original);
+  const existingRules = document.toJSON()?.rules;
+  const nodes = document.get("rules")?.items;
+  if (document.errors.length > 0 || !Array.isArray(existingRules) || !Array.isArray(nodes)) {
+    throw new Error("--update-existing requires a valid existing precise rulepack");
+  }
+  if (detectIdCollisions(existingRules).length || detectIdCollisions(generatedRules).length) {
+    throw new Error("--update-existing rejects duplicate existing or generated rule ids");
+  }
+  const replacements = generatedRules.map((rule) => {
+    const index = existingRules.findIndex((existing) => existing.id === rule.id);
+    if (index === -1) {
+      throw new Error(`--update-existing cannot add unknown rule id: ${rule.id}`);
+    }
+    const range = nodes[index].range;
+    if (!range) {
+      throw new Error(`Missing source range for existing rule: ${rule.id}`);
+    }
+    return { range, rule };
+  });
+  // Splice only the selected YAML nodes so unrelated rules and comments stay byte-identical.
+  let candidate = original;
+  for (const { range, rule } of replacements.toSorted((a, b) => b.range[0] - a.range[0])) {
+    const replacement = stringify(rule, { lineWidth: 0 }).replace(/\n(?=.)/g, "\n    ");
+    candidate = candidate.slice(0, range[0]) + replacement + candidate.slice(range[1]);
+  }
+  const scratch = await fs.mkdtemp(path.join(outDir, ".update-precise-"));
+  try {
+    const candidatePath = path.join(scratch, "precise.yml");
+    await fs.writeFile(candidatePath, candidate);
+    const validation = await findInvalidRuleSpans(candidatePath);
+    if (!validation.validatorOk || validation.errorCount !== 0) {
+      throw new Error(
+        `--update-existing rejected the candidate rulepack: ${validation.validatorError ?? "invalid rules"}`,
+      );
+    }
+    if ((await fs.readFile(precisePath, "utf8")) !== original) {
+      throw new Error("precise.yml changed during validation; no rules were written");
+    }
+    await fs.rename(candidatePath, precisePath);
+  } finally {
+    await fs.rm(scratch, { recursive: true, force: true });
+  }
+  Object.assign(manifest.totals, {
+    preciseRulesExisting: existingRules.length,
+    preciseRulesUpdated: generatedRules.length,
+    preciseRules: existingRules.length,
+    preciseInvalid: 0,
+  });
+}
+
 async function writeOutputs(buckets, manifest, outDir, opts) {
   await fs.mkdir(outDir, { recursive: true });
+  if (opts.updateExisting) {
+    await updateExistingRules(buckets, manifest, outDir);
+    return;
+  }
 
   const precisePath = path.join(outDir, "precise.yml");
   const existingRules = opts.replacePrecise ? [] : await readExistingRules(precisePath);
@@ -571,7 +643,7 @@ function printSummary(buckets, manifest, outDir) {
   console.log(`  files scanned    : ${manifest.totals.filesScanned}`);
   console.log(`  files with rules : ${manifest.totals.filesWithAnyRule}`);
   console.log(
-    `  precise rules    : ${manifest.totals.preciseRules} total (${manifest.totals.preciseRulesExisting ?? 0} existing, ${manifest.totals.preciseRulesAppended ?? 0} appended, ${manifest.totals.preciseRulesDuplicateSkipped ?? 0} duplicate skipped, yaml-skipped: ${manifest.totals.preciseSkipped}, schema-invalid: ${manifest.totals.preciseInvalid ?? 0})`,
+    `  precise rules    : ${manifest.totals.preciseRules} total (${manifest.totals.preciseRulesExisting ?? 0} existing, ${manifest.totals.preciseRulesAppended ?? 0} appended, ${manifest.totals.preciseRulesUpdated ?? 0} updated, ${manifest.totals.preciseRulesDuplicateSkipped ?? 0} duplicate skipped, yaml-skipped: ${manifest.totals.preciseSkipped}, schema-invalid: ${manifest.totals.preciseInvalid ?? 0})`,
   );
   const totalDropped =
     (manifest.totals.preciseSkipped ?? 0) + (manifest.totals.preciseInvalid ?? 0);

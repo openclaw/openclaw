@@ -29,6 +29,31 @@ protocol ChatMediaNowPlayingOwner: ChatMediaPlaybackOwner {
 }
 
 @MainActor
+protocol ChatMediaPlayer: ChatMediaNowPlayingOwner {
+    var isPlaying: Bool { get }
+    func play()
+    func pause()
+}
+
+extension ChatMediaPlayer {
+    func toggle() {
+        if self.isPlaying { self.pause() } else { self.play() }
+    }
+
+    func stopForMediaPlaybackInterruption() {
+        self.pause()
+    }
+
+    func handleRemoteCommand(_ command: ChatMediaRemoteCommand) {
+        switch command {
+        case .play: self.play()
+        case .pause: self.pause()
+        case .toggle: self.toggle()
+        }
+    }
+}
+
+@MainActor
 protocol ChatMediaNowPlayingPublishing: AnyObject {
     func publish(_ metadata: ChatMediaNowPlayingMetadata)
     func setRemoteCommandHandler(
@@ -154,7 +179,7 @@ final class ChatMediaPlaybackCoordinator {
                   self.activeOwner === owner
             else { return }
             owner.handleRemoteCommand(command)
-            self.nowPlayingCenter.publish(owner.nowPlayingMetadata)
+            self.updateNowPlaying(owner)
         }
         self.nowPlayingCenter.publish(owner.nowPlayingMetadata)
     }

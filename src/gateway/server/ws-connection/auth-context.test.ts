@@ -1,6 +1,6 @@
-// WebSocket auth-context tests cover token, password, bootstrap, and device-token decision state.
 import { describe, expect, it, vi } from "vitest";
-import { createAuthRateLimiter, type AuthRateLimiter } from "../../auth-rate-limit.js";
+import { createTestGatewayScheduler } from "../../../test-utils/gateway-scheduler-clock.js";
+import { createGatewayAuthRateLimiter, type AuthRateLimiter } from "../../auth-rate-limit.js";
 import { resolveConnectAuthDecision, resolveConnectAuthState } from "./auth-context.js";
 
 type ConnectAuthState = Awaited<ReturnType<typeof resolveConnectAuthState>>;
@@ -18,45 +18,12 @@ const CLIENT_IP = "203.0.113.20";
 const BOOTSTRAP_TOKEN = "bootstrap-token";
 const DEVICE_TOKEN = "device-token";
 
-function createRateLimiter(params?: { allowed?: boolean; retryAfterMs?: number }): {
-  limiter: AuthRateLimiter;
-  check: ReturnType<typeof vi.fn>;
-  reset: ReturnType<typeof vi.fn>;
-  recordFailure: ReturnType<typeof vi.fn>;
-} {
-  const allowed = params?.allowed ?? true;
-  const retryAfterMs = params?.retryAfterMs ?? 5_000;
-  const check = vi.fn(() => ({ allowed, retryAfterMs }));
-  const reset = vi.fn();
-  const recordFailure = vi.fn();
-  const recordFailureAndDelay = vi.fn<AuthRateLimiter["recordFailureAndDelay"]>(
-    async (ip, scope) => {
-      recordFailure(ip, scope);
-    },
-  );
-  return {
-    limiter: {
-      check,
-      reset,
-      recordFailure,
-      recordFailureAndDelay,
-    } as unknown as AuthRateLimiter,
-    check,
-    reset,
-    recordFailure,
-  };
-}
-
-function createPerScopeRateLimiter(
-  scopes: Record<string, { allowed: boolean; retryAfterMs?: number }>,
-): {
-  limiter: AuthRateLimiter;
-  check: ReturnType<typeof vi.fn>;
-  reset: ReturnType<typeof vi.fn>;
-  recordFailure: ReturnType<typeof vi.fn>;
-} {
+function createTokenBucketRateLimiter(
+  scopes: Partial<Record<TokenBucketScope, { allowed: boolean; retryAfterMs?: number }>> = {},
+) {
+  const configured: Record<string, { allowed: boolean; retryAfterMs?: number }> = scopes;
   const check = vi.fn((_ip: string | undefined, scope?: string) => {
-    const cfg = scopes[scope ?? ""] ?? { allowed: true };
+    const cfg = configured[scope ?? ""] ?? { allowed: true };
     return { allowed: cfg.allowed, retryAfterMs: cfg.retryAfterMs ?? 5_000 };
   });
   const reset = vi.fn();
@@ -74,30 +41,6 @@ function createPerScopeRateLimiter(
   };
 }
 
-function createTokenBucketRateLimiter(
-  overrides?: Partial<Record<TokenBucketScope, { allowed: boolean; retryAfterMs?: number }>>,
-) {
-  const allowed = { allowed: true };
-  return createPerScopeRateLimiter({
-    "bootstrap-token": overrides?.["bootstrap-token"] ?? allowed,
-    "device-token": overrides?.["device-token"] ?? allowed,
-    "shared-secret": overrides?.["shared-secret"] ?? allowed,
-  });
-}
-
-function createBaseState(overrides?: Partial<ConnectAuthState>): ConnectAuthState {
-  return {
-    authResult: { ok: false, reason: "token_mismatch" },
-    authOk: false,
-    authMethod: "token",
-    sharedAuthOk: false,
-    pendingSharedAuthFailure: false,
-    deviceTokenCandidate: "device-token",
-    deviceTokenCandidateSource: "shared-token-fallback",
-    ...overrides,
-  };
-}
-
 function createBootstrapOnlyState(): Partial<ConnectAuthState> {
   return {
     bootstrapTokenCandidate: BOOTSTRAP_TOKEN,
@@ -106,22 +49,11 @@ function createBootstrapOnlyState(): Partial<ConnectAuthState> {
   };
 }
 
-function createBootstrapFallbackState(): Partial<ConnectAuthState> {
-  return {
-    bootstrapTokenCandidate: BOOTSTRAP_TOKEN,
-    deviceTokenCandidate: DEVICE_TOKEN,
-  };
-}
-
-function createVerifyDeviceToken(
-  result: DeviceTokenResult,
-): ReturnType<typeof vi.fn<VerifyDeviceTokenFn>> {
+function createVerifyDeviceToken(result: DeviceTokenResult) {
   return vi.fn<VerifyDeviceTokenFn>(async () => result);
 }
 
-function createVerifyBootstrapToken(
-  result: BootstrapTokenResult,
-): ReturnType<typeof vi.fn<VerifyBootstrapTokenFn>> {
+function createVerifyBootstrapToken(result: BootstrapTokenResult) {
   return vi.fn<VerifyBootstrapTokenFn>(async () => result);
 }
 
@@ -135,7 +67,16 @@ async function resolveDeviceTokenDecision(params: {
   scopes?: string[];
 }) {
   return await resolveConnectAuthDecision({
-    state: createBaseState(params.stateOverrides),
+    state: {
+      authResult: { ok: false, reason: "token_mismatch" },
+      authOk: false,
+      authMethod: "token",
+      sharedAuthOk: false,
+      pendingSharedAuthFailure: false,
+      deviceTokenCandidate: "device-token",
+      deviceTokenCandidateSource: "shared-token-fallback",
+      ...params.stateOverrides,
+    },
     hasDeviceIdentity: true,
     deviceId: "dev-1",
     publicKey: "pub-1",
@@ -145,350 +86,163 @@ async function resolveDeviceTokenDecision(params: {
       params.verifyBootstrapToken ??
       (async () => ({ ok: false, reason: "bootstrap_token_invalid" })),
     verifyDeviceToken: params.verifyDeviceToken,
-    ...(params.rateLimiter ? { rateLimiter: params.rateLimiter } : {}),
-    ...(params.clientIp ? { clientIp: params.clientIp } : {}),
-  });
-}
-
-async function resolveBootstrapCandidateDecision(params: {
-  verifyBootstrapToken: VerifyBootstrapTokenFn;
-  verifyDeviceToken: VerifyDeviceTokenFn;
-  rateLimiter?: AuthRateLimiter;
-  withDeviceFallback?: boolean;
-}) {
-  return await resolveDeviceTokenDecision({
-    verifyBootstrapToken: params.verifyBootstrapToken,
-    verifyDeviceToken: params.verifyDeviceToken,
-    ...(params.rateLimiter
-      ? {
-          rateLimiter: params.rateLimiter,
-          clientIp: CLIENT_IP,
-        }
-      : {}),
-    stateOverrides: params.withDeviceFallback
-      ? createBootstrapFallbackState()
-      : createBootstrapOnlyState(),
-  });
-}
-
-async function resolveRejectedDeviceTokenDecision(params: {
-  result: DeviceTokenResult;
-  scopes?: string[];
-  stateOverrides?: Partial<ConnectAuthState>;
-}) {
-  const verifyDeviceToken = createVerifyDeviceToken(params.result);
-  const decision = await resolveDeviceTokenDecision({
-    verifyDeviceToken,
-    ...(params.scopes ? { scopes: params.scopes } : {}),
-    ...(params.stateOverrides ? { stateOverrides: params.stateOverrides } : {}),
-  });
-  return { decision, verifyDeviceToken };
-}
-
-async function resolveBootstrapCandidateWithRateLimiter(params: {
-  rateLimiter: AuthRateLimiter;
-  verifyBootstrapToken: VerifyBootstrapTokenFn;
-  withDeviceFallback?: boolean;
-}) {
-  const verifyDeviceToken = createVerifyDeviceToken({ ok: true });
-  const decision = await resolveBootstrapCandidateDecision({
-    verifyBootstrapToken: params.verifyBootstrapToken,
-    verifyDeviceToken,
     rateLimiter: params.rateLimiter,
-    ...(params.withDeviceFallback ? { withDeviceFallback: true } : {}),
+    clientIp: params.clientIp,
   });
-  return { decision, verifyDeviceToken };
 }
 
-async function resolveBlockedBootstrapCandidate(params?: { withDeviceFallback?: boolean }) {
-  const rateLimiter = createTokenBucketRateLimiter({
-    "bootstrap-token": { allowed: false, retryAfterMs: 30_000 },
-  });
-  const verifyBootstrapToken = createVerifyBootstrapToken({ ok: true });
-  const resolved = await resolveBootstrapCandidateWithRateLimiter({
+async function resolveBootstrapFixture(
+  params: {
+    blocked?: boolean;
+    invalid?: boolean;
+    withDeviceFallback?: boolean;
+    sharedAuth?: boolean;
+  } = {},
+) {
+  const rateLimiter = createTokenBucketRateLimiter(
+    params.blocked ? { "bootstrap-token": { allowed: false, retryAfterMs: 30_000 } } : {},
+  );
+  const verifyBootstrapToken = createVerifyBootstrapToken(
+    params.invalid ? { ok: false, reason: "bootstrap_token_invalid" } : { ok: true },
+  );
+  const verifyDeviceToken = createVerifyDeviceToken({ ok: true });
+  const decision = await resolveDeviceTokenDecision({
     verifyBootstrapToken,
-    rateLimiter: rateLimiter.limiter,
-    ...(params?.withDeviceFallback ? { withDeviceFallback: true } : {}),
+    verifyDeviceToken,
+    rateLimiter: params.sharedAuth ? undefined : rateLimiter.limiter,
+    clientIp: params.sharedAuth ? undefined : CLIENT_IP,
+    role: params.sharedAuth ? "node" : "operator",
+    scopes: params.sharedAuth ? [] : ["operator.read"],
+    stateOverrides: {
+      ...(params.withDeviceFallback
+        ? { bootstrapTokenCandidate: BOOTSTRAP_TOKEN, deviceTokenCandidate: DEVICE_TOKEN }
+        : createBootstrapOnlyState()),
+      ...(params.sharedAuth
+        ? {
+            authResult: { ok: true, method: "tailscale" as const },
+            authOk: true,
+            authMethod: "tailscale" as const,
+          }
+        : {}),
+    },
   });
-  return { ...resolved, rateLimiter, verifyBootstrapToken };
-}
-
-async function resolveInvalidBootstrapCandidate(params?: { withDeviceFallback?: boolean }) {
-  const rateLimiter = createTokenBucketRateLimiter();
-  const verifyBootstrapToken = createVerifyBootstrapToken({
-    ok: false,
-    reason: "bootstrap_token_invalid",
-  });
-  const resolved = await resolveBootstrapCandidateWithRateLimiter({
-    verifyBootstrapToken,
-    rateLimiter: rateLimiter.limiter,
-    ...(params?.withDeviceFallback ? { withDeviceFallback: true } : {}),
-  });
-  return { ...resolved, rateLimiter };
-}
-
-async function resolveSuccessfulNodeBootstrapDecision(params: {
-  verifyBootstrapToken: VerifyBootstrapTokenFn;
-  verifyDeviceToken: VerifyDeviceTokenFn;
-}) {
-  return await resolveConnectAuthDecision({
-    state: createBaseState({
-      authResult: { ok: true, method: "tailscale" },
-      authOk: true,
-      authMethod: "tailscale",
-      bootstrapTokenCandidate: "bootstrap-token",
-      deviceTokenCandidate: undefined,
-      deviceTokenCandidateSource: undefined,
-    }),
-    hasDeviceIdentity: true,
-    deviceId: "dev-1",
-    publicKey: "pub-1",
-    role: "node",
-    scopes: [],
-    verifyBootstrapToken: params.verifyBootstrapToken,
-    verifyDeviceToken: params.verifyDeviceToken,
-  });
-}
-
-function expectBootstrapTokenAccepted(params: {
-  decision: Awaited<ReturnType<typeof resolveConnectAuthDecision>>;
-  verifyBootstrapToken: ReturnType<typeof vi.fn<VerifyBootstrapTokenFn>>;
-  verifyDeviceToken: ReturnType<typeof vi.fn<VerifyDeviceTokenFn>>;
-}) {
-  expect(params.decision.authOk).toBe(true);
-  expect(params.decision.authMethod).toBe("bootstrap-token");
-  expect(params.verifyBootstrapToken).toHaveBeenCalledOnce();
-  expect(params.verifyDeviceToken).not.toHaveBeenCalled();
+  return { decision, verifyDeviceToken, rateLimiter, verifyBootstrapToken };
 }
 
 describe("resolveConnectAuthDecision", () => {
-  it("does not try credential fallbacks after proxy attribution fails", async () => {
-    const verifyDeviceToken = createVerifyDeviceToken({ ok: true });
-    const verifyBootstrapToken = createVerifyBootstrapToken({ ok: true });
+  it.each(["proxy_attribution_required", "token_redacted_config", "password_redacted_config"])(
+    "does not try credential fallbacks after %s",
+    async (reason) => {
+      const verifyDeviceToken = createVerifyDeviceToken({ ok: true });
+      const verifyBootstrapToken = createVerifyBootstrapToken({ ok: true });
+      const decision = await resolveDeviceTokenDecision({
+        verifyDeviceToken,
+        verifyBootstrapToken,
+        stateOverrides: {
+          authResult: { ok: false, reason },
+          bootstrapTokenCandidate: BOOTSTRAP_TOKEN,
+        },
+      });
+
+      expect(decision).toMatchObject({ authOk: false, authResult: { reason } });
+      expect(verifyDeviceToken).not.toHaveBeenCalled();
+      expect(verifyBootstrapToken).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["explicit-device-token", "device_token_mismatch", { ok: false }, "operator.read"],
+    [
+      "shared-token-fallback",
+      "scope_mismatch",
+      { ok: false, reason: "scope-mismatch" },
+      "operator.admin",
+    ],
+  ] as const)("reports %s rejection as %s", async (source, reason, result, scope) => {
     const decision = await resolveDeviceTokenDecision({
-      verifyDeviceToken,
-      verifyBootstrapToken,
-      stateOverrides: {
-        authResult: { ok: false, reason: "proxy_attribution_required" },
-        bootstrapTokenCandidate: BOOTSTRAP_TOKEN,
-      },
+      verifyDeviceToken: createVerifyDeviceToken(result),
+      scopes: [scope],
+      stateOverrides: { deviceTokenCandidateSource: source },
     });
-
-    expect(decision.authOk).toBe(false);
-    expect(decision.authResult.reason).toBe("proxy_attribution_required");
-    expect(verifyDeviceToken).not.toHaveBeenCalled();
-    expect(verifyBootstrapToken).not.toHaveBeenCalled();
-  });
-
-  it("keeps shared-secret mismatch when fallback device-token check fails", async () => {
-    const verifyDeviceToken = createVerifyDeviceToken({ ok: false });
-    const verifyBootstrapToken = createVerifyBootstrapToken({
-      ok: false,
-      reason: "bootstrap_token_invalid",
-    });
-    const decision = await resolveConnectAuthDecision({
-      state: createBaseState(),
-      hasDeviceIdentity: true,
-      deviceId: "dev-1",
-      publicKey: "pub-1",
-      role: "operator",
-      scopes: ["operator.read"],
-      verifyBootstrapToken,
-      verifyDeviceToken,
-    });
-    expect(decision.authOk).toBe(false);
-    expect(decision.authResult.reason).toBe("token_mismatch");
-    expect(verifyBootstrapToken).not.toHaveBeenCalled();
-    expect(verifyDeviceToken).toHaveBeenCalledOnce();
-  });
-
-  it("reports explicit device-token mismatches as device_token_mismatch", async () => {
-    const { decision } = await resolveRejectedDeviceTokenDecision({
-      result: { ok: false },
-      stateOverrides: {
-        deviceTokenCandidateSource: "explicit-device-token",
-      },
-    });
-    expect(decision.authOk).toBe(false);
-    expect(decision.authResult.reason).toBe("device_token_mismatch");
-  });
-
-  it("preserves explicit device-token scope mismatches", async () => {
-    const { decision } = await resolveRejectedDeviceTokenDecision({
-      result: { ok: false, reason: "scope-mismatch" },
-      scopes: ["operator.admin"],
-      stateOverrides: {
-        deviceTokenCandidateSource: "explicit-device-token",
-      },
-    });
-    expect(decision.authOk).toBe(false);
-    expect(decision.authResult.reason).toBe("scope_mismatch");
-  });
-
-  it("preserves fallback device-token scope mismatches over shared-token mismatch", async () => {
-    const { decision } = await resolveRejectedDeviceTokenDecision({
-      result: { ok: false, reason: "scope-mismatch" },
-      scopes: ["operator.admin"],
-      stateOverrides: {
-        authResult: { ok: false, reason: "token_mismatch" },
-        deviceTokenCandidateSource: "shared-token-fallback",
-      },
-    });
-    expect(decision.authOk).toBe(false);
-    expect(decision.authResult.reason).toBe("scope_mismatch");
+    expect(decision).toMatchObject({ authOk: false, authResult: { reason } });
   });
 
   it("accepts valid device tokens and marks auth method as device-token", async () => {
-    const rateLimiter = createRateLimiter();
+    const rateLimiter = createTokenBucketRateLimiter();
     const verifyDeviceToken = createVerifyDeviceToken({ ok: true });
     const decision = await resolveDeviceTokenDecision({
       verifyDeviceToken,
       rateLimiter: rateLimiter.limiter,
       clientIp: CLIENT_IP,
     });
-    expect(decision.authOk).toBe(true);
-    expect(decision.authMethod).toBe("device-token");
+    expect(decision).toMatchObject({ authOk: true, authMethod: "device-token" });
     expect(verifyDeviceToken).toHaveBeenCalledOnce();
     expect(rateLimiter.reset).toHaveBeenCalledWith(CLIENT_IP, "device-token");
   });
 
-  it("accepts valid bootstrap tokens before device-token fallback", async () => {
-    const verifyBootstrapToken = createVerifyBootstrapToken({ ok: true });
-    const verifyDeviceToken = createVerifyDeviceToken({ ok: true });
-    const decision = await resolveBootstrapCandidateDecision({
-      verifyBootstrapToken,
-      verifyDeviceToken,
-      withDeviceFallback: true,
-    });
-    expectBootstrapTokenAccepted({
-      decision,
-      verifyBootstrapToken,
-      verifyDeviceToken,
-    });
-  });
-
-  it("reports invalid bootstrap tokens when no device token fallback is available", async () => {
-    const verifyBootstrapToken = createVerifyBootstrapToken({
-      ok: false,
-      reason: "bootstrap_token_invalid",
-    });
-    const verifyDeviceToken = createVerifyDeviceToken({ ok: true });
-    const decision = await resolveBootstrapCandidateDecision({
-      verifyBootstrapToken,
-      verifyDeviceToken,
-    });
-    expect(decision.authOk).toBe(false);
-    expect(decision.authResult.reason).toBe("bootstrap_token_invalid");
-    expect(verifyBootstrapToken).toHaveBeenCalledOnce();
-    expect(verifyDeviceToken).not.toHaveBeenCalled();
-  });
-
   it("returns rate-limited auth result without verifying device token", async () => {
-    const rateLimiter = createRateLimiter({ allowed: false, retryAfterMs: 60_000 });
+    const rateLimiter = createTokenBucketRateLimiter({
+      "device-token": { allowed: false, retryAfterMs: 60_000 },
+    });
     const verifyDeviceToken = createVerifyDeviceToken({ ok: true });
     const decision = await resolveDeviceTokenDecision({
       verifyDeviceToken,
       rateLimiter: rateLimiter.limiter,
       clientIp: CLIENT_IP,
     });
-    expect(decision.authOk).toBe(false);
-    expect(decision.authResult.reason).toBe("rate_limited");
-    expect(decision.authResult.retryAfterMs).toBe(60_000);
+    expect(decision).toMatchObject({
+      authOk: false,
+      authResult: { reason: "rate_limited", retryAfterMs: 60_000 },
+    });
     expect(verifyDeviceToken).not.toHaveBeenCalled();
   });
 
-  it("still verifies the device token when only the shared-secret path is rate-limited", async () => {
-    const verifyDeviceToken = createVerifyDeviceToken({ ok: true });
-    const decision = await resolveDeviceTokenDecision({
-      verifyDeviceToken,
-      stateOverrides: {
-        authResult: {
-          ok: false,
-          reason: "rate_limited",
-          rateLimited: true,
-          retryAfterMs: 60_000,
-        },
-      },
-    });
-    expect(decision.authOk).toBe(true);
-    expect(decision.authMethod).toBe("device-token");
-    expect(verifyDeviceToken).toHaveBeenCalledOnce();
-  });
-
-  it("prefers a valid bootstrap token over an already successful shared auth path", async () => {
-    const verifyBootstrapToken = createVerifyBootstrapToken({ ok: true });
-    const verifyDeviceToken = createVerifyDeviceToken({ ok: true });
-    const decision = await resolveSuccessfulNodeBootstrapDecision({
-      verifyBootstrapToken,
-      verifyDeviceToken,
-    });
-    expectBootstrapTokenAccepted({
-      decision,
-      verifyBootstrapToken,
-      verifyDeviceToken,
-    });
-  });
-
-  it("keeps the original successful auth path when bootstrap validation fails", async () => {
-    const verifyBootstrapToken = createVerifyBootstrapToken({
-      ok: false,
-      reason: "bootstrap_token_invalid",
-    });
-    const verifyDeviceToken = createVerifyDeviceToken({ ok: true });
-    const decision = await resolveSuccessfulNodeBootstrapDecision({
-      verifyBootstrapToken,
-      verifyDeviceToken,
-    });
-    expect(decision.authOk).toBe(true);
-    expect(decision.authMethod).toBe("tailscale");
-    expect(verifyBootstrapToken).toHaveBeenCalledOnce();
-    expect(verifyDeviceToken).not.toHaveBeenCalled();
-  });
-
-  it("gates bootstrap-token verify when the bootstrap-token bucket is exceeded", async () => {
-    const { decision, verifyBootstrapToken } = await resolveBlockedBootstrapCandidate();
-    expect(decision.authOk).toBe(false);
-    expect(decision.authResult.reason).toBe("rate_limited");
-    expect(decision.authResult.retryAfterMs).toBe(30_000);
-    // The verify path is mutex-locked + does fs I/O — confirm we never invoke
-    // it once the bucket is exhausted.
-    expect(verifyBootstrapToken).not.toHaveBeenCalled();
-  });
-
-  it("still verifies the device token when only the bootstrap-token path is rate-limited", async () => {
-    const { decision, verifyBootstrapToken, verifyDeviceToken } =
-      await resolveBlockedBootstrapCandidate({
-        withDeviceFallback: true,
-      });
-    expect(decision.authOk).toBe(true);
-    expect(decision.authMethod).toBe("device-token");
-    expect(verifyBootstrapToken).not.toHaveBeenCalled();
-    expect(verifyDeviceToken).toHaveBeenCalledOnce();
-  });
+  it.each([
+    ["bootstrap-token", { sharedAuth: true }, 1, 0, false],
+    ["tailscale", { sharedAuth: true, invalid: true }, 1, 0, false],
+    ["device-token", { blocked: true, withDeviceFallback: true }, 0, 1, false],
+    ["bootstrap-token", {}, 1, 0, true],
+  ] as const)(
+    "selects %s with bootstrap inputs %j",
+    async (authMethod, params, bootstrapChecks, deviceChecks, resets) => {
+      const { decision, verifyBootstrapToken, verifyDeviceToken, rateLimiter } =
+        await resolveBootstrapFixture(params);
+      expect(decision).toMatchObject({ authOk: true, authMethod });
+      expect(verifyBootstrapToken).toHaveBeenCalledTimes(bootstrapChecks);
+      expect(verifyDeviceToken).toHaveBeenCalledTimes(deviceChecks);
+      if (resets) {
+        expect(rateLimiter.reset).toHaveBeenCalledWith(CLIENT_IP, "bootstrap-token");
+        expect(rateLimiter.recordFailure).not.toHaveBeenCalledWith(CLIENT_IP, "bootstrap-token");
+      }
+    },
+  );
 
   it("records a bootstrap-token failure when final auth rejects", async () => {
-    const { rateLimiter } = await resolveInvalidBootstrapCandidate();
+    const { rateLimiter } = await resolveBootstrapFixture({ invalid: true });
     expect(rateLimiter.recordFailure).toHaveBeenCalledWith(CLIENT_IP, "bootstrap-token");
     expect(rateLimiter.reset).not.toHaveBeenCalledWith(CLIENT_IP, "bootstrap-token");
   });
 
   it("does not record a bootstrap-token failure when device-token fallback succeeds", async () => {
-    const { decision, rateLimiter } = await resolveInvalidBootstrapCandidate({
+    const { decision, rateLimiter } = await resolveBootstrapFixture({
+      invalid: true,
       withDeviceFallback: true,
     });
-    expect(decision.authOk).toBe(true);
-    expect(decision.authMethod).toBe("device-token");
+    expect(decision).toMatchObject({ authOk: true, authMethod: "device-token" });
     expect(rateLimiter.recordFailure).not.toHaveBeenCalledWith(CLIENT_IP, "bootstrap-token");
   });
 
   it("serializes concurrent bootstrap-token failures before checking the next attempt", async () => {
-    const rateLimiter = createAuthRateLimiter({
-      maxAttempts: 3,
-      windowMs: 60_000,
-      lockoutMs: 60_000,
-      exemptLoopback: false,
-      pruneIntervalMs: 0,
-    });
+    const rateLimiter = createGatewayAuthRateLimiter(
+      {
+        maxAttempts: 3,
+        windowMs: 60_000,
+        lockoutMs: 60_000,
+        exemptLoopback: false,
+        pruneIntervalMs: 0,
+      },
+      { scheduler: createTestGatewayScheduler() },
+    );
     let activeBootstrapChecks = 0;
     let maxActiveBootstrapChecks = 0;
     const verifyBootstrapToken = vi.fn<VerifyBootstrapTokenFn>(async () => {
@@ -524,23 +278,5 @@ describe("resolveConnectAuthDecision", () => {
     } finally {
       rateLimiter.dispose();
     }
-  });
-
-  it("resets the bootstrap-token bucket when the verify succeeds", async () => {
-    const rateLimiter = createTokenBucketRateLimiter();
-    const verifyBootstrapToken = createVerifyBootstrapToken({ ok: true });
-    const verifyDeviceToken = createVerifyDeviceToken({ ok: true });
-    const decision = await resolveBootstrapCandidateDecision({
-      verifyBootstrapToken,
-      verifyDeviceToken,
-      rateLimiter: rateLimiter.limiter,
-    });
-    expectBootstrapTokenAccepted({
-      decision,
-      verifyBootstrapToken,
-      verifyDeviceToken,
-    });
-    expect(rateLimiter.reset).toHaveBeenCalledWith(CLIENT_IP, "bootstrap-token");
-    expect(rateLimiter.recordFailure).not.toHaveBeenCalledWith(CLIENT_IP, "bootstrap-token");
   });
 });

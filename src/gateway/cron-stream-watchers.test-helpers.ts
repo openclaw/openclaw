@@ -1,4 +1,5 @@
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { CronJob } from "../cron/types.js";
 import type {
   ManagedRun,
@@ -6,11 +7,28 @@ import type {
   RunExit,
   SpawnInput,
 } from "../process/supervisor/types.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createCronStreamWatchers } from "./cron-stream-watchers.js";
+import { runExit } from "./server-cron.process.test-support.js";
+type WatcherParams = Parameters<typeof createCronStreamWatchers>[0];
+
+export const streamBatchArgs = (text: string) => [
+  expect.any(Object),
+  text,
+  expect.any(String),
+  expect.any(String),
+];
+export const streamStateArgs = (patch: Partial<CronJob["state"]>) => [
+  "stream-job",
+  expect.objectContaining(patch),
+  expect.any(String),
+  expect.any(String),
+];
 
 export function job(overrides: Partial<CronJob> = {}): CronJob {
   const base: CronJob = {
     id: "stream-job",
+    agentId: "main",
     name: "stream job",
     enabled: true,
     createdAtMs: 1,
@@ -19,16 +37,14 @@ export function job(overrides: Partial<CronJob> = {}): CronJob {
     sessionTarget: "isolated",
     wakeMode: "now",
     payload: { kind: "agentTurn", message: "base" },
-    state: { streamSourceIdentity: "source:stream-job" },
+    state: {},
+    ...overrides,
   };
-  const merged = { ...base, ...overrides };
-  return {
-    ...merged,
-    state: {
-      streamSourceIdentity: `source:${merged.id}`,
-      ...overrides.state,
-    },
+  base.state = {
+    streamSourceIdentity: `source:${base.id}`,
+    ...overrides.state,
   };
+  return base;
 }
 
 export function createCronStreamMatchingJob(match: string): CronJob {
@@ -45,17 +61,7 @@ export function createCronStreamMatchingJob(match: string): CronJob {
 }
 
 export function exitResult(overrides: Partial<RunExit> = {}): RunExit {
-  return {
-    reason: "exit",
-    exitCode: 0,
-    exitSignal: null,
-    durationMs: 1,
-    stdout: "",
-    stderr: "",
-    timedOut: false,
-    noOutputTimedOut: false,
-    ...overrides,
-  };
+  return runExit({ reason: "exit", exitCode: 0, ...overrides });
 }
 
 export function fakeSupervisor() {
@@ -64,27 +70,29 @@ export function fakeSupervisor() {
   const exits: Array<(result: RunExit) => void> = [];
   const spawn = vi.fn(async (input: SpawnInput) => {
     inputs.push(input);
-    let resolveWait!: (result: RunExit) => void;
-    const wait = new Promise<RunExit>((resolve) => {
-      resolveWait = resolve;
-    });
+    const activity = { resultSettled: false, lastOutputAtMs: Date.now() };
+    const wait = createDeferred<RunExit>();
+    const resolveWait = (result: RunExit) => {
+      activity.resultSettled = true;
+      wait.resolve(result);
+    };
     const run: ManagedRun = {
+      activity,
       runId: `run-${runs.length + 1}`,
       startedAtMs: Date.now(),
-      stdin: undefined,
       cancel: vi.fn(() => resolveWait(exitResult({ reason: "manual-cancel" }))),
       detachOutput: vi.fn(),
-      wait: () => wait,
+      wait: () => wait.promise,
     };
     runs.push(run);
     exits.push(resolveWait);
     return run;
   });
   const supervisor = {
+    acquireScopeCleanup: vi.fn(() => vi.fn(async () => {})),
     spawn,
     cancel: vi.fn(),
     cancelScope: vi.fn(),
-    getRecord: vi.fn(),
   } satisfies ProcessSupervisor;
   return { inputs, runs, exits, spawn, supervisor };
 }
@@ -110,13 +118,20 @@ export async function settle(): Promise<void> {
   }
 }
 
+export async function flushStreamOutput(ms = 50) {
+  await settle();
+  await vi.advanceTimersByTimeAsync(ms);
+  await settle();
+}
+
 export function createWatchers(
-  params: Omit<Parameters<typeof createCronStreamWatchers>[0], "retireSource"> & {
-    retireSource?: Parameters<typeof createCronStreamWatchers>[0]["retireSource"];
-  },
+  params: Omit<WatcherParams, "retireSource" | "scheduler"> &
+    Partial<Pick<WatcherParams, "retireSource" | "scheduler">>,
 ) {
   return createCronStreamWatchers({
     retireSource: vi.fn(async (_jobId, _scheduleKey, identity) => `${identity}:retired`),
     ...params,
+    scheduler:
+      params.scheduler ?? createTestGatewayScheduler(vi.isFakeTimers() ? "fake-timers" : undefined),
   });
 }

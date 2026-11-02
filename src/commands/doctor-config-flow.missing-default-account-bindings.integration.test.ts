@@ -1,62 +1,86 @@
-// Doctor default-account integration tests cover binding warnings across realistic config shapes.
-import { describe, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
-import {
-  collectMissingDefaultAccountBindingWarnings,
-  collectMissingExplicitDefaultAccountWarnings,
-} from "./doctor/shared/default-account-warnings.js";
+import { resolveAgentRoute } from "../routing/resolve-route.js";
+import { repairUnownedChannelAccountBindings } from "./doctor/shared/legacy-config-binding-repair.js";
 
-describe("doctor missing default account binding warning", () => {
-  it("warns when named accounts have no valid account-scoped bindings", () => {
-    const warnings = collectMissingDefaultAccountBindingWarnings({
-      channels: {
-        telegram: {
-          accounts: {
-            alerts: {},
-            work: {},
-          },
-        },
-      },
-      bindings: [{ agentId: "ops", match: { channel: "telegram" } }],
-    } as OpenClawConfig);
+vi.mock("../channels/plugins/read-only.js", () => ({
+  resolveReadOnlyChannelPluginsForConfig: () => {
+    const { listAccountIds } = createAccountListHelpers("discord", {
+      implicitDefaultAccount: { channelKeys: ["token"], envVars: ["DISCORD_BOT_TOKEN"] },
+    });
+    return {
+      configuredChannelIds: ["discord"],
+      plugins: [{ id: "discord", config: { listAccountIds } }],
+    };
+  },
+}));
+afterEach(() => vi.unstubAllEnvs());
 
-    expect(warnings).toEqual([
-      '- channels.telegram: accounts.default is missing and no valid account-scoped binding exists for configured accounts (alerts, work). Channel-only bindings (no accountId) match only default. Add bindings[].match.accountId for one of these accounts (or "*"), or add channels.telegram.accounts.default.',
-    ]);
-  });
+const binding = (agentId: string, match: { guildId?: string; accountId?: string }) => ({
+  agentId,
+  match: { channel: "discord", ...match },
+});
+const legacy = (ids: string[], explicit = false) => ({
+  agents: { list: ids.map((id) => ({ id })), ...(explicit ? { ownership: "explicit" } : {}) },
+});
+const narrow = [
+  binding("ops", { guildId: "guild-a" }),
+  binding("research", { guildId: "guild-b" }),
+];
+function scenario(
+  name: string,
+  discord: NonNullable<OpenClawConfig["channels"]>["discord"],
+  bindings: NonNullable<OpenClawConfig["bindings"]> = [],
+  sourceConfig?: unknown,
+  added: typeof bindings = [],
+) {
+  const config: OpenClawConfig = {
+    agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+    channels: { discord },
+    bindings,
+  };
+  return { name, config, sourceConfig, added };
+}
 
-  it("warns when multiple accounts have no explicit default", () => {
-    const warnings = collectMissingExplicitDefaultAccountWarnings({
-      channels: {
-        telegram: {
-          accounts: {
-            alerts: {},
-            work: {},
-          },
-        },
-      },
-    } as OpenClawConfig);
-
-    expect(warnings).toEqual([
-      "- channels.telegram: multiple accounts are configured but no explicit default is set. Set channels.telegram.defaultAccount or add channels.telegram.accounts.default to avoid fallback routing.",
-    ]);
-  });
-
-  it("warns when defaultAccount does not match configured accounts", () => {
-    const warnings = collectMissingExplicitDefaultAccountWarnings({
-      channels: {
-        telegram: {
-          defaultAccount: "missing",
-          accounts: {
-            alerts: {},
-            work: {},
-          },
-        },
-      },
-    } as OpenClawConfig);
-
-    expect(warnings).toEqual([
-      '- channels.telegram: defaultAccount is set to "missing" but does not match configured accounts (alerts, work). Set channels.telegram.defaultAccount to one of these accounts, or add channels.telegram.accounts.default to avoid fallback routing.',
-    ]);
-  });
+it.each([
+  scenario("explicit fleet", {}, [], legacy(["ops", "research"], true)),
+  scenario("legacy fallback", {}, narrow, legacy(["ops", "research"]), [
+    binding("ops", { accountId: "default" }),
+  ]),
+  scenario(
+    "disabled default beside an active account",
+    { accounts: { default: { enabled: false }, work: {} } },
+    [narrow[0]!, binding("research", { accountId: "work", guildId: "guild-b" })],
+    legacy(["research", "ops"]),
+    [binding("research", { accountId: "work" })],
+  ),
+  scenario("disabled channel", { enabled: false }, [narrow[0]!]),
+  scenario("unconfigured legacy main owner", {}, [binding("main", { guildId: "guild-a" })]),
+])("repairs only proven ownership for $name", ({ name, config, sourceConfig, added }) => {
+  vi.stubEnv("DISCORD_BOT_TOKEN", undefined);
+  const repair = (input: OpenClawConfig) =>
+    repairUnownedChannelAccountBindings({
+      config: input,
+      sourceConfigBeforeMigrations: sourceConfig,
+    });
+  const repaired = repair(config);
+  expect(repaired.config.bindings).toEqual([...config.bindings!, ...added]);
+  if (name === "legacy fallback") {
+    expect(
+      resolveAgentRoute({
+        cfg: repaired.config,
+        channel: "discord",
+        guildId: "guild-b",
+      }).agentId,
+    ).toBe("research");
+  }
+  if (name === "explicit fleet") {
+    expect(repaired.warnings?.join("\n")).toContain(
+      '{"agentId":"<agentId>","match":{"channel":"discord","accountId":"default"}}',
+    );
+  }
+  const second = repair(repaired.config);
+  expect(second.config).toBe(repaired.config);
+  expect(second.changes).toEqual([]);
 });

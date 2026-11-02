@@ -1,4 +1,3 @@
-// Discord plugin module implements rest routes behavior.
 import { redactIdentifier } from "openclaw/plugin-sdk/logging-core";
 import {
   asDateTimestampMs,

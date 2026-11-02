@@ -1,402 +1,198 @@
-// Covers provider hook structured failover signals.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { classifyAssistantFailoverReason } from "../embedded-agent-helpers/assistant-message-failures.js";
-import { classifyProviderRuntimeFailureKind } from "../embedded-agent-helpers/provider-runtime-failure.js";
-import { resolveFailoverReasonFromError } from "../failover-error.js";
-import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
+import { classifyAssistantFailoverReason as assistantReason } from "../embedded-agent-helpers/assistant-message-failures.js";
+import {
+  formatAssistantErrorText,
+  formatUserFacingAssistantErrorText as userCopy,
+} from "../embedded-agent-helpers/error-text.js";
+import { classifyProviderRuntimeFailureKind as runtimeKind } from "../embedded-agent-helpers/provider-runtime-failure.js";
+import { resolveFailoverReasonFromError as resolveReason } from "../failover-error.js";
+import { makeAssistantMessageFixture as makeMessage } from "../test-helpers/assistant-message-fixtures.js";
+import { PROVIDER_SCHEMA_REJECTION_USER_TEXT } from "./assistant-request-failure-copy.js";
 import { classifyFailoverSignal } from "./classify.js";
+import { formatBillingErrorMessage } from "./user-copy.js";
 
-const providerRuntimeMocks = vi.hoisted(() => {
-  const runtime = { classifyProviderFailoverSignalWithPlugin: vi.fn() };
-  return { ...runtime, requireProviderRuntime: vi.fn(() => runtime) };
-});
-
-vi.mock("../../logging/node-require.js", () => ({
-  resolveNodeRequireFromMeta: () => providerRuntimeMocks.requireProviderRuntime,
+const providerRuntimeMocks = vi.hoisted(() => ({
+  classifyProviderFailoverSignalWithPlugin: vi.fn(),
 }));
 
+vi.mock("../../plugins/provider-failover.js", () => providerRuntimeMocks);
+
 describe("provider failover hook structured signals", () => {
+  type Fields = Parameters<typeof makeMessage>[0];
+  const hook = providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin;
+  const rateLimitCopy = "⚠️ The AI service needs a short break. Please try again in a few minutes.";
+  const serverCopy = "⚠️ The AI service is having trouble. Please try again in a moment.";
+  const contextCopy =
+    "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.";
+  const privateDetail =
+    "RAW_BODY_CANARY Authorization: Bearer secret-canary https://private.invalid/body";
+  function expectReason(reason: string, signal: Parameters<typeof classifyFailoverSignal>[0]) {
+    expect(classifyFailoverSignal(signal)).toEqual({ kind: "reason", reason });
+  }
+  const refusal = (errorType: string, errorCode: string, errorMessage: string) =>
+    makeMessage({ provider: "custom-route", errorType, errorCode, errorMessage });
+  function expectSafeCopy(fields: Fields, expected: string) {
+    const message = makeMessage({ errorMessage: privateDetail, ...fields });
+    const text = userCopy(message);
+    expect(text).toBe(expected);
+    expect(text).not.toMatch(/RAW_BODY_CANARY|Authorization|secret-canary|private\.invalid/);
+    expect(hook).not.toHaveBeenCalled();
+    return message;
+  }
+  const rejection = (message: string) =>
+    `400 ${JSON.stringify({ error: { type: "invalid_request_error", message } })}`;
+
   beforeEach(() => {
-    providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockReset();
-    providerRuntimeMocks.requireProviderRuntime.mockClear();
+    hook.mockReset();
   });
 
-  it("does not resolve provider runtime for a generic non-ambiguous error", () => {
+  it("gives prepared context policy precedence without rediscovery", () => {
     expect(
-      classifyFailoverSignal({ provider: "demo-provider", message: "503 service unavailable" }),
-    ).toEqual({ kind: "reason", reason: "overloaded" });
-    expect(providerRuntimeMocks.requireProviderRuntime).not.toHaveBeenCalled();
-    expect(providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin).not.toHaveBeenCalled();
-  });
-
-  it("resolves provider runtime for a context-shaped message", () => {
-    providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockReturnValue(
-      "context_overflow",
-    );
-
-    expect(
-      classifyFailoverSignal({
-        provider: "demo-provider",
-        message: "input exceeds the maximum context window",
+      userCopy(refusal("PROVIDER_TYPE", "unknown_parameter", "403 fixture refusal"), {
+        providerOwner: {
+          id: "prepared-owner",
+          matchesContextOverflowError: () => true,
+          classifyFailoverReason: () => {
+            throw new Error("Context policy must take precedence");
+          },
+        },
       }),
-    ).toEqual({ kind: "context_overflow" });
-    expect(providerRuntimeMocks.requireProviderRuntime).toHaveBeenCalledTimes(1);
-    expect(providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin).toHaveBeenCalledTimes(1);
+    ).toBe(contextCopy);
+    expect(hook).not.toHaveBeenCalled();
   });
 
-  it("lets provider hooks refine ambiguous auth statuses from stable codes", () => {
-    // HTTP 403 is ambiguous; provider-owned stable codes can refine it to
-    // billing or rate-limit without weakening default auth handling.
-    providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockImplementation(
-      ({ context }) => {
-        if (
-          context.provider === "demo-provider" &&
-          context.status === 403 &&
-          context.code === "PROVIDER_RATE_LIMITED"
-        ) {
-          return "rate_limit";
-        }
-        return context.provider === "demo-provider" &&
-          context.status === 403 &&
-          context.code === "PROVIDER_QUOTA_EXHAUSTED"
-          ? "billing"
-          : undefined;
+  it.each([
+    [
+      {
+        errorMessage: "This request was blocked by our safety systems.",
+        errorCode: "misalignment_policy_violation",
+        errorType: "invalid_request_error",
+        errorBody: '{"misalignment":{"detailed_explanation":"PRIVATE_FINDINGS ... [truncated]',
       },
-    );
-
-    expect(
-      classifyFailoverSignal({
-        provider: "demo-provider",
-        status: 403,
-        code: "PROVIDER_QUOTA_EXHAUSTED",
-        message: "Forbidden",
-      }),
-    ).toEqual({ kind: "reason", reason: "billing" });
-    expect(
-      classifyFailoverSignal({
-        provider: "demo-provider",
-        status: 403,
-        code: "PROVIDER_RATE_LIMITED",
-        message: "Forbidden",
-      }),
-    ).toEqual({ kind: "reason", reason: "rate_limit" });
-    expect(
-      classifyFailoverSignal({
-        provider: "other-provider",
-        status: 403,
-        code: "PROVIDER_QUOTA_EXHAUSTED",
-        message: "Forbidden",
-      }),
-    ).toEqual({ kind: "reason", reason: "auth" });
-  });
-
-  it("lets provider billing text override a leading 403 in assistant failures", () => {
-    providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockImplementation(
-      ({ context }) => {
-        return context.provider === "demo-provider" &&
-          context.errorMessage.includes("quota exhausted")
-          ? "billing"
-          : undefined;
+      "The provider stopped this request as a safety precaution (misalignment).",
+    ],
+    [
+      {
+        errorMessage: rejection("provider refusal"),
+        errorCode: "RESOURCE_EXHAUSTED",
       },
-    );
-
-    const errorMessage = '403 {"error":"Account quota exhausted"}';
-    expect(
-      classifyAssistantFailoverReason(
-        makeAssistantMessageFixture({ provider: "demo-provider", errorMessage }),
-      ),
-    ).toBe("billing");
-    expect(
-      classifyAssistantFailoverReason(
-        makeAssistantMessageFixture({ provider: "other-provider", errorMessage }),
-      ),
-    ).toBe("auth");
-  });
-
-  it("consults the provider hook once with the fullest signal", () => {
-    providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockReturnValue(null);
-
-    expect(
-      classifyFailoverSignal({
-        provider: "demo-provider",
-        status: 403,
-        code: "PROVIDER_CODE",
-        errorType: "PROVIDER_TYPE",
-        message: "invalid_api_key",
-      }),
-    ).toEqual({ kind: "reason", reason: "auth" });
-    expect(providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin).toHaveBeenCalledTimes(1);
-    expect(providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin).toHaveBeenCalledWith({
-      provider: "demo-provider",
-      context: {
-        provider: "demo-provider",
-        status: 403,
-        code: "PROVIDER_CODE",
-        errorType: "PROVIDER_TYPE",
-        errorMessage: "invalid_api_key",
+      rateLimitCopy,
+    ],
+    [
+      { errorMessage: undefined, errorType: "invalid_request_error" },
+      PROVIDER_SCHEMA_REJECTION_USER_TEXT,
+    ],
+    [
+      {
+        errorMessage: rejection("max_tokens (100) exceeds maximum output tokens (50)"),
+        errorBody: '{"error":{"message":"insufficient credits"}}',
       },
-    });
-  });
+      formatBillingErrorMessage(),
+    ],
+    [
+      { errorBody: '{"error":{"message":"Request size exceeds model context window"}}' },
+      contextCopy,
+    ],
+    [
+      { errorCode: "DEACTIVATED_WORKSPACE" },
+      "⚠️ The AI service isn't accepting your login. Sign in again under Models in the Control UI or run `openclaw configure`.",
+    ],
+    [{ errorBody: '{"error":{"type":"upstream_error"}}' }, serverCopy],
+    [{ errorMessage: undefined, errorType: "upstream_error" }, serverCopy, true],
+  ] satisfies [Fields, string, boolean?][])(
+    "presents structured %j without discovery",
+    (fields, expected, checkDiagnostic?: boolean) => {
+      const message = expectSafeCopy(fields, expected);
+      if (checkDiagnostic) {
+        expect(formatAssistantErrorText(message)).toBe(expected);
+      }
+    },
+  );
 
   it("uses provider-attributed inferred auth statuses only for scoped hook consultation", () => {
-    providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockImplementation(
-      ({ provider, context }) =>
-        provider === "demo-provider" && (context.status === 403 || context.status === 429)
-          ? "billing"
-          : undefined,
-    );
-
-    expect(
-      classifyFailoverSignal({
-        provider: "demo-provider",
-        message: "403 concurrency limit breached",
-      }),
-    ).toEqual({ kind: "reason", reason: "billing" });
-    expect(providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin).toHaveBeenCalledWith({
-      provider: "demo-provider",
-      context: {
-        provider: "demo-provider",
-        errorMessage: "403 concurrency limit breached",
-        status: 403,
-        code: undefined,
-        errorType: undefined,
-      },
-    });
-    expect(
-      classifyFailoverSignal({
-        provider: "demo-provider",
-        message: "429 API key budget limit exceeded",
-      }),
-    ).toEqual({ kind: "reason", reason: "billing" });
-    expect(providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin).toHaveBeenLastCalledWith({
-      provider: "demo-provider",
-      context: {
-        provider: "demo-provider",
-        errorMessage: "429 API key budget limit exceeded",
-        status: 429,
-        code: undefined,
-        errorType: undefined,
-      },
-    });
+    for (const [status, message] of [
+      [403, "403 concurrency limit breached"],
+      [429, "429 API key budget limit exceeded"],
+    ] as const) {
+      hook.mockImplementation(({ provider, context }) =>
+        provider === "demo-provider" && context.status === status ? "billing" : undefined,
+      );
+      expectReason("billing", { provider: "demo-provider", message });
+    }
   });
 
   it("passes nested provider error types through failover error normalization", () => {
-    // SDK wrappers often put the provider code under error.type; normalization
-    // should preserve that code for provider hooks.
-    providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockImplementation(
-      ({ context }) => {
-        return context.provider === "demo-provider" &&
-          context.errorType === "PROVIDER_QUOTA_EXHAUSTED"
-          ? "billing"
-          : undefined;
-      },
+    hook.mockImplementation(({ context }) =>
+      context.provider === "demo-provider" && context.errorType === "PROVIDER_QUOTA_EXHAUSTED"
+        ? "billing"
+        : undefined,
     );
 
     expect(
-      resolveFailoverReasonFromError({
+      resolveReason({
         provider: "demo-provider",
         status: 403,
         type: "error",
-        error: {
-          type: "PROVIDER_QUOTA_EXHAUSTED",
-          message: "Forbidden",
-        },
+        error: { type: "PROVIDER_QUOTA_EXHAUSTED", message: "Forbidden" },
       }),
     ).toBe("billing");
   });
 
-  it("classifies raw and typed invalid-request errors through one core mapping", () => {
-    providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockReturnValue(undefined);
-    const raw =
-      '{"type":"error","error":{"type":"invalid_request_error","message":"messages.27.content.1: thinking blocks cannot be modified"}}';
-
-    expect(classifyFailoverSignal({ provider: "anthropic", message: raw })).toEqual({
-      kind: "reason",
-      reason: "format",
-    });
-    expect(
-      classifyFailoverSignal({
-        provider: "anthropic",
-        errorType: "invalid_request_error",
-        message: "thinking blocks cannot be modified",
-      }),
-    ).toEqual({ kind: "reason", reason: "format" });
-    expect(
-      classifyAssistantFailoverReason(
-        makeAssistantMessageFixture({
-          provider: "anthropic",
-          errorMessage: raw,
-        }),
-      ),
-    ).toBe("format");
-    expect(classifyProviderRuntimeFailureKind(raw)).toBe("schema");
-  });
-
   it("classifies replay-invalid carriers as terminal format failures", () => {
-    providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockReturnValue(undefined);
     const carriers = [
       '{"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.1: Invalid `signature` in `thinking` block"}}',
       'Validation error: The model returned the following errors: {"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.1: Invalid `signature` in `thinking` block"}}',
     ];
 
     for (const errorMessage of carriers) {
-      expect(classifyFailoverSignal({ provider: "anthropic", message: errorMessage })).toEqual({
-        kind: "reason",
-        reason: "format",
-      });
-      expect(
-        classifyAssistantFailoverReason(
-          makeAssistantMessageFixture({
-            provider: "anthropic",
-            errorMessage,
-          }),
-        ),
-      ).toBe("format");
-      expect(classifyProviderRuntimeFailureKind(errorMessage)).toBe("replay_invalid");
+      expectReason("format", { provider: "anthropic", message: errorMessage });
+      const message = makeMessage({ provider: "anthropic", errorMessage });
+      expect(assistantReason(message)).toBe("format");
+      expect(runtimeKind(errorMessage)).toBe("replay_invalid");
     }
   });
 
-  it("keeps specific raw API error classifications ahead of invalid-request format", () => {
-    providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockReturnValue(undefined);
+  it("classifies message-less Anthropic rate-limit assistant failures", () => {
+    const errorType = "rate_limit_error";
+    hook.mockImplementation(({ context }) =>
+      context.provider === "anthropic" && context.errorType === errorType
+        ? "rate_limit"
+        : undefined,
+    );
 
-    expect(
-      classifyFailoverSignal({
-        provider: "anthropic",
-        message:
-          '{"type":"error","error":{"type":"invalid_request_error","message":"Request size exceeds model context window"}}',
-      }),
-    ).toEqual({ kind: "context_overflow" });
-    expect(
-      classifyFailoverSignal({
-        provider: "anthropic",
-        message:
-          '{"type":"error","error":{"type":"invalid_request_error","message":"You are out of extra usage. Add more at claude.ai/settings/usage"}}',
-      }),
-    ).toEqual({ kind: "reason", reason: "billing" });
-  });
-
-  it("keeps specific typed API error classifications ahead of invalid-request format", () => {
-    providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockReturnValue(undefined);
-
-    expect(
-      classifyFailoverSignal({
-        provider: "anthropic",
-        errorType: "invalid_request_error",
-        message: "Request size exceeds model context window",
-      }),
-    ).toEqual({ kind: "context_overflow" });
-    expect(
-      classifyFailoverSignal({
-        provider: "anthropic",
-        errorType: "invalid_request_error",
-        message: "You are out of extra usage. Add more at claude.ai/settings/usage",
-      }),
-    ).toEqual({ kind: "reason", reason: "billing" });
-  });
-
-  it("lets structured billing details override an ambiguous quota message", () => {
-    providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockReturnValue(undefined);
-    const message = makeAssistantMessageFixture({
-      provider: "openai",
-      errorMessage: "You exceeded your current quota, please check your plan and billing details.",
-      errorCode: "insufficient_quota",
-      errorType: "insufficient_quota",
-      errorBody: JSON.stringify({
-        error: {
-          code: "insufficient_quota",
-          type: "insufficient_quota",
-        },
-      }),
+    const message = makeMessage({
+      provider: "anthropic",
+      errorMessage: undefined,
+      errorType,
+      content: [],
     });
 
-    expect(classifyAssistantFailoverReason(message)).toBe("billing");
+    expect(assistantReason(message)).toBe("rate_limit");
+    const signal = { provider: "anthropic", message: "", errorType };
+    expect(runtimeKind(signal)).toBe("rate_limit");
+    expect(runtimeKind(signal, { providerPlugin: null })).toBe("unclassified");
   });
 
-  it.each([
-    { errorType: "rate_limit_error", reason: "rate_limit", runtimeKind: "rate_limit" },
-    { errorType: "api_error", reason: "server_error", runtimeKind: "unclassified" },
-  ] as const)(
-    "classifies message-less Anthropic $errorType assistant failures",
-    ({ errorType, reason, runtimeKind }) => {
-      providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockImplementation(
-        ({ context }) => {
-          if (context.provider !== "anthropic") {
-            return undefined;
-          }
-          if (context.errorType === "rate_limit_error") {
-            return "rate_limit";
-          }
-          return context.errorType === "api_error" ? "server_error" : undefined;
-        },
-      );
-
-      const message = makeAssistantMessageFixture({
-        provider: "anthropic",
-        errorMessage: undefined,
-        errorType,
-        content: [],
-      });
-
-      expect(classifyAssistantFailoverReason(message)).toBe(reason);
-      expect(
-        classifyProviderRuntimeFailureKind({
-          provider: "anthropic",
-          message: "",
-          errorType,
-        }),
-      ).toBe(runtimeKind);
-    },
-  );
-
-  it.each([
-    { provider: "google", code: "SERVER_ERROR" },
-    { provider: "anthropic", code: "INSUFFICIENT_QUOTA" },
-    { provider: "openai", code: "INTERNAL" },
-    { provider: "openai", code: "DEADLINE_EXCEEDED" },
-    { provider: "anthropic", code: "UNAVAILABLE" },
-    { provider: "google", code: "API_ERROR" },
-    { provider: "google", code: "RATE_LIMIT_ERROR" },
-  ] as const)(
-    "does not apply provider-native $code semantics to non-owner $provider",
-    ({ provider, code }) => {
-      providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockReturnValue(undefined);
-
-      expect(classifyFailoverSignal({ provider, code, message: "" })).toBeNull();
-      expect(classifyProviderRuntimeFailureKind({ provider, code, message: "" })).toBe(
-        "unclassified",
-      );
-    },
-  );
-
   it("consults message-only hooks without promoting generic SDK type strings", () => {
-    providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockReturnValue("billing");
+    hook.mockImplementation(({ context }) =>
+      context.errorType === undefined ? "billing" : undefined,
+    );
 
-    expect(
-      resolveFailoverReasonFromError({
-        provider: "demo-provider",
-        type: "api_error",
-        message: "unclassified provider failure",
-      }),
-    ).toBe("billing");
-    expect(
-      resolveFailoverReasonFromError({
-        provider: "demo-provider",
-        message: "unclassified provider failure",
-        detail: { type: "api_error" },
-      }),
-    ).toBe("billing");
-    expect(providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin).toHaveBeenCalledTimes(2);
-    for (const [call] of providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mock.calls) {
-      expect(call).toEqual({
-        provider: "demo-provider",
-        context: {
-          provider: "demo-provider",
-          status: undefined,
-          code: undefined,
-          errorType: undefined,
-          errorMessage: "unclassified provider failure",
-        },
-      });
+    const message = "unclassified provider failure";
+    for (const fields of [{ type: "api_error" }, { detail: { type: "api_error" } }]) {
+      expect(resolveReason({ provider: "demo-provider", message, ...fields })).toBe("billing");
     }
+  });
+
+  it("routes a preserved server_error code to server_error instead of timeout (#117609)", () => {
+    hook.mockImplementation(({ context }) =>
+      context.provider === "openai" && context.code === "server_error" ? "server_error" : undefined,
+    );
+
+    const signal = { provider: "openai", message: "server_error: provider failed" };
+    expectReason("timeout", signal);
+    expect(hook).not.toHaveBeenCalled();
+
+    expectReason("server_error", { ...signal, code: "server_error" });
   });
 });

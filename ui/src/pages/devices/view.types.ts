@@ -1,21 +1,36 @@
-// Devices page view contracts.
+import type { EnvironmentSummary, SystemInfoResult } from "@openclaw/gateway-protocol";
 import type { PresenceEntry } from "../../api/types.ts";
+import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context-types.ts";
 import type {
-  DevicePairingList,
-  ExecApprovalsFile,
-  ExecApprovalsSnapshot,
+  DevicesPageDataState,
   InventoryRemovalRequest,
-} from "../../lib/nodes/index.ts";
+} from "../../lib/nodes/page-operations.ts";
+import type { DevicePolicyRead } from "./devices-policy-reads.ts";
 
-export type DevicesProps = {
+export type DevicesRouteData = {
+  // Client identity alone cannot distinguish provider replacement or reconnect epochs.
+  gateway: ApplicationContext["gateway"];
+  gatewaySnapshot: ApplicationGatewaySnapshot;
+  devices: DevicesPageDataState;
+};
+
+export type DevicesProps = Omit<
+  DevicesPageDataState,
+  "client" | "requestGeneration" | "nodesLoading" | "nodesQueuedRefresh" | "devicesQueuedRefresh"
+> & {
   loading: boolean;
-  nodes: Array<Record<string, unknown>>;
+  initialInventoryReady: boolean;
+  configRead: DevicePolicyRead;
+  execApprovalsRead: DevicePolicyRead;
+  inventoryRead: () => void;
+  inventoryScope: object;
+  inventorySaving?: boolean;
+  onReloadInventory: () => void;
   presence: PresenceEntry[];
   gatewayVersion: string | null;
-  lastError: string | null;
-  devicesLoading: boolean;
-  devicesError: string | null;
-  devicesList: DevicePairingList | null;
+  basePath: string;
+  gatewaySystemInfo?: SystemInfoResult | null;
+  desktopEnvironments?: EnvironmentSummary[];
   canPairDevice: boolean;
   canManagePairing: boolean;
   canAdmin: boolean;
@@ -24,12 +39,6 @@ export type DevicesProps = {
   configSaving: boolean;
   configDirty: boolean;
   configFormMode: "form" | "raw";
-  execApprovalsLoading: boolean;
-  execApprovalsSaving: boolean;
-  execApprovalsDirty: boolean;
-  execApprovalsSnapshot: ExecApprovalsSnapshot | null;
-  execApprovalsForm: ExecApprovalsFile | null;
-  execApprovalsSelectedAgent: string | null;
   execApprovalsTarget: "gateway" | "node";
   execApprovalsTargetNodeId: string | null;
   onDevicePairSetupOpen: () => void;
@@ -39,6 +48,12 @@ export type DevicesProps = {
    *  device the operator just clicked, without rederiving the label precedence. */
   onDeviceRotate: (device: { id: string; name: string }, role: string, scopes?: string[]) => void;
   onDeviceRevoke: (deviceId: string, role: string) => void;
+  /**
+   * Opens the alias editor for one paired device. `operatorLabel` is the alias
+   * currently stored for it, undefined while the device still shows its
+   * self-reported name.
+   */
+  onDeviceRename: (device: { id: string; name: string; operatorLabel?: string }) => void;
   onNodeApprove: (requestId: string) => void;
   onNodeReject: (requestId: string) => void;
   onInventoryRemove: (entry: InventoryRemovalRequest) => void;

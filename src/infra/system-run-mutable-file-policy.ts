@@ -1,7 +1,7 @@
-/** Filesystem heuristics for mutable executable and script operands. */
 import fs from "node:fs";
 import path from "node:path";
-import { readFileWindowFullySync } from "./file-read.js";
+import { readFileWindowFullySync } from "@openclaw/fs-safe/advanced";
+import { safeRealpathSync, safeStatSync } from "@openclaw/fs-safe/path";
 
 function pathComponentsFromRootSync(targetPath: string): string[] {
   const parts: string[] = [];
@@ -20,11 +20,8 @@ function isOwnedByCurrentProcessSync(candidate: string): boolean {
   if (process.platform === "win32" || typeof process.getuid !== "function") {
     return false;
   }
-  try {
-    return fs.statSync(candidate).uid === process.getuid();
-  } catch {
-    return false;
-  }
+  const stat = safeStatSync(candidate);
+  return stat !== null && stat.uid === process.getuid();
 }
 
 function isMutableByCurrentProcessSync(candidate: string): boolean {
@@ -52,36 +49,24 @@ export function hasMutableSymlinkPathComponentSync(targetPath: string): boolean 
   return false;
 }
 
-export function pathLooksMutableForShellPayloadSync(targetPath: string): boolean {
-  if (
+function isMutableShellPathSync(targetPath: string): boolean {
+  return (
     isMutableByCurrentProcessSync(targetPath) ||
     isMutableByCurrentProcessSync(path.dirname(targetPath)) ||
     hasMutableSymlinkPathComponentSync(targetPath)
-  ) {
-    return true;
-  }
-  let realPath: string;
-  try {
-    realPath = fs.realpathSync(targetPath);
-  } catch {
-    return true;
-  }
-  return (
-    isMutableByCurrentProcessSync(realPath) ||
-    isMutableByCurrentProcessSync(path.dirname(realPath)) ||
-    hasMutableSymlinkPathComponentSync(realPath)
   );
 }
 
+export function pathLooksMutableForShellPayloadSync(targetPath: string): boolean {
+  if (isMutableShellPathSync(targetPath)) {
+    return true;
+  }
+  const realPath = safeRealpathSync(targetPath);
+  return !realPath || isMutableShellPathSync(realPath);
+}
+
 export function looksLikePathToken(token: string): boolean {
-  return (
-    token.startsWith(".") ||
-    token.startsWith("/") ||
-    token.startsWith("\\") ||
-    token.includes("/") ||
-    token.includes("\\") ||
-    path.extname(token).length > 0
-  );
+  return looksLikeExplicitPathToken(token) || path.extname(token).length > 0;
 }
 
 export function looksLikeExplicitPathToken(token: string): boolean {
@@ -105,42 +90,25 @@ export function resolvesToExistingFileSync(rawOperand: string, cwd: string | und
   }
 }
 
+// ELF, Mach-O, and fat executable headers, including both Mach-O byte orders.
+const BINARY_EXECUTABLE_MAGICS = new Set([
+  0x7f454c46, 0xfeedface, 0xcefaedfe, 0xfeedfacf, 0xcffaedfe, 0xcafebabe, 0xbebafeca, 0xcafebabf,
+  0xbfbafeca,
+]);
+
 function isKnownBinaryExecutableHeader(buffer: Buffer): boolean {
-  if (buffer.length >= 4 && buffer.subarray(0, 4).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46]))) {
+  if (buffer.length >= 4 && BINARY_EXECUTABLE_MAGICS.has(buffer.readUInt32BE(0))) {
     return true;
   }
-  if (
-    buffer.length >= 4 &&
-    (buffer.subarray(0, 4).equals(Buffer.from([0xfe, 0xed, 0xfa, 0xce])) ||
-      buffer.subarray(0, 4).equals(Buffer.from([0xce, 0xfa, 0xed, 0xfe])) ||
-      buffer.subarray(0, 4).equals(Buffer.from([0xfe, 0xed, 0xfa, 0xcf])) ||
-      buffer.subarray(0, 4).equals(Buffer.from([0xcf, 0xfa, 0xed, 0xfe])) ||
-      buffer.subarray(0, 4).equals(Buffer.from([0xca, 0xfe, 0xba, 0xbe])) ||
-      buffer.subarray(0, 4).equals(Buffer.from([0xbe, 0xba, 0xfe, 0xca])) ||
-      buffer.subarray(0, 4).equals(Buffer.from([0xca, 0xfe, 0xba, 0xbf])) ||
-      buffer.subarray(0, 4).equals(Buffer.from([0xbf, 0xba, 0xfe, 0xca])))
-  ) {
-    return true;
-  }
-  if (buffer.length < 0x40 || !buffer.subarray(0, 2).equals(Buffer.from([0x4d, 0x5a]))) {
+  if (buffer.length < 0x40 || buffer.readUInt16BE(0) !== 0x4d5a) {
     return false;
   }
   const peOffset = buffer.readUInt32LE(0x3c);
-  return (
-    peOffset >= 0 &&
-    peOffset <= buffer.length - 4 &&
-    buffer.subarray(peOffset, peOffset + 4).equals(Buffer.from([0x50, 0x45, 0x00, 0x00]))
-  );
+  return peOffset <= buffer.length - 4 && buffer.readUInt32BE(peOffset) === 0x50450000;
 }
 
 export function isLikelyScriptLikePathSync(targetPath: string): boolean {
-  let stat: fs.Stats;
-  try {
-    stat = fs.statSync(targetPath);
-  } catch {
-    return true;
-  }
-  if (!stat.isFile()) {
+  if (!safeStatSync(targetPath)?.isFile()) {
     return true;
   }
   let header: Buffer;
@@ -156,7 +124,7 @@ export function isLikelyScriptLikePathSync(targetPath: string): boolean {
   } catch {
     return true;
   }
-  if (header.length === 0 || header.subarray(0, 2).equals(Buffer.from("#!"))) {
+  if (header.length === 0 || (header[0] === 0x23 && header[1] === 0x21)) {
     return true;
   }
   return !isKnownBinaryExecutableHeader(header);

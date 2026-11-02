@@ -1,13 +1,25 @@
+// Shared authoring text for every Workshop writer: the tool description, reviews, and /learn.
 export const SKILL_AUTHORING_STANDARDS_PROMPT = [
-  "Skill authoring standards:",
-  "- Description: write one sentence. Lead with concrete trigger phrases or the task class in the first ~60 characters so the skill index can route the request before loading the body. Keep one trigger per actual branch and collapse synonyms; notes, helpers, or workflows cannot be the sole descriptor.",
-  "- Name: choose a lowercase-hyphenated class-level name that will still identify the task a month later. Reject names tied to one session, run ID, incident ID, calendar date, or other temporary artifact.",
-  "- Invocation: preserve the current policy unless evidence calls for a change. A model-discoverable skill omits `disable-model-invocation`; a manual-only skill sets it to `true`.",
-  "- Procedure: put shared ordered steps before reference material. End every step with a checkable completion criterion. Move branch-only detail into a bundled resource with a direct pointer from the body, and reference every bundled resource.",
-  "- Language: use compact positive imperatives and short lines. State the target behavior; reserve prohibitions for hard guardrails and pair them with the target. Keep one source for each meaning. Every sentence must earn its tokens.",
-  "- Evidence: never invent flags, commands, paths, APIs, tool behavior, or requirements that the source material does not establish. Omit unsupported details or mark them as unknown.",
-  "- Durable learning: capture the working fix, recovery, or procedure. Never preserve a standalone claim that something does not work after the problem may be gone.",
+  "Skill authoring standard:",
+  "- A skill is a procedure, not memory: the method for one class of task this user repeats, so the next run starts from what worked instead of working it out again. Write ordered steps, each with the exact commands, tools, paths, and the check that shows it worked, then the user's standing preferences for the result. Facts about the user, people, or the world with no method attached belong in memory, not a skill.",
+  "- Each rule is an imperative plus one clause of why, attached to the step it affects, stated as the behavior to produce. One rule per lesson; a repeated lesson sharpens the existing rule.",
+  "- Fix the misleading sentence in place so the skill reads as current truth; leave out update notes, dates, ticket or PR ids, incident stories, and quoted user text.",
+  "- Write plain instructions: every sentence should change what the agent does, so drop emphasis and praise.",
+  "- description (aim for ≤160 bytes; keep existing triggers when editing): open with the trigger situations, one phrase per distinct case, then what the skill produces. Name the class of work, not today's task.",
+  "- Keep in SKILL.md what every run needs; move what only some runs need into references/, templates/, or scripts/ and point to it from the step that needs it.",
 ].join("\n");
 
-export const SKILL_AUTONOMOUS_CAPTURE_EXCLUSIONS_PROMPT =
-  "- NEVER capture: environment-dependent failures; claims that a tool or provider is broken or unavailable; transient errors that later resolved; one-off task narratives or session recaps; sequences of failed attempts dressed up as best practice; procedures the evidence did not verify.";
+/** What counts as a skill lesson and how it lands; shared by background review and /learn. */
+export const SKILL_LEARNING_METHOD_PROMPT = [
+  "Change a skill only for a repeatable procedure: a class of task this user will ask for again, where the next run on a different request of that class would go wrong or redo work without the change. Evidence: the user corrected the method; a non-obvious method worked after trial and error; a skill you used had a wrong, missing, or outdated step. Facts true of only one request (one product, order, menu, date, place, or booking) stay out of skills.",
+  "Each skill covers one class of task: sharpen the step a lesson changes in the skill for its class, or create one focused skill when no skill covers that class. Give an unrelated class its own skill rather than a new branch in an existing one. When two listed skills cover the same class, merge them: patch the survivor, then archive the other with absorbed_into. Every change must alter what the agent does next time; keep the skill short by replacing stale lines rather than appending.",
+].join("\n");
+
+export const SKILL_DO_NOT_CAPTURE_PROMPT = [
+  "Do not capture:",
+  "- environment-specific or transient failures (missing binaries, unset credentials, flaky network); capture the fix only when it is durable;",
+  '- negative claims about tools or features ("X does not work"); they harden into refusals after the cause is fixed;',
+  "- unresolved failures or guesses: only a method that visibly worked;",
+  "- knowledge about one codebase (its conventions, build and test commands, architecture, bug fixes): it belongs in that repository's docs or AGENTS.md, where every agent working there reads it;",
+  "- one-off tasks, personal facts, secrets, or generic advice without concrete commands, paths, or ids.",
+].join("\n");

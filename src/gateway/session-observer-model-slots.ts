@@ -1,58 +1,60 @@
 import type { SessionObserverState } from "./session-observer-model.js";
 
+// The Control UI opens at most six live session subscriptions; matching that cap
+// prevents background observer calls from outgrowing the surface consuming them.
+const MAX_CONCURRENT_MODEL_SESSIONS = 6;
+
 export function createSessionObserverModelSlots(params: {
   states: Map<string, SessionObserverState>;
-  maxSessions: number;
   resolve: (agentId: string) => string | undefined;
   demote: (state: SessionObserverState) => void;
 }) {
   const demoted = new WeakSet<SessionObserverState>();
-  const requestGenerations = new WeakMap<SessionObserverState, number>();
+  const running = new Set<SessionObserverState>();
 
   return {
-    beginRequest(state: SessionObserverState): number {
-      const generation = (requestGenerations.get(state) ?? 0) + 1;
-      requestGenerations.set(state, generation);
-      return generation;
+    reserve(state: SessionObserverState): boolean {
+      if (running.has(state) || running.size >= MAX_CONCURRENT_MODEL_SESSIONS) {
+        return false;
+      }
+      // Logical eviction can remove a state before its aborted work settles.
+      // Only the completion owner releases this physical reservation.
+      running.add(state);
+      return true;
     },
-
-    invalidateRequest(state: SessionObserverState): void {
-      requestGenerations.set(state, (requestGenerations.get(state) ?? 0) + 1);
-      state.activeController?.abort();
+    release(state: SessionObserverState): void {
+      running.delete(state);
     },
-
-    requestIsCurrent(state: SessionObserverState, generation: number): boolean {
-      return requestGenerations.get(state) === generation;
-    },
-
     claim(agentId: string, current?: SessionObserverState): string | undefined {
       const resolved = params.resolve(agentId);
       if (!resolved || current?.utilityModelRef === resolved) {
         return resolved;
       }
-      const occupied = [...params.states.values()].filter(
-        (state) => state !== current && state.utilityModelRef,
-      );
-      if (current && demoted.has(current)) {
-        if (occupied.length >= params.maxSessions) {
-          return undefined;
+      let occupied = 0;
+      let evicted: SessionObserverState | undefined;
+      for (const state of params.states.values()) {
+        if (state === current || !state.utilityModelRef) {
+          continue;
         }
-        demoted.delete(current);
-        return resolved;
+        occupied += 1;
+        if (
+          !state.terminalHealth &&
+          !state.finalPending &&
+          (!evicted ||
+            (state.lastActivityAt - evicted.lastActivityAt ||
+              state.sessionKey.localeCompare(evicted.sessionKey)) < 0)
+        ) {
+          evicted = state;
+        }
       }
-      if (occupied.length >= params.maxSessions) {
-        const evicted = occupied
-          .filter((state) => !state.terminalHealth && !state.finalPending)
-          .toSorted(
-            (left, right) =>
-              left.lastActivityAt - right.lastActivityAt ||
-              left.sessionKey.localeCompare(right.sessionKey),
-          )[0];
-        if (!evicted) {
+      if (occupied >= MAX_CONCURRENT_MODEL_SESSIONS) {
+        if ((current && demoted.has(current)) || !evicted) {
           return undefined;
         }
         demoted.add(evicted);
         params.demote(evicted);
+      } else if (current) {
+        demoted.delete(current);
       }
       return resolved;
     },

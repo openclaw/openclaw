@@ -1,15 +1,9 @@
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
+import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
+import { rethrowIncognitoSessionError } from "openclaw/plugin-sdk/session-store-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  asOptionalRecord,
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  extractActiveMemorySearchDebugFromSessionRecord,
-  extractToolResultNameFromSessionRecord,
-  fileTranscriptSource,
-  hasTerminalUnavailableMemoryResultInSessionRecord,
-  hasUnavailableMemoryResultInSessionRecord,
-  hasUsableMemoryResultInSessionRecord,
+  readMemoryResultFromSessionRecord,
   streamActiveMemoryTranscriptRecords,
 } from "./transcript.js";
 import {
@@ -18,47 +12,9 @@ import {
   type ActiveMemoryTranscriptSource,
   type TerminalMemorySearchResult,
   type TerminalMemorySearchWatch,
-  type TranscriptReadLimits,
 } from "./types.js";
 
-async function readActiveMemoryTranscriptState(
-  source: ActiveMemoryTranscriptSource | string,
-  limits?: TranscriptReadLimits,
-  toolsAllow?: readonly string[],
-): Promise<{
-  searchDebug?: ActiveMemorySearchDebug;
-  hasUsableMemoryResult: boolean;
-  hasUnavailableMemorySearchResult: boolean;
-}> {
-  let searchDebug: ActiveMemorySearchDebug | undefined;
-  let hasUsableMemoryResult = false;
-  let hasUnavailableMemorySearchResult = false;
-  await streamActiveMemoryTranscriptRecords({
-    source: typeof source === "string" ? fileTranscriptSource(source) : source,
-    limits,
-    onRecord: (record) => {
-      const debug = extractActiveMemorySearchDebugFromSessionRecord(record);
-      if (debug) {
-        searchDebug = debug;
-      }
-      hasUnavailableMemorySearchResult ||= hasUnavailableMemoryResultInSessionRecord(
-        record,
-        toolsAllow,
-      );
-      hasUsableMemoryResult ||= hasUsableMemoryResultInSessionRecord(record, toolsAllow);
-    },
-  });
-  return { searchDebug, hasUsableMemoryResult, hasUnavailableMemorySearchResult };
-}
-
-async function readActiveMemorySearchDebug(
-  source: ActiveMemoryTranscriptSource | string,
-  limits?: TranscriptReadLimits,
-): Promise<ActiveMemorySearchDebug | undefined> {
-  return (await readActiveMemoryTranscriptState(source, limits)).searchDebug;
-}
-
-async function readMergedActiveMemoryTranscriptState(params: {
+export async function readMergedActiveMemoryTranscriptState(params: {
   sources: readonly ActiveMemoryTranscriptSource[];
   toolsAllow: readonly string[];
 }): Promise<{
@@ -69,34 +25,29 @@ async function readMergedActiveMemoryTranscriptState(params: {
   let searchDebug: ActiveMemorySearchDebug | undefined;
   let hasUsableMemoryResult = false;
   let hasUnavailableMemorySearchResult = false;
-  const seen = new Set<string>();
   for (const source of params.sources) {
-    const key =
-      source.kind === "runtime"
-        ? `runtime:${source.target.agentId ?? ""}:${source.target.sessionId}:${source.target.sessionKey}:${source.target.storePath ?? ""}:${source.target.threadId ?? ""}`
-        : `file:${source.sessionFile}`;
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    const state = await readActiveMemoryTranscriptState(source, undefined, params.toolsAllow);
-    searchDebug = state.searchDebug ?? searchDebug;
-    hasUsableMemoryResult ||= state.hasUsableMemoryResult;
-    hasUnavailableMemorySearchResult ||= state.hasUnavailableMemorySearchResult;
+    await streamActiveMemoryTranscriptRecords({
+      source,
+      onRecord: (record) => {
+        const result = readMemoryResultFromSessionRecord(record, params.toolsAllow);
+        searchDebug = result.searchDebug ?? searchDebug;
+        hasUnavailableMemorySearchResult ||= result.hasUnavailableMemorySearchResult;
+        hasUsableMemoryResult ||= result.hasUsableMemoryResult;
+      },
+    });
   }
   return { searchDebug, hasUsableMemoryResult, hasUnavailableMemorySearchResult };
 }
 
 async function readTerminalMemorySearchResult(
   source: ActiveMemoryTranscriptSource,
-  limits?: TranscriptReadLimits,
-  toolsAllow?: readonly string[],
+  toolsAllow: readonly string[],
 ): Promise<TerminalMemorySearchResult | undefined> {
   // memory_get consumes a path discovered by another tool; it is not an
   // independent fallback that should delay terminal unavailability.
   const recallPathNames = new Set(
     toolsAllow
-      ?.map((toolName) => normalizeLowercaseStringOrEmpty(toolName))
+      .map((toolName) => normalizeLowercaseStringOrEmpty(toolName))
       .filter((toolName) => toolName && toolName !== "memory_get"),
   );
   if (recallPathNames.size === 0) {
@@ -107,15 +58,15 @@ async function readTerminalMemorySearchResult(
   let searchDebug: ActiveMemorySearchDebug | undefined;
   await streamActiveMemoryTranscriptRecords({
     source,
-    limits,
     onRecord: (record) => {
-      hasUsableMemoryResult ||= hasUsableMemoryResultInSessionRecord(record, toolsAllow);
-      searchDebug = extractActiveMemorySearchDebugFromSessionRecord(record) ?? searchDebug;
-      const toolName = extractToolResultNameFromSessionRecord(record);
+      const result = readMemoryResultFromSessionRecord(record, toolsAllow);
+      hasUsableMemoryResult ||= result.hasUsableMemoryResult;
+      searchDebug = result.searchDebug ?? searchDebug;
+      const toolName = result.toolName;
       if (!toolName || !recallPathNames.has(toolName)) {
         return false;
       }
-      if (hasTerminalUnavailableMemoryResultInSessionRecord(record, toolsAllow ?? [])) {
+      if (result.terminalUnavailable) {
         unavailablePathNames.add(toolName);
       } else {
         unavailablePathNames.delete(toolName);
@@ -135,11 +86,10 @@ async function readTerminalMemorySearchResult(
 
 async function readTerminalMemorySearchResultFromSources(
   sources: readonly ActiveMemoryTranscriptSource[],
-  limits: TranscriptReadLimits | undefined,
   toolsAllow: readonly string[],
 ): Promise<TerminalMemorySearchResult | undefined> {
   for (const source of sources) {
-    const result = await readTerminalMemorySearchResult(source, limits, toolsAllow);
+    const result = await readTerminalMemorySearchResult(source, toolsAllow);
     if (result) {
       return result;
     }
@@ -147,137 +97,47 @@ async function readTerminalMemorySearchResultFromSources(
   return undefined;
 }
 
-function watchTerminalMemorySearchResult(params: {
+export function watchTerminalMemorySearchResult(params: {
   getTranscriptSources: () => readonly ActiveMemoryTranscriptSource[];
   abortSignal: AbortSignal;
   toolsAllow: readonly string[];
 }): TerminalMemorySearchWatch {
-  let stopped = false;
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  let inFlight = false;
-  let resolveWatch: (result: TerminalMemorySearchResult) => void = () => {};
-  const stop = () => {
-    if (stopped) {
-      return;
-    }
-    stopped = true;
-    if (timeoutId) {
-      clearTimeout(timeoutId);
-      timeoutId = undefined;
-    }
-    params.abortSignal.removeEventListener("abort", onAbort);
-  };
-  const finish = (result: TerminalMemorySearchResult) => {
-    stop();
-    resolveWatch(result);
-  };
-  const schedule = () => {
-    if (stopped) {
-      return;
-    }
-    timeoutId = setTimeout(() => {
-      void tick();
-    }, TERMINAL_MEMORY_SEARCH_POLL_INTERVAL_MS);
-    timeoutId.unref?.();
-  };
-  const tick = async () => {
-    if (stopped || inFlight) {
-      return;
-    }
-    if (params.abortSignal.aborted) {
-      stop();
-      return;
-    }
-    inFlight = true;
-    try {
-      const result = await readTerminalMemorySearchResultFromSources(
-        params.getTranscriptSources(),
-        undefined,
-        params.toolsAllow,
-      );
-      if (result) {
-        finish(result);
-        return;
+  const controller = new AbortController();
+  const signal = AbortSignal.any([controller.signal, params.abortSignal]);
+  const {
+    promise,
+    resolve: resolveWatch,
+    reject: rejectWatch,
+  } = createDeferred<TerminalMemorySearchResult>();
+  const stop = () => controller.abort();
+  const poll = async () => {
+    while (!signal.aborted) {
+      try {
+        const result = await readTerminalMemorySearchResultFromSources(
+          params.getTranscriptSources(),
+          params.toolsAllow,
+        );
+        // Execution can settle while this transcript read is still in flight.
+        if (signal.aborted) {
+          return;
+        }
+        if (result) {
+          stop();
+          resolveWatch(result);
+          return;
+        }
+      } catch (error) {
+        rethrowIncognitoSessionError(error);
+        // Transcript polling is opportunistic; normal timeout handling remains authoritative.
       }
-    } catch {
-      // Transcript polling is opportunistic; normal timeout handling remains authoritative.
-    } finally {
-      inFlight = false;
+      await sleepWithAbort(TERMINAL_MEMORY_SEARCH_POLL_INTERVAL_MS, signal, { ref: false }).catch(
+        () => undefined,
+      );
     }
-    schedule();
   };
-  function onAbort() {
-    stop();
-  }
-  const promise = new Promise<TerminalMemorySearchResult>((resolve) => {
-    resolveWatch = resolve;
-    params.abortSignal.addEventListener("abort", onAbort, { once: true });
-    void tick();
-  });
+  void poll().catch(rejectWatch);
   return {
     promise,
     stop,
   };
 }
-
-function normalizeSearchDebug(value: unknown): ActiveMemorySearchDebug | undefined {
-  const debug = asOptionalRecord(value);
-  if (!debug) {
-    return undefined;
-  }
-  const normalized: ActiveMemorySearchDebug = {
-    backend: normalizeOptionalString(debug.backend),
-    configuredMode: normalizeOptionalString(debug.configuredMode),
-    effectiveMode: normalizeOptionalString(debug.effectiveMode),
-    fallback: normalizeOptionalString(debug.fallback),
-    searchMs:
-      typeof debug.searchMs === "number" && Number.isFinite(debug.searchMs)
-        ? debug.searchMs
-        : undefined,
-    hits: typeof debug.hits === "number" && Number.isFinite(debug.hits) ? debug.hits : undefined,
-    warning: normalizeOptionalString(debug.warning) ?? normalizeOptionalString(debug.reason),
-    action: normalizeOptionalString(debug.action),
-    error: normalizeOptionalString(debug.error),
-  };
-  return normalized.backend ||
-    normalized.configuredMode ||
-    normalized.effectiveMode ||
-    normalized.fallback ||
-    typeof normalized.searchMs === "number" ||
-    typeof normalized.hits === "number" ||
-    normalized.warning ||
-    normalized.action ||
-    normalized.error
-    ? normalized
-    : undefined;
-}
-
-function readActiveMemorySearchDebugFromRunResult(
-  result: unknown,
-): ActiveMemorySearchDebug | undefined {
-  const record = asOptionalRecord(result);
-  const meta = asOptionalRecord(record?.meta);
-  return (
-    normalizeSearchDebug(meta?.activeMemorySearchDebug) ??
-    normalizeSearchDebug(meta?.memorySearchDebug) ??
-    normalizeSearchDebug(record?.activeMemorySearchDebug) ??
-    normalizeSearchDebug(record?.memorySearchDebug)
-  );
-}
-
-function readActiveMemorySessionFileFromRunResult(result: unknown): string | undefined {
-  const record = asOptionalRecord(result);
-  const meta = asOptionalRecord(record?.meta);
-  const agentMeta = asOptionalRecord(meta?.agentMeta);
-  return (
-    normalizeOptionalString(agentMeta?.sessionFile) ?? normalizeOptionalString(meta?.sessionFile)
-  );
-}
-
-export {
-  readActiveMemorySearchDebug,
-  readActiveMemorySearchDebugFromRunResult,
-  readActiveMemorySessionFileFromRunResult,
-  readMergedActiveMemoryTranscriptState,
-  watchTerminalMemorySearchResult,
-};

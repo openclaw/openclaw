@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { createHookRunner } from "./hooks.js";
 import { createMockPluginRegistry } from "./hooks.test-fixtures.js";
 import {
@@ -6,14 +7,6 @@ import {
   resolvePluginSubagentCompletionRequester,
   type PluginSubagentRequesterContext,
 } from "./runtime/subagent-requester-context.js";
-
-function deferred() {
-  let resolve: () => void = () => {};
-  const promise = new Promise<void>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
 
 function getActiveRequester(): PluginSubagentRequesterContext | undefined {
   try {
@@ -33,9 +26,9 @@ describe("before_dispatch requester authority", () => {
       throw new Error("expected valid requester context");
     }
 
-    const detachedGate = deferred();
-    const secondStarted = deferred();
-    const releaseSecond = deferred();
+    const detachedGate = createDeferred();
+    const secondStarted = createDeferred();
+    const releaseSecond = createDeferred();
     let detachedRead: Promise<PluginSubagentRequesterContext | undefined> | undefined;
     const registry = createMockPluginRegistry([
       {

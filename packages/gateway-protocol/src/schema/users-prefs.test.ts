@@ -1,54 +1,115 @@
-import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
-  GatewayErrorDetailCodes,
-  GatewayErrorDetailsSchema,
-  UserPrefsLimitExceededErrorDetailsSchema,
-  UsersPrefsGetResultSchema,
-  UsersPrefsSetResultSchema,
-  validateUsersPrefsGetParams,
-  validateUsersPrefsSetParams,
+  normalizeUiAppearancePreference as normalize,
+  UI_APPEARANCE_PREFERENCE_KEYS as keys,
 } from "../index.js";
+import * as S from "../index.js";
+import { validation } from "./protocol-validation.test-support.js";
+import { accepts, rejects } from "./schema.test-support.js";
+
+const getPrefs = validation(S.validateUsersPrefsGetParams);
+const setPrefs = validation(S.validateUsersPrefsSetParams);
+const setRole = validation(S.validateUsersSetRoleParams);
 
 describe("user preference protocol schemas", () => {
+  it.each([
+    [keys.theme, ["absolutely"], ["unsupported", 42]],
+    [keys.themeMode, ["system"], ["automatic"]],
+    [keys.accent, ["theme"], ["#abc", "#12345g", { color: "#123456" }]],
+    [keys.fontUi, ["geist", "system"], ["theme"]],
+    [keys.fontChat, ["lora"], ["unknown-font", { family: "lora" }]],
+    [
+      keys.tabIcon,
+      [
+        "default",
+        "agent",
+        "agent:rounded",
+        "agent:circle",
+        "lobster:crimson",
+        `lobster:${"a".repeat(48)}`,
+      ],
+      [
+        "agent:square",
+        "agent:circle\n",
+        "lobster:",
+        "lobster:Crimson",
+        "lobster:crimson\n",
+        "lobster:../crimson",
+        "lobster:https://example.com/icon.png",
+        `lobster:${"a".repeat(49)}`,
+        " agent ",
+        { mode: "custom", image: {} },
+      ],
+    ],
+  ] as const)(
+    "normalizes supported %s values and rejects malformed preferences",
+    (key, accepted, rejected) => {
+      for (const value of accepted) {
+        expect(normalize(key, value)).toBe(value);
+      }
+      for (const value of rejected) {
+        expect(normalize(key, value)).toBeUndefined();
+      }
+    },
+  );
+  it("canonicalizes accent colors", () => {
+    expect(normalize(keys.accent, "#A1b2C3")).toBe("#a1b2c3");
+  });
+
+  it("bounds profile preference change events to their owning profile and written keys", () => {
+    accepts(S.UsersPrefsChangedEventSchema, {
+      profileId: "profile-1",
+      keys: [keys.accent, keys.fontUi, keys.fontChat],
+    });
+    rejects(
+      S.UsersPrefsChangedEventSchema,
+      { profileId: "", keys: [] },
+      { profileId: "profile-1", keys: Array.from({ length: 33 }, (_, index) => `key-${index}`) },
+    );
+  });
+
   it("bounds self-scoped preference requests", () => {
     const entries = Object.fromEntries(
       Array.from({ length: 32 }, (_, index) => [`key-${index}`, { index }]),
     );
-    expect(validateUsersPrefsGetParams({})).toBe(true);
-    expect(validateUsersPrefsGetParams({ keys: Object.keys(entries) })).toBe(true);
-    expect(validateUsersPrefsSetParams({ entries })).toBe(true);
-    expect(validateUsersPrefsSetParams({ entries: { deleted: null } })).toBe(true);
-    expect(validateUsersPrefsGetParams({ keys: [...Object.keys(entries), "overflow"] })).toBe(
-      false,
+    getPrefs.accepts({}, { keys: Object.keys(entries) });
+    setPrefs.accepts(
+      { entries },
+      { entries: {}, expectedEntries: entries },
+      { entries: {}, expectedEntries: { missing: null } },
+      { entries: { deleted: null } },
     );
-    expect(validateUsersPrefsGetParams({ keys: ["same", "same"] })).toBe(false);
-    expect(validateUsersPrefsSetParams({ entries: { ...entries, overflow: true } })).toBe(false);
+    getPrefs.rejects({ keys: [...Object.keys(entries), "overflow"] }, { keys: ["same", "same"] });
+    setPrefs.rejects(
+      { entries: {}, expectedEntries: { ...entries, overflow: true } },
+      { entries: { ...entries, overflow: true } },
+    );
   });
 
-  it("exposes typed per-profile quota details", () => {
-    expect(
-      Value.Check(GatewayErrorDetailsSchema, {
-        code: GatewayErrorDetailCodes.USER_PREFS_LIMIT_EXCEEDED,
-        limit: 128,
-        currentCount: 128,
-      }),
-    ).toBe(true);
-    expect(
-      Value.Check(UserPrefsLimitExceededErrorDetailsSchema, {
-        code: GatewayErrorDetailCodes.USER_PREFS_LIMIT_EXCEEDED,
-        limit: 128,
-        currentCount: 128,
-      }),
-    ).toBe(true);
+  it("accepts bounded role assignments and explicit role removal", () => {
+    const profile = { profileId: "profile-1" };
+    setRole.accepts({ ...profile, role: "guest" }, { ...profile, role: null });
+    setRole.rejects(
+      profile,
+      ...["", "   ", "x".repeat(129)].map((role) => Object.assign({}, profile, { role })),
+      { ...profile, role: "guest", scopes: ["operator.admin"] },
+    );
   });
 
-  it("keeps no-identity results distinct from successful values", () => {
-    expect(Value.Check(UsersPrefsGetResultSchema, { status: "no_durable_identity" })).toBe(true);
-    expect(
-      Value.Check(UsersPrefsGetResultSchema, { status: "ok", entries: { theme: "claw" } }),
-    ).toBe(true);
-    expect(Value.Check(UsersPrefsSetResultSchema, { status: "ok" })).toBe(true);
-    expect(Value.Check(UsersPrefsSetResultSchema, { status: "no_durable_identity" })).toBe(true);
+  it("keeps profile roles additive and preserves role-free profile payloads", () => {
+    const profile = {
+      id: "profile-1",
+      displayName: null,
+      avatarMime: null,
+      mergedInto: null,
+      createdAt: 1,
+      updatedAt: 1,
+      emails: [],
+      githubIdentity: null,
+      hasAvatar: false,
+    };
+
+    accepts(S.UserProfileSchema, profile, { ...profile, role: "guest" });
+    rejects(S.UserProfileSchema, { ...profile, role: null });
   });
 });

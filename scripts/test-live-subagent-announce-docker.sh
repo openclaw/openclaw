@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 set -euo pipefail
 
 SCRIPT_ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -67,25 +71,21 @@ if [ -n "${OPENCLAW_DOCKER_LIVE_GOOGLE_API_KEY:-}" ]; then
   export GOOGLE_API_KEY="$OPENCLAW_DOCKER_LIVE_GOOGLE_API_KEY"
   unset OPENCLAW_DOCKER_LIVE_GOOGLE_API_KEY
 fi
-export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
-export COREPACK_HOME="${COREPACK_HOME:-$XDG_CACHE_HOME/node/corepack}"
-export NPM_CONFIG_CACHE="${NPM_CONFIG_CACHE:-$XDG_CACHE_HOME/npm}"
-export npm_config_cache="$NPM_CONFIG_CACHE"
+trusted_scripts_dir="${OPENCLAW_LIVE_DOCKER_SCRIPTS_DIR:-/src/scripts}"
+source "$trusted_scripts_dir/lib/live-docker-stage.sh"
 mkdir -p "$XDG_CACHE_HOME" "$COREPACK_HOME" "$NPM_CONFIG_CACHE"
 chmod 700 "$XDG_CACHE_HOME" "$COREPACK_HOME" "$NPM_CONFIG_CACHE" || true
 tmp_dir="$(mktemp -d)"
-trusted_scripts_dir="${OPENCLAW_LIVE_DOCKER_SCRIPTS_DIR:-/src/scripts}"
-source "$trusted_scripts_dir/lib/live-docker-stage.sh"
-openclaw_live_stage_source_tree "$tmp_dir"
-openclaw_live_stage_node_modules "$tmp_dir"
-openclaw_live_link_runtime_tree "$tmp_dir"
-openclaw_live_stage_state_dir "$tmp_dir/.openclaw-state"
-openclaw_live_prepare_staged_config
+openclaw_live_stage_workspace "$tmp_dir"
 cd "$tmp_dir"
+announce_relative="$(
+  openclaw_live_resolve_unique_staged_file "$tmp_dir/src/agents" subagent-announce.live.test.ts
+)"
+announce_test="src/agents/$announce_relative"
 OPENCLAW_LIVE_TEST=1 \
 OPENCLAW_LIVE_SUBAGENT_E2E=1 \
 OPENCLAW_VITEST_MAX_WORKERS="${OPENCLAW_VITEST_MAX_WORKERS:-1}" \
-node --import tsx scripts/test-live.mts -- src/agents/subagents/announce/subagent-announce.live.test.ts -- --reporter=verbose
+openclaw_live_run_staged_script scripts/test-live -- "$announce_test" -- --reporter=verbose
 EOF
 
 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$ROOT_DIR" "$TRUSTED_HARNESS_DIR/scripts/test-live-build-docker.sh"
@@ -98,7 +98,7 @@ if openclaw_live_uses_managed_bind_dirs; then
 fi
 
 echo "==> Run subagent announce live test in Docker"
-echo "==> Target: src/agents/subagents/announce/subagent-announce.live.test.ts"
+echo "==> Target: unique staged subagent-announce.live.test.ts"
 echo "==> Model: ${OPENCLAW_LIVE_SUBAGENT_E2E_MODEL:-openai/gpt-5.6-luna}"
 echo "==> Profile file: $PROFILE_STATUS"
 DOCKER_RUN_ARGS=()

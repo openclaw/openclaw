@@ -1,5 +1,16 @@
 const COMPLETE_HTML_DOCUMENT_PATTERN = /^(?:<!doctype\s+html\b|<html\b)/i;
 
+/** Public static assets available to widget documents; never a connect-src grant. */
+export const WIDGET_CDN_ORIGINS: readonly string[] = Object.freeze([
+  "https://cdnjs.cloudflare.com",
+  "https://cdn.jsdelivr.net",
+  "https://esm.sh",
+  "https://unpkg.com",
+  "https://fonts.googleapis.com",
+  "https://fonts.gstatic.com",
+  "https://fonts.bunny.net",
+]);
+
 /** Input error surfaced by tools that accept agent-supplied widget HTML. */
 export class WidgetHtmlInputError extends Error {
   constructor(message: string) {

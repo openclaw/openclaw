@@ -27,5 +27,5 @@ MIT, copyright OpenClaw Foundation. Third-party notices for incorporated or adap
 
 ## Related
 
-- [Token use and costs](/reference/token-use)
-- [Release policy](/reference/RELEASING)
+- [OpenClaw lore](/start/lore) - the backstory behind the name, the shell, and the space lobster
+- [Pull request review flow](/reference/pull-request-review-flow) - how a contribution moves through Barnacle and ClawSweeper review

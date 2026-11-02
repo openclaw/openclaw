@@ -2,10 +2,12 @@ import fsp from "node:fs/promises";
 import type { SandboxContext } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   buildAgentHookContextChannelFields,
+  buildEmbeddedForegroundPromptContext,
   isHostScopedAgentToolActive,
-  resolveSandboxContext as defaultResolveSandboxContext,
-  resolveSessionAgentIds,
+  resolveAgentDir,
+  resolveSandboxContext,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { readNonEmptyString, readResolvedAttemptPath, resolveModelRef } from "./attempt-config.js";
 import type {
   AttemptParamsLike,
@@ -13,7 +15,6 @@ import type {
   CopilotAttemptParams,
 } from "./attempt-types.js";
 import { assertCopilotAttemptHostCapabilities } from "./attempt-types.js";
-import { createCopilotToolBridge } from "./tool-bridge.js";
 export function prepareCopilotAttemptContext(
   params: CopilotAttemptParams,
   deps: CopilotAttemptDeps,
@@ -46,14 +47,12 @@ export function prepareCopilotAttemptContext(
         }
       : params
   ) as AttemptParamsLike;
-  const createToolBridge = deps.createToolBridge ?? createCopilotToolBridge;
-  const hostSystemAgentActive =
-    deps.isHostScopedToolActive?.("openclaw") ?? isHostScopedAgentToolActive("openclaw");
+  const hostSystemAgentActive = isHostScopedAgentToolActive("openclaw");
   const ringZeroSystemAgentRun =
     hostSystemAgentActive &&
     input.toolsAllow?.length === 1 &&
     input.toolsAllow[0]?.trim().toLowerCase() === "openclaw";
-  const messages = Array.isArray(input.messages) ? [...input.messages] : [];
+  const messages = [...(input.messages ?? [])];
   const modelRef = resolveModelRef(input);
   const resolvedWorkspaceForSandbox =
     readResolvedAttemptPath(input.workspaceDir) ?? readResolvedAttemptPath(input.cwd);
@@ -61,7 +60,7 @@ export function prepareCopilotAttemptContext(
     readNonEmptyString((input as { sandboxSessionKey?: unknown }).sandboxSessionKey) ??
     readNonEmptyString((input as { sessionKey?: unknown }).sessionKey) ??
     readNonEmptyString(input.sessionId);
-  const { sessionAgentId } = resolveSessionAgentIds({
+  const { sessionAgentId } = resolveSessionAgentIdsStrict({
     sessionKey: readNonEmptyString((input as { sessionKey?: unknown }).sessionKey),
     config: input.config,
     agentId: readNonEmptyString(params.agentId),
@@ -83,12 +82,17 @@ export function prepareCopilotAttemptContext(
     runId: input.runId,
     jobId: input.jobId,
     agentId: sessionAgentId,
-    sessionKey: sandboxSessionKey,
+    sessionKey: readNonEmptyString(input.sessionKey) ?? sandboxSessionKey,
     sessionId: input.sessionId,
     workspaceDir: resolvedWorkspaceForSandbox,
     modelProviderId: modelRef.provider,
     modelId: modelRef.id,
     trigger: input.trigger,
+    inputProvenance: input.inputProvenance,
+    foregroundPromptContext: buildEmbeddedForegroundPromptContext(
+      { ...input, agentId: sessionAgentId },
+      input.agentDir ?? resolveAgentDir(input.config ?? {}, sessionAgentId),
+    ),
     ...(input.config ? { config: input.config } : {}),
     ...hookContextWindowFields,
     ...buildAgentHookContextChannelFields(input),
@@ -96,7 +100,6 @@ export function prepareCopilotAttemptContext(
   return {
     settledToolFinalization,
     input,
-    createToolBridge,
     ringZeroSystemAgentRun,
     messages,
     modelRef,
@@ -108,17 +111,16 @@ export function prepareCopilotAttemptContext(
   };
 }
 export async function resolveCopilotAttemptSandbox(params: {
-  deps: CopilotAttemptDeps;
   input: AttemptParamsLike;
   resolvedWorkspaceForSandbox: string;
   sandboxSessionKey: string | undefined;
 }): Promise<{ sandbox: SandboxContext | null; effectiveWorkspaceDir: string }> {
-  const resolveSandbox = params.deps.resolveSandboxContextOverride ?? defaultResolveSandboxContext;
   const sandbox =
     params.input.sandbox !== undefined
       ? params.input.sandbox
-      : await resolveSandbox({
+      : await resolveSandboxContext({
           config: params.input.config,
+          agentId: params.input.sandboxAgentId,
           sessionKey: params.sandboxSessionKey,
           workspaceDir: params.resolvedWorkspaceForSandbox,
         });

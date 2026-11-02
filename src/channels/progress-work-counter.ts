@@ -1,3 +1,4 @@
+import type { AgentItemEventData } from "../infra/agent-activity-events.js";
 import { isChannelProgressDraftWorkToolName } from "./streaming.js";
 
 /**
@@ -10,6 +11,20 @@ export function createChannelProgressWorkCounter(params?: { now?: () => number }
   let toolCalls = 0;
 
   return {
+    noteItem(
+      item: Partial<
+        Pick<AgentItemEventData, "kind" | "hideFromChannelProgress" | "suppressChannelProgress">
+      > & { phase?: string },
+    ) {
+      if (
+        item.phase === "start" &&
+        item.kind !== "preamble" &&
+        !item.hideFromChannelProgress &&
+        !item.suppressChannelProgress
+      ) {
+        toolCalls += 1;
+      }
+    },
     noteToolCall(toolName?: string) {
       if (isChannelProgressDraftWorkToolName(toolName)) {
         toolCalls += 1;

@@ -1,4 +1,3 @@
-// Xai API module exposes the plugin public contract.
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 
 export function createXaiProvider(): ProviderPlugin {

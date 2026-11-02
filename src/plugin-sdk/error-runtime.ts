@@ -24,6 +24,8 @@ export {
   readErrorName,
   toErrorObject,
 } from "../infra/errors.js";
+export { attachErrorDiagnostic, formatErrorMessageForDisplay } from "../infra/error-diagnostics.js";
+export { materializeErrorStack } from "../infra/error-graph-internal.js";
 export {
   coerceErrorMessage,
   toStringifiedError,

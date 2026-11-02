@@ -1,0 +1,79 @@
+{
+  "id": "session-share",
+  "categories": ["inbox-collaboration"],
+  "activation": {
+    "onStartup": false,
+    "onConfigPaths": ["plugins.entries.session-share"]
+  },
+  "uiHints": {
+    "share.groups": {
+      "label": "Shared Session Groups",
+      "help": "Required source publication boundary: publish only sessions in these exact groups. The optional person filter narrows them further. Missing or empty groups publish nothing."
+    },
+    "share.involvingProfileId": {
+      "label": "Involving Person",
+      "help": "Optional exact source-local profile ID (including merge aliases). Narrows the required shared groups to canonical owners or profile participants. Mentions alone, names, and logins do not match."
+    },
+    "nodes": {
+      "label": "Paired Node Attribution",
+      "help": "Optional display attribution keyed by paired node id. Attribution never grants session access."
+    },
+    "nodes.*.owner": {
+      "label": "Default Owner",
+      "help": "Local display owner for unattributed sessions: github:<login> or profile:<profileId>."
+    },
+    "nodes.*.linkGitHubIdentities": {
+      "label": "Link GitHub Identities",
+      "help": "Trust this paired node's numeric GitHub account claims for local profile display attribution. Off by default."
+    }
+  },
+  "configGroups": [
+    {
+      "id": "session-sharing",
+      "title": "Session sharing",
+      "order": 10,
+      "properties": ["share"]
+    },
+    {
+      "id": "node-attribution",
+      "title": "Node attribution",
+      "order": 20,
+      "properties": ["nodes"]
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "share": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["groups"],
+        "properties": {
+          "groups": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": { "type": "string", "minLength": 1, "maxLength": 200 }
+          },
+          "involvingProfileId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "pattern": "^\\S+$"
+          }
+        }
+      },
+      "nodes": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "owner": { "type": "string", "pattern": "^(github|profile):[^\\s:]+$", "maxLength": 512 },
+            "linkGitHubIdentities": { "type": "boolean", "default": false }
+          }
+        }
+      }
+    }
+  }
+}

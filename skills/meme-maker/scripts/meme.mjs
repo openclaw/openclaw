@@ -154,6 +154,18 @@ function extFromUrl(url) {
   return ext && ext.length <= 5 ? ext : ".img";
 }
 
+const MIME_BY_EXT = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+};
+
+function mimeFromExt(ext) {
+  return MIME_BY_EXT[ext] ?? "application/octet-stream";
+}
+
 async function fetchBuffer(url) {
   const response = await fetch(url, { headers: { "User-Agent": USER_AGENT } });
   if (!response.ok) throw new Error(`Fetch failed ${response.status} for ${url}`);
@@ -246,7 +258,7 @@ function defaultBoxes(count) {
 
 async function renderLocal(template, texts, flags) {
   const { buffer } = await cachedTemplateImage(template);
-  const imageMime = extFromUrl(template.imageUrl) === ".png" ? "image/png" : "image/jpeg";
+  const imageMime = mimeFromExt(extFromUrl(template.imageUrl));
   const imageData = `data:${imageMime};base64,${buffer.toString("base64")}`;
   const boxes = template.boxes?.length
     ? template.boxes
@@ -279,15 +291,26 @@ async function renderLocal(template, texts, flags) {
   const out = flags.out ?? path.resolve(process.cwd(), `${template.id}.svg`);
   await mkdir(path.dirname(path.resolve(out)), { recursive: true });
   if (path.extname(out).toLowerCase() === ".png") {
-    let sharp;
+    let browser;
     try {
-      sharp = (await import("sharp")).default;
+      const { chromium } = await import("playwright-core");
+      const executablePath = chromium.executablePath();
+      browser = await chromium.launch({
+        headless: true,
+        ...(existsSync(executablePath) ? { executablePath } : { channel: "chrome" }),
+      });
     } catch {
       // Keep this message free of package-install advice: agents follow it
       // literally and can corrupt pnpm-managed OpenClaw installs (see #109405).
-      throw new Error("PNG output needs the optional sharp package. Use --out meme.svg instead.");
+      throw new Error("PNG output needs Chromium or Chrome. Use --out meme.svg instead.");
     }
-    await sharp(Buffer.from(svg)).png().toFile(out);
+    try {
+      const page = await browser.newPage({ viewport: { width, height } });
+      await page.setContent(`<style>body { margin: 0; }</style>${svg}`);
+      await page.locator("svg").screenshot({ path: out, type: "png", omitBackground: true });
+    } finally {
+      await browser.close();
+    }
   } else {
     await writeFile(out, svg, "utf8");
   }
@@ -393,6 +416,7 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error(`error: ${error.message}`);
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(`error: ${message}`);
   process.exit(1);
 });

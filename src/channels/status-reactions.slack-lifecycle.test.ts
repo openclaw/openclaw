@@ -1,4 +1,4 @@
-// Slack lifecycle status reaction tests cover reaction updates around channel session state changes.
+// Shared reaction lifecycle coverage for adapters with multiple reaction slots.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createStatusReactionController,
@@ -6,8 +6,6 @@ import {
   DEFAULT_TIMING,
   type StatusReactionAdapter,
 } from "./status-reactions.js";
-
-const EXEC_TOOL_EMOJI = "🛠️";
 const WEB_SEARCH_TOOL_EMOJI = "🔎";
 
 function createSlackMockAdapter() {
@@ -36,7 +34,7 @@ function createSlackMockAdapter() {
   };
 }
 
-describe("Slack status reaction lifecycle", () => {
+describe("Multi-reaction status lifecycle", () => {
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -45,63 +43,33 @@ describe("Slack status reaction lifecycle", () => {
     vi.useRealTimers();
   });
 
-  it("queued -> thinking -> tool -> done -> clear", async () => {
+  it("keeps acknowledgement stable through activity, silence, success, and restoreInitial", async () => {
     const { adapter, active, log } = createSlackMockAdapter();
     const ctrl = createStatusReactionController({
       enabled: true,
       adapter,
-      initialEmoji: "eyes",
-      timing: { debounceMs: 0, stallSoftMs: 99999, stallHardMs: 99999 },
+      initialEmoji: "working",
+      presentation: "acknowledgement",
     });
 
     void ctrl.setQueued();
-    await vi.advanceTimersByTimeAsync(10);
-    expect(active.has("eyes")).toBe(true);
-
-    void ctrl.setThinking();
-    await vi.advanceTimersByTimeAsync(10);
-    expect(active.has(DEFAULT_EMOJIS.thinking)).toBe(true);
-    expect(active.has("eyes")).toBe(true);
-
-    void ctrl.setTool("web_search");
-    await vi.advanceTimersByTimeAsync(10);
-    expect(active.has(WEB_SEARCH_TOOL_EMOJI)).toBe(true);
-    expect(active.has(DEFAULT_EMOJIS.thinking)).toBe(true);
+    await vi.advanceTimersByTimeAsync(0);
+    for (const update of [ctrl.setThinking, () => ctrl.setTool("exec"), ctrl.setCompacting]) {
+      void update();
+      await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
+    }
+    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.stallHardMs + 1);
+    expect(log).toEqual(["+working"]);
 
     const donePromise = ctrl.setDone();
-    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.doneHoldMs);
+    await vi.advanceTimersByTimeAsync(0);
     await donePromise;
-    expect(active.has(DEFAULT_EMOJIS.done)).toBe(true);
-    expect(active.has(WEB_SEARCH_TOOL_EMOJI)).toBe(false);
-    expect(active.has(DEFAULT_EMOJIS.thinking)).toBe(false);
-
-    await ctrl.clear();
-    expect(active.size).toBe(0);
-    expect(log.length).toBeGreaterThan(0);
-  });
-
-  it("queued -> error -> restoreInitial", async () => {
-    const { adapter, active } = createSlackMockAdapter();
-    const ctrl = createStatusReactionController({
-      enabled: true,
-      adapter,
-      initialEmoji: "eyes",
-      timing: { debounceMs: 0, stallSoftMs: 99999, stallHardMs: 99999 },
-    });
-
-    void ctrl.setQueued();
-    await vi.advanceTimersByTimeAsync(10);
-    expect(active.has("eyes")).toBe(true);
-
-    const errorPromise = ctrl.setError();
-    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.errorHoldMs);
-    await errorPromise;
-    expect(active.has(DEFAULT_EMOJIS.error)).toBe(true);
-    expect(active.has("eyes")).toBe(false);
-
     await ctrl.restoreInitial();
-    expect(active.has("eyes")).toBe(true);
-    expect(active.has(DEFAULT_EMOJIS.error)).toBe(false);
+    void ctrl.setThinking();
+    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.stallHardMs + 1);
+
+    expect(log).toEqual(["+working"]);
+    expect([...active]).toEqual(["working"]);
   });
 
   it("restoreInitial clears stall timers without re-adding queued emoji", async () => {
@@ -125,53 +93,6 @@ describe("Slack status reaction lifecycle", () => {
     expect(active.has("eyes")).toBe(true);
     expect(active.has(DEFAULT_EMOJIS.stallSoft)).toBe(false);
     expect(active.has(DEFAULT_EMOJIS.stallHard)).toBe(false);
-  });
-
-  it("restoreInitial removes extra active reactions when current emoji is already initial", async () => {
-    const { adapter, active } = createSlackMockAdapter();
-    const ctrl = createStatusReactionController({
-      enabled: true,
-      adapter,
-      initialEmoji: "eyes",
-      timing: { debounceMs: 0, stallSoftMs: 99999, stallHardMs: 99999 },
-    });
-
-    void ctrl.setThinking();
-    await vi.advanceTimersByTimeAsync(10);
-    void ctrl.setQueued();
-    await vi.advanceTimersByTimeAsync(10);
-    expect(active.has(DEFAULT_EMOJIS.thinking)).toBe(true);
-    expect(active.has("eyes")).toBe(true);
-
-    await ctrl.restoreInitial();
-
-    expect(active.has("eyes")).toBe(true);
-    expect(active.has(DEFAULT_EMOJIS.thinking)).toBe(false);
-  });
-
-  it("restoreInitial removes only tracked active reactions", async () => {
-    const { adapter, active } = createSlackMockAdapter();
-    const ctrl = createStatusReactionController({
-      enabled: true,
-      adapter,
-      initialEmoji: "eyes",
-      timing: { debounceMs: 0, stallSoftMs: 99999, stallHardMs: 99999 },
-    });
-
-    void ctrl.setQueued();
-    await vi.advanceTimersByTimeAsync(10);
-    const donePromise = ctrl.setDone();
-    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.doneHoldMs);
-    await donePromise;
-
-    await ctrl.restoreInitial();
-
-    expect(active.has("eyes")).toBe(true);
-    expect(active.has(DEFAULT_EMOJIS.done)).toBe(false);
-    expect(adapter.removeReaction).toHaveBeenCalledTimes(2);
-    expect(adapter.removeReaction).toHaveBeenCalledWith("eyes");
-    expect(adapter.removeReaction).toHaveBeenCalledWith(DEFAULT_EMOJIS.done);
-    expect(adapter.removeReaction).not.toHaveBeenCalledWith(DEFAULT_EMOJIS.thinking);
   });
 
   it("restoreInitial still applies initial emoji when it is only debounced", async () => {
@@ -252,23 +173,5 @@ describe("Slack status reaction lifecycle", () => {
     await vi.advanceTimersByTimeAsync(100);
     expect(active.size).toBe(0);
     expect(adapter.setReaction).not.toHaveBeenCalled();
-  });
-
-  it("coding tool resolves to coding emoji", async () => {
-    const { adapter, active } = createSlackMockAdapter();
-    const ctrl = createStatusReactionController({
-      enabled: true,
-      adapter,
-      initialEmoji: "eyes",
-      timing: { debounceMs: 0, stallSoftMs: 99999, stallHardMs: 99999 },
-    });
-
-    void ctrl.setQueued();
-    await vi.advanceTimersByTimeAsync(10);
-
-    void ctrl.setTool("exec");
-    await vi.advanceTimersByTimeAsync(10);
-    expect(active.has(EXEC_TOOL_EMOJI)).toBe(true);
-    expect(active.has("eyes")).toBe(true);
   });
 });

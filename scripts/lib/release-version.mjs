@@ -1,10 +1,5 @@
-const STABLE_VERSION_REGEX = /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<patch>[1-9]\d*)$/;
-const ALPHA_VERSION_REGEX =
-  /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<patch>[1-9]\d*)-alpha\.(?<alpha>[1-9]\d*)$/;
-const BETA_VERSION_REGEX =
-  /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<patch>[1-9]\d*)-beta\.(?<beta>[1-9]\d*)$/;
-const CORRECTION_VERSION_REGEX =
-  /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<patch>[1-9]\d*)-(?<correction>[1-9]\d*)$/;
+const RELEASE_VERSION_REGEX =
+  /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<patch>[1-9]\d*)(?:-(?:(?<channel>alpha|beta)\.(?<prerelease>[1-9]\d*)|(?<correction>[1-9]\d*)))?$/;
 const JUNE_2026_PATCH_FLOOR = 5;
 const EXTENDED_STABLE_PATCH_FLOOR = 33;
 
@@ -27,99 +22,53 @@ const EXTENDED_STABLE_PATCH_FLOOR = 33;
 
 /**
  * @param {string} version
- * @param {Record<string, string | undefined>} groups
- * @param {"stable" | "alpha" | "beta"} channel
  * @returns {ParsedReleaseVersion | null}
  */
-function parseVersionParts(version, groups, channel) {
-  const year = parseSafeIntegerPart(groups.year);
-  const month = parseSafeIntegerPart(groups.month);
-  const patch = parseSafeIntegerPart(groups.patch);
-  const alphaNumber = channel === "alpha" ? parseSafeIntegerPart(groups.alpha) : undefined;
-  const betaNumber = channel === "beta" ? parseSafeIntegerPart(groups.beta) : undefined;
-
+export function parseReleaseVersion(version) {
+  const trimmed = version.trim();
+  const groups = RELEASE_VERSION_REGEX.exec(trimmed)?.groups;
+  if (!groups) {
+    return null;
+  }
+  const year = Number(groups.year);
+  const month = Number(groups.month);
+  const patch = Number(groups.patch);
+  const prereleaseNumber = groups.prerelease === undefined ? undefined : Number(groups.prerelease);
+  const correctionNumber = groups.correction === undefined ? undefined : Number(groups.correction);
   if (
     !Number.isSafeInteger(year) ||
     !Number.isSafeInteger(month) ||
     !Number.isSafeInteger(patch) ||
     month < 1 ||
     month > 12 ||
-    patch < 1
+    patch < 1 ||
+    (prereleaseNumber !== undefined && !Number.isSafeInteger(prereleaseNumber)) ||
+    (correctionNumber !== undefined && !Number.isSafeInteger(correctionNumber))
   ) {
     return null;
   }
-  if (channel === "beta" && (!Number.isSafeInteger(betaNumber) || (betaNumber ?? 0) < 1)) {
-    return null;
-  }
-  if (channel === "alpha" && (!Number.isSafeInteger(alphaNumber) || (alphaNumber ?? 0) < 1)) {
-    return null;
-  }
-
+  const channel =
+    groups.channel === "alpha" ? "alpha" : groups.channel === "beta" ? "beta" : "stable";
   return {
-    version,
+    version: trimmed,
     baseVersion: `${year}.${month}.${patch}`,
     channel,
     year,
     month,
     patch,
-    alphaNumber,
-    betaNumber,
+    alphaNumber: channel === "alpha" ? prereleaseNumber : undefined,
+    betaNumber: channel === "beta" ? prereleaseNumber : undefined,
+    ...(correctionNumber === undefined ? {} : { correctionNumber }),
   };
-}
-
-function parseSafeIntegerPart(value) {
-  const raw = value ?? "";
-  if (!/^[0-9]+$/.test(raw)) {
-    return null;
-  }
-  const parsed = Number(raw);
-  return Number.isSafeInteger(parsed) ? parsed : null;
 }
 
 /**
  * @param {string} version
- * @returns {ParsedReleaseVersion | null}
+ * @returns {string | null}
  */
-export function parseReleaseVersion(version) {
-  const trimmed = version.trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  const stableMatch = STABLE_VERSION_REGEX.exec(trimmed);
-  if (stableMatch?.groups) {
-    return parseVersionParts(trimmed, stableMatch.groups, "stable");
-  }
-
-  const alphaMatch = ALPHA_VERSION_REGEX.exec(trimmed);
-  if (alphaMatch?.groups) {
-    return parseVersionParts(trimmed, alphaMatch.groups, "alpha");
-  }
-
-  const betaMatch = BETA_VERSION_REGEX.exec(trimmed);
-  if (betaMatch?.groups) {
-    return parseVersionParts(trimmed, betaMatch.groups, "beta");
-  }
-
-  const correctionMatch = CORRECTION_VERSION_REGEX.exec(trimmed);
-  if (correctionMatch?.groups) {
-    const parsedCorrection = parseVersionParts(trimmed, correctionMatch.groups, "stable");
-    const correctionNumber = parseSafeIntegerPart(correctionMatch.groups.correction);
-    if (
-      parsedCorrection === null ||
-      !Number.isSafeInteger(correctionNumber) ||
-      correctionNumber < 1
-    ) {
-      return null;
-    }
-
-    return {
-      ...parsedCorrection,
-      correctionNumber,
-    };
-  }
-
-  return null;
+export function parsePinnedReleaseVersion(version) {
+  const parsed = parseReleaseVersion(version);
+  return parsed && parsed.version === parsed.baseVersion ? parsed.baseVersion : null;
 }
 
 /**
@@ -139,6 +88,45 @@ export function classifyReleaseTrain(parsedVersion) {
   return parsedVersion.correctionNumber === undefined
     ? "extended-stable"
     : "unsupported-extended-stable-correction";
+}
+
+/**
+ * A returned baseTag requires callers to prove that tag resolves to the source
+ * SHA. Matching version strings alone do not authorize same-source correction evidence.
+ * @param {string} releaseTag
+ * @param {string} packageVersion
+ * @returns {{ releaseTag: string, baseTag: string | null }}
+ */
+export function resolveReleaseTagPackageIdentity(releaseTag, packageVersion) {
+  const packaged = parseReleaseVersion(packageVersion);
+  const tagged = releaseTag.startsWith("v") ? parseReleaseVersion(releaseTag.slice(1)) : null;
+  if (
+    !packaged ||
+    packaged.version !== packageVersion ||
+    !tagged ||
+    releaseTag !== `v${tagged.version}`
+  ) {
+    throw new Error(`Invalid release tag or package version: ${releaseTag}, ${packageVersion}.`);
+  }
+  if (
+    classifyReleaseTrain(tagged) === "unsupported-extended-stable-correction" ||
+    classifyReleaseTrain(packaged) === "unsupported-extended-stable-correction"
+  ) {
+    throw new Error("Extended-stable releases do not allow correction suffixes.");
+  }
+  const baseTag =
+    tagged.correctionNumber !== undefined &&
+    packaged.channel === "stable" &&
+    packaged.correctionNumber === undefined &&
+    tagged.baseVersion === packaged.version
+      ? `v${packaged.version}`
+      : null;
+  if (tagged.version !== packaged.version && !baseTag) {
+    throw new Error(
+      `Target package version ${packageVersion} does not match release tag ${releaseTag}.`,
+    );
+  }
+  return { releaseTag, baseTag };
 }
 
 /**

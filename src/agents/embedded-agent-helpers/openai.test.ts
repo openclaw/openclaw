@@ -2,16 +2,10 @@
 import type { AssistantMessage, ToolResultMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import type { AgentMessage } from "../runtime/index.js";
+import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { normalizeOpenAIResponsesToolCallIds } from "./openai.js";
 
-const ZERO_USAGE = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-} as const;
+const ZERO_USAGE = createZeroUsageFixture();
 
 function buildAssistantToolCall(rawId: string): AssistantMessage {
   return {
@@ -56,17 +50,6 @@ function toolResultId(message: AgentMessage | undefined): string {
 }
 
 describe("normalizeOpenAIResponsesToolCallIds", () => {
-  it("derives a stable id from the complete native pairing", () => {
-    const rawId = "functions.gateway:0|fc_tmp_kegospxl46";
-    const first = normalizeOpenAIResponsesToolCallIds([buildAssistantToolCall(rawId)]);
-    const second = normalizeOpenAIResponsesToolCallIds([buildAssistantToolCall(rawId)]);
-
-    expect(toolCallId(first[0])).toBe(
-      "call_functions_gateway_0_fc_tmp_kegospxl46_8ea5d0ca62|fc_tmp_kegospxl46",
-    );
-    expect(toolCallId(second[0])).toBe(toolCallId(first[0]));
-  });
-
   it("passes canonical Responses ids through without allocating new messages", () => {
     const messages: AgentMessage[] = [
       buildAssistantToolCall("call_gateway_0|fc_gateway_0"),
@@ -151,5 +134,17 @@ describe("normalizeOpenAIResponsesToolCallIds", () => {
     expect(toolCallId(out[3])).toMatch(/^call_[A-Za-z0-9_-]+\|fc_[A-Za-z0-9_-]+$/);
     expect(toolResultId(out[4])).toMatch(/^call_[A-Za-z0-9_-]+\|fc_[A-Za-z0-9_-]+$/);
     expect(toolCallId(out[3])).not.toBe(toolResultId(out[4]));
+  });
+
+  it.each(["toolUseId"])("backfills and normalizes the %s tool-result alias", (alias) => {
+    const rawId = "functions.gateway:0|fc_tmp_gateway";
+    const { toolCallId: _toolCallId, ...result } = buildToolResult(rawId);
+    const messages = [buildAssistantToolCall(rawId), { ...result, [alias]: rawId } as AgentMessage];
+
+    const [assistant, rewritten] = normalizeOpenAIResponsesToolCallIds(messages);
+    const expectedId = toolCallId(assistant);
+
+    expect(toolResultId(rewritten)).toBe(expectedId);
+    expect(rewritten).toMatchObject({ [alias]: expectedId });
   });
 });

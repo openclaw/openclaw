@@ -1,53 +1,48 @@
 import { vi } from "vitest";
-import type { ProcessSupervisor, SpawnInput, SpawnProcessAdapter } from "./types.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import type { SpawnProcessAdapter } from "./types.js";
 
-type ChildSpawnOptions = Omit<Extract<SpawnInput, { mode: "child" }>, "backendId" | "mode">;
+type StubOutputSubscriber = {
+  listener: (chunk: string) => void;
+  onRaw?: (chunk: Buffer) => void;
+};
 
 export type StubChildAdapter = SpawnProcessAdapter<NodeJS.Signals | null> & {
   emitStdout: (chunk: string) => void;
+  emitStdoutRaw: (chunk: Buffer) => void;
   emitStderr: (chunk: string) => void;
   settle: (code: number | null, signal?: NodeJS.Signals | null) => void;
   killMock: ReturnType<typeof vi.fn>;
   disposeMock: ReturnType<typeof vi.fn>;
 };
 
-export function createWriteStdoutArgv(output: string): string[] {
-  if (process.platform === "win32") {
-    return [process.execPath, "-e", `process.stdout.write(${JSON.stringify(output)})`];
-  }
-  return ["/usr/bin/printf", "%s", output];
-}
-
-export function createSilentIdleArgv(): string[] {
-  return [process.execPath, "-e", "setInterval(() => {}, 1_000)"];
-}
-
 export function createStubChildAdapter(options?: {
-  pid?: number;
   onKill?: (signal: NodeJS.Signals | undefined, adapter: StubChildAdapter) => void;
 }): StubChildAdapter {
-  const stdoutListeners: Array<(chunk: string) => void> = [];
-  const stderrListeners: Array<(chunk: string) => void> = [];
-  let resolveWait:
-    | ((value: { code: number | null; signal: NodeJS.Signals | null }) => void)
-    | null = null;
-  const waitPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-    (resolve) => {
-      resolveWait = resolve;
-    },
-  );
+  const stdoutSubscribers: StubOutputSubscriber[] = [];
+  const stderrSubscribers: StubOutputSubscriber[] = [];
+  // Mirror onDecodedOutput: one stream chunk reaches the raw subscriber before
+  // its decoded sibling, so a single emit exercises both supervisor paths.
+  const emitOutput = (subscribers: StubOutputSubscriber[], chunk: string) => {
+    for (const subscriber of subscribers) {
+      subscriber.onRaw?.(Buffer.from(chunk));
+      subscriber.listener(chunk);
+    }
+  };
+  const result = createDeferredCore<Awaited<ReturnType<StubChildAdapter["wait"]>>>();
   const killMock = vi.fn();
   const disposeMock = vi.fn();
   const adapter: StubChildAdapter = {
-    pid: options?.pid ?? 1234,
+    pid: 1234,
     stdin: undefined,
-    onStdout: (listener) => {
-      stdoutListeners.push(listener);
+    supportsRawOutput: true,
+    onStdout: (listener, onRaw) => {
+      stdoutSubscribers.push({ listener, ...(onRaw ? { onRaw } : {}) });
     },
-    onStderr: (listener) => {
-      stderrListeners.push(listener);
+    onStderr: (listener, onRaw) => {
+      stderrSubscribers.push({ listener, ...(onRaw ? { onRaw } : {}) });
     },
-    wait: async () => await waitPromise,
+    wait: async () => await result.promise,
     kill: (signal) => {
       killMock(signal);
       options?.onKill?.(signal, adapter);
@@ -56,30 +51,22 @@ export function createStubChildAdapter(options?: {
       disposeMock();
     },
     emitStdout: (chunk) => {
-      for (const listener of stdoutListeners) {
-        listener(chunk);
+      emitOutput(stdoutSubscribers, chunk);
+    },
+    emitStdoutRaw: (chunk) => {
+      for (const subscriber of stdoutSubscribers) {
+        subscriber.onRaw?.(chunk);
       }
     },
     emitStderr: (chunk) => {
-      for (const listener of stderrListeners) {
-        listener(chunk);
-      }
+      emitOutput(stderrSubscribers, chunk);
     },
     settle: (code, signal = null) => {
-      resolveWait?.({ code, signal });
-      resolveWait = null;
+      result.resolve({ code, signal });
     },
     killMock,
     disposeMock,
   };
 
   return adapter;
-}
-
-export async function spawnChild(supervisor: ProcessSupervisor, options: ChildSpawnOptions) {
-  return supervisor.spawn({
-    ...options,
-    backendId: "test",
-    mode: "child",
-  });
 }

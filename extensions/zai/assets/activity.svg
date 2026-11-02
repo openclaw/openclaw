@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+<!--
+Adapted from OpenClaw ui/public/provider-icons/ProviderIcon-zai.svg.
+Source: https://github.com/steipete/CodexBar/blob/215efbd39ad58acb4b0cd637c407d63e6183bc8d/Sources/CodexBar/Resources/ProviderIcon-zai.svg
+
+MIT License
+Copyright (c) 2026 Peter Steinberger
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Names and marks remain the property of their respective owners.
+-->
+  <path fill="currentColor" stroke="none" d="M52.3767 10.0721L45.8028 19.4273C44.7914 20.8938 43.072 21.804 41.2516 21.804H5.34765V10.0215C5.29708 10.0721 52.3767 10.0721 52.3767 10.0721Z M97.0291 10.0722L40.5942 90.0216H2.97095L59.4058 10.0722H97.0291Z M47.6233 90.0215L54.2478 80.6157C55.2592 79.1492 56.9785 78.2389 58.799 78.2389H94.6524V90.0215H47.6233Z" />
+</svg>

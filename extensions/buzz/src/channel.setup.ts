@@ -1,14 +1,10 @@
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
+import { listBuzzAccountIds, resolveDefaultBuzzAccountId } from "./account-config.js";
 import { BuzzConfigSchema } from "./config-schema.js";
 import { buzzSetupContract } from "./setup-core.js";
 import { buzzSetupWizard } from "./setup-surface.js";
-import {
-  listBuzzAccountIds,
-  resolveBuzzAccount,
-  resolveDefaultBuzzAccountId,
-  type ResolvedBuzzAccount,
-} from "./types.js";
+import { resolveBuzzAccount, type ResolvedBuzzAccount } from "./types.js";
 
 export const buzzSetupPlugin: ChannelPlugin<ResolvedBuzzAccount> = {
   id: "buzz",
@@ -23,7 +19,7 @@ export const buzzSetupPlugin: ChannelPlugin<ResolvedBuzzAccount> = {
     order: 56,
   },
   capabilities: { chatTypes: ["group"], threads: true },
-  reload: { configPrefixes: ["channels.buzz"] },
+  reload: { configPrefixes: ["channels.buzz"], accountScopedRestart: true },
   configSchema: BuzzConfigSchema,
   setupContract: buzzSetupContract,
   setupWizard: buzzSetupWizard,

@@ -38,6 +38,7 @@ const TARGET_TABLES = new Set([
   "transcript_event_identities",
   "session_transcript_index_state",
   "session_transcript_active_events",
+  "session_transcript_fts_rows",
   "session_transcript_archives",
 ]);
 

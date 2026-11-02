@@ -1,31 +1,14 @@
-import { describe, expect, it, vi } from "vitest";
-import {
-  oversizedJsonResponse,
-  requireFirstPostJsonRecordRequest,
-  streamedJsonResponse,
-} from "./provider-http.js";
+import { expect, it } from "vitest";
+import { oversizedJsonResponse } from "./provider-http.js";
 
-describe("provider HTTP fixtures", () => {
-  it("builds streamed JSON responses", async () => {
-    await expect(streamedJsonResponse({ ok: true }).json()).resolves.toEqual({ ok: true });
-  });
-
-  it("tracks bounded oversized response reads and cancellation", async () => {
-    const fixture = oversizedJsonResponse({ chunkCount: 2, chunkSize: 4 });
-    const reader = fixture.response.body?.getReader();
-    await reader?.read();
-    await reader?.cancel();
-
-    expect(fixture.getReadCount()).toBe(1);
-    expect(fixture.wasCanceled()).toBe(true);
-  });
-
-  it("requires the first request to be a record", () => {
-    const mock = vi.fn();
-    mock({ url: "https://example.test" });
-
-    expect(requireFirstPostJsonRecordRequest(mock, "request")).toEqual({
-      url: "https://example.test",
-    });
-  });
+it("caps the default stream while reusing its immutable chunk", async () => {
+  const { response, state } = oversizedJsonResponse();
+  const chunks: Uint8Array[] = [];
+  for await (const chunk of response.body!) {
+    chunks.push(chunk);
+  }
+  expect([chunks.length, new Set(chunks).size]).toEqual([64, 1]);
+  expect(chunks[0]?.byteLength).toBe(1024 * 1024);
+  expect(chunks[0]?.every((byte) => byte === 0)).toBe(true);
+  expect(state).toEqual({ canceled: false, enqueuedBytes: 64 * 1024 * 1024 });
 });

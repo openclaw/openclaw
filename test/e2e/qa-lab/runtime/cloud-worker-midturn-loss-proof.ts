@@ -1,53 +1,74 @@
+import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { isDeepStrictEqual } from "node:util";
+import { promisify } from "node:util";
+import { stringifyNonErrorCause, toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
 import {
   createQaBusState,
   createQaChannelTransport,
   QA_EVIDENCE_FILENAME,
   startQaBusServer,
-  startQaGatewayChild,
+  createQaGatewayChild,
   type QaEvidenceSummaryJson,
+  type QaGatewayChild,
 } from "../../../../extensions/qa-lab/api.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
 import { loadOrCreateDeviceIdentity } from "../../../../src/infra/device-identity.js";
+import { readGatewayLockProcessCmdline } from "../../../../src/infra/gateway-lock-process.js";
+import { NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND } from "../../../../src/infra/node-commands.js";
+import {
+  inspectNodeWorkerProcessIdentity,
+  requireNodeWorkerProcessIdentity,
+  type NodeWorkerProcessIdentity,
+} from "../../../../src/node-host/node-worker-process-identity.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import {
   BASELINE_PROMPT,
   BASELINE_REPLY,
   COMMITTED_MARKERS,
   CONTEXT_PROMPT,
   CONTEXT_REPLY,
-  createSshdFixture,
-  initializeRepository,
-  killSshdProcessTree,
   MIDTURN_PROMPT,
   MODEL_REF,
   PROOF_TIMEOUT_MS,
   startMidturnProvider,
-  stopSshd,
   VOLATILE_TEXT,
   waitFor,
 } from "./cloud-worker-midturn-loss-fixture.js";
+import {
+  closeWireServer,
+  createPairedNodeWorkerHost,
+  createPublishedWireWorkspace,
+  type PairedNodeWorkerHost,
+  type PublishedWireWorkspace,
+} from "./paired-node-worker-wire-fixture.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
 
 const SCENARIO_ID = "cloud-worker-midturn-loss";
 const VERDICT_FILE = `${SCENARIO_ID}-verdict.json`;
 const SESSION_KEY = "agent:qa:qa-channel:direct:cloud-midturn-loss";
 const SENDER_ID = "cloud-midturn-loss";
-const PROFILE_ID = "development";
 
 type ProducerOptions = { artifactBase: string; repoRoot: string };
-type Gateway = Awaited<ReturnType<typeof startQaGatewayChild>>;
+type Gateway = QaGatewayChild;
 type GatewayEvent = { event: string; payload?: unknown };
 type GatewayRunResult = { runId?: string; status?: string; summary?: string };
 type ChatHistory = { messages?: unknown[] };
+type SessionsList = { sessions?: unknown[] };
+type WorkerDiskSpaceProjection = {
+  availableBytes: number;
+  observedAtMs: number;
+  status: string;
+  totalBytes: number;
+};
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -98,7 +119,7 @@ async function connectOperator(
       clientVersion: "1.0.0",
       platform: process.platform,
       mode: GATEWAY_CLIENT_MODES.WEBCHAT,
-      scopes: ["operator.admin", "operator.read", "operator.write"],
+      scopes: ["operator.admin", "operator.pairing", "operator.read", "operator.write"],
       deviceIdentity,
       requestTimeoutMs: PROOF_TIMEOUT_MS,
       onEvent: (event) => events.push(event),
@@ -111,7 +132,8 @@ async function connectOperator(
 }
 
 function messageRole(message: unknown): string {
-  return String(requireRecord(message, "history message").role ?? "");
+  const role = requireRecord(message, "history message").role;
+  return typeof role === "string" ? role : "";
 }
 
 function messageText(message: unknown): string {
@@ -143,6 +165,63 @@ function markerCounts(messages: readonly unknown[]) {
   return Object.fromEntries(
     COMMITTED_MARKERS.map((marker) => [marker, text.split(marker).length - 1]),
   );
+}
+
+function readActiveWorkerDiskSpace(payload: SessionsList): WorkerDiskSpaceProjection | undefined {
+  const session = payload.sessions?.find((candidate) => {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+      return false;
+    }
+    return (candidate as Record<string, unknown>).key === SESSION_KEY;
+  });
+  if (!session) {
+    return undefined;
+  }
+  const placementValue = requireRecord(session, "listed session").placement;
+  if (!placementValue || typeof placementValue !== "object" || Array.isArray(placementValue)) {
+    return undefined;
+  }
+  const placement = placementValue as Record<string, unknown>;
+  if (placement.state !== "active") {
+    return undefined;
+  }
+  const diskSpaceValue = placement.diskSpace;
+  if (!diskSpaceValue || typeof diskSpaceValue !== "object" || Array.isArray(diskSpaceValue)) {
+    return undefined;
+  }
+  const diskSpace = diskSpaceValue as Record<string, unknown>;
+  if (
+    typeof diskSpace.status !== "string" ||
+    typeof diskSpace.availableBytes !== "number" ||
+    typeof diskSpace.totalBytes !== "number" ||
+    typeof diskSpace.observedAtMs !== "number"
+  ) {
+    throw new Error(`invalid active worker disk-space projection: ${JSON.stringify(diskSpace)}`);
+  }
+  return {
+    status: diskSpace.status,
+    availableBytes: diskSpace.availableBytes,
+    totalBytes: diskSpace.totalBytes,
+    observedAtMs: diskSpace.observedAtMs,
+  };
+}
+
+function isReclaimedWithoutDiskSpace(payload: SessionsList): boolean {
+  const session = payload.sessions?.find((candidate) => {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+      return false;
+    }
+    return (candidate as Record<string, unknown>).key === SESSION_KEY;
+  });
+  if (!session) {
+    return false;
+  }
+  const placementValue = requireRecord(session, "listed session").placement;
+  if (!placementValue || typeof placementValue !== "object" || Array.isArray(placementValue)) {
+    return false;
+  }
+  const placement = placementValue as Record<string, unknown>;
+  return placement.state === "reclaimed" && !("diskSpace" in placement);
 }
 
 async function waitForOutbound(
@@ -204,24 +283,64 @@ function waitForChatError(events: readonly GatewayEvent[], runId: string) {
   });
 }
 
+async function killWorkerPayload(owner: NodeWorkerProcessIdentity): Promise<number> {
+  let worker = owner;
+  if (process.platform === "linux" || process.platform === "darwin") {
+    // The receipt identifies the cleanup anchor; crash its payload, preserving cleanup custody.
+    const { stdout } = await promisify(execFile)("ps", ["-ax", "-o", "ppid=", "-o", "pid="], {
+      encoding: "utf8",
+      timeout: 1_000,
+    });
+    const payloads = stdout.split("\n").flatMap((line) => {
+      const [parentPid, pid] = line.trim().split(/\s+/u).map(Number);
+      if (parentPid !== owner.pid || !pid) {
+        return [];
+      }
+      const identity = requireNodeWorkerProcessIdentity(pid);
+      const argv = readGatewayLockProcessCmdline(pid, process.platform, 1_000);
+      return argv?.includes("--internal-worker-ipc") && argv.includes("--internal-worker-session")
+        ? [identity]
+        : [];
+    });
+    assert.equal(payloads.length, 1, "cleanup anchor must own exactly one worker payload");
+    worker = payloads[0]!;
+  }
+  assert.equal(
+    inspectNodeWorkerProcessIdentity(owner),
+    "live",
+    "worker owner changed before crash",
+  );
+  assert.equal(
+    inspectNodeWorkerProcessIdentity(worker),
+    "live",
+    "worker payload changed before crash",
+  );
+  process.kill(worker.pid, "SIGKILL");
+  return worker.pid;
+}
+
 async function runProof(options: ProducerOptions) {
+  const state = createQaBusState();
   // openclaw-temp-dir: allow standalone QA producer owns and removes this fixture root.
   const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cloud-midturn-loss-"));
-  const state = createQaBusState();
-  const bus = await startQaBusServer({ state });
-  const provider = await startMidturnProvider();
-  const ssh = await createSshdFixture(fixtureRoot);
-  let sshd = await ssh.start();
+  let bus: Awaited<ReturnType<typeof startQaBusServer>> | undefined;
+  let provider: Awaited<ReturnType<typeof startMidturnProvider>> | undefined;
+  const gatewayOwner = createQaGatewayChild();
   let gateway: Gateway | undefined;
   let operator: GatewayClient | undefined;
+  let workerNode: PairedNodeWorkerHost | undefined;
+  let published: PublishedWireWorkspace | undefined;
+  let workerLaunchId: string | undefined;
   let proofError: unknown;
   let verdict: Record<string, unknown> | undefined;
   try {
-    const repo = await initializeRepository(fixtureRoot);
-    const sshPrivateKey = await fs.readFile(ssh.clientKeyPath, "utf8");
+    bus = await startQaBusServer({ state });
+    provider = await startMidturnProvider();
+    published = await createPublishedWireWorkspace(fixtureRoot);
     const transport = createQaChannelTransport(state);
-    gateway = await startQaGatewayChild({
+    gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
+      initializeCurrentRuntimeState: true,
       useRepoCli: true,
       providerBaseUrl: `${provider.baseUrl}/v1`,
       providerMode: "mock-openai",
@@ -232,48 +351,52 @@ async function runProof(options: ProducerOptions) {
       enabledPluginIds: ["qa-lab"],
       controlUiEnabled: false,
       controlUiAllowedOrigins: ["http://127.0.0.1"],
-      runtimeEnvPatch: { OPENCLAW_QA_STATIC_SSH_KEY: sshPrivateKey },
       mutateConfig: (config) => ({
         ...config,
         session: { ...config.session, dmScope: "per-peer" },
-        secrets: {
-          ...config.secrets,
-          providers: { ...config.secrets?.providers, default: { source: "env" } },
-        },
-        cloudWorkers: {
-          profiles: {
-            [PROFILE_ID]: {
-              provider: "static-ssh",
-              install: "bundle",
-              settings: {
-                host: "127.0.0.1",
-                port: ssh.port,
-                user: ssh.user,
-                hostKey: ssh.hostKey,
-                keyRef: {
-                  source: "env",
-                  provider: "default",
-                  id: "OPENCLAW_QA_STATIC_SSH_KEY",
-                },
-              },
-            },
-          },
+        nodeHost: {
+          ...config.nodeHost,
+          workerRuns: { enabled: true },
         },
       }),
     });
     const events: GatewayEvent[] = [];
     const deviceIdentity = loadOrCreateDeviceIdentity({
-      path: path.join(fixtureRoot, "operator-identity.sqlite"),
+      path: path.join(fixtureRoot, "operator", "client", "credentials.sqlite"),
     });
     operator = await connectOperator(gateway, events, deviceIdentity);
+    workerNode = await createPairedNodeWorkerHost({
+      gateway,
+      operator,
+      root: fixtureRoot,
+      label: "midturn-worker",
+      onInvoke: (frame) => {
+        if (frame.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND && frame.paramsJSON) {
+          workerLaunchId = (JSON.parse(frame.paramsJSON) as { launchId?: string }).launchId;
+        }
+      },
+    });
     await operator.request("sessions.create", {
       key: SESSION_KEY,
       agentId: "qa",
       worktree: true,
       worktreeName: `cloud-midturn-${randomUUID().slice(0, 8)}`,
       worktreeBaseRef: "main",
-      cwd: repo,
+      cwd: published.source,
     });
+    const created = requireRecord(
+      await gateway.call("sessions.describe", { key: SESSION_KEY }),
+      "created session",
+    );
+    const session = requireRecord(created.session, "created session details");
+    const localWorkspaceDir = session.execCwd ?? session.spawnedCwd;
+    if (typeof localWorkspaceDir !== "string") {
+      throw new Error("created session did not expose its managed workspace");
+    }
+    await Promise.all([
+      fs.writeFile(path.join(localWorkspaceDir, "checkpoint-1.txt"), "CLOUD-MIDTURN-TOOL-1\n"),
+      fs.writeFile(path.join(localWorkspaceDir, "checkpoint-2.txt"), "CLOUD-MIDTURN-TOOL-2\n"),
+    ]);
     await operator.request("sessions.messages.subscribe", { key: SESSION_KEY });
 
     const baselineCursor = state.getSnapshot().messages.length;
@@ -287,7 +410,7 @@ async function runProof(options: ProducerOptions) {
 
     await gateway.call(
       "sessions.dispatch",
-      { key: SESSION_KEY, profileId: PROFILE_ID },
+      { key: SESSION_KEY, deviceId: workerNode.identity.deviceId },
       { timeoutMs: PROOF_TIMEOUT_MS },
     );
     const runId = `cloud-midturn-loss-${randomUUID()}`;
@@ -308,7 +431,23 @@ async function runProof(options: ProducerOptions) {
     });
     await waitForVolatilePreview(events, runId);
 
-    const killed = await killSshdProcessTree(sshd);
+    const node = workerNode;
+    const activeWorker = await waitFor("proof-owned active node worker", async () => {
+      if (!workerLaunchId) {
+        return undefined;
+      }
+      const receipt = await node.supervisor.status(workerLaunchId);
+      return receipt?.state === "running" && receipt.runId === runId && receipt.worker
+        ? receipt.worker
+        : undefined;
+    });
+    const workerPid = await killWorkerPayload(activeWorker);
+    const killed = {
+      killedProcessCount: 1,
+      nodeDeviceId: node.identity.deviceId,
+      workerPid,
+      cleanupOwnerPid: activeWorker.pid,
+    };
     const waitResult = await operator.request<GatewayRunResult>(
       "agent.wait",
       { runId, timeoutMs: PROOF_TIMEOUT_MS },
@@ -316,9 +455,9 @@ async function runProof(options: ProducerOptions) {
     );
     const chatError = await waitForChatError(events, runId);
     const failedPlacement = await waitForFailedPlacement(gateway);
-    const terminalReason = String(failedPlacement.terminalReason ?? "");
-    if (!terminalReason || terminalReason.length > 1_024) {
-      throw new Error(`placement terminal reason was missing or unbounded: ${terminalReason}`);
+    const terminalReason = failedPlacement.terminalReason;
+    if (typeof terminalReason !== "string" || !terminalReason || terminalReason.length > 1_024) {
+      throw new Error("placement terminal reason was missing, invalid, or unbounded");
     }
     const historyAfterFailure = await readHistory(operator);
     const countsAfterFailure = markerCounts(historyAfterFailure);
@@ -327,21 +466,45 @@ async function runProof(options: ProducerOptions) {
       const marker = COMMITTED_MARKERS.find((candidate) => text.includes(candidate));
       return marker ? [{ role: messageRole(message), marker }] : [];
     });
-    if (
-      !isDeepStrictEqual(historyAfterFailure, committedBeforeKill) ||
-      committedSequence.length !== COMMITTED_MARKERS.length ||
-      committedSequence.some((entry, index) => entry.marker !== COMMITTED_MARKERS[index]) ||
-      historyAfterFailure.some((message) => messageText(message).includes(VOLATILE_TEXT)) ||
-      Object.values(countsAfterFailure).some((count) => count !== 1)
-    ) {
-      throw new Error(`unexpected durable cutoff: ${JSON.stringify(committedSequence)}`);
-    }
+    assert.deepEqual(
+      historyAfterFailure.slice(0, committedBeforeKill.length),
+      committedBeforeKill,
+      "worker loss must retain the exact committed prefix",
+    );
+    assert.deepEqual(
+      committedSequence.map((entry) => entry.marker),
+      COMMITTED_MARKERS,
+      "worker loss must retain checkpoint ordering",
+    );
+    assert.ok(Object.values(countsAfterFailure).every((count) => count === 1));
+    const interruptedTail = historyAfterFailure.slice(committedBeforeKill.length);
+    assert.equal(interruptedTail.length, 2, "worker loss must append one partial and one notice");
+    const interruptedReply = requireRecord(interruptedTail[0], "interrupted reply");
+    assert.equal(interruptedReply.role, "assistant");
+    assert.equal(messageText(interruptedReply), VOLATILE_TEXT);
+    assert.deepEqual(interruptedReply.openclawAbort, {
+      aborted: true,
+      origin: "placement-abandon",
+      runId,
+    });
+    const failureNotice = requireRecord(interruptedTail[1], "worker failure notice");
+    assert.equal(failureNotice.role, "custom");
+    assert.equal(failureNotice.customType, "run-failed-before-reply");
+    assert.equal(failureNotice.display, true);
+    const runError = requireRecord(failureNotice.openclawRunError, "worker failure provenance");
+    assert.equal(runError.runId, runId);
+    const failureSummary = messageText(failureNotice);
+    assert.ok(failureSummary.trim());
+    assert.equal(runError.summary, failureSummary);
+    assert.equal(waitResult.status, "error");
 
-    sshd = await ssh.start();
+    // Keep the node connected until its supervisor delivers the worker's terminal receipt.
+    await node.disconnect();
+    await node.connect();
     const redispatched = requireRecord(
       await gateway.call(
         "sessions.dispatch",
-        { key: SESSION_KEY, profileId: PROFILE_ID },
+        { key: SESSION_KEY, deviceId: workerNode.identity.deviceId },
         { timeoutMs: PROOF_TIMEOUT_MS },
       ),
       "sessions.dispatch redispatch",
@@ -371,41 +534,67 @@ async function runProof(options: ProducerOptions) {
         : undefined;
     });
     const recoveryCounts = markerCounts(historyAfterRecovery);
+    const recoveryContext = provider.contextRequest;
     if (
-      !COMMITTED_MARKERS.every((marker) => provider.contextRequest.includes(marker)) ||
-      provider.contextRequest.includes(VOLATILE_TEXT) ||
+      !COMMITTED_MARKERS.every((marker) => recoveryContext.split(marker).length - 1 === 1) ||
+      recoveryContext.includes(VOLATILE_TEXT) ||
+      recoveryContext.includes(JSON.stringify(failureSummary).slice(1, -1)) ||
       Object.values(recoveryCounts).some((count) => count !== 1)
     ) {
       throw new Error(
-        "redispatched inference did not preserve exactly one copy of each checkpoint",
+        "redispatched inference lost or duplicated checkpoint context or replayed a display-only record",
       );
     }
+
+    const qaOperator = operator;
+    if (!qaOperator) {
+      throw new Error("operator was unavailable after recovery");
+    }
+    const activeDiskSpace = await waitFor(
+      "real paired-node worker disk-space projection",
+      async () =>
+        readActiveWorkerDiskSpace(await qaOperator.request<SessionsList>("sessions.list", {})),
+    );
+    const reclaimed = requireRecord(
+      await operator.request("sessions.reclaim", { key: SESSION_KEY }),
+      "sessions.reclaim",
+    );
+    if (requireRecord(reclaimed.placement, "reclaimed placement").state !== "reclaimed") {
+      throw new Error(`sessions.reclaim did not reclaim the worker: ${JSON.stringify(reclaimed)}`);
+    }
+    await waitFor("retired worker disk-space projection eviction", async () => {
+      const listed = await qaOperator.request<SessionsList>("sessions.list", {});
+      return isReclaimedWithoutDiskSpace(listed) ? true : undefined;
+    });
 
     verdict = {
       status: "pass",
       providerMode: "mock-openai",
       channel: "qa-channel",
-      workerProvider: "static-ssh",
+      workerProvider: "device",
       sessionKey: SESSION_KEY,
       killedWorker: killed,
       durableTranscript: {
         cutoff: COMMITTED_MARKERS.length,
-        exactPreKillSnapshotRetained: true,
+        exactPreKillPrefixRetained: true,
         historyMessageCount: historyAfterFailure.length,
         exactMarkers: COMMITTED_MARKERS,
         sequence: committedSequence,
         markerCounts: countsAfterFailure,
-        volatileMessagePersisted: false,
+        interruptedPartialPersisted: true,
+        failureNoticeCount: 1,
       },
       livePreview: {
         text: VOLATILE_TEXT,
         deliveredBeforeDeath: true,
-        absentFromDurableTranscript: true,
+        retainedAsInterruptedReply: true,
         visibleFailureAfterDeath: true,
       },
       turnFailure: {
         agentWaitStatus: waitResult.status,
-        chatError: String(chatError.errorMessage ?? chatError.error ?? "worker turn failed"),
+        chatError: stringifyNonErrorCause(
+          chatError.errorMessage ?? chatError.error ?? "worker turn failed",
+        ),
         terminalReason,
         terminalReasonLength: terminalReason.length,
       },
@@ -413,9 +602,14 @@ async function runProof(options: ProducerOptions) {
         placementState: requireRecord(redispatched.placement, "redispatched placement").state,
         contextContainedCutoff: true,
         contextExcludedVolatilePreview: true,
+        contextExcludedFailureNotice: true,
         reply: CONTEXT_REPLY,
         turnStatus: recoveryResult.status,
         markerCounts: recoveryCounts,
+      },
+      diskSpaceProjection: {
+        active: activeDiskSpace,
+        reclaimedProjectionAbsent: true,
       },
       providerRequestCount: provider.requestCount,
       historyMessageCountBeforeKill: committedBeforeKill.length,
@@ -428,28 +622,29 @@ async function runProof(options: ProducerOptions) {
     );
   } catch (error) {
     proofError = error;
-  }
-
-  const cleanup = await Promise.allSettled([
-    operator?.stopAndWait({ timeoutMs: 1_000 }) ?? Promise.resolve(),
-    gateway?.stop() ?? Promise.resolve(),
-    stopSshd(sshd),
-    provider.stop(),
-    bus.stop(),
-    fs.rm(fixtureRoot, { recursive: true, force: true }),
-  ]);
-  const cleanupFailures = cleanup.flatMap((result) =>
-    result.status === "rejected" ? [result.reason] : [],
-  );
-  if (cleanupFailures.length > 0) {
-    proofError = new AggregateError(
-      proofError ? [proofError, ...cleanupFailures] : cleanupFailures,
-      "cloud worker mid-turn loss cleanup failed",
-      proofError ? { cause: proofError } : undefined,
+  } finally {
+    const cleanup = await Promise.allSettled([
+      operator?.stopAndWait({ timeoutMs: 1_000 }) ?? Promise.resolve(),
+      workerNode?.stop() ?? Promise.resolve(),
+      stopQaGatewayFixture(gatewayOwner),
+      published ? closeWireServer(published.server) : Promise.resolve(),
+      provider?.stop() ?? Promise.resolve(),
+      bus?.stop() ?? Promise.resolve(),
+      fs.rm(fixtureRoot, { recursive: true, force: true }),
+    ]);
+    const cleanupFailures = cleanup.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
     );
+    if (cleanupFailures.length > 0) {
+      proofError = new AggregateError(
+        proofError ? [proofError, ...cleanupFailures] : cleanupFailures,
+        "cloud worker mid-turn loss cleanup failed",
+        proofError ? { cause: proofError } : undefined,
+      );
+    }
   }
   if (proofError) {
-    throw proofError;
+    throw toErrorObject(proofError, "Cloud worker mid-turn loss proof failed");
   }
   if (!verdict) {
     throw new Error("cloud worker mid-turn loss proof produced no verdict");
@@ -468,11 +663,16 @@ async function runProducer(options: ProducerOptions): Promise<QaEvidenceSummaryJ
       id: SCENARIO_ID,
       title: "Cloud worker mid-turn machine loss",
       sourcePath: `qa/scenarios/runtime/${SCENARIO_ID}.yaml`,
-      docsRefs: ["docs/gateway/cloud-workers.md", "docs/concepts/qa-e2e-automation.md"],
+      docsRefs: [
+        "docs/gateway/cloud-workers/session-lifecycle.md",
+        "docs/concepts/qa-e2e-automation.md",
+      ],
       codeRefs: [
         "src/worker/embedded-agent-transcript.runtime.ts",
         "src/gateway/worker-environments/transcript-commit.ts",
         "src/gateway/worker-environments/worker-turn-launcher.ts",
+        "src/gateway/worker-environments/placement-disk-space.ts",
+        "src/gateway/session-row-projection.ts",
       ],
     },
   });
@@ -483,7 +683,7 @@ async function runProducer(options: ProducerOptions): Promise<QaEvidenceSummaryJ
     return await writer.write({
       artifacts: [{ filePath: VERDICT_FILE, kind: "verdict" }],
       details:
-        "static-SSH process-tree loss preserved the exact committed transcript prefix, surfaced an error, and redispatched with continuous context",
+        "paired-node worker loss preserved the exact committed prefix and interrupted reply, surfaced a durable error, and redispatched with continuous context",
       durationMs: Math.max(1, Date.now() - startedAt),
       status: "pass",
     });

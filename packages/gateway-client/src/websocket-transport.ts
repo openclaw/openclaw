@@ -1,11 +1,13 @@
+import { isIP } from "node:net";
+import { checkServerIdentity, TLSSocket } from "node:tls";
 import { isLoopbackIpAddress, type ParsedIpAddress } from "@openclaw/net-policy/ip";
 import { isWssUrl } from "@openclaw/net-policy/url-protocol";
-import type { ClientOptions, CertMeta, WebSocket } from "ws";
 import {
   normalizeTlsFingerprint,
   parseGatewayIpAddress,
   parseHostForAddressChecks,
 } from "./client-address-utils.js";
+import type { GatewayWebSocketClientOptions, GatewayWebSocketTargetOptions } from "./websocket.js";
 
 const PRIVATE_OR_LOOPBACK_IPV4_RANGES = new Set<string>([
   "loopback",
@@ -52,52 +54,45 @@ function isTrustedPlaintextWebSocketHost(hostname: string): boolean {
 }
 
 function isSecureWebSocketUrl(rawUrl: string, options?: { allowPrivateWs?: boolean }): boolean {
-  try {
-    const url = new URL(rawUrl);
-    const protocol =
-      url.protocol === "https:" ? "wss:" : url.protocol === "http:" ? "ws:" : url.protocol;
-    if (protocol === "wss:") {
-      return true;
-    }
-    if (protocol !== "ws:") {
-      return false;
-    }
-    if (isGatewayLoopbackHost(url.hostname) || isTrustedPlaintextWebSocketHost(url.hostname)) {
-      return true;
-    }
-    if (options?.allowPrivateWs === true) {
-      const hostForIpCheck =
-        url.hostname.startsWith("[") && url.hostname.endsWith("]")
-          ? url.hostname.slice(1, -1)
-          : url.hostname;
-      return (
-        isPrivateOrLoopbackHost(url.hostname) || parseGatewayIpAddress(hostForIpCheck) === undefined
-      );
-    }
-    return false;
-  } catch {
+  const url = URL.parse(rawUrl);
+  if (!url) {
     return false;
   }
+  const protocol =
+    url.protocol === "https:" ? "wss:" : url.protocol === "http:" ? "ws:" : url.protocol;
+  if (protocol === "wss:") {
+    return true;
+  }
+  if (protocol !== "ws:") {
+    return false;
+  }
+  if (isTrustedPlaintextWebSocketHost(url.hostname)) {
+    return true;
+  }
+  if (options?.allowPrivateWs === true) {
+    const hostForIpCheck =
+      url.hostname.startsWith("[") && url.hostname.endsWith("]")
+        ? url.hostname.slice(1, -1)
+        : url.hostname;
+    return parseGatewayIpAddress(hostForIpCheck) === undefined;
+  }
+  return false;
 }
 
 export class GatewayWebSocketTransportConfigurationError extends Error {}
+export class GatewayWebSocketTlsPinError extends Error {}
 
-type FingerprintCheckingClientOptions = Omit<ClientOptions, "checkServerIdentity"> & {
-  checkServerIdentity?: (servername: string, cert: CertMeta) => Error | undefined;
-};
-
-type GatewayWebSocketTransport = {
-  options: ClientOptions;
-  validateSocket(socket: WebSocket): Error | null;
-};
-
-export function resolveGatewayWebSocketTransport(params: {
-  url: string;
-  tlsFingerprint?: string;
-  env?: NodeJS.ProcessEnv;
-  options: Omit<ClientOptions, "checkServerIdentity" | "rejectUnauthorized">;
-  normalizeTlsFingerprint?: (fingerprint: string | undefined) => string;
-}): GatewayWebSocketTransport {
+export function resolveGatewayWebSocketTransport(
+  params: GatewayWebSocketTargetOptions & {
+    url: string;
+    env?: NodeJS.ProcessEnv;
+    options: Omit<
+      GatewayWebSocketClientOptions,
+      "checkServerIdentity" | "rejectUnauthorized" | "finishRequest"
+    >;
+    normalizeTlsFingerprint?: (fingerprint: string | undefined) => string;
+  },
+): { options: GatewayWebSocketClientOptions } {
   const usesTls = isWssUrl(params.url);
   if (params.tlsFingerprint && !usesTls) {
     throw new GatewayWebSocketTransportConfigurationError(
@@ -106,12 +101,7 @@ export function resolveGatewayWebSocketTransport(params: {
   }
   const allowPrivateWs = (params.env ?? process.env).OPENCLAW_ALLOW_INSECURE_PRIVATE_WS === "1";
   if (!isSecureWebSocketUrl(params.url, { allowPrivateWs })) {
-    let displayHost = params.url;
-    try {
-      displayHost = new URL(params.url).hostname || params.url;
-    } catch {
-      // Use the raw URL when syntax is malformed.
-    }
+    const displayHost = URL.parse(params.url)?.hostname || params.url;
     throw new GatewayWebSocketTransportConfigurationError(
       `SECURITY ERROR: Cannot connect to "${displayHost}" over plaintext ws://. ` +
         "Both credentials and chat data would be exposed to network interception. " +
@@ -133,54 +123,72 @@ export function resolveGatewayWebSocketTransport(params: {
       "gateway tls fingerprint must be a SHA-256 fingerprint",
     );
   }
-  const options: FingerprintCheckingClientOptions = { ...params.options };
-  if (usesTls && expectedFingerprint) {
-    options.rejectUnauthorized = false;
-    options.checkServerIdentity = (_hostValue: string, cert: CertMeta) => {
-      const fingerprintValue =
-        typeof cert === "object" && cert && "fingerprint256" in cert
-          ? ((cert as { fingerprint256?: string }).fingerprint256 ?? "")
-          : "";
-      const canonicalFingerprint = normalizeTlsFingerprint(
-        typeof fingerprintValue === "string" ? fingerprintValue : "",
-      );
-      const fingerprint = canonicalFingerprint ? normalize(canonicalFingerprint) : "";
-      const expected = normalize(expectedFingerprint);
-      if (!fingerprint) {
-        return new Error("Missing server TLS fingerprint");
-      }
-      if (fingerprint !== expected) {
-        return new Error("Server TLS fingerprint mismatch");
-      }
-      return undefined;
-    };
+  const options: GatewayWebSocketClientOptions = { ...params.options };
+  if (usesTls && params.tlsServerName) {
+    const peerName = params.tlsServerName;
+    // SNI accepts DNS names, while certificate identity also permits IP SANs.
+    options.servername = isIP(peerName) ? "" : peerName;
+    options.checkServerIdentity = (_hostname, certificate) =>
+      checkServerIdentity(peerName, certificate);
   }
+  if (usesTls && expectedFingerprint) {
+    applyGatewayWebSocketTlsPin(options, expectedFingerprint, normalize);
+  }
+  return { options };
+}
 
-  return {
-    options: options as ClientOptions,
-    validateSocket: (socket) => {
-      if (!params.tlsFingerprint) {
-        return null;
+// The enrolled auxiliary streams share pin enforcement without inheriting URL policy.
+export function applyGatewayWebSocketTlsPin(
+  options: Pick<GatewayWebSocketClientOptions, "headers" | "rejectUnauthorized" | "finishRequest">,
+  expectedFingerprint: string,
+  normalize = normalizeTlsFingerprint,
+): void {
+  options.rejectUnauthorized = false;
+  const headers = { ...options.headers };
+  const deferredHeaders = Object.entries(headers).filter(([key]) => key.toLowerCase() === "expect");
+  for (const [key] of deferredHeaders) {
+    delete headers[key];
+  }
+  options.headers = headers;
+  options.finishRequest = (request) => {
+    request.once("socket", (socket) => {
+      if (!(socket instanceof TLSSocket)) {
+        request.destroy(new GatewayWebSocketTlsPinError("gateway tls fingerprint unavailable"));
+        return;
       }
-      const expected = expectedFingerprint ? normalize(expectedFingerprint) : "";
-      if (!expected) {
-        return new Error("gateway tls fingerprint missing");
-      }
-      const rawSocket = (
-        socket as WebSocket & {
-          _socket?: { getPeerCertificate?: () => { fingerprint256?: string } };
+      const validatePin = () => {
+        if (request.destroyed) {
+          return;
         }
-      )["_socket"];
-      if (!rawSocket || typeof rawSocket.getPeerCertificate !== "function") {
-        return new Error("gateway tls fingerprint unavailable");
+        const canonicalFingerprint = normalizeTlsFingerprint(
+          socket.getPeerCertificate()?.fingerprint256,
+        );
+        const fingerprint = canonicalFingerprint ? normalize(canonicalFingerprint) : "";
+        if (!fingerprint || fingerprint !== normalize(expectedFingerprint)) {
+          request.destroy(
+            new GatewayWebSocketTlsPinError(
+              fingerprint
+                ? "gateway tls fingerprint mismatch"
+                : "gateway tls fingerprint unavailable",
+            ),
+          );
+          return;
+        }
+        // Validate pin before upgrade, including deferred Expect headers.
+        for (const [key, value] of deferredHeaders) {
+          if (value !== undefined) {
+            request.setHeader(key, value);
+          }
+        }
+        request.end();
+      };
+      // SAFETY: Node TLS sockets track secureConnecting; proxy sockets may already be secure.
+      if ((socket as TLSSocket & { secureConnecting: boolean }).secureConnecting) {
+        socket.once("secureConnect", validatePin);
+        request.once("close", () => socket.off("secureConnect", validatePin));
+      } else {
+        validatePin();
       }
-      const cert = rawSocket.getPeerCertificate();
-      const canonicalFingerprint = normalizeTlsFingerprint(cert?.fingerprint256 ?? "");
-      const fingerprint = canonicalFingerprint ? normalize(canonicalFingerprint) : "";
-      if (!fingerprint) {
-        return new Error("gateway tls fingerprint unavailable");
-      }
-      return fingerprint === expected ? null : new Error("gateway tls fingerprint mismatch");
-    },
+    });
   };
 }

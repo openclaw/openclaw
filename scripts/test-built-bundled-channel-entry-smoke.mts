@@ -1,11 +1,10 @@
-// Smoke-tests packaged bundled channel entrypoints in source and installed
-// package layouts.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { createBuildSmokeEnv } from "./lib/build-smoke-env.mts";
 import { collectRootPackageExcludedExtensionDirs } from "./lib/bundled-plugin-build-entries.mjs";
 import { parsePackageRootArg } from "./lib/package-root-args.mts";
 // Keep this prepack smoke independent of workspace package links.
@@ -13,6 +12,11 @@ import { isRecord } from "./lib/record-shared.mjs";
 import { installProcessWarningFilter } from "./process-warning-filter.mts";
 
 installProcessWarningFilter();
+
+const stateTempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-entry-state-"));
+const smokeEnv = createBuildSmokeEnv(stateTempRoot);
+Object.assign(process.env, smokeEnv);
+process.once("exit", () => fs.rmSync(stateTempRoot, { recursive: true, force: true }));
 
 process.env.OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK ??= "1";
 
@@ -55,38 +59,50 @@ function packageRootLooksInstalled(root: string) {
   return root.replaceAll("\\", "/").endsWith("/node_modules/openclaw");
 }
 
-function smokeInInstalledLayoutIfNeeded() {
-  if (process.env[installedLayoutEnv] === "1" || packageRootLooksInstalled(packageRoot)) {
-    return;
-  }
-
+function smokeInInstalledLayout() {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-entry-smoke-"));
   const nodeModulesRoot = path.join(tempRoot, "node_modules");
   const installedPackageRoot = path.join(nodeModulesRoot, "openclaw");
-  fs.mkdirSync(nodeModulesRoot, { recursive: true });
-  fs.symlinkSync(packageRoot, installedPackageRoot, "dir");
-
   try {
-    const result = spawnSync(
-      process.execPath,
-      [
-        "--preserve-symlinks",
-        fileURLToPath(import.meta.url),
-        "--package-root",
-        installedPackageRoot,
-      ],
-      {
-        env: { ...process.env, [installedLayoutEnv]: "1" },
-        stdio: "inherit",
-      },
+    fs.mkdirSync(installedPackageRoot, { recursive: true });
+    fs.copyFileSync(
+      path.join(packageRoot, "package.json"),
+      path.join(installedPackageRoot, "package.json"),
     );
-    process.exit(result.status ?? 1);
+    fs.cpSync(path.join(packageRoot, "dist"), path.join(installedPackageRoot, "dist"), {
+      recursive: true,
+      mode: fs.constants.COPYFILE_FICLONE,
+    });
+    fs.symlinkSync(
+      fs.realpathSync(path.join(packageRoot, "node_modules")),
+      path.join(installedPackageRoot, "node_modules"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    return smokeInstalledPackageOnPlainNode(installedPackageRoot);
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
 }
 
-smokeInInstalledLayoutIfNeeded();
+// tsx's CJS hook would resolve the plugin loader's require(esm) graph (execa ->
+// npm-run-path -> unicorn-magic) with the require condition; probe on plain Node.
+function smokeInstalledPackageOnPlainNode(installedPackageRoot: string) {
+  const result = spawnSync(
+    process.execPath,
+    [fileURLToPath(import.meta.url), "--package-root", installedPackageRoot],
+    { env: { ...smokeEnv, [installedLayoutEnv]: "1" }, stdio: "inherit" },
+  );
+  return result.status ?? 1;
+}
+
+if (process.env[installedLayoutEnv] !== "1") {
+  // Let the layout owner's finally run before terminating this process.
+  process.exit(
+    packageRootLooksInstalled(packageRoot)
+      ? smokeInstalledPackageOnPlainNode(packageRoot)
+      : smokeInInstalledLayout(),
+  );
+}
 
 async function importBuiltModule(absolutePath: string): Promise<unknown> {
   const imported: unknown = await import(pathToFileURL(absolutePath).href);
@@ -177,24 +193,23 @@ function assertSecretContractShape(secrets: unknown, context: string) {
   );
 }
 
-function assertEntryFileExists(entry: BuiltEntryFile) {
+async function importEntry(entryFile: BuiltEntryFile) {
   assert.ok(
-    fs.existsSync(entry.path),
-    `${entry.id} ${entry.kind} entry missing from packed dist: ${entry.path}`,
+    fs.existsSync(entryFile.path),
+    `${entryFile.id} ${entryFile.kind} entry missing from packed dist: ${entryFile.path}`,
   );
-}
-
-async function smokeChannelEntry(entryFile: BuiltEntryFile) {
-  assertEntryFileExists(entryFile);
-  let entry: unknown;
   try {
-    entry = await importBuiltModule(entryFile.path);
+    return await importBuiltModule(entryFile.path);
   } catch (error) {
     throw new Error(
       `${entryFile.id} ${entryFile.kind} entry failed to import ${entryFile.path}: ${error instanceof Error ? error.message : String(error)}`,
       { cause: error },
     );
   }
+}
+
+async function smokeChannelEntry(entryFile: BuiltEntryFile) {
+  const entry = await importEntry(entryFile);
   assert.ok(isRecord(entry));
   assert.equal(entry.kind, "bundled-channel-entry", `${entryFile.id} channel entry kind mismatch`);
   assert.ok("loadChannelPlugin" in entry && typeof entry.loadChannelPlugin === "function");
@@ -209,24 +224,10 @@ async function smokeChannelEntry(entryFile: BuiltEntryFile) {
 }
 
 async function smokeSetupEntry(entryFile: BuiltEntryFile) {
-  assertEntryFileExists(entryFile);
-  let entry: unknown;
-  try {
-    entry = await importBuiltModule(entryFile.path);
-  } catch (error) {
-    throw new Error(
-      `${entryFile.id} ${entryFile.kind} entry failed to import ${entryFile.path}: ${error instanceof Error ? error.message : String(error)}`,
-      { cause: error },
-    );
-  }
+  const entry = await importEntry(entryFile);
   if (!isRecord(entry) || entry.kind !== "bundled-channel-setup-entry") {
     return false;
   }
-  assert.equal(
-    entry.kind,
-    "bundled-channel-setup-entry",
-    `${entryFile.id} setup entry kind mismatch`,
-  );
   assert.ok("loadSetupPlugin" in entry && typeof entry.loadSetupPlugin === "function");
   const plugin = entry.loadSetupPlugin();
   assert.equal(plugin?.id, entryFile.id, `${entryFile.id} setup plugin failed to load`);
