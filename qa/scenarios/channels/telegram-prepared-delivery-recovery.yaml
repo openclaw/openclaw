@@ -59,7 +59,7 @@ scenario:
                 if (references.length !== 1 || !readFileSync(references[0]).equals(readFileSync(mediaPath))) {
                   throw new Error("Prepared delivery fixture block must contain its original document");
                 }
-                appendFileSync(auditPath, JSON.stringify({ phase: "cancelled-full-block", fullText, mediaReferences: 1 }) + "\n", { mode: 0o644 });
+                appendFileSync(auditPath, JSON.stringify({ phase: "cancelled-full-block", fullText, mediaReferences: 1 }) + "\n", { mode: 0o600 });
                 return { cancel: true, reason: "QA retains this full-answer block for final recovery" };
               }
               if (shortened || event.kind !== "final") return;
@@ -76,7 +76,7 @@ scenario:
                 hadTarget: Boolean(event.payload.replyToId || event.payload.replyToCurrent),
                 outputHasTarget: Boolean(payload.replyToId || payload.replyToCurrent || payload.replyToTag),
                 mediaReferences: references.length,
-              }) + "\n", { mode: 0o644 });
+              }) + "\n", { mode: 0o600 });
               return { payload };
             });
           },
@@ -137,7 +137,11 @@ flow:
                     [firstParagraph, ...codeBlocks, finalParagraph].join('\n\n')
               - set: auditPath
                 value:
-                  expr: path.join(env.gateway.workspaceDir, "qa-prepared-delivery-recovery", `${marker}.jsonl`)
+                  expr: path.join(env.gateway.workspaceDir, `${marker}.jsonl`)
+              # Keep the receipt runner-owned in the shared fixture workspace;
+              # the isolated SUT appends without creating a private runtime file.
+              - call: fs.writeFile
+                args: [{ ref: auditPath }, "", { mode: 384 }]
               - call: env.gateway.restartAfterStateMutation
                 args:
                   - lambda:
@@ -151,8 +155,6 @@ flow:
                           telegram.replyToMode = caseName === "stream" ? "all" : "off";
                           telegram.richMessages = false;
                           if (caseName !== "stream") {
-                            await fs.mkdir(path.dirname(auditPath), { recursive: true });
-                            await fs.chmod(path.dirname(auditPath), 0o777);
                             await fs.mkdir(fixtureDir, { recursive: true });
                             const { pathToFileURL } = await qaImport("node:url");
                             const pluginEntryUrl = pathToFileURL(path.join(env.repoRoot, "dist/plugin-sdk/plugin-entry.js")).href;
