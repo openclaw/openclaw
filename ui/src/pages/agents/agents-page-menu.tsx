@@ -10,12 +10,13 @@ async function copyAgentId(id: string) {
   showToast({ message: t(copied ? "common.copied" : "common.copyFailed") });
 }
 
-// Phone widths swap the toolbar's secondary actions for this menu; both run the same actions.
+// Holds the selected agent's actions. Refresh joins them where the toolbar's icon is hidden.
 export function AgentsPageMenu(props: {
   agentId: string | null;
   defaultLabel: string;
   defaultDisabled: boolean;
   pinLabel: string;
+  showRefresh: boolean;
   refreshLabel: string;
   refreshDisabled: boolean;
   onSetDefault: (agentId: string) => void;
@@ -31,7 +32,9 @@ export function AgentsPageMenu(props: {
           { id: "pin", label: props.pinLabel },
         ]
       : []),
-    { id: "refresh", label: props.refreshLabel, disabled: props.refreshDisabled },
+    ...(props.showRefresh
+      ? [{ id: "refresh", label: props.refreshLabel, disabled: props.refreshDisabled }]
+      : []),
   ];
   return (
     <Menu
