@@ -477,8 +477,8 @@ extension OpenClawChatViewModel {
         thinking: String,
         messageID: UUID,
         session: SessionSnapshot,
-        expectedSessionSettings: OpenClawChatSessionSettingsExpectation,
-        deliveryIsAmbiguous: Bool) async -> Bool
+        expectedSessionSettings: OpenClawChatSessionSettingsExpectation?,
+        failureReason: String?) async -> Bool
     {
         guard let outbox else { return false }
         let agentID = self.outboxAgentID(for: session)
@@ -496,11 +496,9 @@ extension OpenClawChatViewModel {
             thinking: thinking,
             expectedSessionSettings: expectedSessionSettings,
             createdAt: Date().timeIntervalSince1970,
-            status: deliveryIsAmbiguous ? .failed : .queued,
+            status: failureReason == nil ? .queued : .failed,
             retryCount: 0,
-            lastError: deliveryIsAmbiguous
-                ? OpenClawChatSQLiteTranscriptCache.outboxUnconfirmedError
-                : nil)
+            lastError: failureReason)
         await self.waitForBootstrapOutboxBranchCapture(for: session)
         guard await outbox.enqueueCommand(command) else { return false }
         guard self.isCurrentSession(session) else { return true }

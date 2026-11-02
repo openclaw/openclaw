@@ -163,13 +163,16 @@ final class ChatSendHydrationTests: XCTestCase {
         case pendingHealth
         case startedAcknowledgement
         case differentAccount
+        case differentAccountNewerDraft
+        case differentAccountClearedDraft
         case explicitAgent
         case differentSession
 
         var permitsSend: Bool {
             switch self {
             case .unchanged, .beforeTask, .pendingHealth, .startedAcknowledgement: true
-            case .differentAccount, .explicitAgent, .differentSession: false
+            case .differentAccount, .differentAccountNewerDraft, .differentAccountClearedDraft,
+                 .explicitAgent, .differentSession: false
             }
         }
     }
@@ -181,7 +184,10 @@ final class ChatSendHydrationTests: XCTestCase {
     }
 
     func testExplicitRoutingChangesInvalidatePendingSend() async throws {
-        for transition in [Transition.differentAccount, .explicitAgent, .differentSession] {
+        for transition in [
+            Transition.differentAccount, .differentAccountNewerDraft, .differentAccountClearedDraft,
+            .explicitAgent, .differentSession,
+        ] {
             try await self.checkSend(transition)
         }
     }
@@ -265,7 +271,9 @@ final class ChatSendHydrationTests: XCTestCase {
                     break
                 case .pendingHealth, .startedAcknowledgement:
                     appModel.gatewayDefaultAgentId = "main"
-                case .differentAccount:
+                case .differentAccount, .differentAccountNewerDraft, .differentAccountClearedDraft:
+                    if transition == .differentAccountNewerDraft { composer.input = "Newer unsent draft" }
+                    if transition == .differentAccountClearedDraft { composer.input = "" }
                     appModel.gatewayDefaultAgentId = "main"
                     appModel.activeGatewayConnectConfig = config(token: "synthetic-second-account")
                 case .explicitAgent:
@@ -283,6 +291,20 @@ final class ChatSendHydrationTests: XCTestCase {
             // Entry was observed above; initial false flags cannot masquerade as task completion.
             await ChatSendHydrationObservation.wait {
                 !original.isSending && !original.isSubmittingDraft
+            }
+            if !transition.permitsSend {
+                XCTAssertTrue(owner.viewModel === original, "Unsecured recovery must keep its existing owner.")
+                let expectedInput = transition == .differentAccountNewerDraft
+                    ? "Newer unsent draft" : transition == .differentAccountClearedDraft ? "" : text
+                XCTAssertEqual(owner.viewModel?.input, expectedInput)
+                XCTAssertTrue(original.retiredComposerRecoveryTexts.contains(text))
+                if transition == .differentAccountNewerDraft {
+                    XCTAssertTrue(original.retiredComposerRecoveryTexts.contains("Newer unsent draft"))
+                }
+                XCTAssertNil(owner.composerModelResolver()())
+                XCTAssertFalse(original.canSend, "The retired transport must not regain send authority.")
+                XCTAssertNil(original.send())
+                original.clearRetiredComposerRecovery()
             }
             if transition == .startedAcknowledgement {
                 XCTAssertEqual(original.pendingRunCount, 1)
@@ -316,7 +338,7 @@ final class ChatSendHydrationTests: XCTestCase {
             }
             XCTAssertEqual(sent, transition.permitsSend ? [text] : [], transition.rawValue)
             XCTAssertEqual(userRows.count, transition.permitsSend ? 1 : 0, transition.rawValue)
-            XCTAssertEqual(current.input, transition == .explicitAgent ? text : "", transition.rawValue)
+            XCTAssertEqual(current.input, "", transition.rawValue)
             owner.viewModel?.detachTransport()
             await appModel.operatorSession.disconnect()
         } catch {

@@ -9,6 +9,8 @@ struct ChatInputHistory: Equatable, Sendable {
     private(set) var entries: [String] = []
     private(set) var cursor: Int?
     private(set) var stashedDraft: String?
+    private(set) var recoveryWarning: String?
+    private(set) var recoveryInput: String?
     private var hasSeededTranscript = false
     private var transcriptSnapshot: [String] = []
     private var pendingTranscriptEchoes: [String] = []
@@ -18,6 +20,7 @@ struct ChatInputHistory: Equatable, Sendable {
     }
 
     mutating func record(_ input: String, transcriptEcho: String? = nil) {
+        self.clearRecovery()
         let recall = self.recallMarker()
         let text = Self.normalized(input)
         if !text.isEmpty, self.entries.first != text {
@@ -51,6 +54,17 @@ struct ChatInputHistory: Equatable, Sendable {
         } else {
             self.resetNavigation()
         }
+    }
+
+    mutating func recordFailure(_ input: String, warning: String?) {
+        self.record(input)
+        self.recoveryWarning = warning
+        self.recoveryInput = input
+    }
+
+    mutating func clearRecovery() {
+        self.recoveryWarning = nil
+        self.recoveryInput = nil
     }
 
     /// Reconciles canonical user messages with locally captured inputs. Inputs
@@ -322,6 +336,7 @@ extension OpenClawChatViewModel {
         let key = self.composerSessionKey(for: self.sessionKey)
         self.composerRevisionsBySession[key, default: 0] &+= 1
         self.inputHistoriesBySession[key, default: ChatInputHistory()].draftChanged(to: self.input)
+        self.resolveRetiredComposerRecovery()
     }
 
     func prepareComposerForSessionSwitch(to nextSessionKey: String, agentID: String? = nil) {
@@ -347,6 +362,10 @@ extension OpenClawChatViewModel {
     func restoreComposerAfterSessionSwitch() {
         let key = self.composerSessionKey(for: self.sessionKey)
         self.applyRecalledInput(self.draftsBySession[key] ?? "", advancesRevision: false)
+    }
+
+    var composerRecoveryWarning: String? {
+        self.inputHistoriesBySession[self.composerSessionKey(for: self.sessionKey)]?.recoveryWarning
     }
 
     func composerRevision(for sessionKey: String) -> UInt64 {
