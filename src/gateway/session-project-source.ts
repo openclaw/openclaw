@@ -6,6 +6,7 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { runGitReadOperation } from "../infra/git-read-cache.js";
 import {
   ProjectCheckoutError,
   resolveProjectCheckout,
@@ -101,27 +102,40 @@ export async function resolveSessionProjectCheckoutOptions(params: {
   resolveSandboxRequired: () => boolean;
   assertCurrent: () => void;
   signal?: AbortSignal;
-}): Promise<{ current: boolean; worktree: boolean }> {
+  onRefresh?: () => void;
+}): Promise<{ current: boolean; worktree: boolean; refreshing?: boolean }> {
   params.assertCurrent();
   const project = await resolveProjectRegistry(params.cfg, params.projectId);
   params.assertCurrent();
   if (!project) {
     return { current: false, worktree: false };
   }
-  const [direct, managed] = await Promise.all([
-    resolveSessionProjectRootForRecord(project, false),
-    resolveSessionProjectRootForRecord(project, true),
-  ]);
+  const direct = prepareSessionCreateFilesystemRoot({
+    cfg: params.cfg,
+    requestedProjectId: params.projectId,
+    targetAgentId: params.targetAgentId,
+    sessionCwd: project.repoRoot,
+    enforceSandboxContainment: true,
+    sandboxRequired: params.resolveSandboxRequired(),
+  });
+  const current = direct.ok;
+  const root = direct.ok ? direct.value.sessionCwd : undefined;
+  // Registered projects already record a committed checkout. Creation validates it
+  // again; the picker only needs discovery for agent-workspace pseudo-projects.
+  const repository =
+    project.source === "workspace" && root
+      ? await runGitReadOperation(
+          {
+            type: "repository.branches",
+            input: { repoRoot: root, includeRepositoryStatus: true },
+          },
+          { snapshot: true, signal: params.signal, onRefresh: params.onRefresh },
+        )
+      : undefined;
   params.assertCurrent();
-  const current =
-    direct.ok &&
-    prepareSessionCreateFilesystemRoot({
-      cfg: params.cfg,
-      requestedProjectId: params.projectId,
-      targetAgentId: params.targetAgentId,
-      sessionCwd: direct.value,
-      enforceSandboxContainment: true,
-      sandboxRequired: params.resolveSandboxRequired(),
-    }).ok;
-  return { current, worktree: managed.ok && (current || project.source !== "workspace") };
+  return {
+    current,
+    worktree: project.source !== "workspace" || (current && repository?.repositoryStatus === "git"),
+    ...(repository?.refreshing ? { refreshing: true } : {}),
+  };
 }
