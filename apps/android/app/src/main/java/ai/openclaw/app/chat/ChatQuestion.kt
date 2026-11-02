@@ -38,9 +38,7 @@ data class ChatQuestionPrompt(
   /** Live prompts own the composer dock; terminal prompts are retained transcript summaries. */
   fun isLiveDockPrompt(): Boolean =
     when (status()) {
-      ChatQuestionStatus.Pending,
-      ChatQuestionStatus.Submitting,
-      -> true
+      ChatQuestionStatus.Pending, ChatQuestionStatus.Submitting -> true
       else -> false
     }
 }
