@@ -91,26 +91,22 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 - [190736](https://github.com/openclaw/openclaw/pull/190736): Compare Matrix account defaults with independent original literals. Actual DM and room-default overwrites each pass the original aliased comparison and fail the repaired expectation, with exact owner/test restoration. All five declarations/seven cases remain; baseline/candidate/published seven, focused checks and fresh review pass;53 CI checks succeed. Only two expected expressions change; zero net test lines, production unchanged.
 
+- [190760](https://github.com/openclaw/openclaw/pull/190760): Retire the Matrix reaction test's partial approval-error classifier mock. Actual canonical legacy-not-found and transient-503 faults pass the old mocked keepers and fail the unmocked keepers, with exact restoration. All seven declarations/cases remain; baseline/candidate/published seven, focused checks, every removal scan and fresh review pass;51 CI checks succeed. Ten fewer test lines; production unchanged.
+
 ## Current qualification
 
-Pinned main 84795f2ec990: retire the Matrix reaction test's partial SDK
-error-classifier mock and exercise the canonical approval-error classifier.
-All seven declarations/cases, inputs, assertions, target cleanup and Gateway/send
-mocks remain. Only the ten-line classifier override is removed; production unchanged.
+Pinned main 8ba4604bb7f2: remove unused QA secret-redaction fixture bookkeeping.
+Keep all four physical declarations/eight expanded cases, inputs, assertions,
+fixture reads and outbound sinceIndex filtering. Remove only the callerless
+seedPriorInbound branch and unread outboundWaitCursors collection/return.
+Twelve fewer test lines proposed; production unchanged.
 
-The untouched official baseline passes all seven cases: command wall 106.13s.
-Actual canonical legacy-not-found and transient-503 classifier faults each pass
-the original mocked keeper and fail that keeper after removing the override.
-Each control selects one existing case; the other six cases are skipped.
-Both temporary owner and original test bytes are restored exactly after controls.
-The clean candidate passes all seven cases in 48.66s.
-
-Typed lint, scoped types, format, ledger MDX and whitespace checks pass.
-Every dependency, unused-file and production/full-tree/script export phase passes.
-Every other selected test byte and the test-line baseline remain unchanged.
-Ten fewer test lines; no declarations, assertions, inputs or production changed.
-Fresh review, final published proof and native CI remain pending. No public API, runtime configuration, migration or state contract
-change. No live Gateway, provider, browser or PostgreSQL runtime claim.
+Untouched native baseline, counted unused-setup control, actual YAML leak-guard
+counterfactual, clean candidate, focused checks, every removal phase, fresh review,
+final published proof and CI remain pending.
+No public API, runtime configuration, migration or state contract change.
+The live-frontier rows use synthetic nested transcript fixtures; no live
+Gateway, provider, browser or PostgreSQL runtime claim.
 
 ## Completed source review
 
