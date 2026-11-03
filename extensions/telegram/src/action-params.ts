@@ -3,6 +3,7 @@ import {
   readStringOrNumberParam,
 } from "openclaw/plugin-sdk/channel-actions";
 import {
+  asOptionalRecord,
   isRecord,
   normalizeUniqueTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -51,6 +52,23 @@ export function readTelegramReplyToMessageId(params: Record<string, unknown>) {
     readTelegramPositiveIntegerParam(params, "replyToMessageId") ??
     readTelegramPositiveIntegerParam(params, "replyTo")
   );
+}
+
+export function normalizeTelegramDeliveryPin(params: Record<string, unknown>) {
+  const delivery = asOptionalRecord(params.delivery);
+  const pin = delivery ? delivery.pin : params.pin === true ? true : undefined;
+  if (pin === true) {
+    return { enabled: true } as const;
+  }
+  const raw = asOptionalRecord(pin);
+  if (raw?.enabled !== true) {
+    return undefined;
+  }
+  return {
+    enabled: true,
+    ...(raw.notify === true ? { notify: true } : {}),
+    ...(raw.required === true ? { required: true } : {}),
+  } as const;
 }
 
 export function readTelegramSendMediaUrls(params: Record<string, unknown>) {
