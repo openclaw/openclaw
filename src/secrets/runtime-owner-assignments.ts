@@ -3,7 +3,6 @@ import { isDeepStrictEqual } from "node:util";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretRef } from "../config/types.secrets.js";
 import { toErrorObject } from "../infra/errors.js";
-import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { secretRefKey } from "./ref-contract.js";
 import {
   describeSecretResolutionError,
@@ -73,14 +72,6 @@ export function classifySecretOwnerDegradationState(params: {
     providerDefinitionsMatch
     ? "stale"
     : "cold";
-}
-
-function registerResolvedValuesForRedaction(resolved: ReadonlyMap<string, unknown>): void {
-  for (const value of resolved.values()) {
-    if (typeof value === "string") {
-      registerSecretValueForRedaction(value);
-    }
-  }
 }
 
 function assignmentOwnerKey(assignment: SecretAssignment): string {
@@ -359,7 +350,7 @@ async function resolveStrictAssignments(params: {
       params.assignments.map((assignment) => assignment.ref),
       params.options,
     );
-    registerResolvedValuesForRedaction(resolved);
+    // resolveSecretRefValues already registered these values for redaction.
     applyResolvedAssignments({ assignments: params.assignments, resolved });
     return resolved;
   } catch (error) {
@@ -430,7 +421,7 @@ export async function resolveAndApplySecretAssignments(params: {
     owners.flat().map((assignment) => assignment.ref),
     params.options,
   );
-  registerResolvedValuesForRedaction(resolution.resolved);
+  // resolveSecretRefValuesSettledByProvider already registered these values for redaction.
 
   const failedOwners = new Map<
     SecretAssignment[],

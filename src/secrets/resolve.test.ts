@@ -17,6 +17,11 @@ import type {
   ManualExecSecretProviderConfig,
   SecretProviderConfig,
 } from "../config/types.secrets.js";
+import {
+  isSecretValueRegisteredForRedaction,
+  redactRegisteredSecretValues,
+} from "../logging/secret-redaction-registry.js";
+import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import {
   killPidIfAlive,
@@ -214,6 +219,30 @@ describe("secret ref resolver", () => {
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toContain('Secret provider "default" is not configured');
     expect(isMissingSecretRefResolutionError({ ref, error })).toBe(false);
+  });
+
+  it("registers resolved secret values for exact-value redaction", async () => {
+    resetSecretRedactionRegistryForTest();
+    const secret = "resolved-secret-value-9f2c";
+    try {
+      const ref = { source: "env", provider: "primary", id: "RESOLVED_API_KEY" } as const;
+      const resolved = await resolveSecretRefValue(ref, {
+        config: {
+          secrets: {
+            providers: { primary: { source: "env" } },
+          },
+        },
+        env: { RESOLVED_API_KEY: secret },
+      });
+
+      expect(resolved).toBe(secret);
+      expect(isSecretValueRegisteredForRedaction(secret)).toBe(true);
+      expect(redactRegisteredSecretValues(`token=${secret}`, () => "[redacted]")).toBe(
+        "token=[redacted]",
+      );
+    } finally {
+      resetSecretRedactionRegistryForTest();
+    }
   });
 
   itPosix(
