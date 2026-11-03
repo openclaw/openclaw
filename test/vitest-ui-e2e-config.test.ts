@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { spawnNodeEvalSync } from "../src/test-utils/node-process.ts";
 import type { PreparedNativeControlUiPluginBuild } from "../ui/src/test-helpers/control-ui-e2e-shared-preview.ts";
+import { uiE2ePrebuiltParallelTestFiles } from "./vitest/vitest.ui-paths.mjs";
 import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "./vitest/vitest.timeouts.ts";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
@@ -486,13 +487,15 @@ describe("Control UI E2E resource ownership", () => {
       }
       expect(result.files.filter((entry) => entry.phase === 1)).toEqual(
         [
-          ...serialGatewayFiles.map((file) => ({
-            file,
-            project: "ui-e2e-serial-standalone",
-            phase: 1,
-            workers: 1,
-            fileParallelism: false,
-          })),
+          ...serialGatewayFiles
+            .filter((file) => !uiE2ePrebuiltParallelTestFiles.includes(file))
+            .map((file) => ({
+              file,
+              project: "ui-e2e-serial-standalone",
+              phase: 1,
+              workers: 1,
+              fileParallelism: false,
+            })),
           ...sharedSerialGatewayFiles.map((file) => ({
             file,
             project: "ui-e2e-serial",
