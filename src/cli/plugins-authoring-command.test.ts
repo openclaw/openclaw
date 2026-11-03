@@ -716,6 +716,38 @@ describe("plugin authoring commands", () => {
     expect(log).not.toHaveBeenCalled();
   });
 
+  it("explains rejected init input instead of failing generically", async () => {
+    const existingDir = tempDirs.make("openclaw-plugin-init-existing-");
+    const cases = [
+      { id: " ", opts: {}, message: "Plugin id is required." },
+      {
+        id: "demo",
+        opts: { type: "bogus", directory: path.join(existingDir, "fresh") },
+        message:
+          'Unsupported plugin scaffold type "bogus". Supported types: tool, provider, feature.',
+      },
+      {
+        id: "demo",
+        opts: { directory: existingDir },
+        message: `Refusing to overwrite existing path: ${existingDir}`,
+      },
+    ];
+    for (const { id, opts, message } of cases) {
+      const error = await runPluginsInitCommand(id, opts).catch((cause: unknown) => cause);
+      expect(error).toBeInstanceOf(ExpectedCliError);
+      expect(
+        formatCliFailureLines({
+          title: "The CLI command failed.",
+          error,
+          argv: ["node", "openclaw", "plugins", "init"],
+          env: {},
+        }),
+      ).toEqual([message]);
+    }
+    expect(fs.existsSync(path.join(existingDir, "fresh"))).toBe(false);
+    expect(fs.readdirSync(existingDir)).toEqual([]);
+  });
+
   it("finishes init with an absolute directory after the launch directory is removed", async () => {
     const tmpDir = tempDirs.make("openclaw-plugin-deleted-cwd-init-");
     const projectDir = path.join(tmpDir, "demo");

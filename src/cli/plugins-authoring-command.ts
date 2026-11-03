@@ -279,7 +279,7 @@ export async function runPluginsValidateCommand(opts: PluginsValidateOptions): P
 function normalizeRequiredPluginText(input: string, label: string): string {
   const value = input.trim();
   if (!value) {
-    throw new Error(`Plugin ${label} is required.`);
+    throwExpectedCliError(`Plugin ${label} is required.`);
   }
   return value;
 }
@@ -305,7 +305,7 @@ export async function runPluginsInitCommand(
   const requestedType = opts.type ?? "tool";
   const type = SUPPORTED_PLUGIN_SCAFFOLD_TYPES.find((candidate) => candidate === requestedType);
   if (!type) {
-    throw new Error(
+    throwExpectedCliError(
       `Unsupported plugin scaffold type "${requestedType}". Supported types: ${SUPPORTED_PLUGIN_SCAFFOLD_TYPES.join(
         ", ",
       )}.`,
@@ -316,7 +316,7 @@ export async function runPluginsInitCommand(
     : `openclaw-plugin-${id}`;
   const rootDir = path.resolve(opts.directory ?? id);
   if (opts.force !== true && fs.existsSync(rootDir)) {
-    throw new Error(`Refusing to overwrite existing path: ${rootDir}`);
+    throwExpectedCliError(`Refusing to overwrite existing path: ${rootDir}`);
   }
   fs.mkdirSync(path.join(rootDir, "src"), { recursive: true });
 
