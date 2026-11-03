@@ -11,6 +11,10 @@ describe("vydra video-generation provider", () => {
   const request = { provider: "vydra", model: "kling", prompt: "animate this image", cfg: {} };
   const generate = (overrides: Partial<Parameters<typeof provider.generateVideo>[0]>) =>
     provider.generateVideo({ ...request, ...overrides });
+  const references = {
+    inputImages: [{ url: "https://example.com/reference.png" }],
+    inputVideos: [{ url: "https://example.com/motion.mp4" }],
+  };
   const completed = (jobId: string, videoUrl: string) => ({ jobId, status: "completed", videoUrl });
   const stubJob = (jobId: string, videoUrl: string, data: string, mime = "video/mp4") =>
     vydra.stubFetch(
@@ -32,6 +36,18 @@ describe("vydra video-generation provider", () => {
 
   it("declares explicit mode capabilities", () => {
     expectExplicitVideoGenerationCapabilities(provider);
+    expect(provider.catalogByModel).toEqual({
+      veo3: { modes: ["generate"] },
+      kling: { modes: ["videoToVideo"] },
+    });
+    expect(provider.capabilities.imageToVideo?.enabled).toBe(false);
+    expect(provider.capabilities.videoToVideo).toMatchObject({
+      enabled: true,
+      maxInputImages: 0,
+      maxInputImagesByModel: { kling: 1 },
+      maxInputVideos: 0,
+      maxInputVideosByModel: { kling: 1 },
+    });
   });
 
   it("rejects generated video downloads that exceed the configured media cap", async () => {
@@ -83,26 +99,75 @@ describe("vydra video-generation provider", () => {
     }
   });
 
-  it("requires a remote image url for kling", async () => {
-    vi.stubGlobal("fetch", vi.fn());
-    await expect(
-      generate({
-        inputImages: [{ buffer: Buffer.from("png"), mimeType: "image/png" }],
-      }),
-    ).rejects.toThrow("Vydra kling currently requires a remote image URL reference.");
+  it.each([
+    { name: "missing image", overrides: { inputImages: [] }, error: "exactly one image" },
+    { name: "missing video", overrides: { inputVideos: [] }, error: "one motion video" },
+    {
+      name: "extra image",
+      overrides: { inputImages: [...references.inputImages, ...references.inputImages] },
+      error: "exactly one image",
+    },
+    {
+      name: "extra video",
+      overrides: { inputVideos: [...references.inputVideos, ...references.inputVideos] },
+      error: "one motion video",
+    },
+    {
+      name: "buffered image",
+      overrides: { inputImages: [{ buffer: Buffer.from("png"), mimeType: "image/png" }] },
+      error: "HTTPS image URL",
+    },
+    {
+      name: "buffered video",
+      overrides: { inputVideos: [{ buffer: Buffer.from("mp4"), mimeType: "video/mp4" }] },
+      error: "HTTPS video URL",
+    },
+    {
+      name: "image reused as motion",
+      overrides: { inputVideos: [{ url: "https://EXAMPLE.com:443/reference.png" }] },
+      error: "distinct image and motion video",
+    },
+    {
+      name: "nonremote video",
+      overrides: { inputVideos: [{ url: "data:video/mp4;base64,c3ludGhldGlj" }] },
+      error: "HTTPS video URL",
+    },
+    {
+      name: "credential-bearing reference",
+      overrides: { inputImages: [{ url: "https://synthetic:synthetic@example.com/image.png" }] },
+      error: "HTTPS image URL",
+    },
+    {
+      name: "audio reference",
+      overrides: { inputAudios: [{ url: "https://example.com/audio.mp3" }] },
+      error: "does not support audio reference inputs",
+    },
+    {
+      name: "veo3 motion",
+      overrides: { model: "veo3" },
+      error: "does not support video reference",
+    },
+  ])("rejects $name before upstream I/O", async ({ overrides, error }) => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(generate({ ...references, ...overrides })).rejects.toThrow(error);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("submits kling jobs with a remote image url", async () => {
+  it("submits distinct Kling image and motion references, then retrieves the original job", async () => {
     const videoUrl = "https://cdn.vydra.ai/generated/kling.mp4";
     const fetchMock = stubJob("job-kling", videoUrl, "mp4-data");
-    const result = await generate({
-      inputImages: [{ url: "https://example.com/reference.png" }],
-    });
+    const result = await generate(references);
     expectPost(fetchMock, "https://www.vydra.ai/api/v1/models/kling", {
       prompt: "animate this image",
       image_url: "https://example.com/reference.png",
-      video_url: "https://example.com/reference.png",
+      video_url: "https://example.com/motion.mp4",
     });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "https://www.vydra.ai/api/v1/jobs/job-kling",
+      expect.objectContaining({ method: "GET" }),
+    );
     expect(result.videos.map(({ mimeType }) => mimeType)).toEqual(["video/mp4"]);
   });
 });
