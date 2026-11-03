@@ -141,7 +141,7 @@ suite.define(() => {
       try {
         expect((await page.goto(url.toString()))?.status()).toBe(200);
         await waitForControlUiGatewayReady(page);
-        const level = page.getByRole("combobox", { name: "Log Level", exact: true });
+        const level = page.getByRole("combobox", { name: "Log level", exact: true });
         const selected = () => level.locator("option:checked").textContent();
         await expect.poll(selected).toBe("info");
         expect(schemaReceived).toBe(true);
