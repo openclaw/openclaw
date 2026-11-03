@@ -20,7 +20,7 @@ const enCommandPalette = {
     startSession: "New session",
     startSessionBackground: "Start new session in background",
     startingSession: "Starting…",
-    startFailed: "Session didn't start: {error}",
+    startFailed: "Couldn’t start the session. Try again. {error}",
     tryAgain: "Try again",
     promptRequired: "Write a prompt to start a session.",
     attachmentPrompt: en.palette.attachmentPrompt,

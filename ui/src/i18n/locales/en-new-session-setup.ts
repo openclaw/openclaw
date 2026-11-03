@@ -121,7 +121,7 @@ const enNewSessionSetup = {
     machineDefault: "Default",
     browseRequiresAdmin:
       "To browse outside agent workspaces, open Inbox, select Limited access, request admin, then approve in Devices.",
-    connectMachine: "Connect a device",
+    connectMachine: "Connect a machine",
     browserUp: "Parent folder",
     browserUse: "Use this folder",
     browserEmpty: "No subfolders",
@@ -236,7 +236,7 @@ const enNewSessionSetup = {
     connectMachineTitle: "Connect a machine",
     connectMachineDescription: "Run this command on the machine you want to connect.",
     connectMachineGenerating: "Creating a secure connection link…",
-    connectMachineFailed: "Couldn't create a connection link.",
+    connectMachineFailed: "Couldn’t create the device connection link. Try again.",
     connectMachineMissingUrl: "The Gateway did not return a join URL. Update it and try again.",
     connectMachineUnavailable: "Reconnect to the Gateway and try again.",
     connectMachineTeamHint:

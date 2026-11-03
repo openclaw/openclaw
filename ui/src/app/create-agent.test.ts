@@ -184,7 +184,9 @@ describe("application agent creation", () => {
       expect(navigate).not.toHaveBeenCalled();
       expect(request.mock.calls.map(([method]) => method)).toEqual(["agents.list"]);
       expect(context.chatSubmissions.creation).toBeUndefined();
-      await vi.waitFor(() => expect(toast.toast?.message).toContain("Pair this browser"));
+      await vi.waitFor(() =>
+        expect(toast.toast?.message).toContain("Ask an admin to check your access"),
+      );
     },
   );
 
@@ -344,7 +346,7 @@ describe("application agent creation", () => {
     await vi.dynamicImportSettled();
     expect(toast.active).toBe(true);
     expect(toast.querySelector(".app-toast__message")?.textContent).toContain(
-      "Your agent was created, but its first message couldn't be sent",
+      "Your agent was created, but its first message couldn’t be sent",
     );
   });
 });
