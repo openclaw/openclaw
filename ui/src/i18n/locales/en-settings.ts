@@ -249,15 +249,14 @@ const enSettings = {
   },
   channels: {
     lastError: "Last error",
-    refreshingStaleSnapshot:
-      "Refreshing channel status in the background; showing the last successful snapshot.",
+    refreshingStaleSnapshot: "Refreshing channel status… Showing the last available status.",
     hub: {
       connectedTitle: "Connected channels",
       addTitle: "Add a channel",
-      addSubtitle: "Pick a service and follow the guided setup.",
+      addSubtitle: "Choose a messaging app to set up.",
       updatedAgo: "Updated {ago}",
-      noneConnected: "No channels connected yet. Pick one below to get started.",
-      partialSnapshot: "Some channel checks did not finish before the UI budget.",
+      noneConnected: "No channels yet.",
+      partialSnapshot: "Couldn’t check some channels. Refresh to try again.",
       stateRunning: "Running",
       stateConfigured: "Configured",
       stateAttention: "Needs attention",
@@ -268,11 +267,10 @@ const enSettings = {
       openDetails: "Open details",
       lastMessageAgo: "Last message {ago}",
       browseAllTitle: "More channels…",
-      browseAllSubtitle: "Browse every available channel, including installable plugins.",
+      browseAllSubtitle: "Browse all channels, including plugins you can install.",
       runSetup: "Run setup",
-      adminRequired: "Browsing only. Channel setup requires operator.admin access.",
-      saveBeforeSetup:
-        "You have unsaved settings changes. Save or discard them before running guided setup.",
+      adminRequired: "You can view channels, but only admins can change them.",
+      saveBeforeSetup: "Save or discard your settings changes before starting setup.",
     },
     pairing: {
       title: "DM access requests",
@@ -288,11 +286,10 @@ const enSettings = {
       requested: "Requested {ago}",
       expires: "Expires {ago}",
       senderDetails: "Sender details",
-      missingPermission:
-        "This connection does not have operator.pairing access, so DM requests cannot be reviewed.",
-      noAccounts: "No configured channel accounts use DM sender pairing.",
-      noRequests: "No pending DM access requests.",
-      noFilteredRequests: "No pending requests match these filters.",
+      missingPermission: "You don’t have permission to review DM access requests.",
+      noAccounts: "No channel accounts use DM access requests yet.",
+      noRequests: "No DM access requests yet.",
+      noFilteredRequests: "No requests match these filters.",
       limits:
         "Requests expire after {minutes} minutes. Each channel account can hold up to {count} pending requests.",
       detailTitle: "DM access",
@@ -300,8 +297,8 @@ const enSettings = {
       pendingCount: "{count} pending",
       noPending: "No pending requests",
       review: "Review requests",
-      approveDialogTitle: "Approve DM access",
-      dismissDialogTitle: "Dismiss DM access request",
+      approveDialogTitle: "Approve DM access?",
+      dismissDialogTitle: "Dismiss this DM access request?",
       approveExplanation:
         "This lets the sender talk to the agent in direct messages. It does not grant group access.",
       dismissExplanation:
@@ -310,16 +307,14 @@ const enSettings = {
       makeCommandOwner: "Also make this sender the first command owner",
       commandOwnerHelp:
         "Command owners can run privileged commands and approve dangerous actions. This option is only available while no owner is configured.",
-      commandOwnerNeedsAdmin:
-        "No command owner is configured. This connection needs operator.admin to assign the first owner.",
+      commandOwnerNeedsAdmin: "No command owner is set. Ask an admin to set one.",
       approvedNotice: "DM access approved.",
-      approvedOwnerNotice: "DM access approved and the first command owner was configured.",
-      approvedNotificationFailedNotice:
-        "DM access approved, but the requester notification could not be delivered.",
+      approvedOwnerNotice: "DM access approved. Command owner set.",
+      approvedNotificationFailedNotice: "DM access approved. Couldn’t notify the requester.",
       approvedOwnerFailedNotice:
-        "DM access approved, but the first command owner could not be configured.",
+        "DM access approved. Couldn’t set the command owner. Ask an admin to set one.",
       approvedFollowupsFailedNotice:
-        "DM access approved, but requester notification and command-owner setup both failed.",
+        "DM access approved. Couldn’t notify the requester or set the command owner. Ask an admin to set the owner.",
       dismissedNotice: "DM access request dismissed. The sender can request access again.",
     },
     setup: {
@@ -329,16 +324,14 @@ const enSettings = {
       subtitle: "Guided channel setup",
       starting: "Starting setup…",
       working: "Working…",
-      sessionExpired:
-        "This setup session expired after the Gateway restarted. Close this dialog, then start channel setup again.",
+      sessionExpired: "Couldn’t continue setup. Close this dialog, then start again.",
       continue: "Continue",
       finish: "Finish",
       copyText: "Copy",
       openLink: "Open link",
       viewDocs: "View docs",
       doneTitle: "Channel configured",
-      doneBody:
-        "Configuration saved. The gateway reloads the channel automatically; check its card for live status.",
+      doneBody: "Settings saved. The channel reloads automatically. Check its card for status.",
       doneNoChangesTitle: "No changes made",
       doneNoChangesBody: "Setup finished without configuring a channel. Nothing was saved.",
       whatsappScanTitle: "Link WhatsApp by scanning the QR code",
@@ -352,49 +345,50 @@ const enSettings = {
       linkLater: "Link later",
     },
     config: {
-      schemaUnavailable: "Schema unavailable. Use Raw.",
-      channelSchemaUnavailable: "Channel config schema unavailable.",
-      loadingSchema: "Loading config schema…",
+      presentationLoadFailed: "Couldn’t load channel settings. Try again.",
+      schemaUnavailable: "Couldn’t load settings. Use the raw editor or try again.",
+      channelSchemaUnavailable: "Couldn’t load channel settings. Try again.",
+      loadingSchema: "Loading settings…",
       unsaved: "Unsaved changes",
       unsavedWithDetail: "Unsaved changes · {detail}",
       saved: "Saved",
-      unsavedTitle: "Unsaved changes",
-      unsavedMessage: "Your changes to {channel} aren't saved yet.",
+      unsavedTitle: "Save your changes?",
+      unsavedMessage: "Your changes to {channel} aren’t saved. Discarding removes them.",
       unsavedOnLeave: "{channel} has unsaved changes",
       unsavedOnLeaveMany: "{channels} have unsaved changes",
       discard: "Discard",
       keepEditing: "Keep editing",
       review: "Review",
       conflict: "Settings changed elsewhere: {fields}",
-      saveInterrupted: "Connection lost during Save.",
-      saveNotSaved: "Connection lost during Save. Your changes weren't saved.",
+      saveInterrupted: "Disconnected while saving. Reconnect to check your changes.",
+      saveNotSaved: "Couldn’t save your changes. Reconnect to try again.",
     },
     generic: {
-      subtitle: "Channel status and configuration.",
+      subtitle: "Channel status and settings.",
     },
     discord: {
       title: "Discord",
-      subtitle: "Bot status and channel configuration.",
+      subtitle: "Account status and settings.",
     },
     googleChat: {
       title: "Google Chat",
-      subtitle: "Chat API webhook status and channel configuration.",
+      subtitle: "Webhook status and settings.",
     },
     imessage: {
       title: "iMessage",
-      subtitle: "macOS bridge status and channel configuration.",
+      subtitle: "macOS bridge status and settings.",
     },
     signal: {
       title: "Signal",
-      subtitle: "signal-cli status and channel configuration.",
+      subtitle: "Account status and settings.",
     },
     slack: {
       title: "Slack",
-      subtitle: "Socket mode status and channel configuration.",
+      subtitle: "Account status and settings.",
     },
     telegram: {
       title: "Telegram",
-      subtitle: "Bot status and channel configuration.",
+      subtitle: "Account status and settings.",
     },
   },
   talkPage: {
