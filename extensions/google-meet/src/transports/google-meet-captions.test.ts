@@ -56,6 +56,11 @@ it("keeps recognition corrections in one pending turn until it completes", async
     ["Alice", "We need fifty volunteers. Please sign up.", true],
   ]);
   expect(page.read(true).lines.map((line) => line.speaker)).toEqual(["Alice", "Bob"]);
+  row.textContent = "Alice\ngo go go";
+  page.show([row]);
+  revise(page, row, "go ask Bob");
+  const lastTurns = page.read(true).lines.slice(-2);
+  expect(lastTurns.map((line) => line.text)).toEqual(["go go go", "go ask Bob"]);
 });
 
 it("omits speakerless Meet notices while preserving participants saying those words", async () => {

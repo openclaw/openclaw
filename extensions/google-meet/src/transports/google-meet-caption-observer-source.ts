@@ -46,7 +46,6 @@ export const GOOGLE_MEET_CAPTION_OBSERVER_SOURCE = `
     return w.__openclawMeetCaptions;
   })();
   const normalizeCaption = (speaker, captionText) => {
-    if (!captionState) return;
     const clean = String(captionText || "").replace(/\\s+/g, " ").trim();
     const cleanSpeaker = String(speaker || "").replace(/\\s+/g, " ").trim();
     if (!clean || clean.length < 2) return undefined;
@@ -92,11 +91,9 @@ export const GOOGLE_MEET_CAPTION_OBSERVER_SOURCE = `
   };
   const scrapeCaptions = () => {
     if (!captionState) return;
-    const regions = [...document.querySelectorAll(captionSelector)];
     const rows = [];
-    for (const region of regions) {
+    for (const region of document.querySelectorAll(captionSelector)) {
       const raw = text(region);
-      if (!raw) continue;
       const pieces = raw.split(/\\n+/).map((part) => part.trim()).filter(Boolean);
       const row = pieces.length >= 2
         ? normalizeCaption(pieces[0], pieces.slice(1).join(" "))
@@ -131,10 +128,16 @@ export const GOOGLE_MEET_CAPTION_OBSERVER_SOURCE = `
         const sameTextLifecycle = row.text.startsWith(candidate.text) || candidate.text.startsWith(row.text);
         const sameDomLifecycle = candidate.node === row.node || now - candidate.seenAt <= ${GOOGLE_MEET_CAPTION_SETTLE_MS};
         const [before, after] = [candidate.text, row.text].map((value) => value.toLowerCase().replace(/[.,!?]/g, "").split(/\\s+/));
-        const nextWords = new Set(after);
-        // Fresh, mostly unchanged words on the same row are recognition edits.
+        let nextIndex = 0;
+        // Each word occurrence contributes once, in order, including repeated words.
+        const overlap = before.filter((word) => {
+          const match = after.indexOf(word, nextIndex);
+          if (match < 0) return false;
+          nextIndex = match + 1;
+          return true;
+        }).length;
         const correction = candidate.node === row.node && now - candidate.seenAt <= ${GOOGLE_MEET_CAPTION_SETTLE_MS} && Math.abs(before.length - after.length) <= 1 &&
-          before.filter((word) => nextWords.has(word)).length >= Math.max(before.length, after.length) * 2 / 3;
+          overlap >= Math.max(before.length, after.length) * 2 / 3;
         return candidate.speaker === row.speaker && captionOriginMatches(candidate, row) && (sameTextLifecycle || correction) && sameDomLifecycle;
       };
       const priorIndex = sameNodeIndex >= 0
@@ -214,9 +217,7 @@ export const GOOGLE_MEET_CAPTION_OBSERVER_SOURCE = `
     if (inCall) {
       scrapeCaptions();
     }
-    const committedLines = Array.isArray(captionState.lines) ? captionState.lines : [];
-    const visibleLines = Array.isArray(captionState.visible) ? captionState.visible : [];
-    const lines = [...committedLines, ...visibleLines];
+    const lines = [...captionState.lines, ...captionState.visible];
     const last = lines[lines.length - 1];
     captioning = document.querySelector(captionSelector) !== null || lines.length > 0;
     transcriptLines = (captionState.droppedLines || 0) + lines.length;
