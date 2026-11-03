@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { normalizeProfileName } from "../cli/profile-utils.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
@@ -12,7 +13,6 @@ import {
   resolveCurrentOpenClawCliInvocation,
   type OpenClawCliInvocation,
 } from "./openclaw-cli-invocation.js";
-import { replaceFileAtomic } from "./replace-file.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
 import { encodeWindowsLauncherScript } from "./windows-launcher-encoding.js";
 

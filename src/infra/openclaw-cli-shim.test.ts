@@ -17,6 +17,14 @@ import {
 } from "./openclaw-cli-invocation.test-support.js";
 import { clearGatewayAgentCliShim, prepareGatewayAgentCliShim } from "./openclaw-cli-shim.js";
 
+const resolveWindowsOemCodePageMock = vi.hoisted(() => vi.fn(() => 437));
+
+vi.mock("./windows-encoding.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./windows-encoding.js")>("./windows-encoding.js");
+  return { ...actual, resolveWindowsOemCodePage: resolveWindowsOemCodePageMock };
+});
+
 const envSnapshot = captureEnv([
   "OPENCLAW_EXEC_SHELL_SNAPSHOT",
   "OPENCLAW_PROFILE",
