@@ -26,11 +26,17 @@ import { runContinuationCustodyBoot } from "./custody-boot.js";
 import { resetContinuationCustodyProjection } from "./custody/custody-projection.js";
 import { hydrateContinuationCustody, listContinuationRecords } from "./custody/custody-store.js";
 import {
+  commitFoldedContinuationWork,
+  executePendingContinuationWork,
+  prepareFoldedContinuationWork,
+} from "./work-dispatch-execution.js";
+import {
   dispatchPendingContinuationWork,
   resetContinuationWorkDispatchForTests,
   scheduleContinuationWork,
 } from "./work-dispatch.js";
 import { decodeWorkState } from "./work-flow-state.js";
+import { consumePendingWork } from "./work-store.js";
 import { enqueuePendingWork } from "./work-store.test-support.js";
 
 const replyTurns = vi.hoisted(() => [] as string[]);
@@ -42,6 +48,25 @@ vi.mock("../reply/get-reply.js", async (importOriginal) => ({
     return { text: "continued" };
   },
 }));
+// Fails the Nth recipient-authority read from the continuation boundaries (1-based), once.
+const authorityReads = vi.hoisted(() => ({ count: 0, failAt: 0 }));
+vi.mock("../../config/sessions/session-recipient-authority-current.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../../config/sessions/session-recipient-authority-current.js")
+    >();
+  return {
+    ...actual,
+    withSessionRecipientAuthorityVerdicts: async (
+      ...args: Parameters<typeof actual.withSessionRecipientAuthorityVerdicts>
+    ) => {
+      if (++authorityReads.count === authorityReads.failAt) {
+        throw new Error("agent database unavailable");
+      }
+      return await actual.withSessionRecipientAuthorityVerdicts(...args);
+    },
+  };
+});
 const logLines = vi.hoisted(() => [] as string[]);
 vi.mock("../../logging/subsystem.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
@@ -98,6 +123,8 @@ afterEach(() => {
   vi.unstubAllEnvs();
   replyTurns.length = 0;
   logLines.length = 0;
+  authorityReads.count = 0;
+  authorityReads.failAt = 0;
 });
 
 /**
@@ -274,6 +301,74 @@ describe("a kept continue_work wake is bound to its recipient authority", () => 
       await dispatchPendingContinuationWork({ sessionKey: KEY });
       expect(wakeTurns()).toEqual([]);
       expect(await readWork(recordId)).toMatchObject({ status: "cancelled" });
+    });
+  });
+});
+
+describe("the adoption boundary", () => {
+  const policy = {
+    reasonCategory: "follow-up-work",
+    busyRetryDelayMs: 1_000,
+    idleRetryHedgeMs: 60_000,
+    mainCommandLane: "main",
+  } as const;
+  const fold = { deliveryTimeoutMs: 1_000, retryDelayMs: 1_000 };
+
+  // The dispatcher's handoff claimed the wake before the handover committed.
+  async function claimThenHandOver(scope: Scope) {
+    const { recordId, dueAt } = await elect();
+    vi.setSystemTime(dueAt + 1);
+    const [claimed] = await consumePendingWork(KEY);
+    await handovers["owner change"]!(scope);
+    return { recordId, claimed: claimed! };
+  }
+
+  it("refuses a claimed wake before its turn runs", async () => {
+    await withSession(async (scope) => {
+      const { recordId, claimed } = await claimThenHandOver(scope);
+      expect(
+        await executePendingContinuationWork(claimed, policy, new AbortController().signal),
+      ).toEqual({ kind: "failed" });
+      await expectRefused(recordId, "adoption");
+    });
+  });
+
+  it("refuses a claimed wake before its fold note reaches the active turn", async () => {
+    await withSession(async (scope) => {
+      const { recordId, claimed } = await claimThenHandOver(scope);
+      const candidates = [{ work: claimed, reasonCategory: "follow-up-work" as const }];
+      const attempt = await prepareFoldedContinuationWork(KEY, candidates, fold);
+      expect(await commitFoldedContinuationWork(KEY, candidates, attempt)).toEqual({
+        folded: 0,
+        requeues: [],
+      });
+      await expectRefused(recordId, "adoption");
+    });
+  });
+
+  it("an unreadable authority at the handoff leaves the decision to the turn's check", async () => {
+    await withSession(async () => {
+      const { recordId, dueAt } = await elect();
+      authorityReads.failAt = authorityReads.count + 1;
+      vi.setSystemTime(dueAt + 1);
+      await dispatchPendingContinuationWork({ sessionKey: KEY });
+      expect(wakeTurns()).toHaveLength(1);
+      expect(await readWork(recordId)).toMatchObject({ status: "succeeded" });
+    });
+  });
+
+  it("an unreadable authority at the fold requeues the wake instead of escaping", async () => {
+    await withSession(async () => {
+      const { recordId, dueAt } = await elect();
+      vi.setSystemTime(dueAt + 1);
+      const [claimed] = await consumePendingWork(KEY);
+      const candidates = [{ work: claimed!, reasonCategory: "follow-up-work" as const }];
+      authorityReads.failAt = authorityReads.count + 1;
+      const attempt = await prepareFoldedContinuationWork(KEY, candidates, fold);
+      expect((await commitFoldedContinuationWork(KEY, candidates, attempt)).requeues).toHaveLength(
+        1,
+      );
+      expect(await readWork(recordId)).toMatchObject({ status: "queued" });
     });
   });
 });

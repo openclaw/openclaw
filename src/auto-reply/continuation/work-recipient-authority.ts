@@ -27,6 +27,8 @@ import {
   type SessionRecipientAuthority,
 } from "../../config/sessions/session-recipient-authority-types.js";
 import { emitContinuationQueueDrainSpan } from "../../infra/continuation-tracer.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { listContinuationRecords } from "./custody/custody-store.js";
 import {
@@ -36,6 +38,8 @@ import {
 } from "./return-refusal.js";
 import { decodeWorkState, workToRuntime, type PendingContinuationWork } from "./work-flow-state.js";
 import { markPendingWorkFailed } from "./work-store.js";
+
+const log = createSubsystemLogger("continuation/work-authority");
 
 /**
  * Capture and check open the session's own store, where its handovers advance the epoch, as the
@@ -91,20 +95,33 @@ function refusalReason(
 /**
  * Refuses each work whose binding is stale and returns the rest. A refusal fails the record with
  * its reason in one revision CAS; a lost CAS means another owner moved it, so it is not driven here
- * either. `onRefused` releases what the caller retained for the ended election.
+ * either. `onRefused` releases what the caller retained for the ended election. An unreadable
+ * authority throws, except at the handoff, which is not the last boundary: there it keeps the works
+ * for the adoption check, which reads again inside the turn's transient-retry path.
  */
 export async function refuseStaleContinuationWork(
   works: readonly PendingContinuationWork[],
   stage: ContinuationWorkRefusalStage,
   onRefused?: (flowId: string) => void,
 ): Promise<PendingContinuationWork[]> {
-  const reasons = await withSessionRecipientAuthorityVerdicts(
-    works.map((work) => ({
-      scope: workRecipientScope(work.sessionKey),
-      judge: (record: AdmittedSessionRecipientAuthority) => refusalReason(record, work),
-    })),
-    (verdicts) => verdicts,
-  );
+  let reasons: readonly (ContinuationWorkRefusalReason | undefined)[];
+  try {
+    reasons = await withSessionRecipientAuthorityVerdicts(
+      works.map((work) => ({
+        scope: workRecipientScope(work.sessionKey),
+        judge: (record: AdmittedSessionRecipientAuthority) => refusalReason(record, work),
+      })),
+      (verdicts) => verdicts,
+    );
+  } catch (error) {
+    if (stage !== "wake") {
+      throw error;
+    }
+    log.warn(
+      `[continuation:work-authority-unread] stage=wake count=${works.length} error=${formatErrorMessage(error)}`,
+    );
+    return [...works];
+  }
   const kept: PendingContinuationWork[] = [];
   for (const [index, work] of works.entries()) {
     const reason = reasons[index];

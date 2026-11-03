@@ -502,11 +502,17 @@ export async function prepareFoldedContinuationWork(
   candidates: readonly ContinuationWorkFoldCandidate[],
   policy: ContinuationWorkFoldPolicy,
 ): Promise<ContinuationWorkFoldAttempt> {
-  // The adoption boundary: the active turn adopts the note, so a moved recipient never gets it.
-  const works = await refuseStaleContinuationWork(
-    candidates.map((candidate) => candidate.work),
-    "adoption",
-  );
+  // The adoption boundary: the active turn adopts the note, so a moved recipient never gets it. An
+  // unreadable authority delivers nothing; the commit requeues the candidates for a retry.
+  const candidateWorks = candidates.map((candidate) => candidate.work);
+  let works: PendingContinuationWork[];
+  try {
+    works = await refuseStaleContinuationWork(candidateWorks, "adoption");
+  } catch (err) {
+    const delivery = { delivered: false, reason: formatErrorMessage(err) } as const;
+    const kept = new Set(candidateWorks);
+    return { now: Date.now(), retryDelayMs: policy.retryDelayMs, kept, delivery };
+  }
   const kept = new Set(works);
   const now = Date.now();
   if (works.length === 0) {

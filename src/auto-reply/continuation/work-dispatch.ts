@@ -697,8 +697,6 @@ export async function scheduleContinuationWork(
 
   const hop = params.chainState.currentChainCount + 1;
   const delayMs = clampDelayMs(params.request.delaySeconds * 1000, params.config);
-  const electedAt = Date.now();
-  const dueAt = electedAt + delayMs;
   const nextState: ChainState = {
     currentChainCount: hop,
     chainStartedAt: params.chainState.chainStartedAt,
@@ -717,6 +715,9 @@ export async function scheduleContinuationWork(
     params.request,
     params.sessionKey,
   );
+  // After the capture: a capture that first records the session's authority precedes the election.
+  const electedAt = Date.now();
+  const dueAt = electedAt + delayMs;
   const electingTurnActive = replyRunRegistry.isActive(params.sessionKey);
   const recoveryHedgeAt = electedAt + params.config.maxDelayMs;
   const idleRetry = electingTurnActive
