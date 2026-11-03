@@ -1,5 +1,7 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.ui.chat.ChatTimelineItem
+import ai.openclaw.app.ui.chat.prepareChatHistory
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -295,6 +297,52 @@ class ChatControllerMessageIdentityTest {
           .single()
           .toolActivity
           ?.browserTab,
+      )
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun claudeCliParallelToolResultsSettleTheirCallsInOneGroup() =
+    runTest {
+      // Gateway chat.history for a Claude CLI turn with two parallel Read calls:
+      // each call and each result is its own row, and results stay on user rows.
+      val history =
+        """
+        {"messages":[
+          {"role":"user","content":"read both files","timestamp":1,"__openclaw":{"id":"p0","importedFrom":"claude-cli"}},
+          {"role":"assistant","content":[{"type":"toolcall","id":"toolu_a","name":"Read","arguments":{"file_path":"a.md"}}],"timestamp":2,"__openclaw":{"id":"p1","importedFrom":"claude-cli"}},
+          {"role":"assistant","content":[{"type":"toolcall","id":"toolu_b","name":"Read","arguments":{"file_path":"b.md"}}],"timestamp":3,"__openclaw":{"id":"p2","importedFrom":"claude-cli"}},
+          {"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_a","content":"alpha","name":"Read"}],"timestamp":4,"__openclaw":{"id":"p3","importedFrom":"claude-cli"}},
+          {"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_b","content":"beta","name":"Read"}],"timestamp":5,"__openclaw":{"id":"p4","importedFrom":"claude-cli"}},
+          {"role":"assistant","content":[{"type":"text","text":"Both files read."}],"timestamp":6,"__openclaw":{"id":"p5","importedFrom":"claude-cli"}}
+        ]}
+        """.trimIndent()
+      val controller =
+        ChatController(
+          scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
+          cacheScope = { ChatCacheScope("gateway-test", 1L) },
+          json = json,
+          requestGateway = { method, _ -> if (method == "chat.history") history else emptyChatGatewayResponse(method) },
+        )
+      controller.load("main")
+      advanceUntilIdle()
+
+      val rows =
+        prepareChatHistory(controller.messages.value, "main", "main").rows.map { row ->
+          when (row) {
+            is ChatTimelineItem.Message -> "${row.message.role}: ${row.message.content.joinToString { it.text.orEmpty() }}"
+            is ChatTimelineItem.ToolActivity -> "tools unresolved=${row.hasUnresolvedTools}: ${row.tools.joinToString { "${it.toolCallId}=${it.result}" }}"
+            else -> row.javaClass.simpleName
+          }
+        }
+      assertEquals(
+        listOf(
+          "user: read both files",
+          "tools unresolved=false: toolu_a=alpha, toolu_b=beta",
+          "assistant: Both files read.",
+        ),
+        rows,
       )
     }
 
