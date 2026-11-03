@@ -26,6 +26,20 @@ describe("owned stdio startup cleanup", () => {
     expect(await starting).toBe(original);
   });
 
+  it("preserves the original startup failure when loaded cleanup settles after 500ms", async () => {
+    const original = new Error("startup failed after admission");
+    createChild.mockImplementation(({ onSpawnCleanup }) => {
+      onSpawnCleanup(
+        new Promise<void>((resolve) => {
+          setTimeout(resolve, 750);
+        }),
+      );
+      throw original;
+    });
+
+    await expect(createOwnedStdioProcess({ argv: ["server"] })).rejects.toBe(original);
+  });
+
   it.each(["rejected", "unsettled"])(
     "reports %s constructor cleanup as uncertainty rather than an ordinary spawn error",
     async (outcome) => {

@@ -58,7 +58,10 @@ export async function createOwnedStdioProcess(
   } catch (error) {
     if (
       startupCleanup &&
-      (!(await settlesWithin(startupCleanup, 500)) || !(await startupCleanup))
+      // Spawn admission can fail while the process owner is still reclaiming a
+      // loaded native process tree. Keep the uncertainty boundary bounded, but
+      // allow the same shutdown window used by ordinary owned-stdio cleanup.
+      (!(await settlesWithin(startupCleanup, 5_000)) || !(await startupCleanup))
     ) {
       throw new OwnedStdioCleanupError("stdio startup cleanup did not confirm closure", {
         cause: error,
