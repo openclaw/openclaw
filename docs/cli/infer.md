@@ -288,7 +288,8 @@ openclaw infer web providers --agent <id> --json
 
 `web providers` lists available, configured, and selected providers for search and fetch.
 
-Interrupting web search or fetch cancels the request and suppresses late provider results and failures.
+Interrupting web search or fetch forwards cancellation to the request and suppresses
+late provider results and failures.
 
 ## Embedding
 
