@@ -1,0 +1,31 @@
+{
+  "name": "@openclaw/openclaw-id-access",
+  "version": "2026.10.9",
+  "private": true,
+  "description": "OpenClaw ID People page for the Control UI",
+  "type": "module",
+  "dependencies": {
+    "@openclaw/openclaw-id-protocol": "workspace:*",
+    "@solidjs/web": "2.0.0-rc.18",
+    "solid-js": "2.0.0-rc.18"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "@solidjs/compiler": "2.0.0-rc.18",
+    "esbuild": "0.28.2",
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "controlUi": "./browser/index.tsx",
+    "assetScripts": {
+      "build": "cd ../.. && node --import ./scripts/tsx.mjs scripts/build-plugin-control-ui.mts extensions/openclaw-id-access",
+      "copy": "cd ../.. && node --import ./scripts/tsx.mjs scripts/build-plugin-control-ui.mts extensions/openclaw-id-access --copy",
+      "buildOutputs": [
+        "dist/openclaw.plugin.json"
+      ]
+    }
+  }
+}

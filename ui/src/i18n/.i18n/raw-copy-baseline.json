@@ -164,6 +164,13 @@
     },
     {
       "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/components/openclaw-id/recovery-kit-panel.tsx",
+      "text": "https://"
+    },
+    {
+      "count": 1,
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/components/provider-icon-data.ts",
@@ -238,6 +245,13 @@
       "name": "description",
       "path": "ui/src/lib/chat/commands.ts",
       "text": "Clear conversation"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "title",
+      "path": "ui/src/lib/openclaw-id/kit-export.ts",
+      "text": "OpenClaw Recovery Kit"
     },
     {
       "count": 1,

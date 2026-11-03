@@ -1192,14 +1192,17 @@ const config = {
     "src/agents/model-auth-runtime.ts": ["nsExports"],
     "src/agents/model-auth-runtime-shared.ts": ["nsExports"],
     "src/agents/prepared-model-runtime.ts": ["nsExports"],
-    // OpenClaw ID focused tests drive retry timers, mailbox handling, connection custody and
-    // tunnel supervision through these exports; the full-tree scan still audits those tests.
+    // OpenClaw ID focused tests drive retry timers, mailbox handling, tunnel supervision and
+    // browser key seams through these exports; the full-tree scan still audits those tests.
     "src/gateway/openclaw-id/mailbox-reader.ts": ["exports"],
     "src/gateway/openclaw-id/publication-retry.ts": ["exports"],
     "src/gateway/openclaw-id/tunnel-connections.ts": ["exports"],
     "src/gateway/openclaw-id/tunnel-principal.ts": ["types"],
     "src/gateway/openclaw-id/tunnel-runtime.ts": ["exports"],
     "src/gateway/openclaw-id/tunnel-supervisor.ts": ["exports", "types"],
+    "extensions/openclaw-id-access/browser/owner-signing.ts": ["exports"],
+    "extensions/openclaw-id-access/browser/people-format.ts": ["exports"],
+    "ui/src/lib/openclaw-id/kit-export.ts": ["exports"],
   },
   workspaces: {
     ".": {

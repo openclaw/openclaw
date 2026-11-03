@@ -2532,8 +2532,10 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   bottom: -2px;
 }
 
+/* Rows keep their intrinsic height; capped menus scroll instead of squeezing multiline labels. */
 .sidebar-customize-menu__item {
   display: flex;
+  flex-shrink: 0;
   align-items: center;
   gap: 6px;
   width: 100%;

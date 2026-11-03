@@ -36,6 +36,7 @@ type EnglishCatalog = TranslationMap & {
   pluginsPage: TranslationMap & Record<"installed" | "official" | "install", string>;
   mcpApp: TranslationMap;
   linkReader: TranslationMap;
+  openclawId: TranslationMap;
   agentTools: TranslationMap;
   githubPublication: TranslationMap & Record<"newAction" | "capacity", string>;
   githubConnections: TranslationMap &
@@ -1210,6 +1211,7 @@ const startupEnglish = {
     toolSearch: {},
 
     hostDesktop: {},
+    openclawId: {},
     workerDesktop: {},
   },
   aboutPage: {
@@ -1999,6 +2001,8 @@ const startupEnglish = {
     title: "Link reader",
     urlPlaceholder: "Supported link URL",
   },
+
+  openclawId: {},
 } satisfies TranslationMap;
 
 export const en: typeof startupEnglish & EnglishCatalog = startupEnglish;
