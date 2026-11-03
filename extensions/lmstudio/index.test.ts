@@ -34,12 +34,12 @@ vi.mock("./src/models.fetch.js", async (importOriginal) => ({
   discoverLmstudioModels: discoverLmstudioModelsMock,
   discoverLmstudioDynamicModels: (
     allowPrivateNetwork: boolean | undefined,
-    baseUrl: string,
+    discoveryBaseUrl: string,
     apiKey: string,
     headers?: Record<string, string>,
   ) =>
     discoverLmstudioModelsMock({
-      baseUrl,
+      baseUrl: discoveryBaseUrl,
       apiKey,
       headers,
       allowPrivateNetwork,
