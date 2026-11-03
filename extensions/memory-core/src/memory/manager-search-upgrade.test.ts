@@ -82,6 +82,7 @@ it("rebuilds unchanged prior-version content on the first default search", async
   const dbPath = await publishIndex(cfg, "chunkingVersion");
   const manager = await fixture.getFreshManager(cfg, "default");
   expect(await manager.search("alpha", { lexicalOnly: true })).toEqual(alphaResult);
+  await (manager as unknown as { awaitManagerIdle(): Promise<void> }).awaitManagerIdle();
   expect(manager.status().custom?.indexIdentity).toEqual({ status: "valid" });
   expect(withDatabase(dbPath, readMeta).chunkingVersion).toBe(MEMORY_CHUNKING_VERSION);
   await closeManager(manager);
@@ -97,6 +98,53 @@ it("rebuilds unchanged prior-version content on the first default search", async
   expect(await reopened.search("alpha", { lexicalOnly: true })).not.toEqual([]);
   expect(provider.embedBatchCalls).toBe(embedded);
   expect(publication()).toEqual(rebuilt);
+});
+
+it("serves keyword hits while a format-upgrade rebuild remains pending", async () => {
+  const cfg = createConfig();
+  const dbPath = await publishIndex(cfg, "chunkingVersion");
+  const manager = await fixture.getFreshManager(cfg, "default");
+  let releaseHeld!: () => void;
+  const held = new Promise<void>((resolve) => {
+    releaseHeld = resolve;
+  });
+  const originalSync = (
+    manager as unknown as {
+      syncAdmitted(
+        params?: { reason: string },
+        options?: { allowEmbeddingBootstrapFallback?: boolean },
+      ): Promise<void>;
+    }
+  ).syncAdmitted.bind(manager);
+  const syncAdmitted = vi
+    .spyOn(
+      manager as unknown as {
+        syncAdmitted(
+          params?: { reason: string },
+          options?: { allowEmbeddingBootstrapFallback?: boolean },
+        ): Promise<void>;
+      },
+      "syncAdmitted",
+    )
+    .mockImplementation(async (...args) => {
+      await held;
+      return await originalSync(...args);
+    });
+  expect(await manager.search("alpha", { lexicalOnly: true })).toEqual(alphaResult);
+  expect(syncAdmitted).toHaveBeenCalledWith(
+    { reason: "search" },
+    { allowEmbeddingBootstrapFallback: true },
+  );
+  expect(manager.status().custom?.indexIdentity).toMatchObject({
+    status: "mismatched",
+    owner: "openclaw",
+    code: "chunking_version",
+  });
+  expect(withDatabase(dbPath, readMeta).chunkingVersion).toBe(MEMORY_CHUNKING_VERSION - 1);
+  releaseHeld();
+  await (manager as unknown as { awaitManagerIdle(): Promise<void> }).awaitManagerIdle();
+  expect(manager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+  await closeManager(manager);
 });
 
 it("keeps status inspection read-only during an upgrade", async () => {
@@ -171,12 +219,15 @@ it.each([
     const previousBatches = provider.embedBatchCalls;
     const manager = await fixture.getFreshManager(cfg);
     expect(await manager.search("alpha")).toEqual(alphaResult);
+    await (manager as unknown as { awaitManagerIdle(): Promise<void> }).awaitManagerIdle();
     expect(manager.status().custom?.indexIdentity).toEqual({ status: "valid" });
     expect(provider.embedBatchCalls).toBeGreaterThan(previousBatches);
-    expect(provider).toMatchObject({
-      embeddedBatchTexts: [expect.stringMatching(document)],
-      embeddedQueryTexts: [query],
-    });
+    expect(provider.embeddedBatchTexts).toEqual([expect.stringMatching(document)]);
+    // First search stayed keyword-only while the format rebuild ran in the
+    // background; the next semantic search embeds the query with the new format.
+    provider.embeddedQueryTexts.length = 0;
+    expect(await manager.search("alpha")).toEqual(alphaResult);
+    expect(provider.embeddedQueryTexts).toEqual([query]);
     await closeManager(manager);
     const upgraded = withDatabase(dbPath, readMeta);
     expect(upgraded.embeddingInputFormatVersion).toBe(1);
