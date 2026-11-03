@@ -20,6 +20,59 @@
   display: none;
 }
 
+/* Incognito panes sit under a quiet smoked shade that fades out below the
+   header: one neutral ink from the theme (never an accent hue), eased through
+   extra stops so the falloff has no visible band. The pending pane renders in a
+   cell too, so the shade holds from send through creation into the chat. */
+.chat-split-view__cell:has(.agent-chat__input[data-incognito="true"]) {
+  --chat-incognito-ink: var(--text-strong);
+  --chat-incognito-strength: 7%;
+  /* The header-to-transcript blend (sidebar.css) would paint the plain surface
+     and cut a band; hand it the shade's depth at the header's lower edge
+     (~18% down the 240px falloff). */
+  --chat-header-tint: var(--chat-incognito-ink);
+  --chat-header-tint-strength: calc(var(--chat-incognito-strength) * 0.77);
+
+  background-image: linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--chat-incognito-ink) var(--chat-incognito-strength), transparent),
+    color-mix(
+        in srgb,
+        var(--chat-incognito-ink) calc(var(--chat-incognito-strength) * 0.62),
+        transparent
+      )
+      30%,
+    color-mix(
+        in srgb,
+        var(--chat-incognito-ink) calc(var(--chat-incognito-strength) * 0.26),
+        transparent
+      )
+      62%,
+    color-mix(
+        in srgb,
+        var(--chat-incognito-ink) calc(var(--chat-incognito-strength) * 0.08),
+        transparent
+      )
+      84%,
+    transparent
+  );
+  background-repeat: no-repeat;
+  background-size: 100% 240px;
+}
+
+/* The pending pane's desktop header reveals the same canvas as the chat
+   pane's (startup-layout.css), so a tinted backdrop runs under it unbroken. */
+openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobile) {
+  background: transparent;
+}
+
+/* On dark surfaces a lighter ink would read as glow; deepen instead. */
+:root[data-theme-mode="dark"]
+  .chat-split-view__cell:has(.agent-chat__input[data-incognito="true"]) {
+  --chat-incognito-ink: black;
+  --chat-incognito-strength: 32%;
+}
+
 .chat-pane-cache {
   display: grid;
   flex: 1 1 0;
