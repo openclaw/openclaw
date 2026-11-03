@@ -1,14 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { onTestFinished } from "vitest";
-import {
-  writeManagedGitHubProfileFiles,
-  resolveManagedGitHubProfileDir,
-} from "../../../extensions/github-repositories/runtime-api.js";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
+import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import { startNodeWorkspaceTransferTestServer } from "./node-workspace-transfer.test-support.js";
 import { stageSessionRepositoryCheckpoint } from "./session-repository-checkpoints.js";
@@ -16,6 +13,21 @@ import type { WorkerEnvironmentStore } from "./store.js";
 import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { requireWorkspaceResultGit } from "./workspace-result-git.js";
+
+const { writeManagedGitHubProfileFiles, resolveManagedGitHubProfileDir } =
+  await loadBundledPluginFacade<{
+    writeManagedGitHubProfileFiles(
+      profileDir: string,
+      identity: { login: string; token: string },
+      options?: { assertCurrent: () => void },
+    ): Promise<void>;
+    resolveManagedGitHubProfileDir(params: {
+      agentId: string;
+      scope: "system" | "agent" | "personal";
+      profileId: string;
+      env?: NodeJS.ProcessEnv;
+    }): string;
+  }>({ pluginId: "github-repositories", artifactBasename: "runtime-api.ts" });
 
 /** Synthetic credentials in the native managed-profile file contract, shared by source and image proof. */
 export async function createManagedRepositoryProfile(params: {

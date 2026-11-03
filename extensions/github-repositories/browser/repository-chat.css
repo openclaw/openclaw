@@ -725,6 +725,11 @@ button.chat-pr__diff {
   color: var(--text);
 }
 
+/* The account is the connection row's primary identity. */
+.github-connection__login {
+  color: var(--text-strong);
+}
+
 .github-device-code {
   color: var(--text-strong);
   font-size: var(--control-ui-text-lg);

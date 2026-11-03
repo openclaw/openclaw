@@ -2,11 +2,13 @@ import { metadataEnglish } from "./metadata-english.ts";
 export const english = {
   githubConnections: {
     ...metadataEnglish.githubConnections,
-    description:
-      "Check the accounts used for agent commands, dashboard data, and publishing. These connections are separate from your GitHub sign-in and co-author credit.",
+    description: "These connections are separate from your GitHub sign-in and co-author credit.",
+    descriptionMore: "Check the accounts used for agent commands, dashboard data, and publishing.",
     mine: "My GitHub",
     system: "System GitHub",
+    personalUse: "Publishing",
     personalDescription: "Your account for explicitly selected Publish PR actions.",
+    systemUse: "Agent commands, dashboards, publishing",
     systemDescription:
       "Default account for agent commands, authenticated dashboards, and publishing.",
     unboundDescription:
@@ -18,15 +20,19 @@ export const english = {
     checking: "Checking connection…",
     statusUnavailable: "Connection status unavailable",
     manage: "Manage connections",
+    manageShort: "Manage",
+    changeShort: "Change",
+    connectShort: "Connect",
+    viewShort: "View",
     reconnectRequired: "Reconnect required",
     connectMine: "Connect My GitHub",
     changeMine: "Change My GitHub",
     changeSystem: "Change System GitHub",
     disconnectMine: "Disconnect My GitHub",
+    disconnect: "Disconnect",
     disconnectDescription:
       "Stops unfinished personal publication. Published work stays intact; revoke the app grant separately in GitHub settings.",
     adminManaged: "Admin managed",
-    purpose: "Connect GitHub",
     forMe: "For me",
     forSystem: "For the system",
     purposeHint: "Only the selected connection changes.",

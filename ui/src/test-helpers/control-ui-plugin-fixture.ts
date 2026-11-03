@@ -60,6 +60,7 @@ export async function prepareNativeControlUiPluginFixtures(
       entryUrl: `${prefix}${path.basename(declaration.entry)}`,
       ...(declaration.settingsViews ? { settingsViews: declaration.settingsViews } : {}),
       styles: (declaration.styles ?? []).map((file) => `${prefix}${path.basename(file)}`),
+      ...(generation.panelIcon ? { panelIcon: generation.panelIcon.dataUrl } : {}),
     });
   }
   return {

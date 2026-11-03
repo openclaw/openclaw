@@ -22,6 +22,7 @@ it.each([
   ["sessions.title.prepare", "operator.write", { controlPlaneWrite: true }],
   ["node.runnerInventory.update", "node", { advertise: false }],
   ["mcp.events.list", "operator.read", { since: "2026.10" }],
+  ["sessions.groups.create", "operator.write", { since: "2026.10" }],
   ["gateway.restart.preflight", "operator.read", { since: "<=2026.7" }],
   [
     "environments.create environments.destroy environments.prepare",

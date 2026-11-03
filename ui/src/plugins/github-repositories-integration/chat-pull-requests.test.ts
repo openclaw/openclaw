@@ -70,9 +70,9 @@ function disposeContainer() {
 describe("ChatPullRequests", () => {
   beforeEach(setupContainer);
   afterEach(disposeContainer);
-  it("keeps unknown diff counts absent rather than inventing zeroes", () => {
+  it("keeps unavailable counts absent and PR rows outside live regions", () => {
     paint({ pullRequests: [pullRequest({ additions: undefined, deletions: 0 })] });
-    expect(query(".chat-pr__additions")).toBeNull();
+    expect(query(".chat-pr__additions, .chat-prs[aria-live]")).toBeNull();
     expect(text(".chat-pr__deletions")).toBe("−0");
   });
 

@@ -7,6 +7,11 @@ import { lobsterPetSeed } from "../components/lobster-pet-contract.ts";
 import { createLobsterPetLook, lobsterLookStyle } from "../components/lobster-pet-identity.ts";
 import { Icon } from "../components/solid/icon.tsx";
 import {
+  SettingsDetailsRow,
+  SettingsDisclosure,
+} from "../components/solid/settings-disclosure.tsx";
+import { SettingsSectionHelp } from "../components/solid/settings-section-help.tsx";
+import {
   SettingsSecretInput,
   SettingsSegmented,
   SettingsNavRow,
@@ -103,6 +108,35 @@ export function createControlUiSettingsComponents(
         ),
         true,
       ),
+    mountDetailsRow: (container, initial) =>
+      mount(
+        container,
+        initial,
+        (props) => (
+          <SettingsDetailsRow
+            title={props().title}
+            description={props().description}
+            control={props().control}
+            detailsLabel={props().detailsLabel}
+            hasDetails={props().hasDetails}
+          >
+            {props().content}
+          </SettingsDetailsRow>
+        ),
+        true,
+      ),
+    mountDisclosure: (container, initial) =>
+      mount(container, initial, (props) => (
+        <SettingsDisclosure title={props().title} quiet={props().quiet}>
+          {props().content}
+        </SettingsDisclosure>
+      )),
+    mountSectionHelp: (container, initial) =>
+      mount(container, initial, (props) => (
+        <SettingsSectionHelp id={props().id} section={props().section}>
+          {props().content}
+        </SettingsSectionHelp>
+      )),
     mountSecretInput: (container, initial) =>
       mount(container, initial, (props) => <SettingsSecretInput {...props()} />),
     mountSegmented: (container, initial) =>

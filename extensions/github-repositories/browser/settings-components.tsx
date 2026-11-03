@@ -45,6 +45,52 @@ export function SettingsRow(props: {
     host.mountRow,
   );
 }
+export function SettingsDetailsRow(props: {
+  title: JSX.Element;
+  description?: JSX.Element;
+  control?: JSX.Element;
+  detailsLabel: string;
+  hasDetails?: boolean;
+  children?: JSX.Element;
+}) {
+  const host = useSettings().components;
+  const title = content(() => props.title);
+  const description = content(() => props.description);
+  const control = content(() => props.control);
+  const children = content(() => props.children);
+  return hostControl(
+    () => ({
+      title,
+      description: props.description === undefined ? undefined : description,
+      control: props.control === undefined ? undefined : control,
+      detailsLabel: props.detailsLabel,
+      hasDetails: props.hasDetails,
+      content: children,
+    }),
+    host.mountDetailsRow,
+  );
+}
+export function SettingsDisclosure(props: {
+  title: JSX.Element;
+  quiet?: boolean;
+  children?: JSX.Element;
+}) {
+  const host = useSettings().components;
+  const title = content(() => props.title);
+  const children = content(() => props.children);
+  return hostControl(
+    () => ({ title, quiet: props.quiet, content: children }),
+    host.mountDisclosure,
+  );
+}
+export function SettingsSectionHelp(props: { id: string; section: string; children: JSX.Element }) {
+  const host = useSettings().components;
+  const children = content(() => props.children);
+  return hostControl(
+    () => ({ id: props.id, section: props.section, content: children }),
+    host.mountSectionHelp,
+  );
+}
 export function SettingsStatus(props: {
   kind: "ok" | "warn" | "danger" | "accent" | "muted";
   label: string;

@@ -320,7 +320,7 @@ async function refreshBranchPullRequests(
         } catch (error) {
           read.assertCurrent();
           if (entry.lastGood === lastGood) {
-            entry.expiresAt = Date.now() + FAILURE_CACHE_MS;
+            entry.expiresAt = performance.now() + FAILURE_CACHE_MS;
             entry.lastGood = previous;
           }
           if (previous) {
@@ -331,7 +331,7 @@ async function refreshBranchPullRequests(
         // An older display completion must not replace a newer branch observation.
         if (entry.lastGood === lastGood) {
           if (result.rateLimited) {
-            entry.expiresAt = Date.now() + RATE_LIMIT_CACHE_MS;
+            entry.expiresAt = performance.now() + RATE_LIMIT_CACHE_MS;
           }
           entry.lastGood = { ...lastGood, pullRequests: result.pullRequests };
         }
@@ -343,7 +343,7 @@ async function refreshBranchPullRequests(
     read.assertCurrent();
     const rateLimited =
       error instanceof gitHubPublicApi.ControlUiGitHubError && error.statusCode === 429;
-    entry.expiresAt = Date.now() + (rateLimited ? RATE_LIMIT_CACHE_MS : FAILURE_CACHE_MS);
+    entry.expiresAt = performance.now() + (rateLimited ? RATE_LIMIT_CACHE_MS : FAILURE_CACHE_MS);
     if (rateLimited) {
       return {
         pullRequests: [],
@@ -649,7 +649,7 @@ function trackBranchRefresh(
 ): Promise<BranchPullRequestsSnapshot> {
   // Publish the replacement promise before any awaited work so later callers
   // cannot overtake a queued forced refresh with an older normal result.
-  entry.expiresAt = Date.now() + SUCCESS_CACHE_MS;
+  entry.expiresAt = performance.now() + SUCCESS_CACHE_MS;
   entry.refreshMode = mode;
   const trackedPromise = load().finally(() => {
     if (entry.promise === trackedPromise) {
@@ -691,7 +691,7 @@ async function cachedBranchPullRequests(
     }),
     refreshMode: null,
   };
-  const reusable = entry.expiresAt > Date.now() && !entry.access.signal.aborted;
+  const reusable = entry.expiresAt > performance.now() && !entry.access.signal.aborted;
   if (entry.access.signal.aborted) {
     entry.access = createGitHubReadGroup();
   }

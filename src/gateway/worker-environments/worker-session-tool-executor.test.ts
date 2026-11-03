@@ -314,16 +314,16 @@ describe("worker session tool topology", () => {
     },
   );
 
-  it("retains Workshop replay, update, call-cap, and live-authority behavior in the generic surface", async () => {
+  it("retains skill library replay, update, call-cap, and live-authority behavior in the generic surface", async () => {
     setEntry(SOURCE.sessionKey, SOURCE.sessionId);
-    await placements.authorizeWorkerTurnTools(sourceClaim, ["skill_workshop"]);
+    await placements.authorizeWorkerTurnTools(sourceClaim, ["skill_library"]);
     const update = vi.fn();
     const beforeToolCall = vi.fn();
     const afterToolCall = vi.fn();
     initializeGlobalHookRunner(
       createMockPluginRegistry([
-        { hookName: "before_tool_call", matcher: ["skill_workshop"], handler: beforeToolCall },
-        { hookName: "after_tool_call", matcher: ["skill_workshop"], handler: afterToolCall },
+        { hookName: "before_tool_call", matcher: ["skill_library"], handler: beforeToolCall },
+        { hookName: "after_tool_call", matcher: ["skill_library"], handler: afterToolCall },
       ]),
     );
     const executeWorkshop = vi.fn<AnyAgentTool["execute"]>(
@@ -334,13 +334,13 @@ describe("worker session tool topology", () => {
       },
     );
     const tools = await getFixture().createTools({
-      name: "skill_workshop",
-      label: "Workshop",
+      name: "skill_library",
+      label: "Skill Library",
       description: "Library",
       parameters: SkillLibraryWorkshopSchema,
       execute: executeWorkshop,
     });
-    const tool = tools.find((candidate) => candidate.name === "skill_workshop")!;
+    const tool = tools.find((candidate) => candidate.name === "skill_library")!;
     const first = await tool.execute("call-0", { action: "list" }, undefined, update);
     expect(await tool.execute("call-0", { action: "list" })).toEqual(first);
     expect(executeWorkshop).toHaveBeenCalledOnce();
@@ -363,13 +363,13 @@ describe("worker session tool topology", () => {
     "revalidates tool grants after awaited %s work",
     async (revokedAt) => {
       setEntry(SOURCE.sessionKey, SOURCE.sessionId);
-      await placements.authorizeWorkerTurnTools(sourceClaim, ["skill_workshop"]);
+      await placements.authorizeWorkerTurnTools(sourceClaim, ["skill_library"]);
       if (revokedAt === "policy") {
         initializeGlobalHookRunner(
           createMockPluginRegistry([
             {
               hookName: "before_tool_call",
-              matcher: ["skill_workshop"],
+              matcher: ["skill_library"],
               handler: async () => {
                 await Promise.resolve();
                 await placements.authorizeWorkerTurnTools(sourceClaim, []);
@@ -385,13 +385,13 @@ describe("worker session tool topology", () => {
       });
       const tool = (
         await getFixture().createTools({
-          name: "skill_workshop",
-          label: "Workshop",
+          name: "skill_library",
+          label: "Skill Library",
           description: "Library",
           parameters: SkillLibraryWorkshopSchema,
           execute: executeWorkshop,
         })
-      ).find((candidate) => candidate.name === "skill_workshop")!;
+      ).find((candidate) => candidate.name === "skill_library")!;
       await expect(tool.execute("revoked-call", { action: "list" })).rejects.toThrow(
         "tool authority changed",
       );

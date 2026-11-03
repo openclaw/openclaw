@@ -266,6 +266,8 @@ export type ReplyPayloadMetadata = {
   blockReplySources?: readonly BlockReplySource[];
   /** Persisted assistant speech facts; never serialized into channel payloads. */
   tts?: AssistantDeliveryTtsFacts;
+  /** The streaming cleaner already classified directive syntax with preceding code context. */
+  ttsDirectivesParsed?: true;
   /** Structured message-tool speech is an explicit request, independent of auto-TTS mode. */
   ttsExplicit?: true;
   /** Original runtime MEDIA references used to identify the persisted assistant row. */

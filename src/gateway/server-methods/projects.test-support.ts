@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { vi } from "vitest";
-import { repositoryProjectHandlers } from "../../../extensions/github-repositories/runtime-api.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -12,6 +11,7 @@ import {
 } from "../../plugins/legacy-sdk-resource-host.js";
 import { withPluginRuntimeGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
+import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -27,7 +27,11 @@ import {
 } from "../session-row-projection.js";
 import { createRepositorySourcesFixture } from "../worker-environments/repository-source.test-support.js";
 import { projectsHandlers as nativeProjectsHandlers } from "./projects.js";
-import type { GatewayRequestContext } from "./types.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
+
+const { repositoryProjectHandlers } = await loadBundledPluginFacade<{
+  repositoryProjectHandlers: GatewayRequestHandlers;
+}>({ pluginId: "github-repositories", artifactBasename: "runtime-api.ts" });
 export const registeredProjectsHandlers = {
   ...nativeProjectsHandlers,
   ...repositoryProjectHandlers,

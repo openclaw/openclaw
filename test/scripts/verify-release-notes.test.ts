@@ -1517,7 +1517,12 @@ console.log(JSON.stringify({ data }));
     mkdirSync(privateTmp);
     const index = join(cwd, git(cwd, ["rev-parse", "--git-path", "index"]));
     const originalIndex = readFileSync(index);
-    const originalObjects = git(cwd, ["count-objects", "-v"]);
+    // Packing or pruning duplicate loose copies must not affect object isolation.
+    const originalObjects = git(cwd, [
+      "cat-file",
+      "--batch-all-objects",
+      "--batch-check=%(objectname)",
+    ]);
     const hooks = join(cwd, "test-hooks");
     mkdirSync(hooks);
     const hook = join(hooks, "post-index-change");
@@ -1537,7 +1542,9 @@ console.log(JSON.stringify({ data }));
     });
     expect(readFileSync(index)).toEqual(originalIndex);
     expect(git(cwd, ["rev-parse", "HEAD"])).toBe(target);
-    expect(git(cwd, ["count-objects", "-v"])).toBe(originalObjects);
+    expect(git(cwd, ["cat-file", "--batch-all-objects", "--batch-check=%(objectname)"])).toBe(
+      originalObjects,
+    );
     expect(readdirSync(privateTmp)).toEqual([]);
     expect(readdirSync(cwd)).not.toContain("hook-fired");
     if (

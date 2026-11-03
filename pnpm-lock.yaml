@@ -3080,6 +3080,8 @@ importers:
         specifier: 1.4.3
         version: 1.4.3
 
+  packages/openclaw-id-protocol: {}
+
   packages/plugin-package-contract: {}
 
   packages/plugin-sdk: {}

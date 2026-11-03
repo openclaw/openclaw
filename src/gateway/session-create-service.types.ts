@@ -10,6 +10,7 @@ import type {
   SessionToolOverrides,
 } from "../config/sessions.js";
 import type { SessionEntryCreateWithTranscriptOptions } from "../config/sessions/session-accessor.types.js";
+import type { SessionCreationOperation } from "../config/sessions/session-creation-operation.js";
 import type {
   SessionCreatedActor,
   SessionCreatedVia,
@@ -103,6 +104,7 @@ export type CreateGatewaySessionResult =
   | Extract<GatewaySessionCommitResult, { ok: false }>;
 
 export type CreateGatewaySessionParams = {
+  creationOperation?: SessionCreationOperation;
   onPhase?: (phase: SessionCreatePhase) => void;
   cfg: OpenClawConfig;
   operatorAuthority?: Promise<
@@ -159,6 +161,8 @@ export type CreateGatewaySessionParams = {
   /** Canonical agent default prepared by the RPC adapter, used only without a selected root. */
   defaultSessionRoot?: string;
   permissionMode?: SessionEntry["permissionMode"];
+  /** Direct profiled operator creation only; never inherited by autonomous callers. */
+  applyAgentPermissionDefault?: boolean;
   toolOverrides?: SessionToolOverrides;
   communication?: SessionEntry["communication"];
   /** Prepares session-owned resources while the target lifecycle fence is held. */
@@ -242,6 +246,7 @@ export type CreateGatewaySessionParams = {
 };
 
 export type GatewaySessionResetParams = {
+  creationOperation?: SessionCreationOperation;
   key: string;
   agentId?: string;
   spawnedCwd?: string;

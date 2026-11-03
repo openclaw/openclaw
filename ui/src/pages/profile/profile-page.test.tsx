@@ -164,7 +164,9 @@ it("renders identity before Usage statistics and opens the usage page", async ()
     ),
   );
   const identity = page.querySelector("#settings-profile-identity");
-  expect(identity?.textContent).toContain("No single verified GitHub sign-in account");
+  // The GitHub row shows its status only; the explanation is under the section's "?".
+  expect(identity?.textContent).toContain("Unavailable");
+  expect(identity?.textContent).not.toContain("No single verified GitHub sign-in account");
   expect(
     [...(identity?.querySelectorAll(".settings-row__title") ?? [])].filter(
       (node) => node.textContent?.trim() === "Linked emails",
@@ -175,7 +177,7 @@ it("renders identity before Usage statistics and opens the usage page", async ()
   expect(docsLink?.href).toBe("https://docs.openclaw.ai/concepts/user-model");
   expect(page.querySelector(".profile-stats")).toBeNull();
   expect(page.querySelector(".profile-heatmap")).toBeNull();
-  const usageRow = page.querySelector<HTMLButtonElement>(".settings-row--nav");
+  const usageRow = page.querySelector<HTMLButtonElement>("button.settings-row--nav");
   expect(usageRow?.textContent).toContain("Usage statistics");
   expect(page.querySelector("#settings-profile-identity")?.compareDocumentPosition(usageRow!)).toBe(
     Node.DOCUMENT_POSITION_FOLLOWING,
@@ -275,7 +277,9 @@ it("falls back to the text avatar when the hero image fails to load", async () =
   };
   const page = mountProfilePage(harness.context);
 
-  flush();
+  await waitForFast(() =>
+    expect(page.querySelector(".profile-hero__avatar .identity-avatar--agent")).not.toBeNull(),
+  );
   const avatar = page.querySelector(".profile-hero__avatar .identity-avatar--agent")!;
   const image = avatar.querySelector("img");
   expect(image?.getAttribute("src")).toBe("data:image/png;base64,unloadable");
@@ -360,7 +364,8 @@ it("keeps identity refresh single-flight and allows retry after settlement", asy
   flush();
   const refresh = refreshButton(page)!;
   expect(refresh.disabled).toBe(true);
-  expect(refresh.textContent?.trim()).toBe(t("common.refreshing"));
+  expect(refresh.getAttribute("aria-busy")).toBe("true");
+  expect(refresh.getAttribute("aria-label")).toBe(t("common.refreshing"));
 
   refresh.click();
   refresh.click();
@@ -369,7 +374,8 @@ it("keeps identity refresh single-flight and allows retry after settlement", asy
 
   firstIdentity.reject(new Error("identity unavailable: OPENAI_API_KEY=sk-1234567890abcdef"));
   await waitForFast(() => expect(refresh.disabled).toBe(false));
-  expect(refresh.textContent?.trim()).toBe(t("common.refresh"));
+  expect(refresh.getAttribute("aria-busy")).toBeNull();
+  expect(refresh.getAttribute("aria-label")).toBe(t("common.refresh"));
   expect(page.textContent).toContain("identity unavailable: OPENAI_API_KEY=sk-123...cdef");
   expect(page.textContent).not.toContain("sk-1234567890abcdef");
 
@@ -558,7 +564,8 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
     "openclaw-viewer-avatar",
   );
   expect(viewer?.user?.id).toBe(profile.id);
-  expect(page.textContent).toContain("ada@example.test, ada@work.test");
+  expect(page.textContent).toContain("ada@example.test");
+  expect(page.textContent).toContain("ada@work.test");
   expect(request.mock.calls.some(([method]) => method === "users.list")).toBe(false);
 
   const input = page.querySelector<HTMLInputElement>('.identity-name-control input[type="text"]');
@@ -593,7 +600,6 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
   displayNameInput.dispatchEvent(new Event("input", { bubbles: true }));
   flush();
   const accountContext = page.querySelector("openclaw-model-accounts");
-  expect(accountContext?.textContent).toContain("Augusta Ada");
   expect(accountContext?.textContent).not.toContain("Unsaved draft");
   stubProfileAvatarProcessing();
   const processAvatar = vi.spyOn(avatarProcessing, "processProfileAvatar");
@@ -754,7 +760,10 @@ it("keeps model-account actions usable when identity refresh overlaps ChatGPT co
   await waitForFast(() => expect(page.textContent).toContain("Ada · Personal workspace"));
   expect(page.querySelector("#profile-account-auth-answer")).toBeNull();
   expect(page.querySelector<HTMLButtonElement>(".profile-auth-add-account")?.disabled).toBe(false);
-  expect(page.querySelector<HTMLButtonElement>(".profile-auth-link-unlink")?.disabled).toBe(false);
+  expect(
+    page.querySelector<HTMLButtonElement>(".profile-auth-account-picker .picker-select__trigger")
+      ?.disabled,
+  ).toBe(false);
 });
 
 it("rechecks avatar upload policy after processing and rerenders on config updates", async () => {

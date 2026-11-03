@@ -1,10 +1,9 @@
 import { createEffect, createMemo } from "solid-js";
-import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { ControlUiSettingsSlot } from "../../plugins/control-ui-settings-slot.solid.tsx";
 import { createAgentsPageState } from "./agents-page-state.ts";
 import type { AgentsRouteData } from "./route.ts";
-import { Agents, AgentsPageHeader } from "./view.tsx";
+import { Agents } from "./view.tsx";
 
 export function AgentsPage(props: { routeData?: AgentsRouteData }) {
   const context = useApplication();
@@ -19,16 +18,12 @@ export function AgentsPage(props: { routeData?: AgentsRouteData }) {
   }));
   return (
     <openclaw-agents-page>
-      <AgentsPageHeader />
-      <SettingsWorkspace>
-        <Agents
-          {...viewProps()}
-          identitySavePending={state.identitySavePending()}
-          renderToolsSettings={() => (
-            <ControlUiSettingsSlot placement={{ section: "agents", panel: "tools" }} />
-          )}
-        />
-      </SettingsWorkspace>
+      <Agents
+        {...viewProps()}
+        renderToolsSettings={() => (
+          <ControlUiSettingsSlot placement={{ section: "agents", panel: "tools" }} />
+        )}
+      />
     </openclaw-agents-page>
   );
 }

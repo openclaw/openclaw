@@ -92,7 +92,7 @@ export async function loadControlUiSessionPullRequestChecks(
   ]);
   let entry = checkDetailsCache.get(key);
   let releaseReader: (() => void) | undefined;
-  if (!entry || entry.expiresAt <= Date.now() || entry.access.signal.aborted) {
+  if (!entry || entry.expiresAt <= performance.now() || entry.access.signal.aborted) {
     if (activeCheckDetails >= MAX_CHECK_DETAIL_REQUESTS) {
       return { ...unavailable("CI details are busy; retry shortly"), retryAfterMs: 5_000 };
     }
@@ -181,7 +181,8 @@ export async function loadControlUiSessionPullRequestChecks(
     };
     pending.promise = load()
       .then((result) => {
-        pending.expiresAt = Date.now() + Math.max(CHECK_DETAILS_CACHE_MS, result.retryAfterMs ?? 0);
+        pending.expiresAt =
+          performance.now() + Math.max(CHECK_DETAILS_CACHE_MS, result.retryAfterMs ?? 0);
         return result;
       })
       .finally(() => {
@@ -198,7 +199,7 @@ export async function loadControlUiSessionPullRequestChecks(
       ...result,
       ...(result.retryAfterMs === undefined
         ? {}
-        : { retryAfterMs: Math.max(0, entry.expiresAt - Date.now()) }),
+        : { retryAfterMs: Math.max(0, entry.expiresAt - performance.now()) }),
     });
   } finally {
     release();
