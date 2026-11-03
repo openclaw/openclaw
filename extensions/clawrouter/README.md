@@ -9,6 +9,12 @@ and JSON input declarations do not enable those transports in chat. The router's
 pricing output cap still bounds the requested output; older catalogs without
 endpoint facts retain the existing fallback behavior.
 
+Fusion is a virtual chat provider. Discovery accepts `clawrouter/fusion` at
+`/v1/chat/completions` only when the selected key's catalog reports an executable,
+eligible unified HTTP offer for that exact model and endpoint. Its `/v1` base is
+not a native proxy prefix. Playground, denied, and unrelated offers cannot enable
+the route. The service still checks current policy and compound budgets at dispatch.
+
 When `models.providers.clawrouter` is configured, the bundled plugin adds
 **ClawRouter** to the Control UI sidebar. Its read-only pool dashboard shows
 subscription quota windows, account and plan details, model eligibility,

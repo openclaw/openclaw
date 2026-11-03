@@ -109,6 +109,28 @@ and [Copilot billing guide](https://docs.github.com/en/copilot/concepts/billing-
 for account and plan requirements. Native chat permission and sandbox boundaries
 below still apply.
 
+## Grok Build in native chat
+
+Install [Grok Build](https://docs.x.ai/build/overview) on the Gateway host and run
+`grok login` under the Gateway's OS account. The native picker launches
+`grok agent stdio`, the vendor's [ACP command](https://docs.x.ai/build/cli/headless-scripting#acp).
+Grok owns authentication, model access, and billing; OpenClaw does not forward an
+OpenClaw xAI provider credential to it.
+
+Refresh the model catalog, then choose an `acp-grok-build/<advertised-model-id>`
+entry. OpenClaw preserves the model IDs advertised by the installed CLI. The
+`grok-build` agent target is not a model ID, and the native picker does not use
+the OpenClaw xAI API provider's model list.
+
+Grok's [model-switch implementation](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/agent/handlers/model_switch.rs)
+can reject a switch to an incompatible agent type after a turn has run. Start a
+new chat for that selection; OpenClaw does not discard the existing conversation
+to retry it. Native chat permission and sandbox boundaries below still apply.
+
+To prevent new native Grok turns and catalog discovery, set
+`plugins.entries.acpx.config.nativeAgents.grok-build` to `false`. Classic
+`/acp spawn grok-build` sessions and `acp.allowedAgents` remain separate.
+
 Installed native agents keep their own sign-in. During discovery, `/models` can
 report **Checking native agent** without requiring an OpenClaw API key. If
 availability is unconfirmed, check the native app on the Gateway host and run
