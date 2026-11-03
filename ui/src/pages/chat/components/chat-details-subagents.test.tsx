@@ -83,6 +83,33 @@ it("omits empty content and removes collapsed activity when the last waiting chi
   expect(view.getByRole("button", { name: "Waiting child Done" })).toBeTruthy();
 });
 
+it("summarizes at most two statuses, leading with the most active one", () => {
+  const working = (key: string): Row => ({ key, label: key, status: "running" });
+  const waiting = (key: string): Row => ({ key, label: key, status: "waiting" });
+  const queued = (key: string): Row => ({ key, label: key, status: "queued" });
+  const done = (key: string): Row => ({ key, label: key, status: "done" });
+  const stopped = (key: string): Row => ({ key, label: key, status: "stopped" });
+  const summary = () =>
+    [...view.container.querySelectorAll(".chat-details-subagents__count")].map(
+      (count) => count.textContent,
+    );
+  const { view, setRows } = mountSubagents([
+    working("a"),
+    waiting("b"),
+    queued("c"),
+    done("d"),
+    stopped("e"),
+    working("f"),
+  ]);
+  expect(summary()).toEqual(["3 Working", "1 Queued"]);
+  setRows([working("a"), waiting("b"), done("d"), stopped("e"), done("f"), working("g")]);
+  flush();
+  expect(summary()).toEqual(["3 Working", "2 Done"]);
+  setRows([done("a"), stopped("b"), done("c"), done("d"), done("e"), done("f")]);
+  flush();
+  expect(summary()).toEqual(["5 Done"]);
+});
+
 it("folds failed runs into Done without changing child outcomes", () => {
   const initial: Row[] = [
     { key: "a", label: "A", status: "running" },
@@ -95,7 +122,7 @@ it("folds failed runs into Done without changing child outcomes", () => {
   const { view, setRows, openChild } = mountSubagents(initial);
   expect(
     view.getByRole("button", {
-      name: "All subagents. 1 Working, 1 Waiting on subagents, 1 Queued, 2 Done, 1 Stopped",
+      name: "All subagents. 2 Working, 1 Queued",
     }),
   ).toBeTruthy();
   setRows([initial[4]!]);
