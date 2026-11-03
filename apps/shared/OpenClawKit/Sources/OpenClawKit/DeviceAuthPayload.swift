@@ -58,7 +58,7 @@ public enum GatewayDeviceAuthPayload {
         // Managed gateways deployed before v3 metadata payload support still
         // verify v2 signatures. Swift connect signers temporarily omit signed
         // metadata until managed and supported self-managed gateways verify v3.
-        (["v2"] + self.components(fields)).joined(separator: "|")
+        return (["v2"] + self.components(fields)).joined(separator: "|")
     }
 
     private static func buildV4(
