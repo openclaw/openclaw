@@ -60,6 +60,7 @@ export const GATEWAY_EVENTS = [
   GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED,
   "node.invoke.cancel",
   "node.invoke.input",
+  "node.worker.localMcpPolicy",
   "node.invoke.request",
   GATEWAY_EVENT_DEVICE_PAIR_CHANGED,
   "device.pair.requested",
