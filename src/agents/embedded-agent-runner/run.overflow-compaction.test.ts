@@ -233,6 +233,35 @@ describe("compactEmbeddedRunForRecovery", () => {
     });
   });
 
+  it("carries a refused summary's degraded facts on the recovery end event", async () => {
+    const compact = vi.fn<ContextEngine["compact"]>(async () => ({
+      ok: true as const,
+      compacted: true as const,
+      result: {
+        summary: "fallback",
+        tokensBefore: 150_000,
+        details: { readFiles: [], modifiedFiles: [], qualityDegraded: true, summaryRefused: true },
+      },
+    }));
+    const onAgentEvent = vi.fn();
+    await recover({
+      runParams: { ...baseRunParams, onAgentEvent },
+      contextEngine: makeContextEngine(compact),
+    });
+
+    expect(onAgentEvent).toHaveBeenLastCalledWith({
+      stream: "compaction",
+      sessionKey: baseRunParams.sessionKey,
+      data: {
+        phase: "end",
+        itemId: "diag-1",
+        completed: true,
+        qualityDegraded: true,
+        summaryRefused: true,
+      },
+    });
+  });
+
   it("lets delegated native timeout recovery use its progress-aware watchdog", async () => {
     vi.useFakeTimers();
     try {
