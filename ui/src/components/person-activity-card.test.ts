@@ -166,19 +166,19 @@ it("exposes the activity link while presence is offline", () => {
   expect(link.getAttribute("href")).toBe("/ui/activity/alice");
 });
 
-it("keeps subagent sessions out of recent sessions", async () => {
+it("keeps view-only subagents out of recent sessions", async () => {
   show({
     sessionData: data([
       session("subagent:child", 4),
-      { ...session("spawned", 3), spawnedBy: "agent:main:one" },
-      session("one", 2),
-      session("two", 1),
+      { ...session("classified", 3), classification: "subagent" },
+      { ...session("spawned", 2), spawnedBy: "agent:main:one" },
+      session("one", 1),
     ]),
   });
   await waitForSolid(() =>
     expect(links().map((link) => link.textContent)).toEqual([
+      expect.stringContaining("spawned"),
       expect.stringContaining("one"),
-      expect.stringContaining("two"),
     ]),
   );
 });

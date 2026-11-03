@@ -2,7 +2,6 @@ import "../styles/session-progress-hovercard.css";
 import "../styles/person-activity-card.css";
 import { render, spread } from "@solidjs/web";
 import { createMemo, createSignal, Errored, For, Loading, runWithOwner, Show } from "solid-js";
-import { isSubagentSessionRow } from "../../../src/shared/session-list-visibility.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { registerChatComposerEnglish } from "../i18n/locales/en-chat-composer.ts";
 import { handleNavigationClick } from "../lib/navigation-click.ts";
@@ -27,6 +26,7 @@ import {
   parseAgentSessionKey,
 } from "../lib/sessions/session-key.ts";
 import { HoverMarquee } from "../lib/solid/hover-marquee.tsx";
+import { isSubagentsPanelSession } from "../pages/chat/chat-spawned-subagent.ts";
 import { ElapsedTime } from "./elapsed-time.tsx";
 import type { PersonActivityData } from "./person-activity-data.ts";
 import { personActivityLink, type PersonActivityRouting } from "./person-activity-link.ts";
@@ -227,7 +227,7 @@ function PersonActivityCard(props: { input: PersonCardInput }) {
     ).filter(
       ({ row, agentId }) =>
         !watched.has(sessionIdentity(row.key, agentId, input)) &&
-        !isSubagentSessionRow(row.key, row) &&
+        !isSubagentsPanelSession(row) &&
         [row.owner?.actor, row.createdActor].some((actor) =>
           presenceMatchesProfile(input.user, actor?.identity),
         ),
