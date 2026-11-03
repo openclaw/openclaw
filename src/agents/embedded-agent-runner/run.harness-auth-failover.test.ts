@@ -222,6 +222,16 @@ describe("native harness auth failover", () => {
     await expect(runEmbeddedAgent(params)).rejects.toBe(refusal);
     expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+
+    // The refusal consumed neither the refused profile nor the fallback chain, so the next
+    // run on the same credential still gets an answer instead of a cooled-out profile.
+    mockedRunEmbeddedAttempt.mockResolvedValue(makeAttemptResult({ assistantTexts: ["OK"] }));
+    await expect(runEmbeddedAgent(params)).resolves.toMatchObject({ payloads: [{ text: "OK" }] });
+    expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
+    expect(mockedRunEmbeddedAttempt.mock.calls.map(([attempt]) => attempt.authProfileId)).toEqual([
+      failedProfile,
+      failedProfile,
+    ]);
   });
 
   it.each(["outer-model", "actual-model"] as const)(
