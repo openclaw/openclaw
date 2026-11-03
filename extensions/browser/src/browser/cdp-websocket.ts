@@ -24,7 +24,10 @@ const PLAYWRIGHT_CDP_MAX_REDIRECTS = 10;
 type CdpSocketLookup = typeof dnsLookupCb;
 
 type CdpResponse = {
-  id: number;
+  id?: number;
+  method?: string;
+  params?: unknown;
+  sessionId?: string;
   result?: unknown;
   error?: { message?: string };
 };
@@ -233,6 +236,13 @@ function createCdpSender(ws: WebSocket, opts?: CdpSocketOptions) {
     try {
       const parsed = JSON.parse(rawDataToString(data)) as CdpResponse;
       if (typeof parsed.id !== "number") {
+        if (typeof parsed.method === "string") {
+          opts?.onEvent?.({
+            method: parsed.method,
+            params: parsed.params,
+            sessionId: parsed.sessionId,
+          });
+        }
         return;
       }
       const p = pending.get(parsed.id);
@@ -253,6 +263,7 @@ function createCdpSender(ws: WebSocket, opts?: CdpSocketOptions) {
 
   ws.on("close", () => {
     closeWithError(new CdpSocketError("closed", "CDP socket closed"));
+    opts?.onClose?.();
   });
 
   return { send, closeWithError };
@@ -304,6 +315,10 @@ export function openCdpWebSocket(
 }
 
 type CdpSocketOptions = {
+  /** Observe socket loss even when no command is pending. */
+  onClose?: () => void;
+  /** Optional event consumer; traffic is never logged by this transport. */
+  onEvent?: (event: { method: string; params?: unknown; sessionId?: string }) => void;
   headers?: Record<string, string>;
   handshakeTimeoutMs?: number;
   commandTimeoutMs?: number;

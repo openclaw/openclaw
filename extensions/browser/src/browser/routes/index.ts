@@ -5,6 +5,7 @@ import {
   readNonBlankString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { BrowserProfileUnavailableError } from "../errors.js";
+import { isExtensionProfileLocked } from "../extension-host-state.js";
 import { assertBrowserNavigationResultAllowed } from "../navigation-guard.js";
 import { DEFAULT_TRACE_DIR } from "../paths.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
@@ -92,6 +93,11 @@ export function registerBrowserRoutes(registrar: BrowserRouteRegistrar, ctx: Bro
         const assertResourceCurrent = req.screencastAuthority?.assertCurrent;
         const assertCurrent = () => {
           assertResourceCurrent?.();
+          if (isExtensionProfileLocked(runtime)) {
+            throw new BrowserProfileUnavailableError(
+              "Browser profile locked for an exclusive extension operation.",
+            );
+          }
           if (
             state.profiles.get(profileName) !== runtime ||
             !isProfileOperationCurrent({ state, runtime, signal: profileSignal })

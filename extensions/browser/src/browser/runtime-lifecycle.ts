@@ -2,6 +2,7 @@ import type { Server } from "node:http";
 import { collectErrorGraphCandidates } from "openclaw/plugin-sdk/error-runtime";
 import { registerUnhandledRejectionHandler } from "openclaw/plugin-sdk/runtime-env";
 import { asOptionalObjectRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { releaseBrowserExtensionDeclarations } from "./extension-host-state.js";
 import {
   getExtensionRelayModule,
   getGatewayExtensionRelayModule,
@@ -121,6 +122,7 @@ async function stopBrowserRuntimeInternal(
     });
   }
 
+  releaseBrowserExtensionDeclarations(current);
   params.clearState();
   current.stopUnhandledRejectionHandler?.();
 }

@@ -5,7 +5,7 @@ import pluginSdkEntryList from "./plugin-sdk-entrypoints.json" with { type: "jso
 import privateLocalOnlyPluginSdkSubpathList from "./plugin-sdk-private-local-only-subpaths.json" with { type: "json" };
 
 /**
- * All plugin SDK subpath entrypoints. The package root barrel has been removed.
+ * All plugin SDK subpath entrypoints, including lazy runtime facades, come from the JSON registry.
  * @internal Shared repository-script contract.
  */
 export const pluginSdkEntrypoints = [...pluginSdkEntryList];

@@ -1187,3 +1187,105 @@ metaschema admission, and `duplicateIds: "reject"` when a new schema cannot reus
 registered root ID. The defaults preserve MCP's existing schema-admission behavior.
 Keep one provider per reference namespace; use a new provider when schemas must not
 retain references to previously registered IDs.
+
+## Managed browser extension hosts
+
+`openclaw/plugin-sdk/browser-extension-host` exposes the browser plugin's
+`registerBrowserExtension`, `BrowserExtensionRequest`,
+`BrowserExtensionRegistration`, and `ExtensionHostSession`. The facade activates
+only the browser-owned public surface; plugins must not import browser internals.
+This is trusted plugin code, not an agent tool or a way to load arbitrary
+extensions from page content.
+
+Register an operator-vetted unpacked Manifest V3 extension **before** launching
+its dedicated local managed profile:
+
+```ts
+import { registerBrowserExtension } from "openclaw/plugin-sdk/browser-extension-host";
+
+const registration = await registerBrowserExtension({
+  profile: "openclaw",
+  principal: "the-connected-person-id",
+  extension: {
+    id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    unpackedPath: "/operator-managed/vetted-extension",
+    minimumVersion: "1.0.0",
+  },
+});
+const session = await registration.openSession({ timeoutMs: 120_000 });
+try {
+  const tab = { targetId: "t1" }; // The browser tool's tab handle or raw target id.
+  await session.withExclusiveTab(tab, async () => {
+    const tabId = await session.resolveChromeTabId(tab);
+    // Call the extension's documented API here. Functions must not capture
+    // host closures. Pass tokens/keys in args, never in the function source.
+    await session.callInServiceWorker((args: { tabId: number }) => ({ tabId: args.tabId }), {
+      tabId,
+    });
+  });
+} finally {
+  await session.close();
+}
+// On plugin shutdown/disconnection, stop the profile before releasing ownership:
+await registration.close();
+```
+
+The operator installs and updates the unpacked directory; OpenClaw does not
+fetch, extract, or trust unsigned Web Store downloads. Preserve its manifest
+`key` when the vendor requires a fixed extension ID. An unpacked extension
+without a key gets a path-derived ID; a mismatched requested ID fails worker
+readiness. Manifest version and minimum version are checked at registration;
+this is not signature or byte-integrity verification. Do not mutate files under
+an active declaration. No new browser configuration keys are required.
+
+When an extension is requested, an unconfigured executable selects the full
+Chromium/Chrome for Testing already in the Playwright cache instead of a
+branded system Chrome. OpenClaw never downloads a browser during runtime.
+Install full Playwright Chromium using the existing browser installation
+instructions. Explicit executables must identify as Chromium or Chrome for
+Testing; branded Google Chrome ignores `--load-extension`. Headless shell is
+not a supported extension host. Launch sets both `--load-extension` and
+`--disable-extensions-except`; conflicting `browser.extraArgs` extension flags
+are rejected. Remote, attach-only, existing-session, extension-relay, and
+non-Chromium profiles are unsupported.
+
+A registration reserves the profile for one person and one extension. A second
+registration or an already running browser is rejected, never restarted
+silently. `close()` stops that browser before releasing the declaration; a new
+person must use another profile. The consuming plugin owns the durable
+person-to-profile association across restarts; the runtime reservation is not
+an identity database. Runtime shutdown or
+process replacement invalidates retained task capabilities.
+
+A task session attaches to the manifest's service-worker target over raw CDP,
+keeps that attachment alive until `close()`, and calls `Runtime.callFunctionOn`
+with separate argument values. The transport does not log traffic and worker
+exception details are not returned. Arguments and results must be
+JSON-serializable. Returning a credential value would still expose it to the
+caller: the consuming plugin must return only safe statuses and keep sensitive
+results out of model context and logs.
+
+Tab mapping resolves OpenClaw handles to a raw CDP tab, then requires exactly one
+`chrome.tabs.query` result with the same URL. The extension needs the `tabs`
+permission (or equivalent URL visibility). Duplicate-URL tabs fail closed;
+active-tab guessing is deliberately unsupported. Resolve inside the exclusive
+operation immediately before using the numeric ID, and do not retain it across
+navigation or browser restarts.
+
+`withExclusiveTab` currently excludes the **whole profile**, a conservative
+superset of the requested tab, including profile aliases reaching the same local
+CDP listener. Conflicting in-flight actions or extension
+operations fail with HTTP 409 rather than queueing. Snapshot, screenshot,
+evaluate, act, navigation, and other leased browser routes cannot overlap it.
+Stop continuous screencasts and Playwright traces first; an active recording
+rejects the operation, and pre-minted screencast tickets cannot attach while the
+profile is locked. This is an in-process orchestrator boundary, not a fence for
+external CDP clients, OS screenshots, or other untrusted extensions.
+
+The timeout bounds worker calls and the exclusive callback (1–600000 ms).
+A callback exception, worker disconnection, or timeout cannot prove transient
+page secrets were cleared. The task lock releases, but the profile stays
+quarantined: browser actions fail clearly until the browser is explicitly
+stopped. Never release reads merely because a CDP request timed out. A consuming
+plugin should check its vendor's response, initialization, and Agentic Mode
+contracts inside this generic host; those policies are not browser concerns.
