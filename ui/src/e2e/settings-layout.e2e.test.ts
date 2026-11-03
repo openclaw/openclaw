@@ -728,6 +728,28 @@ suite.define(() => {
     }
   });
 
+  it("sizes touch controls from the control height above phone width", async () => {
+    const context = await suite.browser.newContext({
+      ...createDarkDesktopControlUiContextOptions(),
+      hasTouch: true,
+      isMobile: true,
+      viewport: { height: 768, width: 1024 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page);
+
+    try {
+      const pathname = pathForRoute("appearance");
+      await page.goto(new URL(pathname, suite.server.baseUrl).toString());
+      await waitForControlUiRoute(page, { pathname, routeId: "appearance" });
+      const trigger = page.locator("main.content .settings-select .picker-select__trigger").first();
+      await trigger.waitFor();
+      await expect.poll(async () => (await trigger.boundingBox())?.height).toBe(38);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("keeps Automations search above one tab-and-action row", async () => {
     const context = await suite.browser.newContext({
       colorScheme: "dark",
