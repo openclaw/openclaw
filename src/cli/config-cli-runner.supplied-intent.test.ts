@@ -29,6 +29,9 @@ vi.mock("../config/io.write-topology.js", () => ({
 // mock-isolation: Fail if the runner unexpectedly requests dry-run unset expansion.
 vi.mock("../config/config-path-mutation.js", () => ({
   resolveManagedUnsetPathsForWrite: () => state.unexpected("dry-run unsets"),
+  // mock-isolation: Observe supplied write intent; parent pruning is exercised by the
+  // real unset and persistence tests, not this path-intent boundary.
+  pruneEmptyConfigParents: () => {},
 }));
 vi.mock("../config/io.meta.js", () => ({ AUTO_MANAGED_CONFIG_META_PATHS: [] }));
 // mock-isolation: Keep the supplied synthetic snapshot intact at the reader boundary.
