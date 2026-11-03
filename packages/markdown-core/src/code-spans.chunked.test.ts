@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { buildCodeSpanIndex, createInlineCodeState } from "./code-spans.js";
 
 const splitAt = (text: string, cuts: readonly number[]): string[] => {
@@ -90,7 +89,10 @@ describe("buildCodeSpanIndex chunk invariance", () => {
       for (let i = 1; i < text.length; i += 1) {
         if (next() < 0.5) cuts.add(i);
       }
-      expectChunkInvariant(text, [...cuts].sort((a, b) => a - b));
+      expectChunkInvariant(
+        text,
+        [...cuts].sort((a, b) => a - b),
+      );
       cases += 1;
     }
   });
