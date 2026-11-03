@@ -16,7 +16,10 @@ vi.mock("./gateway-rpc.js", async (importOriginal) => ({
     params: Record<string, unknown>,
   ) => mocks.call(method, params),
 }));
-vi.mock("./prompt.js", () => ({ promptYesNo: mocks.prompt }));
+vi.mock("./prompt.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./prompt.js")>()),
+  promptYesNo: mocks.prompt,
+}));
 vi.mock("../runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../runtime.js")>()),
   defaultRuntime: { log: mocks.log, error: vi.fn(), exit: vi.fn(), writeJson: mocks.writeJson },

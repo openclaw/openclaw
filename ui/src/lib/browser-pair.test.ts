@@ -2,7 +2,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { canPairBrowserWithGateway, createBrowserPairSession } from "./browser-pair.ts";
 
-vi.mock("./nodes/index.ts", () => ({
+vi.mock("./nodes/index.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./nodes/index.ts")>()),
   loadOrCreateDeviceIdentity: vi.fn(async () => ({
     deviceId: "0123456789abcdef",
     publicKey: "public",

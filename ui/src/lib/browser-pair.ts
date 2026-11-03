@@ -103,6 +103,7 @@ export function createBrowserPairSession(params: {
       fail("expired");
       return;
     }
+    // SAFETY: Same-origin reply from the Gateway that ships with this UI; unknown statuses keep polling.
     const body = result?.body as
       | { status?: string; bootstrapToken?: string; expiresAtMs?: number }
       | undefined;
@@ -145,13 +146,9 @@ export function createBrowserPairSession(params: {
         action: "start",
         identity,
       }).catch(() => null);
-      const body = response?.ok
-        ? ((await response.json().catch(() => null)) as {
-            requestId: string;
-            code: string;
-            expiresAtMs: number;
-          } | null)
-        : null;
+      const started: unknown = response?.ok ? await response.json().catch(() => null) : null;
+      // SAFETY: A 2xx from this route is the shape the Gateway shipped with this UI returns.
+      const body = started as { requestId: string; code: string; expiresAtMs: number } | null;
       if (current !== attempt) {
         return;
       }

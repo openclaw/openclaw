@@ -1,5 +1,6 @@
 // Public device-code pairing for browsers that hold no Gateway credential yet.
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   deriveDeviceIdFromPublicKey,
@@ -35,10 +36,10 @@ type BrowserPairBody = {
 };
 
 function parseBody(value: unknown): BrowserPairBody | null {
-  if (typeof value !== "object" || value === null) {
+  if (!isRecord(value)) {
     return null;
   }
-  const { deviceId, publicKey, signature, requestId } = value as Record<string, unknown>;
+  const { deviceId, publicKey, signature, requestId } = value;
   if (
     typeof deviceId !== "string" ||
     typeof publicKey !== "string" ||
