@@ -549,7 +549,10 @@ test("dispatches agent hooks when the process clock is outside the Date range", 
         clock.mockRestore();
         return { status: "ok", summary: "done" };
       });
-      await post("agent", { message: "Bad clock", wakeMode: "next-heartbeat" });
+      await postWithDeferredHookWake(post, "agent", {
+        message: "Bad clock",
+        wakeMode: "next-heartbeat",
+      });
     }
     await waitForSystemEvent();
 
@@ -583,7 +586,11 @@ test("enforces hooks.allowedAgentIds for effective agent routing", async () => {
     expect(cronIsolatedRun).not.toHaveBeenCalled();
 
     mockIsolatedRunOk(true);
-    await post("agent", { message: "Allowed", agentId: "hooks", wakeMode: "next-heartbeat" });
+    await postWithDeferredHookWake(post, "agent", {
+      message: "Allowed",
+      agentId: "hooks",
+      wakeMode: "next-heartbeat",
+    });
     const targetEvents = await waitForSystemEventTexts(HOOKS_MAIN_SESSION_KEY);
     expect(targetEvents.join("\n")).toContain("Hook Hook: done");
     expect(peekSystemEventEntries(resolveMainKey())).toStrictEqual([]);
