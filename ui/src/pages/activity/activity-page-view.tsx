@@ -10,7 +10,6 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   createDeferred,
-  createEffect,
   createMemo,
   createSignal,
   createStore,
@@ -181,23 +180,16 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
   const pageScrolls = createMediaQuery(
     "(max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)",
   );
-  const [stream, setStream] = createSignal<HTMLDivElement>();
+  let stream: HTMLDivElement | undefined;
   // Resolve ancestry after insertion; the stream ref is assigned before it joins main.
   const scrollContainer = () =>
-    pageScrolls() ? (stream()?.closest<HTMLElement>("main.content") ?? stream()) : stream();
+    pageScrolls() ? (stream?.closest<HTMLElement>("main.content") ?? stream) : stream;
   const follow = useStreamAutoFollow({
     container: scrollContainer,
     enabled: () => filters.autoFollow,
     identity: liveRevision,
     content: () => liveSnapshot().entries,
   });
-  createEffect(
-    () => [pageScrolls(), stream()] as const,
-    () => {
-      const container = scrollContainer();
-      return container ? listen(container, "scroll", follow.handleScroll) : undefined;
-    },
-  );
   const [presentationTime, setPresentationTime] = createSignal(Date.now());
   const activityExpiry = createPresenceActivityLifecycle(presence, () =>
     setPresentationTime(Date.now()),
@@ -211,6 +203,22 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
     };
   });
   function LiveActivityView(liveProps: { basePath: string; entries: readonly ActivityEntry[] }) {
+    onSettled(() => {
+      // Wait for insertion, then capture both responsive owners within the page.
+      const root = stream?.closest<HTMLElement>("main.content") ?? stream;
+      return root
+        ? listen(
+            root,
+            "scroll",
+            (event) => {
+              if (event.target === scrollContainer()) {
+                follow.handleScroll();
+              }
+            },
+            true,
+          )
+        : undefined;
+    });
     function StatusFilter(props: { status: ActivityStatus }) {
       return (
         <label class="activity-status-filter">
@@ -534,7 +542,9 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
           <LiveToolbar toolNames={toolNames()} />
           <div
             class="activity-stream"
-            ref={setStream}
+            ref={(element) => {
+              stream = element;
+            }}
             role="group"
             aria-label={t("activity.streamLabel")}
           >
