@@ -101,6 +101,36 @@ it("opens a controlled group picker without autofocus and dispatches the selecte
   expect(retiredPage.textContent).not.toContain("Alpine");
 });
 
+it.each([
+  ["NFC", "M\u00fcnchen", "Mu\u0308nchen"],
+  ["NFD", "Mu\u0308nchen", "M\u00fcnchen"],
+])("matches canonical %s group searches across Unicode forms", async (_, query, group) => {
+  const { menu, open, close, onAction } = await menuFixture(true);
+  menu.groups = [group];
+  await menu.updateComplete;
+  menu.querySelector<HTMLButtonElement>('[value="compact:open-group"]')!.click();
+  flush();
+  const [page] = open.mock.calls[0]!;
+  menu.mobilePageOpen = true;
+  const mounted = mountSolid(() => [page.headerActions, page.content]);
+  flush();
+  mounted.container.querySelector<HTMLButtonElement>(".chat-mobile-host__circle")!.click();
+  flush();
+  const search = mounted.container.querySelector<HTMLInputElement>('input[type="search"]')!;
+  search.value = query;
+  search.dispatchEvent(new Event("input", { bubbles: true }));
+  flush();
+  const buttons = () => [
+    ...mounted.container.querySelectorAll<HTMLButtonElement>(".session-actions-page__group button"),
+  ];
+  expect(buttons().some((button) => button.textContent === group)).toBe(true);
+  buttons()
+    .find((button) => button.textContent === group)!
+    .click();
+  expect(onAction).toHaveBeenCalledExactlyOnceWith({ kind: "move-to-group", category: group });
+  expect(close).toHaveBeenCalledOnce();
+});
+
 it.each([false, undefined])(
   "uses explicit desktop presentation for the palette delta: %s",
   async (mobile) => {
