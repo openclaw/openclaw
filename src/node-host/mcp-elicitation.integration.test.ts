@@ -3,9 +3,9 @@ import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
 import { McpServer } from "@modelcontextprotocol/server";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
-import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { startMcpHttpFixture } from "../agents/agent-bundle-mcp-lifecycle.test-support.js";
+import { NODE_MCP_ELICITATION_CAPABILITY } from "../infra/node-commands.js";
 import type { NodeHostClient } from "./client.js";
 import { startNodeHostMcpManager } from "./mcp.js";
 
@@ -35,7 +35,7 @@ it("rejects ambiguous MCP prompts and cancels a pending question when its turn e
     { docs: { url: http.url, transport: "streamable-http" } },
     {
       elicitationClient: {
-        serverCapabilities: new Set([GATEWAY_SERVER_CAPS.NODE_MCP_ELICITATION]),
+        serverCapabilities: new Set([NODE_MCP_ELICITATION_CAPABILITY]),
         request,
       },
     },

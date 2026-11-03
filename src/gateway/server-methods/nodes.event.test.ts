@@ -4,11 +4,13 @@ import { McpServer } from "@modelcontextprotocol/server";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/server-capabilities.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { startMcpHttpFixture } from "../../agents/agent-bundle-mcp-lifecycle.test-support.js";
 import { createMcpClientElicitationHandler } from "../../agents/mcp-client-elicitation.js";
-import { NODE_MCP_TOOLS_CALL_COMMAND } from "../../infra/node-commands.js";
+import {
+  NODE_MCP_ELICITATION_CAPABILITY,
+  NODE_MCP_TOOLS_CALL_COMMAND,
+} from "../../infra/node-commands.js";
 import type { NodeHostClient } from "../../node-host/client.js";
 import { coerceNodeInvokePayload } from "../../node-host/invoke-payload.js";
 import { handleInvoke } from "../../node-host/invoke.js";
@@ -221,7 +223,7 @@ describe.each(mcpQuestionCases)("%s MCP questions (%s)", (route, scenario) => {
     const gatewayMethods: string[] = [];
     const client: NodeHostClient = {
       serverCapabilities: new Set(
-        scenario === "legacy Gateway" ? [] : [GATEWAY_SERVER_CAPS.NODE_MCP_ELICITATION],
+        scenario === "legacy Gateway" ? [] : [NODE_MCP_ELICITATION_CAPABILITY],
       ),
       request: async (method, params) => {
         gatewayMethods.push(method);

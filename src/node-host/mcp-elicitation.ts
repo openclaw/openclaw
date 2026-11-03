@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Client } from "@modelcontextprotocol/client";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 import {
   MCP_ELICITATION_TIMEOUT_MS,
   runWithMcpElicitationHandler,
@@ -9,6 +8,7 @@ import {
 } from "../agents/mcp-client-elicitation.js";
 import { bindMcpClientElicitation } from "../agents/mcp-client-elicitation.runtime.js";
 import { createMcpRequestLifecycle } from "../agents/mcp-request-lifecycle.js";
+import { NODE_MCP_ELICITATION_CAPABILITY } from "../infra/node-commands.js";
 import type { NodeHostClient } from "./client.js";
 
 /** The Gateway binds this opaque id to the conversation that owns the call. */
@@ -17,7 +17,7 @@ function forwardQuestion(gateway: NodeHostClient, id?: string): McpElicitationHa
     if (
       !id ||
       method !== "elicitation/create" ||
-      !gateway.serverCapabilities?.has(GATEWAY_SERVER_CAPS.NODE_MCP_ELICITATION)
+      !gateway.serverCapabilities?.has(NODE_MCP_ELICITATION_CAPABILITY)
     ) {
       return { action: "decline" };
     }

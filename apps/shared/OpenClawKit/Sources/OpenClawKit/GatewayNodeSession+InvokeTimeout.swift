@@ -6,7 +6,7 @@ extension GatewayNodeSession {
         let elicitationId: UUID
     }
 
-    // Match MCP_ELICITATION_TIMEOUT_MS in src/agents/mcp-client-elicitation.ts.
+    /// Time allowed for a human answer, matching the node's `MCP_ELICITATION_TIMEOUT_MS`.
     private static let mcpElicitationTimeoutMs = 600_000
 
     static func invokeWallTimeoutMs(for request: BridgeInvokeRequest, timeoutMs: Int?) -> Int {
