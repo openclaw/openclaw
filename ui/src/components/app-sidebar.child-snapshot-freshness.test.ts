@@ -335,9 +335,7 @@ it("retires collapsed child state after an event refresh finishes", async () => 
     });
     await settleLitElement(sidebar);
     expect(data.loadingChildSessionKeys.has(parentKey)).toBe(false);
-    expect(childToggle(sidebar)?.classList.contains("sidebar-child-session-toggle--running")).toBe(
-      false,
-    );
+    expect(sidebar.findSidebarHovercardRowByKey(parentKey)?.runningChildCount).toBe(0);
     expect(harness.list).toHaveBeenCalledTimes(2);
   } finally {
     refresh.resolve(result([child]));

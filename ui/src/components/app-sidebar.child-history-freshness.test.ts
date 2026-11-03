@@ -340,9 +340,7 @@ it.each([
       expect(data.childSessionRowsByParent[parentKey]?.map((row) => row.key)).toEqual(childKeys);
       expect.soft(rowElement(sidebar, child.key)?.textContent).toContain(fresh.label);
       expect.soft(sidebar.findSidebarHovercardRowByKey(child.key)).toMatchObject(fresh);
-      expect(
-        childToggle(sidebar)?.classList.contains("sidebar-child-session-toggle--running"),
-      ).toBe(true);
+      expect(sidebar.findSidebarHovercardRowByKey(parentKey)?.runningChildCount).toBe(1);
       expect(sessions.state.result).toBe(primary);
     } finally {
       unsubscribe();
