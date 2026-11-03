@@ -9,7 +9,7 @@ import {
   hydrateContinuationCustody,
   listContinuationRecords,
 } from "../auto-reply/continuation/custody/custody-store.js";
-import { enqueuePendingWorkReplacing } from "../auto-reply/continuation/work-replacement-store.js";
+import { enqueuePendingWork } from "../auto-reply/continuation/work-store.test-support.js";
 import { captureRuntimeConfigAsyncReader } from "../config/io.runtime.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
@@ -115,26 +115,15 @@ it("an incognito reset ends the session's queued continuation custody as a delet
         throw new Error(created.error.message);
       }
       const now = Date.now();
-      const elected = await enqueuePendingWorkReplacing({
-        work: {
-          sessionKey: created.key,
-          hop: 1,
-          delayMs: 60_000,
-          electedAt: now,
-          dueAt: now + 60_000,
-          anchorFinalizedAt: now,
-          maxChainLength: 8,
-          reason: "come back to the private thread",
-        },
-        summary: "queued before the incognito reset",
-        maxPendingWork: 8,
-        replaceParkedWork: false,
-        expectedRunningFlowIds: [],
+      const work = await enqueuePendingWork({
+        sessionKey: created.key,
+        hop: 1,
+        delayMs: 60_000,
+        electedAt: now,
+        dueAt: now + 60_000,
+        maxChainLength: 8,
       });
-      const recordId = elected.applied ? elected.work.flowId : undefined;
-      if (!recordId) {
-        throw new Error("expected durable continuation work");
-      }
+      const recordId = work!.flowId!;
 
       expect(
         await performGatewaySessionReset({

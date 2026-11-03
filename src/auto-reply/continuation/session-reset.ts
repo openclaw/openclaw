@@ -115,28 +115,26 @@ export async function cancelSessionContinuations(
 
 /**
  * Retire the custody a /new or /reset head swap ends: a wake already driving the replaced head's
- * turn and post-compaction shards. Queued wakes and delegates stay for the successor. Returns the
- * record IDs it retired.
+ * turn and post-compaction shards. Queued wakes and delegates stay for the successor.
  */
 export async function retireReplacedHeadContinuations(
   sessionKey: string,
   assertCurrent: () => void,
-): Promise<string[]> {
-  return await terminalizeAtBoundary(sessionKey, assertCurrent, "head");
+): Promise<void> {
+  await terminalizeAtBoundary(sessionKey, assertCurrent, "head");
 }
 
 async function terminalizeAtBoundary(
   sessionKey: string,
   assertCurrent: () => void,
   boundary: SessionContinuationBoundary,
-): Promise<string[]> {
-  const retired: string[] = [];
+): Promise<void> {
   const now = Date.now();
   const records = await readRecordsForReset(`owned by ${sessionKey}`, () =>
     listContinuationRecords({ ownerSessionKey: sessionKey }),
   );
   for (const initial of records) {
-    const result = await terminalizeRecord(
+    await terminalizeRecord(
       initial,
       (record) => resetPatch(record, now, boundary),
       // Check at the effect: a replacement that won while this reset awaited keeps
@@ -146,17 +144,14 @@ async function terminalizeAtBoundary(
       assertCurrent,
       now,
     );
-    if (result.applied) {
-      retired.push(initial.recordId);
-    }
   }
-  return retired;
 }
 
 /**
- * CAS-applies `patchFor` to one record, re-reading it after a revision conflict. A failed
- * read or write leaves the record as it was and throws the retryable
- * SessionContinuationResetError instead of an unclassified handler error.
+ * CAS-applies `patchFor` to one record, re-reading it after a revision conflict, and releases
+ * the operator custody of the election it ends. A failed read or write leaves the record as it
+ * was and throws the retryable SessionContinuationResetError instead of an unclassified handler
+ * error.
  */
 async function terminalizeRecord(
   initial: ContinuationRecord,
@@ -194,6 +189,7 @@ async function terminalizeRecord(
       );
     }
     if (result.outcome === "applied") {
+      releaseWorkOperatorContinuation(current.recordId);
       return { applied: true, record: current, patch };
     }
     if (result.outcome === "not_found") {
@@ -275,7 +271,6 @@ export async function cancelOwnedContinuationRecords(params: {
         flowId: recordId,
         reason: "owner-cancel",
       });
-      releaseWorkOperatorContinuation(recordId);
       receipt.push({
         ...facts,
         outcome: result.patch.status === "cancelled" ? "cancelled" : "fenced",

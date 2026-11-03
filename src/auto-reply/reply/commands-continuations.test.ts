@@ -10,7 +10,7 @@ import {
   enqueuePendingDelegate,
   markPendingDelegateSpawnAccepted,
 } from "../continuation/delegate-store.js";
-import { enqueuePendingWorkReplacing } from "../continuation/work-replacement-store.js";
+import { enqueuePendingWork } from "../continuation/work-store.test-support.js";
 import { handleContinuationsCommand } from "./commands-continuations.js";
 import { baseCommandTestConfig, buildCommandTestParams } from "./commands.test-harness.js";
 
@@ -20,26 +20,16 @@ const sessionKey = "agent:main:main";
 
 async function electWork(reason: string): Promise<string> {
   const now = Date.now();
-  const elected = await enqueuePendingWorkReplacing({
-    work: {
-      sessionKey,
-      hop: 1,
-      delayMs: 60_000,
-      electedAt: now,
-      dueAt: now + 60_000,
-      anchorFinalizedAt: now,
-      maxChainLength: 8,
-      reason,
-    },
-    summary: reason,
-    maxPendingWork: 8,
-    replaceParkedWork: false,
-    expectedRunningFlowIds: [],
+  const work = await enqueuePendingWork({
+    sessionKey,
+    hop: 1,
+    delayMs: 60_000,
+    electedAt: now,
+    dueAt: now + 60_000,
+    maxChainLength: 8,
+    reason,
   });
-  if (!elected.applied || !elected.work.flowId) {
-    throw new Error("expected durable continuation work");
-  }
-  return elected.work.flowId;
+  return work!.flowId!;
 }
 
 async function runCommand(body: string, owner = true) {

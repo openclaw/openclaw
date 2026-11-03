@@ -76,6 +76,10 @@ import {
 } from "../continuation/state.js";
 import { enqueueContinuationReturnDeliveries } from "../continuation/targeting.js";
 import type { PendingContinuationWork } from "../continuation/work-flow-state.js";
+import {
+  resetWorkOperatorContinuationsForTests,
+  retainWorkOperatorContinuation,
+} from "../continuation/work-operator-continuation.js";
 import { enqueuePendingWorkReplacing } from "../continuation/work-replacement-store.js";
 import { consumePendingWork } from "../continuation/work-store.js";
 import { clearFollowupQueue } from "./queue/state.js";
@@ -568,6 +572,49 @@ describe("clearSessionResetRuntimeState", () => {
           }
         },
       );
+    },
+  );
+
+  // A kept wake keeps the operator custody it was elected under; the boundary that ends the
+  // wake releases it (#1271).
+  it.each([
+    ["reset", 0],
+    ["delete", 1],
+  ] as const)(
+    "%s releases a queued wake's operator custody only by ending it",
+    async (reason, releases) => {
+      const sessionKey = "agent:main:slack:room:operator-wake";
+      const work = await enqueuePendingWork({
+        sessionKey,
+        hop: 1,
+        delayMs: 60_000,
+        electedAt: Date.now(),
+        dueAt: Date.now() + 60_000,
+        maxChainLength: 8,
+        operatorAuthorityRequired: true,
+      });
+      const release = vi.fn();
+      retainWorkOperatorContinuation(work.flowId!, sessionKey, {
+        operatorAuthority: { scope: "operator" },
+        assertCurrent: () => {},
+        run: (run) => run(),
+        release,
+      });
+      try {
+        await clearSessionResetRuntimeState([sessionKey], {
+          agentId: "main",
+          reason,
+          sessionKey,
+          assertCurrent: () => {},
+        });
+
+        expect(release).toHaveBeenCalledTimes(releases);
+        expect((await readCustodyRecordForTest(work.flowId!))?.status).toBe(
+          reason === "delete" ? "cancelled" : "queued",
+        );
+      } finally {
+        resetWorkOperatorContinuationsForTests();
+      }
     },
   );
 });

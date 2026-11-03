@@ -25,7 +25,7 @@ import {
   enqueuePendingDelegate,
 } from "../../../auto-reply/continuation/delegate-store.js";
 import { resetContinuationWorkDispatchForTests } from "../../../auto-reply/continuation/work-dispatch.js";
-import { enqueuePendingWorkReplacing } from "../../../auto-reply/continuation/work-replacement-store.js";
+import { enqueuePendingWork } from "../../../auto-reply/continuation/work-store.test-support.js";
 import { finalizeInboundContext } from "../../../auto-reply/reply/inbound-context.js";
 import { initSessionState } from "../../../auto-reply/reply/session.js";
 import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../../config/config.js";
@@ -170,28 +170,20 @@ async function reset(boundary: "chat" | "rpc", sessionKey = parentKey): Promise<
   expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }), undefined);
 }
 
+/** A continue_work elected while the head was idle, due `dueInMs` from now. */
 async function electWork(reason: string, dueInMs: number, sessionKey = parentKey) {
   const electedAt = Date.now();
-  const elected = await enqueuePendingWorkReplacing({
-    work: {
-      sessionKey,
-      hop: 1,
-      delayMs: dueInMs,
-      electedAt,
-      dueAt: electedAt + dueInMs,
-      anchorFinalizedAt: electedAt,
-      maxChainLength: 8,
-      reason,
-    },
-    summary: reason,
-    maxPendingWork: 8,
-    replaceParkedWork: false,
-    expectedRunningFlowIds: [],
+  const work = await enqueuePendingWork({
+    sessionKey,
+    hop: 1,
+    delayMs: dueInMs,
+    electedAt,
+    dueAt: electedAt + dueInMs,
+    anchorFinalizedAt: electedAt,
+    maxChainLength: 8,
+    reason,
   });
-  if (!elected.applied || !elected.work.flowId) {
-    throw new Error("expected durable continuation work");
-  }
-  return { recordId: elected.work.flowId, dueAt: elected.work.dueAt };
+  return { recordId: work!.flowId!, dueAt: work!.dueAt };
 }
 
 const wakesFor = (reason: string) => doubles.wakes.filter((wake) => wake.body.includes(reason));

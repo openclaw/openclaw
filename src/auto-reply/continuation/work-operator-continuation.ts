@@ -45,14 +45,6 @@ export function releaseWorkOperatorContinuation(flowId: string | undefined): voi
   custody?.release();
 }
 
-export function releaseSessionWorkOperatorContinuations(sessionKey: string): void {
-  for (const [flowId, entry] of retained) {
-    if (entry.sessionKey === sessionKey) {
-      releaseWorkOperatorContinuation(flowId);
-    }
-  }
-}
-
 export function resetWorkOperatorContinuationsForTests(): void {
   for (const flowId of retained.keys()) {
     releaseWorkOperatorContinuation(flowId);
