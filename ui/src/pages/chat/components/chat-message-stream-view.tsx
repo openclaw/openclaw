@@ -188,6 +188,7 @@ function StreamingMessage(props: {
 // instead of flashing a separate avatar+bubble per segment (#63956).
 export function StreamGroup(props: { parts: StreamGroupPart[]; options: StreamGroupOptions }) {
   const replyElements: ReplyConnectorElements = {};
+  const name = () => props.options.assistant?.name ?? "Assistant";
   const starts = () =>
     props.parts.flatMap((part) => (part.kind === "stream" ? [part.startedAt] : []));
   const startedAt = () => (starts().length ? Math.min(...starts()) : null);
@@ -230,6 +231,9 @@ export function StreamGroup(props: { parts: StreamGroupPart[]; options: StreamGr
           elementRef={(element) => (replyElements.avatar = element)}
         />
       </Show>
+      <Show when={Boolean(source())}>
+        <h2 class="sr-only">{name()}</h2>
+      </Show>
       <div ref={(element) => (replyElements.messages = element)} class="chat-group-messages">
         <ReplyLineView line={replyLine()} actions={props.options} elements={replyElements} />
         <StreamGroupParts parts={props.parts} options={props.options} presentation="standalone" />
@@ -241,7 +245,7 @@ export function StreamGroup(props: { parts: StreamGroupPart[]; options: StreamGr
         <div class="chat-group-footer" aria-hidden={active() ? "true" : undefined}>
           <Show when={!active()}>
             <div class="chat-group-footer__meta">
-              <span class="chat-sender-name">{props.options.assistant?.name ?? "Assistant"}</span>
+              <span class="chat-sender-name">{name()}</span>
               <ChatTimestamp timestamp={startedAt()!} />
             </div>
           </Show>

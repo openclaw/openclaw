@@ -55,6 +55,11 @@ import { TurnRecapRow } from "./chat-turn-recap-view.tsx";
 
 export type { NativeMessageGroupOptions } from "./chat-message-group-frame.ts";
 
+type MessageGroupProps = {
+  group: MessageGroupData;
+  options: NativeMessageGroupOptions;
+};
+
 function MessageActionsRow(props: {
   messageKey?: string;
   details: MessageActionDetails | null | undefined;
@@ -226,10 +231,7 @@ export function ActivityGroup(props: {
   );
 }
 
-export function MessageGroupContent(props: {
-  group: MessageGroupData;
-  options: NativeMessageGroupOptions;
-}) {
+export function MessageGroupContent(props: MessageGroupProps) {
   const options = createMemo(() => resolveFileLinkOwnerOptions(props.group, props.options));
   return (
     <Show
@@ -477,10 +479,7 @@ function FramedMessage(props: {
   );
 }
 
-function FramedMessageGroup(props: {
-  group: MessageGroupData;
-  options: NativeMessageGroupOptions;
-}) {
+function FramedMessageGroup(props: MessageGroupProps) {
   const replyElements: ReplyConnectorElements = {};
   const frame = createMemo(() => prepareMessageGroupFrame(props.group, props.options));
   const options = () => frame().options;
@@ -504,6 +503,14 @@ function FramedMessageGroup(props: {
     >
       <Show when={!frame().inlineUserAvatar}>
         <GroupAvatar frame={frame()} elementRef={(element) => (replyElements.avatar = element)} />
+      </Show>
+      <Show
+        when={
+          !frame().isTurnBlock &&
+          (frame().normalizedRole === "user" || frame().normalizedRole === "assistant")
+        }
+      >
+        <h2 class="sr-only">{frame().who}</h2>
       </Show>
       <div ref={(element) => (replyElements.messages = element)} class="chat-group-messages">
         <Show when={frame().forwardedSource}>
@@ -631,10 +638,7 @@ function FramedMessageGroup(props: {
   );
 }
 
-function SessionActivityGroup(props: {
-  group: MessageGroupData;
-  options: NativeMessageGroupOptions;
-}) {
+function SessionActivityGroup(props: MessageGroupProps) {
   const options = createMemo(() => resolveFileLinkOwnerOptions(props.group, props.options));
   return (
     <ChatSessionActivity
@@ -678,10 +682,7 @@ function SessionActivityGroup(props: {
   );
 }
 
-export function MessageGroup(props: {
-  group: MessageGroupData;
-  options: NativeMessageGroupOptions;
-}) {
+export function MessageGroup(props: MessageGroupProps) {
   const options = createMemo(() => resolveFileLinkOwnerOptions(props.group, props.options));
   return (
     <Show

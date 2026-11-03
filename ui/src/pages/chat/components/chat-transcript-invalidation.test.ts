@@ -189,6 +189,7 @@ describe("chat transcript invalidation", () => {
         await flushDeferredRowPrune();
         expect(container.textContent).toContain(ownMessage.content);
         expect(ownName()).toBeNull();
+        expect(find(container, ".chat-group.user h2")?.textContent).toBe("Alex");
         expect(find(container, ".chat-message-source")).toBeNull();
 
         if (peerSource === "session participants") {
@@ -451,12 +452,16 @@ describe("chat transcript invalidation", () => {
       );
       expect(workToggle.getAttribute("aria-expanded")).toBe("false");
       expect(find(container, ".chat-bubble.streaming")?.textContent).toContain(props.stream);
+      const headings = [...container.querySelectorAll("h2.sr-only")];
+      const labels = ["Message", props.assistantName, "Message", props.assistantName];
+      expect(headings.map((heading) => heading.textContent)).toEqual(labels);
       expect(prepareFrame.mock.calls.some(([group]) => group.runId === completedRunId)).toBe(true);
       prepareFrame.mockClear();
       props.stream = "Advanced next reply";
       rerender();
 
       expect(find(container, ".chat-bubble.streaming")?.textContent).toContain(props.stream);
+      expect([...container.querySelectorAll("h2.sr-only")]).toEqual(headings);
       expect(find(container, '[data-entry-id="settled-final"]')).toBe(finalBubble);
       expect(finalBubble.textContent).toContain("Workspace checked");
       expect(workToggle.getAttribute("aria-expanded")).toBe("false");
