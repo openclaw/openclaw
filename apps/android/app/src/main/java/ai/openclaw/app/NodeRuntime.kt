@@ -4669,10 +4669,11 @@ class NodeRuntime internal constructor(
               is GatewayTlsTrustDecision.Failed -> {
                 clearAcceptedConnectAttempt()
                 val problem =
-                  if (decision.reason == GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE) {
-                    gatewayConnectionProblem(gatewayNetworkConnectError(), false, endpoint)
-                  } else {
-                    null
+                  when (decision.reason) {
+                    GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE -> gatewayConnectionProblem(gatewayNetworkConnectError(), false, endpoint)
+                    GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT ->
+                      gatewayConnectionProblem(gatewayNetworkConnectError(timedOut = true).copy(message = gatewayTlsTimeoutText.source), false, endpoint)
+                    GatewayTlsProbeFailure.TLS_UNAVAILABLE -> null
                   }
                 setStandaloneGatewayStatus(problem?.message ?: gatewayTlsProbeFailureMessage(decision.reason), problem, operation = intent)
               }

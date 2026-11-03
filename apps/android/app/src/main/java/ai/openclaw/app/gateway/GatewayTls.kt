@@ -207,6 +207,10 @@ internal fun decideGatewayTlsTrust(
   if (probeResult.failure == GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE) {
     return GatewayTlsTrustDecision.Failed(GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE)
   }
+  // A pasted pin cannot finish a handshake that stalls; manual entry stays for TLS_UNAVAILABLE.
+  if (probeResult.failure == GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT) {
+    return GatewayTlsTrustDecision.Failed(GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT)
+  }
   return GatewayTlsTrustDecision.PromptRequired(
     fingerprintSha256 = null,
     previousFingerprintSha256 = null,

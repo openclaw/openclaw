@@ -1703,22 +1703,27 @@ class GatewayBootstrapAuthTest {
   }
 
   @Test
-  fun connect_showsTlsTimeoutGuidanceWhenFingerprintProbeTimesOut() {
+  fun tlsHandshakeTimeoutShowsRetryableNetworkRecoveryWithoutCertificatePrompt() {
     val (_, _, runtime) =
       gatewayFixture { _, _ -> GatewayTlsProbeResult(failure = GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT) }
-
     runtime.connect(
-      tlsGatewayEndpoint(),
+      GatewayEndpoint.manual(host = "gateway.tail-example.ts.net", port = 443),
       auth(token = "shared-token"),
     )
-
-    val prompt = waitForGatewayTrustPrompt(runtime)
+    runBlocking {
+      withTimeout(5_000) {
+        runtime.gatewayConnectionDisplay.first { it.problem?.code == "NETWORK_UNREACHABLE" }
+      }
+    }
+    val problem = runtime.gatewayConnectionDisplay.value.problem
     assertEquals(
       "Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry.",
-      runtime.gatewayConnectionDisplay.value.statusText,
+      problem?.message,
     )
-    assertNull(prompt.fingerprintSha256)
-    assertEquals(GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT, prompt.probeFailure)
+    assertEquals("timeout", problem?.reason)
+    assertTrue(problem?.retryable == true)
+    assertTrue(problem?.isTailscaleRoute == true)
+    assertNull(runtime.pendingGatewayTrust.value)
   }
 
   @Test
