@@ -147,6 +147,24 @@ public enum ChatSessionSidebarModel {
         }
     }
 
+    /// A depth-preserving projection for flat native row containers.
+    public struct Row: Identifiable, Equatable, Sendable {
+        public let node: Node
+        public let depth: Int
+        public var id: String {
+            self.node.id
+        }
+    }
+
+    /// Rows with a parent's sub-sessions left out unless `showsChildren` says they are open.
+    public static func rows(_ nodes: [Node], depth: Int = 0, showsChildren: (Node) -> Bool) -> [Row] {
+        nodes.flatMap { node in
+            [Row(node: node, depth: depth)] + (showsChildren(node)
+                ? self.rows(node.children, depth: depth + 1, showsChildren: showsChildren)
+                : [])
+        }
+    }
+
     public struct Section: Identifiable, Equatable, Sendable {
         public let id: String
         public let title: String?
@@ -266,8 +284,7 @@ public enum ChatSessionSidebarModel {
             return sections
             #endif
         }
-        // Pin state owns first placement. Group sections then preserve the
-        // same tree builder, so grouped parent/child rosters still nest.
+        // Explicit pin and category placement takes precedence over ancestry.
         let pinned = self.tree(
             from: OpenClawChatSessionListOrganizer.organize(visible.filter { $0.pinned == true }),
             identity: identity)
@@ -276,18 +293,17 @@ public enum ChatSessionSidebarModel {
             lhs.position == rhs.position ? lhs.name < rhs.name : lhs.position < rhs.position
         }
         let groupNames = Set(orderedGroups.map(\.name))
-        let recent = self.tree(from: unpinned.filter { session in
+        let recent = unpinned.filter { session in
             guard let category = session.category else { return true }
             return !groupNames.contains(category)
-        }, identity: identity)
+        }
 
         var result: [Section] = []
         if !pinned.isEmpty {
             result.append(Section(id: "pinned", title: "Pinned", nodes: pinned))
         }
         for group in orderedGroups {
-            let nodes = self.tree(
-                from: unpinned.filter { $0.category == group.name }, identity: identity)
+            let nodes = self.tree(from: unpinned.filter { $0.category == group.name }, identity: identity)
             if !nodes.isEmpty {
                 result.append(Section(id: "group:\(group.name)", title: group.name, nodes: nodes))
             }
@@ -296,7 +312,7 @@ public enum ChatSessionSidebarModel {
             result.append(Section(
                 id: "recent",
                 title: result.isEmpty ? nil : "Recent",
-                nodes: recent))
+                nodes: self.tree(from: recent, identity: identity)))
         }
         return result
     }
