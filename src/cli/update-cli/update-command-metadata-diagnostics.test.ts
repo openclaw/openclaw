@@ -411,30 +411,27 @@ it.each([
   },
 );
 
-it.each(["main", "MAIN", "Main", "openclaw@MAIN"])(
-  "preserves update status after refusing package target %s for an existing profile",
-  async (tag) => {
-    openOpenClawStateDatabase();
-    vi.spyOn(updateGlobal, "detectGlobalInstallManagerForRoot").mockResolvedValue("bun");
-    const result = await rejectUpdate({ tag, yes: true });
-    expect(result).toMatchObject({
-      status: "error",
-      mode: "bun",
-      reason: "unsupported-package-target",
-    });
-    expect(await printSummary(result)).toContain("Update mode: bun");
-    const report = await prepareUpdateFailureReport({ attemptId: "target-policy", result });
-    expect(report.body).toContain("Update mode: bun");
-    expect(await readUpdateStatus("bun")).toMatchObject([
-      {
-        lastRun: { target: { kind: "package" } },
-        update: { packageManager: "bun" },
-      },
-    ]);
-    expect(packageMetadata.fetchNpmPackageTargetStatus).not.toHaveBeenCalled();
-    expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
-  },
-);
+it.each(["main", "MAIN", "Main", "openclaw@MAIN"])("preserves status for %s", async (tag) => {
+  openOpenClawStateDatabase();
+  vi.spyOn(updateGlobal, "detectGlobalInstallManagerForRoot").mockResolvedValue("bun");
+  const result = await rejectUpdate({ tag, yes: true });
+  expect(result).toMatchObject({
+    status: "error",
+    mode: "bun",
+    reason: "unsupported-package-target",
+  });
+  expect(await printSummary(result)).toContain("Update mode: bun");
+  const report = await prepareUpdateFailureReport({ attemptId: "target-policy", result });
+  expect(report.body).toContain("Update mode: bun");
+  expect(await readUpdateStatus("bun")).toMatchObject([
+    {
+      lastRun: { target: { kind: "package" } },
+      update: { packageManager: "bun" },
+    },
+  ]);
+  expect(packageMetadata.fetchNpmPackageTargetStatus).not.toHaveBeenCalled();
+  expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
+});
 
 it("previews unreadable Git target metadata with its reason and next step", async () => {
   execFileSync("git", ["init", "--quiet", "--initial-branch=main", fixture.root]);
