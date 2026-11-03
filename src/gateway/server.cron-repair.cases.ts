@@ -32,9 +32,7 @@ export function registerCronRepairCases(
   }>,
   sendCronAnnouncePayloadStrictMock: Mock<typeof CronDelivery.sendCronAnnouncePayloadStrict>,
 ) {
-  test("allows scheduler repair NO_REPLY without granting silence to public provenance", async ({
-    signal,
-  }) => {
+  test("accepts silent scheduler repairs but rejects public provenance", async ({ signal }) => {
     const caseDir = getCaseDir();
     testState.cronEnabled = true;
     const ownerSessionKey = "agent:main:dashboard:silent-cron-repair";
@@ -42,25 +40,15 @@ export function registerCronRepairCases(
     await writeSessionStore({
       agentId: "main",
       entries: {
-        [ownerSessionKey]: {
-          sessionId: "silent-cron-owner",
-          updatedAt: Date.now(),
-          lastChannel: "webchat",
-        },
+        [ownerSessionKey]: { sessionId: "owner", updatedAt: Date.now(), lastChannel: "webchat" },
       },
     });
     const { runPreparedCliAgent } = await import("../agents/cli-runner.js");
     const execution = await import("../agents/cli-runner/execute.runtime.js");
-    // Replace external CLI I/O only: the real policy, enforcement, and settlement
-    // consume the options produced by public RPC and by trusted scheduler admission.
-    const cliOutput = vi
-      .spyOn(execution, "executePreparedCliRun")
-      .mockResolvedValue({ text: "NO_REPLY", rawText: "NO_REPLY" });
+    const cliOutput = vi.spyOn(execution, "executePreparedCliRun");
+    cliOutput.mockResolvedValue({ text: "NO_REPLY", rawText: "NO_REPLY" });
     const runCli = async (
-      run: Pick<
-        Parameters<typeof runPreparedCliAgent>[0]["params"],
-        "sessionKey" | "runId" | "prompt" | "inputProvenance" | "terminalReplyExpectation"
-      >,
+      run: Partial<Parameters<typeof runPreparedCliAgent>[0]["params"]>,
     ): Promise<{ result?: EmbeddedAgentRunResult; error?: unknown }> => {
       const context = buildPreparedCliRunContext({
         workspaceDir: caseDir,
@@ -97,8 +85,6 @@ export function registerCronRepairCases(
       }
       return { meta: outcome.result.meta, payloads: [] };
     });
-    // The scheduler's repair is a host system turn in the owner conversation; its model
-    // call meets the same CLI completion enforcement with the expectation admission chose.
     const repairOutcome = createDeferred<{ result?: EmbeddedAgentRunResult; error?: unknown }>();
     const repairTurn = installCronRepairTurn(async (params) => {
       const outcome = await runCli(params);
@@ -109,7 +95,6 @@ export function registerCronRepairCases(
       return "NO_REPLY";
     });
     try {
-      // Public RPC can label its input as a repair; the label grants neither silence nor authority.
       const forged = await request("agent", {
         sessionKey: ownerSessionKey,
         message: "Reply exactly NO_REPLY.",
@@ -145,9 +130,9 @@ export function registerCronRepairCases(
       });
       await vi.waitFor(async () => {
         const stored = await loadCronStore(path.join(caseDir, "cron", "jobs.json"));
-        expect(
-          stored.jobs.find((job) => job.id === jobId)?.state.failureAlertIncident?.repair,
-        ).toMatchObject({ settledAtMs: expect.any(Number) });
+        const repair = stored.jobs.find((job) => job.id === jobId)?.state.failureAlertIncident
+          ?.repair;
+        expect(repair).toMatchObject({ settledAtMs: expect.any(Number) });
       });
       expect(cliOutput).toHaveBeenCalledTimes(2);
       expect(sendCronAnnouncePayloadStrictMock).not.toHaveBeenCalled();
