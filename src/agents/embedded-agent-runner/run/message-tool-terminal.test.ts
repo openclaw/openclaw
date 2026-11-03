@@ -30,7 +30,10 @@ function fixture(
   const previousAfterToolCall = previous
     ? vi.fn(typeof previous === "function" ? previous : async () => structuredClone(previous))
     : undefined;
-  const agent = { afterToolCall: previousAfterToolCall } as unknown as Agent;
+  const agent = {
+    state: { tools: [] },
+    afterToolCall: previousAfterToolCall,
+  } as unknown as Agent;
   const onDeliveredSourceReply = vi.fn();
   installMessageToolTerminalHook({ agent, ...route, onDeliveredSourceReply });
   return {
