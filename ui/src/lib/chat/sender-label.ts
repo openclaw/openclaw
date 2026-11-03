@@ -2,6 +2,7 @@ import { asOptionalRecord, readStringField } from "@openclaw/normalization-core/
 import { normalizeNullableString as normalizeLabelPart } from "@openclaw/normalization-core/string-coerce";
 import type { SessionParticipantIdentity } from "../../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { readTranscriptSenderIdentity } from "../../../../src/chat/sender-identity.js";
+import { parseAgentSessionKey } from "../sessions/session-key.ts";
 
 // Keep legacy labels readable without treating their UUID suffix as profile evidence.
 const OPAQUE_ID_LABEL_SUFFIX_RE =
@@ -67,6 +68,26 @@ export function resolveMessageSender(
     username: metadata?.senderUsername,
     profileAvatarUrl: identity?.type === "profile" ? metadata?.senderProfileAvatarUrl : undefined,
   });
+}
+
+// Session creation records its agent-written opening as inter-session
+// provenance; the transcript sender stays an opaque id without an identity.
+const AGENT_OPENING_SOURCE_TOOLS = new Set(["sessions_create", "sessions_spawn"]);
+
+/** Identifies the agent that wrote a session's opening message. */
+export function resolveAgentOpeningSender(message: Record<string, unknown>): SenderIdentity | null {
+  const provenance = asOptionalRecord(message.provenance);
+  const sourceTool = readStringField(provenance, "sourceTool");
+  if (
+    message.role !== "user" ||
+    provenance?.kind !== "inter_session" ||
+    !sourceTool ||
+    !AGENT_OPENING_SOURCE_TOOLS.has(sourceTool)
+  ) {
+    return null;
+  }
+  const agentId = parseAgentSessionKey(readStringField(provenance, "sourceSessionKey"))?.agentId;
+  return agentId ? { identity: { type: "agent", id: agentId }, id: `agent:${agentId}` } : null;
 }
 
 export function resolveMessageSenderLabel(

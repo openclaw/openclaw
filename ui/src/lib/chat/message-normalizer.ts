@@ -25,7 +25,11 @@ import { readPluginInlineViewBlock } from "../../../../src/shared/plugin-inline-
 import { getMediaFileExtension, labelForMediaPath } from "../media-file-extension.ts";
 import type { NormalizedMessage, MessageContentItem, MessageImageSource } from "./chat-types.ts";
 import { normalizeAttachmentContentBlock } from "./message-normalizer-attachments.ts";
-import { resolveMessageSender, resolveMessageSenderLabel } from "./sender-label.ts";
+import {
+  resolveAgentOpeningSender,
+  resolveMessageSender,
+  resolveMessageSenderLabel,
+} from "./sender-label.ts";
 
 function imageDataUrl(data: unknown, mimeType: unknown): string | undefined {
   return typeof data === "string"
@@ -566,7 +570,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   const replyPreviewRecord = asOptionalRecord(openClawMeta?.replyToPreview);
   const replyPreviewText = readStringField(replyPreviewRecord, "text")?.trim() ?? "";
   const replyPreviewSender = readStringField(replyPreviewRecord, "senderLabel")?.trim() ?? "";
-  const metaSender = resolveMessageSender(openClawMeta);
+  const metaSender = resolveAgentOpeningSender(m) ?? resolveMessageSender(openClawMeta);
   const senderLabel = resolveMessageSenderLabel(m, metaSender);
   const sender = metaSender ?? (senderLabel ? { name: senderLabel } : null);
   const sourceClients = role === "user" ? readMessageClientSources(m) : [];
