@@ -1,2 +1,2 @@
-# Portal startup lifecycle: hidden status RPC suppression and one reveal catch-up through the real view owner.
-19
+# Portal startup: hidden polling suppression, reveal catch-up, and no unrelated session-UI imports.
+31
