@@ -38,7 +38,7 @@ async function existingCanonicalProject(
   cfg: OpenClawConfig,
   canonicalUrl: string,
   options: OpenClawStateDatabaseOptions,
-  source?: ManagedProjectSourceV1,
+  source?: Pick<ManagedProjectSourceV1, "resolveUrl">,
 ): Promise<ProjectRegistryRecord | undefined> {
   return (await listProjectRegistry(cfg, options)).find((project) => {
     const origin = project.originUrl
@@ -60,7 +60,10 @@ export async function materializeProjectClone(
     assertCurrent?: () => void;
     startRun?: GitOperationStarter;
   } = {},
-  source?: ManagedProjectSourceV1,
+  source?: Pick<
+    ManagedProjectSourceV1,
+    "resolveUrl" | "invalidUrlMessage" | "clone" | "ensureCommit"
+  >,
 ): Promise<ProjectRegistryRecord> {
   const { cfg, gitUrl, name, requiredCommit } = input;
   const { signal, timeoutMs, token, assertCurrent, startRun } = options;

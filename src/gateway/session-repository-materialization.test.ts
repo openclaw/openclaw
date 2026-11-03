@@ -346,7 +346,13 @@ it.each([
           async prepare(input) {
             expect(input.requiredCommit).toBe(baseCommit);
             input.assertCurrent();
-            return { project, assertCurrent: input.assertCurrent, refresh: async () => {} };
+            return {
+              project,
+              assertCurrent: input.assertCurrent,
+              resolveBase: async () => {
+                throw new Error("Retained workspace preparation must use its accepted commit");
+              },
+            };
           },
         })
       : undefined;
