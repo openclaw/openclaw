@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getSpawnBroker } from "../process/spawn-broker/context.js";
@@ -92,5 +93,35 @@ child.once("spawn", () => {
         await supervisor.shutdown();
       },
     );
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "settles the public exec result after root exit with inherited descendant output",
+  async () => {
+    const cwd = tempDirs.make("exec-root-exit-");
+    const deadline = new AbortController();
+    try {
+      await withEnvAsync({ OPENCLAW_EXEC_SHELL_SNAPSHOT: "0", SHELL: "/bin/sh" }, async () => {
+        const exec = createExecTool({
+          host: "gateway",
+          mode: "full",
+          ask: "off",
+          allowBackground: false,
+          notifyOnExit: false,
+          cwd,
+        });
+        const result = await Promise.race([
+          exec.execute("root-exit", { command: "sleep 30 & echo done" }),
+          delay(2_000, "still running", { signal: deadline.signal }),
+        ]);
+        expect(result).toMatchObject({
+          details: { status: "completed", exitCode: 0, aggregated: "done" },
+        });
+      });
+    } finally {
+      deadline.abort();
+      await supervisor.shutdown();
+    }
   },
 );

@@ -18,6 +18,7 @@ import { setProcessTimeout } from "../process-deadline.js";
 import { createChildAdapter } from "./adapters/child.js";
 import { createPtyAdapter } from "./adapters/pty.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "./cancellation-policy.js";
+import { waitForExecRootCompletion } from "./supervisor-completion.js";
 import type {
   ManagedRun,
   ProcessExtinctionResult,
@@ -624,7 +625,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
       }
 
       const waitPromise = (async (): Promise<RunExit> => {
-        const result = await adapter.wait();
+        const result = await waitForExecRootCompletion(input, adapter, () => Boolean(forcedReason));
         const terminalReason = forcedReason;
         settleResult(adapter);
 

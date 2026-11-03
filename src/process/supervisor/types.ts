@@ -113,6 +113,8 @@ export type ProcessAdapterStartup<Adapter extends SpawnProcessAdapter> = {
 };
 
 type SpawnBaseInput = {
+  /** Only explicit agent-tool children use bounded root-exit output draining. */
+  executionIntent?: "agent-tool" | "gateway-internal";
   initiateSpawn?: SpawnInitiation;
   /** The local subprocess transports execution owned outside its local process tree. */
   cleanupOwnership?: "external";
