@@ -1,38 +1,25 @@
-import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import type { WorkshopChange } from "openclaw/plugin-sdk/skill-workshop-host-runtime";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { setRuntimeConfigSnapshot } from "../../../src/config/runtime-snapshot.js";
-import { replaceSessionEntrySync } from "../../../src/config/sessions/session-accessor.js";
-import { resolveSystemEventQueueKey } from "../../../src/infra/system-event-ownership.js";
-import { useSessionStoreTempDirs } from "../../../src/test-utils/session-state-cleanup.js";
-import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkshopMutationContext } from "./library.js";
-import * as reviewOutcomeModule from "./review-outcome.js";
-import * as reviewUndoModule from "./review-undo.js";
+import { postWorkshopChangeNotice } from "./review-outcome.js";
+import {
+  undoWorkshopReview,
+  WorkshopReviewNotFoundError as NotFound,
+  workshopReviewRunId,
+} from "./review-undo.js";
+import { setWorkshopRuntime } from "./runtime.js";
 import { workshopPluginConfig } from "./test-support.js";
-import { useWorkshopPluginScope } from "./test-support.js";
 
-const { scoped } = useWorkshopPluginScope();
-const { postWorkshopChangeNotice: postScoped } = scoped(reviewOutcomeModule);
-// The host reads delivery config from the runtime snapshot; keep it equal to the call's config.
-const postWorkshopChangeNotice = (
-  params: Parameters<typeof reviewOutcomeModule.postWorkshopChangeNotice>[0],
-) => {
-  setRuntimeConfigSnapshot(params.config);
-  return postScoped(params);
-};
-const { undoWorkshopReview, WorkshopReviewNotFoundError: NotFound } = scoped(reviewUndoModule);
-// Pure id formatting; also used while describe blocks collect, before the plugin scope loads.
-const { workshopReviewRunId } = reviewUndoModule;
-
+// The plugin owns what the notice says and how undo reverts; the host's postSessionNotice owns
+// generation fencing, channel delivery, the transcript row and the system event. Those are pinned
+// in src/plugins/runtime/runtime-session-notice.e2e.test.ts and, through a real review, in
+// src/gateway/gateway-review.workshop-contract.e2e.test.ts.
 const mocks = vi.hoisted(() => ({
-  delivery: vi.fn(),
-  readEntries: vi.fn(),
-  entry: vi.fn(),
-  send: vi.fn(async () => ({ status: "sent" })),
-  append: vi.fn(async () => ({ ok: true })),
-  enqueue: vi.fn(() => true),
+  postSessionNotice: vi.fn(),
+  enqueueSystemEvent: vi.fn(() => true),
+  log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
 }));
 
 type ChangeInput = Pick<WorkshopChange, "skillName" | "action"> & Partial<WorkshopChange>;
@@ -81,31 +68,19 @@ vi.mock("./library.js", async (importOriginal) => ({
   ...library,
 }));
 
-vi.mock("../../../src/config/sessions/delivery-info.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../src/config/sessions/delivery-info.js")>()),
-  extractDeliveryInfo: mocks.delivery,
-}));
-vi.mock("../../../src/config/sessions/session-entry-read-runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("../../../src/config/sessions/session-entry-read-runtime.js")
-  >()),
-  withSessionEntriesFromStoresInWorker: mocks.readEntries,
-}));
-vi.mock("../../../src/channels/message/runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../src/channels/message/runtime.js")>()),
-  sendDurableMessageBatchCore: mocks.send,
-}));
-vi.mock("../../../src/config/sessions/transcript.runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../src/config/sessions/transcript.runtime.js")>()),
-  appendAssistantMessageToSessionTranscript: mocks.append,
-}));
-vi.mock("../../../src/infra/system-events.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../src/infra/system-events.js")>()),
-  enqueueSystemEvent: mocks.enqueue,
-}));
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocks.postSessionNotice.mockResolvedValue({ status: "posted", delivered: true });
+  setWorkshopRuntime({
+    system: {
+      postSessionNotice: mocks.postSessionNotice,
+      enqueueSystemEvent: mocks.enqueueSystemEvent,
+    },
+    logging: { getChildLogger: () => mocks.log },
+  } as unknown as PluginRuntime); // SAFETY: notice and undo read only these runtime members.
+});
 
 describe("postWorkshopChangeNotice", () => {
-  const dirs = useSessionStoreTempDirs(afterAll, "workshop-notice-");
   const change = (overrides: Partial<WorkshopChange>): WorkshopChange => ({
     id: "c1",
     agentId: "main",
@@ -116,15 +91,12 @@ describe("postWorkshopChangeNotice", () => {
     createdAtMs: 1,
     ...overrides,
   });
-  const sessionEntry = {
-    sessionId: "reviewed-session",
-    lifecycleRevision: "reviewed-revision",
-  };
   const generation = (sessionKey: string) => ({
     agentId: "main",
     storePath: "/tmp/sessions.json",
     sessionKey,
-    ...sessionEntry,
+    sessionId: "reviewed-session",
+    lifecycleRevision: "reviewed-revision",
   });
   const reviewId = "0b6a4a52-1f43-4f0e-9d55-3c1d8e1f7a10";
   const runId = `skill-workshop-review:${reviewId}`;
@@ -140,214 +112,94 @@ describe("postWorkshopChangeNotice", () => {
     change({ skillName: "notes", action: "create", summary: "drafting", createdAtMs: 3 }),
     change({ skillName: "notes", createdAtMs: 4, ...lastEdit }),
   ];
-  const marker = (includeRelease = false) => ({
-    kind: "plugin-notice",
-    pluginId: "skill-workshop",
-    type: "skills-changed",
-    data: {
-      agentId: "main",
-      runId,
-      skills: [
-        { name: "budget", action: "updated", summary: "reconciled" },
-        ...(includeRelease ? [{ name: "notes", action: "created", summary: "drafting" }] : []),
-      ],
-    },
+  const noticeData = (includeNotes = false) => ({
+    agentId: "main",
+    runId,
+    skills: [
+      { name: "budget", action: "updated", summary: "reconciled" },
+      ...(includeNotes ? [{ name: "notes", action: "created", summary: "drafting" }] : []),
+    ],
   });
-  const expectNoNotice = () => {
-    expect(mocks.send).not.toHaveBeenCalled();
-    expect(mocks.append).not.toHaveBeenCalled();
-    expect(mocks.enqueue).not.toHaveBeenCalled();
+  const undoButton = {
+    blocks: [
+      {
+        type: "buttons",
+        buttons: [
+          { label: "Undo", action: { type: "command", command: `/learn undo ${reviewId}` } },
+        ],
+      },
+    ],
   };
   const post = (
     changes: WorkshopChange[],
     sessionKey = "agent:main:telegram:direct:42",
     config: OpenClawConfig = {},
   ) => postWorkshopChangeNotice({ config, generation: generation(sessionKey), runId, changes });
-  const delivery = (channel = "telegram", to = "42", threadId?: string, accountId?: string) =>
-    mocks.delivery.mockReturnValue({
-      deliveryContext: { channel, to, accountId },
-      threadId,
-    });
-  const expectTranscript = (fields: Record<string, unknown>) =>
-    expect(mocks.append).toHaveBeenCalledWith(expect.objectContaining(fields));
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mocks.entry.mockReturnValue({ ...sessionEntry });
-    mocks.readEntries.mockImplementation(async (inputs, consume) =>
-      consume(
-        inputs.map(({ sessionKeys }: { sessionKeys: readonly string[] }) => ({
-          result: {
-            entries: sessionKeys.map((sessionKey) => ({ sessionKey, entry: mocks.entry() })),
-          },
-        })),
-      ),
-    );
-  });
+  const posted = () => {
+    expect(mocks.postSessionNotice).toHaveBeenCalledOnce();
+    return mocks.postSessionNotice.mock.calls[0]![0];
+  };
 
   it("stays quiet when the review changed nothing", async () => {
     await post([]);
-    expect(mocks.delivery).not.toHaveBeenCalled();
-    expectNoNotice();
+    expect(mocks.postSessionNotice).not.toHaveBeenCalled();
   });
 
-  it("sends one line with an Undo command button into the session thread when channel notices are enabled", async () => {
+  it("posts one line with an Undo command button and the revert calls when channel notices are enabled", async () => {
     const sessionKey = "agent:main:discord:channel:123:thread:456";
-    mocks.delivery.mockReturnValue({
-      deliveryContext: {
-        channel: "discord",
-        to: "channel:123",
-        accountId: "default",
-        threadId: "stale-thread",
-      },
-      threadId: "456",
-    });
     await post(reviewChanges(), sessionKey, channelNotices);
-    const button = {
-      label: "Undo",
-      action: { type: "command", command: `/learn undo ${reviewId}` },
-    };
-    expect(mocks.send).toHaveBeenCalledTimes(1);
-    expect(mocks.send).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "discord",
-        to: "channel:123",
-        threadId: "456",
-        payloads: [
-          {
-            text: '💾 Learned: updated `budget` (reconciled); created `notes` (drafting). Say "undo" to revert this skill change.',
-            presentation: { blocks: [{ type: "buttons", buttons: [button] }] },
-          },
-        ],
-        session: expect.objectContaining({ key: sessionKey }),
-        deliveryIntentId: expect.stringMatching(
-          /^plugin-notice:skill-workshop:skill-workshop-notice:/,
-        ),
-      }),
-      undefined,
-      undefined,
-      generation(sessionKey),
-    );
-    // The session records its own notice once, with the marker the Control UI renders.
-    expect(mocks.append).toHaveBeenCalledOnce();
-    expect(mocks.append).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionKey, deliveryMirror: marker(true) }),
-    );
-    expect(mocks.enqueue).toHaveBeenCalledTimes(1);
-    expect(mocks.enqueue).toHaveBeenCalledWith(
-      expect.stringContaining("skill_workshop action=restore name=budget version=v1;"),
-      expect.anything(),
-    );
-    expect(mocks.enqueue).toHaveBeenCalledWith(
-      expect.stringContaining('skill_workshop action=archive name=notes reason="undo"'),
-      expect.anything(),
-    );
+
+    const request = posted();
+    expect(request).toMatchObject({
+      generation: generation(sessionKey),
+      notice: {
+        type: "skills-changed",
+        text: '💾 Learned: updated `budget` (reconciled); created `notes` (drafting). Say "undo" to revert this skill change.',
+        presentation: undoButton,
+        data: noticeData(true),
+      },
+      idempotencyKey: `skill-workshop-notice:${runId}`,
+      // Slack never gets a channel message.
+      deliver: { skipChannels: ["slack"] },
+    });
+    expect(request.systemEvent).toContain("skill_workshop action=restore name=budget version=v1;");
+    expect(request.systemEvent).toContain('skill_workshop action=archive name=notes reason="undo"');
   });
 
-  it.each([false, true])("records a transcript notice (Slack=%s)", async (slack) => {
-    if (slack) {
-      delivery("slack", "slack:c0123abc", "1234567890.123456", "workspace-1");
-    } else {
-      mocks.delivery.mockReturnValue({ deliveryContext: undefined, threadId: undefined });
-    }
-    const sessionKey = slack
-      ? "agent:main:slack:channel:c0123abc:thread:1234567890.123456"
-      : "agent:main:telegram:direct:42";
-    await post(
-      slack ? [change({})] : reviewChanges("reconciled", { versionId: "v-typo" }),
-      sessionKey,
-      slack ? channelNotices : {},
-    );
-    expect(mocks.send).not.toHaveBeenCalled();
-    expectTranscript({
-      sessionKey,
-      ...(slack
-        ? { expectedSessionId: "reviewed-session", expectedLifecycleRevision: "reviewed-revision" }
-        : { text: expect.stringContaining("💾 Learned: updated `budget`") }),
-      deliveryMirror: marker(!slack),
+  it("records a transcript-only notice when channel notices are off", async () => {
+    await post(reviewChanges("reconciled", { versionId: "v-typo" }));
+
+    const request = posted();
+    expect(request).not.toHaveProperty("deliver");
+    expect(request.notice).toMatchObject({
+      text: expect.stringContaining("💾 Learned: updated `budget`"),
+      data: noticeData(true),
     });
-    expect(mocks.enqueue).toHaveBeenCalledWith(
-      slack
-        ? expect.any(String)
-        : expect.stringContaining('skill_workshop action=archive name=notes reason="undo"'),
-      { sessionKey },
-    );
+    // The creation is kept over the later edit, so undo archives the created skill.
+    expect(request.systemEvent).toContain('skill_workshop action=archive name=notes reason="undo"');
   });
 
   it.each([
-    ["replacement", { ...sessionEntry, sessionId: "replacement-session" }],
-    ["deletion", undefined],
-  ])("leaves a conversation untouched after %s", async (_change, entry) => {
-    mocks.entry.mockReturnValue(entry);
-    delivery();
-    await post([change({})]);
-    expectNoNotice();
-  });
-
-  it("observes a reset during delivery lookup before enqueueing undo instructions", async () => {
-    mocks.delivery.mockImplementationOnce(async () => {
-      mocks.entry.mockReturnValueOnce({ ...sessionEntry, lifecycleRevision: "reset-revision" });
-      return { deliveryContext: { channel: "telegram", to: "42" } };
-    });
-    await post([change({})], undefined, channelNotices);
-    expectNoNotice();
-  });
-
-  it("keeps undo instructions after delivery failure without rereading the generation", async () => {
-    delivery();
-    mocks.send.mockRejectedValueOnce(new Error("delivery failed"));
-    await post([change({})], undefined, channelNotices);
-    expect(mocks.send).toHaveBeenCalledOnce();
-    expect(mocks.enqueue).toHaveBeenCalledOnce();
-    expect(mocks.readEntries).toHaveBeenCalledOnce();
-  });
-
-  it("reads notice eligibility off-thread and observes a committed reset", async () => {
-    const currentGeneration = {
-      ...generation("agent:main:workshop-worker"),
-      storePath: path.join(dirs.make(), "sessions.sqlite"),
-    };
-    const entry = { ...sessionEntry, updatedAt: 1 };
-    const { withSessionEntriesFromStoresInWorker } = await vi.importActual<
-      typeof import("../../../src/config/sessions/session-entry-read-runtime.js")
-    >("../../../src/config/sessions/session-entry-read-runtime.js");
-    // Fixture commits must not schedule maintenance inside the read observation window.
-    replaceSessionEntrySync(currentGeneration, entry);
-    mocks.readEntries.mockImplementation(withSessionEntriesFromStoresInWorker);
-    mocks.delivery.mockResolvedValue({
-      deliveryContext: undefined,
-      threadId: undefined,
-    });
-    const sql = observeHostDataSql();
-    const reads = () =>
-      sql.queries.filter((query) => /\b(?:session_nodes|session_windows)\b/iu.test(query));
-    const publish = () =>
-      postWorkshopChangeNotice({
-        config: {},
-        generation: currentGeneration,
-        runId,
-        changes: [change({})],
-      });
-    try {
-      await publish();
-      expect(mocks.append).toHaveBeenCalledTimes(1);
-      expect(reads()).toEqual([]);
-      replaceSessionEntrySync(currentGeneration, {
-        ...entry,
-        lifecycleRevision: "committed-reset",
-        updatedAt: 2,
-      });
-      sql.queries.length = 0;
-      mocks.append.mockClear();
-      mocks.enqueue.mockClear();
-      await publish();
-      expect(mocks.append).not.toHaveBeenCalled();
-      expect(mocks.enqueue).not.toHaveBeenCalled();
-      expect(reads()).toEqual([]);
-    } finally {
-      sql.restore();
-    }
-  });
+    [
+      "skipped",
+      { status: "skipped", reason: "session-changed" },
+      "debug",
+      "skill workshop notice skipped: session agent:main:telegram:direct:42 was reset",
+    ],
+    [
+      "failed",
+      { status: "failed", stage: "delivery", error: "delivery failed" },
+      "warn",
+      "skill workshop notice delivery failed: delivery failed",
+    ],
+  ] as const)(
+    "logs instead of throwing when the host reports %s",
+    async (_, result, level, line) => {
+      mocks.postSessionNotice.mockResolvedValueOnce(result);
+      await expect(post([change({})], undefined, channelNotices)).resolves.toBeUndefined();
+      expect(mocks.log[level]).toHaveBeenCalledExactlyOnceWith(line);
+    },
+  );
 });
 
 describe("undoWorkshopReview", () => {
@@ -356,9 +208,10 @@ describe("undoWorkshopReview", () => {
   const user: WorkshopMutationContext = { config: {}, agentId: "main", actor: "user" };
   const undo = (runId = REVIEW_RUN_ID) => undoWorkshopReview(user, { runId });
   function expectNotice(text: string) {
-    expect(mocks.enqueue).toHaveBeenCalledExactlyOnceWith(expect.stringContaining(text), {
-      sessionKey: resolveSystemEventQueueKey(REVIEWED_SESSION, "main"),
-    });
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining(text),
+      { sessionKey: REVIEWED_SESSION, agentId: "main" },
+    );
   }
   async function expectRefusal(error: Error | RegExp, runId = REVIEW_RUN_ID) {
     await expect(undo(runId)).rejects.toThrow(error);
@@ -367,7 +220,6 @@ describe("undoWorkshopReview", () => {
   }
 
   beforeEach(() => {
-    vi.clearAllMocks();
     feed.length = 0;
     const review = { ...user, actor: "review" as const, sessionKey: REVIEWED_SESSION };
     const ctx = { ...review, runId: REVIEW_RUN_ID };
@@ -418,7 +270,7 @@ describe("undoWorkshopReview", () => {
   it("refuses before any write when a saved version is no longer kept", async () => {
     library.listWorkshopArchive.mockResolvedValueOnce([]);
     await expectRefusal(/version of "deploy" saved before it is no longer kept/);
-    expect(mocks.enqueue).not.toHaveBeenCalled();
+    expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
   });
   it("reports and announces the reverts that committed before a later one failed", async () => {
     library.archiveWorkshopSkill.mockRejectedValueOnce(new Error("Learning is off."));

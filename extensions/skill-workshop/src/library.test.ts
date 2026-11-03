@@ -4,23 +4,19 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { canonicalizePath } from "openclaw/plugin-sdk/skill-workshop-host-runtime";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-// Core fixtures for the unused-archive inputs (runtime config, cron jobs, recorded skill use).
-import { setRuntimeConfigSnapshot } from "../../../src/config/runtime-snapshot.js";
-import { makeCronJob } from "../../../src/cron/delivery.test-helpers.js";
-import { resolveCronJobsStorePath, saveCronJobsStore } from "../../../src/cron/store.js";
-import {
-  isSkillUsageTracked,
-  readSkillUsage,
-  registerSkillUsageTracking,
-} from "../../../src/skills/runtime/skill-usage.js";
-import { captureOpenClawStateWorkerContext } from "../../../src/state/openclaw-state-worker-context.js";
-import * as stateWorker from "../../../src/state/openclaw-state-worker-store.js";
 import * as libraryModule from "./library.js";
 import { getWorkshopRuntime, setWorkshopRuntime } from "./runtime.js";
 import * as skillsRootModule from "./skills-root.js";
-import { workshopPluginConfig } from "./test-support.js";
-import { useWorkshopPluginScope } from "./test-support.js";
+import { useWorkshopPluginScope, workshopPluginConfig } from "./test-support.js";
 import * as unusedArchiveModule from "./unused-archive.js";
+
+// Reading cron payloads is a host fact; the Gateway maintenance pin
+// (src/gateway/server-maintenance.workshop-contract.test.ts) proves it against a real cron store.
+const hostCron = vi.hoisted(() => ({ payloadText: "" }));
+vi.mock("openclaw/plugin-sdk/skill-workshop-host-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/skill-workshop-host-runtime")>()),
+  readCronPayloadText: async () => hostCron.payloadText,
+}));
 
 const { run, scoped } = useWorkshopPluginScope();
 const lib = scoped(libraryModule);
@@ -309,33 +305,31 @@ describe("archiveUnusedWorkshopSkills", () => {
     return { agents: { defaults } };
   }
   const config = agentConfig();
-  let stopTracking: (() => Promise<void>) | undefined;
+  // Host facts the pass reads through the plugin runtime: the live config snapshot and recorded
+  // skill use. The Gateway maintenance pin proves the real usage owner records and returns them.
+  let liveConfig: OpenClawConfig;
+  let usageTracked: boolean;
+  let usage: Map<string, { useCount: number; lastUsedAtMs: number }>;
   const archiveUnused = (cfg = config, now = Date.now() + 31 * DAY_MS) =>
     archiveUnusedWorkshopSkills(cfg, "main", now);
   const createNamed = (name: string) => create("1. Do it.", name, `${name} steps`);
   beforeEach(() => {
     ctx = { config, agentId: "main", actor: "agent" };
-    setRuntimeConfigSnapshot(config);
-    stopTracking = registerSkillUsageTracking();
-    // The loaded plugin's runtime reads usage through its own host module copy; point it at the
-    // usage owner this test enables and records into.
+    liveConfig = config;
+    usageTracked = true;
+    usage = new Map();
+    hostCron.payloadText = "";
     run(() => {
       const runtime = getWorkshopRuntime();
       setWorkshopRuntime({
         ...runtime,
+        config: { ...runtime.config, current: () => liveConfig },
         skills: {
           ...runtime.skills,
-          readUsage: async ({ skillFiles }) => ({
-            tracked: isSkillUsageTracked(),
-            usage: await readSkillUsage({}, skillFiles),
-          }),
+          readUsage: async () => ({ tracked: usageTracked, usage }),
         },
       });
     });
-  });
-  afterEach(async () => {
-    await stopTracking?.();
-    stopTracking = undefined;
   });
 
   it("archives old unused skills, preserves used and cron-named ones, and allows undo", async () => {
@@ -343,22 +337,14 @@ describe("archiveUnusedWorkshopSkills", () => {
     for (const name of ["stale", "used", "scheduled", "scheduled-old"]) {
       await createNamed(name);
     }
-    const job = makeCronJob({
-      enabled: false,
-      payload: { kind: "agentTurn", message: "Use the scheduled skill." },
+    hostCron.payloadText = JSON.stringify({
+      kind: "agentTurn",
+      message: "Use the scheduled skill.",
     });
-    await saveCronJobsStore(resolveCronJobsStorePath(), { version: 1, jobs: [job] });
     expect(await archiveUnused(config, createdAtMs + 29 * DAY_MS)).toEqual([]);
-    await stateWorker.executeOpenClawStateWorker(captureOpenClawStateWorkerContext(), {
-      type: "skills.usage.record",
-      input: {
-        skillFile: canonicalizePath(skillPath("used", "SKILL.md")),
-        skillKey: "used",
-        skillName: "used",
-        skillSource: "workspace",
-        agentId: "main",
-        ts: createdAtMs + 20 * DAY_MS,
-      },
+    usage.set(canonicalizePath(skillPath("used", "SKILL.md")), {
+      useCount: 1,
+      lastUsedAtMs: createdAtMs + 20 * DAY_MS,
     });
     const archived = await archiveUnused(config, createdAtMs + 31 * DAY_MS);
     expect(archived.map((change) => change.skillName)).toEqual(["scheduled-old", "stale"]);
@@ -382,11 +368,10 @@ describe("archiveUnusedWorkshopSkills", () => {
         guard === "sandbox" ? "non-main" : undefined,
       );
       if (guard === "tracking") {
-        await stopTracking?.();
-        stopTracking = undefined;
+        usageTracked = false;
       }
       if (guard === "learning") {
-        setRuntimeConfigSnapshot(workshopPluginConfig({ autonomous: { mode: "off" } }, config));
+        liveConfig = workshopPluginConfig({ autonomous: { mode: "off" } }, config);
       }
       expect(await archiveUnused(cfg)).toEqual([]);
       expect(await liveNames()).toEqual(["stale"]);

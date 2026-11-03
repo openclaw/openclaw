@@ -1,35 +1,42 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { GatewayTransportError } from "../../../src/gateway/transport-error.js";
 import { registerSkillsWorkshopCommands } from "./cli.js";
 
-const mocks = await vi.hoisted(async () => {
-  const { runtimeFixture } = await import("../../../src/cli/skills-cli.test-support.js");
+// Gateway-first routing, offline custody (the Gateway lock) and transport fallback belong to
+// the host's `routeSkillsCliRequest`; src/cli/skills-cli.workshop-contract.test.ts pins them
+// end to end. These tests pin what the plugin hands that router and how it renders results.
+const mocks = vi.hoisted(() => {
+  const stub = () => vi.fn();
   return {
-    acquireGatewayLock: vi.fn(),
     archiveWorkshopSkill: vi.fn(),
-    callGateway: vi.fn(),
     config: {},
     listWorkshopChanges: vi.fn(),
     restoreWorkshopSkill: vi.fn(),
-    defaultRuntime: runtimeFixture(true).runtime,
+    routeSkillsCliRequest: vi.fn<(request: RouteRequest) => Promise<unknown>>(),
+    defaultRuntime: {
+      log: stub(),
+      error: stub(),
+      writeStdout: stub(),
+      writeJson: stub(),
+      exit: vi.fn((code: number) => {
+        throw new Error(`__exit__:${code}`);
+      }),
+    },
   };
 });
 
-vi.mock("../../../src/runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../src/runtime.js")>()),
+vi.mock("openclaw/plugin-sdk/runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime")>()),
   defaultRuntime: mocks.defaultRuntime,
 }));
-vi.mock("../../../src/gateway/call.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../src/gateway/call.js")>()),
-  callGateway: mocks.callGateway,
-  isGatewayClientRequestError: () => false,
-  isGatewayCredentialsRequiredError: () => false,
-  isImplicitLocalGatewayTarget: async () => true,
-}));
-vi.mock("../../../src/infra/gateway-lock.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../src/infra/gateway-lock.js")>()),
-  acquireGatewayLock: mocks.acquireGatewayLock,
+vi.mock("openclaw/plugin-sdk/skill-workshop-host-cli", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/skill-workshop-host-cli")>()),
+  resolveSkillsWorkspace: async ({ agentId }: { agentId?: string }) => ({
+    config: mocks.config,
+    agentId: agentId ?? "main",
+    workspaceDir: "/tmp/workspace",
+  }),
+  routeSkillsCliRequest: mocks.routeSkillsCliRequest,
 }));
 vi.mock("./library.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./library.js")>()),
@@ -42,20 +49,32 @@ vi.mock("./workshop-list.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./workshop-list.js")>()),
   buildSkillsWorkshopListResult: vi.fn(),
 }));
-vi.mock("../../../src/config/config.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../src/config/config.js")>()),
-  getRuntimeConfig: () => mocks.config,
-  loadConfig: () => mocks.config,
-  captureRuntimeConfigAsyncReader: () => async () => mocks.config,
-  resetConfigRuntimeState: () => undefined,
-}));
-vi.mock("../../../src/agents/agent-scope.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../src/agents/agent-scope.js")>()),
-  resolveConfiguredAgentId: (_config: unknown, agentId: string) => agentId,
-  resolveAgentIdByWorkspacePath: () => undefined,
-  resolveDefaultAgentId: () => "main",
-  resolveAgentWorkspaceDir: () => "/tmp/workspace",
-}));
+
+type RouteRequest = {
+  resolved: { agentId: string };
+  method: string;
+  params: Record<string, unknown>;
+  mutation: boolean;
+  loadLocal: () => Promise<unknown>;
+};
+
+/** Answers like a running Gateway: the request goes over the wire with the agent added. */
+function gatewayReplies(result: unknown) {
+  mocks.routeSkillsCliRequest.mockImplementation(async () => result);
+}
+
+/** Answers like the host when no Gateway owns the state: the plugin's local path runs. */
+function noGatewayOwnsState() {
+  mocks.routeSkillsCliRequest.mockImplementation((request: RouteRequest) => request.loadLocal());
+}
+
+function routedRequests() {
+  return mocks.routeSkillsCliRequest.mock.calls.map(([request]) => ({
+    method: request.method,
+    params: { agentId: request.resolved.agentId, ...request.params },
+    mutation: request.mutation,
+  }));
+}
 
 const change = {
   id: "change-1",
@@ -71,15 +90,6 @@ const context = { config: mocks.config, agentId: "writer", actor: "user" };
 const namedSkill = { agentId: "main", name: "release-notes" };
 const version = { ...namedSkill, versionId: "v1" };
 const archivedVersion = (id: string, action: string) => ({ id, action, createdAtMs: 1 });
-const gatewayClosed = () =>
-  new GatewayTransportError({
-    kind: "closed",
-    code: 1006,
-    reason: "abnormal closure",
-    message: "gateway closed (1006): abnormal closure",
-    connectionDetails: { url: "ws://127.0.0.1:18789", urlSource: "local loopback", message: "" },
-  });
-
 function runCli(args: string | string[]) {
   const program = new Command().enablePositionalOptions();
   program.exitOverride();
@@ -94,8 +104,7 @@ function runCli(args: string | string[]) {
 
 describe("skills workshop cli", () => {
   beforeEach(() => {
-    mocks.callGateway.mockReset();
-    mocks.acquireGatewayLock.mockReset().mockRejectedValue(new Error("lock held"));
+    mocks.routeSkillsCliRequest.mockReset();
     mocks.archiveWorkshopSkill.mockReset();
     mocks.listWorkshopChanges.mockReset();
     mocks.restoreWorkshopSkill.mockReset();
@@ -105,44 +114,46 @@ describe("skills workshop cli", () => {
   });
 
   it.each([
-    ["--agent writer list", "list", { agentId: "writer" }],
-    ["changes --limit 5 --agent writer", "changes", { agentId: "writer", limit: 5 }],
+    ["--agent writer list", "list", { agentId: "writer" }, false],
+    ["changes --limit 5 --agent writer", "changes", { agentId: "writer", limit: 5 }, false],
     [
       "show release-notes --file references/a.md",
       "read",
       { ...namedSkill, filePath: "references/a.md" },
+      false,
     ],
-    ["show release-notes --version v1", "read", version],
+    ["show release-notes --version v1", "read", version, false],
     [
       "archive release-notes --reason superseded",
       "archive",
       { ...namedSkill, reason: "superseded" },
+      true,
     ],
-    ["restore release-notes --version v1", "restore", version],
-  ] as const)("routes %s to %s", async (argv, method, params) => {
-    mocks.callGateway.mockResolvedValue({ changes: [], change, content: "", skills: [] });
+    ["restore release-notes --version v1", "restore", version, true],
+  ] as const)("routes %s to %s", async (argv, method, params, mutation) => {
+    gatewayReplies({ changes: [], change, content: "", skills: [] });
 
     await runCli(`skills workshop ${argv} --json`);
 
-    expect(mocks.callGateway).toHaveBeenCalledOnce();
-    const request = mocks.callGateway.mock.calls[0]?.[0];
-    expect([request.method, request.params]).toStrictEqual([`skills.workshop.${method}`, params]);
+    expect(routedRequests()).toStrictEqual([
+      { method: `skills.workshop.${method}`, params, mutation },
+    ]);
   });
 
   it("rejects an explicitly blank --version instead of restoring the newest version", async () => {
-    mocks.callGateway.mockResolvedValue({ change });
+    gatewayReplies({ change });
 
     await expect(
       runCli(["skills", "workshop", "restore", "release-notes", "--version", ""]),
     ).rejects.toThrow("__exit__:1");
 
-    expect(mocks.callGateway).not.toHaveBeenCalled();
+    expect(mocks.routeSkillsCliRequest).not.toHaveBeenCalled();
     expect(mocks.restoreWorkshopSkill).not.toHaveBeenCalled();
     expect(mocks.defaultRuntime.error.mock.calls[0]?.[0]).toContain("--version must not be blank");
   });
 
   it("renders learned skills, archived skills, and changes as text", async () => {
-    mocks.callGateway.mockResolvedValueOnce({
+    gatewayReplies({
       agentId: "main",
       mode: "auto",
       root: "/tmp/agent/workshop-skills",
@@ -167,7 +178,7 @@ describe("skills workshop cli", () => {
     expect(listed).toContain("updated 2h ago  uses=3  Draft release notes from merged PRs");
     expect(listed).toMatch(/Archived:[^\n]*\nold-deploy {2}versions=1\n$/);
 
-    mocks.callGateway.mockResolvedValueOnce({ changes: [change] });
+    gatewayReplies({ changes: [change] });
     await runCli("skills workshop changes");
     expect(mocks.defaultRuntime.writeStdout).toHaveBeenLastCalledWith(
       "5m ago  user  archive  release-notes  archived: superseded  version=20260929T010203004Z-archive\n",
@@ -188,13 +199,9 @@ describe("skills workshop cli", () => {
       "Restored release-notes.\n",
     ],
   ] as const)(
-    "runs %s locally as the user while holding the Gateway lock",
+    "runs %s locally as the user when no Gateway owns the state",
     async (method, args, params, output) => {
-      const release = vi.fn();
-      mocks.acquireGatewayLock.mockResolvedValue({
-        run: (action: () => unknown) => action(),
-        release,
-      });
+      noGatewayOwnsState();
       const mutate = method === "archive" ? mocks.archiveWorkshopSkill : mocks.restoreWorkshopSkill;
       mutate.mockResolvedValue(change);
       if (method === "archive") {
@@ -203,9 +210,7 @@ describe("skills workshop cli", () => {
 
       await runCli(`skills workshop ${method} release-notes --agent writer ${args}`);
 
-      expect(mocks.callGateway).not.toHaveBeenCalled();
       expect(mutate).toHaveBeenCalledWith(context, params);
-      expect(release).toHaveBeenCalledOnce();
       expect(mocks.defaultRuntime.writeStdout).toHaveBeenCalledWith(
         expect.stringContaining(output),
       );
@@ -223,13 +228,13 @@ describe("skills workshop cli", () => {
     },
   );
 
-  it("falls back to local reads when the Gateway is unavailable", async () => {
-    mocks.callGateway.mockRejectedValue(gatewayClosed());
+  it("reads changes locally when no Gateway answers", async () => {
+    noGatewayOwnsState();
     mocks.listWorkshopChanges.mockResolvedValue([change]);
 
-    await runCli("skills workshop changes --json");
+    await runCli("skills workshop changes --limit 3 --agent writer --json");
 
-    expect(mocks.listWorkshopChanges).toHaveBeenCalledOnce();
-    expect(mocks.acquireGatewayLock).not.toHaveBeenCalled();
+    expect(mocks.listWorkshopChanges).toHaveBeenCalledExactlyOnceWith("writer", { limit: 3 });
+    expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledWith({ changes: [change] });
   });
 });
