@@ -18,6 +18,7 @@ import {
   appendSessionTranscriptMessageByIdentity,
   readVisibleSessionTranscriptMessageEntries,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { runQaGatewayFixture } from "openclaw/plugin-sdk/test-env";
 import { createSolidPngBuffer } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createCodexNativeTestState } from "./native-app-server.test-support.js";
@@ -632,33 +633,36 @@ describe("Codex active-run steering media", () => {
         delivery: { onBlockReply },
         signal: controller.signal,
       });
-      try {
-        await vi.waitFor(() => expect(onBlockReply).toHaveBeenCalledOnce(), fastWait);
-        expect(onAttemptTimeout).not.toHaveBeenCalled();
-        const accepted = vi.fn();
-        expect(
-          queueAgentHarnessMessage(fixture.params.sessionId, "yes", {
-            debounceMs: 0,
-            isInboundUserMessage: true,
-            toolAuthorityFingerprint: fixture.params.toolAuthorityFingerprint,
-            onQueueAccepted: accepted,
-          }),
-        ).toBe(true);
-        await expect(question).resolves.toEqual(result);
-        await vi.waitFor(() => expect(accepted).toHaveBeenCalledExactlyOnceWith(true), fastWait);
-        expect(onAttemptTimeout).not.toHaveBeenCalled();
-        expect(harness.requests.filter((entry) => entry.method === "turn/steer")).toEqual([]);
-      } finally {
-        const closing = closeHost();
-        answer.resolve(result);
-        const closed = await Promise.allSettled([closing, question]);
-        const failures = closed.flatMap((result) =>
-          result.status === "rejected" ? [result.reason] : [],
-        );
-        if (failures.length > 0) {
-          throw new AggregateError(failures, "Question fixture cleanup failed");
-        }
-      }
+      await runQaGatewayFixture(
+        async () => {
+          await vi.waitFor(() => expect(onBlockReply).toHaveBeenCalledOnce(), fastWait);
+          expect(onAttemptTimeout).not.toHaveBeenCalled();
+          const accepted = vi.fn();
+          expect(
+            queueAgentHarnessMessage(fixture.params.sessionId, "yes", {
+              debounceMs: 0,
+              isInboundUserMessage: true,
+              toolAuthorityFingerprint: fixture.params.toolAuthorityFingerprint,
+              onQueueAccepted: accepted,
+            }),
+          ).toBe(true);
+          await expect(question).resolves.toEqual(result);
+          await vi.waitFor(() => expect(accepted).toHaveBeenCalledExactlyOnceWith(true), fastWait);
+          expect(onAttemptTimeout).not.toHaveBeenCalled();
+          expect(harness.requests.filter((entry) => entry.method === "turn/steer")).toEqual([]);
+        },
+        async () => {
+          const closing = closeHost();
+          answer.resolve(result);
+          const closed = await Promise.allSettled([closing, question]);
+          const failures = closed.flatMap((outcome) =>
+            outcome.status === "rejected" ? [outcome.reason] : [],
+          );
+          if (failures.length > 0) {
+            throw new AggregateError(failures, "Question fixture cleanup failed");
+          }
+        },
+      );
     });
   });
 

@@ -13,6 +13,7 @@ import {
   appendSessionTranscriptMessageByIdentity,
   withSessionTranscriptWriteLock,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { runQaGatewayFixture } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createCodexAppServerAgentHarness } from "../../harness.js";
 import type { CodexSteeringQueueOptions } from "./attempt-steering.js";
@@ -152,20 +153,23 @@ async function createFixture() {
       lock?.release();
       abort.abort("test cleanup");
       vi.useRealTimers();
-      try {
-        await Promise.allSettled([run, ...notifications, ...(lock ? [lock.writer] : [])]);
-      } finally {
-        const closed = await Promise.allSettled([
-          closeHost(),
-          disposePluginRegistryInstances(registration.registry),
-        ]);
-        const failures = closed.flatMap((result) =>
-          result.status === "rejected" ? [result.reason] : [],
-        );
-        if (failures.length > 0) {
-          throw new AggregateError(failures, "Steering fixture cleanup failed");
-        }
-      }
+      await runQaGatewayFixture(
+        async () => {
+          await Promise.allSettled([run, ...notifications, ...(lock ? [lock.writer] : [])]);
+        },
+        async () => {
+          const closed = await Promise.allSettled([
+            closeHost(),
+            disposePluginRegistryInstances(registration.registry),
+          ]);
+          const failures = closed.flatMap((result) =>
+            result.status === "rejected" ? [result.reason] : [],
+          );
+          if (failures.length > 0) {
+            throw new AggregateError(failures, "Steering fixture cleanup failed");
+          }
+        },
+      );
     },
     readMessages: () => readTranscriptMessagesByIdentity(params),
     queue: (options: Partial<CodexSteeringQueueOptions> = {}) =>

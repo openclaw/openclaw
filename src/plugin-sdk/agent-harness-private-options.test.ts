@@ -95,7 +95,6 @@ it.each(["ok", "host failure", "both failures"] as const)(
     const hostFailure = new Error("Controlled host close failure");
     const admissionFailure = new Error("Controlled admission close failure");
     let closeCalls = 0;
-    let closeAgain: (() => Promise<void>) | undefined;
     let reentered: Promise<void> | undefined;
     using factory = vi
       .spyOn(hostOwner, "createAgentHarnessHostCapabilities")
@@ -129,7 +128,7 @@ it.each(["ok", "host failure", "both failures"] as const)(
         throw admissionFailure;
       };
     }
-    closeAgain = host.close;
+    const closeAgain = host.close;
     let closing: Promise<void> | undefined;
     expect(() => {
       closing = host.close();

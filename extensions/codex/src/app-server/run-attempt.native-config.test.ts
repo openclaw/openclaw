@@ -9,6 +9,7 @@ import {
   runInHarnessToolAuthorityForTest,
   useProviderToolSchemaRuntimeForTest,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { runQaGatewayFixture } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import { createCodexAppServerAgentHarness } from "../../harness.js";
 import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
@@ -466,71 +467,76 @@ describe("Codex native configuration", () => {
         () => false,
         () => false,
       );
-      try {
-        await Promise.race([primaryStarted.promise, run]);
-        expect(turnModels).toEqual([runtimeModel]);
-        expect(getCodexInferenceThread(transport.client, "thread-policy")).toBeDefined();
-        const error = { message: "Synthetic provider refusal", codexErrorInfo: "cyberPolicy" };
-        transport.send({
-          method: "error",
-          params: { threadId: "thread-policy", turnId: "turn-1", error, willRetry: false },
-        });
-        transport.send(completedTurn("thread-policy", { status: "failed", error }));
-        const retried = await Promise.race([retryStarted.promise.then(() => true), settled]);
-        if (permission === "revoked") {
-          allowedModels.delete(catalogModel);
-          for (const listener of policyListeners) {
-            listener();
+      await runQaGatewayFixture(
+        async () => {
+          await Promise.race([primaryStarted.promise, run]);
+          expect(turnModels).toEqual([runtimeModel]);
+          expect(getCodexInferenceThread(transport.client, "thread-policy")).toBeDefined();
+          const error = { message: "Synthetic provider refusal", codexErrorInfo: "cyberPolicy" };
+          transport.send({
+            method: "error",
+            params: { threadId: "thread-policy", turnId: "turn-1", error, willRetry: false },
+          });
+          transport.send(completedTurn("thread-policy", { status: "failed", error }));
+          const retried = await Promise.race([retryStarted.promise.then(() => true), settled]);
+          if (permission === "revoked") {
+            allowedModels.delete(catalogModel);
+            for (const listener of policyListeners) {
+              listener();
+            }
           }
-        }
-        expect(allowedControl?.signal.aborted).toBe(permission === "revoked");
-        expect(sourceControl?.signal?.aborted).toBe(false);
-        if (permission === "allowed") {
-          allowedControl?.assertCurrent();
-        }
-        sourceControl?.assertCurrent();
-        if (retried) {
-          transport.send(
-            completedTurn("thread-policy", {
-              id: "turn-2",
-              items: [{ type: "agentMessage", id: "retry-answer", text: "Synthetic retry reply" }],
-            }),
+          expect(allowedControl?.signal.aborted).toBe(permission === "revoked");
+          expect(sourceControl?.signal?.aborted).toBe(false);
+          if (permission === "allowed") {
+            allowedControl?.assertCurrent();
+          }
+          sourceControl?.assertCurrent();
+          if (retried) {
+            transport.send(
+              completedTurn("thread-policy", {
+                id: "turn-2",
+                items: [
+                  { type: "agentMessage", id: "retry-answer", text: "Synthetic retry reply" },
+                ],
+              }),
+            );
+          }
+          expect(retried).toBe(true);
+          expect(turnModels).toEqual([runtimeModel, runtimeModel]);
+          expect(
+            transport.requests
+              .filter(({ method }) => method === "turn/start")
+              .map(({ params: request }) =>
+                isJsonObject(request) ? request.cyberAccessProgram : undefined,
+              ),
+          ).toEqual([undefined, "daybreakBlue"]);
+          if (permission === "revoked") {
+            await expect(run).rejects.toThrow("operator role cannot use this model");
+          } else {
+            await expect(run).resolves.toMatchObject({ terminal: { kind: "ok" } });
+          }
+          expect(params).toMatchObject({ modelId: catalogModel, model: { id: catalogModel } });
+          const transcript = await readTranscriptMessagesByIdentity(params);
+          expect(transcript.filter((message) => message.role === "user")).toHaveLength(1);
+        },
+        async () => {
+          abortController.abort("test_cleanup");
+          await run.catch(() => undefined);
+          allowedControl?.release();
+          sourceControl?.release();
+          const closed: PromiseSettledResult<unknown>[] = await Promise.allSettled([
+            closeHost(),
+            harness.dispose?.(),
+          ]);
+          closed.push(...(await Promise.allSettled([transport.client.closeAndWait()])));
+          const failures = closed.flatMap((result) =>
+            result.status === "rejected" ? [result.reason] : [],
           );
-        }
-        expect(retried).toBe(true);
-        expect(turnModels).toEqual([runtimeModel, runtimeModel]);
-        expect(
-          transport.requests
-            .filter(({ method }) => method === "turn/start")
-            .map(({ params: request }) =>
-              isJsonObject(request) ? request.cyberAccessProgram : undefined,
-            ),
-        ).toEqual([undefined, "daybreakBlue"]);
-        if (permission === "revoked") {
-          await expect(run).rejects.toThrow("operator role cannot use this model");
-        } else {
-          await expect(run).resolves.toMatchObject({ terminal: { kind: "ok" } });
-        }
-        expect(params).toMatchObject({ modelId: catalogModel, model: { id: catalogModel } });
-        const transcript = await readTranscriptMessagesByIdentity(params);
-        expect(transcript.filter((message) => message.role === "user")).toHaveLength(1);
-      } finally {
-        abortController.abort("test_cleanup");
-        await run.catch(() => undefined);
-        allowedControl?.release();
-        sourceControl?.release();
-        const closed: PromiseSettledResult<unknown>[] = await Promise.allSettled([
-          closeHost(),
-          harness.dispose?.(),
-        ]);
-        closed.push(...(await Promise.allSettled([transport.client.closeAndWait()])));
-        const failures = closed.flatMap((result) =>
-          result.status === "rejected" ? [result.reason] : [],
-        );
-        if (failures.length > 0) {
-          throw new AggregateError(failures, "Native policy fixture cleanup failed");
-        }
-      }
+          if (failures.length > 0) {
+            throw new AggregateError(failures, "Native policy fixture cleanup failed");
+          }
+        },
+      );
       expect(policyListeners.size).toBe(0);
     },
   );

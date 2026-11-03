@@ -4,7 +4,7 @@ import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "ope
 import { createAgentHarnessHostCapabilitiesForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { runQaGatewayFixture, useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   resolveCodexAppServerHomeDir,
@@ -58,201 +58,204 @@ describeLive("Codex async questions real-binary bridge", () => {
       timeoutMs: 120_000,
     });
     let closeHost: (() => Promise<void>) | undefined;
-    try {
-      const completedKinds: string[] = [];
-      const questionItemIds: string[] = [];
-      const serverRequestMethods: string[] = [];
-      client.addRequestHandler((request) => {
-        serverRequestMethods.push(request.method);
-        return undefined;
-      });
-      client.addNotificationHandler((notification) => {
-        if (notification.method !== "item/completed" || !isJsonObject(notification.params)) {
-          return;
-        }
-        const item = notification.params.item;
-        if (!isJsonObject(item) || typeof item.type !== "string") {
-          return;
-        }
-        if (
-          item.type === "agentMessage" &&
-          item.delivery === "async" &&
-          Array.isArray(item.questions) &&
-          typeof item.id === "string"
-        ) {
-          questionItemIds.push(item.id);
-          completedKinds.push("asyncQuestion");
-        } else {
-          completedKinds.push(item.type);
-        }
-      });
-
-      const questions = [
-        { title: "Which output format?", options: ["Markdown", "Plain text"] },
-        { title: "Who is the audience?" },
-      ];
-      const deliveredTexts: string[] = [];
-      const modelId = runtimeModelId;
-      const sessionTarget = {
-        agentId: "async-questions",
-        sessionId: "async-questions-session",
-        sessionKey: "agent:async-questions:main",
-        storePath: path.join(agentDir, "openclaw-agent.sqlite"),
-      };
-      const params = {
-        agentId: sessionTarget.agentId,
-        sessionId: sessionTarget.sessionId,
-        sessionKey: sessionTarget.sessionKey,
-        sessionTarget,
-        sessionFile: path.join(root, "session.jsonl"),
-        workspaceDir: workspace,
-        cwd: workspace,
-        agentDir,
-        provider: "openai",
-        modelId,
-        model: {
-          id: modelId,
-          name: modelId,
-          provider: "openai",
-          api: "openai-chatgpt-responses",
-          reasoning: true,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 200_000,
-          maxTokens: 8_000,
-          compat: { supportsTools: false },
-        },
-        prompt: [
-          "This is a synthetic async question integration check. All files belong to this disposable workspace.",
-          "First call request_user_input_async exactly once with these exact arguments:",
-          JSON.stringify({ questions }),
-          "These are optional preferences. Immediately after that tool returns, continue independent work without waiting for an answer.",
-          "Use a native shell command to create async-question-marker.txt containing exactly AFTER_ASYNC_QUESTION followed by a newline.",
-          "Then end this turn with QUESTION_READY. Do not use request_user_input or ask another question.",
-        ].join("\n"),
-        runId: "async-questions-first-run",
-        contextTokenBudget: 150_000,
-        contextWindowInfo: {
-          tokens: 150_000,
-          referenceTokens: 200_000,
-          source: "agentContextTokens",
-        },
-        thinkLevel: "medium",
-        disableTools: false,
-        config: { tools: { web: { search: { enabled: false } } } },
-        timeoutMs: 180_000,
-        trigger: "user",
-        oneShotCliRun: true,
-        senderIsOwner: true,
-        authStorage: {},
-        authProfileStore: { version: 1, profiles: {} },
-        modelRegistry: {},
-        onBlockReply: async (payload: { text?: string }) => {
-          if (payload.text) {
-            deliveredTexts.push(payload.text);
+    await runQaGatewayFixture(
+      async () => {
+        const completedKinds: string[] = [];
+        const questionItemIds: string[] = [];
+        const serverRequestMethods: string[] = [];
+        client.addRequestHandler((request) => {
+          serverRequestMethods.push(request.method);
+          return undefined;
+        });
+        client.addNotificationHandler((notification) => {
+          if (notification.method !== "item/completed" || !isJsonObject(notification.params)) {
+            return;
           }
-        },
-      } as unknown as EmbeddedRunAttemptParams;
-      await upsertSessionEntry({
-        ...sessionTarget,
-        entry: {
+          const item = notification.params.item;
+          if (!isJsonObject(item) || typeof item.type !== "string") {
+            return;
+          }
+          if (
+            item.type === "agentMessage" &&
+            item.delivery === "async" &&
+            Array.isArray(item.questions) &&
+            typeof item.id === "string"
+          ) {
+            questionItemIds.push(item.id);
+            completedKinds.push("asyncQuestion");
+          } else {
+            completedKinds.push(item.type);
+          }
+        });
+
+        const questions = [
+          { title: "Which output format?", options: ["Markdown", "Plain text"] },
+          { title: "Who is the audience?" },
+        ];
+        const deliveredTexts: string[] = [];
+        const modelId = runtimeModelId;
+        const sessionTarget = {
+          agentId: "async-questions",
+          sessionId: "async-questions-session",
+          sessionKey: "agent:async-questions:main",
+          storePath: path.join(agentDir, "openclaw-agent.sqlite"),
+        };
+        const params = {
+          agentId: sessionTarget.agentId,
           sessionId: sessionTarget.sessionId,
-          sessionFile: params.sessionFile,
-          updatedAt: Date.now(),
-        },
-      });
-      const host = await createAgentHarnessHostCapabilitiesForTest({
-        attempt: params,
-        pluginId: "codex",
-        nativeModelPolicySupport: "exact",
-      });
-      params.hostCapabilities = host.capabilities;
-      closeHost = host.close;
-      const bindingStore = createCodexTestBindingStore();
-      const options = {
-        bindingStore,
-        pluginConfig,
-        clientFactory: async () => client,
-      };
-      const first = await runCodexAppServerAttempt(params, options);
+          sessionKey: sessionTarget.sessionKey,
+          sessionTarget,
+          sessionFile: path.join(root, "session.jsonl"),
+          workspaceDir: workspace,
+          cwd: workspace,
+          agentDir,
+          provider: "openai",
+          modelId,
+          model: {
+            id: modelId,
+            name: modelId,
+            provider: "openai",
+            api: "openai-chatgpt-responses",
+            reasoning: true,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 200_000,
+            maxTokens: 8_000,
+            compat: { supportsTools: false },
+          },
+          prompt: [
+            "This is a synthetic async question integration check. All files belong to this disposable workspace.",
+            "First call request_user_input_async exactly once with these exact arguments:",
+            JSON.stringify({ questions }),
+            "These are optional preferences. Immediately after that tool returns, continue independent work without waiting for an answer.",
+            "Use a native shell command to create async-question-marker.txt containing exactly AFTER_ASYNC_QUESTION followed by a newline.",
+            "Then end this turn with QUESTION_READY. Do not use request_user_input or ask another question.",
+          ].join("\n"),
+          runId: "async-questions-first-run",
+          contextTokenBudget: 150_000,
+          contextWindowInfo: {
+            tokens: 150_000,
+            referenceTokens: 200_000,
+            source: "agentContextTokens",
+          },
+          thinkLevel: "medium",
+          disableTools: false,
+          config: { tools: { web: { search: { enabled: false } } } },
+          timeoutMs: 180_000,
+          trigger: "user",
+          oneShotCliRun: true,
+          senderIsOwner: true,
+          authStorage: {},
+          authProfileStore: { version: 1, profiles: {} },
+          modelRegistry: {},
+          onBlockReply: async (payload: { text?: string }) => {
+            if (payload.text) {
+              deliveredTexts.push(payload.text);
+            }
+          },
+        } as unknown as EmbeddedRunAttemptParams;
+        await upsertSessionEntry({
+          ...sessionTarget,
+          entry: {
+            sessionId: sessionTarget.sessionId,
+            sessionFile: params.sessionFile,
+            updatedAt: Date.now(),
+          },
+        });
+        const host = await createAgentHarnessHostCapabilitiesForTest({
+          attempt: params,
+          pluginId: "codex",
+          nativeModelPolicySupport: "exact",
+        });
+        params.hostCapabilities = host.capabilities;
+        closeHost = host.close;
+        const bindingStore = createCodexTestBindingStore();
+        const options = {
+          bindingStore,
+          pluginConfig,
+          clientFactory: async () => client,
+        };
+        const first = await runCodexAppServerAttempt(params, options);
 
-      expect(first.terminal.kind).toBe("ok");
-      expect(questionItemIds).toHaveLength(1);
-      expect(completedKinds.indexOf("commandExecution")).toBeGreaterThan(
-        completedKinds.indexOf("asyncQuestion"),
-      );
-      expect(await fs.readFile(path.join(workspace, "async-question-marker.txt"), "utf8")).toBe(
-        "AFTER_ASYNC_QUESTION\n",
-      );
-      expect(
-        first.messagesSnapshot.filter(
-          (message) => message.role === "assistant" && "openclawAsyncDelivery" in message,
-        ),
-      ).toEqual([
-        expect.objectContaining({
-          openclawAsyncDelivery: { itemId: questionItemIds[0], questions },
-        }),
-      ]);
-      expect(deliveredTexts).toHaveLength(1);
-      expect(deliveredTexts[0]).toContain("Which output format?");
-      expect(deliveredTexts[0]).toContain("Who is the audience?");
-      const persisted = await readSessionTranscriptEvents(sessionTarget);
-      expect(
-        persisted.filter(
-          (event) =>
-            isJsonObject(event) &&
-            isJsonObject(event.message) &&
-            isJsonObject(event.message.openclawAsyncDelivery),
-        ),
-      ).toHaveLength(1);
-      expect(serverRequestMethods).not.toContain("item/tool/requestUserInput");
-      const firstBinding = bindingStore.read(sessionBindingIdentity(params));
-      expect(firstBinding).toBeDefined();
-      expect(firstBinding?.model === runtimeModelId).toBe(true);
-      const firstThreadId = firstBinding?.threadId;
-      expect(firstThreadId).toEqual(expect.any(String));
+        expect(first.terminal.kind).toBe("ok");
+        expect(questionItemIds).toHaveLength(1);
+        expect(completedKinds.indexOf("commandExecution")).toBeGreaterThan(
+          completedKinds.indexOf("asyncQuestion"),
+        );
+        expect(await fs.readFile(path.join(workspace, "async-question-marker.txt"), "utf8")).toBe(
+          "AFTER_ASYNC_QUESTION\n",
+        );
+        expect(
+          first.messagesSnapshot.filter(
+            (message) => message.role === "assistant" && "openclawAsyncDelivery" in message,
+          ),
+        ).toEqual([
+          expect.objectContaining({
+            openclawAsyncDelivery: { itemId: questionItemIds[0], questions },
+          }),
+        ]);
+        expect(deliveredTexts).toHaveLength(1);
+        expect(deliveredTexts[0]).toContain("Which output format?");
+        expect(deliveredTexts[0]).toContain("Who is the audience?");
+        const persisted = await readSessionTranscriptEvents(sessionTarget);
+        expect(
+          persisted.filter(
+            (event) =>
+              isJsonObject(event) &&
+              isJsonObject(event.message) &&
+              isJsonObject(event.message.openclawAsyncDelivery),
+          ),
+        ).toHaveLength(1);
+        expect(serverRequestMethods).not.toContain("item/tool/requestUserInput");
+        const firstBinding = bindingStore.read(sessionBindingIdentity(params));
+        expect(firstBinding).toBeDefined();
+        expect(firstBinding?.model === runtimeModelId).toBe(true);
+        const firstThreadId = firstBinding?.threadId;
+        expect(firstThreadId).toEqual(expect.any(String));
 
-      await closeHost();
-      closeHost = undefined;
-      const followUp = {
-        ...params,
-        runId: "async-questions-answer-run",
-        prompt: [
-          "> Which output format?",
-          "",
-          "Plain text",
-          "",
-          "> Who is the audience?",
-          "",
-          "release reviewers",
-          "",
-          "Use those answers to create async-question-answer.txt containing the chosen format, a vertical bar, then the audience, followed by a newline.",
-          "Do not ask further questions. Then reply ANSWER_USED.",
-        ].join("\n"),
-      };
-      const answerHost = await createAgentHarnessHostCapabilitiesForTest({
-        attempt: followUp,
-        pluginId: "codex",
-        nativeModelPolicySupport: "exact",
-      });
-      followUp.hostCapabilities = answerHost.capabilities;
-      closeHost = answerHost.close;
-      const answered = await runCodexAppServerAttempt(followUp, options);
+        await closeHost();
+        closeHost = undefined;
+        const followUp = {
+          ...params,
+          runId: "async-questions-answer-run",
+          prompt: [
+            "> Which output format?",
+            "",
+            "Plain text",
+            "",
+            "> Who is the audience?",
+            "",
+            "release reviewers",
+            "",
+            "Use those answers to create async-question-answer.txt containing the chosen format, a vertical bar, then the audience, followed by a newline.",
+            "Do not ask further questions. Then reply ANSWER_USED.",
+          ].join("\n"),
+        };
+        const answerHost = await createAgentHarnessHostCapabilitiesForTest({
+          attempt: followUp,
+          pluginId: "codex",
+          nativeModelPolicySupport: "exact",
+        });
+        followUp.hostCapabilities = answerHost.capabilities;
+        closeHost = answerHost.close;
+        const answered = await runCodexAppServerAttempt(followUp, options);
 
-      expect(answered.terminal.kind).toBe("ok");
-      expect(bindingStore.read(sessionBindingIdentity(followUp))?.threadId).toBe(firstThreadId);
-      expect(await fs.readFile(path.join(workspace, "async-question-answer.txt"), "utf8")).toBe(
-        "Plain text|release reviewers\n",
-      );
-      expect(serverRequestMethods).not.toContain("item/tool/requestUserInput");
-    } finally {
-      const closed = await Promise.allSettled([closeHost?.(), client.closeAndWait()]);
-      const failures = closed.flatMap((result) =>
-        result.status === "rejected" ? [result.reason] : [],
-      );
-      if (failures.length > 0) {
-        throw new AggregateError(failures, "Async question fixture cleanup failed");
-      }
-    }
+        expect(answered.terminal.kind).toBe("ok");
+        expect(bindingStore.read(sessionBindingIdentity(followUp))?.threadId).toBe(firstThreadId);
+        expect(await fs.readFile(path.join(workspace, "async-question-answer.txt"), "utf8")).toBe(
+          "Plain text|release reviewers\n",
+        );
+        expect(serverRequestMethods).not.toContain("item/tool/requestUserInput");
+      },
+      async () => {
+        const closed = await Promise.allSettled([closeHost?.(), client.closeAndWait()]);
+        const failures = closed.flatMap((result) =>
+          result.status === "rejected" ? [result.reason] : [],
+        );
+        if (failures.length > 0) {
+          throw new AggregateError(failures, "Async question fixture cleanup failed");
+        }
+      },
+    );
   }, 480_000);
 });
