@@ -10,6 +10,7 @@ import { createCrustaceanSlug } from "../agents/session-slug.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { withWorktreeSourceWait } from "../agents/worktrees/allocation.js";
 import type { WorktreeSourceStage, WorktreeWaitBudget } from "../agents/worktrees/types.js";
+import { hasControlCommand } from "../auto-reply/command-detection.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
@@ -26,7 +27,6 @@ import {
   SESSION_TITLE_SOURCE_MAX_CHARS,
   resolveSessionTitleSource,
 } from "../sessions/session-title-source.js";
-import { hasControlCommand } from "../auto-reply/command-detection.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
 import type { SkillCommandSpec } from "../skills/types.js";
@@ -379,16 +379,17 @@ export async function prepareDashboardSessionTitle(params: {
   operatorAuthority?: AdmittedRunOperatorAuthority;
 }): Promise<string | null> {
   try {
-    const sourceText =
-      resolveSessionTitleSource(params.userMessage) ??
-      resolveSessionTitleSource(
-        params.userMessage,
-        await prepareTitleSkillCommands({
+    // Slash drafts need prepared skill metadata so registered commands stay
+    // skill-aware; ordinary text keeps the empty-command fast path.
+    const trimmed = params.userMessage.trim();
+    const skillCommands = trimmed.startsWith("/")
+      ? await prepareTitleSkillCommands({
           cfg: params.cfg,
           agentId: params.agentId,
           assertCurrent: params.assertCurrent,
-        }),
-      );
+        })
+      : [];
+    const sourceText = resolveSessionTitleSource(params.userMessage, skillCommands);
     return sourceText
       ? await generateDashboardSessionTitle({ ...params, sourceText, utilityOnly: true })
       : null;

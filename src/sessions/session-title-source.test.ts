@@ -1,38 +1,39 @@
 import { describe, expect, it } from "vitest";
+import type { SkillCommandSpec } from "../skills/types.js";
 import { resolveSessionTitleSource } from "./session-title-source.js";
 
+function makeCommand(name: string): SkillCommandSpec {
+  return {
+    name,
+    skillName: name,
+    description: "Demo",
+    rawName: name,
+  } as SkillCommandSpec;
+}
+
 describe("resolveSessionTitleSource", () => {
-  it.each([
-    ["/new", null],
-    ["/reset", null],
-    ["/explain how DNS resolution works", "/explain how DNS resolution works"],
-    ["/tmp/notes.md summarise this file", "/tmp/notes.md summarise this file"],
-    [
-      "/Users/me/notes/handover.md Have a read through this.",
-      "/Users/me/notes/handover.md Have a read through this.",
-    ],
-    ["explain how DNS resolution works", "explain how DNS resolution works"],
-    [
-      "please read /tmp/notes.md and summarise it",
-      "please read /tmp/notes.md and summarise it",
-    ],
-  ])("maps %j to %j", (input, expected) => {
-    expect(resolveSessionTitleSource(input)).toBe(expected);
+  it("passes through ordinary task text", () => {
+    expect(resolveSessionTitleSource("Summarise the notes")).toBe("Summarise the notes");
   });
 
-  it("uses skill-command args when a registered skill owns the slash token", () => {
-    expect(
-      resolveSessionTitleSource("/code-review https://github.com/openclaw/openclaw/pull/1", [
-        { name: "code-review", skillName: "code-review", description: "review", promptTemplate: "Review $ARGUMENTS" },
-      ]),
-    ).toBe("https://github.com/openclaw/openclaw/pull/1");
+  it("titles pasted absolute paths that start with /", () => {
+    expect(resolveSessionTitleSource("/tmp/notes.md summarise this file")).toBe(
+      "/tmp/notes.md summarise this file",
+    );
+    expect(resolveSessionTitleSource("//share/docs/plan.md")).toBe("//share/docs/plan.md");
   });
 
-  it("skips bare skill commands that carry no args", () => {
-    expect(
-      resolveSessionTitleSource("/code-review", [
-        { name: "code-review", skillName: "code-review", description: "review", promptTemplate: "Review $ARGUMENTS" },
-      ]),
-    ).toBeNull();
+  it("skips control commands and unregistered slash commands", () => {
+    expect(resolveSessionTitleSource("/status")).toBeNull();
+    expect(resolveSessionTitleSource("/model choose-a-model")).toBeNull();
+    expect(resolveSessionTitleSource("/unknown task")).toBeNull();
+  });
+
+  it("uses skill args when skill metadata matches", () => {
+    const skillCommands = [makeCommand("topic")];
+    expect(resolveSessionTitleSource("/topic", skillCommands)).toBeNull();
+    expect(resolveSessionTitleSource("/topic Plan the release", skillCommands)).toBe(
+      "Plan the release",
+    );
   });
 });
