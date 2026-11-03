@@ -188,8 +188,9 @@ Source qualification includes the canonical schema, generated runtime, generator
 and compiler, browser consumer, sibling proof, history and static test routing.
 Original/repaired uniqueness-omission controls, clean proof, scoped checks, fresh
 review, publication and CI remain pending. No runtime result is claimed.
-Production, generated output and the shared test-line scalar remain unchanged;
-no declaration, assertion, import, helper or export is removed.
+Production, generated output and the shared test-line scalar remain unchanged.
+Three formatted added test lines have an exact separate allocation; no declaration,
+assertion, import, helper or export is removed.
 
 ## Completed source review
 
