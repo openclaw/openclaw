@@ -159,6 +159,7 @@ export function canonicalizeSessionStore({
 }: SessionKeyCanonicalizationOptions & {
   store: Record<string, SessionEntryLike>;
 }): { store: Record<string, SessionEntryLike>; legacyKeys: string[] } {
+  // SAFETY: The null-prototype dictionary starts empty; every value assigned below is a SessionEntryLike.
   const canonical = Object.create(null) as Record<string, SessionEntryLike>;
   const meta = new Map<string, { isCanonical: boolean; updatedAt: number }>();
   const legacyKeys: string[] = [];
