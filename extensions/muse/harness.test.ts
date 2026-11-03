@@ -61,6 +61,7 @@ afterAll(async () => {
 
 const harnesses = new Set<ReturnType<typeof createMuseAgentHarnessImpl>>();
 afterEach(async () => {
+  vi.useRealTimers();
   try {
     await Promise.all(
       [...harnesses].map(async (harness) => {
@@ -404,6 +405,9 @@ describe("Muse native MSP harness", () => {
     async (failure) => {
       const { params, run, log } = setup(true);
       const controller = new AbortController();
+      if (failure === "timeout") {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      }
       if (failure === "transcript") {
         writes.append.mockRejectedValueOnce(new Error("transcript unavailable"));
       }
@@ -420,6 +424,9 @@ describe("Muse native MSP harness", () => {
         timeoutMs: failure === "timeout" ? 150 : params.timeoutMs,
         abortSignal: controller.signal,
         onExecutionStarted: () => {
+          if (failure === "timeout") {
+            vi.advanceTimersByTime(150);
+          }
           if (failure === "callback") {
             throw new Error("callback failed");
           }

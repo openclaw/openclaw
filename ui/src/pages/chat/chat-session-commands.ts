@@ -19,6 +19,9 @@ function resolveSessionSkillScope(host: ChatPageHost): string | undefined {
 }
 
 export async function refreshChatCommands(host: ChatPageHost) {
+  if (selectedChatSessionRow(host)?.sendDisabledReason) {
+    return;
+  }
   return refreshSlashCommands({
     client: host.client,
     agentId: resolveChatAgentId(host),

@@ -181,6 +181,7 @@ export function PickerContent<Option extends PickerOption>(props: {
   );
   const optionId = (value: string) => `${id}:${value}`;
   const phone = createPickerPhoneSheet({
+    open: () => opened(),
     wanted: () =>
       !props.params.sheet &&
       props.params.variant !== "submenu" &&

@@ -65,11 +65,14 @@ suite.define(() => {
       await page.getByRole("button", { name: "Meta", exact: true }).click();
 
       const policyRow = page.locator(".settings-row").filter({ hasText: "Group policy" });
-      await expect.poll(() => policyRow.getByRole("radio").count()).toBe(4);
-      await expect.poll(() => policyRow.getByText("open", { exact: true }).count()).toBe(1);
-      await expect.poll(() => policyRow.getByText("allowlist", { exact: true }).count()).toBe(1);
-      await expect.poll(() => policyRow.getByText("disabled", { exact: true }).count()).toBe(1);
-      await expect.poll(() => policyRow.getByText("allowall", { exact: true }).count()).toBe(1);
+      await expect
+        .poll(() =>
+          policyRow
+            .locator("select option")
+            .allTextContents()
+            .then((labels) => labels.map((label) => label.trim())),
+        )
+        .toEqual(expect.arrayContaining(["Open", "Allowlist", "Disabled", "Allowall"]));
       await expect
         .poll(() => page.getByText("Unsupported schema node. Use Raw mode.").count())
         .toBe(0);

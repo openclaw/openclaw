@@ -1,21 +1,21 @@
-import { createSignal, onCleanup, Show } from "solid-js";
+import { onSettled, Show } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
 import { Icon } from "./solid/icon.tsx";
 import { createPhoneSheetLayout } from "./solid/phone-sheet-layout.ts";
 
 /** The bottom-sheet form of a picker's own surface: its phone test, swipe, grabber and close. */
 export function createPickerPhoneSheet(options: {
+  open: () => boolean;
   wanted: () => boolean;
   surface: () => HTMLElement;
   dismiss: () => void;
 }) {
   const layout = createPhoneSheetLayout();
-  const [open, setOpen] = createSignal(false);
   let grabber!: HTMLDivElement;
-  const active = () => open() && layout() && options.wanted();
+  const active = () => options.open() && layout() && options.wanted();
   let releaseGesture: (() => void) | undefined;
   let gestureRequested = false;
-  onCleanup(() => releaseGesture?.());
+  onSettled(() => () => releaseGesture?.());
   // The swipe's motion code only loads for a sheet someone actually opens.
   const bindGesture = async () => {
     gestureRequested = true;
@@ -29,7 +29,6 @@ export function createPickerPhoneSheet(options: {
   return {
     active,
     onOpenChange(next: boolean) {
-      setOpen(next);
       if (!next) {
         return;
       }

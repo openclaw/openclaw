@@ -39,6 +39,8 @@ it.each([false, true])(
       [
         runtimeProcessEntrypoints.updateMigratedFinalize,
         runtimeProcessEntrypoints.workerNativeLifecycle,
+        // Native lifecycle selects this through the manifest, outside literal imports.
+        runtimeProcessEntrypoints.spawnBroker,
         runtimeProcessEntrypoints.sqliteWriterAdmission,
         runtimeProcessEntrypoints.sqliteStore,
         runtimeProcessEntrypoints.sqliteIntegrity,
@@ -164,7 +166,7 @@ it.each([false, true])(
           });
         }
         const result = await invoke();
-        expect(result.cleanup).toBe("normal");
+        expect(result.cleanup, JSON.stringify(result)).toBe("normal");
         expect(result.termination).toBe("exit");
         if (wrongBuild) {
           expect(result.code).not.toBe(0);
