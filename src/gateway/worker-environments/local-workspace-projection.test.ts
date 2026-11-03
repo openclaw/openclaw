@@ -750,6 +750,9 @@ it.for([false, true])(
         execution.abort(stop);
         projection[Symbol.dispose]();
       }
+      // This fixture proves ordering and authority, not elapsed interrupt time.
+      // Keep its deadline under the test clock instead of racing a busy host.
+      vi.spyOn(AbortSignal, "timeout").mockReturnValue(signal);
       commands.push(cleanup.terminate(), cleanup.interrupt(1000));
       const outcomes = Promise.allSettled(commands);
       settle.resolve();
