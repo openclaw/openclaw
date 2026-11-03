@@ -41,10 +41,12 @@ vi.mock("./cdp.helpers.js", async (importOriginal) => ({
     throw new Error("no CDP HTTP listener");
   }),
 }));
-vi.mock("./pw-ai-module.js", () => ({
+vi.mock("./pw-ai-module.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./pw-ai-module.js")>()),
   getPwAiModule: async () => ({ listPagesViaPlaywright: observationMocks.listPages }),
 }));
-vi.mock("./extension-relay.runtime.js", () => ({
+vi.mock("./extension-relay.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./extension-relay.runtime.js")>()),
   getExtensionRelayModule: async () => ({
     ensureExtensionRelayForProfile: observationMocks.ensureRelay,
   }),
