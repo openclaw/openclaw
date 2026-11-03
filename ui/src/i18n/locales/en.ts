@@ -452,7 +452,6 @@ const startupEnglish = {
     publicKey: "Public Key",
     probeOk: "Connection check passed",
     probeFailed: "Connection check failed",
-    reloadConfig: "Reload config",
     multiSelect: {
       addCustom: "Add “{value}”",
       noMatches: "No matches",
@@ -823,7 +822,6 @@ const startupEnglish = {
     overview: {
       selectedSkills: "{count} selected",
       allSkills: "All skills",
-      unsavedConfig: {},
       modelSelection: {},
       primaryModel: {},
       primaryModelDefault: {},

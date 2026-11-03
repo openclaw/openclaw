@@ -18,6 +18,7 @@ import { FloatingHeaderActions } from "../../components/solid/floating-header-ac
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
+  RetryAction,
   SettingsEmpty,
   SettingsSection,
   SettingsNavRow,
@@ -126,9 +127,6 @@ export function Agents(props: AgentsProps) {
     configSaving: props.config.configSaving,
     configDirty: props.config.configFormDirty,
     canUpdateConfig: props.access.canUpdateConfig,
-    presentationRetired: props.presentationRetired(),
-    onConfigReload: props.onConfigReload,
-    onConfigSave: props.onConfigSave,
   });
   const context = () =>
     buildAgentContext(
@@ -317,8 +315,14 @@ export function Agents(props: AgentsProps) {
                 <Show when={!props.config.configSaving}>
                   <ConfigError message={props.config.lastError}>
                     {(message) => (
-                      <div class="callout danger" role="alert">
+                      <div class="callout danger agent-config-error" role="alert">
                         {message}
+                        <Show when={!props.config.configSnapshot}>
+                          <RetryAction
+                            disabled={props.config.configLoading}
+                            onRetry={props.onConfigRetry}
+                          />
+                        </Show>
                       </div>
                     )}
                   </ConfigError>

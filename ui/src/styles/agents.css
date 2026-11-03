@@ -174,34 +174,12 @@
   font-size: var(--control-ui-text-xs);
 }
 
-/* Reload and Save close the group they act on. The dirty note shares their line,
-   so it appears without moving anything. */
-.agent-overview__config-actions {
+.agent-config-error {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: space-between;
   gap: var(--space-2);
-  min-width: 0;
-}
-
-.agent-overview__config-actions > .callout {
-  flex: 1 0 100%;
-  margin: 0;
-}
-
-.settings-row:has(> .settings-row__control > .agent-overview__config-actions > .callout) {
-  flex-wrap: wrap;
-}
-
-.settings-row__control:has(> .agent-overview__config-actions > .callout) {
-  flex: 1 0 100%;
-  max-width: none;
-}
-
-.settings-row__control:has(> .agent-overview__config-actions > .callout)
-  > .agent-overview__config-actions {
-  flex: 1 1 auto;
 }
 
 /* Shares the section heading's line; matching its line height keeps the header still. */
@@ -361,20 +339,6 @@
     position-area: bottom span-all;
     position-try-fallbacks: flip-block;
     justify-self: center;
-  }
-
-  /* The config actions fit beside the row's empty label. */
-  .agent-overview
-    .settings-row:has(> .settings-row__control > .agent-overview__config-actions):not(
-      :has(.callout)
-    ) {
-    flex-wrap: nowrap;
-
-    > .settings-row__control {
-      width: auto;
-      flex: 0 0 auto;
-      justify-content: flex-end;
-    }
   }
 }
 

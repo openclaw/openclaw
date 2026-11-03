@@ -135,16 +135,15 @@ it("shows read-only facts the agent has", () => {
   expect(value("Runtime")).toBe("codex (fallback pi)");
 });
 
-it("shows the unsaved note only while config changes are dirty", () => {
+it("edits models without a Save or Reload of its own", () => {
   const defaults = createProps();
-  const render = (configFormDirty: boolean) =>
-    renderAgents({
-      config: { ...defaults.config, configForm: agentConfig({}), configFormDirty },
-    });
-  const note = "You have unsaved config changes.";
-  expect(render(false).textContent).not.toContain(note);
-  const dirty = render(true);
-  expect(dirty.textContent).toContain(note);
+  const dirty = renderAgents({
+    config: { ...defaults.config, configForm: agentConfig({}), configFormDirty: true },
+  });
+  const labels = [...dirty.querySelectorAll("button")].map((button) => button.textContent?.trim());
+  expect(labels).not.toContain("Save");
+  expect(labels).not.toContain("Reload config");
+  expect(dirty.querySelector(".callout.warn")).toBeNull();
 });
 
 it("reaches Agent defaults from Overview and with no agent selected, not from other tabs", () => {

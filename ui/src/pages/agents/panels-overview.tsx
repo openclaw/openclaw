@@ -47,14 +47,13 @@ import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import type { AgentsPageView } from "./agents-page-state.ts";
 import { AvatarPicker } from "./avatar-picker.tsx";
-import { AgentConfigButtons, type AgentConfigActions } from "./config-actions.tsx";
 import type { AgentIdentityOutcome } from "./identity-actions.ts";
-import { renderAgentPanelFacts } from "./panel-ui.tsx";
+import { renderAgentPanelFacts, type AgentConfigState } from "./panel-ui.tsx";
 
 registerEnglishCatalog(registerSettingsEnglish);
 
 export function AgentOverview(
-  params: AgentConfigActions &
+  params: AgentConfigState &
     Omit<AgentsPageView["overview"], "modelSelectionPolicy" | "modelCatalogRetired"> &
     Partial<Pick<AgentsPageView["overview"], "modelSelectionPolicy" | "modelCatalogRetired">> &
     Pick<AgentsPageView, "readData"> & {
@@ -458,15 +457,6 @@ export function AgentOverview(
               onChange={(value) => params.onDecisionModelChange(params.agent.id, value)}
               onOpen={params.onModelCatalogOpen}
             />
-          }
-        />
-        <SettingsRow
-          title=""
-          description={params.configDirty ? t("agents.overview.unsavedConfig") : undefined}
-          control={
-            <div class="agent-overview__config-actions">
-              <AgentConfigButtons {...params} buttonType="button" />
-            </div>
           }
         />
       </SettingsSection>
