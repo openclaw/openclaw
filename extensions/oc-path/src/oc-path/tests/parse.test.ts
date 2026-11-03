@@ -13,9 +13,12 @@ describe("parseMd — frontmatter", () => {
     [String.raw`"bad\qescape" # comment`, String.raw`"bad\qescape" # comment`],
     [String.raw`'C:\Tools\bin'`, String.raw`C:\Tools\bin`],
     [String.raw`"bad\qescape"`, String.raw`bad\qescape`],
+    ["ready # operator note", "ready"],
+    ["ready#literal", "ready#literal"],
+    ["00123", "00123"],
     ["true", "true"],
     ["123", "123"],
-  ])("reads quoted scalar %s without changing plain string semantics", (encoded, value) => {
+  ])("reads string scalar %s without changing non-string spelling", (encoded, value) => {
     const raw = `---\nnote: ${encoded}\n---\n`;
     const ast = parseMd(raw);
     expect(ast.frontmatter[0]?.value).toBe(value);
