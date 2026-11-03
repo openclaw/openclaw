@@ -186,8 +186,20 @@ rejection remains covered independently.
 
 Source qualification includes the canonical schema, generated runtime, generator
 and compiler, browser consumer, sibling proof, history and static test routing.
-Original/repaired uniqueness-omission controls, clean proof, scoped checks, fresh
-review, publication and CI remain pending. No runtime result is claimed.
+Untouched native baseline passes28 without skips. An actual consumed-runtime
+uniqueness omission passes the original28 but fails only the repaired replay
+rejection, with27 other passes. Its marker is reached twice on the original
+and three times on the repaired fixture. Runtime and test bytes restore exactly.
+Clean candidate28 and21 related approval/projection/generator cases pass without
+skips. Generated-validator freshness, focused types/lint, format, ledger MDX and
+whitespace pass. Fresh review, published-head proof and CI remain pending.
+
+Local test-lines remains failed: the exact pinned base has6,442,784 lines against
+a6,442,488 ceiling; the candidate has6,442,787 against6,442,491. Both retain296
+lines of inherited debt, with unchanged policy sources and neutral+3/+3 growth.
+Positive growth exposes that deficit; nonpositive growth may pass despite debt,
+so this does not claim the same job necessarily failed on main. No browser,
+Gateway or native authorization behavior is claimed.
 Production, generated output and the shared test-line scalar remain unchanged.
 Three formatted added test lines have an exact separate allocation; no declaration,
 assertion, import, helper or export is removed.
