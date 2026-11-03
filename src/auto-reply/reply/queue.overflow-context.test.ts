@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createInboundEventDeliveryCorrelation } from "../../plugin-sdk/inbound-event-delivery.js";
 import { createQueueCase } from "./queue.case.test-support.js";
 import {
   createQueueTestRun as createRun,
@@ -54,13 +55,22 @@ describe("followup queue overflow summary context", () => {
         onSettled: vi.fn(),
       }));
       const abandoned = lifecycles.map((lifecycle) => lifecycle.onAbandoned);
-      const delivered = [vi.fn(), vi.fn()];
+      const correlation = createInboundEventDeliveryCorrelation({
+        targetsMatch: (a, b) => a === b,
+      });
+      const activeDelivered = vi.fn();
+      const event = { outboundTo: "room", markInboundEventDelivered: activeDelivered };
+      const options = { inboundEventKind: "room_event" };
+      const endActive = correlation.begin(q.key, event, options);
+      const beginDiscarded = vi.fn(() =>
+        correlation.begin(q.key, { ...event, markInboundEventDelivered: vi.fn() }, options),
+      );
       const ambient = createRun({
         prompt: "lunch?",
         messageId: "ambient",
         currentInboundEventKind: "room_event",
         turnAdoptionLifecycle: lifecycles[0],
-        deliveryCorrelations: [{ begin: () => delivered[0] }],
+        deliveryCorrelations: [{ begin: beginDiscarded }],
         onQueueDisposition: vi.fn(),
       });
       q.add(request);
@@ -71,7 +81,7 @@ describe("followup queue overflow summary context", () => {
         messageId: "incoming",
         controllerInput: undefined,
         turnAdoptionLifecycle: lifecycles[1],
-        deliveryCorrelations: [{ begin: () => delivered[1] }],
+        deliveryCorrelations: [{ begin: beginDiscarded }],
       });
       expect(q.add(incoming)).toBe(false);
       await q.drain();
@@ -80,12 +90,13 @@ describe("followup queue overflow summary context", () => {
         await room.controllerInput?.settlement.promise;
         expect(room.turnAdoptionLifecycle?.onAdopted).toHaveBeenCalledOnce();
         expect(abandoned[index]).not.toHaveBeenCalled();
-        expect(delivered[index]).toHaveBeenCalledExactlyOnceWith({
-          visibleReplySent: false,
-          failed: false,
-        });
         expect(room.turnAdoptionLifecycle?.onSettled).toHaveBeenCalledOnce();
       }
+      correlation.notify({ sessionKey: q.key, to: "room", ...options });
+      correlation.notify({ sessionKey: q.key, to: "room", ...options });
+      expect(activeDelivered).toHaveBeenCalledOnce();
+      expect(beginDiscarded).not.toHaveBeenCalled();
+      endActive();
     },
   );
   it("keeps framing on elided summaries of room events with required replies", async () => {

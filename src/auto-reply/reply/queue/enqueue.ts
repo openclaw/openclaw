@@ -278,13 +278,6 @@ function discardOverflowRoomEvent(
   // no model or tool execution is admitted here.
   void admitFollowupRunLifecycle(run).then(
     () => {
-      for (const correlation of run.deliveryCorrelations ?? []) {
-        try {
-          correlation.begin()?.({ visibleReplySent: false, failed: false });
-        } catch (error) {
-          defaultRuntime.error?.(`followup ambient delivery settlement failed: ${String(error)}`);
-        }
-      }
       completeFollowupRunLifecycle(run, "consumed");
     },
     (error: unknown) => {
