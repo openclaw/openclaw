@@ -26,7 +26,6 @@
   min-width: 0;
 }
 
-.device-entry__heading,
 .personal-instructions__actions,
 .active-filters {
   display: flex;
@@ -441,8 +440,8 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 
 .settings-sidebar__back-icon {
   display: inline-flex;
-  width: 15px;
-  height: 15px;
+  width: var(--chrome-icon-size);
+  height: var(--chrome-icon-size);
 }
 
 .settings-sidebar__title {
@@ -485,9 +484,9 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 }
 
 .settings-sidebar__back-icon svg {
-  width: 15px;
-  height: 15px;
-  stroke-width: 1.7px;
+  width: var(--chrome-icon-size);
+  height: var(--chrome-icon-size);
+  stroke-width: var(--chrome-icon-stroke);
 }
 
 .settings-sidebar__nav {
@@ -506,6 +505,17 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   color: var(--muted);
   font-size: calc(12.5px * var(--control-ui-text-scale));
   line-height: 1.45;
+}
+
+.settings-sidebar__empty--search {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.settings-sidebar__empty--search p {
+  margin: 0;
 }
 
 /* Loading skeleton reuses __nav/__group/__item geometry; only the fills are placeholders. */
@@ -528,8 +538,8 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 }
 
 .settings-sidebar__loading-icon {
-  width: 16px;
-  height: 16px;
+  width: var(--list-row-icon-size);
+  height: var(--list-row-icon-size);
   flex-shrink: 0;
   border-radius: 4px;
 }
@@ -568,6 +578,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 }
 
 .settings-sidebar__item {
+  gap: 9px;
   min-height: 32px;
   padding: 0 9px;
   transition:
@@ -966,7 +977,6 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   flex: 0 0 auto;
   align-items: flex-start;
   margin: 8px;
-  border-color: color-mix(in srgb, var(--danger) 22%, var(--border));
   box-shadow: var(--shadow-sm);
 }
 
@@ -1006,10 +1016,6 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 
 .sidebar-session-toolbar__button:not(:disabled, [aria-disabled="true"]) {
   opacity: var(--sidebar-toolbar-action-opacity, 0.55);
-}
-
-.sidebar-session-toolbar .sidebar-recent-sessions__label-text {
-  flex: 0 0 auto;
 }
 
 .sidebar-session-toolbar__button:hover,
@@ -2386,9 +2392,16 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 .sidebar-panel-header__title {
   margin-inline-end: auto;
   padding-inline-start: 4px;
+}
+
+/* Every sidebar panel title shares one type style, including the Sessions owner
+   picker, whose button host would otherwise reset the inherited letter spacing. */
+.sidebar-panel-header__title,
+.sidebar-session-owner-filter .picker-select__label {
   color: var(--text-strong);
   font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 550;
+  letter-spacing: -0.01em;
 }
 
 .sidebar--rail
@@ -2668,6 +2681,12 @@ a:is(
   stroke-width: 1.5px;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+.settings-sidebar__item-icon svg {
+  width: var(--list-row-icon-size);
+  height: var(--list-row-icon-size);
+  stroke-width: var(--list-row-icon-stroke);
 }
 
 .nav-item__text {
@@ -3800,8 +3819,11 @@ html.openclaw-native-web-chrome
   max-width: none;
 }
 
-.page-meta,
-.dreaming-header-controls {
+.page-subtitle .learn-more-link {
+  white-space: nowrap;
+}
+
+.page-meta {
   display: flex;
   align-items: center;
   gap: 8px;

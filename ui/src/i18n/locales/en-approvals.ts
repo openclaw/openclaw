@@ -112,10 +112,7 @@ const enApprovals = {
     revoke: "Revoke",
     revoking: "Revoking…",
     columns: {
-      automation: "Automation",
-      command: "Command",
       uses: "Uses",
-      state: "State",
     },
   },
   approvalHistory: {
@@ -128,14 +125,12 @@ const enApprovals = {
     invalidResponse: "The gateway returned an invalid approval history response.",
     unknown: "Unknown",
     notApplicable: "N/A",
-    columns: {
-      resolved: "Resolved",
+    fields: {
       kind: "Kind",
-      request: "Request",
-      decision: "Decision",
-      reason: "Resolution reason",
-      source: "Source agent / session",
+      source: "Source",
+      session: "Session",
       resolver: "Resolver",
+      reason: "Reason",
     },
     kinds: {
       exec: "Exec",
@@ -151,7 +146,6 @@ const enApprovals = {
     decisions: {
       allowOnce: "Allow once",
       allowAlways: "Always allow",
-      deny: "Deny",
     },
     reasons: {
       user: "User decision",

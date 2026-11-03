@@ -55,6 +55,12 @@ export async function dispatchCapturedChatSlashCommand(
         return "failed";
       }
       return (await host.createChatSession()) ? "completed" : "cancelled";
+    case "fork":
+      if (!host.forkChatSession) {
+        setChatError(host, "Fork conversation is unavailable.");
+        return "failed";
+      }
+      return host.forkChatSession(args.trim() || undefined);
     case "clear": {
       if (!requireChatSessionAction(host, "reset")) {
         return "failed";

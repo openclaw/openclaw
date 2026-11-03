@@ -70,7 +70,7 @@ suite.define(() => {
         await waitForControlUiSettingsTakeover(page);
         const section = page.locator("#settings-appearance-sidebar");
         const warning = section.getByText("Explicit model catalog unavailable", { exact: true });
-        await section.getByRole("heading", { name: "Session observer" }).waitFor();
+        await section.getByText("Session observer", { exact: true }).waitFor();
         const picker = section.locator("openclaw-select-picker.model-picker__select");
         await picker.waitFor();
         await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(1);

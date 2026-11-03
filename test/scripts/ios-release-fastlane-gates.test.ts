@@ -1037,6 +1037,10 @@ end
 def normalize_watch_screenshot_status_bar(*); end
 def sleep(seconds)
   return if seconds == 3
+  if @scenario.start_with?("unavailable-staged") && seconds == 2
+    $runtime_clock += seconds
+    return
+  end
   @observations << {
     seconds: seconds,
     phase: File.read(ENV.fetch("OPENCLAW_IOS_RESOURCE_PHASE_PATH")),
@@ -1058,7 +1062,7 @@ module Process
   class << self
     alias real_clock_gettime clock_gettime
     def clock_gettime(clock)
-      ($screenshot_scenario.start_with?("watch-") || $screenshot_scenario == "runtime-delete-recovered") ? $runtime_clock : real_clock_gettime(clock)
+      ($screenshot_scenario.start_with?("watch-", "unavailable-staged") || $screenshot_scenario == "runtime-delete-recovered") ? $runtime_clock : real_clock_gettime(clock)
     end
   end
 end
@@ -1187,17 +1191,27 @@ def sh(command, *arguments, **options)
   elsif args[0, 3] == ["xcrun", "simctl", "delete"]
     @owned.delete(args[3])
   elsif args == ["xcrun", "simctl", "runtime", "list", "-j"]
-    return "{}" if %w[unavailable-empty unavailable-staged].include?(@scenario) && !$watch_restored
+    return "{}" if @scenario == "unavailable-empty" && !$watch_restored
+    if @scenario.start_with?("unavailable-staged") && @runtime_scanned && @runtime_deletes == 1 &&
+      (!@runtime_scan_observed || @scenario.end_with?("rescan-timeout"))
+      @runtime_scan_observed = true
+      return "{}"
+    end
     watch_image = @runtime_scanned ? "watch-image-rescanned" : "watch-image"
     images = {
-      watch_image => { "identifier" => watch_image, "runtimeIdentifier" => "com.apple.CoreSimulator.SimRuntime.watchOS-27-0", "state" => "Ready", "runtimeBundlePath" => File.join(@root, "watch-runtime") },
+      watch_image => { "identifier" => watch_image, "runtimeIdentifier" => "com.apple.CoreSimulator.SimRuntime.watchOS-27-0", "state" => "Ready", "runtimeBundlePath" => File.join(@root, "watch-runtime"), "path" => File.join(@root, "asset") },
       "phone-image" => { "identifier" => "phone-image", "runtimeIdentifier" => "com.apple.CoreSimulator.SimRuntime.iOS-27-0", "state" => "Ready", "runtimeBundlePath" => File.join(@root, "phone-runtime") }
     }
     if @scenario == "runtime-delete-recovered" && $watch_deleted_partial && !$watch_restored
       images.fetch(watch_image).merge!("state" => "Unusable", "runtimeBundlePath" => "/fixture/missing")
     end
     if $staging_scenario
-      images.fetch(watch_image).merge!("signatureState" => $watch_staged && @scenario != "watch-staging-unverified" ? "Verified" : "Unknown")
+      images.fetch(watch_image).merge!(
+        "signatureState" => $watch_staged && @scenario != "watch-staging-unverified" ? "Verified" : "Unknown",
+        "kind" => $watch_staged ? "Disk Image" : "Patchable Cryptex Disk Image",
+        "path" => File.join(@root, "asset"),
+        "mountPath" => "/Library/Developer/CoreSimulator/Volumes/watchOS_fixture")
+      images.fetch(watch_image)["runtimeBundlePath"] = "/fixture/missing" if @scenario.start_with?("unavailable-") && !$watch_staged
     end
     if %w[unavailable-deleting unavailable-ambiguous].include?(@scenario)
       images["watch-other"] = {
@@ -1210,12 +1224,12 @@ def sh(command, *arguments, **options)
     raise "wrong runtime image deleted" unless args[4] == (@runtime_scanned ? "watch-image-rescanned" : "watch-image")
     @runtime_deletes += 1
     deletion_error = "runtime deletion denied" if @scenario == "runtime-delete-unrelated"
-    partial_delete = %w[runtime-delete-recovered runtime-delete-repeated runtime-scan-failure].include?(@scenario)
+    partial_delete = %w[runtime-delete-recovered runtime-delete-repeated runtime-scan-failure].include?(@scenario) || @scenario.start_with?("unavailable-staged")
     if partial_delete && (@runtime_deletes == 1 || @scenario == "runtime-delete-repeated")
       $watch_deleted_partial = true
       deletion_error = "An error was encountered processing the command (domain=com.apple.CoreSimulator.simdiskimaged.SimDiskImageError, code=30): Removed the runtime, but did not reclaim its MobileAsset: /fixture/#{"segment/" * 100}runtime.asset/AssetData/"
     end
-    if $staging_scenario && @scenario != "watch-staging-retained"
+    if $staging_scenario && @scenario != "watch-staging-retained" && !deletion_error
       FileUtils.rm_rf(File.join(@root, "asset"))
       $source_retired = true
     end
@@ -1234,6 +1248,7 @@ def sh(command, *arguments, **options)
     raise "runtime staging rejected" if @scenario == "watch-staging-rejected"
     raise "wrong staged package" unless File.read(args.last) == "signed runtime fixture"
     $watch_staged = true
+    $watch_restored = true
     FileUtils.mkdir_p(File.join(@root, "watch-runtime"))
   elsif args[0, 2] == ["/bin/cp", "-c"]
     FileUtils.cp(args[2], args[3])
@@ -1243,8 +1258,13 @@ def sh(command, *arguments, **options)
   elsif args == ["xcrun", "--sdk", "watchsimulator", "--show-sdk-version"]
     return "27.0"
   elsif args[0, 2] == ["xcodebuild", "-downloadPlatform"]
+    raise "redownload attempted before Watch asset retirement" if @scenario.start_with?("unavailable-staged")
     raise "watchOS download unavailable" if %w[runtime-download-failure unavailable-download-failure].include?(@scenario)
     $watch_restored = true
+    if @scenario == "unavailable-package-missing"
+      FileUtils.mkdir_p(File.join(@root, "asset", "Restore"))
+      File.write(File.join(@root, "asset", "Restore", "runtime.dmg"), "signed runtime fixture")
+    end
     FileUtils.mkdir_p(File.join(@root, "watch-runtime")) unless @scenario == "runtime-path-missing"
   elsif args.include?("xcodebuild") && args.include?("build")
     @builds << "watch"
@@ -1258,21 +1278,21 @@ def sh(command, *arguments, **options)
   end
 end
 
-results = %w[combined watch-unrelated-runtime watch-staging watch-staging-retained watch-staging-rejected watch-staging-unverified watch-staging-ambiguous unavailable-staged watch-maintenance watch-runtime-missing diagnostics startup-probe startup-probe-ended iphone standalone standalone-build-failure missing invalid-plist invalid-install build-failure busy boot-failure boot-ended watch-headroom-timeout capture-failure capture-cleanup-failure cleanup-failure runtime-recovered runtime-delete-recovered runtime-delete-repeated runtime-delete-unrelated runtime-scan-failure runtime-download-failure runtime-path-missing runtime-retry-failure runtime-unrelated runtime-local unavailable-recovered unavailable-empty unavailable-deleting unavailable-ambiguous unavailable-download-failure unavailable-still-missing unavailable-create-failure unavailable-local inventory-failure inventory-invalid watch-boot-failure watch-cleanup-failure].map do |scenario|
+results = %w[combined watch-unrelated-runtime watch-staging watch-staging-retained watch-staging-rejected watch-staging-unverified watch-staging-ambiguous unavailable-staged unavailable-staged-rescan-timeout unavailable-package-missing watch-maintenance watch-runtime-missing diagnostics startup-probe startup-probe-ended iphone standalone standalone-build-failure missing invalid-plist invalid-install build-failure busy boot-failure boot-ended watch-headroom-timeout capture-failure capture-cleanup-failure cleanup-failure runtime-recovered runtime-delete-recovered runtime-delete-repeated runtime-delete-unrelated runtime-scan-failure runtime-download-failure runtime-path-missing runtime-retry-failure runtime-unrelated runtime-local unavailable-recovered unavailable-empty unavailable-deleting unavailable-ambiguous unavailable-download-failure unavailable-still-missing unavailable-create-failure unavailable-local inventory-failure inventory-invalid watch-boot-failure watch-cleanup-failure].map do |scenario|
   Dir.mktmpdir("openclaw-watch-build-") do |root|
     @root, @scenario, @builds, @commands, @installed = root, scenario, [], [], nil
     @owned, @created = {}, 0
     @admissions = []
     @observations, @captures = [], 0
     @watch_creates = 0
-    @runtime_deletes, @runtime_scanned = 0, false
+    @runtime_deletes, @runtime_scanned, @runtime_scan_observed = 0, false, false
     $screenshot_scenario, $watch_restored, $watch_deleted_partial = scenario, false, false
     $screenshot_root = root
-    $staging_scenario = scenario.start_with?("watch-staging") || scenario == "unavailable-staged"
+    $staging_scenario = scenario.start_with?("watch-staging", "unavailable-staged") || scenario == "unavailable-package-missing"
     $watch_staged, $source_retired = false, false
     if $staging_scenario
       FileUtils.mkdir_p(File.join(root, "asset", "Restore"))
-      File.write(File.join(root, "asset", "Restore", "runtime.dmg"), "signed runtime fixture")
+      File.write(File.join(root, "asset", "Restore", "runtime.dmg"), "signed runtime fixture") unless scenario == "unavailable-package-missing"
       File.write(File.join(root, "asset", "Restore", "extra.dmg"), "ambiguous") if scenario == "watch-staging-ambiguous"
     end
     $runtime_maintenance_pending = scenario == "watch-maintenance"
@@ -1581,10 +1601,16 @@ puts JSON.generate(results)
       watchCreates: 1,
       repairCommands: [],
     });
-    for (const scenario of ["watch-staging", "unavailable-staged", "watch-unrelated-runtime"]) {
+    for (const scenario of [
+      "watch-staging",
+      "unavailable-staged",
+      "unavailable-package-missing",
+      "watch-unrelated-runtime",
+    ]) {
       expect(row(scenario), scenario).toMatchObject({ error: null, pngs: 9, watchCreates: 1 });
     }
     for (const [scenario, error] of [
+      ["unavailable-staged-rescan-timeout", "did not re-register before runtime repair"],
       ["watch-staging-retained", "old MobileAsset was not reclaimed"],
       ["watch-staging-rejected", "runtime staging rejected"],
       ["watch-staging-unverified", "did not restore a mounted runtime"],
@@ -1596,6 +1622,7 @@ puts JSON.generate(results)
     expect(row("runtime-recovered")).toMatchObject({ error: null, pngs: 9, watchCreates: 2 });
     expect(row("runtime-recovered").repairCommands).toEqual([
       ["xcrun", "simctl", "runtime", "list", "-j"],
+      ["xcrun", "simctl", "runtime", "list", "-j"],
       ["xcrun", "simctl", "runtime", "delete", "watch-image"],
       ["xcodebuild", "-downloadPlatform", "watchOS", "-buildVersion", "27.0"],
       ["xcrun", "simctl", "runtime", "list", "-j"],
@@ -1606,6 +1633,7 @@ puts JSON.generate(results)
       watchCreates: 2,
     });
     const partialDeleteRecovery = [
+      ["xcrun", "simctl", "runtime", "list", "-j"],
       ["xcrun", "simctl", "runtime", "list", "-j"],
       ["xcrun", "simctl", "runtime", "delete", "watch-image"],
       ["xcrun", "simctl", "runtime", "scan-and-mount"],
@@ -1621,10 +1649,10 @@ puts JSON.generate(results)
     expect(row("runtime-delete-repeated").repairCommands).toEqual(partialDeleteRecovery);
     expect(row("runtime-delete-unrelated").error).toContain("runtime deletion denied");
     expect(row("runtime-delete-unrelated").repairCommands).toEqual(
-      partialDeleteRecovery.slice(0, 2),
+      partialDeleteRecovery.slice(0, 3),
     );
     expect(row("runtime-scan-failure").error).toBe("runtime scan unavailable");
-    expect(row("runtime-scan-failure").repairCommands).toEqual(partialDeleteRecovery.slice(0, 3));
+    expect(row("runtime-scan-failure").repairCommands).toEqual(partialDeleteRecovery.slice(0, 4));
     for (const scenario of [
       "runtime-delete-repeated",
       "runtime-delete-unrelated",

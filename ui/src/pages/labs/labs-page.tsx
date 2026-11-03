@@ -264,8 +264,7 @@ export function LabsPage() {
             title={props.feature.title()}
             description={
               <>
-                {props.feature.description()}
-                <br />
+                {props.feature.description()}{" "}
                 <span role="status">
                   {t(
                     config.read().state.configLoading
@@ -273,14 +272,16 @@ export function LabsPage() {
                       : "labsPage.decisionAssistance.unavailable",
                   )}
                 </span>
-                <button
-                  class="btn btn--sm"
-                  disabled={!config.read().state.connected || config.read().state.configLoading}
-                  onClick={() => void context.runtimeConfig.refresh()}
-                >
-                  {t("labsPage.decisionAssistance.refresh")}
-                </button>
               </>
+            }
+            control={
+              <button
+                class="btn btn--sm"
+                disabled={!config.read().state.connected || config.read().state.configLoading}
+                onClick={() => void context.runtimeConfig.refresh()}
+              >
+                {t("labsPage.decisionAssistance.refresh")}
+              </button>
             }
           />
         ) : (
@@ -317,16 +318,6 @@ export function LabsPage() {
                 >
                   {t("labsPage.documentation")}
                 </a>
-                {featureState().overridden ? (
-                  <>
-                    <br />
-                    {t("configForm.defaultValue", {
-                      value: featureState().defaultEnabled
-                        ? t("common.enabled")
-                        : t("common.disabled"),
-                    })}
-                  </>
-                ) : null}
               </>
             }
           />

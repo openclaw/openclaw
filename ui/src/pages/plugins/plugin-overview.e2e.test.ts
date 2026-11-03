@@ -402,9 +402,9 @@ describeControlUiE2e("Plugin overview", () => {
     expect(await content(".plugin-metadata__repository")).toContain("Acme/calendar");
     expect(await content(".plugin-catalog-detail__readme")).toContain("README_TAIL");
     expect(await page.locator(".plugin-capabilities h2").allTextContents()).toEqual([
-      "Skills1",
-      "Tools2",
-      "MCP Server1",
+      "Skills",
+      "Tools",
+      "MCP Server",
     ]);
     await page.getByRole("button", { name: /calendar_search/ }).click();
     await page.getByRole("dialog", { name: "calendar_search" }).waitFor();
@@ -424,6 +424,15 @@ describeControlUiE2e("Plugin overview", () => {
     expect(modalBounds!.height).toBeLessThanOrEqual(804);
     await captureScreenshot(page, "overview-tool-mobile.png", "viewport");
     const body = page.locator(".plugin-tool-preview__body");
+    // Inputs lead, so a long description never pushes them out of the first view.
+    expect(
+      await body.evaluate(
+        (element) =>
+          element.scrollTop === 0 &&
+          element.querySelector(".plugin-tool-preview__parameters")!.getBoundingClientRect()
+            .bottom <= element.getBoundingClientRect().bottom,
+      ),
+    ).toBe(true);
     await body.evaluate((element) => {
       element.scrollTop = element.scrollHeight;
     });
