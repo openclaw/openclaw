@@ -26,32 +26,23 @@ export function projectDetailsSubagents(rows: readonly DetailsSubagent[], mobile
     ]
       .slice(0, rows.length > (mobile ? 3 : 5) ? 4 : 5)
       .map(({ key, label, status }) => ({ key, label, status })),
-    counts: projectSummaryCounts(rows),
+    // At most two statuses: Working beside the avatars, then Queued or Done. Waiting parents
+    // count as working; failed and stopped runs count as done because agents retry around them.
+    counts: (["running", "queued", "done"] as const)
+      .map((status) => ({
+        status,
+        count: rows.filter(
+          (row) =>
+            (isDetailsSubagentWorking(row)
+              ? "running"
+              : row.status === "queued"
+                ? "queued"
+                : "done") === status,
+        ).length,
+      }))
+      .filter((entry) => entry.count > 0)
+      .slice(0, 2),
   };
-}
-
-/**
- * The summary shows at most two statuses: the first beside the avatars, the
- * second trailing. Waiting parents count as working. Failed and stopped runs
- * count as done; agents usually retry around them, so they get no own status.
- */
-function projectSummaryCounts(rows: readonly DetailsSubagent[]) {
-  const count = (matches: (row: DetailsSubagent) => boolean) => rows.filter(matches).length;
-  const working = { status: "running" as const, count: count(isDetailsSubagentWorking) };
-  const queued = { status: "queued" as const, count: count((row) => row.status === "queued") };
-  const done = {
-    status: "done" as const,
-    count: count(
-      (row) => row.status === "done" || row.status === "failed" || row.status === "stopped",
-    ),
-  };
-  const primary = [working, queued, done].find((entry) => entry.count > 0);
-  if (!primary) {
-    return [];
-  }
-  const secondary =
-    primary === working ? (queued.count > 0 ? queued : done) : primary === queued ? done : null;
-  return secondary?.count ? [primary, secondary] : [primary];
 }
 
 /** Display receipts share the transcript's scope and incarnation, never live read authority. */
