@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { runManagedCommand } from "../lib/managed-child-process.mts";
+import { hasUnjoinedWork, runManagedCommand } from "../lib/managed-child-process.mts";
 
 // This fixture needs the disposable native CI account, not an operator desktop.
 assert.equal(process.platform, "darwin");
@@ -520,7 +520,11 @@ try {
       // A failed scenario must not hide independent cases, but failed cleanup
       // means the disposable account is no longer qualified for another case.
       const result = results.at(-1);
-      if (result?.name !== scenario.name || result.cleanupSucceeded !== true) {
+      if (
+        hasUnjoinedWork(error) ||
+        result?.name !== scenario.name ||
+        result.cleanupSucceeded !== true
+      ) {
         throw error;
       }
       scenarioFailures.push(error);
