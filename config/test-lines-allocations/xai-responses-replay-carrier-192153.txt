@@ -1,0 +1,2 @@
+# Cover the xAI Responses replay carrier: family passthrough, all three Responses API ids, completions unchanged, and the plugin-entry wiring.
+67

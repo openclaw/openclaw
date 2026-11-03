@@ -11,6 +11,11 @@ const RESPONSES_FAMILY_APIS = new Set([
 
 type ReplayPolicyBuilder = (ctx: ProviderReplayPolicyContext) => ProviderReplayPolicy | undefined;
 
+/** Family hooks may return null for unsupported APIs; the provider hook type does not. */
+type BaseReplayPolicyBuilder = (
+  ctx: ProviderReplayPolicyContext,
+) => ProviderReplayPolicy | null | undefined;
+
 /**
  * Keeps the per-turn runtime context in place for Responses endpoints.
  *
@@ -18,9 +23,11 @@ type ReplayPolicyBuilder = (ctx: ProviderReplayPolicyContext) => ProviderReplayP
  * Removing the previous turn's runtime-context carrier on every new user turn breaks that, so
  * the first call of each turn missed the cache while in-turn tool follow-ups hit it.
  */
-export function buildXaiReplayPolicy(base: ReplayPolicyBuilder | undefined): ReplayPolicyBuilder {
+export function buildXaiReplayPolicy(
+  base: BaseReplayPolicyBuilder | undefined,
+): ReplayPolicyBuilder {
   return (ctx) => {
-    const policy = base?.(ctx);
+    const policy = base?.(ctx) ?? undefined;
     if (!policy || !RESPONSES_FAMILY_APIS.has(ctx.modelApi ?? "")) {
       return policy;
     }
