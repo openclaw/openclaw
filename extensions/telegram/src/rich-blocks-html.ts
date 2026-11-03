@@ -271,7 +271,7 @@ export function htmlNodesToRichText(
         type: "date_time",
         text,
         unix_time: unixTime,
-        // The shared pattern admits only Bot API date-time formats.
+        // SAFETY: The shared pattern admits only Bot API date-time formats.
         date_time_format: (match[2] ?? "") as RichTextDateTimeFormat,
       });
     }
