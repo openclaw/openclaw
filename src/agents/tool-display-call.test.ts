@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { unwrapToolCallForDisplay } from "./tool-display-call.js";
+import { stripOpenClawMcpToolPrefix, unwrapToolCallForDisplay } from "./tool-display-call.js";
+
+describe("stripOpenClawMcpToolPrefix", () => {
+  it("strips only the loopback transport prefix", () => {
+    expect(stripOpenClawMcpToolPrefix("mcp__openclaw__memory_search")).toBe("memory_search");
+    expect(stripOpenClawMcpToolPrefix("mcp_openclaw_memory_search")).toBe("memory_search");
+    expect(stripOpenClawMcpToolPrefix("memory_search")).toBe("memory_search");
+    expect(stripOpenClawMcpToolPrefix("mcp__other__tool")).toBe("mcp__other__tool");
+    expect(stripOpenClawMcpToolPrefix("mcp_other_tool")).toBe("mcp_other_tool");
+  });
+});
 
 describe("Tool Search display input", () => {
   it.each(
@@ -34,6 +44,19 @@ describe("Tool Search display input", () => {
       expect(unwrapToolCallForDisplay(call)).toBe(call);
     },
   );
+
+  it("presents OpenClaw tools bridged over MCP and keeps other MCP servers' names", () => {
+    const args = { command: "pnpm test", workdir: "/workspace" };
+    expect(unwrapToolCallForDisplay({ name: "mcp__openclaw__exec", args })).toEqual({
+      name: "exec",
+      args,
+    });
+    expect(
+      unwrapToolCallForDisplay({ name: "mcp__openclaw__tool_call", args: { id: "read", args } }),
+    ).toEqual({ name: "read", args });
+    const other = { name: "mcp__other__browser", args };
+    expect(unwrapToolCallForDisplay(other)).toBe(other);
+  });
 
   it.each([undefined, null, [], "input", 3, new Date(0)])(
     "discards non-object inner input %j",
