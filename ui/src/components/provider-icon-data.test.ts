@@ -3,6 +3,7 @@ import {
   compareCloudProfiles,
   hasProviderBrandIcon,
   providerDisplayLabel,
+  resolveProviderIconName,
 } from "./provider-icon-data.ts";
 
 describe("model provider labels", () => {
@@ -11,12 +12,18 @@ describe("model provider labels", () => {
     ["__proto__", "Proto"],
     ["openai", "OpenAI"],
     ["xai", "xAI"],
+    ["llama-app", "Llama"],
     ["acp-opencode", "OpenCode (ACP)"],
     ["acp-qwen", "Qwen Code (ACP)"],
     ["acp-pi", "Pi (ACP)"],
     ["acp-copilot", "GitHub Copilot CLI"],
   ])("renders provider %s as display text", (provider, label) => {
     expect(providerDisplayLabel(provider)).toBe(label);
+  });
+
+  it("keeps Llama.app distinct from llama.cpp artwork", () => {
+    expect(resolveProviderIconName("llama-app")).toBe("llama");
+    expect(resolveProviderIconName("llama-cpp")).toBe("llamacpp");
   });
 
   it("gives ACP harness groups their agent's brand mark", () => {
