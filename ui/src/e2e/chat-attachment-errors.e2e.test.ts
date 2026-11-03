@@ -64,8 +64,8 @@ suite.define(() => {
             "File too large. Try a smaller file.",
           );
           await expectToastPosition(toast, viewport);
-          expect(await toast.getAttribute("role")).toBe("status");
-          expect(await toast.getAttribute("aria-live")).toBe("polite");
+          expect(await toast.getAttribute("role")).toBe("alert");
+          expect(await toast.getAttribute("aria-live")).toBe("assertive");
           expect(await composer.inputValue()).toBe("");
           expect(await page.locator(".chat-attachment-thumb").count()).toBe(0);
           expect(await page.locator(".chat-attachment-failures").count()).toBe(0);
