@@ -26,6 +26,7 @@ import { captureSessionActorStorageOwner } from "../config/sessions/session-acto
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { prepareSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { loadSessionTranscriptEvents } from "../config/sessions/session-transcript-events.js";
+import { withSessionTranscriptHydrationCaller } from "../config/sessions/session-transcript-hydration-caller.js";
 import { streamSessionTranscriptLines } from "../config/sessions/transcript-stream.js";
 import { selectVisibleTranscriptEvents } from "../config/sessions/transcript-visible-events.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -152,16 +153,6 @@ export async function loadSessionCostSummary(params: {
   }
   const { sessionFile } = source;
   const prepared = prepareUsageCostWorker({ ...params, sessionFiles: [sessionFile] });
-  const inventory = await runUsageCostWorker(prepared, {
-    kind: "inventory",
-    sessionFiles: [sessionFile],
-  });
-  if (inventory.kind !== "inventory") {
-    throw new Error("Usage worker returned an invalid session inventory");
-  }
-  if (inventory.files.length === 0) {
-    return null;
-  }
   const result = await runUsageReportAfterRefresh(prepared, params, () =>
     loadCapturedSessionCostSummariesFromCache(
       {
@@ -417,7 +408,9 @@ async function* readTranscriptRecords(
           },
         )) ?? [];
     } else {
-      events = await loadSessionTranscriptEvents(marker);
+      events = await withSessionTranscriptHydrationCaller("usage-diagnostic", () =>
+        loadSessionTranscriptEvents(marker),
+      );
     }
     const records = events.filter(isRecord);
     const visible = selectVisibleTranscriptEvents(records);

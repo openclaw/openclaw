@@ -211,7 +211,7 @@ suite.define(() => {
       await page
         .locator(".chat-group.assistant .chat-text", { hasText: "The delivery notes are ready." })
         .waitFor();
-      await page.getByRole("button", { name: "Stop generating", exact: true }).waitFor({
+      await page.getByRole("button", { name: "Stop", exact: true }).waitFor({
         state: "hidden",
       });
       expect(await composer.inputValue()).toBe("Keep the examples ready for review.");

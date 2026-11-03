@@ -54,6 +54,13 @@ decoded rows even when a caller retains the inactive handle. Predicate compariso
 baselines last only until release; a late acknowledgement cannot restore them.
 Active authorities retain their existing publication and final-effect checks.
 
+Prepared entry-only session guards consume the retained database admission's
+identity and live publication instead of polling its path. Source preparation
+still validates aliases and physical replacement before a guarded write. Missing
+stores and cross-store conversation guards retain their existing discovery checks.
+Profile authority readers retain shared-cell views, never a cached allow decision;
+each use checks the exact lifetime, generation, and mutation publication.
+
 Host file writes prepare retained session-generation authority at their final
 effect boundary, after overwrite rollback capture. The existing session worker
 validates physical sources and refreshes facts after committed native mutations;
@@ -91,6 +98,11 @@ Actor-backed session managers serialize append preparation and committed view
 adoption on their manager queue. Only each actor storage command reserves the
 agent database writer, so unrelated sessions can write between commands. Native
 maintenance and unbound SDK managers retain their existing storage admission.
+Durable actor acquisition prepares cold storage through that writer and transfers
+the retained execution into the actor. Attempt and pending-input callers consume
+its admitted physical identity instead of resolving the pathname again. Warm
+write reservations retain the schema-admitted generation through settlement;
+unknown files and unhosted workers keep their physical admission checks.
 Slow direct-reservation warnings label session-manager, actor-command, and selected
 history-read callers. The `openclaw.agent-database.reservation` diagnostic channel
 publishes holder timing without paths, session identities, or message content.
@@ -174,13 +186,15 @@ still refuses dispatch. The task retains its admission turn through the identity
 check and rechecks live authority after that wait; no successful check is cached
 across requests.
 
-Local workspace reconciliation releases the shared state reader after capturing
-its database snapshot. Immutable record JSON crosses the worker boundary without
-first expanding a tree in the shared reader. The computation pool decodes it once
-and releases the transferred text before scanning files. The existing pool
-prepares manifest results from that compressed snapshot; the Gateway forwards it
-without expanding the tree. The reconciliation lease still checks authority before
-accepting results, and the state writer retains atomic manifest publication.
+Local workspace reconciliation asks its computation worker to prepare the read.
+Each worker retains one decoded baseline tree, scoped to the physical database and
+worktree. The shared state reader always checks the current projection revision
+and reads live metadata; it omits immutable records when the worker already holds
+the committed tree root. A different root or worker reloads the compressed records.
+Scans still observe live files, and their resulting tree can serve the next accepted
+revision. Failed computation drops the retained tree; repair reads never reuse it.
+The Gateway forwards snapshots without expanding them. Filesystem discovery stays
+off shared readers, and reconciliation custody and atomic publication are unchanged.
 
 Long-lived Gateway and local TUI processes reuse the shared-state reader pool for
 early awaited configuration and plugin metadata reads. Standalone CLI inspection
@@ -336,6 +350,14 @@ Ordinary auth helpers supply a native read-only opener to the auth reader pool.
 The artifact-preserving opener is imported on demand for inspection reads, keeping
 parent-side snapshot orchestration out of ordinary auth loading. Handle admission,
 reuse, and retirement remain owned by the pool.
+
+Artifact-preserving SQLite inspection snapshots copy bytes without reflinks or
+copy offload. Cloning a live database can hold its source inode lock and add
+shared extents that make later writes more expensive. Both inspection copy
+drivers retain their source-identity, coherence, private-recovery, and cleanup
+checks. Byte copying still incurs full-image I/O and temporary disk usage; it
+does not repair existing fragmentation. Verified offline snapshot publication
+retains its clone-first transfer and byte-copy space admission.
 
 Generic scoped SQLite reads share at most four process slots, matched by captured
 runtime generation, environment, working directory, and spawn-broker owner.

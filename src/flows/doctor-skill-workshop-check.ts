@@ -13,16 +13,17 @@ export const skillWorkshopToolPolicyCheck: Omit<DoctorHealthCheck, "kind" | "sou
   async detect(ctx) {
     const workshopEnabled = resolveSkillWorkshopConfig(ctx.cfg).autonomous.mode !== "off";
     const listedAgentIds = listAgentIds(ctx.cfg);
-    const diagnostics = (listedAgentIds.length > 0 ? listedAgentIds : [undefined]).flatMap(
-      (agentId) => {
-        const diagnostic = detectSkillWorkshopToolPolicyDiagnostic({
-          config: ctx.cfg,
-          workshopEnabled,
-          ...(agentId ? { agentId } : {}),
-        });
-        return diagnostic ? [diagnostic] : [];
-      },
-    );
+    const diagnostics = (
+      await Promise.all(
+        (listedAgentIds.length > 0 ? listedAgentIds : [undefined]).map((agentId) =>
+          detectSkillWorkshopToolPolicyDiagnostic({
+            config: ctx.cfg,
+            workshopEnabled,
+            ...(agentId ? { agentId } : {}),
+          }),
+        ),
+      )
+    ).filter((diagnostic) => diagnostic !== null);
     // Learned skills load through the skill-workshop plugin; these switches keep it off.
     const plugins = ctx.cfg.plugins;
     const allowlistExcludes =

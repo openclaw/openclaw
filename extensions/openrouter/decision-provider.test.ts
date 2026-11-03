@@ -52,7 +52,7 @@ function context(config: Config = {}): DecisionProviderContextV2 {
     config,
     auth: { apiKey: "synthetic-prepared-token", mode: "api-key", profileId: "openrouter:fixture" },
     signal: new AbortController().signal,
-    deadlineMonotonicMs: performance.now() + 5000,
+    deadlineMonotonicMs: Number.POSITIVE_INFINITY,
     isAdmissible: () => true,
   };
 }

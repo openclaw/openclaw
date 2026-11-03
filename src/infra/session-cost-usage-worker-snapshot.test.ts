@@ -150,7 +150,11 @@ function execute(
       operation,
     },
     { consumeInput() {}, notify() {}, request },
-    { runNativeSection: async (run) => run(), throwIfCancelled() {} },
+    {
+      signal: new AbortController().signal,
+      runNativeSection: async (run) => run(),
+      throwIfCancelled() {},
+    },
     async (_database, read) => read(),
   );
 }

@@ -289,14 +289,17 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
       resultBundle("OpenClawLifecycleTests"),
       "-only-testing:OpenClawTests/ChatComposerTextViewIOSTests",
     ]);
-    const authSelectors = selectors("OpenClawTests", [
+    const lifecycleSelectors = selectors("OpenClawTests", [
       "CloudflareAccessClientTests",
       "CloudflareAccessBrowserPresenterTests",
       "CloudflareAccessTransferTests",
       "CloudflareAccessSessionStoreTests",
       "GatewayConnectionSecurityTests",
+      "Security2AdvertisementTests",
+      "ESPSetupWireTests",
+      "ESPSetupSessionTests",
     ]);
-    expect(tests[0]?.args).toEqual(expect.arrayContaining(authSelectors));
+    expect(tests[0]?.args).toEqual(expect.arrayContaining(lifecycleSelectors));
     expect(commands.filter((command) => command.tool === "python3")).toHaveLength(1);
     if (phase === "smoke") {
       expect(commands.at(-1)).toEqual({
@@ -308,7 +311,7 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
       return;
     }
     expectArgs(tests[0]?.args, [
-      ...authSelectors,
+      ...lifecycleSelectors,
       "-only-testing:OpenClawLogicTests/WatchVoiceTurnTrackerTests",
       "-only-testing:OpenClawTests/NodeAppModelInvokeTests",
     ]);
@@ -400,6 +403,9 @@ it.skipIf(process.platform === "win32").each([
   { owner: "apps/ios/fastlane/Fastfile", groups: [] },
   { owner: "apps/ios/Tests/TalkModeConfigParsingTests.swift", groups: ["voice"] },
   { owner: "apps/ios/Tests/ChatSendHydrationTests.swift", groups: ["lifecycle"] },
+  { owner: "apps/ios/ThirdParty/ESPProvision/ESPProvision/ESPDevice.swift", groups: ["lifecycle"] },
+  { owner: "apps/ios/Tests/ESPSetupWireTests.swift", groups: ["lifecycle"] },
+  { owner: "apps/ios/Tests/ESPSetupSessionTests.swift", groups: ["lifecycle"] },
   {
     owner: "apps/shared/OpenClawKit/Tests/OpenClawKitTests/ChatComposerTextViewIOSTests.swift",
     groups: ["lifecycle"],
