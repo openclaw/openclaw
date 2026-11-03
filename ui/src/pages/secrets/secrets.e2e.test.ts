@@ -259,8 +259,8 @@ suite.define(() => {
         });
         const deletions = () => gateway.getRequests("secrets.store.delete");
         const entryRow = await rowAction(page, "SERVICE_URL", "delete");
-        const confirmation = modal(page, "Delete");
-        await confirmation.getByText("Delete SERVICE_URL?", { exact: true }).waitFor();
+        const confirmation = modal(page, "Delete SERVICE_URL?");
+        await confirmation.getByText("This can’t be undone.", { exact: true }).waitFor();
         const original = await gatewayIdentity(page);
         expect(original.clientInstanceId).toBeDefined();
         const listCount = (await gateway.getRequests("secrets.store.list")).length;
