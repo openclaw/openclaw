@@ -43,6 +43,13 @@ the descriptors after connecting. Tool calls return to that node through
 `mcp.tools.call.v1`; the Gateway does not need matching MCP config or a JS
 plugin. OAuth MCP servers are not supported by this node-hosted v1 path.
 
+A node-hosted tool can ask the user a question during a call. Enable
+`mcp.apps.enabled` on the node and Gateway and restart both. The Gateway shows
+the form or URL prompt in the session that called the tool. The node returns
+the answer to the MCP server and continues the original call. The node rejects
+a prompt if overlapping calls make its requester ambiguous. See [MCP Apps](/cli/mcp/apps)
+for the Gateway listener and reverse proxy settings.
+
 Current node hosts declare the built-in `mcp.tools.call.v1` command family during
 their initial pairing even when no MCP server is configured. A node paired on an
 older OpenClaw version may request a one-time command-surface upgrade after the
