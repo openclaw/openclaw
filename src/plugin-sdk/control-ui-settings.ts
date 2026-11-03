@@ -73,6 +73,13 @@ type ContributionSectionProps = {
 };
 type RowProps = { title: string; description?: Content; control?: Content };
 type ContributionRowProps = Omit<RowProps, "title"> & { title: Content };
+type DetailsRowProps = ContributionRowProps & {
+  detailsLabel: string;
+  hasDetails?: boolean;
+  content: HTMLElement;
+};
+type DisclosureProps = { title: Content; quiet?: boolean; content: HTMLElement };
+type SectionHelpProps = { id: string; section: string; content: HTMLElement };
 type StatusProps = { kind: "ok" | "warn" | "danger" | "accent" | "muted"; label: string };
 type ValueProps = { value: string | number; mono?: boolean };
 type NavProps = { title: string; onClick: () => void };
@@ -131,6 +138,19 @@ export type ControlUiSettingsComponentsV2 = Omit<
     container: HTMLElement,
     props: ContributionRowProps,
   ) => ControlUiComponentHandle<ContributionRowProps>;
+  /** Native disclosure state and overlays belong to the mounted Settings control. */
+  mountDetailsRow: (
+    container: HTMLElement,
+    props: DetailsRowProps,
+  ) => ControlUiComponentHandle<DetailsRowProps>;
+  mountDisclosure: (
+    container: HTMLElement,
+    props: DisclosureProps,
+  ) => ControlUiComponentHandle<DisclosureProps>;
+  mountSectionHelp: (
+    container: HTMLElement,
+    props: SectionHelpProps,
+  ) => ControlUiComponentHandle<SectionHelpProps>;
   mountSecretInput: (
     container: HTMLElement,
     props: SecretInputProps,

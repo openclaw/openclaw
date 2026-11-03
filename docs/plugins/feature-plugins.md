@@ -725,6 +725,7 @@ connection epoch, and config availability. Profile views do not remount just bec
 the selected Settings agent changes. Client, identity, permissions, route, or method
 catalog replacement retires authority; a same-client reconnect preserves drafts but
 rejects earlier replies. `request` accepts a cancellation signal.
+Native details rows, disclosures, and section-help mounts keep their open state and overlay cleanup in the host while plugins supply their content.
 
 Use `readConfig(path)` to read the existing config owner, and
 `runConfigMutation` to delegate serialization and refresh to that same owner. Its
