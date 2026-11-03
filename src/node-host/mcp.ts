@@ -8,13 +8,19 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import pLimit from "p-limit";
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/schema/nodes.js";
+import { assignSafeServerNames } from "../agents/agent-bundle-mcp-names.js";
 import { listAllMcpTools } from "../agents/mcp-catalog-listing.js";
-import { sanitizeMcpMetadataText } from "../agents/mcp-metadata.js";
+import {
+  isAppOnlyMcpTool,
+  readMcpToolUiMetadata,
+  sanitizeMcpMetadataText,
+  summarizeServerCapabilities,
+} from "../agents/mcp-metadata.js";
 import {
   McpSdkCompatibilityError,
   mcpCallToolResultSchema,
 } from "../agents/mcp-sdk-compatibility.js";
-import { createMcpToolFilter } from "../agents/mcp-tool-filter.js";
+import { createListedMcpToolFilter } from "../agents/mcp-tool-filter.js";
 import {
   normalizeMcpToolCatalog,
   type McpToolCatalogMetadata,
@@ -219,6 +225,9 @@ export async function startNodeHostMcpManager(
       },
     ]),
   );
+  const safeServerNames = assignSafeServerNames(
+    Object.keys(servers ?? {}).filter((name) => states.has(name)),
+  );
   let closed = false;
   let startupComplete = false;
 
@@ -290,19 +299,23 @@ export async function startNodeHostMcpManager(
     signal: AbortSignal,
     resetRetryDelay = false,
   ) => {
-    // Node-host tools use their own descriptor names, so filters stay raw-only here.
-    const isToolAllowed = createMcpToolFilter(state.config.toolFilter);
-    const normalized = await listAllMcpTools(session.client, session.requestTimeoutMs, signal).then(
-      (tools) =>
-        normalizeMcpToolCatalog(tools, createMcpJsonSchemaValidator(), (toolName) =>
-          isToolAllowed(toolName) ? "include" : "exclude",
-        ),
-    );
+    const tools = await listAllMcpTools(session.client, session.requestTimeoutMs, signal);
     if (closed || state.current !== session) {
       return;
     }
+    const isToolAllowed = createListedMcpToolFilter(
+      state.config.toolFilter,
+      safeServerNames.get(state.serverName) ?? state.serverName,
+      tools,
+      summarizeServerCapabilities(session.client.getServerCapabilities()),
+    );
+    const normalized = normalizeMcpToolCatalog(tools, createMcpJsonSchemaValidator(), (name) =>
+      isToolAllowed(name) ? "include" : "exclude",
+    );
     session.toolMetadata = normalized.metadata;
-    state.listedTools = normalized.tools;
+    state.listedTools = normalized.tools.filter(
+      (tool) => !isAppOnlyMcpTool(readMcpToolUiMetadata(tool)),
+    );
     if (resetRetryDelay) {
       state.retryDelayMs = NODE_MCP_RETRY_INITIAL_MS;
     }

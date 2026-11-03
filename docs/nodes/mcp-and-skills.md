@@ -51,6 +51,11 @@ require re-pairing because the approved command family is unchanged. Restart
 `openclaw node run` or `openclaw node restart` to apply node MCP config changes;
 the node host does not watch this config.
 
+The node publishes model-visible tools. A server can reserve a tool for its app
+by setting `_meta.ui.visibility` to `["app"]`. Server `toolFilter` entries use
+the same [raw names, probe aliases, and wildcard rules](/cli/mcp/registry) as
+Gateway-hosted servers.
+
 Server-advertised tool-list changes apply live and replace the published node
 catalog. If an MCP transport closes or an SSE or stateful Streamable HTTP session
 expires, the node withdraws that server's stale tools and reconnects with
