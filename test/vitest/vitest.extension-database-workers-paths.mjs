@@ -545,6 +545,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/zalouser/src/zalo-js.listener.test.ts",
   "extensions/zalouser/src/zalo-quote-metadata.test.ts",
   "extensions/imessage/src/approval-reactions.persistence.test.ts",
+  "extensions/imessage/src/chat-db.admission.test.ts",
   "extensions/imessage/src/send.sqlite.test.ts",
   "extensions/imessage/src/send.test.ts",
   "extensions/x/src/guest-usage.test.ts",

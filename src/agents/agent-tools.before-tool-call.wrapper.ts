@@ -94,6 +94,7 @@ import {
 } from "./tool-execution-error.js";
 import { buildToolMutationState } from "./tool-mutation.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
+import { createToolSkillUseRecorder } from "./tool-skill-use-scope.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
@@ -454,6 +455,7 @@ export function wrapToolWithBeforeToolCallHook(
       const eventBase = buildEventBase(executeParams);
       const recordProgress = captureDiagnosticToolProgress(eventBase);
       let liveness: ReturnType<typeof startToolExecutionLiveness> | undefined;
+      let skillUse: ReturnType<typeof createToolSkillUseRecorder> | undefined;
       const startedAt = Date.now();
       let completed = false;
       try {
@@ -476,7 +478,14 @@ export function wrapToolWithBeforeToolCallHook(
                 ctx?.watchdogAttempt,
               );
               recordAdjustedParamsForToolCall(toolCallId, executeParams, ctx?.runId);
-              return liveness.run(() => (execute as ForwardedToolExecution)(...args));
+              // Plugin-reported skill reads take this call's run facts, never caller input.
+              const skillUseScope = createToolSkillUseRecorder((match) =>
+                recordSkillUsed({ ctx, match, toolName: normalizedToolName, toolCallId }),
+              );
+              skillUse = skillUseScope;
+              return liveness.run(() =>
+                skillUseScope.run(() => (execute as ForwardedToolExecution)(...args)),
+              );
             });
           result = outcome.ownerDecision
             ? await invoke()
@@ -578,6 +587,7 @@ export function wrapToolWithBeforeToolCallHook(
         });
         throw err;
       } finally {
+        skillUse?.close();
         liveness?.close(completed);
       }
     },
