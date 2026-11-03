@@ -5,6 +5,7 @@ import type { ChannelsPairingAccount, ChannelsPairingRequest } from "../../api/t
 import { Picker } from "../../components/select-picker.ts";
 import "../../components/modal-dialog.tsx";
 import { ChannelPicker } from "../../components/solid/channel-picker.tsx";
+import { DialogHeader } from "../../components/solid/dialog-header.tsx";
 import {
   SettingsEmpty,
   SettingsLoadingSkeleton,
@@ -377,34 +378,42 @@ function PairingPromptContent(params: {
       label={dialogTitle()}
       onModal-cancel={() => params.props.onPairingPromptCancel()}
     >
-      <div class="channels-pairing-dialog">
-        <div class="settings-row__title">{dialogTitle()}</div>
-        <div class="settings-row__desc">
-          {request().senderId} · {request().channelLabel} · {accountName(request())} (
-          {request().accountId})
-        </div>
-        <div class={["callout", { info: approving(), warn: !approving() }]}>
-          {t(`channels.pairing.${params.prompt.kind}Explanation`)}
-        </div>
-        {params.props.channels.pairingError ? (
-          <div class="callout danger" role="alert">
-            {params.props.channels.pairingError}
+      <div class="oc-dialog channels-pairing-dialog">
+        <DialogHeader
+          title={dialogTitle()}
+          description={
+            <p>
+              {request().senderId} · {request().channelLabel} · {accountName(request())} (
+              {request().accountId})
+            </p>
+          }
+          closeDisabled={busy()}
+          onClose={() => params.props.onPairingPromptCancel()}
+        />
+        <div class="oc-dialog__body">
+          <div class={["callout", { info: approving(), warn: !approving() }]}>
+            {t(`channels.pairing.${params.prompt.kind}Explanation`)}
           </div>
-        ) : undefined}
-        <PairingReadFeedback channels={params.props.channels} prompt />
-        {approving() && request().notifySupported
-          ? option("notify", t("channels.pairing.notifyRequester"))
-          : undefined}
-        {approving() && ownerMissing() && params.props.canAdmin ? (
-          <>
-            {option("bootstrapCommandOwner", t("channels.pairing.makeCommandOwner"))}
-            <div class="settings-row__desc">{t("channels.pairing.commandOwnerHelp")}</div>
-          </>
-        ) : undefined}
-        {approving() && ownerMissing() && !params.props.canAdmin ? (
-          <div class="callout warn">{t("channels.pairing.commandOwnerNeedsAdmin")}</div>
-        ) : undefined}
-        <openclaw-modal-actions class="channels-pairing-dialog__actions">
+          {params.props.channels.pairingError ? (
+            <div class="callout danger" role="alert">
+              {params.props.channels.pairingError}
+            </div>
+          ) : undefined}
+          <PairingReadFeedback channels={params.props.channels} prompt />
+          {approving() && request().notifySupported
+            ? option("notify", t("channels.pairing.notifyRequester"))
+            : undefined}
+          {approving() && ownerMissing() && params.props.canAdmin ? (
+            <>
+              {option("bootstrapCommandOwner", t("channels.pairing.makeCommandOwner"))}
+              <div class="settings-row__desc">{t("channels.pairing.commandOwnerHelp")}</div>
+            </>
+          ) : undefined}
+          {approving() && ownerMissing() && !params.props.canAdmin ? (
+            <div class="callout warn">{t("channels.pairing.commandOwnerNeedsAdmin")}</div>
+          ) : undefined}
+        </div>
+        <openclaw-modal-actions class="oc-dialog__footer">
           <button
             type="button"
             class="btn"

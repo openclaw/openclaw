@@ -222,13 +222,6 @@
   line-height: 1.5;
 }
 
-.channels-pairing-dialog {
-  display: grid;
-  width: min(520px, calc(100vw - 48px));
-  gap: var(--space-3);
-  padding: var(--overlay-modal-padding);
-}
-
 .channels-pairing-dialog__option {
   display: flex;
   align-items: flex-start;

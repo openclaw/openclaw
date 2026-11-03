@@ -271,7 +271,7 @@ function LibraryEditor(props: { library: SkillLibraryModel }) {
       editor={{ title: entry()?.slug ?? t("skillLibrary.create"), disabled: disabled() }}
       footer={
         <Show when={props.library.canEdit()}>
-          <openclaw-modal-actions class="skill-reader-dialog__actions">
+          <openclaw-modal-actions class="oc-dialog__footer">
             <Show when={entry()}>
               <MutationButton action="remove" />
               <MutationButton action={entry()!.enabled ? "disable" : "enable"} />
@@ -527,7 +527,7 @@ function LibraryImport(props: { library: SkillLibraryModel }) {
     <LibraryDialog
       library={props.library}
       footer={
-        <openclaw-modal-actions class="skill-reader-dialog__actions">
+        <openclaw-modal-actions class="oc-dialog__footer">
           <button
             type="submit"
             class="btn primary"
