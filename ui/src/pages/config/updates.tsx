@@ -172,15 +172,18 @@ registerEnglishCatalog(registerUpdateActionsEnglish);
 
 registerEnglishCatalog(registerSettingsEnglish);
 
-function Timestamp(props: { timestampMs: number; nowMs?: number }) {
+function Timestamp(props: { timestampMs: number; nowMs?: number; showRelative?: boolean }) {
   const relative = () =>
     formatTimeAgo(Math.max(0, (props.nowMs ?? Date.now()) - props.timestampMs));
   return (
     <SettingsValue
       value={
         <time datetime={new Date(props.timestampMs).toISOString()} title={relative()}>
-          {formatDateTimeMs(props.timestampMs, { dateStyle: "medium", timeStyle: "short" })}{" "}
-          <span class="muted">· {relative()}</span>
+          {formatDateTimeMs(props.timestampMs, { dateStyle: "medium", timeStyle: "short" })}
+          <Show when={props.showRelative}>
+            {" "}
+            <span class="muted">· {relative()}</span>
+          </Show>
         </time>
       }
     />
@@ -582,7 +585,13 @@ function GatewayUpdates(props: UpdatesViewProps) {
           {(currentRun) => (
             <SettingsRow
               title={t("updates.page.lastProgress")}
-              control={<Timestamp timestampMs={currentRun().updatedAtMs} nowMs={props.nowMs} />}
+              control={
+                <Timestamp
+                  timestampMs={currentRun().updatedAtMs}
+                  nowMs={props.nowMs}
+                  showRelative
+                />
+              }
             />
           )}
         </Show>

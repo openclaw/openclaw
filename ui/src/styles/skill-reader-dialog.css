@@ -88,6 +88,14 @@
   }
 }
 
+.skill-library-dialog__source {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  font-family: var(--mono);
+  resize: vertical;
+}
+
 .oc-dialog.skill-reader-dialog > .oc-dialog__body {
   padding: var(--space-3) var(--overlay-modal-padding) var(--space-2);
 }
@@ -139,6 +147,25 @@
 }
 
 .skill-detail__note {
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.skill-library-details {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.skill-library-dialog .oc-dialog__body > p {
+  margin: 0;
+}
+
+.skill-library-details > .settings-disclosure__summary {
+  padding-inline: 0;
+}
+
+.skill-library-details dl {
+  margin: 0;
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
 }

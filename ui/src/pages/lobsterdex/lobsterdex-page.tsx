@@ -8,7 +8,7 @@ import { canonicalLobsterLook, lobsterLookStyle } from "../../components/lobster
 import { LOBSTER_PALETTE_LORE, lobsterPaletteName } from "../../components/lobster-pet-lore.ts";
 import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
 import { Icon } from "../../components/solid/icon.tsx";
-import { SettingsPageHeader } from "../../components/solid/settings-ui.tsx";
+import { SettingsPage, SettingsPageHeader } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerPreferencesEnglish } from "../../i18n/locales/en-preferences.ts";
 import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
@@ -224,22 +224,24 @@ export function LobsterdexPage() {
         }
       />
       <SettingsWorkspace>
-        {branding().read().lobsterdex ? (
-          <LobsterdexView entries={entries.read()} />
-        ) : (
-          <section class="settings-section" role="status">
-            <p>{t("quickSettings.appearance.lobsterdexThemeHidden")}</p>
-            <a
-              class="btn btn--sm"
-              href={pathForRoute("appearance", context.basePath)}
-              onClick={(event) =>
-                handleNavigationClick(event, () => context.navigate("appearance"))
-              }
-            >
-              {t("tabs.appearance")}
-            </a>
-          </section>
-        )}
+        <SettingsPage wide>
+          {branding().read().lobsterdex ? (
+            <LobsterdexView entries={entries.read()} />
+          ) : (
+            <section class="settings-section" role="status">
+              <p>{t("quickSettings.appearance.lobsterdexThemeHidden")}</p>
+              <a
+                class="btn btn--sm"
+                href={pathForRoute("appearance", context.basePath)}
+                onClick={(event) =>
+                  handleNavigationClick(event, () => context.navigate("appearance"))
+                }
+              >
+                {t("tabs.appearance")}
+              </a>
+            </section>
+          )}
+        </SettingsPage>
       </SettingsWorkspace>
     </openclaw-lobsterdex-page>
   );

@@ -229,6 +229,8 @@ describe("config appearance preferences", () => {
       chatSendShortcutOverridden: true,
       chatSendShortcutProvenance: "synced",
     });
+    document.body.append(container);
+    onTestFinished(() => container.remove());
     const themeSection = required(container, "#settings-appearance-theme", HTMLElement);
     const shortcutRow = settingsRow(container, "Send shortcut");
 
@@ -236,12 +238,12 @@ describe("config appearance preferences", () => {
     expect(shortcutRow.textContent).toContain(
       "Desktop only. On mobile, Enter adds a new line; use the Send button to send.",
     );
-    const shortcut = required(shortcutRow, "select", HTMLSelectElement);
-    expect(shortcut.value).toBe("enter");
-    expect(shortcut.disabled).toBe(false);
+    const enter = required(shortcutRow, 'input[value="enter"]', HTMLInputElement);
+    const modifier = required(shortcutRow, 'input[value="modifier-enter"]', HTMLInputElement);
+    expect(enter.checked).toBe(true);
+    expect(modifier.disabled).toBe(false);
     expect(props.onAppearanceChange).not.toHaveBeenCalled();
-    shortcut.value = "modifier-enter";
-    shortcut.dispatchEvent(new Event("change", { bubbles: true }));
+    modifier.click();
     expect(props.onAppearanceChange).toHaveBeenCalledExactlyOnceWith({
       chatSendShortcut: "modifier-enter",
     });
@@ -310,8 +312,12 @@ describe("config appearance preferences", () => {
       composerHoldToRecord: true,
     });
 
-    const shortcutSelect = required(container, "[data-settings-send-shortcut]", HTMLSelectElement);
-    expect(shortcutSelect.getAttribute("aria-label")).toBe("Send shortcut");
+    const shortcutGroup = required(
+      settingsRow(container, "Send shortcut"),
+      '[role="radiogroup"]',
+      HTMLElement,
+    );
+    expect(shortcutGroup.getAttribute("aria-label")).toBe("Send shortcut");
     const followUpSelect = required(container, "[data-settings-follow-up-mode]", HTMLSelectElement);
     expect(followUpSelect.getAttribute("aria-label")).toBe("Follow-ups while the agent is working");
     expect(followUpSelect.value).toBe("server");
