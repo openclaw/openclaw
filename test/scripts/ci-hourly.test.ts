@@ -166,11 +166,26 @@ describe("hourly main CI admission", () => {
     expect(eligible).toEqual(["preview_plugins_npm", "preview_plugin_pack"]);
   });
 
-  it("retains real per-push CodeQL and workflow security checks", () => {
+  it("batches CodeQL hourly without cancelling active scans and retains push workflow checks", () => {
     const context = { eventName: "push" } as const;
     const codeql = readWorkflow(".github/workflows/codeql.yml");
-    expect(codeql.on.push.branches).toContain("main");
-    expect(evaluate(codeql.jobs["security-high"].if, context)).toBe(true);
+    expect(codeql.on.push).toBeUndefined();
+    expect(codeql.on.schedule).toEqual([{ cron: "23 * * * *" }]);
+    const renderGroup = (eventName: Context["eventName"], runId: number) =>
+      codeql.concurrency.group.replace(/\$\{\{[\s\S]*?\}\}/gu, (expression: string) =>
+        String(
+          evaluate(expression, { eventName, runId, workflow: "CodeQL", pullRequestNumber: 123 }),
+        ),
+      );
+    expect(renderGroup("schedule", 1)).toBe(renderGroup("schedule", 2));
+    expect(renderGroup("schedule", 1)).not.toBe(renderGroup("pull_request", 1));
+    expect(renderGroup("schedule", 1)).not.toBe(renderGroup("workflow_dispatch", 1));
+    expect(renderGroup("workflow_dispatch", 1)).not.toBe(renderGroup("workflow_dispatch", 2));
+    for (const eventName of ["schedule", "workflow_dispatch", "pull_request"] as const) {
+      expect(evaluate(codeql.concurrency["cancel-in-progress"], { eventName })).toBe(
+        eventName === "pull_request",
+      );
+    }
     const sanity = readWorkflow(".github/workflows/workflow-sanity.yml");
     expect(evaluate(sanity.jobs.actionlint.if, context)).toBe(true);
   });
@@ -193,7 +208,14 @@ describe("CodeQL language selection", () => {
   function selectionCase(
     files = [".github/workflows/docs.yml"],
     expected = categories,
-    options: { eventName?: string; exitCode?: number; checkoutOutcome?: string } = {},
+    options: {
+      eventName?: string;
+      exitCode?: number;
+      checkoutOutcome?: string;
+      actionsChanged?: string;
+      javascriptChanged?: string;
+      unchangedCategories?: string[];
+    } = {},
   ) {
     return { files, expected, ...options };
   }
@@ -208,19 +230,72 @@ describe("CodeQL language selection", () => {
     selectionCase([]),
     selectionCase(undefined, undefined, { checkoutOutcome: "failure" }),
     selectionCase(undefined, undefined, { exitCode: 128 }),
-    ...["push", "schedule", "workflow_dispatch"].map((eventName) =>
+    ...["schedule", "workflow_dispatch"].map((eventName) =>
       selectionCase(undefined, undefined, { eventName }),
     ),
+    selectionCase(
+      undefined,
+      categories.filter((category) => category !== "network-ssrf-boundary"),
+      {
+        eventName: "schedule",
+        unchangedCategories: ["network-ssrf-boundary"],
+      },
+    ),
+    selectionCase(undefined, ["actions"], {
+      eventName: "schedule",
+      actionsChanged: "true",
+      javascriptChanged: "false",
+    }),
+    selectionCase(undefined, categories.slice(0, -1), {
+      eventName: "schedule",
+      actionsChanged: "false",
+      javascriptChanged: "true",
+    }),
+    selectionCase(undefined, [], {
+      eventName: "schedule",
+      actionsChanged: "false",
+      javascriptChanged: "false",
+    }),
+    selectionCase(undefined, undefined, {
+      eventName: "workflow_dispatch",
+      actionsChanged: "false",
+      javascriptChanged: "false",
+    }),
   ])(
     "selects $expected for $files/$eventName/$exitCode",
     async ({ files, expected, ...options }) => {
       let matrix: { include: Array<Record<string, string | number>> } | undefined;
+      let hasWork: boolean | undefined;
       await runInNewContext(`(async () => { ${selection.with.script} })()`, {
         context: { eventName: options.eventName ?? "pull_request" },
-        process: { env: { CODEQL_CHECKOUT_OUTCOME: options.checkoutOutcome ?? "success" } },
+        process: {
+          env: {
+            CODEQL_CHECKOUT_OUTCOME: options.checkoutOutcome ?? "success",
+            CODEQL_ACTIONS_CHANGED: options.actionsChanged,
+            ...Object.fromEntries(
+              categories
+                .slice(0, -1)
+                .map((category) => [
+                  `CODEQL_${category.toUpperCase().replaceAll("-", "_")}_CHANGED`,
+                  options.javascriptChanged,
+                ]),
+            ),
+            ...Object.fromEntries(
+              (options.unchangedCategories ?? []).map((category) => [
+                `CODEQL_${category.toUpperCase().replaceAll("-", "_")}_CHANGED`,
+                "false",
+              ]),
+            ),
+          },
+        },
         core: {
-          setOutput: (_name: string, value: string) => {
-            matrix = JSON.parse(value);
+          setOutput: (name: string, value: string | boolean) => {
+            if (name === "matrix") {
+              matrix = JSON.parse(String(value));
+            }
+            if (name === "has_work") {
+              hasWork = Boolean(value);
+            }
           },
           warning: () => {},
         },
@@ -243,11 +318,19 @@ describe("CodeQL language selection", () => {
           config_file: `./.github/codeql/codeql-${category}-critical-security.yml`,
         })),
       );
+      expect(hasWork).toBe(expected.length > 0);
+      expect(
+        evaluate(workflow.jobs["security-high"].if, {
+          eventName: (options.eventName ?? "pull_request") as Context["eventName"],
+          inputs: { profile: "all" },
+          additionalNeeds: { scope: { outputs: { has_work: String(hasWork) } } },
+        }),
+      ).toBe(expected.length > 0);
     },
   );
 
   it("keeps event admission and exact merge identity", () => {
-    expect(scope.if).toBe(workflow.jobs["security-high"].if);
+    expectAdmission(scope.if);
     const checkout = scope.steps.find(
       (step: { name?: string }) => step.name === "Checkout event merge",
     );
@@ -260,5 +343,13 @@ describe("CodeQL language selection", () => {
       needs: "scope",
       strategy: { matrix: "${{ fromJSON(needs.scope.outputs.matrix) }}" },
     });
+    const scheduledCheckout = scope.steps.find(
+      (step: { name?: string }) => step.name === "Checkout scheduled admission",
+    );
+    expect(scheduledCheckout).toMatchObject({
+      if: "github.event_name == 'schedule'",
+      with: { ref: "${{ github.sha }}", "persist-credentials": false },
+    });
+    expect(scope.permissions).toMatchObject({ actions: "read", contents: "read" });
   });
 });

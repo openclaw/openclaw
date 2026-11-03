@@ -20,6 +20,20 @@ export const artifactPreservingReads = resolveGlobalSingleton(
     >(),
 );
 
+const liveStateReads = resolveGlobalSingleton(
+  Symbol.for("openclaw.liveStateReads"),
+  () => new AsyncLocalStorage<boolean>(),
+);
+
+/** Select live runtime state bytes without changing an inspection's side-effect policy. */
+export function withLiveStateReads<T>(operation: () => T): T {
+  return liveStateReads.run(true, operation);
+}
+
+export function isLiveStateRead(): boolean {
+  return liveStateReads.getStore() === true;
+}
+
 /**
  * `agentDatabases` makes every agent-database read a private whole-file copy. It is for
  * offline inspection (Doctor, update checks). Gateway requests read live databases through

@@ -99,6 +99,16 @@ struct ChatMessageMetadataTests {
     }
 
     @Test
+    func `a step that stopped for tools has no footer and the reply it leads to does`() throws {
+        for reason in ["toolUse", "tool_use", "tool_calls"] {
+            let step = try self.message(fields: #""stopReason":"\#(reason)""#)
+            let tool = try self.message(role: "toolResult")
+            let answer = try self.message(fields: #""stopReason":"stop""#)
+            #expect(Set(self.footers([step, tool, answer]).keys) == [answer.id])
+        }
+    }
+
+    @Test
     func `active replies have no metadata while previous completed groups keep theirs`() throws {
         let first = try self.message(fields: #""__openclaw":{"runId":"done"}"#)
         let active = try self.message(fields: #""__openclaw":{"runId":"active"}"#)

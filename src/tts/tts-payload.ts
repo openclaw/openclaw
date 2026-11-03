@@ -24,10 +24,8 @@ import {
 } from "./tts-provider-resolution.js";
 import type { SpeechVoiceOption, TtsStatusEntry } from "./tts-runtime-types.js";
 import {
-  getTtsMaxLength,
-  isSummarizationEnabled,
   resolveTtsConfig,
-  resolveTtsSettingsSnapshot,
+  resolveTtsSettingsSnapshotAsync,
   type ResolvedTtsConfig,
 } from "./tts-settings.js";
 import { textToSpeechCore, type TtsAudioPersistence } from "./tts-synthesis.js";
@@ -120,7 +118,13 @@ export async function maybeApplyTtsToPayloadCore(
     return params.payload;
   }
   const cfg = selectLiveRuntimeConfig(params.cfg);
-  const { autoMode, config, prefsPath } = resolveTtsSettingsSnapshot({
+  const {
+    autoMode,
+    config,
+    prefsPath,
+    maxLength: preferredMaxLength,
+    summarize,
+  } = await resolveTtsSettingsSnapshotAsync({
     cfg,
     preparedTtsPreferences: params.preparedTtsPreferences ?? (await prepareTtsPreferences()),
     sessionAuto: params.ttsAuto,
@@ -187,7 +191,7 @@ export async function maybeApplyTtsToPayloadCore(
   }
 
   // Synthesis rejects text over config.maxTextLength, so never prepare more than that.
-  const maxLength = Math.min(getTtsMaxLength(prefsPath), config.maxTextLength);
+  const maxLength = Math.min(preferredMaxLength, config.maxTextLength);
   let textForAudio = ttsText;
   let wasSummarized = false;
 
@@ -198,7 +202,7 @@ export async function maybeApplyTtsToPayloadCore(
   }
 
   if (textForAudio.length > maxLength) {
-    if (!isSummarizationEnabled(prefsPath)) {
+    if (!summarize) {
       logVerbose(
         `TTS: truncating long text (${textForAudio.length} > ${maxLength}), summarization disabled.`,
       );

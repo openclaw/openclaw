@@ -725,6 +725,14 @@ each adapter keeps its own replacement/null policy. The stream mapper preserves
 synchronous returns without importing the embedded runner. These are bundled
 implementation helpers, not new third-party SDK contracts.
 
+The optional fourth argument to `wrapProviderPayloadHook`, `inputObserver`,
+defaults to `false`. Set it to `true` only when both policy callbacks preserve
+retained input items and their nested content. Settings-only policies can then
+reuse prepared input instead of cloning history. The wrapped caller hook still
+receives editable input when needed; its current requirements are checked per
+request, including live extension-handler registration and removal. This flag
+does not change callback order or the adapter's replacement/null policy.
+
 `applyOpenAICompletionsToolReasoning` shares the native tools/reasoning wire
 policy with pass-through adapters through that private seam. Callers qualify
 the endpoint and normalize vendor-prefixed model IDs before applying it.

@@ -305,8 +305,13 @@ describe("chat Details presentation", () => {
     expect(trigger.getAttribute("aria-expanded")).toBe("false");
     trigger.click();
     await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
+    // ResizeObserver and the native popover settle on the browser's rendering turn.
+    const shown = new Promise<void>((resolve) => {
+      panel.addEventListener("toggle", () => resolve(), { once: true });
+    });
     frame.style.width = "600px";
-    await expect.poll(() => panel.matches(":popover-open")).toBe(true);
+    await shown;
+    expect(panel.matches(":popover-open")).toBe(true);
     expect(panel.getAttribute("role")).toBe("dialog");
     expect(conversation.getBoundingClientRect().width).toBe(600);
     frame.style.width = "1320px";

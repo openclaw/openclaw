@@ -17,6 +17,7 @@ import { createAssistantOutput } from "../transports/assistant-output.js";
 import { buildGuardedModelFetch } from "../transports/host-policy.js";
 import { parseJsonPreservingUnsafeIntegers } from "../transports/json-unsafe-integers.js";
 import {
+  awaitProviderLifecycleCallback,
   failTransportStream,
   iterateSseFrames,
   notifyProviderHttpResponse,
@@ -110,7 +111,10 @@ export const streamGoogleInteractions: StreamFunction<
         : context;
       const videoSlots: GoogleVideoSlots = new Map();
       let body = buildGoogleInteractionsParams(model, providerContext, options, videoSlots);
-      const nextBody = await options?.onPayload?.(body, model);
+      const nextBody = await awaitProviderLifecycleCallback(
+        options?.onPayload ? () => options.onPayload?.(body, model) : undefined,
+        options?.signal,
+      );
       if (nextBody !== undefined) {
         if (!isGoogleInteractionsRequestBody(nextBody)) {
           throw new Error("Google Interactions onPayload returned an invalid request body");

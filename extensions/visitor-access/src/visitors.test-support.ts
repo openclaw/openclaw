@@ -308,7 +308,7 @@ export function visitorFixture(
   const assertCurrent = vi.fn<() => void>();
   const policy = new VisitorPolicyClient(resolved, fetcher, undefined, () => oidcProvider);
   const service = new VisitorAccessService(
-    resolved,
+    () => resolved,
     options.store ?? store,
     policy,
     logger,
