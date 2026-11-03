@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 import {
   externalContentStamp,
+  nativeWebSearchCodecs,
   readPositiveIntegerParam,
   readStringParam,
   wrapWebContent,
@@ -52,29 +53,39 @@ export async function searchClawRouter(
     timeoutMs,
     signal: execution?.signal,
   });
-  const offer = offers.find(
-    (candidate) =>
-      candidate.requestFormat === "tavily.search" &&
-      candidate.responseFormat === "tavily.search" &&
-      candidate.methods.includes("POST") &&
+  const offer = offers.find((candidate) => {
+    const codec = searchCodec(candidate.requestFormat);
+    return (
+      codec &&
+      candidate.responseFormat === candidate.requestFormat &&
+      candidate.methods.includes(codec.method) &&
       (candidate.routeKind === "native" || candidate.routeKind === "manifest") &&
       (!candidate.model ||
         (Array.isArray(candidate.model.capabilities) &&
-          candidate.model.capabilities.includes("web.search"))),
-  );
-  if (!offer) {
+          candidate.model.capabilities.includes("web.search")))
+    );
+  });
+  const codec = offer && searchCodec(offer.requestFormat);
+  if (!offer || !codec) {
     throw new Error("ClawRouter has no eligible search offer with a supported wire format");
   }
+  if (offer.requestFormat === "parallel.search" && query.length > 200) {
+    throw new Error("ClawRouter Parallel search accepts at most 200 query characters");
+  }
+  const request = codec.request(offer.url, query, count);
   execution?.signal?.throwIfAborted();
   execution?.assertCurrent?.();
   const headers = new Headers(context.headers);
-  headers.set("Content-Type", "application/json");
+  headers.set("Accept", "application/json");
+  if ("body" in request) {
+    headers.set("Content-Type", "application/json");
+  }
   const { response, release } = await fetchWithTimeoutGuarded(
-    offer.url,
+    request.url,
     {
-      method: "POST",
+      method: codec.method,
       headers,
-      body: JSON.stringify({ query, max_results: count }),
+      body: "body" in request ? JSON.stringify(request.body) : undefined,
       signal: execution?.signal,
     },
     timeoutMs(),
@@ -101,14 +112,12 @@ export async function searchClawRouter(
     timeoutMs();
     execution?.signal?.throwIfAborted();
     execution?.assertCurrent?.();
-    if (!Array.isArray(payload?.results)) {
+    const envelope =
+      offer.requestFormat === "brave.search" ? asOptionalRecord(payload?.web) : payload;
+    if (!Array.isArray(envelope?.results)) {
       throw new Error("ClawRouter search returned a malformed result");
     }
-    const results = payload.results.slice(0, count).flatMap((value: unknown) => {
-      const row = asOptionalRecord(value);
-      if (typeof row?.url !== "string") {
-        return [];
-      }
+    const results = codec.results(payload, count).flatMap((row) => {
       let url: URL;
       try {
         url = new URL(row.url);
@@ -118,19 +127,7 @@ export async function searchClawRouter(
       if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) {
         return [];
       }
-      return [
-        {
-          url: url.href,
-          title: wrapWebContent(
-            typeof row.title === "string" ? row.title.slice(0, 500) : "",
-            "web_search",
-          ),
-          snippet: wrapWebContent(
-            typeof row.content === "string" ? row.content.slice(0, 4_000) : "",
-            "web_search",
-          ),
-        },
-      ];
+      return [{ ...row, url: url.href }];
     });
     return {
       query,
@@ -144,3 +141,39 @@ export async function searchClawRouter(
     await release();
   }
 }
+
+function searchCodec(format: string) {
+  if (Object.hasOwn(nativeWebSearchCodecs, format)) {
+    return nativeWebSearchCodecs[format as keyof typeof nativeWebSearchCodecs];
+  }
+  return format === "tavily.search" ? tavilySearchCodec : undefined;
+}
+
+const tavilySearchCodec = {
+  method: "POST",
+  request(url: string, query: string, count: number) {
+    return { url, body: { query, max_results: count } };
+  },
+  results(payload: unknown, count: number) {
+    const results = asOptionalRecord(payload)?.results;
+    return (Array.isArray(results) ? results : []).slice(0, count).flatMap((value: unknown) => {
+      const row = asOptionalRecord(value);
+      if (typeof row?.url !== "string") {
+        return [];
+      }
+      return [
+        {
+          url: row.url,
+          title: wrapWebContent(
+            typeof row.title === "string" ? row.title.slice(0, 500) : "",
+            "web_search",
+          ),
+          snippet: wrapWebContent(
+            typeof row.content === "string" ? row.content.slice(0, 4_000) : "",
+            "web_search",
+          ),
+        },
+      ];
+    });
+  },
+};

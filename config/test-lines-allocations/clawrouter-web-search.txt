@@ -1,2 +1,2 @@
-# Registered native/manifest search, grant refresh, credentials and cancellation.
-202
+# Registered native/manifest search, native codec wires, grant refresh and cancellation.
+324
