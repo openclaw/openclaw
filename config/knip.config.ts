@@ -194,6 +194,7 @@ const repositoryScriptEntries = [
   "scripts/perf/mcp-http-dispatcher-measure.ts!",
   "scripts/perf/prepared-gateway-startup-measure.mjs!",
   "scripts/perf/sandbox-paths-measure.ts!",
+  "scripts/perf/github-publication-snapshot-measure.ts!",
   // Maintained source headers invoke these standalone commands and external preload by exact path.
   "scripts/bench-control-ui-talk.ts!",
   // Maintained source headers invoke these standalone analysis commands by exact path.
