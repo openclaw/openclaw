@@ -96,6 +96,7 @@ export function createAdmittedRunOperatorAuthority(
       ? Object.freeze({ ...source.gatewayAccessGrant })
       : source.gatewayAccessGrant,
     source: source.source ?? {},
+    invocation: source.invocation,
     signal,
     retain: source.retain,
     onModelPolicyChanged: source.onModelPolicyChanged,

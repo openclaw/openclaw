@@ -38,7 +38,10 @@ account. Enable the plugin in the source-built Gateway configuration:
 }
 ```
 
-Enabling the plugin or changing its configuration applies through plugin hot reload;
+Changes to `maxVisitors` and `defaultTtlDays` apply to the running service without
+replacing the plugin or waiting for active turns. Existing grants keep their expiry;
+lowering the limit prevents new invitations and bounds list output, without revoking grants.
+Enabling the plugin or changing its Cloudflare settings uses plugin hot replacement;
 no Gateway restart is required.
 Do not retarget `accountId`, `appId`, `policyName`, or the OIDC account-ID mapping while grants exist: the
 durable records belong to that policy, and changing targets could leave the old
@@ -290,8 +293,11 @@ The first call reserves a session key in the grant's onboarding record, then
 creates the session as the guest, so the guest owns it and the guest role's
 agent, sandbox, and session limits apply. The session uses the configured
 default agent when the guest role permits it, otherwise the role's first
-permitted agent, and is titled "Welcome, <display name>" ("Welcome" without a
-display name). The plugin then adds one agent-written message without running
+permitted agent, and is titled "Welcome <display name>". Without a display
+name it uses the guest's canonical GitHub username, when available, or just
+"Welcome"; email addresses and internal IDs are never title fallbacks. Existing
+welcome sessions, including user-renamed titles, are left unchanged. The plugin
+then adds one agent-written message without running
 the model and records the onboarding as `ready`. Any number of calls, tabs,
 retries, reloads, or Gateway restarts yield at most one welcome session per
 grant: a retry after a failure or crash reuses the reserved key, an existing

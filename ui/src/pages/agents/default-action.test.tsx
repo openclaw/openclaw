@@ -18,7 +18,7 @@ it("shows admitted default commands and follows confirmed roster state", async (
   const mounted = mountSolid(Agents, props);
   const control = () =>
     Array.from(
-      mounted.container.querySelectorAll<HTMLButtonElement>(".agents-toolbar button"),
+      mounted.container.querySelectorAll<HTMLButtonElement>(".agents-toolbar-actions button"),
     ).find((button) => /Set Default|Saving|^Default$/.test(button.textContent ?? ""))!;
   try {
     control().click();

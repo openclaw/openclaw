@@ -142,7 +142,7 @@ export function createBeamRequestHandler(params: {
         return true;
       }
       sendJson(res, 200, {
-        ...(publisher.kind === "guest" ? { canView: false } : {}),
+        ...(publisher.kind === "guest" ? { canView: true } : {}),
         ok: true,
         beamId: parsed.value.beamId,
         url: buildControlUiCatalogSharePath({

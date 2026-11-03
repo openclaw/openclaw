@@ -2,11 +2,17 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isPathInside } from "../infra/path-guards.js";
+import {
+  bundledSharedModuleResolver,
+  resolveBundledSharedModule,
+  type BundledPluginReloadSource,
+} from "./plugin-bundled-reload.js";
 import { createPluginCaptureResolver } from "./plugin-capture-resolution.js";
 import type { PluginGenerationArtifact } from "./plugin-generation-artifact.types.js";
 import {
   createPluginGenerationFileCapture,
   createPluginSourceLinkCapture,
+  linkBundledSharedModule,
   linkPluginGenerationDependency,
 } from "./plugin-generation-file-capture.js";
 import { createPluginFrozenGeneration } from "./plugin-generation-frozen-source.js";
@@ -81,6 +87,7 @@ export function capturePluginSourceSnapshot(
     undefined,
     dependencyLookupBoundary,
     undefined,
+    undefined,
     false,
     true,
   );
@@ -103,6 +110,7 @@ export function capturePluginSnapshotGeneration(
       nativeRecovery,
       undefined,
       undefined,
+      undefined,
       true,
       false,
       resolveInput,
@@ -117,6 +125,7 @@ function createPluginGenerationArtifact(
   moduleSource?: (filename: string) => string,
   nativeRecovery?: PluginNativeRecovery,
   dependencyLookupBoundary?: Parameters<typeof createPluginDependencyResolver>[0],
+  bundledReloadSource?: BundledPluginReloadSource,
   retained?: PluginSourceCustodyFork,
   captureForCustody = false,
   sourceOnly = false,
@@ -140,6 +149,7 @@ function createPluginGenerationArtifact(
     findPluginCapturedPackage(packages, filename, directory)?.owner;
   const capturedPaths = new Map<string, string>();
   const capturedDirectories = new Set(retained?.source.directories);
+  const hostModuleLinks = new Set<string>();
   const originalSources = new Map<string, string>();
   const hardlinkedSources = new Set<string>();
   const nativeAdmission = createPluginNativeAdmission(
@@ -261,6 +271,7 @@ function createPluginGenerationArtifact(
       outputRoot,
       capturedPaths,
       capturedDirectories,
+      hostModuleLinks,
       originalSources,
       hardlinkedSources,
       sourceCapture,
@@ -339,6 +350,9 @@ function createPluginGenerationArtifact(
         }
       }
       const target = existingSource ?? path.join(destination, path.relative(root, source));
+      if (hostModuleLinks.has(target)) {
+        return;
+      }
       if (!existingSource) {
         const prepared = nativeAdmission.resolvePreparedSource(source);
         const input = inspectPluginCaptureSource(
@@ -395,6 +409,24 @@ function createPluginGenerationArtifact(
         captureExecutableFile,
         owner,
         sourceLinks,
+        linkSharedModule: bundledReloadSource
+          ? (importer, local, value) => {
+              const shared = resolveBundledSharedModule(
+                bundledReloadSource,
+                rootDir,
+                importer,
+                local,
+              );
+              if (!shared) {
+                return false;
+              }
+              if (value.startsWith(".") && isPathInside(boundary, local)) {
+                const link = path.join(destination, path.relative(boundary, local));
+                linkBundledSharedModule(link, shared, additions, hostModuleLinks);
+              }
+              return true;
+            }
+          : undefined,
       });
       const observed = new Map<string, string | null | undefined>();
       const captureObservedReference = (
@@ -605,6 +637,7 @@ function createPluginGenerationArtifact(
     });
     return {
       sourceRoot,
+      sharedModule: bundledSharedModuleResolver(bundledReloadSource, root),
       rootDir: root,
       sourceAliases,
       linkHost: (hostRoot: string) => {

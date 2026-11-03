@@ -20,16 +20,17 @@ import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsLoadingSkeleton, SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { WizardLogin } from "../../components/wizard-login-controller.tsx";
+import { configSecretFields } from "../../lib/config/config-secret-fields.ts";
 import { currentConfigRead } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { renderPluginCatalogResults as PluginCatalogResults } from "./catalog-results.tsx";
+import "./custom-elements.ts";
 import {
   PluginArtTile,
   renderPluginConsentDialog as PluginConsentDialog,
 } from "./consent-dialog.tsx";
-import "./custom-elements.ts";
 import { pluginDetailLocation, type InstalledPluginDetailTab } from "./detail-tabs.ts";
 import {
   pluginRowKey,
@@ -197,11 +198,14 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
     onConfigPatch: (path: Array<string | number>, value: unknown) =>
       page().settings.patch(path, value),
     onConfigRemove: (path: Array<string | number>) => page().settings.patch(path, undefined),
+    configSecretFields: configSecretFields(page().context),
     onConfigReload: page().reloadConfig,
     onConfigReadRetry: actions.retryConfigRead,
     onConfigWriteRetry: () => void page().context.runtimeConfig.retry(),
     onRefresh: () => void page().refreshCatalog(),
     onAskPlugin: onAskPlugin(),
+    onSelectPrompt: (prompt: string) => void page().recommendedPrompts.select(prompt),
+    promptBlockedReason: page().recommendedPrompts.blockedReason(),
     onAskSetting: ask(),
   }));
 
@@ -248,6 +252,7 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
       <PluginDetailBoundary onRetry={() => void page().showDetails(detailProps.pluginId)}>
         <PluginSettingsDetail
           {...shared()}
+          promptBusy={page().recommendedPrompts.pending}
           configUnsupportedPaths={configAnalysis().unsupportedPaths}
           pluginId={detailProps.pluginId}
           installProgress={page().consent.getActiveInstall(pluginRowKey(detailProps.pluginId))}
@@ -361,6 +366,9 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
                     registerInstallAction={page().registerInstallAction}
                     registerIcon={page().icons.register}
                     onAskPlugin={onAskPlugin()}
+                    onSelectPrompt={(prompt) => void page().recommendedPrompts.select(prompt)}
+                    promptBusy={page().recommendedPrompts.pending}
+                    promptBlockedReason={page().recommendedPrompts.blockedReason()}
                     connected={page().gateway.connected}
                     skillsSection={catalogSkillsSection()}
                     result={page().state.catalogDetail?.result ?? null}
