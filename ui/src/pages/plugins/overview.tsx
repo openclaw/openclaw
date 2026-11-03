@@ -16,6 +16,7 @@ import type {
 } from "../../lib/plugins/index.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { formatCompactCount } from "./catalog-results.tsx";
+import { ExtensionIcon } from "./extension-icons.tsx";
 import { renderPluginAuthor, renderPluginOfficialBadge } from "./plugin-card.tsx";
 import { renderPluginRowMessage } from "./plugin-row-message.tsx";
 
@@ -273,6 +274,7 @@ export function renderPluginMetadata(
 }
 
 type PluginCapabilityRow = {
+  icon?: () => JSX.Element;
   name: string;
   description?: string;
   onOpen?: () => void;
@@ -309,7 +311,7 @@ function PluginCapabilityRowControl(props: { value: PluginCapabilityRow; chevron
 export function renderPluginCapabilitySection(
   title: string,
   values: PluginCapabilityRow[],
-  icon: () => JSX.Element,
+  icon?: () => JSX.Element,
 ): JSX.Element {
   return values.length ? (
     <div class="plugin-capabilities">
@@ -319,7 +321,7 @@ export function renderPluginCapabilitySection(
             const content = (chevron: boolean) => (
               <>
                 <span class="plugin-capability__icon" aria-hidden="true">
-                  {icon()}
+                  {value.icon?.() ?? icon?.()}
                 </span>
                 <PluginCapabilityRowText value={value} />
                 <PluginCapabilityRowControl value={value} chevron={chevron} />
@@ -420,21 +422,16 @@ const overviewContractFamilies = [
 
 function renderPluginDeclaredCapabilities(
   contracts: Readonly<Record<string, readonly string[]>> | undefined,
-  uiCapabilities?: readonly PluginUiCapability[],
 ): JSX.Element {
   return renderPluginCapabilitySection(
     t("pluginsPage.detailCapabilities"),
-    [
-      ...overviewContractFamilies
-        .filter((family) => contracts?.[family]?.length)
-        .map((family) => `capabilityFamilies.${family}`),
-      ...PLUGIN_UI_CAPABILITIES.filter((capability) => uiCapabilities?.includes(capability)).map(
-        (capability) => `uiCapabilities.${capability}`,
-      ),
-    ].map((key) => ({
-      name: t(`pluginsPage.${key}.name`),
-      description: t(`pluginsPage.${key}.description`),
-    })),
+    overviewContractFamilies
+      .filter((family) => contracts?.[family]?.length)
+      .map((family) => `capabilityFamilies.${family}`)
+      .map((key) => ({
+        name: t(`pluginsPage.${key}.name`),
+        description: t(`pluginsPage.${key}.description`),
+      })),
     () => <Icon name="layers" />,
   );
 }
@@ -451,7 +448,17 @@ export function renderPluginContentCapabilities(params: {
 }): JSX.Element {
   return (
     <>
-      {renderPluginDeclaredCapabilities(params.contracts, params.uiCapabilities)}
+      {renderPluginDeclaredCapabilities(params.contracts)}
+      {renderPluginCapabilitySection(
+        t("pluginsPage.detailExtensions"),
+        PLUGIN_UI_CAPABILITIES.filter((capability) =>
+          params.uiCapabilities?.includes(capability),
+        ).map((capability) => ({
+          icon: () => <ExtensionIcon capability={capability} />,
+          name: t(`pluginsPage.uiCapabilities.${capability}.name`),
+          description: t(`pluginsPage.uiCapabilities.${capability}.description`),
+        })),
+      )}
       {params.skillsSection ??
         renderPluginCapabilitySection(t("pluginsPage.detailTabs.skills"), params.skills, () => (
           <Icon name="bookOpenText" />
