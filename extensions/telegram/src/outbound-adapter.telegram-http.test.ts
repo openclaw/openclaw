@@ -672,7 +672,7 @@ describe("Telegram registered adapter conformance over HTTP", () => {
         requests.map(({ method, fields }) => ({
           method,
           reply_markup: fields.reply_markup,
-          labelInText: String(fields.text ?? "").includes("Staging"),
+          labelInText: typeof fields.text === "string" && fields.text.includes("Staging"),
         })),
       ).toEqual(
         ["sendMessage", "editMessageReplyMarkup", "sendMessage"].map((method) => ({
