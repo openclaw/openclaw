@@ -150,13 +150,23 @@ class NodeForegroundServiceTest {
           while (controller.get().foregroundServiceType and ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE == 0) yield()
         }
       }
-      Shadows.shadowOf(checkNotNull(ShadowSpeechRecognizer.getLatestSpeechRecognizer())).triggerOnReadyForSpeech(Bundle())
+      val recognizer = Shadows.shadowOf(checkNotNull(ShadowSpeechRecognizer.getLatestSpeechRecognizer()))
+      val source =
+        checkNotNull(
+          recognizer.lastRecognizerIntent.getParcelableExtra(
+            android.speech.RecognizerIntent.EXTRA_AUDIO_SOURCE,
+            android.os.ParcelFileDescriptor::class.java,
+          ),
+        )
+      recognizer.triggerOnReadyForSpeech(Bundle())
       assertTrue(runtime.voiceWakeIsListening.value)
       runtime.setForeground(false)
       Shadows.shadowOf(Looper.getMainLooper()).idle()
       assertTrue(runtime.voiceWakeIsListening.value)
       controller.destroy()
       assertEquals("Paused", runtime.voiceWakeStatusText.value)
+      assertFalse(source.fileDescriptor.valid())
+      assertTrue(recognizer.isDestroyed)
     } finally {
       closeNodeServiceTestFixture(controller, app)
     }
@@ -223,8 +233,12 @@ class NodeForegroundServiceTest {
         }
       }
       assertFalse(requireNotNull(app.peekRuntime()).isForeground.value)
+      val recognizerBeforeWords = ShadowSpeechRecognizer.getLatestSpeechRecognizer()
+      requireNotNull(app.peekRuntime()).applyNodeVoiceWakeWords(endpoint.stableId, """{"triggers":["openclaw"]}""") { true }
       Shadows.shadowOf(Looper.getMainLooper()).idle()
       assertEquals(0, controller.get().foregroundServiceType and ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+      assertEquals(listOf("openclaw"), requireNotNull(app.peekRuntime()).voiceWakeWords.value)
+      assertEquals(recognizerBeforeWords, ShadowSpeechRecognizer.getLatestSpeechRecognizer())
     } finally {
       closeNodeServiceTestFixture(controller, app)
       gateway.shutdown()

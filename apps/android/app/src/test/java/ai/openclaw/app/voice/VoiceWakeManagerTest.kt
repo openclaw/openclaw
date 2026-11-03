@@ -42,6 +42,8 @@ class VoiceWakeManagerTest {
         })
       manager.setForeground(true)
       manager.setEnabled(true)
+      manager.setBackgroundListeningAllowed(true)
+      manager.setForeground(false)
       shadowOf(Looper.getMainLooper()).idle()
       val platform = checkNotNull(ShadowSpeechRecognizer.getLatestSpeechRecognizer())
       val recognizer = shadowOf(platform)
@@ -93,6 +95,49 @@ class VoiceWakeManagerTest {
         assertEquals(listOf(VoiceWakeRecognitionEvent.Error(SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE)), events)
       } finally {
         adapter.stop(2)
+      }
+    }
+
+  @Test
+  @Config(sdk = [34])
+  fun retiringBackgroundAuthorityOrDisablingPreventsCaptureRestart() =
+    runTest {
+      val app = RuntimeEnvironment.getApplication()
+      shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
+      for (disable in listOf(false, true)) {
+        val adapter = AndroidOnDeviceVoiceWakeRecognizer(app, this)
+        val manager = VoiceWakeManager(app, this, adapter, listOf("openclaw"), { true })
+        manager.setForeground(true)
+        manager.setEnabled(true)
+        manager.setBackgroundListeningAllowed(true)
+        manager.setForeground(false)
+        shadowOf(Looper.getMainLooper()).idle()
+        val platform = checkNotNull(ShadowSpeechRecognizer.getLatestSpeechRecognizer())
+        val recognizer = shadowOf(platform)
+        val source =
+          checkNotNull(
+            recognizer.lastRecognizerIntent.getParcelableExtra(
+              RecognizerIntent.EXTRA_AUDIO_SOURCE,
+              android.os.ParcelFileDescriptor::class.java,
+            ),
+          )
+        try {
+          recognizer.triggerOnReadyForSpeech(Bundle())
+          assertTrue(manager.isListening.value)
+          assertTrue(source.fileDescriptor.valid())
+          // Leave a real recognizer retry pending before authority is retired.
+          recognizer.triggerOnError(SpeechRecognizer.ERROR_NO_MATCH)
+          if (disable) manager.setEnabled(false) else manager.setBackgroundListeningAllowed(false)
+          recognizer.triggerOnError(SpeechRecognizer.ERROR_NO_MATCH)
+          advanceUntilIdle()
+          shadowOf(Looper.getMainLooper()).idle()
+          assertFalse(manager.isListening.value)
+          assertFalse(source.fileDescriptor.valid())
+          assertTrue(recognizer.isDestroyed)
+          assertEquals(platform, ShadowSpeechRecognizer.getLatestSpeechRecognizer())
+        } finally {
+          manager.setEnabled(false)
+        }
       }
     }
 
