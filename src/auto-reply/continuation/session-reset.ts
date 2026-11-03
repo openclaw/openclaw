@@ -109,8 +109,8 @@ async function readRecordsForReset(
 export async function cancelSessionContinuations(
   sessionKey: string,
   assertCurrent: () => void,
-): Promise<string[]> {
-  return await terminalizeAtBoundary(sessionKey, assertCurrent, "session");
+): Promise<void> {
+  await terminalizeAtBoundary(sessionKey, assertCurrent, "session");
 }
 
 /**

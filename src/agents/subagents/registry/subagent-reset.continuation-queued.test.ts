@@ -7,10 +7,13 @@
 import { useSubagentControlFixture } from "./subagent-control.test-support.js";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { resetContinuationCustodyProjection } from "../../../auto-reply/continuation/custody/custody-projection.js";
-import { listContinuationRecords } from "../../../auto-reply/continuation/custody/custody-store.js";
-import { hydrateContinuationCustody } from "../../../auto-reply/continuation/custody/custody-store.js";
+import {
+  hydrateContinuationCustody,
+  listContinuationRecords,
+} from "../../../auto-reply/continuation/custody/custody-store.js";
 import { custodyStateForTest } from "../../../auto-reply/continuation/custody/custody.test-support.js";
 import { recoverPendingContinuationDelegates } from "../../../auto-reply/continuation/delegate-dispatch-recovery.js";
 import {
@@ -216,7 +219,7 @@ it.each(["chat", "rpc"] as const)(
       },
       { timeout: SETTLE_MS },
     );
-    await new Promise((resolve) => setTimeout(resolve, 400));
+    await delay(400);
     expect(spawnsFor("winter annex")).toHaveLength(1);
   },
 );
@@ -240,7 +243,7 @@ it.each(["chat", "rpc"] as const)(
       expect(await readRecord(work.recordId)).toMatchObject({ status: "succeeded" }),
     );
     expect(await releasedAt(work.recordId)).toBeGreaterThanOrEqual(work.dueAt);
-    await new Promise((resolve) => setTimeout(resolve, 400));
+    await delay(400);
     expect(wakesFor("resume the annex search")).toHaveLength(1);
   },
 );
@@ -263,7 +266,7 @@ it("two head swaps before the due time still wake once, not postponed", async ()
   const claimedAt = await releasedAt(work.recordId);
   expect(claimedAt).toBeGreaterThanOrEqual(work.dueAt);
   expect(claimedAt).toBeLessThan(work.dueAt + 1_000);
-  await new Promise((resolve) => setTimeout(resolve, 400));
+  await delay(400);
   expect(wakesFor("one wake across two swaps")).toHaveLength(1);
 });
 
@@ -280,7 +283,7 @@ it("a delegate claimed before the reset spawns once after it, never twice", asyn
   });
   doubles.spawnReached = reached;
   // The replaced head's own drain: it claims the delegate, then the reset lands before spawn.
-  const drain = dispatchToolDelegates({
+  const replacedHeadDrain = dispatchToolDelegates({
     sessionKey: parentKey,
     chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
     ctx: { sessionKey: parentKey },
@@ -292,7 +295,7 @@ it("a delegate claimed before the reset spawns once after it, never twice", asyn
   await reset("rpc");
   doubles.spawnGate = undefined;
   release();
-  await drain;
+  await replacedHeadDrain;
 
   // The aborted claim never dispatched, so it went back to the queue rather than ending.
   expect(spawnsFor("claimed across the swap")).toHaveLength(0);
@@ -406,7 +409,7 @@ it("a reset followed by delete and recreation never delivers the kept work to th
 
   expect(await readRecord(delegate.recordId)).toMatchObject({ status: "cancelled" });
   expect(await readRecord(work.recordId)).toMatchObject({ status: "cancelled" });
-  await new Promise((resolve) => setTimeout(resolve, 1_500));
+  await delay(1_500);
   expect(spawnsFor("branch for the deleted owner")).toHaveLength(0);
   expect(wakesFor("wake for the deleted owner")).toHaveLength(0);
   // The admitted child's return was bound to the old owner's recipient authority, which the

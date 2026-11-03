@@ -561,8 +561,7 @@ async function performPreparedGatewaySessionReset({
           cfg,
           key: params.key,
           target,
-          sessionId: entry?.sessionId,
-          sessionLifecycleRevision: resetLifecycleRevision,
+          entry,
           reason: incognito ? "delete" : params.reason,
         });
         if (runtimeCleanupError) {
