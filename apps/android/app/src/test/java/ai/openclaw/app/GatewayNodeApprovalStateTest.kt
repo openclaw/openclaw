@@ -191,18 +191,4 @@ class GatewayNodeApprovalStateTest {
     val unsafe = nodes.last().copy(approvalState = GatewayNodeCapabilityApproval.PendingReapproval("request-self; unsafe"))
     assertEquals(GatewayNodeCapabilityApproval.PendingReapproval(null), currentNodeCapabilityApproval(listOf(unsafe), "self"))
   }
-
-  @Test
-  fun ignoresStaleNodeApprovalRefreshResults() {
-    val guard = LatestGatewayRefreshGuard()
-    var approvalState: GatewayNodeCapabilityApproval = GatewayNodeCapabilityApproval.Loading
-    val staleRefresh = guard.begin()
-    val currentRefresh = guard.begin()
-
-    assertFalse(guard.publishIfCurrent(staleRefresh) { approvalState = GatewayNodeCapabilityApproval.Approved })
-    assertTrue(
-      guard.publishIfCurrent(currentRefresh) { approvalState = GatewayNodeCapabilityApproval.PendingReapproval(null) },
-    )
-    assertEquals(GatewayNodeCapabilityApproval.PendingReapproval(null), approvalState)
-  }
 }

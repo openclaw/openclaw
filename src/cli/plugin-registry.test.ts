@@ -1,6 +1,6 @@
 // Plugin registry CLI tests cover canonical process-root load scopes.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ensurePluginRegistryLoaded } from "./plugin-registry.js";
+import { ensurePluginRegistryLoaded } from "../plugins/runtime/runtime-registry-loader.js";
 
 const logger = {
   info: vi.fn(),

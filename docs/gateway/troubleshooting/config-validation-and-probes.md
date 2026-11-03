@@ -42,6 +42,7 @@ Look for:
     - OpenClaw-owned writes reject invalid/destructive payloads before commit and save `.rejected.*`.
     - `openclaw doctor --fix` owns legacy-key repair. It can also remove non-JSON prefixes or restore the last-known-good copy while preserving the rejected payload as `.clobbered.*`.
     - When many repairs happen for one config path, OpenClaw rotates older `.clobbered.*` files so the newest repaired payload is still available.
+    - If OpenClaw cannot save the `.clobbered.*` copy, recovery is deferred with a warning and the active file stays unchanged. Retry recovery once the snapshot lock or storage problem is resolved.
 
   </Accordion>
   <Accordion title="Inspect and repair">

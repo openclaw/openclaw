@@ -16,6 +16,7 @@ import { formatUnsupportedChannelActionMessage } from "../../cli/error-format.js
 import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import { danger } from "../../globals.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
+import { groupPluginRecords as groupRecords } from "../../plugins/record-groups.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { resolveInstallableChannelPlugin } from "../channel-setup/channel-plugin-resolution.js";
 
@@ -71,12 +72,6 @@ function detectAutoKindForPlugin(input: string, plugin: ChannelPlugin): ChannelR
     return "user";
   }
   return "group";
-}
-
-function formatResolveResult(result: ChannelResolveResult): string {
-  const name = result.name ? ` (${result.name})` : "";
-  const note = result.note ? ` [${result.note}]` : "";
-  return `${result.input} -> ${result.id}${name}${note}`;
 }
 
 export async function channelsResolveCommand(opts: ChannelsResolveOptions, runtime: RuntimeEnv) {
@@ -142,15 +137,9 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
   const preferredKind =
     !opts.kind || opts.kind === "auto" ? undefined : opts.kind === "user" ? "user" : "group";
 
-  const byKind = new Map<ChannelResolveKind, string[]>();
-  if (preferredKind) {
-    byKind.set(preferredKind, entries);
-  } else {
-    for (const entry of entries) {
-      const kind = detectAutoKindForPlugin(entry, plugin);
-      byKind.set(kind, [...(byKind.get(kind) ?? []), entry]);
-    }
-  }
+  const byKind: Map<ChannelResolveKind, string[]> = preferredKind
+    ? new Map([[preferredKind, entries]])
+    : groupRecords(entries, (entry) => detectAutoKindForPlugin(entry, plugin));
   const resolved: ChannelResolveResult[] = [];
   for (const [kind, inputs] of byKind) {
     resolved.push(
@@ -182,7 +171,9 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
 
   for (const result of results) {
     if (result.resolved && result.id) {
-      runtime.log(formatResolveResult(result));
+      const name = result.name ? ` (${result.name})` : "";
+      const note = result.note ? ` [${result.note}]` : "";
+      runtime.log(`${result.input} -> ${result.id}${name}${note}`);
     } else {
       runtime.error(
         danger(`${result.input} -> unresolved${result.note ? ` (${result.note})` : ""}`),

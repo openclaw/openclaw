@@ -10,7 +10,7 @@ import {
 } from "../infra/update-run-ledger.js";
 import type { UpdateRunPhase, UpdateRunRecord } from "../infra/update-run-record.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
-import { reconcileOpenClawStateSchemaPublication } from "../state/openclaw-state-db.js";
+import { reconcileOpenClawStateSchemaPublicationAsync } from "../state/openclaw-state-schema-publication.async.js";
 import { GATEWAY_EVENT_UPDATE_RUN_CHANGED } from "./events.js";
 import type { GatewayBroadcastFn } from "./server-broadcast-types.js";
 
@@ -44,25 +44,37 @@ export function startUpdateRunWatcher(params: {
   let scanRequested = false;
   let reconcileAllRequested = false;
 
-  const schedulePublication = () => {
+  const schedulePublication = async () => {
     publicationTimer?.cancel();
     publicationTimer = undefined;
     if (work.isClosing) {
       return;
     }
     try {
-      const blocker = reconcileOpenClawStateSchemaPublication();
-      if (blocker?.publishAfterMs != null) {
+      const blocker = await reconcileOpenClawStateSchemaPublicationAsync({ signal: work.signal });
+      if (!work.isClosing && blocker?.publishAfterMs != null) {
         // Deadline belongs to the ledger row, so process restarts never restart the grace.
         publicationTimer = scheduler.schedule({
           id: "update.schema-publication",
           atMs: blocker.publishAfterMs,
-          run: schedulePublication,
+          run: () => work.track(schedulePublication),
         });
       }
     } catch (error) {
-      params.log.warn(`state schema publication deferred: ${formatErrorMessage(error)}`);
+      if (!work.isClosing) {
+        params.log.warn(`state schema publication deferred: ${formatErrorMessage(error)}`);
+      }
     }
+  };
+
+  const schedulePoll = () => {
+    // The detached orchestrator writes the shared ledger. Keep observing the
+    // admitted run until terminal or teardown, including across failed reads.
+    timer = scheduler.schedule({
+      id: "update.run-poll",
+      delayMs: UPDATE_RUN_POLL_MS,
+      run: poll,
+    });
   };
 
   const scanOnce = async (reconcileAll: boolean): Promise<void> => {
@@ -80,7 +92,10 @@ export function startUpdateRunWatcher(params: {
         return;
       }
       reconciled.push(...abandoned.filter((run) => run.runId !== watched?.runId));
-      schedulePublication();
+      await schedulePublication();
+      if (work.isClosing) {
+        return;
+      }
       const nextActive = watched?.sentinelDeadline
         ? (await listUpdateRunsAsync({ active: true, limit: 1 }))[0]
         : undefined;
@@ -170,18 +185,15 @@ export function startUpdateRunWatcher(params: {
         void scan(reconcileAll);
         return;
       }
-      // Named freshness-poll exception: the detached orchestrator writes the
-      // shared ledger. Observe one active run until terminal or teardown so a
-      // late repair still clears the clients' update-in-progress state.
-      timer = scheduler.schedule({
-        id: "update.run-poll",
-        delayMs: UPDATE_RUN_POLL_MS,
-        run: poll,
-      });
+      schedulePoll();
     } catch (error) {
       if (!work.isClosing) {
-        watched = undefined;
-        params.log.warn(`update run watcher stopped: ${formatErrorMessage(error)}`);
+        params.log.warn(
+          `update run watcher ${watched ? "deferred" : "stopped"}: ${formatErrorMessage(error)}`,
+        );
+        if (watched) {
+          schedulePoll();
+        }
       }
     }
   };

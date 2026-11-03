@@ -44,7 +44,6 @@ import type {
   DevicePairSetupCompletionRecord,
 } from "./device-pairing.types.js";
 import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
-import { readSqliteDatabaseWriteTokenForPath } from "./sqlite-database-admission.js";
 import { runSqliteReadOperationSync } from "./sqlite-schema-facts.js";
 
 // Outlive generic setup credentials; cloud-worker completion also binds durably
@@ -520,7 +519,6 @@ export const deviceBootstrapOperations = {
     return {
       removed,
       nextExpiryAtMs: nextExpiryAtMs ?? null,
-      writeToken: readSqliteDatabaseWriteTokenForPath(database.path),
     };
   },
   "bootstrap.clear": devicePairingMutation(clearDeviceBootstrapTokens),

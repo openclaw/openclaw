@@ -61,11 +61,22 @@ export function unwrapGatewayMethodDispatchResponse(
   return response.payload;
 }
 
-function resolveDispatchDeadlineMs(timeoutMs?: number): number | undefined {
+type DispatchDeadline = {
+  /** Wall-clock deadline for diagnostic liveness (consumed with Date.now()). */
+  readonly diagnosticDeadlineMs: number;
+  /** Monotonic deadline and clock for timeout computation (consumed by setTimeout). */
+  readonly monotonicDeadlineMs: number;
+};
+
+function resolveDispatchDeadline(timeoutMs?: number): DispatchDeadline | undefined {
   if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs)) {
     return undefined;
   }
-  return Date.now() + resolveSafeTimeoutDelayMs(timeoutMs);
+  const safeTimeoutMs = resolveSafeTimeoutDelayMs(timeoutMs);
+  return {
+    diagnosticDeadlineMs: Date.now() + safeTimeoutMs,
+    monotonicDeadlineMs: performance.now() + safeTimeoutMs,
+  };
 }
 
 function resolveDispatchAbortError(method: string, signal: AbortSignal): Error {
@@ -84,7 +95,7 @@ export function throwIfGatewayDispatchAborted(method: string, signal?: AbortSign
 async function waitForDispatch<T>(
   method: string,
   promise: Promise<T>,
-  deadlineMs?: number,
+  deadline?: DispatchDeadline,
   signal?: AbortSignal,
   onSignalAbort?: () => Promise<void> | void,
   onTimeout?: () => void,
@@ -93,14 +104,16 @@ async function waitForDispatch<T>(
   let releaseDeadline: (() => void) | undefined;
   try {
     const remainingTimeoutMs =
-      deadlineMs === undefined
+      deadline === undefined
         ? undefined
-        : resolveSafeTimeoutDelayMs(deadlineMs - Date.now(), { minMs: 0 });
+        : resolveSafeTimeoutDelayMs(deadline.monotonicDeadlineMs - performance.now(), { minMs: 0 });
     if (remainingTimeoutMs === undefined && !signal) {
       return await promise;
     }
     releaseDeadline =
-      deadlineMs === undefined ? undefined : registerDiagnosticToolExecutionDeadline(deadlineMs);
+      deadline === undefined
+        ? undefined
+        : registerDiagnosticToolExecutionDeadline(deadline.diagnosticDeadlineMs);
     const abortError = (aborted: AbortSignal) => resolveDispatchAbortError(method, aborted);
     return await (remainingTimeoutMs === undefined || signal?.aborted
       ? racePromiseWithAbortSignal(promise, signal, abortError)
@@ -149,7 +162,7 @@ export async function waitForGatewayDispatch<T>(
   return await waitForDispatch(
     method,
     promise,
-    resolveDispatchDeadlineMs(timeoutMs),
+    resolveDispatchDeadline(timeoutMs),
     signal,
     onSignalAbort,
     onTimeout,
@@ -169,7 +182,7 @@ export async function dispatchGatewayRequestInProcessRaw(
   const first = createDeferredCore<GatewayMethodDispatchResponse>();
   let final: Deferred<GatewayMethodDispatchResponse> | null = null;
   let postFirstResponseError: Error | undefined;
-  const deadlineMs = resolveDispatchDeadlineMs(options.timeoutMs);
+  const deadline = resolveDispatchDeadline(options.timeoutMs);
   const req = {
     type: "req" as const,
     id: `${options.requestIdPrefix ?? "in-process"}-${randomUUID()}`,
@@ -245,7 +258,7 @@ export async function dispatchGatewayRequestInProcessRaw(
     waitForDispatch(
       method,
       response,
-      deadlineMs,
+      deadline,
       options.signal,
       options.onSignalAbort,
       undefined,

@@ -4,10 +4,6 @@ import type {
 } from "@openclaw/libterminal/browser";
 import { resolveThemeColor } from "../../lib/theme-color.ts";
 
-type TerminalTheme = NonNullable<
-  NonNullable<CreateGhosttyTerminalOptions["terminalOptions"]>["theme"]
->;
-
 // ANSI palettes tuned per mode: colors that read on the near-black surface sit
 // at 1.4-2.6:1 on the light surface, so light gets its own darkened set
 // (>=4.5:1 on #f7f8fa) instead of sharing the dark palette.
@@ -62,7 +58,9 @@ export function terminalDynamicColors(): TerminalDefaultColors {
   };
 }
 
-export function terminalTheme(mode: "dark" | "light"): TerminalTheme {
+export function terminalTheme(
+  mode: "dark" | "light",
+): NonNullable<NonNullable<CreateGhosttyTerminalOptions["terminalOptions"]>["theme"]> {
   const colors = terminalDynamicColors();
   return {
     ...(mode === "light" ? LIGHT_ANSI : DARK_ANSI),

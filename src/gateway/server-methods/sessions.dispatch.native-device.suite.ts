@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { PairedDevice } from "../../infra/device-pairing.types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -58,6 +59,7 @@ export function registerNativeDeviceDispatchTests({
           },
         },
       };
+      setRuntimeConfigSnapshot(config, config);
       const node = connectedNode("scenario2-paired-node", 2);
       const runtime = createDeviceWorkerRuntime({
         getPairedDevice: async (id) => (id === node.nodeId ? pairedNode(id) : null),
@@ -182,7 +184,8 @@ export function registerNativeDeviceDispatchTests({
           undefined,
           expect.objectContaining({
             code: ErrorCodes.FORBIDDEN,
-            details: expect.objectContaining({ missingScope: "operator.admin" }),
+            message:
+              "Your operator role cannot dispatch to this cloud profile; choose your own session and an allowed profile, or ask a gateway administrator to update your role.",
           }),
         );
         expect(dispatch).not.toHaveBeenCalled();
@@ -246,7 +249,7 @@ export function registerNativeDeviceDispatchTests({
         },
       }),
       expect.any(Function),
-      undefined,
+      expect.any(Function),
       undefined,
     );
     expect(respond).toHaveBeenCalledWith(

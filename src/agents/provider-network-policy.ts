@@ -47,7 +47,7 @@ export function resolveProviderTransportSsrFPolicy(params: {
   const baseOrigin = resolveHttpOrigin(baseUrl);
   const requestOrigin = resolveHttpOrigin(params.url);
   const requestMatchesBaseOrigin =
-    typeof baseUrl === "string" && Boolean(baseOrigin) && requestOrigin === baseOrigin;
+    baseUrl !== undefined && Boolean(baseOrigin) && requestOrigin === baseOrigin;
   const hostname = requestMatchesBaseOrigin ? normalizeProviderOriginHostname(baseUrl) : undefined;
   const eligibleHostname =
     hostname &&

@@ -1,4 +1,5 @@
 import process from "node:process";
+import { deserialize } from "node:v8";
 
 process.on("SIGTERM", () => {
   // Force the parent test through its SIGKILL path.
@@ -12,11 +13,19 @@ process.stdin.on("data", (chunk) => {
   }
   const input = JSON.parse(buffered);
   buffered = "";
-  const mode = input.request.providerModels[0]?.startsWith("fixture:")
-    ? input.request.providerModels[0]
-    : input.databasePath;
+  const request = deserialize(Buffer.from(input.request, "base64"));
+  const mode =
+    request.query.parameters.find(
+      (value) => typeof value === "string" && value.startsWith("fixture:"),
+    ) ?? input.databasePath;
   if (mode === "fixture:malformed") {
     process.stdout.write("not-json\n");
+    return;
+  }
+  if (mode === "fixture:invalid-row") {
+    process.stdout.write(
+      JSON.stringify({ status: "ok", value: { rows: [{}], fallbackScanRequired: false } }) + "\n",
+    );
     return;
   }
   if (mode === "fixture:oversized") {
@@ -33,7 +42,7 @@ process.stdin.on("data", (chunk) => {
     return;
   }
   process.stderr.write("ready\n");
-  const deadline = performance.now() + Math.max(0, Number(input.request?.limit ?? 0));
+  const deadline = performance.now() + Math.max(0, Number(request.limit ?? 0));
   while (performance.now() < deadline) {
     // Model a synchronous native SQLite call that cannot service messages.
   }

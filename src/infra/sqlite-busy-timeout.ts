@@ -13,7 +13,8 @@ const { busyTimeoutByDatabase, trackedDatabases } = resolveGlobalSingleton(
   }),
 );
 
-function rememberSqliteBusyTimeout(database: DatabaseSync, busyTimeoutMs: number): void {
+/** Record policy applied by the native constructor, after schema tracking is installed. */
+export function rememberSqliteBusyTimeout(database: DatabaseSync, busyTimeoutMs: number): void {
   if (!trackedDatabases.has(database)) {
     trackedDatabases.add(database);
     registerNodeSqliteDisposeCallback(database, () => busyTimeoutByDatabase.delete(database));

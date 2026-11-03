@@ -31,6 +31,20 @@ export function createUserTurnProcessingCompletion(
   let processingCompletion: Result<AgentRunTerminalOutcome, unknown> | undefined;
   let processingCompletionPromise: Promise<AgentRunTerminalOutcome | undefined> | undefined;
   return {
+    withPendingInput: <T>(run: () => T): T => {
+      const pendingInput = readPendingInput();
+      return pendingInput ? pendingInput.run(run) : run();
+    },
+    finishPendingInput: (disposition: "cancelled" | "interrupted") => {
+      const pendingInput = readPendingInput();
+      if (pendingInput) {
+        pendingInput.finish(disposition);
+      } else {
+        for (const source of sources ?? []) {
+          source.finishPendingInput?.(disposition);
+        }
+      }
+    },
     withPendingInputCurrent: async <T>(run: () => T): Promise<Awaited<T>> => {
       const pendingInput = readPendingInput();
       return await (pendingInput?.runAsync
@@ -59,13 +73,6 @@ export function createUserTurnProcessingCompletion(
       if (!pendingInput?.complete) {
         return undefined;
       }
-      warnPluginSdkDeprecation({
-        family: "session-input-completion",
-        method: "UserTurnTranscriptRecorder.completeProcessing",
-        replacement: "await UserTurnTranscriptRecorder.completeProcessingAsync(outcome)",
-        compatibility: "Synchronous completion remains supported until the next Plugin SDK major.",
-        code: "DEP_SESSION_INPUT_COMPLETION",
-      });
       if (!processingCompletion) {
         if (processingCompletionPromise) {
           throw new Error("Input completion is pending; await completeProcessingAsync");

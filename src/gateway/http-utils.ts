@@ -33,9 +33,14 @@ import { ADMIN_SCOPE } from "./method-scopes.js";
 import { loadGatewayModelCatalog } from "./server-model-catalog.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import {
-  authorizeResolvedSessionMutationAsync,
-  isResolvedIncognitoSessionAsync,
-} from "./session-sharing.js";
+  authorizePreparedSessionMutation,
+  withSessionSharingTarget,
+} from "./session-sharing-policy.js";
+import {
+  prepareProjectedSessionSharing,
+  prepareSessionSharingProfiles,
+} from "./session-sharing-read.js";
+import { isResolvedIncognitoSession } from "./session-sharing.js";
 import { canonicalizeSessionKeyForAgent } from "./session-store-key.js";
 
 export {
@@ -105,7 +110,7 @@ function assertKnownAgentId(agentId: string, cfg = getRuntimeConfig()): void {
   }
 }
 
-export function resolveAgentIdFromModel(
+function resolveAgentIdFromModel(
   model: string | undefined,
   cfg = getRuntimeConfig(),
 ): string | undefined {
@@ -125,17 +130,23 @@ export function resolveAgentIdFromModel(
   return normalizeAgentId(agentId);
 }
 
-/** Checks OpenClaw routing-model syntax without resolving fleet ownership. */
-export function isOpenClawAgentModelId(model: string | undefined): boolean {
+/** Maps accepted OpenClaw routing-model spellings to the canonical id listed by `/v1/models`. */
+export function canonicalizeOpenClawAgentModelId(model: string | undefined): string | undefined {
   const raw = model?.trim();
   if (!raw) {
-    return false;
+    return undefined;
   }
   const lowered = normalizeLowercaseStringOrEmpty(raw);
   if (lowered === OPENCLAW_MODEL_ID || lowered === OPENCLAW_DEFAULT_MODEL_ID) {
-    return true;
+    return lowered;
   }
-  return AGENT_MODEL_PATTERN.test(raw);
+  const agentId = raw.match(AGENT_MODEL_PATTERN)?.groups?.agentId;
+  return agentId ? `openclaw/${normalizeAgentId(agentId)}` : undefined;
+}
+
+/** Checks OpenClaw routing-model syntax without resolving fleet ownership. */
+export function isOpenClawAgentModelId(model: string | undefined): boolean {
+  return canonicalizeOpenClawAgentModelId(model) !== undefined;
 }
 
 /** Validates and resolves the `x-openclaw-model` override for OpenAI-compatible requests. */
@@ -289,32 +300,54 @@ export async function authorizeOpenAiCompatibleHttpSession(params: {
   requestAuth: AuthorizedGatewayHttpRequest;
   senderIsOwner: boolean;
 }): Promise<{ allowed: true } | { allowed: false; message: string }> {
-  const cfg = getRuntimeConfig();
   const authenticatedUserProfile = params.requestAuth.authenticatedUserProfile;
-  const authorizationError = await authorizeResolvedSessionMutationAsync({
-    cfg,
-    client: createSyntheticPluginRuntimeClient({
-      ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
-      operatorRoleActor: params.requestAuth.operatorRoleActor,
-      operatorAccessAuthority: params.requestAuth.operatorAccessAuthority,
-      scopes: params.senderIsOwner ? [ADMIN_SCOPE] : [],
-    }),
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
+  const client = createSyntheticPluginRuntimeClient({
+    ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
+    operatorRoleActor: params.requestAuth.operatorRoleActor,
+    operatorAccessAuthority: params.requestAuth.operatorAccessAuthority,
+    scopes: params.senderIsOwner ? [ADMIN_SCOPE] : [],
   });
-  if (authorizationError) {
-    return { allowed: false, message: authorizationError.message };
-  }
-  if (
-    !params.senderIsOwner &&
-    !authenticatedUserProfile &&
-    (await isResolvedIncognitoSessionAsync({
-      cfg,
+  const profiles = await prepareSessionSharingProfiles(client);
+  return withSessionSharingTarget<{ allowed: true } | { allowed: false; message: string }>(
+    {
+      cfg: getRuntimeConfig(),
       sessionKey: params.sessionKey,
       agentId: params.agentId,
-    }))
-  ) {
-    return { allowed: false, message: `missing scope: ${ADMIN_SCOPE}` };
-  }
-  return { allowed: true };
+    },
+    (read) => {
+      read.assertCurrent();
+      const cfg = getRuntimeConfig();
+      const membership = new Set(read.members.map((member) => member.identityId));
+      const sharing = prepareProjectedSessionSharing({
+        cfg,
+        client,
+        profiles,
+        isMember: (_target, id) => membership.has(id),
+      });
+      const authorizationError = authorizePreparedSessionMutation(
+        {
+          cfg,
+          client,
+          sessionKey: params.sessionKey,
+          agentId: params.agentId,
+        },
+        { target: read.target, membership },
+        { policy: sharing.policy, aliases: profiles.readCurrent().profile?.aliases ?? new Set() },
+      );
+      if (authorizationError) {
+        return { allowed: false, message: authorizationError.message };
+      }
+      if (
+        !params.senderIsOwner &&
+        !authenticatedUserProfile &&
+        isResolvedIncognitoSession(
+          { cfg, sessionKey: params.sessionKey, agentId: params.agentId },
+          read.target,
+        )
+      ) {
+        return { allowed: false, message: `missing scope: ${ADMIN_SCOPE}` };
+      }
+      return { allowed: true };
+    },
+  );
 }

@@ -38,11 +38,15 @@ export function readSessionEntryPatchPredicate(
   database: OpenClawAgentDatabase,
   sessionKey: string,
   predicate: SessionEntryPatchGuard["shouldCommitIf"],
+  committedTranscript?: SessionEntryPatchCommitted["transcriptPredicate"],
 ): { matches: boolean; transcriptPredicate?: SessionEntryPatchCommitted["transcriptPredicate"] } {
   if (!predicate) {
     return { matches: true };
   }
-  const watermark = readSessionTranscriptWatermarkInDatabase(database, predicate.sessionId);
+  const watermark =
+    committedTranscript?.sessionId === predicate.sessionId
+      ? committedTranscript.watermark
+      : readSessionTranscriptWatermarkInDatabase(database, predicate.sessionId);
   if (watermark.generation !== predicate.generation) {
     return { matches: false };
   }

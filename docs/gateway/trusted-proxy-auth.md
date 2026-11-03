@@ -194,6 +194,13 @@ These grants are session-only. They do not create or update device pairing
 records and do not trigger device scope-upgrade requests. Token, password, and
 no-auth connections do not carry a verified identity and never receive a grant.
 
+Each connection receiving additional identity scopes emits an `info` security
+audit record with the verified identity, added scopes, authentication method,
+and connection id. Reconnects retain their own records so the log can account
+for every application of the grant. Keep `logging.level` at `info` or more
+verbose to retain these records; applying a configured session grant is not a
+warning. This connection log is separate from the [activity audit ledger](/gateway/audit).
+
 ## Automatic device approval
 
 Trusted-proxy auth can optionally use the proxy identity as the approval boundary for new browser and native UI operator devices and same-key scope upgrades:
@@ -237,6 +244,10 @@ Scope implications:
 - If methods fail with `missing scope` after a successful WebSocket connect, reload so the browser pairs its device identity, or approve the pending device request. See [Control UI insecure HTTP](/web/control-ui/connect-and-pair#insecure-http).
 
 Reverse-proxy scope capping: if your proxy sends `x-openclaw-scopes` on the Control UI WebSocket upgrade request, OpenClaw caps device enrollment or upgrade requests and the final union of device-authorized and identity-granted session scopes. This header does not grant scopes; it only narrows authority. When `deviceAutoApprove.enabled` is true, the cap also limits the persistent device grant written by [automatic device approval](#automatic-device-approval).
+
+The cap honors operator scope implications. For example, an `operator.write`
+grant with an `operator.read` header retains read access without write access,
+whether or not the grant also lists the redundant `operator.read` scope.
 
 Implications:
 

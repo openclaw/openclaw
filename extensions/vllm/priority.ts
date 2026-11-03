@@ -1,6 +1,7 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-metadata";
+import { wrapProviderPayloadHook } from "openclaw/plugin-sdk/provider-stream-shared";
 import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export function wrapVllmPriorityStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
@@ -24,16 +25,16 @@ export function wrapVllmPriorityStream(ctx: ProviderWrapStreamFnContext): Stream
     }
     return underlying(model, context, {
       ...options,
-      onPayload: async (payload, requestModel) => {
+      onPayload: wrapProviderPayloadHook(options?.onPayload, (payload, replacement) => {
         // Explicit dynamic scheduling owns priority after ordinary payload overrides.
         // Mutate only this request; fallback models keep their own configured fields.
-        const result = (await options?.onPayload?.(payload, requestModel)) ?? payload;
+        const result = replacement ?? payload;
         const body = asOptionalObjectRecord(result);
         if (body) {
           body.priority = priority;
         }
         return result;
-      },
+      }),
     });
   };
   return Object.assign(wrapped, { preservesGenericCompatibility: true });

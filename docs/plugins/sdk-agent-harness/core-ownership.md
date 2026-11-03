@@ -39,6 +39,33 @@ applies it when building the surface; harnesses do not need to forward that fact
 and plugin-supplied options cannot replace it. Tool profiles still filter the
 catalog, and each executable remains bound to the host's live authority.
 
+Core also passes optional `params.preparedWebSearchPolicy` to attempts and V2
+side questions with `allowed`, `persistentAllowed`, the `modelRef` provider/model
+tuple, and `requesterFacts` containing the session-policy and lineage reads
+consumed during capability preparation. Harnesses can consume this data without
+reading session policy synchronously. Apply turn-specific tool restrictions separately; this snapshot
+does not grant execution authority or replace live native-action checks. Existing
+harnesses may ignore the field.
+
+When an attempt uses an independent `sandboxSessionKey`, prepared search policy
+uses that session's agent owner. Use `sandboxAgentId` when an unscoped key belongs
+to a different policy owner; the execution agent continues to own the attempt's
+credentials and transcript.
+
+For native-owned models, core uses the prepared native model reference. Codex
+rejects a changed tuple or requester facts before applying the prepared search
+policy; retrying the turn prepares current policy. Native admission retains the
+captured requester checks through the physical native write, including session-ID
+selection and absence. The existing `captureSessionEntryCurrentCheckAsync` helper
+accepts an optional `sessionId` selector in place of `sessionKey`; when both are
+supplied, the ID selects the row. Existing key-only callers are unchanged.
+Both bindings are optional in the SDK shape to preserve existing callers.
+Pending native supervision without a selected model receives a prepared denial.
+Codex enables hosted search only from prepared policy; missing data disables
+hosted search rather than resolving requester policy after native source capture.
+Side-question builders must forward the prepared policy unchanged, including its
+model reference and requester facts.
+
 ### Prepared local execution environment
 
 `hostCapabilities.preparedEnvironment()` returns captured identity and execution facts for the admitted attempt. Its optional `localGitConfigParameters` is an append fragment, not a replacement for `GIT_CONFIG_PARAMETERS`. Apply it only to local child processes owned by the harness. Preserve unrelated inherited or explicitly configured Git parameters and the runtime's environment filters; an explicit native value, including an empty string, replaces its inherited base before the host fragment is appended. Keep inherited credentials in the child environment rather than copying them into tool request overrides or persisted native thread configuration. Remote, sandbox, and externally started peers retain their existing environment owners.
@@ -196,6 +223,14 @@ harness. The operator can switch the session to the embedded runtime or upgrade
 the harness. Channel `/btw` side questions with a restrictive direct policy are
 rejected by core and are not covered by this declaration.
 
+A harness that resolves hosted `web_search` availability itself should await
+`resolveWebSearchToolPolicyAsync(...)` from `openclaw/plugin-sdk/agent-harness`.
+It prepares the stored session facts that policy reads, so the result does not
+depend on the Gateway's session projection, which can lag during startup and
+restart recovery. The synchronous `resolveWebSearchToolPolicy` reads only
+already-prepared facts and can throw `Session capability metadata requires
+worker preparation`.
+
 For a known, actionable refusal, `AgentHarnessPreflightError` accepts an optional
 `userMessage`. Core renders this owner-authored public copy across chat surfaces
 without a verbose setting or generic retry/reset advice. Keep technical context
@@ -217,6 +252,19 @@ scoped to the attempt, and surface actionable authentication failures. Do not
 set this capability on a harness that only sometimes owns authentication.
 This static bootstrap capability is distinct from ownership of an already-bound
 native session's model and connection.
+
+### Native setup verification
+
+For profileless Model Setup activation, a harness with `authBootstrap: "harness"`
+can implement `verifySetup(ctx): Promise<void>`. The context provides `config`,
+`provider`, `modelId`, `workspaceDir`, `signal`, and `assertCurrent()`.
+Import its type from `openclaw/plugin-sdk/agent-harness`.
+
+Confirm live access to the selected model without a turn; cached or bundled
+catalogs are insufficient. Recheck `assertCurrent()` before native I/O and
+after awaits, and close connections in `finally`. Core rechecks the hook and
+plugin artifacts before commit. Credential-backed routes and harnesses without
+the hook retain the normal inference probe.
 
 ### Bound native session ownership
 
@@ -309,9 +357,13 @@ route, using the reply's original caller-policy snapshot for both its fingerprin
 and incoming-message projection. Native ownership or model-selection hooks do not
 replace that snapshot or authorize a different caller.
 
-Core carries optional `expectedSessionRuntimeOwnership` into the attempt, including
-`modelRef` for host-auth bindings. This is a nonauthorizing comparison, not a binding,
-credential, or retained capability. Revalidate during preflight, under the binding
+Core carries optional `expectedSessionRuntimeOwnership` into attempts and V2 side
+questions, including the captured `auth` owner and `modelRef` for host-auth bindings.
+The side-question field reuses the attempt shape; existing callers may omit it.
+This is a nonauthorizing comparison, not a binding, credential, or retained capability.
+Side hooks must check it when acquiring the binding, before selecting a connection
+or using prepared credentials. An auth-owner change rejects the side question even
+when its provider and model are unchanged. Revalidate during preflight, under the binding
 lease, and against the ready thread after resume before inference. A changed host-auth
 tuple rejects stale prepared credentials while retaining the newly observed binding.
 Native-auth connections may follow their native owner's model changes. Missing or
@@ -352,8 +404,6 @@ native harnesses:
   for provider-aware tool schema policy
 - `runtimePlan.transcript.resolvePolicy(...)` for transcript sanitization and
   tool-call repair policy
-- `runtimePlan.delivery.isSilentPayload(...)` for shared `NO_REPLY` and media
-  delivery suppression
 - `runtimePlan.outcome.classifyRunResult(...)` for model fallback
   classification
 - `runtimePlan.observability` for resolved provider/model/harness metadata
@@ -361,6 +411,25 @@ native harnesses:
 Harnesses may use the plan for decisions that need to match OpenClaw behavior,
 but treat it as host-owned attempt state: do not mutate it or use it to switch
 providers/models inside a turn.
+
+Terminal reply preparation belongs to `agent-run-terminal-reply.ts`. Each terminal
+producer publishes `meta.terminalReply` and full prepared payloads; delivery and
+clients consume them without parsing text again. Only a whole final that trims
+to uppercase `NO_REPLY` is silent. Preparation strips one literal leading
+`NO_REPLY\n` and preserves the remainder as visible text, including a second
+`NO_REPLY`. Otherwise, a standalone `NO_REPLY` on the last non-empty line is
+removed and the preceding answer is delivered; whitespace around that final line
+is allowed. Wrapped, lowercase, punctuated, inline, and mid-text forms remain visible.
+Internal result-required turns need an actual completed current-source final
+result; progress mirrors do not satisfy that obligation.
+
+The sole producer entrypoint is `prepareAgentRunTerminalReply({ rawText })`,
+returning `{ text, terminalReply }`. It classifies the raw text before stripping
+one leading or trailing control line. Delivery consumers do not call this function. Deliver
+`text`, which retains the full prepared bytes, rather than the bounded snapshot
+text. A recorded visible result stays visible even if its text is `NO_REPLY`.
+Harnesses combining multiple visible answers combine their prepared snapshots
+and cap the aggregate metadata separately; never reparse the joined delivery text.
 
 For model-visible reply policy, `buildHarnessVisibleReplyGuidance` from
 `openclaw/plugin-sdk/agent-harness-runtime` accepts the prepared delivery mode,

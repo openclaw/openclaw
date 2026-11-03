@@ -19,12 +19,8 @@
   margin-left: var(--shell-chrome-safe-area-left);
 }
 
-/* Native hosts hide the web cluster; onboarding never mounts it. */
-html.openclaw-native-nav
-  .shell:not(.shell--mobile-nav)
-  .sidebar-update-card--floating
-  .sidebar-update-card,
-html.openclaw-native-web-chrome
+/* Legacy native hosts hide the web cluster; onboarding never mounts it. */
+html.openclaw-native-nav:not(.openclaw-native-web-chrome)
   .shell:not(.shell--mobile-nav)
   .sidebar-update-card--floating
   .sidebar-update-card,

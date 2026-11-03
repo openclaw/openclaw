@@ -118,6 +118,19 @@ function isWrapped(command: string, args: readonly string[]): boolean {
   return command === OOM_SCORE_WRAP_SHELL && args[0] === "-c" && args[1] === OOM_SCORE_WRAP_SCRIPT;
 }
 
+/** Diagnostics attribute the final command without changing the wrapper's execution policy. */
+export function resolveOomScoreWrappedCommand(
+  command: string,
+  args: readonly string[],
+): string | undefined {
+  return command === OOM_SCORE_WRAP_SHELL &&
+    args[0] === "-c" &&
+    (args[1] === OOM_SCORE_WRAP_SCRIPT || args[1] === OOM_SCORE_RESTORE_EXEC_ENV_SCRIPT) &&
+    args[2]
+    ? args[2]
+    : undefined;
+}
+
 /** Only small spawn owners may temporarily raise their score; never call from the Gateway. */
 export function spawnWithInheritedOomScore(
   command: string,

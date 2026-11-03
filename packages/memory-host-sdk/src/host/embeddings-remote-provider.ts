@@ -1,15 +1,13 @@
+import type { EmbeddingProviderCreateOptions } from "../../../../src/plugins/embedding-provider-types.js";
 import {
   resolveEmbeddingEndpointUrl,
   resolveRemoteEmbeddingBearerClient,
   type RemoteEmbeddingProviderId,
 } from "./embeddings-remote-client.js";
 import { fetchRemoteEmbeddingVectors } from "./embeddings-remote-fetch.js";
-import type {
-  EmbeddingProvider,
-  EmbeddingProviderCallOptions,
-  EmbeddingProviderOptions,
-} from "./embeddings.types.js";
+import type { EmbeddingProvider, EmbeddingProviderCallOptions } from "./embeddings.types.js";
 import type { SsrFPolicy } from "./openclaw-runtime-network.js";
+import type { RemoteEmbeddingRequestAuth } from "./remote-http.js";
 
 // Remote embedding provider factory for OpenAI-compatible embeddings APIs.
 
@@ -19,6 +17,7 @@ export type RemoteEmbeddingClient = {
   headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
   fetchImpl?: typeof fetch;
+  resolveRequestHeaders?: RemoteEmbeddingRequestAuth;
   model: string;
 };
 
@@ -50,6 +49,7 @@ export function createRemoteEmbeddingProvider(params: {
       headers: client.headers,
       ssrfPolicy: client.ssrfPolicy,
       fetchImpl: client.fetchImpl,
+      resolveRequestHeaders: client.resolveRequestHeaders,
       signal: options?.signal,
       onUsage: options?.onUsage,
       body: {
@@ -87,16 +87,16 @@ export function createRemoteEmbeddingProvider(params: {
 export async function resolveRemoteEmbeddingClient(params: {
   provider: RemoteEmbeddingProviderId;
   capability?: string;
-  options: EmbeddingProviderOptions;
+  options: EmbeddingProviderCreateOptions;
   defaultBaseUrl: string;
   normalizeModel: (model: string) => string;
 }): Promise<RemoteEmbeddingClient> {
-  const { baseUrl, headers, ssrfPolicy } = await resolveRemoteEmbeddingBearerClient({
+  const client = await resolveRemoteEmbeddingBearerClient({
     provider: params.provider,
     capability: params.capability,
     options: params.options,
     defaultBaseUrl: params.defaultBaseUrl,
   });
   const model = params.normalizeModel(params.options.model);
-  return { baseUrl, headers, ssrfPolicy, model };
+  return { ...client, model };
 }

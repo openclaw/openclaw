@@ -10,7 +10,6 @@ import type {
 } from "../plugins/runtime/types-session-facts.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
-import { runSynchronousWork } from "../shared/synchronous-work.js";
 import { readUserProfileVersion } from "../state/user-profile-events.js";
 import { readGatewayAccessRevision } from "./gateway-access-revision.js";
 import { operatorReadShareKey } from "./methods/read-share-keys.js";
@@ -241,7 +240,7 @@ export async function withTrustedPluginSessionFacts<T>(
       const cache = authority ?? createReadScope("");
       const snapshot = await projection.withSelectionPreparation(async () => {
         do {
-          await projection.prepareSelection(true);
+          await projection.prepareSelection({ yieldForCatalog: true });
           await projection.prepareMembership();
           assertAuthority();
         } while (projection.needsSelectionPreparation());
@@ -270,9 +269,7 @@ export async function withTrustedPluginSessionFacts<T>(
             visibility: authority?.visibility,
           });
           const selected = presentation.select(opts, () =>
-            withAgentRosterFactsBatch(prepared.cfg, () =>
-              runSynchronousWork(selectSessionEntries(filters)),
-            ),
+            withAgentRosterFactsBatch(prepared.cfg, () => selectSessionEntries(filters)),
           );
           const targets = new Map<string, SelectionRow>();
           const bySessionId = new Map<string, Set<string>>();

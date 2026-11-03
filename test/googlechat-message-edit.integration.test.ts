@@ -1,7 +1,7 @@
 import { generateKeyPairSync } from "node:crypto";
 import { createServer, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
+import { createOpenClawCodingToolsAsync } from "openclaw/plugin-sdk/agent-harness";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
@@ -12,7 +12,6 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -56,7 +55,6 @@ import {
 
 const CANONICAL_SPACE = "spaces/AAQA1bC2dEf";
 const FOLDED_SPACE = "spaces/aaqa1bc2def";
-const SESSION_KEY = `agent:main:googlechat:group:${FOLDED_SPACE}`;
 
 let server: Server;
 let existingMessage = {
@@ -185,7 +183,8 @@ async function withAdmittedEdit(
       });
     const config: OpenClawConfig = {
       agents: { entries: { main: { workspace: state.workspaceDir } } },
-      tools: { message: { crossContext: { allowWithinProvider: true } } },
+      // This fixture exercises the registered message tool directly, not Tool Search.
+      tools: { toolSearch: false, message: { crossContext: { allowWithinProvider: true } } },
       channels: {
         googlechat: {
           accounts: {
@@ -217,20 +216,22 @@ async function withAdmittedEdit(
       },
     });
     try {
-      const tool = createOpenClawCodingTools({
-        config,
-        agentId: "main",
-        agentAccountId: "default",
-        runId,
-        sessionKey,
-        sessionId: "proof-session",
-        messageProvider: "googlechat",
-        messageTo: currentTarget,
-        currentChannelId: currentTarget,
-        chatType,
-        messageActionTurnCapability: capability,
-        workspaceDir: state.workspaceDir,
-      }).find((entry) => entry.name === "message");
+      const tool = (
+        await createOpenClawCodingToolsAsync({
+          config,
+          agentId: "main",
+          agentAccountId: "default",
+          runId,
+          sessionKey,
+          sessionId: "proof-session",
+          messageProvider: "googlechat",
+          messageTo: currentTarget,
+          currentChannelId: currentTarget,
+          chatType,
+          messageActionTurnCapability: capability,
+          workspaceDir: state.workspaceDir,
+        })
+      ).find((entry) => entry.name === "message");
       expect(tool).toBeDefined();
       requests.length = 0;
       await run({
@@ -250,127 +251,13 @@ async function withAdmittedEdit(
   });
 }
 
-describe("session-derived Google Chat delivery", () => {
-  it("sends and edits in the canonical mixed-case space recorded by the session", async () => {
-    await withOpenClawTestState({ prefix: "googlechat-session-target-" }, async (state) => {
-      const { privateKey } = generateKeyPairSync("rsa", {
-        modulusLength: 2048,
-        privateKeyEncoding: { type: "pkcs8", format: "pem" },
-        publicKeyEncoding: { type: "spki", format: "pem" },
-      });
-      const config: OpenClawConfig = {
-        agents: { entries: { main: { workspace: state.workspaceDir } } },
-        channels: {
-          googlechat: {
-            accounts: {
-              default: {
-                serviceAccount: JSON.stringify({
-                  type: "service_account",
-                  client_email: "proof@example.iam.gserviceaccount.com",
-                  private_key: privateKey,
-                }),
-              },
-            },
-          },
-        },
-      };
-      setRuntimeConfigSnapshot(config);
-
-      // The session recorded its canonical destination on the inbound turn.
-      await upsertSessionEntry({
-        agentId: "main",
-        env: process.env,
-        sessionKey: SESSION_KEY,
-        entry: {
-          sessionId: "proof-session",
-          updatedAt: Date.now(),
-          delivery: {
-            kind: "external",
-            route: { channel: "googlechat", target: { to: `googlechat:${CANONICAL_SPACE}` } },
-            context: { channel: "googlechat", to: `googlechat:${CANONICAL_SPACE}` },
-            origin: { provider: "googlechat", to: `googlechat:${CANONICAL_SPACE}` },
-          },
-        },
-      });
-
-      setActivePluginRegistry(
-        createTestRegistry([
-          { pluginId: "googlechat", source: "test", origin: "bundled", plugin: googlechatPlugin },
-        ]),
-      );
-
-      requests.length = 0;
-
-      // The ambient surface is webchat; the destination exists only in the folded session
-      // key and in the session's stored delivery metadata.
-      const tools = createOpenClawCodingTools({
-        config,
-        agentId: "main",
-        sessionKey: SESSION_KEY,
-        sessionId: "proof-session",
-        messageProvider: "webchat",
-        workspaceDir: state.workspaceDir,
-      });
-      const tool = tools.find((entry) => entry.name === "message");
-      expect(tool, "message tool present in the harness tool list").toBeDefined();
-
-      // No explicit target: the tool must derive the destination from the session.
-      const result = await tool!.execute("proof-1", {
-        action: "send",
-        message: "session-derived reply",
-      });
-
-      const sends = requests.filter((entry) => entry.method === "POST");
-      expect(result.details).toMatchObject({ ok: true, to: CANONICAL_SPACE });
-      expect(sends).toHaveLength(1);
-      expect(sends[0]?.path).toBe(`/v1/${CANONICAL_SPACE}/messages`);
-      expect(JSON.parse(sends[0]!.body)).toEqual({ text: "session-derived reply" });
-
-      // Editing requires the host-admitted current conversation and account.
-      const runId = "googlechat-edit-proof";
-      const capability = mintMessageActionTurnCapability({
-        agentId: "main",
-        runId,
-        sessionKey: SESSION_KEY,
-        sessionId: "proof-session",
-        requesterAccountId: "default",
-        toolContext: {
-          currentChannelProvider: "googlechat",
-          currentChatType: "group",
-          currentChannelId: CANONICAL_SPACE,
-        },
-      });
+describe("Google Chat text edits through host authority", () => {
+  it("edits canonical mixed-case resources and preserves provider errors", async () => {
+    await withAdmittedEdit("mixed-case", CANONICAL_SPACE, async ({ edit }) => {
+      const messageId = `${CANONICAL_SPACE}/messages/proof-1`;
       try {
-        const editTool = createOpenClawCodingTools({
-          config,
-          agentId: "main",
-          agentAccountId: "default",
-          runId,
-          sessionKey: SESSION_KEY,
-          sessionId: "proof-session",
-          messageProvider: "googlechat",
-          messageTo: CANONICAL_SPACE,
-          currentChannelId: CANONICAL_SPACE,
-          chatType: "group",
-          messageActionTurnCapability: capability,
-          workspaceDir: state.workspaceDir,
-        }).find((entry) => entry.name === "message");
-        expect(editTool).toBeDefined();
-        // Use the ID returned by send through the registered tool and lazy adapter.
-        const messageId = `${CANONICAL_SPACE}/messages/proof-1`;
-        const edit = (id = messageId) =>
-          editTool!.execute("edit-proof", {
-            action: "edit",
-            target: CANONICAL_SPACE,
-            messageId: id,
-            message: "corrected reply",
-          });
-        requests.length = 0;
-        const edited = await edit();
-        expect(edited.details).toMatchObject({
-          ok: true,
-          to: CANONICAL_SPACE,
-          messageName: messageId,
+        expect(await edit()).toMatchObject({
+          details: { ok: true, to: CANONICAL_SPACE, messageName: messageId },
         });
         expect(requests.filter((entry) => entry.method !== "GET")).toEqual([
           {
@@ -381,7 +268,7 @@ describe("session-derived Google Chat delivery", () => {
         ]);
 
         requests.length = 0;
-        await expect(edit(`${FOLDED_SPACE}/messages/proof-1`)).rejects.toThrow(
+        await expect(edit({ messageId: `${FOLDED_SPACE}/messages/proof-1` })).rejects.toThrow(
           "messageId must belong to the target Google Chat space",
         );
         expect(requests.filter((entry) => entry.method !== "GET")).toEqual([]);
@@ -396,10 +283,9 @@ describe("session-derived Google Chat delivery", () => {
         }
       } finally {
         loopback.editStatus = 200;
-        revokeMessageActionTurnCapability(capability);
       }
     });
-  }, 60_000);
+  });
 
   it("edits the admitted existing message without replacing its non-text content", async () => {
     existingMessage.text = "original text";

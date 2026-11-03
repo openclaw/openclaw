@@ -11,7 +11,7 @@ import { persistSessionTranscriptTurn } from "../config/sessions/session-accesso
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
-import { readSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.js";
+import { readSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.worker.js";
 import { deriveSessionTitle } from "./session-utils-core.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);

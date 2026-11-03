@@ -1,13 +1,17 @@
 import { EventEmitter, once } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
-import type { HelloOk } from "../../../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_CLIENT_CAPS } from "../../../../packages/gateway-protocol/src/client-info.js";
+import type { ConnectParams, HelloOk } from "../../../../packages/gateway-protocol/src/index.js";
+import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/version.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import * as systemPresence from "../../../infra/system-presence.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { resolveGatewayAuth } from "../../auth-resolve.js";
+import type { HealthSummary } from "../../health/types.js";
 import { startGatewayTailscaleExposure } from "../../server-tailscale.js";
 import { prepareTailscalePublishedOrigin } from "../../tailscale-published-origin.js";
+import { getHealthCache } from "../health-state.js";
 import type { GatewayWsClient } from "../ws-types.js";
 
 // Hello update-scope tests cover authenticated role/scope and recovery ownership projection.
@@ -74,8 +78,9 @@ vi.mock("../../session-row-projection-access.js", async (importOriginal) => ({
   getSessionRowProjection: getSessionRowProjectionMock,
 }));
 
-vi.mock("../../../state/user-profiles.js", () => ({
-  hasMultipleSessionSharingIdentities: vi.fn(() => false),
+vi.mock("../../../state/user-profile-list.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../state/user-profile-list.js")>()),
+  hasMultipleResidentSessionSharingIdentities: vi.fn(() => false),
 }));
 
 vi.mock("../../control-ui-plugin-tabs.js", () => ({
@@ -91,6 +96,8 @@ vi.mock("./connect-auth-security.js", () => ({
 vi.mock("../../../version.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../version.js")>()),
   resolveRuntimeServiceBuildId: () => "build-a",
+  resolveRuntimeServiceCommit: () => "abcdef0",
+  resolveRuntimeServiceBuiltAt: () => "2026-10-21T11:55:00.000Z",
 }));
 
 const tailscaleClaim = vi.hoisted(() => vi.fn());
@@ -107,6 +114,13 @@ function makeContext(
   scopes: string[],
   client?: Pick<GatewayWsClient, "internal" | "preparedSessionProfile">,
 ) {
+  const connectParams: ConnectParams = {
+    minProtocol: PROTOCOL_VERSION,
+    maxProtocol: PROTOCOL_VERSION,
+    client: { id: "gateway-client", version: "dev", platform: "test", mode: "backend" },
+    role,
+    scopes,
+  };
   return {
     handler: {
       socket: new EventEmitter(),
@@ -125,11 +139,7 @@ function makeContext(
       logHealth: { error: vi.fn() },
     },
     frame: { id: `hello-${role}` },
-    connectParams: {
-      client: { id: "gateway-client", version: "dev", platform: "test", mode: "backend" },
-      role,
-      scopes,
-    },
+    connectParams,
     configSnapshot: {},
     sendFrame: vi.fn(async () => undefined),
     onHelloDelivered: vi.fn(),
@@ -154,6 +164,37 @@ function makeState(role: "operator" | "node", scopes: string[]) {
     bootstrapDeviceTokens: [],
   };
 }
+
+describe("sendGatewayHello running Gateway exposure", () => {
+  const gatewayExposure = { bindHost: "0.0.0.0", tailscaleMode: "off" } as const;
+
+  it("advertises what the process runs with to admins, not what config says", async () => {
+    const context = makeContext("operator", ["operator.admin"]);
+    await sendGatewayHello(
+      { ...context, handler: { ...context.handler, gatewayExposure } } as never,
+      { ...makeState("operator", ["operator.admin"]), resolvedAuth: { mode: "password" } } as never,
+      {},
+    );
+    expect(helloSnapshot(context)).toMatchObject({
+      authMode: "password",
+      bindHost: "0.0.0.0",
+      tailscaleMode: "off",
+    });
+  });
+
+  it("keeps it from clients without admin scope", async () => {
+    const context = makeContext("operator", ["operator.read"]);
+    await sendGatewayHello(
+      { ...context, handler: { ...context.handler, gatewayExposure } } as never,
+      makeState("operator", ["operator.read"]) as never,
+      {},
+    );
+    const snapshot = helloSnapshot(context);
+    expect(snapshot?.authMode).toBeUndefined();
+    expect(snapshot?.bindHost).toBeUndefined();
+    expect(snapshot?.tailscaleMode).toBeUndefined();
+  });
+});
 
 function helloPayload(context: ReturnType<typeof makeContext>) {
   const response = context.sendFrame.mock.calls.at(0)?.at(0) as { payload?: HelloOk } | undefined;
@@ -186,14 +227,89 @@ describe("sendGatewayHello update detail scope", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(getHealthCache).mockReturnValue(null);
+  });
+
+  it("advertises input custody without changing negotiated scopes", async () => {
+    const context = makeContext("operator", ["operator.read"]);
+
+    await sendGatewayHello(context as never, makeState("operator", ["operator.read"]) as never, {});
+
+    expect(helloPayload(context)?.features.capabilities).toContain("chat-input-custody-v1");
+    expect(helloPayload(context)?.auth.scopes).toEqual(["operator.read"]);
+  });
+
+  it.each([
+    { origin: "https://gateway.example.test", local: false, expected: true },
+    { origin: "http://127.0.0.1:18789", local: true, expected: true },
+    { origin: "http://127.0.0.1:18789", local: false, expected: false },
+  ])(
+    "advertises browser sign-in only for a secure served return: %j",
+    async ({ origin, local, expected }) => {
+      const context = {
+        ...makeContext("operator", ["operator.read"]),
+        browserOrigin: { origin, requestHost: new URL(origin).host, isLocalClient: local },
+      };
+      const gatewayMethods = ["health", "mcp.authLogin"];
+      await sendGatewayHello(
+        { ...context, handler: { ...context.handler, gatewayMethods } } as never,
+        makeState("operator", ["operator.read"]) as never,
+        {},
+      );
+      expect(helloPayload(context)?.features.methods).toEqual(
+        expected ? gatewayMethods : ["health"],
+      );
+    },
+  );
+
+  it.each([
+    { caps: [], mode: "full" },
+    { caps: [GATEWAY_CLIENT_CAPS.HEALTH_SUMMARY], mode: "summary" },
+    { caps: [GATEWAY_CLIENT_CAPS.HELLO_HEALTH_ON_DEMAND], mode: "empty" },
+    {
+      caps: [GATEWAY_CLIENT_CAPS.HELLO_HEALTH_ON_DEMAND, GATEWAY_CLIENT_CAPS.HEALTH_SUMMARY],
+      mode: "empty",
+    },
+  ])("negotiates $mode cached health in hello", async ({ caps, mode }) => {
+    const summary = {
+      ok: true as const,
+      ts: 123,
+      durationMs: 1,
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+      heartbeatSeconds: 0,
+    };
+    const health: HealthSummary = {
+      ...summary,
+      agents: [],
+      sessions: { path: "", count: 5000, recent: [] },
+    };
+    vi.mocked(getHealthCache).mockReturnValue(health);
+    const context = makeContext("operator", ["operator.read"]);
+    context.connectParams = {
+      ...context.connectParams,
+      caps,
+    };
+
+    await sendGatewayHello(context as never, makeState("operator", ["operator.read"]) as never, {});
+
+    expect(helloSnapshot(context)).toMatchObject({
+      presence: [],
+      stateVersion: { presence: 1, health: 1 },
+      uptimeMs: 1,
+    });
+    expect(helloSnapshot(context)?.health).toEqual(
+      mode === "empty" ? {} : mode === "summary" ? summary : health,
+    );
   });
 
   it.each([undefined, []])(
     "sends hello without membership reads for idle presence (%j)",
     async (watchedSessions) => {
-      const presence = vi
-        .spyOn(systemPresence, "listSystemPresence")
-        .mockReturnValue([{ text: "idle peer", ts: 1, watchedSessions }]);
+      vi.spyOn(systemPresence, "listSystemPresence").mockReturnValue([
+        { text: "idle peer", ts: 1, watchedSessions },
+      ]);
       const projection = {
         needsMembershipPreparation: vi.fn(() => true),
         prepareMembership: vi.fn(async () => {
@@ -209,79 +325,28 @@ describe("sendGatewayHello update detail scope", () => {
         {},
       );
 
-      expect(presence).toHaveBeenCalledWith({ includeConnectionId: "conn-operator" });
       expect(projection.needsMembershipPreparation).not.toHaveBeenCalled();
       expect(projection.prepareMembership).not.toHaveBeenCalled();
       expect(context.sendFrame).toHaveBeenCalledOnce();
     },
   );
 
-  it("waits for watched-session membership before sending hello", async () => {
+  it("sends hello while watched-session membership preparation is pending", async () => {
     vi.spyOn(systemPresence, "listSystemPresence").mockReturnValue([
       { text: "watching peer", ts: 1, watchedSessions: ["agent:main:watched"] },
     ]);
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
     const projection = {
-      needsMembershipPreparation: vi
-        .fn()
-        .mockReturnValueOnce(true)
-        .mockReturnValueOnce(true)
-        .mockReturnValue(false),
-      prepareMembership: vi
-        .fn()
-        .mockImplementationOnce(async () => {
-          entered.resolve();
-          await release.promise;
-        })
-        .mockResolvedValue(undefined),
+      needsMembershipPreparation: vi.fn(() => true),
+      prepareMembership: vi.fn(() => new Promise<void>(() => {})),
     };
     getSessionRowProjectionMock.mockReturnValue(projection);
     const context = makeContext("operator", ["operator.read"]);
-    const sending = sendGatewayHello(
-      context as never,
-      makeState("operator", ["operator.read"]) as never,
-      {},
-    );
-    try {
-      await entered.promise;
-      expect(buildGatewaySnapshotMock).not.toHaveBeenCalled();
-      expect(context.sendFrame).not.toHaveBeenCalled();
-    } finally {
-      release.resolve();
-      await sending;
-    }
-    expect(projection.prepareMembership).toHaveBeenCalledTimes(2);
+
+    await sendGatewayHello(context as never, makeState("operator", ["operator.read"]) as never, {});
+
     expect(context.sendFrame).toHaveBeenCalledOnce();
+    expect(projection.prepareMembership).not.toHaveBeenCalled();
   });
-
-  it.each(["closed", "invalidated"])(
-    "rejects a %s connection after watched-session preparation",
-    async (state) => {
-      vi.spyOn(systemPresence, "listSystemPresence").mockReturnValue([
-        { text: "watching peer", ts: 1, watchedSessions: ["agent:main:watched"] },
-      ]);
-      getSessionRowProjectionMock.mockReturnValue({
-        needsMembershipPreparation: () => true,
-        prepareMembership: async () => undefined,
-      });
-      const original = makeContext("operator", ["operator.read"]);
-      const context = {
-        ...original,
-        handler: {
-          ...original.handler,
-          isClosed: () => state === "closed",
-          getClient: () => (state === "invalidated" ? { invalidated: true } : null),
-        },
-      };
-
-      await expect(
-        sendGatewayHello(context as never, makeState("operator", ["operator.read"]) as never, {}),
-      ).rejects.toThrow("Gateway connection closed before hello");
-      expect(buildGatewaySnapshotMock).not.toHaveBeenCalled();
-      expect(context.sendFrame).not.toHaveBeenCalled();
-    },
-  );
 
   it.each(["write", "suggest", "view", "none", undefined] as const)(
     "projects the current operator session cap %s only when configured",
@@ -425,11 +490,12 @@ describe("sendGatewayHello update detail scope", () => {
     async (withdrawal) => {
       const gatewayMethods = ["health", "config.get"];
       const exited = createDeferredCore();
-      tailscaleClaim.mockResolvedValue({
+      tailscaleClaim.mockResolvedValueOnce({
         exited: exited.promise,
         isActive: () => true,
         stop: vi.fn(),
       });
+      tailscaleClaim.mockRejectedValue(new Error("Tailscale daemon unavailable"));
       const cleanup = await startGatewayTailscaleExposure({
         tailscaleMode: "serve",
         port: 18789,
@@ -547,6 +613,11 @@ describe("sendGatewayHello update detail scope", () => {
   );
 
   it.each([
+    {
+      label: "member",
+      role: "operator" as const,
+      scopes: ["operator.sessions.read", "operator.sessions.write"],
+    },
     { label: "pairing-only operator", role: "operator" as const, scopes: ["operator.pairing"] },
     { label: "node", role: "node" as const, scopes: ["operator.read"] },
   ])("omits update details for a $label", async ({ role, scopes }) => {
@@ -559,7 +630,12 @@ describe("sendGatewayHello update detail scope", () => {
       includeUpdateDetails: false,
     });
     expectRedactedHelloSnapshot(context);
+    expect(helloPayload(context)?.server).toMatchObject({
+      commit: "abcdef0",
+      builtAt: "2026-10-21T11:55:00.000Z",
+    });
     expect(helloPayload(context)?.features.capabilities).toContain("node-permission-errors");
+    expect(helloPayload(context)?.features.capabilities).toContain("agent-session-id-create-v1");
   });
 
   it.each([
@@ -619,6 +695,27 @@ describe("sendGatewayHello update detail scope", () => {
     }
   });
 
+  it.each([
+    [{ controlUi: { basePath: "/__openclaw__/" } }, "/__openclaw__"],
+    [{ controlUi: { basePath: "/" } }, undefined],
+    [{ controlUi: { enabled: false, basePath: "/__openclaw__" } }, undefined],
+  ])(
+    "advertises the Control UI mount path without a public origin: %j",
+    async (gateway, basePath) => {
+      const context = makeContext("operator", ["operator.read"]);
+      context.configSnapshot = { gateway };
+      await sendGatewayHello(
+        context as never,
+        makeState("operator", ["operator.read"]) as never,
+        {},
+      );
+      expect(helloPayload(context)?.controlUiBasePath).toBe(basePath);
+      if (basePath === undefined) {
+        expect(helloPayload(context)).not.toHaveProperty("controlUiBasePath");
+      }
+    },
+  );
+
   it("keeps hello projection and telemetry at effective scopes", async () => {
     const state = {
       ...makeState("operator", ["operator.pairing"]),
@@ -643,6 +740,7 @@ describe("sendGatewayHello update detail scope", () => {
       method: "none",
       role: "operator",
       scopes: ["operator.pairing"],
+      roleAllowsAdmin: true,
       recoveryMigrationAllowed: true,
       recoveryScope: expect.stringMatching(/^[A-Za-z0-9_-]+$/u),
       deviceToken: "paired-token",

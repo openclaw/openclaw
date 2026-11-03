@@ -4,6 +4,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import { allowsProcessHomeSessionScan } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveBundledCodeReloadPluginIds } from "../plugins/bundled-plugin-dev-reload.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../plugins/installed-plugin-index-install-records.js";
 import type {
@@ -26,7 +27,7 @@ import {
 } from "../plugins/runtime/gateway-request-scope.js";
 import {
   buildPluginRuntimeLoadOptions,
-  createPluginRuntimeLoaderLogger,
+  pluginRuntimeLoaderLogger,
   setPluginRuntimeLoadContext,
   type PluginRuntimeLoadContext,
 } from "../plugins/runtime/load-context.js";
@@ -36,11 +37,13 @@ import type {
   PluginRuntime,
   RuntimeGatewayRequestOptions,
 } from "../plugins/runtime/types.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { bindInProcessSessionDeliveryGeneration } from "./in-process-session-delivery.js";
 import { authorizeOperatorScopesForRequiredScope } from "./method-scopes.js";
-import { normalizeOperatorScopeList } from "./operator-scopes.js";
+import { APPROVALS_SCOPE, normalizeOperatorScopeList } from "./operator-scopes.js";
 import type { GatewayNodeInvokeStream } from "./server-methods/shared-types.js";
 import type { GatewayContextResolver, GatewayRequestHandler } from "./server-methods/types.js";
+import { appendTrustedPluginAgentMessage } from "./server-plugin-agent-message.js";
 import { resolveTrustedPluginGitHubAccount } from "./server-plugin-github-account.js";
 import {
   dispatchGatewayMethodInProcess,
@@ -76,6 +79,7 @@ export type { GatewayMethodDispatchResponse } from "./server-plugin-in-process-d
 export { runWithOperatorToolGatewayCleanupContext } from "./server-plugin-in-process-dispatch.js";
 export { hasInProcessGatewayContext } from "./server-plugins-node-runtime.js";
 export {
+  appendTrustedPluginAgentMessage,
   readTrustedPluginSessionFacts,
   withTrustedPluginSessionFacts,
   withTrustedPluginUserProfileIdentity,
@@ -147,10 +151,22 @@ export async function dispatchTrustedPluginGatewayMethod<T>(
   return await dispatchGatewayMethodInProcess<T>(method, requestParams, {
     forceSyntheticClient: true,
     pluginRuntimeOwnerId: pluginId,
+    ...(method === "plugin.approval.request" && syntheticScopes?.includes(APPROVALS_SCOPE)
+      ? { allowHostPluginApprovalRequest: true }
+      : {}),
     resolveGatewayContext,
     ...(!scope?.client ? { operatorRoleActor: { kind: "system" as const } } : {}),
     ...(syntheticScopes ? { syntheticScopes } : {}),
     ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+    ...(options?.signal
+      ? {
+          signal: AbortSignal.any(
+            [options.signal, scope?.signal, getAsyncWorkSignal()].filter(
+              (signal): signal is AbortSignal => signal !== undefined,
+            ),
+          ),
+        }
+      : {}),
   });
 }
 
@@ -325,6 +341,8 @@ function createGatewayPluginRuntimeBindings(
           readTrustedPluginSessionFacts(params, resolveBoundGatewayContext),
         withSessionFacts: (select, run) =>
           withTrustedPluginSessionFacts(select, run, resolveBoundGatewayContext),
+        appendAgentMessage: (params) =>
+          appendTrustedPluginAgentMessage(params, resolveBoundGatewayContext),
         subscribeSessionChanges: subscribeRuntimeSessionChanges,
         withUserProfileIdentity: (params, run) =>
           withTrustedPluginUserProfileIdentity(params, run, resolveBoundGatewayContext),
@@ -375,7 +393,12 @@ export async function loadGatewayPlugins(params: {
   loadIntent: "startup" | "replacement";
   previousRegistry?: import("../plugins/registry-types.js").PluginRegistry;
   replacePluginIds?: ReadonlySet<string>;
-  expectedSourceDigests?: Readonly<Record<string, string>>;
+  /** Explicit lifecycle request: source-digest checks and opted-in bundled recapture. */
+  pluginLifecycle?: {
+    reason: string;
+    pluginIds: readonly string[];
+    expectedSourceDigests?: Readonly<Record<string, string>>;
+  };
   /** Metadata-only replacement preflight; never executes plugin registration. */
   loadModules?: boolean;
   moduleRecoveries?: ReadonlyMap<string, PluginRuntimeRecovery>;
@@ -406,7 +429,7 @@ export async function loadGatewayPlugins(params: {
     });
   const loaderMetadata = metadataSnapshot ?? params.pluginLookUpTable;
   const logger = {
-    ...createPluginRuntimeLoaderLogger(),
+    ...pluginRuntimeLoaderLogger,
     ...(params.suppressPluginInfoLogs ? { info: () => undefined } : {}),
   };
   const loadContext: PluginRuntimeLoadContext = {
@@ -418,7 +441,7 @@ export async function loadGatewayPlugins(params: {
     env: params.env ?? process.env,
     logger,
     preferBuiltPluginArtifacts: true,
-    expectedSourceDigests: params.expectedSourceDigests,
+    expectedSourceDigests: params.pluginLifecycle?.expectedSourceDigests,
     metadataSnapshot,
     ...(loaderMetadata
       ? {
@@ -446,6 +469,7 @@ export async function loadGatewayPlugins(params: {
           throwOnLoadError: params.loadIntent === "replacement",
           previousRegistry: params.previousRegistry,
           replacePluginIds: params.replacePluginIds ? [...params.replacePluginIds] : undefined,
+          bundledCodeReloadPluginIds: resolveBundledCodeReloadPluginIds(params.pluginLifecycle),
           loadModules: params.loadModules,
           moduleRecoveries: params.moduleRecoveries,
           prepareRegistrationFailureCleanup: params.prepareRegistrationFailureCleanup,

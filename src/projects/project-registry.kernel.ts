@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
 import { slugifyWorktreeTitle } from "../agents/worktrees/name.js";
 import {
@@ -6,6 +5,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { createOpenClawStateSchemaEnsurer } from "../state/openclaw-state-feature-schema-ensure.js";
@@ -38,7 +38,7 @@ function rowToProject(row: ProjectRow): ProjectRegistryRecord {
 }
 
 export function insertProjectRegistryInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   input: ProjectRegistryInsert,
 ): ProjectRegistryRecord {
   const db = getNodeSqliteKysely<ProjectsDatabase>(database);
@@ -93,10 +93,10 @@ export const projectRegistryReadOperations = {
         ).rows.map(rowToProject)
       : [],
   }),
-} satisfies WorkerOperationHandlers<DatabaseSync>;
+} satisfies WorkerOperationHandlers<EngineConnection>;
 
 export function resolveProjectRegistryInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   id: string,
 ): ProjectRegistryRecord | undefined {
   const db = getNodeSqliteKysely<ProjectsDatabase>(database);
@@ -108,7 +108,7 @@ export function resolveProjectRegistryInDatabase(
 }
 
 export function resolveRecordedProjectRootInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   repoRoot: string,
 ): string | undefined {
   const db = getNodeSqliteKysely<ProjectsDatabase>(database);
@@ -119,7 +119,7 @@ export function resolveRecordedProjectRootInDatabase(
 }
 
 function readMatchingProjectRow(
-  database: DatabaseSync,
+  database: EngineConnection,
   project: ProjectRegistryIdentity,
 ): ProjectRow | undefined {
   const db = getNodeSqliteKysely<ProjectsDatabase>(database);
@@ -137,7 +137,7 @@ function readMatchingProjectRow(
 }
 
 export function resolveProjectCloneRefreshOwnerInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   project: ProjectRegistryIdentity,
 ): ProjectRegistryRecord | undefined {
   const current = readMatchingProjectRow(database, project);
@@ -145,7 +145,7 @@ export function resolveProjectCloneRefreshOwnerInDatabase(
 }
 
 export function removeProjectRegistryInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   project: ProjectRegistryIdentity,
 ): boolean {
   if (!readMatchingProjectRow(database, project)) {
@@ -159,7 +159,7 @@ export function removeProjectRegistryInDatabase(
 }
 
 export function removeProjectCheckoutReferenceInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   project: Pick<ProjectRegistryIdentity, "id" | "repoRoot">,
 ): "missing" | "changed" | "remaining" | "final" {
   const db = getNodeSqliteKysely<ProjectsDatabase>(database);

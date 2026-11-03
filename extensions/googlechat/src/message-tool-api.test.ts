@@ -10,13 +10,14 @@ const unresolvedRef = {
   id: "OPENCLAW_TEST_MISSING_GOOGLE_CHAT_SERVICE_ACCOUNT",
 } as const;
 
-function buildTwoAccountConfig(): OpenClawConfig {
+function buildTwoAccountConfig(healthyEnabled = true): OpenClawConfig {
   return {
     channels: {
       googlechat: {
         accounts: {
           broken: { serviceAccount: unresolvedRef },
           healthy: {
+            enabled: healthyEnabled,
             serviceAccount:
               '{"client_email":"proof@example.iam.gserviceaccount.com","private_key":"proof-key"}',
           },
@@ -35,6 +36,14 @@ describe("Google Chat message-tool SecretRef inspection", () => {
       actions: ["send", "edit"],
     });
     expect(googlechatMessageActions.describeMessageTool({ cfg, accountId: "broken" })).toBeNull();
+    expect(googlechatMessageActions.describeMessageTool({ cfg, accountId: "healthy" })).toEqual({
+      actions: ["send", "edit"],
+    });
+  });
+
+  it("hides actions for a disabled selected account", () => {
+    const cfg = buildTwoAccountConfig(false);
+    expect(googlechatMessageActions.describeMessageTool({ cfg, accountId: "healthy" })).toBeNull();
   });
 
   it("keeps direct account resolution strict", () => {

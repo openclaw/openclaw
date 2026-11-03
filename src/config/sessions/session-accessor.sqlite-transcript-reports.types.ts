@@ -28,6 +28,7 @@ export type CustomMessageReportAppend = {
   customType: string;
   content: string;
   display: boolean;
+  excludeFromContext?: boolean;
   details?: unknown;
 };
 export type TranscriptReport =
@@ -62,6 +63,7 @@ export type TranscriptReportCommit = {
   abortedPartial?: AbortedSessionTranscriptPartialResult;
   sessionEntryChanged?: boolean;
   entry?: InternalSessionEntry;
+  fullEntry?: InternalSessionEntry;
 };
 
 export type TranscriptReportWorkerOperations = {

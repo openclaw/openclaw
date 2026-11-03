@@ -1,7 +1,6 @@
 // Owns HTTP rejection transport and per-connection request ordering.
 import { channel } from "node:diagnostics_channel";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { Socket } from "node:net";
 import type { Duplex } from "node:stream";
 import { clearTimeout, setTimeout } from "node:timers";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -9,6 +8,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 // This is a transport grace period, not another body-upload allowance. The
 // request stays paused; Node's readable high-water mark bounds residual input.
 const REJECTION_CLOSE_TIMEOUT_MS = 1_000;
+const responseFinishDiagnostics = channel("http.server.response.finish");
 
 type Rejection = {
   request: IncomingMessage;
@@ -24,15 +24,6 @@ type HttpConnection = {
 };
 
 const connections = new WeakMap<Duplex, HttpConnection>();
-
-function httpRejectionTransport(socket: Socket): "node" | "bun-native" | "bun-node" {
-  if (!process.versions.bun) {
-    return "node";
-  }
-  // Bun #43557 added the native HTTP destroySoon override with Node-style closure;
-  // older builds inherit net.Socket's implementation, even with the same Bun version.
-  return socket.destroySoon === Socket.prototype.destroySoon ? "bun-native" : "bun-node";
-}
 
 /** Abort disconnected work without treating normal request/response completion as cancellation. */
 export function createHttpRequestAbortSignal(req: IncomingMessage, res: ServerResponse) {
@@ -294,15 +285,7 @@ export async function sendHttpRequestRejection(
         }
       }
     };
-    const transport = httpRejectionTransport(socket);
-    if (transport === "bun-native") {
-      // Older Bun needs native response completion to flush its HTTP framing.
-      res.end(body, () => {
-        if (rejection.phase === "writing") {
-          rejection.phase = "written";
-        }
-      });
-    } else if (req.method === "HEAD") {
+    if (req.method === "HEAD") {
       const writeHeaders = () => {
         if (!res.socket || rejection.phase !== "writing") {
           return;
@@ -310,7 +293,7 @@ export async function sendHttpRequestRejection(
         stopWaitingForSocket?.();
         try {
           res.flushHeaders();
-          if (transport === "bun-node") {
+          if (process.versions.bun) {
             // Bun's response callback flushes native headers without waiting on
             // the dispatcher's raw socket cork. Only write after socket assignment.
             res.write("", onWritten);
@@ -322,7 +305,7 @@ export async function sendHttpRequestRejection(
         }
       };
       if (!res.socket) {
-        if (transport === "bun-node") {
+        if (process.versions.bun) {
           // Bun assigns queued response sockets before replaying writes, even on
           // builds that do not publish http.server.response.finish diagnostics.
           const onSocket = () => queueMicrotask(writeHeaders);
@@ -332,15 +315,14 @@ export async function sendHttpRequestRejection(
           // HEAD write callbacks do not flush headers. The public notification lets a
           // standalone SDK response wait for earlier responses without private
           // socket-assignment events; Node completes that handoff on this stack.
-          const finished = channel("http.server.response.finish");
           const onFinish = (message: unknown) => {
             // SAFETY: Node documents this channel's payload as including the response's socket.
             if ((message as { socket: Duplex }).socket === socket) {
               queueMicrotask(writeHeaders);
             }
           };
-          finished.subscribe(onFinish);
-          stopWaitingForSocket = () => finished.unsubscribe(onFinish);
+          responseFinishDiagnostics.subscribe(onFinish);
+          stopWaitingForSocket = () => responseFinishDiagnostics.unsubscribe(onFinish);
         }
       }
       writeHeaders();

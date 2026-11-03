@@ -22,7 +22,7 @@ it.each(["none", "before", "during"])("opens the drawer only without a modal (%s
   owner = new NavDrawerSwipeOwner(
     {
       element,
-      querySelector: element.querySelector.bind(element),
+      navDrawerElement: element.querySelector<HTMLElement>(".shell-nav") ?? undefined,
       get isConnected() {
         return element.isConnected;
       },
@@ -68,7 +68,7 @@ it("preserves menu focus when gesture support connects to an open drawer", () =>
   owner = new NavDrawerSwipeOwner(
     {
       element,
-      querySelector: element.querySelector.bind(element),
+      navDrawerElement: drawer,
       get isConnected() {
         return element.isConnected;
       },

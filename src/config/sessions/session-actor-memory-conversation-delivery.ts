@@ -15,7 +15,10 @@ import { selectSessionActorMemoryConversations } from "./session-actor-memory-co
 import type { SessionActorMemoryStorageContext } from "./session-actor-memory-storage-context.js";
 
 export function readSessionActorMemoryConversationDelivery(
-  context: SessionActorMemoryStorageContext,
+  context: Pick<
+    SessionActorMemoryStorageContext,
+    "conversations" | "editConversations" | "get" | "entries"
+  >,
   lookup: ConversationDeliveryLookup,
 ): ConversationDeliveryRecord | undefined {
   if ("operationId" in lookup) {
@@ -44,7 +47,10 @@ export function readSessionActorMemoryConversationDelivery(
 }
 
 export function beginSessionActorMemoryConversationDelivery(
-  context: SessionActorMemoryStorageContext,
+  context: Pick<
+    SessionActorMemoryStorageContext,
+    "conversations" | "editConversations" | "get" | "entries"
+  >,
   params: ConversationDeliveryBegin,
 ): { created: boolean; record: ConversationDeliveryRecord } {
   const conversation = selectSessionActorMemoryConversations(context, {
@@ -84,7 +90,10 @@ export function beginSessionActorMemoryConversationDelivery(
 }
 
 export function transitionSessionActorMemoryConversationDelivery(
-  context: SessionActorMemoryStorageContext,
+  context: Pick<
+    SessionActorMemoryStorageContext,
+    "conversations" | "editConversations" | "get" | "entries"
+  >,
   params: ConversationDeliveryTransition,
 ): ConversationDeliveryRecord {
   if (params.session) {

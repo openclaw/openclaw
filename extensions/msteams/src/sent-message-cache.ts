@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { createPersistentDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { createPluginStateErrorReporter } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getOptionalMSTeamsRuntime } from "./runtime.js";
 
@@ -26,9 +26,7 @@ const namedAccountCaches = new Map<
 
 function createSentMessageCache(accountId: string) {
   const isDefault = accountId === "default";
-  const accountDigest = isDefault
-    ? undefined
-    : createHash("sha256").update(accountId).digest("hex");
+  const accountDigest = isDefault ? undefined : sha256Hex(accountId);
   return createPersistentDedupeCache<MSTeamsSentMessageRecord>({
     globalKey: isDefault
       ? MSTEAMS_SENT_MESSAGES_KEY
@@ -41,7 +39,7 @@ function createSentMessageCache(accountId: string) {
         ? PERSISTENT_NAMESPACE
         : `${PERSISTENT_NAMESPACE}.account.v1.${accountDigest}`,
       maxEntries: PERSISTENT_MAX_ENTRIES,
-      openStore: (options) => getOptionalMSTeamsRuntime()?.state.openKeyedStore(options),
+      openStore: (options) => getOptionalMSTeamsRuntime()?.state.openKeyedStoreV2(options),
       logError: createPluginStateErrorReporter(
         getOptionalMSTeamsRuntime,
         "msteams",

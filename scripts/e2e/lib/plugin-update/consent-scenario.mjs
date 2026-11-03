@@ -7,6 +7,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { classifyReleaseTrain, parseReleaseVersion } from "../../../lib/release-version.mjs";
 import { fixtureCapabilityConsentArgs } from "../package-compat.mjs";
 import { readPluginInstallIndex } from "../plugin-index-sqlite.mjs";
 import { packFutureUpdateFixture } from "../update-first-hop-package-fixtures.mjs";
@@ -203,6 +204,18 @@ export async function runConsentScenario(entry, coreTarball, options = {}) {
     return { record, bytes };
   }
 
+  // Shipped extended-stable updaters refuse explicit --tag targets on their
+  // inferred channel, so a tag update first selects stable as an operator would.
+  function tagUpdateChannelArgs() {
+    const { version } = JSON.parse(
+      fs.readFileSync(path.resolve(path.dirname(entry), "..", "package.json"), "utf8"),
+    );
+    const parsed = parseReleaseVersion(version);
+    return parsed && classifyReleaseTrain(parsed) === "extended-stable"
+      ? ["--channel", "stable"]
+      : [];
+  }
+
   function assertConsentBlocked(command, result, expectedStatus) {
     // A blocked plugin is an explicit warning, not a failed core update or repair.
     assert.equal(command.code, 0, `${command.output}\n${command.diagnostic}`);
@@ -343,7 +356,7 @@ export async function runConsentScenario(entry, coreTarball, options = {}) {
       await serve(2);
       const denied = await cli(
         "update-denied",
-        ["update", "--tag", deniedCoreTarball, "--yes", "--json"],
+        ["update", ...tagUpdateChannelArgs(), "--tag", deniedCoreTarball, "--yes", "--json"],
         { allowFailure: true },
       );
       const deniedResult = JSON.parse(denied.output);
@@ -378,6 +391,7 @@ export async function runConsentScenario(entry, coreTarball, options = {}) {
       assert.deepEqual(await snapshot("no-future-permission", 2), repaired);
       const accepted = await cli("update-accepted", [
         "update",
+        ...tagUpdateChannelArgs(),
         "--tag",
         acceptedCoreTarball,
         "--accept-capabilities",

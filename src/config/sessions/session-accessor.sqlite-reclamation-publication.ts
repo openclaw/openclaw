@@ -41,6 +41,34 @@ export function collectReclamationDeletionEntries(
   );
 }
 
+export function collectReclamationEntryReplacement(
+  plan: SessionNativeBindingDeletion["plan"],
+  result: SqliteSessionReclamationResult,
+) {
+  const changedKeys =
+    result.kind === "entry" && !result.value.deleted
+      ? []
+      : collectReclamationChangedSessionKeys(plan, result);
+  const removedEntries = collectReclamationDeletionEntries(plan, result);
+  const identities =
+    plan.kind === "lifecycle-projection-commit" && result.kind === "lifecycle-projection-commit"
+      ? collectLifecycleIdentityChanges(plan.input.projected, result.value.removedSessionKeys)
+      : {
+          previous: new Map(removedEntries.map(({ sessionKey, entry }) => [sessionKey, entry])),
+          current: new Map<string, SessionEntry>(),
+        };
+  return changedKeys.length > 0
+    ? {
+        ...identities,
+        pendingArchiveRecovery:
+          result.kind === "lifecycle-projection-commit" ? result.value.pendingArchives : false,
+        membershipInvalidatedKeys: changedKeys,
+        maintenancePlans:
+          result.kind === "lifecycle-projection-commit" ? result.value.maintenancePlans : [],
+      }
+    : undefined;
+}
+
 export function prepareReclamationPublication(
   plan: SqliteSessionReclamationPlan,
   databaseIdentity: string | symbol,
@@ -86,7 +114,6 @@ export function collectReclamationChangedSessionKeys(
           maintenance.archivedEntries.map(({ sessionKey }) => sessionKey),
         ),
       ];
-    case "deletion-plan":
     case "lifecycle-projection-plan":
       return [];
     case "maintenance-plan":
@@ -99,7 +126,6 @@ export function collectReclamationChangedSessionKeys(
         (index) =>
           expectDefined(plan.entries[index], "Missing committed maintenance entry").sessionKey,
       );
-    case "maintenance-preservation-required":
     case "maintenance-plan-stale":
     case "maintenance-statistics":
     case "maintenance-age":

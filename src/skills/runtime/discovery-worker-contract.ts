@@ -15,6 +15,7 @@ export function captureSkillsDiscoveryEnvironment() {
     HOME: process.env.HOME,
     USERPROFILE: process.env.USERPROFILE,
     OPENCLAW_HOME: process.env.OPENCLAW_HOME,
+    OPENCLAW_PROFILE: process.env.OPENCLAW_PROFILE,
     OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
     OPENCLAW_CONFIG_PATH: process.env.OPENCLAW_CONFIG_PATH,
     OPENCLAW_BUNDLED_SKILLS_DIR: process.env.OPENCLAW_BUNDLED_SKILLS_DIR,
@@ -30,10 +31,26 @@ export type SkillsDiscoveryEnvironment = ReturnType<typeof captureSkillsDiscover
 export type SkillsSourcePlanInput = {
   workspaceDir: string;
   environment: SkillsDiscoveryEnvironment;
-  options?: Omit<WorkspaceSkillSourcePlanOptions, "pluginMetadataSnapshot" | "pluginSkillRoots">;
+  options?: Omit<
+    WorkspaceSkillSourcePlanOptions,
+    "pluginMetadataSnapshot" | "pluginSkillRoots" | "agentSkillsDirs"
+  >;
   pluginContributions?: PluginSkillContribution[];
+  agentSkillsDirs?: string[];
   acpRuntimeAvailable: boolean;
 };
+
+export type SkillsDiscoverySourceSelection =
+  | {
+      kind: "selected";
+      request: WorkspaceSkillSourceRequest;
+      plan?: { input: SkillsSourcePlanInput; scope?: "gateway" };
+    }
+  | {
+      kind: "planned";
+      request: Omit<WorkspaceSkillSourceRequest, "sourcePlan">;
+      plan: { input: SkillsSourcePlanInput };
+    };
 
 export type SkillsDiscoveryInput =
   | { kind: "plan"; input: SkillsSourcePlanInput }
@@ -41,9 +58,8 @@ export type SkillsDiscoveryInput =
       kind: "scan";
       requests: Array<{
         key: string;
-        request: WorkspaceSkillSourceRequest;
         environment: SkillsDiscoveryEnvironment;
-        plan?: { input: SkillsSourcePlanInput; scope?: "gateway" };
+        selection: SkillsDiscoverySourceSelection;
       }>;
       path: string | undefined;
     }
@@ -62,11 +78,17 @@ export type SkillsDiscoveryResult = {
   key: string;
   sources: WorkspaceSkillSources;
   fingerprint: string;
+  watchDirectories: string[];
   plan?: WorkspaceSkillSourcePlan;
 };
 
 export type SkillsDiscoveryOutput =
   | { kind: "plan"; plan: WorkspaceSkillSourcePlan }
   | { kind: "scan"; results: SkillsDiscoveryResult[] }
-  | { kind: "project"; snapshot: SkillSnapshot }
+  | {
+      kind: "project";
+      snapshot: Omit<SkillSnapshot, "resolvedSkills" | "discoverySkills">;
+      resolvedIndices: number[];
+      discoveryIndices: number[];
+    }
   | { kind: "status"; facts: WorkspaceSkillStatusFacts };

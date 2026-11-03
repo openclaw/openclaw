@@ -88,6 +88,7 @@ export function SkillStateStatus(props: {
         ? [...computeSkillReasons(skill), ...computeSkillMissing(skill)]
         : [t("skillDiscovery.libraryStatus")];
     return {
+      label,
       tone,
       tooltip: [label, invalid, ...(flagged ? (verdict.reasons ?? []) : []), ...details]
         .filter(Boolean)
@@ -96,13 +97,22 @@ export function SkillStateStatus(props: {
   });
   return (
     <span
-      class={["plugin-catalog-card__status settings-status", `settings-status--${status().tone}`]}
+      class={[
+        "plugin-catalog-card__status settings-status",
+        {
+          "settings-status--danger": status().tone === "danger",
+          "settings-status--warn": status().tone === "warn",
+          "settings-status--muted": status().tone === "muted",
+          "settings-status--ok": status().tone === "ok",
+        },
+      ]}
       role="img"
       tabindex="0"
       aria-label={status().tooltip}
       title={status().tooltip}
     >
       <span class="settings-status__dot" aria-hidden="true" />
+      <span class="plugin-catalog-card__status-label">{status().label}</span>
     </span>
   );
 }

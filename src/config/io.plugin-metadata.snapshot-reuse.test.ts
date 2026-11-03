@@ -4,12 +4,13 @@ import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
   openOpenClawStateDatabase,
-  closeOpenClawStateDatabaseForTest,
+  closeOpenClawStateDatabaseAsync,
 } from "../state/openclaw-state-db.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { readBestEffortConfig } from "./io.js";
 
-it("reads CLI routing metadata from a single state snapshot", async () => {
+it("reads CLI routing metadata without synchronous SQLite work", async () => {
   await withOpenClawTestState({}, async (state) => {
     await state.writeConfig({ mcp: { servers: {} } });
     const opened = openOpenClawStateDatabase();
@@ -19,17 +20,19 @@ it("reads CLI routing metadata from a single state snapshot", async () => {
       .prepare("INSERT INTO config_machine_state(state_key,value_json,updated_at_ms) VALUES(?,?,1)")
       .run("synthetic.padding", payload);
     opened.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-    closeOpenClawStateDatabaseForTest();
+    await closeOpenClawStateDatabaseAsync();
     const writer = new DatabaseSync(pathname);
     writer.exec(
       "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; INSERT INTO config_machine_state VALUES ('synthetic.wal','true',2)",
     );
     const prepare = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationSync");
+    const mainSql = observeMainThreadSql();
     try {
       clearPluginMetadataLifecycleCaches();
       const config = await readBestEffortConfig({ observe: false, skipPluginValidation: true });
       expect(config.mcp).toEqual({ servers: {} });
-      expect(prepare).toHaveBeenCalledTimes(1);
+      expect(prepare).not.toHaveBeenCalled();
+      mainSql.expectIdle();
     } finally {
       vi.restoreAllMocks();
       writer.close();

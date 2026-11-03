@@ -1,5 +1,49 @@
-import type { CronCompactJob, CronJob, CronJobsListResult } from "../api/types.ts";
-import type { CronFormState } from "../lib/cron/types.ts";
+import type { CronCompactJob, CronJob, CronJobsListResult, CronRunsResult } from "../api/types.ts";
+import { DEFAULT_CRON_FORM as defaultCronForm } from "../lib/cron/state.ts";
+
+const emptyPage = { offset: 0, limit: 50, hasMore: false, nextOffset: null };
+
+export function createCronJob(id: string, name: string, overrides: Partial<CronJob> = {}): CronJob {
+  return {
+    id,
+    name,
+    enabled: true,
+    createdAtMs: 0,
+    updatedAtMs: 0,
+    configRevision: "config-revision-1",
+    schedule: { kind: "cron", expr: "0 * * * *" },
+    sessionTarget: "isolated",
+    wakeMode: "next-heartbeat",
+    payload: { kind: "agentTurn", message: "run" },
+    state: {},
+    ...overrides,
+  };
+}
+
+export function cronJobsListResponse(
+  jobs: CronJob[] = [],
+  overrides: Partial<Omit<CronJobsListResult, "jobs">> = {},
+): CronJobsListResult {
+  return {
+    jobs,
+    snapshotRevision: "cron-jobs-fixture",
+    total: jobs.length,
+    ...emptyPage,
+    ...overrides,
+  };
+}
+
+export function createCronRunsResult(
+  entries: CronRunsResult["entries"],
+  overrides: Partial<Omit<CronRunsResult, "entries">> = {},
+): CronRunsResult {
+  return {
+    entries,
+    total: entries.length,
+    ...emptyPage,
+    ...overrides,
+  };
+}
 
 export function compactCronJobFixture(job: CronJob): CronCompactJob {
   return {
@@ -43,48 +87,4 @@ export function cronListResponseFixture(input: CronJobsListResult | CronListFixt
   };
 }
 
-export const DEFAULT_CRON_FORM: CronFormState = {
-  name: "",
-  description: "",
-  agentId: "",
-  sessionKey: "",
-  clearAgent: false,
-  enabled: true,
-  deleteAfterRun: false,
-  scheduleKind: "every",
-  scheduleAt: "",
-  everyAmount: "30",
-  everyUnit: "minutes",
-  cronExpr: "0 7 * * *",
-  cronTz: "",
-  scheduleExact: false,
-  staggerAmount: "",
-  staggerUnit: "seconds",
-  triggerEnabled: false,
-  triggerScript: "",
-  triggerOnce: false,
-  sessionTarget: "isolated",
-  wakeMode: "now",
-  payloadKind: "agentTurn",
-  payloadLocked: false,
-  payloadText: "",
-  payloadModel: "",
-  payloadThinking: "",
-  payloadLightContext: false,
-  deliveryMode: "none",
-  deliveryChannel: "last",
-  deliveryTo: "",
-  deliveryAccountId: "",
-  deliveryBestEffort: false,
-  deliveryThreadId: undefined,
-  deliveryCompletionDestination: undefined,
-  deliveryFailureDestination: undefined,
-  failureAlertMode: "inherit",
-  failureAlertAfter: "",
-  failureAlertCooldownSeconds: "",
-  failureAlertChannel: "last",
-  failureAlertTo: "",
-  failureAlertDeliveryMode: "",
-  failureAlertAccountId: "",
-  timeoutSeconds: "",
-};
+export const DEFAULT_CRON_FORM = { ...defaultCronForm };

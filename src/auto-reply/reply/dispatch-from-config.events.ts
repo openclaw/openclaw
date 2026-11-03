@@ -1,4 +1,5 @@
 import type { PluginHookReplyDispatchEvent } from "../../plugins/hook-types.js";
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 
 export type PluginBindingTranscriptOwner = {
@@ -24,9 +25,29 @@ export function createReplyDispatchEvent(
     shouldSendFullToolDetailsAsync: () => Promise<boolean>;
   },
 ): PluginHookReplyDispatchEvent {
-  const { shouldSendToolSummaries, ...event } = params;
-  return Object.defineProperty(event, "shouldSendToolSummaries", {
-    enumerable: true,
-    get: shouldSendToolSummaries,
+  const { shouldSendToolSummaries, shouldSendFullToolDetails, ...event } = params;
+  return Object.defineProperties(event, {
+    shouldSendToolSummaries: {
+      enumerable: true,
+      get() {
+        warnPluginSdkDeprecation({
+          family: "reply-visibility",
+          method: "reply_dispatch.shouldSendToolSummaries",
+          replacement: "await shouldSendToolSummariesAsync()",
+        });
+        return shouldSendToolSummaries();
+      },
+    },
+    shouldSendFullToolDetails: {
+      enumerable: true,
+      get() {
+        warnPluginSdkDeprecation({
+          family: "reply-visibility",
+          method: "reply_dispatch.shouldSendFullToolDetails",
+          replacement: "await shouldSendFullToolDetailsAsync()",
+        });
+        return shouldSendFullToolDetails;
+      },
+    },
   }) as PluginHookReplyDispatchEvent;
 }

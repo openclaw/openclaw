@@ -30,6 +30,7 @@ export function personalGitHubRequestDigest(row: PersonalGitHubPublicationRow): 
         row.title,
         row.body,
         row.created_at_ms,
+        ...(row.draft != null ? [row.draft] : []),
       ]),
     )
     .digest("hex");

@@ -1,9 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import {
-  maybeRepairOwnedChromeExtensionNativeHosts,
-  noteChromeMcpBrowserReadiness,
-} from "./doctor-browser.js";
+import { collectBrowserReadinessFindings } from "./doctor-browser.js";
 
 const loadBundledPluginPublicSurfaceModuleSyncCore = vi.hoisted(() => vi.fn());
 
@@ -17,9 +14,18 @@ describe("doctor browser facade", () => {
   });
 
   it("delegates browser readiness checks to the browser facade surface", async () => {
-    const delegate = vi.fn().mockResolvedValue(undefined);
+    const findings = [
+      {
+        checkId: "core/doctor/browser",
+        severity: "warning",
+        category: "recommended",
+        message: "Optional setup",
+        fixHint: "Inspect setup",
+      },
+    ] as const;
+    const delegate = vi.fn().mockResolvedValue(findings);
     loadBundledPluginPublicSurfaceModuleSyncCore.mockReturnValue({
-      noteChromeMcpBrowserReadiness: delegate,
+      collectBrowserReadinessFindings: delegate,
     });
 
     const cfg: OpenClawConfig = {
@@ -27,43 +33,27 @@ describe("doctor browser facade", () => {
         defaultProfile: "user",
       },
     };
-    const noteFn = vi.fn();
 
-    await noteChromeMcpBrowserReadiness(cfg, { noteFn });
+    expect(await collectBrowserReadinessFindings(cfg)).toBe(findings);
 
     expect(loadBundledPluginPublicSurfaceModuleSyncCore).toHaveBeenCalledWith({
       dirName: "browser",
       artifactBasename: "browser-doctor.js",
     });
-    expect(delegate).toHaveBeenCalledWith(cfg, { noteFn });
-    expect(noteFn).not.toHaveBeenCalled();
+    expect(delegate).toHaveBeenCalledWith(cfg);
   });
 
-  it("delegates owned Chrome native-host repair to the browser facade surface", async () => {
-    const repair = vi.fn().mockResolvedValue({ changes: ["repaired"], warnings: [] });
-    loadBundledPluginPublicSurfaceModuleSyncCore.mockReturnValue({
-      noteChromeMcpBrowserReadiness: vi.fn(),
-      maybeRepairOwnedChromeExtensionNativeHosts: repair,
-    });
-
-    await expect(maybeRepairOwnedChromeExtensionNativeHosts()).resolves.toEqual({
-      changes: ["repaired"],
-      warnings: [],
-    });
-    expect(repair).toHaveBeenCalledOnce();
-  });
-
-  it("warns and no-ops when the browser doctor surface is unavailable", async () => {
+  it("reports an inspection gap when the browser doctor surface is unavailable", async () => {
     loadBundledPluginPublicSurfaceModuleSyncCore.mockImplementation(() => {
       throw new Error("missing browser doctor facade");
     });
 
-    const noteFn = vi.fn();
-
-    await expect(noteChromeMcpBrowserReadiness({}, { noteFn })).resolves.toBeUndefined();
-    expect(noteFn).toHaveBeenCalledExactlyOnceWith(
-      "- Browser health check is unavailable: missing browser doctor facade",
-      "Browser",
-    );
+    await expect(collectBrowserReadinessFindings({})).resolves.toEqual([
+      expect.objectContaining({
+        category: "fix-now",
+        message: "Doctor could not inspect browser readiness: missing browser doctor facade",
+        fixHint: expect.stringContaining("rerun openclaw doctor"),
+      }),
+    ]);
   });
 });

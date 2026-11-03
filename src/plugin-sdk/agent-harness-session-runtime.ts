@@ -16,17 +16,24 @@ export {
 } from "../agents/harness/native-session/binding-generation.js";
 export {
   prepareNativeSessionGenerationAuthority,
+  retainNativeSessionGenerationAuthority,
   reclaimNativeSessionGenerationWithAuthority,
   resolveNativeSessionBindingWithAuthority,
-  resolveNativeSessionBindingWithAuthorityV2,
+  resolvePreparedNativeSessionBinding,
   type NativeSessionGenerationOperationsV2,
+  type PreparedNativeSessionGenerationOperations,
+  type RetainedNativeSessionGenerationAuthority,
 } from "../agents/harness/native-session/binding-generation-authority.js";
 export { createNativeSessionInitializationOwner } from "../agents/harness/native-session/initialization.js";
 
 export {
   createNativeSessionBindingAuthority,
+  createNativeSessionBindingScope,
+  createPreparedNativeSessionBindingAuthority,
   combineNativeSessionBindingAuthority,
+  combinePreparedNativeSessionBindingAuthority,
   type NativeSessionBindingAuthority,
+  type PreparedNativeSessionBindingAuthority,
   type NativeSessionBindingWithCurrent,
 } from "../agents/harness/native-session/binding-authority.js";
 export {

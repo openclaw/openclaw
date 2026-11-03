@@ -1,10 +1,11 @@
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
-import type { Selectable } from "kysely";
+import { sql, type Selectable } from "kysely";
 import {
   createSqliteQueryCache,
   executeSqliteQuerySync,
   prepareSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import { assertConversationAuthority } from "./conversation-authority.js";
@@ -81,7 +82,7 @@ function mapRow(row: ConversationDeliveryRow): ConversationDeliveryRecord {
   };
 }
 
-const operationQuery = createSqliteQueryCache((database) => {
+const operationQuery = createSqliteQueryCache((database: EngineConnection) => {
   const db = getSessionKysely(database);
   return prepareSqliteQuerySync<string, ConversationDeliveryRow>(database, (parameter) =>
     // Session pruning removes only session_conversations. The canonical
@@ -253,7 +254,13 @@ function findConversationTurnDeliveryInDatabase(
           eb("delivery.prepared_message_id", "=", params.replyToId),
         ]),
       )
-      .where("delivery.status", "in", ["queued", "sent", "replied"])
+      // Literal statuses let SQLite match the idx_agent_conversation_deliveries_reply predicate;
+      // a bound IN list never does. Keep the same text and order as the index WHERE clause.
+      .where(
+        "delivery.status",
+        "in",
+        (["queued", "sent", "replied"] as const).map((status) => sql.lit(status)),
+      )
       .orderBy("delivery.updated_at", "desc")
       .limit(1),
   ).rows[0];

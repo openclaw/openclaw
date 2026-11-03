@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
+import { readConfigMachineStateAsync } from "../state/config-machine-state-async.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import {
@@ -8,7 +9,9 @@ import {
 } from "../state/openclaw-state-worker-store.js";
 import { boundWebPushSubscriptionsAdmission } from "./push-web-store.cache.js";
 import {
+  WEB_PUSH_VAPID_STATE_KEY,
   WebPushSubscriptionBindingError,
+  type VapidKeyPair,
   type WebPushMutationGuard,
 } from "./push-web-store.records.js";
 import {
@@ -31,12 +34,16 @@ export {
   type WebPushMutationGuard,
 } from "./push-web-store.records.js";
 
-function context(stateDir?: string) {
+function databaseOptions(stateDir?: string) {
   const env = cloneEnvWithPlatformSemantics(process.env);
   if (stateDir) {
     env.OPENCLAW_STATE_DIR = stateDir;
   }
-  return captureOpenClawStateWorkerContext({ env });
+  return { env };
+}
+
+function context(stateDir?: string) {
+  return captureOpenClawStateWorkerContext(databaseOptions(stateDir));
 }
 
 function executeWebPushCommand<Type extends keyof WebPushWorkerOperations>(
@@ -271,14 +278,9 @@ export function deleteWebPushSubscriptionIfCurrent(
 
 export async function readPersistedVapidKeyPair(stateDir?: string) {
   return (
-    (await runOpenClawStateWorkerOperation(
-      context(stateDir),
-      (scope) =>
-        scope.execute({
-          type: "webPush.readPersistedVapidKeyPair",
-          input: undefined,
-        }),
-      { existingOnly: true },
+    (await readConfigMachineStateAsync<VapidKeyPair>(
+      WEB_PUSH_VAPID_STATE_KEY,
+      databaseOptions(stateDir),
     )) ?? null
   );
 }

@@ -1,4 +1,6 @@
-/** Installed before stored scripts so only trusted input can use private scroll authority. */
+/** Installed before stored scripts so only trusted wheel input can use private scroll authority. */
+// Touch chains natively through both sandbox frames. Relaying it cancels momentum
+// and measures client coordinates against a frame moved by the relayed scroll.
 export function buildSandboxWidgetScrollBridgeHtml(): string {
   return `<script>(()=>{
   const parent=window.parent;
@@ -76,56 +78,5 @@ export function buildSandboxWidgetScrollBridgeHtml(): string {
     if(deltaY===delta)apply(prevent,event,[]);
     post({type:"openclaw:widget-scroll",deltaY,nonce},"*");
   },{passive:false});
-  if(typeof TouchEvent!=="function"||typeof TouchList!=="function"||typeof Touch!=="function")return;
-  const touchesGetter=getter(TouchEvent.prototype,"touches");
-  const lengthGetter=getter(TouchList.prototype,"length");
-  const item=TouchList.prototype.item;
-  const identifierGetter=getter(Touch.prototype,"identifier");
-  const xGetter=getter(Touch.prototype,"clientX");
-  const yGetter=getter(Touch.prototype,"clientY");
-  let touchId=-1;
-  let lastX=0;
-  let lastY=0;
-  const findTouch=touches=>{
-    for(let index=0;index<apply(lengthGetter,touches,[]);index++){
-      const touch=apply(item,touches,[index]);
-      if(touch&&apply(identifierGetter,touch,[])===touchId)return touch;
-    }
-    return null;
-  };
-  listen("touchstart",event=>{
-    if(!event.isTrusted||!nonce)return;
-    const touches=apply(touchesGetter,event,[]);
-    touchId=-1;
-    if(apply(lengthGetter,touches,[])!==1||apply(preventedGetter,event,[]))return;
-    const touch=apply(item,touches,[0]);
-    if(!touch)return;
-    touchId=apply(identifierGetter,touch,[]);
-    lastX=apply(xGetter,touch,[]);
-    lastY=apply(yGetter,touch,[]);
-  },{passive:true});
-  listen("touchmove",event=>{
-    if(!event.isTrusted||!nonce||touchId<0)return;
-    const touches=apply(touchesGetter,event,[]);
-    if(apply(lengthGetter,touches,[])!==1){touchId=-1;return;}
-    const touch=findTouch(touches);
-    if(!touch)return;
-    const x=apply(xGetter,touch,[]);
-    const y=apply(yGetter,touch,[]);
-    const deltaX=lastX-x;
-    const deltaY=lastY-y;
-    lastX=x;
-    lastY=y;
-    if(apply(preventedGetter,event,[])||!deltaY||Math.abs(deltaY)<=Math.abs(deltaX))return;
-    const remaining=remainder(apply(targetGetter,event,[]),deltaY);
-    if(!remaining)return;
-    if(remaining===deltaY)apply(prevent,event,[]);
-    post({type:"openclaw:widget-scroll",deltaY:remaining,nonce},"*");
-  },{passive:false});
-  const endTouch=event=>{
-    if(event.isTrusted&&touchId>=0&&!findTouch(apply(touchesGetter,event,[])))touchId=-1;
-  };
-  listen("touchend",endTouch,{passive:true});
-  listen("touchcancel",endTouch,{passive:true});
 })();</script>`;
 }

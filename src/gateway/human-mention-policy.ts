@@ -13,11 +13,10 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { updateSessionProfileInvolvementAsync } from "../config/sessions/session-accessor.js";
-import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
-import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import { readUserProfileVersion } from "../state/user-profile-events.js";
 import { readUserProfileDirectory } from "../state/user-profile-reads.js";
 import {
@@ -29,18 +28,17 @@ import {
   authorizeGatewaySessionCreation,
   resolveOperatorRolePolicyForProfile,
 } from "./operator-role-policy.js";
-import { ADMIN_SCOPE, READ_SCOPE } from "./operator-scopes.js";
+import { ADMIN_SCOPE, READ_SCOPE, SESSION_READ_SCOPE } from "./operator-scopes.js";
 import { authenticatedProfileUnavailableError } from "./server-methods/gateway-client-identity.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
+import type { SessionSharingTarget } from "./session-sharing-policy.js";
 import { prepareSessionSharingRead } from "./session-sharing-target-read.js";
 import {
   createProfileSessionEntryFilter,
   isSessionVisibilityAllowed,
   prepareSessionSharing,
-  resolveSessionSharingTargetAsync,
-  resolveSessionSharingTarget,
   resolveSessionVisibility,
 } from "./session-sharing.js";
 
@@ -54,14 +52,6 @@ type MentionTarget = {
 };
 type MentionReader = { profile: MentionProfile; canRead: (target: MentionTarget) => boolean };
 
-function scopesAllowRead(scopes: readonly string[]): boolean {
-  return roleScopesAllow({
-    role: "operator",
-    requestedScopes: [READ_SCOPE],
-    allowedScopes: scopes,
-  });
-}
-
 /** UI labels are text, never identity or an email-address fallback. */
 export function humanMentionDisplayLabel(label: string | undefined, profileId: string): string {
   const text = label
@@ -74,6 +64,7 @@ export function humanMentionDisplayLabel(label: string | undefined, profileId: s
 export function createHumanMentionPolicy(params: {
   getRuntimeConfig: () => OpenClawConfig;
   getClients: () => Iterable<GatewayClient>;
+  readSessionTarget: (sessionKey: string, agentId?: string) => SessionSharingTarget | null;
 }) {
   let active = true;
   let profileVersion = -1;
@@ -132,7 +123,7 @@ export function createHumanMentionPolicy(params: {
       client.invalidated === true ||
       client.internal?.syntheticClient ||
       (client.connect.role ?? "operator") !== "operator" ||
-      !scopesAllowRead(client.connect.scopes ?? [])
+      !operatorScopeSatisfied(SESSION_READ_SCOPE, client.connect.scopes ?? [])
     ) {
       return err(errorShape(ErrorCodes.FORBIDDEN, "Human mentions require a signed-in operator."));
     }
@@ -152,7 +143,7 @@ export function createHumanMentionPolicy(params: {
       return err(authenticatedProfileUnavailableError());
     }
     const policy = resolveOperatorRolePolicyForProfile(profile.profileId, cfg);
-    if (policy && !scopesAllowRead(policy.scopes)) {
+    if (policy && !operatorScopeSatisfied(SESSION_READ_SCOPE, policy.scopes)) {
       return err(errorShape(ErrorCodes.FORBIDDEN, "Your operator role cannot read mentions."));
     }
     const admin =
@@ -162,7 +153,7 @@ export function createHumanMentionPolicy(params: {
     const { entryFilter } = prepareSessionSharing({
       cfg,
       client: {
-        connect: { ...client.connect, scopes: admin ? [ADMIN_SCOPE] : [READ_SCOPE] },
+        connect: { ...client.connect, scopes: admin ? [ADMIN_SCOPE] : [SESSION_READ_SCOPE] },
         internal: { operatorRoleActor: { kind: "operator", profileId: profile.profileId } },
       },
     });
@@ -184,7 +175,7 @@ export function createHumanMentionPolicy(params: {
     }
     const policy = resolveOperatorRolePolicyForProfile(profile.profileId, cfg);
     const scopes = policy?.scopes ?? [READ_SCOPE];
-    if (!scopesAllowRead(scopes)) {
+    if (!operatorScopeSatisfied(SESSION_READ_SCOPE, scopes)) {
       return undefined;
     }
     if (scopes.includes(ADMIN_SCOPE)) {
@@ -201,7 +192,7 @@ export function createHumanMentionPolicy(params: {
     client: GatewayClient | null,
     input: UsersMentionableParams,
     cfg: OpenClawConfig,
-    prepared?: { readTarget: () => Awaited<ReturnType<typeof resolveSessionSharingTargetAsync>> },
+    prepared?: { readTarget: () => SessionSharingTarget | null },
   ): Result<{ target: MentionTarget; profile: MentionProfile }, ErrorShape> {
     const identified = identify(client, cfg);
     if (!identified.ok) {
@@ -213,20 +204,9 @@ export function createHumanMentionPolicy(params: {
       if (!agent.ok) {
         return err(agent.error);
       }
-      const binding = captureIncognitoSessionSource({
-        sessionKey: input.sessionKey,
-        agentId: agent.agentId,
-      });
-      const resolved =
-        binding && "kind" in binding
-          ? null
-          : prepared
-            ? prepared.readTarget()
-            : resolveSessionSharingTarget({
-                cfg,
-                sessionKey: input.sessionKey,
-                agentId: agent.agentId,
-              });
+      const resolved = prepared
+        ? prepared.readTarget()
+        : params.readSessionTarget(input.sessionKey, agent.agentId);
       const target = resolved && {
         agentId: resolved.agentId,
         sessionKey: resolved.canonicalKey,
@@ -378,7 +358,7 @@ export function createHumanMentionPolicy(params: {
     mentionable(
       client: GatewayClient | null,
       input: UsersMentionableParams,
-      prepared?: { readTarget: () => Awaited<ReturnType<typeof resolveSessionSharingTargetAsync>> },
+      prepared?: { readTarget: () => SessionSharingTarget | null },
     ): Result<UsersMentionableResult, ErrorShape> {
       const cfg = params.getRuntimeConfig();
       const context = resolveContext(client, input, cfg, prepared);
@@ -398,7 +378,10 @@ export function createHumanMentionPolicy(params: {
             ? [
                 {
                   profileId: candidate.profileId,
-                  displayName: humanMentionDisplayLabel(candidate.label, candidate.profileId),
+                  displayName: humanMentionDisplayLabel(
+                    candidate.label ?? logins[0],
+                    candidate.profileId,
+                  ),
                   avatarUrl: candidate.avatarUrl,
                   logins,
                   online: false,
@@ -454,7 +437,7 @@ export function createHumanMentionPolicy(params: {
       client: GatewayClient | null,
       input: UsersMentionableParams,
       profileIds: readonly string[],
-      prepared?: { readTarget: () => Awaited<ReturnType<typeof resolveSessionSharingTargetAsync>> },
+      prepared?: { readTarget: () => SessionSharingTarget | null },
     ): Result<readonly string[], ErrorShape> {
       if (profileIds.length === 0) {
         return ok([]);

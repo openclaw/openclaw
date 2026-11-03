@@ -1,7 +1,8 @@
 import type { CronConfig } from "../../config/types.cron.js";
+import type { PluginCommandScheduleHost } from "../plugin-command-schedule.types.js";
 import type { CronNotificationIntent } from "../service/notification-intents.js";
 import type { CronJob } from "../types.js";
-import type { CronRunQueueOperations } from "./run-queue.types.js";
+import type { CronRunQueueOperations, CronRunRequestContext } from "./run-queue.types.js";
 import type { CronRunRecoveryOutcome } from "./run-recovery.types.js";
 
 export type CronScheduleMaintenanceOptions = {
@@ -14,24 +15,29 @@ export type CronScheduleMaintenanceOptions = {
 
 export type CronSchedulerConfig = {
   cronEnabled: boolean;
+  preparingAgentIds?: string[];
   cronConfig?: CronConfig;
   defaultAgentId?: string;
   configuredChannels?: string[];
   maxMissedJobsPerRestart?: number;
   missedJobStaggerMs?: number;
   startupDeferredMissedAgentJobDelayMs?: number;
+  /** The Gateway process that owns this scheduler; see `cron.drainQueue`. */
+  hostProcessId?: string;
+  /** Plugin instances that can serve command schedules; see `cron.drainQueue`. */
+  pluginCommandHosts?: PluginCommandScheduleHost[];
 };
 
-/** Versions order pushed config only; they never authorize a run. */
-export type CronSchedulerSnapshot = { version: number; config: CronSchedulerConfig };
+export type CronSchedulerSnapshot = { config: CronSchedulerConfig };
 
-export type CronSchedulerResult = CronRunQueueOperations["cron.requestRuns"]["output"] & {
-  jobs: CronJob[];
-  ownerless: CronJob[];
-  notifications: CronNotificationIntent[];
-  logs: CronRunRecoveryOutcome["logs"];
-  nextWakeAtMs?: number;
-};
+export type CronSchedulerResult = CronRunQueueOperations["cron.requestRuns"]["output"] &
+  CronRunQueueOperations["cron.drainQueue"]["output"] & {
+    jobs: CronJob[];
+    ownerless: CronJob[];
+    notifications: CronNotificationIntent[];
+    logs: CronRunRecoveryOutcome["logs"];
+    nextWakeAtMs?: number;
+  };
 
 type CronSchedulerCommand = {
   storeKey: string;
@@ -39,6 +45,7 @@ type CronSchedulerCommand = {
   paused?: boolean;
   nowMs?: number;
   monotonicMs?: number;
+  requests?: CronRunRequestContext[];
   snapshot?: CronSchedulerSnapshot;
 };
 

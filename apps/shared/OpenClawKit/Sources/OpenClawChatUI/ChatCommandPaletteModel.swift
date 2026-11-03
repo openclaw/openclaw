@@ -24,7 +24,7 @@ enum ChatCommandPaletteAction: String, CaseIterable {
 
     var shortcut: String {
         switch self {
-        case .newThread: "⇧⌘N"
+        case .newThread: "⌘N"
         case .threads: "⇧⌘S"
         case .find: "⌘F"
         case .export: "⇧⌘E"

@@ -57,7 +57,7 @@ openclaw onboard
 On a fresh install the guided flow offers **Quick start** and **Custom setup**,
 detects the AI access you already have, verifies your one chosen connection with
 a real completion, and only then configures the rest of the setup. Both lanes,
-the provider picker, **Skip for now**, and the foreground Gateway are described
+the provider picker, **Skip for now**, and the background Gateway choice are described
 step by step in [Onboarding (CLI)](/start/wizard#guided-default).
 
 After inference passes, OpenClaw can hand channel setup to a masked terminal
@@ -100,6 +100,10 @@ connections in this order:
 5. Eligible loaded models in Ollama, LM Studio, or llama.cpp.
 
 The first connection that passes a live completion becomes the primary model.
+If Codex detection or runtime inspection fails, automatic setup shows the error
+and stops rather than selecting a local model. Fix the reported problem and
+retry, or choose another available provider manually. A missing Codex executable
+or login still allows the remaining connections to be tried.
 If none works, OpenClaw installs or enables the official Codex plugin and uses
 its existing login, or asks you to sign in with ChatGPT. Apple Foundation Models
 is a utility option and is never chosen as the primary model.

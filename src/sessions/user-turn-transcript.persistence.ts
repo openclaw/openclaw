@@ -7,16 +7,25 @@ import {
 import { readActiveTranscriptEntryAnchorAsync } from "../config/sessions/session-transcript-anchor-read.js";
 import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
 import { captureOwnedTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
+import { observeDiagnosticsTimelinePhases } from "../infra/diagnostics-timeline.js";
 import { isUserMessage, resolvePersistedUserTurnMessage } from "./user-turn-transcript.message.js";
 import { preparePersistedUserTurnMessageForTranscriptWrite } from "./user-turn-transcript.metadata.js";
 import type {
   PersistUserTurnTranscriptParams,
   PersistedUserTurnMessage,
   UserTurnTranscriptPersistResult,
+  UserTurnTranscriptTarget,
+  UserTurnTranscriptTargetResolver,
 } from "./user-turn-transcript.types.js";
 
 export type CommittedUserTurnTranscript = TranscriptMessageAppendResult<PersistedUserTurnMessage> &
   Pick<UserTurnTranscriptPersistResult, "sessionEntry" | "sessionTurnMutationResult">;
+
+export async function resolveUserTurnTranscriptTarget(
+  target: UserTurnTranscriptTargetResolver,
+): Promise<UserTurnTranscriptTarget | undefined> {
+  return typeof target === "function" ? await target() : target;
+}
 
 export function admittedUserTurnResult(
   committed: CommittedUserTurnTranscript,
@@ -39,8 +48,10 @@ export async function resolveCommittedUserTurnTranscript(
 ): Promise<UserTurnTranscriptPersistResult | undefined> {
   let committed = originalCommit;
   if (!committed.anchor) {
+    using phase = observeDiagnosticsTimelinePhases("persist.transcript.projection");
     const assertCurrent = captureOwnedTranscriptWriteAssertion(params);
     await waitForSessionTranscriptProjection(params);
+    phase.mark("persist.transcript.anchor");
     const anchor = await readActiveTranscriptEntryAnchorAsync({
       ...params,
       entryId: committed.messageId,

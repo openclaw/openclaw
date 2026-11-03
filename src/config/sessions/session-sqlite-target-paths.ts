@@ -1,7 +1,7 @@
 import { readdirSync } from "node:fs";
 import path from "node:path";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
-import { hasErrnoCode } from "../../infra/errno.js";
+import { ignoreMissingPath } from "../../infra/errno.js";
 
 export const MULTI_STORE_PATH_SENTINEL = "(multiple)";
 
@@ -47,27 +47,50 @@ export function resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath: str
 }
 
 /** List inspection candidates without opening stores or assigning writable ownership. */
-export function listSqliteTargetCandidatePathsForSessionStorePath(storePath: string): string[] {
+export function listSqliteTargetCandidatePathsForSessionStorePath(
+  storePath: string,
+  agentId?: string,
+): string[] {
   const unsuffixedTarget = resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath);
   if (unsuffixedTarget.agentId || unsuffixedTarget.shared) {
     return [unsuffixedTarget.path];
   }
   const directory = path.dirname(unsuffixedTarget.path);
   const baseName = path.basename(unsuffixedTarget.path, ".sqlite");
+  const prefix = agentId ? `${baseName}.${normalizeAgentId(agentId)}` : undefined;
   const candidateNames = new Set([path.basename(unsuffixedTarget.path)]);
   try {
     for (const fileName of readdirSync(directory)) {
       const databaseName = fileName.replace(/-(?:wal|shm|journal)$/u, "");
-      if (databaseName.startsWith(`${baseName}.`) && databaseName.endsWith(".sqlite")) {
+      if (
+        databaseName.startsWith(`${baseName}.`) &&
+        databaseName.endsWith(".sqlite") &&
+        (!prefix || parseSqliteTargetSuffixIndex(databaseName, prefix) !== undefined)
+      ) {
         candidateNames.add(databaseName);
       }
     }
   } catch (error) {
-    if (!hasErrnoCode(error, "ENOENT")) {
-      throw error;
-    }
+    ignoreMissingPath(error);
   }
   return [...candidateNames].map((fileName) => path.join(directory, fileName));
+}
+
+export function parseSqliteTargetSuffixIndex(fileName: string, prefix: string): number | undefined {
+  if (fileName === `${prefix}.sqlite`) {
+    return 1;
+  }
+  if (!fileName.startsWith(`${prefix}.`) || !fileName.endsWith(".sqlite")) {
+    return undefined;
+  }
+  const rawValue = fileName.slice(prefix.length + 1, -".sqlite".length);
+  if (!/^[1-9]\d*$/.test(rawValue)) {
+    return undefined;
+  }
+  const value = Number(rawValue);
+  return Number.isSafeInteger(value) && value >= 2 && String(value) === rawValue
+    ? value
+    : undefined;
 }
 
 /** Extracts the agent id from the canonical per-agent SQLite database path. */

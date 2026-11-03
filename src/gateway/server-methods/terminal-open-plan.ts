@@ -13,18 +13,13 @@ export function authorizeTerminalNodeCommand(
   context: GatewayRequestHandlerOptions["context"],
   nodeId: string,
   command: string,
-):
-  | { ok: true; node: NonNullable<ReturnType<typeof context.nodeRegistry.get>> }
-  | {
-      ok: false;
-      message: string;
-    } {
+) {
   const node = context.nodeRegistry.get(nodeId);
   if (!node) {
-    return { ok: false, message: "terminal node is not connected" };
+    return { ok: false as const, message: "terminal node is not connected" };
   }
   if (!node.commands.includes(command)) {
-    return { ok: false, message: "terminal node command is not available" };
+    return { ok: false as const, message: "terminal node command is not available" };
   }
   const allowlist = resolveNodeCommandAllowlist(context.getRuntimeConfig(), {
     ...node,
@@ -35,7 +30,7 @@ export function authorizeTerminalNodeCommand(
     declaredCommands: node.commands,
     allowlist,
   });
-  return allowed.ok ? { ok: true, node } : { ok: false, message: allowed.reason };
+  return allowed.ok ? { ok: true as const, node } : { ok: false as const, message: allowed.reason };
 }
 
 export function resolveTerminalOpenSpawnPlan(

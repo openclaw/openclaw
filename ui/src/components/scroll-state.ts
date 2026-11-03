@@ -1,81 +1,26 @@
-import { nothing } from "lit";
-import { AsyncDirective } from "lit/async-directive.js";
-import { directive, type ElementPart } from "lit/directive.js";
-import { observeScrollState, type ScrollState } from "./scroll-state-observer.ts";
+/** Horizontal strips: stops short of the region's scroll-padding, which keeps edge fades clear. */
+export function revealInlineInScrollRegion(region: HTMLElement, option: HTMLElement): void {
+  const bounds = region.getBoundingClientRect();
+  const item = option.getBoundingClientRect();
+  const style = getComputedStyle(region);
+  const start = bounds.left + (Number.parseFloat(style.scrollPaddingLeft) || 0);
+  const end = bounds.right - (Number.parseFloat(style.scrollPaddingRight) || 0);
+  if (item.left < start) {
+    region.scrollLeft -= Math.ceil(start - item.left);
+  } else if (item.right > end) {
+    region.scrollLeft += Math.ceil(item.right - end);
+  }
+}
 
 /** Reveal an option without scrollIntoView also moving its popup's ancestors. */
 export function revealInScrollRegion(region: HTMLElement, option: HTMLElement): void {
   const bounds = region.getBoundingClientRect();
   const row = option.getBoundingClientRect();
+  // Opening popovers scale their geometry; scrollTop remains in unscaled CSS pixels.
+  const scale = bounds.height / region.offsetHeight;
   if (row.top < bounds.top) {
-    region.scrollTop -= bounds.top - row.top;
+    region.scrollTop -= Math.ceil((bounds.top - row.top) / scale);
   } else if (row.bottom > bounds.bottom) {
-    region.scrollTop += row.bottom - bounds.bottom;
+    region.scrollTop += Math.ceil((row.bottom - bounds.bottom) / scale);
   }
 }
-
-class ScrollStateDirective extends AsyncDirective {
-  private element: HTMLElement | undefined;
-  private horizontal = false;
-  private trackScroll = true;
-  private observation: ReturnType<typeof observeScrollState> | undefined;
-  private readonly publish = (state: ScrollState) => {
-    const element = this.element;
-    if (!element) {
-      return;
-    }
-    for (const key of ["scrollable", "atStart", "atEnd"] as const) {
-      const value = String(state[key]);
-      if (element.dataset[key] !== value) {
-        element.dataset[key] = value;
-      }
-    }
-  };
-
-  render(_horizontal = false, _trackScroll = true) {
-    return nothing;
-  }
-
-  override update(
-    part: ElementPart,
-    [horizontal = false, trackScroll = true]: [boolean?, boolean?],
-  ) {
-    const element = part.element instanceof HTMLElement ? part.element : undefined;
-    if (
-      element !== this.element ||
-      horizontal !== this.horizontal ||
-      trackScroll !== this.trackScroll
-    ) {
-      this.observation?.disconnect();
-      this.observation = undefined;
-      this.element = element;
-      this.horizontal = horizontal;
-      this.trackScroll = trackScroll;
-    }
-    this.connect();
-    this.observation?.schedule();
-    return nothing;
-  }
-
-  private connect(): void {
-    if (this.isConnected && this.element && !this.observation) {
-      this.observation = observeScrollState(
-        this.element,
-        this.publish,
-        this.horizontal,
-        this.trackScroll,
-      );
-    }
-  }
-
-  protected override disconnected(): void {
-    this.observation?.disconnect();
-    this.observation = undefined;
-  }
-
-  protected override reconnected(): void {
-    this.connect();
-  }
-}
-
-export const scrollState = directive(ScrollStateDirective);

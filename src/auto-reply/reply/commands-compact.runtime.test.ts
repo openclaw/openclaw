@@ -5,10 +5,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 
 // mock-isolation: The real session guard is exercised without starting embedded agent execution.
 vi.mock("../../agents/embedded-agent.js", () => ({
-  abortEmbeddedAgentRun: vi.fn(),
   compactEmbeddedAgentSession: vi.fn(),
-  isEmbeddedAgentRunAbortableForCompaction: vi.fn(),
-  waitForEmbeddedAgentRunEnd: vi.fn(),
 }));
 
 const { prepareCurrentSessionEntry } = await import("./commands-compact.runtime.js");

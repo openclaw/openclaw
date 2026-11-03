@@ -1,29 +1,24 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
-import { readOpenClawAgentDatabase } from "../../state/openclaw-agent-db-readonly-open.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import {
+  readSqliteDatabaseScopedWriteTokenForPath,
+  sqliteSessionIdWriteScope,
+} from "../../infra/sqlite-database-admission.js";
 import {
   assertAgentDatabaseTerminalOpenAllowed,
   revalidateAgentDatabaseTerminalOpenAsync,
 } from "../../state/openclaw-agent-db-terminal.js";
-import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
-import { readSessionTranscriptBoundedActiveContextCore } from "./session-accessor.sqlite-active-context.js";
-import {
-  readLatestSessionTranscriptMessageEvent,
-  readRecentSessionTranscriptActiveEvents,
-} from "./session-accessor.sqlite-active-events.js";
-import { readSessionTranscriptCurrentTurnEntry } from "./session-accessor.sqlite-current-turn.js";
-import { loadTranscriptReadSnapshotSync } from "./session-accessor.sqlite-read.js";
 import {
   prepareSqliteTranscriptReadScope,
-  resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
   type ResolvedTranscriptReadScope,
 } from "./session-accessor.sqlite-scope.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
+import type { SessionActorMemoryHistoryReads } from "./session-actor-memory-history-contract.js";
 import {
   readSessionActorTranscriptReplica,
+  readSessionActorTranscriptStateFromReplica,
   retainSessionActorTranscriptReplica,
 } from "./session-actor-replica.js";
 import { readSessionActorTranscriptAnchors } from "./session-actor-transcript-anchors.js";
@@ -32,17 +27,12 @@ import {
   readSessionActorTranscriptContext,
   seedSessionActorTranscriptContext,
 } from "./session-actor-transcript-replica.js";
-import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
+import { readRestoredSessionTranscriptInWorker } from "./session-cold-storage-read.js";
 import type { SessionEntryCohortRequest } from "./session-entry-read.types.js";
-import type { IncognitoSessionActor } from "./session-incognito-actor.js";
-import { captureIncognitoSessionHistoryBinding } from "./session-incognito-binding.js";
-import type { IncognitoSessionAuthority } from "./session-incognito-contract.js";
-import type {
-  IncognitoHistoryOperations,
-  IncognitoHistoryTarget,
-} from "./session-incognito-history-contract.js";
+import type { SessionTranscriptContextSelection } from "./session-history-read.types.js";
+import { getSessionTranscriptHydrationCaller } from "./session-transcript-hydration-caller.js";
 import type { SessionTranscriptMaintenanceRead } from "./session-transcript-hydration.types.js";
-import { readSessionTranscriptMaintenance } from "./session-transcript-maintenance-read.js";
+import { readSessionTranscriptCohort } from "./session-transcript-read-cohort.js";
 import {
   resolveSessionTranscriptReadFence,
   resolveSqliteSessionTranscriptReadFence,
@@ -50,16 +40,20 @@ import {
 } from "./session-transcript-read-fence.js";
 import { withSessionTranscriptReadSource } from "./session-transcript-read-source.js";
 import {
+  historyLane,
   targetDiscoveryLane,
   type SessionHistoryWorkerLane,
 } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
-import type {
-  PreparedSessionTranscriptHydration,
-  SessionHistoryWorkerDatabase,
-  SessionTranscriptCurrentTurnEntryRead,
-  SessionTranscriptCurrentTurnEntryRequest,
+import {
+  MAX_SESSION_ROW_FACTS_KEYS,
+  type PreparedSessionTranscriptHydration,
+  type SessionHistoryWorkerDatabase,
+  type SessionTranscriptCurrentTurnEntryRead,
+  type SessionTranscriptCurrentTurnEntryRequest,
 } from "./session-transcript-worker.types.js";
+import { collectSessionEntryLookupKeys } from "./store-entry.js";
+import { cloneTranscriptView } from "./transcript-snapshot.js";
 import {
   captureSessionTranscriptTargetBinding,
   type CapturedSessionTranscriptTargetBinding,
@@ -69,10 +63,18 @@ import {
   readOwnedSessionTranscriptState,
 } from "./transcript-write-context.js";
 
+type PendingHydration = {
+  promise: Promise<PreparedSessionTranscriptHydration>;
+  signal?: AbortSignal;
+  readers: number;
+};
+// Only in-flight reads share transport work; completed snapshots belong to the actor replica.
+const pendingHydrations = new WeakMap<SessionHistoryWorkerLane, Map<string, PendingHydration>>();
+
 type SessionTranscriptHydrationReader = {
   target: CapturedSessionTranscriptTargetBinding;
   assertCurrent: () => void;
-  read: () => Promise<PreparedSessionTranscriptHydration>;
+  read: (options?: { compaction?: true }) => Promise<PreparedSessionTranscriptHydration>;
   readCohort?: (
     selection: NonNullable<SessionEntryCohortRequest["transcript"]>,
     consume: (prepared: PreparedSessionTranscriptHydration) => void,
@@ -82,89 +84,44 @@ type SessionTranscriptHydrationReader = {
   ) => Promise<SessionTranscriptCurrentTurnEntryRead>;
   readMaintenance: (
     request: SessionTranscriptMaintenanceRead,
-  ) => Promise<IncognitoHistoryOperations["session.history.maintenance"]["output"]>;
+  ) => Promise<SessionActorMemoryHistoryReads["session.history.maintenance"]["output"]>;
   readRecentActiveEvents: (
     maxEvents: number,
-  ) => Promise<IncognitoHistoryOperations["session.history.recent-active-events"]["output"]>;
+  ) => Promise<SessionActorMemoryHistoryReads["session.history.recent-active-events"]["output"]>;
   readLatestActiveMessage: () => Promise<
-    IncognitoHistoryOperations["session.history.latest-active-message"]["output"]
+    SessionActorMemoryHistoryReads["session.history.latest-active-message"]["output"]
   >;
 };
-
-/** Inactive until P7d: the caller supplies the sole actor for this captured session. */
-export function prepareIncognitoSessionTranscriptHydration(params: {
-  actor: IncognitoSessionActor;
-  authority: IncognitoSessionAuthority;
-  target: IncognitoHistoryTarget;
-  limits?: { maxBytes: number; maxEvents: number };
-  signal?: AbortSignal;
-}): SessionTranscriptHydrationReader {
-  const { actor, authority, signal } = params;
-  actor.assertCurrent();
-  authority.assertCurrent();
-  const captured = structuredClone(params.target);
-  const limits = params.limits ? { ...params.limits } : undefined;
-  const target = captureSessionTranscriptTargetBinding({
-    agentId: actor.agentId,
-    storePath: actor.path,
-    sessionKey: captured.sessionKey,
-    sessionId: captured.sessionId,
-  });
-  captured.admission ??= resolveSessionTranscriptReadFence(target);
-  const claim = actor.sessions.captureCurrent(captured.sessionKey);
-  const assertCurrent = () => {
-    signal?.throwIfAborted();
-    actor.assertCurrent();
-    authority.assertCurrent();
-    claim.assertCurrent();
-  };
-  const boundAuthority: IncognitoSessionAuthority = {
-    assertCurrent,
-    authorize: (stage, facts) => authority.authorize?.(stage, facts),
-  };
-  const read = async <Key extends keyof IncognitoHistoryOperations>(
-    type: Key,
-    input: IncognitoHistoryOperations[Key]["input"],
-  ): Promise<IncognitoHistoryOperations[Key]["output"]> => {
-    assertCurrent();
-    const value = await actor.sessions.history(boundAuthority, { type, input }, signal);
-    assertCurrent();
-    return value;
-  };
-  return {
-    target,
-    assertCurrent,
-    read: () => read("session.history.hydrate", { ...captured, limits }),
-    readCurrentTurnEntry: (request) =>
-      read("session.history.current-turn-entry", {
-        ...captured,
-        entryId: request.entryId,
-        version: { ...request.version },
-        includeEntry: request.includeEntry,
-      }),
-    readMaintenance: (request) => read("session.history.maintenance", { ...captured, request }),
-    readRecentActiveEvents: (maxEvents) =>
-      read("session.history.recent-active-events", { ...captured, maxEvents }),
-    readLatestActiveMessage: () => read("session.history.latest-active-message", captured),
-  };
-}
 
 /** Capture identity before queueing; a missing file remains the creation owner's responsibility. */
 export function prepareSessionTranscriptHydration(
   source: SessionTranscriptRuntimeTarget & { env?: NodeJS.ProcessEnv },
-  limits?: { maxBytes: number; maxEvents: number },
+  limits?: SessionTranscriptContextSelection,
   signal?: AbortSignal,
   lane?: SessionHistoryWorkerLane,
 ): SessionTranscriptHydrationReader {
+  const caller = getSessionTranscriptHydrationCaller();
   const memory = captureSessionActorTranscriptRead(source, signal);
   if (memory) {
     const version = () => ({ generation: null, rawSeq: null, updatedAt: null });
     return {
       target: memory.target,
       assertCurrent: memory.assertCurrent,
-      read: async () => {
+      read: async (options) => {
         if (!memory.missing) {
-          return memory.read("session.history.hydrate", { limits });
+          const prepared = await memory.read("session.history.hydrate", { limits });
+          if (options?.compaction && prepared.kind === "bounded") {
+            const { resolveCurrentSessionPrimaryConversation } =
+              await import("./conversation-registry.js");
+            const entry = memory.currentEntry();
+            prepared.compaction = {
+              sessionTarget: memory.target,
+              entry,
+              runtimeEntry: entry,
+              primaryConversation: await resolveCurrentSessionPrimaryConversation(memory.target),
+            };
+          }
+          return prepared;
         }
         memory.assertCurrent();
         return limits
@@ -185,6 +142,16 @@ export function prepareSessionTranscriptHydration(
                 truncated: false,
                 completeActivePath: true,
               },
+              ...(options?.compaction
+                ? {
+                    compaction: {
+                      sessionTarget: memory.target,
+                      entry: undefined,
+                      runtimeEntry: undefined,
+                      primaryConversation: undefined,
+                    },
+                  }
+                : {}),
             }
           : {
               kind: "full",
@@ -203,7 +170,12 @@ export function prepareSessionTranscriptHydration(
           return memory.read("session.history.maintenance", { request });
         }
         memory.assertCurrent();
-        return { kind: "transcript-maintenance" };
+        return {
+          kind: "transcript-maintenance",
+          ...(request.operation === "custom-branch" && request.leafEntryId === null
+            ? { events: [] }
+            : {}),
+        };
       },
       readRecentActiveEvents: async (maxEvents) => {
         if (!memory.missing) {
@@ -221,40 +193,18 @@ export function prepareSessionTranscriptHydration(
       },
     };
   }
-  const incognito = captureIncognitoSessionHistoryBinding(source);
-  if (incognito) {
-    return prepareIncognitoSessionTranscriptHydration({ ...incognito, limits, signal });
-  }
   const target = captureSessionTranscriptTargetBinding(source);
-  const contextLimits = limits
-    ? { maxBytes: limits.maxBytes, maxEvents: limits.maxEvents }
-    : undefined;
+  const contextLimits = limits ? { ...limits } : undefined;
   const receipt = resolveSessionTranscriptReadFence(target);
   const admission = receipt ? { ...receipt } : undefined;
   signal?.throwIfAborted();
-  const incognitoOptions = isIncognitoSessionKey(target.sessionKey)
-    ? toDatabaseOptions(resolveSqliteTranscriptReadScope(target))
-    : undefined;
-  const incognitoOwner = incognitoOptions
-    ? getOpenClawAgentDatabaseIfOpen(incognitoOptions)
-    : undefined;
-  const assertCurrent = () => {
-    if (incognitoOptions && getOpenClawAgentDatabaseIfOpen(incognitoOptions) !== incognitoOwner) {
-      throw new Error("Session transcript incognito database owner is no longer current");
-    }
-  };
   const readInOwner = async <T>(
-    readInProcess: () => T,
     readInWorker: (
       owner: SessionHistoryWorkerDatabase,
       resolvedScope: ResolvedTranscriptReadScope,
     ) => Promise<T>,
   ): Promise<T> => {
     signal?.throwIfAborted();
-    // Incognito SQLite belongs to this process; never substitute another memory database.
-    if (incognitoOptions) {
-      return runWithSessionTranscriptReadFence(admission, readInProcess);
-    }
     const resolvedScope = await prepareSqliteTranscriptReadScope(target, signal);
     signal?.throwIfAborted();
     const options = toDatabaseOptions(resolvedScope);
@@ -273,22 +223,9 @@ export function prepareSessionTranscriptHydration(
             owner.assertCurrent();
           };
           try {
-            return await readRestoredSessionTranscript(
-              target,
+            return await readRestoredSessionTranscriptInWorker(
+              { scope: target, resolved: resolvedScope, owner, assertCurrent: assertReadCurrent },
               () => readInWorker(owner, resolvedScope),
-              {
-                assertCurrent: assertReadCurrent,
-                coldRead: {
-                  target: resolvedScope,
-                  readMetadata: async () => {
-                    const metadata = await owner.readColdMetadata({
-                      sessionId: resolvedScope.sessionId,
-                      env: target.env,
-                    });
-                    return metadata.archive;
-                  },
-                },
-              },
             );
           } finally {
             // An absent-store reply must not hide a revoked read owner.
@@ -303,12 +240,31 @@ export function prepareSessionTranscriptHydration(
       assertAgentDatabaseTerminalOpenAllowed(databasePath);
     }
   };
-  const retainedRead = (selection?: NonNullable<SessionEntryCohortRequest["transcript"]>) => {
-    if (!contextLimits) {
+  const readState = (resolved?: ResolvedTranscriptReadScope) =>
+    readOwnedSessionTranscriptState(target) ??
+    (resolved?.sessionKey
+      ? readSessionActorTranscriptStateFromReplica({
+          path: resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolved)),
+          sessionId: resolved.sessionId,
+          sessionKey: resolved.sessionKey,
+        })
+      : undefined);
+  const retainedRead = (
+    selection?: NonNullable<SessionEntryCohortRequest["transcript"]>,
+    resolved?: ResolvedTranscriptReadScope,
+  ) => {
+    if (!contextLimits || "compaction" in contextLimits) {
       return undefined;
     }
-    const hot = readOwnedSessionTranscriptState(target);
+    const hot = readState(resolved);
     if (!hot) {
+      return undefined;
+    }
+    if (
+      selection &&
+      (selection.sessionKey !== hot.target.sessionKey ||
+        selection.entryIds.length > MAX_SESSION_ROW_FACTS_KEYS)
+    ) {
       return undefined;
     }
     const retained = readSessionActorTranscriptReplica(hot);
@@ -328,21 +284,25 @@ export function prepareSessionTranscriptHydration(
         { agentId: target.agentId, path: target.storePath, sessionId: target.sessionId },
         selection,
         retained?.tail,
+        retained?.anchors,
       );
       if (!transcript) {
         return undefined;
       }
-      prepared.transcript = transcript;
+      prepared.transcript = structuredClone(transcript);
     } else {
       delete prepared.transcript;
     }
     return prepared;
   };
-  const retainRead = (prepared: PreparedSessionTranscriptHydration) => {
-    if (prepared.kind !== "bounded" || !contextLimits) {
+  const retainRead = (
+    prepared: PreparedSessionTranscriptHydration,
+    resolved?: ResolvedTranscriptReadScope,
+  ) => {
+    if (prepared.kind !== "bounded" || !contextLimits || "compaction" in contextLimits) {
       return;
     }
-    const hot = readOwnedSessionTranscriptState(target);
+    const hot = readState(resolved);
     if (!hot) {
       return;
     }
@@ -357,106 +317,134 @@ export function prepareSessionTranscriptHydration(
       retainSessionActorTranscriptReplica(hot, retained);
     }
   };
-  const read = async (): Promise<PreparedSessionTranscriptHydration> => {
-    signal?.throwIfAborted();
-    const retained = retainedRead();
+  const readPrepared = async (
+    owner: SessionHistoryWorkerDatabase,
+    input: Parameters<SessionHistoryWorkerDatabase["readTranscript"]>[0],
+    readerLane = lane ?? historyLane,
+  ): Promise<PreparedSessionTranscriptHydration> => {
+    const resolved = input.resolvedScope;
+    const retained = input.compaction ? undefined : retainedRead(input.transcript, resolved);
     if (retained) {
       return retained;
     }
-    const prepared = await readInOwner<PreparedSessionTranscriptHydration>(
-      () =>
-        contextLimits
-          ? {
-              kind: "bounded",
-              snapshot: readSessionTranscriptBoundedActiveContextCore(target, {
-                ...contextLimits,
-                readOnly: true,
-              }),
-            }
-          : { kind: "full", snapshot: loadTranscriptReadSnapshotSync(target, { readOnly: true }) },
-      (owner, resolvedScope) =>
-        owner.readTranscript({ target, resolvedScope, limits: contextLimits, admission }, signal),
+    // Full exports stream into caller-owned channels; compaction also carries live entry facts.
+    if (!contextLimits || "compaction" in contextLimits || input.compaction) {
+      return owner.readTranscript(input, signal);
+    }
+    const load = () =>
+      owner.readTranscript(input, signal).then((prepared) => {
+        retainRead(prepared, resolved);
+        return prepared;
+      });
+    const revision = readSqliteDatabaseScopedWriteTokenForPath(
+      resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolved)),
+      [
+        ...(resolved.sessionKey ? collectSessionEntryLookupKeys(resolved.sessionKey) : []),
+        sqliteSessionIdWriteScope(resolved.sessionId),
+      ],
     );
-    retainRead(prepared);
-    return prepared;
+    if (!revision) {
+      return load();
+    }
+    const pending = pendingHydrations.get(readerLane) ?? new Map<string, PendingHydration>();
+    pendingHydrations.set(readerLane, pending);
+    const key = JSON.stringify({ ...input, caller: undefined, revision });
+    let shared = pending.get(key);
+    if (!shared) {
+      const promise = load();
+      shared = { promise, signal, readers: 0 };
+      pending.set(key, shared);
+      const forget = () => pending.delete(key);
+      void promise.then(forget, forget);
+    }
+    shared.readers++;
+    try {
+      const prepared = await racePromiseWithAbortSignal(
+        shared.promise,
+        signal,
+        (aborted) => aborted.reason,
+      );
+      signal?.throwIfAborted();
+      // Earlier receivers detach before the last receiver takes the original envelope.
+      return shared.readers > 1 ? cloneTranscriptView(prepared) : prepared;
+    } catch (error) {
+      signal?.throwIfAborted();
+      if (shared.signal?.aborted && shared.signal !== signal) {
+        return readPrepared(owner, input, readerLane);
+      }
+      throw error;
+    } finally {
+      shared.readers--;
+    }
   };
-  const readCohort: SessionTranscriptHydrationReader["readCohort"] =
-    contextLimits && !incognitoOptions
-      ? (selection, consume) => {
-          const capturedSelection = structuredClone(selection);
-          return withSessionTranscriptReadSource(
-            target,
-            () => {
-              throw new Error("Bounded transcript cohorts require their durable history owner");
-            },
-            async ({ scope, resolved, owner, expectedIdentity, assertCurrent: assertSource }) => {
-              const { captureSessionEntryNativeMutationWitness } =
-                await import("./session-entry-read-ordered.js");
-              assertSource();
-              const database = {
-                agentId: resolved.databaseAgentId ?? resolved.agentId,
-                path: scope.storePath,
-                env: scope.env,
-              };
-              // Restoration needs the writer too; leave FIFO before handling a cold miss.
-              await readRestoredSessionTranscript(
-                scope,
-                () =>
-                  runOpenClawAgentWriteAdmission(
-                    database,
-                    async (_identity, assertOwner) => {
-                      assertSource();
-                      const assertNative = captureSessionEntryNativeMutationWitness([database]);
-                      const prepared =
-                        retainedRead(capturedSelection) ??
-                        (await owner.readTranscript(
-                          {
-                            target: scope,
-                            resolvedScope: resolved,
-                            expectedIdentity,
-                            limits: contextLimits,
-                            admission,
-                            transcript: capturedSelection,
-                            preparedEntry: readOwnedSessionTranscriptEntry(target),
-                          },
-                          signal,
-                        ));
-                      signal?.throwIfAborted();
-                      assertOwner();
-                      assertSource();
-                      assertNative();
-                      retainRead(prepared);
-                      const consumed = consume(prepared);
-                      if (isPromiseLike(consumed)) {
-                        void Promise.resolve(consumed).catch(() => {});
-                        throw new Error("Transcript cohort consumers must remain synchronous");
-                      }
-                    },
-                    true,
-                    undefined,
-                    signal,
-                  ),
-                {
-                  assertCurrent: assertSource,
-                  coldRead: {
-                    target: resolved,
-                    readMetadata: async () => {
-                      const metadata = await owner.readColdMetadata({
-                        sessionId: resolved.sessionId,
-                        env: scope.env,
-                      });
-                      return metadata.archive;
-                    },
+  const read: SessionTranscriptHydrationReader["read"] = async (options) => {
+    signal?.throwIfAborted();
+    const retained = options?.compaction ? undefined : retainedRead();
+    if (retained) {
+      return retained;
+    }
+    return readInOwner<PreparedSessionTranscriptHydration>((owner, resolvedScope) =>
+      readPrepared(owner, {
+        target,
+        resolvedScope,
+        limits: contextLimits,
+        admission,
+        caller,
+        ...options,
+      }),
+    );
+  };
+  const readCohort: SessionTranscriptHydrationReader["readCohort"] = contextLimits
+    ? (selection, consume) => {
+        return withSessionTranscriptReadSource(
+          target,
+          async ({ scope, resolved, owner, expectedIdentity, assertCurrent: assertSource }) => {
+            assertSource();
+            const database = {
+              agentId: resolved.databaseAgentId ?? resolved.agentId,
+              path: scope.storePath,
+              env: scope.env,
+            };
+            // Restoration needs the writer too; leave FIFO before handling a cold miss.
+            await readRestoredSessionTranscriptInWorker(
+              { scope, resolved, owner, assertCurrent: assertSource },
+              () =>
+                readSessionTranscriptCohort(
+                  database,
+                  () =>
+                    readPrepared(
+                      owner,
+                      {
+                        target: scope,
+                        resolvedScope: resolved,
+                        expectedIdentity,
+                        limits: contextLimits,
+                        admission,
+                        transcript: selection,
+                        preparedEntry: readOwnedSessionTranscriptEntry(target),
+                        caller,
+                      },
+                      targetDiscoveryLane,
+                    ),
+                  (prepared) => {
+                    const consumed = consume(prepared);
+                    if (isPromiseLike(consumed)) {
+                      void Promise.resolve(consumed).catch(() => {});
+                      throw new Error("Transcript cohort consumers must remain synchronous");
+                    }
                   },
-                },
-              );
-            },
-            signal,
-            // Cohort consumption holds the writer through read failure and reader cleanup.
-            targetDiscoveryLane,
-          );
-        }
-      : undefined;
+                  assertSource,
+                  signal,
+                  "history.hydration",
+                ),
+            );
+          },
+          signal,
+          // Keep discovery separate from the bounded history worker.
+          targetDiscoveryLane,
+        );
+      }
+    : undefined;
   const readCurrentTurnEntry = (
     input: SessionTranscriptCurrentTurnEntryRequest,
   ): Promise<SessionTranscriptCurrentTurnEntryRead> => {
@@ -465,37 +453,21 @@ export function prepareSessionTranscriptHydration(
       version: { ...input.version },
       includeEntry: input.includeEntry,
     };
-    return readInOwner(
-      () => readSessionTranscriptCurrentTurnEntry(target, { ...request, readOnly: true }),
-      (owner, resolvedScope) =>
-        owner.readCurrentTurnEntry({ ...request, target, resolvedScope, admission }, signal),
+    return readInOwner((owner, resolvedScope) =>
+      owner.readCurrentTurnEntry({ ...request, target, resolvedScope, admission }, signal),
     );
   };
   const readMaintenance = (request: SessionTranscriptMaintenanceRead) =>
-    readInOwner(
-      () => {
-        assertCurrent();
-        if (!incognitoOwner) {
-          throw new Error("Session transcript is unavailable for maintenance planning");
-        }
-        return readOpenClawAgentDatabase(incognitoOwner, (database) =>
-          readSessionTranscriptMaintenance(database, target, request),
-        ).value;
-      },
-      (owner, resolvedScope) =>
-        owner.readMaintenance({ target, resolvedScope, admission, request }, signal),
+    readInOwner((owner, resolvedScope) =>
+      owner.readMaintenance({ target, resolvedScope, admission, request }, signal),
     );
   const readRecentActiveEvents = (maxEvents: number) =>
-    readInOwner(
-      () => readRecentSessionTranscriptActiveEvents(target, maxEvents, { readOnly: true }),
-      (owner, resolvedScope) =>
-        owner.readRecentActiveEvents({ target, resolvedScope, maxEvents, admission }, signal),
+    readInOwner((owner, resolvedScope) =>
+      owner.readRecentActiveEvents({ target, resolvedScope, maxEvents, admission }, signal),
     );
   const readLatestActiveMessage = () =>
-    readInOwner(
-      () => readLatestSessionTranscriptMessageEvent(target, { readOnly: true }),
-      (owner, resolvedScope) =>
-        owner.readLatestActiveMessage({ target, resolvedScope, admission }, signal),
+    readInOwner((owner, resolvedScope) =>
+      owner.readLatestActiveMessage({ target, resolvedScope, admission }, signal),
     );
   return {
     target,
@@ -505,6 +477,6 @@ export function prepareSessionTranscriptHydration(
     readMaintenance,
     readRecentActiveEvents,
     readLatestActiveMessage,
-    assertCurrent,
+    assertCurrent: () => signal?.throwIfAborted(),
   };
 }

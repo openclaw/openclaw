@@ -1,4 +1,3 @@
-/** Shared path candidates for Codex's macOS desktop app bundle. */
 import { existsSync } from "node:fs";
 import path from "node:path";
 
@@ -95,13 +94,9 @@ export function resolveMacOSDesktopCodexComputerUseServiceAppCandidates(
 
 export function resolveFirstExistingMacOSDesktopCodexBundledMarketplacePath(
   params: {
-    platform?: NodeJS.Platform;
     candidates?: readonly string[];
-    pathExists?: (filePath: string) => boolean;
   } = {},
 ): string | undefined {
-  const candidates =
-    params.candidates ?? resolveMacOSDesktopCodexBundledMarketplaceCandidates(params.platform);
-  const pathExists = params.pathExists ?? existsSync;
-  return candidates.find((candidate) => pathExists(candidate));
+  const candidates = params.candidates ?? resolveMacOSDesktopCodexBundledMarketplaceCandidates();
+  return candidates.find((candidate) => existsSync(candidate));
 }

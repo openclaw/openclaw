@@ -1,10 +1,12 @@
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
+import { personalSessionPinKeys } from "../app-navigation.ts";
 import { isSessionRouteId, type RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { i18n } from "../i18n/index.ts";
 import type { SidebarOutboxSummary } from "../lib/chat/outbox-store-projection.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
+import type { PersonalSessionGroup } from "../lib/sessions/personal-groups.ts";
 import {
   projectSidebarHomeSession,
   type SidebarHomeSession,
@@ -20,16 +22,22 @@ import type {
   SidebarVisibleSections,
 } from "./app-sidebar-session-projection.ts";
 import { projectSidebarSnoozeCatalogs } from "./app-sidebar-session-snooze-visibility.ts";
-import type {
-  SidebarEmptyGroupsMode,
-  SidebarRecentSession,
-  SidebarSessionSortMode,
-  SidebarSessionStatusFilter,
+import {
+  isListedInPinnedSection,
+  type SidebarEmptyGroupsMode,
+  type SidebarRecentSession,
+  type SidebarPinZone,
+  type SidebarSessionSortMode,
+  type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
-import type { SessionDataController } from "./session-data-controller.ts";
+import type { SessionDataOwner } from "./session-data.ts";
+import type {
+  SidebarProjectionMemo,
+  SidebarSessionRowProjection,
+} from "./sidebar-projection-cache.ts";
 
 export type SidebarProjectionHost = {
-  readonly sessionData: SessionDataController;
+  readonly sessionData: SessionDataOwner;
   readonly sessionDataContext: ApplicationContext | undefined;
   readonly sessionProjection: SidebarSessionProjection;
   readonly sidebarAgentsMode: "chip" | "roster";
@@ -45,6 +53,7 @@ export type SidebarProjectionHost = {
   readonly sessionsShowCron: boolean;
   readonly sessionsShowSystem: boolean;
   readonly sessionsShowPreview: boolean;
+  readonly sidebarEntries: readonly string[];
   readonly sidebarLiveActivity: boolean;
   readonly sidebarNarrationLines: ReadonlyMap<string, string>;
   readonly sidebarObserverDigests: ReadonlyMap<string, SessionObserverDigest>;
@@ -55,6 +64,12 @@ export type SidebarProjectionHost = {
   readonly sessionInvolvingMeFilterActive: boolean;
   readonly storedOutboxes: SidebarOutboxSummary | undefined;
   resolveSessionAttention: Parameters<typeof projectSidebarHomeSession>[0]["resolveAttention"];
+  personalGroupSessionReferences(): readonly (GatewaySessionRow | undefined)[];
+  personalGroupSessionRows(
+    group: PersonalSessionGroup,
+    zone?: SidebarPinZone,
+  ): SidebarRecentSession[];
+  reconciledSidebarZone(rows?: SidebarRecentSession[]): SidebarPinZone;
   getRouteSessionKey(): string;
   getSessionNavigationState(): SidebarSessionNavigationState;
   effectiveSessionSortMode(): SidebarSessionSortMode;
@@ -64,28 +79,8 @@ export type SidebarProjectionHost = {
   selectedAgentMainSessionKey(agentId: string): string;
   knownSessionGroups(): string[];
   knownSectionOrder(): string[];
-  visibleSessionCatalogs(): SessionDataController["sessionCatalogs"];
+  visibleSessionCatalogs(): SessionDataOwner["sessionCatalogs"];
 };
-
-/** Slot identities belong to the publishing owners; projection never compares row contents. */
-export class SidebarProjectionMemo<T> {
-  private slots: readonly unknown[] | undefined;
-  private value!: T;
-
-  read(inputs: () => readonly unknown[], project: () => T): T {
-    const slots = inputs();
-    if (
-      !this.slots ||
-      slots.length !== this.slots.length ||
-      slots.some((slot, index) => !Object.is(slot, this.slots![index]))
-    ) {
-      this.value = project();
-      // Stateful projection may publish created order, membership, or subtitles.
-      this.slots = inputs();
-    }
-    return this.value;
-  }
-}
 
 export function sidebarNavigationInputs(
   host: SidebarProjectionHost,
@@ -93,6 +88,7 @@ export function sidebarNavigationInputs(
 ) {
   const data = host.sessionData;
   const context = host.sessionDataContext;
+  const pending = context?.chatSubmissions?.readCreate();
   return [
     context,
     result,
@@ -104,6 +100,9 @@ export function sidebarNavigationInputs(
     data.childSessionRowsByParent,
     data.loadingChildSessionKeys,
     host.getRouteSessionKey(),
+    pending?.creation,
+    pending?.creation.admitted,
+    context?.gateway.snapshot.sessionKey,
     isSessionRouteId(host.activeRouteId),
     context?.agentSelection.state.selectedId,
     context?.gateway.snapshot.assistantAgentId,
@@ -132,9 +131,14 @@ export function memoizedSidebarSections(
 ): SidebarVisibleSections {
   const context = host.sessionDataContext;
   const roster = host.sidebarAgentsMode === "roster" ? host.rosterSessionSource : null;
+  const groups = context?.navigation.snapshot.personalSessionGroups;
+  const references = groups?.length ? host.personalGroupSessionReferences() : [];
   return memo.read(
     () => [
       rows,
+      groups?.length ? host.getSessionNavigationState() : undefined,
+      groups?.length ? groups : undefined,
+      ...references,
       catalogs,
       roster,
       host.collapsedSessionSections,
@@ -142,6 +146,7 @@ export function memoizedSidebarSections(
       host.sessionsEmptyGroupsMode,
       rosterLimits,
       host.sessionData.visibleSessionLimits,
+      host.sidebarEntries,
       context?.gateway.snapshot.phase,
       context?.gateway.snapshot.client,
       host.sidebarLiveActivity,
@@ -152,17 +157,25 @@ export function memoizedSidebarSections(
     ],
     () => {
       const grouping = host.effectiveSessionsGrouping();
+      const pinnedKeys = personalSessionPinKeys(host.sidebarEntries);
       const sections = roster?.agentIds.map((agentId) => ({
         id: `agent:${agentId}:recent` as const,
-        rows: rows.filter((row) => !row.pinned && host.sessionNavigationAgentId(row) === agentId),
+        rows: rows.filter(
+          (row) =>
+            !isListedInPinnedSection(row, pinnedKeys) &&
+            host.sessionNavigationAgentId(row) === agentId,
+        ),
       }));
       const collapsedSections = new Set(host.collapsedSessionSections);
       for (const agentId of roster?.collapsedAgentIds ?? []) {
         collapsedSections.add(`agent:${agentId}:recent`);
       }
+      const zone = groups?.length ? host.reconciledSidebarZone(rows) : undefined;
       return host.sessionProjection.project({
         rows,
+        referencedRows: groups?.flatMap((group) => host.personalGroupSessionRows(group, zone)),
         sections,
+        pinnedKeys,
         grouping,
         knownGroups: grouping === "category" ? host.knownSessionGroups() : [],
         selfOwnerId: context?.gateway.snapshot.selfUser?.id ?? null,
@@ -171,7 +184,11 @@ export function memoizedSidebarSections(
         catalogIds: catalogs.map((catalog) => catalog.id),
         collapsedSections,
         emptyGroupsMode: host.sessionsEmptyGroupsMode,
-        ownerFiltered: host.sessionOwnerFilterActive || host.sessionInvolvingMeFilterActive,
+        ownerFilter: host.sessionOwnerFilterActive
+          ? "owner"
+          : host.sessionInvolvingMeFilterActive
+            ? "involvingMe"
+            : null,
         visibleSessionLimits: roster ? rosterLimits : host.sessionData.visibleSessionLimits,
         sortMode: host.effectiveSessionSortMode(),
         statusFilter: host.sessionsStatusFilter,
@@ -181,6 +198,7 @@ export function memoizedSidebarSections(
             ? (context.gateway.snapshot.client ?? null)
             : null,
         listSource: context?.sessions ?? null,
+        listLoaded: (roster ? roster.result : host.sessionData.sessionsResult) !== null,
         subtitle: {
           sidebarLiveActivity: host.sidebarLiveActivity,
           showPreview: host.sessionsShowPreview,
@@ -195,23 +213,29 @@ export function memoizedSidebarSections(
 export function projectSidebarNavigation(
   host: SidebarProjectionHost,
   compareSessions: (a: GatewaySessionRow, b: GatewaySessionRow) => number,
-  runtimeSampledAtByRow: WeakMap<GatewaySessionRow, number>,
+  rowProjection: SidebarSessionRowProjection,
   resolveAgentStatusNote: (row: GatewaySessionRow) => string | undefined,
 ) {
   const roster = host.sidebarAgentsMode === "roster" ? host.rosterSessionSource : null;
   const routeSessionKey = host.getRouteSessionKey();
+  const context = host.sessionDataContext;
+  const pending = context?.chatSubmissions?.readCreate();
+  const creating =
+    pending?.creation.admitted === false && pending.creation.sessionKey === routeSessionKey;
+  // The provisional row is rendered separately, without synthesizing an actionable session.
+  const admittedKey = creating ? (context?.gateway.snapshot.sessionKey ?? "") : routeSessionKey;
   const navigation = buildSidebarSessionNavigationState({
     context: host.sessionDataContext,
-    routeSessionKey,
+    routeSessionKey: admittedKey,
     sessionsResult: roster?.result ?? host.sessionData.sessionsResult,
-    activeSession: findActiveSidebarLineageRow(host.sessionData, routeSessionKey),
+    activeSession: findActiveSidebarLineageRow(host.sessionData, admittedKey),
     sessionsAgentId: host.sessionData.sessionsAgentId,
     showCron: host.sessionsShowCron,
     showSystem: host.sessionsShowSystem,
     statusFilter: host.sessionsStatusFilter,
     compareSessions,
-    highlightCurrentSession: isSessionRouteId(host.activeRouteId),
-    runtimeSampledAtByRow,
+    highlightCurrentSession: isSessionRouteId(host.activeRouteId) && !creating,
+    rowProjection,
     loadingChildSessionKeys: host.sessionData.loadingChildSessionKeys,
     outboxAttentionCountForSessionKey: (key) =>
       host.storedOutboxes?.attentionCountForSession(key) ?? 0,
@@ -246,6 +270,7 @@ export function memoizedSidebarCatalogs(
       host.hiddenSessionCatalogIds,
       host.sessionsStatusFilter,
       ownerId,
+      host.sessionInvolvingMeFilterActive,
       host.sessionData.sessionsResult,
       host.sessionData.sessionResultsByAgent,
     ],

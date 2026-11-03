@@ -99,6 +99,8 @@ A successful upload returns the stable Beam id and a relative Control UI URL:
 }
 ```
 
+Restricted Visitor uploads additionally return `"canView": true`: the current publishing Visitor can open their own retained snapshot while their invitation remains active. The URL is not public access or authorization, and other guests cannot use it to read the snapshot. Other successful receipts may omit `canView`.
+
 The returned URL uses the session title slug followed by a 12-character lowercase
 hexadecimal id prefix, matching regular session links. The id remains authoritative:
 bare-id links and links with an older title still resolve, and the browser replaces
@@ -127,7 +129,9 @@ Beam stores sanitized payloads in OpenClaw's shared SQLite-backed plugin state:
 
 - at most 500 sessions
 - seven-day retention refreshed by each accepted update
-- oldest-entry eviction when the catalog reaches its bound
+- oldest-entry eviction for staff uploads when the catalog reaches its bound
+- at most 20 live rows per verified publisher for restricted Visitor creation; existing owned rows can still be refreshed
+- restricted Visitor creation is rejected at the shared 500-row cap, rather than evicting an existing snapshot
 - server receipt time controls catalog ordering; clients cannot move themselves ahead with a forged timestamp
 
 The sidebar reuses an in-memory metadata inventory rather than loading every
@@ -137,7 +141,15 @@ and refreshes it every 30 seconds to pick up changes made by other processes.
 Expired entries are hidden on every list. Transcript reads and continuation always
 read the underlying store. No stored-data migration is needed on update.
 
-The catalog is intentionally shared across the Gateway operator domain. Every client with `operator.read` can view every beamed session. Uploading or continuing requires `operator.write` or `operator.admin`; agent access policy must also allow the chosen agent. Any write-authorized operator that knows a Beam id can update that row. Uploader attribution does not grant ownership or change access. OpenClaw operator scopes are not tenant isolation; use a separate Gateway when sessions must be isolated between teams or machines.
+The catalog is intentionally shared across the Gateway operator domain. Every client with `operator.read` can view every beamed session. Staff with `operator.write` or `operator.admin` can upload and update any row. Continuing also requires staff write access, and agent access policy must allow the chosen agent.
+
+A restricted guest with `operator.sessions.write`, a durable verified OpenClaw profile, and a current Visitor Access invitation can publish a new row or refresh only a row they initially published. The receiver records the immutable initial publisher separately from mutable uploader attribution; neither field is accepted from the request body. Staff updates preserve that owner. Older live rows without an initial publisher cannot be claimed by a guest, even when their uploader attribution matches. Deletion or expiry ends that retained row; re-upload creates a new row under the normal creation rules.
+
+Guest publication does not grant shared catalog listing, foreign or ownerless snapshot reading, deletion, or continuation. The Beam link uses separate `beam.owned.list` and `beam.owned.read` methods, admitted with the existing `operator.sessions.write` scope and a current verified Visitor grant. They expose only rows whose immutable initial publisher matches the authenticated profile, omit uploader profile attribution, and disable continuation and deletion. Staff continue using the shared operator catalog. Current identity, role, transport, and the original Visitor grant are rechecked after awaited work and at state-write admission. Revoking and reinviting a visitor cannot revive an in-flight request captured under the old grant. Ownership and both creation quotas are checked in one worker-owned state transaction. Limit refusals return `429`; foreign or ownerless retained-row updates return `403`. Stale uploads to an owned row keep the normal success receipt without refreshing retention.
+
+Uploader attribution alone does not change access. OpenClaw operator scopes are not tenant isolation; use a separate Gateway when sessions must be isolated between teams or machines.
+
+Ownership needs no SQL schema migration or backfill. Older retained rows remain ownerless. Rolling back to an older receiver restores its staff-only upload behavior; an accepted upload by that older receiver can discard the new ownership field. After upgrading again, those ownerless rows remain unavailable for guest refresh until deletion or expiry permits a new row. Rollback does not change the seven-day retention or staff eviction policy.
 
 A continuation belongs to the authenticated operator who creates it. From then on it follows ordinary session sharing, sandbox, tool, and model policy for that Team agent. Access to the original Beam does not grant access to another operator's continuation.
 
@@ -187,7 +199,7 @@ Beam can also act as the sender: an opt-in mirror that continuously publishes th
 ```
 
 - `endpoint` (required): the final remote receiver URL. Changing it starts fresh delivery to that receiver, including unchanged active sessions; pending terminal retries for the previous receiver are discarded, leaving its rows to expire normally. Redirect responses (301, 302, 303, 307, and 308) are not followed; configure the destination URL directly. After a redirect, repeated polls are suppressed for the current mirror service instance. A Gateway restart checks the configured endpoint once again so a receiver corrected at the same URL can recover. HTTPS is enforced for non-loopback hosts; plaintext `http://` is accepted only for `localhost`/`127.0.0.1`/`::1` development.
-- `token`: Gateway credential for the remote receiver, sent as `Authorization: Bearer`. Accepts a plain string or a secret reference; a configured-but-unresolved token pauses mirroring instead of sending unauthenticated requests. Deployments fronted by an identity-aware proxy need an ingress that accepts this bearer credential.
+- `token`: Gateway credential for the remote receiver, sent as `Authorization: Bearer`. Accepts a plain string or a secret reference; the Gateway prepares secret references before the mirror starts, rather than resolving them on every poll. An unavailable configured token disables only outbound mirroring; the receiver and session catalog remain available. After restoring the credential, run `openclaw secrets reload`. Omitting `token` still supports receivers that do not require a bearer credential. Deployments fronted by an identity-aware proxy need an ingress that accepts this bearer credential.
 - `catalogs` (required): the session catalog ids to mirror, as explicit per-catalog consent — an omitted or empty list mirrors nothing. The local `beam` receiver catalog is always excluded so two mirrored Gateways cannot re-mirror each other's rows.
 - `pollSeconds` (default 30, minimum 10): how often the mirror scans local catalogs.
 - `activeWindowMinutes` (default 180): sessions with newer activity than this window count as live and stay mirrored; when a session goes idle past the window the running mirror service retries its final `completed` update until the receiver accepts it or the seven-day retention window ends. Retry state is process-local: a Gateway restart clears pending terminal retries, so the remote row remains live until its normal seven-day retention expires.

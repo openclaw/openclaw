@@ -10,17 +10,15 @@ import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { registerConfigCli } from "./config-cli.js";
 
 // Config mutation owns these assertions; plugin discovery suites own registry breadth.
-// Keep the real schemas this suite exercises, but build their metadata only once.
+// Keep the real schemas this suite exercises and their owner-scoped metadata cache.
 vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>();
-  let snapshot: ReturnType<typeof actual.loadPluginMetadataSnapshot> | undefined;
   const resolveSnapshot = (params: Parameters<typeof actual.resolvePluginMetadataSnapshot>[0]) => {
-    snapshot ??= actual.loadPluginMetadataSnapshot({
+    return actual.loadPluginMetadataSnapshot({
       ...params,
       pluginIds: ["codex", "discord", "openclaw-mem0"],
       pluginIdScope: undefined,
     });
-    return snapshot;
   };
   return {
     ...actual,

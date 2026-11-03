@@ -1,5 +1,4 @@
 import { z } from "zod";
-import type { AsyncDebugProxyCaptureStore } from "./store.types.js";
 
 const text = z.string();
 const event = z
@@ -85,6 +84,15 @@ export const debugProxyCaptureWriteCommandSchema = z.discriminatedUnion("type", 
     .strict(),
 ]);
 
+export const captureQueryPresetSchema = z.enum([
+  "double-sends",
+  "retry-storms",
+  "cache-busting",
+  "ws-duplicate-frames",
+  "missing-ack",
+  "error-bursts",
+]);
+
 export const debugProxyCliCommandSchema = z.discriminatedUnion("type", [
   ...debugProxyCaptureWriteCommandSchema.options,
   z
@@ -104,14 +112,7 @@ export const debugProxyCliCommandSchema = z.discriminatedUnion("type", [
       type: z.literal("capture.queryPreset"),
       input: z
         .object({
-          preset: z.enum([
-            "double-sends",
-            "retry-storms",
-            "cache-busting",
-            "ws-duplicate-frames",
-            "missing-ack",
-            "error-bursts",
-          ]),
+          preset: captureQueryPresetSchema,
           sessionId: text.optional(),
         })
         .strict(),
@@ -120,22 +121,7 @@ export const debugProxyCliCommandSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("capture.purgeAll"), input: z.undefined().optional() }).strict(),
 ]);
 
-export type DebugProxyCliStore = Pick<
-  AsyncDebugProxyCaptureStore,
-  | "dbPath"
-  | "upsertSession"
-  | "endSession"
-  | "recordEvent"
-  | "recordEventWithPayload"
-  | "listSessions"
-  | "readBlob"
-  | "queryPreset"
-  | "purgeAll"
->;
-
-export function encodeDebugProxyPayload(
-  payload: import("./store.worker-contract.js").CapturePayloadInput,
-) {
+export function encodeDebugProxyPayload<T extends { data?: Buffer | string | null }>(payload: T) {
   return {
     ...payload,
     ...(Buffer.isBuffer(payload.data)

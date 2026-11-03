@@ -1,26 +1,29 @@
+import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
 import { clearCronJobActive, isCronActiveJobMarkerCurrent } from "../active-jobs.js";
-import { noteCronJobsStoreCommit } from "../store.js";
-import { cronStoreKey } from "../store/key.js";
+import { resolveCronRunErrorReason } from "../run-error-reason.js";
+import { getCronJobsStoreRevision, noteCronJobsStoreCommit } from "../store.js";
 import { cronRunResultEvent } from "../store/run-result.js";
 import { needsCronTimerMaintenance } from "./jobs-scheduling.js";
 import { locked } from "./locked.js";
 import { clearManualCronJobActive, maybeNotifyManualIsolatedSetupTimeout } from "./ops-shared.js";
+import { wakeCronRunQueues } from "./run-queue-wake.js";
 import {
   applyCronRuntimeRowsToState,
   publishDurableNextRunChanges,
 } from "./runtime-publication.js";
 import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
 import { cronFailureNotificationEventContext, emit, type CronServiceState } from "./state.js";
-import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
+import {
+  ensureLoaded,
+  noteLoadedCronStoreCommit,
+  runPostPersistCronNotifications,
+} from "./store.js";
 import type { TimedCronRunOutcome } from "./timer-execution-timeout.js";
 
 type CompletedCronRunOutcomeFinalizationOptions = {
-  clearOnFailure?: boolean;
   discardWhenStopped?: boolean;
-  repairFutureCronNextRunAtMs?: boolean;
-  onRequestedRunFinalized?: () => void;
 };
 
 /** Sends terminal facts to the worker; the host only publishes committed results. */
@@ -35,7 +38,7 @@ export async function finalizeCompletedCronRunOutcomes(
   const context =
     outcomes.find((outcome) => outcome.runReceiptContext)?.runReceiptContext ??
     captureOpenClawStateWorkerContext();
-  const storeKey = cronStoreKey(state.deps.storePath);
+  const storeKey = state.deps.storeKey;
   const canPublish = (outcome: TimedCronRunOutcome) =>
     !(state.stopped && opts?.discardWhenStopped) &&
     isCronActiveJobMarkerCurrent(outcome.activeJobMarker);
@@ -43,38 +46,76 @@ export async function finalizeCompletedCronRunOutcomes(
   let committedSuccessfully = false;
   try {
     const committed = await locked(state, async () => {
-      await ensureLoaded(state, { forceReload: true });
+      if (!state.store) {
+        await ensureLoaded(state);
+      }
+      const observedRevision = getCronJobsStoreRevision(storeKey);
+      const input = {
+        storeKey,
+        snapshot: {
+          nowMs: state.deps.nowMs(),
+          defaultAgentId: state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId,
+          cronConfig: state.deps.cronConfig,
+          failureRepairTimeoutMs: state.deps.failureRepairTimeoutMs,
+          outcomes: outcomes.map(
+            ({
+              activeJobMarker,
+              runReceiptContext: _context,
+              executionSettlement,
+              request,
+              ...completed
+            }) => ({
+              ...completed,
+              executionPending: executionSettlement !== undefined,
+              errorReason: resolveCronRunErrorReason(
+                cronRunResultEvent(completed.job, completed).error,
+                completed.provider,
+                completed.errorClassification,
+              ),
+              activeJobMarker: activeJobMarker && {
+                jobRemoved: activeJobMarker.jobRemoved,
+                scheduleMutated: activeJobMarker.scheduleMutated,
+                triggerMutated: activeJobMarker.triggerMutated,
+              },
+              request: request && {
+                preserveCadence: request.preserveCadence,
+                onExitWatcherCompletion: request.onExitWatcherCompletion,
+                scheduleOwnershipAtMs: request.scheduleOwnershipAtMs,
+                runId: request.runId,
+              },
+            }),
+          ),
+        },
+      };
       const { outcome: result } = await executeOpenClawStateWorker(context, {
         type: "cron.finalizeRuns",
-        input: {
-          storeKey,
-          snapshot: {
-            nowMs: state.deps.nowMs(),
-            defaultAgentId: state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId,
-            cronConfig: state.deps.cronConfig,
-            failureRepairTimeoutMs: state.deps.failureRepairTimeoutMs,
-            outcomes: outcomes.map(
-              ({ activeJobMarker, runReceiptContext: _context, request, ...completed }) => ({
-                ...completed,
-                activeJobMarker: activeJobMarker && {
-                  jobRemoved: activeJobMarker.jobRemoved,
-                  scheduleMutated: activeJobMarker.scheduleMutated,
-                  triggerMutated: activeJobMarker.triggerMutated,
-                },
-                request: request && {
-                  preserveCadence: request.preserveCadence,
-                  onExitWatcherCompletion: request.onExitWatcherCompletion,
-                  scheduleOwnershipAtMs: request.scheduleOwnershipAtMs,
-                  runId: request.runId,
-                },
-              }),
-            ),
-          },
-        },
+        input,
       });
       committedSuccessfully = true;
-      if (result.changed) {
-        noteCronJobsStoreCommit(storeKey);
+      for (const [index, outcome] of outcomes.entries()) {
+        if (!outcome.executionSettlement || !outcome.runReceipt) {
+          continue;
+        }
+        void trackAsyncWork(async () => {
+          await Promise.allSettled([outcome.executionSettlement]);
+          await executeOpenClawStateWorker(context, {
+            type: "cron.finalizeRuns",
+            input: {
+              ...input,
+              snapshot: {
+                ...input.snapshot,
+                receiptOnly: true,
+                outcomes: [{ ...input.snapshot.outcomes[index]!, executionPending: false }],
+              },
+            },
+          });
+          wakeCronRunQueues(state);
+        }).catch((error: unknown) => {
+          state.deps.log.warn(
+            { jobId: outcome.jobId, err: String(error) },
+            "cron: execution receipt settlement failed",
+          );
+        });
       }
       applyCronRuntimeRowsToState(
         state,
@@ -82,6 +123,9 @@ export async function finalizeCompletedCronRunOutcomes(
         result.removedJobs.map((job) => job.id),
         { publish: false },
       );
+      if (result.changed) {
+        noteLoadedCronStoreCommit(state, observedRevision);
+      }
       for (const entry of result.logs) {
         state.deps.log[entry.level](entry.fields, entry.message);
       }
@@ -91,14 +135,18 @@ export async function finalizeCompletedCronRunOutcomes(
           continue;
         }
         finalized.push(outcome);
-        if (
-          !(outcome.status === "ok" && outcome.triggerEval?.fired === false) ||
-          outcome.request?.runId
-        ) {
+        const quietTrigger = outcome.status === "ok" && outcome.triggerEval?.fired === false;
+        if (!quietTrigger || outcome.request?.runId) {
+          let eventContext = cronFailureNotificationEventContext(outcome.failureNotificationDetail);
+          if (quietTrigger) {
+            eventContext = { ...eventContext, quietTrigger: true };
+          }
           emit(
             state,
             cronRunResultEvent(plan.job, outcome),
-            cronFailureNotificationEventContext(outcome.failureNotificationDetail),
+            outcome.executionStarted === false
+              ? { ...eventContext, runNotStarted: true }
+              : eventContext,
           );
           if (outcome.request?.terminalTracker) {
             outcome.request.terminalTracker.emitted = true;
@@ -110,7 +158,6 @@ export async function finalizeCompletedCronRunOutcomes(
             job: outcome.request.executionJob,
             isolatedAgentSetupTimeout: outcome.isolatedAgentSetupTimeout,
           });
-          opts?.onRequestedRunFinalized?.();
         }
       }
       for (const job of result.removedJobs) {
@@ -129,11 +176,10 @@ export async function finalizeCompletedCronRunOutcomes(
       try {
         const request = finalized.find((outcome) => outcome.request);
         const nowMs = state.deps.nowMs();
-        if (request || state.store?.jobs.some((job) => needsCronTimerMaintenance(job, nowMs))) {
+        if (state.store?.jobs.some((job) => needsCronTimerMaintenance(job, nowMs))) {
           await locked(state, () =>
             recomputeUnownedCronSchedules(state, {
               nowMs,
-              repairFutureCronNextRunAtMs: opts?.repairFutureCronNextRunAtMs,
               ...(request
                 ? {
                     recomputeExpired: true,
@@ -159,12 +205,10 @@ export async function finalizeCompletedCronRunOutcomes(
       noteCronJobsStoreCommit(storeKey);
     }
     for (const outcome of outcomes) {
-      if (opts?.clearOnFailure !== false || committedSuccessfully) {
-        if (outcome.request) {
-          clearManualCronJobActive(state, outcome.jobId, outcome.activeJobMarker);
-        } else {
-          clearCronJobActive(outcome.jobId, outcome.activeJobMarker);
-        }
+      if (outcome.request) {
+        clearManualCronJobActive(state, outcome.jobId, outcome.activeJobMarker);
+      } else {
+        clearCronJobActive(outcome.jobId, outcome.activeJobMarker);
       }
     }
   }

@@ -1,7 +1,7 @@
 import path from "node:path";
 import { buildSessionEntry } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
-  listSessionEntries,
+  listSessionEntriesAsync,
   loadTranscriptEvents,
   resolveStorePath,
   type SessionEntry,
@@ -17,6 +17,8 @@ import {
   extractGatewayMessageText,
 } from "./gateway-log-sentinel.js";
 import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
+import { readQaAssistantToolCalls } from "./runtime-transcript.js";
+import { findSubagentHandoffReply } from "./subagent-handoff-reply.js";
 import type { QaSkillStatusEntry, QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 import { projectQaToolActivity, readQaNestedToolActivity } from "./tool-activity.js";
 
@@ -64,35 +66,6 @@ function readSessionTranscriptEventMessage(event: unknown) {
   return isRecord(event) && isRecord(event.message) ? event.message : undefined;
 }
 
-function readAssistantToolCalls(message: Record<string, unknown>): Array<{
-  arguments?: unknown;
-  id?: string;
-  name: string;
-}> {
-  if (!Array.isArray(message.content)) {
-    return [];
-  }
-  return message.content.flatMap((block) => {
-    if (!isRecord(block)) {
-      return [];
-    }
-    const type = readNonEmptyString(block.type);
-    if (type !== "toolCall" && type !== "toolUse" && type !== "tool_use") {
-      return [];
-    }
-    const name = readNonEmptyString(block.name);
-    return name
-      ? [
-          {
-            arguments: block.arguments ?? block.input,
-            id: readNonEmptyString(block.id),
-            name,
-          },
-        ]
-      : [];
-  });
-}
-
 function readWaitingCodeModeRunId(message: Record<string, unknown>) {
   const details = isRecord(message.details) ? message.details : undefined;
   return details?.status === "waiting" ? readNonEmptyString(details.runId) : undefined;
@@ -121,8 +94,6 @@ function summarizeSessionTranscriptEvents(
   let lastAssistantContentTypes: string[] = [];
   let lastAssistantErrorMessage: string | undefined;
   let lastAssistantStopReason: string | undefined;
-  let lastAssistantToolNames: string[] = [];
-  let lastMessageRole: string | undefined;
   let userMessageCount = 0;
 
   for (const event of events) {
@@ -140,7 +111,6 @@ function summarizeSessionTranscriptEvents(
     if (!message) {
       continue;
     }
-    lastMessageRole = readNonEmptyString(message.role);
     if (message.role === "user") {
       userMessageCount += 1;
       continue;
@@ -191,9 +161,7 @@ function summarizeSessionTranscriptEvents(
       : [];
     lastAssistantErrorMessage = readNonEmptyString(message.errorMessage);
     lastAssistantStopReason = readNonEmptyString(message.stopReason);
-    const assistantToolCalls = readAssistantToolCalls(message);
-    lastAssistantToolNames = assistantToolCalls.map((toolCall) => toolCall.name);
-    for (const toolCall of assistantToolCalls) {
+    for (const toolCall of readQaAssistantToolCalls(message, readNonEmptyString)) {
       if (toolCall.id) {
         if (
           pendingCodeModeExecNeedle &&
@@ -272,8 +240,6 @@ function summarizeSessionTranscriptEvents(
     ...(lastAssistantContentTypes.length > 0 ? { lastAssistantContentTypes } : {}),
     ...(lastAssistantErrorMessage ? { lastAssistantErrorMessage } : {}),
     ...(lastAssistantStopReason ? { lastAssistantStopReason } : {}),
-    ...(lastAssistantToolNames.length > 0 ? { lastAssistantToolNames } : {}),
-    ...(lastMessageRole ? { lastMessageRole } : {}),
   };
 }
 
@@ -337,7 +303,7 @@ function qaSessionRuntimeEnv(tempRoot: string): NodeJS.ProcessEnv {
 }
 
 async function seedQaSessionEntries(
-  env: Pick<QaSuiteRuntimeEnv, "gateway">,
+  env: { gateway: Pick<QaSuiteRuntimeEnv["gateway"], "tempRoot"> },
   entries: readonly QaSessionEntrySeed[],
 ): Promise<void> {
   const runtimeEnv = qaSessionRuntimeEnv(env.gateway.tempRoot);
@@ -416,12 +382,13 @@ async function readRawQaSessionStore(
 ): Promise<Record<string, SessionEntry>> {
   const runtimeEnv = qaSessionRuntimeEnv(env.gateway.tempRoot);
   const agentId = readNonEmptyString(options.agentId) ?? "qa";
-  return Object.fromEntries(
-    listSessionEntries({ agentId, env: runtimeEnv }).map(({ sessionKey, entry }) => [
-      sessionKey,
-      entry,
-    ]),
-  );
+  // The harness reads a separate Gateway process and does not receive its write receipts.
+  const entries = await listSessionEntriesAsync({
+    agentId,
+    env: runtimeEnv,
+    readConsistency: "latest",
+  });
+  return Object.fromEntries(entries.map(({ sessionKey, entry }) => [sessionKey, entry]));
 }
 
 async function readQaSessionTranscriptEvents(
@@ -469,6 +436,19 @@ async function readSessionToolActivity(
 ) {
   const { selectedEvents } = await readQaSessionTranscriptEvents(env, sessionKey, options);
   return projectQaToolActivity(selectedEvents);
+}
+
+async function readSubagentHandoffReply(
+  env: Parameters<typeof readQaSessionTranscriptEvents>[0],
+  requesterSessionKey: string,
+  childSessionKey: string,
+  childReply: string,
+  visibleMessages: readonly unknown[],
+) {
+  return findSubagentHandoffReply(visibleMessages, childSessionKey, childReply, async () => {
+    const { events } = await readQaSessionTranscriptEvents(env, requesterSessionKey);
+    return events;
+  });
 }
 
 async function readSessionTranscriptSummary(
@@ -519,9 +499,11 @@ async function readSessionTranscriptSummary(
 export {
   createSession,
   readEffectiveTools,
+  readQaSessionTranscriptEvents,
   readRawQaSessionStore,
   readSessionTranscriptSummary,
   readSessionToolActivity,
+  readSubagentHandoffReply,
   readSkillStatus,
   seedQaSessionEntries,
   seedQaSessionTranscript,

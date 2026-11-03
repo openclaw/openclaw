@@ -144,6 +144,8 @@ keeps the old id and points at the new one.
 - <a id="param-model-id" />[Inworld → `modelId`](/tools/tts/field-reference#param-model-id)
 - <a id="param-speaker-voice-id-2" />[Inworld → `speakerVoiceId`](/tools/tts/field-reference#param-speaker-voice-id-2)
 - <a id="param-temperature" />[Inworld → `temperature`](/tools/tts/field-reference#param-temperature)
+- <a id="param-speaking-rate" />[Inworld → `speakingRate`](/tools/tts/field-reference#param-speaking-rate)
+- <a id="param-delivery-mode" />[Inworld → `deliveryMode`](/tools/tts/field-reference#param-delivery-mode)
 - <a id="local-cli-tts-local-cli" />[Local CLI (tts-local-cli)](/tools/tts/field-reference#local-cli-tts-local-cli)
 - <a id="param-command" />[Local CLI (tts-local-cli) → `command`](/tools/tts/field-reference#param-command)
 - <a id="param-args" />[Local CLI (tts-local-cli) → `args`](/tools/tts/field-reference#param-args)

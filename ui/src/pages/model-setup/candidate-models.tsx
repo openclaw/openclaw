@@ -4,18 +4,12 @@ import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts"
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { renderProviderIcon } from "./model-setup-icon-loader.tsx";
-import { activationTargetId, type ModelSetupActivationState } from "./state.ts";
+import { activationTargetId } from "./state.ts";
+import type { ModelSetupViewProps } from "./view-types.ts";
 
 registerModelSetupEnglish();
 
 type Candidate = SystemAgentSetupDetectResult["candidates"][number];
-export type CandidateRowsProps = Parameters<typeof renderProviderIcon>[0] & {
-  activation: ModelSetupActivationState;
-  actionsDisabled: boolean;
-  detecting?: boolean;
-  embedded?: boolean;
-  onActivateCandidate: (candidate: Candidate) => void;
-};
 
 function candidateStatus(candidate: Candidate): string {
   if (candidate.modelTarget === "utility") {
@@ -34,7 +28,7 @@ function candidateStatus(candidate: Candidate): string {
 }
 
 export function CandidateRows(
-  props: CandidateRowsProps & { result: SystemAgentSetupDetectResult },
+  props: ModelSetupViewProps & { result: SystemAgentSetupDetectResult },
 ) {
   // Saved credentials can replace the current connection for the same model.
   const candidates = createMemo(() => {
@@ -58,26 +52,31 @@ export function CandidateRows(
           <h2>{t("modelSetup.candidates.title")}</h2>
         </div>
         <div class="model-setup__rows">
-          <For each={candidates()}>
+          <For
+            each={candidates()}
+            keyed={(candidate) =>
+              JSON.stringify([candidate.kind, candidate.modelRef, candidate.modelTarget])
+            }
+          >
             {(candidate) => {
               const active = () =>
                 (props.activation.phase === "testing" || props.activation.phase === "failure") &&
                 props.activation.targetId ===
-                  activationTargetId(candidate.kind, candidate.modelRef);
+                  activationTargetId(candidate().kind, candidate().modelRef);
               const testing = () => active() && props.activation.phase === "testing";
               const failure = () => active() && props.activation.phase === "failure";
               return (
-                <div class="model-setup__row" data-candidate-kind={candidate.kind}>
+                <div class="model-setup__row" data-candidate-kind={candidate().kind}>
                   <div class="model-setup__row-main">
                     <div class="model-setup__row-title">
-                      {renderProviderIcon(props, candidate)}
-                      <strong>{candidate.label}</strong>
-                      <span class="model-setup__chip">{candidateStatus(candidate)}</span>
+                      {renderProviderIcon(props, candidate())}
+                      <strong>{candidate().label}</strong>
+                      <span class="model-setup__chip">{candidateStatus(candidate())}</span>
                     </div>
                     <div class="muted">
-                      {candidate.modelRef} · {formatUiExternalText(candidate.detail)}
+                      {candidate().modelRef} · {formatUiExternalText(candidate().detail)}
                     </div>
-                    {candidate.modelTarget === "utility" ? (
+                    {candidate().modelTarget === "utility" ? (
                       <div class="muted">{t("modelSetup.utility.hint")}</div>
                     ) : undefined}
                   </div>
@@ -86,7 +85,7 @@ export function CandidateRows(
                       type="button"
                       class={["btn", { primary: !failure() }]}
                       disabled={props.actionsDisabled || props.detecting}
-                      onClick={() => props.onActivateCandidate(candidate)}
+                      onClick={() => props.onActivateCandidate(candidate())}
                     >
                       <span>
                         {t(
@@ -94,7 +93,7 @@ export function CandidateRows(
                             ? "modelSetup.candidates.testingButton"
                             : failure()
                               ? "modelSetup.candidates.retry"
-                              : candidate.modelTarget === "utility"
+                              : candidate().modelTarget === "utility"
                                 ? props.result.configuredModel
                                   ? "modelSetup.utility.useUtility"
                                   : "modelSetup.utility.useSetup"

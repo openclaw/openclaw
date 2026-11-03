@@ -1,5 +1,6 @@
-import { resolveAgentDir } from "../agents/agent-scope-config.js";
+import { listAgentIds, resolveAgentDir } from "../agents/agent-scope-config.js";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
+import { PreparedModelRuntimePublicationSupersededError } from "../agents/prepared-model-runtime.errors.js";
 import { getRuntimeConfigSourceSnapshot } from "../config/runtime-snapshot.js";
 import {
   isConfiguredAgentDatabaseTarget,
@@ -10,11 +11,13 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
+import { assertionSucceeds } from "../shared/assertion.js";
 import {
   AgentDatabaseStartupSupersededError,
   type getAgentDatabaseStartupAdmission,
 } from "../state/agent-database-startup.js";
 import { isSameOpenClawAgentDatabasePath } from "../state/openclaw-agent-db.paths.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
 
 function assertAgentDatabaseConfiguration(
   cfg: OpenClawConfig,
@@ -22,7 +25,7 @@ function assertAgentDatabaseConfiguration(
   paths: readonly string[],
   env: NodeJS.ProcessEnv,
 ) {
-  const targets = resolveConfiguredAgentDatabaseTargets(cfg, { env });
+  const targets = resolveConfiguredAgentDatabaseTargets(cfg, { env, agentId });
   if (paths.some((pathname) => !isConfiguredAgentDatabaseTarget(targets, agentId, pathname))) {
     throw new Error(`Agent ${agentId} database configuration changed during startup inspection`);
   }
@@ -31,6 +34,7 @@ function assertAgentDatabaseConfiguration(
 /** Finish only the deferred agent's preparation before its admission owner recovers it. */
 export function activateGatewayAgentDatabaseStartup(params: {
   admission: ReturnType<typeof getAgentDatabaseStartupAdmission>;
+  context: GatewayRequestContext;
   preparationReady: Promise<void>;
   waitForPostReadyWork: () => Promise<void>;
   getConfig: () => OpenClawConfig;
@@ -64,10 +68,28 @@ export function activateGatewayAgentDatabaseStartup(params: {
   params.admission?.activate({
     isCurrent: params.isCurrent,
     preparationReady: params.preparationReady,
+    verifyIntegrity: (input) =>
+      runWithSpawnBroker(broker, async () => {
+        const { verifyAgentDatabaseStartupIntegrity } =
+          await import("../state/agent-database-startup-verification.js");
+        await verifyAgentDatabaseStartupIntegrity({
+          ...input,
+          assertCurrent: createPreparationGuard(
+            input.agentId,
+            input.paths,
+            input.env,
+            input.signal,
+            input.assertCurrent,
+          ),
+        });
+      }),
+    captureReadAdmission: ({ agentId, paths, env, signal, assertCurrent }) =>
+      createPreparationGuard(agentId, paths, env, signal, assertCurrent),
     openAgent: ({ agentId, paths, env, signal, assertCurrent }) =>
       runWithSpawnBroker(broker, async () => {
-        const { prepareOpenClawAgentDatabaseExecution } =
+        const { captureOpenClawAgentDatabaseExecution, prepareOpenClawAgentDatabaseExecution } =
           await import("../state/openclaw-agent-execution.js");
+        await using prepared = new AsyncDisposableStack();
         const assertOpenCurrent = createPreparationGuard(
           agentId,
           paths,
@@ -77,12 +99,16 @@ export function activateGatewayAgentDatabaseStartup(params: {
         );
         assertOpenCurrent();
         for (const pathname of paths) {
+          // Keep the existing owner out of idle eviction until this agent's publication settles.
+          const execution = captureOpenClawAgentDatabaseExecution({ agentId, path: pathname, env });
+          prepared.defer(() => execution.release());
           await prepareOpenClawAgentDatabaseExecution(
             { agentId, path: pathname, env },
             assertOpenCurrent,
             signal,
           );
         }
+        return prepared.move();
       }),
     migrateAgent: ({ agentId, paths, env, signal, assertCurrent }) =>
       runWithSpawnBroker(broker, async () => {
@@ -103,7 +129,17 @@ export function activateGatewayAgentDatabaseStartup(params: {
           log: params.log,
         });
         assertMigrationCurrent();
+        const { prepareAgentRestartRecovery } = await import("./session-restart-resume.js");
+        const recoverInputs = await prepareAgentRestartRecovery({
+          context: params.context,
+          agentId,
+          env,
+          signal,
+          assertCurrent: assertMigrationCurrent,
+          log: params.log,
+        });
         return {
+          recoverInputs,
           maintain: () =>
             runWithSpawnBroker(broker, async () => {
               await params.waitForPostReadyWork();
@@ -124,7 +160,11 @@ export function activateGatewayAgentDatabaseStartup(params: {
       runWithSpawnBroker(broker, async () => {
         phase("secrets");
         const [
-          { refreshPreparedModelRuntimeSnapshots, getPreparedModelRuntimeSnapshot },
+          {
+            refreshPreparedModelRuntimeSnapshots,
+            getPreparedModelRuntimeSnapshot,
+            getPendingPreparedModelRuntimeReplacement,
+          },
           { listConfiguredOwnerInputs },
           {
             getActiveSecretsRuntimeSnapshot,
@@ -138,9 +178,13 @@ export function activateGatewayAgentDatabaseStartup(params: {
         ]);
         assertCurrent();
         const beforeConfig = params.getConfig();
+        assertAgentDatabaseConfiguration(beforeConfig, agentId, paths, env);
+        // Non-roster stores (ACP-only or reserved) need no native auth/model publication.
+        if (!listAgentIds(beforeConfig).includes(agentId)) {
+          return;
+        }
         const previousSecretsRevision = getActiveSecretsRuntimeSnapshotRevision();
         const previousSecrets = getActiveSecretsRuntimeSnapshot();
-        assertAgentDatabaseConfiguration(beforeConfig, agentId, paths, env);
         if (
           !previousSecrets ||
           !(await refreshActiveSecretsRuntimeSnapshotForConfig({
@@ -174,8 +218,6 @@ export function activateGatewayAgentDatabaseStartup(params: {
         ) {
           throw new Error(`Agent ${agentId} secrets preparation has not published its auth store`);
         }
-        let preparedInput: ReturnType<typeof listConfiguredOwnerInputs>[number] | undefined =
-          undefined;
         const assertPreparationCurrent = () => {
           signal.throwIfAborted();
           assertCurrent();
@@ -186,37 +228,41 @@ export function activateGatewayAgentDatabaseStartup(params: {
           ) {
             throw new AgentDatabaseStartupSupersededError(agentId, "startup");
           }
-          if (preparedInput && !getPreparedModelRuntimeSnapshot(preparedInput)) {
-            throw new Error(`Agent ${agentId} model preparation has not published`);
-          }
         };
-        const agentIds = new Set([agentId]);
         assertPreparationCurrent();
         phase("models");
         const pluginMetadataSnapshot = params.getPluginMetadataSnapshot();
         await withPluginRuntimeRegistryScope(params.getPluginRegistry(), () =>
           refreshPreparedModelRuntimeSnapshots(cfg, {
-            agentIds,
+            agentIds: new Set([agentId]),
             catalogMode: "static",
             allowGatewaySubagentBinding: true,
             ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
-            isPublicationCurrent: () => {
-              try {
-                assertPreparationCurrent();
-                return true;
-              } catch {
-                return false;
-              }
-            },
+            isPublicationCurrent: () => assertionSucceeds(assertPreparationCurrent),
           }),
-        );
-        preparedInput = listConfiguredOwnerInputs(cfg, undefined, true).find(
+        ).catch(async (error: unknown) => {
+          if (!(error instanceof PreparedModelRuntimePublicationSupersededError)) {
+            throw error;
+          }
+          // Let the current publication settle before the admission owner's bounded retry.
+          await getPendingPreparedModelRuntimeReplacement();
+          throw new AgentDatabaseStartupSupersededError(agentId, "startup");
+        });
+        assertPreparationCurrent();
+        const preparedInput = listConfiguredOwnerInputs(cfg, undefined, true).find(
           (input) => input.agentId === agentId,
         );
         if (!preparedInput) {
           throw new Error(`Agent ${agentId} model preparation is no longer configured`);
         }
-        assertPreparationCurrent();
+        if (!getPreparedModelRuntimeSnapshot(preparedInput)) {
+          const replacement = getPendingPreparedModelRuntimeReplacement();
+          if (replacement) {
+            await replacement;
+            throw new AgentDatabaseStartupSupersededError(agentId, "startup");
+          }
+          throw new Error(`Agent ${agentId} model preparation has not published`);
+        }
       }),
   });
 }

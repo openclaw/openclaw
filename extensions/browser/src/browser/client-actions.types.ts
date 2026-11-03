@@ -4,18 +4,21 @@ export type BrowserFormField = {
   value?: string | number | boolean;
 };
 
+type BrowserElementActionTarget = {
+  ref?: string;
+  selector?: string;
+  timeoutMs?: number;
+};
+
 /** Normalized browser action request sent to the control server. */
 export type BrowserActRequest = { targetId?: string } & (
-  | {
+  | (BrowserElementActionTarget & {
       kind: "click";
-      ref?: string;
-      selector?: string;
       doubleClick?: boolean;
       button?: string;
       modifiers?: string[];
       delayMs?: number;
-      timeoutMs?: number;
-    }
+    })
   | {
       kind: "clickCoords";
       x: number;
@@ -25,29 +28,16 @@ export type BrowserActRequest = { targetId?: string } & (
       delayMs?: number;
       timeoutMs?: number;
     }
-  | {
+  | (BrowserElementActionTarget & {
       kind: "type";
-      ref?: string;
-      selector?: string;
       text: string;
       submit?: boolean;
       slowly?: boolean;
-      timeoutMs?: number;
-    }
+    })
   | { kind: "press"; key: string; delayMs?: number }
   | { kind: "insertText"; text: string }
-  | {
-      kind: "hover";
-      ref?: string;
-      selector?: string;
-      timeoutMs?: number;
-    }
-  | {
-      kind: "scrollIntoView";
-      ref?: string;
-      selector?: string;
-      timeoutMs?: number;
-    }
+  | (BrowserElementActionTarget & { kind: "hover" })
+  | (BrowserElementActionTarget & { kind: "scrollIntoView" })
   | {
       kind: "drag";
       startRef?: string;
@@ -56,13 +46,10 @@ export type BrowserActRequest = { targetId?: string } & (
       endSelector?: string;
       timeoutMs?: number;
     }
-  | {
+  | (BrowserElementActionTarget & {
       kind: "select";
-      ref?: string;
-      selector?: string;
       values: string[];
-      timeoutMs?: number;
-    }
+    })
   | {
       kind: "fill";
       fields: BrowserFormField[];

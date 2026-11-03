@@ -27,9 +27,6 @@ export type ReefAuditHeadRecord = {
 
 export type ReefAuditStateRecord = { kind: "entry"; entry: AuditEntry; nextHash?: string };
 
-export const REEF_AUDIT_APPEND_RETRY_MS = 25;
-export const REEF_AUDIT_APPEND_ATTEMPTS = 120;
-
 export function reefAuditEntryKey(entryHash: string): string {
   return `entry:${entryHash}`;
 }

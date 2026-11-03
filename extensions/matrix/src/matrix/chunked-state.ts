@@ -40,7 +40,7 @@ export async function readMatrixStateChunks<T>(
   keys: string[],
   kind: string,
 ): Promise<string[] | null> {
-  // lookupMany is optional on the published host floor.
+  // Doctor supplies the published V1 store contract, where lookupMany is optional.
   const records = await store.lookupMany?.(keys);
   const chunks: string[] = [];
   for (let index = 0; index < keys.length; index += 1) {
@@ -70,11 +70,23 @@ export async function writeMatrixStateChunks<T>(
   },
   chunkKeyPrefix: string,
 ): Promise<void> {
-  const nextChunkKeys = new Set(rows.chunks.map((row) => row.key));
   for (const row of rows.chunks) {
     await store.register(row.key, row.value);
   }
   await store.register(rows.meta.key, rows.meta.value);
+  await pruneMatrixStateChunks(
+    store,
+    rows.chunks.map((row) => row.key),
+    chunkKeyPrefix,
+  );
+}
+
+export async function pruneMatrixStateChunks<T>(
+  store: Pick<PluginStateKeyedStore<T>, "entries" | "delete">,
+  retainedKeys: string[],
+  chunkKeyPrefix: string,
+): Promise<void> {
+  const nextChunkKeys = new Set(retainedKeys);
   for (const row of await store.entries()) {
     if (row.key.startsWith(chunkKeyPrefix) && !nextChunkKeys.has(row.key)) {
       await store.delete(row.key);

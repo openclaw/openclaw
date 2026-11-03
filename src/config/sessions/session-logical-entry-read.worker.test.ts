@@ -1,13 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import {
   emptySqliteCounts,
   observeParentSqlite,
   sqliteMethods,
 } from "../../../test/helpers/sqlite-parent-observer.js";
-import { resolveHeartbeatSession } from "../../infra/heartbeat-runner-session.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
@@ -28,9 +27,14 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { loadSessionEntryForAdmission } from "./session-accessor.sqlite-entry-admission.js";
-import { loadSessionEntry, replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
+import {
+  loadSessionEntry,
+  replaceSessionEntry,
+  replaceSessionEntrySync,
+} from "./session-accessor.sqlite-entry.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import type { SessionAccessScope } from "./session-accessor.types.js";
+import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import {
   readSessionEntryInWorker,
   readSessionEntryReadOnlyInWorker,
@@ -50,7 +54,7 @@ function storedScope(storePath: string, scope: Partial<SessionAccessScope> = {})
 }
 
 function holdExecution(
-  stage: "while-queued" | "before-open" | "reply",
+  stage: "before-open" | "reply",
   shouldHold: (execution: OpenClawAgentDatabaseExecution) => boolean = () => true,
   once = stage === "reply",
 ) {
@@ -72,9 +76,6 @@ function holdExecution(
     .spyOn(executionOwner, "captureOpenClawAgentDatabaseExecution")
     .mockImplementation((...args) => {
       const execution = capture(...args);
-      if (stage === "while-queued") {
-        gate.entered.resolve();
-      }
       const overrides: Partial<OpenClawAgentDatabaseExecution> = {};
       if (stage === "before-open") {
         overrides.prepare = async (source) => {
@@ -118,63 +119,47 @@ async function readFirstSession(
   }
 }
 
-it("shares cold database admission with an immediate heartbeat", async () => {
-  const agentId = "heartbeat-admission";
+it("shares cold database admission across logical session reads", async () => {
+  const agentId = "session-admission";
   const scope = storedScope(state.sessionsDir(agentId) + "/sessions.json", {
     agentId,
     sessionKey: `agent:${agentId}:hook`,
   });
   const gate = holdExecution("before-open", (execution) => execution.agentId === agentId, true);
   const first = readSessionEntryInWorker(scope);
-  let heartbeat: Promise<Awaited<ReturnType<typeof resolveHeartbeatSession>>> | undefined;
+  let second: ReturnType<typeof readSessionEntryInWorker> | undefined;
   try {
     await awaitGateBeforeSettlement(gate.entered.promise, first, "Hook admission was not held");
-    heartbeat = Promise.resolve(
-      resolveHeartbeatSession(
-        { session: { store: scope.storePath } },
-        agentId,
-        undefined,
-        undefined,
-        state.env,
-      ),
-    );
-    void heartbeat.catch(() => {});
+    second = readSessionEntryInWorker({ ...scope, sessionKey: `agent:${agentId}:main` });
+    void second.catch(() => {});
     gate.release.resolve();
     await expect(first).resolves.toBeUndefined();
-    await expect(heartbeat).resolves.toMatchObject({ entry: undefined });
+    await expect(second).resolves.toBeUndefined();
   } finally {
     gate.release.resolve();
-    await Promise.allSettled([first, heartbeat]);
+    await Promise.allSettled([first, second]);
     gate.restore();
   }
 });
 
-it("preserves heartbeat entries and SQLite creation without materializing the JSON locator", async () => {
+it("preserves legacy entry metadata and SQLite creation without materializing the JSON locator", async () => {
   for (const reader of ["native", "worker"] as const) {
-    const agentId = `heartbeat-${reader}`;
+    const agentId = `session-${reader}`;
     const scope = storedScope(state.sessionsDir(agentId) + "/sessions.json", {
       agentId,
       sessionKey: `agent:${agentId}:main`,
     });
     const databasePath = resolveOpenClawAgentSqlitePath(scope);
-    const cfg = { session: { store: scope.storePath } };
-    const expected = {
-      sessionKey: scope.sessionKey,
-      storePath: scope.storePath,
-      suppressOriginatingContext: false,
-    };
     expect(fs.existsSync(databasePath)).toBe(false);
     if (reader === "native") {
       expect(loadSessionEntry(scope)).toBeUndefined();
     } else {
-      await expect(
-        resolveHeartbeatSession(cfg, agentId, undefined, undefined, state.env),
-      ).resolves.toEqual({ ...expected, entry: undefined });
+      await expect(readSessionEntryInWorker(scope)).resolves.toBeUndefined();
     }
     expect(fs.existsSync(databasePath)).toBe(true);
     expect(fs.existsSync(scope.storePath)).toBe(false);
     const entry = {
-      sessionId: `heartbeat-${reader}-session`,
+      sessionId: `session-${reader}-session`,
       updatedAt: 123,
       lastChannel: "telegram",
       lastTo: "group:operations",
@@ -184,9 +169,7 @@ it("preserves heartbeat entries and SQLite creation without materializing the JS
     replaceSessionEntrySync(scope, entry);
     const native = loadSessionEntry(scope);
     expect(native).toMatchObject(entry);
-    await expect(
-      resolveHeartbeatSession(cfg, agentId, undefined, undefined, state.env),
-    ).resolves.toEqual({ ...expected, entry: native });
+    await expect(readSessionEntryInWorker(scope)).resolves.toEqual(native);
     expect(fs.existsSync(scope.storePath)).toBe(false);
   }
 });
@@ -355,31 +338,36 @@ it("keeps writable schema-repair admission for a logical read", async () => {
   }
 });
 
-it.each([
+it.for([
   { stage: "while-queued", change: "file", registration: "changed" },
   { stage: "while-queued", change: "file", registration: "unchanged" },
   { stage: "while-queued", change: "caller", registration: "changed" },
 ] as const)(
   "refuses $change replacement $stage ($registration registration)",
-  async ({ stage, change, registration }) => {
+  async ({ stage, change, registration }, { signal }) => {
     const scope = storedScope(state.statePath(stage, change, registration, "sessions.json"));
     replaceSessionEntrySync(scope, { sessionId: "selected-row", updatedAt: 1 });
     const target = toDatabaseOptions(resolveSqliteScope(scope));
     if (change === "file") {
       await closeOpenClawAgentDatabasesAsync();
     }
-    const gate = holdExecution(stage);
     const writerEntered = createDeferredCore();
-    const priorWriter =
-      stage === "while-queued"
-        ? runOpenClawAgentWorkerWrite(target, async () => {
-            writerEntered.resolve();
-            await gate.release.promise;
-          })
-        : undefined;
-    if (priorWriter) {
-      await writerEntered.promise;
-    }
+    const releaseWriter = createDeferredCore();
+    let priorWriter: Promise<void> | undefined;
+    const capture = executionOwner.captureOpenClawAgentDatabaseExecution;
+    const intercept = vi
+      .spyOn(executionOwner, "captureOpenClawAgentDatabaseExecution")
+      .mockImplementationOnce((...args) => {
+        intercept.mockRestore();
+        const execution = capture(...args);
+        // Discovery must finish its cold admission before a writer can hold the read queue.
+        priorWriter = runOpenClawAgentWorkerWrite(target, async () => {
+          writerEntered.resolve();
+          await releaseWriter.promise;
+        });
+        void priorWriter.catch((error: unknown) => writerEntered.reject(error));
+        return execution;
+      });
     let callerCurrent = true;
     const reading = readSessionEntryInWorker(scope, () => {
       if (!callerCurrent) {
@@ -389,13 +377,15 @@ it.each([
       (value) => ({ value, error: undefined }),
       (error: unknown) => ({ value: undefined, error }),
     );
-    void reading.then((result) => {
-      gate.entered.reject(
-        result.error ?? new Error("Logical read completed before its held boundary"),
-      );
-    });
     try {
-      await gate.entered.promise;
+      await withinTest(
+        awaitGateBeforeSettlement(
+          writerEntered.promise,
+          reading,
+          "Logical read completed before its held writer",
+        ),
+        signal,
+      );
       const databasePath = resolveOpenClawAgentSqlitePath(target);
       if (change === "file") {
         fs.renameSync(databasePath, `${databasePath}.original`);
@@ -410,43 +400,54 @@ it.each([
           env: state.env,
         });
       }
-      gate.release.resolve();
+      releaseWriter.resolve();
+      await priorWriter;
       const result = await reading;
       expect(result.value).toBeUndefined();
       expect(result.error).toBeInstanceOf(Error);
     } finally {
-      gate.release.resolve();
-      await reading;
-      await priorWriter;
-      gate.restore();
+      releaseWriter.resolve();
+      intercept.mockRestore();
+      await Promise.allSettled([reading, priorWriter]);
     }
   },
 );
 
 it.each([
-  { agentId: undefined, sessionKey: "topic" },
-  { agentId: "main", sessionKey: "global" },
+  { agentId: undefined, keyKind: "short" },
+  { agentId: "main", keyKind: "qualified" },
 ])(
-  "preserves a populated incognito owner for an explicit locator ($agentId, $sessionKey)",
-  async ({ agentId, sessionKey }) => {
-    const owner = { agentId: `ops-memory-${agentId ?? "missing"}-${sessionKey}`, env: state.env };
+  "preserves a populated incognito owner for an explicit locator ($agentId, $keyKind)",
+  async ({ agentId, keyKind }) => {
+    const owner = { agentId: `ops-memory-${agentId ?? "missing"}-${keyKind}`, env: state.env };
     const storePath = resolveIncognitoOpenClawAgentSqlitePath(owner);
-    const ownedScope = { ...owner, storePath, sessionKey };
-    const entry = { sessionId: "private-ops-session", updatedAt: 1 };
-    replaceSessionEntrySync(ownedScope, entry);
-    const database = openOpenClawAgentDatabase({ ...owner, path: storePath });
-    const scope = { env: state.env, storePath, sessionKey, agentId };
-    if (agentId === undefined) {
-      expect(loadSessionEntry(scope)).toMatchObject(entry);
-      await expect(readSessionEntryInWorker(scope)).resolves.toMatchObject(entry);
-    } else {
-      const mismatch = "Explicit incognito database target does not match its agent and state root";
-      expect(() => loadSessionEntry(scope)).toThrow(mismatch);
-      await expect(readSessionEntryInWorker(scope)).rejects.toThrow(mismatch);
+    const canonicalKey = `agent:${owner.agentId}:dashboard:incognito-topic`;
+    const sessionKey = keyKind === "qualified" ? canonicalKey : "dashboard:incognito-topic";
+    const ownedScope = { ...owner, storePath, sessionKey: canonicalKey };
+    const entry = { sessionId: "private-ops-session", updatedAt: 1, incognito: true as const };
+    await replaceSessionEntry(ownedScope, entry);
+    const memory = memorySessionActorOwners.read({ ...owner, path: storePath });
+    expect(memory).toBeDefined();
+    const observer = observeParentSqlite();
+    try {
+      const scope = { env: state.env, storePath, sessionKey, agentId };
+      if (agentId === undefined) {
+        expect(loadSessionEntry(scope)).toMatchObject(entry);
+        await expect(readSessionEntryInWorker(scope)).resolves.toMatchObject(entry);
+      } else {
+        const mismatch =
+          "Explicit incognito database target does not match its agent and state root";
+        expect(() => loadSessionEntry(scope)).toThrow(mismatch);
+        await expect(readSessionEntryInWorker(scope)).rejects.toThrow(mismatch);
+      }
+      expect(fs.existsSync(storePath)).toBe(false);
+      expect(memorySessionActorOwners.read({ ...owner, path: storePath })).toBe(memory);
+      expect(loadSessionEntry(ownedScope)).toMatchObject(entry);
+      expect(observer.counts).toEqual(emptySqliteCounts());
+    } finally {
+      observer.restore();
+      memorySessionActorOwners.closeDatabase({ ...owner, path: storePath });
     }
-    expect(fs.existsSync(storePath)).toBe(false);
-    expect(openOpenClawAgentDatabase({ ...owner, path: storePath })).toBe(database);
-    expect(loadSessionEntry(ownedScope)).toMatchObject(entry);
   },
 );
 

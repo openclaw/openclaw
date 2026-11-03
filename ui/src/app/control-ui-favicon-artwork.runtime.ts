@@ -179,6 +179,7 @@ export function connectControlUiFaviconArtwork(context: {
       });
   }
 
+  // Keep document artwork and its scoped image lease current without a mounted view.
   const stops = [
     context.gateway.subscribe(synchronize),
     context.theme.subscribe(() => {

@@ -24,7 +24,6 @@ async function installReports(page: Page, holdHello = false) {
       contentType: "text/html",
       body: `<!doctype html>
           <html data-instance="${frameRequests.length}">
-            <body>
               <h1>Synthetic reports</h1>
               <output aria-label="Received OpenClaw theme"></output>
               <script>
@@ -40,7 +39,6 @@ async function installReports(page: Page, holdHello = false) {
                   });
                 });
               </script>
-            </body>
           </html>`,
     });
   });
@@ -53,19 +51,19 @@ async function installReports(page: Page, holdHello = false) {
   return { gateway, frameRequests };
 }
 
-async function expectReports(page: Page, pathname = "/reports") {
+async function expectReports(page: Page) {
   await page
     .frameLocator("openclaw-plugin-page iframe")
-    .getByRole("heading", {
-      name: "Synthetic reports",
-    })
+    .getByRole("heading", { name: "Synthetic reports" })
     .waitFor();
-  expect(new URL(page.url()).pathname).toBe(pathname);
+  expect(new URL(page.url()).pathname).toBe("/reports");
   expect(
-    await page.locator("openclaw-plugin-page").evaluate((element: PluginPageElement) => ({
-      pluginId: element.pluginId,
-      id: element.tabId,
-    })),
+    await page
+      .locator("openclaw-plugin-page")
+      .evaluate(({ pluginId: plugin, tabId: tab }: PluginPageElement) => ({
+        pluginId: plugin,
+        id: tab,
+      })),
   ).toEqual({ pluginId, id: tabId });
   await openSidebarPages(page);
   const sidebarEntry = page.locator(
@@ -76,21 +74,20 @@ async function expectReports(page: Page, pathname = "/reports") {
   expect(await sidebarEntry.isVisible()).toBe(true);
 }
 
+async function openReports(page: Page) {
+  const pages = await openSidebarPages(page);
+  const entry = pages.getByRole("link", { name: "Reports", exact: true });
+  await entry.waitFor();
+  expect(await entry.getAttribute("href")).toBe("/reports");
+  await entry.click();
+}
+
 suite.define(() => {
   it("opens the advertised slug from the sidebar inside the plugin page shell", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       await installReports(page);
       await page.goto(`${suite.server.baseUrl}chat`);
-      await page
-        .locator("openclaw-app-sidebar")
-        .getByRole("button", { name: "Pages", exact: true })
-        .click();
-      const entry = page
-        .locator(".sidebar-pages")
-        .getByRole("link", { name: "Reports", exact: true });
-      await entry.waitFor();
-      expect(await entry.getAttribute("href")).toBe("/reports");
-      await entry.click();
+      await openReports(page);
       await expectReports(page);
     });
   });
@@ -147,9 +144,7 @@ suite.define(() => {
       const historyLength = await page.evaluate(() => window.history.length);
       await gateway.resolveDeferred("connect");
       await expectReports(page);
-      const location = new URL(page.url());
-      expect(location.search).toBe("?p.range=week");
-      expect(location.hash).toBe("#details");
+      expect(new URL(page.url())).toMatchObject({ search: "?p.range=week", hash: "#details" });
       expect(await page.evaluate(() => window.history.length)).toBe(historyLength);
     });
   });
@@ -165,69 +160,49 @@ suite.define(() => {
             evaluateControlUiContext(page, (context) => context.config.current.embedSandboxMode),
           )
           .toBe("scripts");
-        await page
-          .locator("openclaw-app-sidebar")
-          .getByRole("button", { name: "Pages", exact: true })
-          .click();
-        await page
-          .locator(".sidebar-pages")
-          .getByRole("link", { name: "Reports", exact: true })
-          .click();
+        await openReports(page);
         // The first frame must receive the script policy without a corrective reload.
         const sandbox = await page.locator("openclaw-plugin-page iframe").getAttribute("sandbox");
         expect(sandbox?.split(/\s+/u)).toContain("allow-scripts");
         const frame = page.frameLocator("openclaw-plugin-page iframe");
         const receivedTheme = frame.getByLabel("Received OpenClaw theme");
+        const readTheme = async (after?: number) => {
+          const received = JSON.parse((await receivedTheme.textContent()) ?? "{}");
+          return {
+            ...received,
+            advanced: after === undefined || Number(received.messages) > after,
+          };
+        };
+        const expectTheme = async (mode: "dark" | "light", after?: number) => {
+          await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe(mode);
+          await expect
+            .poll(() => readTheme(after))
+            .toMatchObject({
+              instance: "1",
+              mode,
+              messages: expect.any(Number),
+              surface: expect.stringMatching(/\S/),
+              advanced: true,
+            });
+        };
         expect(await page.evaluate(() => matchMedia("(prefers-color-scheme: light)").matches)).toBe(
           true,
         );
         const sidebar = page.locator("openclaw-app-sidebar");
+        const modeItem = (mode: string) =>
+          sidebar.getByRole("menuitem", { name: `Color mode: ${mode}`, exact: true });
         const identityMenu = sidebar.getByRole("button", { name: /^Identity and app menu for / });
         await identityMenu.click();
-        // The menu loads lazily, and each mode click renders its next label asynchronously.
         for (const currentMode of ["System", "Light"] as const) {
-          await sidebar
-            .getByRole("menuitem", { name: `Color mode: ${currentMode}`, exact: true })
-            .click();
-          await sidebar
-            .getByRole("menuitem", {
-              name: `Color mode: ${currentMode === "System" ? "Light" : "Dark"}`,
-              exact: true,
-            })
-            .waitFor();
+          await modeItem(currentMode).click();
+          await modeItem(currentMode === "System" ? "Light" : "Dark").waitFor();
         }
-        await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("dark");
-        await expect
-          .poll(async () => JSON.parse((await receivedTheme.textContent()) ?? "{}"))
-          .toMatchObject({
-            instance: "1",
-            messages: expect.any(Number),
-            mode: "dark",
-            surface: expect.stringMatching(/\S/),
-          });
-        const initialMessageCount = Number(
-          JSON.parse((await receivedTheme.textContent()) ?? "{}").messages,
-        );
+        await expectTheme("dark");
+        const initialMessageCount = Number((await readTheme()).messages);
 
-        await sidebar.getByRole("menuitem", { name: "Color mode: Dark", exact: true }).click();
+        await modeItem("Dark").click();
 
-        await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("light");
-        await expect
-          .poll(async () => {
-            const received = JSON.parse((await receivedTheme.textContent()) ?? "{}");
-            return {
-              instance: received.instance,
-              mode: received.mode,
-              receivedLiveUpdate: Number(received.messages) > initialMessageCount,
-              surface: received.surface,
-            };
-          })
-          .toEqual({
-            instance: "1",
-            mode: "light",
-            receivedLiveUpdate: true,
-            surface: expect.stringMatching(/\S/),
-          });
+        await expectTheme("light", initialMessageCount);
         expect(frameRequests).toHaveLength(1);
       },
     );

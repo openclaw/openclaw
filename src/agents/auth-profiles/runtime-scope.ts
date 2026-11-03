@@ -15,6 +15,36 @@ type AuthProfileRuntimeMode =
 
 export const authProfileRuntimeMode = new AsyncLocalStorage<AuthProfileRuntimeMode>();
 
+export function getScopedAuthProfileEnv(): NodeJS.ProcessEnv | undefined {
+  const mode = authProfileRuntimeMode.getStore();
+  return mode?.kind === "agent-dir" ? mode.env : undefined;
+}
+
+export function getScopedSharedAuthStore(): AuthProfileStore | undefined {
+  const mode = authProfileRuntimeMode.getStore();
+  return mode?.kind === "agent-dir" ? mode.sharedStore : undefined;
+}
+
+export function isEnvOnlyAuthProfileRuntime(): boolean {
+  return authProfileRuntimeMode.getStore()?.kind === "env-only";
+}
+
+export function resolveRuntimeAuthProfileAgentDir(agentDir?: string): string | undefined {
+  const mode = authProfileRuntimeMode.getStore();
+  return mode?.kind === "agent-dir" ? mode.agentDir : agentDir;
+}
+
+export function captureAuthProfileStoreScope() {
+  const mode = authProfileRuntimeMode.getStore();
+  return {
+    isolated: Boolean(mode),
+    run: <T>(agentDir: string | undefined, env: NodeJS.ProcessEnv, run: () => T): T =>
+      mode?.kind === "agent-dir"
+        ? authProfileRuntimeMode.run({ ...mode, agentDir: agentDir!, env }, run)
+        : run(),
+  };
+}
+
 type WorkerAuthProfileWrites = {
   env: NodeJS.ProcessEnv;
   assertOwner: (env: NodeJS.ProcessEnv) => void;

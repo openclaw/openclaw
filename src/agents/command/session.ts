@@ -27,10 +27,13 @@ import {
 import { resolveChannelResetConfig, resolveSessionResetType } from "../../config/sessions/reset.js";
 import type { SessionEntrySummary } from "../../config/sessions/session-accessor.types.js";
 import {
+  captureSessionActorStorageOwner,
+  readCapturedSessionActorEntry,
+} from "../../config/sessions/session-actor-storage-binding.js";
+import {
   readSessionEntryReadOnlyInWorker,
   withSessionStoreReaderInWorker,
 } from "../../config/sessions/session-entry-read-runtime.js";
-import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target-paths.js";
 import {
@@ -55,9 +58,7 @@ import {
   listAgentIds,
   resolveDefaultAgentId,
 } from "../agent-scope.js";
-import { clearBootstrapSnapshotOnSessionRollover } from "../bootstrap-cache.js";
-import { clearAllCliSessions } from "../cli-session.js";
-import { transitionMainSessionRecovery } from "../main-session-recovery/main-session-recovery-state.js";
+import { clearRotatedSessionMetadata } from "../session-reset-metadata.js";
 
 type SessionResolution = {
   sessionAgentId: string;
@@ -67,6 +68,10 @@ type SessionResolution = {
   storePath: string;
   isNewSession: boolean;
   previousSessionId?: string;
+  automaticReset?: {
+    reason: "idle" | "daily" | "reset";
+    expectedLifecycleRevision?: string;
+  };
   persistedThinking?: ThinkLevel;
   persistedVerbose?: VerboseLevel;
 };
@@ -86,47 +91,6 @@ type SessionRequest = {
   agentId?: string;
 };
 
-export function clearRotatedSessionMetadata(entry: InternalSessionEntry): InternalSessionEntry {
-  const next = {
-    ...entry,
-    sessionFile: undefined,
-    status: undefined,
-    lifecycleRunId: undefined,
-    lastRunId: undefined,
-    startedAt: undefined,
-    endedAt: undefined,
-    runtimeMs: undefined,
-    abortedLastRun: undefined,
-    restartRecoveryForceSafeTools: undefined,
-    restartRecoveryDeliveryContext: undefined,
-    restartRecoveryDeliveryMediaUrls: undefined,
-    restartRecoveryDisableMessageTool: undefined,
-    restartRecoverySuppressTextDelivery: undefined,
-    restartRecoveryDeliveryRequestFingerprint: undefined,
-    restartRecoveryDeliveryRunId: undefined,
-    restartRecoveryDeliverySourceRunId: undefined,
-    restartRecoveryOperatorSource: undefined,
-    restartRecoveryBeforeAgentReplyState: undefined,
-    restartRecoveryDeliveryReceiptState: undefined,
-    restartRecoveryDeliveryToolCallId: undefined,
-    restartRecoveryRequesterAccountId: undefined,
-    restartRecoveryRequesterSenderId: undefined,
-    restartRecoverySameChannelThreadRequired: undefined,
-    restartRecoverySourceIngress: undefined,
-    restartRecoverySourceReplyDeliveryMode: undefined,
-    restartRecoveryTerminalDeliveryEvidence: undefined,
-    restartRecoveryTerminalRunIds: undefined,
-    sessionStartedAt: undefined,
-    sessionDiffBaseline: undefined,
-    sessionDiffBaselineCapture: undefined,
-    lastInteractionAt: undefined,
-    pendingTranscriptRepair: undefined,
-  };
-  transitionMainSessionRecovery(next, { kind: "clear" });
-  clearAllCliSessions(next);
-  return next;
-}
-
 type SessionIdMatchSet = {
   candidates: SessionIdMatchCandidate[];
   ownerConflict: boolean;
@@ -135,7 +99,7 @@ type SessionIdMatchSet = {
 type SessionIdMatchCandidate = {
   sessionKey: string;
   entry: InternalSessionEntry;
-  resolution: Omit<SessionKeyResolution, "sessionEntry">;
+  resolution: Omit<SessionKeyResolution, "sessionEntry"> & { sessionKey: string };
   primary: boolean;
 };
 
@@ -164,28 +128,45 @@ function selectSessionIdMatchCandidate(
     })[0];
 }
 
-async function loadCommandSessionEntries(params: {
+async function loadCommandSessionIdMatches(params: {
   agentId?: string;
   storePath: string;
+  sessionId: string;
 }): Promise<SessionEntrySummary[]> {
   return withSessionStoreReaderInWorker(
     params,
     async ({ reader, database, continuation }) => {
-      const result = await reader.readEntries(
-        { agentId: database.agentId, storePath: database.path, env: database.env },
+      // Identity selection must not hydrate every saved prompt and diff in the store.
+      const result = await reader.readExactEntries({
+        selection: { kind: "session-id-or-key", sessionIdOrKey: params.sessionId },
+        projection: "list",
+        env: database.env,
         continuation,
-      );
-      return result.entries;
+      });
+      return result.entries.filter(({ entry }) => entry.sessionId === params.sessionId);
     },
     { backing: true, dataOnly: true },
   );
+}
+
+async function readCommandSessionIdMatch(
+  scope: { agentId?: string; storePath: string; sessionKey: string },
+  sessionId: string,
+): Promise<InternalSessionEntry> {
+  const entry = await readSessionEntryReadOnlyInWorker(scope);
+  if (entry?.sessionId !== sessionId) {
+    throw new Error("Stored session changed while resolving its ID. Retry the request.");
+  }
+  return entry;
 }
 
 export function buildExplicitSessionIdSessionKey(params: {
   sessionId: string;
   agentId?: string;
 }): string {
-  return `agent:${normalizeAgentId(params.agentId)}:explicit:${params.sessionId.trim()}`;
+  return normalizeStoreSessionKey(
+    `agent:${normalizeAgentId(params.agentId)}:explicit:${params.sessionId.trim()}`,
+  );
 }
 
 async function collectSessionIdMatchesForRequest(opts: {
@@ -217,13 +198,10 @@ async function collectSessionIdMatchesForRequest(opts: {
     candidateAgentId: string | undefined,
     options?: { primary?: boolean },
   ): void => {
-    // The successful listing already validated a partition's scoped owner; do not inspect it again.
+    // The worker selection already validated a partition's scoped owner.
     const candidateStoreTarget =
       resolveUnsuffixedSqliteTargetFromSessionStorePath(candidateStorePath);
     for (const { sessionKey: candidateKey, entry: candidateEntry } of candidateEntries) {
-      if (candidateEntry?.sessionId !== opts.sessionId) {
-        continue;
-      }
       const normalizedCandidateAgentId = candidateAgentId
         ? normalizeAgentId(candidateAgentId)
         : undefined;
@@ -294,9 +272,10 @@ async function collectSessionIdMatchesForRequest(opts: {
     }
     const candidateStorePath = resolveSessionStorePathCore(opts.cfg.session?.store, { agentId });
     addMatches(
-      await loadCommandSessionEntries({
+      await loadCommandSessionIdMatches({
         agentId,
         storePath: candidateStorePath,
+        sessionId: opts.sessionId,
       }),
       candidateStorePath,
       agentId,
@@ -330,13 +309,14 @@ export async function resolveStoredSessionKeyForSessionId(opts: {
   const storePath = resolveSessionStorePathCore(opts.cfg.session?.store, {
     agentId: storeAgentId,
   });
-  const sessionEntries = await loadCommandSessionEntries({
-    storePath,
-    agentId: storeAgentId,
-  });
   if (!sessionId) {
     return { sessionKey: undefined, storePath };
   }
+  const sessionIdMatches = await loadCommandSessionIdMatches({
+    storePath,
+    agentId: storeAgentId,
+    sessionId,
+  });
 
   const resolveMatchedAgentId = (sessionKey: string): string | undefined => {
     const scopedAgentId = parseAgentSessionKey(sessionKey)?.agentId;
@@ -350,7 +330,6 @@ export async function resolveStoredSessionKeyForSessionId(opts: {
         ? undefined
         : (requestedAgentId ?? tryResolveLegacyCompatibilityAgentId(opts.cfg));
   };
-  const sessionIdMatches = sessionEntries.filter(({ entry }) => entry.sessionId === sessionId);
   const selectionMatches = requestedAgentId
     ? sessionIdMatches.filter(
         ({ sessionKey }) => resolveMatchedAgentId(sessionKey) === requestedAgentId,
@@ -391,8 +370,9 @@ export async function resolveStoredSessionKeyForSessionId(opts: {
   return {
     agentId: resolvedAgentId,
     sessionKey,
-    sessionEntry: structuredClone(
-      selectionMatches.find((match) => match.sessionKey === sessionKey)?.entry,
+    sessionEntry: await readCommandSessionIdMatch(
+      { agentId: resolvedAgentId, storePath, sessionKey },
+      sessionId,
     ),
     storePath,
   };
@@ -461,12 +441,10 @@ async function resolveSessionKeyForRequestInternal(
     ? normalizeAgentId(knownAgentId)
     : requestedSessionId
       ? undefined
-      : normalizeAgentId(
-          resolveDefaultAgentId(opts.cfg, {
-            surface: "agent command session routing",
-            hint: "Pass --agent <id> or an agent-prefixed --session-key.",
-          }),
-        );
+      : resolveDefaultAgentId(opts.cfg, {
+          surface: "agent command session routing",
+          hint: "Pass --agent <id> or an agent-prefixed --session-key.",
+        });
   const storeAgentId = explicitSessionKey
     ? unownedBareSessionKey
       ? sessionIdScanAnchor
@@ -505,11 +483,14 @@ async function resolveSessionKeyForRequestInternal(
     !isInternalSessionEffectsKey(storeSessionKey) &&
     !(
       opts.prepareBoundEntry &&
-      captureIncognitoSessionSource({
-        agentId: storeAgentId,
-        storePath,
-        sessionKey: storeSessionKey,
-      })
+      captureSessionActorStorageOwner(
+        {
+          agentId: storeAgentId,
+          storePath,
+          sessionKey: storeSessionKey,
+        },
+        { assertCurrent() {}, authorize() {} },
+      )
     )
       ? await readSessionEntryReadOnlyInWorker({
           agentId: storeAgentId,
@@ -529,7 +510,11 @@ async function resolveSessionKeyForRequestInternal(
   ) {
     const { candidates, ownerConflict } = await collectSessionIdMatchesForRequest({
       cfg: opts.cfg,
-      sessionEntries: await loadCommandSessionEntries({ storePath, agentId: storeAgentId }),
+      sessionEntries: await loadCommandSessionIdMatches({
+        storePath,
+        agentId: storeAgentId,
+        sessionId: requestedSessionId,
+      }),
       storePath,
       storeAgentId,
       sessionId: requestedSessionId,
@@ -542,7 +527,7 @@ async function resolveSessionKeyForRequestInternal(
     if (selectedMatch) {
       return {
         ...selectedMatch.resolution,
-        sessionEntry: structuredClone(selectedMatch.entry),
+        sessionEntry: await readCommandSessionIdMatch(selectedMatch.resolution, requestedSessionId),
       };
     }
     if (ownerConflict) {
@@ -607,15 +592,19 @@ export async function resolveSession(
     prepareBoundEntry: true,
   });
   const scope = { agentId: resolvedAgentId, sessionKey: sessionKey ?? "", storePath };
-  const sessionEntry =
-    sessionKey && !isInternalSessionEffectsKey(sessionKey) && captureIncognitoSessionSource(scope)
-      ? await readSessionEntryReadOnlyInWorker(
-          { ...scope, sessionKey: normalizeStoreSessionKey(sessionKey) },
-          () => {
+  const memory =
+    sessionKey && !isInternalSessionEffectsKey(sessionKey)
+      ? captureSessionActorStorageOwner(scope, {
+          assertCurrent() {
             opts.signal?.throwIfAborted();
             opts.assertCurrent?.();
           },
-        )
+          authorize() {},
+        })
+      : undefined;
+  const sessionEntry =
+    memory && sessionKey
+      ? readCapturedSessionActorEntry(memory, normalizeStoreSessionKey(sessionKey))
       : routedEntry;
   const now = Date.now();
 
@@ -655,37 +644,47 @@ export async function resolveSession(
   const lockedModelSelection = isModelSelectionLocked(sessionEntry);
   const skipImplicitExpiry =
     resetPolicy.configured !== true && hasProviderOwnedSession(sessionEntry);
-  const fresh = sessionEntry
-    ? lockedModelSelection ||
-      (!terminalMainTranscriptNewerThanRegistry &&
-        (skipImplicitExpiry ||
-          evaluateSessionFreshness({
-            updatedAt: sessionEntry.updatedAt,
-            ...(sessionKey
-              ? await resolveSessionLifecycleTimestampsAsync({
-                  entry: sessionEntry,
-                  agentId: sessionAgentId,
-                  sessionKey,
-                  storePath,
-                  signal: opts.signal,
-                })
-              : {}),
-            now,
-            policy: resetPolicy,
-          }).fresh))
-    : false;
+  const freshness =
+    sessionEntry &&
+    !lockedModelSelection &&
+    !terminalMainTranscriptNewerThanRegistry &&
+    !skipImplicitExpiry
+      ? evaluateSessionFreshness({
+          updatedAt: sessionEntry.updatedAt,
+          ...(sessionKey
+            ? await resolveSessionLifecycleTimestampsAsync({
+                entry: sessionEntry,
+                agentId: sessionAgentId,
+                sessionKey,
+                storePath,
+                signal: opts.signal,
+              })
+            : {}),
+          now,
+          policy: resetPolicy,
+        })
+      : undefined;
+  const fresh = Boolean(
+    sessionEntry &&
+    (lockedModelSelection ||
+      (!terminalMainTranscriptNewerThanRegistry && (skipImplicitExpiry || freshness?.fresh))),
+  );
   opts.signal?.throwIfAborted();
   opts.assertCurrent?.();
-  const sessionId =
-    requestedSessionId || (fresh ? sessionEntry?.sessionId : undefined) || crypto.randomUUID();
   const isNewSession = !fresh && !requestedSessionId;
+  const automaticReset: SessionResolution["automaticReset"] =
+    isNewSession && sessionEntry && !terminalMainTranscriptNewerThanRegistry
+      ? {
+          reason: freshness?.staleReason ?? "reset",
+          expectedLifecycleRevision: sessionEntry.lifecycleRevision,
+        }
+      : undefined;
+  const sessionId =
+    requestedSessionId ||
+    (fresh || automaticReset ? sessionEntry?.sessionId : undefined) ||
+    crypto.randomUUID();
   const resolvedSessionEntry =
     isNewSession && sessionEntry ? clearRotatedSessionMetadata(sessionEntry) : sessionEntry;
-
-  clearBootstrapSnapshotOnSessionRollover({
-    sessionKey,
-    previousSessionId: isNewSession ? sessionEntry?.sessionId : undefined,
-  });
 
   // Behavior overrides belong to the logical session, not one transcript id.
   // Carry them across every rollover; explicit `default` directives clear them.
@@ -704,6 +703,7 @@ export async function resolveSession(
     storePath,
     isNewSession,
     previousSessionId: isNewSession ? sessionEntry?.sessionId : undefined,
+    automaticReset,
     persistedThinking,
     persistedVerbose,
   };

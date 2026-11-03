@@ -1,5 +1,12 @@
-import type { ChatGoalDraftMode, ChatReplyTarget } from "../../lib/chat/chat-types.ts";
-import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts";
+import type {
+  ChatGoalDraftMode,
+  ChatReplyTarget,
+  ChatComposerDraftRetry,
+} from "../../lib/chat/chat-types.ts";
+import {
+  type StoredChatOutboxScope,
+  storedChatOutboxScopeKey,
+} from "../../lib/chat/outbox-store-scope.ts";
 import { parseStoredChatOutboxScope } from "../../lib/chat/outbox-store.ts";
 import {
   resolveUiConversationIdentity,
@@ -7,12 +14,8 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { releaseDisplacedChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import type { ChatComposerMemoryFallback, ChatPageHost } from "./chat-state-host.ts";
+import { loadChatComposerState } from "./composer-draft-storage.ts";
 import { isIncognitoComposerScope } from "./composer-persistence-state.ts";
-import {
-  loadChatComposerState,
-  storedChatOutboxScopeKey,
-  type ChatComposerDraftRetry,
-} from "./composer-persistence.ts";
 
 let lastChatComposerMemoryFallbackSequence = 0;
 
@@ -66,10 +69,11 @@ function resolveChatComposerMemoryFallback(
   }
   let adoptedFallback = sourceFallback;
   if (sourceKey !== scopeKey && sourceFallback.draftRetry) {
-    const committedRevision = loadChatComposerState(state, sessionKey, scope.agentId).revisions
-      .committed;
-    const latestRevision = loadChatComposerState(state, sessionKey, scope.agentId).revisions
-      .latestAttempt;
+    const { committed: committedRevision, latestAttempt: latestRevision } = loadChatComposerState(
+      state,
+      sessionKey,
+      scope.agentId,
+    ).revisions;
     // Rebase only when this unresolved edit is newer than every resolved
     // attempt. Otherwise its original CAS must keep newer pane input intact.
     if (sourceFallback.draftRetry.draftRevision > latestRevision) {

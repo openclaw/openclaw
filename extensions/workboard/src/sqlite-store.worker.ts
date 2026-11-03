@@ -19,69 +19,47 @@ export function createSqliteWorkerBackend(
   context: { databasePath: string },
 ): SqliteWorkerBackend<WorkboardSqliteWorkerOperations> {
   const kernel = createWorkboardSqliteKernel(context.databasePath, undefined, input);
-  function execute(
-    command: SqliteWorkerCommand<WorkboardSqliteOperations>,
-  ): WorkboardSqliteOperations[keyof WorkboardSqliteOperations]["output"] {
-    switch (command.type) {
-      case "cards.register":
-        return kernel.cards.register(...command.input.args);
-      case "cards.registerIfAbsent":
-        return kernel.cards.registerIfAbsent(...command.input.args);
-      case "cards.registerIfUpdatedAt":
-        return kernel.cards.registerIfUpdatedAt(...command.input.args);
-      case "cards.claimIfOwnerAvailable":
-        return kernel.cards.claimIfOwnerAvailable(...command.input.args);
-      case "cards.deleteIfUpdatedAt":
-        return kernel.cards.deleteIfUpdatedAt(...command.input.args);
-      case "cards.lookup":
-        return kernel.cards.lookup(...command.input.args);
-      case "cards.delete":
-        return kernel.cards.delete(...command.input.args);
-      case "cards.entries":
-        return kernel.cards.entries(...command.input.args);
-      case "cards.listCardStatuses":
-        return kernel.cards.listCardStatuses(...command.input.args);
-      case "cards.listBoardAggregates":
-        return kernel.cards.listBoardAggregates(...command.input.args);
-      case "cards.listStatsAggregates":
-        return kernel.cards.listStatsAggregates(...command.input.args);
-      case "cards.hasCards":
-        return kernel.cards.hasCards(...command.input.args);
-      case "boards.register":
-        return kernel.boards.register(...command.input.args);
-      case "boards.lookup":
-        return kernel.boards.lookup(...command.input.args);
-      case "boards.delete":
-        return kernel.boards.delete(...command.input.args);
-      case "boards.entries":
-        return kernel.boards.entries(...command.input.args);
-      case "sessionsBoard.get":
-        return kernel.sessionsBoard.get(...command.input.args);
-      case "sessionsBoard.update":
-        return kernel.sessionsBoard.update(...command.input.args);
-      case "sessionsBoard.listPlacements":
-        return kernel.sessionsBoard.listPlacements(...command.input.args);
-      case "sessionsBoard.repairPlacements":
-        return kernel.sessionsBoard.repairPlacements(...command.input.args);
-      case "sessionsBoard.writePlacement":
-        return kernel.sessionsBoard.writePlacement(...command.input.args);
-      case "subscriptions.register":
-        return kernel.subscriptions.register(...command.input.args);
-      case "subscriptions.lookup":
-        return kernel.subscriptions.lookup(...command.input.args);
-      case "subscriptions.delete":
-        return kernel.subscriptions.delete(...command.input.args);
-      case "subscriptions.entries":
-        return kernel.subscriptions.entries(...command.input.args);
-      case "attachments.register":
-        return kernel.attachments.register(...command.input.args);
-      case "attachments.lookup":
-        return kernel.attachments.lookup(...command.input.args);
-      case "attachments.delete":
-        return kernel.attachments.delete(...command.input.args);
-      case "attachments.entries":
-        return kernel.attachments.entries(...command.input.args);
-    }
+  const operations: {
+    [K in keyof WorkboardSqliteOperations]: (
+      ...args: WorkboardSqliteOperations[K]["input"]["args"]
+    ) => WorkboardSqliteOperations[K]["output"];
+  } = {
+    "cards.register": kernel.cards.register.bind(kernel.cards),
+    "cards.registerIfAbsent": kernel.cards.registerIfAbsent.bind(kernel.cards),
+    "cards.registerIfUpdatedAt": kernel.cards.registerIfUpdatedAt.bind(kernel.cards),
+    "cards.claimIfOwnerAvailable": kernel.cards.claimIfOwnerAvailable.bind(kernel.cards),
+    "cards.deleteIfUpdatedAt": kernel.cards.deleteIfUpdatedAt.bind(kernel.cards),
+    "cards.lookup": kernel.cards.lookup.bind(kernel.cards),
+    "cards.delete": kernel.cards.delete.bind(kernel.cards),
+    "cards.entries": kernel.cards.entries.bind(kernel.cards),
+    "cards.listCardStatuses": kernel.cards.listCardStatuses.bind(kernel.cards),
+    "cards.listBoardAggregates": kernel.cards.listBoardAggregates.bind(kernel.cards),
+    "cards.listStatsAggregates": kernel.cards.listStatsAggregates.bind(kernel.cards),
+    "cards.hasCards": kernel.cards.hasCards.bind(kernel.cards),
+    "boards.register": kernel.boards.register.bind(kernel.boards),
+    "boards.lookup": kernel.boards.lookup.bind(kernel.boards),
+    "boards.delete": kernel.boards.delete.bind(kernel.boards),
+    "boards.entries": kernel.boards.entries.bind(kernel.boards),
+    "sessionsBoard.get": kernel.sessionsBoard.get.bind(kernel.sessionsBoard),
+    "sessionsBoard.update": kernel.sessionsBoard.update.bind(kernel.sessionsBoard),
+    "sessionsBoard.listPlacements": kernel.sessionsBoard.listPlacements.bind(kernel.sessionsBoard),
+    "sessionsBoard.repairPlacements": kernel.sessionsBoard.repairPlacements.bind(
+      kernel.sessionsBoard,
+    ),
+    "sessionsBoard.writePlacement": kernel.sessionsBoard.writePlacement.bind(kernel.sessionsBoard),
+    "subscriptions.register": kernel.subscriptions.register.bind(kernel.subscriptions),
+    "subscriptions.lookup": kernel.subscriptions.lookup.bind(kernel.subscriptions),
+    "subscriptions.delete": kernel.subscriptions.delete.bind(kernel.subscriptions),
+    "subscriptions.entries": kernel.subscriptions.entries.bind(kernel.subscriptions),
+    "attachments.register": kernel.attachments.register.bind(kernel.attachments),
+    "attachments.lookup": kernel.attachments.lookup.bind(kernel.attachments),
+    "attachments.delete": kernel.attachments.delete.bind(kernel.attachments),
+    "attachments.entries": kernel.attachments.entries.bind(kernel.attachments),
+  };
+  function execute<K extends keyof WorkboardSqliteOperations>(
+    command: SqliteWorkerCommand<Pick<WorkboardSqliteOperations, K>>,
+  ): WorkboardSqliteOperations[K]["output"] {
+    return operations[command.type](...command.input.args);
   }
   return {
     execute(command) {

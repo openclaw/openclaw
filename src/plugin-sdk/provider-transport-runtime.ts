@@ -1,9 +1,10 @@
-/**
- * Runtime SDK subpath for provider transport helpers and stream primitives.
- */
 export { buildGuardedModelFetch } from "../agents/provider-transport-fetch.js";
 export { buildOpenAICompletionsParams } from "../agents/openai-transport-stream.js";
 export { buildAssistantMessage } from "../agents/stream-message-shared.js";
+/** @deprecated Bundled provider option composition; not a third-party SDK contract. */
+export { applyAnthropicThinkingOptions } from "@openclaw/ai/internal/anthropic";
+/** @deprecated Bundled provider transport primitives; not a third-party SDK contract. */
+export { clampMaxTokensToModel, iterateSseFrames } from "@openclaw/ai/internal/shared";
 export {
   sortPromptCacheToolsByName,
   splitSystemPromptCacheBoundary,
@@ -19,15 +20,24 @@ export {
   isImageWithMediaPayload,
 } from "@openclaw/ai/internal/shared";
 export {
+  buildGoogleGenerationConfig,
+  buildGoogleSimpleThinking,
+} from "@openclaw/ai/internal/google";
+export {
   coerceTransportToolCallArguments,
   consumeGoogleGenerateContentStream,
   convertGoogleTools,
+  createGoogleVideoPlaceholder,
+  GOOGLE_VIDEO_SLOT_OMISSION,
+  materializeGoogleVideoSlots,
+  type GoogleVideoSlots,
   projectGoogleMessages,
   requiresGoogleToolCallId,
   type GoogleStreamChunk,
   copyProviderAcceptanceObserver,
   createEmptyTransportUsage,
   createWritableTransportEventStream,
+  createProviderWaitObserver,
   failTransportStream,
   finalizeTerminalToolCallArguments,
   finalizeTransportStream,

@@ -1,10 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { resolveSessionStoreIdentity } from "../../gateway/session-store-key.js";
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { collectCanonicalSessionLookupKeys } from "./main-session-key.js";
 import { resolveSessionStorePathCore } from "./paths.js";
+import { captureMemoryExactSessionReader } from "./session-accessor.memory-exact-read.js";
 import type {
   LogicalSessionAccessScope,
   ResolvedSessionEntryAccessTarget,
@@ -12,11 +11,7 @@ import type {
   SessionEntrySummary,
 } from "./session-accessor.types.js";
 import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-key.js";
-import {
-  readSessionEntryReadOnlyInWorker,
-  withSessionEntriesFromStoresInWorker,
-} from "./session-entry-read-runtime.js";
-import { captureIncognitoSessionBinding } from "./session-incognito-binding.js";
+import { withSessionEntriesFromStoresInWorker } from "./session-entry-read-runtime.js";
 import { prepareSessionStoreTargetInventory } from "./session-store-target-inventory.js";
 import { prepareSessionStoreTargetInventoryRead } from "./session-store-target-runtime.js";
 import { listConfiguredSessionStoreAgentIds, type SessionStoreTarget } from "./targets.js";
@@ -53,9 +48,9 @@ export async function readResolvedSessionEntryInWorker(
 }
 
 /** One selected metadata read per store, shared by every requested logical owner. */
-async function readResolvedSessionEntriesInWorker(
+export async function readResolvedSessionEntriesInWorker(
   input: Omit<LogicalSessionAccessScope, "sessionKey"> & { sessionKeys: readonly string[] },
-  projection: "exact" | "worktree" = "exact",
+  projection: "exact" | "worktree" | "list" = "exact",
 ): Promise<Map<string, ResolvedSessionEntryAccessTarget>> {
   const targets = await readResolvedSessionStoreTargetsInWorker(input, projection);
   return new Map([...targets].map(([key, { storePath: _storePath, ...target }]) => [key, target]));
@@ -63,7 +58,7 @@ async function readResolvedSessionEntriesInWorker(
 
 export async function readResolvedSessionStoreTargetsInWorker(
   input: Omit<LogicalSessionAccessScope, "sessionKey"> & { sessionKeys: readonly string[] },
-  projection: "exact" | "worktree" = "exact",
+  projection: "exact" | "worktree" | "list" = "exact",
 ): Promise<Map<string, ResolvedSessionEntryStoreTarget>> {
   const scope = { ...input, env: cloneEnvWithPlatformSemantics(input.env ?? process.env) };
   const actorEnv = input.env === undefined ? undefined : scope.env;
@@ -71,7 +66,7 @@ export async function readResolvedSessionStoreTargetsInWorker(
   const prepared = [...new Set(scope.sessionKeys)].map((requestedKey) => {
     const { agentId, canonicalKey } = resolveSessionStoreIdentity({
       ...scope,
-      sessionKey: requestedKey.trim(),
+      sessionKey: requestedKey,
     });
     return {
       agentId,
@@ -95,24 +90,15 @@ export async function readResolvedSessionStoreTargetsInWorker(
       env: actorEnv,
       sessionKey: canonicalKey,
     };
-    const binding = captureIncognitoSessionBinding(actorScope);
-    if (binding || isIncognitoSessionKey(canonicalKey)) {
+    const memory = captureMemoryExactSessionReader({ ...actorScope, agentId });
+    if (memory) {
       result.set(requestedKey, {
         agentId,
         canonicalKey,
         requestedKey,
         storeKey: canonicalKey,
-        storePath:
-          binding?.actor.path ??
-          resolveIncognitoOpenClawAgentSqlitePath({ agentId, env: scope.env }),
-        entry: await readSessionEntryReadOnlyInWorker({
-          ...actorScope,
-          agentId,
-          // Unbound incognito still belongs to its process-local native owner.
-          ...(!binding && {
-            storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId, env: scope.env }),
-          }),
-        }),
+        storePath: memory.path,
+        entry: memory.read(canonicalKey, projection === "worktree" ? "list" : undefined),
       });
       continue;
     }

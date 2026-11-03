@@ -7,7 +7,9 @@ it("reserves the conversation height before its frame request completes", async 
   const { view, unmount } = mountView(
     { sessionKey: "agent:main:main", viewId: "delayed-view", height: 840 },
     {
-      gateway: { snapshot: { client: { request: () => response.promise }, phase: "connected" } },
+      gateway: {
+        snapshot: { client: { request: () => response.promise }, phase: "connected", hello: null },
+      },
     },
   );
   await view.updateComplete;

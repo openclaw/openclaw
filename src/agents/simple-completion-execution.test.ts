@@ -1,8 +1,20 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { reasoningTagTextPolicy } from "@openclaw/ai/internal/openai";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { findSourceImportBackedges } from "../../test/helpers/source-import-closure.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { hasInternalDiagnosticEventListeners } from "../infra/diagnostic-event-listener-presence.js";
+import { flushDiagnosticsTimeline } from "../infra/diagnostics-timeline.js";
 import { bindModelCompletionOwner } from "../llm/model-runtime-binding.js";
+import {
+  getModelTransportContext,
+  withModelTransportContext,
+} from "../llm/model-transport-context.js";
 import type { Model } from "../llm/types.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import { completionContext, completionModel } from "./simple-completion.test-support.js";
+import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 
 const mocks = vi.hoisted(() => ({
   complete: vi.fn(),
@@ -19,20 +31,26 @@ vi.mock("@openclaw/ai/transports", async (importOriginal) => ({
 import { completeWithPreparedSimpleCompletionModel } from "./simple-completion-execution.js";
 
 type CompletionParams = Parameters<typeof completeWithPreparedSimpleCompletionModel>[0];
-const context = { messages: [{ role: "user" as const, content: "pong", timestamp: 1 }] };
+type Options = NonNullable<CompletionParams["options"]>;
+type ReasoningCase = [Options["reasoning"], string | undefined, Partial<Model>?, string?];
+const context = completionContext("pong");
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const auth = { apiKey: "test-key", source: "test", mode: "api-key" } as const;
-const baseModel = {
+const baseModel = completionModel({
   provider: "openai",
   id: "gpt-5.4",
-  name: "gpt-5.4",
   api: "openai-responses",
   baseUrl: "https://api.openai.com/v1",
   reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 128000,
-  maxTokens: 4096,
-} satisfies Model<"openai-responses">;
+});
+const opencode = { provider: "opencode-go", baseUrl: "https://opencode.ai/zen/go/v1" };
+const custom = { provider: "custom", id: "synthetic-model" };
+const sonnet: Partial<Model> = {
+  provider: "anthropic",
+  id: "production-sonnet",
+  api: "anthropic-messages",
+  params: { canonicalModelId: "claude-sonnet-5" },
+};
 
 function complete(
   params: Omit<CompletionParams, "context" | "auth"> & { auth?: CompletionParams["auth"] },
@@ -40,233 +58,264 @@ function complete(
   return completeWithPreparedSimpleCompletionModel({ context, auth, ...params });
 }
 
-function completionRequests() {
-  return mocks.complete.mock.calls.map(([model, completionContext, options]) => ({
-    model,
-    context: completionContext,
-    options,
-  }));
+const completionOptions = () => mocks.complete.mock.calls.map((call) => call[2]);
+function expectCompletion(model: Model, options: unknown) {
+  expect(mocks.complete.mock.calls.map((call) => call.slice(0, 3))).toEqual([
+    [model, context, options],
+  ]);
 }
 
 beforeEach(() => {
-  mocks.complete.mockReset();
-  mocks.complete.mockResolvedValue({ content: [{ type: "text", text: "ok" }] });
-  mocks.prepareModel.mockReset();
-  mocks.prepareModel.mockImplementation((params: { model: unknown }) => params.model);
+  mocks.complete.mockReset().mockResolvedValue({ content: [{ type: "text", text: "ok" }] });
+  mocks.prepareModel.mockReset().mockImplementation((params) => params.model);
 });
 
-describe("prepared completion import boundary", () => {
-  it.each([
-    "src/agents/host-prepared-isolated-completion.ts",
-    "src/plugin-sdk/simple-completion-runtime.ts",
-  ])("%s does not import model/auth preparation", (entry) => {
-    expect(findSourceImportBackedges(entry, ["src/agents/simple-completion-runtime.ts"])).toEqual(
-      [],
-    );
-  });
-});
-
-describe("completeWithPreparedSimpleCompletionModel", () => {
-  it.each<{
-    name: string;
-    patch?: Partial<Model>;
-    reasoning: NonNullable<CompletionParams["options"]>["reasoning"];
-    expected?: string;
-    preparedApi?: string;
-  }>([
-    {
-      name: "custom Ultra",
-      patch: { provider: "custom", id: "synthetic-model" },
-      reasoning: "ultra",
-      expected: "high",
-    },
-    {
-      name: "non-reasoning Ultra",
-      patch: { provider: "custom", id: "synthetic-model", reasoning: false },
-      reasoning: "ultra",
-      expected: "off",
-    },
-    {
-      name: "disabled native effort",
-      patch: { compat: { supportsReasoningEffort: false } },
-      reasoning: "ultra",
-    },
-    { name: "explicit max", reasoning: "max", expected: "max" },
-    { name: "explicit off", reasoning: "off", expected: "off" },
-    { name: "native Ultra", reasoning: "ultra", expected: "xhigh" },
-    { name: "adaptive", reasoning: "adaptive", expected: "medium" },
-    { name: "unspecified", reasoning: undefined },
-    {
-      name: "prepared Sonnet alias",
-      patch: {
-        provider: "anthropic",
-        id: "production-sonnet",
-        name: "Production Sonnet",
-        api: "anthropic-messages",
-        baseUrl: "https://api.anthropic.com",
-        params: { canonicalModelId: "claude-sonnet-5" },
-      },
-      reasoning: "off",
-      expected: "off",
-      preparedApi: "openclaw-provider-simple:anthropic:production-sonnet",
-    },
-  ])(
-    "preserves transport reasoning for $name",
-    async ({ patch, reasoning, expected, preparedApi }) => {
-      const model: Model = { ...baseModel, ...patch };
-      const preparedModel = preparedApi ? { ...model, api: preparedApi } : model;
-      mocks.prepareModel.mockReturnValueOnce(preparedModel);
-      await complete({ model, options: { reasoning } });
-      if (expected === undefined) {
-        expect(completionRequests()[0]?.options).not.toHaveProperty("reasoning");
-      }
-      expect(completionRequests()).toEqual([
-        {
-          model: preparedModel,
-          context,
-          options: {
-            ...(expected ? { reasoning: expected } : {}),
-            ...(reasoning === "off" ? { onPayload: expect.any(Function) } : {}),
-            apiKey: auth.apiKey,
-          },
-        },
-      ]);
-    },
-  );
-
-  it("passes only selected auth facts to transport preparation", async () => {
-    await complete({
-      model: baseModel,
-      auth: {
-        apiKey: "test-access-token",
-        source: "profile:test",
-        profileId: "test:profile",
-        mode: "oauth",
-        authFlow: "test-subscription",
-      },
+it.each(["success", "returned-error", "thrown"])(
+  "records a timeline-only %s completion without diagnostic listeners",
+  async (outcome) => {
+    const file = path.join(tempDirs.make("simple-completion-timeline-"), "timeline.jsonl");
+    expect(hasInternalDiagnosticEventListeners()).toBe(false);
+    const message = makeAssistantMessageFixture({
+      stopReason: outcome === "success" ? "stop" : "error",
+      errorMessage: outcome === "success" ? undefined : "fixture error",
     });
-    expect(mocks.prepareModel.mock.calls[0]?.[0]).toMatchObject({
-      auth: { mode: "oauth", authFlow: "test-subscription" },
-    });
-    expect(mocks.prepareModel.mock.calls[0]?.[0]).not.toHaveProperty("auth.apiKey");
-    expect(completionRequests()[0]?.options.apiKey).toBe("test-access-token");
-  });
-
-  it("stops before transport preparation when its owner retires during host initialization", async () => {
-    const retired = new Error("Completion owner retired.");
-    let current = true;
-    const model = bindModelCompletionOwner(baseModel, {
-      run: (run) => run(),
-      assertCurrent: () => {
-        if (!current) {
-          throw retired;
-        }
-      },
-    });
-    const completion = complete({ model });
-    current = false;
-    await expect(completion).rejects.toBe(retired);
-    expect(mocks.prepareModel).not.toHaveBeenCalled();
-    expect(mocks.complete).not.toHaveBeenCalled();
-  });
-
-  it("gives standalone OpenCode completions distinct routing identities", async () => {
-    for (let index = 0; index < 2; index++) {
-      await complete({
-        model: { ...baseModel, provider: "opencode-go", baseUrl: "https://opencode.ai/zen/go/v1" },
+    message.usage.usageReport = { state: "available" };
+    const outerWait = vi.fn();
+    const outerContext = {
+      sessionKey: "foreground-session",
+      runId: "foreground-run",
+      requestId: "foreground-call",
+      priority: "background" as const,
+      onRateLimitWait: outerWait,
+    };
+    let observed: ReturnType<typeof getModelTransportContext>;
+    mocks.complete.mockImplementationOnce(async () => {
+      observed = getModelTransportContext();
+      expect(observed).toMatchObject({
+        runId: expect.any(String),
+        requestId: expect.any(String),
+        priority: "background",
+        onRateLimitWait: expect.any(Function),
       });
-    }
-    const [first, second] = completionRequests();
-    const firstId = first?.options.headers?.["x-opencode-session"];
-    const secondId = second?.options.headers?.["x-opencode-session"];
-    expect(firstId).toEqual(expect.any(String));
-    expect(firstId.length).toBeGreaterThan(0);
-    expect(secondId).toEqual(expect.any(String));
-    expect(secondId).not.toBe(firstId);
-    expect(first?.options.sessionId).toBeUndefined();
-  });
-
-  it.each<{
-    name: string;
-    patch?: Partial<Model>;
-    options?: CompletionParams["options"];
-    expectedHeaders?: Record<string, string>;
-  }>([
-    {
-      name: "caller header",
-      options: { headers: { "X-OpenCode-Session": "caller-owned", "X-Custom": "keep" } },
-      expectedHeaders: { "X-OpenCode-Session": "caller-owned", "X-Custom": "keep" },
-    },
-    {
-      name: "caller session",
-      options: { sessionId: "conversation-a", headers: { "X-Custom": "keep" } },
-      expectedHeaders: { "x-opencode-session": "conversation-a", "X-Custom": "keep" },
-    },
-    { name: "model header", patch: { headers: { "X-OpenCode-Session": "caller-owned" } } },
-    { name: "proxy endpoint", patch: { baseUrl: "https://proxy.example/v1" } },
-    { name: "insecure endpoint", patch: { baseUrl: "http://opencode.ai/zen/go/v1" } },
-  ])("preserves routing options for $name", async ({ patch, options, expectedHeaders }) => {
-    const original = structuredClone(options);
-    const model: Model = {
-      ...baseModel,
-      provider: "opencode-go",
-      baseUrl: "https://opencode.ai/zen/go/v1",
-      ...patch,
-    };
-    const originalModelHeaders = structuredClone(model.headers);
-    for (let index = 0; index < 2; index++) {
-      await complete({ model, options });
-    }
-    expect(completionRequests().map((request) => request.options.headers)).toEqual([
-      expectedHeaders,
-      expectedHeaders,
-    ]);
-    expect(completionRequests()[0]?.model.headers).toEqual(originalModelHeaders);
-    expect(completionRequests()[0]?.options).toEqual({
-      ...options,
-      apiKey: auth.apiKey,
-      ...(expectedHeaders ? { headers: expectedHeaders } : {}),
+      expect(observed?.runId).not.toBe(outerContext.runId);
+      expect(observed?.requestId).not.toBe(outerContext.requestId);
+      expect(observed?.sessionKey).toBeUndefined();
+      expect(observed?.onRateLimitWait).not.toBe(outerWait);
+      await Promise.resolve();
+      expect(getModelTransportContext()).toBe(observed);
+      observed?.onRateLimitWait?.(Date.now())?.();
+      if (outcome === "thrown") {
+        throw new Error("before usage");
+      }
+      return message;
     });
-    expect(options).toEqual(original);
-  });
+    await withEnvAsync(
+      {
+        OPENCLAW_DIAGNOSTICS: "timeline",
+        OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: file,
+      },
+      async () => {
+        await withModelTransportContext(outerContext, async () => {
+          const result = complete({ model: baseModel });
+          if (outcome === "thrown") {
+            await expect(result).rejects.toThrow("before usage");
+          } else {
+            await expect(result).resolves.toBe(message);
+          }
+          expect(getModelTransportContext()).toBe(outerContext);
+        });
+        expect(outerWait).not.toHaveBeenCalled();
+        flushDiagnosticsTimeline();
+      },
+    );
+    const events = readFileSync(file, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(events.filter((event) => event.name === "provider.request.started")).toHaveLength(1);
+    expect(events.filter((event) => event.type === "provider.request")).toEqual([
+      expect.objectContaining({
+        runId: observed?.runId,
+        spanId: observed?.requestId,
+        ok: outcome === "success",
+        attributes: expect.objectContaining({
+          observationUnit: "logical-call",
+          usageState: outcome === "thrown" ? "unreported" : "available",
+          ...(outcome === "thrown" ? {} : { input: 0, output: 0 }),
+        }),
+      }),
+    ]);
+  },
+);
 
-  it("prepares provider-owned stream APIs before running a completion", async () => {
-    const model = {
-      ...baseModel,
-      provider: "ollama",
-      id: "llama3.2:latest",
-      name: "llama3.2:latest",
-      api: "ollama",
-      baseUrl: "http://127.0.0.1:11434",
-      reasoning: false,
-      contextWindow: 8192,
-      maxTokens: 1024,
-    } satisfies Model<"ollama">;
-    const preparedModel = { ...model, api: "openclaw-ollama-simple-test" };
-    const cfg = {
-      models: { providers: { ollama: { baseUrl: "http://remote-ollama:11434", models: [] } } },
-    };
+it.each(["interactive", "background"] as const)(
+  "isolates concurrent completions while preserving %s admission priority",
+  async (priority) => {
+    const file = path.join(tempDirs.make("simple-completion-context-"), "timeline.jsonl");
+    const contexts: ReturnType<typeof getModelTransportContext>[] = [];
+    mocks.complete.mockImplementation(async () => {
+      const current = getModelTransportContext();
+      contexts.push(current);
+      await Promise.resolve();
+      expect(getModelTransportContext()).toBe(current);
+      return makeAssistantMessageFixture();
+    });
+    await withEnvAsync(
+      { OPENCLAW_DIAGNOSTICS: "timeline", OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: file },
+      () =>
+        withModelTransportContext({ requestId: "outer", priority }, async () => {
+          await Promise.all([complete({ model: baseModel }), complete({ model: baseModel })]);
+          expect(getModelTransportContext()).toEqual({ requestId: "outer", priority });
+          flushDiagnosticsTimeline();
+        }),
+    );
+    expect(contexts).toHaveLength(2);
+    expect(new Set(contexts.map((current) => current?.requestId)).size).toBe(2);
+    for (const current of contexts) {
+      expect(current).toMatchObject({
+        requestId: expect.any(String),
+        runId: current?.requestId,
+        priority,
+      });
+      expect(current?.requestId).not.toBe("outer");
+    }
+  },
+);
+
+it("preserves the caller's transport context when diagnostics are disabled", async () => {
+  const outerContext = {
+    requestId: "outer",
+    priority: "interactive" as const,
+    onRateLimitWait: vi.fn(),
+  };
+  mocks.complete.mockImplementationOnce(async () => {
+    await Promise.resolve();
+    expect(getModelTransportContext()).toBe(outerContext);
+    return makeAssistantMessageFixture();
+  });
+  await withEnvAsync(
+    { OPENCLAW_DIAGNOSTICS: undefined, OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: undefined },
+    () => withModelTransportContext(outerContext, () => complete({ model: baseModel })),
+  );
+  expect(completionOptions()[0]).not.toHaveProperty("requestId");
+});
+
+it.each([
+  "src/agents/host-prepared-isolated-completion.ts",
+  "src/plugin-sdk/simple-completion-runtime.ts",
+])("%s does not import model/auth preparation", (entry) => {
+  expect(findSourceImportBackedges(entry, ["src/agents/simple-completion-runtime.ts"])).toEqual([]);
+});
+
+it.each<ReasoningCase>([
+  ["ultra", "high", custom],
+  ["ultra", "off", { ...custom, reasoning: false }],
+  ["ultra", undefined, { compat: { supportsReasoningEffort: false } }],
+  ["max", "max"],
+  ["off", "off"],
+  ["ultra", "xhigh"],
+  ["adaptive", "medium"],
+  [undefined, undefined],
+  ["off", "off", sonnet, "openclaw-provider-simple:anthropic:production-sonnet"],
+])(
+  "preserves transport reasoning %s as %s for %j",
+  async (reasoning, expected, patch, preparedApi) => {
+    const model: Model = { ...baseModel, ...patch };
+    const preparedModel = preparedApi ? { ...model, api: preparedApi } : model;
     mocks.prepareModel.mockReturnValueOnce(preparedModel);
-    await complete({
-      model,
-      auth: { apiKey: "ollama-local", source: "models.json (local marker)", mode: "api-key" },
-      cfg,
+    await complete({ model, options: { reasoning } });
+    if (expected === undefined) {
+      expect(completionOptions()[0]).not.toHaveProperty("reasoning");
+    }
+    expectCompletion(preparedModel, {
+      ...(expected ? { reasoning: expected } : {}),
+      ...(reasoning === "off" ? { onPayload: expect.any(Function) } : {}),
+      apiKey: auth.apiKey,
     });
-    expect(mocks.prepareModel).toHaveBeenCalledWith({
-      apiRegistry: expect.anything(),
-      model,
-      cfg,
-      auth: { mode: "api-key", authFlow: undefined },
-    });
-    expect(completionRequests()).toEqual([
-      { model: preparedModel, context, options: { apiKey: "ollama-local" } },
-    ]);
-  });
+  },
+);
 
-  it("carries strict visibility internally without adding a wire option", async () => {
-    await complete({ model: baseModel, options: { strictReasoningTags: true } });
-    const options = mocks.complete.mock.calls[0]?.[2] as object | undefined;
-    expect(reasoningTagTextPolicy.isStrict(options)).toBe(true);
-    expect(Object.keys(options ?? {})).toEqual(["apiKey"]);
+it("passes non-secret auth facts to preparation and executes its returned transport", async () => {
+  const selectedAuth: CompletionParams["auth"] = {
+    apiKey: "test-access-token",
+    source: "profile:test",
+    profileId: "test:profile",
+    mode: "oauth",
+    authFlow: "test-subscription",
+  };
+  const cfg = { plugins: { enabled: false } };
+  const preparedModel = { ...baseModel, api: "openclaw-provider-simple:test" };
+  mocks.prepareModel.mockReturnValueOnce(preparedModel);
+  await complete({ model: baseModel, auth: selectedAuth, cfg });
+  expect(mocks.prepareModel.mock.calls[0]?.[0]).toStrictEqual({
+    apiRegistry: expect.anything(),
+    model: baseModel,
+    cfg,
+    auth: { mode: selectedAuth.mode, authFlow: selectedAuth.authFlow },
   });
+  expectCompletion(preparedModel, { apiKey: selectedAuth.apiKey });
+});
+
+it("stops before transport preparation when its owner retires during host initialization", async () => {
+  const retired = new Error("Completion owner retired.");
+  let current = true;
+  const model = bindModelCompletionOwner(baseModel, {
+    run: (run) => run(),
+    assertCurrent: () => {
+      if (!current) {
+        throw retired;
+      }
+    },
+  });
+  const completion = complete({ model });
+  current = false;
+  await expect(completion).rejects.toBe(retired);
+  expect(mocks.prepareModel).not.toHaveBeenCalled();
+  expect(mocks.complete).not.toHaveBeenCalled();
+});
+
+it("gives standalone OpenCode completions distinct routing identities", async () => {
+  for (let index = 0; index < 2; index++) {
+    await complete({ model: { ...baseModel, ...opencode } });
+  }
+  const [first, second] = completionOptions();
+  const firstId = first?.headers?.["x-opencode-session"];
+  const secondId = second?.headers?.["x-opencode-session"];
+  expect(firstId).toEqual(expect.stringMatching(/[\s\S]+/));
+  expect(secondId).toEqual(expect.any(String));
+  expect(secondId).not.toBe(firstId);
+  expect(first?.sessionId).toBeUndefined();
+});
+
+it.each<{
+  name: string;
+  options?: CompletionParams["options"];
+  expectedHeaders?: Record<string, string>;
+}>([
+  {
+    name: "caller header",
+    options: { headers: { "X-OpenCode-Session": "caller-owned", "X-Custom": "keep" } },
+    expectedHeaders: { "X-OpenCode-Session": "caller-owned", "X-Custom": "keep" },
+  },
+  {
+    name: "caller session",
+    options: { sessionId: "conversation-a", headers: { "X-Custom": "keep" } },
+    expectedHeaders: { "x-opencode-session": "conversation-a", "X-Custom": "keep" },
+  },
+])("preserves routing options for $name", async ({ options, expectedHeaders }) => {
+  const original = structuredClone(options);
+  await complete({ model: { ...baseModel, ...opencode }, options });
+  expect(completionOptions()[0]).toEqual({
+    ...options,
+    apiKey: auth.apiKey,
+    ...(expectedHeaders ? { headers: expectedHeaders } : {}),
+  });
+  expect(options).toEqual(original);
+});
+
+it("carries strict visibility internally without adding a wire option", async () => {
+  await complete({ model: baseModel, options: { strictReasoningTags: true } });
+  const options = mocks.complete.mock.calls[0]?.[2] as object | undefined;
+  expect(reasoningTagTextPolicy.isStrict(options)).toBe(true);
+  expect(Object.keys(options ?? {})).toEqual(["apiKey"]);
 });

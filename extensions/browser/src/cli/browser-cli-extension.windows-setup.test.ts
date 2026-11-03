@@ -1,9 +1,6 @@
 import "../browser/extension-install-fixture.test-support.js";
-import { Command } from "commander";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createCliRuntimeCapture } from "../../test-support.js";
 import type { InstallFixture } from "../browser/extension-install-fixture.test-support.js";
 import { useExtensionInstallFixture } from "../browser/extension-install.test-support.js";
 import type {
@@ -11,6 +8,10 @@ import type {
   WindowsManagementResponse,
 } from "../browser/extension-windows-contract.js";
 import { windowsFixture } from "../browser/extension-windows.test-support.js";
+import {
+  createBrowserCliCapture,
+  runExtensionSetup,
+} from "./browser-cli-extension.test-support.js";
 
 const boundary = vi.hoisted(() => ({
   deps: undefined as InstallFixture | undefined,
@@ -44,7 +45,15 @@ vi.mock("../browser/extension-relay/owner-client.js", () => ({
   RelayOwnerClient: { connect: boundary.connect },
 }));
 const localFixture = useExtensionInstallFixture();
-const { defaultRuntime: capture, resetRuntimeCapture } = createCliRuntimeCapture();
+const { installRuntime, resetRuntimeCapture } = createBrowserCliCapture();
+type Setup = Awaited<ReturnType<typeof setup>>;
+async function expectInstallBlocked(f: Setup) {
+  await expect(f.run("install")).rejects.toThrow("__exit__:1");
+  expect(f.mutations()).toHaveLength(0);
+}
+function expectJson(f: Setup, shape: Record<string, unknown>) {
+  expect(f.json).toHaveBeenCalledWith(expect.objectContaining(shape));
+}
 afterEach(() => {
   vi.restoreAllMocks();
   vi.clearAllMocks();
@@ -55,20 +64,22 @@ afterEach(() => {
 async function setup() {
   const local = await localFixture("win32");
   const f = windowsFixture();
-  let active: string | undefined;
-  let override: WindowsManagementResponse | undefined;
-  let before: ((request: WindowsManagementRequest) => void) | undefined;
+  const state: {
+    active?: string;
+    response?: WindowsManagementResponse;
+    before?: (request: WindowsManagementRequest) => void;
+  } = {};
   const manage = vi.fn(
     async (
       _exe: string,
       request: WindowsManagementRequest,
       _options: { signal?: AbortSignal } = {},
     ) => {
-      before?.(request);
-      if (override) {
-        return override;
+      state.before?.(request);
+      if (state.response) {
+        return state.response;
       }
-      if (active && request.context?.browserProfile !== active) {
+      if (state.active && request.context?.browserProfile !== state.active) {
         return {
           ...f.response,
           ok: false,
@@ -77,10 +88,10 @@ async function setup() {
         } satisfies WindowsManagementResponse;
       }
       if (request.action === "install") {
-        active = request.context!.browserProfile;
+        state.active = request.context!.browserProfile;
         f.prepare(request.context!, request.expectedOrigins);
       }
-      return active
+      return state.active
         ? f.response
         : ({
             ...f.response,
@@ -104,31 +115,14 @@ async function setup() {
   const cfg = boundary.config.mockReset().mockReturnValue({
     browser: { profiles: { work: { driver: "extension", cdpPort: 19444 } } },
   });
-  const json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(capture.writeJson);
-  const error = vi.spyOn(defaultRuntime, "error").mockImplementation(capture.error);
-  const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(capture.exit);
+  const { json, error, exit } = installRuntime();
   boundary.readToken.mockReturnValue("synthetic-relay-token");
   boundary.connect.mockResolvedValue({
     status: async () => ({ ready: true, identity: { extensionVersion: "fixture" } }),
     close: async () => {},
   });
-  const { registerBrowserExtensionCommands } = await import("./browser-cli-extension.js");
-  async function run(action: string, profile?: string) {
-    const program = new Command();
-    registerBrowserExtensionCommands(program.command("browser"), () => ({}), local.pluginRoot);
-    await program.parseAsync(
-      [
-        "browser",
-        "extension",
-        "setup",
-        "--action",
-        action,
-        "--json",
-        ...(profile ? ["--browser-profile", profile] : []),
-      ],
-      { from: "user" },
-    );
-  }
+  const run = (action: string, profile?: string) =>
+    runExtensionSetup(local.pluginRoot, action, profile);
   return {
     ...f,
     local,
@@ -138,15 +132,7 @@ async function setup() {
     error,
     exit,
     run,
-    setActive: (value: string | undefined) => {
-      active = value;
-    },
-    setResponse: (value: WindowsManagementResponse) => {
-      override = value;
-    },
-    before: (fn: (request: WindowsManagementRequest) => void) => {
-      before = fn;
-    },
+    state,
     mutations: () => manage.mock.calls.filter(([, r]) => r.action !== "inspect"),
   };
 }
@@ -156,11 +142,7 @@ describe("Windows saved selection through the registered setup CLI", () => {
     const f = await setup();
     await f.run(action);
     expect(f.exit).not.toHaveBeenCalled();
-    expect(f.json).toHaveBeenCalledWith(
-      expect.objectContaining({
-        target: expect.objectContaining({ profile: "work", relayPort: 19444 }),
-      }),
-    );
+    expectJson(f, { target: expect.objectContaining({ profile: "work", relayPort: 19444 }) });
     expect(f.mutations()).toHaveLength(action === "install" ? 1 : 0);
     expect(f.manage.mock.calls.map(([, r]) => [r.action, r.context?.browserProfile])).toEqual([
       ["inspect", "chrome"],
@@ -182,7 +164,7 @@ describe("Windows saved selection through the registered setup CLI", () => {
     await f.run("verify", "chrome");
     expect(f.mutations()).toHaveLength(0);
     expect(boundary.readToken).not.toHaveBeenCalled();
-    expect(f.json).toHaveBeenCalledWith(expect.objectContaining({ phase: "blocked" }));
+    expectJson(f, { phase: "blocked" });
     expect(f.manage).toHaveBeenCalledTimes(1);
   });
   it.each(["absent-profile", "companion", "foreign-store"])(
@@ -193,66 +175,60 @@ describe("Windows saved selection through the registered setup CLI", () => {
         f.cfg.mockReturnValue({});
       }
       if (kind === "foreign-store") {
-        f.setResponse({
+        f.state.response = {
           ...f.response,
           ok: false,
           code: "foreign_registration",
           store: "foreign",
           installation: null,
-        });
+        };
       }
       if (kind === "companion") {
-        f.setResponse({
+        f.state.response = {
           ...f.response,
           ok: false,
           code: "context_conflict",
           mode: "companion-managed-wsl",
           installation: null,
-        });
+        };
       }
-      await expect(f.run("install")).rejects.toThrow("__exit__:1");
-      expect(f.mutations()).toHaveLength(0);
+      await expectInstallBlocked(f);
       expect(f.exit).toHaveBeenCalledWith(1);
       expect(boundary.readToken).not.toHaveBeenCalled();
     },
   );
   it("still verifies an existing relay when the native registration is genuinely missing", async () => {
     const f = await setup();
-    f.setActive(undefined);
+    f.state.active = undefined;
     await f.run("verify");
     expect(f.exit).not.toHaveBeenCalled();
     expect(f.mutations()).toHaveLength(0);
-    expect(f.json).toHaveBeenCalledWith(
-      expect.objectContaining({
-        phase: "ready",
-        connection: { state: "connected", extensionVersion: "fixture" },
-        installation: expect.objectContaining({ nativeHostRegistered: false }),
-      }),
-    );
+    expectJson(f, {
+      phase: "ready",
+      connection: { state: "connected", extensionVersion: "fixture" },
+      installation: expect.objectContaining({ nativeHostRegistered: false }),
+    });
   });
   it("blocks a changed observation before mutation", async () => {
     const f = await setup();
     let workReads = 0;
-    f.before((r) => {
+    f.state.before = (r) => {
       if (r.action === "inspect" && r.context?.browserProfile === "work" && ++workReads === 2) {
-        f.setActive("chrome");
+        f.state.active = "chrome";
       }
-    });
-    await expect(f.run("install")).rejects.toThrow("__exit__:1");
+    };
+    await expectInstallBlocked(f);
     expect(f.exit).toHaveBeenCalledWith(1);
-    expect(f.mutations()).toHaveLength(0);
   });
   it("rejects a descriptor with a changed state directory", async () => {
     const f = await setup();
     f.context.stateDir = f.context.stateDir.replace("C:", "D:");
-    await expect(f.run("install")).rejects.toThrow("__exit__:1");
-    expect(f.mutations()).toHaveLength(0);
+    await expectInstallBlocked(f);
   });
   it("rejects coherent metadata with a different approved-origin set", async () => {
     const f = await setup();
     f.prepare({ ...f.context, browserProfile: "work" });
-    await expect(f.run("install")).rejects.toThrow("__exit__:1");
-    expect(f.mutations()).toHaveLength(0);
+    await expectInstallBlocked(f);
   });
   it("shares one finite budget across serial candidates and stops on expiry", async () => {
     const f = await setup();
@@ -268,12 +244,12 @@ describe("Windows saved selection through the registered setup CLI", () => {
         },
       },
     });
-    f.before((r) => {
+    f.state.before = (r) => {
       if (r.context?.browserProfile === "beta") {
         budget.abort();
       }
-    });
-    await expect(f.run("install")).rejects.toThrow("__exit__:1");
+    };
+    await expectInstallBlocked(f);
     expect(timeout).toHaveBeenCalledExactlyOnceWith(60_000);
     expect(f.manage.mock.calls.map(([, r]) => r.context?.browserProfile)).toEqual([
       "chrome",
@@ -283,16 +259,15 @@ describe("Windows saved selection through the registered setup CLI", () => {
     expect(f.manage.mock.calls.slice(1).every((call) => call[2]?.signal === budget.signal)).toBe(
       true,
     );
-    expect(f.mutations()).toHaveLength(0);
     expect(boundary.readToken).not.toHaveBeenCalled();
   });
   it("never retries after an uncertain started mutation", async () => {
     const f = await setup();
-    f.before((r) => {
+    f.state.before = (r) => {
       if (r.action === "install") {
         throw new Error("synthetic unknown outcome");
       }
-    });
+    };
     await expect(f.run("install")).rejects.toThrow("__exit__:1");
     expect(f.mutations()).toHaveLength(1);
     expect(f.manage.mock.calls.at(-1)?.[1].action).toBe("install");
@@ -300,14 +275,14 @@ describe("Windows saved selection through the registered setup CLI", () => {
   });
   it("leaves the final race to the serialized C# mutation guard without retry", async () => {
     const f = await setup();
-    f.before((r) => {
+    f.state.before = (r) => {
       if (r.action === "install") {
-        f.setActive("chrome");
+        f.state.active = "chrome";
       }
-    });
+    };
     await f.run("install");
     expect(f.mutations()).toHaveLength(1);
     expect(f.mutations()[0]?.[1].context?.browserProfile).toBe("work");
-    expect(f.json).toHaveBeenCalledWith(expect.objectContaining({ phase: "blocked" }));
+    expectJson(f, { phase: "blocked" });
   });
 });

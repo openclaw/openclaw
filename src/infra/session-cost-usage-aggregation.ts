@@ -4,10 +4,6 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import type { SessionCostUsageRollupRow } from "./session-cost-usage-cache.kernel.js";
 import { publishSessionCostUsageUpdated } from "./session-cost-usage-events.js";
-import {
-  withUsageCostIncognitoScope,
-  type UsageCostIncognitoBinding,
-} from "./session-cost-usage-incognito.js";
 import { prepareUsageCostWorker, runUsageCostWorker } from "./session-cost-usage-worker-runtime.js";
 import type { UsageCostPendingFile } from "./session-cost-usage-worker.types.js";
 
@@ -19,61 +15,41 @@ export async function refreshCostUsageCacheForAgent(params: {
   databasePath?: string;
   maxFiles?: number;
   onRemaining?: (files: UsageCostPendingFile[]) => void;
-  sessionsDir?: string;
   storePath?: string;
   sessionFiles?: string[];
   startMs?: number;
   rebuildRows?: SessionCostUsageRollupRow[];
-  incognito?: UsageCostIncognitoBinding;
   sessionActor?: SessionActorStorageBinding;
+  waitForRefresh?: boolean;
 }): Promise<"refreshed" | "busy"> {
   const prepared = prepareUsageCostWorker(params);
-  return withUsageCostIncognitoScope<"refreshed" | "busy">(
-    prepared.incognito,
-    async (incognito) => {
-      const scoped = { ...params, incognito };
-      const agentId = normalizeAgentId(scoped.agentId);
-      try {
-        const result = await runUsageCostWorker(
-          prepared,
-          {
-            kind: "refresh",
-            maxFiles: scoped.maxFiles,
-            sessionsDir: scoped.sessionsDir,
-            sessionFiles: scoped.sessionFiles,
-            startMs: scoped.startMs,
-            rebuildRows: scoped.rebuildRows,
-          },
-          scoped.incognito,
-        );
-        if (result.kind === "busy") {
-          return "busy";
-        }
-        if (result.kind !== "refresh") {
-          throw new Error("Invalid usage refresh worker result");
-        }
-        if (result.changed) {
-          scoped.incognito?.actor.assertCurrent();
-          scoped.incognito?.authority.assertCurrent();
-          publishSessionCostUsageUpdated(agentId);
-        }
-        if (result.remainingFiles?.length) {
-          scoped.onRemaining?.(result.remainingFiles);
-        }
-        return "refreshed";
-      } catch (error) {
-        if (!getAsyncWorkSignal()?.aborted) {
-          try {
-            scoped.incognito?.actor.assertCurrent();
-            scoped.incognito?.authority.assertCurrent();
-            publishSessionCostUsageUpdated(agentId, true);
-          } catch {
-            // Retired actors cannot publish failure facts for their successors.
-          }
-        }
-        throw error;
-      }
-    },
-    true,
-  );
+  const agentId = normalizeAgentId(params.agentId);
+  try {
+    const operation = {
+      kind: "refresh",
+      maxFiles: params.maxFiles,
+      sessionFiles: params.sessionFiles,
+      startMs: params.startMs,
+      rebuildRows: params.rebuildRows,
+    } satisfies Parameters<typeof runUsageCostWorker>[1];
+    const result = await runUsageCostWorker(prepared, operation, params.waitForRefresh);
+    if (result.kind === "busy") {
+      return "busy";
+    }
+    if (result.kind !== "refresh") {
+      throw new Error("Invalid usage refresh worker result");
+    }
+    if (result.changed) {
+      publishSessionCostUsageUpdated(agentId);
+    }
+    if (result.remainingFiles?.length) {
+      params.onRemaining?.(result.remainingFiles);
+    }
+    return "refreshed";
+  } catch (error) {
+    if (!getAsyncWorkSignal()?.aborted) {
+      publishSessionCostUsageUpdated(agentId, true);
+    }
+    throw error;
+  }
 }

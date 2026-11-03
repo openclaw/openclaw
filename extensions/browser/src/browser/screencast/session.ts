@@ -2,13 +2,22 @@ import type { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import type { CDPSession, Frame, Page } from "playwright-core";
 import { getPwAiModule } from "../pw-ai-module.js";
 import { clearBrowserScreencastTokens, type BrowserScreencastTokenParams } from "./tokens.js";
-import { encodeBrowserScreencastFrame } from "./wire.js";
 
 const MAX_BUFFERED_BYTES = 2 * 1024 * 1024;
 const FRAME_INTERVAL_MS = 50;
 const sessions = new Map<string, BrowserScreencastSession>();
 
-type ScreencastFrame = Parameters<typeof encodeBrowserScreencastFrame>[1] & { sessionId: number };
+type ScreencastFrame = {
+  sessionId: number;
+  data: string;
+  metadata: {
+    deviceWidth: number;
+    deviceHeight: number;
+    scrollOffsetX: number;
+    scrollOffsetY: number;
+    timestamp?: number;
+  };
+};
 type ViewerRequester = {
   signal?: AbortSignal;
   isCurrent?: () => boolean;
@@ -296,7 +305,22 @@ class BrowserScreencastSession {
     }, FRAME_INTERVAL_MS);
     timer.unref();
     this.acknowledgements.add(timer);
-    const wire = encodeBrowserScreencastFrame(url, frame);
+    const header = Buffer.from(
+      JSON.stringify({
+        url,
+        cssWidth: frame.metadata.deviceWidth,
+        cssHeight: frame.metadata.deviceHeight,
+        scrollX: frame.metadata.scrollOffsetX,
+        scrollY: frame.metadata.scrollOffsetY,
+        ts: frame.metadata.timestamp,
+      }),
+      "utf8",
+    );
+    const jpeg = Buffer.from(frame.data, "base64");
+    const wire = Buffer.allocUnsafe(4 + header.length + jpeg.length);
+    wire.writeUInt32BE(header.length, 0);
+    header.copy(wire, 4);
+    jpeg.copy(wire, 4 + header.length);
     for (const ws of this.readyViewers) {
       this.send(ws, wire);
     }

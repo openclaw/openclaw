@@ -6,6 +6,8 @@ import {
   registerNodeSqliteDisposeCallback,
 } from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "../infra/node-sqlite.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { isPostgresSqlConnection, sqlPublicationAnchor } from "../infra/sql-connection.js";
 import { prepareSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
 import { withSqliteNativeOpen } from "../infra/sqlite-error-diagnostics.js";
 import { isSqliteWalWorkerMaintained } from "../infra/sqlite-wal-write-admission.js";
@@ -23,8 +25,8 @@ const identities = resolveGlobalSingleton(
 );
 
 /** Physical identity admitted by the native opener, never a later pathname observation. */
-export function readTrackedStateDatabaseIdentity(database: DatabaseSync) {
-  return identities.get(database);
+export function readTrackedStateDatabaseIdentity(database: EngineConnection) {
+  return identities.get(sqlPublicationAnchor(database));
 }
 
 type StateDatabaseOpenOptions = {
@@ -102,6 +104,30 @@ export function closeStateDatabaseHandle(
   options?: Parameters<OpenClawStateDatabase["walMaintenance"]["close"]>[0],
 ): { errors: unknown[]; cleanupPending: boolean } {
   const errors: unknown[] = [];
+  if (isPostgresSqlConnection(database.db)) {
+    for (const connection of [database.db, database.db.anchor]) {
+      if (connection === database.db.anchor && database.db.isOpen) {
+        break;
+      }
+      try {
+        if (connection.isOpen) {
+          connection.close();
+        }
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    let cleanupPending = database.db.isOpen || database.db.anchor.isOpen;
+    if (!cleanupPending) {
+      try {
+        database.afterClose?.();
+      } catch (error) {
+        errors.push(error);
+        cleanupPending = true;
+      }
+    }
+    return { errors, cleanupPending };
+  }
   using seal = prepareSqliteDatabaseCleanClose(database.db);
   const delegated = isSqliteWalWorkerMaintained(database.db);
   const priorCheckpointError = database.walMaintenance?.health?.state === "error";

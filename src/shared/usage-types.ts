@@ -23,6 +23,17 @@ export type SessionUsageCreator = {
   actor?: SessionCreatedActor;
 };
 
+/** Report-calendar hour facets folded in the usage worker instead of per-quarter rows. */
+type UsageLocalHours = {
+  /** Tokens per hour (0-23), tokens per weekday (24-30), messages (31-54) and errors (55-78) per hour. */
+  values: Float64Array;
+  /** At least one quarter had tokens; otherwise charts spread totals over the active span. */
+  precise: boolean;
+};
+
+/** Overview rows carry hour facets instead of UTC quarter arrays; compact output drops both. */
+export type UsageOverviewSessionSummary = SessionCostSummary & { localHours?: UsageLocalHours };
+
 export type SessionUsageEntry = {
   /** Stable row key for UI diffing; may be a session id or family key. */
   key: string;
@@ -57,7 +68,7 @@ export type SessionUsageEntry = {
   providerOverride?: string;
   modelProvider?: string;
   model?: string;
-  usage: SessionCostSummary | null;
+  usage: UsageOverviewSessionSummary | null;
   computing?: boolean;
   /** Context availability without transferring the full report in overview queries. */
   hasContextWeight?: boolean;
@@ -88,10 +99,10 @@ export type SessionsUsageAggregates = {
   costDaily?: CostUsageSummary["daily"];
   latency?: SessionLatencyStats;
   dailyLatency?: SessionDailyLatency[];
+  /** Provider attribution for the same calendar facet as costDaily, before selectedDays. */
   modelDaily?: SessionDailyModelUsage[];
   daily: Array<{
     date: string;
-    usageReport?: CostUsageSummary["totals"]["usageReport"];
     tokens: number;
     cost: number;
     messages: number;
@@ -114,6 +125,7 @@ export type SessionsUsageResult = {
   creatorOptions?: SessionUsageCreator[];
   cacheStatus?: CostUsageSummary["cacheStatus"];
   overview?: SessionsUsageOverview;
+  partial?: { reason: "time-budget" | "aggregate-boundary" | "summarizing"; message: string };
 };
 
 export type UsageOverviewOptions = {
@@ -129,14 +141,14 @@ export type UsageOverviewOptions = {
 };
 
 export type SessionsUsageOverview = {
-  /** Completeness of full-session chart sources before selected-day totals. */
-  usageReport?: CostUsageSummary["totals"]["usageReport"];
   total: number;
   unfilteredSessionCount: number;
   /** Sessions with activity in the selected population; empty comparison rows do not count. */
   selectedSessionCount: number;
   /** Matching rows in the selected population, including empty sessions eligible for detail reads. */
   selectedRowCount: number;
+  /** Every explicitly selected source has complete usage before query/day/hour filtering. */
+  selectedUsageComplete?: boolean;
   /** Explicitly selected matching rows, in selection order and independent of the table page. */
   selectedRows: SessionUsageEntry[];
   /** Comparison statistics before paging and the Recent roster selection. */
@@ -145,7 +157,6 @@ export type SessionsUsageOverview = {
     tokens: number;
     cost: number;
     errors: number;
-    usageReport?: CostUsageSummary["totals"]["usageReport"];
   };
   offset: number;
   limit: number;
@@ -158,12 +169,6 @@ export type SessionsUsageOverview = {
   hourlyMessages: number[];
   hourlyErrors: number[];
   filterOptions: Record<"agent" | "channel" | "provider" | "model" | "tool", string[]>;
-};
-
-/** Already-authorized metadata; the worker supplies usage from the owning store. */
-export type UsageOverviewSession = Omit<SessionUsageEntry, "usage" | "contextWeight"> & {
-  agentId: string;
-  instances: Array<{ sessionId?: string; sessionFile: string }>;
 };
 
 /** Aggregated report with one final, bounded comparison page. */

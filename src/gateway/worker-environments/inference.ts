@@ -45,7 +45,7 @@ import {
   type WorkerSessionTurnClaim,
 } from "./placement-record.js";
 import { getWorkerTurnInference } from "./placement-turn-claim-events.js";
-import { formatWorkerInferenceError } from "./worker-error.js";
+import { projectWorkerInferenceError } from "./worker-error.js";
 
 export type { WorkerInferenceSink } from "./inference.types.js";
 
@@ -136,9 +136,7 @@ export function createWorkerInferenceManager(options: WorkerInferenceManagerOpti
   };
   const abortEntry = (entry: ActiveInference, reason: WorkerInferenceErrorReason): void => {
     entry.abortReason ??= reason;
-    if (!entry.controller.signal.aborted) {
-      entry.controller.abort();
-    }
+    entry.controller.abort();
   };
   const durableFence = (entry: ActiveInference): WorkerInferenceErrorReason | null => {
     const processError = processFence(entry);
@@ -255,7 +253,7 @@ export function createWorkerInferenceManager(options: WorkerInferenceManagerOpti
             // captured registration still owns its cancellation receipt, never a retry
             // of an uncertain write or a provider success under retired authority.
             storedOutcome = await store.complete(
-              { ...entry.storeInput, outcome: terminalError(error.reason, rawOutcome) },
+              { ...entry.storeInput, outcome: terminalError(error.reason, outcome) },
               () => assertEntry(entry),
             );
           }
@@ -351,10 +349,12 @@ export function createWorkerInferenceManager(options: WorkerInferenceManagerOpti
     } catch (caught) {
       const error = preserveInferenceAuthorityFailure(caught, entry.authorityFailure);
       failure = { error };
+      const projected = entry.abortReason ? undefined : projectWorkerInferenceError(error);
       outcome = terminalError(
         entry.abortReason ?? "provider-error",
         undefined,
-        entry.abortReason ? undefined : formatWorkerInferenceError(error),
+        projected?.message,
+        projected?.retryAfterMs,
       );
       if (hasSqliteWorkerOutcomeUnknown(error)) {
         retainFailure(entry, error);
@@ -387,6 +387,7 @@ export function createWorkerInferenceManager(options: WorkerInferenceManagerOpti
       ),
       entry.storeInput,
     );
+    entry.execution = operation;
     providers.set(operation, entry.request.sessionId);
     void operation.then(
       () => providers.delete(operation),

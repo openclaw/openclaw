@@ -18,7 +18,7 @@ export function shouldApplyStartupContext(params: {
     return false;
   }
   const applyOn = startupContext?.applyOn;
-  return !Array.isArray(applyOn) || applyOn.length === 0 || applyOn.includes(params.action);
+  return !applyOn?.length || applyOn.includes(params.action);
 }
 
 function shiftDateStampByCalendarDays(stamp: string, offsetDays: number): string {
@@ -169,9 +169,7 @@ async function listStartupMemoryPaths(params: {
 export async function buildSessionStartupContextPrelude(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
-  nowMs?: number;
 }): Promise<string | null> {
-  const nowMs = params.nowMs ?? Date.now();
   const timezone = resolveUserTimezone(params.cfg?.agents?.defaults?.userTimezone);
   const startupContext = params.cfg?.agents?.defaults?.startupContext;
   const limits = {
@@ -190,7 +188,7 @@ export async function buildSessionStartupContextPrelude(params: {
     }),
   };
   const stamps = buildStartupMemoryDateStamps({
-    nowMs,
+    nowMs: Date.now(),
     timezone,
     dailyMemoryDays: limits.dailyMemoryDays,
   });

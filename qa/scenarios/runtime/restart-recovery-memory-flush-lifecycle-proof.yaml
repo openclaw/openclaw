@@ -27,7 +27,6 @@ scenario:
   codeRefs:
     - src/auto-reply/reply/agent-runner-memory.ts
     - src/gateway/server-chat.ts
-    - src/auto-reply/reply/restart-recovery-claim.ts
   execution:
     kind: flow
     runtime: openclaw

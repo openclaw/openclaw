@@ -21,6 +21,7 @@ import {
   McpAppViewExpiredError,
   type McpAppOperation,
   requireMcpAppInteraction,
+  supportsMcpAppInteraction,
   resolveMcpAppActiveView,
   withMcpAppActiveView,
 } from "../mcp-app-operations.js";
@@ -120,7 +121,7 @@ function operationHandler(
     const cfg = context.getRuntimeConfig();
     const requesterId = resolveMcpAppRequesterId(client);
     const active = await resolveRequestedMcpAppView(options, { cfg, requesterId });
-    const read = retainSessionScopedRead(
+    const read = await retainSessionScopedRead(
       options,
       requireString(params, "sessionKey"),
       active.view.agentId,
@@ -199,7 +200,7 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
     const sessionKey = requireString(params, "sessionKey");
     const agentId = resolveMcpAppSessionOwner(params, context.getRuntimeConfig());
     const requesterId = resolveMcpAppRequesterId(client);
-    const read = retainSessionScopedRead(options, sessionKey, agentId);
+    const read = await retainSessionScopedRead(options, sessionKey, agentId);
     const assertRequestCurrent = () => {
       read?.assertCurrent();
       if (requesterId !== resolveMcpAppRequesterId(client)) {
@@ -258,13 +259,8 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
             stop();
           }
         }
-        let interactive = false;
-        try {
-          await requireMcpAppInteraction(view);
-          interactive = true;
-        } catch {
-          // Stale board leases remain renderable but lose every interactive capability.
-        }
+        // Stale board leases remain renderable but lose every interactive capability.
+        const interactive = await supportsMcpAppInteraction(view);
         const openFilesSupported =
           interactive && Boolean(active.runtime.sessionKey) && (await canOpenMcpAppFiles(view));
         const updateModelContextSupported =

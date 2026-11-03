@@ -142,10 +142,7 @@ export async function finalizeAcpTurnOutput(params: {
     const currentMeta = currentSession?.acp;
     const identityAfterTurn = resolveSessionIdentityFromMeta(currentMeta);
     if (!isSessionIdentityPending(identityAfterTurn)) {
-      const resolvedDetails = resolveAcpThreadSessionDetailLines({
-        sessionKey: params.sessionKey,
-        meta: currentMeta,
-      });
+      const resolvedDetails = resolveAcpThreadSessionDetailLines(currentMeta);
       if (resolvedDetails.length > 0) {
         const delivered = await params.delivery.deliver("final", {
           text: prefixSystemMessage(["Session ids resolved.", ...resolvedDetails].join("\n")),

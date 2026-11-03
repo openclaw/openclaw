@@ -2,6 +2,33 @@ import { describe, expect, it } from "vitest";
 import { AgentsSchema } from "./zod-schema.agents.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
+describe("workspace file modes", () => {
+  it.each(["0600", "0620", "0640", "0660"])("accepts %s at either scope", (mode) => {
+    expect(
+      AgentsSchema.safeParse({
+        defaults: { workspaceFileMode: mode },
+        entries: { main: { workspaceFileMode: mode } },
+      }).success,
+    ).toBe(true);
+  });
+
+  it.each(["600", "0400", "0644", "0700", "1660", "0666", 0o660])(
+    "rejects unsafe or non-octal-string mode %j with a useful error",
+    (mode) => {
+      for (const config of [
+        { defaults: { workspaceFileMode: mode }, entries: { main: {} } },
+        { entries: { main: { workspaceFileMode: mode } } },
+      ]) {
+        const result = AgentsSchema.safeParse(config);
+        expect(result.success).toBe(false);
+        if (!result.success) {
+          expect(result.error.issues[0]?.message).toContain("0600, 0620, 0640, or 0660");
+        }
+      }
+    },
+  );
+});
+
 describe("agent roster ownership", () => {
   it("rejects an empty roster after load-time migration", () => {
     expect(AgentsSchema.safeParse({ entries: {} }).success).toBe(false);
@@ -54,7 +81,7 @@ describe("agent roster ownership", () => {
 describe("explicit ambient agent targets", () => {
   it("rejects an unknown explicit target", () => {
     const result = OpenClawSchema.safeParse({
-      agents: { defaults: { heartbeat: { agentId: "missing" } }, entries: { main: {} } },
+      agents: { defaults: { systemAgent: { agentId: "missing" } }, entries: { main: {} } },
     });
     expect(result.success).toBe(false);
     if (!result.success) {
@@ -62,12 +89,11 @@ describe("explicit ambient agent targets", () => {
     }
   });
 
-  it("accepts configured heartbeat, system-agent, compatibility, and Talk targets", () => {
+  it("accepts configured system-agent, compatibility, and Talk targets", () => {
     expect(
       OpenClawSchema.safeParse({
         agents: {
           defaults: {
-            heartbeat: { agentId: "ops" },
             systemAgent: { agentId: "ops" },
             authInheritance: { agentId: "ops" },
             sessionStore: { agentId: "ops" },

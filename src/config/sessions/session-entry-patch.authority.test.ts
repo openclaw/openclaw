@@ -4,13 +4,20 @@ import {
   isSessionEntryDataSql,
   observeHostDataSql,
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   patchSessionEntryCore as patchInternalSessionEntry,
+  patchSessionEntryTarget,
   recordInboundSessionMeta,
+  replaceSessionEntry,
 } from "./session-accessor.sqlite-entry.js";
+import type { SessionEntryTargetPatchScope } from "./session-accessor.types.js";
 import { createSessionCompoundWorkerFixture as fixture } from "./session-compound-worker.test-support.js";
+import { readSessionEntryInWorker } from "./session-entry-read-writable.js";
 
 // mock-isolation: Background maintenance must not race the transaction/commit authority fixture.
 vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
@@ -20,6 +27,46 @@ vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
 vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMaintenance() {} }));
 
 afterEach(() => vi.restoreAllMocks());
+
+it.each([false, true])(
+  "creates an entry and patches its admitted read target (creation witness: %s)",
+  async (useCreationIdentity) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const options = { agentId: "main" };
+      const storePath = resolveOpenClawAgentSqlitePath(options);
+      const creator = captureOpenClawAgentDatabaseExecution(
+        options,
+        useCreationIdentity
+          ? { expectedCreationIdentity: readDatabasePathIdentitySync(storePath) }
+          : undefined,
+      );
+      const scope = { ...options, storePath, sessionKey: "agent:main:creating-patch" };
+      const entry = { sessionId: "creating-patch", updatedAt: 1, label: "created in worker" };
+      try {
+        await expect(replaceSessionEntry(scope, entry)).resolves.toMatchObject(entry);
+        expect(creator.fileIdentity).toMatchObject({ kind: "file" });
+        let target: SessionEntryTargetPatchScope | undefined;
+        await expect(
+          readSessionEntryInWorker(scope, undefined, undefined, (captured) => {
+            target = captured;
+          }),
+        ).resolves.toMatchObject(entry);
+        if (!target) {
+          throw new Error("Session read did not return its admitted target");
+        }
+        const updated = { sessionId: entry.sessionId, label: "updated through read target" };
+        await expect(
+          patchSessionEntryTarget(target, () => ({ label: updated.label }), {
+            skipMaintenance: true,
+          }),
+        ).resolves.toMatchObject(updated);
+        await expect(readSessionEntryInWorker(scope)).resolves.toMatchObject(updated);
+      } finally {
+        await creator.release();
+      }
+    });
+  },
+);
 
 it("transfers an ordinary patch candidate with its final authority grant", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {

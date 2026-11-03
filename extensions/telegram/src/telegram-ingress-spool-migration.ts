@@ -65,7 +65,7 @@ async function listSpoolSources(stateDir: string): Promise<SpoolSource[]> {
     const spoolDir = path.join(telegramDir, directory.name);
     const byName = new Map<string, SpoolSource>();
     for (const candidate of (await fs.readdir(spoolDir)).toSorted()) {
-      const name = migrationSdk.resolveLegacyMigrationSourcePath?.(candidate) ?? candidate;
+      const name = migrationSdk.resolveLegacyMigrationSourcePath(candidate);
       const match = /^(\d{16})\.json(?:\.(processing|failed))?$/.exec(name);
       if (match) {
         const source = byName.get(name) ?? {
@@ -172,7 +172,7 @@ export const telegramIngressSpoolMigration = {
     let hasRefusal = false;
     const access = context.channelIngressQueues?.find((entry) => entry.channelId === "telegram");
     const { backupLegacyStateSource } = migrationSdk;
-    if (!access?.importLegacyEntries || !access.assertCurrent || !backupLegacyStateSource) {
+    if (!access?.importLegacyEntries || !access.assertCurrent) {
       return {
         changes,
         warnings: [

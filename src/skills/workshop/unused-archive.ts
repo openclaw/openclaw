@@ -7,9 +7,10 @@ import { canonicalizePath } from "../../agents/utils/paths.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadCronJobsStore } from "../../cron/store.js";
-import { resolveCronJobsStorePathFromConfig } from "../../cron/store/paths.js";
+import { resolveCronJobsStorePathFromConfigAsync } from "../../cron/store/paths.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { isSkillUsageTracked, readSkillUsage } from "../runtime/skill-usage.js";
 import type { WorkshopChange } from "./changes.kernel.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
 import {
@@ -18,7 +19,6 @@ import {
   listWorkshopSkills,
   WorkshopWriteError,
 } from "./library.js";
-import { isSkillUsageTracked, readSkillUsage } from "./skill-usage.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
 
 const log = createSubsystemLogger("skills/workshop");
@@ -30,7 +30,7 @@ const CHANGE_FEED_LIMIT = 500;
 
 /** Every scheduled job's payload text, including paused jobs; a job may run less than monthly. */
 async function readCronPayloadText(config: OpenClawConfig): Promise<string> {
-  const store = await loadCronJobsStore(resolveCronJobsStorePathFromConfig(config));
+  const store = await loadCronJobsStore(await resolveCronJobsStorePathFromConfigAsync(config));
   return store.jobs.map((job) => JSON.stringify(job.payload ?? {})).join("\n");
 }
 

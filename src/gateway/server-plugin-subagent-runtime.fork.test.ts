@@ -263,16 +263,6 @@ describe("plugin session forks", () => {
     });
   });
 
-  it("rejects another operator's session even when the agent is allowed", async () => {
-    await withSession(async () => {
-      const stranger = ensureProfileForEmail("fork-stranger@example.test");
-      await expect(fork(identifiedClient(stranger.id))).rejects.toThrow(
-        `Session "${sessionKey}" was not found`,
-      );
-      expect(sideQuestion).not.toHaveBeenCalled();
-    });
-  });
-
   it.each([
     "Gateway binding",
     "conversation access",

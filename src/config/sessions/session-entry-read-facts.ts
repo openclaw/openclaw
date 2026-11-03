@@ -1,10 +1,13 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { toUSVString } from "node:util";
 import { ok } from "@openclaw/normalization-core/result";
-import { readSqliteDatabaseWriteTokenForPath } from "../../infra/sqlite-database-admission.js";
-import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
+import {
+  getSqliteDatabaseAdmissionIdentityForPath,
+  readSqliteDatabaseWriteTokenForPath,
+} from "../../infra/sqlite-database-admission.js";
+import { runWithAsyncStore } from "../../shared/async-store.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import { captureOpenClawAgentDatabaseReadValidation } from "../../state/openclaw-agent-db-validation-cache.js";
+import { isArtifactPreservingStateRead } from "../../state/artifact-preserving-state-reads.js";
 import type { AgentDatabaseGenerationClaim } from "../../state/openclaw-agent-execution-admission-contract.js";
 import { resolveTimestamp } from "./lifecycle-timestamps.js";
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
@@ -20,14 +23,13 @@ import type {
   SessionExactEntriesWorkerRequest,
   SessionExactEntriesWorkerResult,
 } from "./session-entry-read.types.js";
-import { attachSessionEntrySnapshots } from "./session-entry-snapshot-values.js";
 import { runLockedSessionTranscriptRead } from "./session-transcript-execution-read.js";
 import { withTranscriptLockSettlement } from "./session-transcript-lock-settlement.js";
 import {
   MAX_SESSION_ROW_FACTS_KEYS,
   type SessionHistoryWorkerDatabase,
 } from "./session-transcript-worker.types.js";
-import { collectSessionEntryLookupKeys } from "./store-entry.js";
+import { collectSessionEntryLookupKeys, normalizeStoreSessionKey } from "./store-entry.js";
 
 type Database = { agentId: string; path: string };
 type WriterReads = {
@@ -37,10 +39,13 @@ type WriterReads = {
   entries: (request: SessionEntryCohortRequest) => Promise<SessionExactEntriesWorkerResult>;
 };
 type WriterReadContext = {
-  database: Database;
-  reads: WriterReads;
-  queue: <T>(read: () => Promise<T>) => Promise<T>;
-  active: boolean;
+  borrowed:
+    | {
+        database: Database;
+        reads: WriterReads;
+        queue: <T>(read: () => Promise<T>) => Promise<T>;
+      }
+    | undefined;
   parent?: WriterReadContext;
 };
 const writerReads = resolveGlobalSingleton(
@@ -56,16 +61,14 @@ export async function withSessionEntryWriterReads<T>(
 ): Promise<T> {
   return withTranscriptLockSettlement(async (queue) => {
     const context: WriterReadContext = {
-      database,
-      reads,
-      queue,
-      active: true,
+      borrowed: { database, reads, queue },
       parent: writerReads.getStore(),
     };
     try {
-      return await writerReads.run(context, run);
+      return await runWithAsyncStore(writerReads, context, run);
     } finally {
-      context.active = false;
+      // The queue also closes over this invocation; release the complete borrow from snapshots.
+      context.borrowed = undefined;
     }
   });
 }
@@ -76,17 +79,18 @@ function readFromSessionWriter<T>(
 ): Promise<T> | undefined {
   let context = writerReads.getStore();
   while (context) {
+    const borrowed = context.borrowed;
     if (
-      context.active &&
-      context.database.agentId === database.agentId &&
-      context.database.path === database.path
+      borrowed &&
+      borrowed.database.agentId === database.agentId &&
+      borrowed.database.path === database.path
     ) {
-      const reads = context.reads;
+      const reads = borrowed.reads;
       // Transcript appends have their own acceptance queue, including a nested preparation
       // queue. Joining it prevents a read from overtaking an accepted, not-yet-dispatched write.
       return (
         runLockedSessionTranscriptRead(database, () => read(reads)) ??
-        context.queue(() => read(reads))
+        borrowed.queue(() => read(reads))
       );
     }
     context = context.parent;
@@ -113,7 +117,8 @@ function eligible(request: Selection): request is Selection & { sessionKeys: rea
   return (
     !request.selection &&
     request.sessionKeys !== undefined &&
-    request.sessionKeys.length <= MAX_SESSION_ROW_FACTS_KEYS &&
+    request.sessionKeys.length + (request.replyInitializationSessionKey ? 1 : 0) <=
+      MAX_SESSION_ROW_FACTS_KEYS &&
     request.sessionKeys.every((key) => {
       const candidates = collectSessionEntryLookupKeys(key);
       return candidates.length === 1 && candidates[0] === key;
@@ -122,18 +127,16 @@ function eligible(request: Selection): request is Selection & { sessionKeys: rea
       request.projection === "full" ||
       request.projection === "sharing" ||
       request.projection === "exact") &&
-    !request.replyInitializationSessionKey &&
     !request.manualCompact &&
     !request.transcript &&
     !request.includeAuthProfileSource &&
-    !request.includeColdMetadata &&
     (request.projection !== "sharing" || (!request.lifecycleSessionKey && !request.runtimeTarget))
   );
 }
 
 function captureTarget(database: Database, sessionKey: string): FileTarget | undefined {
-  const identity = readDatabasePathIdentitySync(database.path);
-  if (!identity.key.startsWith("file:")) {
+  const identity = getSqliteDatabaseAdmissionIdentityForPath(database.path);
+  if (!identity?.key.startsWith("file:")) {
     return undefined;
   }
   return {
@@ -141,23 +144,19 @@ function captureTarget(database: Database, sessionKey: string): FileTarget | und
     database: {
       kind: "file",
       physicalIdentity: identity.key.slice("file:".length),
-      nativeLocation: identity.canonicalPath,
+      nativeLocation: database.path,
       birthtime: identity.birthtime,
     },
   };
 }
 
-/** The actor owner admits committed facts; callers keep their own live assertions. */
+/** Borrow immutable committed facts; callers own edits and live-authority assertions. */
 export function readRetainedSessionEntryFacts(
   database: Database,
   request: Selection,
   nativeOwner?: AgentDatabaseGenerationClaim,
 ): SessionEntryCohortResult | undefined {
   if (!eligible(request)) {
-    return undefined;
-  }
-  const validation = captureOpenClawAgentDatabaseReadValidation(database);
-  if (!validation || Atomics.load(new Int32Array(validation.validation.canonicalReady), 0) !== 1) {
     return undefined;
   }
   nativeOwner?.assertCurrent();
@@ -168,7 +167,8 @@ export function readRetainedSessionEntryFacts(
   const participantRecords: NonNullable<SessionEntryCohortResult["participantRecords"]> = {};
   let source: SessionEntryCohortResult["source"] | undefined;
   let databaseIdentity: SessionEntryCohortResult["databaseIdentity"] | undefined;
-  for (const key of request.sessionKeys) {
+  const sessionKeys = [...request.sessionKeys];
+  for (const key of sessionKeys) {
     const target = captureTarget(database, key);
     if (
       !target ||
@@ -180,14 +180,15 @@ export function readRetainedSessionEntryFacts(
     ) {
       return undefined;
     }
-    const facts = readSessionActorEntryFacts(target);
+    const facts = readSessionActorEntryFacts(target, projection);
     if (
       !facts ||
       (request.projection === "sharing" && (!facts.entry || facts.members === undefined)) ||
       (facts.snapshots !== "full" &&
         (projection === "full" || projection.some((field) => !facts.snapshots.includes(field)))) ||
       (request.includeMembers && facts.members === undefined) ||
-      (request.includeParticipantRecords && facts.participants === undefined)
+      (request.includeParticipantRecords && facts.participants === undefined) ||
+      (request.includeColdMetadata && facts.entry && !facts.coldArchiveAbsent)
     ) {
       return undefined;
     }
@@ -209,9 +210,19 @@ export function readRetainedSessionEntryFacts(
       birthtime: target.database.birthtime,
     };
     if (facts.entry) {
+      if (key === request.replyInitializationSessionKey && facts.entry.parentSessionKey) {
+        const parentKey = normalizeStoreSessionKey(facts.entry.parentSessionKey);
+        if (parentKey && !sessionKeys.includes(parentKey)) {
+          const candidates = collectSessionEntryLookupKeys(parentKey);
+          if (candidates.length !== 1 || candidates[0] !== parentKey) {
+            return undefined;
+          }
+          sessionKeys.push(parentKey);
+        }
+      }
       entries.push({
         sessionKey: key,
-        entry: attachSessionEntrySnapshots(facts.entry, {}, projection),
+        entry: facts.entry,
       });
       if (facts.members) {
         members[key] = facts.members;
@@ -270,6 +281,7 @@ export function readRetainedSessionEntryFacts(
     members,
     participantRecords,
     lifecycleTimestamps,
+    ...(request.includeColdMetadata ? { coldArchives: [] } : {}),
     ...(runtimeTarget ? { runtimeTarget: { ...runtimeTarget, storePath: database.path } } : {}),
     source,
     databaseIdentity,
@@ -305,21 +317,35 @@ export function retainSessionEntryReadFacts(
   const byKey = new Map(
     result.entries.map(({ sessionKey, entry }) => [toUSVString(sessionKey), entry]),
   );
-  for (const key of request.sessionKeys) {
-    const target = captureTarget(database, key);
-    if (
-      !target ||
-      target.database.physicalIdentity !== result.source.databaseIdentity ||
-      target.database.birthtime !== result.source.databaseBirthtime
-    ) {
-      return;
+  const sessionKeys = [...request.sessionKeys];
+  const parent = request.replyInitializationSessionKey
+    ? byKey.get(request.replyInitializationSessionKey)?.parentSessionKey
+    : undefined;
+  const parentKey = parent ? normalizeStoreSessionKey(parent) : undefined;
+  if (parentKey && !sessionKeys.includes(parentKey)) {
+    const candidates = collectSessionEntryLookupKeys(parentKey);
+    if (candidates.length === 1 && candidates[0] === parentKey) {
+      sessionKeys.push(parentKey);
     }
-    const previous = readSessionActorEntryFacts(target);
+  }
+  if (sessionKeys.length === 0) {
+    return;
+  }
+  const target = captureTarget(database, sessionKeys[0]!);
+  if (
+    !target ||
+    target.database.physicalIdentity !== result.source.databaseIdentity ||
+    target.database.birthtime !== result.source.databaseBirthtime
+  ) {
+    return;
+  }
+  const entries = sessionKeys.map((key) => {
+    const previous = readSessionActorEntryFacts({ ...target, sessionKey: toUSVString(key) });
     const entry = byKey.get(toUSVString(key));
     const fields = request.projection === "sharing" ? [] : (request.snapshotFields ?? "full");
-    retainSessionActorEntryFacts(
-      target,
-      {
+    return {
+      sessionKey: toUSVString(key),
+      facts: {
         entry: previous?.entry && entry ? { ...previous.entry, ...entry } : entry,
         snapshots:
           previous?.snapshots === "full" || fields === "full"
@@ -330,10 +356,10 @@ export function retainSessionEntryReadFacts(
           ? (result.participantRecords[key] ?? [])
           : previous?.participants,
         projection: previous?.projection,
-      },
-      result.databaseIdentity.incarnation,
-    );
-  }
+      } satisfies Parameters<typeof retainSessionActorEntryFacts>[1][number]["facts"],
+    };
+  });
+  retainSessionActorEntryFacts(target.database, entries, result.databaseIdentity.incarnation);
 }
 
 /**
@@ -356,7 +382,11 @@ export async function readSessionEntriesWithRetainedFacts(
   if (cached) {
     return cached;
   }
-  const before = readSqliteDatabaseWriteTokenForPath(database.path);
+  const before =
+    !isArtifactPreservingStateRead("agent") ||
+    getSqliteDatabaseAdmissionIdentityForPath(database.path)
+      ? readSqliteDatabaseWriteTokenForPath(database.path)
+      : undefined;
   const result = await read();
   retainSessionEntryReadFacts(database, request, result, before);
   return result;
@@ -382,7 +412,11 @@ export async function readSessionEntryWithRetainedFacts(
   if (cached) {
     return { ...ok(cached.entries[0]?.entry), source: cached.source };
   }
-  const before = readSqliteDatabaseWriteTokenForPath(database.path);
+  const before =
+    !isArtifactPreservingStateRead("agent") ||
+    getSqliteDatabaseAdmissionIdentityForPath(database.path)
+      ? readSqliteDatabaseWriteTokenForPath(database.path)
+      : undefined;
   const result = await read();
   if (result.ok && result.facts) {
     retainSessionEntryReadFacts(database, request, result.facts, before);

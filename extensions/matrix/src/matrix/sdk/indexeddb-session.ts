@@ -1,3 +1,5 @@
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
+import { materializeErrorStack } from "openclaw/plugin-sdk/error-runtime";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 
 type SessionState = "active" | "retiring" | "retired" | "failed";
@@ -25,14 +27,11 @@ function retiredError(): DOMException {
 }
 
 function trackTransaction(session: Session, transaction: IDBTransaction): void {
-  let settle!: () => void;
-  const pending = new Promise<void>((resolve) => {
-    settle = resolve;
-  });
-  session.transactions.add(pending);
+  const pending = createDeferred();
+  session.transactions.add(pending.promise);
   const complete = () => {
-    session.transactions.delete(pending);
-    settle();
+    session.transactions.delete(pending.promise);
+    pending.resolve();
   };
   transaction.addEventListener("complete", complete, { once: true });
   transaction.addEventListener("abort", complete, { once: true });
@@ -66,14 +65,11 @@ function openForSession(
     throw retiredError();
   }
   const request = factory.open(name, version);
-  let settle!: () => void;
-  const pending = new Promise<void>((resolve) => {
-    settle = resolve;
-  });
-  session.pendingOpens.add(pending);
+  const pending = createDeferred();
+  session.pendingOpens.add(pending.promise);
   const complete = () => {
-    session.pendingOpens.delete(pending);
-    settle();
+    session.pendingOpens.delete(pending.promise);
+    pending.resolve();
   };
   request.addEventListener("upgradeneeded", () => {
     admitConnection(session, request.result);
@@ -94,6 +90,7 @@ function openForSession(
           request.result.close();
         }
       } catch (error) {
+        materializeErrorStack(error);
         session.failure = { error };
         session.state = "failed";
       } finally {
@@ -178,6 +175,7 @@ export function beginMatrixSdkIndexedDbSession(
           // retired session. The registry remains closed until a successor begins.
           session.connections.clear();
         } catch (error) {
+          materializeErrorStack(error);
           session.state = "failed";
           throw error;
         }

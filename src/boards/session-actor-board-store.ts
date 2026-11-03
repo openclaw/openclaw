@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type { SessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
+import { readSessionActorStorageResult } from "../config/sessions/session-actor-storage-result.js";
 import { restoreBoardError } from "./board-store-errors.js";
 import type {
   BoardSessionTarget,
@@ -25,7 +26,7 @@ export function createSessionActorBoardStore(
     if (outcome.kind === "rolled-back") {
       throw restoreBoardError(Object.assign(new Error(outcome.error.message), outcome.error));
     }
-    return outcome.value;
+    return readSessionActorStorageResult(outcome);
   };
   const readSnapshot = async <T>(
     target: BoardSessionTarget,

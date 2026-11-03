@@ -4,10 +4,45 @@ import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-en
 import {
   readExactSessionEntryRow,
   readSessionEntryRowScan,
+  readSessionEntryTargetRow,
   type ResolvedSessionEntryRow,
 } from "./session-accessor.sqlite-entry-read.js";
 import type { SessionEntryWindowFacts } from "./session-entry-window.types.js";
+import { normalizeStoreSessionKey } from "./store-entry.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
+
+export function resolveLifecyclePrimaryEntry(
+  database: Pick<OpenClawAgentDatabase, "agentId" | "db">,
+  target: { canonicalKey: string; storeKeys: string[] },
+  options: { allowCanonicalMove?: boolean; includeWindowFacts?: true } = {},
+): SqliteLifecycleTargetSnapshot[number] | undefined {
+  const row = readSessionEntryTargetRow(database, target, options);
+  return row?.entry ? captureSessionEntrySnapshot({ entry: row.entry, row: row.row }) : undefined;
+}
+
+export function readLifecycleTargetSnapshot(
+  database: Pick<OpenClawAgentDatabase, "agentId" | "db">,
+  target: { canonicalKey: string; storeKeys: string[] },
+  options: { allowCanonicalMove?: boolean; includeWindowFacts?: true } = {},
+): SqliteLifecycleTargetSnapshot {
+  const normalized = normalizeLifecycleTarget(target);
+  const row = resolveLifecyclePrimaryEntry(database, normalized, options);
+  return row ? [row] : [];
+}
+
+export function normalizeLifecycleTarget(target: {
+  canonicalKey: string;
+  storeKeys: readonly string[];
+}): {
+  canonicalKey: string;
+  storeKeys: string[];
+} {
+  const canonicalKey = normalizeStoreSessionKey(target.canonicalKey);
+  return {
+    canonicalKey,
+    storeKeys: uniqueStrings([canonicalKey, ...target.storeKeys.map(normalizeStoreSessionKey)]),
+  };
+}
 
 /** Exact reads already own nested values; retain them through identity publication. */
 export function readSessionIdentitySnapshot(

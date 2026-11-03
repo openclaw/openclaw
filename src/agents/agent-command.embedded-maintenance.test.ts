@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
+import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
+import { getCurrentSessionControllerOwner } from "../sessions/session-controller.context.js";
 import {
   agentCommand,
   agentCommandFromGatewayIngress,
@@ -37,6 +39,19 @@ registerAgentCommandCompactionTestHooks();
 
 function makeEmbeddedResult(sessionId: string, text: string) {
   return makeResult({ sessionId, text, runner: "embedded", agentHarnessId: "openclaw" });
+}
+
+async function advanceWork(advanceClock: () => void) {
+  advanceClock();
+  const operation = getCurrentSessionControllerOwner();
+  if (!operation) {
+    throw new Error("Expected the simulated command or maintenance owner");
+  }
+  // The mocked model/checkpoint has completed work, not silently stalled.
+  // Sample the real watchdog so its one-second timer cannot decide the test outcome.
+  operation.watchdog.progress("semantic", "fixture:work_completed");
+  await operation.watchdog.tick();
+  operation.abortSignal.throwIfAborted();
 }
 
 describe("agentCommand embedded maintenance", () => {
@@ -75,24 +90,67 @@ describe("agentCommand embedded maintenance", () => {
     expect(foreground.pendingTokens).toBe(100);
   });
 
+  it("schedules retained maintenance when terminal cleanup rejects", async () => {
+    const sessionId = "maintenance-after-cleanup-rejection";
+    const sessionKey = `agent:main:explicit:${sessionId}`;
+    const cleanupError = new Error("terminal cleanup failed");
+    let terminalDeliveryCalls = 0;
+    state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
+      params.onSuccessfulAuthProfile?.({});
+      params.onCompactionRequestBudget?.({
+        contextWindow: 32_768,
+        reserveTokens: 8_192,
+        fixedTokens: 4_000,
+        pendingTokens: 100,
+      });
+      return makeEmbeddedResult(sessionId, "done");
+    });
+
+    await expect(
+      agentCommand({
+        message: "continue",
+        sessionId,
+        sessionKey,
+        beforeTerminalDelivery: async () => {
+          terminalDeliveryCalls += 1;
+          if (terminalDeliveryCalls === 2) {
+            throw cleanupError;
+          }
+        },
+      }),
+    ).rejects.toBe(cleanupError);
+    await waitForSessionMaintenance(sessionKey);
+
+    expect(state.runSessionCompactionIfNeededMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        compactionRequestBudget: expect.objectContaining({ pendingTokens: 0 }),
+      }),
+    );
+  });
+
   it.each([462_153, 600_000])(
     "shares the command allowance after %i ms of foreground work",
     async (foregroundMs) => {
       const startedAt = Date.now();
       let now = startedAt;
       const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+      const monotonicClock = vi.spyOn(performance, "now").mockImplementation(() => now - startedAt);
       const sessionId = `maintenance-budget-${foregroundMs}`;
       const sessionKey = `agent:main:explicit:${sessionId}`;
       const text = "completed foreground answer";
       let flushTimeout: number | undefined;
       state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
         params.onSuccessfulAuthProfile?.({});
-        now += foregroundMs;
+        await advanceWork(() => {
+          now += foregroundMs;
+        });
         return makeEmbeddedResult(sessionId, text);
       });
       state.runMemoryFlushIfNeededMock.mockImplementationOnce(async (params) => {
         flushTimeout = params.followupRun.run.timeoutMs;
-        now = startedAt + 600_000;
+        await advanceWork(() => {
+          now = startedAt + 600_000;
+        });
         return { sessionEntry: params.sessionEntry, outcome: "completed" };
       });
       try {
@@ -111,12 +169,45 @@ describe("agentCommand embedded maintenance", () => {
       } finally {
         await waitForSessionMaintenance(sessionKey);
         clock.mockRestore();
+        monotonicClock.mockRestore();
       }
     },
   );
 
+  it("keeps the maintenance allowance when the wall clock steps back", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    const sessionId = "maintenance-clock-rewind";
+    const sessionKey = `agent:main:explicit:${sessionId}`;
+    let flushTimeout: number | undefined;
+    let compactionTimeout: number | undefined;
+    state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
+      params.onSuccessfulAuthProfile?.({});
+      await vi.advanceTimersByTimeAsync(400);
+      return makeEmbeddedResult(sessionId, "answer after clock rewind");
+    });
+    state.runMemoryFlushIfNeededMock.mockImplementationOnce(async (params) => {
+      flushTimeout = params.followupRun.run.timeoutMs;
+      vi.setSystemTime(Date.now() - 600_000);
+      await vi.advanceTimersByTimeAsync(200);
+      return { sessionEntry: params.sessionEntry, outcome: "completed" };
+    });
+    state.runSessionCompactionIfNeededMock.mockImplementationOnce(async (params) => {
+      compactionTimeout = params.followupRun.run.timeoutMs;
+      return params.sessionEntry;
+    });
+    try {
+      await agentCommand({ message: "continue", sessionId, sessionKey, timeout: "1" });
+      await waitForSessionMaintenance(sessionKey);
+      expect(flushTimeout).toBe(600);
+      expect(compactionTimeout).toBe(400);
+    } finally {
+      await waitForSessionMaintenance(sessionKey);
+      vi.useRealTimers();
+    }
+  });
+
   it("drains expired maintenance without changing the completed reply", async () => {
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     const sessionId = "maintenance-expiry";
     const successorSessionId = "maintenance-expiry-successor";
     const sessionKey = `agent:main:explicit:${sessionId}`;
@@ -210,19 +301,25 @@ describe("agentCommand embedded maintenance", () => {
   });
 
   it("preserves unlimited command maintenance after a long foreground turn", async () => {
-    let now = Date.now();
+    const startedAt = Date.now();
+    let now = startedAt;
     const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const monotonicClock = vi.spyOn(performance, "now").mockImplementation(() => now - startedAt);
     const sessionId = "maintenance-unlimited";
     const sessionKey = `agent:main:explicit:${sessionId}`;
     let flushTimeout: number | undefined;
     state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
       params.onSuccessfulAuthProfile?.({});
-      now += 1_200_000;
+      await advanceWork(() => {
+        now += 1_200_000;
+      });
       return makeEmbeddedResult(sessionId, "unlimited answer");
     });
     state.runMemoryFlushIfNeededMock.mockImplementationOnce(async (params) => {
       flushTimeout = params.followupRun.run.timeoutMs;
-      now += 600_000;
+      await advanceWork(() => {
+        now += 600_000;
+      });
       return { sessionEntry: params.sessionEntry, outcome: "completed" };
     });
     try {
@@ -240,6 +337,7 @@ describe("agentCommand embedded maintenance", () => {
     } finally {
       await waitForSessionMaintenance(sessionKey);
       clock.mockRestore();
+      monotonicClock.mockRestore();
     }
   });
 
@@ -400,10 +498,12 @@ describe("agentCommand embedded maintenance", () => {
     ).toHaveLength(1);
     expect(state.runMemoryFlushIfNeededMock).toHaveBeenCalledOnce();
     expect(state.runMemoryFlushIfNeededMock).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionEntry: expect.objectContaining({ totalTokens: 904_869 }) }),
+      expect.objectContaining({
+        sessionEntry: expect.objectContaining({ totalTokens: lastCallUsage.total }),
+      }),
     );
     expect(storedBeforeMaintenance).toMatchObject({
-      totalTokens: 904_869,
+      totalTokens: lastCallUsage.total,
       inputTokens: lastCallUsage.input,
       outputTokens: lastCallUsage.output,
       cacheRead: lastCallUsage.cacheRead,
@@ -515,7 +615,7 @@ describe("agentCommand embedded maintenance", () => {
             compactionCount: 7,
             totalTokens: 777,
             totalTokensFresh: true,
-            totalTokensVersion: 1,
+            totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
           }));
         }
         const entry = loadSessionEntry(target);
@@ -575,7 +675,6 @@ describe("agentCommand embedded maintenance", () => {
     { name: "native harness ownership", agentHarnessId: "codex" },
     { name: "an unavailable auth selection", observeAuth: false },
     { name: "disabled proactive compaction", enabled: false },
-    { name: "a heartbeat", opts: { bootstrapContextRunKind: "heartbeat" } },
   ];
   it.each(excludedEmbeddedRuns)("does not add command compaction for $name", async (testCase) => {
     const sessionId = "excluded-embedded-compaction";
@@ -617,9 +716,9 @@ describe("agentCommand embedded maintenance", () => {
   it.each(
     (
       [
-        ["restart-during-compaction", "reply owned by restart recovery"],
-        ["restart-after-successful-compaction", "reply owned by restart recovery after compaction"],
-        ["stale-during-compaction", "reply owned by the next gateway lifecycle"],
+        ["restart-during-compaction", "reply awaiting transport before restart"],
+        ["restart-after-successful-compaction", "reply awaiting transport after compaction"],
+        ["stale-during-compaction", "reply retained by its original gateway lifecycle"],
       ] as const
     ).map(([phase, text]) => ({ phase, text })),
   )("does not deliver or clear the pending CLI final for $phase", async ({ phase, text }) => {
@@ -628,13 +727,21 @@ describe("agentCommand embedded maintenance", () => {
     const restart = phase !== "stale-during-compaction";
     const sessionKey = `agent:main:explicit:${sessionId}`;
     const abortController = new AbortController();
+    let pendingFinalDelivery: SessionEntry["pendingFinalDelivery"];
     state.runAgentAttemptMock.mockImplementationOnce(async () => {
       return makeResult({ sessionId, text, runner, agentHarnessId: "openclaw" });
     });
     const compact = async (params: { sessionEntry?: SessionEntry }) => {
-      expect(params.sessionEntry).toMatchObject({
-        pendingFinalDelivery: { kind: "replayable", text },
+      pendingFinalDelivery = params.sessionEntry?.pendingFinalDelivery;
+      expect(pendingFinalDelivery).toEqual({
+        kind: "transport-only",
+        intentId: expect.any(String),
+        deliveries: [{ id: expect.any(String), state: "prepared" }],
+        createdAt: expect.any(Number),
+        context: { channel: "discord", to: "discord:dm:123", accountId: "main" },
       });
+      expect(pendingFinalDelivery?.intentId).not.toBe("");
+      expect(pendingFinalDelivery?.deliveries?.[0]?.id).not.toBe("");
       if (restart) {
         abortController.abort(createAgentRunRestartAbortError());
       } else {
@@ -659,14 +766,11 @@ describe("agentCommand embedded maintenance", () => {
         deliver: true,
         abortSignal: abortController.signal,
       }),
-    ).rejects.toThrow(
-      restart ? "agent run aborted for restart" : "Agent run belongs to a stale gateway lifecycle",
-    );
+    ).rejects.toThrow("agent run aborted for restart");
 
+    expect(state.runCliTurnCompactionLifecycleMock).toHaveBeenCalledOnce();
     expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
-    expect(findStoredSessionEntry(sessionKey)).toMatchObject({
-      pendingFinalDelivery: { kind: "replayable", text },
-    });
+    expect(findStoredSessionEntry(sessionKey)?.pendingFinalDelivery).toEqual(pendingFinalDelivery);
   });
 
   it("preserves the completed embedded reply when background maintenance loses its lifecycle", async () => {
@@ -721,7 +825,7 @@ describe("agentCommand embedded maintenance", () => {
       const sessionId = `${runner}-background-failure-${expiry}`;
       const sessionKey = `agent:main:explicit:${sessionId}`;
       if (expiry) {
-        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+        vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
       }
       try {
         state.runAgentAttemptMock.mockImplementationOnce(async (params) => {

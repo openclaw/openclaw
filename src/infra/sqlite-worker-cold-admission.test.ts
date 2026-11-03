@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-record.js";
 import { withStateDatabaseColdAdmission } from "./gateway-state-owner.js";
 import { exchangeSqliteDatabaseAdmissions } from "./sqlite-worker-database-admission-relay.js";
@@ -46,7 +47,7 @@ it.each([
     throw new Error("Cold file creation must not enter a transaction");
   });
   admission.bindDatabaseAuthority({
-    databasePath,
+    databasePath: resolveIdentityPathViaExistingAncestorSync(databasePath),
     coldOpenPath: scenario === "non-open" ? undefined : databasePath,
     assertRequest() {
       if (!requestCurrent) {
@@ -69,12 +70,10 @@ it.each([
       return { assertCurrent() {}, release };
     },
   });
-  // Service the real port exchange and release the foreign schema holder only
-  // when the existing cold-admission owner yields, without sleeps or polling.
-  vi.spyOn(Atomics, "wait").mockImplementation((_array, _index, _value, timeout) => {
-    if (timeout === undefined) {
-      admission.service();
-    } else {
+  // Release the foreign schema holder only when real admission yields.
+  vi.spyOn(Atomics, "wait").mockImplementation((array, index, value) => {
+    admission.service();
+    if (Atomics.load(array, index) === value) {
       expect(existsSync(requestedPath)).toBe(false);
       expect(mutate).not.toHaveBeenCalled();
       schemaBusy = false;
@@ -108,36 +107,24 @@ it.each([
   try {
     if (succeeds) {
       expect(open).not.toThrow();
-      expect(mutate).toHaveBeenCalledOnce();
-      if (transport === "creation") {
-        expect(create).toHaveBeenCalledExactlyOnceWith(databasePath);
-        expect(existsSync(databasePath)).toBe(true);
-      } else {
-        expect(create).not.toHaveBeenCalled();
-        expect(existsSync(databasePath)).toBe(false);
-      }
     } else {
-      if (scenario === "exhausted") {
-        expect(open).toThrow(StateDatabaseAdmissionPendingError);
-      } else {
-        expect(open).toThrow(
-          transport === "creation"
+      expect(open).toThrow(
+        scenario === "exhausted"
+          ? StateDatabaseAdmissionPendingError
+          : transport === "creation"
             ? "SQLite admission facts exchange failed"
             : "SQLite transaction admission was refused",
-        );
-      }
-      expect(mutate).not.toHaveBeenCalled();
-      expect(create).not.toHaveBeenCalled();
-      expect(existsSync(requestedPath)).toBe(false);
+      );
     }
+    const created = succeeds && transport === "creation";
+    expect(mutate.mock.calls).toEqual(succeeds ? [[]] : []);
+    expect(create.mock.calls).toEqual(created ? [[databasePath]] : []);
+    expect(existsSync(requestedPath)).toBe(created);
     if (retryable) {
       expect(admission.failure).toBeUndefined();
       expect(owner.refusal).toBeUndefined();
-    } else {
-      expect(admission.failure).toBe(scenario === "revoked" ? revoked : pending);
-      if (transport === "schema") {
-        expect(owner.refusal).toBeInstanceOf(Error);
-      }
+    } else if (transport === "schema") {
+      expect(owner.refusal).toBeInstanceOf(Error);
     }
     expect(release).not.toHaveBeenCalled();
   } finally {

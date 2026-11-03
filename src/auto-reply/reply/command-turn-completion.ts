@@ -23,7 +23,7 @@ export async function finishCommandTurn(params: {
       await resolveCommandAuthorizationAsync({ ctx, cfg, commandAuthorized: ctx.CommandAuthorized })
     ).isAuthorizedSender
   ) {
-    runState.replyCompletion = resolveReplyCompletion("optional", "empty");
+    runState.replyCompletion = resolveReplyCompletion("optional", "silent");
   }
   return reply;
 }

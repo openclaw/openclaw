@@ -1,7 +1,5 @@
-import {
-  assertTransactionUsable,
-  runSqliteWorkerTransactionSync,
-} from "../../infra/sqlite-transaction.js";
+import { runSqliteWorkerTransactionSync } from "../../infra/sqlite-transaction.js";
+import { bindSqliteWorkerDatabase } from "../../infra/sqlite-worker-binding.js";
 import type { SqliteWorkerBackend } from "../../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerDatabaseContext } from "../../infra/sqlite-worker-database-context.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../state/openclaw-state-db-contract.js";
@@ -14,7 +12,7 @@ export function bindSqliteWorkerBackend(
   context: SqliteWorkerDatabaseContext,
 ): SqliteWorkerBackend<ContextEngineTurnOutboxWorkerOperations> {
   const db = context.database;
-  return {
+  return bindSqliteWorkerDatabase<ContextEngineTurnOutboxWorkerOperations>(db, {
     execute(command) {
       return runSqliteWorkerTransactionSync(
         context,
@@ -26,12 +24,5 @@ export function bindSqliteWorkerBackend(
         },
       );
     },
-    assertSettled() {
-      assertTransactionUsable(db);
-      if (db.isTransaction) {
-        throw new Error("Context-engine turn outbox transaction did not settle");
-      }
-    },
-    close() {},
-  };
+  });
 }

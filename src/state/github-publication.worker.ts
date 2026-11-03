@@ -1,6 +1,5 @@
 import * as personal from "../gateway/github-personal-publication-store.worker.js";
 import { selectGitHubPublicationDeferralsInDatabase } from "../gateway/github-publication-defer.worker.js";
-import { captureGitHubPublicationChanges } from "../gateway/github-publication-events.js";
 import { githubPublicationEffectFacts } from "../gateway/github-publication-execution-effects.js";
 import {
   claimGitHubPublicationExecutionInDatabase,
@@ -10,8 +9,12 @@ import {
   deferGitHubPublicationRequestsInDatabase,
 } from "../gateway/github-publication-store.worker.js";
 import * as repository from "../gateway/github-repository-publication-store.worker.js";
+import { sqlPublicationAnchor } from "../infra/sql-connection.js";
 import { deferSqliteWorkerCommitReceipt } from "../infra/sqlite-worker-operation-admission.js";
-import { captureGitHubPublicationWorkerReceipt } from "./github-publication-receipts.js";
+import {
+  captureGitHubPublicationMutation,
+  commitGitHubPublicationBookkeeping,
+} from "./github-publication-bookkeeping.worker.js";
 import { publicationRequestOperations } from "./github-publication-request.worker.js";
 import { readGitHubPublicationSessionLifecycle } from "./github-publication-session-lifecycles.worker.js";
 import type { GitHubPublicationSourcePredicate } from "./github-publication-source-contract.js";
@@ -19,20 +22,18 @@ import {
   assertGitHubPublicationConnectionSource,
   assertGitHubPublicationWorktreeSource,
 } from "./github-publication-source.kernel.js";
-import { assertGitHubPublicationWorkerSourceCurrent } from "./github-publication-source.worker.js";
+import {
+  assertGitHubPublicationWorkerSourceCurrent,
+  withGitHubPublicationSourceTransaction,
+} from "./github-publication-source.worker.js";
 import type {
   PersonalPublicationMutation,
   SharedPublicationMutation,
   RepositoryPublicationMutation,
-  PublicationMutationReceipt,
   PublicationMutationResult,
 } from "./github-publication-worker.types.js";
-import { publicationReadOperations } from "./github-publication.read.worker.js";
 import type { PublicationWorkerOperations } from "./github-publication.worker-contract.js";
-import {
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabase,
-} from "./openclaw-state-db.js";
+import type { OpenClawStateDatabase } from "./openclaw-state-db.js";
 import type { WorkerOperationHandlers } from "./worker-operation-registry.js";
 
 function assertCustody(database: OpenClawStateDatabase) {
@@ -41,45 +42,30 @@ function assertCustody(database: OpenClawStateDatabase) {
   }
 }
 
-function requiresSource(
-  kind: PublicationMutationReceipt["kind"],
-  input: PersonalPublicationMutation | RepositoryPublicationMutation | SharedPublicationMutation,
-): boolean {
-  if (input.operation === "claim") {
-    return kind === "personal";
-  }
-  return input.operation === "bindWorkspaceSnapshot" || input.operation === "checkpoint";
-}
-
 function mutate(
   database: OpenClawStateDatabase,
-  operation: string,
+  input: { operation: string; source?: GitHubPublicationSourcePredicate },
+  kind: PublicationMutationResult["kind"],
   write: () => PublicationMutationResult,
-  source?: GitHubPublicationSourcePredicate,
 ) {
-  const capture = () =>
-    captureGitHubPublicationWorkerReceipt(database.db, () => {
-      const { value, changes } = captureGitHubPublicationChanges(write);
-      return { ...value, changes };
-    });
-  if (source) {
-    assertGitHubPublicationWorkerSourceCurrent(database.db);
-    const receipt = capture();
-    assertMutationSource(database, receipt, source);
-    assertGitHubPublicationWorkerSourceCurrent(database.db);
-    deferSqliteWorkerCommitReceipt(database.db, receipt);
-    return receipt;
+  const requiresSource =
+    (input.operation === "claim" && kind === "personal") ||
+    input.operation === "bindWorkspaceSnapshot" ||
+    input.operation === "checkpoint";
+  if (requiresSource && !input.source) {
+    throw new Error("GitHub publication action requires a typed source.");
   }
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      // Accepted bookkeeping can settle after caller revocation; it grants no GitHub action.
-      const receipt = capture();
-      deferSqliteWorkerCommitReceipt(db, receipt);
-      return receipt;
-    },
-    { database },
-    { operationLabel: `github-publication.${operation}` },
-  );
+  const source = input.source;
+  if (source) {
+    return withGitHubPublicationSourceTransaction(database, source, () => {
+      assertGitHubPublicationWorkerSourceCurrent(database.db);
+      const receipt = captureGitHubPublicationMutation(database, write);
+      assertMutationSource(database, receipt, source);
+      assertGitHubPublicationWorkerSourceCurrent(database.db);
+      deferSqliteWorkerCommitReceipt(sqlPublicationAnchor(database.db), receipt);
+    });
+  }
+  return commitGitHubPublicationBookkeeping(database, input.operation, write);
 }
 
 function assertMutationSource(
@@ -142,11 +128,15 @@ function assertMutationSource(
     if (!lifecycle || lifecycle.lifecycle_revision !== selector.lifecycleRevision) {
       throw new Error("GitHub publication transition source lifecycle changed.");
     }
-    assertGitHubPublicationWorktreeSource(source, {
-      id: row.worktree_id,
-      repoFingerprint: row.repository_fingerprint,
-      branch: row.branch,
-    });
+    assertGitHubPublicationWorktreeSource(
+      source,
+      {
+        id: row.worktree_id,
+        repoFingerprint: row.repository_fingerprint,
+        branch: row.branch,
+      },
+      result.kind === "shared",
+    );
   }
   if (result.kind === "personal") {
     for (const row of result.rows) {
@@ -172,7 +162,7 @@ function personalMutation(database: OpenClawStateDatabase, input: PersonalPublic
     case "complete":
     case "recordEffect":
     case "interrupt": {
-      const { values } = githubPublicationEffectFacts(input, "needs_confirmation");
+      const values = githubPublicationEffectFacts(input, "needs_confirmation");
       return [
         personal.writePersonalGitHubPublicationInDatabase(
           database,
@@ -180,16 +170,9 @@ function personalMutation(database: OpenClawStateDatabase, input: PersonalPublic
           input.instanceId,
           input.executionId,
           values,
-          false,
-          admitted,
         ),
       ];
     }
-    case "restart":
-      return personal.requirePersonalGitHubPublicationConfirmationInDatabase(
-        database,
-        input.instanceId,
-      );
     case "report": {
       const row = personal.markPersonalGitHubPublicationReportedInDatabase(
         database,
@@ -219,7 +202,7 @@ function repositoryMutation(database: OpenClawStateDatabase, input: RepositoryPu
     case "complete":
     case "recordEffect":
     case "interrupt": {
-      const { values } = githubPublicationEffectFacts(
+      const values = githubPublicationEffectFacts(
         input,
         input.row.owner_profile_id === null ? "requested" : "needs_confirmation",
       );
@@ -230,8 +213,6 @@ function repositoryMutation(database: OpenClawStateDatabase, input: RepositoryPu
           input.instanceId,
           input.executionId,
           values,
-          false,
-          authority,
         ),
       ];
     }
@@ -323,14 +304,13 @@ function sharedMutation(database: OpenClawStateDatabase, input: SharedPublicatio
 }
 
 export const publicationOperations = {
-  ...publicationReadOperations,
   ...publicationRequestOperations,
   "githubPublications.maintenance": (
     input: PublicationWorkerOperations["githubPublications.maintenance"]["input"],
     { open },
   ) => {
     const database = open();
-    return mutate(database, input.operation, () => {
+    return mutate(database, input, "maintenance", () => {
       if (input.operation === "report") {
         personalMutation(database, input);
         sharedMutation(database, input);
@@ -356,59 +336,35 @@ export const publicationOperations = {
     { open },
   ) => {
     const database = open();
-    if (requiresSource("shared", input) && !input.source) {
-      throw new Error("GitHub publication action requires a typed source.");
-    }
-    return mutate(
-      database,
-      input.operation,
-      () => ({
-        operationId: input.operationId,
-        operation: input.operation,
-        kind: "shared",
-        rows: sharedMutation(database, input),
-      }),
-      input.source,
-    );
+    return mutate(database, input, "shared", () => ({
+      operationId: input.operationId,
+      operation: input.operation,
+      kind: "shared",
+      rows: sharedMutation(database, input),
+    }));
   },
   "githubPublications.personal": (
     input: PublicationWorkerOperations["githubPublications.personal"]["input"],
     { open },
   ) => {
     const database = open();
-    if (requiresSource("personal", input) && !input.source) {
-      throw new Error("GitHub publication action requires a typed source.");
-    }
-    return mutate(
-      database,
-      input.operation,
-      () => ({
-        operationId: input.operationId,
-        operation: input.operation,
-        kind: "personal",
-        rows: personalMutation(database, input),
-      }),
-      input.source,
-    );
+    return mutate(database, input, "personal", () => ({
+      operationId: input.operationId,
+      operation: input.operation,
+      kind: "personal",
+      rows: personalMutation(database, input),
+    }));
   },
   "githubPublications.repository": (
     input: PublicationWorkerOperations["githubPublications.repository"]["input"],
     { open },
   ) => {
     const database = open();
-    if (requiresSource("repository", input) && !input.source) {
-      throw new Error("GitHub publication action requires a typed source.");
-    }
-    return mutate(
-      database,
-      input.operation,
-      () => ({
-        operationId: input.operationId,
-        operation: input.operation,
-        kind: "repository",
-        rows: repositoryMutation(database, input),
-      }),
-      input.source,
-    );
+    return mutate(database, input, "repository", () => ({
+      operationId: input.operationId,
+      operation: input.operation,
+      kind: "repository",
+      rows: repositoryMutation(database, input),
+    }));
   },
 } satisfies WorkerOperationHandlers;

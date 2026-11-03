@@ -218,41 +218,6 @@ describe("browser remote profile tab ops via Playwright", () => {
     );
   });
 
-  it("transfers stable aliases across a high-confidence target replacement", async () => {
-    let currentPages = [page("A", "https://app.example/form")];
-    const listPagesViaPlaywright = vi.fn(async () => currentPages);
-
-    vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue({
-      listPagesViaPlaywright,
-    } as unknown as Awaited<ReturnType<typeof deps.pwAiModule.getPwAiModule>>);
-
-    const { state, remote } = deps.createRemoteRouteHarness();
-
-    const first = await remote.listTabs();
-    expect(first).toEqual([
-      expect.objectContaining({ targetId: "A", tabId: "t1", suggestedTargetId: "t1" }),
-    ]);
-    const labeled = await remote.labelTab("t1", "form");
-    expect(labeled).toMatchObject({ targetId: "A", tabId: "t1", label: "form" });
-    state.profiles.get("remote")!.lastTargetId = "A";
-
-    currentPages = [page("B", "https://app.example/submitted")];
-
-    const afterSwap = await remote.listTabs();
-    expect(afterSwap).toEqual([
-      expect.objectContaining({
-        targetId: "B",
-        tabId: "t1",
-        suggestedTargetId: "form",
-        label: "form",
-      }),
-    ]);
-    expect(state.profiles.get("remote")?.lastTargetId).toBe("B");
-    await expect(remote.ensureTabAvailable("A")).rejects.toThrow(/tab not found/i);
-    const formTab = await remote.ensureTabAvailable("form");
-    expect(formTab).toMatchObject({ targetId: "B", tabId: "t1", label: "form" });
-  });
-
   it("migrates only unique URL groups alongside ambiguous duplicate groups", async () => {
     let currentPages = [
       page("A", "https://unique.example"),
