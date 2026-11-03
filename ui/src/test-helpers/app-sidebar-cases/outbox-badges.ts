@@ -5,7 +5,7 @@ import { createGateway, createSessions, mountSidebar } from "../app-sidebar.ts";
 import { settleRoster } from "./roster.test-support.ts";
 
 describe("AppSidebar outbox attention badges", () => {
-  it("shows active and inactive draft pencils while suppressing Incognito roster rows", async () => {
+  it("shows only inactive draft badges while suppressing Incognito roster rows", async () => {
     const draftKey = "agent:main:draft-thread";
     const activeDraftKey = "agent:main:active-draft-thread";
     const plainKey = "agent:main:plain-thread";
@@ -29,7 +29,7 @@ describe("AppSidebar outbox attention badges", () => {
     expect(draftBadge?.getAttribute("aria-label")).toBe("Unsent draft");
     expect(
       sidebar.querySelector(`[data-session-key="${activeDraftKey}"] .session-row-badge--draft`),
-    ).not.toBeNull();
+    ).toBeNull();
     expect(
       sidebar.querySelector(`[data-session-key="${plainKey}"] .session-row-badge--draft`),
     ).toBeNull();
