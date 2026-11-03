@@ -286,7 +286,7 @@ const catalog = {
       workspaceStopped:
         "Saved changed files are shown. Start the cloud session to load full diffs and line counts.",
       workspaceStoppedFile: "Start the cloud session to load this diff.",
-      disconnected: "Gateway is disconnected.",
+      disconnected: "Reconnect to view changes.",
       allChanges: "All Changes",
       uncommitted: "Uncommitted",
       commitsAhead: "{count} commits ahead of {base}",
@@ -408,7 +408,7 @@ const catalog = {
         searchFolder: "Search in {folder}",
         empty: "No files match this view.",
         unavailable: "Workspace files are unavailable.",
-        disconnected: "Gateway is disconnected.",
+        disconnected: "Reconnect to view files.",
       },
       desktop: {
         sessionFiles: "Session files",

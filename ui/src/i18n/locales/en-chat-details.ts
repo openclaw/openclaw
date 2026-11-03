@@ -16,7 +16,7 @@ const enChatDetails = {
       contextOpen: "View context",
       contextLoading: "Loading context breakdown…",
       contextError: "Couldn't load the context breakdown. Try refreshing.",
-      contextOffline: "Connect to the Gateway to load the context breakdown.",
+      contextOffline: "Reconnect to load the context breakdown.",
       contextExactCount: "{used} of {limit} tokens",
       worktree: "Worktree",
       changes: "Changes",

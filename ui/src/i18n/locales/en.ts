@@ -1822,7 +1822,7 @@ const startupEnglish = {
       showSecret: "Show secret",
       hideSecret: "Hide secret",
       answer: "Answer",
-      disconnected: "Not connected. Try again after reconnecting.",
+      disconnected: "Reconnect to try again.",
     },
     imageLightbox: {},
     externalImage: { notLoaded: "External image not loaded", open: "Open image" },

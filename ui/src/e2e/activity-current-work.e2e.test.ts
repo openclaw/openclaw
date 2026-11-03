@@ -102,9 +102,7 @@ suite.define(() => {
       expect(await current.getByText("Check documentation links", { exact: true }).count()).toBe(1);
       expect(await rows.count()).toBe(1);
       expect(
-        await current
-          .getByText("Connect to the Gateway to load active sessions.", { exact: true })
-          .count(),
+        await current.getByText("Reconnect to load active sessions.", { exact: true }).count(),
       ).toBe(0);
       await gateway.setMethodResponse("sessions.list", listing([]));
       const previousReads = await gateway.deferNext("sessions.list", { activeOnly: true });

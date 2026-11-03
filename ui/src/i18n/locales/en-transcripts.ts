@@ -31,7 +31,7 @@ const enTranscripts = {
     forbiddenHint:
       "This connection needs operator read access and permission to read the shared archive. Ask a Gateway administrator to review your access.",
     loadError: "Could not load transcripts",
-    disconnected: "Connect to the Gateway to read meeting transcripts.",
+    disconnected: "Reconnect to read meeting transcripts.",
     unknown: "Unknown",
     unattributed: "Agent not recorded",
     savedCount: "{count} saved utterances",

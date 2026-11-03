@@ -108,7 +108,7 @@ const enSessionOrganization = {
     transcriptSearchClear: "Clear",
     transcriptSearchRetry: "Retry",
     transcriptSearchSearching: "Searching transcripts…",
-    transcriptSearchUnavailable: "Connect to the Gateway to search transcripts.",
+    transcriptSearchUnavailable: "Reconnect to search transcripts.",
     transcriptSearchError: "Transcript search failed",
     transcriptSearchIndexing: "Results may be incomplete — search again shortly.",
     transcriptSearchArchivedExcluded: sharedSessions.transcriptSearchArchivedExcluded,

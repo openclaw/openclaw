@@ -62,7 +62,7 @@ const catalog = {
         toolAccess: {
           loadFailed: "Couldn’t load tools.",
         },
-        offlineBlocked: "Reconnect to change tools for this chat.",
+        offlineBlocked: "Reconnect to change tools for this session.",
         adminBlocked: "Admin access is required to manage MCP servers.",
         savingBlocked: "Saving… try again in a moment.",
       },
@@ -223,7 +223,7 @@ const catalog = {
       empty: "No people found",
       truncated: "Keep typing to find more people.",
       online: "Online",
-      offline: "Offline",
+      offline: "Disconnected",
       unavailable: "Could not load people. Try again.",
       accessDenied: "Mention access denied. Sign in or contact an admin.",
       profileUnavailable: "Profile unverified. Reconnect or contact an admin.",

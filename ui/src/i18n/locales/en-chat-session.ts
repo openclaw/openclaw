@@ -32,7 +32,7 @@ const enChatSession = {
       automationUpdateError: "Couldn't update automations.",
       automationShowMore: "Show more",
       automationUnavailable: en.chat.sessionDetails.automationUnavailable,
-      automationOffline: "Offline · last-known automations",
+      automationOffline: "Disconnected · last-known automations",
       automationLoading: en.chat.sessionDetails.automationLoading,
       automationEmpty: en.chat.sessionDetails.automationEmpty,
       automationMore: en.chat.sessionDetails.automationMore,
@@ -246,7 +246,7 @@ const enChatSession = {
     sessionDiscussion: {
       show: "Show discussion",
       hide: "Hide discussion",
-      disconnected: "Gateway is disconnected.",
+      disconnected: "Reconnect to view the discussion.",
       loading: "Loading discussion…",
       opening: "Opening discussion…",
       requiresWriteAccess: "Operator write access is required to open this discussion.",

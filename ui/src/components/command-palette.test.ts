@@ -228,7 +228,7 @@ describe("CommandPalette search", () => {
       await palette.updateComplete;
       if (replacement === "connection") {
         expect(findPaletteOption(palette, "Needle old")).toBeDefined();
-        expect(palette.textContent).toContain("Reconnect to search Gateway content.");
+        expect(palette.textContent).toContain("Reconnect to search.");
       } else if (replacement !== "publication") {
         expect(findPaletteOption(palette, "Needle old")).toBeUndefined();
       }

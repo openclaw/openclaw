@@ -57,7 +57,7 @@ const enActivity = {
       title: "Active sessions",
       loading: "Loading active sessions…",
       empty: "No active sessions.",
-      disconnected: "Connect to the Gateway to load active sessions.",
+      disconnected: "Reconnect to load active sessions.",
       loadFailed: "Could not load active sessions.",
       queued: "Queued",
       limit: "Showing {count} of {total} active sessions.",
@@ -265,9 +265,8 @@ const enActivity = {
           description: "Reading the Gateway's retained identity projection…",
         },
         disconnected: {
-          title: "Gateway disconnected",
-          description:
-            "Run identity is durable on the Gateway, but it cannot be read while this browser is disconnected.",
+          title: "Disconnected",
+          description: "Run identity is saved. Reconnect to view it.",
         },
         unauthorized: {
           title: "Operator read access required",
@@ -325,7 +324,7 @@ const enActivity = {
     agentLabel: "Agent: {value}",
     online: "Online",
     idle: "Idle",
-    offline: "Offline",
+    offline: "Disconnected",
     unknownConnection: "Unknown client",
     connectionDetails: "Connection details · {count}",
     connectionOne: "1 connection",

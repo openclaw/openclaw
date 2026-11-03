@@ -25,7 +25,7 @@ const catalog = {
       expired: "This process is no longer retained. Return to the process list.",
       omitted:
         "This process is not included in the current limited list. Return to Processes or refresh.",
-      disconnected: "Connect to the Gateway to view processes.",
+      disconnected: "Reconnect to view processes.",
       output: "Recent output",
       noOutput: "No output recorded yet.",
       exitCode: "Exit {code}",

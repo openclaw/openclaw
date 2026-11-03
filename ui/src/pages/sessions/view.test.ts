@@ -663,7 +663,7 @@ it("preserves the saved ultrafast override until explicitly changed", async () =
 });
 
 const render = (props: Partial<ReturnType<typeof buildProps>>) => renderView([], props);
-const unavailable = "Connect to the Gateway to search transcripts.";
+const unavailable = "Reconnect to search transcripts.";
 const connectionStatus = () => container.querySelector('.settings-section__desc [role="status"]');
 const transcriptTrigger = () =>
   container.querySelector<HTMLButtonElement>(".sessions-transcript-search__trigger");
