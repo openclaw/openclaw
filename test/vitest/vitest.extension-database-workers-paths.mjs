@@ -367,6 +367,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/imessage/src/monitor/cache-lifecycle.test.ts",
   "extensions/imessage/src/monitor/inbound-processing.test.ts",
   "extensions/imessage/src/monitor/recovery-cursor.test.ts",
+  "extensions/imessage/src/monitor/recovery-cursor.postgres.test.ts",
   "extensions/imessage/src/monitor/self-chat-dedupe.test.ts",
   "extensions/imessage/src/monitor/catchup-startup.test.ts",
   "extensions/imessage/src/monitor.debounce-policy.test.ts",

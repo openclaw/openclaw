@@ -25,15 +25,17 @@ function writeLegacyCatchupCursor(accountId: string, lastSeenRowid: number): voi
   store.register(key, { lastSeenMs: Date.now(), lastSeenRowid });
 }
 
+function recoveryCursorStore() {
+  return getIMessageRuntime().state.openSyncKeyedStore<{ lastRowid: number }>({
+    namespace: "imessage.recovery-cursor",
+    maxEntries: 64,
+  });
+}
+
 // Writes a pre-database-scoping recovery cursor: keyed by accountId alone, with
 // no database identity, as older builds persisted it.
 function writeLegacyRecoveryCursor(accountId: string, lastRowid: number): void {
-  getIMessageRuntime()
-    .state.openSyncKeyedStore<{ lastRowid: number }>({
-      namespace: "imessage.recovery-cursor",
-      maxEntries: 64,
-    })
-    .register(accountId, { lastRowid });
+  recoveryCursorStore().register(accountId, { lastRowid });
 }
 
 describe("iMessage recovery cursor", () => {
@@ -73,6 +75,14 @@ describe("iMessage recovery cursor", () => {
       await loadIMessageRecoveryCursor("default", DB_B, { migrateLegacyCatchup: false }),
     ).toBeNull();
     // The original database still reports its cursor.
+    expect(await loadIMessageRecoveryCursor("default", DB)).toBe(12396);
+  });
+
+  it("adopts a NUL-separated composite cursor once on SQLite (#184862)", async () => {
+    recoveryCursorStore().register(`default\u0000${DB}`, { lastRowid: 12396 });
+    expect(await loadIMessageRecoveryCursor("default", DB_B)).toBeNull();
+    expect(await loadIMessageRecoveryCursor("default", DB)).toBe(12396);
+    expect(recoveryCursorStore().lookup(`default\u0000${DB}`)).toBeUndefined();
     expect(await loadIMessageRecoveryCursor("default", DB)).toBe(12396);
   });
 

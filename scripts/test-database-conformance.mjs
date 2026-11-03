@@ -75,7 +75,11 @@ function listTestFiles(directory) {
 }
 let targets = explicitTargets
   ? []
-  : [...directoryTargets.flatMap(listTestFiles), "src/state/openclaw-state-db.postgres.test.ts"];
+  : [
+      ...directoryTargets.flatMap(listTestFiles),
+      "src/state/openclaw-state-db.postgres.test.ts",
+      "extensions/imessage/src/monitor/recovery-cursor.postgres.test.ts",
+    ];
 if (shardCount) {
   if (shardCount > targets.length) {
     console.error(usage);
