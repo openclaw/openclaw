@@ -47,14 +47,13 @@ export function transcriptContextDependencies(
   loadedSources: ReadonlyMap<string, LoadedReplySource>,
   props: Pick<
     ChatThreadProps,
-    "onRetryRun" | "onEditRun" | "editRunDisabledReason" | "failureActionsRunId" | "modelCatalog"
+    "onRetryRun" | "failedMessageEditSource" | "failureActionsRunId" | "modelCatalog"
   >,
 ): unknown[] {
   if (item.kind === "notice") {
     return [
       props.onRetryRun,
-      props.onEditRun,
-      props.editRunDisabledReason,
+      props.failedMessageEditSource,
       props.failureActionsRunId,
       item.modelChange ? props.modelCatalog : undefined,
     ];

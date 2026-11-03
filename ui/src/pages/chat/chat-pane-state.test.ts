@@ -9,6 +9,7 @@ import {
   SessionParticipationTracker,
   createChatPaneRunRecoveryActions,
 } from "./chat-pane-state.ts";
+import { createFailedMessageEdit } from "./failed-message-edit.ts";
 
 function projectionState(): Parameters<typeof applySelectedSessionProjection>[0] {
   return {
@@ -433,46 +434,41 @@ describe("failed run recovery actions", () => {
     chatReplyTarget: null,
     chatGoalDraftMode: null,
   });
+  const failedInputState = (): Parameters<typeof createChatPaneRunRecoveryActions>[0] => ({
+    ...emptyComposer(),
+    sessionKey: "session-a",
+    connected: true,
+    chatRunId: null,
+    chatSending: false,
+    handleSendChat: vi.fn(),
+    chatMessages: [
+      { role: "user", content: [], __openclaw: { id: "user-a", seq: 1, runId: "run-a" } },
+    ],
+  });
   it("rewinds only the current failed input and never submits an unchanged retry", async () => {
-    const state: Parameters<typeof createChatPaneRunRecoveryActions>[0] = {
-      ...emptyComposer(),
-      sessionKey: "session-a",
-      connected: true,
-      chatRunId: null,
-      chatSending: false,
-      handleSendChat: vi.fn(),
-      chatMessages: [
-        { role: "user", content: [], __openclaw: { id: "user-a", seq: 1, runId: "run-a" } },
-      ],
-    };
+    const state = failedInputState();
     const rewind = vi.fn(async () => true);
+    let failedRunId = "run-a";
     const actions = createChatPaneRunRecoveryActions(state, {
       canSend: true,
       isCurrent: () => true,
-      latestFailedRunId: () => "run-a",
+      latestFailedRunId: () => failedRunId,
       onRewindMessage: rewind,
     });
-    expect(await actions.onEditRun?.("old-run")).toBe(false);
-    expect(await actions.onEditRun?.("run-a")).toBe(true);
+    const edit = createFailedMessageEdit(actions.failedMessageEditSource);
+    failedRunId = "run-b";
+    expect(await edit?.run()).toBe(false);
+    failedRunId = "run-a";
+    expect(await edit?.run()).toBe(true);
     expect(rewind).toHaveBeenCalledExactlyOnceWith("user-a");
     expect(state.handleSendChat).not.toHaveBeenCalled();
     state.chatMessages.push({ role: "user", __openclaw: { id: "user-b", seq: 2, runId: "run-b" } });
-    expect(await actions.onEditRun?.("run-a")).toBe(false);
+    expect(await edit?.run()).toBe(false);
     expect(rewind).toHaveBeenCalledOnce();
   });
 
   it("preserves a pre-existing or newly typed draft without mutating history", async () => {
-    const state: Parameters<typeof createChatPaneRunRecoveryActions>[0] = {
-      ...emptyComposer(),
-      sessionKey: "session-a",
-      connected: true,
-      chatRunId: null,
-      chatSending: false,
-      handleSendChat: vi.fn(),
-      chatMessages: [
-        { role: "user", content: [], __openclaw: { id: "user-a", seq: 1, runId: "run-a" } },
-      ],
-    };
+    const state = failedInputState();
     const rewind = vi.fn(async () => true);
     const options = {
       canSend: true,
@@ -481,12 +477,17 @@ describe("failed run recovery actions", () => {
       onRewindMessage: rewind,
     };
     const actions = createChatPaneRunRecoveryActions(state, options);
+    const edit = createFailedMessageEdit(actions.failedMessageEditSource);
     state.chatMessage = "Keep this unsent draft";
     state.chatAttachments = [
       { id: "draft-image", mimeType: "image/png", dataUrl: "data:image/png;base64,YQ==" },
     ];
-    expect(createChatPaneRunRecoveryActions(state, options).editRunDisabledReason).toBeTruthy();
-    expect(await actions.onEditRun?.("run-a")).toBe(false);
+    expect(
+      createFailedMessageEdit(
+        createChatPaneRunRecoveryActions(state, options).failedMessageEditSource,
+      )?.disabled,
+    ).toBe(true);
+    expect(await edit?.run()).toBe(false);
     expect(state.chatMessage).toBe("Keep this unsent draft");
     expect(state.chatAttachments.map((image) => image.id)).toEqual(["draft-image"]);
     expect(rewind).not.toHaveBeenCalled();

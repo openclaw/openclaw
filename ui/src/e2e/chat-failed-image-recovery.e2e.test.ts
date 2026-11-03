@@ -163,12 +163,34 @@ suite.define(() => {
         await suite.withPage(
           { viewport: { width: 1440, height: 1040 }, locale: "en-US", serviceWorkers: "block" },
           async ({ page }) => {
+            let sawOptionalEditLoad = false;
+            if (!imageOnly) {
+              await page.route(
+                (url) =>
+                  url.pathname.includes("chat-failed-message-edit-button-") &&
+                  url.pathname.endsWith(".js"),
+                async (route) => {
+                  try {
+                    await expectBrowser(page.locator(".chat-run-failure__toggle")).toBeVisible();
+                    await expectBrowser(
+                      page.getByRole("button", { name: "Try again", exact: true }),
+                    ).toBeVisible();
+                    sawOptionalEditLoad = true;
+                  } finally {
+                    await route.continue();
+                  }
+                },
+              );
+            }
             const { gateway, composer, input, images, params, entryId, row } = await failFiveImages(
               page,
               imageOnly,
             );
             const edit = page.getByRole("button", { name: "Edit message", exact: true });
             await expectBrowser(edit).toBeEnabled();
+            if (!imageOnly) {
+              expect(sawOptionalEditLoad).toBe(true);
+            }
             if (!imageOnly) {
               await composer.fill("Keep my independent draft.");
               await input.setInputFiles({

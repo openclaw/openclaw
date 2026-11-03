@@ -18,14 +18,7 @@ function FailureNotice(props: ChatNoticeProps) {
     }
     return {
       onRetry: recovery.onRetryRun ? () => recovery.onRetryRun?.(initialRunId) : undefined,
-      onEdit: recovery.onEditRun
-        ? async () => {
-            if (await recovery.onEditRun?.(initialRunId)) {
-              recovery.onFocusComposer?.();
-            }
-          }
-        : undefined,
-      editDisabledReason: recovery.editRunDisabledReason,
+      editSource: recovery.failedMessageEditSource,
     };
   });
   return (
@@ -38,8 +31,8 @@ function FailureNotice(props: ChatNoticeProps) {
         summary={failure().summary}
         repeatCount={props.item.repeatCount}
         onRetry={actions()?.onRetry}
-        onEdit={actions()?.onEdit}
-        editDisabledReason={actions()?.editDisabledReason}
+        editSource={actions()?.editSource}
+        onFocusComposer={props.recovery?.onFocusComposer}
       />
     </div>
   );

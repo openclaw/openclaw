@@ -39,7 +39,7 @@ export function createChatPaneRunRecoveryActions(
     latestFailedRunId: () => string | undefined;
     onRewindMessage?: ChatProps["onRewindMessage"];
   },
-): Pick<ChatProps, "onRetryRun" | "onEditRun" | "editRunDisabledReason"> {
+): Pick<ChatProps, "onRetryRun" | "failedMessageEditSource"> {
   const sessionKey = state.sessionKey;
   const ownsFailure = (runId: string) =>
     options.isCurrent() &&
@@ -48,39 +48,19 @@ export function createChatPaneRunRecoveryActions(
     !state.chatRunId &&
     !state.chatSending &&
     options.latestFailedRunId() === runId;
-  const editEntryId = (runId: string) => {
-    const lastUserMessage = state.chatMessages.findLast(
-      (message) => readSessionMessageIdentity(message)?.role === "user",
-    );
-    const identity = readSessionMessageIdentity(lastUserMessage);
-    // Only the latest durable user turn may be recovered. A newer submission
-    // must never be rewound along with an older failure.
-    return identity?.runId === runId && !identity.isImported ? identity.id : null;
-  };
-  const hasDraft = () =>
-    Boolean(
-      state.chatMessage ||
-      state.chatAttachments.length ||
-      state.chatMentions?.length ||
-      state.chatReplyTarget ||
-      state.chatGoalDraftMode,
-    );
   const failedRunId = options.latestFailedRunId();
+  const rewind = options.onRewindMessage;
   return {
-    ...(options.onRewindMessage && failedRunId && editEntryId(failedRunId)
-      ? {
-          editRunDisabledReason: hasDraft() ? t("chat.recovery.editDraftBlocked") : undefined,
-          onEditRun: async (runId: string) => {
-            const entryId = editEntryId(runId);
-            if (!ownsFailure(runId) || !entryId || hasDraft()) {
-              return false;
-            }
-            // Rewind owns both context removal and attachment restoration;
-            // merely sending a new prompt would retain the rejected images.
-            return Boolean(await options.onRewindMessage?.(entryId));
-          },
-        }
-      : {}),
+    failedMessageEditSource:
+      rewind && failedRunId
+        ? {
+            state,
+            runId: failedRunId,
+            isCurrent: () => ownsFailure(failedRunId),
+            readIdentity: readSessionMessageIdentity,
+            rewind,
+          }
+        : undefined,
     onRetryRun: options.canSend
       ? (runId) => {
           if (ownsFailure(runId)) {

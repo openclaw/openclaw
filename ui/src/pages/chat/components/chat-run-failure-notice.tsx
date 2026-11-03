@@ -1,15 +1,16 @@
-import { createMemo, createSignal, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, lazy, Loading, onSettled, Show } from "solid-js";
 import { formatWebUiIconErrorText } from "../../../components/error-presentation.ts";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Popover, type PopoverHandle } from "../../../components/solid/popover.tsx";
-import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { createScrollStateRef } from "../../../lib/reactive/scroll-state.ts";
-import { RewindButton } from "./chat-message-confirmation-view.tsx";
+import type { FailedMessageEditSource } from "../failed-message-edit.ts";
+import { openChatRewindConfirmation } from "./chat-message-confirmation-view.tsx";
 
-registerChatSessionEnglish();
+// Failure facts and continuation stay eager; only this optional action is deferred.
+const ChatFailedMessageEditButton = lazy(() => import("./chat-failed-message-edit-button.tsx"));
 
 let nextPanelId = 0;
 
@@ -28,8 +29,8 @@ export function ChatRunFailureNotice(props: {
   summary: string;
   repeatCount?: number;
   onRetry?: () => void;
-  onEdit?: () => Promise<void>;
-  editDisabledReason?: string;
+  editSource?: FailedMessageEditSource;
+  onFocusComposer?: () => void;
 }) {
   const panelId = `chat-run-failure-${++nextPanelId}`;
   const [line, setLine] = createSignal<HTMLElement>();
@@ -139,12 +140,14 @@ export function ChatRunFailureNotice(props: {
             </span>
           </div>
         </Popover>
-        <Show when={props.onEdit}>
-          <RewindButton
-            label={t("chat.recovery.editMessage")}
-            disabledReason={props.editDisabledReason}
-            onRewind={() => void props.onEdit?.()}
-          />
+        <Show when={props.editSource}>
+          <Loading fallback={null}>
+            <ChatFailedMessageEditButton
+              source={props.editSource}
+              confirm={openChatRewindConfirmation}
+              onFocusComposer={props.onFocusComposer}
+            />
+          </Loading>
         </Show>
         <Show when={props.onRetry}>
           <button

@@ -94,26 +94,20 @@ function placeConfirmedActionPopover(trigger: HTMLElement, popover: HTMLElement)
   popover.dataset.placement = placeBelow ? "below" : "above";
 }
 
-export function RewindButton(props: {
-  onRewind: () => void;
-  label?: string;
-  disabledReason?: string;
-}) {
-  const label = () => props.label ?? t("chat.messages.rewind");
+export function RewindButton(props: { onRewind: () => void }) {
+  const label = () => t("chat.messages.rewind");
   return (
     <span class="chat-confirm-wrap chat-rewind-wrap">
-      <openclaw-tooltip prop:content={props.disabledReason ?? label()}>
+      <openclaw-tooltip prop:content={label()}>
         <button
-          class={props.label ? "btn btn--sm" : "chat-group-rewind"}
+          class="chat-group-rewind"
           aria-label={label()}
-          disabled={Boolean(props.disabledReason)}
           onClick={(event: Event) =>
             // SAFETY: This handler is registered on the native button rendered here.
             openChatRewindConfirmation(event.currentTarget as HTMLElement, () => props.onRewind())
           }
         >
           <Icon name="refresh" />
-          {props.label}
         </button>
       </openclaw-tooltip>
     </span>
