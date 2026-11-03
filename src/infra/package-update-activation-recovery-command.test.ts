@@ -5,6 +5,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
+import { readBytes } from "./package-update-activation-fixtures.test-support.js";
 import {
   openPackageActivationJournal,
   resolvePackageActivationControl,
@@ -25,6 +26,26 @@ import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-wor
 
 const fixture = createPackageActivationLifetimeFixture();
 const recoveryWorker = resolveRuntimeWorkerUrl(packageActivationRuntimeEntrypoint);
+function recoveryCommand(
+  prepared: { anchor: string; operationId: string },
+  env: NodeJS.ProcessEnv,
+  preload: string[] = [],
+) {
+  const argv = [
+    ...preload,
+    ...resolveRuntimeWorkerArgv(recoveryWorker),
+    "--anchor",
+    prepared.anchor,
+    "--operation",
+    prepared.operationId,
+  ];
+  return (action: string) =>
+    spawnSync(process.execPath, [...argv, action], {
+      env,
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+}
 afterEach(async () => {
   try {
     await fixture.lifetime.cleanup();
@@ -32,6 +53,32 @@ afterEach(async () => {
     vi.restoreAllMocks();
   }
 });
+
+it.skipIf(process.platform === "win32")(
+  "a separate helper reports and retires unpublished preparation after lease loss",
+  () =>
+    fixture.lifetime.run(async () => {
+      const { childGuardEnv } = fixture.setup();
+      const prepared = await fixture.prepare();
+      const record = openPackageActivationJournal(prepared.anchor).read();
+      fs.unlinkSync(record.descriptor.authority.databasePath);
+      const before = fixture.snapshotControl(prepared.anchor);
+      const run = recoveryCommand(prepared, childGuardEnv(process.env));
+      const status = run("status");
+      expect(status.status, status.stderr).toBe(0);
+      expect(JSON.parse(status.stdout)).toMatchObject({
+        phase: "prepared",
+        operationId: prepared.operationId,
+      });
+      expect(fixture.snapshotControl(prepared.anchor)).toEqual(before);
+      expect(fs.existsSync(record.descriptor.authority.databasePath)).toBe(false);
+      const repaired = run("repair");
+      expect(repaired.status, repaired.stderr).toBe(0);
+      expect(JSON.parse(repaired.stdout)).toMatchObject({ phase: "complete" });
+      expect(repaired.stderr).toContain("unpublished prepared package update");
+      expect(() => assertNoPendingPackageActivation(prepared.packageRoot)).not.toThrow();
+    }),
+);
 
 it.skipIf(process.platform === "win32").each([false, true])(
   "recovers after private permission repair and preserves package integrity checks (changed=%s)",
@@ -159,19 +206,7 @@ it.skipIf(process.platform === "win32")(
     fixture.lifetime.run(async () => {
       const { childGuardEnv } = fixture.setup();
       const prepared = await fixture.prepare();
-      const run = (action: string) =>
-        spawnSync(
-          process.execPath,
-          [
-            ...resolveRuntimeWorkerArgv(recoveryWorker),
-            "--anchor",
-            prepared.anchor,
-            "--operation",
-            prepared.operationId,
-            action,
-          ],
-          { env: childGuardEnv(process.env), encoding: "utf8", timeout: 30_000 },
-        );
+      const run = recoveryCommand(prepared, childGuardEnv(process.env));
       const journalPath = resolvePackageActivationJournalPath(prepared.anchor);
       const pendingBytes = fs.readFileSync(journalPath);
       const pending = run("retire");
@@ -225,9 +260,7 @@ it.skipIf(process.platform === "win32")(
       });
       expect(result.stderr).toContain(retained);
       expect(fs.existsSync(path.dirname(journalPath))).toBe(false);
-      expect(fs.readFileSync(path.join(retained, "control", "operation.sqlite"))).toEqual(
-        completedBytes,
-      );
+      expect(readBytes(retained, "control", "operation.sqlite")).toEqual(completedBytes);
       expect(() => assertNoPendingPackageActivation(prepared.packageRoot)).not.toThrow();
     }),
 );
@@ -265,20 +298,11 @@ syncBuiltinESMExports();
 `,
         );
       }
-      const run = (action: string) =>
-        spawnSync(
-          process.execPath,
-          [
-            ...(scenario === "archive-sync-fails" ? ["--import", preload] : []),
-            ...resolveRuntimeWorkerArgv(recoveryWorker),
-            "--anchor",
-            f.anchor,
-            "--operation",
-            f.operationId,
-            action,
-          ],
-          { env: childGuardEnv(process.env), encoding: "utf8", timeout: 30_000 },
-        );
+      const run = recoveryCommand(
+        f,
+        childGuardEnv(process.env),
+        scenario === "archive-sync-fails" ? ["--import", preload] : [],
+      );
       const before = fs.readFileSync(f.journalPath);
       for (const action of ["status", "retire"]) {
         const refusal = run(action);

@@ -1,6 +1,7 @@
-// Ollama tests cover provider models plugin behavior.
+import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { expectDefined } from "@openclaw/normalization-core";
 import { jsonResponse, requestUrl, withServer } from "openclaw/plugin-sdk/test-env";
+import { oversizedJsonResponse } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildOllamaProvider,
@@ -14,6 +15,19 @@ import {
   toDynamicOllamaModel,
   type OllamaTagModel,
 } from "./provider-models.js";
+const localUrl = "http://127.0.0.1:11434";
+const completion = ["completion"];
+
+afterEach(() => vi.unstubAllGlobals());
+
+async function discoverModel(url = localUrl) {
+  const provider = await buildOllamaProvider(url);
+  const model = expectDefined(provider.models[0], "discovered model");
+  return {
+    model,
+    runtime: toDynamicOllamaModel({ provider: "ollama", providerConfig: provider, model }),
+  };
+}
 
 function stubDiscovery(models: OllamaTagModel[], show: unknown = {}) {
   vi.stubGlobal(
@@ -36,23 +50,14 @@ describe("ollama provider models", () => {
     "keeps total parameter metadata through discovery: %j",
     async ({ tagSize, showCount, showSize, expected }) => {
       stubDiscovery([{ name: "custom-model", details: { parameter_size: tagSize } }], {
-        capabilities: ["completion"],
+        capabilities: completion,
         model_info: { "general.parameter_count": showCount },
         details: { parameter_size: showSize },
       });
-      const provider = await buildOllamaProvider("http://127.0.0.1:11434");
-      const model = expectDefined(provider.models[0], "discovered model");
-      expect(model.parameterCount).toBe(expected);
-      expect(
-        toDynamicOllamaModel({ provider: "ollama", providerConfig: provider, model })
-          .parameterCount,
-      ).toBe(expected);
+      const { model, runtime } = await discoverModel();
+      expect([model.parameterCount, runtime.parameterCount]).toEqual([expected, expected]);
     },
   );
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
 
   it("keeps incomplete cloud metadata discoverable with remote host metadata", async () => {
     const listed = {
@@ -62,7 +67,7 @@ describe("ollama provider models", () => {
     };
     stubDiscovery([listed]);
 
-    await expect(buildOllamaProvider("http://127.0.0.1:11434")).resolves.toMatchObject({
+    await expect(buildOllamaProvider(localUrl)).resolves.toMatchObject({
       models: [
         {
           id: listed.name,
@@ -75,14 +80,11 @@ describe("ollama provider models", () => {
   });
 
   it("keeps strict node discovery closed when remote completion is only inferred", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => jsonResponse({})),
-    );
+    stubDiscovery([]);
 
     await expect(
       enrichOllamaCompletionModels(
-        "http://127.0.0.1:11434",
+        localUrl,
         [
           {
             name: "remote-chat:latest",
@@ -130,16 +132,16 @@ describe("ollama provider models", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const first = await buildOllamaProvider("https://ollama.example.com", {
-      apiKey: "account-a",
-    });
-    const second = await buildOllamaProvider("https://ollama.example.com", {
-      apiKey: "account-b",
-    });
+    const [first, second, third] = await Promise.all(
+      ["account-a", "account-b", "account-a"].map(
+        async (apiKey) => await buildOllamaProvider("https://ollama.example.com", { apiKey }),
+      ),
+    );
 
-    expect(first.models?.[0]?.contextWindow).toBe(16_000);
-    expect(second.models?.[0]?.contextWindow).toBe(32_000);
-    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect([first, second, third].map((provider) => provider?.models[0]?.contextWindow)).toEqual([
+      16_000, 32_000, 16_000,
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(5);
   });
 
   it.each([
@@ -151,72 +153,38 @@ describe("ollama provider models", () => {
     for (const modelId of [id, `${id}:cloud`, `${id}-cloud`]) {
       expect(
         buildOllamaModelDefinition(modelId, undefined, undefined, { remote: true }),
-      ).toMatchObject({
-        id: modelId,
-        contextWindow,
-        maxTokens,
-      });
+      ).toMatchObject({ id: modelId, contextWindow, maxTokens });
     }
   });
 
-  it.each([
-    { name: "local-model", baseUrl: "http://127.0.0.1:11434", maxTokens: 8192 },
-    { name: "minimax-m3", baseUrl: "http://127.0.0.1:11434", maxTokens: 8192 },
-    { name: "kimi-k3", baseUrl: "http://127.0.0.1:11434", maxTokens: 8192 },
-    { name: "minimax-m3", baseUrl: "https://ollama.com", maxTokens: 524_288 },
-    { name: "kimi-k3", baseUrl: "https://ollama.com", maxTokens: 1_048_576 },
-    { name: "glm-5.2:cloud", baseUrl: "http://127.0.0.1:11434", maxTokens: 131_072 },
-    { name: "unknown:cloud", baseUrl: "http://127.0.0.1:11434", maxTokens: 262_144 },
-    { name: "unknown", baseUrl: "https://ollama.com", maxTokens: 262_144 },
-    {
-      name: "remote-stub",
-      baseUrl: "http://127.0.0.1:11434",
-      remote_host: "https://ollama.com",
-      maxTokens: 262_144,
-    },
-    {
-      name: "remote-model-stub",
-      baseUrl: "http://127.0.0.1:11434",
-      remote_model: "upstream-model",
-      maxTokens: 262_144,
-    },
-  ])(
-    "discovers $name output limits at $baseUrl",
-    async ({ name, baseUrl, remote_host, remote_model, maxTokens }) => {
-      stubDiscovery([{ name, remote_host, remote_model }], {
-        capabilities: ["completion"],
-        model_info: { "test.context_length": 262_144 },
-      });
-      const provider = await buildOllamaProvider(baseUrl);
-      const model = expectDefined(provider.models[0], "discovered model");
-      expect(
-        toDynamicOllamaModel({ provider: "ollama", providerConfig: provider, model }),
-      ).toMatchObject({
-        id: name,
-        maxTokens,
-      });
-    },
-  );
+  it.each<[name: string, url: string, maxTokens: number, remote?: Partial<OllamaTagModel>]>([
+    ["local-model", localUrl, 8192],
+    ["minimax-m3", localUrl, 8192],
+    ["kimi-k3", localUrl, 8192],
+    ["minimax-m3", "https://ollama.com", 524_288],
+    ["kimi-k3", "https://ollama.com", 1_048_576],
+    ["glm-5.2:cloud", localUrl, 131_072],
+    ["unknown:cloud", localUrl, 262_144],
+    ["unknown", "https://ollama.com", 262_144],
+    ["remote-stub", localUrl, 262_144, { remote_host: "https://ollama.com" }],
+    ["remote-model-stub", localUrl, 262_144, { remote_model: "upstream-model" }],
+  ])("discovers %s output limits at %s", async (name, url, maxTokens, remote) => {
+    stubDiscovery([{ name, ...remote }], {
+      capabilities: completion,
+      model_info: { "test.context_length": 262_144 },
+    });
+    expect((await discoverModel(url)).runtime).toMatchObject({ id: name, maxTokens });
+  });
 
   it("uses Modelfile num_ctx when it expands the discovered context window", async () => {
-    const models: OllamaTagModel[] = [{ name: "llama3-32k:latest" }];
-    const fetchMock = vi.fn(async () =>
-      jsonResponse({
-        model_info: { "llama.context_length": 8192 },
-        parameters: 'stop "<|eot_id|>"\nnum_ctx 32768\nnum_keep 5',
-        capabilities: ["completion"],
-      }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-
-    const enriched = await enrichOllamaModelsWithContext("http://127.0.0.1:11434", models);
-
-    expect(enriched).toEqual([
-      {
-        name: "llama3-32k:latest",
-        contextWindow: 32768,
-        capabilities: ["completion"],
-      },
+    const models = [{ name: "llama3-32k:latest" }];
+    stubDiscovery(models, {
+      model_info: { "llama.context_length": 8192 },
+      parameters: 'stop "<|eot_id|>"\nnum_ctx 32768\nnum_keep 5',
+      capabilities: completion,
+    });
+    expect(await enrichOllamaModelsWithContext(localUrl, models)).toEqual([
+      { name: "llama3-32k:latest", contextWindow: 32768, capabilities: completion },
     ]);
   });
 
@@ -246,39 +214,24 @@ describe("ollama provider models", () => {
       }
 
       response.writeHead(200, { "content-type": "application/json" });
-      if (path === "/api/tags") {
-        response.end(JSON.stringify({ models: [{ name: "llama3:8b" }] }));
-        return;
-      }
       response.end(
-        JSON.stringify({
-          model_info: { "llama.context_length": 32768 },
-          capabilities: ["completion", "tools"],
-        }),
+        JSON.stringify(
+          path === "/api/tags"
+            ? { models: [{ name: "llama3:8b" }] }
+            : {
+                model_info: { "llama.context_length": 32768 },
+                capabilities: ["completion", "tools"],
+              },
+        ),
       );
     };
 
     const waitForSocketClose = async (path: string): Promise<void> => {
-      const closed = socketClosures.get(path);
-      if (!closed) {
-        throw new Error(`No failed discovery socket was recorded for ${path}`);
-      }
-
-      let timeout: ReturnType<typeof setTimeout> | undefined;
-      try {
-        await Promise.race([
-          closed,
-          new Promise<never>((_resolve, reject) => {
-            timeout = setTimeout(() => {
-              reject(new Error(`Failed discovery socket was not closed for ${path}`));
-            }, 2_000);
-          }),
-        ]);
-      } finally {
-        if (timeout !== undefined) {
-          clearTimeout(timeout);
-        }
-      }
+      await withTimeout(
+        expectDefined(socketClosures.get(path), `failed discovery socket for ${path}`),
+        2_000,
+        { message: `Failed discovery socket was not closed for ${path}` },
+      );
     };
 
     await withServer(handleRequest, async (baseUrl) => {
@@ -318,11 +271,7 @@ describe("ollama provider models", () => {
       (request, response) => {
         response.setHeader("Content-Type", "application/json");
         if (request.url === "/api/tags") {
-          response.end(
-            JSON.stringify({
-              models: [listed],
-            }),
-          );
+          response.end(JSON.stringify({ models: [listed] }));
           return;
         }
         if (request.url === "/api/show") {
@@ -334,10 +283,7 @@ describe("ollama provider models", () => {
         response.end(JSON.stringify({ error: "not found" }));
       },
       async (baseUrl) => {
-        const provider = await buildOllamaProvider(baseUrl);
-        const model = expectDefined(provider.models?.[0], "show-failed Ollama model");
-
-        expect(model).toMatchObject({
+        expect((await discoverModel(baseUrl)).model).toMatchObject({
           id: listed.name,
           contextWindow: 32_768,
           compat: { supportsTools: true },
@@ -347,62 +293,29 @@ describe("ollama provider models", () => {
     );
   });
 
-  it("fails soft and stops reading when discovery streams exceed the JSON byte cap", async () => {
-    // Larger than the shared 16 MiB readProviderJsonResponse cap so the bounded reader cancels
-    // the stream mid-flight; if the cap were removed the reader would buffer the whole payload.
-    const ONE_MIB = 1024 * 1024;
-    const TOTAL_CHUNKS = 32; // 32 MiB advertised body, double the cap.
-    const chunk = new Uint8Array(ONE_MIB);
-
-    let bytesPulled = 0;
-    let canceled = false;
-    const makeOversizedJsonResponse = (): Response => {
-      bytesPulled = 0;
-      canceled = false;
-      let pulled = 0;
-      const body = new ReadableStream<Uint8Array>({
-        pull(controller) {
-          if (pulled >= TOTAL_CHUNKS) {
-            controller.close();
-            return;
-          }
-          pulled += 1;
-          bytesPulled += chunk.length;
-          controller.enqueue(chunk);
-        },
-        cancel() {
-          canceled = true;
-        },
-      });
-      return new Response(body, {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    };
-
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => makeOversizedJsonResponse()),
-    );
-    const tags = await fetchOllamaModels("http://127.0.0.1:11434");
-    expect(tags).toEqual({ reachable: false, models: [] });
-    expect(canceled).toBe(true);
-    // Only the bounded prefix is pulled, never the full advertised 32 MiB stream.
-    expect(bytesPulled).toBeLessThan(TOTAL_CHUNKS * ONE_MIB);
-
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => makeOversizedJsonResponse()),
-    );
-    const showInfo = await queryOllamaModelShowInfo("http://127.0.0.1:11434", "evil-model:latest");
-    expect(showInfo).toEqual({ showInspectionFailed: true });
-    expect(canceled).toBe(true);
-    expect(bytesPulled).toBeLessThan(TOTAL_CHUNKS * ONE_MIB);
-  });
+  it.each(["tags", "show"] as const)(
+    "bounds %s discovery JSON and cancels oversized streams",
+    async (endpoint) => {
+      // Advertise 32 MiB, twice the shared JSON cap, and observe early cancellation.
+      const oversized = oversizedJsonResponse({ chunkCount: 32, chunkSize: 1024 * 1024 });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => oversized.response),
+      );
+      const result =
+        endpoint === "tags"
+          ? await fetchOllamaModels(localUrl)
+          : await queryOllamaModelShowInfo(localUrl, "evil-model:latest");
+      expect(result).toEqual(
+        endpoint === "tags" ? { reachable: false, models: [] } : { showInspectionFailed: true },
+      );
+      expect(oversized.wasCanceled()).toBe(true);
+      expect(oversized.getReadCount()).toBeLessThan(32);
+    },
+  );
 });
 
 describe("Ollama model discovery failures", () => {
-  afterEach(() => vi.unstubAllGlobals());
   it.each([503, "offline", "invalid-json", "missing-models"])(
     "preserves advisory discovery while strict catalogs reject %s",
     async (failure) => {
@@ -418,36 +331,30 @@ describe("Ollama model discovery failures", () => {
         }),
       );
 
-      await expect(
-        buildOllamaProvider("http://127.0.0.1:11434", { quiet: true }),
-      ).resolves.toMatchObject({ models: [] });
-      await expect(
-        buildOllamaProvider("http://127.0.0.1:11434", { discoveryMode: "strict" }),
-      ).rejects.toThrow();
+      await expect(buildOllamaProvider(localUrl, { quiet: true })).resolves.toMatchObject({
+        models: [],
+      });
+      await expect(buildOllamaProvider(localUrl, { discoveryMode: "strict" })).rejects.toThrow();
     },
   );
 });
 
 describe("buildOllamaBaseUrlSsrFPolicy", () => {
-  it("pins requests to the configured Ollama hostname for HTTP(S) URLs", () => {
-    expect(buildOllamaBaseUrlSsrFPolicy("http://127.0.0.1:11434")).toEqual({
-      hostnameAllowlist: ["127.0.0.1"],
-      allowPrivateNetwork: true,
-    });
-    expect(buildOllamaBaseUrlSsrFPolicy("http://192.168.1.10:11434")).toEqual({
-      hostnameAllowlist: ["192.168.1.10"],
-      allowPrivateNetwork: true,
-    });
-    expect(buildOllamaBaseUrlSsrFPolicy("https://ollama.example.com/v1")).toEqual({
-      hostnameAllowlist: ["ollama.example.com"],
+  it.each([
+    [localUrl, "127.0.0.1"],
+    ["http://192.168.1.10:11434", "192.168.1.10"],
+    ["https://ollama.example.com/v1", "ollama.example.com"],
+  ])("pins requests to the configured HTTP(S) hostname %s", (url, hostname) => {
+    expect(buildOllamaBaseUrlSsrFPolicy(url)).toEqual({
+      hostnameAllowlist: [hostname],
       allowPrivateNetwork: true,
     });
   });
 
-  it("returns no allowlist for empty or invalid base URLs", () => {
-    expect(buildOllamaBaseUrlSsrFPolicy("")).toBeUndefined();
-    expect(buildOllamaBaseUrlSsrFPolicy("ftp://ollama.example.com")).toBeUndefined();
-    expect(buildOllamaBaseUrlSsrFPolicy("not-a-url")).toBeUndefined();
-    expect(buildOllamaBaseUrlSsrFPolicy("http://metadata.google.internal")).toBeUndefined();
-  });
+  it.each(["", "ftp://ollama.example.com", "not-a-url", "http://metadata.google.internal"])(
+    "rejects empty, invalid or blocked base URL %s",
+    (url) => {
+      expect(buildOllamaBaseUrlSsrFPolicy(url)).toBeUndefined();
+    },
+  );
 });

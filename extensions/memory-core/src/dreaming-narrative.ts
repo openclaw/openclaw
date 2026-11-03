@@ -6,7 +6,12 @@ import {
   SUBAGENT_RUNTIME_REQUEST_SCOPE_ERROR_CODE,
 } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
-import { appendNarrativeEntry, clampDreamDiaryContextEntry } from "./dreaming-dreams-file.js";
+import {
+  appendNarrativeEntry,
+  clampDreamDiaryContextEntry,
+  FALLBACK_NARRATIVE,
+} from "./dreaming-dreams-file.js";
+import type { WorkspaceFileMode } from "./workspace-file-mode.js";
 
 export type DreamingCompletion = Pick<PluginRuntime["subagent"], "complete">;
 
@@ -74,11 +79,9 @@ function formatFallbackWriteFailure(err: unknown): string {
   );
 }
 
-const REQUEST_SCOPED_FALLBACK_NARRATIVE =
-  "A memory trace surfaced, but details were unavailable in this run.";
-
 export async function appendFallbackNarrativeEntry(params: {
   workspaceDir: string;
+  workspaceFileMode?: WorkspaceFileMode;
   data: NarrativePhaseData;
   nowMs: number;
   timezone?: string;
@@ -88,9 +91,10 @@ export async function appendFallbackNarrativeEntry(params: {
   try {
     await appendNarrativeEntry({
       workspaceDir: params.workspaceDir,
+      workspaceFileMode: params.workspaceFileMode,
       // Raw snippets and promotions are pre-processing memory staging fragments.
       // Keep fallback diary text generic so DREAMS.md never leaks staging content.
-      narrative: REQUEST_SCOPED_FALLBACK_NARRATIVE,
+      narrative: FALLBACK_NARRATIVE,
       nowMs: params.nowMs,
       timezone: params.timezone,
     });
@@ -183,6 +187,7 @@ export type DreamNarrativeRequest = {
   timeoutMs: number;
   subagent: DreamingCompletion;
   workspaceDir: string;
+  workspaceFileMode?: WorkspaceFileMode;
   data: NarrativePhaseData;
   nowMs?: number;
   timezone?: string;
@@ -191,9 +196,9 @@ export type DreamNarrativeRequest = {
   runInBackground?: <T>(run: () => Promise<T>) => Promise<T>;
 };
 
-export type DreamNarrativeOutcome =
-  | { status: "completed" | "pending" | "skipped" }
-  | { status: "degraded"; error: string };
+export type DreamNarrativeOutcome = {
+  status: "completed" | "pending" | "skipped" | "degraded";
+};
 
 export type PreparedDreamNarrative = Pick<DreamNarrativeRequest, "data" | "model" | "timezone">;
 
@@ -235,10 +240,11 @@ async function generateAndAppendDreamNarrative(
         nowMs,
         reason: "the narrative run produced no text",
       });
-      return { status: "degraded", error: "the narrative run produced no text" };
+      return { status: "degraded" };
     }
     const dreamsPath = await appendNarrativeEntry({
       workspaceDir: params.workspaceDir,
+      workspaceFileMode: params.workspaceFileMode,
       narrative,
       nowMs,
       timezone: params.timezone,
@@ -268,7 +274,7 @@ async function generateAndAppendDreamNarrative(
         ? "subagent runtime is request-scoped"
         : `the narrative run failed (${formatErrorMessage(error)})`,
     });
-    return { status: "degraded", error: formatErrorMessage(error) };
+    return { status: "degraded" };
   }
   return { status: "completed" };
 }

@@ -24,10 +24,10 @@ const runs = resolveGlobalSingleton<WeakMap<object, PreparedSessionRun>>(
   () => new WeakMap(),
 );
 
-export function bindInProcessSessionRun(
-  request: Record<string, unknown>,
+export function bindInProcessSessionRun<T extends Record<string, unknown>>(
+  request: T,
   launch: PreparedSessionRun,
-): Record<string, unknown> {
+) {
   if (request.sessionKey !== launch.sessionKey || request.idempotencyKey !== launch.runId) {
     throw new Error("Session run does not match its prepared target");
   }

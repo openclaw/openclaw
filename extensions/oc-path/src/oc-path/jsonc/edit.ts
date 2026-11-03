@@ -1,13 +1,22 @@
-import { applyEdits, modify } from "jsonc-parser/lib/esm/main.js";
+import {
+  applyEdits,
+  findNodeAtLocation,
+  format,
+  type FormattingOptions,
+  modify,
+  parseTree,
+} from "jsonc-parser/lib/esm/main.js";
 import { OcPathEditError } from "../edit-error.js";
 import type { OcPath } from "../oc-path.js";
 import { splitOcPathSlots } from "../oc-path.js";
-import { OcEmitSentinelError, REDACTED_SENTINEL } from "../sentinel.js";
+import { guardSentinel } from "../sentinel.js";
 import type { JsoncAst, JsoncValue } from "./ast.js";
-import { parseJsonc } from "./parse.js";
+import { findEffectiveJsoncNode, parseJsonc } from "./parse.js";
 import { resolveJsoncValueOcPath } from "./resolve-value.js";
 
 type JsoncEditPath = Array<string | number>;
+const FORMATTING: FormattingOptions = { insertSpaces: true, tabSize: 2 };
+
 type JsoncEditTarget = { readonly path: JsoncEditPath; readonly value: JsoncValue };
 
 export function setJsoncOcPath(ast: JsoncAst, path: OcPath, newValue: JsoncValue): JsoncAst {
@@ -19,8 +28,20 @@ export function setJsoncOcPath(ast: JsoncAst, path: OcPath, newValue: JsoncValue
   if (target === null) {
     throw new OcPathEditError("unresolved");
   }
-  guardSentinel(newValue, `oc://${path.file}/${target.path.join("/")}`);
-  return applyJsoncEdit(ast, target.path, newValue, false);
+  const tree = parseTree(ast.raw, [], { allowTrailingComma: true });
+  const node = tree && findEffectiveJsoncNode(tree, target.path);
+  if (!node) {
+    throw new OcPathEditError("unresolved");
+  }
+  const content = JSON.stringify(
+    jsoncValueToJson(newValue, `oc://${path.file}/${target.path.join("/")}`),
+  );
+  // Replace the effective node, then format the new range as jsonc-parser's modify does.
+  const replaced = applyEdits(ast.raw, [{ offset: node.offset, length: node.length, content }]);
+  const range = { offset: node.offset, length: content.length };
+  return reparse(
+    applyEdits(replaced, format(replaced, range, { ...FORMATTING, keepLines: false })),
+  );
 }
 
 export function insertJsoncOcPath(
@@ -51,10 +72,16 @@ export function insertJsoncOcPath(
     throw new OcPathEditError("unresolved");
   }
 
+  const tree = parseTree(ast.raw, [], { allowTrailingComma: true });
+  if (tree && findNodeAtLocation(tree, target.path) !== findEffectiveJsoncNode(tree, target.path)) {
+    throw new OcPathEditError(
+      "not-writable",
+      "insertion under a duplicated key is ambiguous; merge the duplicate keys into one (keeping the last, effective value), then retry the insertion",
+    );
+  }
   const segment = typeof indexOrKey === "number" && indexOrKey < 0 ? -1 : indexOrKey;
   const editPath = [...target.path, segment];
-  guardSentinel(newValue, `oc://${parentPath.file}/${editPath.join("/")}`);
-  return applyJsoncEdit(ast, editPath, newValue, typeof segment === "number");
+  return applyJsoncEdit(ast, editPath, newValue, typeof segment === "number", parentPath.file);
 }
 
 function applyJsoncEdit(
@@ -62,37 +89,26 @@ function applyJsoncEdit(
   path: JsoncEditPath,
   newValue: JsoncValue,
   isArrayInsertion: boolean,
+  file: string,
 ): JsoncAst {
-  const edits = modify(ast.raw, path, jsoncValueToJson(newValue), {
-    formattingOptions: { insertSpaces: true, tabSize: 2 },
-    isArrayInsertion,
-  });
+  const edits = modify(
+    ast.raw,
+    path,
+    jsoncValueToJson(newValue, `oc://${file}/${path.join("/")}`),
+    { formattingOptions: FORMATTING, isArrayInsertion },
+  );
   if (edits.length === 0) {
     throw new OcPathEditError("unresolved");
   }
-
-  const nextRaw = applyEdits(ast.raw, edits);
-  const reparsed = parseJsonc(nextRaw);
-  if (reparsed.ast.root === null) {
-    throw new OcPathEditError("unresolved");
-  }
-  return reparsed.ast;
+  return reparse(applyEdits(ast.raw, edits));
 }
 
-function guardSentinel(value: JsoncValue, guardPath: string): void {
-  if (value.kind === "string") {
-    if (value.value.includes(REDACTED_SENTINEL)) {
-      throw new OcEmitSentinelError(guardPath);
-    }
-    return;
+function reparse(nextRaw: string): JsoncAst {
+  const reparsed = parseJsonc(nextRaw);
+  if (reparsed.root === null) {
+    throw new OcPathEditError("unresolved");
   }
-  if (value.kind === "array") {
-    value.items.forEach((item, index) => guardSentinel(item, `${guardPath}/${index}`));
-    return;
-  }
-  if (value.kind === "object") {
-    value.entries.forEach((entry) => guardSentinel(entry.value, `${guardPath}/${entry.key}`));
-  }
+  return reparsed;
 }
 
 function resolveEditTarget(root: JsoncValue, segments: readonly string[]): JsoncEditTarget | null {
@@ -105,17 +121,21 @@ function resolveEditTarget(root: JsoncValue, segments: readonly string[]): Jsonc
   );
 }
 
-function jsoncValueToJson(value: JsoncValue): unknown {
+function jsoncValueToJson(value: JsoncValue, guardPath: string): unknown {
   if (value.kind === "null") {
     return null;
   }
   if (value.kind === "string" || value.kind === "number" || value.kind === "boolean") {
+    guardSentinel(value.value, guardPath);
     return value.value;
   }
   if (value.kind === "array") {
-    return value.items.map(jsoncValueToJson);
+    return value.items.map((item, index) => jsoncValueToJson(item, `${guardPath}/${index}`));
   }
   return Object.fromEntries(
-    value.entries.map((entry) => [entry.key, jsoncValueToJson(entry.value)]),
+    value.entries.map((entry) => [
+      entry.key,
+      jsoncValueToJson(entry.value, `${guardPath}/${entry.key}`),
+    ]),
   );
 }

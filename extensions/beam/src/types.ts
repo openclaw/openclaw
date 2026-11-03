@@ -18,6 +18,7 @@ export const BEAM_SESSION_SHARE_ROUTE = {
 export const BEAM_MAX_BODY_BYTES = 56 * 1024;
 export const BEAM_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 export const BEAM_MAX_SESSIONS = 500;
+export const BEAM_MAX_GUEST_SESSIONS = 20;
 export const BEAM_MAX_ITEMS = 200;
 export const BEAM_MAX_ITEM_CHARS = 6_000;
 
@@ -45,7 +46,9 @@ export type BeamUpload = {
 };
 
 export type BeamStoredSession = BeamUpload & {
-  /** Verified publisher of this snapshot; never accepted from the upload body. */
+  /** Immutable verified initial publisher. Older ownerless live rows remain ownerless. */
+  publisherProfileId?: string;
+  /** Verified uploader of this accepted snapshot; never accepted from the upload body. */
   uploaderProfileId?: string;
   createdAt: number;
   receivedAt: number;

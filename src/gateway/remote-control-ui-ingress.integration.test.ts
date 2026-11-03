@@ -23,6 +23,7 @@ import {
   mergeCanonicalUserProfiles,
   setCanonicalUserProfileAvatar,
 } from "../state/user-profile-writes.js";
+import { withEnv } from "../test-utils/env.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -119,8 +120,7 @@ describe("remote Control UI ingress production composition", () => {
     },
   };
   let http: ReturnType<typeof createGatewayHttpRequestHandler> | undefined;
-  const hostLifetime = new AbortController();
-  const serviceLifetime = new AbortController();
+  const lifetime = new AbortController();
   const grantLifetime = new AbortController();
   const clients = new GatewayClientRegistry();
   let listener: Awaited<
@@ -155,10 +155,9 @@ describe("remote Control UI ingress production composition", () => {
     const root = path.dirname(
       await state.writeText(
         "ui/index.html",
-        '<!doctype html><html><head><script type="module" src="./assets/app.js"></script></head><body>Remote UI fixture</body></html>',
+        "<!doctype html><html><head></head><body>Remote UI fixture</body></html>",
       ),
     );
-    await state.writeText("ui/assets/app.js", 'document.body.dataset.ready = "remote-ui";');
     await fs.writeFile(path.join(state.workspaceDir, "favicon.png"), PNG_BYTES);
     const assistantMedia = await state.writeText("media/ingress-chat.txt", "Ingress chat media\n");
     assistantMediaPath = `/claw/__openclaw__/assistant-media?source=${encodeURIComponent(assistantMedia)}`;
@@ -225,7 +224,10 @@ describe("remote Control UI ingress production composition", () => {
     );
     Object.assign(requestContext, { resolveGatewayContext: () => requestContext });
     gatewayContext = requestContext as never;
-    const preauthConnectionBudget = createPreauthConnectionBudget(8);
+    const preauthConnectionBudget = withEnv(
+      { OPENCLAW_MAX_PREAUTH_CONNECTIONS_PER_IP: "8" },
+      createPreauthConnectionBudget,
+    );
     attachGatewayWsConnectionHandler({
       wss,
       clients,
@@ -282,8 +284,8 @@ describe("remote Control UI ingress production composition", () => {
     });
     factory = createGatewayControlUiIngressFactory({
       pluginId: "synthetic-bundled-plugin",
-      signal: serviceLifetime.signal,
-      assertCurrent: () => serviceLifetime.signal.throwIfAborted(),
+      signal: lifetime.signal,
+      assertCurrent: () => lifetime.signal.throwIfAborted(),
       host: {
         controlUiBasePath: "/claw",
         resolveGatewayContext: () => requestContext as never,
@@ -298,8 +300,8 @@ describe("remote Control UI ingress production composition", () => {
           await http!(req, res);
         },
         handleUpgrade,
-        handleSandboxRequest: createSandboxHostHttpRequestHandler(),
-        signal: hostLifetime.signal,
+        handleSandboxRequest: createSandboxHostHttpRequestHandler({ clients }),
+        signal: lifetime.signal,
       },
     });
     ingress = await factory.open(openOptions);
@@ -307,8 +309,7 @@ describe("remote Control UI ingress production composition", () => {
 
   afterAll(async () => {
     await ingress?.close();
-    hostLifetime.abort();
-    serviceLifetime.abort();
+    lifetime.abort();
     await connectionWork.drain();
     await new Promise<void>((resolve) => {
       wss.close(() => resolve());
@@ -535,6 +536,68 @@ describe("remote Control UI ingress production composition", () => {
     await response.body?.cancel();
   });
 
+  it("delivers preview resources only through the issuing ingress grant and live connection", async () => {
+    const controller = new AbortController();
+    const owner = await factory.open({
+      ...openOptions,
+      audienceId: "preview-issuer",
+      signal: controller.signal,
+      assertCurrent: () => controller.signal.throwIfAborted(),
+    });
+    const foreign = await factory.open({ ...openOptions, audienceId: "preview-other-grant" });
+    const code = "window.previewReady = true;";
+    const policy =
+      "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'";
+    const html = `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${policy}"><script defer src="csp-preview.js"></script></head><body>Preview</body></html>`;
+    await fs.writeFile(path.join(state.workspaceDir, "csp-preview.html"), html);
+    await fs.writeFile(path.join(state.workspaceDir, "csp-preview.js"), code);
+    let resourcePath = "";
+    const readResource = async (handle: GatewayControlUiIngressV2) =>
+      (
+        await handle.request({
+          surface: "sandbox",
+          method: "GET",
+          pathAndQuery: resourcePath,
+          headers: [],
+          signal: lifetime.signal,
+        })
+      ).response;
+    try {
+      await usePeer(await openRemote(owner), async (peer) => {
+        const identity = loadOrCreateDeviceIdentity({ identityKey: "synthetic-preview-browser" });
+        expectHello(
+          await connect(peer, { identity, scopes: [...SCOPES] }),
+          "remote-ingress",
+          SCOPES,
+        );
+        const result = await request(peer, "sessions.files.preview", {
+          sessionKey: OWNER_SESSION_KEY,
+          path: "csp-preview.html",
+          html,
+        });
+        expect(result.ok, JSON.stringify(result.error)).toBe(true);
+        expect(result.payload?.status).toBe("ready");
+        const sandboxPath = result.payload?.sandboxPath;
+        assert(typeof sandboxPath === "string", "Missing admitted preview URL");
+        resourcePath = new URL("csp-preview.js", SANDBOX_ORIGIN + sandboxPath).pathname;
+        const allowed = await readResource(owner);
+        expect(allowed.status).toBe(200);
+        expect(await allowed.text()).toBe(code);
+        const denied = await readResource(foreign);
+        expect(denied.status).toBe(404);
+        expect(await denied.text()).toBe("Not Found");
+      });
+      const retired = await readResource(owner);
+      expect(retired.status).toBe(404);
+      expect(await retired.text()).toBe("Not Found");
+      controller.abort(new Error("preview ingress revoked"));
+      await expect(readResource(owner)).rejects.toThrow();
+    } finally {
+      await owner.close();
+      await foreign.close();
+    }
+  });
+
   it("rejects invalid devices, reusable credentials, roles and scopes at WebSocket admission", async () => {
     const identity = loadOrCreateDeviceIdentity({ identityKey: "synthetic-rejected-browser" });
     const cases = [
@@ -637,13 +700,13 @@ describe("remote Control UI ingress production composition", () => {
           );
         }
         await expectStatus(readRemote(`/claw/api/users/${person.id}/avatar`, ui), 200);
-        await expectStatus(
-          readRemote(
-            `/claw/__openclaw__/workspace-icon/${encodeURIComponent(`agent:main:ingress-${person.id}`)}`,
-            ui,
-          ),
-          isAdmin ? 200 : 403,
-        );
+        // Session byte routes follow session visibility: each person reads the icon of the
+        // draft they created, the reader role (sessions.others: none) cannot see the admin's
+        // draft, and admin scope stays unfiltered.
+        const iconPath = (owner: { id: string }) =>
+          `/claw/__openclaw__/workspace-icon/${encodeURIComponent(`agent:main:ingress-${owner.id}`)}`;
+        await expectStatus(readRemote(iconPath(person), ui), 200);
+        await expectStatus(readRemote(iconPath(isAdmin ? reader : admin), ui), isAdmin ? 200 : 403);
       } finally {
         await binding.close();
       }

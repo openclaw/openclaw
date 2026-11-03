@@ -13,7 +13,7 @@ export function createTuiRefreshCoalescer(refresh: CoalescedRefreshWork, afterDr
     async run(): Promise<void> {
       if (active) {
         requestRerun();
-        return await active;
+        return active;
       }
       const current = (async () => {
         do {
@@ -28,9 +28,7 @@ export function createTuiRefreshCoalescer(refresh: CoalescedRefreshWork, afterDr
       try {
         await current;
       } finally {
-        if (active === current) {
-          active = undefined;
-        }
+        active = undefined;
       }
     },
   };

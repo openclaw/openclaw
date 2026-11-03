@@ -7,14 +7,13 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it } from "vitest";
 import { isInternalRuntimeContextCarrierText } from "../extensions/qa-lab/api.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
-import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
+import { disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
 import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
 import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
+import { writeRestartToolCalls } from "./gateway-restart.test-support.js";
+import { connectProofClient, respondJson } from "./helpers/gateway-integration-fixtures.js";
 import { createOpenAiResponsesModelConfig } from "./helpers/openai-responses-model-fixture.js";
-import {
-  writeOpenAiResponsesSse,
-  writeOpenAiResponsesText,
-} from "./helpers/openai-responses-sse.js";
+import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -95,13 +94,11 @@ it(
     expect(prepared.code, prepared.stderr).toBe(0);
     await gateway.startGateway();
     const errorSessions: unknown[] = [];
-    const client = await connectGatewayClient({
-      url: gateway.url,
-      token: gateway.gatewayToken,
+    const client = await connectProofClient(gateway, {
       role: "operator",
       scopes: ["operator.admin", "operator.read", "operator.write"],
       deviceIdentity: loadOrCreateDeviceIdentity({
-        path: gateway.state.path("reply-obligation-client.sqlite"),
+        path: gateway.state.path("reply-obligation-client", "client", "credentials.sqlite"),
       }),
       signal,
       onEvent: (event) => {
@@ -292,8 +289,7 @@ async function startFixture(scenarios: Scenario[]) {
       createServer((request, response) => {
         void handle(request, response).catch((error: unknown) => {
           failures.push(String(error));
-          response.writeHead(400, { "content-type": "application/json" });
-          response.end(JSON.stringify({ error: { message: String(error) } }));
+          respondJson(response, { error: { message: String(error) } }, 400);
         });
       }),
   });
@@ -364,30 +360,7 @@ async function startFixture(scenarios: Scenario[]) {
       }),
       status: "completed",
     };
-    const event = (type: string, fields: Record<string, unknown>) => ({
-      type: `response.${type}`,
-      output_index: 0,
-      ...fields,
-    });
-    writeOpenAiResponsesSse(response, [
-      event("output_item.added", {
-        item: { ...item, status: "in_progress", arguments: "" },
-      }),
-      event("function_call_arguments.done", {
-        item_id: item.id,
-        arguments: item.arguments,
-      }),
-      event("output_item.done", { item }),
-      {
-        type: "response.completed",
-        response: {
-          id: "resp_" + id,
-          status: "completed",
-          output: [item],
-          usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-        },
-      },
-    ]);
+    writeRestartToolCalls(response, "resp_" + id, [item], { argumentEvent: "done" });
   }
   return {
     url: "http://127.0.0.1:" + reserved.claim.port,

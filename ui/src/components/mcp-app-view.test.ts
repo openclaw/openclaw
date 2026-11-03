@@ -1,4 +1,4 @@
-import { GatewayErrorDetailCodes } from "@openclaw/gateway-protocol";
+import { GatewayErrorDetailCodes } from "@openclaw/gateway-protocol/gateway-error-details";
 import { createComponent, flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
@@ -22,8 +22,8 @@ import {
   type McpAppContextState,
   type McpAppMessageEventDetail,
 } from "./mcp-app-security.ts";
-import { mountView } from "./mcp-app-view.test-support.ts";
-import { McpAppPanel, type McpAppPanelElement } from "./solid/mcp-app-panel.tsx";
+import { mockMcpSandboxProxyReady, mountView } from "./mcp-app-view.test-support.ts";
+import { McpAppPanel } from "./solid/mcp-app-panel.tsx";
 const bridgeMocks = vi.hoisted(() => ({
   instances: [] as Array<Record<string, unknown>>,
   transports: [] as Array<Record<string, unknown>>,
@@ -398,10 +398,13 @@ describe("mcp-app-view localization", () => {
     const provider = createSolidApplicationContextProvider(
       context as unknown as ApplicationContext,
     );
-    const mounted = mountSolid(() => createComponent(McpAppPanel, { launch }), {
-      wrapper: provider.wrapper,
-    });
-    const panel = mounted.container.querySelector<McpAppPanelElement>("openclaw-mcp-app-panel")!;
+    const mounted = mountSolid(
+      () => createComponent(McpAppPanel, { launch, observeRetirement: () => () => {} }),
+      {
+        wrapper: provider.wrapper,
+      },
+    );
+    const panel = mounted.container.querySelector("openclaw-mcp-app-panel")!;
     const expired = deferred();
     panel.addEventListener(MCP_APP_VIEW_EXPIRED_EVENT, () => expired.resolve(), { once: true });
     await expired.promise;
@@ -567,22 +570,7 @@ describe("mcp-app-view localization", () => {
     vi.stubGlobal("localStorage", createStorageMock());
     vi.stubGlobal("sessionStorage", createStorageMock());
     installTranscriptDomMocks();
-    vi.spyOn(HTMLIFrameElement.prototype, "contentWindow", "get").mockReturnValue(window);
-    const frameSource = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, "src")!;
-    vi.spyOn(HTMLIFrameElement.prototype, "src", "set").mockImplementation(function (
-      this: HTMLIFrameElement,
-      value,
-    ) {
-      frameSource.set!.call(this, value);
-      queueMicrotask(() =>
-        window.dispatchEvent(
-          new MessageEvent("message", {
-            source: window,
-            data: { method: "ui/notifications/sandbox-proxy-ready" },
-          }),
-        ),
-      );
-    });
+    mockMcpSandboxProxyReady();
     const sessionKey = "agent:main:apps-context";
     const viewId = "apps-context-view";
     const fixture = createMountedPanes([
@@ -734,104 +722,6 @@ describe("mcp-app-view localization", () => {
       },
       { signal: expect.any(AbortSignal) },
     );
-  });
-  it("pushes live theme and container changes and cleans up their observers", async () => {
-    let resize: (() => void) | undefined;
-    const disconnect = vi.fn();
-    vi.stubGlobal(
-      "ResizeObserver",
-      class {
-        constructor(callback: () => void) {
-          resize = callback;
-        }
-        observe() {}
-        disconnect() {
-          disconnect();
-        }
-      },
-    );
-    let width = 640;
-    let height = 480;
-    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
-      () => ({ width, height }) as DOMRect,
-    );
-    document.documentElement.dataset.themeMode = "dark";
-    document.documentElement.style.setProperty("--card", "#161920");
-    document.documentElement.style.setProperty("--text", "#d4d4d8");
-    const { bridge, frame, themeListeners, unsubscribe, view, unmount } = await mountBridge(
-      `view-context-${crypto.randomUUID()}`,
-    );
-    expect(bridge.options.hostContext).toMatchObject({
-      theme: "dark",
-      containerDimensions: { width: 640, height: 600 },
-      styles: {
-        variables: {
-          "--color-background-primary": "#161920",
-          "--color-text-primary": "#d4d4d8",
-        },
-      },
-    });
-    await expect.poll(() => themeListeners.size).toBe(1);
-    document.documentElement.dataset.themeMode = "light";
-    document.documentElement.style.setProperty("--card", "#ffffff");
-    document.documentElement.style.setProperty("--text", "#403c35");
-    themeListeners.values().next().value?.();
-    expect(bridge.setHostContext).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        theme: "light",
-        styles: {
-          variables: expect.objectContaining({
-            "--color-background-primary": "#ffffff",
-            "--color-text-primary": "#403c35",
-          }),
-        },
-      }),
-    );
-    width = 720;
-    resize?.();
-    expectHost(bridge, { containerDimensions: { width: 720, height: 600 } });
-    view.height = 480;
-    await view.updateComplete;
-    expect(view.querySelector("iframe")?.style.height).toBe("480px");
-    expectHost(bridge, { containerDimensions: { width: 720, height: 480 } });
-    const onHeightChange = vi.fn();
-    view.onHeightChange = onHeightChange;
-    bridge.onsizechange?.({ height: 900 });
-    expect(frame.style.height).toBe("900px");
-    expect(view.querySelector<HTMLElement>(".mount")?.style.minHeight).toBe("900px");
-    expect(onHeightChange).toHaveBeenLastCalledWith(900);
-    bridge.onsizechange?.({ height: Number.NaN });
-    expect(frame.style.height).toBe("900px");
-    expect(onHeightChange).toHaveBeenCalledTimes(1);
-    for (const change of [
-      { title: "Updated library" },
-      { surface: "board" },
-      { relaunching: true },
-    ]) {
-      Object.assign(view, change);
-      await view.updateComplete;
-      expect(view.querySelector("iframe")).toBe(frame);
-      expect(frame.style.height).toBe("900px");
-    }
-    view.fillContainer = true;
-    await view.updateComplete;
-    expect(view.querySelector("iframe")?.style.height).toBe("100%");
-    bridge.onsizechange?.({ height: 900 });
-    expect(view.querySelector("iframe")?.style.height).toBe("100%");
-    expect(onHeightChange).toHaveBeenCalledTimes(1);
-    expectHost(bridge, { containerDimensions: { width: 720, height: 480 } });
-    height = 760;
-    resize?.();
-    expectHost(bridge, { containerDimensions: { width: 720, height: 760 } });
-    view.fillContainer = false;
-    await view.updateComplete;
-    expect(view.querySelector("iframe")?.style.height).toBe("480px");
-    bridge.onsizechange?.({ height: 900 });
-    expect(view.querySelector("iframe")?.style.height).toBe("900px");
-    unmount();
-    await expect.poll(() => disconnect).toHaveBeenCalledOnce();
-    expect(unsubscribe).toHaveBeenCalledOnce();
-    expect(themeListeners.size).toBe(0);
   });
   it("keeps the frame connected through teardown and installs only the latest replacement", async () => {
     const pending = deferred<Record<string, never>>();

@@ -1,4 +1,7 @@
-import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
+import {
+  requireNativeDatabaseFile,
+  getPostgresPhysicalFacts,
+} from "../infra/database-engine/physical-facts.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import {
@@ -14,11 +17,20 @@ import {
   getAdmittedSqliteSchemaFacts,
   isSqliteSchemaAdmissionCold,
 } from "../infra/sqlite-schema-facts.js";
+import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 
 function getStateSchemaFacts(database: EngineConnection) {
   return isPostgresSqlConnection(database)
     ? getPostgresPhysicalFacts(database)
     : getAdmittedSqliteSchemaFacts(database);
+}
+
+/** PostgreSQL admits the current schema; SQLite may still expose a pre-feature version. */
+export function isStateSchemaVersionAtLeast(database: EngineConnection, version: number): boolean {
+  return (
+    isPostgresSqlConnection(database) ||
+    (getAdmittedSqliteSchemaFacts(database)?.userVersion ?? 0) >= version
+  );
 }
 
 export type StateSchemaVersionFacts = { userVersion: number; contentVersion: number };
@@ -217,4 +229,15 @@ export function publishStateRuntimeSchemaAdmission(
   startupReady: boolean,
 ): void {
   runtimeAdmission.publish(database, { startupReady });
+}
+
+export function readPublishedStateSchemaVersion(database: EngineConnection): number {
+  const admitted = getStateSchemaVersionAdmission(database);
+  if (admitted) {
+    return admitted.userVersion;
+  }
+  if (isPostgresSqlConnection(database)) {
+    requireNativeDatabaseFile("postgres", "repair");
+  }
+  return readSqliteUserVersion(database);
 }

@@ -1,4 +1,4 @@
-/** Timeout watchdogs for isolated cron agent setup and execution phases. */
+/** Timeout watchdogs for cron runner setup and execution phases. */
 import { raceWithTimeout } from "@openclaw/retry";
 import type {
   CronAgentExecutionPhase,
@@ -47,8 +47,9 @@ const CRON_AGENT_PHASE_WATCHDOG_STAGE = {
   model_call_started: "execution",
 } as const satisfies Record<CronAgentExecutionPhase, CronAgentPhaseWatchdogStage>;
 
-/** Tracks isolated-agent setup/execution progress and fires the correct cron timeout reason. */
+/** Tracks runner setup/execution progress and fires the owning timeout reason. */
 export function createCronAgentWatchdog(params: {
+  executionKind?: "agent" | "command";
   deferUntilRunner: boolean;
   jobTimeoutMs: number;
   triggerTimeout: (reason: string) => void;
@@ -58,7 +59,6 @@ export function createCronAgentWatchdog(params: {
   let setupTimeoutId: NodeJS.Timeout | undefined;
   let preExecutionTimeoutId: NodeJS.Timeout | undefined;
   let activeExecution: CronAgentExecutionStarted | undefined;
-  let observedLaneWait = false;
   let waitingForLane = false;
 
   const setTimedOut = (reason: string) => {
@@ -90,7 +90,11 @@ export function createCronAgentWatchdog(params: {
     }
     setupTimeoutId = setTimeout(() => {
       if (state === "waiting_for_runner" && !waitingForLane) {
-        setTimedOut(setupTimeoutErrorMessage(activeExecution));
+        setTimedOut(
+          params.executionKind === "command"
+            ? `${timeoutErrorMessage()} (command setup before runner start)`
+            : setupTimeoutErrorMessage(activeExecution),
+        );
       }
     }, CRON_AGENT_SETUP_WATCHDOG_MS);
   };
@@ -133,33 +137,21 @@ export function createCronAgentWatchdog(params: {
 
   return {
     start: () => {
+      // The job deadline bounds admission and teardown too, even if the runner
+      // never reports startup. Phase watchdogs may fail a stalled run sooner.
+      startTimeout();
       if (params.deferUntilRunner) {
         startSetupTimeout();
-        return;
       }
-      startTimeout();
-    },
-    replaceTimeout: (timeoutMs: number | undefined) => {
-      // A heartbeat handoff starts a distinct configured deadline. Keeping the
-      // original timer would still abort long heartbeat turns at the cron default.
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-      timeoutId =
-        timeoutMs !== undefined && state !== "timed_out" && state !== "disposed"
-          ? setTimeout(() => setTimedOut(timeoutErrorMessage(activeExecution)), timeoutMs)
-          : undefined;
     },
     noteLaneWait: () => {
       if (state === "waiting_for_runner") {
-        observedLaneWait = true;
         waitingForLane = true;
         clearSetupTimeout();
       }
     },
     noteLaneAdmitted: () => {
       if (state === "waiting_for_runner") {
-        observedLaneWait = false;
         waitingForLane = false;
         startSetupTimeout();
       }
@@ -170,6 +162,12 @@ export function createCronAgentWatchdog(params: {
       }
       clearSetupTimeout();
       startTimeout();
+      if (params.executionKind === "command") {
+        state = "executing";
+        clearPreExecutionTimeout();
+        noteExecutionProgress(info);
+        return;
+      }
       if (info?.isFallback === true) {
         clearPreExecutionTimeout();
         state = "waiting_for_fallback_execution";
@@ -186,7 +184,7 @@ export function createCronAgentWatchdog(params: {
       noteExecutionProgress(info);
     },
     activeExecution: () => activeExecution,
-    observedLaneWait: () => observedLaneWait,
+    observedLaneWait: () => waitingForLane,
     dispose: () => {
       state = "disposed";
       if (timeoutId) {

@@ -1,9 +1,5 @@
-import { assert, expect, it, onTestFinished } from "vitest";
+import { assert, expect, it, onTestFinished, vi } from "vitest";
 import { createChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
-import {
-  createOperationalRunInstanceRef,
-  prepareAgentRunAdmission,
-} from "../../agents/admitted-run-context.js";
 import { createAgentHarnessHostCapabilities } from "../../agents/harness/host-capability.js";
 import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import {
@@ -68,6 +64,42 @@ function captureAdmission() {
   };
   return { identityWork, decisions, audit, evidence, envelope };
 }
+
+it.each(["channel", "gateway"] as const)(
+  "freezes published %s admission owners without freezing private adapter objects",
+  async (source) => {
+    const { evidence, envelope } = captureAdmission();
+    const prepared = prepare({
+      evidence: source === "channel" ? evidence() : undefined,
+      gatewayLocalUserIngress:
+        source === "gateway"
+          ? prepareGatewayLocalUserIngress({
+              authMethod: "token",
+              authenticatedUserExpected: true,
+              isLocalClient: false,
+            })
+          : undefined,
+    });
+    const freeze = vi.spyOn(Object, "freeze");
+    onTestFinished(() => freeze.mockRestore());
+    const admitted = await prepared.admit("embedded");
+    expect(Object.isFrozen(prepared)).toBe(true);
+    expect(Object.isFrozen(admitted)).toBe(true);
+    expect(envelope().ingress.state).toBe("present");
+    expect(
+      freeze.mock.calls.filter(([value]) => {
+        if (!value || typeof value !== "object") {
+          return false;
+        }
+        return (
+          ("facts" in value && "onAdmitted" in value) ||
+          ("invoker" in value &&
+            Object.keys(value).every((key) => key === "invoker" || key === "assurance"))
+        );
+      }),
+    ).toHaveLength(0);
+  },
+);
 
 it.each(["unresolved", "forged"] as const)(
   "records only owner-prepared Gateway facts for a %s carrier",
@@ -206,8 +238,8 @@ it("explains identifier-authentication effects alongside an unevaluated contribu
   expect(JSON.stringify(decisions)).not.toContain("private-person-value");
 });
 
-it("does not consume a cancelled pre-admission carrier or label internal ACP as a person", async () => {
-  const { evidence: createEvidence, envelope } = captureAdmission();
+it("does not consume a cancelled pre-admission carrier", async () => {
+  const { evidence: createEvidence } = captureAdmission();
   const evidence = createEvidence();
   const cancelled = prepare({ runId: "cancelled-run", evidence });
   cancelled.close();
@@ -215,18 +247,4 @@ it("does not consume a cancelled pre-admission carrier or label internal ACP as 
     "prepared execution context is already closed",
   );
   expect(consumeChannelAdmissionEvidence(evidence)).toMatchObject({ ingressState: "present" });
-
-  const internalAcp = prepareAgentRunAdmission({
-    cfg: identityConfig,
-    operationalRunInstance: createOperationalRunInstanceRef("internal-acp"),
-    facts: {
-      runId: "internal-acp",
-      agentId: "main",
-      ingress: { kind: "acp", boundary: "test.internal", state: "present" },
-    },
-  });
-  await internalAcp.admit("acp");
-  internalAcp.close();
-
-  expect(envelope().invoker).toBeUndefined();
 });

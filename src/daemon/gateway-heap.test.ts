@@ -1,5 +1,6 @@
 // Managed Gateway heap tests cover capacity policy and safe native service controls.
-import { describe, expect, it } from "vitest";
+import os from "node:os";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   formatGatewayHeapLimitReport,
   inspectGatewayHeapLimit,
@@ -48,17 +49,18 @@ describe("Gateway service heap controls", () => {
         environment: { NODE_OPTIONS: nodeOptions },
       }),
     ).toEqual(["--max-old-space-size=24576", "--max-heap-size=32768"]);
-    expect(inspectGatewayHeapLimit(nodeOptions, {}, command)).toMatchObject({
+    expect(inspectGatewayHeapLimit(nodeOptions, command)).toMatchObject({
       nodeOptions,
       execArgv: ["--max-old-space-size=24576", "--max-heap-size=32768"],
     });
   });
 
   it("does not infer automatic provenance when configured heap matches the recommendation", () => {
-    const report = inspectGatewayHeapLimit("--max-old-space-size=4096", {
-      constrainedMemoryBytes: 8192 * MIB,
-      physicalMemoryBytes: 16384 * MIB,
-    });
+    const constrained = vi.spyOn(process, "constrainedMemory").mockReturnValue(8192 * MIB);
+    const physical = vi.spyOn(os, "totalmem").mockReturnValue(16384 * MIB);
+    onTestFinished(() => constrained.mockRestore());
+    onTestFinished(() => physical.mockRestore());
+    const report = inspectGatewayHeapLimit("--max-old-space-size=4096");
     const text = formatGatewayHeapLimitReport(report);
     expect(text).toContain("service NODE_OPTIONS: --max-old-space-size=4096");
     expect(text).toContain("installer recommendation: 4096 MiB old space");
@@ -67,13 +69,12 @@ describe("Gateway service heap controls", () => {
   });
 
   it("reports unavailable capacity without inventing a recommendation", () => {
-    expect(
-      formatGatewayHeapLimitReport(
-        inspectGatewayHeapLimit(undefined, {
-          constrainedMemoryBytes: 0,
-          physicalMemoryBytes: Number.NaN,
-        }),
-      ),
-    ).toContain("installer recommendation: unavailable (unknown capacity; use Node default)");
+    const constrained = vi.spyOn(process, "constrainedMemory").mockReturnValue(0);
+    const physical = vi.spyOn(os, "totalmem").mockReturnValue(Number.NaN);
+    onTestFinished(() => constrained.mockRestore());
+    onTestFinished(() => physical.mockRestore());
+    expect(formatGatewayHeapLimitReport(inspectGatewayHeapLimit(undefined))).toContain(
+      "installer recommendation: unavailable (unknown capacity; use Node default)",
+    );
   });
 });

@@ -10,6 +10,16 @@ function mockDoctorPlugins(...plugins: Record<string, unknown>[]): void {
   mocks.loadPluginManifestRegistry.mockReturnValue({ plugins, diagnostics: [] });
 }
 
+const workspaceActivation = [
+  { name: "inactive workspace", config: {}, allowed: false },
+  { name: "allowlisted workspace", config: { plugins: { allow: ["alpha"] } }, allowed: true },
+  {
+    name: "enabled workspace",
+    config: { plugins: { entries: { alpha: { enabled: true } } } },
+    allowed: true,
+  },
+];
+
 function pluginRecord(rootDir: string, overrides: Record<string, unknown> = {}) {
   return {
     id: "alpha",
@@ -143,31 +153,14 @@ function modernLegacyFixture(source = directDetector) {
 }
 
 describe("doctor-contract-registry state migrations", () => {
-  it("freezes dynamic and declared live actions in stable owner order", () => {
-    const pluginRoot = makeTempDir();
-    writeMigrations(pluginRoot, "dynamic-action");
-    mockDoctorPlugins(
-      pluginRecord(pluginRoot, { id: "dynamic-owner" }),
-      pluginRecord(pluginRoot, {
-        id: "declared-owner",
-        doctorContract: { stateMigrations: [{ id: "declared-action" }] },
-      }),
-    );
-
-    expect(
-      harness.registry.resolveLivePluginDoctorStateMigrationInventory({ config: {}, env: {} })
-        .descriptors,
-    ).toEqual([
-      { pluginId: "declared-owner", id: "declared-action" },
-      { pluginId: "dynamic-owner", id: "dynamic-action" },
-    ]);
-  });
-
-  it("uses stable owner order while preserving each owner's declaration order", () => {
+  it("orders dynamic and declared owners while preserving each owner's action order", () => {
     const acpxRoot = makeTempDir();
     const codexRoot = makeTempDir();
+    const dynamicRoot = makeTempDir();
     writeMigrations(acpxRoot, "z-prepare", "a-finalize");
     writeMigrations(codexRoot, "codex-only");
+    writeMigrations(dynamicRoot, "dynamic-action");
+    const dynamicRecord = pluginRecord(dynamicRoot, { id: "dynamic-owner" });
     const codexRecord = pluginRecord(codexRoot, {
       id: "codex",
       origin: "config",
@@ -179,7 +172,7 @@ describe("doctor-contract-registry state migrations", () => {
         stateMigrations: [{ id: "z-prepare" }, { id: "a-finalize" }],
       },
     });
-    let discoveryOrder = [codexRecord, acpxRecord];
+    let discoveryOrder = [dynamicRecord, codexRecord, acpxRecord];
     mocks.loadPluginManifestRegistry.mockImplementation(() => ({
       plugins: discoveryOrder,
       diagnostics: [],
@@ -188,13 +181,14 @@ describe("doctor-contract-registry state migrations", () => {
       { pluginId: "acpx", id: "z-prepare" },
       { pluginId: "acpx", id: "a-finalize" },
       { pluginId: "codex", id: "codex-only" },
+      { pluginId: "dynamic-owner", id: "dynamic-action" },
     ];
     expect(
       harness.registry.resolveLivePluginDoctorStateMigrationInventory({ config: {}, env: {} })
         .descriptors,
     ).toEqual(expected);
 
-    discoveryOrder = [acpxRecord, codexRecord];
+    discoveryOrder = [acpxRecord, codexRecord, dynamicRecord];
     expect(
       migrationEntries().map(({ pluginId, migration }) => ({
         pluginId,
@@ -262,12 +256,9 @@ describe("doctor-contract-registry state migrations", () => {
     },
   );
 
-  it.each([
-    { name: "entry feature present", entryFeature: true, expectedCount: 1 },
-    { name: "entry feature absent", entryFeature: false, expectedCount: 0 },
-  ])(
-    "gates the legacy setup-plugin lifecycle fallback when the $name",
-    async ({ entryFeature, expectedCount }) => {
+  it.each([false, true])(
+    "gates the legacy setup-plugin lifecycle fallback (entry feature=%s)",
+    async (entryFeature) => {
       const { pluginRoot, events } = legacyFixture(
         `module.exports = {
   kind: "bundled-channel-setup-entry",
@@ -279,7 +270,7 @@ describe("doctor-contract-registry state migrations", () => {
 };`,
       );
       const entries = migrationEntries({ pluginIds: ["legacy-channel"] });
-      expect(entries).toHaveLength(expectedCount);
+      expect(entries).toHaveLength(Number(entryFeature));
       if (entries[0]) {
         await expect(
           entries[0].migration.detectLegacyState(detectionInput(pluginRoot)),
@@ -314,27 +305,12 @@ describe("doctor-contract-registry state migrations", () => {
   });
 
   it.each([
-    {
-      name: "explicitly disabled channel",
-      config: { channels: { alpha: { enabled: false } } },
-    },
-    {
-      name: "explicitly disabled plugin",
-      config: { plugins: { entries: { alpha: { enabled: false } } } },
-    },
-    {
-      name: "denylisted plugin",
-      config: { plugins: { deny: ["alpha"] } },
-    },
-    {
-      name: "globally disabled plugins",
-      config: { plugins: { enabled: false } },
-    },
-    {
-      name: "every configured channel alias disabled",
-      config: { channels: { alpha: { enabled: false }, "alpha-alias": { enabled: false } } },
-    },
-  ])("never loads state migrations for an $name, but still repairs its config", ({ config }) => {
+    { channels: { alpha: { enabled: false } } },
+    { plugins: { entries: { alpha: { enabled: false } } } },
+    { plugins: { deny: ["alpha"] } },
+    { plugins: { enabled: false } },
+    { channels: { alpha: { enabled: false }, "alpha-alias": { enabled: false } } },
+  ])("repairs disabled owner config without loading state migrations: %j", (config) => {
     const { detectLegacyState, migrateLegacyState } = mockModernPlugin(
       {
         origin: "global",
@@ -356,29 +332,12 @@ describe("doctor-contract-registry state migrations", () => {
   });
 
   it.each([
-    {
-      name: "untrusted workspace even when explicitly scoped",
-      origin: "workspace",
-      config: {},
-      allowed: false,
-    },
+    ...workspaceActivation.map((scenario) => ({ ...scenario, origin: "workspace" })),
     {
       name: "non-bundled owner omitted from a restrictive allowlist",
       origin: "global",
       config: { plugins: { allow: ["other-plugin"] } },
       allowed: false,
-    },
-    {
-      name: "explicitly allowlisted workspace",
-      origin: "workspace",
-      config: { plugins: { allow: ["alpha"] } },
-      allowed: true,
-    },
-    {
-      name: "explicitly enabled workspace",
-      origin: "workspace",
-      config: { plugins: { entries: { alpha: { enabled: true } } } },
-      allowed: true,
     },
   ])("honors effective activation before loading an $name", ({ origin, config, allowed }) => {
     const { events } = legacyFixture(directDetector, {
@@ -395,24 +354,15 @@ describe("doctor-contract-registry state migrations", () => {
     expect(doctorContractWarnMock).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { name: "inactive workspace owner", config: {}, allowed: false },
-    {
-      name: "allowlisted workspace owner",
-      config: { plugins: { allow: ["alpha"] } },
-      allowed: true,
-    },
-    {
-      name: "explicitly enabled workspace owner",
-      config: { plugins: { entries: { alpha: { enabled: true } } } },
-      allowed: true,
-    },
-  ])("gates a modern non-channel $name before loading", ({ config, allowed }) => {
-    mockModernPlugin({ origin: "workspace" });
+  it.each(workspaceActivation)(
+    "gates a modern non-channel $name before loading",
+    ({ config, allowed }) => {
+      mockModernPlugin({ origin: "workspace" });
 
-    expect(migrationIds({ config })).toEqual(allowed ? ["alpha-state"] : []);
-    expect(mocks.createJiti).toHaveBeenCalledTimes(allowed ? 1 : 0);
-  });
+      expect(migrationIds({ config })).toEqual(allowed ? ["alpha-state"] : []);
+      expect(mocks.createJiti).toHaveBeenCalledTimes(allowed ? 1 : 0);
+    },
+  );
 
   it("preserves an enabled channel alias and the existing restrictive-allowlist bypass", () => {
     const pluginRoot = makeTempDir();
@@ -429,24 +379,16 @@ describe("doctor-contract-registry state migrations", () => {
     ).toEqual(["alpha-state"]);
   });
 
-  it("prefers modern migrations without loading the same owner's legacy setup entry", () => {
-    const { pluginRoot, events } = modernLegacyFixture(
-      "throw new Error('obsolete setup entry loaded');",
-    );
-    writeMigrations(pluginRoot, "alpha-modern");
-    expect(migrationIds()).toEqual(["alpha-modern"]);
-    expect(events()).toEqual([]);
-    expect(doctorContractWarnMock).not.toHaveBeenCalled();
-  });
-
-  it("does not fall back to legacy when an explicit modern declaration yields no migrations", () => {
-    const { pluginRoot, events } = modernLegacyFixture();
-    writeMigrations(pluginRoot);
-
-    expect(migrationEntries()).toEqual([]);
-    expect(events()).toEqual([]);
-    expect(doctorContractWarnMock).not.toHaveBeenCalled();
-  });
+  it.each([{ ids: [] }, { ids: ["alpha-modern"] }])(
+    "never falls back to legacy for an explicit modern declaration: $ids",
+    ({ ids }) => {
+      const { pluginRoot, events } = modernLegacyFixture();
+      writeMigrations(pluginRoot, ...ids);
+      expect(migrationIds()).toEqual(ids);
+      expect(events()).toEqual([]);
+      expect(doctorContractWarnMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps bundled non-channel state migrations available when plugins are globally disabled", () => {
     const pluginRoot = makeTempDir();

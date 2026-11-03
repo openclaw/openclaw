@@ -78,7 +78,8 @@ export function selectDeltaNotes(
 } {
   const candidates = snapshot.notes
     .filter((note) => note.sequence > afterSequence)
-    .toSorted((left, right) => left.sequence - right.sequence);
+    // oxlint-disable-next-line unicorn/no-array-sort -- filter creates a private array, preserving snapshot note order.
+    .sort((left, right) => left.sequence - right.sequence);
   return {
     notes: selectSessionCompanionReferenceItems(candidates.toReversed(), DELTA_MAX_BYTES),
     lastSequence: candidates.at(-1)?.sequence ?? afterSequence,

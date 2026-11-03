@@ -5,7 +5,7 @@ import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/bro
 import type { Page } from "playwright";
 import qrcode from "qrcode";
 import { beforeEach, expect, it } from "vitest";
-import type { OpenClawModalDialog } from "../components/modal-dialog.ts";
+import type { OpenClawModalDialog } from "../components/modal-dialog.tsx";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
@@ -46,7 +46,7 @@ async function expectPairingLayout(page: Page, mode: "node" | "qr") {
     const setup = document.querySelector<HTMLElement>(".device-pair-setup")!;
     const setupBounds = setup.getBoundingClientRect();
     const elements = document.querySelectorAll<HTMLElement>(
-      `.device-pair-setup, .device-pair-setup__body, .device-pair-setup__access label, .device-pair-setup__meta, .device-pair-setup__fallback, .device-pair-setup__footer, ${
+      `.device-pair-setup, .device-pair-setup__body, .device-pair-setup__meta, .device-pair-setup__fallback, .device-pair-setup__footer, ${
         currentMode === "node"
           ? ".device-pair-setup__command, .login-gate__command, .login-gate__command code, .device-pair-setup .chat-copy-btn"
           : ".device-pair-setup__qr-frame, .device-pair-setup__qr"
@@ -88,7 +88,8 @@ async function expectPairingLayout(page: Page, mode: "node" | "qr") {
   }, mode);
 
   expect(layout).toEqual({
-    accessCards: 3,
+    // A code is minted for one access level, so the choice is gone once it exists.
+    accessCards: 0,
     outside: [],
     pageOverflow: false,
     qrState: true,
@@ -143,7 +144,7 @@ suite.define(() => {
         await page.getByRole("button", { name: "Pair device", exact: true }).isDisabled(),
       ).toBe(true);
       await gateway.setMethodResponse("device.pair.list", { pending: [], paired: [] });
-      await pending.getByRole("button", { name: "Approve", exact: true }).click();
+      await pending.getByRole("button", { name: "Approve Synthetic browser", exact: true }).click();
       const approved = await gateway.waitForRequest("device.pair.approve");
       expect(approved.params).toEqual({ requestId: "synthetic-browser-request" });
       await pending.waitFor({ state: "hidden" });
@@ -288,15 +289,21 @@ suite.define(() => {
             "device.pair.list": { paired: [], pending: [] },
             "device.pair.setupCode": setupResult("setup-full", "full"),
             "device.pair.setupStatus": {},
+            "environments.list": { environments: [] },
+            "exec.approvals.get": {
+              exists: false,
+              file: { agents: {}, defaults: {}, version: 1 },
+              hash: "e2e",
+              path: "/tmp/exec-approvals.json",
+            },
             "node.list": { nodes: [] },
+            "system-presence": [],
           },
         });
 
-        const response = await page.goto(`${suite.server.baseUrl}settings/security`);
+        const response = await page.goto(`${suite.server.baseUrl}settings/devices`);
         expect(response?.status()).toBe(200);
-        const pairFromSettings = page
-          .locator(".security-page")
-          .getByRole("button", { name: "Pair device" });
+        const pairFromSettings = page.getByRole("button", { name: "Pair device" });
         await expect.poll(async () => pairFromSettings.isEnabled()).toBe(true);
         await pairFromSettings.click();
 
@@ -341,9 +348,7 @@ suite.define(() => {
           await page.getByRole("status").getByText("Creating a secure setup code…").isVisible(),
         ).toBe(true);
         expect(await qr.count()).toBe(0);
-        expect(await page.locator('input[name="device-pair-access"]').first().isDisabled()).toBe(
-          true,
-        );
+        expect(await page.locator('input[name="device-pair-access"]').count()).toBe(0);
         await captureUiProof(page, "02-mobile-loading.png");
         await gateway.resolveDeferred("device.pair.setupCode", setupResult("setup-full", "full"));
         await qr.waitFor();
@@ -593,9 +598,11 @@ suite.define(() => {
           await manageDevices.click({ trial: true });
           if (viewport.width === 1280) {
             await page.locator(".device-pair-setup__close").click();
+            await dialog.waitFor({ state: "hidden" });
           }
         }
         // The body scrolls while completion actions stay outside it in the pinned footer.
+        await page.setViewportSize({ height: 480, width: 390 });
         const scrollBody = setup.locator(".device-pair-setup__body");
         await scrollBody.hover();
         await page.mouse.wheel(0, 1000);

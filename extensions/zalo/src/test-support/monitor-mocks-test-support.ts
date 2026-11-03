@@ -34,23 +34,26 @@ let lifecycleStateDir: string | undefined;
 let previousLifecycleStateDir: string | undefined;
 let waitForLifecycleIngressIdle: (() => Promise<void>) | undefined;
 
-const lifecycleMocks = vi.hoisted(() => ({
-  setWebhookMock: vi.fn<AsyncUnknownCall>(async () => ({ ok: true, result: { url: "" } })),
-  deleteWebhookMock: vi.fn<AsyncUnknownCall>(async () => ({ ok: true, result: { url: "" } })),
-  getWebhookInfoMock: vi.fn<AsyncUnknownCall>(async () => ({ ok: true, result: { url: "" } })),
-  getUpdatesMock: vi.fn<UnknownCall>(() => new Promise(() => {})),
-  sendChatActionMock: vi.fn<AsyncUnknownCall>(async () => ({ ok: true })),
-  sendMessageMock: vi.fn<AsyncUnknownCall>(async () => ({
+const apiMocks = vi.hoisted(() => ({
+  setWebhook: vi.fn<AsyncUnknownCall>(async () => ({ ok: true, result: { url: "" } })),
+  deleteWebhook: vi.fn<AsyncUnknownCall>(async () => ({ ok: true, result: { url: "" } })),
+  getWebhookInfo: vi.fn<AsyncUnknownCall>(async () => ({ ok: true, result: { url: "" } })),
+  getUpdates: vi.fn<UnknownCall>(() => new Promise(() => {})),
+  sendChatAction: vi.fn<AsyncUnknownCall>(async () => ({ ok: true })),
+  sendMessage: vi.fn<AsyncUnknownCall>(async () => ({
     ok: true,
     result: { message_id: "zalo-test-reply-1" },
   })),
-  sendPhotoMock: vi.fn<AsyncUnknownCall>(async () => ({ ok: true })),
-  getZaloRuntimeMock: vi.fn<UnknownCall>(),
+  sendPhoto: vi.fn<AsyncUnknownCall>(async () => ({ ok: true })),
 }));
 
-const { setWebhookMock } = lifecycleMocks;
-export const { getUpdatesMock, sendMessageMock, sendPhotoMock, getZaloRuntimeMock } =
-  lifecycleMocks;
+const getZaloRuntimeMock = vi.hoisted(() => vi.fn<UnknownCall>());
+export { getZaloRuntimeMock };
+export const {
+  getUpdates: getUpdatesMock,
+  sendMessage: sendMessageMock,
+  sendPhoto: sendPhotoMock,
+} = apiMocks;
 
 function installLifecycleModuleMocks() {
   vi.doMock("openclaw/plugin-sdk/channel-outbound", async () => {
@@ -69,21 +72,11 @@ function installLifecycleModuleMocks() {
     };
   });
   vi.doMock(apiModuleId, async () => {
-    const actual = await vi.importActual<object>(apiModuleId);
-    return {
-      ...actual,
-      deleteWebhook: lifecycleMocks.deleteWebhookMock,
-      getUpdates: lifecycleMocks.getUpdatesMock,
-      getWebhookInfo: lifecycleMocks.getWebhookInfoMock,
-      sendChatAction: lifecycleMocks.sendChatActionMock,
-      sendMessage: lifecycleMocks.sendMessageMock,
-      sendPhoto: lifecycleMocks.sendPhotoMock,
-      setWebhook: lifecycleMocks.setWebhookMock,
-    };
+    return { ...(await vi.importActual<object>(apiModuleId)), ...apiMocks };
   });
 
   vi.doMock(runtimeModuleId, () => ({
-    getZaloRuntime: lifecycleMocks.getZaloRuntimeMock,
+    getZaloRuntime: getZaloRuntimeMock,
   }));
 }
 
@@ -126,14 +119,11 @@ export function setLifecycleRuntimeCore(
 }
 
 export async function loadCachedLifecycleMonitorModule(key: string): Promise<MonitorModule> {
-  const cached =
-    cachedMonitorModules.get(key) ??
-    (async () => {
-      installLifecycleModuleMocks();
-      return (await import(`${monitorModuleUrl}?t=${key}`)) as MonitorModule;
-    })();
-  cachedMonitorModules.set(key, cached);
-  return await cached;
+  if (!cachedMonitorModules.has(key)) {
+    installLifecycleModuleMocks();
+    cachedMonitorModules.set(key, import(`${monitorModuleUrl}?t=${key}`) as Promise<MonitorModule>);
+  }
+  return await cachedMonitorModules.get(key)!;
 }
 
 export async function startWebhookLifecycleMonitor(params: {
@@ -177,7 +167,7 @@ export async function startWebhookLifecycleMonitor(params: {
     const hostedMediaRoute = registry.httpRoutes.find(
       (entry) => entry.source === "zalo-hosted-media",
     );
-    if (setWebhookMock.mock.calls.length !== 1 || !webhookRoute || !hostedMediaRoute) {
+    if (apiMocks.setWebhook.mock.calls.length !== 1 || !webhookRoute || !hostedMediaRoute) {
       throw new Error("waiting for webhook registration");
     }
     return webhookRoute;
@@ -188,10 +178,7 @@ export async function startWebhookLifecycleMonitor(params: {
   }
 
   return {
-    abort,
-    registry,
     route,
-    run,
     runtime,
     waitForIdle: waitForLifecycleIngressIdle,
     stop: async () => {

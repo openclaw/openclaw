@@ -60,76 +60,67 @@ export async function ensureExtensionRelayForProfile(
   profile: ResolvedBrowserProfile,
   signal?: AbortSignal,
 ): Promise<ExtensionRelayResource> {
-  for (;;) {
-    signal?.throwIfAborted();
-    if (!isBrowserRuntimeRunning(state)) {
-      throw new Error("Browser runtime is stopping");
-    }
-    // The host-local HMAC key can rotate while Browser control stays up.
-    // Resolve one canonical desired profile after adopting the live key.
-    const { ensureExtensionRelayToken } = await import("./relay-auth.js");
-    const token = await ensureExtensionRelayToken();
-    if (state.resolved.extensionRelayToken !== token) {
-      state.resolved = { ...state.resolved, extensionRelayToken: token };
-    }
-    const desiredProfile = resolveProfile(state.resolved, profile.name);
-    if (
-      profile.driver !== "extension" ||
-      desiredProfile?.driver !== "extension" ||
-      desiredProfile.cdpPort !== profile.cdpPort
-    ) {
-      throw new Error(`Extension relay profile "${profile.name}" changed during startup.`);
-    }
-    // Keep the active request's shared profile object aligned with the relay.
-    Object.assign(profile, desiredProfile);
-
-    const runtime = getOrCreateProfileRuntime(state, desiredProfile);
-    if (
-      runtime.profile !== profile &&
-      runtime.profile.driver === "extension" &&
-      runtime.profile.cdpPort === desiredProfile.cdpPort
-    ) {
-      Object.assign(runtime.profile, desiredProfile);
-    }
-    const pending = pendingRelayEnsures.get(runtime);
-    if (
-      pending &&
-      (pending.port !== desiredProfile.cdpPort ||
-        pending.token !== token ||
-        pending.allowLegacyAuth !== state.resolved.extensionRelay.allowLegacyAuth)
-    ) {
-      try {
-        await waitForProfileOperation(pending.promise, signal);
-      } catch (err) {
-        signal?.throwIfAborted();
-        if (getProfileLifecycle(runtime).blockedReason) {
-          throw err;
-        }
-      }
-      continue;
-    }
-
-    const promise =
-      pending?.promise ?? ensureDesiredRelay({ state, runtime, profile: desiredProfile, token });
-    if (!pending) {
-      pendingRelayEnsures.set(runtime, {
-        port: desiredProfile.cdpPort,
-        token,
-        allowLegacyAuth: state.resolved.extensionRelay.allowLegacyAuth,
-        promise,
-      });
-      const settlePending = () => {
-        pendingRelayEnsures.delete(runtime);
-      };
-      void promise.then(settlePending, settlePending);
-    }
-    const handle = await waitForProfileOperation(promise, signal);
-    const current = resolveProfile(state.resolved, profile.name);
-    if (current) {
-      Object.assign(profile, current);
-    }
-    return handle;
+  signal?.throwIfAborted();
+  if (!isBrowserRuntimeRunning(state)) {
+    throw new Error("Browser runtime is stopping");
   }
+  // The host-local HMAC key can rotate while Browser control stays up.
+  // Resolve one canonical desired profile after adopting the live key.
+  const { ensureExtensionRelayToken } = await import("./relay-auth.js");
+  const token = await ensureExtensionRelayToken();
+  if (state.resolved.extensionRelayToken !== token) {
+    state.resolved = { ...state.resolved, extensionRelayToken: token };
+  }
+  const desiredProfile = resolveProfile(state.resolved, profile.name);
+  if (
+    profile.driver !== "extension" ||
+    desiredProfile?.driver !== "extension" ||
+    desiredProfile.cdpPort !== profile.cdpPort
+  ) {
+    throw new Error(`Extension relay profile "${profile.name}" changed during startup.`);
+  }
+  // Keep the active request's shared profile object aligned with the relay.
+  Object.assign(profile, desiredProfile);
+
+  const runtime = getOrCreateProfileRuntime(state, desiredProfile);
+  if (
+    runtime.profile !== profile &&
+    runtime.profile.driver === "extension" &&
+    runtime.profile.cdpPort === desiredProfile.cdpPort
+  ) {
+    Object.assign(runtime.profile, desiredProfile);
+  }
+  const pending = pendingRelayEnsures.get(runtime);
+  if (
+    pending &&
+    (pending.port !== desiredProfile.cdpPort ||
+      pending.token !== token ||
+      pending.allowLegacyAuth !== state.resolved.extensionRelay.allowLegacyAuth)
+  ) {
+    // A changed startup request can retry after the current attempt settles.
+    throw new Error(`Extension relay profile "${profile.name}" changed during startup.`);
+  }
+
+  const promise =
+    pending?.promise ?? ensureDesiredRelay({ state, runtime, profile: desiredProfile, token });
+  if (!pending) {
+    pendingRelayEnsures.set(runtime, {
+      port: desiredProfile.cdpPort,
+      token,
+      allowLegacyAuth: state.resolved.extensionRelay.allowLegacyAuth,
+      promise,
+    });
+    const settlePending = () => {
+      pendingRelayEnsures.delete(runtime);
+    };
+    void promise.then(settlePending, settlePending);
+  }
+  const handle = await waitForProfileOperation(promise, signal);
+  const current = resolveProfile(state.resolved, profile.name);
+  if (current) {
+    Object.assign(profile, current);
+  }
+  return handle;
 }
 
 async function ensureDesiredRelay(params: {
@@ -154,8 +145,7 @@ async function ensureDesiredRelay(params: {
           existing.allowLegacyAuth === state.resolved.extensionRelay.allowLegacyAuth;
         if (matches && existing.ownership === "borrowed" && existing.client.connected) {
           try {
-            // A live socket can still have an unread retirement notice. Reuse requires
-            // a response from this owner; loss without cleanup acknowledgement stays blocked.
+            // Reuse requires a response; an unread retirement notice can invalidate a live socket.
             await existing.client.status();
           } catch (error) {
             if (existing.client.connected) {
@@ -285,24 +275,20 @@ async function ensureDesiredRelay(params: {
   });
 }
 
-/** Start relays for every extension-driver profile (control service startup). */
-export async function startConfiguredExtensionRelays(
-  state: BrowserServerState,
-  resolveProfileByName: (name: string) => ResolvedBrowserProfile | null,
-  onWarn: (message: string) => void,
-): Promise<void> {
+/** Start configured relays before browser requests; individual failures leave Browser control up. */
+export async function startConfiguredExtensionRelays(state: BrowserServerState): Promise<void> {
   for (const [name, profile] of Object.entries(state.resolved.profiles)) {
     if (profile.driver !== "extension") {
       continue;
     }
-    const resolved = resolveProfileByName(name);
+    const resolved = resolveProfile(state.resolved, name);
     if (!resolved) {
       continue;
     }
     try {
       await ensureExtensionRelayForProfile(state, resolved);
     } catch (err) {
-      onWarn(`extension relay for profile "${name}" failed to start: ${String(err)}`);
+      log.warn(`extension relay for profile "${name}" failed to start: ${String(err)}`);
     }
   }
 }

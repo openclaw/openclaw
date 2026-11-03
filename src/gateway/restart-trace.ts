@@ -9,6 +9,7 @@ const RESTART_TRACE_HANDOFF_MAX_AGE_MS = 10 * 60_000;
 const CLOSE_STEP_SLOW_MS = 1_000;
 const CLOSE_PENDING_REPORT_MS = 5_000;
 const MAX_PENDING_CLOSE_STEPS = 8;
+const MAX_PENDING_CLOSE_METRICS = 8;
 
 type RestartTraceMetricValue = boolean | number | string | null | undefined;
 type RestartTraceMetrics =
@@ -22,7 +23,11 @@ type GatewayRestartTraceHandoff = {
 let startedAt = 0;
 let lastAt = 0;
 let active = false;
-const pendingCloseSteps = new Set<{ name: string; startedAt: number }>();
+const pendingCloseSteps = new Set<{
+  name: string;
+  startedAt: number;
+  metrics?: () => RestartTraceMetrics | undefined;
+}>();
 let pendingCloseCount = 0;
 let pendingCloseTimer: ReturnType<typeof setInterval> | undefined;
 
@@ -145,7 +150,21 @@ export function formatGatewayPendingCloseSteps(): string {
   const now = nowMs();
   const entries: string[] = [];
   for (const step of pendingCloseSteps) {
-    entries.push(`${step.name}=${Math.max(0, Math.round(now - step.startedAt))}ms`);
+    let detail = "";
+    try {
+      const metrics = step.metrics?.();
+      if (metrics) {
+        detail = formatMetrics(
+          (Array.isArray(metrics) ? metrics : Object.entries(metrics)).slice(
+            0,
+            MAX_PENDING_CLOSE_METRICS,
+          ),
+        );
+      }
+    } catch {
+      // Retiring an observed owner must not turn diagnostics into a shutdown failure.
+    }
+    entries.push(`${step.name}=${Math.max(0, Math.round(now - step.startedAt))}ms${detail}`);
     if (entries.length === MAX_PENDING_CLOSE_STEPS) {
       break;
     }
@@ -171,7 +190,11 @@ async function measureGatewayTraceSpan<T>(
   const before = nowMs();
   const pending =
     closeStep || trackPending
-      ? { name: formatMetricValue(name) ?? "unnamed", startedAt: before }
+      ? {
+          name: formatMetricValue(name) ?? "unnamed",
+          startedAt: before,
+          ...(typeof metrics === "function" ? { metrics } : {}),
+        }
       : undefined;
   if (pending) {
     pendingCloseSteps.add(pending);

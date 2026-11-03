@@ -9,6 +9,7 @@ import { renderTriagePrompt } from "../commands/triage-prompt.js";
 import { isDefaultInstallIdentity } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  execSystemctlMock,
   execSystemctlUserMock,
   resetServiceAuditMocks,
   resolveNodeRuntimeInfoMock,
@@ -61,6 +62,31 @@ afterEach(async () => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   await fs.rm(home, { recursive: true, force: true });
+});
+
+it("reports the host shutdown cap without a Gateway reinstall hint", async () => {
+  await fs.writeFile(unitPath, "[Service]\nKillMode=mixed\n");
+  execSystemctlUserMock.mockResolvedValue({
+    stdout:
+      "LoadState=loaded\nKillMode=mixed\nControlGroup=/user.slice/user-1000.slice/user@1000.service/app.slice/openclaw-gateway.service\n",
+    stderr: "",
+    code: 0,
+    termination: "exit",
+  });
+  execSystemctlMock.mockResolvedValue({
+    stdout: "LoadState=loaded\nTimeoutStopUSec=5s\n",
+    stderr: "",
+    code: 0,
+    termination: "exit",
+  });
+  const findings = await detect();
+  expect(findings).toEqual([
+    expect.objectContaining({
+      severity: "warning",
+      message: expect.stringContaining("Gateway drain to 5s"),
+    }),
+  ]);
+  expect(findings[0]).not.toHaveProperty("fixHint");
 });
 
 it.each(["legacy", "profile"])("triages %s read-only", async (scenario) => {

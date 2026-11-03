@@ -21,6 +21,7 @@ import {
   resolveMcpLoopbackClientGrant as resolveClient,
   revokeAttachGrant,
   revokeAttachGrantsForSession,
+  revokeMintedMcpLoopbackClientGrant as revokeMinted,
   revokeMcpLoopbackClientGrant as revokeClient,
   revokeMcpLoopbackClientGrantsForRuntime as revokeRuntime,
   transferMcpLoopbackClientGrant as transferClient,
@@ -28,6 +29,8 @@ import {
 
 const T0 = 1_000_000_000_000;
 const admissions: PreparedAgentRunAdmission[] = [];
+const attach = (sessionKey: string, params: Partial<Parameters<typeof mintAttachGrant>[0]> = {}) =>
+  mintAttachGrant({ sessionKey, nowMs: T0, ...params });
 const grantParams = (token: string, captureKey: string, runtimeOwnerToken = "runtime-one") => ({
   token,
   captureKey,
@@ -75,11 +78,11 @@ describe("mcp-grant-store", () => {
   });
 
   it("requires a non-empty sessionKey", () => {
-    expect(() => mintAttachGrant({ sessionKey: "  ", nowMs: T0 })).toThrow();
+    expect(() => attach("  ")).toThrow();
   });
 
   it("resolves a live grant and drops it once expired (TTL)", () => {
-    const g = mintAttachGrant({ sessionKey: "agent:main:x", ttlMs: 1_000, nowMs: T0 });
+    const g = attach("agent:main:x", { ttlMs: 1_000 });
     expect(resolveAttachGrant(g.token, T0)?.sessionKey).toBe("agent:main:x");
     expect(resolveAttachGrant(g.token, T0 + 999)?.sessionKey).toBe("agent:main:x");
     expect(resolveAttachGrant(g.token, T0 + 1_000)).toBeUndefined();
@@ -87,28 +90,24 @@ describe("mcp-grant-store", () => {
   });
 
   it("binds a separate agent owner only to the canonical global session", () => {
-    const global = mintAttachGrant({ sessionKey: "global", agentId: " ops ", nowMs: T0 });
-    const scoped = mintAttachGrant({
-      sessionKey: "agent:main:telegram:1",
-      agentId: "ops",
-      nowMs: T0,
-    });
+    const global = attach("global", { agentId: " ops " });
+    const scoped = attach("agent:main:telegram:1", { agentId: "ops" });
 
     expect(global.agentId).toBe("ops");
     expect(scoped.agentId).toBeUndefined();
   });
 
   it("revokes by token", () => {
-    const g = mintAttachGrant({ sessionKey: "agent:main:x", nowMs: T0 });
+    const g = attach("agent:main:x");
     expect(revokeAttachGrant(g.token)).toBe(true);
     expect(resolveAttachGrant(g.token, T0)).toBeUndefined();
     expect(revokeAttachGrant(g.token)).toBe(false);
   });
 
   it("revokes every attach grant for one session", () => {
-    const first = mintAttachGrant({ sessionKey: "agent:main:first", nowMs: T0 });
-    const second = mintAttachGrant({ sessionKey: "agent:main:first", nowMs: T0 });
-    const other = mintAttachGrant({ sessionKey: "agent:main:other", nowMs: T0 });
+    const first = attach("agent:main:first");
+    const second = attach("agent:main:first");
+    const other = attach("agent:main:other");
 
     expect(revokeAttachGrantsForSession(" agent:main:first ")).toBe(2);
     expect(resolveAttachGrant(first.token, T0)).toBeUndefined();
@@ -117,11 +116,11 @@ describe("mcp-grant-store", () => {
   });
 
   it("clamps TTL: default for non-positive, ceiling at 12h", () => {
-    const def = mintAttachGrant({ sessionKey: "s", nowMs: T0 });
+    const def = attach("s");
     expect(def.expiresAtMs).toBe(T0 + 60 * 60 * 1000);
-    const zero = mintAttachGrant({ sessionKey: "s", ttlMs: 0, nowMs: T0 });
+    const zero = attach("s", { ttlMs: 0 });
     expect(zero.expiresAtMs).toBe(T0 + 60 * 60 * 1000);
-    const huge = mintAttachGrant({ sessionKey: "s", ttlMs: 999 * 60 * 60 * 1000, nowMs: T0 });
+    const huge = attach("s", { ttlMs: 999 * 60 * 60 * 1000 });
     expect(huge.expiresAtMs).toBe(T0 + 12 * 60 * 60 * 1000);
   });
 
@@ -129,21 +128,10 @@ describe("mcp-grant-store", () => {
     const admittedRunContext = await admitted("run-immutable-context");
     const context = {
       sessionKey: " agent:main:telegram:group:1 ",
-      sessionId: "session-1",
-      messageProvider: "telegram",
       clientCaps: ["tool-events"],
       pinnedWidgetAuthoring: true,
-      currentChannelId: "telegram:-1001",
-      currentThreadTs: "42",
-      currentMessageId: "message-1",
-      currentInboundAudio: true,
-      accountId: "account-1",
-      inboundEventKind: "room_event" as const,
-      sourceReplyDeliveryMode: "message_tool_only" as const,
       sourceReplyOnly: true,
       toolsAllow: ["message"],
-      taskSuggestionDeliveryMode: "gateway" as const,
-      requireExplicitMessageTarget: true,
       senderIsOwner: false,
     };
     const grant = mintMcpLoopbackClientGrant({
@@ -305,6 +293,7 @@ describe("mcp-grant-store", () => {
     const nextAdmission = await admitted("run-next-turn");
     const firstController = new AbortController();
     const nextController = new AbortController();
+    const toolAuth = { agentDir: "/tmp/next-agent", store: { version: 1, profiles: {} } };
     const skillLibraryAuthoring: SkillLibraryAuthoringCapability = {
       target: "personal",
       defaultTarget: "personal",
@@ -324,10 +313,7 @@ describe("mcp-grant-store", () => {
       admittedRunContext: nextAdmission,
       abortSignal: nextController.signal,
       skillLibraryAuthoring,
-      toolAuth: {
-        agentDir: "/tmp/next-agent",
-        store: { version: 1, profiles: {} },
-      },
+      toolAuth,
     });
     expect(activateCapture(grantParams(stable.token, "stale-capture"))).toBeTruthy();
     const first = resolveClient(grantParams(stable.token, "stale-capture"));
@@ -365,10 +351,7 @@ describe("mcp-grant-store", () => {
       },
       admittedRunContext: nextAdmission,
       skillLibraryAuthoring,
-      toolAuth: {
-        agentDir: "/tmp/next-agent",
-        store: { version: 1, profiles: {} },
-      },
+      toolAuth,
     });
     expect(transferred?.skillLibraryAuthoring).toBe(skillLibraryAuthoring);
     expect(transferred?.isCurrent()).toBe(true);
@@ -381,6 +364,84 @@ describe("mcp-grant-store", () => {
     nextController.abort();
     expect(transferred?.isCurrent()).toBe(false);
     expect(resolveClient(grantParams(stable.token, "next-capture"))).toBeUndefined();
+  });
+
+  it("revokes the minted turn through admission, capture and warm bearer replacement", async () => {
+    const stable = mintClient();
+    const next = mintClient({ context: { nativeCronCreatorToolAllowlist: [] } });
+    expect(next).not.toHaveProperty("owner");
+    expect(
+      bindAdmission({
+        token: next.token,
+        runtimeOwnerToken: "runtime-one",
+        admittedRunContext: await admitted("run-minted-owner"),
+      }),
+    ).toBe(true);
+    const sourceCapture = activateCapture(grantParams(next.token, "source-capture"));
+    expect(sourceCapture).toBeTruthy();
+    expect(sourceCapture && sourceCapture.captureNativeToolAuthority(["read"])).toBe(true);
+    expect(deactivateCapture(grantParams(next.token, "source-capture"))).toBe(true);
+    expect(
+      transferClient({
+        sourceToken: next.token,
+        targetToken: stable.token,
+        runtimeOwnerToken: "runtime-one",
+      }),
+    ).toBe(true);
+    const params = grantParams(stable.token, "process-capture");
+    const processCapture = activateCapture(params);
+    expect(processCapture).toBeTruthy();
+    expect(processCapture && processCapture.captureNativeToolAuthority([])).toBe(true);
+    const retained = resolveClient(params);
+    expect(retained?.isCurrent()).toBe(true);
+    expect(deactivateCapture(params)).toBe(true);
+    const events: Array<{ token: string; runtimeOwnerToken: string }> = [];
+    const unregister = registerRevocations((event) => events.push(event));
+    try {
+      expect(revokeMinted(next)).toBe(true);
+      expect(revokeMinted(next)).toBe(false);
+      expect(activateCapture(params)).toBe(false);
+      expect(retained?.isCurrent()).toBe(false);
+      expect(events).toEqual([{ token: stable.token, runtimeOwnerToken: "runtime-one" }]);
+    } finally {
+      unregister();
+    }
+  });
+
+  it("fences delayed minted cleanup from successor turns and sibling grants", async () => {
+    const first = mintClient({ admittedRunContext: await admitted("run-minted-first") });
+    const second = mintClient({ admittedRunContext: await admitted("run-minted-second") });
+    const third = mintClient({ admittedRunContext: await admitted("run-minted-third") });
+    const sibling = mintClient({ context: { sessionKey: "agent:main:sibling" } });
+    const otherRuntime = mintClient({ runtimeOwnerToken: "runtime-two" });
+    const transfer = (sourceToken: string) =>
+      transferClient({
+        sourceToken,
+        targetToken: first.token,
+        runtimeOwnerToken: "runtime-one",
+      });
+    const params = grantParams(first.token, "same-process-capture");
+    expect(transfer(second.token)).toBe(true);
+    expect(activateCapture(params)).toBeTruthy();
+    const secondRow = resolveClient(params);
+    expect(revokeMinted(first)).toBe(false);
+    expect(secondRow?.isCurrent()).toBe(true);
+
+    expect(transfer(third.token)).toBe(true);
+    expect(activateCapture(params)).toBeTruthy();
+    const thirdRow = resolveClient(params);
+    expect(secondRow?.isCurrent()).toBe(false);
+    expect(revokeMinted(first)).toBe(false);
+    expect(revokeMinted(second)).toBe(false);
+    expect(revokeMinted(second)).toBe(false);
+    expect(thirdRow?.isCurrent()).toBe(true);
+    expect(revokeMinted(third)).toBe(true);
+    expect(revokeMinted(third)).toBe(false);
+    expect(activateCapture(params)).toBe(false);
+    expect(thirdRow?.isCurrent()).toBe(false);
+    // Siblings remain present even after every predecessor cleanup has run.
+    expect(revokeClient(sibling.token)).toBe(true);
+    expect(revokeClient(otherRuntime.token)).toBe(true);
   });
 
   it("notifies revocation listeners for single and runtime-wide cleanup", () => {

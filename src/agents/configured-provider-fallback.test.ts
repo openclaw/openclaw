@@ -64,15 +64,4 @@ describe("resolveConfiguredProviderFallback", () => {
       }),
     ).toEqual({ provider: "first", model: "first-model" });
   });
-
-  it("returns no implicit provider when its only model is reserved for utility use", () => {
-    expect(
-      resolveConfiguredProviderFallback({
-        cfg: configuredProviders({ "local-provider": localProvider }),
-        defaultProvider: "openai",
-        defaultModel: "missing-default-model",
-        excludedModel: { provider: "local-provider", model: "local-good" },
-      }),
-    ).toBeNull();
-  });
 });

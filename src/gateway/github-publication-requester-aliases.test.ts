@@ -26,12 +26,15 @@ import {
   restoreGitHubPublicationRequester,
 } from "./github-publication-requester.js";
 import {
-  createGitHubPublicationRequesterFixture,
+  capturePublicationGuest as captureGuest,
   createRequesterPolicyFixture,
   createRequesterPublicationFixture,
-  guestScopes,
+  forPublicationBackends as forBackends,
   holdWorkerTurn,
-  prepareVisitorPublicationFixture,
+  publicationGuestEmail as email,
+  queueGuestPublication as queueGuest,
+  resumePublicationFixture,
+  startVisitorPublicationFixture as startVisitors,
 } from "./github-publication-requester.test-support.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 
@@ -41,58 +44,11 @@ vi.mock("./worker-environments/session-repository-checkpoints.js", () => ({
   withSessionRepositoryCheckpoint: (...args: unknown[]) => checkpoint(...args),
 }));
 const fixture = createRequesterPublicationFixture.bind(undefined, checkpoint);
-const email = "publication-guest@example.test";
 const later = "publication-later-alias@example.test";
 const secondary = "publication-guest-secondary@example.test";
 const recipient = "publication-alias-recipient@example.test";
-type PolicyFixture = Awaited<ReturnType<typeof createRequesterPolicyFixture>>;
 type PublicationFixture = Awaited<ReturnType<typeof fixture>>;
 type TurnClaim = Awaited<ReturnType<typeof holdWorkerTurn>>;
-
-const forBackends = <T extends string>(changes: readonly T[]) =>
-  (["local", "repository"] as const).flatMap((backend) =>
-    changes.map((change) => ({ backend, change })),
-  );
-
-function captureGuest(f: PolicyFixture) {
-  return createGitHubPublicationRequesterFixture({
-    profileId: f.guestProfile,
-    scopes: guestScopes,
-    ...f.guestSource.session,
-  });
-}
-
-async function startVisitors(f: PolicyFixture) {
-  const visitors = await prepareVisitorPublicationFixture(f);
-  try {
-    await visitors.start();
-    await visitors.execute("visitor_invite", { email, days: 1 });
-    return Object.assign(visitors, { [Symbol.asyncDispose]: () => visitors.close() });
-  } catch (error) {
-    await visitors.close();
-    throw error;
-  }
-}
-
-async function queueGuest(f: PublicationFixture, key: string, claimBound = false) {
-  const original = await captureGuest(f);
-  const claim =
-    claimBound && f.backend === "local"
-      ? await f.placements.claimTurn({
-          ...f.session,
-          agentId: "main",
-          owner: { kind: "local" },
-          claimId: "immediate-alias-retry-claim",
-          runId: "immediate-alias-retry-run",
-        })
-      : await holdWorkerTurn(f);
-  const input = f.request(key, original.requester);
-  const queued = claimBound
-    ? await f.coordinator.requestForClaimV2({ ...input, claim })
-    : await f.coordinator.requestForSessionV2(input);
-  expect(queued.status).toBe("requested");
-  return { original, claim, input, queued };
-}
 
 async function acceptCheckpoint(f: PublicationFixture, claim: TurnClaim, requestId: string) {
   if (f.backend === "repository") {
@@ -117,7 +73,7 @@ function releaseClaim(f: PublicationFixture, claim: TurnClaim) {
 }
 
 installGitHubPublicationTestHarness({
-  creatorEmail: "publication-guest@example.test",
+  creatorEmail: email,
   sandbox: "required",
   realWorktree: true,
 });
@@ -239,8 +195,7 @@ it.each(forBackends(["captured alias", "later alias"] as const))(
     original.release();
     await visitors.reopen();
     await visitors.start();
-    const restarted = f.restart();
-    await restarted.resumeSessionRequests();
+    const restarted = await resumePublicationFixture(f);
     expect(await restarted.readAsync(queued.requestId)).toMatchObject(
       change === "captured alias"
         ? { status: "failed", code: "identity_changed" }
@@ -427,8 +382,7 @@ it("retains the winning repository request's bindings across concurrent alias-ad
   expect(original.requester.assertCurrent).not.toThrow();
   await f.placements.releaseTurn(claim);
   original.release();
-  const restarted = f.restart();
-  await restarted.resumeSessionRequests();
+  const restarted = await resumePublicationFixture(f);
   expect(await restarted.readAsync(admitted.requestId)).toMatchObject({
     status: "failed",
     code: "identity_changed",

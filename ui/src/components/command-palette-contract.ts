@@ -14,8 +14,8 @@ export type CommandPaletteOpenInput = CommandPaletteInputSnapshot & {
   submitRequested?: true;
   /** Position of an explicitly typed @ retained only during the cold-input handoff. */
   mentionTrigger?: number;
-  /** Clipboard Files remain in memory until the canonical draft admits and reads them. */
-  imageFiles?: readonly File[];
+  /** Dropped/clipboard Files remain in memory until the canonical draft admits and reads them. */
+  attachmentFiles?: readonly File[];
 };
 
 /** Read the live cold input when replacement focus is accepted; undefined means retired. */
@@ -78,7 +78,8 @@ export function applyCommandPaletteTargetEvent(
 export type CommandPaletteElement = HTMLElement & {
   custodianAvailable: boolean;
   desktopAvailable: boolean;
-  isOpen: boolean;
+  /** The native getter is installed by the first committed palette setup. */
+  isOpen?: boolean;
   openPalette: (input?: CommandPaletteOpenInput | CommandPaletteInputHandoff) => void;
   togglePalette: () => void;
 };

@@ -7,7 +7,6 @@ import JSON5 from "json5";
 import type { OxlintConfig } from "oxlint";
 import { reportLimitViolations } from "./lib/check-limits.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
-import { resolveRepoToolBinPath } from "./lib/local-check-runtime.mts";
 import { createManagedCommandInvocation } from "./lib/managed-child-process.mts";
 import {
   compareRatchetCounts,
@@ -50,6 +49,30 @@ function gitPaths(root: string, args: string[]) {
     .filter(Boolean);
 }
 
+function resolveOxlintBin() {
+  const manifestPath = fs.realpathSync(fileURLToPath(import.meta.resolve("oxlint/package.json")));
+  const packageRoot = path.dirname(manifestPath);
+  const manifest: { bin?: string | Record<string, string> } = JSON.parse(
+    fs.readFileSync(manifestPath, "utf8"),
+  );
+  const declaredBin = typeof manifest.bin === "string" ? manifest.bin : manifest.bin?.oxlint;
+  if (typeof declaredBin !== "string" || !declaredBin) {
+    throw new Error("The admitted oxlint package does not declare its CLI bin.");
+  }
+  const bin = fs.realpathSync(path.resolve(packageRoot, declaredBin));
+  const relative = path.relative(packageRoot, bin);
+  if (
+    !relative ||
+    relative === ".." ||
+    relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative) ||
+    !fs.statSync(bin).isFile()
+  ) {
+    throw new Error("The oxlint CLI bin must be a file inside its admitted package.");
+  }
+  return bin;
+}
+
 function collectViolations(
   snapshot: string,
   sources: ReadonlyMap<string, string>,
@@ -75,8 +98,9 @@ function collectViolations(
     );
   }
   const invocation = createManagedCommandInvocation({
-    bin: resolveRepoToolBinPath("oxlint", { cwd: path.resolve(import.meta.dirname, "..") }),
+    bin: process.execPath,
     args: [
+      resolveOxlintBin(),
       "--config",
       ".oxlintrc.json",
       "--disable-nested-config",
@@ -97,7 +121,16 @@ function collectViolations(
   if (result.error || (result.status !== 0 && result.status !== 1)) {
     throw result.error ?? new Error(result.stderr || "oxlint line-cap probe failed");
   }
-  const report: { diagnostics: OxlintDiagnostic[] } = JSON.parse(result.stdout);
+  let report: { diagnostics: OxlintDiagnostic[] };
+  try {
+    report = JSON.parse(result.stdout);
+  } catch (error) {
+    // Native binding and configuration failures can exit 1 before emitting JSON.
+    // Keep their diagnostic instead of replacing it with a report parse error.
+    throw result.status !== 0
+      ? new Error(result.stderr || result.stdout || "oxlint line-cap probe failed")
+      : error;
+  }
   for (const diagnostic of report.diagnostics) {
     // JetBrains terminals make oxlint emit file URLs; both forms must match Git paths.
     const filename = diagnostic.filename.startsWith("file://")

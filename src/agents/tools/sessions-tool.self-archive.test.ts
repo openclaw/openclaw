@@ -1,4 +1,5 @@
 import path from "node:path";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import {
   loadSessionEntry,
@@ -17,10 +18,6 @@ import { createSessionsTool } from "./sessions-tool.js";
 import { withSessionToolTestCaller } from "./sessions-tool.test-helpers.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-sessions-tool-self-archive-");
-const nextTurn = () =>
-  new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
 const authority = (profileId: string, scopes = ["operator.write"], signal?: AbortSignal) =>
   createAdmittedRunOperatorAuthority({ profileId, scopes, signal, assertCurrent: () => {} });
 const patchRequest = (key: string, params: Record<string, unknown>) => ({

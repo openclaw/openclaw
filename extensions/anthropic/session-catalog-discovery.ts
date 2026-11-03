@@ -85,7 +85,7 @@ function applyCatalogDiscovery(
 
 type ClaudeCatalogScan = { records: CatalogRecord[]; truncated: boolean };
 
-export type CatalogRecord = ClaudeSessionCatalogSession & {
+type CatalogRecord = ClaudeSessionCatalogSession & {
   filePath: string;
 };
 

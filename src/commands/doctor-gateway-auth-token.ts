@@ -2,7 +2,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
 import { resolveGatewayAuthToken } from "../gateway/auth-token-resolution.js";
-import { hasErrnoCode } from "../infra/errno.js";
+import { ignoreMissingPath } from "../infra/errno.js";
 import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
 
 /** Preserve a recovered credential without overwriting any existing store entry. */
@@ -45,12 +45,7 @@ export async function preserveGatewayAuthTokenForService(params: {
   const { randomUUID } = await import("node:crypto");
   const { resolveOpenClawStateSqlitePath } = await import("../state/openclaw-state-db.paths.js");
   const databasePath = resolveOpenClawStateSqlitePath(params.env);
-  const existing = await stat(databasePath).catch((error: unknown) => {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
-  });
+  const existing = await stat(databasePath).catch(ignoreMissingPath);
   let backupPath: string | undefined;
   if (existing) {
     const { createVerifiedSqliteSnapshot } = await import("../infra/sqlite-snapshot.js");

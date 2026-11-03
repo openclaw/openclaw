@@ -12,6 +12,7 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { resolveConfiguredToolAccess } from "./tool-access-diagnostics.js";
+import { attachToolAllowlistIntersection } from "./tool-policy-shared.js";
 import { resolveEffectiveToolInventory } from "./tools-effective-inventory.js";
 
 // mock-isolation: Policy fixtures use synthetic agents and mocked tools without auth database admission.
@@ -22,7 +23,10 @@ vi.mock("./auth-profiles/source-check.js", () => ({
 function messagingAgentConfig(tools: OpenClawConfig["tools"] = {}): OpenClawConfig {
   return {
     tools: { profile: "full", ...tools },
-    agents: { entries: { assistant: { tools: { profile: "messaging" } } } },
+    agents: {
+      defaults: { model: "openai/test-model" },
+      entries: { assistant: { tools: { profile: "messaging" } } },
+    },
   };
 }
 
@@ -47,6 +51,36 @@ describe("tool access diagnostics", () => {
   beforeEach(() => {
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
+
+  it.each([
+    { name: "configured empty", allow: [], exec: true, process: true },
+    {
+      name: "marked empty",
+      allow: attachToolAllowlistIntersection([], [[]]),
+      exec: false,
+      process: false,
+    },
+    {
+      name: "intersection",
+      allow: attachToolAllowlistIntersection(["*"], [["ex*", "process"], ["*ec"]]),
+      exec: true,
+      process: false,
+    },
+  ])(
+    "preserves $name sandbox policy through inventory preparation",
+    async ({ allow, exec, process }) => {
+      const result = await resolveEffectiveToolInventory({
+        cfg: {},
+        agentId: "main",
+        workspaceDir: "/tmp/tool-access-workspace",
+        agentDir: "/tmp/tool-access-agent",
+        modelApi: null,
+        sandboxToolPolicy: { allow },
+      });
+      const ids = new Set(result.groups.flatMap((group) => group.tools.map((tool) => tool.id)));
+      expect([ids.has("exec"), ids.has("process")]).toEqual([exec, process]);
+    },
+  );
 
   it("explains local exclusion and repair for a normalized explicit agent key", () => {
     const agents: NonNullable<OpenClawConfig["agents"]> = {
@@ -94,8 +128,6 @@ describe("tool access diagnostics", () => {
     const result = resolveConfiguredToolAccess({
       config: messagingAgentConfig(tools),
       agentId: "assistant",
-      modelProvider: "openai",
-      modelId: "test-model",
     });
     const exec = result.tools.find((tool) => tool.id === "exec");
 

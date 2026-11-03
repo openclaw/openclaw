@@ -172,18 +172,19 @@ it.each(["discovered workspace", "read failure"] as const)(
   },
 );
 
-it("repairs only durable session owners, including overlapping agent names after runtime pruning", async () => {
+it("repairs only durable sandboxed sessions after pruning, excluding main sessions in non-main mode", async () => {
   const context = setup(
     {},
     {
       main: { sandbox: { mode: "off" } },
-      "main-telegram": {},
+      "main-telegram": { sandbox: { mode: "non-main" } },
       writer: { sandbox: { workspaceAccess: "rw" } },
     },
   );
   const activeSession = "agent:main-telegram:signal:direct:doctor-proof";
   const inactiveSessions = [
     "agent:main:telegram:direct:doctor-proof",
+    "agent:main-telegram:main",
     "agent:writer:telegram:direct:doctor-proof",
   ];
   const active = context.marker(activeSession);
@@ -239,18 +240,6 @@ it("takes both durable ownership and the default sandbox root from the requested
     ]);
   }
   await repair(requested, active, protectedPaths);
-});
-
-it("does not migrate a main-session copy when sandbox mode is non-main", async () => {
-  const context = setup({ mode: "non-main" });
-  const mainSession = "agent:main:main";
-  const session = "agent:main:telegram:direct:doctor-proof";
-  const active = context.marker(session);
-  const main = context.marker(mainSession);
-  writeMarkers(active, main);
-  await register(mainSession);
-  await register(session);
-  await repair(context, active, [main]);
 });
 
 it("repairs sandbox workspace copies beneath the configured OpenClaw home", async () => {

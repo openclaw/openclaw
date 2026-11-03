@@ -12,10 +12,6 @@ function isMutatingMethod(method: string): boolean {
   return m === "POST" || m === "PUT" || m === "PATCH" || m === "DELETE";
 }
 
-function isLoopbackUrl(value: string): boolean {
-  return isLoopbackHost(URL.parse(value.trim())?.hostname ?? "");
-}
-
 /** Return true when a request should be rejected as browser-originated CSRF. */
 function shouldRejectBrowserMutation(params: {
   method: string;
@@ -36,7 +32,7 @@ function shouldRejectBrowserMutation(params: {
 
   // Non-browser clients (curl/undici/Node) typically send no Origin/Referer.
   const source = (params.origin ?? "").trim() || (params.referer ?? "").trim();
-  return source ? !isLoopbackUrl(source) : false;
+  return source ? !isLoopbackHost(URL.parse(source.trim())?.hostname ?? "") : false;
 }
 
 /** Reject browser-control mutation requests from unsafe cross-site contexts. */

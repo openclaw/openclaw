@@ -16,8 +16,15 @@ import type { ChatHost } from "./chat-send-contract.ts";
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
 import type { ChatComposerMemoryFallback } from "./chat-state-host.ts";
 import type { RenderLifecycle } from "./render-lifecycle.ts";
+import type { ChatMessageCache } from "./session-message-cache.ts";
 
 type RequestHandlers = Record<string, unknown>;
+
+export const historyBudget = {
+  limit: 80,
+  maxBytes: 256 * 1024,
+  toolResultMaxChars: 2_000,
+};
 
 export function makeRequestMock(handlers: RequestHandlers = {}): GatewayRequestMock {
   return createGatewayRequestMock((method: string, params?: unknown) => {
@@ -48,6 +55,12 @@ export function requestCalls<Call extends ReadonlyArray<unknown>>(
   method: string,
 ): Call[] {
   return Array.from(source.mock.calls).filter(([calledMethod]) => calledMethod === method);
+}
+
+export function expectRequestCounts(request: MockCallSource, counts: Record<string, number>) {
+  for (const [method, count] of Object.entries(counts)) {
+    expect(requestCalls(request, method)).toHaveLength(count);
+  }
 }
 
 export function expectRpc(
@@ -111,12 +124,14 @@ export function findChatSendPayload(host: {
 }
 
 function composerDefaults(chatMessage = "", chatAttachments: ChatAttachment[] = []) {
+  const chatMessagesBySession: ChatMessageCache = new Map();
   return {
     connected: true,
     sessionKey: "agent:main",
     chatLoading: false,
     chatMessage,
     chatMessages: [],
+    chatMessagesBySession,
     chatLocalInputHistoryBySession: {},
     chatInputHistorySessionKey: null,
     chatInputHistoryItems: null,
@@ -152,6 +167,7 @@ export function createImmediateCommandHost(
 }
 
 type TestChatHost = ChatHost & {
+  selectedChatSessionIncognito: boolean;
   basePath: string;
   resourceBasePath: string;
   chatAvatarUrl: string | null;
@@ -253,6 +269,7 @@ export function makeChatHost(
   };
   const host = {
     ...composerDefaults(),
+    selectedChatSessionIncognito: false,
     chatSubmissions: createChatSubmissions(),
     client: request ? createTestGatewayClient(request) : null,
     chatDisplayedLeafEntryId: undefined,
@@ -260,7 +277,6 @@ export function makeChatHost(
     chatToolMessages: [],
     connectionEpoch: 0,
     canRestoreComposer: () => true,
-    chatThinkingLevel: null,
     chatVerboseLevel: null,
     chatComposerFallbackByScope: {},
     chatStreamStartedAt: null,

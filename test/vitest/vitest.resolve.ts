@@ -207,6 +207,17 @@ export function createVitestResolveConfig(repoRoot: string) {
         replacement: path.join(repoRoot, "packages", "gateway-protocol", "src", "index.ts"),
       },
       {
+        find: "@openclaw/ai/internal/model-request-body",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "ai",
+          "src",
+          "transports",
+          "model-request-body.ts",
+        ),
+      },
+      {
         find: /^@openclaw\/ai\/internal\/(.+)$/,
         replacement: path.join(repoRoot, "packages", "ai", "src", "internal", "$1.ts"),
       },
@@ -287,6 +298,7 @@ export function createVitestResolveConfig(repoRoot: string) {
         ),
       },
       sourcePackageAlias("model-catalog-core", "model-catalog-pricing"),
+      sourcePackageAlias("model-catalog-core", "model-inference-capabilities"),
       {
         find: "@openclaw/model-catalog-core/model-catalog-types",
         replacement: path.join(
@@ -382,6 +394,8 @@ export function createVitestResolveConfig(repoRoot: string) {
       sourcePackageAlias("session-url-contract", "public-share"),
       sourcePackageAlias("session-url-contract"),
       sourcePackageAlias("workboard-contract"),
+      sourcePackageAlias("openclaw-id-protocol", "testing"),
+      sourcePackageAlias("openclaw-id-protocol"),
       ...sourcePackageAliasesFromExports("acp-core", acpCorePackageJson.exports),
       ...sourcePluginSdkSubpaths.map((subpath) => ({
         find: `openclaw/plugin-sdk/${subpath}`,

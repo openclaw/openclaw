@@ -13,6 +13,7 @@ import {
   assertServiceInspectionFallbackAllowed,
   ServiceInspectionError,
   type ServiceInspectionReason,
+  SystemdInspectionTimeout,
 } from "./service-inspection-error.js";
 import type { SystemdUserTransport } from "./service-runtime.js";
 import type { GatewayServiceEnv } from "./service-types.js";
@@ -35,12 +36,6 @@ const versionArgs = [
   `${manager}.Manager`,
   "Version",
 ];
-export class SystemdTransportInspectionTimeout extends ServiceInspectionError {
-  constructor(check: string, detail = "") {
-    super("systemd-inspection-deadline-exceeded");
-    this.message = `${detail ? `${detail}\n` : ""}${this.message} Stalled check: ${check}.`;
-  }
-}
 const addressFor = (socket: string) =>
   `unix:path=${encodeURIComponent(socket).replaceAll("%2F", "/")}`;
 const transportKey = (env: GatewayServiceEnv, uid = process.geteuid?.()) => {
@@ -72,12 +67,12 @@ export async function resolveSystemdUserTransport(
       let failure = "";
       const check = () => {
         if (inspectionBudget.now() >= deadline) {
-          throw new SystemdTransportInspectionTimeout(checking, failure);
+          throw new SystemdInspectionTimeout(checking, failure);
         }
         assertGatewayServiceUpdateCurrent();
         runServiceInspectionGuard(assertCurrent);
         if (inspectionBudget.now() >= deadline) {
-          throw new SystemdTransportInspectionTimeout("custody/admission guards", failure);
+          throw new SystemdInspectionTimeout("custody/admission guards", failure);
         }
       };
       const uid = process.geteuid?.();
@@ -122,7 +117,7 @@ export async function resolveSystemdUserTransport(
           await discovery.catch(assertServiceInspectionFallbackAllowed);
         }
         check();
-        throw new SystemdTransportInspectionTimeout(checking, failure);
+        throw new SystemdInspectionTimeout(checking, failure);
       }
       check();
       // A timed-out earlier candidate remains unresolved for a later admission.
@@ -214,10 +209,7 @@ export async function resolveSystemdUserTransport(
           } catch (error) {
             assertServiceInspectionFallbackAllowed(error);
             check();
-            if (error instanceof SystemdTransportInspectionTimeout) {
-              throw error;
-            }
-            if (inspectionBudget.now() >= until) {
+            if (error instanceof SystemdInspectionTimeout || inspectionBudget.now() >= until) {
               timedOut = true;
               timedOutCheck = checking;
             }
@@ -232,7 +224,7 @@ export async function resolveSystemdUserTransport(
           check();
         }
         const error = timedOut
-          ? new SystemdTransportInspectionTimeout(timedOutCheck)
+          ? new SystemdInspectionTimeout(timedOutCheck)
           : new ServiceInspectionError(reason);
         if (failure) {
           error.message = `${failure}\n${error.message}`;

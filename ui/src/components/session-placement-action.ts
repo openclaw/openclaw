@@ -70,7 +70,9 @@ export function sessionPlacementActionReason(
   const access = readSessionMethodAccess(snapshot, {
     method: action === "dispatch" ? "sessions.dispatch" : "sessions.move",
     requiredScope:
-      retry?.target.kind === "profile" || requiredProfile ? "operator.admin" : "operator.write",
+      action !== "dispatch" && (retry?.target.kind === "profile" || requiredProfile)
+        ? "operator.admin"
+        : "operator.write",
   });
   if (!access.allowed) {
     return access.reason;
@@ -106,6 +108,7 @@ export async function moveSessionFromMenu(params: {
   fallbackAgentId: string;
   currentRow: () => GatewaySessionRow | undefined;
   isCurrent: () => boolean;
+  onAdmittedCommand?: (completion: Promise<void>) => void;
   publishError?: (error: unknown) => void;
 }): Promise<void> {
   const { context, row } = params;
@@ -119,20 +122,29 @@ export async function moveSessionFromMenu(params: {
     context.gateway.snapshot.client === client &&
     context.gateway.connectionRevision === revision &&
     context.gateway.snapshot.hello === hello;
-  const { changeSessionPlacement } = await import("./session-placement.runtime.ts");
-  await changeSessionPlacement({
-    client,
-    gatewaySnapshot: context.gateway.snapshot,
-    currentGatewaySnapshot: () => context.gateway.snapshot,
-    requiredProfile: () => context.agents.state.agentsList?.sessionPlacement?.requiredProfile?.id,
-    mode: "move",
-    pendingKey: null,
-    row,
-    fallbackAgentId: params.fallbackAgentId,
-    currentRow: params.currentRow,
-    isCurrent,
-    onPendingChange: () => {},
-    publishError: params.publishError ?? ((error) => showToast({ message: formatUiError(error) })),
-    reconcileMutation: (agentId) => sessions.reconcileMutation(agentId),
-  });
+  const publishError: (error: unknown) => void =
+    params.publishError ?? ((error) => showToast({ message: formatUiError(error) }));
+  try {
+    const { changeSessionPlacement } = await import("./session-placement.runtime.ts");
+    await changeSessionPlacement({
+      client,
+      gatewaySnapshot: context.gateway.snapshot,
+      currentGatewaySnapshot: () => context.gateway.snapshot,
+      requiredProfile: () => context.agents.state.agentsList?.sessionPlacement?.requiredProfile?.id,
+      mode: "move",
+      pendingKey: null,
+      row,
+      fallbackAgentId: params.fallbackAgentId,
+      currentRow: params.currentRow,
+      isCurrent,
+      onAdmittedCommand: params.onAdmittedCommand,
+      onPendingChange: () => {},
+      publishError,
+      reconcileMutation: (agentId) => sessions.reconcileMutation(agentId),
+    });
+  } catch (error) {
+    if (isCurrent()) {
+      publishError(error);
+    }
+  }
 }

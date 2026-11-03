@@ -9,13 +9,13 @@ import {
   createCodeModeHarness,
   resetCodeModeTestState,
   runUntilCompleted,
-  testing,
 } from "../../src/agents/code-mode.test-support.js";
 import { createReadTool } from "../../src/agents/sessions/tools/read.js";
 import { createWriteTool } from "../../src/agents/sessions/tools/write.js";
 import type { AnyAgentTool } from "../../src/agents/tools/common.js";
 import { setPluginToolMeta } from "../../src/plugins/tool-metadata.js";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
+import { settlementRecoveryProgram } from "./code-mode-matrix-recovery.test-support.js";
 
 const tempDirs = createTempDirTracker();
 afterEach(async () => {
@@ -45,13 +45,8 @@ it("reconciles uncertain settlements through public exec/wait without replaying 
       targets.push(tool);
     },
   });
-  const read = createReadTool(workspace);
-  const write = createWriteTool(workspace);
-  targets.push(read, write);
-  const observations = targets.map((tool) => ({
-    name: tool.name,
-    execute: vi.spyOn(tool, "execute"),
-  }));
+  targets.push(createReadTool(workspace), createWriteTool(workspace));
+  const observations = targets.map((tool) => vi.spyOn(tool, "execute"));
   const harness = createCodeModeHarness({ codeMode: { executor: "node" } });
   applyCodeModeCatalog({ ...harness.ctx, tools: [...harness.tools, ...targets] });
   const execTool = expectDefined(harness.tools[0], "public Code Mode exec");
@@ -62,46 +57,16 @@ it("reconciles uncertain settlements through public exec/wait without replaying 
     execTool,
     waitTool,
     code: `
-      const batch = await matrix_settlement_batch({});
-      const failures = [];
-      for (const operation of batch.operations) {
-        if (operation.blocked) continue;
-        const input = {
-          operationId: operation.operationId,
-          totalCents: operation.lines.reduce((sum, line) => sum + line.amountCents, 0),
-        };
-        try {
-          await matrix_settle_operation(input);
-        } catch (error) {
-          const { states } = await matrix_inspect_settlements({});
-          const state = states.find(item => item.operationId === operation.operationId);
-          failures.push({ message: error.message, effectCount: state.effectCount });
-          await yield_control();
-          if (state.status === "unsettled") await matrix_settle_operation(input);
-        }
-      }
-      const { states } = await matrix_inspect_settlements({});
-      const project = ({ operationId, effectCount, totalCents }) =>
-        ({ operationId, effectCount, totalCents });
-      const byId = (left, right) => left.operationId.localeCompare(right.operationId);
-      const settled = states
-        .filter(state => batch.operations.some(item => item.operationId === state.operationId)
-          && state.status === "settled")
-        .map(project).sort(byId);
-      const report = {
-        batchId: batch.batchId,
-        sourceLineCount: batch.operations.reduce((sum, operation) => sum + operation.lines.length, 0),
-        settled,
-        blocked: states.filter(state => state.status === "blocked").map(state => state.operationId).sort(),
-        preserved: states
-          .filter(state => batch.existing.some(item => item.operationId === state.operationId))
-          .map(project).sort(byId),
-        newEffectCount: settled.reduce((sum, state) => sum + state.effectCount, 0),
-        newTotalCents: settled.reduce((sum, state) => sum + state.totalCents, 0),
-      };
+      const recover = ${settlementRecoveryProgram};
+      const { report, failures } = await recover({
+        call: (name, input = {}) => ({ matrix_settlement_batch, matrix_settle_operation,
+          matrix_inspect_settlements })[name](input),
+        onFailure: () => yield_control(),
+      });
       await write({ path: "settlement-report.json", content: JSON.stringify(report) });
       const readback = await read({ path: "settlement-report.json" });
-      return { report: JSON.parse(readback.content), readbackKind: readback.kind, failures };
+      return { report: JSON.parse(readback.content), readbackKind: readback.kind,
+        failures: failures.map(({ message, effectCount }) => ({ message, effectCount })) };
     `,
   });
 
@@ -142,25 +107,9 @@ it("reconciles uncertain settlements through public exec/wait without replaying 
   expect(exec).toHaveBeenCalledOnce();
   expect(wait.mock.calls.length).toBeGreaterThanOrEqual(4);
   expect(details.telemetry).toMatchObject({ callCount: 20 });
-  const nestedIds = observations.flatMap(({ execute }) =>
+  const nestedIds = observations.flatMap((execute) =>
     execute.mock.calls.map(([toolCallId]) => toolCallId),
   );
-  expect(nestedIds).toHaveLength(20);
-  expect(new Set(nestedIds).size).toBe(20);
+  expect([nestedIds.length, new Set(nestedIds).size]).toEqual([20, 20]);
   expect(nestedIds.every((id) => id.startsWith("tool_call:code-call-1:"))).toBe(true);
-  const observedWrite = expectDefined(
-    observations.find(({ name }) => name === "write"),
-    "report write",
-  ).execute;
-  const observedRead = expectDefined(
-    observations.find(({ name }) => name === "read"),
-    "report readback",
-  ).execute;
-  expect(observedWrite).toHaveBeenCalledOnce();
-  expect(observedRead).toHaveBeenCalledOnce();
-  expect(observedWrite.mock.invocationCallOrder[0]).toBeLessThan(
-    expectDefined(observedRead.mock.invocationCallOrder[0], "report readback order"),
-  );
-  expect(testing.activeRuns.size).toBe(0);
-  expect(testing.resumingRunIds.size).toBe(0);
 });

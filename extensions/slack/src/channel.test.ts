@@ -10,6 +10,19 @@ import { SLACK_QUESTION_FINALIZATION_BLOCKS } from "./reply-action-ids.js";
 import { setSlackRuntime } from "./runtime.js";
 
 const THREAD_TS = "1712345678.123456";
+const messaging = slackPlugin.messaging!;
+const threading = slackPlugin.threading!;
+const outbound = slackPlugin.outbound!;
+const button = (label: string, value = label.toLowerCase()) => ({ label, value });
+
+function route(
+  params: Omit<
+    Parameters<NonNullable<typeof messaging.resolveOutboundSessionRoute>>[0],
+    "cfg" | "agentId"
+  > & { cfg?: OpenClawConfig },
+) {
+  return messaging.resolveOutboundSessionRoute!({ cfg: {}, agentId: "main", ...params });
+}
 
 function slackConfig(slack: NonNullable<OpenClawConfig["channels"]>["slack"]): OpenClawConfig {
   return { channels: { slack } };
@@ -55,23 +68,15 @@ vi.mock("./client.js", async () => {
 });
 
 beforeEach(() => {
-  for (const mock of [
-    mocks.handleAction,
-    mocks.resolveDm,
-    mocks.sendMessage,
-    mocks.sessionCall,
-    mocks.conversationInfo,
-    mocks.conversationOpen,
-    mocks.userInfo,
-    mocks.teamsList,
-  ]) {
-    mock.mockReset();
+  for (const [name, mock] of Object.entries(mocks)) {
+    if (name !== "writeClient") {
+      mock.mockReset();
+    }
   }
   mocks.resolveDm.mockResolvedValue("D123");
   mocks.sendMessage.mockResolvedValue({ messageId: "msg-1", channelId: "D123" });
   mocks.sessionCall.mockResolvedValue({ ok: true });
   mocks.writeClient.mockClear();
-  setSlackRuntime({ channel: { slack: { handleSlackAction: mocks.handleAction } } } as never);
 });
 
 async function getSlackConfiguredState(cfg: OpenClawConfig) {
@@ -153,10 +158,8 @@ describe("slackPlugin actions", () => {
   });
 
   it("treats interactive reply payloads as structured Slack payloads", () => {
-    const hasStructuredReplyPayload = slackPlugin.messaging!.hasStructuredReplyPayload!;
-
     expect(
-      hasStructuredReplyPayload({
+      messaging.hasStructuredReplyPayload!({
         payload: {
           text: "Choose",
           interactive: {
@@ -169,9 +172,7 @@ describe("slackPlugin actions", () => {
 
   it("forwards read threadId to Slack action handler", async () => {
     mocks.handleAction.mockResolvedValueOnce({ messages: [], hasMore: false });
-    const handleAction = slackPlugin.actions!.handleAction!;
-
-    await handleAction({
+    await slackPlugin.actions!.handleAction!({
       action: "read",
       channel: "slack",
       accountId: "default",
@@ -278,48 +279,37 @@ describe("slackPlugin status", () => {
   );
 
   it.each([
-    {
-      name: "bot token warning",
-      probe: {
+    [
+      {
         ok: true,
         warning: "Slack bot token is a user token",
         bot: { id: "UUSER", name: "human-installer" },
         team: { id: "T1", name: "OpenClaw" },
       },
-      expected: [
+      [
         { text: "Warning: Slack bot token is a user token", tone: "warn" },
         { text: "Bot: @human-installer" },
         { text: "Team: OpenClaw (T1)" },
       ],
-    },
-    {
-      name: "human identity",
-      probe: {
+    ],
+    [
+      {
         ok: true,
         user: { id: "U12345678", name: "test-human" },
         team: { id: "T12345678", name: "Test Team" },
       },
-      expected: [
-        { text: "User identity: @test-human (U12345678)" },
-        { text: "Team: Test Team (T12345678)" },
-      ],
-    },
-  ])("renders $name in capabilities output", ({ probe, expected }) => {
+      [{ text: "User identity: @test-human (U12345678)" }, { text: "Team: Test Team (T12345678)" }],
+    ],
+  ] as const)("renders capabilities output for %j", (probe, expected) => {
     expect(slackPlugin.status?.formatCapabilitiesProbe?.({ probe })).toStrictEqual(expected);
   });
 
   it("matches the workspace-qualified session identity produced by Enterprise ingress", async () => {
-    const resolveRoute = slackPlugin.messaging!.resolveOutboundSessionRoute!;
-
-    const channelRoute = await resolveRoute({
-      cfg: {} as OpenClawConfig,
-      agentId: "main",
+    const channelRoute = await route({
       target: "team:T123:channel:C456",
       currentSessionKey: "agent:main:slack:channel:team:t123:channel:c456:thread:1712345678.123456",
     });
-    const dmRoute = await resolveRoute({
-      cfg: {} as OpenClawConfig,
-      agentId: "main",
+    const dmRoute = await route({
       accountId: "default",
       target: "team:T123:user:U456",
     });
@@ -349,19 +339,18 @@ describe("slackPlugin status", () => {
         teams: [{ id: "T22222222" }, { id: "T11111111" }],
       });
       try {
-        const route = await slackPlugin.messaging!.resolveOutboundSessionRoute!({
+        const resolved = await route({
           cfg: slackConfig({ botToken: "sending-fixture" }),
-          agentId: "main",
           target: "user:u12345678",
           deliveryPurpose,
         });
         if (!deliveryPurpose) {
-          expect(route).toMatchObject({ to: "user:u12345678" });
+          expect(resolved).toMatchObject({ to: "user:u12345678" });
           expect(mocks.userInfo).not.toHaveBeenCalled();
           expect(mocks.teamsList).not.toHaveBeenCalled();
           return;
         }
-        expect(route).toMatchObject({
+        expect(resolved).toMatchObject({
           baseSessionKey: "agent:main:main:account:default:team:t11111111",
           to: "team:T11111111:user:U12345678",
           recipientSessionExact: true,
@@ -406,19 +395,18 @@ describe("slackPlugin status", () => {
     "routes $target using read-only conversation metadata",
     async ({ target, channel, expected }) => {
       mocks.conversationInfo.mockResolvedValueOnce({ channel });
-      const route = await slackPlugin.messaging!.resolveOutboundSessionRoute!({
+      const resolved = await route({
         cfg: {
           ...slackConfig({ botToken: "xoxb-test", appToken: "xapp-test" }),
           session: { dmScope: "per-channel-peer" },
         },
-        agentId: "main",
         target,
         threadId: "1778110574.653649",
       });
       if (expected) {
-        expect(route).toMatchObject(expected);
+        expect(resolved).toMatchObject(expected);
       } else {
-        expect(route).toBeNull();
+        expect(resolved).toBeNull();
       }
       expect(mocks.conversationInfo).toHaveBeenCalledWith({ channel: channel.id });
       expect(mocks.conversationOpen).not.toHaveBeenCalled();
@@ -427,7 +415,6 @@ describe("slackPlugin status", () => {
 });
 
 it("folds comparison, delivery, and session identities", () => {
-  const messaging = slackPlugin.messaging!;
   expect(messaging.normalizeTarget!("channel:C08GQH53EJM")).toBe("channel:c08gqh53ejm");
   expect(messaging.resolveDeliveryTarget!({ conversationId: "G08GQH53EJM" })).toEqual({
     to: "channel:g08gqh53ejm",
@@ -475,7 +462,7 @@ describe("slackPlugin outbound", () => {
     sendSlack: ReturnType<typeof vi.fn>,
     to = "channel:C123",
   ) =>
-    slackPlugin.outbound!.sendPayload!({
+    outbound.sendPayload!({
       cfg,
       to,
       text: "",
@@ -516,9 +503,7 @@ describe("slackPlugin outbound", () => {
   });
 
   it("forwards agent identity through the registered text sender", async () => {
-    const sendText = slackPlugin.outbound!.sendText!;
-
-    await sendText({
+    await outbound.sendText!({
       cfg,
       to: "C123",
       text: "heartbeat alert",
@@ -582,10 +567,7 @@ describe("slackPlugin outbound", () => {
   });
 
   it("auto-threads a DM target after target resolution strips its user prefix", async () => {
-    const resolveTarget = slackPlugin.messaging!.targetResolver!.resolveTarget!;
-    const resolveAutoThreadId = slackPlugin.threading!.resolveAutoThreadId!;
-
-    const resolved = await resolveTarget({
+    const resolved = await messaging.targetResolver!.resolveTarget!({
       cfg,
       accountId: "default",
       input: "user:U123",
@@ -594,7 +576,7 @@ describe("slackPlugin outbound", () => {
 
     expect(resolved).toMatchObject({ to: "U123", kind: "user" });
     expect(
-      resolveAutoThreadId({
+      threading.resolveAutoThreadId!({
         cfg,
         to: resolved?.to ?? "",
         toolContext: {
@@ -608,9 +590,7 @@ describe("slackPlugin outbound", () => {
   });
 
   it("does not stringify numeric thread ids in tool context", () => {
-    const buildToolContext = slackPlugin.threading!.buildToolContext!;
-
-    const context = buildToolContext({
+    const context = threading.buildToolContext!({
       cfg,
       context: { To: "channel:C123", MessageThreadId: 1712345678.123456 },
     });
@@ -628,7 +608,7 @@ describe("slackPlugin outbound", () => {
     "resolves %s reply transport",
     (_name, replyToId, threadId, replyDelivery, replyToIsExplicit, expected) => {
       expect(
-        slackPlugin.threading!.resolveReplyTransport!({
+        threading.resolveReplyTransport!({
           cfg,
           replyToId,
           threadId,
@@ -650,18 +630,12 @@ describe("slackPlugin outbound", () => {
             { type: "text", text: "Slack interactive smoke." },
             {
               type: "buttons",
-              buttons: [
-                { label: "Approve", value: "approve" },
-                { label: "Reject", value: "reject" },
-              ],
+              buttons: [button("Approve"), button("Reject")],
             },
             {
               type: "select",
               placeholder: "Choose a target",
-              options: [
-                { label: "Canary", value: "canary" },
-                { label: "Production", value: "production" },
-              ],
+              options: [button("Canary"), button("Production")],
             },
           ],
         },
@@ -695,6 +669,7 @@ describe("slackPlugin outbound", () => {
 
   it.each([
     { surface: "interactive", type: "text" },
+    { surface: "presentation", type: "text" },
     { surface: "presentation", type: "context" },
   ] as const)(
     "delivers oversized $surface $type in order across the real Slack outbound adapter",
@@ -706,7 +681,7 @@ describe("slackPlugin outbound", () => {
       const text = "x".repeat(3_000 * 50 + 1);
       const buttons = {
         type: "buttons" as const,
-        buttons: [{ label: "Continue", value: "continue" }],
+        buttons: [button("Continue")],
       };
       const presentationTextBlock =
         type === "context" ? { type: "context" as const, text } : { type: "text" as const, text };
@@ -822,45 +797,43 @@ it("matches Slack thread replies against configured channel bindings", () => {
 });
 
 describe("slackPlugin config", () => {
-  it("requires an app token for Socket Mode bot accounts", async () => {
-    const { configured, snapshot } = await getSlackConfiguredState(
-      slackConfig({ mode: "socket", botToken: "xoxb-socket" }),
-    );
-    expect(configured).toBe(false);
-    expect(snapshot?.configured).toBe(false);
-  });
-
   it.each([
     {
-      name: "Socket Mode",
-      slack: { postAs: "user" as const, userToken: "test-user-token", appToken: "test-app-token" },
-      expectedTransportSource: { appTokenSource: "config" },
+      name: "Socket Mode bot without an app token",
+      slack: { mode: "socket" as const, botToken: "xoxb-socket" },
+      configured: false,
+      snapshot: {},
     },
     {
-      name: "HTTP mode",
+      name: "Socket Mode user",
+      slack: { postAs: "user" as const, userToken: "test-user-token", appToken: "test-app-token" },
+      configured: true,
+      snapshot: {
+        identity: "user",
+        userTokenSource: "config",
+        userTokenStatus: "available",
+        appTokenSource: "config",
+      },
+    },
+    {
+      name: "HTTP user",
       slack: {
         postAs: "user" as const,
         mode: "http" as const,
         userToken: "test-user-token",
         signingSecret: "test-signing-secret",
       },
-      expectedTransportSource: { signingSecretSource: "config" },
-    },
-  ])(
-    "treats a complete user-identity $name account as configured",
-    async ({ slack, expectedTransportSource }) => {
-      const { configured, snapshot } = await getSlackConfiguredState({
-        channels: { slack },
-      } as OpenClawConfig);
-
-      expect(configured).toBe(true);
-      expect(snapshot).toMatchObject({
-        configured: true,
+      configured: true,
+      snapshot: {
         identity: "user",
         userTokenSource: "config",
         userTokenStatus: "available",
-        ...expectedTransportSource,
-      });
+        signingSecretSource: "config",
+      },
     },
-  );
+  ])("reports credential readiness for $name", async ({ slack, configured, snapshot }) => {
+    const result = await getSlackConfiguredState(slackConfig(slack));
+    expect(result.configured).toBe(configured);
+    expect(result.snapshot).toMatchObject({ configured, ...snapshot });
+  });
 });

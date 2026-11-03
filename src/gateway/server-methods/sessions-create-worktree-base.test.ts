@@ -19,8 +19,11 @@ import {
 import {
   controlUiClient,
   initializeRepository,
+  removeOwnedSessionWorktree,
   settleWorkspaceRuns,
+  successfulSessionRequest as requestOk,
 } from "../server.sessions.create.projects.test-support.js";
+import { sessionTitleRequests } from "../session-title-state.js";
 import { dispatchInboundMessageMock, testState } from "../test-helpers.js";
 import {
   directSessionReq,
@@ -33,11 +36,6 @@ const execFileAsync = promisify(execFile);
 const git = (cwd: string, ...args: string[]) => execFileAsync("git", ["-C", cwd, ...args]);
 const readSession = (storePath: string, sessionKey: string) =>
   loadSessionEntry({ agentId: "main", sessionKey, storePath });
-async function requestOk<T>(...args: Parameters<typeof directSessionReq<T>>) {
-  const response = await directSessionReq<T>(...args);
-  expect(response.ok, JSON.stringify(response.error)).toBe(true);
-  return response.payload!;
-}
 const createRun = (
   params: Record<string, unknown>,
   options: Parameters<typeof directSessionReq<{ key: string; runId: string }>>[2],
@@ -86,14 +84,7 @@ async function cleanupRun(
   sessionKey: string,
 ) {
   await settleWorkspaceRuns(context, storePath, sessionKey, true);
-  const owned = await managedWorktrees.findLiveByOwner("session", sessionKey);
-  if (owned) {
-    await managedWorktrees.remove({
-      id: owned.id,
-      reason: "test-cleanup",
-      allowSnapshotLoss: true,
-    });
-  }
+  await removeOwnedSessionWorktree(sessionKey);
 }
 
 vi.mock("../../projects/project-clone.js", async (importOriginal) => {
@@ -116,6 +107,23 @@ test.each(["fresh", "retry"] as const)(
     const { publisher, upstream, projectRoot } = await cloneFixture(root);
     const baseRef = mode === "retry" ? "origin/missing" : "main";
     if (mode === "retry") {
+      const commit = (await git(projectRoot, "rev-parse", "HEAD")).stdout.trim();
+      const branches = [
+        "main",
+        ...Array.from({ length: 7_850 }, (_, index) => String(index).padStart(65, "0")),
+      ];
+      for (const [directory, prefix] of [
+        [upstream, "refs/heads"],
+        [path.join(projectRoot, ".git"), "refs/remotes/origin"],
+      ] as const) {
+        await fs.writeFile(
+          path.join(directory, "packed-refs"),
+          branches
+            .map((branch) => `${commit} ${prefix}/${branch}\n`)
+            .toSorted()
+            .join(""),
+        );
+      }
       // A matching branch at the mutable origin must not bypass the registry-owned remote.
       const unrelated = await initializeRepository(root, "unrelated");
       await git(unrelated, "branch", "missing");
@@ -152,11 +160,21 @@ test.each(["fresh", "retry"] as const)(
         );
         expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
         expect(readSession(storePath, sessionKey)?.pendingWorktree).toMatchObject({ baseRef });
+        await fs.writeFile(path.join(publisher, "requested.txt"), "requested branch\n");
+        await git(publisher, "add", "requested.txt");
+        await git(publisher, "commit", "-m", "requested branch");
+        const expectedCommit = (await git(publisher, "rev-parse", "HEAD")).stdout.trim();
         await git(publisher, "branch", "missing");
         await git(publisher, "push", upstream, "refs/heads/missing:refs/heads/missing");
         await sendRun(sessionKey, "retry", "retry-invalid-remote-base", options);
         await settleWorkspaceRuns(context, storePath, sessionKey);
         expect(readSession(storePath, sessionKey)).not.toHaveProperty("pendingWorktree");
+        const owned = await managedWorktrees.findLiveByOwner("session", sessionKey);
+        expect(owned).toBeDefined();
+        expect((await git(owned!.path, "rev-parse", "HEAD")).stdout.trim()).toBe(expectedCommit);
+        expect(await fs.readFile(path.join(owned!.path, "requested.txt"), "utf8")).toBe(
+          "requested branch\n",
+        );
       }
       expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
       expect((await managedWorktrees.findLiveByOwner("session", sessionKey))?.baseRef).toBe(
@@ -282,7 +300,12 @@ test("sessions.create recovers a failed worktree in the same session with an exp
   const target = { agentId: "main", sessionKey, storePath };
   try {
     await settleWorkspaceRuns(context, storePath, sessionKey);
+    const beforeTitle = loadSessionEntry(target)!;
+    // Automatic naming is independent of the failed worktree run's settlement.
+    await sessionTitleRequests.get({ ...target, sessionId: beforeTitle.sessionId });
     const failed = loadSessionEntry(target)!;
+    expect(failed.displayName).toMatch(/^[a-z]+-[a-z]+$/);
+    expect(failed.updatedAt).toBeGreaterThanOrEqual(beforeTitle.updatedAt);
     expect(failed).toMatchObject({
       status: "failed",
       lastRunError: expect.stringContaining("has no commits"),
@@ -305,10 +328,12 @@ test("sessions.create recovers a failed worktree in the same session with an exp
     const bound = loadSessionEntry(target)!;
     expect(bound).toMatchObject({
       sessionId: failed.sessionId,
+      displayName: failed.displayName,
       projectId: project.id,
       lastRunError: failed.lastRunError,
       worktree: { repoRoot: repository },
     });
+    expect(bound.updatedAt).toBeGreaterThanOrEqual(failed.updatedAt);
     expect(bound).not.toHaveProperty("pendingWorktree");
     expect(bound).not.toHaveProperty("pendingProjectGitUrl");
     expect(loadTranscriptEventsSync(transcriptScope)).toEqual(history);

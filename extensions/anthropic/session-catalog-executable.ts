@@ -12,12 +12,7 @@ const MAX_SHIM_PROBE_BYTES = 4096;
 
 let cachedNativeReplacement: { key: string; executable: string | undefined } | undefined;
 
-function readSmallExecutableSource(executable: string):
-  | {
-      realPath: string;
-      source: string;
-    }
-  | undefined {
+function readSmallExecutableSource(executable: string) {
   try {
     const realPath = fs.realpathSync(executable);
     if (fs.statSync(realPath).size > MAX_SHIM_PROBE_BYTES) {

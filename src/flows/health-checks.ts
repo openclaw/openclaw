@@ -31,6 +31,9 @@ export interface HealthFinding {
   readonly checkId: string;
   readonly severity: HealthFindingSeverity;
   readonly message: string;
+  /** Operator urgency is independent of diagnostic severity. */
+  readonly category?: "fix-now" | "recommended" | "historical";
+  readonly docsUrl?: string;
   readonly source?: string;
   readonly errorCode?: string;
   readonly path?: string;

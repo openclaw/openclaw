@@ -28,6 +28,12 @@ duplicated. Existing independently managed installations keep their current
 lifecycle. Eligible app-managed Node services move to bundled Bun while keeping
 their always-on service.
 
+For local connections, the app prefers the configured `gateway.auth.token` or
+`gateway.auth.password` over `OPENCLAW_GATEWAY_TOKEN` or
+`OPENCLAW_GATEWAY_PASSWORD` inherited by the app, matching Gateway startup.
+Environment credentials remain fallbacks when no configured credential resolves.
+Remote connections retain their environment overrides.
+
 Before launching an app-hosted Gateway, the app saves a local authentication
 token when neither configuration nor the child environment supplies credentials
 and token authentication is selected or implicit. Existing credentials, secret
@@ -44,8 +50,17 @@ for the default state directory, `~/.config/openclaw/gateway.env`.
 The app first copies its runtime to `<state>/runtime/<runtimeBuildId>/`, where
 `<state>` is `~/.openclaw` or `~/.openclaw-<profile>`. Copies use one APFS
 directory clone when available, falling back to a file copy, and are published atomically after provenance and
-Bun checks succeed. The child and app-managed Bun service use the concrete
-build directory so each process keeps its matching package and SQLite library.
+Bun checks succeed. The child uses the concrete build directory so it keeps its
+matching package and SQLite library. An app-managed Bun service also loads its
+package and SQLite library from that directory, but runs a copy of that build's
+Bun at the stable path `<state>/runtime/service/bun`. macOS records the
+Messages Automation grant for a standalone executable by its path, so a stable
+path lets later app updates keep it. The first update that moves a service onto
+this path, including a move from Node, still needs Automation approved once for
+the new executable. Full Disk Access is also checked against the executable's
+code signature, so an update that replaces an ad-hoc or source-built Bun can
+lose it while System Settings still shows `bun` as enabled; grant it again for
+`<state>/runtime/service/bun`.
 The `runtime/current` symlink selects the runtime for the terminal CLI shim.
 The app retains the current and previous builds; older copies are removed only
 after Gateway health succeeds and no process runs from them.
@@ -64,16 +79,38 @@ ends unexpectedly.
 The private worker validates core and node configuration through a read-only
 bootstrap, without Gateway-wide Doctor preflight or channel-schema validation.
 Node plugins still validate their own settings before publishing commands, and
-the node runtime owns its MCP clients. Node startup retains the Doctor-owned
-device-auth, device-identity, and exec-approval migrations; this is not a promise
-that all worker startup is read-only. Public `node run`, Gateway, and Doctor
-retain their existing startup policies.
+the node runtime owns its MCP clients. Node startup prepares client credentials
+through their migration owner before using them, and retains exec-approval
+migrations; this is not a promise that all worker startup is read-only.
 
-When the native app creates identity, device-auth, or approval tables before
-the worker starts, node startup completes that recognized version-zero database
-through the shared initializer before plugins read their state. Existing
-native rows are preserved. This does not migrate an already-versioned shared
-Gateway database or adopt unknown or occupied bootstrap state.
+The native app loads private identities and cached device tokens from its local
+`client/credentials.sqlite` before connecting, without opening the selected
+Gateway database. The active app serves bounded same-user credential operations,
+holding exclusive SQLite custody only for each operation. A fresh client can create an identity while
+PostgreSQL or the Gateway is unavailable; shared approval policy still requires
+its existing state owner.
+
+The packaged app runs the matching bundled CLI's narrow, noninteractive
+credential preparation before native admission. That native handoff also settles
+pending local runtime-pin migration before the app chooses its Gateway runtime.
+It preserves explicit pin data rather than forcing a new seed; a migration
+conflict prevents startup and retains recovery guidance. Gateway and node
+startup use the same credential migration owner. When an in-place app update
+leaves the previous build's app-managed Gateway service running, that Gateway still owns the state,
+so the app stops it, prepares credentials, and then installs the service on its
+own runtime. Ordinary pending migrations and validated remounts
+complete automatically without a manual Doctor command or a recovery prompt.
+A recognized credential-only native version-zero database can be
+extracted under exclusive custody before PostgreSQL bootstrap. Unknown data or
+other application tables require the supported Doctor/port route. Existing
+private keys are preserved; migration failure never silently creates replacement
+keys. Update older apps after shared credential retirement. Doctor remains the
+recovery path for unsupported or inconsistent source state.
+
+Independent native credential sources remain untouched after their read-only
+import. The previous app can still read them after rollback. The local copy keeps
+source identity and content hash, preserving refreshed tokens for an unchanged
+source and rebuilding after a source change. Consumed JSON imports remain consumed.
 
 ## Automatic setup
 
@@ -120,12 +157,18 @@ retries setup when needed. See
 
 ## Manual recovery
 
+If the bundled runtime exits with an illegal instruction (`SIGILL`), the app stops
+automatic restarts immediately and preserves the crash output in the Gateway log.
+Update or reinstall OpenClaw.app and include that log if the failure persists.
+An independently managed [Node Gateway](/install/node) is an alternative; connect
+the app to it. The app does not automatically switch its bundled runtime to Node.
+
 Read the version to install from the app: choose **About OpenClaw** in the
 menu bar, or run `openclaw-mac status --json`, which reports the app version
 and build.
 
 For a manual install, use Node 26 (recommended) or another supported release:
-Node 24.16+ or Node 26.1+. Install `openclaw` globally:
+Node 24.22.1+ or Node 26.12.1+. Install `openclaw` globally:
 
 The command below is for npm 12 or npm 11.16+. On npm 11.15 and earlier,
 omit `--allow-scripts=openclaw`.
@@ -439,6 +482,12 @@ installation diagnostics. Use **Retry setup** after failed setup, or open
 **Connection… → Connection** from the menu bar and choose
 **Recheck** after repairing it. The Connection window remains available when
 the Dashboard cannot reach the Gateway.
+
+For a bundled app, Connection reports the connected local Gateway's version,
+or the installed service's version when disconnected—not just the app's bundled
+version. An older Gateway exposes **Update Gateway…**; unfinished preparation or
+recovery exposes **Repair Gateway…**, including when the Gateway is newer than
+the app. A healthy compatible newer Gateway does not offer a downgrade.
 
 ## State directory on macOS
 

@@ -454,7 +454,7 @@ export class AuthProfileCredentialPublicationPendingError extends Error {
 export function captureAuthProfileCredentialAuthority(
   context: OpenClawStateWorkerContext,
   source: { identity: string; databasePath: string },
-  profileId: string,
+  profileId: string | undefined,
 ) {
   const rootIdentity = `${context.admission.identity.key}:${context.admission.identity.birthtime ?? ""}`;
   const root = ownerFor(rootIdentity);
@@ -474,8 +474,8 @@ export function captureAuthProfileCredentialAuthority(
       },
     });
   }
-  let cell = owner.cells.get(profileId);
-  if (!cell) {
+  let cell = profileId ? owner.cells.get(profileId) : undefined;
+  if (profileId && !cell) {
     cell = { identityCurrent: () => true };
     owner.cells.set(profileId, cell);
   }
@@ -517,21 +517,25 @@ export function captureAuthProfileCredentialAuthority(
       assertOwnerCurrent();
     }
   };
+  const assertCurrent = () => {
+    assertOwnerCurrent();
+    if (root.pending.size || owner.pending.size) {
+      throw new AuthProfileCredentialPublicationPendingError(waitUntilCurrent);
+    }
+  };
   // Preparation may overlap publication; only the effect reader grants current authority.
   return {
     waitUntilCurrent,
+    assertCurrent,
     observe(credential: AuthProfileCredential | undefined) {
-      if (!retained.observed) {
+      if (retained && !retained.observed) {
         retained.credential = credential && structuredClone(credential);
         retained.observed = true;
       }
     },
     readCurrentCredential(this: void) {
-      assertOwnerCurrent();
-      if (root.pending.size || owner.pending.size) {
-        throw new AuthProfileCredentialPublicationPendingError(waitUntilCurrent);
-      }
-      return retained.credential && structuredClone(retained.credential);
+      assertCurrent();
+      return retained?.credential && structuredClone(retained.credential);
     },
   };
 }

@@ -32,6 +32,12 @@ function expectPolicy(
   expect(resolveModelRuntimePolicy(params)).toEqual(expected);
 }
 
+const modelPolicy = (id: string, matchedProvider?: string) => ({
+  policy: { id },
+  source: "model" as const,
+  ...(matchedProvider ? { matchedProvider } : {}),
+});
+
 describe("model route intent", () => {
   const config: OpenClawConfig = {
     agents: {
@@ -47,22 +53,10 @@ describe("model route intent", () => {
   };
 
   it("inherits only the selected agent's same-provider primary route", () => {
-    expect(
-      resolveModelRouteIntent({
-        config,
-        provider: "openai",
-        modelId: "gpt-5.4-mini",
-        agentId: "assistant",
-      }),
-    ).toEqual({ runtimeId: "codex", source: "inherited" });
-    expect(
-      resolveModelRouteIntent({
-        config,
-        provider: "anthropic",
-        modelId: "claude-sonnet-4-6",
-        agentId: "assistant",
-      }),
-    ).toBeUndefined();
+    const resolve = (provider: string, modelId: string) =>
+      resolveModelRouteIntent({ config, provider, modelId, agentId: "assistant" });
+    expect(resolve("openai", "gpt-5.4-mini")).toEqual({ runtimeId: "codex", source: "inherited" });
+    expect(resolve("anthropic", "claude-sonnet-4-6")).toBeUndefined();
   });
 
   it("keeps a consumer's explicit runtime ahead of the default route", () => {
@@ -168,13 +162,11 @@ describe("resolveModelRuntimePolicy", () => {
         return config;
       };
       const config = prepare({ agents: { defaults: { models } } });
+      const resolve = (captured: OpenClawConfig, modelId = "model-23") =>
+        resolveModelRuntimePolicyBase({ config: captured, provider: "fixture", modelId });
       using parse = vi.spyOn(modelCatalogRefs, "parseModelCatalogRef");
       for (const modelId of ["model-23", "model-0", "model-12"]) {
-        expect(resolveModelRuntimePolicyBase({ config, provider: "fixture", modelId })).toEqual({
-          policy: { id: "first-runtime" },
-          source: "model",
-          matchedProvider: "fixture",
-        });
+        expect(resolve(config, modelId)).toEqual(modelPolicy("first-runtime", "fixture"));
       }
       expect(parse.mock.calls.length).toBeLessThanOrEqual(Object.keys(models).length + 6);
 
@@ -187,35 +179,20 @@ describe("resolveModelRuntimePolicy", () => {
             agentRuntime: { id: restart ? "restarted" : "republished" },
           };
           prepare(config);
-          expect(
-            resolveModelRuntimePolicyBase({ config, provider: "fixture", modelId: "model-23" })
-              .policy?.id,
-          ).toBe(restart ? "restarted" : "republished");
+          expect(resolve(config).policy?.id).toBe(restart ? "restarted" : "republished");
         }
       }
 
       const replacement = agentModels({ "fixture/model-23": "next-runtime" });
-      expect(
-        resolveModelRuntimePolicyBase({
-          config: prepare(replacement),
-          provider: "fixture",
-          modelId: "model-23",
-        }),
-      ).toEqual({ policy: { id: "next-runtime" }, source: "model", matchedProvider: "fixture" });
+      expect(resolve(prepare(replacement))).toEqual(modelPolicy("next-runtime", "fixture"));
 
       const mutablePolicy = { id: "mutable-runtime" };
       const mutable: OpenClawConfig = {
         agents: { defaults: { models: { "fixture/model-23": { agentRuntime: mutablePolicy } } } },
       };
-      expect(
-        resolveModelRuntimePolicyBase({ config: mutable, provider: "fixture", modelId: "model-23" })
-          .policy?.id,
-      ).toBe("mutable-runtime");
+      expect(resolve(mutable).policy?.id).toBe("mutable-runtime");
       mutablePolicy.id = "edited-runtime";
-      expect(
-        resolveModelRuntimePolicyBase({ config: mutable, provider: "fixture", modelId: "model-23" })
-          .policy?.id,
-      ).toBe("edited-runtime");
+      expect(resolve(mutable).policy?.id).toBe("edited-runtime");
     },
   );
 
@@ -233,7 +210,7 @@ describe("resolveModelRuntimePolicy", () => {
           provider: "ollama",
           modelId: model.id.slice("ollama/".length),
         }),
-      ).toEqual({ policy: { id: "openclaw" }, source: "model" });
+      ).toEqual(modelPolicy("openclaw"));
     }
 
     // Projection must not parse the full provider inventory again for every model.
@@ -255,28 +232,16 @@ describe("resolveModelRuntimePolicy", () => {
     expectPolicy({ config: qaConfig(), provider: "openai", modelId: "gpt-5.5" }, expected);
   });
 
-  it("honors provider wildcard agent model runtime policy entries", () => {
+  it.each(["qwen-local", undefined])("honors provider wildcard policies (model=%s)", (modelId) => {
     const config = agentModels({ "vllm/*": "openclaw" });
-    config.agents = { ...config.agents, ownership: "explicit", entries: { ops: {}, research: {} } };
-    expectPolicy(
-      { config, provider: "vllm", modelId: "qwen-local" },
-      {
-        policy: { id: "openclaw" },
-        source: "model",
-        matchedProvider: "vllm",
-      },
-    );
-  });
-
-  it("honors provider wildcard agent model runtime policy entries without a concrete model id", () => {
-    expectPolicy(
-      { config: agentModels({ "vllm/*": "openclaw" }), provider: "vllm" },
-      {
-        policy: { id: "openclaw" },
-        source: "model",
-        matchedProvider: "vllm",
-      },
-    );
+    if (modelId) {
+      config.agents = {
+        ...config.agents,
+        ownership: "explicit",
+        entries: { ops: {}, research: {} },
+      };
+    }
+    expectPolicy({ config, provider: "vllm", modelId }, modelPolicy("openclaw", "vllm"));
   });
 
   it("prefers exact provider model runtime policy over agent provider wildcards", () => {
@@ -287,13 +252,7 @@ describe("resolveModelRuntimePolicy", () => {
         models: [createModelConfig("codex")],
       }),
     };
-    expectPolicy(
-      { config, provider: "vllm", modelId: "qwen-local" },
-      {
-        policy: { id: "codex" },
-        source: "model",
-      },
-    );
+    expectPolicy({ config, provider: "vllm", modelId: "qwen-local" }, modelPolicy("codex"));
   });
 
   it("matches self-qualified provider rows only by their full model id", () => {
@@ -317,11 +276,7 @@ describe("resolveModelRuntimePolicy", () => {
 
     expectPolicy(
       { config, provider: "", modelId: "openrouter/anthropic/claude-opus-4.6" },
-      {
-        policy: { id: "openclaw" },
-        source: "model",
-        matchedProvider: "openrouter",
-      },
+      modelPolicy("openclaw", "openrouter"),
     );
   });
 
@@ -352,11 +307,7 @@ describe("resolveModelRuntimePolicy", () => {
     });
     expectPolicy(
       { config, provider: "", modelId: "anthropic/claude-opus-4-7" },
-      {
-        policy: { id: "claude-cli" },
-        source: "model",
-        matchedProvider: "anthropic",
-      },
+      modelPolicy("claude-cli", "anthropic"),
     );
   });
 
@@ -367,7 +318,7 @@ describe("resolveModelRuntimePolicy", () => {
         provider: "",
         modelId: "claude-opus-4-7[1m]",
       },
-      { policy: { id: "claude-cli" }, source: "model", matchedProvider: "anthropic" },
+      modelPolicy("claude-cli", "anthropic"),
     );
   });
 
@@ -393,27 +344,11 @@ describe("resolveModelRuntimePolicy", () => {
       },
     } as OpenClawConfig;
 
-    expect(
-      resolveModelRuntimePolicy({
-        config,
-        provider: "vllm",
-        modelId: "qwen-local",
-        sessionKey: "global",
-      }),
-    ).toEqual({
-      policy: { id: "openclaw" },
-      source: "model",
-      matchedProvider: "vllm",
-    });
-    expect(() =>
-      resolveModelRuntimePolicy({
-        config,
-        provider: "vllm",
-        modelId: "qwen-local",
-        agentId: "ops",
-        sessionKey: "global",
-      }),
-    ).toThrow(/belongs to "research"/);
+    const params = { config, provider: "vllm", modelId: "qwen-local", sessionKey: "global" };
+    expectPolicy(params, modelPolicy("openclaw", "vllm"));
+    expect(() => resolveModelRuntimePolicy({ ...params, agentId: "ops" })).toThrow(
+      /belongs to "research"/,
+    );
   });
 
   it("uses a prepared stored-row owner for openai/* without re-admitting global", () => {
@@ -436,7 +371,7 @@ describe("resolveModelRuntimePolicy", () => {
         sessionKey: "global",
         agentScope: { kind: "prepared", agentId: "main" },
       }),
-    ).toEqual({ policy: { id: "openclaw" }, source: "model", matchedProvider: "openai" });
+    ).toEqual(modelPolicy("openclaw", "openai"));
   });
 
   it("fails closed for duplicate provider-prefixed bare-model policies", () => {

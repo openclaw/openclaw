@@ -48,7 +48,8 @@ struct ChatAssistantRunGroup: Identifiable {
 
     var answerID: UUID? {
         self.parts.reversed().compactMap { part -> UUID? in
-            if case let .row(.message(message)) = part, message.isCompletedReply { return message.id }
+            if case let .row(.message(message)) = part, message.presentationOwnsFooter,
+               message.isCompletedReply { return message.presentationID }
             return nil
         }.first
     }
@@ -116,8 +117,13 @@ struct ChatAssistantRunGroup: Identifiable {
         if hasLiveContent {
             // Unknown ownership must never make unrelated runs look like one reply.
             if !searchActive, let liveRunID, let boundary = boundaries[liveRunID] {
-                if groups.last?.runID == liveRunID {
-                    groups[groups.count - 1].includesLive = true
+                // A waiting follow-up must not move the current stream into
+                // a new frame. Reuse its latest segment for the same input.
+                if let index = groups.lastIndex(where: { group in
+                    guard case let .run(runID, inputBoundary, _) = group.id else { return false }
+                    return runID == liveRunID && inputBoundary == boundary
+                }) {
+                    groups[index].includesLive = true
                 } else {
                     groups.append(Self(
                         id: .run(liveRunID, boundary, segments[liveRunID, default: 0]),

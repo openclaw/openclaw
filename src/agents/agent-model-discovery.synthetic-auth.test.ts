@@ -35,8 +35,14 @@ vi.mock("./auth-profiles/store-runtime.js", () => ({
   ensureAuthProfileStoreWithoutExternalProfilesAsync: async () => ({ version: 1, profiles: {} }),
 }));
 
-vi.mock("./agent-auth-discovery-core.js", () => ({
-  addEnvBackedAgentCredentials: (credentials: Record<string, unknown>) => ({ ...credentials }),
+vi.mock("./model-auth-env-vars.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./model-auth-env-vars.js")>()),
+  resolveProviderEnvAuthLookupMaps: () => ({
+    aliasMap: {},
+    envCandidateMap: {},
+    authEvidenceMap: {},
+    setupProviderFallbackRefs: [],
+  }),
 }));
 
 async function withAgentDir(run: (agentDir: string) => Promise<void>): Promise<void> {

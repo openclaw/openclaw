@@ -89,25 +89,22 @@ it("coalesces machine metadata bursts off thread and selects only correlated pro
       }
     }
     const environments = await createWorkerEnvironmentStore({ database });
+    for (const id of ["unowned", "stale"]) {
+      expect(
+        readWorkerPlacementIdentity(
+          store.get(id)!,
+          undefined,
+          environments.get(`environment-${id}`),
+        ),
+      ).toBeUndefined();
+    }
     const expected = ["active", "pending", "terminal"];
-    expect(
-      (await store.listAsync())
-        .filter(
-          (row) =>
-            readWorkerPlacementIdentity(
-              row,
-              undefined,
-              row.environmentId ? (environments.get(row.environmentId) ?? null) : null,
-            )?.profileId === "development",
-        )
-        .map((row) => row.sessionId),
-    ).toEqual(expected);
     expect((await store.readChangeSnapshot(["development"])).map((row) => row.sessionId)).toEqual(
       expected,
     );
     expect(await store.readChangeSnapshot([])).toEqual([]);
     expect(await store.readChangeSnapshot(["missing"])).toEqual([]);
-    let changed!: (profileId: string) => void;
+    const machineShapeNotifications = { onChanged: (_profileId: string) => {} };
     const received: string[] = [];
     const published = createDeferredCore();
     const unlisten = sessionChanges.subscribe((change) => {
@@ -123,12 +120,7 @@ it("coalesces machine metadata bursts off thread and selects only correlated pro
     const changes = subscribeGatewayWorkerPlacementMetadataChanges({
       placements: store,
       runnerAvailability: { read: () => undefined, version: () => 0 },
-      environments: {
-        subscribeMachineShapeChanged: (listener) => {
-          changed = listener;
-          return () => {};
-        },
-      },
+      environments: { machineShapeNotifications },
       getSessionChangeContext: () => context,
       warn,
     });
@@ -136,11 +128,11 @@ it("coalesces machine metadata bursts off thread and selects only correlated pro
     const calls = observeMainThreadSql();
     try {
       for (let i = 0; i < 3; i++) {
-        changed("development");
+        machineShapeNotifications.onChanged("development");
       }
       await published.promise;
       await changes.stop();
-      changed("development");
+      machineShapeNotifications.onChanged("development");
       expect(received).toEqual(expected.map((id) => `agent:main:${id}`));
       calls.expectIdle();
       expect(warn).not.toHaveBeenCalled();

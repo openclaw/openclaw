@@ -156,6 +156,12 @@ The shared protocol client still owns frame parsing, request correlation,
 challenge ordering, timeout cleanup, sequence-gap detection, and reconnect
 scheduling.
 
+`connect` is the first request on each socket. Requests made while the connection
+is opening or awaiting hello stay queued until the accepted hello is published.
+Their original deadlines and abort signals remain active while queued. Closing
+or stopping the connection rejects queued work instead of replaying it on a new
+socket.
+
 Both the Node and browser entries export `isGatewayProtocolResponseError(error)`.
 It recognizes correlated Gateway response errors; constructed errors and local
 transport timeouts return `false`. Both entries use the same implementation.

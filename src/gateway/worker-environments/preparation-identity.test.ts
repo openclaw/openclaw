@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { createWorkerPreparationIdentity } from "./preparation-identity.js";
 import {
   readWorkerPreparation,
   readWorkerProjectPreparation,
+  workerPreparationSourceKey,
 } from "./preparation-identity.schema.js";
 import type { WorkerLocalProjectSnapshot } from "./workspace-git-base.js";
 
@@ -29,160 +30,133 @@ const input: Omit<Parameters<typeof createWorkerPreparationIdentity>[0], "projec
   },
   setupRecipe: "f".repeat(40),
 };
+const { project: _project, setupRecipe: _setupRecipe, ...runtime } = input;
+type InputChange = Omit<
+  {
+    [K in keyof typeof input]?: (typeof input)[K] extends object
+      ? Partial<(typeof input)[K]>
+      : (typeof input)[K];
+  },
+  "profileSnapshot"
+> & { profileSnapshot?: (typeof input)["profileSnapshot"] };
+const makeInput = (change: InputChange) => ({
+  ...input,
+  ...change,
+  project: { ...input.project, ...change.project },
+  target: { ...input.target, ...change.target },
+  artifacts: { ...input.artifacts, ...change.artifacts },
+  profileSnapshot: { ...input.profileSnapshot, ...change.profileSnapshot },
+});
+const original = createWorkerPreparationIdentity(input);
 
-describe("worker preparation identity", () => {
-  it("keeps empty runtime preparation separate from project content", () => {
-    const { project: _project, setupRecipe: _setupRecipe, ...runtime } = input;
-    const preparation = createWorkerPreparationIdentity(runtime);
-    expect(preparation.key).not.toBe(createWorkerPreparationIdentity(input).key);
-    expect(preparation).not.toHaveProperty("setupRecipe");
-    expect(
-      readWorkerPreparation({
-        ...runtime.profileSnapshot,
-        runtimePreparation: { source: "empty", ...preparation },
-      }),
-    ).toEqual({ source: "empty", ...preparation });
-    expect(() =>
-      readWorkerPreparation({
-        project: input.project,
-        runtimePreparation: { source: "empty", ...preparation },
-      }),
-    ).toThrow("runtime preparation identity is invalid");
-    expect(() =>
-      readWorkerPreparation({
-        runtimePreparation: {
-          source: "empty",
-          ...preparation,
-          recipe: { source: "none", inputs: {}, env: {} },
-        },
-      }),
-    ).toThrow("runtime preparation identity is invalid");
+it("keeps empty runtime preparation separate from project content", () => {
+  const preparation = createWorkerPreparationIdentity(runtime);
+  const empty = { source: "empty", ...preparation };
+  expect(preparation.key).not.toBe(original.key);
+  expect(preparation).not.toHaveProperty("setupRecipe");
+  expect(readWorkerPreparation({ ...runtime.profileSnapshot, runtimePreparation: empty })).toEqual(
+    empty,
+  );
+  const rejects = (profile: Record<string, unknown>) =>
+    expect(() => readWorkerPreparation(profile)).toThrow("runtime preparation identity is invalid");
+  rejects({ project: input.project, runtimePreparation: empty });
+  rejects({ runtimePreparation: { ...empty, recipe: { source: "none", inputs: {}, env: {} } } });
+});
+
+it("separates image capacity from empty workspaces in both claim and cache identities", () => {
+  const empty = createWorkerPreparationIdentity(runtime);
+  const image = createWorkerPreparationIdentity({ ...runtime, imageReserve: true });
+  expect(image.key).not.toBe(empty.key);
+  expect(image.cacheKey).not.toBe(empty.cacheKey);
+  const profile = { runtimePreparation: { ...image, source: "image" } };
+  expect(readWorkerPreparation(profile)).toEqual(profile.runtimePreparation);
+  expect(workerPreparationSourceKey(profile)).toBe("image");
+  expect(() => readWorkerPreparation({ ...profile, project: input.project })).toThrow(
+    "runtime preparation identity is invalid",
+  );
+});
+
+it("shares identity across linked source paths, JSON field order and plugin order", () => {
+  const equivalent = structuredClone(input);
+  equivalent.project.root = "/source/second-worktree";
+  equivalent.profileSnapshot = {
+    executionMode: "worker-turn",
+    settings: { disk: 20, region: "test" },
+    install: "bundle",
+    machineClass: "small",
+  };
+  equivalent.artifacts.enabledPluginIds.reverse();
+  expect(createWorkerPreparationIdentity(equivalent)).toEqual(original);
+});
+
+it("separates skipped setup caches while preserving the default identity", () => {
+  const enabled = createWorkerPreparationIdentity({ ...input, runSetupScript: true });
+  expect(enabled).toEqual(original);
+  expect(enabled).not.toHaveProperty("runSetupScript");
+  const skipped = createWorkerPreparationIdentity({ ...input, runSetupScript: false });
+  expect(skipped.setupRecipe).toBe(original.setupRecipe);
+  expect(skipped.runSetupScript).toBe(false);
+  expect(skipped.key).not.toBe(original.key);
+  expect(skipped.cacheKey).not.toBe(original.cacheKey);
+  expect(readWorkerProjectPreparation({ preparation: skipped })).toEqual(skipped);
+});
+
+it("uses the provider disk fingerprint independently of lease and runtime policy", () => {
+  const target = { ...input.target, profileKey: "7".repeat(64) };
+  const disk = createWorkerPreparationIdentity({ ...input, target });
+  // These digests pin warm-image compatibility across updates.
+  expect(disk.key).toBe("cbdf7035128e74fcf4571c1d9c8f5a0b11e1c8e00bd516556c755bd5b495c559");
+  expect(disk.cacheKey).toBe("5aa1bd824e0e251412000829f6a7932ef884b12223a29d19611c17a769abc474");
+  const changed = createWorkerPreparationIdentity({
+    ...input,
+    target,
+    profileId: "renamed",
+    profileSnapshot: {
+      install: "npm",
+      executionMode: "remote-exec",
+      suspendAfter: "45m",
+      readyWorkers: 0,
+      settings: { ttl: "4h", idleTimeout: "2h", binary: "/other/crabbox", warmImage: true },
+    },
   });
-
-  it("shares identity across linked source paths, JSON field order and plugin order", () => {
-    const equivalent = structuredClone(input);
-    equivalent.project.root = "/source/second-worktree";
-    equivalent.profileSnapshot = {
-      executionMode: "worker-turn",
-      settings: { disk: 20, region: "test" },
-      install: "bundle",
-      machineClass: "small",
-    };
-    equivalent.artifacts.enabledPluginIds.reverse();
-    expect(createWorkerPreparationIdentity(equivalent)).toEqual(
-      createWorkerPreparationIdentity(input),
-    );
-  });
-
-  it("separates skipped setup caches while preserving the default identity", () => {
-    const original = createWorkerPreparationIdentity(input);
-    const enabled = createWorkerPreparationIdentity({ ...input, runSetupScript: true });
-    expect(enabled).toEqual(original);
-    expect(enabled).not.toHaveProperty("runSetupScript");
-    const skipped = createWorkerPreparationIdentity({ ...input, runSetupScript: false });
-    expect(skipped.setupRecipe).toBe(original.setupRecipe);
-    expect(skipped.runSetupScript).toBe(false);
-    expect(skipped.key).not.toBe(original.key);
-    expect(skipped.cacheKey).not.toBe(original.cacheKey);
-    expect(readWorkerProjectPreparation({ preparation: skipped })).toEqual(skipped);
-  });
-
-  it("uses the provider disk fingerprint independently of lease and runtime policy", () => {
-    const target = { ...input.target, profileKey: "7".repeat(64) };
-    const original = createWorkerPreparationIdentity({ ...input, target });
-    // Changing this value invalidates every user's warm images on update; change deliberately and explain why in the PR.
-    expect(original.key).toBe("cbdf7035128e74fcf4571c1d9c8f5a0b11e1c8e00bd516556c755bd5b495c559");
-    // Changing this value invalidates every user's warm images on update; change deliberately and explain why in the PR.
-    expect(original.cacheKey).toBe(
-      "5aa1bd824e0e251412000829f6a7932ef884b12223a29d19611c17a769abc474",
-    );
-    const changed = createWorkerPreparationIdentity({
+  expect(changed.cacheKey).toBe(disk.cacheKey);
+  expect(changed.key).not.toBe(disk.key);
+  expect(
+    createWorkerPreparationIdentity({
       ...input,
-      target,
-      profileId: "renamed",
-      profileSnapshot: {
-        install: "npm",
-        executionMode: "remote-exec",
-        suspendAfter: "45m",
-        readyWorkers: 0,
-        settings: { ttl: "4h", idleTimeout: "2h", binary: "/other/crabbox", warmImage: true },
-      },
-    });
-    expect(changed.cacheKey).toBe(original.cacheKey);
-    expect(changed.key).not.toBe(original.key);
-    expect(
-      createWorkerPreparationIdentity({
-        ...input,
-        target: { ...target, profileKey: "8".repeat(64) },
-      }).cacheKey,
-    ).not.toBe(original.cacheKey);
-  });
+      target: { ...target, profileKey: "8".repeat(64) },
+    }).cacheKey,
+  ).not.toBe(disk.cacheKey);
+});
 
-  it.each<[string, Partial<typeof input>]>([
-    ["namespace", { namespace: "gateway-two" }],
-    ["provider", { providerId: "another-provider" }],
-    ["profile id", { profileId: "another-profile" }],
-    ["commit", { project: { ...input.project, baseCommit: "1".repeat(40) } }],
-    ["recipe", { setupRecipe: "2".repeat(40) }],
-    [
-      "profile",
-      { profileSnapshot: { ...input.profileSnapshot, settings: { region: "elsewhere" } } },
-    ],
-    ["project", { project: { ...input.project, key: "9".repeat(64) } }],
-    ["class", { target: { ...input.target, machineClass: "large" } }],
-    ["target", { target: { ...input.target, arch: "arm64" } }],
-    ["OS", { target: { ...input.target, platform: "darwin" } }],
-    ["mode", { profileSnapshot: { ...input.profileSnapshot, executionMode: "remote-exec" } }],
-    ["version", { artifacts: { ...input.artifacts, openclawVersion: "2026.9.1" } }],
-    ["archive", { artifacts: { ...input.artifacts, workerArchiveSha256: "6".repeat(64) } }],
-    ["runtime", { artifacts: { ...input.artifacts, nodeBootstrapSha256: "3".repeat(64) } }],
-    [
-      "plugins",
-      {
-        artifacts: {
-          ...input.artifacts,
-          enabledPluginIds: [...input.artifacts.enabledPluginIds, "third"],
-        },
-      },
-    ],
-    ["bundle", { artifacts: { ...input.artifacts, workerBundleHash: "4".repeat(64) } }],
-    [
-      "protocol",
-      {
-        artifacts: {
-          ...input.artifacts,
-          protocolFeatures: [...input.artifacts.protocolFeatures, "worker-computer-v1"],
-        },
-      },
-    ],
-  ])("invalidates a changed %s before allocation", (label, change) => {
-    const original = createWorkerPreparationIdentity(input);
-    const next = createWorkerPreparationIdentity({ ...input, ...change });
-    expect(next.key).not.toBe(original.key);
-    expect(next.cacheKey).toMatch(/^[a-f0-9]{64}$/u);
-    if (
-      [
-        "profile id",
-        "commit",
-        "mode",
-        "runtime",
-        "plugins",
-        "bundle",
-        "protocol",
-        "version",
-        "archive",
-      ].includes(label)
-    ) {
-      expect(next.cacheKey).toBe(original.cacheKey);
-    } else {
-      expect(next.cacheKey).not.toBe(original.cacheKey);
-    }
-    const { project: _project, setupRecipe: _setupRecipe, ...runtime } = input;
-    const { project: _changedProject, setupRecipe: _changedRecipe, ...runtimeChange } = change;
-    if (!["recipe", "commit", "project"].includes(label)) {
-      expect(createWorkerPreparationIdentity({ ...runtime, ...runtimeChange }).key).not.toBe(
-        createWorkerPreparationIdentity(runtime).key,
-      );
-    }
-  });
+it.each<[string, InputChange, boolean?]>([
+  ["namespace", { namespace: "gateway-two" }],
+  ["provider", { providerId: "another-provider" }],
+  ["profile id", { profileId: "another-profile" }, false],
+  ["commit", { project: { baseCommit: "1".repeat(40) } }, false],
+  ["recipe", { setupRecipe: "2".repeat(40) }],
+  ["profile", { profileSnapshot: { settings: { region: "elsewhere" } } }],
+  ["project", { project: { key: "9".repeat(64) } }],
+  ["class", { target: { machineClass: "large" } }],
+  ["target", { target: { arch: "arm64" } }],
+  ["OS", { target: { platform: "darwin" } }],
+  ["mode", { profileSnapshot: { executionMode: "remote-exec" } }, false],
+  ["version", { artifacts: { openclawVersion: "2026.9.1" } }, false],
+  ["archive", { artifacts: { workerArchiveSha256: "6".repeat(64) } }, false],
+  ["runtime", { artifacts: { nodeBootstrapSha256: "3".repeat(64) } }, false],
+  ["plugins", { artifacts: { enabledPluginIds: ["third"] } }, false],
+  ["bundle", { artifacts: { workerBundleHash: "4".repeat(64) } }, false],
+  ["protocol", { artifacts: { protocolFeatures: ["worker-computer-v1"] } }, false],
+])("invalidates a changed %s before allocation", (label, change, cacheChanges = true) => {
+  const changedInput = makeInput(change);
+  const next = createWorkerPreparationIdentity(changedInput);
+  expect(next.key).not.toBe(original.key);
+  expect(next.cacheKey).toMatch(/^[a-f0-9]{64}$/u);
+  expect(next.cacheKey === original.cacheKey).toBe(!cacheChanges);
+  const { project: _source, setupRecipe: _recipe, ...runtimeChange } = changedInput;
+  if (!["recipe", "commit", "project"].includes(label)) {
+    expect(createWorkerPreparationIdentity({ ...runtime, ...runtimeChange }).key).not.toBe(
+      createWorkerPreparationIdentity(runtime).key,
+    );
+  }
 });

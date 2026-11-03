@@ -50,6 +50,17 @@ struct SettingsHubScreen: View {
                     }
                     ToolbarItem(placement: .topBarTrailing) {
                         Button {
+                            self.push(.espSetup)
+                        } label: {
+                            Label { Text("ESP device setup").font(OpenClawType.subheadSemiBold) } icon: {
+                                Image(systemName: "cpu")
+                            }
+                            .labelStyle(.iconOnly)
+                        }
+                        .accessibilityIdentifier("SettingsHub.ESPSetup")
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
                             self.push(.gateway)
                         } label: {
                             Text("Gateway")
@@ -130,6 +141,7 @@ struct SettingsHubScreen: View {
 
 struct EmbeddedDashboardContent: View {
     @State private var bridge: IOSDeviceSettingsBridge
+    private let appModel: NodeAppModel
     let embedCompatibility: DashboardEmbedCompatibility?
     let url: URL
     let config: GatewayConnectConfig?
@@ -146,6 +158,7 @@ struct EmbeddedDashboardContent: View {
         openGateway: (() -> Void)? = nil)
     {
         self.url = url
+        self.appModel = appModel
         self.config = config
         self.openGateway = openGateway
         self.embedCompatibility = embedCompatibility
@@ -171,7 +184,14 @@ struct EmbeddedDashboardContent: View {
                     storedOperatorToken: storedOperatorToken,
                     usesNativeNavigationChrome: true),
                 tls: self.config?.tls,
+                basicProxyCredentialProvider: {
+                    AuthenticatedControlUI.basicProxyCredential(config: self.config)
+                },
                 deviceSettingsBridge: self.bridge,
+                nativeAuth: AuthenticatedControlUI.nativeAuthHandler(
+                    config: self.config,
+                    storedOperatorToken: storedOperatorToken,
+                    appModel: self.appModel),
                 usesNativeEmbed: true,
                 embedCompatibility: self.embedCompatibility)
                 .id(AuthenticatedControlUI.webContentIdentity(

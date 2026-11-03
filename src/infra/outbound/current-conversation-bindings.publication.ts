@@ -58,7 +58,6 @@ const state = resolveGlobalSingleton(
     capture: new AsyncLocalStorage<BindingChange[]>(),
     installingFacts: 0,
     facts: new Set<(publication: CurrentConversationBindingFactChange) => void>(),
-    observers: new Set<(publication: CurrentConversationBindingPublication) => void>(),
   }),
 );
 
@@ -135,19 +134,16 @@ function publicationState(publication: CurrentConversationBindingPublication) {
       installed = unknownPublication(publication);
       installFacts(installed);
     },
-    notify: () => notifyListeners(state.observers, installed),
+    notify() {},
   };
 }
 
 /** Owns binding-fact staging and observation; callers retain native/foreign authority guards. */
 export const currentConversationBindingPublication = {
   stage: stageCurrentConversationBindingChanges,
-  /** Install/invalidate prepared facts only; storage mutations belong in postcommit observers. */
+  /** Install/invalidate prepared facts only. */
   subscribeFacts(listener: (publication: CurrentConversationBindingFactChange) => void) {
     return registerListener(state.facts, listener);
-  },
-  subscribe(listener: (publication: CurrentConversationBindingPublication) => void) {
-    return registerListener(state.observers, listener);
   },
 };
 

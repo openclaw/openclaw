@@ -146,20 +146,22 @@ export function resolvePluginInstallSourcePlan(params: {
         )
       : { ok: false, error: `unsupported git: plugin spec: ${params.raw}` };
   }
-  const clawhubPrefix = params.raw.trim().toLowerCase().startsWith("clawhub:");
-  const clawhub = parseClawHubPluginSpec(params.raw);
-  if (clawhubPrefix) {
-    return clawhub
+  function planClawHub(parsed: ReturnType<typeof parseClawHubPluginSpec>): PluginInstallSourcePlan {
+    return parsed
       ? sourcePlan(
           {
             source: "clawhub",
-            packageName: clawhub.name,
-            version: clawhub.version,
+            packageName: parsed.name,
+            version: parsed.version,
             mode: params.mode,
           },
           params.raw,
         )
       : { ok: false, error: `Unsupported ClawHub plugin spec: ${params.raw}` };
+  }
+  const clawhubPrefix = params.raw.trim().toLowerCase().startsWith("clawhub:");
+  if (clawhubPrefix) {
+    return planClawHub(parseClawHubPluginSpec(params.raw));
   }
   const explicitNpm = parseNpmPrefixSpec(params.raw);
   if (explicitNpm !== null && !explicitNpm) {
@@ -212,17 +214,7 @@ export function resolvePluginInstallSourcePlan(params: {
     const defaultClawHub = params.raw.includes(":")
       ? null
       : parseClawHubPluginSpec(`clawhub:${params.raw}`);
-    return defaultClawHub
-      ? sourcePlan(
-          {
-            source: "clawhub",
-            packageName: defaultClawHub.name,
-            version: defaultClawHub.version,
-            mode: params.mode,
-          },
-          params.raw,
-        )
-      : { ok: false, error: `Unsupported ClawHub plugin spec: ${params.raw}` };
+    return planClawHub(defaultClawHub);
   }
   const trusted = resolveOpenClawTrustedNpmPackageInstall(explicitNpm);
   return sourcePlan(

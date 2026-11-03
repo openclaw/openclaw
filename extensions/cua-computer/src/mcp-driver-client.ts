@@ -8,6 +8,7 @@ import {
   ClickButton,
   ScrollDirection,
   type CuaDriverSession,
+  type CuaSessionState,
   type CuaToolResult,
 } from "./driver-client.js";
 
@@ -200,13 +201,12 @@ function createClient(binaryPath: string, socketPath: string, env: NodeJS.Proces
     );
 }
 
-function sessionState(value: CuaToolResult): import("@trycua/cua-driver").SessionStateOutput {
+function sessionState(value: CuaToolResult): CuaSessionState {
   if (value.isError || !value.structuredContent) {
     throw driverProtocolError(value.text || "CUA MCP session operation failed");
   }
   const structured = value.structuredContent;
   return {
-    session: typeof structured.session === "string" ? structured.session : "",
     captureScope: mappedEnum(
       structured.capture_scope,
       ["auto", "window", "desktop"],
@@ -217,27 +217,8 @@ function sessionState(value: CuaToolResult): import("@trycua/cua-driver").Sessio
       ["window", "desktop"],
       "effective scope",
     ),
-    desktopCaptureAuthorized: structured.desktop_capture_authorized === true,
     desktopUnlocked: structured.desktop_unlocked === true,
-    ...(typeof structured.escalation_reason === "string"
-      ? {
-          escalationReason: mappedEnum(
-            structured.escalation_reason,
-            [
-              "ax_tree_pixel_mismatch",
-              "background_delivery_failed",
-              "foreground_ineffective",
-              "no_window_target",
-              "other",
-            ],
-            "escalation reason",
-          ),
-        }
-      : {}),
-    ...(typeof structured.escalation_detail === "string"
-      ? { escalationDetail: structured.escalation_detail }
-      : {}),
-  } as import("@trycua/cua-driver").SessionStateOutput;
+  };
 }
 
 class McpCuaDriverSession implements CuaDriverSession {
@@ -362,12 +343,7 @@ class McpCuaDriverSession implements CuaDriverSession {
       return;
     }
     this.disposed = true;
-    let failure: unknown;
-    try {
-      await this.startPromise;
-    } catch (error) {
-      failure = error;
-    }
+    let failure: unknown = await this.startPromise?.catch((error: unknown) => error);
     try {
       const client = await this.client;
       if (client.isAvailable() && this.started) {
@@ -420,24 +396,17 @@ class McpCuaDriverSession implements CuaDriverSession {
     if (this.disposed) {
       throw driverUnavailable("cua-computer is stopping");
     }
-    if (!this.startPromise) {
-      const start = this.tool("start_session", {}, signal).then((result) => {
+    this.startPromise ??= this.tool("start_session", {}, signal)
+      .then((result) => {
         if (result.isError) {
           throw driverProtocolError(result.text || "CUA MCP start_session failed");
         }
         this.started = true;
-      });
-      this.startPromise = start;
-      try {
-        await start;
-      } catch (error) {
-        if (this.startPromise === start) {
-          this.startPromise = undefined;
-        }
+      })
+      .catch((error: unknown) => {
+        this.startPromise = undefined;
         throw error;
-      }
-      return;
-    }
+      });
     await this.startPromise;
   }
 }

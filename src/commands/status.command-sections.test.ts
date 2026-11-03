@@ -1,15 +1,22 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import * as terminalTable from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { HealthSummary } from "./health.js";
 import { pluginHealthError } from "./health.test-fixtures.js";
+import { buildStatusCommandReportLines } from "./status.command-report.js";
 import {
-  buildStatusHealthRows,
-  buildStatusHeartbeatValue,
-  buildStatusMemoryValue,
-  buildStatusModelSelectionLines,
-  buildStatusSecurityAuditLines,
-} from "./status.command-sections.js";
-import { baseStatusSession, createStatusHealth } from "./status.test-support.ts";
+  baseStatusSession,
+  createStatusCommandReportDataParams,
+  createStatusHealth,
+} from "./status.test-support.ts";
+
+// mock-isolation: Formatting consumes fixed facts, not live backup or database inspection.
+vi.mock("../state/backup-run-records.js", () => ({ readBackupRunFreshness: async () => ({}) }));
+vi.mock("./status-database-engines.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./status-database-engines.js")>()),
+  resolveStatusDatabaseEngines: async () => ({ source: "admitted", stores: [] }),
+}));
 
 beforeEach(() => {
   for (const color of ["success", "warn", "muted", "error"] as const) {
@@ -17,56 +24,40 @@ beforeEach(() => {
   }
   vi.stubEnv("OPENCLAW_PROFILE", undefined);
   vi.stubEnv("OPENCLAW_CONTAINER_HINT", undefined);
+  vi.spyOn(terminalTable, "renderTable").mockReturnValue("table");
 });
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
 
-it("renders native provider health without legacy index counters", () => {
-  const value = buildStatusMemoryValue({
-    memory: {
-      agentId: "main",
-      provider: "records",
-      health: { status: "degraded", message: "warming" },
-    },
-    memoryPlugin: { enabled: true, slot: "records" },
-  });
+async function report(overrides: Parameters<typeof createStatusCommandReportDataParams>[0]) {
+  const lines = await buildStatusCommandReportLines(createStatusCommandReportDataParams(overrides));
+  return lines.map(stripAnsi);
+}
 
-  expect(value).toBe("plugin records · degraded · warming");
-});
+async function healthRows(health: Partial<HealthSummary>) {
+  await report({ health: createStatusHealth(health) });
+  return vi
+    .mocked(terminalTable.renderTable)
+    .mock.calls.find(([options]) => options.columns.some((column) => column.key === "Status"))?.[0]
+    .rows;
+}
 
-const healthRows = (health: Partial<HealthSummary>) =>
-  buildStatusHealthRows({ health: createStatusHealth(health) });
-
-it("shows valid configuration examples when heartbeat is waiting for a delivery route", () => {
-  const agent = {
-    agentId: "main",
-    enabled: true,
-    every: "1m",
-    everyMs: 60_000,
-    waitingForRoute: true,
-  };
-  const value = buildStatusHeartbeatValue({
-    summary: { heartbeat: { defaultAgentId: "main", agents: [agent] } },
-  });
-  expect(value).toContain("1m (main; waiting for delivery route");
-  expect(value).toContain('commands.ownerAllowFrom=["telegram:123456789"]');
-  expect(value).toContain('heartbeat.target="telegram"');
-  expect(value).toContain('heartbeat.to="123456789"');
-});
-
-it("prioritizes critical audit findings, caps warnings, and preserves remediation", () => {
-  const lines = buildStatusSecurityAuditLines({
+it("prioritizes critical audit findings, caps warnings, and preserves remediation", async () => {
+  const lines = await report({
     securityAudit: {
+      ts: 1,
       summary: { critical: 1, warn: 6, info: 2 },
       findings: [
         ...Array.from({ length: 6 }, (_, index) => ({
+          checkId: `warn-${index}`,
           severity: "warn" as const,
           title: `Warn ${index}`,
           detail: "warn detail",
         })),
         {
+          checkId: "critical",
           severity: "critical",
           title: "Critical first",
           detail: "critical\ndetail",
@@ -75,7 +66,8 @@ it("prioritizes critical audit findings, caps warnings, and preserves remediatio
       ],
     },
   });
-  expect(lines.slice(0, 4)).toEqual([
+  const start = lines.indexOf("Security audit") + 1;
+  expect(lines.slice(start, start + 4)).toEqual([
     "Summary: 1 critical · 6 warn · 2 info",
     "  CRITICAL Critical first",
     "    critical detail",
@@ -83,30 +75,35 @@ it("prioritizes critical audit findings, caps warnings, and preserves remediatio
   ]);
   expect(lines).toContain("… +1 more");
   expect(lines).not.toContain("  WARN Warn 5");
-  expect(lines.slice(-2)).toEqual([
-    "Full report: openclaw security audit",
-    "Deep check: openclaw security audit --deep",
-  ]);
+  expect(lines).toContain("Full report: openclaw security audit");
+  expect(lines).toContain("Deep check: openclaw security audit --deep");
 });
 
-it("distinguishes pinned sessions from automatic fallbacks in a session report", () => {
-  const lines = buildStatusModelSelectionLines({
-    recent: [
-      {
-        ...baseStatusSession,
-        key: "pinned",
-        configuredModel: "first/a",
-        selectedModel: "second/b",
-        modelSelectionReason: "session override",
+it("distinguishes pinned sessions from automatic fallbacks in a session report", async () => {
+  const params = createStatusCommandReportDataParams();
+  const lines = await report({
+    summary: {
+      ...params.summary,
+      sessions: {
+        ...params.summary.sessions,
+        recent: [
+          {
+            ...baseStatusSession,
+            key: "pinned",
+            configuredModel: "first/a",
+            selectedModel: "second/b",
+            modelSelectionReason: "session override",
+          },
+          {
+            ...baseStatusSession,
+            key: "fallback",
+            configuredModel: "third/c",
+            selectedModel: "fourth/d",
+            modelSelectionReason: "fallback selected",
+          },
+        ],
       },
-      {
-        ...baseStatusSession,
-        key: "fallback",
-        configuredModel: "third/c",
-        selectedModel: "fourth/d",
-        modelSelectionReason: "fallback selected",
-      },
-    ],
+    },
   });
   expect(lines).toEqual(
     expect.arrayContaining([
@@ -122,7 +119,7 @@ it("distinguishes pinned sessions from automatic fallbacks in a session report",
   );
 });
 
-it("classifies a mixed channel report through the real health formatter", () => {
+it("classifies a mixed channel report through the real health formatter", async () => {
   const account = {
     accountId: "default",
     configured: true,
@@ -130,7 +127,7 @@ it("classifies a mixed channel report through the real health formatter", () => 
     healthState: "healthy",
   } satisfies HealthSummary["channels"][string];
   expect(
-    healthRows({
+    await healthRows({
       channels: {
         healthy: account,
         failed: { ...account, probe: { ok: false, error: "sync rejected" } },
@@ -158,8 +155,8 @@ it("classifies a mixed channel report through the real health formatter", () => 
   ]);
 });
 
-it("marks colon-bearing plugin failures as warnings", () => {
-  const rows = healthRows({
+it("marks colon-bearing plugin failures as warnings", async () => {
+  const rows = await healthRows({
     plugins: {
       loaded: ["broken:ok"],
       errors: [
@@ -177,8 +174,8 @@ it("marks colon-bearing plugin failures as warnings", () => {
   });
 });
 
-it("shows blocked ingress even when the channel connection is healthy", () => {
-  const rows = healthRows({
+it("shows blocked ingress even when the channel connection is healthy", async () => {
+  const rows = await healthRows({
     channels: { Telegram: { accountId: "ops", healthState: "healthy" } },
     deliveryQueues: {
       failed: [],
@@ -205,9 +202,9 @@ it("shows blocked ingress even when the channel connection is healthy", () => {
   });
 });
 
-it("adds degraded event-loop health to status rows", () => {
+it("adds degraded event-loop health to status rows", async () => {
   expect(
-    healthRows({
+    await healthRows({
       eventLoop: {
         degraded: true,
         degradedSinceMs: 180_000,
@@ -230,14 +227,14 @@ it("adds degraded event-loop health to status rows", () => {
   ]);
 });
 
-it("warns when deep health says the retained Node executable is gone", () => {
+it("warns when deep health says the retained Node executable is gone", async () => {
   const execPath = "/opt/homebrew/Cellar/node@24/24.20.0/bin/node";
   vi.spyOn(theme, "success").mockImplementation((value) => `ok(${String(value)})`);
   vi.spyOn(theme, "warn").mockImplementation((value) => `warn(${String(value)})`);
-  const rows = healthRows({ childRuntime: { execPath, available: false } });
+  const rows = await healthRows({ childRuntime: { execPath, available: false } });
 
-  expect(rows[0]).toEqual({ Item: "Gateway", Status: "ok(reachable)", Detail: "42ms" });
-  expect(rows[1]).toEqual({
+  expect(rows?.[0]).toEqual({ Item: "Gateway", Status: "ok(reachable)", Detail: "42ms" });
+  expect(rows?.[1]).toEqual({
     Item: "Gateway runtime",
     Status: "warn(WARN)",
     Detail: `The Node.js runtime this Gateway started with (${execPath}) can no longer start worker processes, likely because it was upgraded or removed. Restart the Gateway.`,

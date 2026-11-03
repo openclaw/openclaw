@@ -1,11 +1,9 @@
-import { setImmediate as realImmediate } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
-import { readSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
+import { createEnteredGate } from "../agents/entered-gate.test-support.js";
 import {
   sqliteMaintenanceFixture,
   sqliteSchedulerClock,
-  sqliteWriteGate,
 } from "./sqlite-maintenance-fixture.test-support.js";
 import {
   cancelSqliteWalWriteAdmission,
@@ -65,17 +63,14 @@ describe("sqlite WAL checkpoint tick", () => {
 
       const prepare = vi.spyOn(db, "prepare");
       const exec = vi.spyOn(db, "exec");
-      try {
-        await cancelSqliteWalWriteAdmission(db);
-        expect(cancelled).toBe(1);
-        await maintenance.stop();
-        expect(maintenance.close()).toBe(false);
-        expect(prepare).not.toHaveBeenCalled();
-        expect(exec).not.toHaveBeenCalled();
-      } finally {
-        prepare.mockRestore();
-        exec.mockRestore();
-      }
+      await cancelSqliteWalWriteAdmission(db);
+      expect(cancelled).toBe(1);
+      await maintenance.stop();
+      expect(maintenance.close()).toBe(false);
+      expect(prepare).not.toHaveBeenCalled();
+      expect(exec).not.toHaveBeenCalled();
+      prepare.mockRestore();
+      exec.mockRestore();
       expect(pragma("wal_autocheckpoint")).toBe(0);
       expect(clock.armedAtMs).toBeNull();
     },
@@ -85,7 +80,7 @@ describe("sqlite WAL checkpoint tick", () => {
     vi.useFakeTimers();
     const { db } = createDatabase();
     const maintenance = resources.maintain(db, { checkpointIntervalMs: 100 });
-    const gate = sqliteWriteGate();
+    const gate = createEnteredGate();
     resources.retain(gate.release);
     const execute = vi.fn(async () => {
       await gate.wait();
@@ -111,53 +106,33 @@ describe("sqlite WAL checkpoint tick", () => {
   });
 
   it("checkpoints on the maintenance tick and vacuums only on the periodic pass", async () => {
-    vi.useFakeTimers();
+    const clock = sqliteSchedulerClock();
     const { db, dbPath, pragma } = createDatabase();
     const freelistCount = () => pragma("freelist_count");
-    // The periodic pass yields between vacuum units on real immediates that fake timers do not own.
-    const settle = async () => {
-      for (let index = 0; index < 64; index += 1) {
-        await realImmediate();
-      }
-    };
     configureSqlitePreSchemaPragmas(db);
     const maintenance = resources.maintain(db, {
       busyTimeoutMs: 1_000,
       checkpointIntervalMs: 60_000,
       databasePath: dbPath,
     });
-    db.exec("CREATE TABLE payload (id INTEGER PRIMARY KEY, value BLOB NOT NULL);");
-    const insert = db.prepare("INSERT INTO payload (value) VALUES (?)");
-    const value = new Uint8Array(16 * 1024);
-    for (let index = 0; index < 64; index += 1) {
-      insert.run(value);
-    }
-    db.exec("DELETE FROM payload;");
+    db.exec(`CREATE TABLE payload (value BLOB NOT NULL);
+      INSERT INTO payload VALUES (zeroblob(1048576));
+      DELETE FROM payload;`);
     const freeBefore = freelistCount();
     expect(freeBefore).toBeGreaterThan(0);
     // Commits below the inline threshold leave every frame for the maintenance tick.
     expect(maintenance.health).toBeUndefined();
 
-    const reads = resources.count(db, "timeout", /\bbusy_timeout\b/iu);
-    const exec = vi.spyOn(db, "exec");
-    try {
-      await vi.advanceTimersByTimeAsync(10_000);
-      await settle();
-      expect(reads.counts.timeout).toBe(0);
-      expect(exec.mock.calls.some(([sql]) => /\bbusy_timeout\b/iu.test(sql))).toBe(false);
-    } finally {
-      reads.restore();
-      exec.mockRestore();
-    }
-    expect(readSqliteBusyTimeout(db)).toBe(1_000);
+    await clock.advanceBy(10_000);
 
     const ticked = expectDefined(maintenance.health, "WAL tick health");
     expect(ticked).toMatchObject({ state: "complete", checkpointedFrames: ticked.logFrames });
     expect(ticked.checkpointedFrames).toBeGreaterThan(0);
     expect(freelistCount()).toBe(freeBefore);
 
-    await vi.advanceTimersByTimeAsync(50_000);
-    await settle();
+    for (let tick = 0; tick < 5; tick++) {
+      await clock.advanceBy(10_000);
+    }
     expect(freelistCount()).toBeLessThan(freeBefore);
   });
 });

@@ -4,7 +4,6 @@ import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { codeModeReplayIdForToolCall } from "./code-mode-bridge.js";
 import type { CodeModeExecutorContinuation } from "./code-mode-executor-types.js";
 import { runCodeModeExecutor } from "./code-mode-executor.js";
-import { resolveCodeModeHeadlessConfig } from "./code-mode-runtime.js";
 import type { CodeModeSkill } from "./code-mode-skills.js";
 import {
   activeRuns,
@@ -13,6 +12,7 @@ import {
   resumingRunIds,
 } from "./code-mode-state.js";
 import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
+import { fakeTool } from "./test-helpers/fake-tool.js";
 import {
   createToolSearchCatalogRef,
   registerHeadlessToolSearchCatalog,
@@ -35,23 +35,12 @@ export const testing = {
     }
     return result;
   },
-  resolveCodeModeHeadlessConfig,
 };
 
 export async function resetCodeModeTestState(): Promise<void> {
   await disposeAllCodeModeRuns();
   await Promise.all([...directContinuations].map((continuation) => continuation.dispose()));
   directContinuations.clear();
-}
-
-export function fakeTool(name: string, description: string): AnyAgentTool {
-  return {
-    name,
-    label: name,
-    description,
-    parameters: { type: "object", properties: { value: { type: "string" } } },
-    execute: vi.fn(async (_toolCallId, input) => jsonResult({ name, input })),
-  };
 }
 
 export function pluginTool(
@@ -103,6 +92,7 @@ export function mcpTool(params: {
   description?: string;
   parameters?: AnyAgentTool["parameters"];
   operation?: "tool" | "resources_list" | "resources_read" | "prompts_list" | "prompts_get";
+  instructions?: string;
   execute?: AnyAgentTool["execute"];
 }): AnyAgentTool {
   const tool: AnyAgentTool = {
@@ -124,6 +114,7 @@ export function mcpTool(params: {
       safeServerName: params.safeServerName ?? params.serverName,
       toolName: params.toolName,
       operation: params.operation ?? "tool",
+      ...(params.instructions ? { instructions: params.instructions } : {}),
     },
   });
   return tool;
@@ -196,7 +187,6 @@ export function createCodeModeHarness(
     catalogRef?: ToolSearchCatalogRef;
     codeModeSkills?: readonly CodeModeSkill[];
     codeMode?: CodeModeToolsConfig;
-    forceRestartSafeTools?: boolean;
     abortSignal?: AbortSignal;
     modelContextWindowTokens?: number;
   } = {},
@@ -218,7 +208,6 @@ export function createCodeModeHarness(
     sessionKey: params.agentId ? `agent:${params.agentId}:main` : "agent:main:main",
     runId: "run-code-mode",
     catalogRef,
-    forceRestartSafeTools: params.forceRestartSafeTools,
     codeModeSkills: params.codeModeSkills,
     ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
     ...(params.modelContextWindowTokens === undefined
@@ -259,11 +248,8 @@ export async function runUntilCompleted(params: {
   execTool: AnyAgentTool;
   waitTool: AnyAgentTool;
   code: string;
-  restartSafe?: boolean;
 }) {
-  const details = await codeModeRunner([params.execTool]).run(params.code, "code-call-1", {
-    restartSafe: params.restartSafe,
-  });
+  const details = await codeModeRunner([params.execTool]).run(params.code, "code-call-1");
   return await waitUntilCompleted({ details, waitTool: params.waitTool });
 }
 

@@ -1,8 +1,11 @@
+import { performance } from "node:perf_hooks";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { resolveChannelMessageActionFacts } from "../channels/plugins/message-action-names.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
+import { withDiagnosticsTimelineObserver } from "../infra/diagnostics-timeline.js";
+import { startDiffReadTiming } from "../infra/diff-read-timing.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import {
@@ -16,6 +19,10 @@ import {
 } from "../process/gateway-work-admission.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { AgentDatabaseAdmissionError } from "../state/agent-database-admission.js";
+import {
+  withArtifactPreservingStateReads,
+  withLiveStateReads,
+} from "../state/artifact-preserving-state-reads.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "./control-plane-audit.js";
 import {
   consumeControlPlaneWriteBudget,
@@ -267,11 +274,37 @@ export async function handleGatewayRequest(
   diagnostics?: GatewayRpcDiagnostics,
 ): Promise<void> {
   const { req, client, isWebchatConnect, context, signal, hasCurrentClientAuthority } = opts;
+  using workboardDiagnostics =
+    req.method === "workboard.cards.list"
+      ? startSlowRequestDiagnostics<string>(
+          context.logGateway,
+          "slow workboard cards list",
+          req.method,
+          "setup",
+          undefined,
+          [
+            "sessionAuthority.profiles",
+            "sessionAuthority.targets",
+            "sessionAuthority.policy",
+            "sessionFacts.inventory",
+            "sessionFacts.storageReadiness",
+            "sessionFacts.discovery",
+            "sessionFacts.rows",
+            "sessionFacts.publication",
+            "sessionFacts.selection",
+          ],
+        )
+      : undefined;
   // Keep the caller's current registry, including methods published after global registration.
   const methodRegistry =
     opts.methodRegistry?.getHandler(req.method) !== undefined
       ? opts.methodRegistry
       : createRequestGatewayMethodRegistry(opts.extraHandlers);
+  using diffTiming =
+    req.method === "sessions.diff"
+      ? startDiffReadTiming("sessions.diff", diagnostics?.startedAt)
+      : undefined;
+  const diffAdmissionStarted = diffTiming ? (diagnostics?.startedAt ?? performance.now()) : 0;
   const observation = methodRegistry.isObservation(req.method);
   let observationResponded = false;
   let respondCancelled = opts.respond;
@@ -367,7 +400,7 @@ export async function handleGatewayRequest(
         methodRegistry,
         expectedProfileBinding: profileBinding,
         hasCurrentClientAuthority,
-        markSessionSubscribePhase: subscribeDiagnostics?.mark,
+        markSessionSubscribePhase: subscribeDiagnostics?.mark ?? workboardDiagnostics?.mark,
         assertInvocationCurrent: () => {
           runtimeAuthority?.assertCurrent();
           profileBinding?.assertCurrent();
@@ -382,6 +415,7 @@ export async function handleGatewayRequest(
         },
       });
       sessionAccessAuthority = authorization.sessionAccessAuthority;
+      workboardDiagnostics?.mark("admission");
       releaseSessionMutation = authorization.sessionMutationAuthorization?.release;
       entry?.assertOpen();
       if (authorization.error) {
@@ -469,6 +503,7 @@ export async function handleGatewayRequest(
       const invokeHandler = async () => {
         retainRoot?.();
         subscribeDiagnostics?.mark("handlerPreparation");
+        workboardDiagnostics?.mark("handlerPreparation");
         chatSendPhase?.mark("preparation");
         const preparedHandler = await prepareGatewayRequestHandler(handler, entry, opts);
         // Lazy preparation may yield across a hot config change. Keep the router fence
@@ -495,6 +530,7 @@ export async function handleGatewayRequest(
             sessionMutationAuthorization,
             withSessionTurnAuthority,
             markSessionSubscribePhase: subscribeDiagnostics?.mark,
+            diffTiming,
             ...(authorization.sessionAccessAuthority
               ? { sessionAccessAuthority: authorization.sessionAccessAuthority }
               : {}),
@@ -525,6 +561,10 @@ export async function handleGatewayRequest(
           ? methodRegistry.getReadSharing?.(req.method)
           : undefined;
         chatSendPhase?.finish();
+        workboardDiagnostics?.mark("handler");
+        if (diffTiming) {
+          diffTiming.durations.admission = performance.now() - diffAdmissionStarted;
+        }
         return GatewayRpcDiagnostics.runHandler(
           req.method,
           () =>
@@ -567,6 +607,7 @@ export async function handleGatewayRequest(
       }
       respond(false, undefined, error.error);
     } finally {
+      workboardDiagnostics?.mark("cleanup");
       releaseSessionMutation?.();
       sessionAccessAuthority?.release();
       releaseForegroundWork();
@@ -576,17 +617,27 @@ export async function handleGatewayRequest(
       }
     }
   };
+  const dispatchLive = (retainRoot?: () => void) => withLiveStateReads(() => dispatch(retainRoot));
+  const dispatchObserved = workboardDiagnostics
+    ? (retainRoot?: () => void) =>
+        withDiagnosticsTimelineObserver(workboardDiagnostics.observeSpan, () =>
+          dispatchLive(retainRoot),
+        )
+    : dispatchLive;
   if (!observation) {
-    return await dispatch();
+    return await dispatchObserved();
   }
   await runWithGatewayObservationScope(
     req.method,
-    dispatch,
+    req.method === "sessions.github.readiness"
+      ? (retainRoot) => withArtifactPreservingStateReads(() => dispatchObserved(retainRoot))
+      : dispatchObserved,
     [signal, client?.connectionSignal],
     (error) => {
       if (!observationResponded && !client?.connectionSignal?.aborted) {
         respondCancelled(false, undefined, error);
       }
     },
+    req.method === "sessions.branches.list" ? 10_000 : undefined,
   );
 }

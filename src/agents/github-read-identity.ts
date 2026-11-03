@@ -11,7 +11,6 @@ import { createStaleWhileRevalidateCache } from "../infra/stale-while-revalidate
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { runCommandBuffered } from "../process/exec.js";
 import { withGitProcessOperation } from "../process/spawn-diagnostics.js";
-import { notifyListeners, registerListener } from "../shared/listeners.js";
 import type { GitHubCredentialReader } from "./github-credential-reader.js";
 import { resolveGitHubHost } from "./github-host-runtime.js";
 
@@ -28,14 +27,15 @@ const nativeTokens = createStaleWhileRevalidateCache<string | undefined>({
   cacheable: (token) => token !== undefined,
 });
 
-const identityChanges = new Set<() => void>();
-export function subscribeGitHubIdentityChanges(listener: () => void): () => void {
-  return registerListener(identityChanges, listener);
-}
+export const githubIdentityChanges: { onChange?: () => void } = {};
 
 export function clearNativeGitHubTokenCache(): void {
   nativeTokens.clear();
-  notifyListeners(identityChanges, undefined);
+  try {
+    githubIdentityChanges.onChange?.();
+  } catch {
+    // Discovery is best effort; cache retirement must still succeed.
+  }
 }
 
 function ambientGitHubCredential(env: NodeJS.ProcessEnv, host = resolveGitHubHost()) {

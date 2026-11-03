@@ -15,14 +15,11 @@ import {
   requestSqliteWorkerOperationAdmission,
 } from "../infra/sqlite-worker-operation-admission.js";
 import type { OpenClawAgentDatabase } from "./openclaw-agent-db-contract.js";
+import { readActiveOpenClawAgentDatabaseLeasesInDatabase } from "./openclaw-agent-db-lease-inspection.js";
 import { mayShareAgentDatabaseFile } from "./openclaw-agent-db-lease-provenance.js";
-import {
-  readActiveOpenClawAgentDatabaseLeasesReadOnly,
-  type OpenClawAgentDatabaseWorkerLeaseReceipt,
-} from "./openclaw-agent-db-lease.js";
-import { OPENCLAW_AGENT_FTS_SCHEMAS } from "./openclaw-agent-fts-schema.js";
+import type { OpenClawAgentDatabaseWorkerLeaseReceipt } from "./openclaw-agent-db-lease.js";
+import { AGENT_FTS_SCHEMAS } from "./openclaw-agent-fts-schema.js";
 import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
-import type { WorkerOperations } from "./worker-operation-registry.js";
 
 type PreparationInput = Omit<
   Extract<SessionMaintenanceMetadataCommand, { kind: "maintenance-plan" }>,
@@ -74,6 +71,19 @@ export function createAgentDatabaseMaintenanceOwner(context: {
         databaseOptions: context.databaseOptions,
       });
       preparation = { plan: input, prepared };
+      if (!prepared.requiresWrite) {
+        try {
+          const value = kernel.runSessionMaintenanceMetadataInTransaction(
+            { ...input, kind: "maintenance-plan", databaseOptions: context.databaseOptions },
+            {},
+            prepared,
+          );
+          return { kind: "not-committed" as const, workerThreadId: threadId, value };
+        } finally {
+          releasePreparation();
+        }
+      }
+      return undefined;
     },
     "session.maintenance.metadata": (input: MetadataInput) => {
       const kernel = expectDefined(maintenance, "Session maintenance kernel");
@@ -163,17 +173,17 @@ export function createAgentDatabaseMaintenanceOwner(context: {
       });
       const state = { env: context.databaseOptions.env, path: receipt.sharedStatePath };
       // The shared write fence excludes new leases through Doctor's backed-up repair.
-      const changes = runOpenClawStateWriteTransaction(() => {
+      const changes = runOpenClawStateWriteTransaction((database) => {
         assertCurrent();
-        const owners = readActiveOpenClawAgentDatabaseLeasesReadOnly(state).filter((owner) =>
-          mayShareAgentDatabaseFile(owner.path, receipt.path),
+        const owners = readActiveOpenClawAgentDatabaseLeasesInDatabase(database.db).filter(
+          (owner) => mayShareAgentDatabaseFile(owner.path, receipt.path),
         );
         if (owners.length !== 1 || owners[0]?.lease_id !== receipt.leaseId) {
           throw new Error("Startup FTS repair requires an exclusive live agent database lease");
         }
         return repairDoctorSqliteIndexCorruption(check.database, check.databaseLabel, {
           label: `agent ${context.databaseOptions.agentId}`,
-          ftsSchemas: OPENCLAW_AGENT_FTS_SCHEMAS,
+          ftsSchemas: AGENT_FTS_SCHEMAS,
           ftsOnly: true,
           assertCurrent,
           describeRepair(indexes) {
@@ -216,7 +226,3 @@ export function createAgentDatabaseMaintenanceOwner(context: {
     },
   };
 }
-
-export type AgentDatabaseMaintenanceOperations = WorkerOperations<
-  ReturnType<typeof createAgentDatabaseMaintenanceOwner>["operations"]
->;

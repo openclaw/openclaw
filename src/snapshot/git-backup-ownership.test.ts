@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { requireGitCommand as requireGit } from "../infra/git-exec.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -13,13 +12,12 @@ import {
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { GitBackupIdentity } from "./git-backup-codec.js";
+import { createGitBackup, restoreGitBackupRef, verifyGitBackupRef } from "./git-backup.js";
 import {
-  createGitBackup,
-  initializeGitBackupRepository,
-  restoreGitBackupRef,
-  verifyGitBackupRef,
-} from "./git-backup.js";
-import { writeBackupManifest } from "./git-backup.test-support.js";
+  expectDatabaseRows,
+  gitBackupRepository,
+  writeBackupManifest,
+} from "./git-backup.test-support.js";
 import {
   createAgentDatabase,
   createGlobalDatabase,
@@ -40,7 +38,8 @@ afterEach(async () => {
 
 async function fixture(all = true) {
   const root = roots.make("git-backup-ownership-");
-  const stateDir = path.join(root, "state");
+  const repository = gitBackupRepository(root);
+  const { stateDir, repositoryPath, file: repoFile } = repository;
   const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
   const global = {
     path: resolveOpenClawStateSqlitePath(env),
@@ -59,12 +58,8 @@ async function fixture(all = true) {
       source.prepare("INSERT INTO payload VALUES (1, ?)").run(database.identity.role);
     });
   }
-  const repositoryPath = path.join(root, "repository");
-  await initializeGitBackupRepository({ repositoryPath, stateDir });
-  await requireGit(repositoryPath, ["config", "user.name", "Backup fixture"]);
-  await requireGit(repositoryPath, ["config", "user.email", "backup@example.invalid"]);
-  const git = (...args: string[]) => requireGit(repositoryPath, args);
-  const repoFile = (relative: string) => path.join(repositoryPath, relative);
+  await repository.init();
+  await repository.configureIdentity();
   const backup = (databases = all ? [global, agent] : [agent]) =>
     createGitBackup({ repositoryPath, stateDir, databases, all });
   const updateAgent = () =>
@@ -78,11 +73,11 @@ async function fixture(all = true) {
       ref,
       targetPath: path.join(root, `${name}.sqlite`),
     });
-  return { root, repositoryPath, global, agent, git, repoFile, backup, updateAgent, restore };
+  return { ...repository, global, agent, repoFile, backup, updateAgent, restore };
 }
 
 it("preserves extras and their staging while refreshing and pruning declared artifacts", async () => {
-  const { global, agent, git, repoFile, backup } = await fixture();
+  const { global, agent, git, repoFile, backup, write } = await fixture();
   const extras = [
     "unrelated.txt",
     "agents/.DS_Store",
@@ -93,9 +88,7 @@ it("preserves extras and their staging while refreshing and pruning declared art
     "global/tables/notes.jsonl",
   ];
   for (const file of extras) {
-    const destination = repoFile(file);
-    await fs.mkdir(path.dirname(destination), { recursive: true });
-    await fs.writeFile(destination, `operator document: ${file}\n`);
+    await write(file, `operator document: ${file}\n`);
   }
   await git("add", "--", ...extras);
   await backup();
@@ -125,6 +118,8 @@ it("preserves extras and their staging while refreshing and pruning declared art
   await fs.rm(repoFile("agents/main/manifest.json"));
   const expired = repoFile("agents/expired");
   await writeBackupManifest(expired, "expired");
+  const untracked = "agents/operator-untracked/notes.txt";
+  await write(untracked, "operator-owned\n");
   const pruned = await backup([global]);
   await expectMissing(expired);
   expect(await git("ls-tree", "HEAD", "agents/main")).toBe("");
@@ -132,6 +127,10 @@ it("preserves extras and their staging while refreshing and pruning declared art
   for (const file of extras) {
     await expectContents(repoFile(file), `operator document: ${file}\n`);
   }
+  await expectContents(repoFile(untracked), "operator-owned\n");
+  expect(await git("status", "--porcelain", "--untracked-files=all", "--", untracked)).toBe(
+    `?? ${untracked}`,
+  );
   expect((await staged()).split("\n").toSorted()).toEqual(extras.toSorted());
   await expect(backup([global])).resolves.toMatchObject({ noChanges: true });
   expect(await git("rev-parse", "HEAD")).toBe(pruned.commit);
@@ -156,15 +155,9 @@ it("restores legacy refs without interpreting extras or rewriting their history"
   const legacy = await git("rev-parse", "HEAD");
   for (const database of [global, agent]) {
     const restored = await restore(`${database.identity.role}-restored`, database.identity, legacy);
-    withDatabase(
-      restored.targetPath,
-      (recovered) => {
-        expect(recovered.prepare("SELECT value FROM payload WHERE id = 1").get()).toEqual({
-          value: database.identity.role,
-        });
-      },
-      { readOnly: true },
-    );
+    expectDatabaseRows(restored.targetPath, {
+      "SELECT value FROM payload WHERE id = 1": [{ value: database.identity.role }],
+    });
     expect(
       (
         await verifyGitBackupRef({ repositoryPath, identity: database.identity, ref: legacy })
@@ -241,17 +234,15 @@ it.each(
 });
 
 it("leaves a pending operator merge and its index unchanged", async () => {
-  const { git, repoFile, backup, updateAgent } = await fixture(false);
+  const { git, repoFile, backup, updateAgent, write, commit } = await fixture(false);
   await backup();
   const branch = await git("branch", "--show-current");
   await git("checkout", "-b", "incoming");
-  await fs.writeFile(repoFile("incoming.txt"), "incoming changes\n");
-  await git("add", "incoming.txt");
-  await git("commit", "-m", "Incoming changes");
+  await write("incoming.txt", "incoming changes\n");
+  await commit("Incoming changes", "incoming.txt");
   await git("checkout", branch);
-  await fs.writeFile(repoFile("operator.txt"), "operator changes\n");
-  await git("add", "operator.txt");
-  await git("commit", "-m", "Operator changes");
+  await write("operator.txt", "operator changes\n");
+  await commit("Operator changes", "operator.txt");
   await git("merge", "--no-commit", "--no-ff", "incoming");
   const head = await git("rev-parse", "HEAD");
   const mergeHead = await git("rev-parse", "MERGE_HEAD");
