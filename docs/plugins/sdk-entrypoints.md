@@ -568,3 +568,11 @@ This capability is host-local and is never a wire environment override.
 streams. It preserves incomplete lines and leaves CR handling to the consumer.
 Node duplex calls may supply `assertCurrent` to compose caller-owned liveness with
 the runtime's existing dispatch and delivery authority.
+
+### OpenAI-style speech payloads
+
+`openclaw/plugin-sdk/speech-provider` exports `buildOpenAiSpeechRequestBody`,
+`OPENAI_TTS_MODELS` and `OPENAI_TTS_VOICES` for native and routed consumers.
+The payload builder preserves native optional speed/instructions and filters unsafe
+extra-body property names. It does not resolve credentials, choose an endpoint or
+assert that a catalog offer is eligible. Those remain consumer-owned.
