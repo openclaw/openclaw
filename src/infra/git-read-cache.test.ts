@@ -199,6 +199,53 @@ describe("typed Git read ownership", () => {
     expect(workerCalls("repository.branches")).toHaveLength(2);
   });
 
+  it("rechecks a non-Git branch folder on the monotonic retry clock despite wall-clock rollback", async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => drainGlobalSingletonLifecycleState());
+    // The branch retry deadline is process-local, so it must follow the monotonic clock.
+    const nowSpy = vi.spyOn(performance, "now");
+    onTestFinished(() => nowSpy.mockRestore());
+    let monotonic = 1_000;
+    nowSpy.mockImplementation(() => monotonic);
+    const operation = {
+      type: "repository.branches" as const,
+      input: { repoRoot: "/branch-not-git-clock", includeRepositoryStatus: true },
+    };
+    const notGit = { branches: [], repositoryStatus: "not_git" as const };
+    gitRead.mockResolvedValueOnce(notGit);
+    const initial = createDeferredCore();
+    await runGitReadOperation(operation, { snapshot: true, onRefresh: initial.resolve });
+    await initial.promise;
+    expect(await runGitReadOperation(operation, { snapshot: true })).toEqual(notGit);
+    expect(workerCalls("repository.branches")).toHaveLength(1);
+
+    // A wall-clock correction must not postpone the retry deadline.
+    vi.setSystemTime(Date.now() - 3_600_000);
+    monotonic += 5_001; // five seconds of monotonic time elapse independently of the wall clock
+    expect(workerCalls("repository.branches")).toHaveLength(1);
+    const ready = {
+      branches: [{ name: "main", kind: "local" as const }],
+      repositoryStatus: "git" as const,
+    };
+    const held = holdRead("repository.branches", ready);
+    const refreshed = createDeferredCore();
+    expect(
+      await runGitReadOperation(operation, { snapshot: true, onRefresh: refreshed.resolve }),
+    ).toEqual({ ...notGit, refreshing: true });
+    const discovered = {
+      ...ready,
+      observation: {
+        root: "/branch-not-git-clock",
+        gitDir: "/branch-not-git-clock/.git",
+        commonDir: "/branch-not-git-clock/.git",
+      },
+    };
+    held.resolve(discovered);
+    await refreshed.promise;
+    expect(await runGitReadOperation(operation, { snapshot: true })).toEqual(ready);
+    expect(workerCalls("repository.branches")).toHaveLength(2);
+  });
+
   it("retains interleaved PR histories while sharing checks of the same checkout refs", async () => {
     const read = (sha: string, branch = "feature", refreshIndex = false) =>
       runGitReadOperation({
