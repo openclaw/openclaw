@@ -146,15 +146,30 @@ it("installs the pinned guest image without session credentials or writable Git 
   expect(cfg.docker.env).toHaveProperty("REGISTRY_PASSWORD", "private-fixture");
 });
 
-it("records install failure without exposing installer output and retires the writer", async () => {
-  mocks.exec.mockImplementation(async (_engine, args: string[]) => ({
-    code: args[0] === "exec" ? 1 : 0,
-    stdout: args[0] === "image" ? image : containerId,
-    stderr: "registry password private-fixture",
-  }));
-  expect(await prepare()).toEqual({ installed: false, reason: "pnpm install failed (exit 1)" });
-  expect(mocks.retire).toHaveBeenCalledOnce();
-});
+it.each(["stdout", "stderr"] as const)(
+  "records a bounded, redacted install failure from %s and retires the writer",
+  async (stream) => {
+    mocks.exec.mockImplementation(async (_engine, args: string[]) => ({
+      code: args[0] === "exec" ? 1 : 0,
+      stdout: args[0] === "image" ? image : containerId,
+      stderr: "",
+      ...(args[0] === "exec"
+        ? {
+            [stream]: `${"progress\n".repeat(400)}ERR_PNPM_NO_OFFLINE_META\npassword=fixture-secret`,
+          }
+        : {}),
+    }));
+    const result = await prepare();
+    expect(result.installed).toBe(false);
+    if (!result.installed) {
+      expect(result.reason).toContain("pnpm install failed (exit 1)");
+      expect(result.reason).toContain("ERR_PNPM_NO_OFFLINE_META");
+      expect(result.reason).not.toContain("fixture-secret");
+      expect(result.reason.length).toBeLessThanOrEqual(2100);
+    }
+    expect(mocks.retire).toHaveBeenCalledOnce();
+  },
+);
 
 it("uses offline installation when the sandbox has no network", async () => {
   const offlineCfg = { ...cfg, docker: { ...cfg.docker, network: "none" } };

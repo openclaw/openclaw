@@ -1,5 +1,6 @@
 import path from "node:path";
 import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
+import { redactSensitiveText } from "../../logging/redact.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { timeWorktreePreparationPhase } from "../worktrees/preparation-timing.js";
 import {
@@ -291,11 +292,21 @@ export async function prepareSandboxDependencyTemplate(params: {
         ),
       );
       assertCurrent();
-      return installed.code === 0
-        ? { installed: true }
-        : { installed: false, reason: `pnpm install failed (exit ${installed.code})` };
+      if (installed.code === 0) {
+        return { installed: true };
+      }
+      // pnpm reports some failures on stdout. Redact before truncating secret context.
+      const tail = redactSensitiveText(`${installed.stdout}\n${installed.stderr}`, {
+        mode: "tools",
+      })
+        .trim()
+        .slice(-2048);
+      return {
+        installed: false,
+        reason: `pnpm install failed (exit ${installed.code})${tail ? `: ${tail}` : ""}`,
+      };
     } catch {
-      // Installer output can contain registry credentials; retain only the failure category.
+      // Exceptions may include engine invocation details; retain only the failure category.
       assertCurrent();
       return {
         installed: false,
