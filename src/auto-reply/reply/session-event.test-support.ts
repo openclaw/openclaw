@@ -62,7 +62,7 @@ export function runEventFixture(
 export async function openEventToolHost(
   params: RunEmbeddedAgentParams,
   label: string,
-  options: { includeOpenClawTools?: boolean } = {},
+  options: { includeOpenClawTools?: boolean; includeShellTools?: boolean } = {},
 ) {
   const admittedRunContext = await startEmbeddedTurn(params, label);
   const workspace = await resolveAttemptWorkspaceSandbox({ ...params, admittedRunContext });
@@ -119,7 +119,7 @@ export async function openEventToolHost(
       sessionPermissionPolicy: workspace.sessionPermissionPolicy,
       toolConstructionPlan: {
         ...construction.codingToolConstructionPlan,
-        includeShellTools: false,
+        includeShellTools: options.includeShellTools === true,
         includeChannelTools: false,
         includeOpenClawTools: options.includeOpenClawTools === true,
         includePluginTools: false,
