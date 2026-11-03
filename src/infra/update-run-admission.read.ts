@@ -7,19 +7,7 @@ import {
   inspectUpdateRunReconciliation,
   readUpdateRunReconciliationCandidates,
 } from "./update-run-reconciliation.read.js";
-import {
-  inspectPluginCohortRecoveryRows,
-  inspectRecoveryRows,
-} from "./update-run-recovery-store.js";
-
-export function readUpdateRecoveryAdmissionFacts(db: EngineConnection) {
-  // Reservations and companions must come from one snapshot; an orphan cannot
-  // disappear between reads. Execution authority stays with the calling updater.
-  return runSqliteReadSnapshotSync(db, () => ({
-    cohorts: inspectPluginCohortRecoveryRows(db),
-    recoveries: inspectRecoveryRows(db),
-  }));
-}
+import { readUpdateRecoveryAdmissionFacts } from "./update-run-recovery-store.js";
 
 export function readUpdateRunAdmissionCommand(
   db: EngineConnection,

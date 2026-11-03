@@ -1,2 +1,2 @@
-# Live recovery/reconciliation/progress reads, retained snapshots, and legacy policy regression.
-192
+# Live recovery/reconciliation/progress reads, async worker settlement, retained snapshots, and legacy policy.
+377

@@ -10,12 +10,14 @@ import {
   requiresSqliteRollbackRecoveryInProcess,
   tryInspectSqliteReadOnlyInProcess,
 } from "../infra/sqlite-readonly-inspection.js";
-import type { SqliteReadOnlyOperationContext } from "../infra/sqlite-readonly-operation-types.js";
+import type {
+  SqliteReadOnlyOperationContext,
+  SqliteReadOnlyOperationExecutionContext,
+} from "../infra/sqlite-readonly-operation-types.js";
 import {
   StateSchemaMutationConflictError,
   withStateDatabaseSchemaMaintenance,
 } from "../infra/state-database-maintenance.js";
-import { readUpdateRunAdmissionCommand } from "../infra/update-run-admission.read.js";
 import {
   isUpdateRunAdmissionReadCommand,
   type UpdateRunAdmissionReadCommand,
@@ -42,10 +44,22 @@ export const startupMetadataReadOperations = {
     _input: undefined,
     context: SqliteReadOnlyOperationContext,
   ) => requiresSqliteRollbackRecoveryInProcess(context.path),
-  "startupMetadata.readCurrent": (
+  "startupMetadata.readCurrent": async (
     command: StartupMetadataRead,
-    context: SqliteReadOnlyOperationContext,
+    context: SqliteReadOnlyOperationExecutionContext,
   ) => {
+    // Update policy stays out of ordinary config/plugin reads. Load it before
+    // native admission so no SQLite handle or snapshot is held across the await.
+    const readMetadata = isUpdateRunAdmissionReadCommand(command)
+      ? await import("../infra/update-run-admission.read.js").then(
+          ({ readUpdateRunAdmissionCommand }) =>
+            (db: EngineConnection) =>
+              readUpdateRunAdmissionCommand(db, command),
+        )
+      : command.type === "config.health.read"
+        ? (db: EngineConnection) => configHealthReadOperations[command.type](command.input, db)
+        : (db: EngineConnection) => pluginMetadataReadOperations[command.type](command.input, db);
+    context.assertCurrent();
     assertStateDatabaseAccessAllowed(context.path);
     const inspect = (db: EngineConnection) => {
       let sourceAdmitted = false;
@@ -60,11 +74,7 @@ export const startupMetadataReadOperations = {
           sourceAdmitted = true;
           return {
             ok: true as const,
-            result: isUpdateRunAdmissionReadCommand(command)
-              ? readUpdateRunAdmissionCommand(db, command)
-              : command.type === "config.health.read"
-                ? configHealthReadOperations[command.type](command.input, db)
-                : pluginMetadataReadOperations[command.type](command.input, db),
+            result: readMetadata(db),
           };
         });
       } catch (error) {
