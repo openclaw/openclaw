@@ -307,6 +307,8 @@ export function buildSessionEventContext(params: {
     ) {
       ctx.SenderId = requester.senderId;
       ctx.SenderE164 = requester.senderE164;
+      ctx.SenderName = requester.senderName;
+      ctx.SenderUsername = requester.senderUsername;
       ctx.ChatId = requester.conversationId;
     }
   }

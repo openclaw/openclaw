@@ -13,10 +13,8 @@ import {
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
-import {
-  createChannelTestPluginBase,
-  createTestRegistry,
-} from "../../test-utils/channel-plugins.js";
+import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
   captureSessionEventTargetForHost,
   enqueueSessionEventForHost,
@@ -40,20 +38,24 @@ const ACCOUNT = "owner-account";
 const scope = { agentId: "main", sessionKey: "agent:main:completion-reauthorize" };
 const route = { channel: "telegram", to: `telegram:${OWNER}`, accountId: ACCOUNT };
 
-// Telegram's direct-message policy contract: channels.telegram.direct[chat].tools.
-const telegram: ChannelPlugin = {
-  ...createChannelTestPluginBase({ id: "telegram" }),
-  security: {
-    resolveDirectToolPolicy: ({ cfg, conversationId }) =>
-      cfg.channels?.telegram?.direct?.[conversationId]?.tools,
-  },
+// The real Telegram plugin owns the DM policy: channels.telegram.direct[chat].
+const { telegramPlugin } = await loadBundledPluginFacade<{ telegramPlugin: ChannelPlugin }>({
+  pluginId: "telegram",
+  artifactBasename: "channel-plugin-api.ts",
+});
+const dmRevocations = {
+  DM: { tools: { deny: ["exec"] } },
+  // Keys on the requester's mutable username and display name, not on their id.
+  "DM username": { toolsBySender: { "username:alice": { deny: ["exec"] } } },
+  "DM name": { toolsBySender: { "name:Alice": { deny: ["exec"] } } },
 };
+type Revocation = "sender" | keyof typeof dmRevocations;
 
-function policy(revoke?: "sender" | "DM", commandOwner?: true): Partial<OpenClawConfig> {
+function policy(revoke?: Revocation, commandOwner?: true): Partial<OpenClawConfig> {
   return {
     ...(commandOwner ? { commands: { ownerAllowFrom: [OWNER] } } : {}),
     channels: {
-      telegram: revoke === "DM" ? { direct: { [OWNER]: { tools: { deny: ["exec"] } } } } : {},
+      telegram: revoke && revoke !== "sender" ? { direct: { [OWNER]: dmRevocations[revoke] } } : {},
     },
     tools: {
       profile: "coding",
@@ -72,7 +74,7 @@ const retired = "agent harness host capability is no longer active";
 const rows: Array<{
   label: string;
   requester: string;
-  revoke?: "sender" | "DM";
+  revoke?: Revocation;
   after?: true;
   to?: string;
   commandOwner?: true;
@@ -87,6 +89,8 @@ const rows: Array<{
     outcome: "absent",
   },
   { label: "DM revoked before admission", requester: OWNER, revoke: "DM", outcome: "absent" },
+  { label: "DM username entry", requester: OWNER, revoke: "DM username", outcome: "absent" },
+  { label: "DM name entry", requester: OWNER, revoke: "DM name", outcome: "absent" },
   {
     label: "command owner, DM revoked before admission",
     requester: OWNER,
@@ -126,7 +130,7 @@ it.for(rows)(
       const registry = captureActivePluginRegistrySnapshot();
       onTestFinished(() => restoreActivePluginRegistrySnapshot(registry));
       setActivePluginRegistry(
-        createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegram }]),
+        createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]),
       );
       const config = await configureEventState(state, policy(undefined, row.commandOwner));
       await replaceSessionEntry(scope, {
@@ -152,6 +156,8 @@ it.for(rows)(
             chatType: "direct",
             conversationId: OWNER,
             senderId: row.requester,
+            senderUsername: "alice",
+            senderName: "Alice",
           },
         },
         () =>

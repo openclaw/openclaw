@@ -537,15 +537,21 @@ describe("session event target custody", () => {
       channels: { telegram: {} },
       commands: { ownerAllowFrom: ["456", "457"] },
     });
-    const capture = (senderId: string, conversationId = senderId) =>
+    const capture = (senderId: string, conversationId = senderId, senderUsername = "alice") =>
       withGatewayToolCallerIdentity(
         {
           ...eventScope,
-          requesterOrigin: { sessionKey, messageProvider: "telegram", conversationId, senderId },
+          requesterOrigin: {
+            sessionKey,
+            messageProvider: "telegram",
+            conversationId,
+            senderId,
+            senderUsername,
+          },
         },
         () => captureTarget("main", sessionKey, { env, retainRequesterOwner: true }),
       );
-    const [owner, sameOwner, guest, otherOwner, ownerElsewhere, sameGuest, otherGuest] =
+    const [owner, sameOwner, guest, otherOwner, ownerElsewhere, sameGuest, otherGuest, renamed] =
       await Promise.all([
         capture("456"),
         capture("456"),
@@ -554,6 +560,7 @@ describe("session event target custody", () => {
         capture("456", "-100001"),
         capture("789"),
         capture("790"),
+        capture("789", "789", "bob"),
       ]);
     const combines = (targets: Awaited<ReturnType<typeof capture>>[]) => {
       try {
@@ -572,6 +579,7 @@ describe("session event target custody", () => {
       ownerElsewhere: combines([owner, ownerElsewhere]),
       sameGuest: combines([guest, sameGuest]),
       otherGuest: combines([guest, otherGuest]),
+      renamed: combines([guest, renamed]),
     }).toEqual({
       sameOwner: true,
       guest: false,
@@ -579,6 +587,7 @@ describe("session event target custody", () => {
       ownerElsewhere: false,
       sameGuest: true,
       otherGuest: false,
+      renamed: false,
     });
   });
 

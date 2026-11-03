@@ -263,6 +263,8 @@ export async function captureSessionEventTargetForHost(
               accountId: requester.accountId ?? undefined,
               senderId: requester.senderId,
               senderE164: requester.senderE164 ?? undefined,
+              senderName: requester.senderName ?? undefined,
+              senderUsername: requester.senderUsername ?? undefined,
               chatType: normalizeChatType(requester.chatType),
               conversationId: requester.conversationId ?? undefined,
             }),
@@ -472,9 +474,18 @@ export type CommandOwnerRequester = Readonly<{
   senderE164?: string;
 }>;
 
-/** The host-captured requester of a completion and the conversation they spoke in. */
+/**
+ * The host-captured requester of a completion and the conversation they spoke in. Keep every
+ * sender fact that sender and conversation policy match on, including the mutable name and
+ * username keys, so a current restriction keyed on any of them still applies.
+ */
 export type RetainedSessionEventRequester = CommandOwnerRequester &
-  Readonly<{ chatType?: ChatType; conversationId?: string }>;
+  Readonly<{
+    senderName?: string;
+    senderUsername?: string;
+    chatType?: ChatType;
+    conversationId?: string;
+  }>;
 
 /** The retained owner authority and the host-captured requester it belongs to. */
 export function readSessionEventTargetCommandOwner(
@@ -496,6 +507,8 @@ function requesterKey(requester: RetainedSessionEventRequester | undefined): str
         requester.accountId ?? null,
         requester.senderId,
         requester.senderE164 ?? null,
+        requester.senderName ?? null,
+        requester.senderUsername ?? null,
         requester.chatType ?? null,
         requester.conversationId ?? null,
       ])
