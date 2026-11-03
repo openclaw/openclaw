@@ -83,12 +83,14 @@ export function registerGoalAutomaticContinuationCases(
       prompts.push(params.prompt);
       delivery.push(getAgentRunContext(params.runId)?.sessionEventDelivery);
       if (runEmbeddedAgent.mock.calls.length === 1) {
-        enqueueSessionEventForHost("Background exec completed", {
+        const receipt = enqueueSessionEventForHost("Background exec completed", {
           ...scope(),
           ...event,
           source: "exec",
           sourceTurnId: "exec:goal-background",
         });
+        // Hold the first turn until the completion is queued, before a Goal nudge can compete.
+        expect(await receipt.accepted).toEqual({ ok: true });
       } else if (runEmbeddedAgent.mock.calls.length >= 2) {
         await onEventTurn();
       }
