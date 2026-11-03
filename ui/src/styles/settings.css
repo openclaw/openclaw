@@ -584,12 +584,12 @@ openclaw-appearance-background .settings-background-preview .session-background_
 .settings-section__help-button > span,
 .settings-section__help-button svg {
   display: block;
-  width: 100%;
-  height: 100%;
+  width: var(--chrome-icon-size);
+  height: var(--chrome-icon-size);
 }
 
 .settings-section__help-button svg {
-  stroke-width: 1.75;
+  stroke-width: var(--chrome-icon-stroke);
 }
 
 .settings-section__help-button:hover,
@@ -1016,7 +1016,7 @@ openclaw-appearance-background .settings-background-preview .session-background_
      and disappears in dark mode. */
   stroke: currentColor;
   fill: none;
-  stroke-width: 2px;
+  stroke-width: var(--list-row-icon-stroke);
   stroke-linecap: round;
   stroke-linejoin: round;
 }
@@ -1576,8 +1576,8 @@ textarea.settings-input {
   }
 
   .settings-section__help-button > span {
-    width: 16px;
-    height: 16px;
+    width: var(--chrome-icon-size);
+    height: var(--chrome-icon-size);
   }
 }
 
@@ -1612,8 +1612,8 @@ textarea.settings-input {
     }
 
     .settings-section__help-button > span {
-      width: 16px;
-      height: 16px;
+      width: var(--chrome-icon-size);
+      height: var(--chrome-icon-size);
     }
   }
 }
@@ -2182,16 +2182,16 @@ openclaw-approvals-page .data-table-pagination__info {
   inset-inline-start: 10px;
   z-index: 1;
   display: inline-flex;
-  width: 15px;
-  height: 15px;
+  width: var(--chrome-icon-size);
+  height: var(--chrome-icon-size);
   pointer-events: none;
 }
 
 .settings-sidebar__search-icon svg,
 .settings-sidebar__search-clear svg {
-  width: 15px;
-  height: 15px;
-  stroke-width: 1.7px;
+  width: var(--chrome-icon-size);
+  height: var(--chrome-icon-size);
+  stroke-width: var(--chrome-icon-stroke);
 }
 
 .settings-sidebar__search-input {
@@ -2265,20 +2265,19 @@ openclaw-approvals-page .data-table-pagination__info {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 16px;
-  height: 16px;
+  width: var(--list-row-icon-size);
+  height: var(--list-row-icon-size);
   flex-shrink: 0;
-  opacity: 0.72;
-  transition: opacity var(--duration-fast) ease;
-}
-
-.settings-sidebar__item:hover .settings-sidebar__item-icon,
-.settings-sidebar__item--active .settings-sidebar__item-icon {
-  opacity: 1;
 }
 
 .settings-sidebar__item--active .settings-sidebar__item-icon {
   color: var(--navigation-selected-icon, var(--accent));
+}
+
+/* The mascot keeps its quiet resting state; line icons take their weight from the stroke. */
+.settings-sidebar__item:not(:hover, .settings-sidebar__item--active)
+  .settings-sidebar__item-icon:has(openclaw-theme-brand-icon) {
+  opacity: 0.72;
 }
 
 .settings-sidebar__item-label {

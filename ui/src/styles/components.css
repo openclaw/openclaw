@@ -2551,9 +2551,9 @@ select.data-table-pagination__size {
 
 .agent-select__chevron svg,
 .agent-select__avatar--icon svg {
-  width: 14px;
-  height: 14px;
-  stroke-width: 1.7px;
+  width: var(--chrome-icon-size);
+  height: var(--chrome-icon-size);
+  stroke-width: var(--chrome-icon-stroke);
 }
 
 .agent-select--compact .agent-select__trigger,

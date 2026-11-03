@@ -440,8 +440,8 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 
 .settings-sidebar__back-icon {
   display: inline-flex;
-  width: 15px;
-  height: 15px;
+  width: var(--chrome-icon-size);
+  height: var(--chrome-icon-size);
 }
 
 .settings-sidebar__title {
@@ -484,9 +484,9 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 }
 
 .settings-sidebar__back-icon svg {
-  width: 15px;
-  height: 15px;
-  stroke-width: 1.7px;
+  width: var(--chrome-icon-size);
+  height: var(--chrome-icon-size);
+  stroke-width: var(--chrome-icon-stroke);
 }
 
 .settings-sidebar__nav {
@@ -538,8 +538,8 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 }
 
 .settings-sidebar__loading-icon {
-  width: 16px;
-  height: 16px;
+  width: var(--list-row-icon-size);
+  height: var(--list-row-icon-size);
   flex-shrink: 0;
   border-radius: 4px;
 }
@@ -578,6 +578,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 }
 
 .settings-sidebar__item {
+  gap: 9px;
   min-height: 32px;
   padding: 0 9px;
   transition:
@@ -2680,6 +2681,12 @@ a:is(
   stroke-width: 1.5px;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+.settings-sidebar__item-icon svg {
+  width: var(--list-row-icon-size);
+  height: var(--list-row-icon-size);
+  stroke-width: var(--list-row-icon-stroke);
 }
 
 .nav-item__text {
