@@ -225,14 +225,14 @@ final class ChatProTabRecoveryControlsTests: XCTestCase {
         // then require the route to have run — a conditional activation would let the
         // recovery path disappear without failing the regression.
         XCTAssertTrue(
-            statusButton.activate(),
+            statusButton.control.activate(),
             "The unhealthy status button must accept a native activation while the reconnect retries.")
         XCTAssertTrue(
             probe.openedSettings,
             "Tapping the unhealthy status button must open Gateway settings during reconnect.")
         self.attachRenderedEvidence(
             named: "recovery-gateway-settings-route-executed",
-            window: window,
+            windows: [statusButton.window, window],
             states: [("opened-settings", probe.openedSettings)])
 
         // The chat surface keeps its lock: the composer belongs to the captured owner
@@ -253,7 +253,7 @@ final class ChatProTabRecoveryControlsTests: XCTestCase {
         XCTAssertFalse(composer.isFirstResponder)
         self.attachRenderedEvidence(
             named: "recovery-composer-locked",
-            window: window,
+            windows: [window],
             states: [
                 ("composer-editable", composer.isEditable),
                 ("composer-selectable", composer.isSelectable),
@@ -300,17 +300,26 @@ final class ChatProTabRecoveryControlsTests: XCTestCase {
             currentOwnerID: "owner-b"))
     }
 
-    /// Rendered evidence for the recovery path: the screen exactly as the assertions saw it, plus
-    /// the interactivity each control published. Kept in the result bundle so an Apple lane run
-    /// carries the media and the diagnostics instead of only a pass/fail line.
-    private func attachRenderedEvidence(named name: String, window: UIWindow, states: [(String, Bool)]) {
-        let renderer = UIGraphicsImageRenderer(bounds: window.bounds)
-        let screenshot = XCTAttachment(image: renderer.image { _ in
-            window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
-        })
-        screenshot.name = "\(name)-screen"
-        screenshot.lifetime = .keepAlways
-        self.add(screenshot)
+    /// Rendered evidence for the recovery path: every window that carries the screen exactly as
+    /// the assertions saw it, plus the interactivity each control published. Kept in the result
+    /// bundle so an Apple lane run carries the media and the diagnostics instead of only a
+    /// pass/fail line.
+    private func attachRenderedEvidence(
+        named name: String,
+        windows: [UIWindow],
+        states: [(String, Bool)])
+    {
+        var visited: Set<ObjectIdentifier> = []
+        for (index, window) in windows.enumerated() {
+            guard visited.insert(ObjectIdentifier(window)).inserted else { continue }
+            let renderer = UIGraphicsImageRenderer(bounds: window.bounds)
+            let screenshot = XCTAttachment(image: renderer.image { _ in
+                window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            })
+            screenshot.name = "\(name)-screen-\(index)"
+            screenshot.lifetime = .keepAlways
+            self.add(screenshot)
+        }
 
         let diagnostics = states
             .map { entry in "\(entry.0): \(entry.1 ? "enabled" : "disabled")" }
@@ -338,118 +347,165 @@ final class ChatProTabRecoveryControlsTests: XCTestCase {
     /// Requires the three routes to Gateway settings to be rendered and reachable while the
     /// automatic reconnect keeps retrying, and returns the unhealthy status button so the caller
     /// can drive the recovery route itself.
-    private func requireRecoveryControlsReachable(in window: UIWindow) async throws
-        -> ChatRecoveryRenderedControl
-    {
-        let renderedSidebarToggle = await Self.renderedControl(
-            withIdentifier: "chat-recovery-sidebar-toggle",
-            in: window)
-        let sidebarToggle = try XCTUnwrap(
-            renderedSidebarToggle,
+    ///
+    /// This fixture's own sidebar identifier locates the window the renderer published the tab's
+    /// toolbar in, and the status button and Chat actions are then required in that window (or in
+    /// the mounted one): the host app renders a chat toolbar of its own, and matching that one
+    /// would measure the wrong controls.
+    private func requireRecoveryControlsReachable(in window: UIWindow) async throws -> RenderedMatch {
+        let sceneWindows = Self.sceneWindows()
+        let sidebarMatch = await Self.waitForRenderedControl(in: sceneWindows) {
+            $0.identifier == "chat-recovery-sidebar-toggle"
+        }
+        let sidebar = try XCTUnwrap(
+            sidebarMatch,
             Self.missingControlMessage(
                 "The sidebar toggle must be rendered while the gateway retries.",
-                in: window))
+                in: sceneWindows))
         XCTAssertTrue(
-            sidebarToggle.isEnabled,
+            sidebar.control.isEnabled,
             "The sidebar must stay reachable so the saved gateway can be managed.")
-        let renderedStatusButton = await Self.renderedControl(
-            withIdentifier: "chat-agent-identity",
-            in: window)
-        let statusButton = try XCTUnwrap(
-            renderedStatusButton,
+
+        let toolbarWindows = [sidebar.window, window]
+        let statusMatch = await Self.waitForRenderedControl(in: toolbarWindows) {
+            $0.identifier == "chat-agent-identity"
+        }
+        let status = try XCTUnwrap(
+            statusMatch,
             Self.missingControlMessage(
                 "The gateway status button must be rendered while the gateway retries.",
-                in: window))
+                in: toolbarWindows))
         XCTAssertTrue(
-            statusButton.isEnabled,
+            status.control.isEnabled,
             "The unhealthy status button advertises 'Opens Settings / Gateway' and must stay tappable.")
-        let renderedChatActions = await Self.renderedControl(withLabel: "Chat actions", in: window)
-        let chatActions = try XCTUnwrap(
-            renderedChatActions,
+
+        let actionsMatch = await Self.waitForRenderedControl(in: toolbarWindows) {
+            $0.label == "Chat actions"
+        }
+        let actions = try XCTUnwrap(
+            actionsMatch,
             Self.missingControlMessage(
                 "The Chat actions toolbar button must be rendered while the gateway retries.",
-                in: window))
+                in: toolbarWindows))
         XCTAssertTrue(
-            chatActions.isEnabled,
+            actions.control.isEnabled,
             "Chat actions carries the in-product Gateway settings route and must stay tappable.")
-        let inventory = XCTAttachment(string: Self.renderedInventory(in: window))
+
+        let inventory = XCTAttachment(string: Self.renderedInventory(in: sceneWindows))
         inventory.name = "recovery-rendered-inventory"
         inventory.lifetime = .keepAlways
         self.add(inventory)
         self.attachRenderedEvidence(
             named: "recovery-toolbar-reachable-while-retrying",
-            window: window,
+            windows: [sidebar.window, status.window, actions.window, window],
             states: [
-                ("sidebar-toggle", sidebarToggle.isEnabled),
-                ("gateway-status-button", statusButton.isEnabled),
-                ("chat-actions", chatActions.isEnabled),
+                ("sidebar-toggle", sidebar.control.isEnabled),
+                ("gateway-status-button", status.control.isEnabled),
+                ("chat-actions", actions.control.isEnabled),
             ])
-        return statusButton
+        return status
     }
 
-    /// Every rendered control in the window this regression mounted, walking the view tree and
-    /// the accessibility elements a container publishes: SwiftUI can hand a toolbar button out
-    /// as an element instead of a `UIView`, and a view-only walk misses it. Scoped to this
-    /// window on purpose — the host app renders a chat toolbar of its own, and matching that one
-    /// would measure the wrong controls.
+    /// A rendered control together with the window the renderer published it in.
+    private struct RenderedMatch {
+        let control: ChatRecoveryRenderedControl
+        let window: UIWindow
+    }
+
+    /// Every window the scene owns. SwiftUI installs toolbar chrome where it sees fit, so the
+    /// search covers the scene and then narrows to the window carrying this fixture's identifier.
+    private static func sceneWindows() -> [UIWindow] {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+    }
+
+    /// Every rendered control under a root: the view tree, the elements a container lists in
+    /// `accessibilityElements`, and the ones it publishes through the accessibility container
+    /// protocol. SwiftUI hands a toolbar button out in either element form instead of as a
+    /// `UIView`, so a view-only walk misses exactly the controls this regression is about.
     private static func renderedControls(in root: UIView) -> [ChatRecoveryRenderedControl] {
         var found: [ChatRecoveryRenderedControl] = []
         var stack: [UIView] = [root]
-        while let view = stack.popLast() {
+        var visited: Set<ObjectIdentifier> = []
+        while let view = stack.popLast(), found.count < 4000 {
+            guard visited.insert(ObjectIdentifier(view)).inserted else { continue }
             found.append(ChatRecoveryRenderedControl(view: view))
             stack.append(contentsOf: view.subviews)
-            for case let element as UIAccessibilityElement in view.accessibilityElements ?? [] {
-                found.append(ChatRecoveryRenderedControl(element: element))
-            }
+            self.appendAccessibilityChildren(of: view, to: &found, pending: &stack)
         }
         return found
     }
 
-    /// Bounded on purpose, like the composer walk below: a control that never appears must fail
+    private static func appendAccessibilityChildren(
+        of view: UIView,
+        to found: inout [ChatRecoveryRenderedControl],
+        pending stack: inout [UIView])
+    {
+        for element in view.accessibilityElements ?? [] {
+            self.append(element, to: &found, pending: &stack)
+        }
+        // A custom accessibility container answers the protocol instead of listing elements.
+        let count = view.accessibilityElementCount()
+        guard count > 0, count < 500 else { return }
+        for index in 0..<count {
+            guard let element = view.accessibilityElement(at: index) else { continue }
+            self.append(element, to: &found, pending: &stack)
+        }
+    }
+
+    private static func append(
+        _ element: Any,
+        to found: inout [ChatRecoveryRenderedControl],
+        pending stack: inout [UIView])
+    {
+        if let view = element as? UIView {
+            stack.append(view)
+        } else if let element = element as? UIAccessibilityElement {
+            found.append(ChatRecoveryRenderedControl(element: element))
+        }
+    }
+
+    /// Bounded on purpose, like the composer walk above: a control that never appears must fail
     /// the regression instead of hanging the suite until the lane's execution allowance kills it.
     private static func waitForRenderedControl(
-        in window: UIView,
+        in windows: [UIWindow],
         deadline: TimeInterval = 10,
-        matching matches: (ChatRecoveryRenderedControl) -> Bool) async
-        -> ChatRecoveryRenderedControl?
+        matching matches: (ChatRecoveryRenderedControl) -> Bool) async -> RenderedMatch?
     {
         let limit = Date(timeIntervalSinceNow: deadline)
         while true {
-            window.setNeedsLayout()
-            window.layoutIfNeeded()
-            if let match = self.renderedControls(in: window).first(where: matches) { return match }
+            for window in windows {
+                window.setNeedsLayout()
+                window.layoutIfNeeded()
+                if let match = self.renderedControls(in: window).first(where: matches) {
+                    return RenderedMatch(control: match, window: window)
+                }
+            }
             if Date() >= limit { return nil }
             try? await Task.sleep(for: .milliseconds(50))
         }
     }
 
-    private static func renderedControl(withIdentifier identifier: String, in window: UIView) async
-        -> ChatRecoveryRenderedControl?
-    {
-        await self.waitForRenderedControl(in: window) { $0.identifier == identifier }
-    }
-
-    private static func renderedControl(withLabel label: String, in window: UIView) async
-        -> ChatRecoveryRenderedControl?
-    {
-        await self.waitForRenderedControl(in: window) { $0.label == label }
-    }
-
     /// Failure message for a control the renderer did not publish: it carries the inventory of
-    /// what the window does contain, so a miss names the real hierarchy instead of only the
+    /// what the windows do contain, so a miss names the real hierarchy instead of only the
     /// expectation. Evaluated through XCTUnwrap's autoclosure, so only on failure.
-    private static func missingControlMessage(_ expectation: String, in window: UIView) -> String {
-        "\(expectation)\nRendered controls:\n\(self.renderedInventory(in: window))"
+    private static func missingControlMessage(_ expectation: String, in windows: [UIWindow]) -> String {
+        "\(expectation)\nRendered controls:\n\(self.renderedInventory(in: windows))"
     }
 
     /// Doubles as the failure message: when a control is missing, the run reports what the
-    /// renderer did publish instead of only what was expected.
-    private static func renderedInventory(in window: UIView) -> String {
-        self.renderedControls(in: window)
-            .filter { $0.identifier != nil || $0.label != nil }
-            .prefix(300)
-            .map(\.describe)
-            .joined(separator: "\n")
+    /// renderer did publish — every control, not only the identified ones, so a bar that renders
+    /// without publishing its items is visible too — instead of only what was expected.
+    private static func renderedInventory(in windows: [UIWindow]) -> String {
+        var visited: Set<ObjectIdentifier> = []
+        var lines: [String] = []
+        for window in windows {
+            guard visited.insert(ObjectIdentifier(window)).inserted else { continue }
+            lines.append("window \(type(of: window)) frame=\(window.frame) key=\(window.isKeyWindow)")
+            lines.append(contentsOf: self.renderedControls(in: window).prefix(300).map(\.describe))
+        }
+        return lines.prefix(900).joined(separator: "\n")
     }
 
     private static func composer(in view: UIView) -> UITextView? {
