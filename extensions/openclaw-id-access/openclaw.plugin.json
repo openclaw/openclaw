@@ -1,0 +1,24 @@
+{
+  "id": "openclaw-id-access",
+  "name": "OpenClaw ID people",
+  "description": "Invite people to this claw, approve their requests, and see and remove members.",
+  "categories": [
+    "security"
+  ],
+  "enabledByDefault": true,
+  "activation": {
+    "onStartup": false,
+    "onConfigPaths": ["gateway.openclawId.enabled"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "controlUi": {
+    "entry": "dist/control-ui/5a375a30a9d8fd3319d3508b65a4eac17d991b90d8ddfede456f3d8273cd2860/index.js",
+    "styles": [
+      "dist/control-ui/5a375a30a9d8fd3319d3508b65a4eac17d991b90d8ddfede456f3d8273cd2860/index.css"
+    ]
+  }
+}
