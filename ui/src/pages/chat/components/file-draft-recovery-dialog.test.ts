@@ -45,31 +45,39 @@ function draft(name: string): FileDraft {
   };
 }
 
-it("retains draft controls through copy feedback and discard, then ignores a dismissed copy", async () => {
-  const first = draft("first.md");
-  const second = draft("second.md");
-  const pending = Promise.withResolvers<boolean>();
-  clipboard.copy.mockResolvedValueOnce(true).mockReturnValueOnce(pending.promise);
-  const result = reviewFileDrafts([first, second]);
-  const { modal } = await waitForRenderedModalDialog(document.body);
-  const button = (name: string) => within(modal).getByRole("button", { name });
-  const copy = button("Copy first.md");
-  const secondCopy = button("Copy second.md");
-  copy.focus();
-  copy.click();
-  await waitForSolid(() => expect(copy.textContent).toContain("Copied"));
-  expect(document.activeElement).toBe(copy);
-  button("Discard first.md").click();
-  await waitForSolid(() => {
-    expect(first.discard).toHaveBeenCalledOnce();
-    expect(modal.textContent).not.toContain("first.md");
-    expect(button("Copy second.md")).toBe(secondCopy);
-  });
-  secondCopy.click();
-  expect(clipboard.copy).toHaveBeenCalledTimes(2);
-  button("Keep drafts").click();
-  await result;
-  pending.resolve(true);
-  await waitForSolid(() => expect(document.querySelector("openclaw-modal-dialog")).toBeNull());
-  expect(second.discard).not.toHaveBeenCalled();
-});
+it.each(["discard", "same draft", "other draft"])(
+  "retains draft controls and %s focus through discard, then ignores a dismissed copy",
+  async (focus) => {
+    const first = draft("first.md");
+    const second = draft("second.md");
+    const pending = Promise.withResolvers<boolean>();
+    clipboard.copy.mockResolvedValueOnce(true).mockReturnValueOnce(pending.promise);
+    const result = reviewFileDrafts([first, second]);
+    const { modal } = await waitForRenderedModalDialog(document.body);
+    const button = (name: string) => within(modal).getByRole("button", { name });
+    const copy = button("Copy first.md");
+    const secondCopy = button("Copy second.md");
+    copy.focus();
+    copy.click();
+    await waitForSolid(() => expect(copy.textContent).toContain("Copied"));
+    expect(document.activeElement).toBe(copy);
+    const discard = button("Discard first.md");
+    (focus === "discard" ? discard : focus === "same draft" ? copy : secondCopy).focus();
+    discard.click();
+    await waitForSolid(() => {
+      expect(first.discard).toHaveBeenCalledOnce();
+      expect(modal.textContent).not.toContain("first.md");
+      expect(button("Copy second.md")).toBe(secondCopy);
+      expect(document.activeElement).toBe(
+        focus === "other draft" ? secondCopy : button("Keep drafts"),
+      );
+    });
+    secondCopy.click();
+    expect(clipboard.copy).toHaveBeenCalledTimes(2);
+    button("Keep drafts").click();
+    await result;
+    pending.resolve(true);
+    await waitForSolid(() => expect(document.querySelector("openclaw-modal-dialog")).toBeNull());
+    expect(second.discard).not.toHaveBeenCalled();
+  },
+);
