@@ -97,6 +97,7 @@ export function resolveSourceReplyExpectation(params: {
   ctx: SourceReplyDeliveryModeContext;
   cfg: OpenClawConfig;
   scheduledAutomation?: boolean;
+  replyExpectation?: ReplyExpectation;
 }): ReplyExpectation {
   // Scheduling permits silence even when the saved session has an internal source.
   if (params.scheduledAutomation) {
@@ -106,7 +107,10 @@ export function resolveSourceReplyExpectation(params: {
     cfg: params.cfg,
     sessionKey: params.ctx.SessionKey,
     messageChannel: params.ctx.Provider ?? params.ctx.Surface,
-    opts: { inputProvenance: params.ctx.InputProvenance },
+    opts: {
+      inputProvenance: params.ctx.InputProvenance,
+      replyExpectation: params.replyExpectation,
+    },
   });
   if (commandExpectation === "result-required") {
     return commandExpectation;

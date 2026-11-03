@@ -564,6 +564,8 @@ function enqueueSessionEventAttempt(
         operatorAuthority: options.scheduledAutomation?.operatorAuthority ?? operatorAuthority,
         admittedSessionSettings: settings,
         toolsAllow,
+        replyExpectation: options.replyExpectation,
+        terminalReplyExpectation: options.replyExpectation,
         onDeliberateSilentTerminalReply: () => {
           deliverySuppressionReason = "silent";
         },

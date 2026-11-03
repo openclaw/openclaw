@@ -178,6 +178,8 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
       ctx,
       cfg,
       scheduledAutomation: params.replyOptions?.scheduledAutomation !== undefined,
+      replyExpectation:
+        params.replyOptions?.replyExpectation ?? params.replyOptions?.terminalReplyExpectation,
     }),
     "empty",
   );

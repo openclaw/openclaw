@@ -3,6 +3,7 @@ import type {
   AdmittedRunContext,
   AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
+import type { ReplyExpectation } from "../../agents/reply-completion.js";
 import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.types.js";
 import type {
   EmbeddedAgentRunMeta,
@@ -117,6 +118,8 @@ export type SessionEventOptions = {
   deliver?: boolean;
   /** Host-owned: runtime error payloads stay in the transcript, out of chat delivery. */
   suppressErrorDelivery?: true;
+  /** Explicit completion policy override for the admitted turn. */
+  replyExpectation?: ReplyExpectation;
   /** Host producer remains live through admission, execution and delivery. */
   assertCurrent?: () => void;
 };

@@ -1,5 +1,6 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { AgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.js";
+import type { ReplyExpectation } from "../agents/reply-completion.js";
 /** Public option types for reply generation callbacks, streaming, and delivery policy. */
 import type { ExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import type { AgentPlanStep } from "../channels/streaming.js";
@@ -195,6 +196,10 @@ type ProgressCallbackResult = boolean | void;
 
 /** Reply generation options shared by auto-reply, webchat, channels, and tests. */
 export type GetReplyOptions = {
+  /** Optional explicit reply expectation for the admitted turn. */
+  replyExpectation?: ReplyExpectation;
+  /** Optional terminal reply expectation override. */
+  terminalReplyExpectation?: ReplyExpectation;
   /** Host-issued capability for the exact findings acknowledged by the current operator. */
   providerReviewAcknowledgment?: import("../sessions/provider-review.js").ProviderReviewAcknowledgment;
   /** Channel-owned participant name encoding for source replies sent through message actions. */

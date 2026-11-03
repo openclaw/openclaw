@@ -56,3 +56,15 @@ describe("exec completion reply expectation", () => {
     expect(resolveSourceReplyExpectation({ ctx: turn, cfg: {} })).toBe(expected);
   });
 });
+
+describe("explicit reply expectation override", () => {
+  it("honors optional reply expectation on webchat turns", () => {
+    expect(
+      resolveSourceReplyExpectation({
+        ctx: { Provider: "webchat" },
+        cfg: {},
+        replyExpectation: "optional",
+      }),
+    ).toBe("optional");
+  });
+});
