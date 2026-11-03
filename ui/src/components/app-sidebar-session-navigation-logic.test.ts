@@ -681,6 +681,45 @@ describe("sidebar navigation lineage ownership", () => {
   });
 });
 
+it("only marks a composer draft while its session is not being viewed", () => {
+  const key = "agent:main:composer-draft";
+  const row: GatewaySessionRow = { key, kind: "direct", updatedAt: 1 };
+  const rowProjection = new SidebarSessionRowProjection();
+  const project = (routeSessionKey: string, viewingSession: boolean, hasDraft: boolean) => {
+    const navigation = buildSidebarSessionNavigationState({
+      context: undefined,
+      routeSessionKey,
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [row],
+      },
+      sessionsAgentId: null,
+      showCron: false,
+      showSystem: false,
+      statusFilter: "active",
+      compareSessions: () => 0,
+      highlightCurrentSession: viewingSession,
+      rowProjection,
+      loadingChildSessionKeys: new Set(),
+      outboxAttentionCountForSessionKey: () => 0,
+      hasSessionDraft: () => hasDraft,
+      resolveAttention: () => ({ kind: "none" }),
+      resolveAgentStatusNote: () => undefined,
+    });
+    return navigation.toSidebarSession(row).hasComposerDraft;
+  };
+
+  expect(project(key, true, false)).toBe(false);
+  expect(project(key, true, true)).toBe(false);
+  expect(project("agent:main:other", true, true)).toBe(true);
+  expect(project(key, true, true)).toBe(false);
+  expect(project(key, false, true)).toBe(true);
+  expect(project(key, false, false)).toBe(false);
+});
+
 it("keeps a prepared worktree session in Coding before canonical metadata arrives", () => {
   const key = "agent:main:new-worktree";
   const context = {
