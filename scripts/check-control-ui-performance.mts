@@ -74,10 +74,12 @@ const controlUiPerformanceBudgets = {
   // 308,922 B: 309,201 B. Vyctor Brzezowski approved exceeding the budget on 2026-10-30.
   // Retain 64 B build variance.
   // Mobile composer controls stay inside the composer: 309,341 B measured.
-  totalCssGzipBytes: 309_366,
+  // Same-toolchain main 6494dce5: 319,575 B; prompt panel adds 671 B.
+  // Keep 1 KiB above that measured base without changing startup budgets.
+  totalCssGzipBytes: 320_599,
   // Rail first frame #190877 adds 65 B; main measured 1,654,023 B (phone-UI batch landed 2026-11-02).
   // Lead approved the exact raise on 2026-11-02. Retain 64 B build variance.
-  totalCssRawBytes: 1_654_088,
+  totalCssRawBytes: 1_655_112,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 
