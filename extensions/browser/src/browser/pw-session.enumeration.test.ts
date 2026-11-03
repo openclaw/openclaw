@@ -1,6 +1,9 @@
 import { EventEmitter, getEventListeners } from "node:events";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { RelayOwnerClient } from "./extension-relay/owner-client.js";
+import { registerRelayCdpAccess } from "./extension-relay/relay-access.js";
+import type { ExtensionRelayHandle } from "./extension-relay/relay-server.js";
 import { setupPwSessionConnectionTest } from "./pw-session.connection.test-support.js";
 
 // These fixtures count native-inventory browser sessions; keep the connection's
@@ -118,6 +121,32 @@ function expectObservedConnection(fixture: EnumerationBrowser) {
   expect(fixture.browserEvents.listenerCount("disconnected")).toBe(1);
 }
 
+function registerRelay(endpoint: string, ownership: "borrowed" | "owned") {
+  if (ownership === "owned") {
+    return registerRelayCdpAccess(endpoint, {
+      ownership,
+      port: 9222,
+      token: "test-token",
+      allowLegacyAuth: false,
+      internalToken: "test-internal-token",
+      bridge: {} as ExtensionRelayHandle["bridge"],
+      close: vi.fn(async () => {}),
+    });
+  }
+  const client = {
+    assertCurrent: vi.fn(),
+    openTransport: vi.fn(async () => ({ send: vi.fn(), close: vi.fn() })),
+  } as unknown as RelayOwnerClient;
+  return registerRelayCdpAccess(endpoint, {
+    ownership: "borrowed",
+    port: 9222,
+    token: "test-token",
+    allowLegacyAuth: false,
+    client,
+    close: vi.fn(async () => {}),
+  });
+}
+
 beforeEach(() => {
   getChromeWebSocketUrlSpy.mockResolvedValue(null);
 });
@@ -145,6 +174,130 @@ describe("pw-session page enumeration", () => {
       expectedTabs(tab("GOODREADS", "My Books", "https://www.goodreads.com/review/list")),
     );
   });
+
+  it.each(["borrowed", "owned"] as const)(
+    "lists %s relay native targets without waiting for an unpublished Page",
+    async (ownership) => {
+      const fixture = makePageEnumerationBrowser([
+        {
+          targetId: "BUSY",
+          title: "Native busy title",
+          url: "http://localhost/busy",
+          published: false,
+          readTargetInfo: () => new Promise<never>(() => {}),
+        },
+        tab("HEALTHY", "Playwright title", "http://127.0.0.1/healthy"),
+        tab("BLOCKED_TARGET", "Blocked target", "https://blocked-target.example"),
+        tab("BLOCKED_PAGE", "Blocked page ref", "https://blocked-page.example"),
+      ]);
+      const inventoryRead = vi.fn(async () => ({
+        targetInfos: [
+          {
+            targetId: "BUSY",
+            type: "page",
+            title: "Native busy title",
+            url: "http://localhost/busy",
+          },
+          {
+            targetId: "HEALTHY",
+            type: "page",
+            title: "Native healthy title",
+            url: "http://127.0.0.1/healthy",
+          },
+          {
+            targetId: "BLOCKED_TARGET",
+            type: "page",
+            title: "Blocked target",
+            url: "https://blocked-target.example",
+          },
+          {
+            targetId: "BLOCKED_PAGE",
+            type: "page",
+            title: "Blocked page ref",
+            url: "https://blocked-page.example",
+          },
+        ],
+      }));
+      const detach = installInventory(fixture, inventoryRead);
+      const unregister = registerRelay(cdpUrl, ownership);
+      connectOverCdpSpy.mockResolvedValue(fixture.browser);
+      markTargetBlocked(cdpUrl, "BLOCKED_TARGET");
+      markPageRefBlocked(cdpUrl, fixture.pages[2]!);
+
+      try {
+        await expect(
+          listPagesViaPlaywright({ cdpUrl, requireCompleteTargetList: true }),
+        ).resolves.toEqual([
+          {
+            targetId: "BUSY",
+            title: "Native busy title",
+            url: "http://localhost/busy",
+            type: "page",
+          },
+          {
+            targetId: "HEALTHY",
+            title: "Native healthy title",
+            url: "http://127.0.0.1/healthy",
+            type: "page",
+          },
+        ]);
+        expect(inventoryRead).toHaveBeenCalledOnce();
+        expect(detach).toHaveBeenCalledOnce();
+        expect(fixture.newCDPSession).toHaveBeenCalledTimes(1);
+        expect(fixture.newCDPSession).toHaveBeenCalledWith(fixture.pages[2]);
+        expectObservedConnection(fixture);
+      } finally {
+        unregister();
+      }
+    },
+  );
+
+  it.each(["invalid inventory", "aborted inventory"] as const)(
+    "keeps borrowed-relay native inventory failure visible: %s",
+    async (failure) => {
+      const fixture = makePageEnumerationBrowser([
+        tab("HEALTHY", "Healthy", "https://healthy.example"),
+      ]);
+      const started = createDeferred<void>();
+      const gate = createDeferred<void>();
+      const detach = vi.fn(async () => {});
+      const send = vi.fn(async () => {
+        started.resolve();
+        if (failure === "aborted inventory") {
+          await gate.promise;
+          return { targetInfos: [{ targetId: "HEALTHY", type: "page" }] };
+        }
+        return { targetInfos: undefined };
+      });
+      Object.assign(fixture.browser, {
+        newBrowserCDPSession: async () => ({ send, detach }),
+      });
+      const unregister = registerRelay(cdpUrl, "borrowed");
+      connectOverCdpSpy.mockResolvedValue(fixture.browser);
+      const controller = new AbortController();
+
+      try {
+        const listing = listPagesViaPlaywright({
+          cdpUrl,
+          requireCompleteTargetList: true,
+          signal: controller.signal,
+        });
+        if (failure === "invalid inventory") {
+          await expect(listing).rejects.toThrow("Browser target enumeration was unavailable");
+        } else {
+          const rejected = expect(listing).rejects.toThrow("cancel native inventory");
+          await started.promise;
+          controller.abort(new Error("cancel native inventory"));
+          await rejected;
+          gate.resolve();
+        }
+        expect(detach).toHaveBeenCalledOnce();
+        expectObservedConnection(fixture);
+      } finally {
+        unregister();
+      }
+    },
+  );
 
   it("reconciles a page closed between native discovery and Page enumeration", async () => {
     vi.useFakeTimers();

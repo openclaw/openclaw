@@ -463,6 +463,65 @@ it.each(["target_closed", "canceled_by_user"])("honors native %s recovery", asyn
   );
 });
 
+it("resumes automatic recovery only for an explicitly reattached tab", async () => {
+  let targetId = "original-target";
+  const { bridge, handlers } = readyBridge((message) =>
+    message.type === "attach"
+      ? { type: "result", seq: message.seq, result: { targetId } }
+      : replyFor(message),
+  );
+  const { first, firstCdp, second, secondCdp } = await attachClients(bridge);
+  await dispatch(firstCdp, 2, "Target.detachFromTarget", { sessionId: attachedSession(first) });
+  await dispatch(firstCdp, 3, "Target.attachToTarget", { targetId, flatten: true });
+  expect(response(first, 3)?.error).toBeUndefined();
+  expect(attached(first)).toHaveLength(2);
+  // A recovered logical alias must suppress another root Page announcement.
+  for (const id of [4, 5]) {
+    deliver(handlers, { type: "tabs", tabs: defaultTabs() });
+    await flush();
+    await dispatch(firstCdp, id, "Target.getTargets");
+  }
+  await dispatch(firstCdp, 6, "Target.setAutoAttach", { autoAttach: true });
+  await dispatch(firstCdp, 9, "Target.attachToBrowserTarget");
+  await dispatch(
+    firstCdp,
+    10,
+    "Target.getTargets",
+    {},
+    asOptionalRecord(response(first, 9)?.result)?.sessionId,
+  );
+  await dispatch(secondCdp, 11, "Target.getTargets");
+  expect(attached(first)).toHaveLength(2);
+  expect(attached(second)).toHaveLength(1);
+  await dispatch(
+    firstCdp,
+    7,
+    "Runtime.evaluate",
+    {},
+    asOptionalRecord(response(first, 3)?.result)?.sessionId,
+  );
+  expect(response(first, 7)?.error).toBeUndefined();
+  // Repeated recovery must also suppress inventories between alias detach/attach.
+  await dispatch(firstCdp, 12, "Target.detachFromTarget", {
+    sessionId: asOptionalRecord(response(first, 3)?.result)?.sessionId,
+  });
+  deliver(handlers, { type: "tabs", tabs: defaultTabs() });
+  await flush();
+  await dispatch(firstCdp, 13, "Target.getTargets");
+  expect(attached(first)).toHaveLength(2);
+  await dispatch(firstCdp, 14, "Target.attachToTarget", { targetId, flatten: true });
+  expect(response(first, 14)?.error).toBeUndefined();
+  await dispatch(firstCdp, 15, "Target.getTargets");
+  expect(attached(first)).toHaveLength(3);
+  targetId = "replacement-target";
+  deliver(handlers, { type: "detached", tabId: 1, reason: "target_closed" });
+  await flush();
+  deliver(handlers, { type: "tabs", tabs: [tab(1, "https://example.com/next", "Next")] });
+  await flush();
+  expect(attached(first)).toHaveLength(4);
+  expect(attached(first)[3]?.params).toMatchObject({ targetInfo: { targetId } });
+});
+
 it.each(["client close", "tab removal", "user cancellation"])(
   "rechecks recovery on %s",
   async (ending) => {
@@ -617,29 +676,55 @@ it("publishes a shared recovered attachment to every waiting auto-attach client"
   expect(attached(first)).toHaveLength(firstAttachedEventCount);
 });
 
-it("skips a permanent Chrome refusal but retries that tab on the next enumeration", async () => {
-  let refused = true;
-  const { bridge } = readyBridge(
-    (message) =>
-      message.type === "attach" && message.tabId === 2 && refused
-        ? {
-            type: "error",
-            seq: message.seq,
-            message: "The extensions gallery cannot be scripted.",
-          }
-        : replyFor(message),
-    [
-      ...defaultTabs(),
-      tab(2, "https://chromewebstore.google.com/detail/x/abc", "Chrome Web Store"),
-    ],
-  );
-  const { client, cdp } = connectClient(bridge);
-  await dispatch(cdp, 1, "Target.getTargets");
-  expect(response(client, 1)).toMatchObject(targetInfos("target-1"));
-  refused = false;
-  await dispatch(cdp, 2, "Target.getTargets");
-  expect(response(client, 2)).toMatchObject(targetInfos("target-1", "target-2"));
-});
+const chromeRefusalCases = [
+  "The extensions gallery cannot be scripted.",
+  "Cannot access a chrome:// URL",
+  "Cannot access a chrome-extension:// URL of different extension",
+].flatMap((reason) => [
+  { failure: reason, skip: true },
+  {
+    failure: `Debugger acquisition failed: Error: ${reason}; cleanup incomplete: Error: ${reason}`,
+    skip: true,
+  },
+  {
+    failure: `Debugger acquisition failed: Error: ${reason}; cleanup incomplete: Error: native detach failed`,
+    skip: true,
+  },
+  { failure: `Debugger cleanup incomplete: Error: ${reason}`, skip: true },
+]);
+
+it.each([
+  ...chromeRefusalCases,
+  {
+    failure:
+      "Debugger acquisition failed: Error: native target unavailable; cleanup incomplete: Error: Cannot access a chrome-extension:// URL of different extension",
+    skip: false,
+  },
+  { failure: "Debugger cleanup incomplete: Error: native detach failed", skip: false },
+])(
+  "skips only permanent Chrome refusals and retries them on the next enumeration: $failure",
+  async ({ failure, skip }) => {
+    let refused = true;
+    const { bridge } = readyBridge(
+      (message) =>
+        message.type === "attach" && message.tabId === 2 && refused
+          ? { type: "error", seq: message.seq, message: failure }
+          : replyFor(message),
+      [
+        ...defaultTabs(),
+        tab(2, "https://chromewebstore.google.com/detail/x/abc", "Chrome Web Store"),
+      ],
+    );
+    const { client, cdp } = connectClient(bridge);
+    await dispatch(cdp, 1, "Target.getTargets");
+    expect(response(client, 1)).toMatchObject(
+      skip ? targetInfos("target-1") : { error: { message: "Target identities are unavailable" } },
+    );
+    refused = false;
+    await dispatch(cdp, 2, "Target.getTargets");
+    expect(response(client, 2)).toMatchObject(targetInfos("target-1", "target-2"));
+  },
+);
 it.each(["attach", "createTab"])(
   "waits for %s and native detach before closing",
   async (operation) => {

@@ -8,6 +8,7 @@ import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isSelectableCdpBrowserTarget } from "../cdp-target-filter.js";
 import { resolveCreateTargetParams } from "./create-target-params.js";
 import { resolveExtensionRelayCommandTimeoutMs } from "./relay-command-timeout.js";
+import { isPermanentChromePageRefusal } from "./relay-page-refusal.js";
 import {
   type ExtensionToRelayMessage,
   parseExtensionMessage,
@@ -593,7 +594,7 @@ export class ExtensionRelayBridge {
       (candidate) =>
         candidate.autoAttach &&
         !candidate.detachedTabs.has(tabId) &&
-        (!sessionId || !candidate.sessions.has(sessionId)),
+        (!sessionId || !this.sessions.hasRootSession(candidate, sessionId)),
     );
   }
 
@@ -628,12 +629,7 @@ export class ExtensionRelayBridge {
           } catch (error) {
             // Exact Chromium page restrictions, not attachment conflicts,
             // permission failures, timeouts, or retired tab generations.
-            if (
-              error instanceof Error &&
-              (error.message === "The extensions gallery cannot be scripted." ||
-                error.message === "Cannot access a chrome:// URL" ||
-                error.message === "Cannot access a chrome-extension:// URL of different extension")
-            ) {
+            if (isPermanentChromePageRefusal(error)) {
               skipped.set(tab, { url, reason: error.message });
             }
           }
@@ -1157,6 +1153,9 @@ export class ExtensionRelayBridge {
             },
             request.sessionId,
           );
+          // Explicit attachment resumes this client's interest after a detach.
+          // Clear only after successful attachment so auto-attach cannot race it.
+          client.detachedTabs.delete(found.tabId);
           this.respond(client, request, { sessionId });
         });
         return;
@@ -1172,7 +1171,7 @@ export class ExtensionRelayBridge {
             this.respondError(client, request, `Session not found: ${String(sessionId)}`, -32001);
             return;
           }
-          if (!session.parent && session.id === session.physical.rootSessionId) {
+          if (!session.parentSessionId) {
             client.detachedTabs.add(session.physical.tabId);
           }
           await this.sessions.detach(client, sessionId);

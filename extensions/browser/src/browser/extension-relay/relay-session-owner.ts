@@ -137,6 +137,16 @@ export class RelaySessionOwner {
     }
   }
 
+  hasRootSession(client: RelaySessionClient, physicalId: string): boolean {
+    const physical = this.physical.get(physicalId);
+    return Boolean(
+      physical &&
+      [...client.sessions.values()].some(
+        (session) => session.physical === physical && !session.parentSessionId,
+      ),
+    );
+  }
+
   announce(
     client: RelaySessionClient,
     sessionId: string,

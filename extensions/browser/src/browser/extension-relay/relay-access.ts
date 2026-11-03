@@ -13,23 +13,22 @@ export type BorrowedRelayAccess = {
 export type ExtensionRelayResource = ExtensionRelayHandle | BorrowedRelayAccess;
 
 // Prepared by the profile lifecycle only. This registry never discovers keys or listeners.
-const borrowedCdpAccess = new Map<string, BorrowedRelayAccess>();
+const relayCdpAccess = new Map<string, ExtensionRelayResource>();
 
-export function registerBorrowedRelayCdpAccess(
-  cdpUrl: string,
-  relay: BorrowedRelayAccess,
-): () => void {
+export function registerRelayCdpAccess(cdpUrl: string, relay: ExtensionRelayResource): () => void {
   const key = cdpUrl.replace(/\/$/u, "");
-  borrowedCdpAccess.set(key, relay);
+  relayCdpAccess.set(key, relay);
   return () => {
-    if (borrowedCdpAccess.get(key) === relay) {
-      borrowedCdpAccess.delete(key);
+    if (relayCdpAccess.get(key) === relay) {
+      relayCdpAccess.delete(key);
     }
   };
 }
 
-export function getBorrowedRelayCdpAccess(cdpUrl: string): BorrowedRelayAccess | undefined {
-  const relay = borrowedCdpAccess.get(cdpUrl.replace(/\/$/u, ""));
-  relay?.client.assertCurrent();
+export function getRelayCdpAccess(cdpUrl: string): ExtensionRelayResource | undefined {
+  const relay = relayCdpAccess.get(cdpUrl.replace(/\/$/u, ""));
+  if (relay?.ownership === "borrowed") {
+    relay.client.assertCurrent();
+  }
   return relay;
 }
