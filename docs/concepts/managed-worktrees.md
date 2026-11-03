@@ -99,7 +99,9 @@ The reusable generation binds the source commit, frozen lockfile, immutable imag
 (including its Node and pnpm versions), guest path, and sandbox policy. A changed
 generation prepares a new template with a distinct builder identity; background
 housekeeping recovers interrupted builders independently of template expiration. Installation failure or changed tracked source
-records a warning and keeps a source-only template for that generation. Missing
+records a warning with a bounded, redacted tail of the installer output and keeps
+a source-only template for that generation. Repeated preparations with the same
+inputs reuse that source-only template without rerunning the failed install. Missing
 lockfiles, unsupported filesystems, and unavailable images use source-only
 checkout. The agent can install normally in that private checkout. Dependency
 preparation does not update an already-used session when its lockfile changes.

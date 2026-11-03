@@ -6075,3 +6075,37 @@ owner latency, CPU, and allocations, with no user-facing metric regressing by
 20% or more. Record cold catch-up and warm-report results separately, including
 partial counts so a faster incomplete response cannot masquerade as a complete
 report speedup.
+
+## Package-store workspace capture and staging
+
+`workspace-store-staging-measure.ts` uses the real workspace capture and Git
+fast-import preparation owners with 62,000 synthetic files totaling 1.1811 GB.
+Of those, 60,000 are pnpm store files at the observed task-environment root and
+2,000 are authored source files. No database padding or live service is involved.
+
+```sh
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/workspace-store-staging-measure.ts \
+  prepare .local/store-proof
+OPENCLAW_BENCH_BASELINE_DIR=/absolute/original-source-overlay \
+  node --expose-gc --import ./scripts/tsx.mjs scripts/perf/workspace-store-staging-measure.ts \
+  run .local/store-proof baseline-1
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/workspace-store-staging-measure.ts \
+  run .local/store-proof candidate-1
+```
+
+The sparse baseline overlay contains original repository-relative owner files,
+using the existing `worker-retained-heap-preload.ts` loader. Repeat same-source
+A/A controls and five interleaved baseline/candidate pairs on an otherwise idle
+host; append `allocation` or `cpu` for separate profiling passes. Retain the
+baseline revision and source diff with the results. Each process starts with a
+fresh hash memo; the shared fixture remains immutable and OS cache is not evicted.
+
+The ordinary delta contains one authored file and 1,000 store downloads. The
+threshold case stages the entire captured snapshot: baseline must fail the real
+768 MiB aggregate cap and candidate must preserve all authored files. Acceptance
+requires zero captured/staged store bytes, equal authored digests, fewer hashes
+and fast-import bytes, and no timing, CPU, or allocation regression. Existing
+generated-path tests cover nearby reports, nested fixtures, and staged inputs.
+Reports distinguish logical payload and emitted fast-import bytes; physical
+device writes are unavailable. These measurements do not qualify btrfs, Podman,
+full Gateway preparation, or the unrelated agent database.
