@@ -203,7 +203,7 @@ describe("google video generation provider", () => {
     expect(clientOptions.apiKey).toBe("google-key");
     const httpOptions = recordField(clientOptions.httpOptions, "httpOptions");
     expect(httpOptions).not.toHaveProperty("baseUrl");
-    expect(httpOptions).not.toHaveProperty("apiVersion");
+    expect(httpOptions.apiVersion).toBe("v1beta");
   });
 
   it("returns inline video bytes encoded with URL-safe base64", async () => {
@@ -262,24 +262,48 @@ describe("google video generation provider", () => {
 
   it.each([
     {
-      name: "strips /v1beta suffix from configured baseUrl before passing to GoogleGenAI SDK",
+      name: "preserves a configured /v1beta endpoint without appending a second version",
       baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-      expectedBaseUrl: "https://generativelanguage.googleapis.com",
+      expectedBaseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      apiVersion: "",
       prompt: "A tiny robot watering a windowsill garden",
     },
     {
       name: "does NOT strip /v1beta when it appears mid-path (end-anchor proof)",
       baseUrl: "https://proxy.example.com/v1beta/route",
       expectedBaseUrl: "https://proxy.example.com/v1beta/route",
+      apiVersion: "",
       prompt: "test",
     },
     {
-      name: "passes baseUrl unchanged when no /v1beta suffix is present",
+      name: "normalizes the official API origin to its v1beta endpoint",
       baseUrl: "https://generativelanguage.googleapis.com",
-      expectedBaseUrl: "https://generativelanguage.googleapis.com",
+      expectedBaseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      apiVersion: "",
       prompt: "test",
     },
-  ])("$name", async ({ baseUrl, expectedBaseUrl, prompt }) => {
+    {
+      name: "preserves an explicitly configured v1alpha endpoint",
+      baseUrl: "https://proxy.example.com/v1alpha",
+      expectedBaseUrl: "https://proxy.example.com/v1alpha",
+      apiVersion: "",
+      prompt: "test",
+    },
+    {
+      name: "preserves an explicitly configured v1 endpoint",
+      baseUrl: "https://proxy.example.com/v1",
+      expectedBaseUrl: "https://proxy.example.com/v1",
+      apiVersion: "",
+      prompt: "test",
+    },
+    {
+      name: "pins v1beta for an unversioned custom endpoint",
+      baseUrl: "https://proxy.example.com/google",
+      expectedBaseUrl: "https://proxy.example.com/google",
+      apiVersion: "v1beta",
+      prompt: "test",
+    },
+  ])("$name", async ({ baseUrl, expectedBaseUrl, apiVersion, prompt }) => {
     mockGoogleApiKeyAuth();
     generateVideosMock.mockResolvedValue(
       completedVideo({ videoBytes: Buffer.from("mp4").toString("base64"), mimeType: "video/mp4" }),
@@ -292,6 +316,7 @@ describe("google video generation provider", () => {
     });
 
     expect(firstGoogleClientHttpOptions().baseUrl).toBe(expectedBaseUrl);
+    expect(firstGoogleClientHttpOptions().apiVersion).toBe(apiVersion);
   });
 
   it("downloads MLDev direct video uri responses without routing through the Files API", async () => {

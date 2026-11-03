@@ -29,6 +29,7 @@ type GoogleGenAIConfig = {
   apiKey?: string;
   httpOptions?: {
     baseUrl?: string;
+    apiVersion?: string;
     timeout?: number;
   };
 };
@@ -282,14 +283,15 @@ describe("google music generation provider", () => {
   const baseUrlCases: Array<{
     name: string;
     baseUrl?: string;
+    apiVersion?: string;
     expectedBaseUrl?: string;
     prompt: string;
     audio: string;
   }> = [
     {
-      name: "strips /v1beta suffix from configured baseUrl before passing to GoogleGenAI SDK",
+      name: "preserves the configured versioned SDK endpoint",
       baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-      expectedBaseUrl: "https://generativelanguage.googleapis.com",
+      expectedBaseUrl: "https://generativelanguage.googleapis.com/v1beta",
       prompt: "ambient ocean",
       audio: "mp3-bytes",
     },
@@ -345,4 +347,30 @@ describe("google music generation provider", () => {
       }),
     ).rejects.toThrow("supports mp3 output");
   });
+
+  it.each([
+    [undefined, undefined, "v1beta"],
+    ["https://proxy.example.com", "https://proxy.example.com", "v1beta"],
+    ["https://proxy.example.com/v1beta", "https://proxy.example.com/v1beta", ""],
+    ["https://proxy.example.com/v1alpha", "https://proxy.example.com/v1alpha", ""],
+    ["https://proxy.example.com/v1", "https://proxy.example.com/v1", ""],
+  ])(
+    "preserves the SDK API version for base URL %s",
+    async (baseUrl, expectedBaseUrl, apiVersion) => {
+      mockGoogleAuth();
+      generateContentMock.mockResolvedValue(googleMusicAudioResponse());
+
+      await generateMusic({
+        cfg: baseUrl ? { models: { providers: { google: { baseUrl, models: [] } } } } : {},
+      });
+
+      const httpOptions = lastGoogleGenAIConfig().httpOptions;
+      expect(httpOptions).toMatchObject({ apiVersion });
+      if (expectedBaseUrl) {
+        expect(httpOptions?.baseUrl).toBe(expectedBaseUrl);
+      } else {
+        expect(httpOptions).not.toHaveProperty("baseUrl");
+      }
+    },
+  );
 });

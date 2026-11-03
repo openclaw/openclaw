@@ -1,5 +1,7 @@
+import { createLazyRuntimeSurface } from "openclaw/plugin-sdk/lazy-runtime";
 import type { ProviderReasoningOutputModeContext } from "openclaw/plugin-sdk/plugin-entry";
 import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { resolveMergedModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-entry";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeGoogleModelId } from "./model-id.js";
@@ -11,6 +13,7 @@ import {
   isGoogleNativeVideoModelId,
   isModernGoogleModel,
   resolveGoogleGeminiForwardCompatModel,
+  resolveGoogleModelApi,
 } from "./provider-models.js";
 import {
   isOfficialGoogleAiStudioBaseUrl,
@@ -18,22 +21,6 @@ import {
   normalizeGoogleProviderConfig,
   resolveGoogleGenerativeAiTransport,
 } from "./provider-policy.js";
-import {
-  createGoogleGenerativeAiTransportStreamFn,
-  createGoogleVertexTransportStreamFn,
-} from "./transport-stream.js";
-
-function normalizeGoogleVideoInput(
-  ctx: Parameters<NonNullable<ProviderPlugin["normalizeResolvedModel"]>>[0],
-) {
-  const input = (ctx.model.input as string[]).filter((type) => type !== "video");
-  const supportsVideo =
-    ctx.provider === "google" &&
-    ctx.model.api === "google-generative-ai" &&
-    isOfficialGoogleAiStudioBaseUrl(ctx.model.baseUrl) &&
-    isGoogleNativeVideoModelId(ctx.modelId);
-  return { ...ctx.model, input: supportsVideo ? [...input, "video"] : input } as typeof ctx.model;
-}
 
 function resolveGoogleReasoningOutputMode(
   ctx: ProviderReasoningOutputModeContext,
@@ -55,6 +42,18 @@ function resolveGoogleReasoningOutputMode(
   }
   return "tagged";
 }
+const loadGenerativeAiStream = createLazyRuntimeSurface(
+  () => import("./transport-stream.js"),
+  (runtime) => runtime.createGoogleGenerativeAiTransportStreamFn(),
+);
+const loadVertexStream = createLazyRuntimeSurface(
+  () => import("./transport-stream.js"),
+  (runtime) => runtime.createGoogleVertexTransportStreamFn(),
+);
+const loadInteractionsStream = createLazyRuntimeSurface(
+  () => import("./transport-stream.js"),
+  (runtime) => runtime.createGoogleInteractionsTransportStreamFn(),
+);
 
 export function buildGoogleProvider(): ProviderPlugin {
   return {
@@ -113,7 +112,25 @@ export function buildGoogleProvider(): ProviderPlugin {
       },
     },
     normalizeModelId: ({ modelId }) => normalizeGoogleModelId(modelId),
-    normalizeResolvedModel: normalizeGoogleVideoInput,
+    normalizeResolvedModel: (ctx) => {
+      const input = (ctx.model.input as string[]).filter((type) => type !== "video");
+      const supportsVideo =
+        ctx.provider === "google" &&
+        (ctx.model.api === "google-generative-ai" || ctx.model.api === "google-interactions") &&
+        isOfficialGoogleAiStudioBaseUrl(ctx.model.baseUrl) &&
+        isGoogleNativeVideoModelId(ctx.modelId);
+      return {
+        ...ctx.model,
+        api: resolveGoogleModelApi({
+          provider: ctx.provider,
+          modelId: ctx.modelId,
+          api: ctx.model.api,
+          baseUrl: ctx.model.baseUrl,
+          providerConfig: resolveMergedModelProviderConfig(ctx.config, ctx.provider),
+        }),
+        input: supportsVideo ? [...input, "video"] : input,
+      } as typeof ctx.model;
+    },
     resolveDynamicModel: (ctx) =>
       resolveGoogleGeminiForwardCompatModel({
         providerId: ctx.provider,
@@ -125,10 +142,13 @@ export function buildGoogleProvider(): ProviderPlugin {
         (model.api === "google-generative-ai" &&
           (model.provider === "google-vertex" || isGoogleVertexBaseUrl(model.baseUrl)))
       ) {
-        return createGoogleVertexTransportStreamFn();
+        return async (...args) => (await loadVertexStream())(...args);
       }
       if (model.api === "google-generative-ai") {
-        return createGoogleGenerativeAiTransportStreamFn();
+        return async (...args) => (await loadGenerativeAiStream())(...args);
+      }
+      if (model.api === "google-interactions") {
+        return async (...args) => (await loadInteractionsStream())(...args);
       }
       return undefined;
     },

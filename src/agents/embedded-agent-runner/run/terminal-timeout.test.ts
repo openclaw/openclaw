@@ -153,7 +153,7 @@ describe("tool timeout terminal bookkeeping", () => {
       expect(result.payloads?.[0]?.mediaUrls).toEqual(attempt.toolMediaUrls);
     }
     expect(result.payloads?.at(-1)).toEqual({
-      text: expect.stringContaining("Request timed out"),
+      text: "Tool execution timed out with an unknown outcome. Check the current state before repeating the operation.",
       isError: true,
     });
     expect(result.meta).toMatchObject({

@@ -28,7 +28,7 @@ vi.mock("@google/genai", () => ({
 }));
 
 import { streamGoogleVertex, streamSimpleGoogleVertex } from "./google-vertex.js";
-import { streamGoogle } from "./google.js";
+import { streamGoogle, streamSimpleGoogle } from "./google.js";
 
 const context = {
   messages: [{ role: "user", content: "hello", timestamp: 0 }],
@@ -68,6 +68,17 @@ describe("Google SDK construction auth", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
     configureAiTransportHost({});
+  });
+
+  it("preserves explicit topP at both SDK request boundaries without leaking it", async () => {
+    const googleOptions = { apiKey: "test-key", topP: 0.4 };
+    const vertexOptions = { apiKey: "test-key", topP: 0.6 };
+    await streamSimpleGoogle(googleModel(), context, googleOptions).result();
+    await streamSimpleGoogleVertex(vertexModel(), context, vertexOptions).result();
+    await streamSimpleGoogle(googleModel(), context, { apiKey: "test-key" }).result();
+    expect(googleMockState.requests[0]).toMatchObject({ config: { topP: 0.4 } });
+    expect(googleMockState.requests[1]).toMatchObject({ config: { topP: 0.6 } });
+    expect(googleMockState.requests[2]).not.toHaveProperty("config.topP");
   });
 
   it("identifies OpenCode conversations without cache retention", async () => {
@@ -199,5 +210,36 @@ describe("Google SDK construction auth", () => {
       project: "vertex-project",
       location: "us-central1",
     });
+  });
+});
+
+describe("Google API version defaults", () => {
+  beforeEach(() => {
+    googleMockState.configs = [];
+    googleMockState.requests = [];
+  });
+  afterEach(() => {
+    configureAiTransportHost({});
+  });
+  it.each([
+    ["", "v1beta"],
+    ["https://generativelanguage.googleapis.com/v1beta", ""],
+    ["https://proxy.example.com/google/v1alpha", ""],
+    ["https://proxy.example.com/google/v1", ""],
+  ])("preserves the Google API version for base URL %s", async (baseUrl, apiVersion) => {
+    await streamGoogle({ ...googleModel(), baseUrl }, context, { apiKey: "test-key" }).result();
+
+    expect(googleMockState.configs).toHaveLength(1);
+    expect(googleMockState.configs[0]).toMatchObject({
+      httpOptions: { apiVersion, ...(baseUrl ? { baseUrl } : {}) },
+    });
+  });
+
+  it("keeps Vertex on v1 without a configured endpoint", async () => {
+    await streamGoogleVertex({ ...vertexModel(), baseUrl: "" }, context, {
+      apiKey: "test-key",
+    }).result();
+
+    expect(googleMockState.configs[0]).toMatchObject({ vertexai: true, apiVersion: "v1" });
   });
 });

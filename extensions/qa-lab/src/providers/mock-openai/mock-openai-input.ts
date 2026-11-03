@@ -161,7 +161,6 @@ function isSubagentRecoveryText(text: string): boolean {
   return (
     /^(?:continue|keep going|resume|retry|carry on)[.!?]?$/iu.test(text) ||
     [
-      "The previous assistant turn recorded reasoning but did not produce a user-visible answer.",
       "The previous attempt did not produce a user-visible answer.",
       "The previous assistant turn completed its tool calls but did not produce a user-visible answer.",
       "The previous attempt compacted the conversation context before producing a final user-visible answer.",

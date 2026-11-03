@@ -57,7 +57,8 @@ export function transformProviderMessages<TApi extends Api>(
         content: projectUserMediaForTransport(
           message.content,
           model.input.includes("image"),
-          model.api === "openai-completions" && model.input.includes("video"),
+          (model.api === "openai-completions" || model.api === "google-interactions") &&
+            model.input.includes("video"),
         ),
       }) as Extract<Message, { role: "user" }>;
     }),

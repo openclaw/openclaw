@@ -31,6 +31,8 @@ export function buildGoogleHttpOptions(
   } else if (model.baseUrl) {
     httpOptions.baseUrl = model.baseUrl;
     httpOptions.apiVersion = ""; // baseUrl already includes the version path.
+  } else {
+    httpOptions.apiVersion = "v1beta";
   }
   if (model.headers || optionsHeaders) {
     httpOptions.headers = resolveAiTransportHeaderSentinels(

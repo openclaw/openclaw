@@ -3,6 +3,7 @@
  */
 export type { ApiProvider } from "@openclaw/ai";
 export { resolveProviderContext } from "../../packages/ai/src/provider-types.js";
+export { PROVIDER_MODEL_INPUT } from "../../packages/ai/src/provider-types.js";
 export { resolveOpenAIRequestReasoning } from "../../packages/ai/src/providers/openai-request-reasoning.js";
 export {
   resolveOpenAIModelReasoningEfforts,

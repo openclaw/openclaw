@@ -1,5 +1,10 @@
 import { DEFAULT_MISSING_TOOL_RESULT_TEXT } from "@openclaw/llm-core/types";
 import { describe, expect, it } from "vitest";
+import {
+  PROVIDER_MODEL_INPUT,
+  type ProviderContext,
+  type ProviderModel,
+} from "../provider-types.js";
 import type { AssistantMessage, Context, Model, ToolResultMessage, UserMessage } from "../types.js";
 import {
   buildGoogleInteractionsParams,
@@ -97,6 +102,50 @@ describe("buildGoogleInteractionsParams", () => {
     ]);
   });
 
+  it("projects native user video as a private slot placeholder", () => {
+    const context: ProviderContext = {
+      messages: [
+        {
+          role: "user",
+          timestamp: 0,
+          content: [
+            { type: "text", text: "Describe this clip" },
+            { type: "video", mimeType: "video/mp4", data: "dmlkZW8=" },
+          ],
+        },
+      ],
+    };
+    const videoInput: ProviderModel["input"] = ["text", "image", "video"];
+    const withVideo = { [PROVIDER_MODEL_INPUT]: videoInput };
+    expect(buildGoogleInteractionsParams(model, context, withVideo).input).toEqual([
+      {
+        type: "user_input",
+        content: [
+          { type: "text", text: "Describe this clip" },
+          { type: "text", text: "(video omitted: native video slot unavailable)" },
+        ],
+      },
+    ]);
+  });
+
+  it("omits user video when the provider-normalized model has no video input", () => {
+    const context: ProviderContext = {
+      messages: [
+        {
+          role: "user",
+          timestamp: 0,
+          content: [{ type: "video", mimeType: "video/mp4", data: "dmlkZW8=" }],
+        },
+      ],
+    };
+    expect(buildGoogleInteractionsParams(model, context).input).toEqual([
+      {
+        type: "user_input",
+        content: [{ type: "text", text: "(video omitted: provider does not support video input)" }],
+      },
+    ]);
+  });
+
   it("preserves chronological model step order in stateless replay", () => {
     const params = buildGoogleInteractionsParams(
       model,
@@ -177,18 +226,6 @@ describe("buildGoogleInteractionsParams", () => {
       baseUrl: "https://generativelanguage.googleapis.com",
     });
     expect(headers["x-goog-api-client"]).toMatch(/^openclaw\//u);
-  });
-
-  it("rejects unsupported explicit prompt caching locally", () => {
-    const context: Context = {
-      messages: [user("Hello")],
-    };
-
-    expect(() =>
-      buildGoogleInteractionsParams(model, context, {
-        cachedContent: "cachedContents/123",
-      } as Record<string, unknown>),
-    ).toThrow(/Explicit prompt caching/);
   });
 
   it("maps an explicit tool choice into generation_config", () => {

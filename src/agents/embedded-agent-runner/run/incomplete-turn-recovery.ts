@@ -1,5 +1,8 @@
 import { isResponsesOutputLimitToolCallError } from "@openclaw/ai/diagnostics";
-import { hasOnlyAssistantReasoningContent } from "@openclaw/ai/internal/shared";
+import {
+  hasOnlyAssistantReasoningContent,
+  isReasoningOnlyLengthAssistantTurn,
+} from "@openclaw/ai/internal/shared";
 import { MALFORMED_TOOL_CALL_ARGUMENTS_ERROR_CODE } from "../../../llm/types.js";
 import { isTerminalAssistantError } from "../../../llm/utils/retry.js";
 import { hasAcceptedSessionSpawn } from "../../accepted-session-spawn.js";
@@ -31,7 +34,7 @@ import type { EmbeddedRunAttemptResult } from "./types.js";
 export const DEFAULT_REASONING_ONLY_RETRY_LIMIT = 2;
 export const DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT = 1;
 const REASONING_ONLY_RETRY_INSTRUCTION =
-  "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
+  "Your turn ended without a final reply. Continue from the current conversation and answer the user's request now. Do not repeat completed actions or restart the task. Do not restate your reasoning.";
 const EMPTY_RESPONSE_RETRY_INSTRUCTION =
   "The previous attempt did not produce a user-visible answer. Continue from the current state and produce the visible answer now. Do not restart from scratch.";
 const TEXT_TOOL_CALL_RETRY_INSTRUCTION =
@@ -175,6 +178,8 @@ export function resolveReasoningOnlyRetryInstruction(
   return joinAssistantTexts(params.attempt.assistantTexts).length === 0 &&
     assistant &&
     assistant.stopReason !== "error" &&
+    // Replay omits token-limited reasoning, so no partial turn remains to continue.
+    !isReasoningOnlyLengthAssistantTurn(assistant) &&
     !assistant.openclawDelivery?.tts?.text?.trim() &&
     Array.isArray(assistant.content) &&
     assistant.content.length > 0 &&
