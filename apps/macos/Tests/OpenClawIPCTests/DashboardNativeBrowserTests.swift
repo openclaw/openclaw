@@ -752,7 +752,11 @@ struct DashboardNativeBrowserFailureTests {
             try controller.nativeBrowser.navigate(tabId: "mac-article", url: server.url("/plain"))
             expectedPath = "/plain"
         }
-        try await TestWait.state("\(trigger) settles") { !webView.isLoading && webView.url?.path == expectedPath }
+        // The tab's URL projection updates in a queued main-actor KVO task.
+        try await TestWait.state("\(trigger) settles") {
+            !webView.isLoading && webView.url?.path == expectedPath &&
+                controller.nativeBrowser.state.tabs.first?.url == webView.url?.absoluteString
+        }
         #expect(browser.failureView == nil, "\(trigger)")
         #expect(controller.nativeBrowser.state.tabs.first?.url == webView.url?.absoluteString, "\(trigger)")
     }
