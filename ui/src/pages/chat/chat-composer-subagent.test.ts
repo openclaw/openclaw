@@ -302,7 +302,7 @@ it.each([
     pane.render();
 
     expect(pane.chatProps?.disabledBanner?.actionLabel).toBe(
-      restricted ? undefined : "Connect an AI provider",
+      restricted ? undefined : "Set up a model",
     );
     expect(pane.chatProps?.disabledReason).toBeNull();
     expect(pane.chatProps?.canSend).toBe(true);
@@ -441,7 +441,7 @@ it.each([
       const settled = draw();
       expect(state.chatModelCatalogInitialized).toBe(true);
       expect(settled.disabledBanner?.actionLabel).toBe(
-        !restricted && !cachedDefault ? "Connect an AI provider" : undefined,
+        !restricted && !cachedDefault ? "Set up a model" : undefined,
       );
       if (restricted) {
         expect(settled.modelRequiredReason).toBe("No models are permitted by your administrator.");
