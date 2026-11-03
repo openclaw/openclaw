@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveNpmGlobalPrefixLayoutFromPrefix } from "../infra/update-npm-prefix.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import {
@@ -89,6 +89,32 @@ describe("durable CLI for an npx copy", () => {
 });
 
 describe("resolveDaemonServicePathDirs", () => {
+  // Fixtures live under the real temp dir, which the service PATH treats as disposable.
+  beforeEach(() => {
+    vi.spyOn(os, "tmpdir").mockReturnValue(path.join(root, "tmp"));
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it.each([
+    ["npx", [".npm", "_npx", "abc", "node_modules", ".bin"]],
+    ["pnpm dlx", [".cache", "pnpm", "dlx", "abc", "node_modules", ".bin"]],
+    ["a temporary directory", ["tmp", "bunx-501-openclaw", "bin"]],
+  ])("leaves %s off the service PATH", (_name, segments) => {
+    const shim = entrypoint(path.join(...segments));
+    const binDir = path.dirname(shim);
+    fs.renameSync(shim, path.join(binDir, "openclaw"));
+    expect(
+      resolveDaemonServicePathDirs({
+        runtimePath: path.resolve("/opt/node/bin/node"),
+        argv: ["node", path.join(binDir, "openclaw"), "gateway", "install"],
+        env: { PATH: binDir },
+        platform: "linux",
+      }),
+    ).toEqual([path.resolve("/opt/node/bin")]);
+  });
+
   it.skipIf(process.platform === "win32").each([true, false])(
     "accepts only the active installation's PATH shim (same=%s)",
     (same) => {

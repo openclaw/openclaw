@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isStandaloneRuntimeExecutable } from "../../cli-invocation.mjs";
-import { resolveDurableServiceEntrypoint } from "../daemon/durable-service-entrypoint.js";
+import {
+  isDisposableInstallPath,
+  resolveDurableServiceEntrypoint,
+} from "../daemon/durable-service-entrypoint.js";
 import {
   resolveBunRuntimeInfo,
   resolvePinnedDaemonRuntimePath,
@@ -146,6 +149,12 @@ export function resolveDaemonServicePathDirs(params: {
   const env = params.env ?? process.env;
   const argv1 = argv[1]?.trim();
   const dirs = new Set(resolveDaemonRuntimeBinDir(params.runtimePath));
+  // An npx, dlx, or temp folder goes stale once its runner evicts it.
+  const addDurable = (dir: string) => {
+    if (!isDisposableInstallPath(safeRealpathSync(dir) ?? path.resolve(dir))) {
+      dirs.add(dir);
+    }
+  };
   const commandName = path.basename(argv1 ?? "");
 
   if (
@@ -155,7 +164,7 @@ export function resolveDaemonServicePathDirs(params: {
       (platform === "win32" &&
         ["openclaw.cmd", "openclaw.ps1", "openclaw.exe"].includes(commandName)))
   ) {
-    dirs.add(path.dirname(argv1));
+    addDurable(path.dirname(argv1));
   }
 
   const argvRealpath = argv1 && path.isAbsolute(argv1) ? safeRealpathSync(argv1) : undefined;
@@ -179,7 +188,7 @@ export function resolveDaemonServicePathDirs(params: {
         continue;
       }
     }
-    dirs.add(segment);
+    addDurable(segment);
   }
 
   return dirs.size > 0 ? [...dirs] : undefined;

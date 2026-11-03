@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,16 +9,24 @@ const realpathOrResolve = (target: string) => fs.realpath(target).catch(() => pa
 
 /**
  * npx, pnpm dlx, and temp-dir runners (bunx) own their copies and may evict them,
- * so a service must never point into one.
+ * so a service must never point into one or keep one on its PATH.
+ * Takes a realpath; the temp dir is compared by its realpath too.
  */
-export async function isDisposableEntrypoint(entrypoint: string): Promise<boolean> {
-  const resolved = await realpathOrResolve(entrypoint);
+export function isDisposableInstallPath(resolved: string): boolean {
   const segments = resolved.split(path.sep);
+  let tmp = os.tmpdir();
+  try {
+    tmp = fsSync.realpathSync(tmp);
+  } catch {}
   return (
     segments.includes("_npx") ||
     segments.includes("dlx") ||
-    resolved.startsWith(`${await realpathOrResolve(os.tmpdir())}${path.sep}`)
+    resolved.startsWith(`${path.resolve(tmp)}${path.sep}`)
   );
+}
+
+export async function isDisposableEntrypoint(entrypoint: string): Promise<boolean> {
+  return isDisposableInstallPath(await realpathOrResolve(entrypoint));
 }
 
 /**
@@ -56,6 +65,7 @@ export async function resolveDurableServiceEntrypoint(
     { collectInstalledGlobalPackageErrors, createGlobalInstallEnv, resolveGlobalInstallTarget },
     { runStep },
     { runCommandWithTimeout },
+    { applyPathPrepend },
   ] = await Promise.all([
     import("../infra/openclaw-root.js"),
     import("../infra/package-dist-inventory.js"),
@@ -64,6 +74,7 @@ export async function resolveDurableServiceEntrypoint(
     import("../infra/update-global.js"),
     import("../infra/update-runner-command.js"),
     import("../process/exec.js"),
+    import("../infra/path-prepend.js"),
   ]);
   const sourceRoot = await resolveOpenClawPackageRoot({
     argv1: await realpathOrResolve(entrypoint),
@@ -84,6 +95,9 @@ export async function resolveDurableServiceEntrypoint(
     ));
   if (!reusable) {
     const installEnv = await createGlobalInstallEnv(env, { manager: "npm" });
+    // npm runs lifecycle scripts (openclaw's runtime guard) with the first `node` on
+    // PATH, which can be an older system Node; pin them to this runtime as update does.
+    applyPathPrepend(installEnv, [path.dirname(process.execPath)]);
     const target = await resolveGlobalInstallTarget({
       manager: "npm",
       runCommand: runCommandWithTimeout,
