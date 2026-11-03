@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as fnv1a from "../../../../../src/shared/fnv1a.js";
+import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { chatItemGroups } from "../chat-agent-run-grouping.ts";
 import { resetWorkingProgress } from "../chat-progress.ts";
 import { buildChatItems, type BuildChatItemsProps } from "../chat-thread-build.ts";
@@ -715,6 +716,46 @@ describe("subagent handoff", () => {
     ]);
     expect(framesOf(chain).map((frame) => frame.runId)).toEqual(["run-1", "run-2"]);
   });
+});
+
+it("keeps commentary's own tool call in the activity group that follows it", () => {
+  const call = (id: string, seq: number, text?: string) =>
+    makeMessage(id, seq, {
+      stopReason: "toolUse",
+      content: [
+        ...(text ? [{ type: "text", text }] : []),
+        { type: "toolCall", id: `call-${id}`, name: "exec", arguments: { command: "ls" } },
+      ],
+    });
+  const result = (id: string, seq: number) => ({
+    ...makeMessage(`result-${id}`, seq, {
+      role: "toolResult",
+      content: [{ type: "text", text: "ok" }],
+    }),
+    toolName: "exec",
+    toolCallId: `call-${id}`,
+  });
+  const messages = [
+    makeMessage("question", 1, { role: "user" }),
+    call("narrated", 2, "Recheck the ratchet."),
+    result("narrated", 3),
+    call("next", 4),
+    result("next", 5),
+  ];
+  const frame = chainFor(chatItems({ messages }), { runWorking: true }).transcriptItems.find(
+    (item) => item.kind === "agent-run-frame",
+  );
+  const rows = frame?.kind === "agent-run-frame" ? frame.parts : [];
+  expect(
+    rows.map((row) =>
+      row.kind === "group"
+        ? [row.role, row.messages.map(({ message }) => extractToolCardsCached(message).length)]
+        : row.kind,
+    ),
+  ).toEqual([
+    ["assistant", [0]],
+    ["tool", [1, 1]],
+  ]);
 });
 
 describe("system event presentation", () => {

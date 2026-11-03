@@ -158,13 +158,9 @@ it.each([
 it.each(["human", "forwarded", "projected source"] as const)(
   "keeps tool results across a hidden %s boundary",
   (kind) => {
-    const invocation = assistantMessage(
-      [
-        { type: "text", text: "Rollout started" },
-        { type: "tool_call", id: "reused", name: "custom", arguments: {} },
-      ],
-      1000,
-    );
+    const narration = { type: "text", text: "Rollout started" };
+    const call = { type: "tool_call", id: "reused", name: "custom", arguments: {} };
+    const invocation = assistantMessage([narration, call], 1000);
     const separator =
       kind === "human"
         ? userMessage("New request", 1001)
@@ -178,7 +174,12 @@ it.each(["human", "forwarded", "projected source"] as const)(
       searchOpen: true,
       searchQuery: "Rollout",
     }).flatMap((group) => group.messages);
-    expect(sources.map((source) => source.message)).toEqual([invocation, result]);
+    // Narration keeps its own row beside the call it introduced.
+    expect(sources.map((source) => source.message)).toEqual([
+      { ...invocation, content: [narration] },
+      { ...invocation, content: [call] },
+      result,
+    ]);
   },
 );
 

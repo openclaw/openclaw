@@ -377,12 +377,27 @@ function scanSessionsYieldItems(
  * rows. A resumed run's request and handoffs are facts of the whole transcript,
  * so working and waiting statuses are taken from there, not from the matching rows.
  */
+// Hidden tool calls keep assistant text, whose ordinary calls coalescing split
+// into their own rows. Only handoff and permission rows stay visible.
+function keepsRowWithToolsHidden(item: ChatItem): boolean {
+  if (item.kind !== "message") {
+    return true;
+  }
+  const cards = extractToolCardsCached(item.message);
+  return (
+    cards.length === 0 ||
+    hasHandoffToolCall(item.message) ||
+    cards.some((card) => readNodePermissionRequest(asRecord(card.details)?.permissionMissing))
+  );
+}
+
 export function projectSessionsYieldItems(
   items: ChatItem[],
   showToolCalls = true,
   complete?: readonly ChatItem[],
 ): ChatItem[] {
-  const projected = scanSessionsYieldItems(items, showToolCalls).items;
+  const shown = showToolCalls ? items : items.filter(keepsRowWithToolsHidden);
+  const projected = scanSessionsYieldItems(shown, showToolCalls).items;
   const status = complete?.find(isTurnStatus);
   const completeKeys = complete && new Set(complete.map((item) => item.key));
   const visible = completeKeys
