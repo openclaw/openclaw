@@ -387,8 +387,7 @@ export function SessionStorageSettings(props: SettingsProps) {
                       t("common.loading")
                     ) : (
                       <span role="alert">
-                        {formatUiError(error())}
-                        {t("configView.sessionStorage.refreshAfterError")}
+                        {formatUiError(error())} {t("configView.sessionStorage.refreshAfterError")}
                       </span>
                     )
                   }

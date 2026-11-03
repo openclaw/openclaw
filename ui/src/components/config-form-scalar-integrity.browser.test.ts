@@ -213,9 +213,9 @@ describe("config form scalar integrity", () => {
       container.querySelector<HTMLSelectElement>("select"),
       "default-aware select",
     );
-    expect(container.textContent).toContain("Default: balanced");
-    expect(select.options[0]?.textContent?.trim()).toBe("Default: balanced");
-    expect(select.selectedOptions[0]?.textContent?.trim()).toBe("fast");
+    expect(container.textContent).toContain("Default: Balanced");
+    expect(select.options[0]?.textContent?.trim()).toBe("Default: Balanced");
+    expect(select.selectedOptions[0]?.textContent?.trim()).toBe("Fast");
     select.value = "__unset__";
     select.dispatchEvent(new Event("change", { bubbles: true }));
     expect(onRemove).toHaveBeenCalledWith(["mode"]);
@@ -234,7 +234,7 @@ describe("config form scalar integrity", () => {
         container.querySelector<HTMLSelectElement>("select"),
         "inherited select",
       ).selectedOptions[0]?.textContent?.trim(),
-    ).toBe("Default: balanced");
+    ).toBe("Default: Balanced");
   });
 
   it("does not commit a clear while a number input holds partial numeric text", () => {
