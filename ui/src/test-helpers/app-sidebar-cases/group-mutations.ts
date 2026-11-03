@@ -311,7 +311,7 @@ describe("AppSidebar group mutation collapsed state", () => {
         });
         await waitForFast(() =>
           expect(toast.querySelector(".app-toast__message")?.textContent).toBe(
-            'Gateway connection replaced before "Alpha" was deleted. Try again.',
+            "The connection changed before “Alpha” was deleted. Try again.",
           ),
         );
         toast.remove();

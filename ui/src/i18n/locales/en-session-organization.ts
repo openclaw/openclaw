@@ -249,8 +249,10 @@ const enSessionOrganization = {
     deleteSelectedConfirm:
       "Delete {count} sessions?\n\nStop work on any attached devices, then delete the session entries and archive their transcripts.",
     archiveSessionTitle: "Also archive nested sessions?",
-    archiveSessionNestedOne: "“{session}” has 1 nested session. Archive it too?",
-    archiveSessionNestedOther: "“{session}” has {count} nested sessions. Archive them too?",
+    archiveSessionNestedOne:
+      "“{session}” has 1 directly nested session. If you archive only this session, that nested session moves to the top level.",
+    archiveSessionNestedOther:
+      "“{session}” has {count} directly nested sessions. If you archive only this session, those nested sessions move to the top level.",
     archiveThisSession: "Archive only this session",
     archiveSessionNestedOffline:
       'Archive only "{session}"? Its directly nested sessions move to the top level. Reconnect to archive the complete subtree.',
