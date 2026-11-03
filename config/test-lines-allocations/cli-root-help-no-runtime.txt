@@ -1,2 +1,2 @@
-# Real root-help/version entrypoints count optional registry/runtime loads and preserve manifest commands.
-80
+# Root-help/version entrypoint regression replaces obsolete legacy-runtime help expectations.
+55
