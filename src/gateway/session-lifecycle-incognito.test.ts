@@ -4,6 +4,12 @@ import {
   isSessionEntryDataSql,
   observeHostDataSql,
 } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { resetContinuationCustodyProjection } from "../auto-reply/continuation/custody/custody-projection.js";
+import {
+  hydrateContinuationCustody,
+  listContinuationRecords,
+} from "../auto-reply/continuation/custody/custody-store.js";
+import { enqueuePendingWorkReplacing } from "../auto-reply/continuation/work-replacement-store.js";
 import { captureRuntimeConfigAsyncReader } from "../config/io.runtime.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
@@ -89,6 +95,65 @@ it.each(["reset", "delete"] as const)(
     });
   },
 );
+
+// karmaterminal/openclaw#1271: /reset keeps queued elections for the successor, but an incognito
+// reset deletes the row, so nothing may survive it for a later occupant of the key.
+it("an incognito reset ends the session's queued continuation custody as a delete does", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await state.writeConfig(cfg);
+    await captureRuntimeConfigAsyncReader()();
+    await hydrateContinuationCustody();
+    try {
+      const created = await createGatewaySession({
+        cfg,
+        incognito: true,
+        displayName: "Private conversation",
+        commandSource: "test",
+        operatorRoleActor: { kind: "system" },
+      });
+      if (!created.ok) {
+        throw new Error(created.error.message);
+      }
+      const now = Date.now();
+      const elected = await enqueuePendingWorkReplacing({
+        work: {
+          sessionKey: created.key,
+          hop: 1,
+          delayMs: 60_000,
+          electedAt: now,
+          dueAt: now + 60_000,
+          anchorFinalizedAt: now,
+          maxChainLength: 8,
+          reason: "come back to the private thread",
+        },
+        summary: "queued before the incognito reset",
+        maxPendingWork: 8,
+        replaceParkedWork: false,
+        expectedRunningFlowIds: [],
+      });
+      const recordId = elected.applied ? elected.work.flowId : undefined;
+      if (!recordId) {
+        throw new Error("expected durable continuation work");
+      }
+
+      expect(
+        await performGatewaySessionReset({
+          key: created.key,
+          agentId: "main",
+          reason: "reset",
+          commandSource: "test",
+          operatorRoleActor: { kind: "system" },
+          workerPlacementContext: {},
+        }),
+      ).toMatchObject({ ok: true, incognitoDeleted: true });
+      expect((await listContinuationRecords({ recordIds: [recordId] }))[0]).toMatchObject({
+        status: "cancelled",
+      });
+    } finally {
+      resetContinuationCustodyProjection();
+    }
+  });
+});
 
 it("creates a fresh explicit incognito key under authorization captured before its memory owner exists", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
