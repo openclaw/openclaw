@@ -179,8 +179,10 @@ async function disposeNodeHostMcpSession(
   } catch (error) {
     // Cleanup must never break the recovery pipeline; retry scheduling runs
     // after this helper returns, so a throwing dispose must stay non-throwing.
+    // Cleanup may be unconfirmed, so keep the operator action from the
+    // "uncertain" branch instead of reporting only the exception.
     console.warn(
-      `node host MCP server "${serverName}" cleanup failed: ${error instanceof Error ? error.message : String(error)}`,
+      `node host MCP server "${serverName}" cleanup failed: ${error instanceof Error ? error.message : String(error)}; check the server process`,
     );
     return;
   }
