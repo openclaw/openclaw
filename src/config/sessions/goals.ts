@@ -11,7 +11,12 @@ import {
 } from "./goals-transitions.js";
 import { patchSessionEntryCore } from "./session-accessor.js";
 import { withSessionEntryReadOnlyInWorker } from "./session-entry-read-runtime.js";
-import type { SessionEntry, SessionGoal, SessionGoalStatus } from "./types.js";
+import type {
+  SessionEntry,
+  SessionGoal,
+  SessionGoalStatus,
+  SessionGoalTerminalObjective,
+} from "./types.js";
 
 type SessionGoalSnapshot = {
   status: "missing" | "found";
@@ -31,11 +36,14 @@ type SessionGoalStoreOptions = {
 type CreateSessionGoalOptions = SessionGoalStoreOptions & {
   objective: string;
   tokenBudget?: number;
+  terminalObjective?: SessionGoalTerminalObjective;
 };
 
 type UpdateSessionGoalStatusOptions = SessionGoalStoreOptions & {
   status: Extract<SessionGoalStatus, "active" | "paused" | "blocked" | "complete">;
   note?: string;
+  blockerOwner?: string;
+  resumeCondition?: string;
 };
 
 export const MODEL_UPDATABLE_SESSION_GOAL_STATUSES = ["complete", "blocked"] as const;
@@ -75,14 +83,23 @@ export function formatSessionGoalStatus(goal: SessionGoal | undefined): string {
       ? ""
       : `Token budget: ${formatTokenCount(goal.tokensUsed)}/${formatTokenCount(goal.tokenBudget)}`;
   const note = goal.lastStatusNote ? `Note: ${goal.lastStatusNote}` : "";
+  const terminalObjective = goal.terminalObjective
+    ? `Terminal objective: ${goal.terminalObjective}`
+    : "";
+  const blocker =
+    goal.status === "blocked" && goal.blockerOwner && goal.resumeCondition
+      ? `Blocker owner: ${goal.blockerOwner}\nResume condition: ${goal.resumeCondition}`
+      : "";
   const commands = resolveGoalCommandHint(goal.status);
   return [
     "Goal",
     `Status: ${goal.status}`,
     `Objective: ${goal.objective}`,
+    ...(terminalObjective ? [terminalObjective] : []),
     `Tokens used: ${formatTokenCount(goal.tokensUsed)}`,
     ...(budget ? [budget] : []),
     ...(note ? [note] : []),
+    ...(blocker ? [blocker] : []),
     "",
     `Commands: ${commands}`,
   ].join("\n");
@@ -155,7 +172,11 @@ export async function createSessionGoal(options: CreateSessionGoalOptions): Prom
     (entry) => {
       created = buildCreatedSessionGoal(
         entry,
-        { objective, tokenBudget: options.tokenBudget },
+        {
+          objective,
+          tokenBudget: options.tokenBudget,
+          terminalObjective: options.terminalObjective,
+        },
         now,
       );
       return { goal: created };

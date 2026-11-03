@@ -8,6 +8,7 @@ export const SessionGoalSchema = closedObject({
   schemaVersion: Type.Literal(1),
   id: NonEmptyString,
   objective: Type.String(),
+  terminalObjective: Type.Optional(stringLiteralUnion(["publish", "qualify", "handoff"])),
   status: stringLiteralUnion([
     "active",
     "paused",
@@ -24,6 +25,8 @@ export const SessionGoalSchema = closedObject({
   tokenBudget: Type.Optional(Type.Number()),
   continuationTurns: Type.Number(),
   lastStatusNote: Type.Optional(Type.String()),
+  blockerOwner: Type.Optional(Type.String()),
+  resumeCondition: Type.Optional(Type.String()),
   pausedAt: Type.Optional(Type.Number()),
   blockedAt: Type.Optional(Type.Number()),
   completedAt: Type.Optional(Type.Number()),
@@ -33,6 +36,7 @@ export const SessionGoalSchema = closedObject({
 
 export type SessionGoal = Static<typeof SessionGoalSchema>;
 export type SessionGoalStatus = SessionGoal["status"];
+export type SessionGoalTerminalObjective = NonNullable<SessionGoal["terminalObjective"]>;
 
 const GoalOperationIdentity = {
   sessionKey: NonEmptyString,

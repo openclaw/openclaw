@@ -109,6 +109,41 @@ describe("goal tools", () => {
     },
   );
 
+  it("persists release terminality and requires owned blocker recovery", async () => {
+    const { options, readGoal } = await createStoreConfig();
+    const create = createCreateGoalTool(options);
+    await create.execute("call-create", {
+      objective: "hand off the release",
+      terminal_objective: "handoff",
+    });
+    expect(readGoal()).toMatchObject({
+      objective: "hand off the release",
+      terminalObjective: "handoff",
+    });
+
+    const update = createUpdateGoalTool(options);
+    const missing = await update.execute("call-missing-blocker", { status: "blocked" });
+    expect(missing.details).toMatchObject({
+      status: "error",
+      error: "blocked goals require blocker owner and resume condition",
+      nextAction: expect.stringContaining("blocker_owner"),
+    });
+
+    const blocked = await update.execute("call-block", {
+      status: "blocked",
+      blocker_owner: "release operator",
+      resume_condition: "signing approval is granted",
+    });
+    expect(blocked.details).toMatchObject({
+      status: "updated",
+      goal: {
+        status: "blocked",
+        blockerOwner: "release operator",
+        resumeCondition: "signing approval is granted",
+      },
+    });
+  });
+
   it.each(["42.9", 0])("rejects invalid token budget %s", async (tokenBudget) => {
     const { options, readGoal } = await createStoreConfig();
     const tool = createCreateGoalTool(options);

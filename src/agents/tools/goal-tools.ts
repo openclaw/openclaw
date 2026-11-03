@@ -38,6 +38,12 @@ const CreateGoalToolSchema = Type.Object({
       description: "Positive token budget. Omit or pass null unless explicitly requested.",
     }),
   ),
+  terminal_objective: Type.Optional(
+    stringEnum(["publish", "qualify", "handoff"] as const, {
+      description:
+        "Release-work terminal objective. Use only when the explicit request is to publish, qualify, or hand off a release.",
+    }),
+  ),
 });
 
 const UpdateGoalToolSchema = Type.Object({
@@ -45,6 +51,14 @@ const UpdateGoalToolSchema = Type.Object({
     description: "complete | blocked.",
   }),
   note: Type.Optional(Type.String({ description: "Short status note." })),
+  blocker_owner: Type.Optional(
+    Type.String({ description: "Required with status=blocked: owner of the unblock action." }),
+  ),
+  resume_condition: Type.Optional(
+    Type.String({
+      description: "Required with status=blocked: observable condition that resumes the goal.",
+    }),
+  ),
 });
 
 function resolveGoalSessionScope(options: GoalToolOptions) {
@@ -99,12 +113,20 @@ export function createCreateGoalTool(options: GoalToolOptions): AnyAgentTool {
       const tokenBudget = readPositiveIntegerParam(params, "token_budget", {
         message: "token_budget must be a positive integer",
       });
+      const requestedTerminalObjective = readToolStringParam(params, "terminal_objective");
+      const terminalObjective = (["publish", "qualify", "handoff"] as const).find(
+        (candidate) => candidate === requestedTerminalObjective,
+      );
+      if (requestedTerminalObjective && !terminalObjective) {
+        throw new ToolInputError("terminal_objective must be one of publish, qualify, handoff");
+      }
       const scope = resolveGoalSessionScope(options);
       const goal = await createSessionGoal({
         ...scope,
         actor: { type: "agent", id: scope.sessionKey },
         objective,
         ...(tokenBudget !== undefined ? { tokenBudget } : {}),
+        ...(terminalObjective ? { terminalObjective } : {}),
       });
       bindCreatedGoalContinuation({ ...scope, runId: options.runId, goalId: goal.id });
       return jsonResult({ status: "created", goal });
@@ -132,6 +154,8 @@ export function createUpdateGoalTool(options: GoalToolOptions): AnyAgentTool {
         );
       }
       const note = readToolStringParam(params, "note");
+      const blockerOwner = readToolStringParam(params, "blocker_owner");
+      const resumeCondition = readToolStringParam(params, "resume_condition");
       const scope = resolveGoalSessionScope(options);
       try {
         const goal = await updateSessionGoalStatus({
@@ -139,6 +163,8 @@ export function createUpdateGoalTool(options: GoalToolOptions): AnyAgentTool {
           actor: { type: "agent", id: scope.sessionKey },
           status,
           ...(note ? { note } : {}),
+          ...(blockerOwner ? { blockerOwner } : {}),
+          ...(resumeCondition ? { resumeCondition } : {}),
         });
         return jsonResult({
           status: "updated",
@@ -148,11 +174,13 @@ export function createUpdateGoalTool(options: GoalToolOptions): AnyAgentTool {
         });
       } catch (err) {
         if (err instanceof SessionGoalTransitionError) {
+          const needsBlockerDetails = err.message.includes("require blocker owner");
           return jsonResult({
             status: "error",
             error: err.message,
-            nextAction:
-              "Do not retry update_goal. No active goal requires a status change — continue this turn and provide your response to the user.",
+            nextAction: needsBlockerDetails
+              ? "Retry update_goal with blocker_owner and resume_condition."
+              : "Do not retry update_goal. No active goal requires a status change — continue this turn and provide your response to the user.",
           });
         }
         throw err;

@@ -6,6 +6,16 @@ from [the skill](../SKILL.md). A longer kickoff prompt is optional.
 
 ## Resolve the release brief
 
+For an explicit request to manage, publish, qualify, or hand off a release, create a
+session Goal before delegating or waiting. Set `terminal_objective` to `publish`,
+`qualify`, or `handoff` from the effective authority below; use `qualify` for
+prepare-only work. Keep the Goal active until that terminal objective is verified.
+A status update, child dispatch, approval wait, or pending CI run is not completion.
+Before ending a turn with required work outstanding, retain a working continuation
+for the owning session. If the same external blocker prevents progress for three
+consecutive Goal turns, mark the Goal blocked with both `blocker_owner` and an
+observable `resume_condition`; never leave the operator as the continuation scheduler.
+
 Record channel, patch/feature, version, new/resume/handoff, source baseline,
 publication scope and authority in the [handoff record](release-handoff-template.md).
 Read current branches, tags, registry selectors, and any existing owner record

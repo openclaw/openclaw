@@ -1,6 +1,11 @@
 import crypto from "node:crypto";
 import { resolveFreshSessionTotalTokens } from "./types.js";
-import type { SessionEntry, SessionGoal, SessionGoalStatus } from "./types.js";
+import type {
+  SessionEntry,
+  SessionGoal,
+  SessionGoalStatus,
+  SessionGoalTerminalObjective,
+} from "./types.js";
 
 export class SessionGoalTransitionError extends Error {
   override name = "SessionGoalTransitionError";
@@ -66,7 +71,11 @@ export function accountSessionGoalUsage(
 
 export function buildCreatedSessionGoal(
   entry: SessionEntry,
-  options: { objective: string; tokenBudget?: number },
+  options: {
+    objective: string;
+    tokenBudget?: number;
+    terminalObjective?: SessionGoalTerminalObjective;
+  },
   now: number,
 ): SessionGoal {
   const objective = options.objective;
@@ -82,6 +91,7 @@ export function buildCreatedSessionGoal(
     schemaVersion: 1,
     id: crypto.randomUUID(),
     objective,
+    ...(options.terminalObjective ? { terminalObjective: options.terminalObjective } : {}),
     status: "active",
     createdAt: now,
     updatedAt: now,
@@ -98,6 +108,8 @@ export function buildUpdatedSessionGoalStatus(
   options: {
     status: Extract<SessionGoalStatus, "active" | "paused" | "blocked" | "complete">;
     note?: string;
+    blockerOwner?: string;
+    resumeCondition?: string;
   },
   now: number,
 ): SessionGoal {
@@ -128,6 +140,20 @@ export function buildUpdatedSessionGoalStatus(
     ...(options.status === "blocked" ? { blockedAt: now } : {}),
     ...(options.status === "complete" ? { completedAt: accounted.completedAt ?? now } : {}),
   };
+  if (options.status === "blocked") {
+    const blockerOwner = options.blockerOwner?.trim();
+    const resumeCondition = options.resumeCondition?.trim();
+    if (accounted.terminalObjective && (!blockerOwner || !resumeCondition)) {
+      throw new SessionGoalTransitionError(
+        "blocked goals require blocker owner and resume condition",
+      );
+    }
+    next.blockerOwner = blockerOwner || undefined;
+    next.resumeCondition = resumeCondition || undefined;
+  } else {
+    delete next.blockerOwner;
+    delete next.resumeCondition;
+  }
   if (accounted.status === "complete" && options.status === "active") {
     // Completion belongs to the finished pursuit; a later completion needs its own timestamp.
     delete next.completedAt;

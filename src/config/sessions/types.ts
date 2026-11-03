@@ -259,6 +259,7 @@ export interface QuotaSuspension {
 export type {
   SessionGoal,
   SessionGoalStatus,
+  SessionGoalTerminalObjective,
 } from "../../../packages/gateway-protocol/src/schema/sessions-goal.js";
 
 type SessionEntryCore = SessionEntryProvenance &

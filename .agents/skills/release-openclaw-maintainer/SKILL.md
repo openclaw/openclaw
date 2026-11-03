@@ -15,6 +15,8 @@ credential operations use `$one-password`.
 - **Release owner (default):** “Manage this release” owns one release from
   preparation through verification, retrospective, and closeout. Start with
   [the owner lifecycle](references/release-owner.md), even for a short prompt.
+  Its first-class Goal and terminal objective are required lifecycle state, not
+  a prose reminder to keep going.
 - **Release manager / orchestrator:** coordinate several release owners, draft
   their kickoff or handoff briefs, and route hotfix opportunities. Start with
   [manager mode](references/release-manager.md). This role does not become a
