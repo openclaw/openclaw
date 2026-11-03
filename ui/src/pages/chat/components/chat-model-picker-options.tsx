@@ -134,13 +134,14 @@ function ModelOptionButton(
       class={[
         "chat-controls__inline-select-option chat-controls__model-option",
         {
-          "chat-controls__inline-select-option--selected": props.presentation.selected,
+          "chat-controls__inline-select-option--selected":
+            props.presentation.selected && !props.presentation.needsAuth,
         },
       ]}
       data-chat-model-option={props.entry.value}
       data-chat-model-key={key()}
       data-chat-model-rank={rank()}
-      data-chat-model-highlighted={highlighted() ? "" : undefined}
+      data-chat-model-highlighted={highlighted() && !props.presentation.needsAuth ? "" : undefined}
       style={{ "--chat-model-rank": rank() }}
       data-chat-model-runtime={props.entry.agentRuntime ?? undefined}
       data-chat-model-default={props.entry.isDefault ? "true" : undefined}
@@ -200,10 +201,12 @@ function ModelOptionButton(
         </span>
       </span>
       <span class="chat-controls__model-option-action">
-        <Show when={props.presentation.selected} fallback={<ModelShortcut rowKey={key()} />}>
-          <span class="chat-controls__inline-select-check" aria-hidden="true">
-            <Icon name="check" />
-          </span>
+        <Show when={!props.presentation.needsAuth}>
+          <Show when={props.presentation.selected} fallback={<ModelShortcut rowKey={key()} />}>
+            <span class="chat-controls__inline-select-check" aria-hidden="true">
+              <Icon name="check" />
+            </span>
+          </Show>
         </Show>
       </span>
     </button>

@@ -78,6 +78,11 @@ function mountPicker(optionsReady = true) {
     await new Promise(requestAnimationFrame);
     if (picker.open) {
       await waitForModelMenu(picker);
+      if (params.modelOptions.length) {
+        await waitForSolid(() =>
+          expect(picker.querySelector("[data-chat-model-option]")).not.toBeNull(),
+        );
+      }
     }
   };
   const open = () => toggle(() => page.getByText("Alpha", { exact: true }).first().click());
@@ -490,4 +495,26 @@ it("keeps the complete model panel above the composer", async () => {
   } finally {
     container.removeAttribute("style");
   }
+});
+
+it("places provider recovery below the disabled model rows", async () => {
+  const { params, update, open, picker } = mountPicker();
+  params.modelOptions = params.modelOptions.map((entry) => ({
+    ...entry,
+    disabled: true,
+    unavailableReason: "auth-failed",
+  }));
+  params.onModelSetup = vi.fn();
+  update();
+  await open();
+  await vi.waitFor(() => {
+    const state = picker.querySelector<HTMLElement>("[data-chat-model-auth-state]")!;
+    const rows = [...picker.querySelectorAll<HTMLElement>("[data-chat-model-option]")];
+    expect(state.getBoundingClientRect().top).toBeGreaterThanOrEqual(
+      Math.max(...rows.map((row) => row.getBoundingClientRect().bottom)),
+    );
+    expect(state.querySelector("button")!.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+      picker.querySelector(".chat-picker-overlay")!.getBoundingClientRect().bottom - 8,
+    );
+  });
 });

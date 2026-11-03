@@ -16,7 +16,11 @@ export function modelAuthState(options: ChatModelPickerOption[]) {
   }
   return {
     claude: options.every(
-      (option) => resolveModelRuntimeRoute(option.provider, option.agentRuntimeId) === "claudeCli",
+      (option) =>
+        resolveModelRuntimeRoute(
+          option.provider,
+          option.agentRuntimeId ?? option.agentRuntime ?? undefined,
+        ) === "claudeCli",
     ),
     failed: options.some((option) => option.unavailableReason === "auth-failed"),
   };
@@ -28,7 +32,12 @@ export function ChatModelAuthState(props: {
 }) {
   const command = "claude auth login";
   return (
-    <div class="chat-controls__model-auth-state" data-chat-model-auth-state role="status">
+    <div
+      class="chat-controls__model-auth-state"
+      data-chat-model-auth-state
+      data-auth-failed={props.state.failed ? "" : undefined}
+      role="status"
+    >
       <span>
         {props.state.claude ? (
           <For each={t("chat.modelControls.claudeCliNotReady").split(command)}>

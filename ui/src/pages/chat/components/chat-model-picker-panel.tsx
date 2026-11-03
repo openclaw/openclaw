@@ -356,6 +356,20 @@ export function ChatModelPickerPanel(panel: {
   const renderCatalogStatus = createMemo(
     () => panel.params.renderModelCatalogStatus ?? renderDirect,
   );
+  function CatalogStatus() {
+    return (
+      <>
+        {renderCatalogStatus()(() => (
+          <ChatModelCatalogState
+            state={panel.params.modelCatalogState}
+            hasOptions={modelOptions().length > 0}
+            hasSelectableOptions={state().hasSelectableModelOptions}
+            onModelSetup={onModelSetup()}
+          />
+        ))}
+      </>
+    );
+  }
   function TargetOptions(props: { group: ChatModelPickerTargetGroup }) {
     const options = createMemo(() => props.group.completion.promise);
     return (
@@ -563,14 +577,7 @@ export function ChatModelPickerPanel(panel: {
               ) : undefined}
             </div>
           ) : undefined}
-          {renderCatalogStatus()(() => (
-            <ChatModelCatalogState
-              state={panel.params.modelCatalogState}
-              hasOptions={modelOptions().length > 0}
-              hasSelectableOptions={state().hasSelectableModelOptions}
-              onModelSetup={onModelSetup()}
-            />
-          ))}
+          {!state().hasOptions ? <CatalogStatus /> : undefined}
           {state().hasOptions ? (
             <>
               <div class="chat-controls__model-browser">
@@ -649,6 +656,7 @@ export function ChatModelPickerPanel(panel: {
                   <Show when={activeAuth()}>
                     {(auth) => <ChatModelAuthState state={auth()} onSetup={onModelSetup()} />}
                   </Show>
+                  <CatalogStatus />
                 </div>
               </div>
               <ChatModelSettings
