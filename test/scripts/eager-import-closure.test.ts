@@ -592,6 +592,11 @@ const sessionMemoryOwners: string[] = [
 
 it.each<[name: string, entrypoints: string[], deferredOwners: string[], dynamic?: boolean]>([
   [
+    "operator role policy",
+    ["src/gateway/operator-role-policy.ts"],
+    ["packages/gateway-protocol/src/protocol-validator.ts"],
+  ],
+  [
     "native session worker transactions",
     [
       "src/config/sessions/session-actor.worker.ts",

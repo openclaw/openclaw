@@ -1,0 +1,3 @@
+115
+# Startup memory follow-up: cold spawn runtime discovery and post-import invocation authority, plus operator-role import closure.
+# Preserves the current tool schema verbatim; two targeted upstream regression cases.
