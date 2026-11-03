@@ -1301,7 +1301,7 @@ const enSettings = {
       version: "App version",
       versionBuild: "{version} (build {build})",
       automatic: "Check for updates automatically",
-      check: "Check for Updates…",
+      check: "Check for updates…",
       unavailable: "App updates unavailable",
     },
     channel: {
@@ -1351,7 +1351,7 @@ const enSettings = {
       gitCommitAhead: "{count} commit ahead of tracked upstream",
       gitCommitsAhead: "{count} commits ahead of tracked upstream",
       gitDiverged: "Diverged · {ahead} ahead, {behind} behind",
-      gitFetchFailed: "Could not fetch the tracked upstream",
+      gitFetchFailed: "Couldn’t check the update source. Try again.",
       gitNoUpstream: "No tracked upstream is configured",
       gitComparisonFailed: "Could not compare this checkout with its tracked upstream",
       checking: "Checking for updates…",
@@ -1375,7 +1375,7 @@ const enSettings = {
       retryUpdate: "Retry update",
       reportFailure: "Report update failure",
       reportOwnerRequired:
-        "Reporting requires a connected, identified user with administrator access.",
+        "You need admin access to report an update failure. Sign in and connect to the Gateway.",
       reportResult: "Failure report",
       reportSubmitting: "Submitting report…",
       reportCreated: "GitHub issue created",
@@ -1383,7 +1383,7 @@ const enSettings = {
       reportPending: "GitHub issue submission may have completed. Do not submit this report again.",
       reportRetryable: "No GitHub issue submission was started. This report can be retried.",
       reportDuplicate: "This update attempt was already reported.",
-      reportError: "The report could not be prepared or submitted.",
+      reportError: "Couldn’t prepare or submit the report. Check its status before trying again.",
       openIssue: "Open GitHub issue",
       openPrefilledIssue: "Open prefilled issue",
       savedReport: "Saved report",
@@ -1395,15 +1395,15 @@ const enSettings = {
   configPage: {
     deviceSettings: {
       appOnly: "These settings are only available inside the OpenClaw app.",
-      loading: "Waiting for settings from the app…",
+      loading: "Loading app settings…",
       intro: "App behavior and capabilities on this Mac.",
       introIos: "App behavior and capabilities on this device.",
       permissionsIntro: "macOS access for notifications, capture, voice, and device context.",
       permissionsIntroIos: "Device access for notifications, capture, voice, and personal data.",
       app: "App",
-      nativeExperience: "Native experience (Experimental)",
+      nativeExperience: "Native experience (experimental)",
       nativeExperienceHint:
-        "Use native Mac views for chat and navigation. When off, use the Web experience. Settings always open here.",
+        "Use native Mac views for chat and navigation. When off, use the web experience. Settings always open here.",
       appearance: "Appearance",
       appearanceModes: { system: "System", light: "Light", dark: "Dark" },
       notificationsEnabled: "Notifications",
@@ -1422,17 +1422,17 @@ const enSettings = {
       keepGatewayRunning: "Keep OpenClaw running when the app is closed",
       keepGatewayRunningHint:
         "Runs the Gateway as a background service so channels and automations keep working after you quit OpenClaw.",
-      keepGatewayRunningFailed: "Could not change Gateway hosting.",
-      quickChat: "Quick Chat enabled",
+      keepGatewayRunningFailed: "Couldn’t change whether OpenClaw stays running. Try again.",
+      quickChat: "Quick chat enabled",
       quickChatHint:
         "Show a floating composer for quick messages, summoned with a global shortcut.",
-      quickChatShortcut: "Quick Chat shortcut",
+      quickChatShortcut: "Quick chat shortcut",
       notSet: "Not set",
       changeShortcut: "Change…",
       capabilities: "Capabilities",
       canvas: "Allow Canvas",
       canvasHint: "Allow the agent to show and control the Canvas panel.",
-      camera: "Allow Camera",
+      camera: "Allow camera",
       cameraHint: "Allow the agent to capture a photo or short video via the built-in camera.",
       keepAwake: "Keep awake",
       keepAwakeHint: "Keep the screen awake while OpenClaw is active.",
@@ -1448,10 +1448,10 @@ const enSettings = {
         watch: "Apple Watch",
       },
       openPanel: "Open…",
-      computerControl: "Allow Computer Control",
+      computerControl: "Allow computer control",
       computerControlHint:
         "Starts enabled. After this Mac is paired and macOS access is granted, the paired Gateway can move the pointer, click, and type without per-action confirmation. High risk.",
-      computerControlProvider: "Computer Control provider",
+      computerControlProvider: "Computer control provider",
       desktopSharing: "Desktop sharing",
       desktopSharingHint:
         "View and control this Mac from Systems. Enabled by default. Requires Screen Sharing in macOS System Settings → General → Sharing. Changes briefly reconnect this Mac; a new capability may need pairing approval.",
@@ -1489,18 +1489,18 @@ const enSettings = {
       chromeExtensionStatusUnsupported:
         "Automatic installation checks require an updated Mac app. Open Chrome to check whether OpenClaw is installed and enabled.",
       chromeExtensionStatusFailed:
-        "Could not check Chrome installation automatically. You can still run setup or refresh status. Make sure the OpenClaw app and CLI are up to date.",
+        "Couldn’t check whether Chrome is installed. You can still run setup or refresh status. Make sure the OpenClaw app and CLI are up to date.",
       chromeExtensionSetup: "Set up Chrome on this device",
       chromeExtensionHint:
         "Prepare the OpenClaw extension on this device, then approve it in Chrome. This does not install on a remote Gateway.",
       chromeExtensionPreparing: "Working on this device…",
       chromeExtensionRefresh: "Refresh setup status",
       chromeExtensionVerify: "Verify connection",
-      chromeExtensionTarget: "Host: {hostname} · Profile: {profile} · Relay port: {port}",
+      chromeExtensionTarget: "Device: {hostname} · Profile: {profile} · Relay port: {port}",
       chromeExtensionTabsHint:
-        "A connected extension does not mean eligible tabs are available. Check tabs on this host and profile in the browser tools; an empty list is different from a disconnected extension.",
+        "A connected extension does not mean eligible tabs are available. Check tabs on this device and browser profile in the browser tools; an empty list is different from a disconnected extension.",
       chromeExtensionFailed:
-        "Setup could not finish. Check the OpenClaw CLI on this device with openclaw browser extension setup, then try again.",
+        "Couldn’t finish setup. Check the OpenClaw CLI on this device with openclaw browser extension setup, then try again.",
       chromeExtensionPhases: {
         inspection_required: "Setup required on this device.",
         preparing: "Preparing Chrome on this device.",
@@ -1511,13 +1511,13 @@ const enSettings = {
       },
       chromeExtensionNextActions: {
         none: "",
-        install: "Choose Set up Chrome on this device to prepare the native host.",
+        install: "Choose Set up Chrome on this device to prepare Chrome for OpenClaw.",
         open_chrome:
           "Installation requested. Open or restart Chrome on this device and approve OpenClaw.",
         approve_extension: "Approve OpenClaw in Chrome on this device, then verify the connection.",
         install_from_store:
           "Add OpenClaw from the Chrome Web Store on this device, then verify the connection.",
-        check_connection: "Choose Verify connection to check this host's Chrome relay.",
+        check_connection: "Choose Verify connection to check Chrome on this device.",
         repair_native_host: "Check the local CLI installation, then run setup again.",
         unsupported:
           "Automatic setup is unavailable on this host. Follow the extension documentation.",
@@ -1572,12 +1572,12 @@ const enSettings = {
         },
         microphone: {
           title: "Microphone",
-          hint: "Allow Voice Wake, push-to-talk, Talk Mode, and Quick Chat dictation.",
+          hint: "Allow Voice wake, push-to-talk, Talk mode, and Quick chat dictation.",
         },
         camera: { title: "Camera", hint: "Capture photos and video from the camera." },
         speechRecognition: {
           title: "Speech Recognition",
-          hint: "Use Apple Speech; passive Voice Wake stays on-device.",
+          hint: "Use Apple Speech; passive Voice wake stays on-device.",
         },
         location: { title: "Location", hint: "Share location when requested by the agent." },
         contacts: { title: "Contacts", hint: "Access contacts when requested by the agent." },
@@ -1603,15 +1603,15 @@ const enSettings = {
     },
     deviceTalk: {
       title: "This Mac",
-      wakeEnabled: "Voice Wake",
+      wakeEnabled: "Voice wake",
       unsupported:
-        "Voice Wake is unavailable on this Mac. It requires macOS 26 or newer and on-device recognition for the selected language.",
-      unsupportedDevice: "Voice Wake is unavailable on this device.",
+        "Voice wake is unavailable on this Mac. It requires macOS 26 or newer and on-device recognition for the selected language.",
+      unsupportedDevice: "Voice wake is unavailable on this device.",
       talkEnabled: "Talk mode",
       talkButtonEnabled: "Show Talk button",
       talkBackgroundEnabled: "Talk in the background",
       speakerphoneEnabled: "Use speakerphone",
-      wakeTriggersTalkMode: "Wake triggers Talk Mode",
+      wakeTriggersTalkMode: "Wake triggers Talk mode",
       pushToTalkEnabled: "Hold Right Option to talk",
       talkShiftToStopEnabled: "Shift to stop",
       talkPhaseSoundsEnabled: "Phase sounds",
@@ -1632,10 +1632,10 @@ const enSettings = {
       triggerWordsHint:
         "One trigger per line, shared by every device connected to this Gateway. Up to 32 triggers and 64 characters each. Clear the list to restore the defaults.",
       triggerWordsUnavailable: "Voice wake trigger editing is not enabled on this Gateway.",
-      triggerWordsError: "Could not save trigger words: {error}",
-      triggerWordsLoadError: "Could not load trigger words: {error}",
-      triggerWordsSaveFailed: "Could not save trigger words.",
-      triggerWordsLoadFailed: "Could not load trigger words.",
+      triggerWordsError: "Couldn’t save trigger words. Try again. {error}",
+      triggerWordsLoadError: "Couldn’t load trigger words. Try again. {error}",
+      triggerWordsSaveFailed: "Couldn’t save trigger words. Try again.",
+      triggerWordsLoadFailed: "Couldn’t load trigger words. Try again.",
       triggerWordsDisconnected:
         "Trigger words have not been saved. Your edits are retained. Reconnect to this Gateway, then retry.",
       saved: "Saved",
