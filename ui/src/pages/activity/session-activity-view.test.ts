@@ -15,6 +15,7 @@ import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { DashboardsView } from "../dashboards/view.tsx";
 import { mountSolid, props, row } from "./session-activity-view.test-harness.ts";
 import { renderSessionActivityView } from "./session-activity-view.tsx";
+import { ACTIVITY_PHONE_QUERY } from "./session-activity.ts";
 
 const renderSessionActivityViewSolid = mountSolid<ReturnType<typeof props>>(
   renderSessionActivityView,
@@ -365,6 +366,44 @@ describe("session activity semantics", () => {
 });
 
 describe("session activity people filter", () => {
+  it.each([false, true])("keeps unnamed identities private and unresolved (phone: %s)", (phone) => {
+    const matchMedia = window.matchMedia;
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      ...matchMedia(query),
+      matches: phone && query === ACTIVITY_PHONE_QUERY,
+    }));
+    const privateId = "private-login@example.test";
+    const opaqueId = "0123456789abcdef";
+    const input = props({
+      filters: { personId: privateId, query: "", time: "7d" },
+      rows: [row("Unresolved session", { id: privateId }, 1)],
+      presenceViewers: [profile(opaqueId, { name: " ", email: "other-private@example.test" })],
+    });
+    input.result!.people = [
+      { identity: { type: "profile", id: privateId }, sessionCount: 1 },
+      { identity: { type: "profile", id: opaqueId }, sessionCount: 1 },
+      { identity: { type: "profile", id: "named" }, label: "Public person", sessionCount: 1 },
+    ];
+    show(input);
+    const unresolved = find("[data-activity-unresolved]")!;
+    expect(all("[data-activity-person]", unresolved)).toHaveLength(2);
+    const privateRow = find(`[data-activity-person="${privateId}"]`, unresolved)!;
+    expect(text(".activity-feed__people-name", privateRow)).toBe("Person");
+    expect(privateRow.querySelector(".activity-feed__unknown-avatar")).not.toBeNull();
+    expect(text(`[data-activity-person="${opaqueId}"] .activity-feed__people-name`)).toBe(
+      "01234567…",
+    );
+    expect(find('[data-activity-person="named"]', unresolved)).toBeNull();
+    expect(container.textContent).not.toContain("private-");
+    if (phone) {
+      const session = find('[data-activity-session="Unresolved session"]')!;
+      expect(session.querySelector(".activity-feed__unknown-avatar")).not.toBeNull();
+      expect(session.querySelector(".activity-feed__session-owner")).toBeNull();
+    } else {
+      expect(text(".activity-feed__selected-person")).toBe("Person");
+    }
+  });
+
   it("groups connection diagnostics, orders known watched sessions, and scopes disclosure to the person", () => {
     const entry = {
       ts: 1,

@@ -957,7 +957,6 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
           /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
         ),
         identity: { type: "profile", id: profileId },
-        email: "alice@example.com",
         name: "alice",
         avatarUrl: expect.stringMatching(
           new RegExp(`^/api/users/${profileId}/avatar\\?v=\\d+$`, "u"),
@@ -1503,7 +1502,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         expect(upsertPresenceMock).toHaveBeenCalledWith(
           "conn-profile-store-failure",
           expect.objectContaining({
-            user: { id: "alice@example.com", email: "alice@example.com" },
+            user: undefined,
           }),
           { pending: true },
         );
