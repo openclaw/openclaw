@@ -719,6 +719,22 @@ final class SettingsHubVisualProofTests: XCTestCase {
             else {
                 throw URLError(.userAuthenticationRequired)
             }
+            let reply = try await webView.callAsyncJavaScript(
+                """
+                const reply = await window.webkit.messageHandlers.OpenClawNativeGatewayAuth.postMessage({
+                  id: 'native-settings-fixture', nonce: 'settings-nonce', signedAt: 1700000000000
+                });
+                return reply.result;
+                """,
+                arguments: [:],
+                in: nil,
+                contentWorld: .page)
+            let authorization = try XCTUnwrap(reply as? [String: Any])
+            XCTAssertEqual(authorization["auth"] as? [String: String], [:])
+            XCTAssertEqual(authorization["scopes"] as? [String], ["operator.admin", "operator.read"])
+            let device = try XCTUnwrap(authorization["device"] as? [String: Any])
+            XCTAssertEqual(device["nonce"] as? String, "settings-nonce")
+            XCTAssertFalse(try XCTUnwrap(device["signature"] as? String).isEmpty)
             try await self.attach(controller.view, named: attachmentName, webView: webView)
         } catch {
             try? await self.attach(

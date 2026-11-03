@@ -164,19 +164,6 @@ enum AuthenticatedControlUI {
     }
 
     @MainActor
-    static func nativeAuthHandler(
-        config: GatewayConnectConfig?,
-        storedOperatorToken: String?,
-        appModel: NodeAppModel) -> ControlUINativeGatewayAuthHandler?
-    {
-        let token = storedOperatorToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard let config, !token.isEmpty,
-              Self.storedOperatorAuthorization(config: config, expectedToken: token) != nil
-        else { return nil }
-        return ControlUINativeGatewayAuthHandler(config: config, expectedToken: token, appModel: appModel)
-    }
-
-    @MainActor
     static func storedOperatorToken(config: GatewayConnectConfig?) -> String? {
         self.storedOperatorAuthorization(config: config)?.entry.token
     }
@@ -412,8 +399,7 @@ final class DashboardEmbedCompatibility {
 @MainActor
 final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDelegate {
     let deviceSettingsBridge: IOSDeviceSettingsBridge?
-    let nativeAuthDocument: IOSDashboardNativeGatewayAuthDocument
-    let nativeAuth: ControlUINativeGatewayAuthHandler?
+    let nativeAuth: ControlUINativeGatewayAuthHandler
     private let embedCompatibility: DashboardEmbedCompatibility?
     private var compatibilityDocumentID: UUID?
     private let url: URL
@@ -443,7 +429,6 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
         authScriptProvider: (@MainActor () async -> String?)? = nil,
         nativeGatewayAuthProvider: IOSDashboardNativeGatewayAuthProvider? = nil,
         deviceSettingsBridge: IOSDeviceSettingsBridge? = nil,
-        nativeAuth: ControlUINativeGatewayAuthHandler? = nil,
         usesNativeEmbed: Bool = false,
         embedCompatibility: DashboardEmbedCompatibility? = nil,
         accessCookie: HTTPCookie? = nil,
@@ -454,13 +439,12 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
         self.url = url
         self.authScript = authScript
         self.authScriptProvider = authScriptProvider
-        self.nativeAuthDocument = IOSDashboardNativeGatewayAuthDocument(
+        self.nativeAuth = ControlUINativeGatewayAuthHandler(
             url: url,
             allowedMainFramePathPrefix: allowedMainFramePathPrefix,
             provider: nativeGatewayAuthProvider,
             accessAdmissionIsCurrent: accessAdmissionIsCurrent)
         self.deviceSettingsBridge = deviceSettingsBridge
-        self.nativeAuth = nativeAuth
         self.usesNativeEmbed = usesNativeEmbed
         self.embedCompatibility = embedCompatibility
         self.expectedOrigin = GatewayTLSAuthority(url: url)
@@ -486,7 +470,8 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
     func retireAccess(in webView: WKWebView) {
         guard self.accessCookie != nil, !self.hasRetiredAccess else { return }
         self.hasRetiredAccess = true
-        self.nativeAuthDocument.retire()
+        self.nativeAuth.document.retire()
+        self.nativeAuth.webView = nil
         self.activeNavigation = nil
         self.retireEmbedCompatibility()
         webView.navigationDelegate = nil
@@ -535,7 +520,7 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
 
     func attachNativeAuthDocument(to webView: WKWebView) {
         self.nativeAuthWebView = webView
-        self.nativeAuthDocument.attach(to: webView)
+        self.nativeAuth.webView = webView
     }
 
     static func embedScript(url: URL, isPad: Bool = UIDevice.current.userInterfaceIdiom == .pad) -> String? {
@@ -546,19 +531,17 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         self.activeNavigation = navigation
-        self.nativeAuthDocument.beginNavigation()
         self.deviceSettingsBridge?.willNavigate(in: webView)
-        self.nativeAuth?.document.startNavigation()
+        self.nativeAuth.document.startNavigation()
         self.installUserScripts(in: webView.configuration.userContentController)
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         guard self.activeNavigation === navigation else { return }
-        self.nativeAuthDocument.beginNavigation()
         // WebKit retains the previous committed page when a provisional navigation fails.
         self.compatibilityDocumentID = self.embedCompatibility?.beginDocument()
         self.deviceSettingsBridge?.didCommitDocument(in: webView)
-        self.nativeAuth?.document.commitNavigation()
+        self.nativeAuth.document.commitNavigation()
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -570,22 +553,20 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
         guard self.activeNavigation === navigation else { return }
         self.retireEmbedCompatibility()
         self.deviceSettingsBridge?.retireDocument(in: webView)
-        self.nativeAuth?.document.retire()
+        self.nativeAuth.document.retire()
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError _: any Error) {
         guard self.activeNavigation === navigation else { return }
-        self.nativeAuthDocument.beginNavigation()
         self.deviceSettingsBridge?.didFailProvisionalNavigation(in: webView)
-        self.nativeAuth?.document.failProvisionalNavigation()
+        self.nativeAuth.document.failProvisionalNavigation()
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         self.activeNavigation = nil
-        self.nativeAuthDocument.beginNavigation()
         self.retireEmbedCompatibility()
         self.deviceSettingsBridge?.retireDocument(in: webView)
-        self.nativeAuth?.document.retire()
+        self.nativeAuth.document.retire()
     }
 
     func retireEmbedCompatibility() {
@@ -755,7 +736,6 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
     let allowedMainFramePathPrefix: String?
     let onMainFrameNavigationOutsideScope: (() -> Void)?
     let deviceSettingsBridge: IOSDeviceSettingsBridge?
-    let nativeAuth: ControlUINativeGatewayAuthHandler?
     let usesNativeEmbed: Bool
     let embedCompatibility: DashboardEmbedCompatibility?
     let accessCookie: HTTPCookie?
@@ -773,7 +753,6 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
         allowedMainFramePathPrefix: String? = nil,
         onMainFrameNavigationOutsideScope: (() -> Void)? = nil,
         deviceSettingsBridge: IOSDeviceSettingsBridge? = nil,
-        nativeAuth: ControlUINativeGatewayAuthHandler? = nil,
         usesNativeEmbed: Bool = false,
         embedCompatibility: DashboardEmbedCompatibility? = nil,
         accessCookie: HTTPCookie? = nil,
@@ -790,7 +769,6 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
         self.allowedMainFramePathPrefix = allowedMainFramePathPrefix
         self.onMainFrameNavigationOutsideScope = onMainFrameNavigationOutsideScope
         self.deviceSettingsBridge = deviceSettingsBridge
-        self.nativeAuth = nativeAuth
         self.usesNativeEmbed = usesNativeEmbed
         self.embedCompatibility = embedCompatibility
         self.accessCookie = accessCookie
@@ -810,7 +788,6 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
             authScriptProvider: self.authScriptProvider,
             nativeGatewayAuthProvider: self.nativeGatewayAuthProvider,
             deviceSettingsBridge: self.deviceSettingsBridge,
-            nativeAuth: self.nativeAuth,
             usesNativeEmbed: self.usesNativeEmbed,
             embedCompatibility: self.embedCompatibility,
             accessCookie: self.accessCookie,
@@ -827,12 +804,9 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
         context.coordinator.installUserScripts(in: configuration.userContentController)
         if self.nativeGatewayAuthProvider != nil {
             configuration.userContentController.addScriptMessageHandler(
-                context.coordinator.nativeAuthDocument,
+                context.coordinator.nativeAuth,
                 contentWorld: .page,
-                name: IOSDashboardNativeGatewayAuthDocument.messageHandlerName)
-        } else if let nativeAuth {
-            configuration.userContentController.addScriptMessageHandler(
-                nativeAuth, contentWorld: .page, name: ControlUINativeGatewayAuthHandler.name)
+                name: ControlUINativeGatewayAuthHandler.name)
         }
         if let deviceSettingsBridge {
             configuration.userContentController.addScriptMessageHandler(
@@ -840,11 +814,7 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
         }
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
-        if self.nativeGatewayAuthProvider != nil {
-            context.coordinator.attachNativeAuthDocument(to: webView)
-        } else {
-            self.nativeAuth?.webView = webView
-        }
+        context.coordinator.attachNativeAuthDocument(to: webView)
         self.deviceSettingsBridge?.attach(to: webView) { [weak coordinator = context.coordinator, weak webView] in
             guard let coordinator, let webView else { return }
             coordinator.installUserScripts(in: webView.configuration.userContentController)
@@ -932,13 +902,10 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
         coordinator: AuthenticatedControlUIWebViewCoordinator)
     {
         coordinator.retireAccess(in: webView)
-        coordinator.nativeAuthDocument.retire()
         coordinator.retireEmbedCompatibility()
         coordinator.deviceSettingsBridge?.detach(from: webView)
-        coordinator.nativeAuth?.document.retire()
-        coordinator.nativeAuth?.webView = nil
-        webView.configuration.userContentController.removeScriptMessageHandler(
-            forName: IOSDashboardNativeGatewayAuthDocument.messageHandlerName, contentWorld: .page)
+        coordinator.nativeAuth.document.retire()
+        coordinator.nativeAuth.webView = nil
         webView.configuration.userContentController.removeScriptMessageHandler(
             forName: IOSDeviceSettingsBridge.messageHandlerName, contentWorld: .page)
         webView.configuration.userContentController.removeScriptMessageHandler(

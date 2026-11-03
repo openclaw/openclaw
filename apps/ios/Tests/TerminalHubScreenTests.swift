@@ -181,6 +181,7 @@ struct TerminalHubScreenTests {
         model.activeGatewayConnectConfig = config
         var options = config.nodeOptions
         options.role = "operator"
+        options.clientMode = "ui"
         options.scopes = ["operator.read"]
         try await model.operatorSession.connect(
             url: config.url,
@@ -201,8 +202,7 @@ struct TerminalHubScreenTests {
             url: pageURL,
             authScript: ControlUIHubPage.terminal.authUserScript(config: config, storedOperatorToken: token),
             tls: nil,
-            nativeAuth: AuthenticatedControlUI.nativeAuthHandler(
-                config: config, storedOperatorToken: token, appModel: model))
+            nativeGatewayAuthProvider: IOSDashboardNativeGatewayAuthProvider(appModel: model, config: config))
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
         window.rootViewController = UIHostingController(rootView: content)
         window.makeKeyAndVisible()
@@ -232,6 +232,8 @@ struct TerminalHubScreenTests {
         #expect(try await webView.callAsyncJavaScript(
             challenge, arguments: [:], in: nil, contentWorld: .page) as? Bool == false)
         model.setOperatorConnected(true)
+        #expect(try await webView.callAsyncJavaScript(
+            challenge, arguments: [:], in: nil, contentWorld: .page) as? Bool == true)
         model.activeGatewayConnectConfig = try Self.makeConfig(
             url: #require(URL(string: "ws://replacement.example:18789")), deviceAuthGatewayID: gatewayID)
         #expect(try await webView.callAsyncJavaScript(

@@ -22,8 +22,6 @@ struct SessionDashboardScreen: View {
         let url = Self.dashboardURL(config: config, sessionKey: self.sessionKey, agentId: self.agentId)
         let authScript: String?
         let authScriptProvider: (@MainActor () async -> String?)?
-        let accessNativeAuthProvider: IOSDashboardNativeGatewayAuthProvider?
-        let nativeAuth: ControlUINativeGatewayAuthHandler?
         if authorization != nil {
             authScript = AuthenticatedControlUI.authUserScript(
                 config: config,
@@ -37,8 +35,6 @@ struct SessionDashboardScreen: View {
                     legacyCredentials: credentials,
                     usesNativeNavigationChrome: true)
             }
-            accessNativeAuthProvider = nativeAuthProvider
-            nativeAuth = nil
         } else {
             authScript = AuthenticatedControlUI.authUserScript(
                 config: config,
@@ -46,11 +42,6 @@ struct SessionDashboardScreen: View {
                 storedOperatorToken: storedOperatorToken,
                 usesNativeNavigationChrome: true)
             authScriptProvider = nil
-            accessNativeAuthProvider = nil
-            nativeAuth = AuthenticatedControlUI.nativeAuthHandler(
-                config: config,
-                storedOperatorToken: storedOperatorToken,
-                appModel: self.appModel)
         }
         return ZStack {
             OpenClawProBackground()
@@ -63,7 +54,7 @@ struct SessionDashboardScreen: View {
                     authScript: authScript,
                     tls: config?.tls,
                     authScriptProvider: authScriptProvider,
-                    nativeGatewayAuthProvider: accessNativeAuthProvider,
+                    nativeGatewayAuthProvider: nativeAuthProvider,
                     basicProxyCredentialProvider: {
                         AuthenticatedControlUI.basicProxyCredential(config: config)
                     },
@@ -71,7 +62,6 @@ struct SessionDashboardScreen: View {
                     onMainFrameNavigationOutsideScope: {
                         self.dismiss()
                     },
-                    nativeAuth: nativeAuth,
                     accessCookie: authorization?.dashboardCookie(url),
                     accessAdmissionIsCurrent: authorization.map { authorization in
                         { authorization.isCurrent() }

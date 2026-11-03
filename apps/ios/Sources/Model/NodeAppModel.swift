@@ -277,27 +277,6 @@ final class NodeAppModel {
         let routeGeneration: UInt64
     }
 
-    private struct NodeGatewayLoopContext: Sendable {
-        let url: URL
-        let stableID: String
-        let routeGeneration: UInt64
-        let fallbackConfig: GatewayConnectConfig
-        let initialOptions: GatewayConnectOptions
-        let sessionBox: WebSocketSessionBox?
-        let ingressAuthorization: GatewayIngressAuthorization?
-    }
-
-    private struct NodeGatewayLoopState: Sendable {
-        var attempt = 0
-        var options: GatewayConnectOptions
-    }
-
-    private enum NodeGatewayLoopStep: Sendable {
-        case retry(NodeGatewayLoopState)
-        case stop
-        case stopPreservingStatus
-    }
-
     private enum ExecApprovalPushRouteValidation {
         case validated(GatewaySessionRouteContext)
         case unavailable
@@ -4598,204 +4577,131 @@ extension NodeAppModel {
         let stableID = config.effectiveStableID
         let routeGeneration = self.gatewayRouteGeneration
         guard self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID) else { return }
-        let context = NodeGatewayLoopContext(
-            url: config.url,
-            stableID: stableID,
-            routeGeneration: routeGeneration,
-            fallbackConfig: config,
-            initialOptions: config.nodeOptions,
-            sessionBox: sessionBox,
-            ingressAuthorization: config.ingressAuthorization)
         self.nodeGatewayTask = Task { [weak self] in
-            await self?.runNodeGatewayLoop(context)
-        }
-    }
-
-    private func runNodeGatewayLoop(_ context: NodeGatewayLoopContext) async {
-        var state = NodeGatewayLoopState(options: context.initialOptions)
-
-        gatewayLoop: while !Task.isCancelled,
-                           self.isCurrentGatewayRoute(
-                               generation: context.routeGeneration,
-                               stableID: context.stableID)
-        {
-            if await self.shouldDelayNodeGatewayConnectionAttempt() {
-                continue
+            guard let self else { return }
+            var attempt = 0
+            var options = config.nodeOptions
+            while !Task.isCancelled,
+                  self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID)
+            {
+                if let delay = self.gatewayReconnectLoopDelay(owner: .node) {
+                    try? await Task.sleep(nanoseconds: delay)
+                    continue
+                }
+                if !self.isLocalGatewayFixtureEnabled {
+                    self.setGatewayConnectionProgress(reconnecting: attempt != 0)
+                    self.gatewayServerName = nil
+                    self.gatewayRemoteAddress = nil
+                    LiveActivityManager.shared.showConnecting(
+                        statusText: attempt == 0
+                            ? String(localized: "Connecting...")
+                            : String(localized: "Reconnecting..."),
+                        agentName: self.activeAgentName,
+                        sessionKey: self.mainSessionKey)
+                }
+                let epochMs = Int(Date().timeIntervalSince1970 * 1000)
+                let reconnectAuth = self.currentGatewayReconnectAuth(fallback: config)
+                let deviceAuthGatewayID = options.deviceAuthGatewayID ?? stableID
+                let nodeAuthState = Self.nodeDeviceAuthState(
+                    gatewayID: deviceAuthGatewayID,
+                    principal: config.ingressAuthorization?.principal,
+                    profile: options.deviceIdentityProfile,
+                    fallbackAllowed: options.allowStoredDeviceAuth)
+                var candidateOptions = options
+                candidateOptions.allowStoredDeviceAuth = nodeAuthState.allowStoredDeviceAuth
+                let connectedOptions = candidateOptions
+                GatewayDiagnostics.log("connect attempt epochMs=\(epochMs) url=\(config.url.absoluteString)")
+                do {
+                    try await self.nodeGateway.connect(
+                        url: config.url,
+                        credentials: reconnectAuth,
+                        connectOptions: connectedOptions,
+                        sessionBox: sessionBox,
+                        extraHeadersProvider: {
+                            if let ingressAuthorization = config.ingressAuthorization {
+                                return try await ingressAuthorization.headers(config.url)
+                            }
+                            return GatewaySettingsStore.loadGatewayCustomHeaders(gatewayStableID: stableID)
+                        },
+                        onConnected: { [weak self] in
+                            await self?.handleNodeGatewayConnected(
+                                url: config.url,
+                                stableID: stableID,
+                                routeGeneration: routeGeneration,
+                                nodeOptions: connectedOptions,
+                                auth: reconnectAuth)
+                        },
+                        onDisconnected: { [weak self] reason in
+                            guard let self else { return }
+                            await MainActor.run {
+                                guard !self.isLocalGatewayFixtureEnabled,
+                                      self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID)
+                                else { return }
+                                if let problem = self.currentGatewayProblemToKeep(forDisconnectReason: reason) {
+                                    self.gatewayStatusText = problem.statusText
+                                } else {
+                                    self.gatewayStatusText = "Disconnected: \(reason)"
+                                }
+                                self.gatewayServerName = nil
+                                self.gatewayRemoteAddress = nil
+                                self.gatewayConnected = false
+                            }
+                            GatewayDiagnostics.log("gateway disconnected reason: \(reason)")
+                        },
+                        onInvoke: { [weak self] req in
+                            guard let self else {
+                                return BridgeInvokeResponse(
+                                    id: req.id,
+                                    ok: false,
+                                    error: OpenClawNodeError(
+                                        code: .unavailable,
+                                        message: "UNAVAILABLE: node not ready"))
+                            }
+                            return await self.handleInvoke(req, gatewayStableID: stableID)
+                        },
+                        onRouteInvalidated: { [weak self] in
+                            await MainActor.run {
+                                self?.handleNodeGatewayRouteInvalidated(
+                                    routeGeneration: routeGeneration,
+                                    stableID: stableID)
+                            }
+                        })
+                    guard let reconnectOptions = await self.gatewayOptionsAfterSuccessfulConnection(
+                        connectedOptions,
+                        stableID: stableID,
+                        routeGeneration: routeGeneration,
+                        auth: reconnectAuth,
+                        previousTokenVersion: nodeAuthState.tokenVersion)
+                    else { break }
+                    options = reconnectOptions
+                    attempt = 0
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                } catch {
+                    guard !Task.isCancelled,
+                          self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID)
+                    else { break }
+                    attempt += 1
+                    let mappedProblem = self.mapNodeGatewayConnectionError(error)
+                    let problem = self.isLocalGatewayFixtureEnabled ? nil : mappedProblem
+                    if !self.isLocalGatewayFixtureEnabled {
+                        self.recordNodeGatewayConnectionError(problem, error: error)
+                    }
+                    GatewayDiagnostics.log("gateway connect error: \(error.localizedDescription)")
+                    if problem?.needsPairingApproval == true {
+                        // Pairing owns its status until explicit recovery; stop both watchdogs.
+                        self.operatorGatewayTask?.cancel()
+                        self.operatorGatewayTask = nil
+                        await self.operatorGateway.disconnect()
+                        await self.nodeGateway.disconnect()
+                        return
+                    }
+                    if problem?.pauseReconnect == true { continue }
+                    let sleepSeconds = min(8.0, 0.5 * pow(1.7, Double(attempt)))
+                    try? await Task.sleep(nanoseconds: UInt64(sleepSeconds * 1_000_000_000))
+                }
             }
-            self.showNodeGatewayConnectingStatus(
-                attempt: state.attempt,
-                context: context)
-
-            switch await self.performNodeGatewayConnectionAttempt(context: context, state: state) {
-            case let .retry(nextState):
-                state = nextState
-            case .stop:
-                break gatewayLoop
-            case .stopPreservingStatus:
-                // Pairing owns its status until explicit recovery.
-                return
-            }
+            self.resetNodeGatewayLoopStatusIfCurrent(routeGeneration: routeGeneration, stableID: stableID)
         }
-
-        self.resetNodeGatewayLoopStatusIfCurrent(
-            routeGeneration: context.routeGeneration,
-            stableID: context.stableID)
-    }
-
-    private func shouldDelayNodeGatewayConnectionAttempt() async -> Bool {
-        if let delay = self.gatewayReconnectLoopDelay(owner: .node) {
-            try? await Task.sleep(nanoseconds: delay)
-            return true
-        }
-        return false
-    }
-
-    private func showNodeGatewayConnectingStatus(
-        attempt: Int,
-        context: NodeGatewayLoopContext)
-    {
-        guard !self.isLocalGatewayFixtureEnabled,
-              self.isCurrentGatewayRoute(
-                  generation: context.routeGeneration,
-                  stableID: context.stableID)
-        else { return }
-        self.setGatewayConnectionProgress(reconnecting: attempt != 0)
-        self.gatewayServerName = nil
-        self.gatewayRemoteAddress = nil
-        LiveActivityManager.shared.showConnecting(
-            statusText: (attempt == 0)
-                ? String(localized: "Connecting...")
-                : String(localized: "Reconnecting..."),
-            agentName: self.activeAgentName,
-            sessionKey: self.mainSessionKey)
-    }
-
-    private func performNodeGatewayConnectionAttempt(
-        context: NodeGatewayLoopContext,
-        state: NodeGatewayLoopState) async -> NodeGatewayLoopStep
-    {
-        let epochMs = Int(Date().timeIntervalSince1970 * 1000)
-        let reconnectAuth = self.currentGatewayReconnectAuth(fallback: context.fallbackConfig)
-        let deviceAuthGatewayID = state.options.deviceAuthGatewayID ?? context.stableID
-        let nodeAuthState = Self.nodeDeviceAuthState(
-            gatewayID: deviceAuthGatewayID,
-            principal: context.ingressAuthorization?.principal,
-            profile: state.options.deviceIdentityProfile,
-            fallbackAllowed: state.options.allowStoredDeviceAuth)
-        var candidateOptions = state.options
-        candidateOptions.allowStoredDeviceAuth = nodeAuthState.allowStoredDeviceAuth
-        let connectedOptions = candidateOptions
-        GatewayDiagnostics.log("connect attempt epochMs=\(epochMs) url=\(context.url.absoluteString)")
-
-        do {
-            try await self.nodeGateway.connect(
-                url: context.url,
-                credentials: reconnectAuth,
-                connectOptions: connectedOptions,
-                sessionBox: context.sessionBox,
-                extraHeadersProvider: {
-                    if let ingress = context.ingressAuthorization {
-                        return try await ingress.headers(context.url)
-                    }
-                    return GatewaySettingsStore.loadGatewayCustomHeaders(gatewayStableID: context.stableID)
-                },
-                onConnected: { [weak self] in
-                    await self?.handleNodeGatewayConnected(
-                        url: context.url,
-                        stableID: context.stableID,
-                        routeGeneration: context.routeGeneration,
-                        nodeOptions: connectedOptions,
-                        auth: reconnectAuth)
-                },
-                onDisconnected: { [weak self] reason in
-                    guard let self else { return }
-                    await MainActor.run {
-                        guard !self.isLocalGatewayFixtureEnabled,
-                              self.isCurrentGatewayRoute(
-                                  generation: context.routeGeneration,
-                                  stableID: context.stableID)
-                        else { return }
-                        if let problem = self.currentGatewayProblemToKeep(forDisconnectReason: reason) {
-                            self.gatewayStatusText = problem.statusText
-                        } else {
-                            self.gatewayStatusText = "Disconnected: \(reason)"
-                        }
-                        self.gatewayServerName = nil
-                        self.gatewayRemoteAddress = nil
-                        self.gatewayConnected = false
-                    }
-                    GatewayDiagnostics.log("gateway disconnected reason: \(reason)")
-                },
-                onInvoke: { [weak self] req in
-                    guard let self else {
-                        return BridgeInvokeResponse(
-                            id: req.id,
-                            ok: false,
-                            error: OpenClawNodeError(
-                                code: .unavailable,
-                                message: "UNAVAILABLE: node not ready"))
-                    }
-                    return await self.handleInvoke(req, gatewayStableID: context.stableID)
-                },
-                onRouteInvalidated: { [weak self] in
-                    await MainActor.run {
-                        self?.handleNodeGatewayRouteInvalidated(
-                            routeGeneration: context.routeGeneration,
-                            stableID: context.stableID)
-                    }
-                })
-
-            guard let reconnectOptions = await self.gatewayOptionsAfterSuccessfulConnection(
-                connectedOptions,
-                stableID: context.stableID,
-                routeGeneration: context.routeGeneration,
-                auth: reconnectAuth,
-                previousTokenVersion: nodeAuthState.tokenVersion)
-            else { return .stop }
-
-            var nextState = state
-            nextState.options = reconnectOptions
-            nextState.attempt = 0
-            try? await Task.sleep(nanoseconds: 1_000_000_000)
-            return .retry(nextState)
-        } catch {
-            return await self.handleNodeGatewayConnectionError(
-                error,
-                context: context,
-                state: state)
-        }
-    }
-
-    private func handleNodeGatewayConnectionError(
-        _ error: Error,
-        context: NodeGatewayLoopContext,
-        state: NodeGatewayLoopState) async -> NodeGatewayLoopStep
-    {
-        guard !Task.isCancelled,
-              self.isCurrentGatewayRoute(
-                  generation: context.routeGeneration,
-                  stableID: context.stableID)
-        else { return .stop }
-        var nextState = state
-        nextState.attempt += 1
-        let mappedProblem = self.mapNodeGatewayConnectionError(error)
-        let problem = self.isLocalGatewayFixtureEnabled ? nil : mappedProblem
-        if !self.isLocalGatewayFixtureEnabled {
-            self.recordNodeGatewayConnectionError(problem, error: error)
-        }
-        GatewayDiagnostics.log("gateway connect error: \(error.localizedDescription)")
-        if problem?.needsPairingApproval == true {
-            // Pairing owns its status until explicit recovery; stop both watchdogs.
-            self.operatorGatewayTask?.cancel()
-            self.operatorGatewayTask = nil
-            await self.operatorGateway.disconnect()
-            await self.nodeGateway.disconnect()
-            return .stopPreservingStatus
-        }
-        if problem?.pauseReconnect == true { return .retry(nextState) }
-        let sleepSeconds = min(8.0, 0.5 * pow(1.7, Double(nextState.attempt)))
-        try? await Task.sleep(nanoseconds: UInt64(sleepSeconds * 1_000_000_000))
-        return .retry(nextState)
     }
 
     private func recordNodeGatewayConnectionError(

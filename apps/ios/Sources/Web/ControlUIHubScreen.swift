@@ -102,24 +102,15 @@ struct ControlUIHubScreen: View {
         let url = self.page.url(config: config)
         let authScript: String?
         let authScriptProvider: (@MainActor () async -> String?)?
-        let accessNativeAuthProvider: IOSDashboardNativeGatewayAuthProvider?
-        let nativeAuth: ControlUINativeGatewayAuthHandler?
         if authorization != nil {
             authScript = self.page.authUserScript(config: config)
             authScriptProvider = {
                 let credentials = await nativeAuthProvider?.legacyCredentials()
                 return self.page.authUserScript(config: config, legacyCredentials: credentials)
             }
-            accessNativeAuthProvider = nativeAuthProvider
-            nativeAuth = nil
         } else {
             authScript = self.page.authUserScript(config: config, storedOperatorToken: storedOperatorToken)
             authScriptProvider = nil
-            accessNativeAuthProvider = nil
-            nativeAuth = AuthenticatedControlUI.nativeAuthHandler(
-                config: config,
-                storedOperatorToken: storedOperatorToken,
-                appModel: self.appModel)
         }
         return ZStack {
             OpenClawProBackground()
@@ -132,11 +123,10 @@ struct ControlUIHubScreen: View {
                     authScript: authScript,
                     tls: config?.tls,
                     authScriptProvider: authScriptProvider,
-                    nativeGatewayAuthProvider: accessNativeAuthProvider,
+                    nativeGatewayAuthProvider: nativeAuthProvider,
                     basicProxyCredentialProvider: {
                         AuthenticatedControlUI.basicProxyCredential(config: config)
                     },
-                    nativeAuth: nativeAuth,
                     accessCookie: authorization?.dashboardCookie(url),
                     accessAdmissionIsCurrent: authorization.map { authorization in
                         { authorization.isCurrent() }
