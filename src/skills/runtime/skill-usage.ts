@@ -13,24 +13,32 @@ import { normalizeSkillIndexName } from "../discovery/skill-index.js";
 
 const log = createSubsystemLogger("skills/usage");
 
-/** Usage counters keyed by the canonical absolute SKILL.md path. */
+export type SkillUsage = { useCount: number; lastUsedAtMs: number };
+
+/** Usage counters for SKILL.md files, keyed by the paths as given; lookup uses canonical paths. */
 export async function readSkillUsage(
   options: Pick<OpenClawStateDatabaseOptions, "path" | "env">,
   skillFiles: readonly string[],
-): Promise<Map<string, { useCount: number; lastUsedAtMs: number }>> {
-  const canonicalFiles = [...new Set(skillFiles.map((file) => canonicalizePath(file)))];
-  const usage = new Map<string, { useCount: number; lastUsedAtMs: number }>();
-  if (canonicalFiles.length === 0) {
+): Promise<Map<string, SkillUsage>> {
+  const filesByCanonical = new Map<string, string[]>();
+  for (const file of new Set(skillFiles)) {
+    const canonical = canonicalizePath(file);
+    filesByCanonical.set(canonical, [...(filesByCanonical.get(canonical) ?? []), file]);
+  }
+  const usage = new Map<string, SkillUsage>();
+  if (filesByCanonical.size === 0) {
     return usage;
   }
   const context = captureOpenClawStateWorkerContext(options);
   const { executeOpenClawStateWorker } = await import("../../state/openclaw-state-worker-store.js");
   const rows = await executeOpenClawStateWorker(context, {
     type: "skills.usage.read",
-    input: { skillFiles: canonicalFiles },
+    input: { skillFiles: [...filesByCanonical.keys()] },
   });
   for (const row of rows) {
-    usage.set(row.skillFile, { useCount: row.useCount, lastUsedAtMs: row.lastUsedAtMs });
+    for (const file of filesByCanonical.get(row.skillFile) ?? []) {
+      usage.set(file, { useCount: row.useCount, lastUsedAtMs: row.lastUsedAtMs });
+    }
   }
   return usage;
 }
