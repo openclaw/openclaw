@@ -65,12 +65,16 @@ export async function listClawRouterDecisionModels(
 ): Promise<ProviderAugmentModelCatalogContext["entries"]> {
   const auth = context.resolveProviderApiKey?.("clawrouter");
   const apiKey = auth?.discoveryApiKey ?? auth?.apiKey;
-  if (!context.config || !apiKey) return [];
+  if (!context.config || !apiKey) {
+    return [];
+  }
   const http = resolveClawRouterCapabilityHttpContext(context.config, apiKey);
   const offers = await fetchClawRouterCapabilityOffers({ context: http, timeoutMs: () => 5_000 });
   return offers.flatMap((offer) => {
     const qualified = readLiquidDecisionOffer(offer);
-    if (!qualified) return [];
+    if (!qualified) {
+      return [];
+    }
     return [
       {
         provider: "clawrouter",

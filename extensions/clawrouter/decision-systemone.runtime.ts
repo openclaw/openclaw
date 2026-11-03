@@ -114,7 +114,9 @@ export async function evaluateClawRouterLiquidDecision(
       return { status: "unavailable", reason: "unsupported-input" };
     }
     const encoded = encodeLiquidDecisionRequest(batch, selected.upstream);
-    if (!encoded) return { status: "unavailable", reason: "unsupported-input" };
+    if (!encoded) {
+      return { status: "unavailable", reason: "unsupported-input" };
+    }
     return await executeLiquidDecision(batch, {
       body:
         selected.offer.routeKind === "manifest"
@@ -137,7 +139,9 @@ export async function evaluateClawRouterLiquidDecision(
     });
   } catch {
     context.signal.throwIfAborted();
-    if (authorityError) throw authorityError.error;
+    if (authorityError) {
+      throw authorityError.error;
+    }
     return { status: "unavailable", reason: "transport" };
   }
 }
