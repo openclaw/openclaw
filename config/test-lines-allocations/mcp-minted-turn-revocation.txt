@@ -1,2 +1,2 @@
-# Cover minted-owner revocation, three-turn warm reuse, audience release and canonical fixture seams.
-323
+# Cover minted-owner revocation, warm reuse, audience release and final HTTP file-effect fencing.
+484
