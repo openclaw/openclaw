@@ -1,740 +1,628 @@
-import fsSync from "node:fs";
-import path from "node:path";
-import chokidar from "chokidar";
-import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
-import { classifyMemoryMultimodalPath } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { materializeErrorStack } from "openclaw/plugin-sdk/error-runtime";
 import {
-  createSubsystemLogger,
-  type ResolvedMemorySearchConfig,
-} from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+  watch,
+  resolveFsObservationMode,
+  resolveFsObservationIntervalMs,
+  ObservationSampleCloseError,
+  type WatchHealth,
+  type WatchInvalidation,
+  type WatchSubscription,
+  type WatchScope,
+} from "openclaw/plugin-sdk/file-access-runtime";
+import type { MemoryWorkspaceWatchRequest } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
+import type { MemoryCoreRuntimeHost } from "./runtime-host.js";
+import { MemoryWatchPolicy, type MemoryObservation } from "./watch-policy.js";
 import {
-  isFileMissingError,
-  matchesExtraMemoryPathEntry,
-  normalizeExtraMemoryPathEntries,
-  type MemoryWorkspaceWatchRequest,
-} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  type LinuxMemoryDirectoryWatcher,
-  MemoryFileWatchResources,
-  type NativeMemoryWatchPair,
-} from "./manager-watch-resources.js";
-import { countChokidarWatchedEntries } from "./watch-pressure.js";
-import {
+  MEMORY_WATCH_MAX_PATHS,
   recordMemoryWatchEventPath,
   settleMemoryWatchEventPaths,
-  type MemoryWatchEventStats,
+  type MemoryWatchFile,
   type MemoryWatchSettleQueue,
 } from "./watch-settle.js";
 
-const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
-  ".git",
-  "node_modules",
-  ".pnpm-store",
-  ".venv",
-  "venv",
-  ".tox",
-  "__pycache__",
-]);
 const log = createSubsystemLogger("memory");
-const TEST_MEMORY_WATCH_FACTORY_KEY = Symbol.for("openclaw.test.memoryWatchFactory");
-const TEST_MEMORY_NATIVE_WATCH_FACTORY_KEY = Symbol.for("openclaw.test.memoryNativeWatchFactory");
-
-type NativeMemoryWatchResult = "attached" | "missing" | "failed";
-
-function resolveMemoryWatchFactory(): typeof chokidar.watch {
-  if (process.env.VITEST === "true" || process.env.NODE_ENV === "test") {
-    const override: unknown = Reflect.get(globalThis, TEST_MEMORY_WATCH_FACTORY_KEY);
-    if (typeof override === "function") {
-      // SAFETY: Only test fixtures install the chokidar-compatible factory at this test-only symbol.
-      return override as typeof chokidar.watch;
-    }
-  }
-  return chokidar.watch.bind(chokidar);
-}
-
-function resolveMemoryNativeWatchFactory(): typeof fsSync.watch {
-  if (process.env.VITEST === "true" || process.env.NODE_ENV === "test") {
-    const override: unknown = Reflect.get(globalThis, TEST_MEMORY_NATIVE_WATCH_FACTORY_KEY);
-    if (typeof override === "function") {
-      // SAFETY: Only test fixtures install the fs.watch-compatible factory at this test-only symbol.
-      return override as typeof fsSync.watch;
-    }
-  }
-  return fsSync.watch.bind(fsSync);
-}
-
-function shouldIgnoreMemoryWatchPath(
-  watchPath: string,
-  stats?: { isDirectory?: () => boolean },
-  multimodalSettings?: ResolvedMemorySearchConfig["multimodal"],
-): boolean {
-  const normalized = path.normalize(watchPath);
-  const parts = normalized
-    .split(path.sep)
-    .map((segment) => normalizeLowercaseStringOrEmpty(segment));
-  if (parts.some((segment) => IGNORED_MEMORY_WATCH_DIR_NAMES.has(segment))) {
-    return true;
-  }
-  if (stats?.isDirectory?.()) {
-    return false;
-  }
-  if (!stats) {
-    return false;
-  }
-  const extension = normalizeLowercaseStringOrEmpty(path.extname(normalized));
-  if (extension.length === 0 || extension === ".md") {
-    return false;
-  }
-  if (!multimodalSettings) {
-    return true;
-  }
-  return classifyMemoryMultimodalPath(normalized, multimodalSettings) === null;
-}
-
-function runDetachedMemorySync(sync: () => Promise<void>, reason: "interval" | "watch") {
-  void sync().catch((err: unknown) => {
-    log.warn(`memory sync failed (${reason}): ${String(err)}`);
-  });
-}
-
+const RETRY_DELAYS_MS = [500, 2_000, 5_000];
+const DEFAULT_POLL_INTERVAL_MS = 30_000;
+// Native events drive updates; infrequent reconciliation recovers missed events.
+const RECONCILE_INTERVAL_MS = 5 * 60_000;
+export type MemoryWatchFacts = {
+  health: ReturnType<MemoryFileWatcher["health"]>;
+  capacityDegraded: boolean;
+};
 export type MemoryFileWatcherOptions = {
+  runInBackgroundContext: NonNullable<MemoryCoreRuntimeHost["runInBackgroundContext"]>;
   workspaceDir: string;
   agentId: string;
   settings: MemoryWorkspaceWatchRequest["settings"];
   onChange: () => void | Promise<void>;
   onUnavailable: () => void;
   onDirty?: () => void;
+  onState?: (facts: MemoryWatchFacts) => void;
 };
+type ObservationMember = {
+  group: MemoryObservation;
+  scopes: WatchScope[];
+  policy: MemoryWatchPolicy;
+  invalidate: (hint: WatchInvalidation) => void;
+  health: (health: WatchHealth) => void;
+  isolate: () => void;
+  unavailable: (error: unknown, capacityCode?: string) => void;
+};
+type SharedObservation = {
+  key: string;
+  members: Set<ObservationMember>;
+  subscription: WatchSubscription;
+  mode: "auto" | "poll";
+  pollIntervalMs: number;
+  shareable: boolean;
+  refreshRequested: boolean;
+  refreshing?: Promise<void>;
+};
+type Observation = { id: string; member: ObservationMember; shared: SharedObservation };
+const sharedObservations = new Map<string, Set<SharedObservation>>();
 
-/** Native Memory file coverage and settling, independent of index or provider state. */
-export class MemoryFileWatcher extends MemoryFileWatchResources {
-  private readonly workspaceDir: string;
-  private readonly settings: MemoryFileWatcherOptions["settings"];
-  private readonly pendingWatchPaths: MemoryWatchSettleQueue = new Map();
-  private watchTimer: NodeJS.Timeout | null = null;
+function failShared(shared: SharedObservation, error: unknown, capacityCode?: string): void {
+  shared.shareable = false;
+  const isolate = shared.members.size > 1;
+  if (isolate) {
+    // Retry separately: one unreadable scope or an oversized union must not disable peers.
+    // Mark every member before unavailable callbacks synchronously retire memberships.
+    for (const member of shared.members) {
+      member.isolate();
+    }
+  }
+  for (const member of shared.members) {
+    member.unavailable(error, isolate ? undefined : capacityCode);
+  }
+}
+
+function sharedScopes(members: Iterable<ObservationMember>): WatchScope[] {
+  const scopes = new Map<string, WatchScope>();
+  for (const member of members) {
+    for (const scope of member.scopes) {
+      scopes.set(JSON.stringify(scope), scope);
+    }
+  }
+  return [...scopes.values()];
+}
+
+function sharedSelectionKey(members: Iterable<ObservationMember>): string {
+  return JSON.stringify(
+    [
+      ...new Set([...members].flatMap((member) => member.policy.selectionKeys(member.group))),
+    ].toSorted(),
+  );
+}
+
+function refreshShared(shared: SharedObservation): Promise<void> {
+  shared.refreshRequested = true;
+  return (shared.refreshing ??= shared.subscription.ready
+    .then(async () => {
+      while (shared.refreshRequested && shared.members.size) {
+        shared.refreshRequested = false;
+        // Serialize updates and read live membership after each awaited scan.
+        // setScopes also baselines changed exclusion policies and notifies new members.
+        await shared.subscription.setScopes(sharedScopes(shared.members));
+      }
+    })
+    .catch((error: unknown) => {
+      failShared(shared, error);
+    })
+    .finally(() => {
+      shared.refreshing = undefined;
+    })
+    .then(() =>
+      shared.refreshRequested && shared.members.size ? refreshShared(shared) : undefined,
+    ));
+}
+
+function acquireObservation(
+  member: ObservationMember,
+  mode: "auto" | "poll",
+  pollIntervalMs: number,
+  shareable: boolean,
+): { shared: SharedObservation; ready: Promise<void> } {
+  const key = JSON.stringify([
+    member.group.root.rootDir,
+    member.group.identity,
+    mode,
+    pollIntervalMs,
+  ]);
+  const candidates = sharedObservations.get(key) ?? new Set<SharedObservation>();
+  for (const shared of candidates) {
+    if (shareable && shared.shareable && sharedScopes([...shared.members, member]).length <= 128) {
+      const selection = sharedSelectionKey(shared.members);
+      shared.members.add(member);
+      if (selection !== sharedSelectionKey(shared.members)) {
+        return { shared, ready: refreshShared(shared) };
+      }
+      const ready = shared.refreshing ?? shared.subscription.ready;
+      return {
+        shared,
+        // A ready subscription won't replay its baseline for the joining member.
+        // Publish only to that member, after the caller enrolls its observation.
+        ready:
+          !shared.refreshing && shared.subscription.health().state === "ready"
+            ? ready.then(() => {
+                member.invalidate({ reason: "reconcile" });
+                member.health(shared.subscription.health());
+              })
+            : ready,
+      };
+    }
+  }
+  const members = new Set([member]);
+  const shared: SharedObservation = {
+    key,
+    members,
+    mode,
+    pollIntervalMs,
+    shareable,
+    refreshRequested: false,
+    subscription: watch(member.group.root, {
+      scopes: member.scopes,
+      mode,
+      intervalMs: RECONCILE_INTERVAL_MS,
+      pollIntervalMs,
+      maxDirectories: 1_000_000,
+      maxEntries: 1_000_000,
+      maxPendingPaths: MEMORY_WATCH_MAX_PATHS,
+      // The last member owns close; an individual agent must not abort its peers.
+      exclude: (file) => {
+        for (const active of members) {
+          if (!active.policy.exclude(active.group, file)) {
+            return false;
+          }
+        }
+        return true;
+      },
+      onInvalidate: (hint) => {
+        for (const active of members) {
+          active.invalidate(hint);
+        }
+      },
+      onHealth: (health) => {
+        if (health.state === "unavailable") {
+          const code =
+            health.failure?.operation === "watch" && health.failure.code === "watch-limit"
+              ? "watch-limit"
+              : undefined;
+          failShared(shared, health.failure?.error, code);
+          return;
+        }
+        for (const active of members) {
+          active.health(health);
+        }
+      },
+    }),
+  };
+  candidates.add(shared);
+  sharedObservations.set(key, candidates);
+  return { shared, ready: shared.subscription.ready };
+}
+
+function releaseObservation({ member, shared }: Observation): Promise<void> {
+  const selection = sharedSelectionKey(shared.members);
+  shared.members.delete(member);
+  if (shared.members.size) {
+    if (selection !== sharedSelectionKey(shared.members)) {
+      void refreshShared(shared);
+    }
+    return Promise.resolve();
+  }
+  const candidates = sharedObservations.get(shared.key);
+  candidates?.delete(shared);
+  if (!candidates?.size) {
+    sharedObservations.delete(shared.key);
+  }
+  return shared.subscription.close();
+}
+
+export class MemoryFileWatcher {
+  private readonly policy: MemoryWatchPolicy;
+  private readonly lifetime = new AbortController();
+  private readonly observations = new Map<string, Observation>();
+  private readonly rootIds = new WeakMap<MemoryObservation["root"], number>();
+  private readonly isolatedRoots = new WeakSet<MemoryObservation["root"]>();
+  private nextRootId = 0;
+  private readonly pendingPaths: MemoryWatchSettleQueue = new Map();
+  private pressureWarningShown = false;
+  private pollingWarningShown = false;
+  private readonly closeErrors: unknown[] = [];
+  private closed = false;
+  private degraded = false;
+  private retries = 0;
+  private retryExhausted = false;
+  private starting?: Promise<void>;
+  private refreshing?: Promise<void>;
+  private refreshRequested = false;
+  private recovering?: Promise<void>;
+  private closing?: Promise<void>;
+  private settling?: Promise<void>;
+  private watchTimer?: ReturnType<typeof setTimeout>;
+  private retryTimer?: ReturnType<typeof setTimeout>;
+  private pendingChange = false;
+  private revision = 0;
 
   constructor(private readonly options: MemoryFileWatcherOptions) {
-    super(options.agentId, options.onUnavailable);
-    this.workspaceDir = options.workspaceDir;
-    this.settings = options.settings;
+    this.policy = new MemoryWatchPolicy(options.workspaceDir, options.settings);
   }
 
-  start(): void {
-    if (this.closed) {
-      return;
-    }
-    if (
-      this.memoryWatchCapacityDegraded ||
-      this.watcher ||
-      this.nativeMemoryWatchPairs.length > 0
-    ) {
-      return;
-    }
-    // Core paths preserve original symlink-follow behavior (chokidar/fs.watch
-    // resolve through symlinks by default); extraPaths preserves the original
-    // explicit symlink-skip policy.
-    const fileWatchPaths = new Set<string>([
-      path.join(this.workspaceDir, "MEMORY.md"),
-      path.join(this.workspaceDir, "USER.md"),
-    ]);
-    const memoryDir = path.join(this.workspaceDir, "memory");
-    const dirWatchPaths = new Set<string>([memoryDir]);
-    const additionalPaths = normalizeExtraMemoryPathEntries(
-      this.workspaceDir,
-      this.settings.extraPaths,
-    );
-    for (const entry of additionalPaths) {
-      try {
-        const stat = fsSync.lstatSync(entry.path);
-        if (stat.isSymbolicLink()) {
-          continue;
-        }
-        if (stat.isDirectory()) {
-          dirWatchPaths.add(entry.path);
-          continue;
-        }
-        if (
-          stat.isFile() &&
-          (normalizeLowercaseStringOrEmpty(entry.path).endsWith(".md") ||
-            classifyMemoryMultimodalPath(entry.path, this.settings.multimodal) !== null)
-        ) {
-          fileWatchPaths.add(entry.path);
-        }
-      } catch {
-        continue;
-      }
-    }
-    const markDirty = (watchPath?: string, stats?: MemoryWatchEventStats) => {
-      if (watchPath && stats && !stats.isDirectory?.()) {
-        const normalizedWatchPath = path.resolve(watchPath);
-        const matchingEntries = isPathInside(memoryDir, normalizedWatchPath)
-          ? []
-          : additionalPaths.filter((entry) => isPathInside(entry.path, normalizedWatchPath));
-        if (
-          matchingEntries.length > 0 &&
-          !matchingEntries.some((entry) => matchesExtraMemoryPathEntry(entry, normalizedWatchPath))
-        ) {
-          return;
-        }
-      }
-      recordMemoryWatchEventPath(this.pendingWatchPaths, watchPath, stats);
-      this.options.onDirty?.();
-      this.scheduleWatchSync();
-    };
-    // Native recursive fs.watch for directory paths — one watcher per
-    // directory on macOS (FSEvents) and Windows (ReadDirectoryChangesW).
-    // Avoids chokidar's per-file fs.watch fan-out on large memory trees.
-    //
-    // Linux is intentionally handled by a separate directory-tree watcher
-    // below: Node's `fs.watch(dir, { recursive: true })` routes through
-    // `internal/fs/recursive_watch` and watches every file. Watching
-    // directories only preserves Linux inotify semantics while avoiding
-    // per-file watch descriptor fan-out.
-    //
-    // On any other native creation failure (e.g. unsupported filesystem,
-    // ERR_FEATURE_UNAVAILABLE_ON_PLATFORM) the directory also falls back to
-    // chokidar so freshness is preserved on the degraded path.
-    const nativeRecursiveSupported = process.platform === "darwin" || process.platform === "win32";
-    for (const dir of dirWatchPaths) {
-      const attached = nativeRecursiveSupported
-        ? this.attachNativeMemoryWatchForDir(dir, markDirty)
-        : process.platform === "linux"
-          ? this.attachLinuxMemoryDirectoryTreeWatchForDir(dir, markDirty)
-          : "failed";
-      if (attached !== "attached") {
-        // Native creation failed (dir missing, unsupported FS, throw) —
-        // fall back to chokidar so directory coverage isn't dropped.
-        fileWatchPaths.add(dir);
-      }
-      if (this.memoryWatchCapacityDegraded) {
-        return;
-      }
-    }
-    if (fileWatchPaths.size > 0) {
-      this.attachMemoryChokidarPaths(Array.from(fileWatchPaths), markDirty);
-    }
-    this.scheduleMemoryWatchPressureStartupCheck();
+  get capacityDegraded(): boolean {
+    return this.degraded;
   }
 
-  // Pair recursive coverage with a parent watch that survives root replacement.
-  protected attachNativeMemoryWatchForDir(
-    dir: string,
-    markDirty: (watchPath?: string, stats?: MemoryWatchEventStats) => void,
-  ): NativeMemoryWatchResult {
-    if (this.closed) {
-      return "failed";
-    }
-    let recordedInode: number | null;
-    try {
-      recordedInode = fsSync.statSync(dir).ino;
-    } catch (err) {
-      // Startup falls back; an existing parent can wait for a missing root.
-      return isFileMissingError(err) ? "missing" : "failed";
-    }
-    const pair: NativeMemoryWatchPair = { dir, main: null, parent: null };
-    let mainWatcher: fsSync.FSWatcher | undefined;
-    try {
-      mainWatcher = resolveMemoryNativeWatchFactory()(
-        dir,
-        { recursive: true },
-        (_eventType, filename) => {
-          if (this.closed || (mainWatcher && pair.main !== mainWatcher)) {
-            return;
-          }
-          if (filename == null) {
-            // Node docs: filename may be null on some platforms even when
-            // recursive watching is otherwise supported. Be conservative
-            // and mark broadly dirty rather than dropping the event.
-            markDirty();
-            return;
-          }
-          const full = path.join(dir, filename);
-          let stats: fsSync.Stats | undefined;
-          try {
-            const s = fsSync.lstatSync(full, { throwIfNoEntry: false });
-            stats = s ?? undefined;
-          } catch {
-            stats = undefined;
-          }
-          if (shouldIgnoreMemoryWatchPath(full, stats, this.settings.multimodal)) {
-            return;
-          }
-          // Pass stats so the watch-settle queue can debounce rapid
-          // writes; without a snapshot the queue cannot detect stability.
-          markDirty(full, stats);
-        },
-      );
-    } catch (err) {
-      if (isFileMissingError(err)) {
-        return "missing";
-      }
-      if (this.degradeMemoryWatchCapacity(dir, err, markDirty)) {
-        return "failed";
-      }
-      log.warn(
-        `failed to start native recursive watcher on ${dir}: ${String(err)}; falling back to chokidar`,
-      );
-      return "failed";
-    }
-    pair.main = mainWatcher;
-    mainWatcher.on("error", (err) => {
-      if (pair.main !== mainWatcher) {
-        return;
-      }
-      if (this.degradeMemoryWatchCapacity(dir, err, markDirty)) {
-        return;
-      }
-      const message = err instanceof Error ? err.message : String(err);
-      log.warn(`memory native watcher error on ${dir}: ${message}`);
-      // Per Node docs the FSWatcher is no longer usable after an error.
-      this.closeNativeMemoryWatchPair(pair);
-      if (this.closed) {
-        return;
-      }
-      // Force a broad re-sync to cover the gap, then restore directory
-      // coverage by reattaching to chokidar so subsequent file changes
-      // still drive watch sync (intervalMinutes defaults to 0; without
-      // a watcher the directory would stop being indexed).
-      markDirty();
-      this.attachMemoryChokidarFallback(dir, markDirty);
-    });
-    this.nativeMemoryWatchPairs.push(pair);
-    this.attachNativeMemoryParentWatch(pair, recordedInode, markDirty, "native", () =>
-      this.attachNativeMemoryWatchForDir(dir, markDirty),
-    );
-    return "attached";
-  }
-
-  private attachNativeMemoryParentWatch(
-    pair: NativeMemoryWatchPair,
-    recordedInode: number,
-    markDirty: (watchPath?: string, stats?: MemoryWatchEventStats) => void,
-    label: "native" | "Linux",
-    reattach: () => NativeMemoryWatchResult,
-  ): void {
-    const { dir } = pair;
-    let watchedInode: number | null = recordedInode;
-    // Non-recursive parent watcher: catches root-directory replacement so
-    // we can reattach the main watcher on the new inode. Without this,
-    // `rm -rf memory && mkdir memory` would leave the main watcher bound
-    // to the dead inode and silently miss subsequent file changes.
-    const parentDir = path.dirname(dir);
-    const baseName = path.basename(dir);
-    let parentInode: number;
-    try {
-      parentInode = fsSync.statSync(parentDir).ino;
-    } catch (err) {
-      log.warn(`memory ${label} parent watcher could not start on ${parentDir}: ${String(err)}`);
-      return;
-    }
-    try {
-      let parentWatcher: fsSync.FSWatcher | null = null;
-      parentWatcher = resolveMemoryNativeWatchFactory()(
-        parentDir,
-        { recursive: false },
-        (_eventType, filename) => {
-          if (this.closed || (parentWatcher && pair.parent !== parentWatcher)) {
-            return;
-          }
-          // Per Node docs `filename` can be null on some platforms even
-          // when the parent watcher is otherwise supported. Treat null
-          // as an unknown event and re-check the watched directory's inode;
-          // otherwise filter by basename so sibling events don't trigger reattach.
-          // A retained parent can itself be replaced while the root is absent.
-          // Its self-rename must reach the inode check before we trust it again.
-          if (
-            filename !== null &&
-            filename !== baseName &&
-            (pair.main || filename !== path.basename(parentDir))
-          ) {
-            return;
-          }
-          let currentInode: number | null = null;
-          let result: NativeMemoryWatchResult = "missing";
-          try {
-            currentInode = fsSync.statSync(dir).ino;
-          } catch (err) {
-            result = isFileMissingError(err) ? "missing" : "failed";
-            if (result === "missing") {
-              try {
-                if (fsSync.statSync(parentDir).ino !== parentInode) {
-                  result = "failed";
-                }
-              } catch {
-                result = "failed";
+  health() {
+    return [...this.observations.values()].map(
+      ({ shared: { subscription, mode, pollIntervalMs } }) => {
+        const health = subscription.health();
+        return {
+          state: health.state,
+          mode: health.mode,
+          directories: health.directories,
+          failure: health.failure
+            ? {
+                operation: health.failure.operation,
+                code: health.failure.code,
+                error: String(health.failure.error),
               }
-            }
-          }
-          if (currentInode === watchedInode && result !== "failed") {
-            return;
-          }
-          // Keep the parent authoritative while the root is absent. Chokidar's
-          // asynchronous missing-path setup can miss an immediate recreation.
-          this.closeNativeMemoryWatchChildren(pair);
-          watchedInode = null;
-          markDirty();
-          if (currentInode !== null) {
-            result = reattach();
-          }
-          if (result === "missing") {
-            return;
-          }
-          // New coverage must attach before the old parent closes: the root
-          // can disappear again between the inode check and native attachment.
-          this.closeNativeMemoryWatchPair(pair);
-          if (result === "failed") {
-            this.attachMemoryChokidarFallback(dir, markDirty);
-          }
-        },
-      );
-      const attachedParent = parentWatcher;
-      attachedParent.on("error", (err) => {
-        if (pair.parent !== attachedParent) {
-          return;
-        }
-        if (this.degradeMemoryWatchCapacity(dir, err, markDirty)) {
-          return;
-        }
-        const message = err instanceof Error ? err.message : String(err);
-        log.warn(`memory ${label} parent watcher error on ${path.dirname(dir)}: ${message}`);
-        try {
-          attachedParent.close();
-        } catch {
-          // ignore
-        }
-        pair.parent = null;
-        if (!pair.main) {
-          this.closeNativeMemoryWatchPair(pair);
-          if (!this.closed) {
-            markDirty();
-            this.attachMemoryChokidarFallback(dir, markDirty);
-          }
-        }
-        // A live main watcher still covers normal events without its parent.
-      });
-      pair.parent = attachedParent;
-    } catch (err) {
-      if (this.degradeMemoryWatchCapacity(dir, err, markDirty)) {
-        return;
-      }
-      // A failed parent leaves the main watcher covering non-replacement events.
-      log.warn(
-        `memory ${label} parent watcher could not start on ${path.dirname(dir)}: ${String(err)}`,
-      );
-    }
+            : undefined,
+          pollingFallback: mode === "auto" && health.mode === "poll",
+          pollIntervalMs,
+        };
+      },
+    );
   }
 
-  // Linux inotify reports direct child changes from a watched directory, but
-  // it has no native recursive primitive. Watch directories only, then attach
-  // newly-created subdirectories on demand; this avoids per-file watchers.
-  protected attachLinuxMemoryDirectoryTreeWatchForDir(
-    dir: string,
-    markDirty: (watchPath?: string, stats?: MemoryWatchEventStats) => void,
-  ): NativeMemoryWatchResult {
-    if (this.closed) {
-      return "failed";
+  start(): Promise<void> {
+    return (this.starting ??= this.options.runInBackgroundContext(() => this.refresh()));
+  }
+
+  private publishState(): void {
+    this.options.onState?.({ health: this.health(), capacityDegraded: this.degraded });
+  }
+
+  private get canObserve(): boolean {
+    return !(
+      this.closed ||
+      this.degraded ||
+      this.closeErrors.length ||
+      this.recovering ||
+      this.retryTimer ||
+      this.retryExhausted
+    );
+  }
+
+  private refresh(): Promise<void> {
+    if (!this.canObserve) {
+      return Promise.resolve();
     }
-    let recordedInode: number | null;
-    try {
-      recordedInode = fsSync.statSync(dir).ino;
-    } catch (err) {
-      return isFileMissingError(err) ? "missing" : "failed";
-    }
-
-    let pair: NativeMemoryWatchPair | null = null;
-    const treeWatchers = new Map<string, LinuxMemoryDirectoryWatcher>();
-    let rootMissing = false;
-
-    const closeAndFallback = (message: string, cause?: unknown) => {
-      if (this.memoryWatchCapacityDegraded) {
-        return;
-      }
-      if (cause !== undefined && this.degradeMemoryWatchCapacity(dir, cause, markDirty)) {
-        return;
-      }
-      log.warn(message);
-      if (pair) {
-        this.closeNativeMemoryWatchPair(pair);
-      }
-      if (this.closed) {
-        return;
-      }
-      markDirty();
-      this.attachMemoryChokidarFallback(dir, markDirty);
-    };
-
-    const closeDirectorySubtree = (watchDir: string) => {
-      const watchDirPrefix = `${watchDir}${path.sep}`;
-      for (const [entryDir, entry] of Array.from(treeWatchers.entries())) {
-        if (entryDir !== watchDir && !entryDir.startsWith(watchDirPrefix)) {
-          continue;
-        }
-        try {
-          entry.watcher.close();
-        } catch {
-          // ignore close failures
-        }
-        treeWatchers.delete(entryDir);
-      }
-    };
-
-    const attachDirectory = (watchDir: string): fsSync.FSWatcher | null => {
-      if (this.closed) {
-        return null;
-      }
-      let currentInode: number;
-      try {
-        const currentStat = fsSync.statSync(watchDir);
-        if (!currentStat.isDirectory()) {
-          return null;
-        }
-        currentInode = currentStat.ino;
-      } catch (err) {
-        rootMissing ||= watchDir === dir && isFileMissingError(err);
-        return null;
-      }
-      const existing = treeWatchers.get(watchDir);
-      if (existing) {
-        if (existing.ino === currentInode) {
-          return existing.watcher;
-        }
-        closeDirectorySubtree(watchDir);
-      }
-      let watcher: fsSync.FSWatcher | undefined;
-      try {
-        watcher = resolveMemoryNativeWatchFactory()(
-          watchDir,
-          { recursive: false },
-          (eventType, filename) => {
-            if (this.closed || (watcher && treeWatchers.get(watchDir)?.watcher !== watcher)) {
+    this.refreshRequested = true;
+    return (this.refreshing ??= Promise.resolve()
+      .then(async () => {
+        while (this.refreshRequested && this.canObserve) {
+          this.refreshRequested = false;
+          const admitted = await this.policy.observations(this.lifetime.signal);
+          const groups = admitted.flatMap((group) => {
+            let id = this.rootIds.get(group.root);
+            if (id === undefined) {
+              id = ++this.nextRootId;
+              this.rootIds.set(group.root, id);
+            }
+            const chunks: Array<{ id: string; group: MemoryObservation }> = [];
+            for (let offset = 0; offset < group.selections.length; offset += 128) {
+              chunks.push({
+                id: String(id) + ":" + offset,
+                group: {
+                  ...group,
+                  selections: group.selections.slice(offset, offset + 128),
+                },
+              });
+            }
+            return chunks;
+          });
+          if (!this.canObserve) {
+            return;
+          }
+          const next = new Set(groups.map((group) => group.id));
+          const removed = [...this.observations.values()].filter((entry) => !next.has(entry.id));
+          await this.retire(removed);
+          if (!this.canObserve) {
+            return;
+          }
+          const ready: Promise<void>[] = [];
+          for (const { id, group } of groups) {
+            if (!this.canObserve) {
               return;
             }
-            if (filename == null) {
-              markDirty();
-              if (!this.attachLinuxSubtree(watchDir, attachDirectory)) {
-                closeAndFallback(
-                  `failed to refresh Linux memory directory watchers under ${watchDir}; falling back to chokidar`,
-                );
+            const scopes = this.policy.scopes(group);
+            const entry = this.observations.get(id);
+            if (entry) {
+              if (JSON.stringify(entry.member.scopes) === JSON.stringify(scopes)) {
+                entry.member.group = group;
+                continue;
               }
-              return;
-            }
-            const full = path.join(watchDir, filename);
-            let stats: fsSync.Stats | undefined;
-            try {
-              const s = fsSync.lstatSync(full, { throwIfNoEntry: false });
-              stats = s ?? undefined;
-            } catch {
-              stats = undefined;
-            }
-            if (!stats) {
-              closeDirectorySubtree(full);
-            }
-            if (stats?.isDirectory()) {
-              if (eventType === "rename") {
-                closeDirectorySubtree(full);
-              }
-              if (!this.attachLinuxSubtree(full, attachDirectory)) {
-                closeAndFallback(
-                  `failed to attach Linux memory directory watcher under ${full}; falling back to chokidar`,
-                );
+              // Re-admit changed scopes so the shared 128-scope budget stays bounded.
+              await this.retire([entry]);
+              if (!this.canObserve) {
                 return;
               }
             }
-            if (shouldIgnoreMemoryWatchPath(full, stats, this.settings.multimodal)) {
-              return;
-            }
-            markDirty(full, stats);
-          },
-        );
-      } catch (err) {
-        rootMissing ||= watchDir === dir && isFileMissingError(err);
-        if (this.degradeMemoryWatchCapacity(watchDir, err, markDirty)) {
-          return null;
+            const mode = resolveFsObservationMode();
+            const pollIntervalMs = resolveFsObservationIntervalMs(
+              process.env,
+              DEFAULT_POLL_INTERVAL_MS,
+            );
+            const member: ObservationMember = {
+              group,
+              scopes,
+              policy: this.policy,
+              invalidate: (hint) => {
+                this.deliver(() => this.dirty(member.group, hint));
+              },
+              health: (health) => {
+                this.deliver(() => this.onHealth(health, mode, pollIntervalMs));
+              },
+              isolate: () => {
+                if (!this.isolatedRoots.has(group.root)) {
+                  this.isolatedRoots.add(group.root);
+                  this.retries = 0;
+                }
+              },
+              unavailable: (error, code) => {
+                this.deliver(() => this.unavailable(error, code));
+              },
+            };
+            const { shared, ready: observationReady } = acquireObservation(
+              member,
+              mode,
+              pollIntervalMs,
+              !this.isolatedRoots.has(group.root),
+            );
+            this.observations.set(id, { id, member, shared });
+            ready.push(observationReady);
+          }
+          this.publishState();
+          await Promise.all(ready);
         }
-        if (watchDir === dir && !rootMissing) {
-          log.warn(
-            `failed to start Linux memory directory watcher on ${watchDir}: ${String(err)}; falling back to chokidar`,
-          );
+      })
+      .catch((error: unknown) => {
+        if (!this.closed) {
+          this.unavailable(error);
         }
-        return null;
-      }
-      treeWatchers.set(watchDir, { watcher, ino: currentInode });
-      watcher.on("error", (err) => {
-        if (treeWatchers.get(watchDir)?.watcher !== watcher) {
-          return;
+      })
+      .finally(() => {
+        this.refreshing = undefined;
+        if (this.refreshRequested && !this.retryTimer) {
+          void this.refresh();
         }
-        const detail = err instanceof Error ? err.message : String(err);
-        closeAndFallback(`memory Linux directory watcher error on ${watchDir}: ${detail}`, err);
+      }));
+  }
+
+  private deliver(run: () => void): void {
+    let admitted = false;
+    try {
+      this.options.runInBackgroundContext(() => {
+        admitted = true;
+        run();
       });
-      return watcher;
-    };
-
-    const mainWatcher = attachDirectory(dir);
-    if (!mainWatcher) {
-      return rootMissing ? "missing" : "failed";
-    }
-    pair = { dir, main: mainWatcher, parent: null, treeWatchers };
-    this.nativeMemoryWatchPairs.push(pair);
-    let subtreeAttached = this.attachLinuxSubtree(dir, attachDirectory);
-    // Scan errors can refer to a missing child, not the root. Only the root's
-    // identity can decide whether an existing parent should retain coverage.
-    try {
-      subtreeAttached = fsSync.statSync(dir).ino === recordedInode && subtreeAttached;
-    } catch (err) {
-      this.closeNativeMemoryWatchPair(pair);
-      if (!this.closed) {
-        markDirty();
+    } catch (error) {
+      if (admitted) {
+        throw error;
       }
-      return isFileMissingError(err) ? "missing" : "failed";
+      // Native notifications can arrive after admission closes but before cleanup joins them.
+      this.retryExhausted = true;
+      this.unavailable(error);
+      clearTimeout(this.watchTimer);
+      this.watchTimer = undefined;
+      this.pendingChange = false;
     }
-    if (!subtreeAttached) {
-      closeAndFallback(
-        `failed to attach Linux memory directory watcher subtree under ${dir}; falling back to chokidar`,
+  }
+
+  private dirty(group: MemoryObservation, hint: WatchInvalidation): void {
+    if (!hint.changes) {
+      this.markDirty();
+      void this.refresh();
+      return;
+    }
+    let structural = false;
+    for (const change of hint.changes) {
+      const file = this.policy.select(group, change.path, change.type === "structural");
+      if (file) {
+        structural ||= change.type === "structural";
+        // Only selected file facts refresh recovery, not peer or whole-scope events.
+        if (hint.reason === "event" || hint.reason === "reconcile") {
+          this.retries = 0;
+        }
+        this.markDirty(file);
+      }
+    }
+    if (structural) {
+      void this.refresh();
+    }
+  }
+
+  private onHealth(health: WatchHealth, mode: "auto" | "poll", pollIntervalMs: number): void {
+    this.publishState();
+    if (health.state !== "ready") {
+      return;
+    }
+    if (mode === "auto" && health.mode === "poll" && !this.pollingWarningShown) {
+      this.pollingWarningShown = true;
+      const reason = health.failure
+        ? `${health.failure.code ?? health.failure.operation}: ${String(health.failure.error)}`
+        : "native watch events are unavailable; fs-safe did not report a reason";
+      log.warn(
+        `memory watcher using fallback polling every ${pollIntervalMs} ms: ${reason}. ` +
+          "Native watching will not be retried until the watcher restarts.",
       );
-      return "attached";
     }
-
-    this.attachNativeMemoryParentWatch(pair, recordedInode, markDirty, "Linux", () =>
-      this.attachLinuxMemoryDirectoryTreeWatchForDir(dir, markDirty),
+    const count = [...this.observations.values()].reduce(
+      (total, entry) => total + entry.shared.subscription.health().directories,
+      0,
     );
-    return "attached";
-  }
-
-  private attachLinuxSubtree(
-    root: string,
-    attachDirectory: (dir: string) => fsSync.FSWatcher | null,
-  ): boolean {
-    let rootStats: fsSync.Stats | undefined;
-    try {
-      rootStats = fsSync.lstatSync(root, { throwIfNoEntry: false }) ?? undefined;
-    } catch {
-      // Directory-scan failures (including ENOSPC disk-full) are not watcher
-      // capacity. Returning false keeps closeAndFallback's Chokidar path.
-      return false;
-    }
-    if (
-      !rootStats?.isDirectory() ||
-      shouldIgnoreMemoryWatchPath(root, rootStats, this.settings.multimodal)
-    ) {
-      return true;
-    }
-    if (!attachDirectory(root)) {
-      return false;
-    }
-    let entries: fsSync.Dirent[];
-    try {
-      entries = fsSync.readdirSync(root, { withFileTypes: true });
-    } catch {
-      // Same scan-side contract as the lstat catch above: do not permanently
-      // disable watching after a full disk or a racy child listing.
-      return false;
-    }
-    for (const entry of entries) {
-      if (!entry.isDirectory() || entry.isSymbolicLink()) {
-        continue;
-      }
-      if (!this.attachLinuxSubtree(path.join(root, entry.name), attachDirectory)) {
-        return false;
-      }
-    }
-    return true;
-  }
-
-  // Reattach `dir` to chokidar after a native watcher dies, so
-  // subsequent memory changes under `dir` continue to drive watch sync.
-  protected attachMemoryChokidarFallback(
-    dir: string,
-    markDirty: (watchPath?: string, stats?: MemoryWatchEventStats) => void,
-  ): void {
-    if (this.closed || this.memoryWatchCapacityDegraded) {
+    if (this.pressureWarningShown || count <= 2_000) {
       return;
     }
-    try {
-      this.attachMemoryChokidarPaths(dir, markDirty);
-    } catch (err) {
-      log.warn(`failed to attach chokidar fallback for ${dir}: ${String(err)}`);
-    }
+    this.pressureWarningShown = true;
+    const detail =
+      health.mode === "poll"
+        ? "Large memory folders or extraPaths increase metadata polling work."
+        : "Large memory folders or extraPaths can exhaust file-watch/open-file limits.";
+    log.warn(
+      `Memory file watching is tracking ${count} observed directories. ${detail} ` +
+        "Remove unnecessary memory.search.extraPaths entries or narrow their roots. After changes, restart the Gateway. To refresh the index, run in the Gateway's environment: " +
+        formatCliCommand("openclaw memory index --force --agent " + this.options.agentId) +
+        ".",
+    );
   }
 
-  private attachMemoryChokidarPaths(
-    paths: string | string[],
-    markDirty: (watchPath?: string, stats?: MemoryWatchEventStats) => void,
-  ): void {
-    if (this.closed || this.memoryWatchCapacityDegraded) {
+  private unavailable(error: unknown, capacityCode?: string): void {
+    if (this.closed || this.recovering || this.retryTimer || this.degraded) {
       return;
     }
-    // Linux subtree startup can create the fallback before ensureWatcher
-    // attaches file paths. Reuse that watcher rather than replacing it.
-    if (this.watcher) {
-      this.watcher.add(paths);
-      return;
-    }
-    const watcher = resolveMemoryWatchFactory()(typeof paths === "string" ? [paths] : paths, {
-      ignoreInitial: true,
-      ignored: (watchPath, stats) =>
-        shouldIgnoreMemoryWatchPath(watchPath, stats, this.settings.multimodal),
-    });
-    this.watcher = watcher;
-    watcher.on("add", markDirty);
-    watcher.on("change", markDirty);
-    watcher.on("unlink", markDirty);
-    watcher.on("unlinkDir", markDirty);
-    watcher.on("error", (err) => {
-      if (this.degradeMemoryWatchCapacity("chokidar", err, markDirty)) {
+    this.degraded ||= Boolean(capacityCode);
+    this.publishState();
+    this.options.onUnavailable();
+    this.markDirty();
+    log.warn(
+      capacityCode
+        ? "memory watcher capacity exhausted (" +
+            capacityCode +
+            "); watching disabled, memory will refresh on search"
+        : "memory watcher unavailable; memory will refresh on search: " + String(error),
+    );
+    const retirement = this.retire([...this.observations.values()]);
+    this.recovering = retirement.finally(() => {
+      this.recovering = undefined;
+      if (this.closed || this.degraded || this.closeErrors.length || this.retryExhausted) {
         return;
       }
-      // File watcher errors must not crash the gateway; manual search still works.
-      const message = err instanceof Error ? err.message : String(err);
-      log.warn(`memory watcher error: ${message}`);
-    });
-    watcher.once("ready", () => {
-      this.warnIfMemoryWatchPressure(countChokidarWatchedEntries(watcher), "paths");
+      const delay = RETRY_DELAYS_MS[this.retries++];
+      if (delay === undefined) {
+        this.retryExhausted = true;
+        return;
+      }
+      this.retryTimer = setTimeout(() => {
+        this.retryTimer = undefined;
+        void this.refresh();
+      }, delay);
+      this.retryTimer.unref();
     });
   }
 
-  async close(): Promise<void> {
-    this.closed = true;
-    if (this.watchTimer) {
-      clearTimeout(this.watchTimer);
-      this.watchTimer = null;
+  private async retire(entries: Observation[]): Promise<void> {
+    for (const entry of entries) {
+      this.observations.delete(entry.id);
     }
-    if (this.memoryWatchPressureStartupTimer) {
-      clearTimeout(this.memoryWatchPressureStartupTimer);
-      this.memoryWatchPressureStartupTimer = null;
+    if (entries.length) {
+      this.publishState();
     }
-    this.closeNativeMemoryWatchPairs();
-    if (this.watcher) {
-      await this.watcher.close();
-      this.watcher = null;
+    const results = await Promise.allSettled(entries.map(releaseObservation));
+    for (const result of results) {
+      if (result.status !== "rejected") {
+        continue;
+      }
+      materializeErrorStack(result.reason);
+      this.closeErrors.push(result.reason);
+      if (!this.closed) {
+        this.options.onUnavailable();
+      }
+      log.warn(
+        "memory watcher close failed; observation will not restart: " + String(result.reason),
+      );
     }
-    this.pendingWatchPaths.clear();
   }
 
-  private scheduleWatchSync() {
+  private markDirty(file?: MemoryWatchFile): void {
     if (this.closed) {
       return;
     }
-    if (this.watchTimer) {
-      clearTimeout(this.watchTimer);
+    this.revision++;
+    this.pendingChange = true;
+    if (file) {
+      recordMemoryWatchEventPath(this.pendingPaths, file);
     }
-    this.watchTimer = setTimeout(() => {
-      this.watchTimer = null;
-      runDetachedMemorySync(async () => {
-        if (this.closed) {
-          return;
-        }
-        if (!(await settleMemoryWatchEventPaths(this.pendingWatchPaths))) {
-          if (!this.closed) {
-            this.scheduleWatchSync();
-          }
-          return;
-        }
-        if (this.closed) {
-          return;
-        }
-        await this.options.onChange();
-      }, "watch");
-    }, this.settings.sync.watchDebounceMs);
+    this.options.onDirty?.();
+    this.scheduleSync();
+  }
+
+  private scheduleSync(recheck = false): void {
+    if (this.closed || this.settling) {
+      return;
+    }
+    clearTimeout(this.watchTimer);
+    this.watchTimer = setTimeout(
+      () => {
+        this.watchTimer = undefined;
+        let retry = false;
+        const revision = this.revision;
+        this.settling = Promise.resolve()
+          .then(async () => {
+            if (this.closed) {
+              return;
+            }
+            if (!(await settleMemoryWatchEventPaths(this.pendingPaths, this.lifetime.signal))) {
+              retry = true;
+              return;
+            }
+            if (this.closed) {
+              return;
+            }
+            this.pendingChange = this.revision !== revision;
+            await this.options.runInBackgroundContext(() => this.options.onChange());
+          })
+          .catch((error: unknown) => {
+            if (error instanceof ObservationSampleCloseError) {
+              materializeErrorStack(error.cause);
+              this.closeErrors.push(error.cause);
+              this.unavailable(error);
+            }
+            if (!this.closed) {
+              // Do not spin indefinitely on a persistent metadata/indexing failure.
+              this.pendingChange = this.revision !== revision;
+              log.warn("memory sync failed (watch): " + String(error));
+            }
+          })
+          .finally(() => {
+            this.settling = undefined;
+            if (this.pendingChange) {
+              this.scheduleSync(retry);
+            }
+          });
+      },
+      Math.max(recheck ? 100 : 0, this.options.settings.sync.watchDebounceMs),
+    );
+    this.watchTimer.unref();
+  }
+
+  close(): Promise<void> {
+    if (this.closing) {
+      return this.closing;
+    }
+    this.closing = this.options.runInBackgroundContext(async () => {
+      this.closed = true;
+      this.lifetime.abort();
+      clearTimeout(this.watchTimer);
+      clearTimeout(this.retryTimer);
+      const retirement = this.retire([...this.observations.values()]);
+      await Promise.allSettled([
+        this.starting,
+        this.refreshing,
+        this.recovering,
+        this.settling,
+        retirement,
+      ]);
+      this.pendingPaths.clear();
+      this.publishState();
+      if (this.closeErrors.length) {
+        const failure = new AggregateError(this.closeErrors, "Memory watcher cleanup failed");
+        materializeErrorStack(failure);
+        throw failure;
+      }
+    });
+    return this.closing;
   }
 }

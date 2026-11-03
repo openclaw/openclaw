@@ -28,7 +28,7 @@ struct RemoteGatewayProbeTests {
             },
             sessionBox: WebSocketSessionBox(session: session))
 
-        let result = await RemoteGatewayProbe._testProbeGateway(
+        let result = await RemoteGatewayProbe.probeGateway(
             connection: gateway,
             timeoutMs: 0)
 
@@ -61,10 +61,10 @@ struct RemoteGatewayProbeTests {
             },
             sessionBox: WebSocketSessionBox(session: session))
 
-        let first = await RemoteGatewayProbe._testProbeGateway(connection: gateway, timeoutMs: 0)
+        let first = await RemoteGatewayProbe.probeGateway(connection: gateway, timeoutMs: 0)
         // A short probe must receive the same rejection, not spend its budget
         // behind the prior handshake's shared transport backoff (initially 500ms).
-        let second = await RemoteGatewayProbe._testProbeGateway(connection: gateway, timeoutMs: 250)
+        let second = await RemoteGatewayProbe.probeGateway(connection: gateway, timeoutMs: 250)
         #expect(first == second)
         if case let .failed(message) = second {
             #expect(message.contains("Gateway update required"))
@@ -88,7 +88,7 @@ struct RemoteGatewayProbeTests {
             },
             sessionBox: WebSocketSessionBox(session: session))
 
-        let result = await RemoteGatewayProbe._testProbeGateway(
+        let result = await RemoteGatewayProbe.probeGateway(
             connection: gateway,
             timeoutMs: 10)
 

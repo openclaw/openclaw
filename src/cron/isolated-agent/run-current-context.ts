@@ -28,6 +28,8 @@ function truncateContextLine(role: "user" | "assistant", text: string): string {
 function formatCurrentConversationContext(messages: unknown[]): string | undefined {
   const lines = projectChatDisplayMessages(messages, {
     maxChars: CURRENT_CONTEXT_MAX_LINE_CHARS,
+    // Prompt context retains only role and text, never forwarded sender labels.
+    resolveCronJobName: () => undefined,
   })
     .flatMap((message) => {
       if (!message || typeof message !== "object" || Array.isArray(message)) {

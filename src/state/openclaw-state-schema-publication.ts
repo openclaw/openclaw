@@ -2,6 +2,8 @@ import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parse as parseSemver } from "semver";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { invalidateSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { ABANDONED_UPDATE_RUN_MS } from "../infra/update-run-timeouts.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
@@ -92,6 +94,13 @@ export function resolveStateSchemaVersionToPublish(db: DatabaseSync): number {
       "Shared state schema publication cannot be deferred without config_machine_state.",
     );
   }
+  writeStateSchemaContentVersion(db);
+  invalidateSqliteSchemaFacts(db);
+  return published;
+}
+
+/** Persist the content marker inside the schema owner's transaction. */
+export function writeStateSchemaContentVersion(db: EngineConnection): void {
   executeSqliteQuerySync(
     db,
     getNodeSqliteKysely<PublicationDatabase>(db)
@@ -111,5 +120,19 @@ export function resolveStateSchemaVersionToPublish(db: DatabaseSync): number {
           .where("config_machine_state.value_json", "!=", String(OPENCLAW_STATE_SCHEMA_VERSION)),
       ),
   );
-  return published;
+}
+
+/** Advance an existing migration marker without changing its original timestamp. */
+export function advanceStateSchemaContentVersion(
+  db: EngineConnection,
+  versions: { fromVersion: number; toVersion: number },
+): void {
+  executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<PublicationDatabase>(db)
+      .updateTable("config_machine_state")
+      .set({ value_json: String(versions.toVersion) })
+      .where("state_key", "=", CONTENT_VERSION_KEY)
+      .where("value_json", "=", String(versions.fromVersion)),
+  );
 }

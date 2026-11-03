@@ -1,28 +1,34 @@
-import type { Model } from "@openclaw/llm-core";
+import type { Model, ModelRequestHeaders } from "@openclaw/llm-core";
 import { consumeResponseBytes } from "@openclaw/normalization-core";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { raceWithTimeout } from "../../../retry/src/index.js";
 import { getAiTransportHost } from "../host.js";
 export { redactIdentifier, sha256Hex } from "@openclaw/normalization-core/node-crypto";
+export { createAbortError } from "../../../retry/src/index.js";
 export { parseRetryAfterHeadersSeconds as parseRetryAfterSeconds } from "../internal/retry-after.js";
 export { parsePositiveInteger } from "./positive-integer.js";
 
 export const MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE =
   "OpenClaw transport error: malformed_streaming_fragment";
-export const CHARS_PER_TOKEN_ESTIMATE = 4;
-const NON_LATIN_RE =
-  /[\u2E80-\u9FFF\uA000-\uA4FF\uAC00-\uD7AF\uF900-\uFAFF\uFF01-\uFF60\uFFE0-\uFFE6\u{20000}-\u{2FA1F}]/gu;
-const CJK_SURROGATE_HIGH_RE = /[\uD840-\uD87E][\uDC00-\uDFFF]/g;
 
-export function redactSensitiveText(text: string, _options?: unknown): string {
-  return getAiTransportHost().redactToolPayloadText(text);
+/** Keep provider payloads out of parse errors without replacing unrelated failures. */
+export function streamFragmentError(
+  cause: unknown,
+  ErrorType: new (message: string, options: { cause: SyntaxError }) => Error = Error,
+): unknown {
+  return cause instanceof SyntaxError
+    ? new ErrorType(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE, { cause })
+    : cause;
 }
 
 export function resolveModelHeaderSentinels<TModel extends Model>(model: TModel): TModel {
   if (!model.headers) {
     return model;
   }
-  let headers: Record<string, string> | undefined;
+  let headers: ModelRequestHeaders | undefined;
   for (const [name, value] of Object.entries(model.headers)) {
+    if (value === null) {
+      continue;
+    }
     const resolved = getAiTransportHost().resolveSecretSentinel(value);
     if (resolved !== value) {
       headers ??= { ...model.headers };
@@ -30,24 +36,6 @@ export function resolveModelHeaderSentinels<TModel extends Model>(model: TModel)
     }
   }
   return headers ? ({ ...model, headers } as TModel) : model;
-}
-
-export function createAbortError(message: string, options?: ErrorOptions): Error {
-  const error = new Error(message, options);
-  error.name = "AbortError";
-  return error;
-}
-
-export function estimateStringChars(text: string): number {
-  if (!text) {
-    return 0;
-  }
-  const nonLatinCount = (text.match(NON_LATIN_RE) ?? []).length;
-  const codePointLength =
-    nonLatinCount === 0
-      ? text.length
-      : text.length - (text.match(CJK_SURROGATE_HIGH_RE) ?? []).length;
-  return codePointLength + nonLatinCount * (CHARS_PER_TOKEN_ESTIMATE - 1);
 }
 
 export function supportsModelTools(model: { compat?: unknown }): boolean {
@@ -65,41 +53,12 @@ export function isCodeModeModelVisibleToolName(
   return visibleToolNames.has(name);
 }
 
-async function readChunkWithIdleTimeout(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-  timeoutMs: number,
-  onIdleTimeout?: (params: { chunkTimeoutMs: number }) => Error,
-): Promise<ReadableStreamReadResult<Uint8Array>> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      reader.read(),
-      new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(
-          () =>
-            reject(onIdleTimeout?.({ chunkTimeoutMs: timeoutMs }) ?? new Error("Read timed out")),
-          timeoutMs,
-        );
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
-}
+const ANTHROPIC_MESSAGES_ERROR_BODY_MAX_BYTES = 8 * 1024;
+const ANTHROPIC_MESSAGES_ERROR_BODY_READ_IDLE_TIMEOUT_MS = 10_000;
 
-export async function readResponseTextSnippet(
+export async function readAnthropicMessagesErrorSnippet(
   response: Response,
-  options?: {
-    maxBytes?: number;
-    maxChars?: number;
-    chunkTimeoutMs?: number;
-    onIdleTimeout?: (params: { chunkTimeoutMs: number }) => Error;
-  },
 ): Promise<string | undefined> {
-  const maxBytes = options?.maxBytes ?? 8 * 1024;
-  const maxChars = options?.maxChars ?? 200;
   const reader = response.body?.getReader();
   if (!reader) {
     return undefined;
@@ -108,24 +67,25 @@ export async function readResponseTextSnippet(
   let bytes = 0;
   let truncated = false;
   try {
-    if (bytes < maxBytes) {
-      const result = await consumeResponseBytes({
-        maxBytes,
-        stopAtLimit: true,
-        read: () =>
-          options?.chunkTimeoutMs
-            ? readChunkWithIdleTimeout(reader, options.chunkTimeoutMs, options.onIdleTimeout)
-            : reader.read(),
-        onChunk: (chunk) => chunks.push(chunk),
-        onLimit: async () => {
-          await reader.cancel().catch(() => undefined);
-        },
-      });
-      bytes = Math.min(result.size, maxBytes);
-      truncated = result.truncated;
-    }
+    const result = await consumeResponseBytes({
+      maxBytes: ANTHROPIC_MESSAGES_ERROR_BODY_MAX_BYTES,
+      stopAtLimit: true,
+      read: () =>
+        raceWithTimeout(reader.read(), ANTHROPIC_MESSAGES_ERROR_BODY_READ_IDLE_TIMEOUT_MS, () => {
+          throw new Error(
+            `Anthropic Messages error response stalled: no data received for ${ANTHROPIC_MESSAGES_ERROR_BODY_READ_IDLE_TIMEOUT_MS}ms`,
+          );
+        }),
+      onChunk: (chunk) => chunks.push(chunk),
+      onLimit: () => {
+        // Capture tees must not delay the byte limit or timeout outcome.
+        void reader.cancel().catch(() => undefined);
+      },
+    });
+    bytes = Math.min(result.size, ANTHROPIC_MESSAGES_ERROR_BODY_MAX_BYTES);
+    truncated = result.truncated;
   } catch (error) {
-    await reader.cancel(error).catch(() => undefined);
+    void reader.cancel(error).catch(() => undefined);
     throw error;
   } finally {
     reader.releaseLock();
@@ -139,9 +99,6 @@ export async function readResponseTextSnippet(
   const collapsed = new TextDecoder().decode(merged).replace(/\s+/g, " ").trim();
   if (!collapsed) {
     return undefined;
-  }
-  if (collapsed.length > maxChars) {
-    return `${truncateUtf16Safe(collapsed, maxChars)}…`;
   }
   return truncated ? `${collapsed}…` : collapsed;
 }

@@ -83,7 +83,5 @@ read_when:
     - Always-on Gateway (run on a VPS, interact from anywhere).
     - Nodes for local browser/screen/camera/exec.
 
-    Showcase: [https://openclaw.ai/showcase](https://openclaw.ai/showcase).
-
   </Accordion>
 </AccordionGroup>

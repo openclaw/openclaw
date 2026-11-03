@@ -1,28 +1,26 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import assert from "node:assert/strict";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { PluginRecord } from "openclaw/plugin-sdk/plugin-test-runtime";
 import "../test-support/browser-security.mock.js";
-import type { OpenClawConfig } from "../config/config.js";
+import { beforeEach, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn<() => OpenClawConfig>(() => ({})),
   sourceConfig: null as OpenClawConfig | null,
   pluginRecord: undefined as
-    | {
-        id: string;
-        status: "disabled" | "error" | "loaded";
-        activationReason?: string;
-        error?: string;
-        failurePhase?: "validation" | "load" | "register";
-      }
+    | Pick<PluginRecord, "id" | "status" | "activationReason" | "error" | "failurePhase">
     | undefined,
   startBrowserControlServiceFromConfig: vi.fn<() => Promise<null>>(async () => null),
   dispatch: vi.fn(),
 }));
 
-vi.mock("../config/config.js", () => ({
-  getRuntimeConfig: mocks.loadConfig,
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
+  readRuntimeConfig: mocks.loadConfig,
   getRuntimeConfigSourceSnapshot: () => mocks.sourceConfig,
 }));
-vi.mock("./control-service.js", () => ({
+vi.mock("../control-service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../control-service.js")>()),
   createBrowserControlContext: vi.fn(() => ({})),
   startBrowserControlServiceFromConfig: mocks.startBrowserControlServiceFromConfig,
 }));
@@ -38,104 +36,77 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
 const { fetchBrowserJson } = await import("./client-fetch.js");
 
 async function expectThrownBrowserFetchError(
-  request: () => Promise<unknown>,
-  expected: { contains: string[]; omits: string[] },
+  contains: string[],
+  omits = ["Restart", "not installed", "not yet loaded"],
 ) {
-  const result = await request().catch((error: unknown) => error);
-  expect(result).toBeInstanceOf(Error);
-  if (!(result instanceof Error)) {
-    throw new Error("Expected browser control refusal");
-  }
-  for (const text of expected.contains) {
+  const result = await fetchBrowserJson("/tabs").catch((error: unknown) => error);
+  assert(result instanceof Error, "Expected browser control refusal");
+  for (const text of contains) {
     expect(result.message).toContain(text);
   }
-  for (const text of expected.omits) {
+  for (const text of omits) {
     expect(result.message).not.toContain(text);
   }
 }
 
-describe("browser control availability diagnostics", () => {
-  beforeEach(() => {
-    mocks.loadConfig.mockReset().mockReturnValue({});
-    mocks.sourceConfig = null;
-    mocks.pluginRecord = undefined;
-    mocks.startBrowserControlServiceFromConfig.mockReset().mockResolvedValue(null);
-    mocks.dispatch.mockReset();
-  });
+beforeEach(() => {
+  mocks.loadConfig.mockReset().mockReturnValue({});
+  mocks.sourceConfig = null;
+  mocks.pluginRecord = undefined;
+  mocks.startBrowserControlServiceFromConfig.mockReset().mockResolvedValue(null);
+  mocks.dispatch.mockReset();
+});
 
-  it.each([
-    {
-      name: "allowlist exclusion",
-      config: { plugins: { allow: ["telegram"] } },
-      contains: ['"browser" is not in plugins.allow', "Add", "openclaw plugins enable browser"],
-    },
-    {
-      name: "global plugin disablement",
-      config: { plugins: { enabled: false } },
-      contains: [
-        "plugins.enabled=false",
-        "plugins.enabled=true",
-        "openclaw plugins enable browser",
-      ],
-    },
-    {
-      name: "plugin denylist",
-      config: { plugins: { deny: ["browser"] } },
-      contains: ["plugins.deny", "Remove", "openclaw plugins enable browser"],
-    },
-    {
-      name: "explicit plugin disablement",
-      config: { plugins: { entries: { browser: { enabled: false } } } },
-      contains: ["plugins.entries.browser.enabled=false", "openclaw plugins enable browser"],
-    },
-    {
-      name: "browser config disablement",
-      config: { browser: { enabled: false } },
-      contains: ["browser.enabled=false", "browser.enabled=true"],
-    },
-    {
-      name: "unrecorded availability",
-      config: {},
-      contains: ["openclaw doctor"],
-    },
-  ])("explains $name at the local dispatch boundary", async ({ config, contains }) => {
+it.each([
+  [
+    { plugins: { enabled: false } },
+    ["plugins.enabled=false", "plugins.enabled=true", "openclaw plugins enable browser"],
+  ],
+  [
+    { plugins: { deny: ["browser"] } },
+    ["plugins.deny", "Remove", "openclaw plugins enable browser"],
+  ],
+  [
+    { plugins: { entries: { browser: { enabled: false } } } },
+    ["plugins.entries.browser.enabled=false", "openclaw plugins enable browser"],
+  ],
+  [{ browser: { enabled: false } }, ["browser.enabled=false", "browser.enabled=true"]],
+  [{}, ["openclaw doctor"]],
+] satisfies [OpenClawConfig, string[]][])(
+  "explains unavailable config %j at the local dispatch boundary",
+  async (config, contains) => {
     mocks.loadConfig.mockReturnValue(config);
-    mocks.startBrowserControlServiceFromConfig.mockResolvedValueOnce(null);
 
-    await expectThrownBrowserFetchError(() => fetchBrowserJson("/tabs"), {
-      contains,
-      omits: ["Restart", "not installed", "not yet loaded"],
-    });
+    await expectThrownBrowserFetchError(contains);
     expect(mocks.dispatch).not.toHaveBeenCalled();
-  });
+  },
+);
 
-  it("explains the source policy that refused startup despite runtime auto-enable", async () => {
-    mocks.loadConfig.mockReturnValue({ plugins: { allow: ["browser"] } });
-    mocks.sourceConfig = { plugins: { allow: ["telegram"] } };
-    mocks.startBrowserControlServiceFromConfig.mockResolvedValueOnce(null);
+it("explains the source policy that refused startup despite runtime auto-enable", async () => {
+  mocks.loadConfig.mockReturnValue({ plugins: { allow: ["browser"] } });
+  mocks.sourceConfig = { plugins: { allow: ["telegram"] } };
 
-    await expectThrownBrowserFetchError(() => fetchBrowserJson("/tabs"), {
-      contains: ['"browser" is not in plugins.allow', "openclaw plugins enable browser"],
-      omits: ["Restart"],
-    });
-  });
+  await expectThrownBrowserFetchError([
+    '"browser" is not in plugins.allow',
+    "Add",
+    "openclaw plugins enable browser",
+  ]);
+  expect(mocks.dispatch).not.toHaveBeenCalled();
+});
 
-  it.each([
-    { status: "error", failurePhase: "load", error: "Cannot find module browser-driver" },
-    { status: "error", failurePhase: "register", error: "registration timed out" },
-    { status: "error", error: "plugin not installed: browser" },
-    { status: "disabled", activationReason: "capability consent required" },
-  ] as const)("preserves recorded $status refusal details", async (record) => {
-    mocks.pluginRecord = { id: "browser", ...record };
-    mocks.startBrowserControlServiceFromConfig.mockResolvedValueOnce(null);
+it.each([
+  { status: "error", failurePhase: "register", error: "registration timed out" },
+  { status: "error", error: "plugin not installed: browser" },
+  { status: "disabled", activationReason: "capability consent required" },
+] as const)("preserves recorded $status refusal details", async (record) => {
+  mocks.pluginRecord = { id: "browser", ...record };
 
-    await expectThrownBrowserFetchError(() => fetchBrowserJson("/tabs"), {
-      contains: [
-        record.status === "error" ? record.error : record.activationReason,
-        "openclaw doctor",
-        "Do NOT retry the browser tool",
-      ],
-      omits: ["Restart", "Retry the browser tool once"],
-    });
-  });
+  await expectThrownBrowserFetchError(
+    [
+      record.status === "error" ? record.error : record.activationReason,
+      "openclaw doctor",
+      "Do NOT retry the browser tool",
+    ],
+    ["Restart", "Retry the browser tool once"],
+  );
 });

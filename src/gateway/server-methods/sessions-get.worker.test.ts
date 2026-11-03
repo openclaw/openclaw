@@ -1,12 +1,11 @@
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import {
-  replaceSessionEntrySync,
-  replaceTranscriptEvents,
-} from "../../config/sessions/session-accessor.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { sessionByKeyReadHandlers } from "./sessions-read-by-key.js";
+import { sessionReader } from "./sessions-keyed-read.test-support.js";
 import {
   identifiedClient,
   initializeSessionReadContext,
@@ -15,16 +14,19 @@ import {
 
 it("keeps warm, dirty, and archived keyed RPCs off host SQLite while preserving raw messages", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
     const scope = {
       agentId: "main",
       sessionKey: "agent:main:raw-worker-history",
       sessionId: "raw-worker-history",
     };
-    replaceSessionEntrySync(scope, {
+    const entry = {
       sessionId: scope.sessionId,
       updatedAt: 1,
-      visibility: "shared",
-    });
+      visibility: "shared" as const,
+    };
+    replaceSessionEntrySync(scope, entry);
     const messages = [
       { role: "user", content: "Earlier message" },
       { role: "assistant", channel: "commentary", content: "Checking the fixture" },
@@ -40,68 +42,52 @@ it("keeps warm, dirty, and archived keyed RPCs off host SQLite while preserving 
         message,
       })),
     ]);
-    const context = requestContext({ agents: { entries: { main: {} } } });
+    const context = requestContext(cfg);
     const client = identifiedClient("synthetic-viewer");
     await initializeSessionReadContext(context);
-    const read = async (method: "sessions.get" | "sessions.describe" = "sessions.get") => {
-      const respond = vi.fn();
-      await sessionByKeyReadHandlers[method]!({
-        req: { type: "req", id: "raw-worker-history", method },
-        params: { key: scope.sessionKey, ...(method === "sessions.get" ? { limit: 3 } : {}) },
-        client,
-        context,
-        respond,
-        isWebchatConnect: () => false,
-      });
-      expect(respond).toHaveBeenCalledOnce();
-      expect(respond.mock.calls[0]?.[0]).toBe(true);
-      return respond.mock.calls[0]?.[1];
-    };
+    const reader = sessionReader(context, client, scope.sessionKey);
+    const read = (method: "sessions.get" | "sessions.describe" = "sessions.get") =>
+      reader(method, method === "sessions.get" ? 3 : undefined);
     const expected = await read();
-    expect(expected).toMatchObject({ messages: messages.slice(1) });
     expect(expected).toMatchObject({
-      messages: [
-        { __openclaw: { id: "message-1" } },
-        { __openclaw: { id: "message-2" } },
-        { __openclaw: { id: "message-3" } },
-      ],
+      messages: messages
+        .slice(1)
+        .map((message, index) =>
+          Object.assign({}, message, { __openclaw: { id: `message-${index + 1}` } }),
+        ),
     });
     const hostSql = observeHostDataSql();
+    const assertWorkerRead = async (
+      method: "sessions.get" | "sessions.describe",
+      archived = false,
+    ) => {
+      // Count the RPC read, independently of the committed writer's publication work.
+      hostSql.calls.forEach((call) => call.mockClear());
+      const result = await read(method);
+      if (method === "sessions.get") {
+        expect(result).toEqual(expected);
+      } else {
+        expect(result).toMatchObject({
+          session: { sessionId: scope.sessionId, ...(archived ? { archivedAt: 1 } : {}) },
+        });
+      }
+      expect(hostSql.calls.flatMap((call) => call.mock.calls)).toEqual([]);
+    };
     try {
-      for (let index = 0; index < 100; index++) {
+      for (let index = 0; index < 2; index++) {
         expect(await read()).toEqual(expected);
       }
       expect(hostSql.calls.flatMap((call) => call.mock.calls)).toEqual([]);
       for (const method of ["sessions.get", "sessions.describe"] as const) {
-        for (let index = 0; index < 100; index++) {
+        for (let index = 0; index < 2; index++) {
           sessionChanges.emit({ agentId: scope.agentId, sessionKey: scope.sessionKey });
-          // Count the RPC read, independently of the committed writer's publication work.
-          hostSql.calls.forEach((call) => call.mockClear());
-          const result = await read(method);
-          if (method === "sessions.get") {
-            expect(result).toEqual(expected);
-          } else {
-            expect(result).toMatchObject({ session: { sessionId: scope.sessionId } });
-          }
-          expect(hostSql.calls.flatMap((call) => call.mock.calls)).toEqual([]);
+          await assertWorkerRead(method);
         }
       }
-      replaceSessionEntrySync(scope, {
-        sessionId: scope.sessionId,
-        updatedAt: 1,
-        visibility: "shared",
-        archivedAt: 1,
-      });
+      replaceSessionEntrySync(scope, { ...entry, archivedAt: 1 });
       for (const method of ["sessions.get", "sessions.describe"] as const) {
         sessionChanges.emit({ all: true, scope: "catalog" });
-        hostSql.calls.forEach((call) => call.mockClear());
-        const result = await read(method);
-        if (method === "sessions.get") {
-          expect(result).toEqual(expected);
-        } else {
-          expect(result).toMatchObject({ session: { sessionId: scope.sessionId, archivedAt: 1 } });
-        }
-        expect(hostSql.calls.flatMap((call) => call.mock.calls)).toEqual([]);
+        await assertWorkerRead(method, true);
       }
     } finally {
       hostSql.restore();

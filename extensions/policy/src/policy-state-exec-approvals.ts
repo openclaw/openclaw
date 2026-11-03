@@ -1,4 +1,3 @@
-// Policy plugin exec approval evidence.
 import {
   asNonArrayRecord,
   isRecord,
@@ -9,20 +8,13 @@ import { execApprovalsPolicyUri } from "./exec-approvals-uri.js";
 import { ocPathSegment } from "./policy-state-helpers.js";
 import type { PolicyExecApprovalEvidence } from "./policy-state-types.js";
 
-const DEFAULT_EXEC_APPROVAL_AGENT_ID = "main";
-
 export function scanPolicyExecApprovals(raw: string): readonly PolicyExecApprovalEvidence[] {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return [];
-  }
-  if (!isRecord(parsed) || parsed.version !== 1) {
+  const parsed = parseExecApprovalsFile(raw);
+  if (!parsed.ok) {
     return [];
   }
   const evidence: PolicyExecApprovalEvidence[] = [];
-  const defaults = asNonArrayRecord(parsed.defaults);
+  const defaults = asNonArrayRecord(parsed.value.defaults);
   evidence.push(
     execApprovalPostureEvidence(
       "defaults",
@@ -32,33 +24,62 @@ export function scanPolicyExecApprovals(raw: string): readonly PolicyExecApprova
     ),
   );
 
-  for (const agent of normalizedExecApprovalAgents(parsed.agents)) {
-    const agentSource = execApprovalsPolicyUri(`agents/${ocPathSegment(agent.sourceAgentId)}`);
+  // Snapshot admission leaves legacy agent and allowlist migration to Doctor.
+  for (const [agentId, value] of Object.entries(asNonArrayRecord(parsed.value.agents)).toSorted(
+    ([a], [b]) => a.localeCompare(b),
+  )) {
+    if (!isRecord(value)) {
+      continue;
+    }
+    const agentSource = execApprovalsPolicyUri(`agents/${ocPathSegment(agentId)}`);
     evidence.push(
-      execApprovalPostureEvidence(
-        `agent:${agent.agentId}`,
-        "agent",
-        agent.value,
-        agentSource,
-        agent.agentId,
-      ),
+      execApprovalPostureEvidence(`agent:${agentId}`, "agent", value, agentSource, agentId),
     );
-    for (const [index, entry] of agent.allowlistEntries.entries()) {
-      const allowlistSource = execApprovalsPolicyUri(
-        `agents/${ocPathSegment(entry.sourceAgentId)}/allowlist/#${entry.index}`,
-      );
+    if (!Array.isArray(value.allowlist)) {
+      continue;
+    }
+    let allowlistIndex = 0;
+    for (const [index, entry] of value.allowlist.entries()) {
+      if (!isRecord(entry)) {
+        continue;
+      }
+      const pattern = readString(entry.pattern);
+      if (pattern === undefined) {
+        continue;
+      }
+      const argPattern = readString(entry.argPattern);
+      const entrySource = readString(entry.source) === "allow-always" ? "allow-always" : undefined;
       evidence.push({
-        id: `agent:${agent.agentId}:allowlist:${index}`,
+        id: `agent:${agentId}:allowlist:${allowlistIndex++}`,
         kind: "allowlist",
-        source: allowlistSource,
-        agentId: agent.agentId,
-        pattern: entry.pattern,
-        ...(entry.argPattern === undefined ? {} : { argPattern: entry.argPattern }),
-        ...(entry.entrySource === undefined ? {} : { entrySource: entry.entrySource }),
+        source: `${agentSource}/allowlist/#${index}`,
+        agentId,
+        pattern,
+        ...(argPattern === undefined ? {} : { argPattern }),
+        ...(entrySource === undefined ? {} : { entrySource }),
       });
     }
   }
   return evidence;
+}
+
+export function parseExecApprovalsFile(
+  raw: string,
+):
+  | { readonly ok: true; readonly value: Record<string, unknown> }
+  | { readonly ok: false; readonly message: string } {
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (!isRecord(value) || value.version !== 1) {
+      return { ok: false, message: "unsupported exec approvals version" };
+    }
+    return { ok: true, value };
+  } catch (err) {
+    return {
+      ok: false,
+      message: err instanceof Error ? err.message : String(err),
+    };
+  }
 }
 
 function execApprovalPostureEvidence(
@@ -97,186 +118,4 @@ function readExecApprovalAsk(value: unknown): string | undefined {
   return normalized === "off" || normalized === "on-miss" || normalized === "always"
     ? normalized
     : undefined;
-}
-
-type NormalizedExecApprovalAllowlistEntry = ReturnType<
-  typeof execApprovalAllowlistEntries
->[number] & {
-  readonly sourceAgentId: string;
-};
-
-type NormalizedExecApprovalAgent = {
-  readonly agentId: string;
-  readonly sourceAgentId: string;
-  readonly value: Record<string, unknown>;
-  readonly allowlistEntries: readonly NormalizedExecApprovalAllowlistEntry[];
-};
-
-function normalizedExecApprovalAgents(rawAgents: unknown): readonly NormalizedExecApprovalAgent[] {
-  if (!isRecord(rawAgents)) {
-    return [];
-  }
-  const agents = Object.entries(rawAgents).filter(
-    (entry): entry is [string, Record<string, unknown>] => isRecord(entry[1]),
-  );
-  const legacyDefault = agents.find(([agentId]) => agentId === "default")?.[1];
-  const normalized = agents
-    .filter(([agentId]) => agentId !== "default")
-    .map(([agentId, value]): NormalizedExecApprovalAgent => {
-      if (agentId === DEFAULT_EXEC_APPROVAL_AGENT_ID && legacyDefault !== undefined) {
-        return {
-          agentId,
-          sourceAgentId: agentId,
-          value: mergeLegacyExecApprovalAgent(value, legacyDefault),
-          allowlistEntries: mergedExecApprovalAllowlistEntries(
-            value.allowlist,
-            legacyDefault.allowlist,
-          ),
-        };
-      }
-      return execApprovalAgentFromParts(agentId, agentId, value);
-    });
-  if (
-    legacyDefault !== undefined &&
-    !agents.some(([agentId]) => agentId === DEFAULT_EXEC_APPROVAL_AGENT_ID)
-  ) {
-    normalized.push(
-      execApprovalAgentFromParts(DEFAULT_EXEC_APPROVAL_AGENT_ID, "default", legacyDefault),
-    );
-  }
-  return normalized.toSorted((a, b) => a.agentId.localeCompare(b.agentId));
-}
-
-function execApprovalAgentFromParts(
-  agentId: string,
-  sourceAgentId: string,
-  value: Record<string, unknown>,
-): NormalizedExecApprovalAgent {
-  const allowlistEntries = execApprovalAllowlistEntries(value.allowlist).map(
-    (entry): NormalizedExecApprovalAllowlistEntry => ({
-      index: entry.index,
-      pattern: entry.pattern,
-      argPattern: entry.argPattern,
-      entrySource: entry.entrySource,
-      sourceAgentId,
-    }),
-  );
-  return {
-    agentId,
-    sourceAgentId,
-    value,
-    allowlistEntries,
-  };
-}
-
-function mergeLegacyExecApprovalAgent(
-  current: Record<string, unknown>,
-  legacy: Record<string, unknown>,
-): Record<string, unknown> {
-  return {
-    ...legacy,
-    ...current,
-    security: current.security ?? legacy.security,
-    ask: current.ask ?? legacy.ask,
-    askFallback: current.askFallback ?? legacy.askFallback,
-    autoAllowSkills: current.autoAllowSkills ?? legacy.autoAllowSkills,
-    allowlist: mergedExecApprovalAllowlist(current.allowlist, legacy.allowlist),
-  };
-}
-
-function mergedExecApprovalAllowlist(
-  current: unknown,
-  legacy: unknown,
-): readonly unknown[] | undefined {
-  const entries = mergedExecApprovalAllowlistEntries(current, legacy).map((entry) => {
-    const allowlistEntry: Record<string, unknown> = { pattern: entry.pattern };
-    if (entry.argPattern !== undefined) {
-      allowlistEntry.argPattern = entry.argPattern;
-    }
-    if (entry.entrySource !== undefined) {
-      allowlistEntry.source = entry.entrySource;
-    }
-    return allowlistEntry;
-  });
-  return entries.length === 0 ? undefined : entries;
-}
-
-function mergedExecApprovalAllowlistEntries(
-  current: unknown,
-  legacy: unknown,
-): readonly NormalizedExecApprovalAllowlistEntry[] {
-  const entries: NormalizedExecApprovalAllowlistEntry[] = [];
-  const seen = new Set<string>();
-  const appendEntries = (sourceEntries: readonly NormalizedExecApprovalAllowlistEntry[]) => {
-    for (const sourceEntry of sourceEntries) {
-      const key = `${sourceEntry.pattern.toLowerCase()}\x00${sourceEntry.argPattern ?? ""}`;
-      if (seen.has(key)) {
-        continue;
-      }
-      seen.add(key);
-      entries.push(sourceEntry);
-    }
-  };
-  appendEntries(withExecApprovalAllowlistSource(current, DEFAULT_EXEC_APPROVAL_AGENT_ID));
-  appendEntries(withExecApprovalAllowlistSource(legacy, "default"));
-  return entries;
-}
-
-function withExecApprovalAllowlistSource(
-  value: unknown,
-  sourceAgentId: string,
-): readonly NormalizedExecApprovalAllowlistEntry[] {
-  return execApprovalAllowlistEntries(value).map((entry): NormalizedExecApprovalAllowlistEntry => ({
-    index: entry.index,
-    pattern: entry.pattern,
-    argPattern: entry.argPattern,
-    entrySource: entry.entrySource,
-    sourceAgentId,
-  }));
-}
-
-function readExecApprovalAllowlistEntrySource(value: unknown): "allow-always" | undefined {
-  return readString(value) === "allow-always" ? "allow-always" : undefined;
-}
-
-function execApprovalAllowlistEntries(value: unknown): readonly {
-  readonly index: number;
-  readonly pattern: string;
-  readonly argPattern?: string;
-  readonly entrySource?: string;
-}[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  const entries: {
-    readonly index: number;
-    readonly pattern: string;
-    readonly argPattern?: string;
-    readonly entrySource?: string;
-  }[] = [];
-  for (const [index, entry] of value.entries()) {
-    if (typeof entry === "string") {
-      const pattern = entry.trim();
-      if (pattern !== "") {
-        entries.push({ index, pattern });
-      }
-      continue;
-    }
-    if (!isRecord(entry)) {
-      continue;
-    }
-    const pattern = readString(entry.pattern);
-    if (pattern === undefined) {
-      continue;
-    }
-    const argPattern = readString(entry.argPattern);
-    const entrySource = readExecApprovalAllowlistEntrySource(entry.source);
-    entries.push({
-      index,
-      pattern,
-      ...(argPattern === undefined ? {} : { argPattern }),
-      ...(entrySource === undefined ? {} : { entrySource }),
-    });
-  }
-  return entries;
 }

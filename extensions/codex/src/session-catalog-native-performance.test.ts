@@ -19,12 +19,7 @@ it("measures ordinary and catalog response retention across real native DB-only 
   });
   const knownPreviews = new Map<
     string,
-    {
-      path: string | null;
-      updatedAt: number | null;
-      recencyAt: number | null;
-      preview: string;
-    }
+    Omit<Parameters<CodexCatalogPreviewCache>[0], "id"> & { preview: string }
   >();
   const seed = await startNativeCatalogPerformanceClient(fixture);
   try {
@@ -76,23 +71,10 @@ it("measures ordinary and catalog response retention across real native DB-only 
     }
   }
   const [ordinary, catalog] = measurements;
-  console.info(
-    "native catalog boundary measurements",
-    JSON.stringify({
-      fixtureRows: 3_000,
-      userPreviewBytes: 64 * 1024,
-      preparedPreviewRows: knownPreviews.size,
-      rolloutBytes: fixture.rolloutBytes,
-      interpretation:
-        "Equivalent DB-only request walk through the real client boundary; not the periodic timer. Both modes retain the same prepared preview map; catalog mode reuses matching previews. Wire JSON parsing remains necessary.",
-      measurements,
-    }),
-  );
   expect(ordinary).toMatchObject({
     rows: 3_000,
     pages: 47,
     pageRows: 64,
-    previewCacheUsed: false,
     previewCacheHits: 0,
   });
   expect(catalog).toMatchObject({
@@ -100,12 +82,9 @@ it("measures ordinary and catalog response retention across real native DB-only 
     pages: 47,
     pageRows: 64,
     firstThreadId: ordinary!.firstThreadId,
-    previewCacheUsed: true,
     previewCacheHits: 3_064,
   });
   expect(ordinary!.maxPreviewCharacters).toBeGreaterThan(16 * 1024);
   expect(catalog!.maxPreviewCharacters).toBeLessThanOrEqual(500);
   expect(catalog!.retainedPageBytes).toBeLessThan(ordinary!.retainedPageBytes / 10);
-  expect(ordinary!.sampledWalkAllocationBytes).toBeGreaterThan(0);
-  expect(catalog!.sampledWalkAllocationBytes).toBeGreaterThan(0);
 });

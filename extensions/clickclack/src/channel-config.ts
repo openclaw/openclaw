@@ -1,4 +1,3 @@
-// ClickClack plugin module shares channel metadata and account config behavior.
 import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { getChatChannelMeta } from "openclaw/plugin-sdk/channel-plugin-common";
 import {

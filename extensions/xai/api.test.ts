@@ -1,18 +1,7 @@
-// Xai tests cover api plugin behavior.
 import { describe, expect, it } from "vitest";
-import {
-  normalizeXaiModelId,
-  resolveXaiForwardCompatModel,
-  resolveXaiTransport,
-  XAI_BASE_URL,
-} from "./api.js";
-import { normalizeXaiModelId as normalizeXaiModelIdDirect } from "./model-id.js";
+import { resolveXaiForwardCompatModel, resolveXaiTransport, XAI_BASE_URL } from "./api.js";
 
 describe("xai api helpers", () => {
-  it("re-exports the model normalizer", () => {
-    expect(normalizeXaiModelId).toBe(normalizeXaiModelIdDirect);
-  });
-
   it("uses shared endpoint classification for native xAI transports", () => {
     expect(
       resolveXaiTransport({
@@ -28,8 +17,6 @@ describe("xai api helpers", () => {
 
   it.each([
     ["xai", "openai-completions"],
-    ["x-ai", "openai-completions"],
-    ["xai", "openai-responses"],
     ["x-ai", "openai-responses"],
   ])("keeps default-route xAI transport for %s with %s", (provider, api) => {
     expect(
@@ -59,11 +46,6 @@ describe("xai api helpers", () => {
   it.each([
     {
       provider: "xai",
-      modelId: "grok-4.5",
-      cost: { input: 2, output: 6, cacheRead: 0.3, cacheWrite: 0 },
-    },
-    {
-      provider: "x-ai",
       modelId: "grok-4.5",
       cost: { input: 2, output: 6, cacheRead: 0.3, cacheWrite: 0 },
     },

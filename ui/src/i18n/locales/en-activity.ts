@@ -6,9 +6,21 @@ import { en } from "./en.ts";
 const enActivity = {
   activity: {
     images: {
-      failed: "Image previews are unavailable. Open the session or retry.",
-      older: "Search older images",
-      incomplete: "Some images are too large to preview here. Open the session to see them.",
+      failed: "Couldn't load images",
+      older: "Older images",
+      incomplete: "Images too large to preview here",
+    },
+    pulse: {
+      sessionsOne: "session",
+      sessions: "sessions",
+      started: "started",
+      peopleOne: "person",
+      people: "people",
+      running: "running now",
+      bucketOne: "{period} · {count} session",
+      bucket: "{period} · {count} sessions",
+      descriptionOne: "{window}: {count} session; busiest {period}",
+      description: "{window}: {count} sessions; busiest {period}",
     },
     git: {
       pullRequest: "{repository} pull request #{number}: {title} ({state})",
@@ -31,7 +43,7 @@ const enActivity = {
     expandAll: "Expand all",
     collapseAll: "Collapse all",
     clear: "Clear",
-    empty: "No activity yet.",
+    empty: "No activity yet. Only activity received while this view is open appears here.",
     emptyFiltered: "No activity matches these filters.",
     argumentHiddenOne: "1 argument hidden",
     argumentsHidden: "{count} arguments hidden",
@@ -39,7 +51,7 @@ const enActivity = {
     toolCallId: "Tool call",
     runId: "Run",
     session: "Session",
-    outputTruncated: "Preview redacted and truncated.",
+    outputTruncated: "Preview truncated.",
     noOutputPreview: "No output preview.",
     currentWork: {
       title: "Active sessions",
@@ -167,6 +179,9 @@ const enActivity = {
         occurredAtLabel: "Recorded at",
         ownerHeading: "Display provenance",
         durableOwnerLabel: "Verified producer",
+        representedSubjectHeading: "Recorded authority subject",
+        representedSubjectNote:
+          "This records whose authority the operation selected. It does not prove that the person requested or approved it, or that the operation was authorized.",
         boundaryLabel: "Decision boundary",
         ownerNote:
           "The Gateway exposes explanations only from a verified owning call path. Receipt-controlled explanations and next steps are hidden; the Control UI does not infer trust from receipt metadata.",
@@ -274,11 +289,59 @@ const enActivity = {
       retry: "Retry inspection",
     },
   },
+  activityFeed: {
+    partialHistory:
+      "People and counts describe visible recorded session associations; retained history and this people list may be incomplete.",
+    sessionsMode: "Sessions",
+    searchPlaceholder: "Search session titles…",
+    time: "Time",
+    time24h: "Last 24 hours",
+    time7d: "Last 7 days",
+    time30d: "Last 30 days",
+    timeAll: "All time",
+    everyone: "Everyone",
+    peopleButtonLabel: "Filter sessions by person",
+    lastActive: "· {time}",
+    unresolvedIdentities: "Unresolved identities",
+    clearPersonFilter: "Clear person filter",
+    showing: en.activityFeed.showing,
+    today: "Today",
+    yesterday: "Yesterday",
+    unknownDate: "Unknown date",
+    noSessions: "No sessions match these filters.",
+    automationGroup: "{count} automation sessions",
+    automation: "Automation",
+    inspectRun: "Inspect run",
+    recap: "Session recap",
+    recapMissing: "No recap yet",
+    recapUpdating: "Updating recap…",
+    recapStale: "New activity since this recap",
+    recapUnavailable: "Recap unavailable",
+    recapRefreshFailed: "Couldn’t refresh recap",
+    recapRetry: "Retry recap",
+    recapUpdated: "Recap updated {time}",
+    backToSessions: "Back to sessions",
+    channelLabel: "Channel: {value}",
+    agentLabel: "Agent: {value}",
+    online: "Online",
+    idle: "Idle",
+    offline: "Offline",
+    unknownConnection: "Unknown client",
+    connectionDetails: "Connection details · {count}",
+    connectionOne: "1 connection",
+    connectionMany: "{count} connections",
+    lastInput: "Last input {time} ago",
+    viewingNow: en.activityFeed.viewingNow,
+    notViewing: "Not viewing a session right now.",
+    notFoundTitle: "Person not found",
+    notFoundDescription: "No online presence or visible session association matches this identity.",
+  },
 } satisfies TranslationMap;
 
 export const registerActivityEnglish = Object.assign(
   () => {
     en.activity = enActivity.activity;
+    Object.assign(en.activityFeed, enActivity.activityFeed);
   },
   { catalog: enActivity },
 );

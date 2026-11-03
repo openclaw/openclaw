@@ -54,8 +54,6 @@ describe("OpenRouter per-day cap reaches the real retry owner", () => {
       server.listen(0, "127.0.0.1", resolve);
     });
 
-    let reason: string | null;
-    let retryMessage: string | undefined;
     try {
       const address = server.address() as AddressInfo;
       const result = await streamOpenAICompletions(
@@ -67,28 +65,14 @@ describe("OpenRouter per-day cap reaches the real retry owner", () => {
       expect(result.stopReason).toBe("error");
       expect(result.errorMessage).toContain("free-models-per-day-high-balance");
 
-      reason = classifyAssistantFailoverReason(result, { providerOwner });
-      // attempt-recovery.ts:331 passes assistantSignal.message (built by
-      // buildAssistantFailoverSignal, the RAW trimmed errorMessage) into
-      // maybeRetryTransient as retry.message — not the user-facing friendly
-      // copy from formatAssistantErrorText. Match that exact production
-      // value so this test proves what the real retry guard actually sees.
-      retryMessage = buildAssistantFailoverSignal(result).message;
+      expect(classifyAssistantFailoverReason(result, { providerOwner })).toBe("rate_limit");
+      // The retry owner consumes the raw assistant signal, not formatted display text.
+      const retryMessage = buildAssistantFailoverSignal(result).message;
+      expect(hasLongWindowRateLimitEvidence(retryMessage)).toBe(true);
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
       });
     }
-
-    // Same reason the real embedded-agent-runner attempt loop passes as
-    // retry.reason into failover-retry-controller.ts's maybeRetryTransient().
-    expect(reason).toBe("rate_limit");
-
-    // The exact guard failover-retry-controller.ts:232 calls with retry.message
-    // before allowing a same-model transient retry. A message that came from a
-    // real HTTP round-trip through the real transport must make this return
-    // true, or the production controller burns retries against an exhausted
-    // daily cap instead of failing over.
-    expect(hasLongWindowRateLimitEvidence(retryMessage)).toBe(true);
   });
 });

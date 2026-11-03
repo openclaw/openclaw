@@ -1,8 +1,9 @@
-// Tool execution component renders tool call status and output in the TUI.
 import { Box, Container, Spacer, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AgentActivityItem as AgentItemEventData } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import { unwrapToolCallForDisplay } from "../../agents/tool-display-call.js";
 import { formatToolDetail, resolveToolDisplay } from "../../agents/tool-display.js";
 import { markdownTheme, tuiTheme as theme } from "../theme/theme.js";
 import * as tuiFormatters from "../tui-formatters.js";
@@ -10,21 +11,18 @@ import { extractTuiImageSources } from "../tui-images.js";
 import { HyperlinkMarkdown } from "./hyperlink-markdown.js";
 import { MessageImages, type TuiImageRenderer } from "./message-images.js";
 
-// Rendering model for live tool calls in the chat log.
-type ToolResultContent = {
-  type?: string;
-  text?: string;
-  mimeType?: string;
-  bytes?: number;
-  omitted?: boolean;
-  data?: string;
-  url?: string;
-  artifactId?: string;
-  source?: unknown;
-};
-
 type ToolResult = {
-  content?: ToolResultContent[];
+  content?: {
+    type?: string;
+    text?: string;
+    mimeType?: string;
+    bytes?: number;
+    omitted?: boolean;
+    data?: string;
+    url?: string;
+    artifactId?: string;
+    source?: unknown;
+  }[];
   details?: Record<string, unknown>;
 };
 
@@ -107,7 +105,6 @@ function formatArgs(detail: string | undefined, args: unknown): string {
   }
 }
 
-// Extracts visible text and compact media placeholders from tool result payloads.
 function extractText(result?: ToolResult): string {
   if (!result?.content) {
     return "";
@@ -141,11 +138,12 @@ function isCodeModeResult(toolName: string, result?: ToolResult): boolean {
 
 /** Displays a running or completed tool call with optional expandable output. */
 export class ToolExecutionComponent extends Container {
-  private box: Box;
-  private header: Text;
-  private argsLine: Text;
-  private output: ToolOutputComponent;
-  private toolName: string;
+  private box = new Box(1, 1, theme.toolPendingBg);
+  private header = new Text("", 0, 0);
+  private argsLine = new Text("", 0, 0);
+  private output = new ToolOutputComponent("", 0, 0, markdownTheme, {
+    color: (line) => theme.toolOutput(line),
+  });
   private title = "";
   private isPartial = true;
   private isError = false;
@@ -153,15 +151,12 @@ export class ToolExecutionComponent extends Container {
   private activity?: AgentItemEventData | null;
   private expanded = false;
 
-  constructor(toolName: string, args: unknown, imageRenderer?: TuiImageRenderer) {
+  constructor(
+    private readonly toolName: string,
+    args: unknown,
+    imageRenderer?: TuiImageRenderer,
+  ) {
     super();
-    this.toolName = toolName;
-    this.box = new Box(1, 1, theme.toolPendingBg);
-    this.header = new Text("", 0, 0);
-    this.argsLine = new Text("", 0, 0);
-    this.output = new ToolOutputComponent("", 0, 0, markdownTheme, {
-      color: (line) => theme.toolOutput(line),
-    });
     this.addChild(new Spacer(1));
     this.addChild(this.box);
     this.box.addChild(this.header);
@@ -170,19 +165,38 @@ export class ToolExecutionComponent extends Container {
     this.images = new MessageImages(imageRenderer);
     this.box.addChild(this.images);
     this.setArgs(args);
-    this.setPartialResult(undefined);
+    this.setResult(undefined, { partial: true });
   }
 
-  /** Re-renders tool arguments when streaming tool call input changes. */
   setArgs(args: unknown) {
-    const display = resolveToolDisplay({ name: this.toolName, args });
-    this.title = `${display.emoji} ${display.label}`;
+    const call = unwrapToolCallForDisplay({ name: this.toolName, args });
+    const display = resolveToolDisplay(call);
+    this.title = display.label;
     this.refreshTitle();
-    const argLine = formatArgs(formatToolDetail(display), args);
+    const questions = asOptionalObjectRecord(call.args)?.questions;
+    const questionText =
+      display.name === "ask_user" && Array.isArray(questions)
+        ? questions
+            .slice(0, 3)
+            .flatMap((raw) => {
+              const question = asOptionalObjectRecord(raw);
+              const options = question?.options;
+              return [normalizeOptionalString(question?.question)].concat(
+                Array.isArray(options)
+                  ? options.slice(0, 4).map((option, index) => {
+                      const label = normalizeOptionalString(asOptionalObjectRecord(option)?.label);
+                      return label ? `${index + 1}. ${label}` : undefined;
+                    })
+                  : [],
+              );
+            })
+            .filter(Boolean)
+            .join("\n")
+        : undefined;
+    const argLine = formatArgs(questionText || formatToolDetail(display), args);
     this.argsLine.setText(argLine ? theme.dim(argLine) : theme.dim(" "));
   }
 
-  /** Toggles preview/full output rendering for long tool results. */
   setExpanded(expanded: boolean) {
     this.expanded = expanded;
     this.output.setExpanded(expanded);
@@ -209,14 +223,13 @@ export class ToolExecutionComponent extends Container {
     return super.render(width);
   }
 
-  /** Marks the tool call complete and renders final output. */
-  setResult(result: ToolResult | undefined, opts?: { isError?: boolean }) {
-    this.updateResult(result, false, Boolean(opts?.isError));
-  }
-
-  /** Renders partial output while the tool call is still running. */
-  setPartialResult(result: ToolResult | undefined) {
-    this.updateResult(result, true);
+  setResult(result: ToolResult | undefined, opts?: { isError?: boolean; partial?: boolean }) {
+    this.isPartial = Boolean(opts?.partial);
+    this.isError = !this.isPartial && Boolean(opts?.isError);
+    this.refreshResult();
+    // Code Mode JSON is literal data; prose normalization can change values and escapes.
+    this.output.setText(extractText(result), isCodeModeResult(this.toolName, result));
+    this.images.setImages(extractTuiImageSources(result));
   }
 
   dispose() {
@@ -230,15 +243,6 @@ export class ToolExecutionComponent extends Container {
         : `${this.title}${this.isPartial ? " (running)" : ""}`,
     );
     this.header.setText(theme.toolTitle(theme.bold(title)));
-  }
-
-  private updateResult(result: ToolResult | undefined, isPartial: boolean, isError = false) {
-    this.isPartial = isPartial;
-    this.isError = isError;
-    this.refreshResult();
-    // Code Mode JSON is literal data; prose normalization can change values and escapes.
-    this.output.setText(extractText(result), isCodeModeResult(this.toolName, result));
-    this.images.setImages(extractTuiImageSources(result));
   }
 
   private refreshResult() {

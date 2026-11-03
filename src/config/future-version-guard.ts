@@ -1,4 +1,5 @@
-// Rejects config files written by unsupported future versions.
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { VERSION } from "../version.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 import { shouldWarnOnTouchedVersion } from "./version.js";
@@ -22,6 +23,8 @@ type FutureConfigGuardParams = {
   config?: OpenClawConfig | null;
   currentVersion?: string;
   env?: Record<string, string | undefined>;
+  /** Select recovery guidance for service startup, which ignores the override. */
+  serviceMode?: boolean;
 };
 
 function allowOlderBinaryDestructiveActions(env: Record<string, string | undefined>): boolean {
@@ -31,15 +34,8 @@ function allowOlderBinaryDestructiveActions(env: Record<string, string | undefin
 
 function resolveTouchedVersion(params: FutureConfigGuardParams): string | null {
   const readSourceVersion = (value: unknown): string | undefined => {
-    if (!value || typeof value !== "object") {
-      return undefined;
-    }
-    const meta = (value as { meta?: unknown }).meta;
-    if (!meta || typeof meta !== "object") {
-      return undefined;
-    }
-    const version = (meta as { lastTouchedVersion?: unknown }).lastTouchedVersion;
-    return typeof version === "string" ? version.trim() || undefined : undefined;
+    const meta = asOptionalObjectRecord(asOptionalObjectRecord(value)?.meta);
+    return normalizeOptionalString(meta?.lastTouchedVersion);
   };
   return (
     readSourceVersion(params.snapshot?.sourceConfig) ??
@@ -71,7 +67,9 @@ export function resolveFutureConfigActionBlock(
     message: `Refusing to ${params.action} because this OpenClaw binary (${currentVersion}) is older than the config last written by OpenClaw ${touchedVersion}.`,
     hints: [
       "Run the newer openclaw binary on PATH, or reinstall the intended gateway service from the newer install.",
-      `Set ${ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV}=1 only for an intentional downgrade or recovery action.`,
+      params.serviceMode
+        ? "For an intentional downgrade, restore a verified pre-update backup with its matching OpenClaw release. See https://docs.openclaw.ai/install/updating/rollback-and-recovery#downgrade."
+        : `Set ${ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV}=1 only for an intentional downgrade or recovery action.`,
     ],
   };
 }

@@ -4,7 +4,7 @@ import Testing
 @testable import OpenClaw
 
 struct PipeReadStreamTests {
-    @Test func `cancelled finish still joins reader cleanup`() throws {
+    @Test func `cancelled finish still joins reader cleanup`() async throws {
         let pipe = Pipe()
         let probe = PipeReadProbe()
         let entered = DispatchSemaphore(value: 0)
@@ -26,18 +26,27 @@ struct PipeReadStreamTests {
         }
         try pipe.fileHandleForReading.close()
         try pipe.fileHandleForWriting.write(contentsOf: Data("first".utf8))
-        try #require(entered.wait(timeout: .now() + 2) == .success)
+        try #require(await Self.waitForSignal(entered))
         let closing = Task {
             started.signal()
             await reader.finish()
             joined.signal()
         }
         closing.cancel()
-        try #require(started.wait(timeout: .now() + 2) == .success)
-        #expect(joined.wait(timeout: .now() + 0.1) == .timedOut)
+        try #require(await Self.waitForSignal(started))
+        #expect(await !Self.waitForSignal(joined, timeout: 0.1))
         release.signal()
-        #expect(joined.wait(timeout: .now() + 2) == .success)
+        try #require(await Self.waitForSignal(joined, timeout: 30))
+        await closing.value
         #expect(probe.finishCount == 1)
+    }
+
+    private static func waitForSignal(_ signal: DispatchSemaphore, timeout: TimeInterval = 2) async -> Bool {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global().async {
+                continuation.resume(returning: signal.wait(timeout: .now() + timeout) == .success)
+            }
+        }
     }
 
     @Test func `reader drains large child output in bounded chunks before closing`() throws {

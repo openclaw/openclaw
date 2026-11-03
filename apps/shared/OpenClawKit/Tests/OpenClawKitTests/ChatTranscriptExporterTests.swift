@@ -20,6 +20,18 @@ struct ChatTranscriptExporterTests {
             "provenance": {"kind": "internal_system", "sourceTool": "restart-sentinel"}
           },
           {
+            "role": "user",
+            "content": [{"type": "text", "text": "Context first line.\nContext last line."}],
+            "timestamp": 600,
+            "provenance": {"kind": "internal_system", "sourceTool": "cli_harness_context"}
+          },
+          {
+            "role": "user",
+            "content": [{"type": "text", "text": "Task first line.\nTask last line."}],
+            "timestamp": 700,
+            "provenance": {"kind": "internal_system", "sourceTool": "claude_cli_task_notification"}
+          },
+          {
             "role": "system",
             "content": [],
             "timestamp": 1000,
@@ -49,6 +61,8 @@ struct ChatTranscriptExporterTests {
         #expect(!markdown.contains("private context"))
         #expect(markdown.contains("System · restart recovery"))
         #expect(markdown.contains("[System · gateway restarted] Gateway restarted after an update."))
+        #expect(markdown.contains("[System · injected context] Context first line.\nContext last line."))
+        #expect(markdown.contains("[System · background task] Task first line.\nTask last line."))
         #expect(markdown.contains("[Compacted history · saved 12.5k tokens]"))
         #expect(markdown.contains("[Session reset — The earlier conversation was cleared.]"))
         #expect(!markdown.contains("Unknown marker body"))

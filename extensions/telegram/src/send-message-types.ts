@@ -1,12 +1,15 @@
 import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
-import type { MarkdownTableMode, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
+import type {
+  MarkdownTableMode,
+  OpenClawConfig,
+  ReplyToMode,
+} from "openclaw/plugin-sdk/config-contracts";
 import type { OutboundMediaAccess } from "openclaw/plugin-sdk/media-runtime";
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
 import type { TelegramInlineButtons } from "./button-types.js";
 import type { createTelegramPromptContextProjectionCursor } from "./prompt-context-projection.js";
 import type { TelegramApiOverride } from "./send-context.js";
-import type { OpenClawConfig } from "./send.runtime.js";
 
 export type TelegramSendOpts = {
   cfg: OpenClawConfig;
@@ -23,6 +26,8 @@ export type TelegramSendOpts = {
   api?: TelegramApiOverride;
   retry?: RetryConfig;
   textMode?: "markdown" | "html";
+  /** Per-message link-preview override for literal copied content. */
+  linkPreview?: boolean;
   tableMode?: MarkdownTableMode;
   textLimit?: number;
   chunkMode?: ChunkMode;
@@ -69,7 +74,7 @@ export type TelegramApiCallOpts = Pick<
 >;
 
 export type TelegramThreadedSendOpts = TelegramApiCallOpts &
-  Pick<TelegramSendOpts, "replyToMessageId" | "messageThreadId">;
+  Pick<TelegramSendOpts, "replyToMessageId" | "messageThreadId" | "assertPlatformSendAuthorized">;
 
 export type TelegramMessageActionOpts = TelegramApiCallOpts &
   Pick<TelegramSendOpts, "signal" | "assertPlatformSendAuthorized"> & { notify?: boolean };

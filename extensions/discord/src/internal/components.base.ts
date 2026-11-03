@@ -1,4 +1,3 @@
-import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type { BaseComponentInteraction } from "./interactions.js";
 export { stripUndefinedFields as clean } from "./undefined-fields.js";
 
@@ -14,13 +13,9 @@ export type ComponentData<
 type ConditionalComponentOption = (interaction: BaseComponentInteraction) => boolean;
 
 export function parseCustomId(id: string): ComponentParserResult {
-  const [rawKeyValue, ...parts] = id.split(";");
-  const rawKey = expectDefined(rawKeyValue, "custom id split first segment");
-  const [keyPart, firstValue] = rawKey.split("=");
-  const definedKeyPart = expectDefined(keyPart, "custom id key segment");
-  const key = definedKeyPart.includes(":")
-    ? expectDefined(definedKeyPart.split(":").at(0), "namespaced custom id key")
-    : definedKeyPart;
+  const [rawKey = "", ...parts] = id.split(";");
+  const [keyPart = "", firstValue] = rawKey.split("=");
+  const key = keyPart.split(":", 1)[0] ?? "";
   const data: ComponentParserResult["data"] = {};
   const entries = firstValue === undefined ? parts : [rawKey.slice(key.length + 1), ...parts];
   for (const entry of entries) {
@@ -51,15 +46,13 @@ export abstract class BaseComponent {
   abstract serialize(): unknown;
 }
 
-export abstract class BaseMessageInteractiveComponent extends BaseComponent {
-  override readonly isV2 = false;
-  defer: boolean | ConditionalComponentOption = false;
-  ephemeral: boolean | ConditionalComponentOption = false;
+export abstract class BaseMessageInteractiveComponent {
+  abstract readonly type: number;
+  declare defer?: boolean | ConditionalComponentOption;
+  declare ephemeral?: boolean | ConditionalComponentOption;
   abstract customId: string;
-  customIdParser = parseCustomId;
-  run(_interaction: BaseComponentInteraction, _data: ComponentData): unknown {
-    return undefined;
-  }
+  declare customIdParser?: typeof parseCustomId;
+  abstract run(interaction: BaseComponentInteraction, data: ComponentData): unknown;
 }
 
 export abstract class BaseModalComponent extends BaseComponent {

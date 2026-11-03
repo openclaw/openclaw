@@ -1,7 +1,6 @@
-// Tool payload helpers normalize provider tool-call schemas and compatibility payloads.
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   parseStandalonePlainTextToolCallBlocks as parseStandaloneRepairToolCallBlocks,
-  stripPlainTextToolCallBlocks as stripRepairToolCallBlocks,
   type PlainTextToolCallBlock,
   type PlainTextToolCallParseOptions,
   type PlainTextToolCallProtectedRange,
@@ -27,12 +26,7 @@ export function parseStandalonePlainTextToolCallBlocks(
 }
 
 /** Removes full-line standalone plain-text tool call blocks from visible text. */
-export function stripPlainTextToolCallBlocks(
-  text: string,
-  options?: PlainTextToolCallStripOptions,
-): string {
-  return stripRepairToolCallBlocks(text, options);
-}
+export { stripPlainTextToolCallBlocks } from "../../packages/tool-call-repair/src/index.js";
 
 type ToolPayloadTextBlock = {
   type: "text";
@@ -48,12 +42,8 @@ export type ToolPayloadCarrier = {
 };
 
 function isToolPayloadTextBlock(block: unknown): block is ToolPayloadTextBlock {
-  return (
-    Boolean(block) &&
-    typeof block === "object" &&
-    (block as { type?: unknown }).type === "text" &&
-    typeof (block as { text?: unknown }).text === "string"
-  );
+  const record = asOptionalObjectRecord(block);
+  return record?.type === "text" && typeof record.text === "string";
 }
 
 /**

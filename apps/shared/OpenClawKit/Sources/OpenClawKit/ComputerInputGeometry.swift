@@ -17,22 +17,12 @@ public struct OpenClawComputerDisplayGeometry: Sendable, Equatable {
     }
 }
 
-/// Maps reference-screenshot pixel coordinates to global display points.
-///
-/// The model reasons over the `screen.snapshot` image whose pixel width equals
-/// the captured width (ScreenSnapshotService downscales the capture source to
-/// `min(refWidth, sourceWidth)`), so model coordinates live in captured-pixel
-/// space. A single uniform factor (display point width / captured pixel width)
-/// recovers global display points; aspect ratio is preserved so it also applies
-/// to the vertical axis. Deriving the factor from the captured pixel width
-/// rather than the display point width keeps clicks aligned on Retina modes
-/// where physical pixels and logical points differ. Retina backing scale never
-/// enters CGEvent coordinates, which are always points.
+/// Maps captured screenshot pixels to global display points with a uniform
+/// display-point-width / captured-pixel-width scale. Capture downsampling must
+/// be reflected in that width; Retina backing scale must not enter CGEvent coordinates.
 public enum OpenClawComputerInputGeometry {
-    /// Stable opaque identity for one physical display geometry and reference
-    /// scale. Screenshot and input paths independently derive this value so
-    /// hot-plug/reindex/geometry/scale changes fail closed before coordinates can
-    /// target pixels other than the frame the caller observed.
+    /// Screenshot and input paths derive the same identity so display, geometry,
+    /// or reference-scale changes reject input targeting a stale frame.
     public static func displayFrameId(
         displayID: UInt32,
         sourceWidth: Double,
@@ -92,12 +82,8 @@ public enum OpenClawComputerInputGeometry {
         // min(refWidth, sourceWidth) and never upscales.
         let widthCap = refWidth.map { min(Double($0), sourceWidth) } ?? sourceWidth
         guard let refWidth, refWidth > 0, sourceHeight > 0 else { return widthCap }
-        // The agent additionally caps the delivered screenshot's LONGEST edge to
-        // the reference width (this turn and on later replay-sanitization), so a
-        // portrait capture whose height exceeds the reference width is scaled down
-        // uniformly. Mirror that scaling here so coordinates map against the same
-        // pixel width the model actually saw. Landscape frames, whose longest edge
-        // is the already-capped width, are unaffected.
+        // The agent also caps the longest edge on delivery and replay. Mirror its
+        // uniform portrait scaling so coordinates match the image the model saw.
         let cappedHeight = widthCap * sourceHeight / sourceWidth
         let longestEdge = max(widthCap, cappedHeight)
         let referenceWidth = Double(refWidth)
@@ -123,11 +109,8 @@ public enum OpenClawComputerInputGeometry {
             y: display.originY + y * scale)
     }
 
-    /// Clamps a global point to strictly inside the display. Coordinate mapping
-    /// tolerates a small rounding epsilon at the edges, but the posted event must
-    /// stay on the selected display: a far-edge point (e.g. x == captured width,
-    /// which maps to originX + widthPoints) would otherwise fall on the adjacent
-    /// screen the model never saw.
+    /// Keeps epsilon-tolerated edge coordinates inside the selected display;
+    /// posting its exact far edge could click an adjacent screen the model never saw.
     public static func clampToDisplay(
         x: Double,
         y: Double,

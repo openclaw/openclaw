@@ -105,8 +105,8 @@ export async function resolveIMessageRemoteHost(params: {
   }
 
   const key = cacheKey(params.cliPath);
-  if (detectedRemoteHosts.has(key)) {
-    const cached = detectedRemoteHosts.get(key);
+  const cached = detectedRemoteHosts.get(key);
+  if (cached !== undefined) {
     if (cached === ambiguousSshWrapper) {
       throwAmbiguousSshWrapper();
     }
@@ -134,14 +134,8 @@ export async function resolveIMessageRemoteHost(params: {
       detectedRemoteHosts.set(key, ambiguousSshWrapper);
       throwAmbiguousSshWrapper();
     }
-    const normalized = normalizeScpRemoteHost(detected);
-    if (detected && !normalized) {
-      logVerbose("imessage: ignoring unsafe auto-detected remoteHost from cliPath");
-    } else if (normalized) {
-      logVerbose(`imessage: detected remoteHost=${normalized} from cliPath`);
-    }
-    detectedRemoteHosts.set(key, normalized ?? null);
-    return normalized;
+    detectedRemoteHosts.set(key, detected ?? null);
+    return detected;
   })().finally(() => remoteHostLookups.delete(key));
   remoteHostLookups.set(key, lookup);
   return await lookup;

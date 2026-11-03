@@ -1,5 +1,5 @@
 /** Dependency-free runtime intent contracts shared by planners and native service writers. */
-type DaemonRuntimePin = { runtime: "node" | "bun"; path: string };
+type DaemonRuntimePin = { runtime: "node" | "bun" | "standalone"; path: string };
 
 export type DaemonRuntimePinSnapshot = {
   revision: string;
@@ -8,4 +8,11 @@ export type DaemonRuntimePinSnapshot = {
   pin?: DaemonRuntimePin;
 };
 
-export type DaemonRuntimePinUpdate = { expected: DaemonRuntimePinSnapshot; pin?: DaemonRuntimePin };
+export type DaemonRuntimePinUpdate = {
+  expected: DaemonRuntimePinSnapshot;
+  pin?: DaemonRuntimePin;
+  /** A guarded caller also binds unpinned service definitions. */
+  requireDefinitionMatch?: true;
+  /** An explicit runtime switch may replace an existing service only while it is running. */
+  requireRunning?: true;
+};

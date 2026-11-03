@@ -72,7 +72,7 @@ struct StatusMenuWidthTests {
 
         let menu = NSMenu()
         let renderer = StatusMenuRenderer(menu: menu, state: state)
-        renderer.render(descriptor)
+        renderer.reconcile(descriptor)
 
         #expect(menu.minimumWidth == StatusMenuMetrics.width)
         #expect(menu.size.width == StatusMenuMetrics.width)
@@ -117,7 +117,7 @@ struct StatusMenuWidthTests {
         ])
 
         healthStore.__setSnapshotForTest(nil, lastError: "Ready")
-        renderer.render(descriptor)
+        renderer.reconcile(descriptor)
         let header = try #require(menu.items.first?.view)
         let shortHeight = header.frame.height
 

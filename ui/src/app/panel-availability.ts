@@ -1,53 +1,68 @@
-import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import {
+  canCallGatewayMethod,
+  canPresentGatewayMethod,
+  isGatewayMethodAdvertised,
+} from "../lib/gateway-methods.ts";
 import type { ApplicationContext } from "./context.ts";
 import { hasNativeBrowserBridge } from "./native-browser-host.ts";
 import { hasOperatorAdminAccess } from "./operator-access.ts";
 
 type GatewaySnapshot = Pick<ApplicationContext["gateway"]["snapshot"], "phase" | "hello">;
 
-function isPanelAvailable(snapshot: GatewaySnapshot, method: string): boolean {
-  return (
-    snapshot.phase === "connected" &&
-    hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
-    isGatewayMethodAdvertised(snapshot, method) === true
-  );
+export type PanelUnavailableReason = "disconnected" | "permission" | "unavailable";
+
+function panelUnavailableReason(
+  snapshot: GatewaySnapshot,
+  method: string,
+): PanelUnavailableReason | null {
+  if (snapshot.phase !== "connected") {
+    return "disconnected";
+  }
+  if (!hasOperatorAdminAccess(snapshot.hello?.auth ?? null)) {
+    return "permission";
+  }
+  return isGatewayMethodAdvertised(snapshot, method) === true ? null : "unavailable";
 }
 
 export function isBrowserPanelAvailable(snapshot: GatewaySnapshot): boolean {
-  return isPanelAvailable(snapshot, "browser.request");
+  return panelUnavailableReason(snapshot, "browser.request") === null;
+}
+
+/** The session owner checks target membership, tool policy, and sandbox requirements. */
+export function isBrowserDashboardAvailable(
+  snapshot: Pick<ApplicationContext["gateway"]["snapshot"], "client" | "phase" | "hello">,
+): boolean {
+  return (
+    isBrowserPanelAvailable(snapshot) ||
+    canCallGatewayMethod(snapshot, "browser.dashboard.request", "operator.sessions.write")
+  );
+}
+
+export function browserPanelSurfaceUnavailableReason(
+  snapshot: GatewaySnapshot,
+): PanelUnavailableReason | null {
+  return hasNativeBrowserBridge() ? null : panelUnavailableReason(snapshot, "browser.request");
 }
 
 export function isBrowserPanelSurfaceAvailable(snapshot: GatewaySnapshot): boolean {
-  return hasNativeBrowserBridge() || isBrowserPanelAvailable(snapshot);
+  return browserPanelSurfaceUnavailableReason(snapshot) === null;
 }
 
 export function isDesktopPanelAvailable(snapshot: GatewaySnapshot): boolean {
-  return isPanelAvailable(snapshot, "desktop.observe");
+  return panelUnavailableReason(snapshot, "desktop.observe") === null;
 }
 
-const homePanelAccess = new WeakMap<
-  ApplicationContext["gateway"],
-  { gatewayUrl: string; allowed: boolean }
->();
+/** Admin-only, never advertisement alone; the Custodian session store authorizes each turn. */
+export function isCustodianPanelAvailable(
+  gateway: ApplicationContext["gateway"] | undefined,
+): boolean {
+  return canPresentGatewayMethod(gateway?.snapshot, "openclaw.chat", "operator.admin");
+}
 
 /** Presentation access survives reconnect; the chat send/outbox owner still authorizes delivery. */
 export function isHomePanelAvailable(gateway: ApplicationContext["gateway"] | undefined): boolean {
-  if (!gateway) {
-    return false;
-  }
-  const snapshot = gateway.snapshot;
-  const gatewayUrl = gateway.connection.gatewayUrl;
-  if (snapshot.phase === "connected") {
-    const allowed =
-      canCallGatewayMethod(snapshot, "chat.history", "operator.read") &&
-      canCallGatewayMethod(snapshot, "chat.send", "operator.write");
-    homePanelAccess.set(gateway, { gatewayUrl, allowed });
-    return allowed;
-  }
-  const previous = homePanelAccess.get(gateway);
-  if (previous?.gatewayUrl !== gatewayUrl || snapshot.phase === "reload-required") {
-    homePanelAccess.delete(gateway);
-    return false;
-  }
-  return previous.allowed;
+  return (
+    canPresentGatewayMethod(gateway?.snapshot, "chat.history", "operator.read") &&
+    canPresentGatewayMethod(gateway?.snapshot, "chat.send", "operator.write")
+  );
 }
