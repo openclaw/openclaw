@@ -420,6 +420,7 @@ export async function handleSendChat(
       }
       const isRunCommand = parsed.command.key === "steer" || parsed.command.key === "redirect";
       const waitsForPicker = parsed.command.key === "redirect";
+      const forksConversation = parsed.command.key === "fork";
       const dispatchLocalCommand = async () => {
         if (waitsForPicker && !(await waitForSubmittedRoute(host, submittedSessionKey))) {
           return;
@@ -443,7 +444,9 @@ export async function handleSendChat(
         if (messageOverride == null) {
           recordNonTranscriptInputHistory(host, userMessage);
           if (parsed.command.key !== "export-session") {
-            recoveryComposer = clearComposer(isRunCommand ? "annotations" : "none");
+            recoveryComposer = clearComposer(
+              forksConversation ? "all" : isRunCommand ? "annotations" : "none",
+            );
           }
         }
         const recovery = captureChatCommandComposerRecovery(host, recoveryScope, recoveryComposer);
@@ -470,7 +473,7 @@ export async function handleSendChat(
           settleChatCommandComposer(host, recovery, true, recovery.composer?.previousAttachments);
         }
       };
-      if (waitsForPicker) {
+      if (waitsForPicker || forksConversation) {
         const submitKey = chatSubmitKey(host, "local", message, attachmentsToSend);
         await withChatSubmitGuard(host, submitKey, submitGuardOptions, dispatchLocalCommand);
       } else {

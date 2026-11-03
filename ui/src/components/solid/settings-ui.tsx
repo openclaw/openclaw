@@ -3,6 +3,7 @@ import { children, For, onSettled, Show } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { liveChecked } from "../../lib/reactive/live-checked.ts";
 import { Icon } from "./icon.tsx";
 import type { SettingsSegmentedProps, SettingsToggleControl } from "./settings-ui.types.ts";
 import "../tooltip.ts";
@@ -172,9 +173,7 @@ export function SettingsSection(props: {
         </div>
       </Show>
       {props.notice}
-      <SettingsGroup danger={props.danger} carapace={props.carapace}>
-        {props.children}
-      </SettingsGroup>
+      <SettingsGroup carapace={props.carapace}>{props.children}</SettingsGroup>
     </section>
   );
 }
@@ -194,20 +193,9 @@ export function SettingsSummary(props: { items: ReadonlyArray<{ label: string; v
   );
 }
 
-export function SettingsGroup(props: {
-  children?: JSX.Element;
-  danger?: boolean;
-  carapace?: boolean;
-}) {
+export function SettingsGroup(props: { children?: JSX.Element; carapace?: boolean }) {
   return (
-    <div
-      class={[
-        "settings-group",
-        { "settings-group--danger": props.danger, "oc-settings-group": props.carapace },
-      ]}
-    >
-      {props.children}
-    </div>
+    <div class={["settings-group", { "oc-settings-group": props.carapace }]}>{props.children}</div>
   );
 }
 
@@ -289,11 +277,10 @@ function ToggleControl(
   return (
     <span class="settings-toggle">
       <input
-        ref={(element) => props.inputRef?.(element)}
+        ref={[liveChecked(() => props.checked), (element) => props.inputRef?.(element)]}
         class="settings-toggle__input"
         type="checkbox"
         role="switch"
-        checked={props.checked}
         disabled={props.disabled}
         aria-disabled={props.saving ? "true" : undefined}
         aria-label={props.inputLabel}
@@ -621,6 +608,11 @@ export function SettingsEmpty(props: { message: JSX.Element; carapace?: boolean 
       </div>
     </Show>
   );
+}
+
+/** Says why a surface can't be used here, in the same quiet state as an empty list. */
+export function SettingsUnavailable(props: { message: JSX.Element }) {
+  return <SettingsEmpty message={<span role="status">{props.message}</span>} />;
 }
 
 export function SettingsLoadingSkeleton(props: {

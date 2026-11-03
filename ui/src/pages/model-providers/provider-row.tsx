@@ -189,6 +189,8 @@ export function ApiKeyInput(props: {
   /** Inline beside its own actions, where the placeholder already names the field. */
   labelHidden?: boolean;
   inputRef?: (element: HTMLInputElement) => void;
+  /** The label already names the field; a form with nothing else needs no second prompt. */
+  labelOnly?: boolean;
 }) {
   return (
     <label class="field">
@@ -199,11 +201,15 @@ export function ApiKeyInput(props: {
         ref={(element) => props.inputRef?.(element)}
         type="password"
         autocomplete="off"
-        placeholder={t(
-          props.replace
-            ? "modelProviders.apiKey.replacePlaceholder"
-            : "modelProviders.apiKey.placeholder",
-        )}
+        placeholder={
+          props.labelOnly
+            ? undefined
+            : t(
+                props.replace
+                  ? "modelProviders.apiKey.replacePlaceholder"
+                  : "modelProviders.apiKey.placeholder",
+              )
+        }
         value={props.value}
         disabled={props.disabled}
         onInput={(event) => props.onInput(event.currentTarget.value)}
@@ -248,7 +254,7 @@ function KeyButton(props: ProviderRowProps & { replace?: boolean }) {
   );
 }
 
-function KeyForm(props: ProviderRowProps) {
+function KeyForm(props: ProviderRowProps & { onCancel?: () => void }) {
   const busy = () => Boolean(props.busy[`key:${props.card.id}`]);
   const authModeBlocked = () =>
     props.card.apiKeySupported === false ||
@@ -276,12 +282,9 @@ function KeyForm(props: ProviderRowProps) {
         <button
           class="btn btn--sm"
           disabled={busy()}
-          onClick={(event) => {
-            const summary = event.currentTarget
-              .closest(".provider-row")
-              ?.querySelector<HTMLElement>("button.provider-row__summary");
+          onClick={() => {
             props.onCloseKeyEditor();
-            summary?.focus();
+            props.onCancel?.();
           }}
         >
           {t("common.cancel")}
@@ -298,7 +301,7 @@ function KeyForm(props: ProviderRowProps) {
   );
 }
 
-function KeyEditor(props: ProviderRowProps) {
+function KeyEditor(props: ProviderRowProps & { onCancel?: () => void }) {
   return (
     <Show when={keyEditorOpen(props)}>
       <KeyForm {...props} />
@@ -464,6 +467,7 @@ function credentialLine(card: ModelProviderCard): string | undefined {
  * Open, it lists credentials, then what they allow, then the provider's actions.
  */
 export function ProviderRow(props: ProviderRowProps) {
+  let summary: HTMLButtonElement | undefined;
   const card = () => props.card;
   const message = () => props.messages[`key:${card().id}`] ?? props.messages[card().id];
   const limits = () => (hasProviderUsageDetails(card().usage) ? card().usage : undefined);
@@ -487,6 +491,7 @@ export function ProviderRow(props: ProviderRowProps) {
       <button
         type="button"
         class="provider-row__summary model-providers__head"
+        ref={(element) => (summary = element)}
         aria-expanded={open() ? "true" : "false"}
         aria-controls={detailId()}
         onClick={() => setExpanded(!open())}
@@ -508,7 +513,7 @@ export function ProviderRow(props: ProviderRowProps) {
       <Show when={open()}>
         <div class="provider-row__detail" id={detailId()}>
           <ProviderCredentials {...props} />
-          <KeyEditor {...props} />
+          <KeyEditor {...props} onCancel={() => summary?.focus()} />
           <Show when={limits()}>
             {(usage) => (
               <section

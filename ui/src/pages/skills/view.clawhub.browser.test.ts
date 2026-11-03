@@ -38,7 +38,9 @@ it("windows skill discovery while preserving keyboard traversal, notices, detail
     }),
   );
   const [query, setQuery] = createSignal("");
-  const [notice, setNotice] = createSignal<{ kind: "error"; text: string } | null>(null);
+  const [notice, setNotice] = createSignal<{ ref: string; kind: "error"; text: string } | null>(
+    null,
+  );
   const onDetailOpen = vi.fn();
   const props = createProps({
     surface: "discovery",
@@ -108,7 +110,11 @@ it("windows skill discovery while preserving keyboard traversal, notices, detail
     });
   };
   await expectEndVisible();
-  setNotice({ kind: "error", text: "The registry could not refresh this catalog. ".repeat(100) });
+  setNotice({
+    ref: "other",
+    kind: "error",
+    text: "The registry could not refresh this catalog. ".repeat(100),
+  });
   await expectEndVisible();
   setNotice(null);
   await expectEndVisible();

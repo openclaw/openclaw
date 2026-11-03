@@ -543,7 +543,7 @@ describe("GatewayBrowserClient", () => {
         "Browser refused the Gateway WebSocket for security reasons. Use wss:// when the Control UI is served over HTTPS/Tailscale Serve, or open the loopback dashboard at http://127.0.0.1:18789.",
     },
     {
-      name: "TypeError",
+      name: "SyntaxError",
       message: "constructor failed",
       code: "BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR",
       reason: "websocket error",

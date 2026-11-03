@@ -8,7 +8,7 @@ import type {
 import type { SecretRef } from "../config/types.secrets.js";
 import type { ImageGenerationProvider } from "../image-generation/provider-types.js";
 import type { MediaUnderstandingProvider } from "../media-understanding/types.js";
-import type { MusicGenerationProvider } from "../music-generation/types.js";
+import type { MusicGenerationProvider } from "../music-generation/provider-types.js";
 import type { SpawnResult } from "../process/exec.js";
 import type {
   RealtimeTranscriptionProviderConfig,

@@ -205,3 +205,13 @@ it("counts a provider's only unavailable model in the singular", () => {
   );
   expect(text(container.querySelector(".provider-row__meta"))).toContain("2 of 3 models available");
 });
+
+it("hands the accent to an open API key form", () => {
+  const editable = card({ id: "example", displayName: "Example", catalogStatus: "ready" });
+  const viewProps = props({ cards: [editable], configuredModels: [] });
+  const container = mount(viewProps);
+  const connect = () => container.querySelector("[data-model-readiness] .btn") as HTMLButtonElement;
+  expect(connect().classList.contains("primary")).toBe(true);
+  mount({ ...viewProps, keyEditorProvider: "example" }, container);
+  expect(connect().classList.contains("primary")).toBe(false);
+});

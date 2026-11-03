@@ -230,6 +230,8 @@ openclaw-select-picker {
 .picker-select__chevron,
 .picker-select__check {
   display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex: 0 0 16px;
   width: 16px;
   margin-inline-start: auto;
@@ -241,11 +243,23 @@ openclaw-select-picker {
   height: 16px;
 }
 
+.picker-select__chevron svg {
+  width: var(--chrome-icon-size);
+  height: var(--chrome-icon-size);
+  stroke-width: var(--chrome-icon-stroke);
+}
+
 .picker-select__menu.oc-overlay {
   /* Keep the picker budget when the shared overlay stylesheet loads later. */
   max-height: min(400px, var(--oc-overlay-available-height, calc(100dvh - 16px)));
   min-width: anchor-size(width);
   width: max-content;
+}
+
+@media (max-width: 640px) {
+  .oc-modal-dialog .picker-select__menu.oc-overlay {
+    max-width: anchor-size(width);
+  }
 }
 
 .picker-select__menu[hidden],
