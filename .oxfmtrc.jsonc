@@ -32,6 +32,9 @@
     "CHANGELOG/**",
     "CLAUDE.md",
     "docker-compose.yml",
+    // napi-rs generates the iroh binding loader and its type declarations.
+    "crates/openclaw-iroh-node/index.js",
+    "crates/openclaw-iroh-node/index.d.ts",
     "dist/",
     "extensions/diffs/assets/viewer-runtime.js",
     "extensions/browser/chrome-extension/modules/copilot-runtime.js",

@@ -1,9 +1,4 @@
 import type { DatabaseSync } from "node:sqlite";
-import { getEnvironmentData } from "node:worker_threads";
-import {
-  getDatabaseEngineInput,
-  getDatabaseEngineSelection,
-} from "../infra/database-engine/context.js";
 import type { PostgresSchemaFragment, StoreSchema } from "../infra/database-engine/contract.js";
 import { openEngineStore } from "../infra/database-engine/open.js";
 import {
@@ -36,6 +31,7 @@ import {
 } from "./openclaw-state-db-admission.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
+import { stateEngineInput } from "./openclaw-state-db-engine-input.js";
 import { openTrackedStateDatabase } from "./openclaw-state-db-handle.js";
 import { withLegacyPublicationDraft } from "./openclaw-state-db-schema-v28-publication.js";
 import { withLegacyLocalWorkspaceManifests } from "./openclaw-state-db-schema-v31-workspace-manifests.js";
@@ -61,18 +57,6 @@ import { statePostgresRuntime as runtime } from "./postgres-schema.generated/run
 
 const recovery =
   "Use the matching OpenClaw version or restore the matching PostgreSQL schema and anchor.";
-
-export function stateEngineInput() {
-  const selected = getDatabaseEngineSelection();
-  if (selected) {
-    return getDatabaseEngineInput("state");
-  }
-  const connection: unknown =
-    process.env.NODE_ENV === "test"
-      ? getEnvironmentData("openclaw.test.state.connection")
-      : undefined;
-  return typeof connection === "string" ? { connection, schemaPrefix: "openclaw_test" } : undefined;
-}
 
 export function isStatePostgres(): boolean {
   return stateEngineInput() !== undefined;

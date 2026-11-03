@@ -1,8 +1,12 @@
+import { performance } from "node:perf_hooks";
 import { beforeEach, expect, it, vi } from "vitest";
+import { startChatSendDiagnostics } from "../../gateway/server-methods/chat-send-diagnostics.js";
+import { withDiagnosticsTimelineObserver } from "../../infra/diagnostics-timeline.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import {
   prepareSandboxDependencyTemplate,
   resolveSandboxDependencyTemplateIdentity,
+  retireSandboxDependencyTemplate,
 } from "./dependency-template.js";
 import { createSandboxTestContext } from "./test-fixtures.js";
 import type { SandboxConfig } from "./types.js";
@@ -13,20 +17,35 @@ const mocks = vi.hoisted(() => ({
   retire: vi.fn(),
   registry: vi.fn(),
   current: vi.fn(),
+  mark: vi.fn(),
+  schedule: vi.fn(),
 }));
 vi.mock("./container-engine.js", () => ({
   DOCKER_SANDBOX_ENGINE: { id: "docker", command: "docker", displayName: "Docker" },
   execContainer: mocks.exec,
 }));
 vi.mock("./docker.js", () => ({ ensureSandboxContainer: mocks.ensure }));
-vi.mock("./manage.js", () => ({ removeSandboxRuntimeGeneration: mocks.retire }));
+// mock-isolation: Installer contract tests have no state owner; real lifecycle coverage lives in the lifecycle suite.
+vi.mock("./registry-lifecycle.js", () => ({
+  withSandboxRegistrySettlement: (_context: unknown, run: () => Promise<unknown>) => run(),
+  acquireSandboxRuntimeUse: async () => ({ [Symbol.dispose]: () => {} }),
+}));
+// mock-isolation: Unit installation contracts must not initialize backend dispatch or real housekeeping.
+vi.mock("./prune.js", () => ({ scheduleSandboxPrune: mocks.schedule }));
+vi.mock("./container-inspect.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./container-inspect.js")>()),
+  containerHasTerminated: mocks.retire,
+}));
 vi.mock("./podman-runtime.js", () => ({
   validateSandboxContainerEngineTarget: vi.fn(),
   resolvePodmanSandboxRuntimeInfo: vi.fn(),
   bindPodmanSandboxEngine: vi.fn(),
 }));
+// mock-isolation: These installer contracts use synthetic registry facts without opening a state database.
 vi.mock("./registry.js", () => ({
-  assertSandboxRegistryEntryCurrent: mocks.current,
+  assertSandboxRegistryRetirementCurrent: mocks.current,
+  beginSandboxRegistryRemoval: mocks.mark,
+  withSandboxRegistryEntryLock: (_entry: unknown, run: () => Promise<void>) => run(),
   readRegistry: mocks.registry,
 }));
 
@@ -60,7 +79,8 @@ beforeEach(() => {
     stderr: "",
   }));
   mocks.ensure.mockResolvedValue({ containerName: "builder", containerId });
-  mocks.retire.mockResolvedValue(undefined);
+  mocks.retire.mockResolvedValue(true);
+  mocks.mark.mockImplementation(async (entry) => ({ ...entry, runtimeState: "removing" }));
   mocks.registry.mockResolvedValue({
     entries: [
       {
@@ -81,15 +101,24 @@ async function prepare(config = cfg, signal?: AbortSignal, rollbackGuard = vi.fn
     assertCurrent: () => {},
   });
   expect(identity).toBeDefined();
-  return await prepareSandboxDependencyTemplate({
-    directory,
-    cfg: config,
-    scopeKey: "fixture",
-    identity: identity!,
-    signal,
-    assertCurrent: () => {},
-    rollbackGuard,
-  });
+  const closed = vi.fn();
+  try {
+    return await withDiagnosticsTimelineObserver(
+      (name) => (name.endsWith(".dependency.retire") ? closed : undefined),
+      () =>
+        prepareSandboxDependencyTemplate({
+          directory,
+          cfg: config,
+          scopeKey: "fixture",
+          identity: identity!,
+          signal,
+          assertCurrent: () => {},
+          rollbackGuard,
+        }),
+    );
+  } finally {
+    expect(closed).toHaveBeenCalledOnce();
+  }
 }
 
 it("installs the pinned guest image without session credentials or writable Git metadata", async () => {
@@ -108,19 +137,39 @@ it("installs the pinned guest image without session credentials or writable Git 
   expect(admitted.readOnlyResourceMounts).toEqual([
     { hostPath: "/owned/template/.git", containerPath: "/workspace/.git" },
   ]);
-  expect(mocks.retire).toHaveBeenCalledWith(expect.objectContaining({ id: containerId }));
+  expect(mocks.retire).toHaveBeenCalledWith(
+    expect.anything(),
+    containerId,
+    expect.any(AbortSignal),
+  );
+  expect(mocks.exec.mock.calls.map(([, args]) => args[0])).not.toContain("rm");
   expect(cfg.docker.env).toHaveProperty("REGISTRY_PASSWORD", "private-fixture");
 });
 
-it("records install failure without exposing installer output and retires the writer", async () => {
-  mocks.exec.mockImplementation(async (_engine, args: string[]) => ({
-    code: args[0] === "exec" ? 1 : 0,
-    stdout: args[0] === "image" ? image : containerId,
-    stderr: "registry password private-fixture",
-  }));
-  expect(await prepare()).toEqual({ installed: false, reason: "pnpm install failed (exit 1)" });
-  expect(mocks.retire).toHaveBeenCalledOnce();
-});
+it.each(["stdout", "stderr"] as const)(
+  "records a bounded, redacted install failure from %s and retires the writer",
+  async (stream) => {
+    mocks.exec.mockImplementation(async (_engine, args: string[]) => ({
+      code: args[0] === "exec" ? 1 : 0,
+      stdout: args[0] === "image" ? image : containerId,
+      stderr: "",
+      ...(args[0] === "exec"
+        ? {
+            [stream]: `${"progress\n".repeat(400)}ERR_PNPM_NO_OFFLINE_META\npassword=fixture-secret`,
+          }
+        : {}),
+    }));
+    const result = await prepare();
+    expect(result.installed).toBe(false);
+    if (!result.installed) {
+      expect(result.reason).toContain("pnpm install failed (exit 1)");
+      expect(result.reason).toContain("ERR_PNPM_NO_OFFLINE_META");
+      expect(result.reason).not.toContain("fixture-secret");
+      expect(result.reason.length).toBeLessThanOrEqual(2100);
+    }
+    expect(mocks.retire).toHaveBeenCalledOnce();
+  },
+);
 
 it("uses offline installation when the sandbox has no network", async () => {
   const offlineCfg = { ...cfg, docker: { ...cfg.docker, network: "none" } };
@@ -146,6 +195,52 @@ it("refuses to publish a template whose builder could not be retired", async () 
   mocks.retire.mockRejectedValue(new Error("writer is still live"));
   await expect(prepare()).rejects.toThrow("writer is still live");
 });
+
+it.each([true, false])(
+  "attributes retirement on the slow-send line (terminated=%s)",
+  async (terminated) => {
+    let clock = 0;
+    const now = vi.spyOn(performance, "now").mockImplementation(() => clock);
+    const info = vi.fn();
+    const diagnostics = startChatSendDiagnostics({ info });
+    const prefix =
+      "detail.attempt.setup.sandbox.workspace_selection.prepare.reconcile.dependency.retire";
+    mocks.exec.mockImplementation(async (_engine, args: string[]) => {
+      clock += args[0] === "kill" ? 19_000 : args[0] === "wait" ? 500 : 100;
+      return { code: 0, stdout: containerId, stderr: "" };
+    });
+    mocks.retire.mockImplementation(async () => {
+      clock += 200;
+      return terminated;
+    });
+    try {
+      const retired = withDiagnosticsTimelineObserver(diagnostics.observeSpan, () =>
+        retireSandboxDependencyTemplate(directory, () => {}),
+      );
+      if (terminated) {
+        await retired;
+      } else {
+        await expect(retired).rejects.toThrow("still running; template retained");
+      }
+      diagnostics.finish();
+      expect(info).toHaveBeenCalledOnce();
+      const line = info.mock.calls[0]![0];
+      for (const field of [
+        "inspect=100ms",
+        "kill=19000ms",
+        "wait=500ms",
+        "verify=200ms",
+        "verify.attempts=1",
+      ]) {
+        expect(line).toContain(`${prefix}.${field}`);
+      }
+      expect(line).not.toContain(containerId);
+      expect(line).not.toContain(directory);
+    } finally {
+      now.mockRestore();
+    }
+  },
+);
 
 it("retries a failed dependency generation when its network policy changes", async () => {
   const options = { assertCurrent: () => {} };

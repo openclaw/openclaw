@@ -411,10 +411,10 @@ it.each([
   },
 );
 
-it("preserves update status after target policy admission failure for an existing profile", async () => {
+it.each(["main", "MAIN", "Main", "openclaw@MAIN"])("preserves status for %s", async (tag) => {
   openOpenClawStateDatabase();
   vi.spyOn(updateGlobal, "detectGlobalInstallManagerForRoot").mockResolvedValue("bun");
-  const result = await rejectUpdate({ tag: "main", yes: true });
+  const result = await rejectUpdate({ tag, yes: true });
   expect(result).toMatchObject({
     status: "error",
     mode: "bun",
