@@ -620,6 +620,52 @@ describe("createVoiceCallRuntime lifecycle", () => {
     expect(consultParamsFrom(runAgentTurn).toolsAllow).toBeUndefined();
   });
 
+  it("runs host-forced consults (consultPolicy always) as cancellable agent turns", async () => {
+    const runAgentTurn = answeringAgent("Forced answer.");
+    let turnSignal: AbortSignal | undefined;
+    const turnStarted = createDeferred<void>();
+    runAgentTurn.mockImplementationOnce(async (params) => {
+      turnSignal = params.abortSignal;
+      turnStarted.resolve();
+      await new Promise<void>((resolve) => {
+        params.abortSignal?.addEventListener("abort", () => resolve());
+      });
+      throw params.abortSignal?.reason;
+    });
+    const agentRuntime = createConsultRuntime(runAgentTurn);
+    setConsultCall();
+    const handler = await startConsult(
+      createRealtimeConfig({ consultPolicy: "always", toolPolicy: "safe-read-only" }),
+      agentRuntime,
+    );
+
+    // The forced path passes only the caller's transcript and the forced owner's abort signal.
+    const forcedOwner = new AbortController();
+    const pending = handler({ question: "Is the slab poured?" }, "call-1", {
+      abortSignal: forcedOwner.signal,
+    });
+    // Without the agent-turn runner the consult rejects here instead of starting a turn.
+    await Promise.race([turnStarted.promise, pending]);
+    expect(agentRuntime.runEmbeddedAgent).not.toHaveBeenCalled();
+    expect(consultParamsFrom(runAgentTurn)).toMatchObject({
+      senderIsOwner: false,
+      deliver: false,
+      toolsAllow: [
+        "read",
+        "web_search",
+        "web_fetch",
+        "x_search",
+        "memory_search",
+        "memory_get",
+        "voice_call",
+      ],
+    });
+    expect(turnSignal?.aborted).toBe(false);
+    forcedOwner.abort(new Error("forced owner cancelled"));
+    await expect(pending).rejects.toThrow();
+    expect(turnSignal?.aborted).toBe(true);
+  });
+
   it("canonicalizes restored legacy per-call keys for realtime consults", async () => {
     const config = createRealtimeConfig(
       {},
