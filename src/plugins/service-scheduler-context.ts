@@ -1,5 +1,6 @@
 import { runOutsideOperatorToolGatewayAuthority } from "../gateway/operator-tool-gateway-authority.js";
 import { createScheduledGatewayRunner } from "../gateway/scheduled-run-gateway-context.js";
+import { runOutsideGatewayRootWorkAdmission } from "../process/gateway-work-admission.js";
 import type { PluginRuntimeCapabilityLease } from "./capability-lease.js";
 import { withPluginHttpRouteRegistry } from "./http-registry.js";
 import { getBoundLegacyPluginSdkResourceHost } from "./legacy-sdk-resource-host.js";
@@ -12,6 +13,15 @@ import {
   getGatewayContextResolver,
   withPluginRuntimeGatewayContextResolver,
 } from "./runtime/gateway-request-scope.js";
+import { runOutsidePluginRuntimeGenerationScope } from "./runtime/generation-scope.js";
+
+export function runPluginServiceStartup<T>(run: () => T): T {
+  return runOutsideGatewayRootWorkAdmission(() =>
+    runOutsideOperatorToolGatewayAuthority(() =>
+      runOutsidePluginRuntimeGenerationScope(() => pluginInstanceInvocation.exit(run)),
+    ),
+  );
+}
 
 export function createPluginServiceSchedulerRunner(owner: {
   registry: PluginRegistry;
