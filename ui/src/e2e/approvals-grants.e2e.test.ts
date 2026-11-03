@@ -176,7 +176,7 @@ suite.define(() => {
           animations: "disabled",
         });
         await expect.poll(() => gateway.getRequests("exec.approval.grants.list")).toHaveLength(1);
-        const grants = page.locator(".standing-grants-table");
+        const grants = page.getByRole("list", { name: "Standing grants" });
         await grants.getByText(grant.cronJobName!, { exact: true }).waitFor();
         await grants.getByRole("button", { name: /Revoke/ }).click();
         await expect.poll(() => gateway.getRequests("exec.approval.grants.revoke")).toHaveLength(1);

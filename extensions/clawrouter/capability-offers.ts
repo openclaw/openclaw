@@ -228,7 +228,7 @@ export async function fetchClawRouterCapabilityOffers(params: {
       const catalog = asOptionalRecord(body);
       const scope = asOptionalRecord(catalog?.scope);
       const observedAt =
-        typeof catalog?.observedAt === "string" ? Date.parse(catalog.observedAt) : NaN;
+        typeof catalog?.observedAt === "string" ? Date.parse(catalog.observedAt) : Number.NaN;
       const age = Date.now() - observedAt;
       if (
         !Number.isFinite(age) ||

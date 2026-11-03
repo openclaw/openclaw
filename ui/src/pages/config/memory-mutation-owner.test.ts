@@ -428,7 +428,7 @@ it.each(["add-on", "engine"] as const)(
       isEngine ? selectEngine(element, "other") : toggleAddon(element, "Active memory", false);
     const control = () =>
       isEngine
-        ? element.querySelector(".settings-segmented__input")
+        ? element.querySelector("select[aria-label='Memory engine']")
         : addonSwitch(element, "Active memory");
     mountMemoryPage(element);
     try {
@@ -448,10 +448,12 @@ it.each(["add-on", "engine"] as const)(
       await waitForCatalog(request, 3);
       expect(element.textContent).not.toContain("Could not change the memory engine");
       flush();
-      expect(control()?.hasAttribute("aria-disabled")).toBe(true);
+      expect(control()?.hasAttribute(isEngine ? "aria-busy" : "aria-disabled")).toBe(true);
 
       secondMutation.resolve(committed(pluginId, isEngine));
-      await waitForSolid(() => expect(control()?.hasAttribute("aria-disabled")).toBe(false));
+      await waitForSolid(() =>
+        expect(control()?.hasAttribute(isEngine ? "aria-busy" : "aria-disabled")).toBe(false),
+      );
     } finally {
       firstMutation.resolve(committed(pluginId, isEngine));
       secondMutation.resolve(committed(pluginId, isEngine));

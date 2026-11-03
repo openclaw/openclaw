@@ -101,7 +101,7 @@ function ConfigMapRow(
   );
   return (
     <>
-      <div class="settings-row">
+      <div class="settings-row cfg-collection-row">
         <div class="settings-row__text">
           <input
             type="text"
@@ -242,7 +242,7 @@ export function ConfigMapField(props: MapProps & { heading?: MapHeading }): JSX.
   return (
     <Show when={content().visible}>
       <div class="cfg-block cfg-map">
-        <div class="settings-row">
+        <div class="settings-row cfg-collection-row">
           <Show
             when={props.heading}
             fallback={
@@ -306,7 +306,7 @@ export function ConfigMapField(props: MapProps & { heading?: MapHeading }): JSX.
                 }
               }}
             >
-              {t("configForm.addEntry")}
+              {t("configForm.add")}
             </button>
           </div>
         </div>
