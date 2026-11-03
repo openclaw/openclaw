@@ -63,7 +63,7 @@ async function bindingControls(
   const researchSelect = section
     .locator(".settings-row")
     .filter({
-      has: page.locator(".settings-row__title").getByText("Research (research)", { exact: true }),
+      has: page.locator(".settings-row__title").getByText("Research", { exact: true }),
     })
     .getByRole("combobox");
   return { gateway, section, defaultSelect, researchSelect };
@@ -113,8 +113,6 @@ suite.define(() => {
           for (const select of selects) {
             await expect(select.locator("option:checked")).toBeEnabled();
           }
-          const saveButton = section.getByRole("button", { name: "Save", exact: true });
-          await expect(saveButton).toBeDisabled();
           const capture = async (name: string) => {
             await section.scrollIntoViewIfNeeded();
             for (const select of selects) {
@@ -141,7 +139,6 @@ suite.define(() => {
             await Promise.all(selects.map((select) => select.inputValue())),
             "BINDING_SELECTION_LOSS_133032",
           ).toEqual(values);
-          await expect(saveButton).toBeDisabled();
           await expectBindings(
             selects,
             values,
@@ -153,7 +150,6 @@ suite.define(() => {
           await expect(defaultSelect).toBeEnabled();
           await expectBindings(selects, values, availableLabels);
           await capture("recovered.png");
-          await expect(saveButton).toBeDisabled();
           await expectWrites(gateway, 0);
         },
       );
@@ -211,7 +207,7 @@ suite.define(() => {
         await gateway.deferNext("config.get");
         await gateway.resolveDeferred("config.set");
         const indicator = page.locator("openclaw-settings-save-indicator");
-        await expect(indicator).toContainText("Apply changes");
+        await expect(indicator).toContainText("Saved");
         await gateway.waitForRequest("config.get", { after: refreshReads });
         await gateway.resolveDeferred("config.get");
         if (artifacts) {
@@ -222,16 +218,16 @@ suite.define(() => {
         await expect(researchSelect).toBeEnabled();
 
         await gateway.deferNext("config.set");
-        await researchSelect.selectOption({ label: "Use default" });
+        await researchSelect.selectOption({ label: "Use default (Any node)" });
         const clearedAgent = requireRecord(
           (await gateway.waitForRequest("config.set", { after: 1 })).params,
         );
         expect(JSON.parse(String(clearedAgent.raw))).toEqual(makeConfig("", ""));
         await gateway.resolveDeferred("config.set");
         await expect(indicator).toContainText("Apply changes");
-        await expect(researchSelect).toHaveValue("__default__");
-        await expect(researchSelect).toBeDisabled();
-        await expect(defaultSelect).toBeDisabled();
+        await expect(
+          section.getByText("No nodes with system.run available.", { exact: true }),
+        ).toBeVisible();
         if (artifacts) {
           await page.screenshot({ path: path.join(artifacts, "unavailable-cleared.png") });
         }

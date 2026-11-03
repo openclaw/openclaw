@@ -284,6 +284,11 @@ suite.define(() => {
             expect(await summary.isVisible()).toBe(false);
             await heading.click();
             await summary.waitFor();
+            // Desktop Details keeps each stacked subagent's identity tint.
+            const tints = await summary
+              .locator(".chat-details-subagents__avatar")
+              .evaluateAll((els) => els.map((el) => getComputedStyle(el).backgroundColor));
+            expect(new Set(tints).size).toBe(4);
           }
           // The whole summary remains a hit target, including its leading inset.
           await checkThemes(async () => {
