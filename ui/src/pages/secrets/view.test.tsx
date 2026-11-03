@@ -42,6 +42,22 @@ function mount(
   )).container;
 }
 
+it("says the store is empty instead of repeating the page name", () => {
+  const container = mount([]);
+  const empty = container.querySelector(".settings-empty");
+  expect(empty?.textContent).toContain("No secrets yet.");
+  expect(empty?.querySelector("a")?.textContent).toBe("Docs");
+});
+
+it("says why secrets are unavailable in the empty state, without a section or a count", () => {
+  const container = mount([], {}, []);
+  const state = container.querySelector(".settings-empty");
+  expect(state?.querySelector('[role="status"]')?.textContent).toBe(
+    "Update the Gateway to manage secrets here.",
+  );
+  expect(container.querySelector(".settings-section__heading")).toBeNull();
+});
+
 it("never renders a secret value even when hostile input carries one", () => {
   const env: SecretStoreEntry = {
     name: "SERVICE_URL",
@@ -86,7 +102,7 @@ it("shows the allowed-host field for secret add and edit dialogs", () => {
 it("hides mutation controls when the gateway does not advertise them", () => {
   const container = mount([], {}, ["secrets.store.list"]);
   expect(container.querySelector("button")).toBeNull();
-  expect(container.textContent).toContain("Secrets");
+  expect(container.textContent).toContain("No secrets yet.");
 });
 
 it("uses the current system timezone for refreshed inventory timestamps", () => {

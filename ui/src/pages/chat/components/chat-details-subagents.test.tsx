@@ -123,11 +123,11 @@ it("folds failed runs into Done without changing child outcomes", () => {
     { key: "f", label: "F", status: "stopped" },
   ];
   const { view, setRows, openChild } = mountSubagents(initial);
-  expect(
-    view.getByRole("button", {
-      name: "All subagents. 2 Working, 1 Queued",
-    }),
-  ).toBeTruthy();
+  view.getByRole("button", {
+    name: "All subagents. 2 Working, 1 Queued",
+  });
+  const shimmering = view.container.querySelectorAll(".chat-details-subagents__count.text-shimmer");
+  expect([...shimmering].map((count) => count.getAttribute("data-status"))).toEqual(["running"]);
   setRows([initial[4]!]);
   flush();
   view.getByRole("button", { name: "E Failed" }).click();
