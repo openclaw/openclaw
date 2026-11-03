@@ -11,6 +11,7 @@ import type {
 } from "../lib/config/config-secret-fields.ts";
 import { formatUnknownText } from "../lib/format.ts";
 import { isSupportedConfigValueValid } from "./config-form.constraints.ts";
+import { configLabelInContext } from "./config-form.label-context.ts";
 import { formatConfigFormNumber } from "./config-form.numeric.ts";
 import { resolveConfigFieldMeta, type ConfigSearchCriteria } from "./config-form.search.ts";
 import {
@@ -49,6 +50,8 @@ export type ConfigNodeRenderParams = {
   /** Compact editors show effective defaults and inline collection controls. */
   compact?: boolean;
   commitOnBlur?: boolean;
+  /** The nearest visible heading, whose name a row's label need not repeat. */
+  contextLabel?: string;
   /** Help of an enclosing object that renders no row of its own. */
   helpContext?: readonly string[];
   /** The surrounding section heading names this object, and its "?" carries lifted help. */
@@ -105,6 +108,7 @@ export function resolveConfigFieldPresentation(params: ConfigNodeRenderParams) {
   const showLabel = params.showLabel ?? true;
   return {
     label,
+    title: configLabelInContext(label, params.contextLabel),
     help,
     showLabel,
     path: params.path,

@@ -1,0 +1,19 @@
+/* The test state stands where a row title stands, so it reads at title size. */
+.search-test-status > .settings-status {
+  font: inherit;
+  color: inherit;
+  white-space: normal;
+}
+
+/* A long status stays on the chevron's line; the provider name wraps instead. */
+.search-provider > .settings-row__control {
+  flex-wrap: nowrap;
+}
+
+.search-provider > .settings-row__control > .settings-row__chevron {
+  transition: transform var(--duration-fast) var(--ease-out);
+}
+
+.search-provider[aria-expanded="true"] > .settings-row__control > .settings-row__chevron {
+  transform: rotate(90deg);
+}

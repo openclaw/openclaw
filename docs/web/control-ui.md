@@ -66,6 +66,20 @@ text replaces the instructions after the read-only heading. End the notice with
 a space and an absolute HTTP or HTTPS URL to add a **Learn more** link. For
 example, `Edit the deployment manifest and redeploy. https://example.org/gateway`.
 
+## Edit a failed message
+
+If a model rejects a message (for example, because it contains too many images),
+choose **Edit message** on the latest failed reply. Confirm the rewind to return
+that message and its attachments to the composer, remove or change attachments,
+and send again. The rejected turn remains in a saved conversation branch, but is
+excluded from the active model context.
+
+Send or clear any existing composer draft first; recovery never replaces it.
+Editing requires permission to rewind the conversation and is unavailable while
+a run is active. **Try again** still continues the existing conversation without
+replaying the original message, because earlier actions may already have run.
+Rewinding does not undo external actions.
+
 ## Command palette file attachments
 
 Open the command palette with **Cmd+K** on macOS or **Ctrl+K** elsewhere. Drop

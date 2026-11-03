@@ -4,6 +4,7 @@ import { objectFormOfUnion } from "../lib/config-form-utils.ts";
 import { getLocale, t } from "../lib/reactive/i18n.ts";
 import { resolveStructuredDraftInitialValue } from "./config-form-structured-draft.ts";
 import { ConfigStructuredDraft } from "./config-form-structured-draft.tsx";
+import { configLabelInContext } from "./config-form.label-context.ts";
 import { ConfigArray, ConfigObject } from "./config-form.node.collection.tsx";
 import { NumberInput, SelectInput, TextInput } from "./config-form.node.scalar.tsx";
 import {
@@ -365,6 +366,7 @@ function BooleanNode(props: { params: ConfigNodeRenderParams }): JSX.Element {
       <Match when={props.params.compact}>
         <FieldRow
           label={meta().label}
+          title={configLabelInContext(meta().label, props.params.contextLabel)}
           path={props.params.path}
           help={meta().help}
           helpContext={props.params.helpContext}
@@ -389,7 +391,7 @@ function BooleanNode(props: { params: ConfigNodeRenderParams }): JSX.Element {
         <SettingsToggleRow
           title={
             <>
-              {meta().label}
+              {configLabelInContext(meta().label, props.params.contextLabel)}
               <Show when={copy().hasHelp}>
                 <ConfigFieldHelp
                   path={props.params.path}

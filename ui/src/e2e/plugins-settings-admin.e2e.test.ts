@@ -764,7 +764,7 @@ suite.define(() => {
       await page.getByRole("button", { name: /(?:Remove|Uninstall) Workboard/iu }).click();
       await page.getByRole("dialog").waitFor();
       await page
-        .locator(".exec-approval-actions")
+        .locator("openclaw-modal-actions")
         .getByRole("button", { name: "Remove", exact: true })
         .click();
       await gateway.waitForRequest("plugins.uninstall", { after: uninstallCount });

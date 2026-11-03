@@ -140,6 +140,11 @@ export async function sendGatewayHello(
     revisionProjector: buildRequestContext().configRevisionProjector,
     sessionRowProjection,
   });
+  if (scopes.includes(ADMIN_SCOPE)) {
+    // What this process runs with, which startup flags can set apart from the config file.
+    snapshot.authMode = resolvedAuth.mode;
+    Object.assign(snapshot, context.handler.gatewayExposure);
+  }
   const cachedHealth = getHealthCache();
   if (cachedHealth && !connectParams.caps?.includes(GATEWAY_CLIENT_CAPS.HELLO_HEALTH_ON_DEMAND)) {
     snapshot.health = connectParams.caps?.includes(GATEWAY_CLIENT_CAPS.HEALTH_SUMMARY)

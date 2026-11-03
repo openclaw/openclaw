@@ -80,6 +80,40 @@ function edit(input: HTMLInputElement | HTMLSelectElement, value: string, type =
 afterEach(() => i18n.setLocale("en"));
 
 describe("config form renderer", () => {
+  it("drops a heading that repeats a name already on screen and keeps its description and help", async () => {
+    const analysis = analyze({
+      gateway: object({ enabled: { type: "boolean" } }, { description: "Gateway help" }),
+    });
+    renderForm(analysis, {
+      activeSection: "gateway",
+      repeatedHeadings: ["gateway"],
+      uiHints: { gateway: { docsUrl: "https://docs.openclaw.ai/gateway" } },
+    });
+    await waitForSolid(() => expect(texts(".settings-section__desc")).toHaveLength(1));
+    expect(container.querySelector("h2.settings-section__heading")).toBeNull();
+    expect(container.querySelector("section.settings-section")?.getAttribute("aria-label")).toBe(
+      "Gateway",
+    );
+    const header = query(".settings-section__header", HTMLElement);
+    expect(header.querySelector(".settings-section__desc")).not.toBeNull();
+    expect(header.querySelector(".settings-section__help-button")).not.toBeNull();
+  });
+
+  it("drops a heading that opens the name on screen", async () => {
+    const analysis = analyze({ gateway: object({ enabled: { type: "boolean" } }) });
+    renderForm(analysis, { activeSection: "gateway", repeatedHeadings: ["Gateway Policy"] });
+    await waitForSolid(() =>
+      expect(container.querySelector("section.settings-section[aria-label]")).not.toBeNull(),
+    );
+    expect(container.querySelector("h2.settings-section__heading")).toBeNull();
+  });
+
+  it("keeps a heading that names something else", async () => {
+    const analysis = analyze({ gateway: object({ enabled: { type: "boolean" } }) });
+    renderForm(analysis, { activeSection: "gateway", repeatedHeadings: ["Network"] });
+    await waitForSolid(() => expect(texts("h2.settings-section__heading")).toHaveLength(1));
+  });
+
   it("notes an unsupported setting quietly and links Raw only where the page has it", async () => {
     const schema = object({ lab: object({ mode: { type: "string" }, name: { type: "string" } }) });
     const onOpenRaw = vi.fn();
@@ -611,6 +645,21 @@ describe("config form renderer", () => {
     expect(descriptions.filter((text) => text === help)).toHaveLength(1);
     expect(container.querySelectorAll('button[aria-label^="Help for"]')).toHaveLength(1);
     expect(descriptions.some((text) => text?.includes("nested-default"))).toBe(false);
+  });
+
+  it("drops the heading from a row's visible label and keeps it for assistive tech", () => {
+    renderForm(
+      analyze({
+        gateway: object({
+          port: { type: "integer", title: "Gateway port" },
+          mode: { type: "string", title: "Bind mode" },
+        }),
+      }),
+      { activeSection: "gateway", showAdvanced: true },
+    );
+    expect(texts(".settings-row__title")).toContain("Port");
+    expect(texts(".settings-row__title")).toContain("Bind mode");
+    expect(container.querySelector('input[aria-label="Gateway port"]')).not.toBeNull();
   });
 
   it("moves the help of a level's only group behind the section's help", () => {
