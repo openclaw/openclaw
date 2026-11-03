@@ -106,6 +106,7 @@ function defineHealthCheckRegistration(
     registerCheck: typeof registerHealthCheck,
   ) => HealthFinding[] | void,
   updateReadiness?: "post-plugin",
+  pluginId?: string,
 ) {
   // Owners retain callback and check identities when refreshing their registration state.
   // Declare phase ownership before loading their implementation, then carry it onto each check.
@@ -114,6 +115,7 @@ function defineHealthCheckRegistration(
         registerHealthCheck(Object.assign(check, { updateReadiness }))
     : registerHealthCheck;
   return {
+    pluginId,
     updateReadiness,
     register: (params: BundledHealthCheckParams) => register(params, registerCheck),
   };
@@ -122,7 +124,7 @@ function defineHealthCheckRegistration(
 const HEALTH_CHECK_REGISTRATIONS = [
   defineHealthCheckRegistration(registerMemoryCoreHealthChecks, "post-plugin"),
   defineHealthCheckRegistration(registerPolicyHealthChecks),
-  defineHealthCheckRegistration(registerOpenAIHealthChecks),
+  defineHealthCheckRegistration(registerOpenAIHealthChecks, undefined, "openai"),
   defineHealthCheckRegistration(registerCuaHealthChecks),
   defineHealthCheckRegistration(registerBundledWorkerProviderHealthChecks),
 ];
@@ -354,6 +356,8 @@ export function collectDeclaredPluginDoctorHealthChecks(params: BundledHealthChe
   for (const owner of registry.plugins) {
     if (
       owner.id === "codex" ||
+      // Retained native registrations keep their own artifact and activation contract.
+      HEALTH_CHECK_REGISTRATIONS.some((registration) => registration.pluginId === owner.id) ||
       owner.doctorHealthChecks !== true ||
       !isActivatedManifestOwner({ plugin: owner, normalizedConfig, rootConfig: params.cfg })
     ) {

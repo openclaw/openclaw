@@ -1340,9 +1340,17 @@ const nodeTestShards = targetNodeTestShards
       requires_bun:
         !shard.requiresDist &&
         (Boolean(testRuntimePolicy?.ciTestShardRequiresBun(shard, testRuntimeMode)) ||
-          // Node-hosted packaging proof also launches a pinned Bun child.
-          shardRequiresTests(shard, ["test/scripts/bun-standalone-codegen.test.ts"], (plan) =>
-            plan.configs?.includes(goToolingConfig),
+          // These Node-hosted proofs also launch a pinned Bun child.
+          shardRequiresTests(
+            shard,
+            [
+              "test/scripts/bun-standalone-codegen.test.ts",
+              "src/infra/update-retained-runtime-imports.process.test.ts",
+            ],
+            (plan) =>
+              plan.configs?.some((config) =>
+                [goToolingConfig, "test/vitest/vitest.infra.config.ts"].includes(config),
+              ),
           )),
       shard_name: shard.shardName,
       groups_gzip_base64: packedGroups,

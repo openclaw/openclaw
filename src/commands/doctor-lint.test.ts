@@ -15,6 +15,7 @@ import * as snapshotSource from "../infra/sqlite-snapshot-source.js";
 import { clearLoadInstalledPluginIndexInstallRecordsCache } from "../plugins/installed-plugin-index-record-cache.js";
 import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
+import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureEnv } from "../test-utils/env.js";
 import type { DoctorLintCliOptions } from "./doctor-lint-options.js";
@@ -563,12 +564,15 @@ describe("runDoctorLintCli", () => {
 
   it("fails closed when a semantic index needs plugin state that cannot be prepared", async () => {
     const { databasePath: pluginDatabasePath } = await seedSemanticState(semanticConfig);
-    mocks.prepareSqliteReadOnlyLocation.mockImplementation((...args: unknown[]) => {
-      if (args[0] === pluginDatabasePath) {
-        throw new Error("shared state did not stabilize");
-      }
-      return mocks.actualPrepareSqliteReadOnlyLocation(...args);
-    });
+    const forkSnapshot = stateReads.forkActiveOpenClawStateDatabaseReadSnapshot;
+    const fork = vi
+      .spyOn(stateReads, "forkActiveOpenClawStateDatabaseReadSnapshot")
+      .mockImplementation(async (options) => {
+        if (resolveOpenClawStateSqlitePath(options?.env) === pluginDatabasePath) {
+          throw new Error("shared state did not stabilize");
+        }
+        return await forkSnapshot(options);
+      });
 
     await expectFailedCheck(
       MEMORY_CHECK_ID,
@@ -581,10 +585,9 @@ describe("runDoctorLintCli", () => {
       { severityMin: "error" },
     );
     expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
-    expect(mocks.prepareSqliteReadOnlyLocation).toHaveBeenCalledWith(pluginDatabasePath, {
-      preserveSourceArtifacts: true,
-      shared: false,
-    });
+    expect(fork).toHaveBeenCalledOnce();
+    expect(resolveOpenClawStateSqlitePath(fork.mock.calls[0]?.[0]?.env)).toBe(pluginDatabasePath);
+    expect(mocks.prepareSqliteReadOnlyLocation).not.toHaveBeenCalled();
   });
 
   it("rejects registered checks that claim reserved core doctor ids", async () => {

@@ -507,6 +507,7 @@ suite.define(() => {
       },
     };
     const gateway = await installMockGateway(page, {
+      nativePlugins: nativeRepositoryPlugins,
       subscriptionInitialHistory: false,
       deferredMethods: ["chat.startup"],
       workspace: WORKSPACE,

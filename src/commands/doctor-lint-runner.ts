@@ -429,7 +429,8 @@ async function executeDoctorLint(
     allowExecSecretRefs: opts.allowExec === true,
     ...(snapshot.path !== undefined ? { configPath: snapshot.path } : {}),
   };
-  const { registerBundledHealthChecks } = await import("../flows/bundled-health-checks.js");
+  const { registerBundledHealthChecks, collectDeclaredPluginDoctorHealthChecks } =
+    await import("../flows/bundled-health-checks.js");
   const availabilityFindings = registerBundledHealthChecks({
     cfg,
     cwd: ctx.cwd,
@@ -437,7 +438,17 @@ async function executeDoctorLint(
     runWithPluginStateSnapshot: stateView.runWithPluginStateSnapshot,
     updateReadiness: opts.updateReadiness,
   });
-  const registeredExtensionChecks = listExtensionHealthChecksForDoctor([], availabilityFindings);
+  const declared = collectDeclaredPluginDoctorHealthChecks({
+    cfg,
+    cwd: ctx.cwd,
+    env: stateView.pluginMetadataEnv,
+  });
+  availabilityFindings.push(...declared.findings);
+  const registeredExtensionChecks = listExtensionHealthChecksForDoctor(
+    [],
+    availabilityFindings,
+    declared.checks,
+  );
   const onlyRegisteredExtensionChecks =
     opts.onlyIds !== undefined &&
     opts.onlyIds.length > 0 &&
@@ -450,7 +461,7 @@ async function executeDoctorLint(
   }
   const extensionChecks = onlyRegisteredExtensionChecks
     ? registeredExtensionChecks
-    : listExtensionHealthChecksForDoctor(coreChecks, availabilityFindings);
+    : listExtensionHealthChecksForDoctor(coreChecks, availabilityFindings, declared.checks);
   const runWithPrivateStateSnapshot: DoctorLintStateRunner = async (run) =>
     await stateView.runWithPluginStateSnapshot(async () => await run());
   // Update readiness keeps every declared check private until restart.

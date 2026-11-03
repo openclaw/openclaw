@@ -500,11 +500,13 @@ suite.define(() => {
         await selectView(page, "Composer", replacement);
         const composer = page.locator(".agent-chat__composer-shell");
         await composer.waitFor();
-        expect(
-          await composer.evaluate((element) =>
-            Boolean(element.closest("openclaw-plugin-view[data-plugin-composer]")),
-          ),
-        ).toBe(replacement !== "");
+        await expect
+          .poll(() =>
+            composer.evaluate((element) =>
+              Boolean(element.closest("openclaw-plugin-view[data-plugin-composer]")),
+            ),
+          )
+          .toBe(replacement !== "");
         if (replacement === "ui-fixture/failing-composer") {
           await page.getByRole("alert").filter({ hasText: "Fixture composer failed" }).waitFor();
         }

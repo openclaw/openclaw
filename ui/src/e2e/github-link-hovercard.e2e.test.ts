@@ -467,7 +467,7 @@ suite.define(() => {
       });
       await page.setViewportSize({ width: scenario.width, height: 800 });
       await pullLink.focus();
-      const request = await gateway.waitForRequest("github.preview");
+      const request = await gateway.waitForRequest("forge.preview");
       expect(request.params).toMatchObject({ agentId: "main" });
 
       await page.clock.runFor(1_000);
@@ -481,7 +481,7 @@ suite.define(() => {
 
       if (scenario.fails) {
         const error = "GitHub API rate limit exceeded (HTTP 403). Try again in 2 minutes.";
-        await gateway.rejectDeferred("github.preview", { message: error });
+        await gateway.rejectDeferred("forge.preview", { message: error });
         await expectText(card.getByRole("status"), error);
         await expectAttr(card, "aria-label", "Could not load preview");
         const externalLink = card.getByRole("link", { name: "Open on Forge" });
@@ -492,7 +492,7 @@ suite.define(() => {
         await expectAttr(pullLink, "aria-haspopup", "dialog");
         expect(await isFocused(pullLink)).toBe(true);
       } else {
-        await gateway.resolveDeferred("github.preview");
+        await gateway.resolveDeferred("forge.preview");
         await expectText(card, pullPreviewResponse.title);
       }
       expect(await page.locator("body").getAttribute("data-preview-mounts")).toBe("1");

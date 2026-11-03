@@ -1,5 +1,6 @@
-import type { CronJob } from "@openclaw/gateway-protocol";
 /** @jsxImportSource @solidjs/web */
+
+import type { CronJob } from "@openclaw/gateway-protocol";
 import { For, Show, type Element } from "solid-js";
 import type { CiAutomationOption, CiAutomationOptions } from "../session-pr-automation-api.ts";
 import { Icon, SettingsToggle, type MenuControls } from "./presentation-components.tsx";

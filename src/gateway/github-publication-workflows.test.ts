@@ -495,16 +495,18 @@ it("cannot reintroduce a workflow after a remote reset following the last observ
   const transport = mocks.runCommand.getMockImplementation()!;
   let pushes = 0;
   mocks.runCommand.mockImplementation(async (args: string[], options) => {
-    if (args[0] === "gh" && args.some((arg) => arg.includes("/git/matching-refs/heads/"))) {
+    const matchingRef = args.find((arg) => arg.includes("/git/matching-refs/heads/"));
+    if (matchingRef) {
+      const requestedBranch = decodeURIComponent(matchingRef.split("/heads/")[1]!);
+      const observed = await workspace.git(
+        "ls-remote",
+        "--refs",
+        remote,
+        `refs/heads/${requestedBranch}`,
+      );
+      const sha = observed.split(/\s+/u)[0];
       return commandResult(
-        JSON.stringify([
-          {
-            ref: `refs/heads/${BRANCH}`,
-            object: {
-              sha: await workspace.git("--git-dir", remote, "rev-parse", `refs/heads/${BRANCH}`),
-            },
-          },
-        ]),
+        JSON.stringify(sha ? [{ ref: `refs/heads/${requestedBranch}`, object: { sha } }] : []),
       );
     }
     if (args.includes("push")) {

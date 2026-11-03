@@ -71,7 +71,12 @@ export async function runStructuredHealthRepairs(
     }),
     { checks, progress: ctx.options.json !== true },
   );
-  reportDoctorRepairResult(ctx, result, [...availabilityFindings, ...result.remainingFindings]);
+  reportDoctorRepairResult(ctx, result, [
+    ...availabilityFindings.filter(
+      (finding) => !checks.some((check) => check.id === finding.checkId),
+    ),
+    ...result.remainingFindings,
+  ]);
 }
 
 export async function runCoreContributionHealth(

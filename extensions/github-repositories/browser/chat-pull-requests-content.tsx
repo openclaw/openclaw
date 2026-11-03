@@ -1,8 +1,9 @@
+/** @jsxImportSource @solidjs/web */
+
 import type {
   ControlUiSessionBranch,
   ControlUiSessionPullRequest,
 } from "@openclaw/gateway-protocol";
-/** @jsxImportSource @solidjs/web */
 import { createMemo, For, Show, useContext } from "solid-js";
 import { ChatCiAutomationPanel, ChatCiDetailsPanel } from "./chat-ci-panels.tsx";
 import { GitHubPublicationAction, GitHubPublicationDetails } from "./chat-github-publication.tsx";

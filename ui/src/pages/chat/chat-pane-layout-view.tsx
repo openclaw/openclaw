@@ -156,11 +156,23 @@ function PaneSubagentHeader(props: {
 function PaneHeaderContent(props: {
   header: ChatPaneHeaderPresentation;
   notice?: Parameters<typeof renderChatTopbarNotices>[0];
+  sessionKey: string;
+  agentId: string;
+  presentation: PresentationValue;
+  facts?: ChatProps["sessionHeaderFacts"];
 }) {
+  const presented = usePanePresentation(() => props.presentation);
   return (
     <>
       <PaneHeaderView {...props.header} />
       {props.notice ? renderChatTopbarNotices(props.notice) : undefined}
+      <PluginContributions
+        kind="session-header"
+        sessionKey={props.sessionKey}
+        agentId={props.agentId}
+        facts={props.facts}
+        presented={presented()}
+      />
     </>
   );
 }
@@ -191,7 +203,11 @@ function PaneContent(props: { data: PaneLayoutData; questions: ComposerQuestions
     <Show
       when={props.data.subagentHeader}
       fallback={
-        <Show when={props.data.header}>{(value) => <PaneHeaderContent {...value()} />}</Show>
+        <Show when={props.data.header}>
+          {(value) => (
+            <PaneHeaderContent {...value()} facts={props.data.primary.chat.sessionHeaderFacts} />
+          )}
+        </Show>
       }
     >
       {(value) => <PaneSubagentHeader {...value()} />}
@@ -215,13 +231,6 @@ function PaneContent(props: { data: PaneLayoutData; questions: ComposerQuestions
   );
   return (
     <>
-      <PluginContributions
-        kind="session-header"
-        sessionKey={props.data.primary.chat.sessionKey}
-        agentId={props.data.primary.chat.currentAgentId ?? undefined}
-        facts={props.data.primary.chat.sessionHeaderFacts}
-        presented={presented()}
-      />
       <SidebarRegionView
         {...props.data.region}
         header={header}

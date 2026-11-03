@@ -636,6 +636,9 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
         !conversationVisible && chatProps.error
           ? { error: chatProps.error, onDismissError: chatProps.onDismissError }
           : undefined,
+      sessionKey: state.sessionKey,
+      agentId: currentAgentId,
+      presentation: headerPresentation,
     };
     const externalPanelsToggle = this.sessionPresentation === "desktop" && header !== null;
     if (header) {

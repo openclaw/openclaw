@@ -1,8 +1,9 @@
+/** @jsxImportSource @solidjs/web */
+
 import type {
   ControlUiSessionPullRequest,
   ControlUiSessionPullRequestSnapshot,
 } from "@openclaw/gateway-protocol";
-/** @jsxImportSource @solidjs/web */
 import { For, Show, createSignal, useContext } from "solid-js";
 import { ChatCiAutomationPanel, ChatCiDetailsPanel } from "./chat-ci-panels.tsx";
 import { createPullRequestCopy } from "./chat-pull-request-copy.ts";

@@ -619,7 +619,7 @@ export async function requireGitHubPublicationCommit(params: {
   if (!params.contents) {
     return;
   }
-  const readMissing = async () => {
+  const readMissing = async (stage = "content inventory") => {
     const result = await runPublicationCommand(
       [
         "git",
@@ -639,7 +639,7 @@ export async function requireGitHubPublicationCommit(params: {
     );
     assertCurrent();
     if (result.code !== 0) {
-      throw new Error(failure);
+      throw createGitHubPublicationGitError(failure, stage, result, DEFAULT_COMMAND_TIMEOUT_MS);
     }
     return result.stdout
       .toString("utf8")
@@ -650,8 +650,10 @@ export async function requireGitHubPublicationCommit(params: {
   const missing = await readMissing();
   if (missing.length) {
     await fetch(missing);
-    if ((await readMissing()).length) {
-      throw new Error(failure);
+    if ((await readMissing("content verification")).length) {
+      throw new Error(
+        `${failure} Git content verification failed: required objects are still missing after fetching.`,
+      );
     }
   }
 }

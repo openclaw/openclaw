@@ -1,6 +1,7 @@
+/** @jsxImportSource @solidjs/web */
+
 import type { ControlUiSessionPullRequest } from "@openclaw/gateway-protocol";
 import type { ControlUiMenuItemAttributes } from "openclaw/plugin-sdk/control-ui";
-/** @jsxImportSource @solidjs/web */
 import { createMemo, createSignal, createUniqueId, Show, useContext } from "solid-js";
 import { ChatCiAutomationPanel, ChatCiDetailsPanel } from "./chat-ci-panels.tsx";
 import { createPullRequestCopy } from "./chat-pull-request-copy.ts";
@@ -11,6 +12,7 @@ import {
   STATE_LABEL_KEYS,
   type ChatPullRequestsProps,
 } from "./chat-pull-request-shared.tsx";
+import { content } from "./host-control.tsx";
 import { GitDiffValues } from "./native-components.tsx";
 import {
   projectPresentation,
@@ -151,12 +153,12 @@ export function PullRequestActions(props: {
   const ciPages: MenuEntry = {
     kind: "content",
     id: "ci-pages",
-    content: (
+    content: content(() => (
       <>
         {checksContent}
         {monitoringContent}
       </>
-    ),
+    )),
   };
   const backItem = (): MenuEntry => ({
     id: "back",
