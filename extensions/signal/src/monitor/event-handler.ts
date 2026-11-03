@@ -1,16 +1,12 @@
-// Signal plugin module implements event handler behavior.
-import { setTimeout as sleep } from "node:timers/promises";
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
   createStatusReactionController,
   DEFAULT_EMOJIS,
-  DEFAULT_TIMING,
   logAckFailure,
   logTypingFailure,
   resolveAckReaction,
   shouldAckReaction,
   type StatusReactionController,
-  type StatusReactionEmojis,
 } from "openclaw/plugin-sdk/channel-feedback";
 import {
   buildMentionRegexes,
@@ -24,7 +20,7 @@ import {
   matchesMentionPatterns,
   readAgentRunTerminalOutcome,
   resolveInboundMentionDecision,
-  resolveEnvelopeFormatOptions,
+  resolveInboundSessionEnvelopeContextAsync,
   hasVisibleInboundReplyDispatch,
   runChannelInboundEvent,
   shouldDebounceTextInbound,
@@ -49,7 +45,6 @@ import {
   resolveChannelGroupsConfigPath,
 } from "openclaw/plugin-sdk/channel-policy";
 import { isControlCommandMessage } from "openclaw/plugin-sdk/command-detection";
-import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createInternalHookEvent,
   fireAndForgetHook,
@@ -61,17 +56,17 @@ import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import { resolveBatchedReplyThreadingPolicy } from "openclaw/plugin-sdk/reply-reference";
 import { resolveAgentRoute, resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
-import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
-import { normalizeE164, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveSignalReplyToMode } from "../accounts.js";
 import {
   maybeResolveSignalApprovalReaction,
   resolveSignalApprovalConversationKey,
 } from "../approval-reactions.js";
+import type { SignalSseEvent } from "../client-types.js";
 import {
   formatSignalPairingIdLine,
   formatSignalSenderDisplay,
@@ -80,12 +75,10 @@ import {
   resolveSignalPeerId,
   resolveSignalRecipient,
   resolveSignalSender,
-  type SignalSender,
 } from "../identity.js";
 import { formatSignalMediaText } from "../media-text.js";
 import { createSignalNativeReplyIdPlan } from "../native-reply.js";
 import { normalizeSignalMessagingTarget } from "../normalize.js";
-import { maybeResolveSignalQuestionReaction } from "../question-reactions.js";
 import { resolveSignalReactionLevel } from "../reaction-level.js";
 import { registerSignalReplyContext } from "../reply-authors.js";
 import { sendReactionSignal, type SignalReactionOpts } from "../send-reactions.js";
@@ -98,27 +91,22 @@ import {
   resolveSignalInboundDebounceKey,
   type SignalInboundEntry,
 } from "./event-handler.control-lane.js";
-import type {
-  SignalEnvelope,
-  SignalEventHandlerDeps,
-  SignalReactionMessage,
-  SignalReceivePayload,
-} from "./event-handler.types.js";
+import type { SignalEventHandlerDeps, SignalReceivePayload } from "./event-handler.types.js";
 import { resolveSignalQuoteContext } from "./inbound-context.js";
 import { renderSignalMentions, resolveSignalMentionFacts } from "./mentions.js";
+import {
+  buildSignalReactionSystemEventText,
+  isSignalReactionMessage,
+  resolveSignalReactionTargets,
+  resolveSignalStatusReactionTimestamp,
+  shouldEmitSignalReactionNotification,
+} from "./reactions.js";
 
-const REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE = /reply session initialization conflicted for \S+/u;
-const RETRYABLE_FLUSH_RETRY_DELAYS_MS = [1_000, 2_000, 4_000] as const;
 type SignalInboundDebounceParams = Parameters<
   typeof createChannelInboundDebouncer<SignalInboundEntry>
 >[0];
 type SignalInboundFlushFactory = Parameters<SignalInboundDebounceParams["onFlush"]>[1];
 type SignalInboundFlush = ReturnType<SignalInboundDebounceParams["onFlush"]>;
-function isSignalReplySessionInitConflictError(error: unknown): boolean {
-  return collectErrorGraphCandidates(error, (current) => [current.cause, current.error]).some(
-    (candidate) => REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE.test(formatErrorMessage(candidate)),
-  );
-}
 
 function resolveSignalInboundRoute(params: {
   cfg: SignalEventHandlerDeps["cfg"];
@@ -136,46 +124,6 @@ function resolveSignalInboundRoute(params: {
       id: params.isGroup ? (params.groupId ?? "unknown") : params.senderPeerId,
     },
   });
-}
-
-function resolveSignalStatusReactionTimestamp(params: {
-  timestamp?: number;
-  messageId?: string;
-}): number | null {
-  if (typeof params.timestamp === "number") {
-    return Number.isFinite(params.timestamp) && params.timestamp > 0 ? params.timestamp : null;
-  }
-  const parsed = Number(params.messageId);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
-}
-
-type SignalStatusDispatchResult = {
-  settledReceipt?: {
-    counts: Record<
-      "tool" | "block" | "final",
-      { failedBeforeSend: number; failedAfterSend: number }
-    >;
-  };
-};
-
-function hasSignalStatusReplyDeliveryFailure(result: SignalStatusDispatchResult): boolean {
-  return Object.values(result.settledReceipt?.counts ?? {}).some(
-    (counts) => counts.failedBeforeSend > 0 || counts.failedAfterSend > 0,
-  );
-}
-
-function resolveSignalStatusReactionEmojis(
-  emojis: StatusReactionEmojis | undefined,
-): StatusReactionEmojis | undefined {
-  if (emojis?.stallHard !== undefined) {
-    return emojis;
-  }
-  return {
-    ...emojis,
-    // Signal exposes one reaction slot on the source message. A warning emoji
-    // reads as terminal failure even when the turn is merely long-running.
-    stallHard: DEFAULT_EMOJIS.stallSoft,
-  };
 }
 
 async function finalizeSignalStatusReaction(params: {
@@ -198,7 +146,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     accountId: deps.accountId,
     groups: resolveChannelGroups(deps.cfg, "signal", deps.accountId),
   });
-  const statusReactionTiming = deps.statusReactionTiming ?? DEFAULT_TIMING;
   const activeEnqueueEntries = new WeakSet<SignalInboundEntry>();
 
   async function handleSignalInboundMessage(entry: SignalInboundEntry) {
@@ -218,12 +165,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       groupId: entry.groupId,
       senderPeerId: entry.senderPeerId,
     });
-    const storePath = resolveStorePath(cfg.session?.store, {
+    const { envelopeOptions, previousTimestamp } = await resolveInboundSessionEnvelopeContextAsync({
+      cfg,
       agentId: route.agentId,
-    });
-    const envelopeOptions = resolveEnvelopeFormatOptions(cfg);
-    const previousTimestamp = readSessionUpdatedAt({
-      storePath,
       sessionKey: route.sessionKey,
     });
     const body = formatInboundEnvelope({
@@ -345,11 +289,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       },
     });
 
-    if (shouldLogVerbose()) {
-      const preview = truncateUtf16Safe(body, 200).replace(/\r/g, "\\r").replace(/\n/g, "\\n");
-      logVerbose(`signal inbound: from=${ctxPayload.From} len=${body.length} preview="${preview}"`);
-    }
-
     const statusReactionTimestamp = resolveSignalStatusReactionTimestamp(entry);
     const statusReactionsConfig = cfg.messages?.statusReactions;
     const signalReactionLevel = resolveSignalReactionLevel({
@@ -405,8 +344,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
               },
             },
             initialEmoji: ackReaction,
-            emojis: resolveSignalStatusReactionEmojis(undefined),
-            timing: statusReactionTiming,
+            // Signal has one reaction slot. A stall warning otherwise reads as terminal failure.
+            emojis: { stallHard: DEFAULT_EMOJIS.stallSoft },
             onError: (err) => {
               logAckFailure({
                 log: logVerbose,
@@ -421,6 +360,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       void statusReactionController.setQueued();
     }
 
+    const sendTyping = async (stop?: true) => {
+      if (ctxPayload.To) {
+        const { baseUrl, account, accountId } = deps;
+        await sendTypingSignal(ctxPayload.To, { cfg, baseUrl, account, accountId, stop });
+      }
+    };
     const { onModelSelected, typingCallbacks, ...replyPipeline } =
       createChannelMessageReplyPipeline({
         cfg,
@@ -428,17 +373,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         channel: "signal",
         accountId: route.accountId,
         typing: {
-          start: async () => {
-            if (!ctxPayload.To) {
-              return;
-            }
-            await sendTypingSignal(ctxPayload.To, {
-              cfg,
-              baseUrl: deps.baseUrl,
-              account: deps.account,
-              accountId: deps.accountId,
-            });
-          },
+          start: () => sendTyping(),
+          // Without a stop, Signal keeps showing typing until its own timeout.
+          stop: () => sendTyping(true),
           onStartError: (err) => {
             logTypingFailure({
               log: logVerbose,
@@ -585,8 +522,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           },
           dispatcherOptions,
           delivery,
-          // Signal retries the whole debounced flush below so the keyed lane and durable claims
-          // remain owned during backoff; a nested dispatch retry breaks shutdown cancellation.
+          // Durable ingress owns redelivery; do not retry a dispatch inside the debounce lane.
           sessionInitRetry: { delaysMs: [] },
           replyOptions: {
             ...(entry.turnAdoptionLifecycle
@@ -626,7 +562,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           const hasFinalResponse =
             result.dispatched && hasVisibleInboundReplyDispatch(result.dispatchResult);
           const hasDeliveryFailure =
-            result.dispatched && hasSignalStatusReplyDeliveryFailure(result.dispatchResult);
+            result.dispatched &&
+            Object.values(result.dispatchResult.settledReceipt?.counts ?? {}).some(
+              (counts) => counts.failedBeforeSend > 0 || counts.failedAfterSend > 0,
+            );
           const hasAgentRunFailure =
             result.dispatched && readAgentRunTerminalOutcome(result.dispatchResult) === "failed";
           void finalizeSignalStatusReaction({
@@ -656,36 +595,33 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       await settle();
       return;
     }
-    if (entries.length === 1) {
-      await handleSignalInboundMessage({
+    let inbound = last;
+    if (entries.length > 1) {
+      const combinedText = entries
+        .map((entry) => entry.bodyText)
+        .filter(Boolean)
+        .join("\n");
+      const combinedCommandBody = entries
+        .map((entry) => entry.commandBody)
+        .filter(Boolean)
+        .join("\n");
+      if (!combinedText.trim()) {
+        await settle();
+        return;
+      }
+      inbound = {
         ...last,
-        channelIngress,
-        turnAdoptionLifecycle: lifecycle,
-      });
-      await settle();
-      return;
-    }
-    const combinedText = entries
-      .map((entry) => entry.bodyText)
-      .filter(Boolean)
-      .join("\n");
-    const combinedCommandBody = entries
-      .map((entry) => entry.commandBody)
-      .filter(Boolean)
-      .join("\n");
-    if (!combinedText.trim()) {
-      await settle();
-      return;
+        bodyText: combinedText,
+        commandBody: combinedCommandBody,
+        isBatched: true,
+        nativeReplyBody: last.nativeReplyBody ?? last.bodyText,
+        media: entries.flatMap((entry) => entry.media ?? []),
+      };
     }
     await handleSignalInboundMessage({
-      ...last,
-      bodyText: combinedText,
-      commandBody: combinedCommandBody,
-      turnAdoptionLifecycle: lifecycle,
-      isBatched: true,
-      nativeReplyBody: last.nativeReplyBody ?? last.bodyText,
-      media: entries.flatMap((entry) => entry.media ?? []),
+      ...inbound,
       channelIngress,
+      turnAdoptionLifecycle: lifecycle,
     });
     await settle();
   }
@@ -694,9 +630,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     entries: SignalInboundEntry[],
     last: SignalInboundEntry,
   ): Promise<readonly ResolvedChannelMessageIngress[]> {
-    if (last.boundChannelIngress) {
-      return last.boundChannelIngress;
-    }
     const route = resolveSignalInboundRoute({
       cfg: last.cfg,
       accountId: deps.accountId,
@@ -710,56 +643,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       ...(last.messageId ? { messageId: last.messageId } : {}),
       inboundEventKind: "user_request",
     };
-    const resolved = await Promise.all(
-      entries.flatMap((entry) =>
-        entry.resolveChannelIngress
-          ? [entry.resolveChannelIngress(contextBinding)]
-          : (entry.channelIngress ?? []).map(async (ingress) => ingress),
-      ),
-    );
-    // The original last entry survives retry attempts; cache this exact aggregate
-    // so session-conflict retries cannot mint replacement provenance.
-    last.boundChannelIngress = resolved;
-    return resolved;
-  }
-
-  async function retrySignalInboundFlush(
-    entries: SignalInboundEntry[],
-    lifecycle: SignalIngressLifecycle,
-    settle: () => Promise<void>,
-    initialError: unknown,
-  ): Promise<void> {
-    let lastError = initialError;
-    for (const [attemptIndex, delayMs] of RETRYABLE_FLUSH_RETRY_DELAYS_MS.entries()) {
-      const attempt = attemptIndex + 1;
-      logVerbose(
-        `signal: reply session init conflict, retrying ${entries.length} inbound message(s) in ${delayMs}ms (attempt ${attempt}/${RETRYABLE_FLUSH_RETRY_DELAYS_MS.length})`,
-      );
-      try {
-        await sleep(delayMs, undefined, { ref: false, signal: deps.abortSignal });
-      } catch (err) {
-        if (deps.abortSignal?.aborted) {
-          return;
-        }
-        throw err;
-      }
-      if (deps.abortSignal?.aborted) {
-        return;
-      }
-      try {
-        await flushSignalInboundEntries(entries, lifecycle, settle);
-        return;
-      } catch (err) {
-        if (deps.abortSignal?.aborted) {
-          return;
-        }
-        lastError = err;
-        if (!isSignalReplySessionInitConflictError(err)) {
-          throw err;
-        }
-      }
-    }
-    throw lastError;
+    return await Promise.all(entries.map((entry) => entry.resolveChannelIngress(contextBinding)));
   }
 
   const flushDebouncedSignalInboundEntries = (
@@ -781,22 +665,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         try {
           await flushSignalInboundEntries(entries, admissionLifecycle, settle);
         } catch (err) {
-          if (!isSignalReplySessionInitConflictError(err)) {
-            throw err;
-          }
-          if (deps.abortSignal?.aborted) {
-            return;
-          }
-          // Retry only pre-admission session conflicts; admitted turns have already
-          // released the debounce lane and own their normal completion lifecycle.
-          await retrySignalInboundFlush(entries, admissionLifecycle, settle, err).catch(
-            async (terminalError: unknown) => {
-              // Exhausted retries: release the drain claims so queue retry policy
-              // owns redelivery instead of the stall watchdog dead-lettering them.
-              await lifecycle?.onAbandoned();
-              throw terminalError;
-            },
-          );
+          await lifecycle?.onFailed?.(err);
+          throw err;
         }
       },
     });
@@ -845,122 +715,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     onError: reportSignalInboundFlushError,
   });
 
-  async function handleReactionOnlyInbound(params: {
-    cfg: SignalEventHandlerDeps["cfg"];
-    envelope: SignalEnvelope;
-    sender: SignalSender;
-    senderDisplay: string;
-    reaction: SignalReactionMessage;
-    hasBodyContent: boolean;
-    accessDecision: { decision: "allow" | "block" | "pairing"; reasonCode: string };
-  }): Promise<boolean> {
-    if (params.hasBodyContent) {
-      return false;
-    }
-    if (params.reaction.isRemove) {
-      return true; // Ignore reaction removals
-    }
-    const emojiLabel = normalizeOptionalString(params.reaction.emoji) ?? "emoji";
-    const senderName = params.envelope.sourceName ?? params.senderDisplay;
-    logVerbose(`signal reaction: ${emojiLabel} from ${senderName}`);
-    const groupId = params.reaction.groupInfo?.groupId ?? undefined;
-    const groupName = params.reaction.groupInfo?.groupName ?? undefined;
-    const isGroup = Boolean(groupId);
-    const messageId = params.reaction.targetSentTimestamp
-      ? String(params.reaction.targetSentTimestamp)
-      : "unknown";
-    const conversationKey = resolveSignalApprovalConversationKey(
-      groupId ? `group:${groupId}` : `signal:${resolveSignalRecipient(params.sender)}`,
-    );
-    if (
-      conversationKey &&
-      (await maybeResolveSignalApprovalReaction({
-        cfg: params.cfg,
-        accountId: deps.accountId,
-        conversationKey,
-        messageId,
-        reactionKey: emojiLabel,
-        actorId: formatSignalSenderId(params.sender),
-        targetAuthor: params.reaction.targetAuthor,
-        targetAuthorUuid: params.reaction.targetAuthorUuid,
-        logVerboseMessage: logVerbose,
-      }))
-    ) {
-      return true;
-    }
-    if (params.accessDecision.decision !== "allow") {
-      logVerbose(
-        `Blocked signal reaction sender ${params.senderDisplay} (${params.accessDecision.reasonCode})`,
-      );
-      return true;
-    }
-    if (
-      conversationKey &&
-      (await maybeResolveSignalQuestionReaction({
-        cfg: params.cfg,
-        accountId: deps.accountId,
-        conversationKey,
-        messageId,
-        reactionKey: emojiLabel,
-        isRemove: Boolean(params.reaction.isRemove),
-        actorId: formatSignalSenderId(params.sender),
-        targetAuthor: params.reaction.targetAuthor,
-        targetAuthorUuid: params.reaction.targetAuthorUuid,
-        logDebug: logVerbose,
-      }))
-    ) {
-      return true;
-    }
-    const targets = deps.resolveSignalReactionTargets(params.reaction);
-    const shouldNotify = deps.shouldEmitSignalReactionNotification({
-      mode: deps.reactionMode,
-      account: deps.account,
-      accountUuid: deps.accountUuid,
-      targets,
-      sender: params.sender,
-      allowlist: deps.reactionAllowlist,
-    });
-    if (!shouldNotify) {
-      return true;
-    }
-
-    const senderPeerId = resolveSignalPeerId(params.sender);
-    const route = resolveSignalInboundRoute({
-      cfg: params.cfg,
-      accountId: deps.accountId,
-      isGroup,
-      groupId,
-      senderPeerId,
-    });
-    const groupLabel = isGroup ? `${groupName ?? "Signal Group"} id:${groupId}` : undefined;
-    const text = deps.buildSignalReactionSystemEventText({
-      emojiLabel,
-      actorLabel: senderName,
-      messageId,
-      targetLabel: targets[0]?.display,
-      groupLabel,
-    });
-    const senderId = formatSignalSenderId(params.sender);
-    const contextKey = [
-      "signal",
-      "reaction",
-      "added",
-      messageId,
-      senderId,
-      emojiLabel,
-      groupId ?? "",
-    ]
-      .filter(Boolean)
-      .join(":");
-    enqueueSystemEvent(text, {
-      sessionKey: route.sessionKey,
-      contextKey,
-    });
-    return true;
-  }
-
   return async (
-    event: { event?: string; data?: string },
+    event: SignalSseEvent,
     turnAdoptionLifecycle?: SignalIngressLifecycle,
     preparedPayload?: SignalReceivePayload,
   ): Promise<{ kind: "deferred" } | { kind: "failed-retryable"; error: unknown } | void> => {
@@ -973,28 +729,24 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     if (!preparedPayload) {
       try {
         payload = JSON.parse(event.data) as SignalReceivePayload;
-      } catch (err) {
-        deps.runtime.error?.(`failed to parse event: ${String(err)}`);
+      } catch {
+        deps.runtime.error?.("failed to parse event: invalid JSON");
         return;
       }
     }
     if (payload?.exception?.message) {
-      deps.runtime.error?.(`receive exception: ${payload.exception.message}`);
+      deps.runtime.error?.("receive exception");
     }
     const envelope = payload?.envelope;
     if (!envelope) {
       return;
     }
 
-    // Check for syncMessage (e.g., sentTranscript from other devices)
-    // We need to check if it's from our own account to prevent self-reply loops
     const sender = resolveSignalSender(envelope);
     if (!sender) {
       return;
     }
 
-    // Check if the message is from our own account to prevent loop/self-reply
-    // This handles both phone number and UUID based identification
     const normalizedAccount = deps.account ? normalizeE164(deps.account) : undefined;
     const isOwnMessage =
       (sender.kind === "phone" && normalizedAccount != null && sender.e164 === normalizedAccount) ||
@@ -1012,13 +764,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     }
 
     const dataMessage = envelope.dataMessage ?? envelope.editMessage?.dataMessage;
-    const reaction = deps.isSignalReactionMessage(envelope.reactionMessage)
+    const reaction = isSignalReactionMessage(envelope.reactionMessage)
       ? envelope.reactionMessage
-      : deps.isSignalReactionMessage(dataMessage?.reaction)
+      : isSignalReactionMessage(dataMessage?.reaction)
         ? dataMessage?.reaction
         : null;
 
-    // Replace ￼ (object replacement character) with @uuid or @phone from mentions
     // Signal encodes mentions as the object replacement character; hydrate them from metadata first.
     const rawMessage = dataMessage?.message ?? "";
     const normalizedMessage = renderSignalMentions(rawMessage, dataMessage?.mentions);
@@ -1062,18 +813,88 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       Boolean(messageText || visibleQuoteText) ||
       Boolean(!reaction && dataMessage?.attachments?.length);
 
-    if (
-      reaction &&
-      (await handleReactionOnlyInbound({
-        cfg,
-        envelope,
+    if (reaction && !hasBodyContent) {
+      if (reaction.isRemove) {
+        return;
+      }
+      const emojiLabel = normalizeOptionalString(reaction.emoji) ?? "emoji";
+      const reactionSenderName = envelope.sourceName ?? senderDisplay;
+      const reactionGroupId = reaction.groupInfo?.groupId ?? undefined;
+      const reactionGroupName = reaction.groupInfo?.groupName ?? undefined;
+      const isReactionGroup = Boolean(reactionGroupId);
+      const reactionMessageId = reaction.targetSentTimestamp
+        ? String(reaction.targetSentTimestamp)
+        : "unknown";
+      const conversationKey = resolveSignalApprovalConversationKey(
+        reactionGroupId ? `group:${reactionGroupId}` : `signal:${resolveSignalRecipient(sender)}`,
+      );
+      if (
+        conversationKey &&
+        (await maybeResolveSignalApprovalReaction({
+          cfg,
+          accountId: deps.accountId,
+          conversationKey,
+          messageId: reactionMessageId,
+          reactionKey: emojiLabel,
+          actorId: formatSignalSenderId(sender),
+          targetAuthor: reaction.targetAuthor,
+          targetAuthorUuid: reaction.targetAuthorUuid,
+          logVerboseMessage: logVerbose,
+        }))
+      ) {
+        return;
+      }
+      if (senderAccess.decision !== "allow") {
+        logVerbose(`Blocked signal reaction sender ${senderDisplay} (${senderAccess.reasonCode})`);
+        return;
+      }
+      const targets = resolveSignalReactionTargets(reaction);
+      const shouldNotify = shouldEmitSignalReactionNotification({
+        mode: deps.reactionMode,
+        account: deps.account,
+        accountUuid: deps.accountUuid,
+        targets,
         sender,
-        senderDisplay,
-        reaction,
-        hasBodyContent,
-        accessDecision: senderAccess,
-      }))
-    ) {
+        allowlist: deps.reactionAllowlist,
+      });
+      if (!shouldNotify) {
+        return;
+      }
+
+      const reactionSenderPeerId = resolveSignalPeerId(sender);
+      const reactionRoute = resolveSignalInboundRoute({
+        cfg,
+        accountId: deps.accountId,
+        isGroup: isReactionGroup,
+        groupId: reactionGroupId,
+        senderPeerId: reactionSenderPeerId,
+      });
+      const groupLabel = isReactionGroup
+        ? `${reactionGroupName ?? "Signal Group"} id:${reactionGroupId}`
+        : undefined;
+      const text = buildSignalReactionSystemEventText({
+        emojiLabel,
+        actorLabel: reactionSenderName,
+        messageId: reactionMessageId,
+        targetLabel: targets[0]?.display,
+        groupLabel,
+      });
+      const senderId = formatSignalSenderId(sender);
+      const contextKey = [
+        "signal",
+        "reaction",
+        "added",
+        reactionMessageId,
+        senderId,
+        emojiLabel,
+        reactionGroupId ?? "",
+      ]
+        .filter(Boolean)
+        .join(":");
+      enqueueSystemEvent(text, {
+        sessionKey: reactionRoute.sessionKey,
+        contextKey,
+      });
       return;
     }
     if (!dataMessage) {
@@ -1191,6 +1012,11 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       },
     });
     const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;
+    const attachments = dataMessage.attachments ?? [];
+    const mediaFacts: ChannelInboundMediaInput[] = attachments.map((attachment) => {
+      const contentType = attachment?.contentType ?? undefined;
+      return { contentType, kind: kindFromMime(contentType) ?? "unknown" };
+    });
     if (isGroup && requireMention && canDetectMention && mentionDecision.shouldSkip) {
       logInboundDrop({
         log: deps.runtime.log,
@@ -1200,14 +1026,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         onceKey: JSON.stringify([deps.accountId, groupId]),
         hint: `Mention patterns can be derived from the agent identity name. Set ${groupsConfigPath}[${JSON.stringify(groupId)}].requireMention=false to process messages without a mention. Preserve existing groups entries; when adding the first groups map, include "*": {} to keep other chats admitted.`,
       });
-      const pendingMedia: ChannelInboundMediaInput[] = (dataMessage.attachments ?? []).map(
-        (attachment) => {
-          const contentType = attachment?.contentType ?? undefined;
-          return { contentType, kind: kindFromMime(contentType) ?? "unknown" };
-        },
-      );
       // Skipped messages intentionally avoid downloads; facts stay type-only.
-      const pendingMediaText = formatSignalMediaText(pendingMedia);
+      const pendingMediaText = formatSignalMediaText(mediaFacts);
       const pendingBodyText = messageText || pendingMediaText || visibleQuoteText;
       const historyKey = groupId ?? "unknown";
       createChannelHistoryWindow({ historyMap: deps.groupHistories }).record({
@@ -1216,7 +1036,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         entry: {
           sender: envelope.sourceName ?? senderDisplay,
           body: messageText || visibleQuoteText,
-          media: toHistoryMediaEntries(pendingMedia),
+          media: toHistoryMediaEntries(mediaFacts),
           timestamp: inboundTimestamp,
           messageId,
         },
@@ -1227,7 +1047,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         replyToId,
         author: senderRecipient,
         body: messageText || visibleQuoteText,
-        media: pendingMedia,
+        media: mediaFacts,
         sourceTimestamp: inboundTimestamp,
       });
       const signalGroupPolicy = resolveChannelGroupPolicy({
@@ -1272,11 +1092,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       return;
     }
 
-    const attachments = dataMessage.attachments ?? [];
-    const mediaFacts: ChannelInboundMediaInput[] = attachments.map((attachment) => {
-      const contentType = attachment?.contentType ?? undefined;
-      return { contentType, kind: kindFromMime(contentType) ?? "unknown" };
-    });
     let unavailableAttachmentCount = deps.ignoreAttachments ? attachments.length : 0;
     if (!deps.ignoreAttachments) {
       for (const [index, attachment] of attachments.entries()) {
@@ -1305,9 +1120,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           } else {
             unavailableAttachmentCount += 1;
           }
-        } catch (err) {
+        } catch {
           unavailableAttachmentCount += 1;
-          deps.runtime.error?.(danger(`attachment fetch failed: ${String(err)}`));
+          deps.runtime.error?.(danger("attachment fetch failed"));
         }
       }
     }
@@ -1324,24 +1139,21 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       return;
     }
 
-    if (deps.sendReadReceipts && !deps.readReceiptsViaDaemon && !isGroup && inboundTimestamp) {
-      try {
-        await sendReadReceiptSignal(`signal:${senderRecipient}`, inboundTimestamp, {
-          cfg,
-          baseUrl: deps.baseUrl,
-          account: deps.account,
-          accountId: deps.accountId,
-        });
-      } catch (err) {
-        logVerbose(`signal read receipt failed for ${senderDisplay}: ${String(err)}`);
+    if (deps.sendReadReceipts && !deps.readReceiptsViaDaemon && !isGroup) {
+      if (inboundTimestamp) {
+        try {
+          await sendReadReceiptSignal(`signal:${senderRecipient}`, inboundTimestamp, {
+            cfg,
+            baseUrl: deps.baseUrl,
+            account: deps.account,
+            accountId: deps.accountId,
+          });
+        } catch (err) {
+          logVerbose(`signal read receipt failed for ${senderDisplay}: ${String(err)}`);
+        }
+      } else {
+        logVerbose(`signal read receipt skipped (missing timestamp) for ${senderDisplay}`);
       }
-    } else if (
-      deps.sendReadReceipts &&
-      !deps.readReceiptsViaDaemon &&
-      !isGroup &&
-      !inboundTimestamp
-    ) {
-      logVerbose(`signal read receipt skipped (missing timestamp) for ${senderDisplay}`);
     }
 
     const senderName = envelope.sourceName ?? senderDisplay;
@@ -1372,7 +1184,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       media: mediaFacts,
       commandAuthorized,
       canDetectMention,
-      requireMention,
       wasMentioned: effectiveWasMentioned,
       replyToBody: visibleQuoteText || undefined,
       replyToSender: visibleQuoteSender,

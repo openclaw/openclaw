@@ -1,231 +1,184 @@
-import { parentPort, type MessagePort, type Transferable } from "node:worker_threads";
-import { createDeferredCore, type Deferred } from "../shared/deferred.js";
-import { cancelWorkerIdleGc, scheduleWorkerIdleGc } from "./worker-idle-gc.js";
+// Initialize the context-free root before a task can lazily import maintenance owners.
+import "../shared/detached-async-context.js";
+import { MessagePort, type Transferable } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
-  createWorkerTaskControl,
-  observeWorkerTaskCancellation,
-  withWorkerTaskNativeSectionScope,
-  type WorkerTaskControl,
-} from "./worker-task-native-sections.js";
+  serveOwnedWorkerTasks as serveRuntimeWorkerTasks,
+  type WorkerTaskHandler,
+} from "@openclaw/worker-runtime/worker";
+import { scheduleOpenClawCompileCacheFlush } from "../../node-compile-cache.mjs";
+import { loggingState } from "../logging/state.js";
+import {
+  applyAgentDatabaseReaderRequest,
+  decodeAgentDatabaseReaderRequest,
+  installDeletedAgentDatabaseFences,
+} from "./agent-database-readers.js";
+import { withDatabaseEngineSelection } from "./database-engine/context.js";
+import type { DiagnosticWorkerRetainedData } from "./diagnostic-process-types.js";
+import { bindPostgresPool, postgresPoolWorkerFailure } from "./postgres-sync/pool-state.js";
+import { withSqliteDatabaseAdmissionExchange } from "./sqlite-database-admission-context.js";
+import {
+  bindSqliteDatabaseAdmissionUpstream,
+  exchangeSqliteDatabaseAdmissions,
+  withSqliteDatabaseAdmissionWait,
+} from "./sqlite-worker-database-admission-relay.js";
+import { cancelWorkerIdleGc, scheduleWorkerIdleGc } from "./worker-idle-gc.js";
+import { serveWorkerMemorySamples } from "./worker-memory.js";
+import { WORKER_TASK_PORT_MESSAGE, type WorkerTaskContext } from "./worker-task-transport.js";
 
-type WorkerChannelResponse = { input: unknown; consumed: () => void };
-type WorkerConversation = {
-  taskId: number;
-  responseId: number;
-  pending?: Deferred<WorkerChannelResponse>;
-  assertCurrent: () => void;
-  cancelPending: (error: unknown) => void;
-};
-
-/** A conversation never outlives the pool task or crosses worker generations. */
-export type WorkerTaskChannel = {
-  consumeInput: () => void;
-  request: (
-    value: unknown,
-    transferList?: readonly Transferable[],
-  ) => Promise<{ input: unknown; consumed: () => void }>;
-};
+export type { WorkerTaskChannel } from "@openclaw/worker-runtime/worker";
 
 /** Pool dispatch is serial per worker; handlers finish cleanup before returning their result. */
-export function serveWorkerTasks<Output>(
-  handler: (
-    input: unknown,
-    channel: WorkerTaskChannel | undefined,
-    control: WorkerTaskControl,
-  ) => Output | Promise<Output>,
-  options: { transferList?: (value: Output) => Transferable[] } = {},
+export function serveWorkerTasks<Output, Input = unknown>(
+  handler: WorkerTaskHandler<Output, Input>,
+  options: {
+    transferList?: (value: Output) => Transferable[];
+    retireOnError?: boolean;
+    idleGc?: false;
+    retainedData?: () => readonly DiagnosticWorkerRetainedData[];
+  } = {},
 ): void {
   serveOwnedWorkerTasks(handler, options);
 }
 
-/** Internal native owners additionally acknowledge resource cleanup between tasks. */
-export function serveOwnedWorkerTasks<Output>(
-  handler: (
-    input: unknown,
-    channel: WorkerTaskChannel | undefined,
-    control: WorkerTaskControl,
-  ) => Output | Promise<Output>,
+/** Every served worker closes its agent database readers by path between tasks; owners may add more. */
+export function serveOwnedWorkerTasks<Output, Input = unknown>(
+  handler: WorkerTaskHandler<Output, Input>,
   options: {
     transferList?: (value: Output) => Transferable[];
-    closeResource?: (key?: string) => void;
+    closeResource?: (key?: string) => void | Promise<void>;
+    encodeResourceError?: (error: unknown) => unknown;
+    /** Unknown native state cannot publish a reusable task failure before isolate exit. */
+    retireOnError?: boolean;
+    /** Guest runtimes own their heap budget and lifetime across task boundaries. */
+    idleGc?: false;
+    /** Cheap owner-held counts and size estimates; never contents, keys, or identities. */
+    retainedData?: () => readonly DiagnosticWorkerRetainedData[];
   } = {},
 ): void {
-  const port = parentPort;
-  if (!port) {
-    return;
-  }
-  let active: WorkerConversation | undefined;
-  let execution = Promise.resolve();
-  let resourceClosures = Promise.resolve();
-  let cancelledResponse: { taskId: number; responseId: number } | undefined;
-  port.on(
-    "message",
-    (message: {
-      input: unknown;
-      taskId: number;
-      interactive?: boolean;
-      responseId?: number;
-      nativeSections: SharedArrayBuffer;
-      closeResource?: true;
-      key?: string;
-      resourcePort?: MessagePort;
-    }) => {
-      cancelWorkerIdleGc();
-      if (message.closeResource && message.resourcePort) {
-        const receipt = message.resourcePort;
-        const precedingExecution = execution;
-        resourceClosures = resourceClosures
-          .then(() => precedingExecution)
-          .then(() => {
-            if (!options.closeResource) {
-              throw new Error("Worker does not own retained resources");
-            }
-            options.closeResource(message.key);
-            receipt.postMessage({ ok: true }, []);
-          })
-          .catch((error: unknown) => {
-            receipt.postMessage(
-              {
-                ok: false,
-                error: error instanceof Error ? error.message : String(error),
-              },
-              [],
-            );
-          })
-          .finally(() => {
-            receipt.close();
-            if (!active) {
-              scheduleWorkerIdleGc();
-            }
-          });
-        return;
+  let memoryPort: MessagePort;
+  let taskPort: MessagePort | undefined;
+  let databaseAdmissionPort: MessagePort | undefined;
+  let databaseAdmissionDeadlineAtMs: number | undefined;
+  let databaseEngineSelection: WorkerTaskContext["databaseEngineSelection"];
+  let memorySamples: ReturnType<typeof serveWorkerMemorySamples> | undefined;
+  const runWithTaskContext = async <T>(operation: () => T | Promise<T>): Promise<T> => {
+    const run = async () => {
+      const port = databaseAdmissionPort;
+      if (!port) {
+        return operation();
       }
-      if (message.responseId !== undefined) {
-        if (
-          message.taskId === cancelledResponse?.taskId &&
-          message.responseId === cancelledResponse.responseId
-        ) {
-          return;
-        }
-        if (
-          !active ||
-          message.taskId !== active.taskId ||
-          message.responseId !== active.responseId ||
-          !active.pending
-        ) {
-          throw new Error("stale worker task response");
-        }
-        try {
-          active.assertCurrent();
-        } catch (error) {
-          active.cancelPending(error);
-          return;
-        }
-        const pending = active.pending;
-        active.pending = undefined;
-        let consumed = false;
-        const taskId = message.taskId;
-        const id = message.responseId;
-        pending.resolve({
-          input: message.input,
-          consumed: () => {
-            if (consumed) {
-              return;
-            }
-            consumed = true;
-            port.postMessage({ status: "consumed", taskId, id });
-          },
-        });
-        return;
-      }
-      if (active) {
-        throw new Error("overlapping worker tasks");
-      }
-      const nativeSections = new Int32Array(message.nativeSections);
-      const task: WorkerConversation = {
-        taskId: message.taskId,
-        responseId: 0,
-        assertCurrent: () => control.throwIfCancelled(),
-        cancelPending: (error) => {
-          const pending = task.pending;
-          if (!pending) {
-            return;
+      let active = true;
+      try {
+        return await withSqliteDatabaseAdmissionExchange((admissions, location, create) => {
+          if (!active) {
+            throw new Error("SQLite admission facts outlived their worker task");
           }
-          task.pending = undefined;
-          cancelledResponse = { taskId: task.taskId, responseId: task.responseId };
-          pending.reject(error);
+          return exchangeSqliteDatabaseAdmissions(port, admissions, location, create);
+        }, operation);
+      } finally {
+        active = false;
+      }
+    };
+    // Offline ports reuse workers across engines; cleanup retains the last task's selection.
+    return databaseEngineSelection
+      ? withDatabaseEngineSelection(databaseEngineSelection, run)
+      : run();
+  };
+  serveRuntimeWorkerTasks<Output, WorkerTaskContext, Input>(
+    (input, channel, control) =>
+      withSqliteDatabaseAdmissionWait(
+        {
+          deadlineAtMs: databaseAdmissionDeadlineAtMs,
+          assertActive: () => control.throwIfCancelled(),
         },
-      };
-      const control = createWorkerTaskControl(nativeSections, () => active === task);
-      active = task;
-      const stopObserving = message.interactive
-        ? observeWorkerTaskCancellation(
-            nativeSections,
-            () => active === task,
-            () => task.cancelPending(new Error("worker task cancelled")),
-          )
-        : undefined;
-      const channel: WorkerTaskChannel | undefined = message.interactive
-        ? {
-            consumeInput: () =>
-              port.postMessage({ status: "consumed", taskId: task.taskId, id: 0 }),
-            request: (value, transferList) => {
-              control.throwIfCancelled();
-              if (active !== task || task.pending) {
-                throw new Error("closed or busy worker channel");
-              }
-              const pending = createDeferredCore<WorkerChannelResponse>();
-              task.pending = pending;
-              try {
-                const transfers = transferList ? [...transferList] : [];
-                control.throwIfCancelled();
-                port.postMessage(
-                  {
-                    status: "request",
-                    taskId: task.taskId,
-                    id: ++task.responseId,
-                    value,
-                  },
-                  transfers,
-                );
-              } catch (error) {
-                task.pending = undefined;
-                pending.reject(error);
-              }
-              return pending.promise;
-            },
+        () =>
+          runWithTaskContext(async () => {
+            const result = await handler(input, channel, control);
+            // Some handlers encode database failures as results; their dead endpoints
+            // still require the same retirement as a thrown transport failure.
+            const failure = postgresPoolWorkerFailure();
+            if (failure) {
+              throw failure;
+            }
+            return result;
+          }),
+      ),
+    {
+      ...options,
+      get retireOnError() {
+        return options.retireOnError || postgresPoolWorkerFailure() !== undefined;
+      },
+      closeResource: (key) =>
+        runWithTaskContext(async () => {
+          const request = decodeAgentDatabaseReaderRequest(key);
+          if (!request && !options.closeResource) {
+            throw new Error("Worker does not own retained resources");
           }
-        : undefined;
-      const precedingClosures = resourceClosures;
-      execution = Promise.resolve()
-        .then(async () => {
-          try {
-            await precedingClosures;
-            control.throwIfCancelled();
-            return await withWorkerTaskNativeSectionScope(
-              nativeSections,
-              () => active === task,
-              () => handler(message.input, channel, control),
-            );
-          } finally {
-            await stopObserving?.();
-            active = undefined;
+          if (request) {
+            await applyAgentDatabaseReaderRequest(request);
           }
-        })
-        .then((value) => {
-          port.postMessage(
-            { status: "ok", value, taskId: task.taskId },
-            options.transferList?.(value) ?? [],
-          );
-        })
-        .catch((error: unknown) => {
-          port.postMessage({
-            status: "failed",
-            taskId: task.taskId,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        })
-        .finally(scheduleWorkerIdleGc);
+          if (!request || request.kind === "close") {
+            await options.closeResource?.(key);
+          }
+        }),
+    },
+    {
+      selectStartupPort(message) {
+        if (!isRecord(message) || message.type !== WORKER_TASK_PORT_MESSAGE) {
+          return undefined;
+        }
+        if (!(message.port instanceof MessagePort)) {
+          throw new Error("Retained worker task port is invalid");
+        }
+        taskPort = message.port;
+        return taskPort;
+      },
+      initialize(port) {
+        // Results use the host port; worker-local diagnostics must keep JSON stdout clean.
+        loggingState.forceConsoleToStderr = true;
+        memoryPort = port;
+      },
+      onReady() {
+        taskPort?.postMessage({ status: "ready" }, []);
+      },
+      onMessage(sampleMemory) {
+        if (sampleMemory && !memorySamples) {
+          memorySamples = serveWorkerMemorySamples(memoryPort, options.retainedData);
+        }
+        cancelWorkerIdleGc();
+      },
+      installTaskContext(context) {
+        // Carry demand on the task itself so even its first synchronous work is observed.
+        memorySamples?.setTaskMetrics(context.collectWorkerMetrics === true);
+        databaseAdmissionDeadlineAtMs = context.databaseAdmissionDeadlineAtMs;
+        databaseEngineSelection = context.databaseEngineSelection;
+        if (context.postgresPool) {
+          bindPostgresPool(context.postgresPool);
+        }
+        installDeletedAgentDatabaseFences(context.deletedAgentDatabaseFences);
+        if (context.databaseAdmissionPort) {
+          bindSqliteDatabaseAdmissionUpstream(context.databaseAdmissionPort);
+        }
+        databaseAdmissionPort ??= context.databaseAdmissionPort;
+      },
+      onIdle() {
+        // Later tasks can load additional modules; an empty native flush does no I/O.
+        scheduleOpenClawCompileCacheFlush();
+        if (options.idleGc !== false) {
+          scheduleWorkerIdleGc();
+        }
+      },
+      collectTaskDiagnostics: () => memorySamples?.collectTask(),
+      onRetire() {
+        cancelWorkerIdleGc();
+        try {
+          memorySamples?.close();
+        } finally {
+          // Exchanges are synchronous; the runtime already joined task cleanup and resource receipts.
+          databaseAdmissionPort?.close();
+        }
+      },
     },
   );
 }

@@ -9,7 +9,7 @@ import type { ExecApprovalRequest } from "../ui/src/app/exec-approval.ts";
 import type { ControlUiMockGateway } from "../ui/src/test-helpers/control-ui-e2e.ts";
 
 /** Runs in the preview document; one record owns Inbox, replay, and resolution. */
-function installApprovalMock(includeInbox: boolean): void {
+function installApprovalMock(includeInbox: boolean, options: { cwd?: string }): void {
   const gateway = (window as Window & { openclawControlUiE2eGateway?: ControlUiMockGateway })
     .openclawControlUiE2eGateway;
   if (!gateway) {
@@ -25,7 +25,11 @@ function installApprovalMock(includeInbox: boolean): void {
       id: "mock-production-export-approval",
       urlPath: "/api/approvals/mock-production-export-approval",
       sourceSessionKey: "agent:main:production-export",
-      request: { cwd: "/Users/demo/Projects/openclaw", security: "full", ask: "on-miss" },
+      request: {
+        cwd: options.cwd ?? "/Users/demo/Projects/openclaw",
+        security: "full",
+        ask: "on-miss",
+      },
       createdAtMs: now - 7 * 60_000,
       expiresAtMs: now + 4 * 60 * 60_000,
       status: "pending",
@@ -156,6 +160,9 @@ function installApprovalMock(includeInbox: boolean): void {
   }
 }
 
-export function approvalMockInitScript(includeInbox: boolean): string {
-  return `(() => { const __name = (target) => target; (${installApprovalMock.toString()})(${JSON.stringify(includeInbox)}); })();`;
+export function approvalMockInitScript(
+  includeInbox: boolean,
+  options: { cwd?: string } = {},
+): string {
+  return `(() => { const __name = (target) => target; (${installApprovalMock.toString()})(${JSON.stringify(includeInbox)}, ${JSON.stringify(options)}); })();`;
 }

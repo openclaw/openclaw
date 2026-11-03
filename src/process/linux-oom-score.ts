@@ -1,21 +1,23 @@
-// Linux OOM score helpers adjust child process OOM priority when supported.
+import {
+  spawn,
+  type ChildProcess,
+  type ChildProcessByStdio,
+  type SpawnOptions,
+  type SpawnOptionsWithStdioTuple,
+  type StdioNull,
+  type StdioPipe,
+} from "node:child_process";
 import fs from "node:fs";
+import type { Readable, Writable } from "node:stream";
+import { readChildRuntimeViability } from "../infra/child-runtime-viability.js";
+import { parseBooleanValue } from "../utils/boolean.js";
 
 /**
- * On Linux, children spawned by a long-lived parent (e.g., the gateway) inherit
- * the parent's `oom_score_adj`. Under cgroup memory pressure the kernel tends
- * to pick the largest-RSS process as the OOM victim, which is usually the
- * gateway rather than its transient workers. See issue #70404.
- *
- * Since Linux 2.6.20 any unprivileged process may voluntarily *raise* its own
- * `oom_score_adj` without `CAP_SYS_RESOURCE`. We exploit that by wrapping the
- * child argv in a tiny `/bin/sh` shim that raises the score in the post-fork
- * child and then `exec`s the real command, so there is no extra long-lived
- * shell process and no change to the final process identity.
- *
- * Opt out per-process by setting `OPENCLAW_CHILD_OOM_SCORE_ADJ=0` (also
- * accepts `false`/`no`/`off`). Callers may also provide the key via
- * `params.env` for per-child overrides.
+ * Linux children inherit the Gateway's OOM score, leaving the larger Gateway
+ * vulnerable under memory pressure (#70404). Raise children to 1000 through a
+ * shell that execs the command, or after native spawn when argv0 must be retained.
+ * Raising a same-user child's score needs no CAP_SYS_RESOURCE.
+ * OPENCLAW_CHILD_OOM_SCORE_ADJ=0 (also false/no/off) opts out per child or process.
  */
 
 const CHILD_OOM_SCORE_ADJ_ENV_KEY = "OPENCLAW_CHILD_OOM_SCORE_ADJ";
@@ -38,18 +40,6 @@ const OOM_SCORE_RESTORE_EXEC_ENV_SCRIPT = [
   'if [ "${OC_INTERNAL_OOM_EXEC_CDPATH+x}" = x ]; then CDPATH="$OC_INTERNAL_OOM_EXEC_CDPATH"; export CDPATH; fi; unset OC_INTERNAL_OOM_EXEC_CDPATH',
   'if [ "${OC_INTERNAL_OOM_EXEC_PS4+x}" = x ]; then PS4="$OC_INTERNAL_OOM_EXEC_PS4"; export PS4; fi; unset OC_INTERNAL_OOM_EXEC_PS4; exec "$0" "$@"',
 ].join("; ");
-
-function isDisabled(value: string | undefined): boolean {
-  switch (value?.trim().toLowerCase()) {
-    case "0":
-    case "false":
-    case "no":
-    case "off":
-      return true;
-    default:
-      return false;
-  }
-}
 
 let cachedShellAvailable: boolean | null = null;
 function defaultShellAvailable(): boolean {
@@ -77,29 +67,111 @@ export type OomScoreAdjustedSpawn = {
   argv0?: string;
   env: NodeJS.ProcessEnv | undefined;
   wrapped: boolean;
+  afterSpawn?: (pid: number | undefined) => void;
 };
 
-function shouldWrapChildForOomScore(options: OomWrapOptions | undefined): boolean {
+function raiseChildOomScore(pid: number | undefined): void {
+  if (pid === undefined) {
+    return;
+  }
+  try {
+    fs.writeFileSync(`/proc/${pid}/oom_score_adj`, "1000");
+  } catch {
+    // Best effort, like the shell shim: /proc may be unavailable or the child already gone.
+  }
+}
+
+/** Native spawn semantics with the shared Linux child OOM policy. */
+export function spawnOomScoreAdjusted(
+  command: string,
+  args: readonly string[],
+  options: SpawnOptionsWithStdioTuple<StdioNull | StdioPipe, StdioPipe, StdioPipe>,
+): ChildProcessByStdio<Writable | null, Readable, Readable>;
+export function spawnOomScoreAdjusted(
+  command: string,
+  args: readonly string[],
+  options: SpawnOptions,
+): ChildProcess;
+export function spawnOomScoreAdjusted(
+  command: string,
+  args: readonly string[],
+  options: SpawnOptions,
+): ChildProcess {
+  const child = spawn(command, args, options);
+  if (!options.shell && shouldAdjustChildOomScore(options)) {
+    raiseChildOomScore(child.pid);
+  }
+  return child;
+}
+
+function shouldAdjustChildOomScore(options: OomWrapOptions | undefined): boolean {
   const platform = options?.platform ?? process.platform;
   if (platform !== "linux") {
     return false;
   }
-  const env = options?.env ?? process.env;
-  if (isDisabled(env[CHILD_OOM_SCORE_ADJ_ENV_KEY])) {
-    return false;
-  }
-  return (options?.shellAvailable ?? defaultShellAvailable)();
+  const value =
+    options?.env?.[CHILD_OOM_SCORE_ADJ_ENV_KEY] ?? process.env[CHILD_OOM_SCORE_ADJ_ENV_KEY];
+  return parseBooleanValue(value) !== false;
 }
 
 function isWrapped(command: string, args: readonly string[]): boolean {
   return command === OOM_SCORE_WRAP_SHELL && args[0] === "-c" && args[1] === OOM_SCORE_WRAP_SCRIPT;
 }
 
-function canUseShellExecCommand(command: string): boolean {
-  // POSIX sh implementations such as dash do not support `exec --`. A command
-  // starting with "-" could be parsed as an exec option, so keep that rare
-  // shape on the original direct-spawn path instead of wrapping it.
-  return !command.startsWith("-");
+/** Diagnostics attribute the final command without changing the wrapper's execution policy. */
+export function resolveOomScoreWrappedCommand(
+  command: string,
+  args: readonly string[],
+): string | undefined {
+  return command === OOM_SCORE_WRAP_SHELL &&
+    args[0] === "-c" &&
+    (args[1] === OOM_SCORE_WRAP_SCRIPT || args[1] === OOM_SCORE_RESTORE_EXEC_ENV_SCRIPT) &&
+    args[2]
+    ? args[2]
+    : undefined;
+}
+
+/** Only small spawn owners may temporarily raise their score; never call from the Gateway. */
+export function spawnWithInheritedOomScore(
+  command: string,
+  args: string[],
+  options: SpawnOptions,
+): ChildProcess {
+  if (
+    process.platform !== "linux" ||
+    !isWrapped(command, args) ||
+    !args[2] ||
+    options.shell ||
+    options.argv0 !== undefined
+  ) {
+    return spawnOomScoreAdjusted(command, args, options);
+  }
+  let scoreFd: number | undefined;
+  let original: string;
+  try {
+    scoreFd = fs.openSync("/proc/self/oom_score_adj", "r+");
+    original = fs.readFileSync(scoreFd, "utf8").trim();
+    fs.writeSync(scoreFd, "1000", 0, "utf8");
+  } catch {
+    if (scoreFd !== undefined) {
+      fs.closeSync(scoreFd);
+    }
+    return spawn(command, args, options);
+  }
+  try {
+    // No await: only this fork inherits the raised score, including its earliest descendants.
+    return spawn(args[2], args.slice(3), options);
+  } finally {
+    try {
+      // Linux permits restoring the inherited minimum without CAP_SYS_RESOURCE.
+      fs.writeSync(scoreFd, original, 0, "utf8");
+    } catch {
+      // Preserve the child handle so its owner can still supervise and clean it up.
+      process.emitWarning("Could not restore spawn owner's Linux OOM score");
+    } finally {
+      fs.closeSync(scoreFd);
+    }
+  }
 }
 
 function hardenShellEnv(baseEnv: NodeJS.ProcessEnv | undefined): NodeJS.ProcessEnv {
@@ -129,13 +201,22 @@ function prepareOomScoreAdjustedSpawnWithExecEnvPolicy(
     env: options?.env,
     wrapped: false,
   };
+  // POSIX sh lacks `exec --`; a leading dash would become an exec option.
   if (
     !command ||
-    !canUseShellExecCommand(command) ||
-    !shouldWrapChildForOomScore(options) ||
-    (options?.argv0 !== undefined && options.argv0 !== command)
+    command.startsWith("-") ||
+    !shouldAdjustChildOomScore(options) ||
+    // A shell would start successfully and hide the removed runtime's native ENOENT.
+    (command === process.execPath && !readChildRuntimeViability().available)
   ) {
-    // POSIX sh cannot preserve an argv0 that differs from the exec pathname.
+    return directSpawn;
+  }
+  if (options?.argv0 !== undefined && options.argv0 !== command) {
+    // POSIX sh cannot preserve argv0. Adjust immediately after native spawn;
+    // the child (and early descendants) can run briefly at the inherited score.
+    return { ...directSpawn, afterSpawn: raiseChildOomScore };
+  }
+  if (!(options?.shellAvailable ?? defaultShellAvailable)()) {
     return directSpawn;
   }
   if (!preserveExecEnv && isWrapped(command, copy)) {

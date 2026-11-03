@@ -8,7 +8,8 @@ import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-con
 import * as channelConfig from "./update-command-config.js";
 import * as execution from "./update-command-execution.js";
 import { installFreshUpdateFixture, targetMetadata } from "./update-command-fresh.test-support.js";
-import * as servicePlan from "./update-command-service-plan.js";
+import * as packageUpdate from "./update-command-package.js";
+import * as runtimePlan from "./update-command-runtime-preflight.js";
 import { updateCommand } from "./update-command.js";
 
 const { fixture } = installFreshUpdateFixture();
@@ -24,10 +25,12 @@ it.each([false, true])(
       ...targetMetadata,
       schemaVersions: { ...targetMetadata.schemaVersions, state: OPENCLAW_STATE_SCHEMA_VERSION },
     });
-    vi.spyOn(servicePlan, "resolvePackageRuntimePreflight").mockResolvedValue({
+    vi.spyOn(runtimePlan, "resolvePackageRuntimePreflight").mockResolvedValue({
       ok: true,
       value: {},
     });
+    const stage = { root: fixture.root, run: vi.fn(), close: vi.fn().mockResolvedValue(undefined) };
+    vi.mocked(packageUpdate.stagePackageInstallUpdate).mockResolvedValue(stage);
     let admittedRunId: string | undefined;
     const execute = vi
       .spyOn(execution, "executeMutableUpdate")
@@ -47,6 +50,7 @@ it.each([false, true])(
     await updateCommand({ yes: true, json: true, restart: false, dryRun });
 
     if (dryRun) {
+      expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
       expect(execute).not.toHaveBeenCalled();
       expect(fs.existsSync(fixture.databasePath)).toBe(false);
       expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
@@ -55,6 +59,8 @@ it.each([false, true])(
         }),
       );
     } else {
+      expect(packageUpdate.stagePackageInstallUpdate).toHaveBeenCalledOnce();
+      expect(stage.close).toHaveBeenCalledOnce();
       expect(execute).toHaveBeenCalledOnce();
       assert(admittedRunId);
       expect(getUpdateRun(admittedRunId)?.steps).toEqual(

@@ -10,34 +10,19 @@ const manifestAuthChoices = vi.hoisted(() => [
     choiceLabel: "Anthropic Claude CLI",
     deprecatedChoiceIds: ["claude-cli"],
   },
-  {
-    pluginId: "openai",
-    providerId: "openai",
-    methodId: "oauth",
-    choiceId: "openai",
-    choiceLabel: "ChatGPT Login",
-  },
 ]);
 
+// mock-isolation: Keep legacy diagnostics independent of installed provider manifests.
 vi.mock("../plugins/provider-auth-choices.js", () => ({
-  resolveManifestProviderAuthChoices: () => manifestAuthChoices,
   resolveManifestDeprecatedProviderAuthChoice: (choiceId: string) =>
-    manifestAuthChoices.find((choice) => choice.deprecatedChoiceIds?.includes(choiceId) === true),
+    manifestAuthChoices.find((choice) => choice.deprecatedChoiceIds.includes(choiceId)),
 }));
 
 import { resolveLegacyOnboardAuthChoice } from "./auth-choice-legacy.js";
 
-function authChoiceManifestEnv(): NodeJS.ProcessEnv {
-  return {
-    OPENCLAW_BUNDLED_PLUGINS_DIR: "extensions",
-    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0",
-    VITEST: "1",
-  } as NodeJS.ProcessEnv;
-}
-
 describe("auth choice legacy aliases", () => {
   it("maps claude-cli to the new anthropic cli choice", () => {
-    expect(resolveLegacyOnboardAuthChoice("claude-cli", { env: authChoiceManifestEnv() })).toEqual({
+    expect(resolveLegacyOnboardAuthChoice("claude-cli")).toEqual({
       authChoice: "anthropic-cli",
       deprecated: {
         message:
@@ -49,7 +34,7 @@ describe("auth choice legacy aliases", () => {
   });
 
   it("does not keep retired Codex setup choices alive outside doctor", () => {
-    const result = resolveLegacyOnboardAuthChoice("codex-cli", { env: authChoiceManifestEnv() });
+    const result = resolveLegacyOnboardAuthChoice("codex-cli");
     expect(result.authChoice).toBe("codex-cli");
     expect(result.deprecated).toBeUndefined();
   });

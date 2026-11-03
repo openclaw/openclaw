@@ -3,7 +3,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { coerceSecretRef } from "../config/types.secrets.js";
+import { parseSecretRef } from "../config/types.secrets.js";
 import type {
   PreparedAgentCredentialMode,
   PreparedAgentCredentialModes,
@@ -13,10 +13,6 @@ import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
 import type { ApiKeyCredential, AuthStorageData } from "./sessions/auth-storage.js";
 
-// Converts auth-profile credentials into the compact credential map consumed by
-// agent runtimes. Secret refs can be represented by markers without reading
-// secret values.
-type AgentApiKeyCredential = ApiKeyCredential;
 type AgentOAuthCredential = {
   type: "oauth";
   access: string;
@@ -25,7 +21,7 @@ type AgentOAuthCredential = {
 };
 
 /** Credential value shape consumed by agent runtimes after auth-profile normalization. */
-type AgentCredential = AgentApiKeyCredential | AgentOAuthCredential;
+type AgentCredential = ApiKeyCredential | AgentOAuthCredential;
 export type AgentCredentialMap = Record<string, AgentCredential>;
 
 type ResolveAgentCredentialMapOptions = {
@@ -78,45 +74,26 @@ export function resolveUsableAgentCredentialModes(
   return Object.freeze(modes);
 }
 
-function hasConfiguredSecretRef(value: unknown): boolean {
-  return coerceSecretRef(value) !== null;
-}
-
-function secretRefPlaceholder(
-  options: ResolveAgentCredentialMapOptions | undefined,
-): AgentCredential | null {
-  if (options?.includeSecretRefPlaceholders === true) {
-    return { type: "api_key", key: AGENT_SECRET_REF_CONFIGURED_MARKER };
-  }
-  return null;
-}
-
 function convertAuthProfileCredentialToAgent(
   cred: AuthProfileCredential,
   options?: ResolveAgentCredentialMapOptions,
 ): AgentCredential | null {
-  if (cred.type === "api_key") {
-    const key = normalizeOptionalString(cred.key) ?? "";
-    if (!key) {
-      // A configured secret ref proves the credential exists, but this converter
-      // must not resolve or leak the actual secret value.
-      return hasConfiguredSecretRef(cred.keyRef) ? secretRefPlaceholder(options) : null;
-    }
-    return { type: "api_key", key };
-  }
-
-  if (cred.type === "token") {
-    if (cred.expires !== undefined) {
+  if (cred.type === "api_key" || cred.type === "token") {
+    if (cred.type === "token" && cred.expires !== undefined) {
       const expires = asDateTimestampMs(cred.expires);
       if (expires === undefined || Date.now() >= expires) {
         return null;
       }
     }
-    const token = normalizeOptionalString(cred.token) ?? "";
-    if (!token) {
-      return hasConfiguredSecretRef(cred.tokenRef) ? secretRefPlaceholder(options) : null;
+    const key = normalizeOptionalString(cred.type === "api_key" ? cred.key : cred.token);
+    if (!key) {
+      // A configured ref proves existence, never authority to resolve its secret here.
+      const ref = cred.type === "api_key" ? cred.keyRef : cred.tokenRef;
+      return parseSecretRef(ref) !== null && options?.includeSecretRefPlaceholders === true
+        ? { type: "api_key", key: AGENT_SECRET_REF_CONFIGURED_MARKER }
+        : null;
     }
-    return { type: "api_key", key: token };
+    return { type: "api_key", key };
   }
 
   if (cred.type === "oauth") {

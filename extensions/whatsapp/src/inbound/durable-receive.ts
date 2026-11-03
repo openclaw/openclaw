@@ -48,7 +48,10 @@ function hashNamespacePart(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, 24);
 }
 
-function createWhatsAppDurableInboundMessageId(params: { remoteJid: string; id: string }): string {
+export function createWhatsAppDurableInboundMessageId(params: {
+  remoteJid: string;
+  id: string;
+}): string {
   return createHash("sha256").update(`${params.remoteJid}\n${params.id}`).digest("hex");
 }
 
@@ -94,7 +97,6 @@ export function createWhatsAppIngressMonitor(params: {
   onError?: (error: unknown) => void;
   onActivityChange?: (active: boolean) => void;
   pollIntervalMs: number;
-  abortSignal?: AbortSignal;
 }) {
   return createChannelIngressMonitor<
     WhatsAppIngressAdmission,
@@ -150,7 +152,6 @@ export function createWhatsAppIngressMonitor(params: {
       },
       ...(params.onLog ? { onLog: params.onLog } : {}),
     },
-    ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
     admissionMode: "while-running",
     createStoppedError: () => new Error("WhatsApp ingress monitor is stopped."),
     ...(params.onError ? { onError: params.onError } : {}),

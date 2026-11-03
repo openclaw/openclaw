@@ -1,0 +1,43 @@
+import { onTestFinished, vi, type Mock } from "vitest";
+import { AsyncWorkScope, runOutsideAsyncWorkScope } from "./async-work-scope.js";
+
+let observation: { spy: Mock<AsyncWorkScope["run"]>; subscribers: number } | undefined;
+
+/** Keep the scope observer installed until its last fixture subscriber finishes. */
+export function observeAsyncWorkScopeRuns() {
+  const current = (observation ??= {
+    spy: vi.spyOn(AsyncWorkScope.prototype, "run"),
+    subscribers: 0,
+  });
+  current.subscribers += 1;
+  let disposed = false;
+  const dispose = () => {
+    if (disposed) {
+      return;
+    }
+    disposed = true;
+    current.subscribers -= 1;
+    if (current.subscribers === 0) {
+      current.spy.mockRestore();
+      observation = undefined;
+    }
+  };
+  onTestFinished(dispose);
+  return {
+    startIndex: current.spy.mock.results.length,
+    get mock() {
+      return current.spy.mock;
+    },
+    [Symbol.dispose]: dispose,
+  };
+}
+
+export function createDeferredWorkTracker(scope: AsyncWorkScope) {
+  return <T>(run: (signal: AbortSignal) => Promise<T>): Promise<T> => {
+    // The explicit fixture lifetime must not inherit the startup scope it can later drain.
+    const operation = runOutsideAsyncWorkScope(() =>
+      Promise.resolve().then(() => run(scope.signal)),
+    );
+    return scope.track(() => operation);
+  };
+}

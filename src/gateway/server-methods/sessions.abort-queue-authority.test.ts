@@ -4,27 +4,46 @@ import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { resolveEmbeddedSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
 import {
   createQueueSettings,
   createQueueTestRun,
 } from "../../auto-reply/reply/queue.test-helpers.js";
-import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import { enqueueFollowupRun } from "../../auto-reply/reply/queue/enqueue.js";
-import { FOLLOWUP_QUEUES } from "../../auto-reply/reply/queue/state.js";
+import { getExistingFollowupQueue } from "../../auto-reply/reply/queue/state.js";
 import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { enqueueCommandInLane, getQueueSize } from "../../process/command-queue.js";
+import {
+  retireSessionControllerInput,
+  releaseSessionControllerClaim,
+} from "../../sessions/session-controller.mailbox.js";
+import { getRpcSource, registerRpcSource } from "../../sessions/session-controller.rpc-sources.js";
+import { gatewayRequest } from "../request-frame.test-support.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
-import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
+import {
+  roleClient,
+  rolePolicyConfig,
+  sharingPolicyClient,
+} from "../session-sharing.test-utils.js";
 import { createActiveRun } from "./chat.abort.test-helpers.js";
 import { sessionAbortHandlers } from "./sessions-abort.js";
+import { revocableAuthority } from "./sessions.abort-lifecycle.test-support.js";
 
 useChatAbortRegistryFixture();
 const key = "agent:main:queued-stop";
 const sessionId = "original-stop-session";
-afterEach(() => clearSessionQueues([key, sessionId]));
+const ownedFollowups: ReturnType<typeof createQueueTestRun>[] = [];
+const readQueue = () =>
+  getExistingFollowupQueue(key, ownedFollowups[0]?.controllerInput?.mailbox.owner.target);
+const aborted = (run: ReturnType<typeof createActiveRun>) => run.input.abortSignal.aborted;
+afterEach(async () => {
+  const inputs = ownedFollowups.splice(0).flatMap((run) => run.controllerInput ?? []);
+  for (const input of inputs) {
+    retireSessionControllerInput(input);
+  }
+  await Promise.allSettled(inputs.map((input) => input.settlement.promise));
+});
 
 async function setup() {
   const client = roleClient("view", "queued-stop-owner");
@@ -45,37 +64,41 @@ async function setup() {
     },
   );
   const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
-  const active = createActiveRun(key, {
-    agentId: "main",
-    sessionId,
-    owner: { connId: client.connId },
-  });
-  const queued = createActiveRun(key, {
-    agentId: "main",
-    sessionId,
-    owner: { connId: client.connId },
-  });
-  context.chatAbortControllers.set("active", active);
-  context.chatQueuedTurns.set("queued", queued);
-  let current = true;
+  const source = (runId: string, queued = false) => {
+    const run = createActiveRun(key, {
+      runId,
+      queued,
+      agentId: "main",
+      sessionId,
+      owner: { connId: client.connId },
+    });
+    registerRpcSource(runId, run);
+    return run;
+  };
+  const active = source("active");
+  // This fixture has no native producer: its synthetic turn returns on cancellation.
+  active.input.abortSignal.addEventListener(
+    "abort",
+    () => {
+      const claim = active.input.claim;
+      claim?.operation?.complete();
+      if (claim) {
+        releaseSessionControllerClaim(claim);
+      }
+    },
+    { once: true },
+  );
+  const queued = source("queued", true);
+  const authority = revocableAuthority("original queue authority revoked");
   const respond = vi.fn();
   const stop = () =>
     handleGatewayRequest({
-      req: {
-        type: "req",
-        id: "ui-stop",
-        method: "sessions.abort",
-        params: { key, clearQueued: true },
-      },
+      req: gatewayRequest("ui-stop", "sessions.abort", { key, clearQueued: true }),
       client,
       context,
       respond,
       isWebchatConnect: () => false,
-      sessionMutationCommitGuard: () => {
-        if (!current) {
-          throw new Error("original queue authority revoked");
-        }
-      },
+      sessionMutationCommitGuard: authority.assertCurrent,
       extraHandlers: { "sessions.abort": sessionAbortHandlers["sessions.abort"]! },
     });
   return {
@@ -85,33 +108,50 @@ async function setup() {
     queued,
     respond,
     stop,
-    revoke: () => {
-      current = false;
-    },
+    revocationError: authority.error,
+    revoke: authority.revoke,
   };
 }
 
-function followup(prompt: string, targetSessionId = sessionId) {
+async function expectAuthorityRevocation(fixture: Awaited<ReturnType<typeof setup>>) {
+  const failure = await fixture.stop().catch((error: unknown) => error);
+  if (!(failure instanceof AggregateError)) {
+    throw new Error("Expected cancellation and persistence failures", { cause: failure });
+  }
+  expect(failure.errors).toContain(fixture.revocationError);
+}
+
+function followup(
+  prompt: string,
+  targetSessionId = sessionId,
+  agentId = "main",
+  sessionKey = key,
+  admissionSessionId?: string,
+) {
   const run = createQueueTestRun({ prompt });
-  Object.assign(run.run, { agentId: "main", sessionKey: key, sessionId: targetSessionId });
+  ownedFollowups.push(run);
+  Object.assign(run.run, { agentId, sessionKey, sessionId: targetSessionId });
+  run.admissionSessionId = admissionSessionId;
   const settled = vi.fn();
   run.turnAdoptionLifecycle = { admission: "cancel-only", onAdopted: () => {}, onSettled: settled };
-  enqueueFollowupRun(key, run, createQueueSettings(), "none", undefined, false);
+  enqueueFollowupRun(sessionKey, run, createQueueSettings(), "none", undefined, false);
   return { run, settled };
 }
 
 it("UI-style narrow Stop clears owned lane entries through their signals and preserves foreign work", async () => {
   const fixture = await setup();
   const foreign = createActiveRun(key, {
+    runId: "foreign",
+    queued: true,
     agentId: "main",
     sessionId: "previous-incarnation",
     owner: { connId: fixture.client.connId },
   });
-  fixture.context.chatQueuedTurns.set("foreign", foreign);
+  registerRpcSource("foreign", foreign);
   const ownFollowup = followup("owned");
   const foreignFollowup = followup("foreign", "previous-incarnation");
-  const queue = FOLLOWUP_QUEUES.get(key);
-  const lane = resolveEmbeddedSessionLane(key);
+  const queue = readQueue();
+  const lane = "test:sessions-abort-queue-authority";
   const entered = createDeferred();
   const release = createDeferred();
   const blocker = enqueueCommandInLane(lane, async () => {
@@ -124,9 +164,9 @@ it("UI-style narrow Stop clears owned lane entries through their signals and pre
   const foreignTask = vi.fn(async () => "foreign");
   const maintenanceTask = vi.fn(async () => "maintenance");
   const queuedTasks = [
-    enqueueCommandInLane(lane, activeTask, { abortSignal: fixture.active.controller.signal }),
-    enqueueCommandInLane(lane, queuedTask, { abortSignal: fixture.queued.controller.signal }),
-    enqueueCommandInLane(lane, foreignTask, { abortSignal: foreign.controller.signal }),
+    enqueueCommandInLane(lane, activeTask, { abortSignal: fixture.active.input.abortSignal }),
+    enqueueCommandInLane(lane, queuedTask, { abortSignal: fixture.queued.input.abortSignal }),
+    enqueueCommandInLane(lane, foreignTask, { abortSignal: foreign.input.abortSignal }),
     enqueueCommandInLane(lane, maintenanceTask),
   ];
   const settled = Promise.allSettled(queuedTasks);
@@ -137,13 +177,11 @@ it("UI-style narrow Stop clears owned lane entries through their signals and pre
       { ok: true, abortedRunId: "queued", status: "aborted" },
       undefined,
     ]);
-    expect(fixture.active.controller.signal.aborted).toBe(true);
-    expect(fixture.queued.controller.signal.aborted).toBe(true);
-    expect(foreign.controller.signal.aborted).toBe(false);
-    expect(fixture.context.chatQueuedTurns.get("foreign")).toBe(foreign);
+    expect([fixture.active, fixture.queued, foreign].map(aborted)).toEqual([true, true, false]);
+    expect(getRpcSource("foreign")).toBe(foreign);
     expect(ownFollowup.settled).toHaveBeenCalledOnce();
     expect(foreignFollowup.settled).not.toHaveBeenCalled();
-    expect(FOLLOWUP_QUEUES.get(key)).toBe(queue);
+    expect(readQueue()).toBe(queue);
     expect(queue?.items).toEqual([foreignFollowup.run]);
     expect(queue?.abortController.signal.aborted).toBe(false);
     expect(getQueueSize(lane)).toBe(3);
@@ -165,23 +203,73 @@ it("UI-style narrow Stop clears owned lane entries through their signals and pre
   }
 });
 
-it.each(["session", "queue", "new-source", "source"] as const)(
+it.each([true, false])(
+  "broad research Stop preserves main's work sharing a bare session key (persisted=%s)",
+  async (persisted) => {
+    const sharedKey = "shared";
+    const researchSessionId = "research-shared";
+    const cfg = {
+      ...getRuntimeConfig(),
+      agents: {
+        entries: { main: {}, research: {} },
+        ownership: "explicit" as const,
+        defaults: { ...getRuntimeConfig().agents?.defaults, systemAgent: { agentId: "research" } },
+      },
+    };
+    setRuntimeConfigSnapshot(cfg);
+    if (persisted) {
+      await upsertSessionEntryCore(
+        { agentId: "research", sessionKey: "agent:research:shared" },
+        { sessionId: researchSessionId, updatedAt: 1 },
+      );
+    }
+    const foreign = followup("main", "main-shared", "main", sharedKey);
+    const owned = followup("research", researchSessionId, "research", sharedKey);
+    const otherIncarnation = followup(
+      "research",
+      "research-previous",
+      "research",
+      sharedKey,
+      "research-next",
+    );
+    const respond = vi.fn();
+    await handleGatewayRequest({
+      req: gatewayRequest("research-shared-stop", "sessions.abort", {
+        key: sharedKey,
+        clearQueued: true,
+      }),
+      client: sharingPolicyClient({ scopes: ["operator.admin"] }),
+      context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
+      respond,
+      isWebchatConnect: () => false,
+      extraHandlers: sessionAbortHandlers,
+    });
+    expect(respond.mock.calls[0]?.[0], JSON.stringify(respond.mock.calls[0])).toBe(true);
+    expect.soft(foreign.run.queueAbortSignal?.aborted, "main follow-up must survive").toBe(false);
+    expect.soft(foreign.settled).not.toHaveBeenCalled();
+    expect(owned.settled).toHaveBeenCalledOnce();
+    expect(otherIncarnation.settled).toHaveBeenCalledOnce();
+    expect
+      .soft(
+        getExistingFollowupQueue(sharedKey, foreign.run.controllerInput?.mailbox.owner.target)
+          ?.items,
+        "main follow-up must remain queued",
+      )
+      .toEqual([foreign.run]);
+  },
+);
+
+it.each(["session", "source"] as const)(
   "narrow clearQueued does not adopt %s changed by an earlier Stop callback",
   async (change) => {
     const fixture = await setup();
     const original = followup("original");
-    const queue = expectDefined(FOLLOWUP_QUEUES.get(key), "captured queue");
-    let successor: ReturnType<typeof followup> | undefined;
-    fixture.queued.controller.signal.addEventListener(
+    const queue = expectDefined(readQueue(), "captured queue");
+    fixture.queued.input.abortSignal.addEventListener(
       "abort",
       () => {
         if (change === "session") {
           original.run.run.sessionId = "successor-session";
-        } else if (change === "queue") {
-          FOLLOWUP_QUEUES.delete(key);
-          successor = followup("successor queue");
-        } else if (change === "new-source") {
-          successor = followup("later source");
         } else {
           fixture.revoke();
         }
@@ -189,15 +277,13 @@ it.each(["session", "queue", "new-source", "source"] as const)(
       { once: true },
     );
     if (change === "source") {
-      await expect(fixture.stop()).rejects.toThrow("original queue authority revoked");
+      await expectAuthorityRevocation(fixture);
     } else {
       await fixture.stop();
     }
-    expect(fixture.queued.controller.signal.aborted).toBe(true);
-    expect(fixture.active.controller.signal.aborted).toBe(change !== "source");
-    expect(original.settled).toHaveBeenCalledTimes(change === "new-source" ? 1 : 0);
-    expect(successor?.settled.mock.calls ?? []).toHaveLength(0);
-    expect(FOLLOWUP_QUEUES.get(key)?.items).toEqual([successor?.run ?? original.run]);
+    expect([fixture.queued, fixture.active].map(aborted)).toEqual([true, change !== "source"]);
+    expect(original.settled).not.toHaveBeenCalled();
+    expect(readQueue()?.items).toEqual([original.run]);
     expect(queue.abortController.signal.aborted).toBe(false);
     if (change === "source") {
       expect(fixture.respond).not.toHaveBeenCalled();
@@ -208,7 +294,7 @@ it.each(["session", "queue", "new-source", "source"] as const)(
   },
 );
 
-it("settles detached pending sources after revocation and preserves later active Stop effects", async () => {
+it("stops detached pending source cancellation after authority revocation", async () => {
   const fixture = await setup();
   const first = followup("first");
   const second = followup("second");
@@ -216,11 +302,13 @@ it("settles detached pending sources after revocation and preserves later active
     fixture.revoke();
     throw new Error("cleanup callback failed");
   });
-  await expect(fixture.stop()).rejects.toThrow("original queue authority revoked");
-  expect(fixture.queued.controller.signal.aborted).toBe(true);
-  expect(fixture.active.controller.signal.aborted).toBe(false);
+  await expectAuthorityRevocation(fixture);
+  expect([fixture.queued, fixture.active].map(aborted)).toEqual([true, false]);
   expect(first.settled).toHaveBeenCalledOnce();
-  expect(second.settled).toHaveBeenCalledOnce();
-  expect(FOLLOWUP_QUEUES.get(key)?.items).toEqual([]);
+  expect(second.settled).not.toHaveBeenCalled();
+  await expect(first.run.controllerInput!.settlement.promise).rejects.toThrow(
+    "cleanup callback failed",
+  );
+  expect(readQueue()?.items).toEqual([second.run]);
   expect(fixture.respond).not.toHaveBeenCalled();
 });

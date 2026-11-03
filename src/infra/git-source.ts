@@ -21,6 +21,7 @@ export async function acquireGitSource(params: {
   workTimeoutMs?: number | null;
   commandEnv?: () => { baseEnv?: NodeJS.ProcessEnv; env?: NodeJS.ProcessEnv };
   cloneSeparator?: boolean;
+  cloneNoHardlinks?: boolean;
   recordCommit?: boolean;
   formatFailure?: (failure: GitSourceFailure) => string;
   cleanupOnFailure?: () => Promise<void>;
@@ -47,11 +48,14 @@ export async function acquireGitSource(params: {
       error:
         details.action === "resolve ref"
           ? `failed to resolve ref ${ref} in ${label}`
-          : `failed to ${details.action}${details.action === "checkout" ? ` ${params.ref}` : ""} ${label}: ${detail}`,
+          : `failed to ${details.action}${details.action === "checkout" ? ` ${ref}` : ""} ${label}: ${detail}`,
     };
   };
 
   const argv = ["git", "clone"];
+  if (params.cloneNoHardlinks) {
+    argv.push("--no-hardlinks");
+  }
   if (!params.ref || params.refMode === "shallow-branch") {
     argv.push("--depth", "1");
   }

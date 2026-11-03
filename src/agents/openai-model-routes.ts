@@ -30,6 +30,7 @@ export function createOpenAIModelRoutesResolver(params: {
   agentId?: string;
   primaryModel?: ProviderModelRef;
   resolveProfileAuthMode?: (profileId: string) => string | undefined;
+  resolveProfileAuthFlow?: (profileId: string) => string | undefined;
   env?: Readonly<Record<string, string | undefined>>;
   requestTransportOverrides?: ProviderRouteOverridePresence;
 }) {
@@ -56,6 +57,7 @@ export function createOpenAIModelRoutesResolver(params: {
         agentId: params.agentId,
         primaryModel: params.primaryModel,
         resolveProfileAuthMode: params.resolveProfileAuthMode,
+        resolveProfileAuthFlow: params.resolveProfileAuthFlow,
       });
     return resolveRoutes({
       modelId: observed.modelId ? splitTrailingAuthProfile(observed.modelId).model : undefined,
@@ -138,10 +140,12 @@ export function resolveOpenAIModelRoutes(params: {
   modelId?: string;
   api?: string | null;
   baseUrl?: unknown;
+  observedRoutes?: readonly ProviderModelRouteSource[];
   config?: OpenClawConfig;
   agentId?: string;
   primaryModel?: ProviderModelRef;
   resolveProfileAuthMode?: (profileId: string) => string | undefined;
+  resolveProfileAuthFlow?: (profileId: string) => string | undefined;
   env?: Readonly<Record<string, string | undefined>>;
   requestTransportOverrides?: ProviderRouteOverridePresence;
   routeIntent?: ProviderResolveModelRoutesContext["routeIntent"];
@@ -155,12 +159,14 @@ export function resolveOpenAIModelRoutes(params: {
     agentId: params.agentId,
     primaryModel: params.primaryModel,
     resolveProfileAuthMode: params.resolveProfileAuthMode,
+    resolveProfileAuthFlow: params.resolveProfileAuthFlow,
     env: params.env,
     requestTransportOverrides: params.requestTransportOverrides,
   })({
     modelId: params.modelId,
     api: params.api as ModelApi | null | undefined,
     baseUrl: params.baseUrl,
+    observedRoutes: params.observedRoutes,
     routeIntent: params.routeIntent,
     pinnedAuthRequirement: params.pinnedAuthRequirement,
   });

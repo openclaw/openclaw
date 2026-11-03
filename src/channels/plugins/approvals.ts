@@ -1,23 +1,12 @@
-/**
- * Channel approval capability adapters.
- *
- * Projects plugin approval metadata into runtime approval delivery adapters.
- */
 import type { ChannelApprovalAdapter, ChannelApprovalCapability } from "./types.adapters.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 
-/**
- * Returns the approval capability exposed by a channel plugin.
- */
 export function resolveChannelApprovalCapability(
   plugin?: Pick<ChannelPlugin, "approvalCapability"> | null,
 ): ChannelApprovalCapability | undefined {
   return plugin?.approvalCapability;
 }
 
-/**
- * Projects a channel approval capability into the runtime approval adapter shape.
- */
 export function resolveChannelApprovalAdapter(
   plugin?: Pick<ChannelPlugin, "approvalCapability"> | null,
 ): ChannelApprovalAdapter | undefined {
@@ -28,8 +17,10 @@ export function resolveChannelApprovalAdapter(
   if (
     !capability.delivery &&
     !capability.nativeRuntime &&
+    !capability.nativeRuntimeAsync &&
     !capability.render &&
-    !capability.native
+    !capability.native &&
+    !capability.nativeAsync
   ) {
     // Auth-only capabilities are valid plugin metadata but do not form a delivery adapter.
     return undefined;
@@ -39,7 +30,9 @@ export function resolveChannelApprovalAdapter(
     describePluginApprovalSetup: capability.describePluginApprovalSetup,
     delivery: capability.delivery,
     nativeRuntime: capability.nativeRuntime,
+    nativeRuntimeAsync: capability.nativeRuntimeAsync,
     render: capability.render,
     native: capability.native,
+    nativeAsync: capability.nativeAsync,
   };
 }

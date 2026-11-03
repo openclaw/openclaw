@@ -1,5 +1,10 @@
-import { readItemString } from "./event-projector-values.js";
+import { readStringField as readItemString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexThreadItem } from "./protocol.js";
+
+export type AssistantCompletion = Pick<CodexThreadItem, "type" | "id" | "text"> & {
+  phase?: unknown;
+  delivery?: unknown;
+};
 
 export type CodexNativeToolAuditStatus = ReturnType<typeof itemStatus> | "cancelled" | "unknown";
 export type CodexNativeToolUnfinishedStatus = Extract<
@@ -7,14 +12,30 @@ export type CodexNativeToolUnfinishedStatus = Extract<
   "failed" | "unknown"
 >;
 
-type CodexItemPresentation = {
-  kind: "tool" | "command" | "patch" | "search" | "analysis";
-  title: string;
+type CodexItemMetadata = {
   toolName?: string;
+  auditName?: string;
   projectedTool?: true;
-};
+  clearsTerminal?: true;
+} & (
+  | { kind: "tool" | "command" | "patch" | "search" | "analysis"; title: string }
+  | { kind?: never; title?: never }
+);
 
-const itemPresentations = new Map<string, CodexItemPresentation>([
+type CodexItemStatus = "completed" | "failed" | "running" | "blocked";
+
+const itemStatuses = new Map<string, CodexItemStatus>([
+  ["completed", "completed"],
+  ["failed", "failed"],
+  ["error", "failed"],
+  ["interrupted", "failed"],
+  ["declined", "blocked"],
+  ["inProgress", "running"],
+  ["in_progress", "running"],
+  ["running", "running"],
+]);
+
+const itemMetadata = new Map<string, CodexItemMetadata>([
   ["dynamicToolCall", { kind: "tool", title: "Tool" }],
   ["mcpToolCall", { kind: "tool", title: "MCP tool", projectedTool: true }],
   [
@@ -31,6 +52,10 @@ const itemPresentations = new Map<string, CodexItemPresentation>([
   ],
   ["contextCompaction", { kind: "analysis", title: "Context compaction" }],
   ["reasoning", { kind: "analysis", title: "Reasoning" }],
+  ["collabAgentToolCall", { clearsTerminal: true }],
+  ["imageGeneration", { auditName: "image_generation", clearsTerminal: true }],
+  ["imageView", { auditName: "image_view", clearsTerminal: true }],
+  ["sleep", { auditName: "sleep" }],
 ]);
 
 export function matchesCodexSnapshotTurn(item: CodexThreadItem, turnId: string): boolean {
@@ -39,62 +64,31 @@ export function matchesCodexSnapshotTurn(item: CodexThreadItem, turnId: string):
   return itemTurnId === undefined || itemTurnId === turnId;
 }
 
-export function itemKind(item: CodexThreadItem): CodexItemPresentation["kind"] | undefined {
-  return itemPresentations.get(item.type)?.kind;
+export function itemKind(item: CodexThreadItem): CodexItemMetadata["kind"] | undefined {
+  return itemMetadata.get(item.type)?.kind;
 }
 
 export function itemTitle(item: CodexThreadItem): string {
-  return itemPresentations.get(item.type)?.title ?? item.type;
+  return itemMetadata.get(item.type)?.title ?? item.type;
 }
 
-export function itemStatus(item: CodexThreadItem): "completed" | "failed" | "running" | "blocked" {
-  const status = readItemString(item, "status");
-  if (status === "failed" || status === "error") {
-    return "failed";
-  }
-  if (status === "declined") {
-    return "blocked";
-  }
-  if (status === "inProgress" || status === "in_progress" || status === "running") {
-    return "running";
-  }
-  return "completed";
+export function itemStatus(item: CodexThreadItem): CodexItemStatus {
+  return itemStatuses.get(readItemString(item, "status") ?? "") ?? "completed";
 }
 
 export function unknownItemStatus(item: CodexThreadItem): string | undefined {
   const status = readItemString(item, "status");
-  switch (status) {
-    case undefined:
-    case "completed":
-    case "failed":
-    case "error":
-    case "declined":
-    case "inProgress":
-    case "in_progress":
-    case "running":
-      return undefined;
-    default:
-      return status;
-  }
+  return status === undefined || itemStatuses.has(status) ? undefined : status;
 }
 
 export function auditNativeToolTerminalStatus(item: CodexThreadItem): CodexNativeToolAuditStatus {
   if (item.type === "imageView" || item.type === "sleep") {
     return "completed";
   }
-  const status = readItemString(item, "status");
-  if (status === "completed") {
-    return "completed";
-  }
-  if (status === "failed" || status === "error") {
-    return "failed";
-  }
-  if (status === "declined") {
-    return "blocked";
-  }
+  const status = itemStatuses.get(readItemString(item, "status") ?? "");
   // A completed notification with a missing, active, or new status does not
   // prove success. Preserve that ambiguity at the durable audit boundary.
-  return "unknown";
+  return status === undefined || status === "running" ? "unknown" : status;
 }
 
 export function auditNativeToolUnfinishedStatus(
@@ -117,7 +111,7 @@ export function itemName(item: CodexThreadItem): string | undefined {
     const server = typeof item.server === "string" ? item.server : undefined;
     return server ? `${server}.${item.tool}` : item.tool;
   }
-  return itemPresentations.get(item.type)?.toolName;
+  return itemMetadata.get(item.type)?.toolName;
 }
 
 export function auditNativeToolName(item: CodexThreadItem): string | undefined {
@@ -133,16 +127,7 @@ export function auditNativeToolName(item: CodexThreadItem): string | undefined {
       ? `collab.${item.tool.trim()}`
       : "collab_agent";
   }
-  if (item.type === "imageGeneration") {
-    return "image_generation";
-  }
-  if (item.type === "imageView") {
-    return "image_view";
-  }
-  if (item.type === "sleep") {
-    return "sleep";
-  }
-  return undefined;
+  return itemMetadata.get(item.type)?.auditName;
 }
 
 export function isSideEffectingNativeToolItem(item: CodexThreadItem): boolean {
@@ -153,7 +138,7 @@ export function isSideEffectingNativeToolItem(item: CodexThreadItem): boolean {
 }
 
 export function isProjectedNativeToolItem(item: CodexThreadItem): boolean {
-  return itemPresentations.get(item.type)?.projectedTool === true;
+  return itemMetadata.get(item.type)?.projectedTool === true;
 }
 
 export function isMutatingNativeToolItem(item: CodexThreadItem): boolean {
@@ -170,16 +155,30 @@ export function isMutatingNativeToolItem(item: CodexThreadItem): boolean {
 }
 
 export function shouldClearTerminalPresentationForNativeItem(item: CodexThreadItem): boolean {
-  switch (item.type) {
-    case "collabAgentToolCall":
-    case "commandExecution":
-    case "fileChange":
-    case "imageGeneration":
-    case "imageView":
-    case "mcpToolCall":
-    case "webSearch":
+  const metadata = itemMetadata.get(item.type);
+  return metadata?.projectedTool === true || metadata?.clearsTerminal === true;
+}
+
+export function shouldAdvancePersistableAssistantBarrier(item: CodexThreadItem): boolean {
+  // Sleep ends the answer segment without mutating terminal presentation.
+  return (
+    shouldClearTerminalPresentationForNativeItem(item) ||
+    item.type === "dynamicToolCall" ||
+    item.type === "sleep"
+  );
+}
+
+// A terminal snapshot can replay an earlier input's suppressed coda after a
+// steer reopens projection. Suppression follows item identity, never its text.
+export function createAssistantItemSuppression(hasDeliveredFinal: () => boolean | undefined) {
+  const suppressedIds = new Set<string>();
+  return (itemId: string | undefined): boolean => {
+    if (hasDeliveredFinal()) {
+      if (itemId) {
+        suppressedIds.add(itemId);
+      }
       return true;
-    default:
-      return false;
-  }
+    }
+    return itemId !== undefined && suppressedIds.has(itemId);
+  };
 }

@@ -12,17 +12,13 @@ const LinuxNodePluginConfigSchema = z.strictObject({
   location: CapabilityConfigSchema.optional(),
 });
 
-export type ResolvedLinuxNodePluginConfig = {
-  notify: { enabled: boolean };
-  camera: { enabled: boolean };
-  location: { enabled: boolean };
-};
+export type ResolvedLinuxNodePluginConfig = ReturnType<typeof resolveLinuxNodePluginConfig>;
 
 export function createLinuxNodePluginConfigSchema() {
   return buildPluginConfigSchema(LinuxNodePluginConfigSchema);
 }
 
-export function resolveLinuxNodePluginConfig(value: unknown): ResolvedLinuxNodePluginConfig {
+export function resolveLinuxNodePluginConfig(value: unknown) {
   const parsed = LinuxNodePluginConfigSchema.safeParse(value ?? {});
   if (!parsed.success) {
     throw new Error(

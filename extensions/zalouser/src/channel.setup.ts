@@ -1,4 +1,3 @@
-// Zalouser plugin module implements channel.setup behavior.
 import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import type { ResolvedZalouserAccount } from "./accounts.js";
 import { zalouserSetupContract } from "./setup-core.js";

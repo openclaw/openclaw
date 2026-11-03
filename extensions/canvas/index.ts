@@ -1,15 +1,12 @@
-/**
- * Canvas plugin entrypoint for node canvas control, hosted A2UI routes, and
- * node CLI registration.
- */
+import { randomUUID } from "node:crypto";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { definePluginEntry, type AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
-import { canvasA2UIBoardWidgetKind } from "./src/board-widget.js";
 import { canvasConfigSchema, isCanvasHostEnabled } from "./src/config.js";
-import { A2UI_PATH } from "./src/host/a2ui-shared.js";
-import { CanvasToolSchema } from "./src/tool-schema.js";
-import { createCanvasWidgetPresenter } from "./src/widget-presenter.js";
+import { CANVAS_PRESENT_COMMAND, isEligibleCanvasNode } from "./src/node-eligibility.js";
+import { canvasToolDefinition } from "./src/tool-schema.js";
 
+const DEFAULT_CANVAS_NODE_INVOKE_TIMEOUT_MS = 30_000;
 const CANVAS_NODE_COMMANDS = ["canvas.present", "canvas.hide", "canvas.navigate"];
 
 function createLazyCanvasTool(agentSessionKey?: string): AnyAgentTool {
@@ -17,11 +14,7 @@ function createLazyCanvasTool(agentSessionKey?: string): AnyAgentTool {
     import("./src/tool.js").then(({ createCanvasTool }) => createCanvasTool({ agentSessionKey })),
   );
   return {
-    label: "Canvas",
-    name: "canvas",
-    resultContentSource: "network",
-    description: "Present, hide, or navigate the widget panel on a paired macOS node.",
-    parameters: CanvasToolSchema,
+    ...canvasToolDefinition,
     execute: async (...args: Parameters<AnyAgentTool["execute"]>) =>
       await (await loadTool()).execute(...args),
   };
@@ -34,16 +27,98 @@ export default definePluginEntry({
   configSchema: canvasConfigSchema,
   register(api) {
     if (isCanvasHostEnabled(api.config)) {
-      api.registerBoardWidgetContentKind(canvasA2UIBoardWidgetKind);
-      const loadRenderer = createLazyRuntimeModule(() => import("./src/host/a2ui.js"));
-      api.registerHttpRoute({
-        path: A2UI_PATH,
-        auth: "plugin",
-        match: "prefix",
-        nodeCapability: { surface: "canvas" },
-        handler: async (req, res) => await (await loadRenderer()).handleA2uiHttpRequest(req, res),
+      const nodesRuntime = api.runtime.nodes;
+      type CanvasRuntimeNode = Awaited<ReturnType<typeof nodesRuntime.list>>["nodes"][number];
+      async function selectCanvasNode(): Promise<CanvasRuntimeNode | null> {
+        const { selectDefaultNodeFromList } =
+          await import("openclaw/plugin-sdk/agent-harness-runtime");
+        const { nodes } = await nodesRuntime.list({ connected: true });
+        return selectDefaultNodeFromList(nodes.filter(isEligibleCanvasNode), {
+          capability: "canvas",
+          fallback: "first",
+          preferLocalMac: true,
+        });
+      }
+
+      api.registerWidgetPresenter({
+        target: "node_panel",
+        description: "Show on a connected device panel",
+        async availability() {
+          try {
+            const node = await selectCanvasNode();
+            return node
+              ? { ok: true, value: { available: true } }
+              : {
+                  ok: false,
+                  error: {
+                    code: "no_eligible_node",
+                    message: "No connected canvas-capable device is available.",
+                  },
+                };
+          } catch (error) {
+            return {
+              ok: false,
+              error: { code: "node_error", message: formatErrorMessage(error) },
+            };
+          }
+        },
+        async present({ document, context }) {
+          if (!document.hostedUrl) {
+            return {
+              ok: false,
+              error: {
+                code: "node_error",
+                message: "The widget document is not hosted for device presentation.",
+              },
+            };
+          }
+          let node: CanvasRuntimeNode | null;
+          try {
+            node = await selectCanvasNode();
+          } catch (error) {
+            return {
+              ok: false,
+              error: { code: "node_error", message: formatErrorMessage(error) },
+            };
+          }
+          if (!node) {
+            return {
+              ok: false,
+              error: {
+                code: "no_eligible_node",
+                message: "No connected canvas-capable device is available.",
+              },
+            };
+          }
+          try {
+            await nodesRuntime.invoke({
+              nodeId: node.nodeId,
+              command: CANVAS_PRESENT_COMMAND,
+              params: { url: document.hostedUrl },
+              timeoutMs: DEFAULT_CANVAS_NODE_INVOKE_TIMEOUT_MS,
+              idempotencyKey: randomUUID(),
+              ...(context.sessionKey ? { sessionKey: context.sessionKey } : {}),
+            });
+            return {
+              ok: true,
+              value: {
+                kind: "node",
+                nodeId: node.nodeId,
+                ...(node.displayName ? { nodeName: node.displayName } : {}),
+              },
+            };
+          } catch (error) {
+            return {
+              ok: false,
+              error: {
+                code: "node_error",
+                message: formatErrorMessage(error),
+                nodeId: node.nodeId,
+              },
+            };
+          }
+        },
       });
-      api.registerWidgetPresenter(createCanvasWidgetPresenter(api.runtime.nodes));
     }
     api.registerNodeInvokePolicy({
       commands: CANVAS_NODE_COMMANDS,
@@ -53,9 +128,8 @@ export default definePluginEntry({
     api.registerTool((ctx) => createLazyCanvasTool(ctx.sessionKey));
     api.registerNodeCliFeature(
       async ({ program }) => {
-        const { createDefaultCanvasCliDependencies, registerNodesCanvasCommands } =
-          await import("./src/cli.js");
-        registerNodesCanvasCommands(program, createDefaultCanvasCliDependencies());
+        const { registerNodesCanvasCommands } = await import("./src/cli.js");
+        registerNodesCanvasCommands(program);
       },
       {
         descriptors: [

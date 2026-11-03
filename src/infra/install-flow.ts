@@ -1,7 +1,7 @@
-// Coordinates plugin install flow decisions from source detection through target preparation.
 import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveUserPath } from "../utils.js";
 import {
   type ArchiveExtractLimits,
@@ -15,9 +15,7 @@ import { resolveInstallWorkTimeoutMs } from "./install-mode-options.js";
 import { withInstallActivity, type InstallActivityObserver } from "./install-progress.js";
 import { withInstallWorkspace } from "./install-source-utils.js";
 
-// Install-flow helpers validate local install paths and unpack archives inside
-// temporary workspaces before handing the resolved package root to callers.
-type ExistingInstallPathResult =
+export async function resolveExistingInstallPath(inputPath: string): Promise<
   | {
       ok: true;
       resolvedPath: string;
@@ -26,12 +24,8 @@ type ExistingInstallPathResult =
   | {
       ok: false;
       error: string;
-    };
-
-/** Resolve and stat a user-provided install path. */
-export async function resolveExistingInstallPath(
-  inputPath: string,
-): Promise<ExistingInstallPathResult> {
+    }
+> {
   const resolvedPath = resolveUserPath(inputPath);
   if (!(await pathExists(resolvedPath))) {
     return { ok: false, error: `path not found: ${resolvedPath}` };
@@ -47,7 +41,6 @@ export type ExtractedArchiveVerification<TFailure extends { ok: false; error: st
   onExtractionError: (error: unknown) => TFailure;
 };
 
-/** Extract an archive to a temp dir and run work against the detected package root. */
 export async function withExtractedArchiveRoot<
   TResult extends { ok: boolean },
   TFailure extends { ok: false; error: string } = never,
@@ -66,7 +59,7 @@ export async function withExtractedArchiveRoot<
     const extractDir = path.join(tmpDir, "extract");
     await fs.mkdir(extractDir, { recursive: true });
 
-    params.logger?.info?.(`Extracting ${params.archivePath}…`);
+    params.logger?.info?.(terminalText`Extracting ${params.archivePath}…`);
     try {
       await withInstallActivity(params.logger, "extract", () =>
         extractArchive({

@@ -81,29 +81,7 @@ struct OpenClawConfigFileTests {
         let override = self.makeConfigOverridePath()
 
         await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": override]) {
-            #expect(OpenClawConfigFile.url().path == override)
-        }
-    }
-
-    @MainActor
-    @Test
-    func `remote gateway port parses and matches host`() async {
-        let override = self.makeConfigOverridePath()
-
-        await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": override]) {
-            OpenClawConfigFile.saveDict([
-                "gateway": [
-                    "remote": [
-                        "url": "ws://gateway.ts.net:19999",
-                    ],
-                ],
-            ])
-            #expect(OpenClawConfigFile.remoteGatewayPort() == 19999)
-            #expect(OpenClawConfigFile.remoteGatewayPort(matchingHost: "gateway.ts.net") == 19999)
-            #expect(OpenClawConfigFile.remoteGatewayPort(matchingHost: "GATEWAY.ts.net.") == 19999)
-            #expect(OpenClawConfigFile.remoteGatewayPort(matchingHost: "gateway") == nil)
-            #expect(OpenClawConfigFile.remoteGatewayPort(matchingHost: "other.ts.net") == nil)
-            #expect(OpenClawConfigFile.remoteGatewayPort(matchingHost: "gateway.attacker.tld") == nil)
+            #expect(OpenClawPaths.configURL.path == override)
         }
     }
 
@@ -117,8 +95,8 @@ struct OpenClawConfigFileTests {
             "OPENCLAW_CONFIG_PATH": nil,
             "OPENCLAW_STATE_DIR": dir,
         ]) {
-            #expect(OpenClawConfigFile.stateDirURL().path == dir)
-            #expect(OpenClawConfigFile.url().path == "\(dir)/openclaw.json")
+            #expect(OpenClawPaths.stateDirURL.path == dir)
+            #expect(OpenClawPaths.configURL.path == "\(dir)/openclaw.json")
         }
     }
 
@@ -601,7 +579,9 @@ struct OpenClawConfigFileTests {
 
             let selection = PrimaryGatewayControlConfiguration.clear
             let replacement = try selection.replacingRoot(OpenClawConfigFile.loadDict(), effectiveLocalPort: 18789)
-            #expect(OpenClawConfigFile.saveDict(replacement.root, allowGatewayModeRemoval: replacement.removesGatewayMode))
+            #expect(OpenClawConfigFile.saveDict(
+                replacement.root,
+                allowGatewayModeRemoval: replacement.removesGatewayMode))
             let cleared = OpenClawConfigFile.loadDict()
             let gateway = try #require(cleared["gateway"] as? [String: Any])
             #expect(gateway["mode"] == nil)

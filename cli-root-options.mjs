@@ -76,7 +76,42 @@ export function getRootOptionAwareCommandPath(argv, depth) {
   return path;
 }
 
-function consumeKnownOptionToken(args, index, booleanFlags, valueFlags, mode) {
+export function rewriteUpdateFlagArgv(argv) {
+  // Preserve the old root --update spelling by rewriting before Commander registration.
+  // Only rewrite --update while scanning the root-option prefix; once a command
+  // or `--` appears, later --update tokens belong to that command's arguments.
+  const updateIndex = argv.indexOf("--update");
+  if (updateIndex === -1) {
+    return argv;
+  }
+
+  for (let i = 2; i < argv.length; i++) {
+    const arg = argv[i];
+    if (!arg || arg === FLAG_TERMINATOR) {
+      return argv;
+    }
+    if (i === updateIndex) {
+      // Old runtimes reach this through Node recovery; avoid newer array helpers.
+      return [...argv.slice(0, updateIndex), "update", ...argv.slice(updateIndex + 1)];
+    }
+    const consumed = consumeRootOptionToken(argv, i);
+    if (consumed > 0) {
+      i += consumed - 1;
+      continue;
+    }
+    if (!arg.startsWith("-")) {
+      return argv;
+    }
+  }
+  return argv;
+}
+
+/** Launchers choose their signal budget before the CLI parses, so accept both spellings. */
+export function isUpdateCommandArgv(argv) {
+  return getRootOptionAwareCommandPath(rewriteUpdateFlagArgv(argv), 1)[0] === "update";
+}
+
+export function consumeKnownOptionToken(args, index, booleanFlags, valueFlags, mode) {
   const arg = args[index];
   if (!arg || arg === FLAG_TERMINATOR || !arg.startsWith("-")) {
     return 0;
@@ -111,11 +146,18 @@ export function getCommandArgsWithRootOptions(argv, options) {
   return parseCommandArgsWithRootOptions(argv, options, true);
 }
 
-function parseCommandArgsWithRootOptions(argv, options, returnTail) {
+/** Keep option roles intact when another command must use the same root selectors. */
+export function getCommandOptionsWithRootOptions(argv, options) {
+  return parseCommandArgsWithRootOptions(argv, options, false, true);
+}
+
+function parseCommandArgsWithRootOptions(argv, options, returnTail, returnOptions = false) {
   const args = argv.slice(2);
   const booleanFlags = new Set(options.booleanFlags ?? []);
   const valueFlags = new Set(options.valueFlags ?? []);
   const positionals = [];
+  const rootOptions = [];
+  const commandOptions = [];
   let commandIndex = 0;
   let literal = false;
 
@@ -137,6 +179,9 @@ function parseCommandArgsWithRootOptions(argv, options, returnTail) {
         ? consumeRootCommandOptionToken(args, index)
         : consumeRootOptionToken(args, index);
     if (rootConsumed > 0) {
+      // Gateway's post-command --dev bootstraps its workspace, not a root profile.
+      const destination = commandIndex > 0 && booleanFlags.has(arg) ? commandOptions : rootOptions;
+      destination.push(...args.slice(index, index + rootConsumed));
       index += rootConsumed - 1;
       continue;
     }
@@ -151,6 +196,7 @@ function parseCommandArgsWithRootOptions(argv, options, returnTail) {
       if (optionConsumed === 0 || commandIndex === 0) {
         return null;
       }
+      commandOptions.push(arg);
       index += optionConsumed - 1;
       continue;
     }
@@ -167,10 +213,14 @@ function parseCommandArgsWithRootOptions(argv, options, returnTail) {
       continue;
     }
     positionals.push(arg);
-    if (positionals.length === options.maxPositionals) {
+    if (!returnOptions && positionals.length === options.maxPositionals) {
       return positionals;
     }
   }
 
-  return commandIndex < options.commandPath.length ? null : positionals;
+  return commandIndex < options.commandPath.length
+    ? null
+    : returnOptions
+      ? { rootOptions, commandOptions }
+      : positionals;
 }

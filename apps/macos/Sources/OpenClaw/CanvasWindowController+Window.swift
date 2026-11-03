@@ -4,52 +4,35 @@ import OpenClawIPC
 extension CanvasWindowController {
     // MARK: - Window
 
-    static func makeWindow(for presentation: CanvasPresentation, contentView: NSView) -> NSWindow {
-        switch presentation {
-        case .window:
-            let window = NSWindow(
-                contentRect: NSRect(origin: .zero, size: CanvasLayout.windowSize),
-                styleMask: [.titled, .closable, .resizable, .miniaturizable],
-                backing: .buffered,
-                defer: false)
-            window.title = "OpenClaw Canvas"
-            window.isReleasedWhenClosed = false
-            window.isRestorable = false
-            window.contentView = contentView
-            window.center()
-            window.minSize = NSSize(width: 880, height: 680)
-            return window
-
-        case .panel:
-            let panel = CanvasPanel(
-                contentRect: NSRect(origin: .zero, size: CanvasLayout.panelSize),
-                styleMask: [.borderless, .resizable],
-                backing: .buffered,
-                defer: false)
-            // Keep Canvas below the Voice Wake overlay panel.
-            panel.level = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue - 1)
-            panel.hasShadow = true
-            panel.isMovable = false
-            panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-            panel.titleVisibility = .hidden
-            panel.titlebarAppearsTransparent = true
-            panel.backgroundColor = .clear
-            panel.isOpaque = false
-            panel.contentView = contentView
-            panel.becomesKeyOnlyIfNeeded = true
-            panel.hidesOnDeactivate = false
-            panel.minSize = CanvasLayout.minPanelSize
-            return panel
-        }
+    static func makePanel(contentView: NSView) -> NSWindow {
+        let panel = CanvasPanel(
+            contentRect: NSRect(origin: .zero, size: CanvasLayout.panelSize),
+            styleMask: [.borderless, .resizable],
+            backing: .buffered,
+            defer: false)
+        // Keep Canvas below the Voice Wake overlay panel.
+        panel.level = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue - 1)
+        panel.hasShadow = true
+        panel.isMovable = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.titleVisibility = .hidden
+        panel.titlebarAppearsTransparent = true
+        panel.backgroundColor = .clear
+        panel.isOpaque = false
+        panel.contentView = contentView
+        panel.becomesKeyOnlyIfNeeded = true
+        panel.hidesOnDeactivate = false
+        panel.minSize = CanvasLayout.minPanelSize
+        return panel
     }
 
     func presentAnchoredPanel(anchorProvider: @escaping () -> NSRect?) {
-        guard case .panel = self.presentation, let window else { return }
+        guard let window else { return }
         self.repositionPanel(using: anchorProvider)
         // Agent-driven presents must not steal focus: order front without app
         // activation or key status. becomesKeyOnlyIfNeeded gives the panel key
         // when the user clicks into it; user entry points own app activation.
-        window.orderFrontRegardless()
+        AppActivation.shared.orderFrontRegardless(window: window)
         VoiceWakeOverlayController.shared.bringToFrontIfVisible()
         self.setCanvasVisible(true)
     }
@@ -101,15 +84,10 @@ extension CanvasWindowController {
 
     func setPanelFrame(_ frame: NSRect, on screen: NSScreen?) {
         guard let panel = self.window else { return }
-        guard let s = screen ?? panel.screen ?? NSScreen.main ?? NSScreen.screens.first else {
-            panel.setFrame(frame, display: false)
-            self.persistFrameIfPanel()
-            return
-        }
-
-        let constrained = Self.constrainFrame(frame, toVisibleFrame: s.visibleFrame)
-        panel.setFrame(constrained, display: false)
-        self.persistFrameIfPanel()
+        let screen = screen ?? panel.screen ?? NSScreen.main ?? NSScreen.screens.first
+        let constrained = screen.map { Self.constrainFrame(frame, toVisibleFrame: $0.visibleFrame) }
+        panel.setFrame(constrained ?? frame, display: false)
+        self.persistFrame()
     }
 
     static func screen(forAnchor anchor: NSRect?) -> NSScreen? {
@@ -154,15 +132,15 @@ extension CanvasWindowController {
     }
 
     func windowDidMove(_: Notification) {
-        self.persistFrameIfPanel()
+        self.persistFrame()
     }
 
     func windowDidEndLiveResize(_: Notification) {
-        self.persistFrameIfPanel()
+        self.persistFrame()
     }
 
-    func persistFrameIfPanel() {
-        guard case .panel = self.presentation, let window else { return }
+    func persistFrame() {
+        guard let window else { return }
         Self.storeRestoredFrame(window.frame, sessionKey: self.sessionKey)
     }
 }

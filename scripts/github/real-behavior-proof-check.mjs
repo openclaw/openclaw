@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-// Checks external PR body context and evidence.
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import {
@@ -13,10 +12,6 @@ function escapeCommandValue(value) {
     .replace(/\r/g, "%0D")
     .replace(/\n/g, "%0A")
     .replace(/:/g, "%3A");
-}
-
-function isMainModule() {
-  return Boolean(process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href);
 }
 
 async function main(env = process.env) {
@@ -62,6 +57,6 @@ async function main(env = process.env) {
   process.exit(1);
 }
 
-if (isMainModule()) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   await main();
 }

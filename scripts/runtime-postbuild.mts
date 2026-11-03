@@ -15,9 +15,12 @@ import {
 import { verifyBuiltPluginControlPlaneModules } from "./check-built-plugin-control-plane-modules.mts";
 import { copyBundledPluginMetadata } from "./copy-bundled-plugin-metadata.mts";
 import { copyHookMetadata, listHookMetadataOutputs } from "./copy-hook-metadata.ts";
+import { bundledModuleRegions } from "./lib/bundled-module-regions.mjs";
 import { withDistArtifactOwnership } from "./lib/dist-artifact-ownership.mts";
+import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
+import { updateStandaloneSourceModuleUrlChunks } from "./lib/standalone-source-module-urls.mjs";
 import {
   copyStaticExtensionAssets,
   copyStaticExtensionAssetsToRuntimeOverlay,
@@ -28,11 +31,10 @@ import {
   isUpdateCompatibilityChunk,
   listUpdateCompatibilityChunkPaths,
   readUpdateCompatibilityInventory,
-  UPDATE_COMPATIBILITY_INVENTORY_FILE,
   writeUpdateCompatibilityChunks,
 } from "./lib/update-compat-chunks.mts";
 import { buildUpdateConfigRuntimeAlias } from "./lib/update-config-runtime-compat.mts";
-import { writeTextFileIfChanged } from "./runtime-postbuild-shared.mjs";
+import { CLI_DIAGNOSTIC_COMPANIONS, writeTextFileIfChanged } from "./runtime-postbuild-shared.mjs";
 import { stageBundledPluginRuntime } from "./stage-bundled-plugin-runtime.mts";
 import { writeBuildInfo } from "./write-build-info.ts";
 import { writeOfficialChannelCatalog } from "./write-official-channel-catalog.mts";
@@ -49,14 +51,8 @@ type RuntimePostBuildParams = {
 type RuntimeFsParams = Pick<RuntimePostBuildParams, "rootDir" | "fs">;
 type RuntimeAliasCandidate = { candidate: string; source: string };
 
-const LEGACY_UPDATE_NODE_RUNNER_COMPAT_CHUNK = [
-  'import path from "node:path";',
-  "export function resolveNodeRunner() {",
-  "  const base = path.basename(process.execPath).trim().toLowerCase();",
-  '  return base === "node" || base === "node.exe" ? process.execPath : "node";',
-  "}",
-  "",
-].join("\n");
+const LEGACY_UPDATE_NODE_RUNNER_COMPAT_CHUNK =
+  'export { resolveNodeRunner } from "./cli/update-cli/node-runner.js";\n';
 
 const ROOT = resolveRepoRoot(import.meta.url);
 const UPDATE_COMPATIBILITY_INVENTORY = path.join(ROOT, "scripts/lib/update-compat-inventory.json");
@@ -102,7 +98,6 @@ const PLUGIN_INSTALL_RUNTIME_ALIAS = {
   aliasFileName: "install.runtime.js",
   sourceIncludes: [
     "scanPackageInstallSource",
-    "scanFileInstallSource",
     "scanInstalledPackageDependencyTree",
     "scanBundleInstallSource",
   ],
@@ -189,7 +184,7 @@ function resolveStableRootRuntimeAliasCandidate(
       (target) =>
         target !== candidate &&
         source.includes(`"./${target}"`) &&
-        !source.includes("\n//#region "),
+        bundledModuleRegions(source).next().done,
     ),
   );
   return wrappers.length === 1 ? (wrappers[0]?.candidate ?? null) : null;
@@ -228,6 +223,15 @@ function listLegacyRootRuntimeCompatOutputs(params: RuntimeFsParams = {}) {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+function listCliDiagnosticCompanionOutputs(params: RuntimeFsParams = {}) {
+  const rootDir = params.rootDir ?? ROOT;
+  const fsImpl = params.fs ?? fs;
+  // The facade is emitted only for private QA; normal builds run helpers from source.
+  return fsImpl.existsSync(path.join(rootDir, "dist/plugin-sdk/test-env.js"))
+    ? CLI_DIAGNOSTIC_COMPANIONS.map((fileName) => `dist/${fileName}`)
+    : [];
+}
+
 /**
  * Lists all core runtime postbuild outputs expected after a build.
  */
@@ -237,10 +241,10 @@ export function listCoreRuntimePostBuildOutputs(params: RuntimeFsParams = {}) {
     ...listHookMetadataOutputs(params),
     OFFICIAL_CHANNEL_CATALOG_OUTPUT,
     ...listExportHtmlTemplateOutputs(params),
+    ...listCliDiagnosticCompanionOutputs(params),
     ...listStableRootRuntimeAliasOutputs(params),
     ...listLegacyRootRuntimeCompatOutputs(params),
     ...LEGACY_CLI_EXIT_COMPAT_CHUNKS.map(({ dest }) => dest),
-    `dist/${UPDATE_COMPATIBILITY_INVENTORY_FILE}`,
     ...listUpdateCompatibilityChunkPaths(
       readUpdateCompatibilityInventory(UPDATE_COMPATIBILITY_INVENTORY),
     ).map((fileName) => `dist/${fileName}`),
@@ -386,6 +390,8 @@ export function writeStableRootRuntimeAliases(params: RuntimeFsParams = {}) {
   );
 
   const ownership = readRuntimeDependencyOwnership(rootDir, fsImpl);
+  const moduleUrlRewrites: { filename: string; original: string; rewritten: string }[] = [];
+  using parser = createNativeTypeScriptParser({ cwd: rootDir });
   for (const [aliasFileName, candidates] of candidatesByAlias) {
     const aliasPath = path.join(distDir, aliasFileName);
     const candidate = resolveStableRootRuntimeAliasCandidate(
@@ -404,7 +410,10 @@ export function writeStableRootRuntimeAliases(params: RuntimeFsParams = {}) {
       aliasFileName === "io.runtime.js"
         ? buildUpdateConfigRuntimeAlias(
             candidate,
-            fsImpl.readFileSync(path.join(distDir, candidate), "utf8"),
+            parser.parseSourceFile(
+              path.join(distDir, candidate),
+              fsImpl.readFileSync(path.join(distDir, candidate), "utf8"),
+            ),
           )
         : buildRuntimeAliasSource(candidate, distDir, fsImpl);
     const owner = ownership?.chunks[candidate];
@@ -422,8 +431,19 @@ export function writeStableRootRuntimeAliases(params: RuntimeFsParams = {}) {
     } else if (ownership) {
       delete ownership.chunks[aliasFileName];
     }
+    const original = fsImpl.existsSync(aliasPath)
+      ? fsImpl.readFileSync(aliasPath, "utf8")
+      : undefined;
     writeTextFileIfChanged(aliasPath, source);
+    if (original !== undefined && original !== source) {
+      moduleUrlRewrites.push({ filename: aliasPath, original, rewritten: source });
+    }
   }
+  updateStandaloneSourceModuleUrlChunks({
+    outputRoot: distDir,
+    rewrites: moduleUrlRewrites,
+    fsImpl,
+  });
   writeRuntimeDependencyOwnership(rootDir, ownership, fsImpl);
 }
 
@@ -456,6 +476,7 @@ export function rewriteRootRuntimeImportsToStableAliases(params: RuntimeFsParams
   }
 
   const ownership = readRuntimeDependencyOwnership(rootDir, fsImpl);
+  const moduleUrlRewrites: { filename: string; original: string; rewritten: string }[] = [];
   for (const entry of entries) {
     if (!entry.isFile() || !/\.m?js$/u.test(entry.name)) {
       continue;
@@ -490,8 +511,14 @@ export function rewriteRootRuntimeImportsToStableAliases(params: RuntimeFsParams
         owner.sha256 = createHash("sha256").update(rewritten).digest("hex");
       }
       writeTextFileIfChanged(filePath, rewritten);
+      moduleUrlRewrites.push({ filename: filePath, original: source, rewritten });
     }
   }
+  updateStandaloneSourceModuleUrlChunks({
+    outputRoot: distDir,
+    rewrites: moduleUrlRewrites,
+    fsImpl,
+  });
   writeRuntimeDependencyOwnership(rootDir, ownership, fsImpl);
 }
 
@@ -571,6 +598,14 @@ export function runRuntimePostBuild(params: RuntimePostBuildParams = {}) {
   runPhase("bundled hook metadata", () => copyHookMetadata(phaseParams));
   runPhase("official channel catalog", () => writeOfficialChannelCatalog(phaseParams));
   runPhase("export HTML assets", () => copyExportHtmlTemplates(phaseParams));
+  runPhase("private CLI diagnostic companions", () => {
+    for (const output of listCliDiagnosticCompanionOutputs(phaseParams)) {
+      writeTextFileIfChanged(
+        path.join(rootDir, output),
+        fsImpl.readFileSync(path.join(rootDir, "src/cli", path.basename(output)), "utf8"),
+      );
+    }
+  });
   runPhase("bundled plugin runtime overlay", () => stageBundledPluginRuntime(phaseParams));
   runPhase("static extension assets", () => {
     if (!shouldCopyStaticExtensionAssets(phaseParams)) {

@@ -1,53 +1,35 @@
-// Workshop config helpers resolve skill workshop settings from OpenClaw config.
-import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { SkillsWorkshopAutonomousMode } from "../../config/types.skills.js";
+import { isRecord } from "../../utils.js";
 
-/** Runtime configuration for the skill workshop proposal flow. */
+/** How background reviews may change Workshop skills. */
+type SkillsWorkshopAutonomousMode = "off" | "propose" | "auto";
+
+/** Runtime configuration for Skill Workshop. */
 type SkillWorkshopConfig = {
   autonomous: {
     mode: SkillsWorkshopAutonomousMode;
+    channelNotices: boolean;
   };
-  approvalPolicy: "pending" | "auto";
-  maxPending: number;
   maxSkillBytes: number;
 };
 
-const DEFAULT_CONFIG: SkillWorkshopConfig = {
-  autonomous: {
-    mode: "auto",
-  },
-  approvalPolicy: "auto",
-  maxPending: 50,
-  maxSkillBytes: 40_000,
-};
-
-function readInteger(value: unknown, fallback: number, min: number, max: number): number {
-  return typeof value === "number" && Number.isFinite(value)
-    ? Math.min(Math.max(Math.trunc(value), min), max)
-    : fallback;
+function isMode(value: unknown): value is SkillsWorkshopAutonomousMode {
+  return value === "off" || value === "propose" || value === "auto";
 }
 
-function readAutonomousMode(
-  value: unknown,
-  fallback: SkillsWorkshopAutonomousMode,
-): SkillsWorkshopAutonomousMode {
-  return value === "off" || value === "propose" || value === "auto" ? value : fallback;
-}
-
-function readApprovalPolicy(value: unknown, fallback: SkillWorkshopConfig["approvalPolicy"]) {
-  return value === "pending" || value === "auto" ? value : fallback;
-}
-
+/**
+ * Reads the bundled plugin's own settings (`plugins.entries.skill-workshop.config`); its manifest
+ * schema validates them. Doctor moves the retired core `skills.workshop` key here.
+ */
 export function resolveSkillWorkshopConfig(config?: OpenClawConfig): SkillWorkshopConfig {
-  const raw = asNullableRecord(config?.skills?.workshop) ?? {};
-  const autonomous = asNullableRecord(raw.autonomous) ?? {};
+  const raw = config?.plugins?.entries?.["skill-workshop"]?.config;
+  const autonomous = isRecord(raw?.autonomous) ? raw.autonomous : undefined;
+  const maxSkillBytes = typeof raw?.maxSkillBytes === "number" ? raw.maxSkillBytes : 40_000;
   return {
     autonomous: {
-      mode: readAutonomousMode(autonomous.mode, DEFAULT_CONFIG.autonomous.mode),
+      mode: isMode(autonomous?.mode) ? autonomous.mode : "auto",
+      channelNotices: autonomous?.channelNotices === true,
     },
-    approvalPolicy: readApprovalPolicy(raw.approvalPolicy, DEFAULT_CONFIG.approvalPolicy),
-    maxPending: readInteger(raw.maxPending, DEFAULT_CONFIG.maxPending, 1, 200),
-    maxSkillBytes: readInteger(raw.maxSkillBytes, DEFAULT_CONFIG.maxSkillBytes, 1024, 200_000),
+    maxSkillBytes: Math.min(Math.max(maxSkillBytes, 1024), 200_000),
   };
 }

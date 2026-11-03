@@ -10,6 +10,7 @@ import {
   isColdPluginRuntimeLoaded,
 } from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import { mkdirSafeDir } from "../plugins/test-helpers/fs-fixtures.js";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnv } from "../test-utils/env.js";
@@ -72,7 +73,9 @@ describe("provider auth prepared manifest snapshot", () => {
         { env: processEnv },
       );
       clearBundledDiscoveryModeMemo();
-      const config: OpenClawConfig = { plugins: { allow: ["unrelated-owner"] } };
+      const config: OpenClawConfig = freezeJsonSnapshot({
+        plugins: { allow: ["unrelated-owner"] },
+      });
       const metadataSnapshot = loadPluginMetadataSnapshot({
         config,
         env,
@@ -91,6 +94,30 @@ describe("provider auth prepared manifest snapshot", () => {
         .soft(maps.setupProviderFallbackRefs)
         .toEqual(mode === "compat" ? ["profile-provider"] : []);
       expect(maps.envCandidateMap["profile-provider"]).toEqual(["FIXTURE_PROVIDER_API_KEY"]);
+      const otherEnv = { ...env, ...processEnv };
+      const otherMaps = resolveProviderAuthLookupMaps({ config, env: otherEnv, metadataSnapshot });
+      expect(otherMaps.authEvidenceMap["profile-provider"]).toEqual(
+        mode === "allowlist" ? [evidence] : undefined,
+      );
+      expect(otherMaps.setupProviderFallbackRefs).toEqual(
+        mode === "allowlist" ? ["profile-provider"] : [],
+      );
+      expect(resolveProviderAuthLookupMaps({ config, env: { ...env }, metadataSnapshot })).toBe(
+        maps,
+      );
+      expect(resolveProviderAuthLookupMaps({ config, env: otherEnv, metadataSnapshot })).toBe(
+        otherMaps,
+      );
+      // A policy write in the same profile must invalidate the previously selected facts.
+      writeConfigMachineState(
+        "plugins.bundledDiscovery",
+        mode === "compat" ? "allowlist" : "compat",
+        {
+          env,
+        },
+      );
+      clearBundledDiscoveryModeMemo();
+      expect(resolveProviderAuthLookupMaps({ config, env, metadataSnapshot })).toBe(otherMaps);
       expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
     },
   );

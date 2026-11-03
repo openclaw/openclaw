@@ -1,13 +1,5 @@
-import { performance } from "node:perf_hooks";
-
-export type QaLeaseClock = { wall: number; monotonic: number };
-
-export function captureQaLeaseClock(): QaLeaseClock {
-  return { wall: Date.now(), monotonic: performance.now() };
-}
-
 /** Timers can pause; every consumer also checks the last confirmed lease directly. */
-export function createQaLeaseHealth(leaseTtlMs: number, acquiredAt: QaLeaseClock) {
+export function createQaLeaseHealth(leaseTtlMs: number, acquiredAt: number) {
   let confirmedAt = acquiredAt;
   let closed = false;
   let failure: Error | undefined;
@@ -16,10 +8,8 @@ export function createQaLeaseHealth(leaseTtlMs: number, acquiredAt: QaLeaseClock
       throw new Error("QA credential lease has been released.");
     }
     if (!failure) {
-      const now = captureQaLeaseClock();
-      if (
-        Math.max(now.wall - confirmedAt.wall, now.monotonic - confirmedAt.monotonic) >= leaseTtlMs
-      ) {
+      // Broker TTLs elapse during host suspend, unlike a process monotonic clock.
+      if (Date.now() - confirmedAt >= leaseTtlMs) {
         failure = new Error("QA credential lease expired before its owner could renew it.");
       }
     }
@@ -29,7 +19,7 @@ export function createQaLeaseHealth(leaseTtlMs: number, acquiredAt: QaLeaseClock
   };
   return {
     assertHealthy,
-    confirm(requestStartedAt: QaLeaseClock) {
+    confirm(requestStartedAt: number) {
       assertHealthy();
       confirmedAt = requestStartedAt;
       assertHealthy();

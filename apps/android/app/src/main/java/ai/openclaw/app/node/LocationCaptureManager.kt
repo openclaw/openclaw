@@ -43,6 +43,7 @@ class LocationCaptureManager(
     providers: List<String>,
     maxAgeMs: Long?,
   ): Location? {
+    // Keep platform checks visible to Android lint's permission analysis.
     val fineOk =
       ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
         PackageManager.PERMISSION_GRANTED

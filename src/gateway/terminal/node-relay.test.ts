@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { WebSocket } from "ws";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { NODE_DUPLEX_INVOKE_IDLE_TIMEOUT_MS } from "../../infra/node-commands.js";
 import { type NodeInvokeResult, NodeRegistry } from "../node-registry.js";
+import { createInertGatewayTestSocket } from "../server/inert-socket.test-support.js";
 import { createNodeRelayBackend } from "./node-relay.js";
 import { TerminalSessionManager } from "./session-manager.js";
 import { baseOpenRequest, expectTerminalOpen } from "./session-manager.test-helpers.js";
@@ -14,16 +14,7 @@ function registerNodeRelayClient(registry: NodeRegistry) {
     {
       connId: "conn-validated",
       usesSharedGatewayAuth: false,
-      socket: {
-        readyState: WebSocket.OPEN,
-        bufferedAmount: 0,
-        send: (frame) => frames.push(frame),
-        close: vi.fn(),
-        terminate: vi.fn(),
-        on: vi.fn(),
-        off: vi.fn(),
-        once: vi.fn(),
-      },
+      socket: createInertGatewayTestSocket((frame) => frames.push(frame.toString())),
       connect: {
         minProtocol: 1,
         maxProtocol: 1,

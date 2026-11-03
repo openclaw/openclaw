@@ -4,6 +4,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveUserPath } from "../infra/home-dir.js";
 import type { UpdateCandidatePluginCodeLink } from "../infra/update-candidate-plugin-code-links.js";
+import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
 import type { PluginDoctorMigrationBackupWarning } from "../plugins/doctor-contract-module.js";
 import {
   createRehearsalPathInspector,
@@ -27,7 +28,6 @@ function assertConfigLayout(config: unknown, stateDir: string): void {
   const expected: Record<string, unknown> = {
     "agents.defaults.workspace": workspace,
     "agents.defaults.cwd": workspace,
-    "agents.defaults.heartbeat.every": "0m",
     "logging.file": path.join(stateDir, "canary.log"),
     "gateway.mode": "local",
     "gateway.bind": "loopback",
@@ -74,7 +74,6 @@ function assertConfigLayout(config: unknown, stateDir: string): void {
       !within(workspace, agentWorkspace) ||
       valueAt(agent, "workspace") !== agentWorkspace ||
       valueAt(agent, "cwd") !== agentWorkspace ||
-      valueAt(agent, "heartbeat.every") !== "0m" ||
       typeof agentDir !== "string" ||
       !path.isAbsolute(agentDir) ||
       !within(stateDir, agentDir)
@@ -131,29 +130,8 @@ export async function inspectPreparedDoctorRehearsal(params: {
     OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR: "0",
     OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION: "0",
     OPENCLAW_SERVICE_REPAIR_POLICY: "external",
-    HOME: stateDir,
-    USERPROFILE: stateDir,
-    OPENCLAW_HOME: stateDir,
-    OPENCLAW_STATE_DIR: stateDir,
-    TMPDIR: stateDir,
-    TMP: stateDir,
-    TEMP: stateDir,
-    OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+    ...buildUpdateRehearsalPathEnv(stateDir),
     OPENCLAW_OAUTH_DIR: env.OPENCLAW_OAUTH_DIR,
-    OPENCLAW_WORKSPACE_DIR: path.join(stateDir, "workspace"),
-    XDG_CONFIG_HOME: path.join(stateDir, "config"),
-    XDG_CACHE_HOME: path.join(stateDir, "cache"),
-    XDG_DATA_HOME: path.join(stateDir, "data"),
-    XDG_STATE_HOME: path.join(stateDir, "state"),
-    OPENCLAW_SKIP_CHANNELS: "1",
-    OPENCLAW_SKIP_PROVIDERS: "1",
-    OPENCLAW_SKIP_CRON: "1",
-    OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-    OPENCLAW_SKIP_CANVAS_HOST: "1",
-    OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-    OPENCLAW_SKIP_STARTUP_MODEL_PREWARM: "1",
-    OPENCLAW_NO_AUTO_UPDATE: "1",
-    NODE_DISABLE_COMPILE_CACHE: "1",
   };
   const cleared = [
     ...markers.SUPERVISOR_HINT_ENV_VARS,
@@ -204,7 +182,7 @@ export async function inspectPreparedDoctorRehearsal(params: {
     path.resolve(stateDir) !== stateDir ||
     realpathSync(stateDir) !== stateDir
   ) {
-    refuse("the rehearsal root is not a private canonical directory");
+    refuse("the rehearsal root is not a private directory at its resolved path");
   }
   // Revalidate producer bindings before plugin inventory can import copied code.
   for (const fact of params.pluginCodeLinks ?? []) {
@@ -256,9 +234,18 @@ export async function inspectPreparedDoctorRehearsal(params: {
     // remote stores are never part of a disposable filesystem rehearsal.
     refuse("LanceDB migration requires an absolute copied path");
   }
-  const configuredMigrationRoots = [canvasRoot, voiceStore, lanceDbPath, reefPath]
-    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
-    .map((value) => path.resolve(resolveUserPath(value, env)));
+  const configuredMigrationRoots: Array<{ pluginId: string; path: string }> = (
+    [
+      ["canvas", canvasRoot],
+      ["voice-call", voiceStore],
+      ["memory-lancedb", lanceDbPath],
+      ["reef", reefPath],
+    ] as const
+  ).flatMap(([pluginId, value]) =>
+    typeof value === "string" && value.trim()
+      ? [{ pluginId, path: path.resolve(resolveUserPath(value, env)) }]
+      : [],
+  );
   // Match Wiki's own expandHomePath exactly: no whitespace trimming or ~\
   // expansion. Even an explicit empty path is a cwd locator, not its default.
   if (typeof wikiPath === "string") {
@@ -268,10 +255,10 @@ export async function inspectPreparedDoctorRehearsal(params: {
         : wikiPath.startsWith("~/")
           ? path.join(stateDir, wikiPath.slice(2))
           : wikiPath;
-    configuredMigrationRoots.push(path.resolve(expandedWikiPath));
-  }
-  for (const root of configuredMigrationRoots) {
-    inspectPath(root);
+    configuredMigrationRoots.push({
+      pluginId: "memory-wiki",
+      path: path.resolve(expandedWikiPath),
+    });
   }
   const [
     { createConfigIO },
@@ -294,10 +281,8 @@ export async function inspectPreparedDoctorRehearsal(params: {
     import("../infra/sqlite-files.js"),
     import("../config/paths.js"),
   ]);
-  const { collectPluginDoctorMigrationBackupResources } =
+  const { preparePluginDoctorMigrationBackupResources } =
     await import("../plugins/doctor-contract-registry.js");
-  const { collectDoctorSkillWorkshopBackupResources } =
-    await import("./doctor-update-rehearsal-workshop.js");
   const { isSqliteSnapshotFile } = await import("../infra/sqlite-file-header.js");
   const shared = paths.resolveOpenClawStateSqlitePath(env);
   if (!inspectPath(shared)?.isFile()) {
@@ -346,32 +331,30 @@ export async function inspectPreparedDoctorRehearsal(params: {
       registeredDatabases: registered,
     }),
   ];
+  // Plugin collectors read their configured roots. Admit copied roots first so
+  // no collector reads through an unsafe link; deferred external roots stay unread.
+  for (const root of configuredMigrationRoots) {
+    if (within(stateDir, root.path)) {
+      inspectPath(root.path);
+    }
+  }
   const resourceWarnings: PluginDoctorMigrationBackupWarning[] = [];
-  const inventories = await Promise.allSettled([
-    collectPluginDoctorMigrationBackupResources({
-      config,
-      env,
-      stateDir,
-      warnings: resourceWarnings,
-      requireLocalResources: true,
-    }),
-    collectDoctorSkillWorkshopBackupResources({ config, env }),
-  ]);
-  // Every native reader must settle before the caller can remove a rejected copy.
-  const failures = inventories.flatMap((result) =>
-    result.status === "rejected" ? [result.reason] : [],
-  );
-  if (failures.length === 1) {
-    throw failures[0];
+  const pluginScope = await preparePluginDoctorMigrationBackupResources({
+    config,
+    env,
+    stateDir,
+    warnings: resourceWarnings,
+    requireLocalResources: true,
+  });
+  const resources = pluginScope.resources;
+  const selectedMigrationRoots = configuredMigrationRoots
+    .filter(({ pluginId }) => !pluginScope.deferredPluginIds.has(pluginId))
+    .map((root) => root.path);
+  for (const root of selectedMigrationRoots) {
+    inspectPath(root);
   }
-  if (failures.length > 1) {
-    throw new AggregateError(failures, "Migration resource inventories failed.");
-  }
-  const resources = inventories.flatMap((result) =>
-    result.status === "fulfilled" ? result.value : [],
-  );
   const pendingPaths = [
-    ...configuredMigrationRoots,
+    ...selectedMigrationRoots,
     configPath,
     configPaths.resolveOAuthDir(env, stateDir),
     ...sqliteFiles.resolveSqliteDatabaseFilePaths(shared),
@@ -468,7 +451,12 @@ export async function inspectPreparedDoctorRehearsal(params: {
   };
   assertPrepared();
   return {
-    fact: { kind: "doctor-schema-rehearsal" as const, stateDir, warnings: resourceWarnings },
+    fact: {
+      kind: "doctor-schema-rehearsal" as const,
+      stateDir,
+      warnings: resourceWarnings,
+      ...(pluginScope.notices.length > 0 ? { notices: pluginScope.notices } : {}),
+    },
     assertPrepared,
     assertCurrent,
   };

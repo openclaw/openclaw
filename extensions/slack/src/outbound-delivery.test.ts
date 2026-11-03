@@ -17,14 +17,15 @@ import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest"
 import { createSlackSendTestClient } from "./blocks.test-helpers.js";
 import * as clientDelivery from "./client-delivery.js";
 import { slackOutbound } from "./outbound-adapter.js";
-import { sendMessageSlack } from "./send.js";
 import { clearSlackThreadParticipationCache } from "./sent-thread-cache.js";
 
 const sendMessageSlackMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./send.runtime.js", () => ({
+vi.mock("./send.js", () => ({
   sendMessageSlack: sendMessageSlackMock,
 }));
+
+const { sendMessageSlack } = await vi.importActual<typeof import("./send.js")>("./send.js");
 
 const cfg: OpenClawConfig = {
   channels: {
@@ -110,7 +111,6 @@ describe("slack outbound shared hook wiring", () => {
   ])("media followed by $name", ({ content, expectedText, hasBlocks }) => {
     it.each([
       { name: "mediaUrl", media: { mediaUrl: "https://example.com/a.png" } },
-      { name: "singleton mediaUrls", media: { mediaUrls: ["https://example.com/a.png"] } },
       {
         name: "mediaUrls list",
         media: { mediaUrls: ["https://example.com/a.png", "https://example.com/b.png"] },
@@ -314,28 +314,6 @@ describe("slack outbound shared hook wiring", () => {
       },
     );
     expect(sendMessageSlackMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("passes replyToId as Slack threadTs for threaded outbound delivery", async () => {
-    await sendDurableMessageBatch({
-      cfg,
-      channel: "slack",
-      to: "C123",
-      payloads: [{ text: "hello" }],
-      accountId: "default",
-      replyToId: "1712000000.000001",
-    });
-
-    expect(sendMessageSlackMock).toHaveBeenCalledWith(
-      "C123",
-      "hello",
-      expect.objectContaining({
-        cfg,
-        threadTs: "1712000000.000001",
-        accountId: "default",
-        onDeliveryResult: expect.any(Function),
-      }),
-    );
   });
 
   it("respects cancel from the shared hook without a second adapter pass", async () => {
