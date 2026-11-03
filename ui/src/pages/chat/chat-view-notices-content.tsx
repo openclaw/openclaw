@@ -17,7 +17,6 @@ import { registerChatSessionOptionalEnglish } from "../../i18n/locales/en-chat-s
 import { registerNewSessionRuntimeEnglish } from "../../i18n/locales/en-new-session-runtime.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
-import { clampText } from "../../lib/format.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { isChatSendReconnecting } from "./chat-send-presentation.ts";
 import type { ChatComposerNoticesProps, ChatViewNoticesProps } from "./chat-view-notices.tsx";
@@ -312,11 +311,10 @@ function ChatErrorNotice(props: {
       .trim()
       .split(/\r?\n/u)
       .map((line) => line.replace(/\s+/gu, " ").trim());
-  // Local action errors already contain recovery instructions; keep those visible.
-  const title = () => props.summary ?? clampText(lines()[0] ?? "");
+  const title = () => props.summary ?? t("chat.errorSummary");
   const hasDetails = () => lines().some((line) => line !== "" && line !== title());
   const tone = () => props.tone ?? "danger";
-  return (
+  const content = (error: string) => (
     <Show
       when={props.compact}
       fallback={
@@ -336,18 +334,18 @@ function ChatErrorNotice(props: {
             fallback={
               <span class="chat-error__content">
                 <strong>{title()}</strong>
-                <CopyButton text={props.error} idleLabel={t("chat.copyError")} />
+                <CopyButton text={error} idleLabel={t("chat.copyError")} />
               </span>
             }
           >
             <details class="chat-error__content">
               <summary class="chat-error__summary">
                 <strong>{title()}</strong>
-                <span>{t("chat.details")}</span>
+                <span>{t("common.showDetails")}</span>
                 <span class="chat-error__chevron" aria-hidden="true">
                   <Icon name="chevronDown" />
                 </span>
-                <CopyButton text={props.error} idleLabel={t("chat.copyError")} />
+                <CopyButton text={error} idleLabel={t("chat.copyError")} />
               </summary>
               <pre class="chat-error__diagnostic" tabindex={0} aria-label={t("chat.errorDetails")}>
                 {displayError()}
@@ -400,11 +398,16 @@ function ChatErrorNotice(props: {
               <pre tabindex={0} aria-label={t("chat.errorDetails")}>
                 {displayError()}
               </pre>
-              <CopyButton text={props.error} idleLabel={t("chat.copyError")} bare />
+              <CopyButton text={error} idleLabel={t("chat.copyError")} bare />
             </div>
           </details>
         </Show>
       </div>
+    </Show>
+  );
+  return (
+    <Show when={props.error} keyed>
+      {content}
     </Show>
   );
 }

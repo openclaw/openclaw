@@ -11,6 +11,7 @@ import {
   onSettled,
 } from "solid-js";
 import { pathForPluginSettings } from "../../app-route-paths.ts";
+import { ErrorDetails } from "../../components/config-error.tsx";
 import {
   LearnMoreLink,
   SettingsPage,
@@ -26,7 +27,6 @@ import {
   resolveEditableSnapshotConfig,
 } from "../../lib/config/config-state-model.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
-import { formatUiError } from "../../lib/format-error.ts";
 import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
@@ -389,8 +389,9 @@ export function LabsPage() {
               <Errored
                 fallback={(error) => (
                   <SettingsRow
+                    role="alert"
                     title={t("labsPage.saveErrorTitle")}
-                    description={<span role="alert">{formatUiError(error())}</span>}
+                    description={<ErrorDetails error={error()} />}
                   />
                 )}
               >

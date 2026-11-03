@@ -1,4 +1,5 @@
-import { createMemo, onSettled } from "solid-js";
+import { createMemo, onSettled, Show } from "solid-js";
+import { ErrorDetails } from "../components/config-error.tsx";
 import { Icon } from "../components/solid/icon.tsx";
 import { AgentIdentityAvatar } from "../components/solid/identity-avatar.tsx";
 import { formatUiExternalText } from "./format-error.ts";
@@ -78,7 +79,12 @@ export function ToastView(props: {
               <Icon name={props.toast.icon} />
             </span>
           ) : undefined}
-          <span class="app-toast__message">{message()}</span>
+          <div class="app-toast__message">
+            <span>{message()}</span>
+            <Show when={props.toast} keyed>
+              {(toast) => <ErrorDetails error={toast.detail} />}
+            </Show>
+          </div>
           {props.toast.actionLabel && props.toast.onAction ? (
             props.toast.actionHref ? (
               <a

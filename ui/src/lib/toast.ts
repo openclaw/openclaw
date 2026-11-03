@@ -8,6 +8,8 @@ export type ToastOptions = {
   /** Rich content lets a message name a destination the operator can actually open,
    * instead of spelling out a settings path the toast then makes them find. */
   message: string | Node;
+  /** Raw error shown only when expanded; redacted by the shared error renderer. */
+  detail?: unknown;
   /** Positions a compact toast at the top center of the owning surface. */
   anchor?: Element;
   /** Bottom placement suits settings feedback without covering the page heading. */
