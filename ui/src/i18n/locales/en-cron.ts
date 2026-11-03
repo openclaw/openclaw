@@ -2,17 +2,15 @@ import type { TranslationMap } from "../lib/types.ts";
 import { en } from "./en.ts";
 
 const enCron = {
-  cronJob: {
-    state: "{status} · next {next} · last {last}",
-    payload: {
+  cron: {
+    job: {
+      state: "{status} · next {next} · last {last}",
       pluginCommand: "Plugin command: /{command} ({plugin})",
       system: "System: {text}",
       command: "Command: {command}",
       script: "Script: {script}",
       agent: "Agent: {message}",
     },
-  },
-  cron: {
     missingConfigRevision:
       "This automation is missing its configuration revision. Refresh and try again.",
     changedOnGateway:
@@ -484,7 +482,6 @@ const enCron = {
 
 export const registerCronEnglish = Object.assign(
   () => {
-    Object.assign(en, { cronJob: enCron.cronJob });
     const { runNotStarted, errors, ...cron } = enCron.cron;
     Object.assign(en.cron, cron);
     Object.assign(en.cron.runNotStarted, runNotStarted);

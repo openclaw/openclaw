@@ -20,14 +20,14 @@ it("routes cron state and payload labels through whole catalog templates", async
   try {
     const cronJob = job({ kind: "every", everyMs: 60_000 });
     cronJob.state = { lastStatus: "ok", lastRunAtMs: 1000, nextRunAtMs: 2000 };
-    const expectedState = i18n.t("cronJob.state", {
+    const expectedState = i18n.t("cron.job.state", {
       status: "ok",
       next: formatMs(2000),
       last: formatMs(1000),
     });
     translate.mockClear();
     expect(formatCronState(cronJob)).toBe(expectedState);
-    expect.soft(translate).toHaveBeenCalledWith("cronJob.state", {
+    expect.soft(translate).toHaveBeenCalledWith("cron.job.state", {
       status: "ok",
       next: formatMs(2000),
       last: formatMs(1000),
@@ -40,17 +40,17 @@ it("routes cron state and payload labels through whole catalog templates", async
     ];
     for (const [payload, label, params] of cases) {
       cronJob.payload = payload;
-      const expectedPayload = i18n.t(`cronJob.payload.${label}`, params);
+      const expectedPayload = i18n.t(`cron.job.${label}`, params);
       translate.mockClear();
       expect(formatCronPayload(cronJob)).toBe(expectedPayload);
-      expect.soft(translate).toHaveBeenCalledWith(`cronJob.payload.${label}`, params);
+      expect.soft(translate).toHaveBeenCalledWith(`cron.job.${label}`, params);
     }
     cronJob.payloadSource = { kind: "pluginCommand", command: "DoThing", pluginId: "Plugin-ID" };
     const params = { command: "DoThing", plugin: "Plugin-ID" };
-    const expectedPlugin = i18n.t("cronJob.payload.pluginCommand", params);
+    const expectedPlugin = i18n.t("cron.job.pluginCommand", params);
     translate.mockClear();
     expect(formatCronPayload(cronJob)).toBe(expectedPlugin);
-    expect.soft(translate).toHaveBeenCalledWith("cronJob.payload.pluginCommand", params);
+    expect.soft(translate).toHaveBeenCalledWith("cron.job.pluginCommand", params);
   } finally {
     translate.mockRestore();
     await i18n.setLocale("en");
