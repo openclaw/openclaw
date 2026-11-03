@@ -1,90 +1,174 @@
-import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
-import { setActiveNodeContexts } from "../../infra/active-node-context.js";
-import { ApnsRegistrationPairingChangedError } from "../../infra/push-apns-store.js";
+import { generateKeyPairSync } from "node:crypto";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import {
+  deriveDeviceIdFromPublicKey,
+  publicKeyRawBase64UrlFromPem,
+} from "../../infra/device-identity.js";
+import { resolveNodePairingState } from "../../infra/device-pairing-identity.js";
+import {
+  captureNodePairingGeneration,
+  isPairedDeviceNodeBindingCurrent,
+  resolveCurrentPairedDeviceNodeBinding,
+} from "../../infra/device-pairing-node-state.js";
+import { persistDevicePairingStoreState } from "../../infra/device-pairing-store.js";
+import { getPairedDevice, type PairedDevice } from "../../infra/device-pairing.js";
+import { loadApnsRegistration, registerApnsRegistration } from "../../infra/push-apns-store.js";
+import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { NodeRegistry } from "../node-registry.js";
 import { makeClient, registerNodeSession } from "../node-registry.test-helpers.js";
-import type { handleNodeEvent } from "../server-node-events.js";
+import { createGatewayRequestContext } from "../server-request-context.js";
+import { makeContextParams } from "../server-request-context.test-support.js";
 import { nodeEventHandlers } from "./nodes.event.js";
-import type { GatewayRequestHandlerOptions } from "./types.js";
 
-const handleEvent = vi.hoisted(() => vi.fn<typeof handleNodeEvent>());
-vi.mock("../server-node-events.js", () => ({ handleNodeEvent: handleEvent }));
-vi.mock("../../infra/device-pairing-node-state.js", () => ({
-  captureNodePairingGeneration: async (nodeId: string) => ({ nodeId, key: "generation-a" }),
-  isNodePairingGenerationCurrent: async () => true,
-}));
-
+const tempDirs = createTrackedTempDirs();
 const registries = new Set<NodeRegistry>();
-afterEach(() => {
+let baseDir: string;
+beforeEach(async () => {
+  baseDir = await tempDirs.make("apns-node-authority-");
+  vi.stubEnv("OPENCLAW_STATE_DIR", baseDir);
+});
+afterEach(async () => {
   for (const registry of registries) {
     for (const node of registry.listConnected()) {
       registry.unregister(node.connId);
     }
   }
   registries.clear();
-  setActiveNodeContexts([]);
-  handleEvent.mockReset();
+  await closeStateDatabaseForTest();
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+  await tempDirs.cleanup();
 });
 
-it.each(["current", "replacement", "invalidated"])(
-  "binds APNs worker admission to the original live node session (%s)",
-  async (state) => {
-    const registry = new NodeRegistry();
-    registries.add(registry);
-    const client = makeClient("conn-a", "node-a");
-    registerNodeSession(registry, client, {
-      pairingIdentity: "identity-a",
-      pairingGeneration: "generation-a",
-    });
-    const entered = createDeferred();
-    const release = createDeferred();
-    let registered = false;
-    handleEvent.mockImplementation(async (_context, _nodeId, event, options) => {
-      expect(await options?.resolveApnsRegistrationGeneration?.()).toBe("generation-a");
-      entered.resolve();
-      await release.promise;
-      expect(options?.assertApnsRegistrationCurrent).toBeTypeOf("function");
-      try {
-        options?.assertApnsRegistrationCurrent?.();
-        registered = true;
-        return undefined;
-      } catch (error) {
-        if (!(error instanceof ApnsRegistrationPairingChangedError)) {
-          throw error;
-        }
-        return { ok: true, event: event.event, handled: false, reason: "pairing_changed" };
-      }
-    });
-    const params = {
-      event: "push.apns.register",
-      payload: { token: "abcd1234".repeat(4), topic: "ai.openclaw.ios" },
-    };
-    const respond = vi.fn();
-    const pending = nodeEventHandlers["node.event"]!({
-      req: { type: "req", id: "apns", method: "node.event", params },
-      params,
-      client,
-      respond,
-      isWebchatConnect: () => false,
-      context: {
-        nodeRegistry: registry,
-        logGateway: { warn: vi.fn() },
-      } as unknown as GatewayRequestHandlerOptions["context"],
-    });
-    await entered.promise;
-    if (state === "replacement") {
-      // Even a reused correlation string cannot give a replacement session the old lease.
-      registerNodeSession(registry, makeClient("conn-a", "node-a"), {
-        pairingIdentity: "identity-a",
-        pairingGeneration: "generation-a",
-      });
-    } else if (state === "invalidated") {
-      registry.invalidateConnectionForPairingChange("conn-a");
+it.each(["transaction", "commit"] as const)(
+  "checks the real node route before APNs worker %s admission",
+  async (stage) => {
+    const { publicKey } = generateKeyPairSync("ed25519");
+    const rawPublicKey = publicKeyRawBase64UrlFromPem(
+      publicKey.export({ format: "pem", type: "spki" }),
+    );
+    const nodeId = deriveDeviceIdFromPublicKey(rawPublicKey);
+    if (!nodeId) {
+      throw new Error("Fixture has no device identity");
     }
-    release.resolve();
-    await pending;
-    expect(registered).toBe(state === "current");
-    expect(respond.mock.calls[0]?.[0]).toBe(state === "current");
+    const device: PairedDevice = {
+      deviceId: nodeId,
+      publicKey: rawPublicKey,
+      role: "node",
+      roles: ["node"],
+      tokens: {
+        node: { token: "synthetic-node-grant", role: "node", scopes: [], createdAtMs: 100 },
+      },
+      nodeSurface: { createdAtMs: 200, approvedAtMs: 300 },
+      createdAtMs: 50,
+      approvedAtMs: 300,
+    };
+    persistDevicePairingStoreState(
+      { pendingById: {}, pairedByDeviceId: { [nodeId]: device } },
+      baseDir,
+      "paired",
+    );
+    const pairing = resolveNodePairingState(await getPairedDevice(nodeId, baseDir));
+    if (!pairing?.generation) {
+      throw new Error("Fixture has no authenticated node pairing state");
+    }
+    const generation = pairing.generation;
+    await expect(captureNodePairingGeneration(nodeId)).resolves.toEqual(generation);
+    await registerApnsRegistration({
+      nodeId,
+      token: "ab".repeat(32),
+      topic: "ai.openclaw.tests",
+      environment: "sandbox",
+    });
+    const peer = await registerApnsRegistration({
+      nodeId: "peer",
+      token: "cd".repeat(32),
+      topic: "ai.openclaw.tests",
+      environment: "sandbox",
+    });
+    for (const state of ["current", "replacement", "invalidated"] as const) {
+      const previous = await loadApnsRegistration(nodeId);
+      if (!previous) {
+        throw new Error("Fixture registration is missing");
+      }
+      const registry = new NodeRegistry({
+        resolveCurrentPairingState: resolveCurrentPairedDeviceNodeBinding,
+        isPairingStateCurrent: isPairedDeviceNodeBindingCurrent,
+      });
+      registries.add(registry);
+      const makeBoundClient = () => {
+        const connection = makeClient("node-connection", nodeId);
+        if (!connection.connect?.device) {
+          throw new Error("Fixture client has no device");
+        }
+        connection.connect.device.publicKey = rawPublicKey;
+        return connection;
+      };
+      const client = makeBoundClient();
+      registerNodeSession(registry, client, {
+        pairingIdentity: pairing.identity.key,
+        pairingGeneration: generation.key,
+      });
+      const context = createGatewayRequestContext(makeContextParams({ nodeRegistry: registry }));
+      const respond = vi.fn();
+      const params = {
+        event: "push.apns.register",
+        payload: {
+          token: (state === "current" ? "de" : "ef").repeat(32),
+          topic: "ai.openclaw.tests",
+          environment: "sandbox",
+        },
+      };
+      let reached = false;
+      const admission = probe.admission(workerAdmission, (request, grant, admit) => {
+        if (request.stage === stage) {
+          reached = true;
+          if (state === "replacement") {
+            // A reused connection ID does not give the replacement the original session's authority.
+            registerNodeSession(registry, makeBoundClient(), {
+              pairingIdentity: pairing.identity.key,
+              pairingGeneration: generation.key,
+            });
+          } else if (state === "invalidated") {
+            registry.invalidateConnectionForPairingChange("node-connection");
+          }
+        }
+        admit(request, grant);
+      });
+      try {
+        await nodeEventHandlers["node.event"]!({
+          req: { type: "req", id: "registration", method: "node.event", params },
+          params,
+          client,
+          respond,
+          isWebchatConnect: () => false,
+          context,
+        });
+        expect(reached, JSON.stringify(respond.mock.calls)).toBe(true);
+        expect(respond.mock.calls[0]?.[0]).toBe(state === "current");
+        if (state === "current") {
+          expect(respond.mock.calls[0]?.[1]).toEqual({
+            ok: true,
+            event: "push.apns.register",
+            handled: true,
+            reason: "registered",
+          });
+          await expect(loadApnsRegistration(nodeId)).resolves.toMatchObject({
+            token: "de".repeat(32),
+          });
+        } else {
+          await expect(loadApnsRegistration(nodeId)).resolves.toEqual(previous);
+        }
+        await expect(loadApnsRegistration("peer")).resolves.toEqual(peer);
+      } finally {
+        admission.mockRestore();
+        for (const node of registry.listConnected()) {
+          registry.unregister(node.connId);
+        }
+      }
+    }
   },
 );

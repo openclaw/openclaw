@@ -17,7 +17,7 @@ private actor RecoveryRelay: PushRelayRegistering {
         self.enrollmentCount += 1
         return PushRelayRegisterResponse(
             relayHandle: "renewed-handle", sendGrant: "renewed-grant",
-            expiresAtMs: Int64(Date().timeIntervalSince1970 * 1000) + 3600000,
+            expiresAtMs: Int64(Date().timeIntervalSince1970 * 1000) + 3_600_000,
             tokenSuffix: nil, status: "registered")
     }
 }
@@ -31,7 +31,7 @@ struct PushRegistrationRecoveryTests {
             relayProfile: "production", proofPolicy: "appleStrict", topic: "ai.openclaw.tests")
     }
 
-    @Test func rejectedCacheSurvivesScopeSwitchesAndReconstructionWithBoundedRenewal() async throws {
+    @Test func `rejected cache survives scope switches and reconstruction with bounded renewal`() async throws {
         _ = try #require(ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"])
         let service = "ai.openclawfoundation.app.pushrelay.tests"
         let originalLegacy = GenericPasswordKeychainStore.loadString(service: service, account: "registration-state")
@@ -53,7 +53,7 @@ struct PushRegistrationRecoveryTests {
         let state = PushRelayRegistrationStore.RegistrationState(
             relayHandle: "rejected-handle", sendGrant: "rejected-grant",
             relayOrigin: scopeA.relayOrigin, gatewayDeviceId: scopeA.gatewayDeviceId,
-            relayHandleExpiresAtMs: Int64(Date().timeIntervalSince1970 * 1000) + 3600000,
+            relayHandleExpiresAtMs: Int64(Date().timeIntervalSince1970 * 1000) + 3_600_000,
             tokenDebugSuffix: nil, lastAPNsTokenHashHex: tokenHash, installationId: installationID,
             lastTransport: "relay", apnsEnvironment: "production", relayProfile: "production",
             proofPolicy: "appleStrict")
@@ -115,7 +115,7 @@ struct PushRegistrationRecoveryTests {
         #expect(try await manager.beginRecovery(payloadJSON: changedToken, manual: false) == false)
     }
 
-    @Test func directAPNsDoesNotUseRelayRecovery() async throws {
+    @Test func `direct AP ns does not use relay recovery`() async throws {
         let relay = RecoveryRelay()
         let manager = PushRegistrationManager(
             buildConfig: PushBuildConfig(infoDictionary: ["OpenClawPushMode": "localSandbox"]),

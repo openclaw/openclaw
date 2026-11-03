@@ -1,9 +1,13 @@
 import fs from "node:fs/promises";
+import { createServer } from "node:http";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { withLoopbackTestServer } from "../commands/loopback-server.test-support.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
+import * as identityRuntime from "./device-identity-async.js";
 import { persistDevicePairingStoreState } from "./device-pairing-store.js";
 import { resolveNodePairingGeneration, type PairedDevice } from "./device-pairing.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
@@ -14,7 +18,7 @@ import {
   registerApnsRegistration,
   sendApnsAlert,
 } from "./push-apns.js";
-import { mockApnsRelayFetch } from "./push-apns.relay.test-support.js";
+import { mockApnsRelayIdentity } from "./push-apns.relay.test-support.js";
 import * as workerAdmission from "./sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
 
@@ -139,7 +143,7 @@ describe("push APNs registration store", () => {
     });
   });
 
-  it("retains relay rejection across reconnect and restart without poisoning a replacement or peer", async () => {
+  it("retains relay rejection across real HTTP, reconnect and restart without poisoning a replacement or peer", async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", baseDir);
     const peer = await registerRelay({ nodeId: "healthy-peer", relayHandle: "peer-handle" });
     const direct = await registerDirect();
@@ -147,48 +151,137 @@ describe("push APNs registration store", () => {
     if (rejected.transport !== "relay") {
       throw new Error("expected relay registration");
     }
-    const send = mockApnsRelayFetch({
-      ok: false,
-      status: 410,
-      reason: "Unregistered",
-      environment: "production",
-    });
-    const push = () =>
-      sendApnsAlert({
-        nodeId: rejected.nodeId,
-        registration: rejected,
-        relayConfig: { baseUrl: "https://relay.openclaw.test", timeoutMs: 2500 },
-        title: "Synthetic recovery test",
-        body: "Only the fixture device",
+    const identity = mockApnsRelayIdentity();
+    const requests: Array<{ body: unknown; grant: string | undefined }> = [];
+    let responseStatus = 410;
+    let holdRequest = false;
+    const entered = createDeferred();
+    const release = createDeferred();
+    const server = createServer((request, response) => {
+      void (async () => {
+        const chunks: Buffer[] = [];
+        for await (const chunk of request) {
+          chunks.push(Buffer.from(chunk));
+        }
+        const body: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        requests.push({ body, grant: request.headers.authorization });
+        if (holdRequest) {
+          holdRequest = false;
+          entered.resolve();
+          await release.promise;
+        }
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({
+            ok: responseStatus === 200,
+            status: responseStatus,
+            ...(responseStatus === 410 ? { reason: "Unregistered" } : {}),
+            environment: "production",
+          }),
+        );
+      })().catch(() => {
+        response.writeHead(500);
+        response.end("Fixture request failed");
       });
-    await expect(push()).resolves.toMatchObject({ status: 410, reason: "Unregistered" });
-    await closeStateDatabaseForTest();
-    await expect(registerRelay()).resolves.toMatchObject({
-      relayRejection: { status: 410, reason: "Unregistered" },
     });
-    await expect(load("healthy-peer")).resolves.toEqual(peer);
-    await expect(load()).resolves.toEqual(direct);
-    const replacement = await registerRelay({
-      relayHandle: "renewed-handle",
-      sendGrant: "renewed-grant",
-    });
-    // A late result for the old enrollment must not mark the replacement rejected.
-    await push();
-    await expect(load(rejected.nodeId)).resolves.toEqual(replacement);
-    expect(replacement).not.toHaveProperty("relayRejection");
-    if (replacement.transport !== "relay") {
-      throw new Error("expected relay registration");
-    }
-    send.mockImplementation(async () => Response.json({ ok: true, status: 200 }));
-    await expect(
-      sendApnsAlert({
+    await withLoopbackTestServer(server, async (port) => {
+      const relayConfig = { baseUrl: `http://127.0.0.1:${port}`, timeoutMs: 2500 };
+      const push = () =>
+        sendApnsAlert({
+          nodeId: rejected.nodeId,
+          registration: rejected,
+          relayConfig,
+          title: "Synthetic recovery test",
+          body: "Only the fixture device",
+        });
+      await expect(push()).resolves.toMatchObject({
+        ok: false,
+        status: 410,
+        reason: "Unregistered",
+      });
+      expect(requests).toEqual([
+        {
+          body: expect.objectContaining({ relayHandle: "relay-handle-123" }),
+          grant: "Bearer send-grant-123",
+        },
+      ]);
+      await closeStateDatabaseForTest();
+      const replay = await registerRelay();
+      expect(replay).toMatchObject({ relayRejection: { status: 410, reason: "Unregistered" } });
+      if (replay.transport !== "relay") {
+        throw new Error("expected relay registration");
+      }
+      await expect(
+        sendApnsAlert({
+          nodeId: replay.nodeId,
+          registration: replay,
+          relayConfig,
+          title: "Synthetic",
+          body: "Known rejection",
+        }),
+      ).resolves.toMatchObject({ ok: false, status: 410, reason: "Unregistered" });
+      expect(requests).toHaveLength(1);
+      await expect(load("healthy-peer")).resolves.toEqual(peer);
+      await expect(load()).resolves.toEqual(direct);
+
+      holdRequest = true;
+      const late = push();
+      void late.catch(() => {});
+      await entered.promise;
+      const replacement = await registerRelay({
+        relayHandle: "renewed-handle",
+        sendGrant: "renewed-grant",
+      });
+      release.resolve();
+      await late;
+      await expect(load(rejected.nodeId)).resolves.toEqual(replacement);
+      expect(replacement).not.toHaveProperty("relayRejection");
+      if (replacement.transport !== "relay") {
+        throw new Error("expected relay registration");
+      }
+      responseStatus = 200;
+      await expect(
+        sendApnsAlert({
+          nodeId: replacement.nodeId,
+          registration: replacement,
+          relayConfig,
+          title: "Synthetic recovery test",
+          body: "Only the fixture device",
+        }),
+      ).resolves.toMatchObject({ ok: true, status: 200 });
+      expect(requests).toHaveLength(3);
+      expect(requests[2]).toMatchObject({
+        body: { relayHandle: "renewed-handle" },
+        grant: "Bearer renewed-grant",
+      });
+
+      const identityEntered = createDeferred();
+      const identityRelease = createDeferred();
+      vi.spyOn(identityRuntime, "loadOrCreateProcessDeviceIdentityAsync").mockImplementationOnce(
+        async () => {
+          identityEntered.resolve();
+          await identityRelease.promise;
+          return identity;
+        },
+      );
+      const authority = new AbortController();
+      const revoked = sendApnsAlert({
         nodeId: replacement.nodeId,
         registration: replacement,
-        relayConfig: { baseUrl: "https://relay.openclaw.test", timeoutMs: 2500 },
-        title: "Synthetic recovery test",
-        body: "Only the fixture device",
-      }),
-    ).resolves.toMatchObject({ ok: true, status: 200 });
+        relayConfig,
+        title: "Synthetic",
+        body: "Must not be sent",
+        signal: authority.signal,
+      });
+      void revoked.catch(() => {});
+      await identityEntered.promise;
+      const reason = new Error("Recovery authority revoked");
+      authority.abort(reason);
+      identityRelease.resolve();
+      await expect(revoked).rejects.toBe(reason);
+      expect(requests).toHaveLength(3);
+      await expect(load(rejected.nodeId)).resolves.toEqual(replacement);
+    });
   });
 
   it("round-trips direct and sandbox relay fields including relay origin", async () => {

@@ -59,7 +59,8 @@ actor PushRegistrationManager {
         gatewayIdentity: PushRelayGatewayIdentity?,
         forceRelayRenewal: Bool = false,
         isCurrent: @escaping @Sendable () async -> Bool = { true })
-    async throws -> String {
+        async throws -> String
+    {
         switch self.buildConfig.transport {
         case .direct:
             return try Self.encodePayload(

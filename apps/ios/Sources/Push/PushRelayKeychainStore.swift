@@ -12,6 +12,7 @@ enum PushRelayRegistrationStore {
         #endif
         return "ai.openclawfoundation.app.pushrelay"
     }
+
     private static let registrationStateAccount = "registration-state"
     private static let appAttestKeyIDAccount = "app-attest-key-id"
     private static let appAttestedKeyIDAccount = "app-attested-key-id"
