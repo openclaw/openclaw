@@ -17,6 +17,7 @@ async function avatarConfig(home: string): Promise<OpenClawConfig> {
         modelPolicyAllowlist: true,
         utilityModelSeparation: true,
         skillWorkshopPlugin: true,
+        skillLibraryToolSplit: true,
       },
     },
     gateway: { mode: "local" },

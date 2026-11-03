@@ -104,6 +104,7 @@ it.for([
           modelPolicyAllowlist: true,
           utilityModelSeparation: true,
           skillWorkshopPlugin: true,
+          skillLibraryToolSplit: true,
         },
       },
       agents: catalogAgents(state, { modelPolicy: { allow: providers.map((id) => `${id}/*`) } }),
