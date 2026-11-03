@@ -233,6 +233,19 @@ describe("SSRF policy and pinning", () => {
     ).rejects.toThrow(SsrFBlockedError);
   });
 
+  it("keeps loopback DNS for a configured hostname when private networks are allowed", async () => {
+    const lookupFn = vi.fn(async () => [{ address: "127.0.0.1", family: 4 }]);
+    await expect(
+      resolvePinnedHostnameWithPolicy("configured.ollama.test", {
+        lookupFn,
+        policy: {
+          allowPrivateNetwork: true,
+          hostnameAllowlist: ["configured.ollama.test"],
+        },
+      }),
+    ).resolves.toMatchObject({ addresses: ["127.0.0.1"] });
+  });
+
   it("keeps an RFC1918 answer when private networks are allowed", async () => {
     const lookupFn = vi.fn(async () => [{ address: "192.168.1.20", family: 4 }]);
     await expect(

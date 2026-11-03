@@ -414,8 +414,9 @@ function assertAllowedTrustedHostnameResolvedAddressesOrThrow(
   results: readonly LookupAddress[],
   hostname: string,
   policy?: SsrFPolicy,
+  allowResolvedLoopback = false,
 ): void {
-  const isLoopbackAllowed = isExplicitLoopbackHostname(hostname);
+  const isLoopbackAllowed = allowResolvedLoopback || isExplicitLoopbackHostname(hostname);
   const isPodmanGatewayLinkLocalAllowed = hasTrustedHostPodmanGatewayLinkLocalExemption(policy);
 
   for (const entry of results) {
@@ -584,9 +585,14 @@ export async function resolvePinnedHostnameWithPolicy(
     // Phase 2: re-check DNS answers so public hostnames cannot pivot to private targets.
     assertAllowedResolvedAddressesOrThrow(results, params.policy);
   } else {
-    // Private allow and exact-host trust may keep RFC1918 and tailnet targets, but
-    // metadata and non-exempt link-local DNS answers stay blocked.
-    assertAllowedTrustedHostnameResolvedAddressesOrThrow(results, normalized, params.policy);
+    // Private allow keeps loopback and RFC1918 answers. Exact-host trust does not
+    // keep loopback rebinding. Metadata and non-exempt link-local answers stay blocked.
+    assertAllowedTrustedHostnameResolvedAddressesOrThrow(
+      results,
+      normalized,
+      params.policy,
+      isPrivateNetworkAllowedByPolicy(params.policy),
+    );
   }
 
   // Prefer addresses returned as IPv4 by DNS family metadata before other
@@ -639,7 +645,12 @@ function resolvePinnedDispatcherLookup(
   if (!shouldSkipPrivateNetworkChecks(pinned.hostname, policy)) {
     assertAllowedResolvedAddressesOrThrow(records, policy);
   } else {
-    assertAllowedTrustedHostnameResolvedAddressesOrThrow(records, pinned.hostname, policy);
+    assertAllowedTrustedHostnameResolvedAddressesOrThrow(
+      records,
+      pinned.hostname,
+      policy,
+      isPrivateNetworkAllowedByPolicy(policy),
+    );
   }
   return createPinnedLookup({
     hostname: pinned.hostname,
