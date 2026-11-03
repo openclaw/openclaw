@@ -50,6 +50,25 @@ describe("webhooks cli", () => {
     vi.clearAllMocks();
   });
 
+  it("explains legacy consent in Gmail run help without adding a bypass flag", () => {
+    const program = new Command();
+    registerWebhooksCli(program);
+    const run = program.commands
+      .find((command) => command.name() === "webhooks")!
+      .commands.find((command) => command.name() === "gmail")!
+      .commands.find((command) => command.name() === "run")!;
+    const output: string[] = [];
+    run.configureOutput({
+      writeOut: (text) => {
+        output.push(text);
+      },
+    });
+    run.outputHelp();
+    expect(output.join("")).toContain("default-No foreground confirmation");
+    expect(output.join("")).toContain("hooks.gmail.allowInsecureTokenArgs=true");
+    expect(run.options.some((option) => option.long === "--allow-insecure-token-args")).toBe(false);
+  });
+
   it.each([
     ["setup", "--port", "8080x", "--port must be a positive integer.", true],
     ["run", "--max-bytes", "10mb", "--max-bytes must be a positive integer."],

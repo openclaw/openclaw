@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   commandSuccess,
+  gogSchemaSuccess,
+  gogServeSchema,
   commandGate,
   createGmailConfig,
   WatcherChild,
@@ -11,10 +13,17 @@ const mocks = vi.hoisted(() => ({
   ensureTailscaleEndpoint: vi.fn(),
   readRuntimeConfig: vi.fn(),
   runCommandWithTimeout: vi.fn(),
+  runUtf8CommandWithTimeout: vi.fn(),
   killProcessTree: vi.fn(),
   spawn: vi.fn(),
+  confirm: vi.fn(),
   log: { debug: vi.fn(), trace: vi.fn(), error: vi.fn(), warn: vi.fn(), info: vi.fn() },
   defaultRuntime: { log: vi.fn(), error: vi.fn(), writeJson: vi.fn(), exit: vi.fn() },
+}));
+
+vi.mock("@clack/prompts", () => ({
+  confirm: mocks.confirm,
+  isCancel: (value: unknown) => typeof value === "symbol",
 }));
 
 vi.mock("../logging/subsystem.js", () => ({ createSubsystemLogger: () => mocks.log }));
@@ -28,7 +37,10 @@ vi.mock("node:child_process", async () => {
 });
 
 // mock-isolation: all command completion and cancellation is controlled by this fixture.
-vi.mock("../process/exec.js", () => ({ runCommandWithTimeout: mocks.runCommandWithTimeout }));
+vi.mock("../process/exec.js", () => ({
+  runCommandWithTimeout: mocks.runCommandWithTimeout,
+  runUtf8CommandWithTimeout: mocks.runUtf8CommandWithTimeout,
+}));
 
 // mock-isolation: terminate only the fixture's fake child processes.
 vi.mock("../process/kill-tree.js", () => ({ killProcessTree: mocks.killProcessTree }));
@@ -61,6 +73,14 @@ vi.mock("../infra/executable-path.js", () => ({
 const { runGmailService } = await import("./gmail-ops.js");
 const { stopGmailWatcher } = await import("./gmail-watcher.js");
 
+const ttyDescriptors = [process.stdin, process.stdout].map((stream) =>
+  Object.getOwnPropertyDescriptor(stream, "isTTY"),
+);
+function setTty(value: boolean) {
+  for (const stream of [process.stdin, process.stdout]) {
+    Object.defineProperty(stream, "isTTY", { value, configurable: true });
+  }
+}
 const signals = ["SIGINT", "SIGTERM"] as const;
 
 let children: WatcherChild[];
@@ -85,12 +105,15 @@ function expectStopped() {
 beforeEach(() => {
   vi.useFakeTimers();
   vi.clearAllMocks();
+  setTty(false);
+  mocks.confirm.mockReset().mockResolvedValue(false);
   signalBaselines = new Map(signals.map((signal) => [signal, process.rawListeners(signal)]));
   children = [];
   mocks.ensureDependency.mockReset().mockResolvedValue(undefined);
   mocks.ensureTailscaleEndpoint.mockReset().mockResolvedValue(undefined);
   mocks.readRuntimeConfig.mockResolvedValue(createGmailConfig(undefined, 1, { mode: "off" }));
   mocks.runCommandWithTimeout.mockReset().mockResolvedValue(commandSuccess);
+  mocks.runUtf8CommandWithTimeout.mockReset().mockResolvedValue(gogSchemaSuccess);
   mocks.spawn.mockReset().mockImplementation(() => {
     const child = new WatcherChild(9000 + children.length);
     children.push(child);
@@ -114,6 +137,14 @@ afterEach(async () => {
     await stopGmailWatcher();
     expectStopped();
   } finally {
+    [process.stdin, process.stdout].forEach((stream, index) => {
+      const descriptor = ttyDescriptors[index];
+      if (descriptor) {
+        Object.defineProperty(stream, "isTTY", descriptor);
+      } else {
+        Reflect.deleteProperty(stream, "isTTY");
+      }
+    });
     vi.useRealTimers();
   }
 });
@@ -135,7 +166,8 @@ it.each(["rejected renewal", "timed-out registration"])(
         stderr: `${"noise\n".repeat(1000)}\u001b[31mregistration stderr tail\u001b[0m`,
       });
     }
-    await runGmailService({});
+    const service = runGmailService({});
+    await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(120_000);
     expect(children.filter((child) => child.alive)).toHaveLength(1);
     expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(3);
@@ -151,6 +183,9 @@ it.each(["rejected renewal", "timed-out registration"])(
       expect(message).toContain("registration stderr tail");
       expect(message).not.toContain("\u001b");
     }
+    shutdownHandler("SIGTERM")();
+    await vi.advanceTimersByTimeAsync(8_000);
+    await service;
   },
 );
 
@@ -159,7 +194,8 @@ it("keeps renewal single-flight and cancels it on shutdown", async () => {
   mocks.runCommandWithTimeout
     .mockResolvedValueOnce(commandSuccess)
     .mockImplementationOnce((_args, options: { signal: AbortSignal }) => renewal.run(options));
-  await runGmailService({});
+  const service = runGmailService({});
+  await vi.advanceTimersByTimeAsync(0);
   await vi.advanceTimersByTimeAsync(120_000);
   expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(2);
   shutdownHandler("SIGTERM")();
@@ -167,6 +203,7 @@ it("keeps renewal single-flight and cancels it on shutdown", async () => {
   await vi.advanceTimersByTimeAsync(60_000);
   expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(2);
   expect(children[0]?.alive).toBe(false);
+  await service;
   expectStopped();
 });
 
@@ -176,7 +213,8 @@ it.each([
 ] as const)(
   "$signal stops the watcher during $phase without restarting or renewing",
   async ({ signal, phase }) => {
-    await runGmailService({});
+    const service = runGmailService({});
+    await vi.advanceTimersByTimeAsync(0);
     children[0]!.exit();
     await vi.advanceTimersByTimeAsync(phase === "replacement" ? 5_000 : 1_000);
     const countAtShutdown = children.length;
@@ -197,6 +235,7 @@ it.each([
       );
       expect(children[1]?.alive).toBe(false);
     }
+    await service;
     expectStopped();
   },
 );
@@ -241,5 +280,125 @@ it.each(["tailscale", "spawn"])("cleans up signals after %s startup failure", as
     runGmailService({ tailscale: boundary === "tailscale" ? "serve" : "off" }),
   ).rejects.toThrow("fixture setup failed");
   expect(children).toHaveLength(0);
+  expectStopped();
+});
+
+it.each(["usage", "early usage", "usage after retry", "spawn", "bind"])(
+  "settles foreground failure on %s",
+  async (failure) => {
+    if (failure === "spawn") {
+      mocks.spawn.mockImplementationOnce(() => {
+        const child = new WatcherChild();
+        children.push(child);
+        queueMicrotask(() => {
+          child.alive = false;
+          child.emit("error", new Error("ENOENT"));
+          child.emit("close", -2);
+        });
+        return child;
+      });
+    }
+    if (failure === "early usage") {
+      mocks.spawn.mockImplementationOnce(() => {
+        const child = new WatcherChild(9000);
+        children.push(child);
+        queueMicrotask(() => child.exit(2));
+        return child;
+      });
+    }
+    const service = runGmailService({});
+    const rejected = expect(service).rejects.toThrow(/Gog/);
+    await vi.advanceTimersByTimeAsync(0);
+    if (failure === "usage after retry") {
+      children[0]!.exit(1);
+      await vi.advanceTimersByTimeAsync(5_000);
+    }
+    if (failure === "bind") {
+      for (const delay of [5_000, 10_000, 20_000, 0]) {
+        const child = children[children.length - 1]!;
+        child.stderr.emit("data", Buffer.from("EADDRINUSE"));
+        child.exit(1);
+        await vi.advanceTimersByTimeAsync(delay);
+      }
+    } else if (!["spawn", "early usage"].includes(failure)) {
+      children[children.length - 1]!.exit(2);
+    }
+    await vi.advanceTimersByTimeAsync(60_000);
+    await rejected;
+    expect(mocks.runCommandWithTimeout).toHaveBeenCalledOnce();
+    expect(mocks.runUtf8CommandWithTimeout).toHaveBeenCalledOnce();
+    expect(mocks.defaultRuntime.exit).not.toHaveBeenCalled();
+    expectStopped();
+  },
+);
+
+it.each(["non-tty", "no", "cancel", "yes", "durable", "supported", "invalid"])(
+  "handles legacy foreground consent: %s",
+  async (mode) => {
+    setTty(mode !== "non-tty");
+    const config = createGmailConfig(undefined, 1, { mode: "off" });
+    config.hooks!.gmail!.allowInsecureTokenArgs = mode === "durable" || mode === "invalid";
+    mocks.readRuntimeConfig.mockResolvedValue(config);
+    mocks.confirm.mockResolvedValue(
+      mode === "yes" ? true : mode === "cancel" ? Symbol("cancel") : false,
+    );
+    mocks.runUtf8CommandWithTimeout.mockResolvedValue({
+      ...commandSuccess,
+      stdout:
+        mode === "invalid"
+          ? "invalid"
+          : JSON.stringify(gogServeSchema(mode === "supported" ? undefined : [])),
+    });
+    const service = runGmailService({});
+    const launched = ["yes", "durable", "supported"].includes(mode);
+    const completion = launched
+      ? service
+      : expect(service).rejects.toThrow(/Upgrade Gog|compatibility check/);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.confirm).toHaveBeenCalledTimes(["no", "cancel", "yes"].includes(mode) ? 1 : 0);
+    if (["no", "cancel", "yes"].includes(mode)) {
+      expect(mocks.confirm).toHaveBeenCalledWith(
+        expect.objectContaining({
+          initialValue: false,
+          signal: expect.any(AbortSignal),
+          message: expect.stringContaining("BOTH"),
+        }),
+      );
+    }
+    expect(children).toHaveLength(launched ? 1 : 0);
+    if (launched) {
+      shutdownHandler("SIGINT")();
+      await vi.advanceTimersByTimeAsync(8_000);
+    }
+    await completion;
+    expect(config.hooks!.gmail!.allowInsecureTokenArgs).toBe(
+      mode === "durable" || mode === "invalid",
+    );
+    expectStopped();
+  },
+);
+
+it("cancels a pending foreground prompt without launching or persisting permission", async () => {
+  setTty(true);
+  mocks.runUtf8CommandWithTimeout.mockResolvedValue({
+    ...commandSuccess,
+    stdout: JSON.stringify(gogServeSchema([])),
+  });
+  let promptSignal: AbortSignal | undefined;
+  mocks.confirm.mockImplementation(
+    ({ signal }: { signal: AbortSignal }) =>
+      new Promise((resolve) => {
+        promptSignal = signal;
+        signal.addEventListener("abort", () => resolve(Symbol("cancel")), { once: true });
+      }),
+  );
+  const service = runGmailService({});
+  await vi.advanceTimersByTimeAsync(0);
+  expect(promptSignal?.aborted).toBe(false);
+  shutdownHandler("SIGTERM")();
+  await service;
+  expect(promptSignal?.aborted).toBe(true);
+  expect(mocks.spawn).not.toHaveBeenCalled();
+  expect(mocks.runCommandWithTimeout).not.toHaveBeenCalled();
   expectStopped();
 });

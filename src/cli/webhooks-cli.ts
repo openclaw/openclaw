@@ -115,6 +115,10 @@ export function registerWebhooksCli(program: Command) {
     gmail
       .command("run")
       .description("Run gog watch serve + auto-renew loop")
+      .addHelpText(
+        "after",
+        "\nLegacy Gog requires a default-No foreground confirmation for this run, or explicit hooks.gmail.allowInsecureTokenArgs=true. Upgrade Gog for child-only token environment sources; the Gateway never prompts.",
+      )
       .option("--account <email>", "Gmail account to watch")
       .option("--topic <topic>", "Pub/Sub topic path (projects/.../topics/..)"),
   ).action(async (opts) => {

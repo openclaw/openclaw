@@ -106,7 +106,21 @@ Command failures show bounded tails from both stdout and stderr, with terminal c
 openclaw webhooks gmail run --account you@example.com
 ```
 
-Starts the Gmail watch and runs `gog gmail watch serve` plus periodic watch renewal in the foreground. Unexpected serve-process exits continue to restart after 5 seconds. Bind conflicts retry after 5, 10, and 20 seconds; if all three retries fail to bind, an error is logged and restarts stop, but watch renewal continues. Run only one watcher per listener, and stop the conflicting process before restarting this command. Ctrl-C or SIGTERM cancels pending restarts and renewal work and shuts down the serve process tree. Investigate repeated exits in the logs.
+Checks local Gog command metadata, starts the Gmail watch, and runs `gog gmail watch serve` plus periodic renewal in the foreground. Supporting Gog receives both credentials through child-only environment sources (`--token-env` and `--hook-token-env`); OpenClaw supplies their values from your existing config. No manual environment exports are needed. A started message means launched, not registered or ready.
+
+If Gog is positively identified as lacking these flags, an interactive terminal offers a **default-No confirmation for this run only**. It warns that both the Gmail push token and OpenClaw hook token become visible in process arguments to other local users on hosts with permissive process visibility. Declining, cancellation, or noninteractive input stops startup before watch registration or Tailscale setup. A failed or inconclusive metadata check never permits legacy arguments.
+
+The Gateway never prompts. To explicitly accept this exposure for an older Gog in unattended runs:
+
+```bash
+openclaw config set hooks.gmail.allowInsecureTokenArgs true
+```
+
+This is an insecure compatibility exception. Supporting Gog always uses environment sources even with this setting enabled. Revoke by setting it to `false` or unsetting it, then apply the normal config reload/restart; with reload disabled, restart manually. Foreground runs must be stopped and restarted separately. One-run confirmation never writes config. After upgrading Gog, restart the watcher; restart the Gateway process if the executable's resolved PATH location changed. Use a Gog build exposing both flags; release availability must be verified before deploying this integration. On macOS, upgrade the separately installed dependency with `brew upgrade gogcli` when a supporting release is available.
+
+Transient serve exits restart after 5 seconds. Bind conflicts retry after 5, 10, and 20 seconds. Usage/configuration exit 2 without a Go crash or bind diagnostic stops serving and renewal; it never downgrades transport. Failed spawn and exhausted bind retries also finish the foreground command unsuccessfully after cleanup. Inspect the preceding diagnostic, correct the configuration or Gog installation, and rerun the command. Ctrl-C or SIGTERM cancels pending restarts and renewal work and shuts down the process tree.
+
+Prefer config-held tokens: existing `--hook-token` and `--push-token` overrides remain accepted, but secrets manually placed on the parent CLI command line remain visible there. Rotate tokens previously exposed in process arguments. Environment handoff does not protect against the process owner or root. One-time setup separately passes a token-bearing Pub/Sub push endpoint to `gcloud`; this serve-launch change does not remove that setup exposure.
 
 `run` accepts the same Pub/Sub, OpenClaw delivery, `gog gmail watch serve`, and Tailscale flags as `setup`, except:
 

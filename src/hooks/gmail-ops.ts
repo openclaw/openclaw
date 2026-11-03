@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { stylePromptMessage } from "../../packages/terminal-core/src/prompt-style.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
   captureRuntimeConfigAsyncReader,
@@ -14,6 +15,7 @@ import { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { formatCommandResult } from "../process/command-error.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { displayPath } from "../utils.js";
 import {
   ensureDependency,
@@ -36,6 +38,7 @@ import {
   DEFAULT_GMAIL_SERVE_PORT,
   DEFAULT_GMAIL_SUBSCRIPTION,
   DEFAULT_GMAIL_TOPIC,
+  GMAIL_INSECURE_TOKEN_ARGS_WARNING,
   type GmailHookOverrides,
   mergeHookPresets,
   normalizeHooksPath,
@@ -293,6 +296,8 @@ export async function runGmailService(opts: GmailRunOptions) {
   const runtimeConfig = resolved.value;
   const scheduler = new GatewayScheduler();
   const controller = new AbortController();
+  const completion = createDeferredCore();
+  let fatalError: Error | undefined;
   let shutdownTask: Promise<void> | undefined;
   const detachSignals = () => {
     process.off("SIGINT", shutdown);
@@ -315,7 +320,10 @@ export async function runGmailService(opts: GmailRunOptions) {
       .catch((err: unknown) => {
         defaultRuntime.error(`gmail watcher shutdown failed: ${String(err)}`);
       })
-      .finally(detachSignals);
+      .finally(() => {
+        detachSignals();
+        completion.resolve();
+      });
   };
 
   // Own signals before async startup so cancellation cannot leave a late serve child behind.
@@ -330,9 +338,37 @@ export async function runGmailService(opts: GmailRunOptions) {
     const result = await startGmailWatcherService(runtimeConfig, {
       scheduler,
       signal: controller.signal,
+      confirmInsecureTokenArgs:
+        process.stdin.isTTY && process.stdout.isTTY
+          ? async () => {
+              const { confirm, isCancel } = await import("@clack/prompts");
+              if (controller.signal.aborted) {
+                return false;
+              }
+              const answer = await confirm({
+                message: stylePromptMessage(
+                  `${GMAIL_INSECURE_TOKEN_ARGS_WARNING} Continue with insecure arguments for this run only?`,
+                ),
+                initialValue: false,
+                signal: controller.signal,
+              });
+              return !controller.signal.aborted && !isCancel(answer) && answer;
+            }
+          : undefined,
+      onFatalError: (reason) => {
+        if (controller.signal.aborted) {
+          return;
+        }
+        fatalError = new Error(reason);
+        shutdown();
+      },
     });
     if (!result.started && !controller.signal.aborted) {
       throw new Error(result.reason ?? "gmail watcher failed to start");
+    }
+    await completion.promise;
+    if (fatalError) {
+      throw fatalError;
     }
   } catch (err) {
     shutdown();

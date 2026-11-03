@@ -22,13 +22,22 @@ export const DEFAULT_GMAIL_SERVE_PORT = 8788;
 export const DEFAULT_GMAIL_SERVE_PATH = "/gmail-pubsub";
 export const DEFAULT_GMAIL_MAX_BYTES = 20_000;
 export const DEFAULT_GMAIL_RENEW_MINUTES = 12 * 60;
+export const GMAIL_WATCH_PUSH_TOKEN_ENV = "OPENCLAW_GOG_WATCH_PUSH_TOKEN";
+export const GMAIL_WATCH_HOOK_TOKEN_ENV = "OPENCLAW_GOG_WATCH_HOOK_TOKEN";
+export const GMAIL_INSECURE_TOKEN_ARGS_WARNING =
+  "Legacy Gog puts BOTH the Gmail push token and the OpenClaw hook token in process arguments. " +
+  "Other local users may read them on hosts with permissive process visibility and use the hook token " +
+  "to send authenticated requests to OpenClaw hooks. Upgrade Gog instead when possible.";
+export type GmailTokenTransport = "env" | "legacy-argv";
 const DEFAULT_HOOKS_PATH = "/hooks";
 // OpenClaw handles inbound mail; override gog's narrower SPAM,TRASH default.
 const GMAIL_WATCH_EXCLUDED_LABELS = "SPAM,TRASH,DRAFT,SENT";
 const GMAIL_WATCH_SENSITIVE_FLAGS = new Set(["--token", "--hook-url", "--hook-token"]);
 let gogBin: string | undefined;
 
-export type GmailHookOverrides = Partial<Omit<GmailHookRuntimeConfig, "serve" | "tailscale">> & {
+export type GmailHookOverrides = Partial<
+  Omit<GmailHookRuntimeConfig, "serve" | "tailscale" | "allowInsecureTokenArgs">
+> & {
   serveBind?: string;
   servePort?: number;
   servePath?: string;
@@ -44,6 +53,7 @@ export type GmailHookRuntimeConfig = {
   subscription: string;
   pushToken: string;
   hookToken: string;
+  allowInsecureTokenArgs: boolean;
   hookUrl: string;
   includeBody: boolean;
   maxBytes: number;
@@ -176,6 +186,7 @@ export function resolveGmailHookRuntimeConfig(
       subscription,
       pushToken,
       hookToken,
+      allowInsecureTokenArgs: gmail?.allowInsecureTokenArgs === true,
       hookUrl,
       includeBody,
       maxBytes,
@@ -210,7 +221,10 @@ export function buildGogWatchStartArgs(
   ];
 }
 
-export function buildGogWatchServeArgs(cfg: GmailHookRuntimeConfig): string[] {
+export function buildGogWatchServeArgs(
+  cfg: GmailHookRuntimeConfig,
+  transport: GmailTokenTransport = "env",
+): string[] {
   const args = [
     "gmail",
     "watch",
@@ -223,12 +237,12 @@ export function buildGogWatchServeArgs(cfg: GmailHookRuntimeConfig): string[] {
     String(cfg.serve.port),
     "--path",
     cfg.serve.path,
-    "--token",
-    cfg.pushToken,
+    transport === "env" ? "--token-env" : "--token",
+    transport === "env" ? GMAIL_WATCH_PUSH_TOKEN_ENV : cfg.pushToken,
     "--hook-url",
     cfg.hookUrl,
-    "--hook-token",
-    cfg.hookToken,
+    transport === "env" ? "--hook-token-env" : "--hook-token",
+    transport === "env" ? GMAIL_WATCH_HOOK_TOKEN_ENV : cfg.hookToken,
   ];
   if (cfg.includeBody) {
     args.push("--include-body");
@@ -240,8 +254,11 @@ export function buildGogWatchServeArgs(cfg: GmailHookRuntimeConfig): string[] {
   return args;
 }
 
-export function buildGogWatchServeLogArgs(cfg: GmailHookRuntimeConfig): string[] {
-  return buildGogWatchServeArgs(cfg).filter(
+export function buildGogWatchServeLogArgs(
+  cfg: GmailHookRuntimeConfig,
+  transport: GmailTokenTransport = "env",
+): string[] {
+  return buildGogWatchServeArgs(cfg, transport).filter(
     (arg, index, args) =>
       !GMAIL_WATCH_SENSITIVE_FLAGS.has(arg) &&
       !GMAIL_WATCH_SENSITIVE_FLAGS.has(args[index - 1] ?? ""),

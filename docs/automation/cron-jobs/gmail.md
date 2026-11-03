@@ -18,7 +18,7 @@ Wire Gmail inbox triggers to OpenClaw through Google Pub/Sub and `gog gmail watc
 Not on Gmail? The [IMAP email trigger plugin](/automation/imap) watches an existing IMAP mailbox without Google PubSub or a public webhook.
 
 <Note>
-**Prerequisites:** `gcloud` CLI, `gog` (gogcli) authorized for the watched Gmail account, OpenClaw hooks enabled, an HTTPS push endpoint reachable by Pub/Sub (Tailscale Funnel in the recommended setup), and a working sandbox backend. The example below uses the default Docker backend; build its image first by following [Sandbox images and setup](/gateway/sandboxing#images-and-setup), or configure another supported backend.
+**Prerequisites:** `gcloud` CLI, `gog` (gogcli) authorized for the watched Gmail account with both `--token-env` and `--hook-token-env` support, OpenClaw hooks enabled, an HTTPS push endpoint reachable by Pub/Sub (Tailscale Funnel in the recommended setup), and a working sandbox backend. The example below uses the default Docker backend; build its image first by following [Sandbox images and setup](/gateway/sandboxing#images-and-setup), or configure another supported backend.
 </Note>
 
 ### Configure a restricted Gmail reader (recommended)
@@ -134,6 +134,12 @@ Check forwarding and completion separately. A watcher success only acknowledges 
 ### Gateway auto-start
 
 When `hooks.enabled=true` and `hooks.gmail.account` is set, the Gateway starts `gog gmail watch serve` on boot and auto-renews the watch. Set `OPENCLAW_SKIP_GMAIL_WATCHER=1` to opt out.
+
+Before exposure or watch registration, OpenClaw checks `gog --json --no-input schema gmail watch serve`. Supporting Gog receives tokens through child-only environment sources. Positively identified older Gog requires explicit `hooks.gmail.allowInsecureTokenArgs: true` for Gateway-managed startup; the Gateway never prompts. This exposes both tokens in process arguments and is reported by the existing dangerous-config warning/audit. A failed or inconclusive check leaves Gmail stopped even with permission enabled. The Gateway stays alive.
+
+Foreground runs can instead confirm a default-No, one-run warning in an interactive terminal. See [Gmail run compatibility and revocation](/cli/webhooks#webhooks-gmail-run). Supported Gog always uses the secure transport. Apply a config reload/restart after revoking durable permission; stop/restart foreground runs separately. Restart the watcher after upgrading Gog, or the whole Gateway when its resolved executable location changes. No supporting release version is assumed.
+
+A serve usage/configuration exit 2 without a Go crash or bind diagnostic stops Gmail renewal and restarts, without affecting sibling Gateway work. Correct the configuration or Gog installation and explicitly restart/reload. No serve failure triggers legacy fallback. A failed schema check also requires an explicit restart after correction.
 
 After sleep, an overdue renewal runs once instead of replaying missed intervals.
 Shutdown cancels and waits for any in-flight renewal before stopping the watcher.

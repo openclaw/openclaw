@@ -203,6 +203,7 @@ hook path.
 | `model`                      | agent/model defaults        | Templated model override.                                                                                                                         |
 | `thinking`                   | agent/model defaults        | Templated thinking override.                                                                                                                      |
 | `timeoutSeconds`             | agent timeout               | Positive integer turn timeout.                                                                                                                    |
+| `allowInsecureTokenArgs`     | `false`                     | Explicitly accept both tokens in process arguments for positively identified legacy Gog. Supporting Gog always uses child environment sources.    |
 | `allowUnsafeExternalContent` | `false`                     | Dangerous: disables agent external-content wrapping for this mapping. Gmail's global unsafe flag can also disable wrapping.                       |
 | `transform.module`           | unset                       | Safe relative JS/TS module under `transformsDir`; absolute, traversal, URL/drive forms, and symlink escapes are rejected.                         |
 | `transform.export`           | `default`, then `transform` | Named function export; an explicitly named export must exist.                                                                                     |
@@ -342,6 +343,7 @@ example and must be available to the reader. Gmail fields:
 | `tailscale.target`           | local watcher                | Optional port, `host:port`, or URL target. An explicit target preserves the configured serve path.                                                            |
 | `model`                      | agent/model defaults         | Gmail model default; an explicit mapping model overrides it. A disallowed Gmail default is ignored, while an invalid explicit run override fails preparation. |
 | `thinking`                   | agent/model defaults         | `"off"`, `"minimal"`, `"low"`, `"medium"`, or `"high"`; explicit mapping thinking takes precedence.                                                           |
+| `allowInsecureTokenArgs`     | `false`                      | Explicitly accept both tokens in process arguments for positively identified legacy Gog. Supporting Gog always uses child environment sources.                |
 | `allowUnsafeExternalContent` | `false`                      | Dangerous: disable email safety wrapping for Gmail agent turns. Leave off for untrusted inboxes.                                                              |
 
 Gmail-path mappings use a request-body allowance of
@@ -357,6 +359,8 @@ When `hooks.enabled: true` and `hooks.gmail.account` is set, the Gateway starts
 are available, and renews the watch. Set `OPENCLAW_SKIP_GMAIL_WATCHER=1` to opt out.
 Do not start a second foreground watcher on the same listener. Setup output can
 contain tokens; see the [CLI reference](/cli/webhooks).
+
+The watcher probes local Gog schema before exposure/registration. Supporting builds use `--token-env` and `--hook-token-env` automatically. A failed/inconclusive probe stops startup; it never authorizes legacy arguments. The Gateway never prompts. An interactive foreground run offers default-No, one-run consent only for positively identified older Gog. Durable permission requires `openclaw config set hooks.gmail.allowInsecureTokenArgs true`; it intentionally exposes both tokens to local users with process visibility and appears in the dangerous-config audit. Revoke with false/unset and apply normal config reload/restart; stop/restart foreground runs separately. After upgrading Gog, restart the watcher (or the Gateway if its resolved executable location changed). See [compatibility, failures, and token handling](/cli/webhooks#webhooks-gmail-run). A started watcher is not readiness or registration proof.
 
 A successful push or hook response is transport/admission evidence, not proof of
 completed email processing or delivery. Verify the restricted reader through
