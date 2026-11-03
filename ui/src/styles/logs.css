@@ -122,3 +122,192 @@ main.content:where(.content--logs-page) .content-header {
   min-height: 0;
   max-height: none;
 }
+
+/* Phone: search, filter and actions share one row; the stream owns the rest of the
+   page without a frame, and each row gives its message the full width. */
+@media (max-width: 640px) {
+  main.content.content--logs-page {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  main.content.content--logs-page > openclaw-router-outlet {
+    display: flex;
+    flex: 1 1 auto;
+    height: auto;
+    min-height: 0;
+  }
+
+  .content.content--logs-page openclaw-logs-page {
+    display: contents;
+  }
+
+  /* The description reads as the title's subtitle, with no gap held between them. */
+  main.content.content--logs-page .content-header + * {
+    margin-top: 0;
+  }
+
+  .content.content--logs-page .settings-workspace--fill-height,
+  .content.content--logs-page .settings-workspace--fill-height > .settings-workspace__body {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    height: auto;
+    min-height: 0;
+  }
+
+  /* Without the section heading there is nothing for the description to pull toward. */
+  .content.content--logs-page .settings-section__desc {
+    margin-top: 0;
+  }
+
+  .content.content--logs-page .settings-workspace--fill-height .logs-card {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    gap: var(--space-3);
+    min-height: 0;
+    margin-top: var(--space-3);
+    padding: 0;
+    overflow: visible;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+  }
+
+  .content.content--logs-page .settings-workspace--fill-height .log-stream {
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: none;
+    border: 0;
+    border-radius: 0;
+    background: none;
+  }
+
+  .log-row {
+    grid-template-columns: minmax(8ch, max-content) minmax(56px, max-content) minmax(0, 1fr);
+    gap: 4px var(--space-2);
+    align-items: center;
+    padding: var(--space-2) 0;
+  }
+
+  .log-subsystem {
+    display: block;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .log-time:empty,
+  .log-level:empty,
+  .log-subsystem:empty {
+    display: none;
+  }
+
+  .log-message {
+    grid-column: 1 / -1;
+  }
+}
+
+.logs-toolbar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.logs-toolbar__search {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.logs-toolbar__search-icon {
+  position: absolute;
+  top: 50%;
+  left: 12px;
+  display: flex;
+  width: 15px;
+  height: 15px;
+  color: var(--muted);
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.logs-toolbar__search-icon svg,
+.logs-toolbar__button svg {
+  width: 15px;
+  height: 15px;
+}
+
+.logs-toolbar__search input {
+  height: var(--logs-toolbar-height, 44px);
+  padding-left: 34px;
+}
+
+.logs-toolbar .logs-toolbar__button {
+  flex: 0 0 auto;
+  justify-content: center;
+  width: var(--logs-toolbar-height, 44px);
+  height: var(--logs-toolbar-height, 44px);
+  padding: 0;
+}
+
+/* The menu wraps its trigger in an inline label; center the icon, not its text line. */
+.logs-toolbar__button .oc-menu-item__label {
+  display: flex;
+  flex: 0 0 auto;
+}
+
+.logs-filter-popover {
+  --oc-popover-padding: 0;
+  --oc-overlay-max-width: min(280px, calc(100vw - 48px));
+}
+
+.logs-filter {
+  display: grid;
+  gap: var(--space-3);
+  width: min(280px, calc(100vw - 48px));
+  padding: var(--space-3);
+}
+
+.logs-filter__levels {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-1) var(--space-2);
+}
+
+.logs-filter-popover .logs-filter .log-chip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+.logs-filter .log-chip input {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+.logs-filter__follow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  font-size: var(--control-ui-text-sm);
+}
+
+.logs-filter__file {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}

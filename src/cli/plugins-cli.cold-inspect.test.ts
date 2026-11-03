@@ -88,6 +88,8 @@ it.each([false, true])("runtime inspect preserves activation (enabled=%s)", asyn
   const fixture = createFixture(enabled);
   const plugin = { id: pluginId, enabled, status: enabled ? "error" : "disabled" };
   expect(await runPluginsCommand(["inspect", pluginId, "--runtime"])).toMatchObject({
+    inspectionScope: "cli",
+    gatewayRuntime: null,
     plugin: { ...plugin, imported: enabled, cliBackendIds: [] },
     capabilities: [],
   });

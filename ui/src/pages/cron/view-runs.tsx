@@ -334,7 +334,7 @@ export function RunsSection(props: CronRunsSectionProps) {
         </div>
       </div>
       {props.runsState === "failed" ? (
-        <button class="btn btn--sm" onClick={() => props.onRefresh()}>
+        <button class="btn btn--sm" onClick={() => void props.onRefresh()}>
           {t("common.retry")}
         </button>
       ) : undefined}

@@ -77,6 +77,10 @@ Gateway lease directly in a read-only worker instead of copying the shared
 database. Fresh or unverifiable owners still prevent startup; Doctor's schema
 repair admission keeps its private snapshot on SQLite. PostgreSQL maintenance
 inspects the lease through an admitted state reader without a file snapshot.
+Synchronous CLI startup diagnostics also read the current lease directly when
+the exact SQLite database has a verified live owner. This bounded read does not
+copy the database; artifact-preserving inspection and Doctor's schema repair
+admission still use private snapshots.
 
 Borrowed worker transactions obtain their initial host grant before `BEGIN
 IMMEDIATE`; writes with domain or publication facts still revalidate those facts
@@ -513,6 +517,27 @@ reader job. Open the page that matches your task and stay there.
 | [Agent schema history](/reference/database-schemas/agent-schema-history)                       | Per-agent database schema versions, their changes, and their first releases.                             |
 | [State schema history](/reference/database-schemas/state-schema-history)                       | Shared state database schema versions, their changes, and their first releases.                          |
 | [Integrity, troubleshooting, and recovery](/reference/database-schemas/integrity-and-recovery) | Integrity checks, common database errors, and the supported downgrade recovery path.                     |
+
+## Selective session dependency recovery
+
+Use `openclaw database restore-session-dependencies --input <directory> --sha256 <request-sha256>` only while the Gateway is stopped. The command acquires exclusive local state custody and refuses a serving owner. It repairs an existing session's selected skill revision and repository checkpoint without restoring the full database.
+
+The private input directory contains:
+
+- `request.json`: version 1, `sourceSha256`, current canonical `profileId`, `agentId`, `sessionKey`, exact `sessionId`, `skillId`, `skillRevision`, and `workspaceId`.
+- `shared.sqlite`: a closed single-file current-schema capture; no WAL, SHM, or journal companions.
+- `skill-revision/`: the selected immutable library tree, including `SKILL.md`.
+- `workspace.git/`: the selected checkpoint store with its original `refs/openclaw/worker-results/...` ref.
+
+The request checksum selects the request bytes; its source checksum selects the database capture. Skill and checkpoint content must match their recorded content hashes. Existing session IDs and dependency pins must still match. The current profile catalog must already resolve the historical skill owner to the selected canonical profile: the command never imports identities or merges profiles from history.
+
+This command accepts profile-owned, nonremoved skill entries. Team-owned skills, removed entries, and historical fork formats are not silently converted. Mirrored recovery restores checkpoint contents, not optional GitHub publication companion metadata.
+
+For a retained repository, add `retained: { "expectedSha256": "<sha256>" }` to the sealed request and include `expected.sqlite`: a closed current-schema capture of the destination taken while offline. Both images must use the current state schema. The expected image selects complete current environment, placement, and workspace records (or their absence); changed live records refuse repair. The source must have no unfinished workspace result, placement move, or running session tool operation. Its profile must match current configuration.
+
+Retained repair restores exact resource custody, not execution authority. It keeps the original disk receipt and workspace epoch, advances the placement generation, clears turn claims and worker credentials, and sets retained runtime readiness to false. It never recreates node pairing, roles, or grants. Ordinary explicit wake must revalidate the provider receipt, current paired node, and current runtime. A disk-only source may have no checkpoint artifact; it never falls back to a stale mirrored checkpoint. A successful retained repair changes the expected records, so inspect and seal a new destination image before another repair.
+
+Missing skills return as private, disabled entries. Existing permissions, current revisions, credentials, roles, and defaults are never restored or overwritten. Current profile and skill ownership are rechecked before artifact publication and inside the database transaction; a foreign or reassigned owner is refused without publishing new artifacts. Immutable artifacts publish before database pointers; a later database conflict may leave verified, unreachable artifacts, so the same request can be retried. Conflicting rows or checkpoint stores are refused rather than replaced. No setup script or worker is executed.
 
 ## Related
 

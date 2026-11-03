@@ -4,17 +4,12 @@ import {
   ErrorCodes,
   type ErrorShape,
   errorShape,
-  missingScopeErrorShape,
   normalizeSessionColorValue,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
-import {
-  resolveDefaultModelForAgent,
-  resolveSubagentConfiguredModelSelection,
-} from "../agents/model-selection.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE } from "../auto-reply/reply/session-fork.js";
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions.js";
@@ -36,7 +31,6 @@ import {
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   isIncognitoSessionKey,
-  isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
@@ -44,7 +38,6 @@ import {
 import {
   AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
   isAgentHarnessSessionKey,
-  isAgentHarnessSessionKeyOwnedBy,
 } from "../sessions/agent-harness-session-key.js";
 import { isModelSelectionLocked } from "../sessions/model-overrides.js";
 import {
@@ -54,7 +47,6 @@ import {
 import { recordSessionCreated } from "../sessions/session-created.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "./operator-role-policy.js";
-import { ADMIN_SCOPE } from "./operator-scopes.js";
 import {
   prepareSessionCreateFilesystemRoot,
   prepareSessionForkFilesystemRoot,
@@ -66,7 +58,8 @@ import {
 import { completeGatewaySessionCreation } from "./session-create-completion.js";
 import {
   buildSessionCreateSettingsPatch,
-  existingSessionSelectionWouldChange,
+  prepareSessionCreatePermissionSelection,
+  validateExistingSessionCreateSelection,
   sessionCreatePolicyAdoptionError,
 } from "./session-create-existing-selection.js";
 import { prepareGatewaySessionFork } from "./session-create-fork.js";
@@ -78,6 +71,7 @@ import {
   resolveSessionCreateSpawnPolicy,
 } from "./session-create-inheritance.js";
 import {
+  resolveSessionCreateTrustedOwners,
   validateFreshSessionConstraints,
   withInitialAssistantTranscript,
 } from "./session-create-initial-assistant.js";
@@ -147,6 +141,7 @@ async function createGatewaySessionInScope(
   let assertPreparedTargetCurrent: (() => void) | undefined;
   let creationOperation: SessionEntryCreationOperation | undefined;
   let createdTargetCommitted = false;
+  let assertPermissionDefaultCurrent: (() => void) | undefined;
   let bindPreparedCreation: SessionEntryCreateWithTranscriptOptions["bindCreation"];
   const modelInputError = resolveSessionCreateModelInputError(params);
   if (modelInputError) {
@@ -164,6 +159,9 @@ async function createGatewaySessionInScope(
   });
   const commitGuard = () => {
     assertCreationCurrent?.();
+    if (!createdTargetCommitted) {
+      assertPermissionDefaultCurrent?.();
+    }
     // Creation restrictions end at commit; a later policy change cannot block this chat's turn.
     const error = !createdTargetCommitted && validateVisibility?.();
     if (error) {
@@ -213,17 +211,9 @@ async function createGatewaySessionInScope(
     return invalidSessionRequest("catalog sessions require a generated dashboard key");
   }
 
-  const authorizedHarnessCreation = Boolean(
-    explicitTargetKey &&
-    params.initialEntry &&
-    normalizeOptionalAgentRuntimeId(params.authorizedAgentHarnessId) ===
-      normalizeOptionalAgentRuntimeId(params.initialEntry.agentHarnessId) &&
-    isAgentHarnessSessionKeyOwnedBy(explicitTargetKey, params.authorizedAgentHarnessId),
-  );
-  const authorizedPluginCreation = Boolean(
-    explicitTargetKey &&
-    params.initialEntry?.pluginOwnerId &&
-    params.authorizedPluginId === params.initialEntry.pluginOwnerId,
+  const { authorizedHarnessCreation, authorizedPluginCreation } = resolveSessionCreateTrustedOwners(
+    params,
+    explicitTargetKey,
   );
   if (params.initialEntry?.pluginOwnerId && !authorizedPluginCreation) {
     return invalidSessionRequest("trusted plugin session owner is not authorized");
@@ -524,6 +514,16 @@ async function createGatewaySessionInScope(
     if (!visibilityAdmission.ok) {
       return visibilityAdmission;
     }
+    const permission = prepareSessionCreatePermissionSelection(params, {
+      agentId: target.agentId,
+      existingEntry: currentTargetEntry,
+      creation,
+      operatorAuthority,
+    });
+    if (!permission.ok) {
+      return permission;
+    }
+    assertPermissionDefaultCurrent = permission.assertCurrent;
     // Delegated isolation survives changes to the creator's current role.
     const creationSandbox =
       creation?.sandbox ?? (creation ? resolveCreatorSandbox(params.cfg, creation) : undefined);
@@ -681,39 +681,13 @@ async function createGatewaySessionInScope(
         const requestedThinkingLevel = normalizeOptionalString(params.thinkingLevel);
         const requestedFastMode = params.fastMode;
         if (existingEntry?.sessionId && params.allowExistingModelSelection !== true) {
-          const gateDefaultModel = resolveDefaultModelForAgent({
-            cfg: params.cfg,
+          const selectionError = await validateExistingSessionCreateSelection(params, {
             agentId: target.agentId,
-          });
-          const sessionSelectionWouldChange = await existingSessionSelectionWouldChange({
-            agentId: target.agentId,
-            cfg: params.cfg,
-            catalogModel,
-            defaultModel: gateDefaultModel.model,
-            defaultProvider: gateDefaultModel.provider,
+            sessionKey: target.canonicalKey,
             existingEntry,
-            loadGatewayModelCatalogSnapshot: params.loadGatewayModelCatalogSnapshot,
-            requestedModel,
-            requestedAgentRuntime: params.agentRuntime,
-            requestedContextWindow,
-            requestedCyberAccessProgram: params.cyberAccessProgram,
-            requestedFastMode,
-            requestedThinkingLevel,
-            subagentModelHint: isSubagentSessionKey(target.canonicalKey)
-              ? resolveSubagentConfiguredModelSelection({
-                  cfg: params.cfg,
-                  agentId: target.agentId,
-                })
-              : undefined,
           });
-          if (sessionSelectionWouldChange) {
-            return {
-              ok: false,
-              error: missingScopeErrorShape({
-                missingScope: ADMIN_SCOPE,
-                requiredScopes: [ADMIN_SCOPE],
-              }),
-            };
+          if (selectionError) {
+            return { ok: false, error: selectionError };
           }
         }
         const patched = await projectSessionsPatchEntry({
@@ -724,14 +698,17 @@ async function createGatewaySessionInScope(
           agentId: target.agentId,
           preparedSessionRoot: sessionRoot,
           preparedAgentRuntime: catalogAgentRuntime,
-          patch: buildSessionCreateSettingsPatch(params, {
-            key: target.canonicalKey,
-            label,
-            model: catalogModel ?? requestedModel,
-            contextWindow: requestedContextWindow,
-            thinkingLevel: requestedThinkingLevel,
-            fastMode: requestedFastMode,
-          }),
+          patch: buildSessionCreateSettingsPatch(
+            { ...params, permissionMode: permission.mode },
+            {
+              key: target.canonicalKey,
+              label,
+              model: catalogModel ?? requestedModel,
+              contextWindow: requestedContextWindow,
+              thinkingLevel: requestedThinkingLevel,
+              fastMode: requestedFastMode,
+            },
+          ),
           loadGatewayModelCatalogSnapshot: loadModelCatalog
             ? async () => {
                 preparedModelCatalog = await loadModelCatalog();
@@ -971,6 +948,7 @@ async function createGatewaySessionInScope(
       },
       {
         onPhase,
+        creationOperation: params.creationOperation,
         label,
         ...(params.initialEntry
           ? {

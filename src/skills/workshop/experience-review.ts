@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { prepareSessionFork, runSessionFork } from "../../agents/session-fork-run.js";
+import {
+  prepareSessionFork,
+  readSessionForkTurn,
+  runSessionFork,
+} from "../../agents/session-fork-run.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -10,7 +14,7 @@ import { resolveSkillWorkshopConfig } from "./config.js";
 import { buildSkillExperienceReviewPrompt } from "./experience-review-prompt.js";
 import type { ExperienceReviewCandidate } from "./experience-review-scheduler.js";
 import { listWorkshopChanges } from "./library.js";
-import { assertSkillReviewRunSucceeded, postWorkshopChangeNotice } from "./review-outcome.js";
+import { postWorkshopChangeNotice } from "./review-outcome.js";
 import { workshopReviewRunId } from "./review-undo.js";
 
 const REVIEW_TOOLS = ["skill_workshop"] as const;
@@ -27,17 +31,38 @@ export async function prepareSkillExperienceReviewCandidate(
   ) {
     return undefined;
   }
+  // The same host-owned turn facts a plugin fork uses: the anchored turn's requester and model.
+  const turn = await readSessionForkTurn(candidate.source);
+  if (!turn) {
+    // Without the turn's own requester, sender-specific policy cannot be checked.
+    return undefined;
+  }
+  const model = turn.model ?? {
+    provider: candidate.ctx.modelProviderId,
+    model: candidate.ctx.modelId,
+  };
   const fork = await prepareSessionFork({
     config,
     source: candidate.source,
     tools: REVIEW_TOOLS,
-    model: { provider: candidate.ctx.modelProviderId, model: candidate.ctx.modelId },
+    model,
     workspaceDir: candidate.ctx.workspaceDir,
-    ...(candidate.ctx.requester ? { requester: candidate.ctx.requester } : {}),
+    ...(turn.requester ? { requester: turn.requester } : {}),
   });
-  return fork
-    ? { ...candidate, ctx: { ...candidate.ctx, workspaceDir: fork.workspaceDir }, config }
-    : undefined;
+  if (!fork) {
+    return undefined;
+  }
+  return {
+    ...candidate,
+    ctx: {
+      ...candidate.ctx,
+      workspaceDir: fork.workspaceDir,
+      modelProviderId: model.provider,
+      modelId: model.model,
+    },
+    ...(turn.requester ? { requester: turn.requester } : {}),
+    config,
+  };
 }
 
 export async function runSkillExperienceReview(
@@ -69,7 +94,7 @@ export async function runSkillExperienceReview(
         ...(candidate.ctx.authProfileId ? { authProfileId: candidate.ctx.authProfileId } : {}),
       },
       workspaceDir: candidate.ctx.workspaceDir,
-      ...(candidate.ctx.requester ? { requester: candidate.ctx.requester } : {}),
+      ...(candidate.requester ? { requester: candidate.requester } : {}),
       timeoutMs: resolveAgentTimeoutMs({ cfg: config }),
       ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
       assertCallerCurrent: () => {
@@ -88,14 +113,7 @@ export async function runSkillExperienceReview(
       },
     },
     async (outcome) => {
-      let reviewFailure: unknown = outcome.ok ? undefined : outcome.error;
-      if (outcome.ok) {
-        try {
-          assertSkillReviewRunSucceeded(outcome.result);
-        } catch (error) {
-          reviewFailure = error;
-        }
-      }
+      const reviewFailure: unknown = outcome.ok ? undefined : outcome.error;
       // Each skill_workshop call commits on its own, so a failed or aborted run may have changed
       // skills. Cleanup always runs after the stop, and its independent failure must stay visible
       // to the scheduler instead of being classified as part of the cancellation.
@@ -118,7 +136,7 @@ export async function runSkillExperienceReview(
               "Skill experience review and its cleanup failed",
             );
       }
-      if (reviewFailure !== undefined) {
+      if (!outcome.ok) {
         if (options.abortSignal?.aborted || getGatewayRestartDrainSignal().aborted) {
           // The model aborts with a plain error; normalize the outcome so the scheduler reports
           // an expected cancellation rather than a review failure.
@@ -126,9 +144,9 @@ export async function runSkillExperienceReview(
             name: "AbortError",
           });
         }
-        throw reviewFailure instanceof Error
-          ? reviewFailure
-          : new Error(formatErrorMessage(reviewFailure));
+        throw outcome.error instanceof Error
+          ? outcome.error
+          : new Error(formatErrorMessage(outcome.error));
       }
     },
   );

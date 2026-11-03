@@ -56,6 +56,7 @@ import {
   MATURITY_SCORECARD_WORKFLOW,
   SETUP_GO_V6,
   UPLOAD_ARTIFACT_V7,
+  acceptsWorkflowPaths,
   evaluateWorkflowCondition,
   evaluateWorkflow as evaluateWorkflowExpression,
   evaluateWorkflowRunner,
@@ -489,7 +490,7 @@ describe("release fast lane label", () => {
       .env.JOB_RESULTS.trim()
       .split("\n");
     for (const row of rows) {
-      const selected = row.slice(row.lastIndexOf("|") + 1);
+      const selected = expectDefined(row.match(/^[\w-]+=\$\{\{ .*? \}\}\|(.+)$/u)?.[1], row);
       expect(selected === "true" || selected.includes("needs.preflight.outputs."), row).toBe(true);
       expect(selected).not.toContain("release_fast_lane");
     }
@@ -497,7 +498,56 @@ describe("release fast lane label", () => {
 });
 
 describe("ci workflow guards", () => {
+  it("shares main screenshot input caches with restore-only store validation", () => {
+    const source = readCiWorkflow().jobs["ios-screenshot-capture"].steps;
+    const validation = readWorkflow(".github/workflows/ios-store-release.yml").jobs.screenshots
+      .steps;
+    for (const name of ["Restore Watch RTC build inputs", "Restore screenshot source packages"]) {
+      const producer = requiredWorkflowStep(source, name);
+      const consumer = requiredWorkflowStep(validation, name);
+      expect(consumer.uses).toBe(producer.uses);
+      expect(consumer.with).toEqual(producer.with);
+      expect(consumer["continue-on-error"]).toBe(true);
+      expect(consumer["timeout-minutes"]).toBe(3);
+    }
+    expect(requiredWorkflowStep(validation, "Identify iOS native cache inputs").run).toBe(
+      requiredWorkflowStep(source, "Identify iOS native cache inputs").run,
+    );
+    expect(
+      validation.some((step: WorkflowStep) => step.uses?.startsWith("actions/cache/save@")),
+    ).toBe(false);
+  });
+
   const ci = readCiWorkflow();
+  it("limits observation uploads to the sampled current-target CI cohort", () => {
+    const job = ci.jobs["checks-node-core-test-nondist-shard"];
+    const upload = requiredWorkflowStep(job.steps, "Upload adaptive CI observations");
+    const run = requiredWorkflowStep(job.steps, "Run Node test shard");
+    for (const [eventName, repository, frozen, runId, expected] of [
+      ["schedule", "openclaw/openclaw", "false", 101, true],
+      ["pull_request", "openclaw/openclaw", "false", 100, true],
+      ["pull_request", "openclaw/openclaw", "false", 101, false],
+      ["schedule", "openclaw/openclaw", "true", 100, false],
+      ["schedule", "example/fork", "false", 100, false],
+      ["push", "openclaw/openclaw", "false", 100, false],
+    ] as const) {
+      const context = {
+        eventName,
+        repository,
+        runId,
+        runAttempt: 1,
+        preflightOutputs: { frozen_target: frozen },
+      };
+      expect(evaluateWorkflowCondition(upload.if, context)).toBe(expected);
+      expect(
+        Boolean(evaluateWorkflowExpression(run.env.OPENCLAW_CI_TEST_OBSERVATIONS_DIR, context)),
+      ).toBe(expected);
+    }
+    expect(upload["continue-on-error"]).toBe(true);
+    expect(upload.with.path).toBe("${{ runner.temp }}/ci-test-observations/*/observations.json");
+    expect(upload.with["retention-days"]).toBe(7);
+  });
+
   function ciValue(
     job: string,
     property: "runs-on" | "timeout-minutes",
@@ -1185,11 +1235,14 @@ AFTER_CD
     }
   });
 
-  it.skipIf(process.platform === "win32").each(["src/config/schema.help.runtime.ts"])(
-    "keeps native publication independent of Control UI schema changes: %s",
+  it
+    .skipIf(process.platform === "win32")
+    .each(["src/config/schema.help.runtime.ts", "src/shared/fnv1a.ts"])(
+    "keeps native publication independent of Control UI generator changes: %s",
     (sourcePath) => {
       const nativeWorkflow = readWorkflow(NATIVE_APP_LOCALE_REFRESH_WORKFLOW);
       const controlUiWorkflow = readWorkflow(CONTROL_UI_LOCALE_REFRESH_WORKFLOW);
+      expect(acceptsWorkflowPaths(controlUiWorkflow.on.push.paths, [sourcePath])).toBe(true);
       const results = [nativeWorkflow, controlUiWorkflow].map((workflow) => {
         const publisher = expectDefined(
           workflow.jobs.finalize.steps.find(
@@ -3759,54 +3812,16 @@ server.listen(0, "127.0.0.1", () => {
     expect(existsSync(boundaryReceipt)).toBe(true);
   });
 
-  it("keeps the Gradle sticky disk on O(1) per-task protected keys", () => {
-    const workflow = readCiWorkflow();
-    const androidSteps = workflow.jobs.android.steps as WorkflowStep[];
-    const mountWith = expectDefined(
-      androidSteps.find((step) => step.name === "Mount Gradle sticky disk")?.with,
-      "Gradle sticky mount step",
+  it("uses the Android toolchain cache without a provider-specific Gradle home", () => {
+    const androidSteps = readCiWorkflow().jobs.android.steps as WorkflowStep[];
+    const toolchain = requiredWorkflowStep(androidSteps, "Setup Android toolchain");
+    expect(toolchain.with?.["cache-mode"]).toBe(
+      "${{ needs.preflight.outputs.cache_write_allowed == 'true' && 'read-write' || needs.preflight.outputs.cache_mode }}",
     );
-    const pointStep = requiredWorkflowStep(androidSteps, "Point Gradle at the sticky disk");
-
-    // Task scope stays in the key (a light task like ktlint must never seed
-    // heavy build lanes), but PR number and dependency hash must not: those
-    // minted a backing disk per PR/bump until Blacksmith's installation-wide
-    // budget 429-failed every mount fleet-wide.
-    expect(mountWith.key).toBe("${{ github.repository }}-gradle-v2-${{ matrix.task }}");
-    expect(androidSteps.find((step) => step.name === "Mount Gradle sticky disk")?.if).toContain(
-      "vars.OPENCLAW_CI_RUNNER_BACKEND != 'github'",
+    expect(androidSteps.some((step) => step.uses?.startsWith("useblacksmith/stickydisk@"))).toBe(
+      false,
     );
-    expect(pointStep.if).toContain("vars.OPENCLAW_CI_RUNNER_BACKEND != 'github'");
-    // Single semantic writer: protected pushes commit explicitly (on-change's
-    // allocated-byte heuristic can miss a same-size refresh); PR clones stay read-only.
-    expect(mountWith.commit).toBe(
-      "${{ github.event_name != 'pull_request' && 'true' || 'false' }}",
-    );
-    // Gradle owns invalidation and expiry; dependency updates must retain reusable entries.
-    const stickyRoot = tempDirs.make("openclaw-gradle-sticky-");
-    const gradleHome = path.join(stickyRoot, "gradle-user-home");
-    const cachedDependency = path.join(gradleHome, "caches", "dependency.jar");
-    const githubEnv = path.join(stickyRoot, "github-env");
-    mkdirSync(path.dirname(cachedDependency), { recursive: true });
-    writeFileSync(cachedDependency, "cached dependency");
-    writeFileSync(path.join(stickyRoot, ".openclaw-gradle-deps-fingerprint"), "old-inputs\n");
-    const result = runWorkflowShellScript(
-      expectDefined(pointStep.run, "Gradle sticky home").replace(
-        "sticky_root=/var/tmp/openclaw-gradle",
-        `sticky_root=${quoteShell(stickyRoot)}`,
-      ),
-      {
-        env: {
-          ...process.env,
-          GITHUB_ENV: githubEnv,
-          GRADLE_DEPS_FINGERPRINT: "new-inputs",
-          STICKY_WRITER: "true",
-        },
-      },
-    );
-    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
-    expect(readFileSync(cachedDependency, "utf8")).toBe("cached dependency");
-    expect(readFileSync(githubEnv, "utf8")).toBe(`GRADLE_USER_HOME=${gradleHome}\n`);
+    expect(androidSteps.some((step) => step.run?.includes("GRADLE_USER_HOME="))).toBe(false);
   });
 
   function readStickyDisks() {

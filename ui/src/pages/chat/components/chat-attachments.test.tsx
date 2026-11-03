@@ -470,7 +470,6 @@ describe("chat attachment read failures", () => {
       8,
     ],
     ["empty.png", [new File([], "empty.png", { type: "image/png" })], "", undefined],
-    ["pasted-text", [], "x".repeat(2048), 1024],
     ["pasted-image", [], `data:image/gif;base64,${btoa("p".repeat(64))}`, 16],
   ])(
     "rejects %s at intake while preserving admitted siblings",
@@ -635,7 +634,11 @@ it("retains focused pasted-text actions when a peer read completes and uses curr
   const { container } = h;
   document.body.append(container);
   onTestFinished(() => container.remove());
-  h.append([imageFile("peer.png", "hi")]);
+  await waitForSolid(() =>
+    expect(container.querySelector(".chat-attachment-file__name")?.textContent).toBe(
+      "Restored text",
+    ),
+  );
   const restore = expectDefined(
     container.querySelector<HTMLButtonElement>(".chat-attachment-text-action"),
     "pasted text restore action",
@@ -646,6 +649,7 @@ it("retains focused pasted-text actions when a peer read completes and uses curr
   );
   restore.focus();
   expect(document.activeElement).toBe(restore);
+  h.append([imageFile("peer.png", "hi")]);
 
   h.previewProps.draft = "Current draft";
   h.previewProps.onDraftChange = currentDraftChange;

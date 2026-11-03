@@ -1,4 +1,5 @@
 import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
+import { sql } from "kysely";
 import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
 import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
 import type { SqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
@@ -10,11 +11,16 @@ import {
   assertCanonicalSqliteSessionKeysCurrent,
   readWithCanonicalSessionAdmission,
 } from "../config/sessions/session-canonical-key.js";
+import { transcriptEventReadBytesSql } from "../config/sessions/session-transcript-read-bytes.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import { SessionMetadataUnavailableError } from "../state/session-metadata-unavailable-error.js";
 import { chunkItems } from "../utils/chunk-items.js";
-import { executeSqliteQuerySync } from "./kysely-sync.js";
+import {
+  createSqliteQueryCache,
+  executeSqliteQuerySync,
+  prepareSqliteQueryTakeFirstSync,
+} from "./kysely-sync.js";
 import { LruCache } from "./lru-cache.js";
 import type { SessionCostUsageRollupRow } from "./session-cost-usage-cache.kernel.js";
 import {
@@ -32,7 +38,7 @@ import type {
 } from "./session-cost-usage-worker.types.js";
 import { readSqliteDatabaseScopedWriteTokenForPath } from "./sqlite-database-admission.js";
 
-type TranscriptStats = SessionTranscriptStats & { generation?: string | null; cold?: boolean };
+type TranscriptStats = SessionTranscriptStats & { generation: string | null; cold: boolean };
 type RollupInput = {
   row: SessionCostUsageRollupRow;
   /** `quarterDates` lists partitions whose report quarter row is current. */
@@ -55,6 +61,53 @@ const rollups = new LruCache<{ receipt: string; value: RollupInput }>(64, {
       0,
     ) ?? 0),
 });
+
+// Observe generation, storage and suffix in one statement. A rewrite recounts;
+// an append reuses the rollup's recorded prefix without rebuilding the SQL AST.
+const appendedTranscriptStats = createSqliteQueryCache((database) =>
+  prepareSqliteQueryTakeFirstSync<
+    { sessionId: string; afterSeq: number },
+    {
+      count: number;
+      maxSeq: number | null;
+      bytes: number;
+      generation: string | null;
+      cold: string | null;
+      mtimeMs: number | null;
+    }
+  >(database, (parameter) => {
+    const sessionId = parameter((input) => input.sessionId);
+    return getSessionKysely(database)
+      .selectFrom("transcript_events")
+      .select((eb) => [
+        eb.fn.countAll<number>().as("count"),
+        eb.fn.max<number>("seq").as("maxSeq"),
+        // kysely-allow-raw: recorded bytes plus JSONL separators for appended rows.
+        sql<number>`COALESCE(SUM(${transcriptEventReadBytesSql()} + 1), 0)`.as("bytes"),
+        eb
+          .selectFrom("transcript_rewrite_watermarks")
+          .select("generation")
+          .where("session_id", "=", sessionId)
+          .as("generation"),
+        eb
+          .selectFrom("session_transcript_cold_archives")
+          .select("session_id")
+          .where("session_id", "=", sessionId)
+          .as("cold"),
+        eb
+          .selectFrom("session_windows")
+          .select("transcript_updated_at")
+          .where("session_id", "=", sessionId)
+          .as("mtimeMs"),
+      ])
+      .where("session_id", "=", sessionId)
+      .where(
+        "seq",
+        ">",
+        parameter((input) => input.afterSeq),
+      );
+  }),
+);
 
 export function usageRefreshInputs(databasePath: string) {
   const key = (id: string) => JSON.stringify([databasePath, id]);
@@ -168,17 +221,49 @@ export function createUsageCostCollectionAccess(params: {
         groups.set(key, group);
       }
       for (const group of groups.values()) {
-        const marker = group[0]!.marker;
-        const database = target(marker.agentId, marker.storePath);
-        const loadedStats = await readStore(marker.agentId, marker.storePath, () => {
+        const firstMarker = group[0]!.marker;
+        const database = target(firstMarker.agentId, firstMarker.storePath);
+        const loadedStats = await readStore(firstMarker.agentId, firstMarker.storePath, () => {
           try {
             const read = withOpenClawAgentDatabaseReadOnly(
-              (opened) =>
-                readTranscriptStatsBatchFromDatabase(
-                  opened,
-                  group.map((item) => item.marker.sessionId),
-                  { includeGeneration: true },
-                ),
+              (opened) => {
+                const stats = new Map<string, TranscriptStats>();
+                for (const { marker, index } of group) {
+                  const checkpoint = checkpoints[index];
+                  if (!checkpoint?.eventCount || mutations[index]?.cold) {
+                    continue;
+                  }
+                  const row = appendedTranscriptStats(opened.db)({
+                    sessionId: marker.sessionId,
+                    afterSeq: checkpoint.maxSeq,
+                  })!;
+                  if (
+                    row.cold !== null ||
+                    row.generation !== (checkpoint.generation ?? null) ||
+                    row.mtimeMs === null
+                  ) {
+                    continue;
+                  }
+                  stats.set(marker.sessionId, {
+                    eventCount: checkpoint.eventCount + row.count,
+                    maxSeq: row.maxSeq ?? checkpoint.maxSeq,
+                    sizeBytes: checkpoint.size + row.bytes,
+                    lastMutationAtMs: row.mtimeMs,
+                    generation: row.generation,
+                    cold: false,
+                  });
+                }
+                const missing = group.filter(({ marker }) => !stats.has(marker.sessionId));
+                if (missing.length > 0) {
+                  const full = readTranscriptStatsBatchFromDatabase(
+                    opened,
+                    missing.map(({ marker }) => marker.sessionId),
+                    { includeGeneration: true },
+                  );
+                  missing.forEach(({ marker }, index) => stats.set(marker.sessionId, full[index]!));
+                }
+                return group.map(({ marker }) => stats.get(marker.sessionId)!);
+              },
               { ...database, env },
             );
             if (!read.found) {

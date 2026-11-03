@@ -709,19 +709,21 @@ it.for([false, true])(
       events.push(kind);
     };
     // Keep the cleanup producer and projection gate real; model only container I/O.
-    vi.spyOn(docker, "ensureSandboxContainer").mockResolvedValue({
-      containerName: entry.containerName,
-      containerId: "a".repeat(64),
-      configHash: "checkpoint-fixture-config",
-      mountPlan: {
-        binds: [],
-        protectedTargets: [],
-        skippedBinds: [],
-        readOnlyWorkspaceSkillMounts: [],
-        tmpfs: [],
-      },
-      currentConfig: true,
-    });
+    vi.spyOn(docker, "ensureSandboxContainer").mockImplementation(async (_params, build) =>
+      build({
+        containerName: entry.containerName,
+        containerId: "a".repeat(64),
+        configHash: "checkpoint-fixture-config",
+        mountPlan: {
+          binds: [],
+          protectedTargets: [],
+          skippedBinds: [],
+          readOnlyWorkspaceSkillMounts: [],
+          tmpfs: [],
+        },
+        currentConfig: true,
+      }),
+    );
     vi.spyOn(docker, "execContainerRaw").mockImplementation(async (_engine, args) => {
       if (runtimePaused) {
         return { code: 125, stdout: Buffer.alloc(0), stderr: Buffer.from("Container is paused") };
@@ -740,10 +742,7 @@ it.for([false, true])(
       agentWorkspaceDir: canonical,
     });
     const backend: SandboxBackendHandle = {
-      id: "docker",
-      runtimeId: entry.containerName,
-      runtimeLabel: entry.containerName,
-      workdir: "/workspace",
+      ...container,
       prepareProcessCleanup: container.prepareProcessCleanup!.bind(container),
       buildExecSpec: async () => {
         dispatch("exec");
