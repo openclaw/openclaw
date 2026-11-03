@@ -5,13 +5,6 @@ import {
   createInboundDecisionParams,
   type InboundDecisionParams,
 } from "./inbound-decision.test-support.js";
-const readChannelAllowFromStoreMock = vi.hoisted(() => vi.fn());
-
-vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
-  return { ...actual, readChannelAllowFromStore: readChannelAllowFromStoreMock };
-});
-
 type InboundProcessingModule = typeof import("./inbound-processing.js");
 
 type ReplyCacheModule = typeof import("../monitor-reply-cache.js");
