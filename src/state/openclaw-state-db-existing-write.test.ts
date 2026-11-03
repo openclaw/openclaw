@@ -379,3 +379,32 @@ it("rechecks current environment for each retained write", () => {
   });
   expect(readValues(options.path)).toEqual(["authorized", "readmitted"]);
 });
+
+it("borrows the maintenance connection without closing it or changing its FK policy", () => {
+  const options = fixture();
+  maintenance.withStateDatabaseSchemaMaintenance({ databasePath: options.path }, () => {
+    using db = openNodeSqliteDatabase(options.path, { enableForeignKeyConstraints: false });
+    maintenance.withStateDatabaseSchemaConnection(options.path, db, () => {
+      const writer = openWriter(options);
+      expect(readRow(db, "PRAGMA foreign_keys")?.foreign_keys).toBe(0);
+      writer.run(({ db: borrowed }) => {
+        expect(borrowed).toBe(db);
+        expect(readRow(db, "PRAGMA foreign_keys")?.foreign_keys).toBe(1);
+        insert(borrowed, 1, "borrowed");
+      }, options);
+      expect(readRow(db, "PRAGMA foreign_keys")?.foreign_keys).toBe(0);
+      expect(() =>
+        writer.run(() => {
+          throw new Error("borrowed write failed");
+        }, options),
+      ).toThrow("borrowed write failed");
+      expect(readRow(db, "PRAGMA foreign_keys")?.foreign_keys).toBe(0);
+      writer.close();
+      writer.close();
+      expect(db.isOpen).toBe(true);
+      expect(readRow(db, "PRAGMA foreign_keys")?.foreign_keys).toBe(0);
+    });
+    expect(maintenance.getStateDatabaseSchemaConnection(options.path)).toBeUndefined();
+  });
+  expect(readValues(options.path)).toEqual(["borrowed"]);
+});

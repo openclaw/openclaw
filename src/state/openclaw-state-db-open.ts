@@ -40,6 +40,7 @@ import {
   getSqliteWorkerExistingDatabaseIdentity,
 } from "../infra/sqlite-worker-state-context.js";
 import {
+  takeStateDatabaseSchemaConnection,
   withStateDatabaseSchemaMaintenance,
   withStateDatabaseSchemaMaintenanceAsync,
 } from "../infra/state-database-maintenance.js";
@@ -257,10 +258,12 @@ function* openNativeStateDatabase(
     }
   };
   // Observing an existing generation never authorizes recreating it after a reset.
-  const db = openTrackedStateDatabase(params.pathname, {
-    existingOnly: original !== undefined,
-    expectedIdentity: original ? `file:${original.dev}:${original.ino}` : undefined,
-  });
+  const db =
+    takeStateDatabaseSchemaConnection(params.pathname) ??
+    openTrackedStateDatabase(params.pathname, {
+      existingOnly: original !== undefined,
+      expectedIdentity: original ? `file:${original.dev}:${original.ino}` : undefined,
+    });
   let walMaintenance: SqliteWalMaintenance | undefined;
   let selected: EngineConnection = db;
   let sqlite: OpenClawStateDatabase | undefined;

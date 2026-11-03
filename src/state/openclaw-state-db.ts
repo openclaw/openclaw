@@ -31,6 +31,7 @@ import {
   type SqliteTransactionOptions,
 } from "../infra/sqlite-transaction.js";
 import {
+  getStateDatabaseSchemaConnection,
   StateSchemaMutationConflictError,
   withStateDatabaseSchemaMaintenance,
   withStateDatabaseSchemaMaintenanceAsync,
@@ -173,10 +174,7 @@ export async function prepareOpenClawStateDatabaseSchema(
     legacyCronDefaultStoreKey?: string;
   } = {},
   mode: "automatic" | "doctor-preparation" | "doctor" = "automatic",
-): Promise<{
-  changes: string[];
-  warnings: string[];
-}> {
+): Promise<StateSchemaRepairResult> {
   if (isStatePostgres()) {
     await openOpenClawStateDatabaseForDoctor(options);
     return { changes: [], warnings: [] };
@@ -197,27 +195,30 @@ export async function prepareOpenClawStateDatabaseSchema(
       ? { openStateSchemaReadAdmission: openDoctorStateSchemaReadAdmission }
       : {}),
   });
-  let repairStarted = false;
+  const shared = getStateDatabaseSchemaConnection(pathname);
+  const ownsSharedConnection = () =>
+    shared !== undefined && stateDbCache.peekOpenClawStateDatabaseConnection(pathname) === shared;
+  let needsRepair = mode === "doctor";
+  if (mode === "doctor-preparation") {
+    try {
+      stateDbCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
+    } catch {
+      // The full repair must clear quarantine before dependent readers can proceed.
+      needsRepair = true;
+    }
+  }
+  if (
+    !needsRepair &&
+    !(await needsOpenClawStateDatabaseSchemaRepair(pathname, scope, options.integrityCheck))
+  ) {
+    return { changes: [], warnings: [] };
+  }
   try {
-    let needsRepair = mode === "doctor";
-    if (mode === "doctor-preparation") {
-      try {
-        stateDbCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
-      } catch {
-        // The full repair must clear quarantine before dependent readers can proceed.
-        needsRepair = true;
-      }
+    // Independent writers retire before private repair. A nested repair borrows
+    // its exact canonical native owner instead of retiring and reopening it.
+    if (!ownsSharedConnection()) {
+      await closeOpenClawStateDatabaseByPathAsync(pathname);
     }
-    if (
-      !needsRepair &&
-      !(await needsOpenClawStateDatabaseSchemaRepair(pathname, scope, options.integrityCheck))
-    ) {
-      return { changes: [], warnings: [] };
-    }
-    repairStarted = true;
-    // Retire prior writers and publish their native-close receipts before the
-    // private repair handle validates its source and acquires exclusive custody.
-    await closeOpenClawStateDatabaseByPathAsync(pathname);
     const repairArgs: Parameters<typeof repairStateSchema> = [
       pathname,
       env,
@@ -233,8 +234,7 @@ export async function prepareOpenClawStateDatabaseSchema(
           repairStateSchemaAsync(...repairArgs),
         );
   } finally {
-    // Readiness checks borrow the live generation; only admitted repair retires it.
-    if (repairStarted) {
+    if (!ownsSharedConnection()) {
       await closeOpenClawStateDatabaseByPathAsync(pathname);
     }
   }

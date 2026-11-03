@@ -28,6 +28,7 @@ import { assertSqliteSchemaTablesPresent } from "../infra/sqlite-schema-contract
 import { migrateSqliteSchemaToStrictInTransaction } from "../infra/sqlite-strict.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import {
+  getStateDatabaseSchemaConnection,
   withStateDatabaseSchemaMaintenance,
   withStateDatabaseSchemaMaintenanceAsync,
 } from "../infra/state-database-maintenance.js";
@@ -155,14 +156,16 @@ export function repairStateSchema(
   legacyCronDefaultStoreKey?: string,
 ) {
   assertOpenClawStateSchemaRepairAllowed(pathname);
-  // This private handle rebuilds referenced tables and is closed after repair.
-  const db = openNodeSqliteDatabase(pathname, { enableForeignKeyConstraints: false });
+  // Rebuilding referenced tables needs FK-off custody. A lender owns disposal;
+  // otherwise this repair opens and closes its own private handle.
+  const shared = getStateDatabaseSchemaConnection(pathname);
+  const db = shared ?? openNodeSqliteDatabase(pathname, { enableForeignKeyConstraints: false });
   try {
     return runUpdateSqliteMigration(db, pathname, () =>
       repairOpenedStateSchema(db, pathname, env, scope, integrityCheck, legacyCronDefaultStoreKey),
     );
   } finally {
-    if (db.isOpen) {
+    if (!shared && db.isOpen) {
       clearNodeSqliteKyselyCacheForDatabase(db);
       db.close();
     }
@@ -196,7 +199,8 @@ export async function repairStateSchemaAsync(
   const signal = resolveSqliteInspectionSignal(getAsyncWorkSignal());
   signal?.throwIfAborted();
   assertOpenClawStateSchemaRepairAllowed(pathname);
-  const db = openNodeSqliteDatabase(pathname, { enableForeignKeyConstraints: false });
+  const shared = getStateDatabaseSchemaConnection(pathname);
+  const db = shared ?? openNodeSqliteDatabase(pathname, { enableForeignKeyConstraints: false });
   const preparation: { credentialCustody?: ClientCredentialCustody | null } = {};
   const operation = repairOpenedStateSchemaSteps(
     db,
@@ -240,7 +244,7 @@ export async function repairStateSchemaAsync(
       try {
         preparation.credentialCustody?.close();
       } finally {
-        if (db.isOpen) {
+        if (!shared && db.isOpen) {
           clearNodeSqliteKyselyCacheForDatabase(db);
           db.close();
         }

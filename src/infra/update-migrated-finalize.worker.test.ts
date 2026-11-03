@@ -44,7 +44,7 @@ it.each([false, true])(
       vi.doUnmock("../flows/doctor-health.js");
     }
 
-    expect(fixture.stopService).not.toHaveBeenCalled();
+    expect(fixture.stopService).toHaveBeenCalledTimes(retirementOnly ? 1 : 0);
     if (retirementOnly) {
       expect(doctor).toHaveBeenCalledExactlyOnceWith(
         expect.anything(),
@@ -71,7 +71,6 @@ const fixture = vi.hoisted(() => ({
   terminal: vi.fn(),
   writeFile: vi.fn(),
   stopService: vi.fn(),
-  ownerLease: vi.fn(),
   recordStep: vi.fn(),
   recordLedgerStep: vi.fn(),
   adopt: vi.fn(),
@@ -126,7 +125,6 @@ vi.mock("../cli/update-cli/update-command-service-maintenance.js", () => ({
 vi.mock("../state/openclaw-state-db-doctor-schema.js", () => ({
   openDoctorStateSchemaReadAdmission: vi.fn(),
 }));
-vi.mock("./gateway-owner-lease.js", () => ({ readGatewayOwnerLease: fixture.ownerLease }));
 vi.mock("../cli/update-cli/update-command-terminal.js", () => ({
   withUpdateCommandTerminalResult: async (run: (registerRun: () => void) => Promise<unknown>) =>
     run(vi.fn()),
@@ -148,6 +146,20 @@ vi.mock("./postgres-sync/pool.js", () => ({
 }));
 vi.mock("./update-finalization-budget.js", () => ({
   resolveUpdateFinalizationTimeoutMs: fixture.budget,
+}));
+// Native capture and shared-handle ownership: update-command-predecessor-capture.test.ts.
+// mock-isolation: This executable-wiring suite must not acquire real maintenance ownership.
+vi.mock("./update-doctor-predecessor.js", () => ({
+  async withUpdateDoctorPredecessor(
+    ...[input, params, operation]: Parameters<
+      typeof import("./update-doctor-predecessor.js").withUpdateDoctorPredecessor
+    >
+  ) {
+    const { stopSupervisedPredecessorGateway } =
+      await import("./update-candidate-predecessor-stop.js");
+    await stopSupervisedPredecessorGateway(input, params);
+    return operation(undefined);
+  },
 }));
 vi.mock("./update-doctor-result.js", () => ({
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV: "OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH",
@@ -218,6 +230,7 @@ function expectResultFile(
 beforeEach(() => {
   vi.resetModules();
   vi.clearAllMocks();
+  fixture.stopService.mockResolvedValue({ stopped: false });
   stdout.length = 0;
   stderr.length = 0;
   loggingState.forceConsoleToStderr = false;
@@ -685,7 +698,6 @@ it("does not stop a supervised predecessor when the delegated Doctor deadline ex
     return true;
   });
   vi.spyOn(Date, "now").mockImplementation(() => wallNow);
-  fixture.ownerLease.mockReturnValue({ state: "live", mode: "supervised" });
   await runDoctorWorker(doctor, { serviceInspectionDeadlineAtMs: deadlineAtMs }, () => {
     wallNow -= 90_000;
     elapsedMs = 501;
@@ -699,20 +711,12 @@ it("does not stop a supervised predecessor when the delegated Doctor deadline ex
   expect(process.exitCode).toBe(1);
 });
 
-it.each([
-  ["supervised", "stopped"],
-  ["supervised", "port-bound"],
-  ["supervised", "uncertain"],
-  ["foreground", "stopped"],
-  [undefined, "stopped"],
-] as const)(
-  "delegated Doctor respects %s owner and stop=%s before maintenance",
-  async (mode, stop) => {
+it.each(["stopped", "port-bound", "uncertain"] as const)(
+  "delegated Doctor records predecessor stop=%s before maintenance",
+  async (stop) => {
     const uncertain = stop === "uncertain";
     vi.spyOn(Date, "now").mockReturnValue(1_000);
     vi.spyOn(performance, "now").mockReturnValue(0);
-    const owner = mode ? { state: "live", mode } : undefined;
-    const stops = mode === "supervised";
     const doctor = vi.fn();
     const databasePluginOwners = {
       fixture: {
@@ -722,7 +726,6 @@ it.each([
         origin: "bundled",
       },
     };
-    fixture.ownerLease.mockReturnValue(owner);
     fixture.recordStep.mockImplementation(async (runId: string, step: unknown) => ({
       runId,
       status: "running",
@@ -766,7 +769,7 @@ it.each([
         }),
       );
     }
-    if (stops) {
+    {
       expect(fixture.stopService).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
           root: "/synthetic",
@@ -787,8 +790,6 @@ it.each([
           doctor.mock.invocationCallOrder[0] ?? 0,
         );
       }
-    } else {
-      expect(fixture.stopService).not.toHaveBeenCalled();
     }
   },
 );

@@ -1,0 +1,3 @@
+# Real native v12 migration, delegated Doctor, rollback, stop receipt, and independent-writer regression coverage.
+# Includes 10 lines for per-operation borrowed foreign-key policy and restoration after failure.
+294

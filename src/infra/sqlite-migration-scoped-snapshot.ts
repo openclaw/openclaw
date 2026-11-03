@@ -15,7 +15,7 @@ import { createPrivateSqliteTempDirectory } from "./sqlite-private-directory.js"
 import { foldSqliteIdentifierCase, quoteSqliteIdentifier } from "./sqlite-schema-sql.js";
 import { publishVerifiedSqliteFile } from "./sqlite-snapshot.js";
 import type { PublishedSqliteFileGuard } from "./sqlite-snapshot.types.js";
-import { withSqliteForeignKeysDisabled } from "./sqlite-strict.js";
+import { withSqliteForeignKeys } from "./sqlite-strict.js";
 import {
   runSqliteImmediateTransactionSync,
   runSqliteReadSnapshotSync,
@@ -550,7 +550,7 @@ export function restoreScopedMigrationSnapshot(params: {
     try {
       requireAuthorizer(target);
       target.exec("PRAGMA trusted_schema = OFF;");
-      withSqliteForeignKeysDisabled(target, () =>
+      withSqliteForeignKeys(target, false, () =>
         runSqliteImmediateTransactionSync(target, () => {
           params.assertCurrent();
           const kinds = target.prepare("PRAGMA table_list").all();

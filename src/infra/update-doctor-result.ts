@@ -201,6 +201,7 @@ export type UpdateDoctorWriteAuthority = {
   commandAuthority?: import("./update-managed-command-custody.js").ManagedCommandProcessAuthority;
   postCoreSchemaRepair?: { runId: string; assertCurrent: () => void };
   databaseGenerations?: UpdateDatabaseGenerations;
+  databaseWriteCapture?: ReturnType<typeof createUpdateDoctorDatabaseWriteCapture>;
   databasePluginOwners?: import("./database-engine/port-descriptor.js").DatabasePortPluginOwners;
   originalRecoveryCapture?: {
     runId: string;
@@ -218,6 +219,7 @@ export function createUpdateDoctorDatabaseWriteCapture(
     signal: AbortSignal;
     assertCurrent?: () => void;
     warn: (message: string) => void;
+    beforeSettle?: () => void;
     pluginOwners?: import("./database-engine/port-descriptor.js").DatabasePortPluginOwners;
   },
 ) {
@@ -330,6 +332,7 @@ export function createUpdateDoctorDatabaseWriteCapture(
       }
     },
     async settle() {
+      options.beforeSettle?.();
       let generations: UpdateDatabaseGenerations | undefined;
       let observation: Awaited<ReturnType<typeof read>>;
       let cleanScans: ReturnType<typeof historicalScans.settle>;

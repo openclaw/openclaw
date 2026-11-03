@@ -317,13 +317,13 @@ function readForeignKeysEnabled(db: DatabaseSync): boolean {
   return Number(row?.foreign_keys ?? 0) === 1;
 }
 
-/** Temporarily relax foreign keys around synchronous staging work, outside a transaction. */
-export function withSqliteForeignKeysDisabled<T>(db: DatabaseSync, fn: () => T): T {
+/** Borrow a connection's foreign-key policy for synchronous work, outside a transaction. */
+export function withSqliteForeignKeys<T>(db: DatabaseSync, enabled: boolean, fn: () => T): T {
   if (db.isTransaction) {
     throw new Error("SQLite foreign-key enforcement cannot change inside a transaction");
   }
-  const enabled = readForeignKeysEnabled(db);
-  db.exec("PRAGMA foreign_keys = OFF;");
+  const previous = readForeignKeysEnabled(db);
+  db.exec(enabled ? "PRAGMA foreign_keys = ON;" : "PRAGMA foreign_keys = OFF;");
   try {
     const result = fn();
     if (isPromiseLike(result)) {
@@ -333,7 +333,7 @@ export function withSqliteForeignKeysDisabled<T>(db: DatabaseSync, fn: () => T):
     }
     return result;
   } finally {
-    db.exec(enabled ? "PRAGMA foreign_keys = ON;" : "PRAGMA foreign_keys = OFF;");
+    db.exec(previous ? "PRAGMA foreign_keys = ON;" : "PRAGMA foreign_keys = OFF;");
   }
 }
 
@@ -485,12 +485,8 @@ export function migrateSqliteSchemaToStrict(
   if (db.isTransaction) {
     throw new Error("SQLite STRICT schema migration cannot start inside a transaction");
   }
-  const foreignKeysWereEnabled = readForeignKeysEnabled(db);
-  if (foreignKeysWereEnabled) {
-    db.exec("PRAGMA foreign_keys = OFF;");
-  }
-  try {
-    return runSqliteImmediateTransactionSync(
+  return withSqliteForeignKeys(db, false, () =>
+    runSqliteImmediateTransactionSync(
       db,
       () => migrateSqliteSchemaToStrictInTransaction(db, schemaSql, options),
       {
@@ -498,10 +494,6 @@ export function migrateSqliteSchemaToStrict(
         databaseLabel: options.databaseLabel,
         operationLabel: "sqlite.strict-schema-migration",
       },
-    );
-  } finally {
-    if (foreignKeysWereEnabled) {
-      db.exec("PRAGMA foreign_keys = ON;");
-    }
-  }
+    ),
+  );
 }

@@ -8,6 +8,7 @@ import {
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { assertTransactionUsable, runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
+import { getStateDatabaseSchemaConnection } from "../infra/state-database-maintenance.js";
 import { hasUpdateDoctorMigrationCapture } from "../infra/update-doctor-migration-attribution.js";
 import {
   getOpenClawDatabaseMaintenanceResourceScope,
@@ -50,6 +51,7 @@ export function createOpenClawStateCurrentWarmReader<T>(
         path: string;
         scope: ReturnType<typeof getOpenClawDatabaseMaintenanceScope>;
         read(): CurrentWarmReadResult<T>;
+        close(): void;
       }
     | undefined;
   return () => {
@@ -58,9 +60,13 @@ export function createOpenClawStateCurrentWarmReader<T>(
       if (!scope?.ownsSchemaMaintenance || (bound && bound.scope !== scope)) {
         return { available: false };
       }
-      // Captured SQLite migrations retain native exclusion across commits. An idle
-      // independent WAL reader would block that exclusion; use fresh private reads.
-      if (!isStatePostgres() && hasUpdateDoctorMigrationCapture()) {
+      // Shared schema owners and captured migrations need native exclusion. Do not
+      // pin an independent WAL reader; the caller retains its fresh snapshot fallback.
+      if (
+        getStateDatabaseSchemaConnection(pathname) ||
+        (!isStatePostgres() && hasUpdateDoctorMigrationCapture())
+      ) {
+        bound?.close();
         return { available: false };
       }
       if (isStatePostgres()) {
@@ -153,6 +159,7 @@ export function createOpenClawStateCurrentWarmReader<T>(
         const reader = {
           path: pathname,
           scope,
+          close,
           read(): CurrentWarmReadResult<T> {
             if (!assertCurrent()) {
               return { available: false };
