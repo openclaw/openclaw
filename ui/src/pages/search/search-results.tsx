@@ -11,15 +11,19 @@ export type SearchTestOutcomeProps = {
   providerLabel: (id: string) => string;
 };
 
-function outcome(props: SearchTestOutcomeProps) {
-  const last = props.pending || props.error ? null : (props.result ?? null);
-  const failed = !props.pending && Boolean(props.error || last?.status === "error");
+function outcome(
+  pending: boolean | undefined,
+  error: string | undefined,
+  result: WebSearchTestResult | null | undefined,
+) {
+  const last = pending || error ? null : (result ?? null);
+  const failed = !pending && Boolean(error || last?.status === "error");
   return { last, failed };
 }
 
 /** The test's state, in the place a row title takes. */
 export function SearchTestStatus(props: SearchTestOutcomeProps) {
-  const state = () => outcome(props);
+  const state = () => outcome(props.pending, props.error, props.result);
   return (
     <span role="status" class="search-test-status">
       <SettingsStatus
@@ -38,7 +42,7 @@ export function SearchTestStatus(props: SearchTestOutcomeProps) {
  */
 export function SearchTestDetail(props: SearchTestOutcomeProps) {
   const text = () => {
-    const { last, failed } = outcome(props);
+    const { last, failed } = outcome(props.pending, props.error, props.result);
     if (failed) {
       return props.error || last?.error || t("searchPage.failure");
     }
