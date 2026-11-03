@@ -15,7 +15,7 @@ const booleanOptions = new Set([
   "paragraphs",
   "profanity_filter",
 ]);
-const repeatedOptions = new Set(["keyterm", "keywords", "replace", "redact", "tag"]);
+const repeatedOptions = new Set(["keyterm", "replace", "redact", "tag"]);
 const scalarOptions = new Set([
   "language",
   "encoding",

@@ -102,6 +102,7 @@ describe("ClawRouter native Deepgram file transcription", () => {
 
   it.each<NonNullable<AudioTranscriptionRequest["query"]>>([
     { callback: "https://callback.example" },
+    { keywords: ["unsupported legacy hint"] },
     { url: "https://audio.example/file.wav" },
     { model: "flux-general-en" },
     { smart_format: 1 },

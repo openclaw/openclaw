@@ -532,7 +532,8 @@ The consumer sends unchanged audio bytes with their native audio MIME (or
 ClawRouter Bearer key. It never uses a direct Deepgram Token key. The upload cap
 is 25,000,000 bytes; this memory bound does not establish billable duration.
 Native repeated options such as `keyterm` retain their order. Set supported query
-options under the audio entry's `providerOptions.clawrouter`; select the model in
+options under the audio entry's `providerOptions.clawrouter`; legacy `keywords`
+is unsupported for Nova-3 and fails before discovery. Select the model in
 `model`, not by overriding the query. Prompt hints fail explicitly; use `keyterm`
 when appropriate. Query options outside the synchronous file contract, repeated
 scalar values, and invalid or oversized input are rejected before discovery.
