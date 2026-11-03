@@ -222,32 +222,6 @@ describe("replacement guard advice", () => {
 });
 
 describe("unsetAtPath", () => {
-  it("prunes an emptied object parent", () => {
-    const root = { logging: { level: "debug" }, tools: { allow: ["a", "b"] } };
-    const result = unsetAtPath(root, ["logging", "level"]);
-    expect(result).toEqual({ removed: true, leafContainer: "object" });
-    expect(root).toEqual({ tools: { allow: ["a", "b"] } });
-  });
-
-  it("splices an emptied object element out of an array", () => {
-    const root = {
-      plugins: { entries: { example: { config: { values: [{ value: "a" }, { value: "b" }] } } } },
-    };
-    const result = unsetAtPath(root, [
-      "plugins",
-      "entries",
-      "example",
-      "config",
-      "values",
-      "0",
-      "value",
-    ]);
-    expect(result).toEqual({ removed: true, leafContainer: "object" });
-    expect(root).toEqual({
-      plugins: { entries: { example: { config: { values: [{ value: "b" }] } } } },
-    });
-  });
-
   it("prunes an emptied keyed agent roster entry while preserving siblings", () => {
     const root = {
       agents: {
@@ -260,10 +234,22 @@ describe("unsetAtPath", () => {
     expect(root).toEqual({ agents: { defaults: { authInheritance: { agentId: "research" } } } });
   });
 
-  it("keeps an emptied array intact", () => {
-    const root = { tools: { allow: ["a"] } };
-    const result = unsetAtPath(root, ["tools", "allow", "0"]);
-    expect(result).toEqual({ removed: true, leafContainer: "array" });
-    expect(root).toEqual({ tools: { allow: [] } });
+  it("keeps an agent entry emptied by an inner-field unset instead of pruning it", () => {
+    const root = {
+      agents: {
+        entries: { main: {}, research: { name: "Research" } },
+        defaults: { authInheritance: { agentId: "research" } },
+      },
+    };
+    const result = unsetAtPath(root, ["agents", "entries", "research", "name"]);
+    expect(result).toEqual({ removed: true, leafContainer: "object" });
+    // Only a whole-entry deletion authorizes roster removal; an inner-field unset
+    // must leave the entry as {} so the roster-loss guard accepts the save.
+    expect(root).toEqual({
+      agents: {
+        entries: { main: {}, research: {} },
+        defaults: { authInheritance: { agentId: "research" } },
+      },
+    });
   });
 });
