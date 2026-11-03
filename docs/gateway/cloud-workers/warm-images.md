@@ -118,7 +118,7 @@ An already-admitted capture can finish after reserve-demand expiry within its se
 
 ### Inspect snapshots in the Control UI
 
-Open **Settings → Connections → Cloud environments**. Each repository has one row showing **Ready**, **Building**, **Cold only**, or **Needs attention**. Select it to inspect its snapshots, recorded setup source, step timings, and failures. **Machine → Change** sets the repository's default profile. Inventory refreshes while builds, captures, or ready workers are present, and after deferred plugin activation.
+Open **Settings → Connections → Cloud environments**. Each repository has one row showing **Ready**, **Building**, **Cold only**, or **Needs attention**. Select it to inspect its snapshots, recorded setup source, step timings, and failures. **Cloud device → Change** sets the repository's default profile. Inventory refreshes while builds, captures, or ready workers are present, and after deferred plugin activation.
 
 **Rebuild** prepares the recorded local project's committed `HEAD` without a session. It requires administrator access, a local project root, an eligible profile, and pool capacity. Repository-only sources cannot use this action. Rebuild follows normal refresh policy and may reuse a matching build or reserve; it does not force snapshot replacement. Active builds offer **Cancel**; failed builds offer **Dismiss**, which hides the row until reload while the terminal record remains retained. Orphaned builds still awaiting cleanup cannot be dismissed.
 
@@ -126,7 +126,7 @@ Snapshot overflow actions offer **Pin**, **Unpin**, **Delete**, and, when a prev
 
 Rollback restores the previous checkpoint as current. The demoted current image is retained when pinned or when `keepPrevious: 1`; otherwise it retires after allocations release it. A retained previous checkpoint can still be rolled back after lowering `keepPrevious` to `0`. If both generations are pinned, unpin one before publishing another replacement.
 
-The collapsed **Advanced** section contains **Machines**, **Pool**, **Snapshot retention**, and **Machine images**. Machines manages profiles; Pool shows reserve counts and limits; Snapshot retention applies to all repositories. Machine images holds snapshots and builds without repository metadata, including uncertain captures. Saving machine settings refreshes eligibility without leaving the page.
+The collapsed **Advanced** section contains **Cloud devices**, **Pool**, **Snapshot retention**, and **Machine images**. Cloud devices manages profiles; Pool shows reserve counts and limits; Snapshot retention applies to all repositories. Machine images holds snapshots and builds without repository metadata, including uncertain captures. Saving machine settings refreshes eligibility without leaving the page.
 
 Snapshot inspection and actions require `operator.admin` and the enabled Crabbox provider. Actions appear only when their methods are advertised. API clients use `crabbox.images.list` for local snapshot state and `includePreparedDetails: true` on `environments.list` or `environments.status` for pool details. Listing snapshots does not contact the provider or expose setup commands or secret values.
 
