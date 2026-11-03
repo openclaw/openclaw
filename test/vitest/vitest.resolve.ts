@@ -394,6 +394,8 @@ export function createVitestResolveConfig(repoRoot: string) {
       sourcePackageAlias("session-url-contract", "public-share"),
       sourcePackageAlias("session-url-contract"),
       sourcePackageAlias("workboard-contract"),
+      sourcePackageAlias("openclaw-id-protocol", "testing"),
+      sourcePackageAlias("openclaw-id-protocol"),
       ...sourcePackageAliasesFromExports("acp-core", acpCorePackageJson.exports),
       ...sourcePluginSdkSubpaths.map((subpath) => ({
         find: `openclaw/plugin-sdk/${subpath}`,
