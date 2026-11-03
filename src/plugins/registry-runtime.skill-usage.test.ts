@@ -6,6 +6,7 @@ import { wrapToolWithBeforeToolCallHook } from "../agents/agent-tools.before-too
 import { createStubTool } from "../agents/test-helpers/agent-tool-stubs.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { canonicalizePath } from "../agents/utils/paths.js";
+import { waitForDiagnosticEventsDrained } from "../infra/diagnostic-events.js";
 import { consumeRunSkillUsage } from "../skills/runtime/run-usage.js";
 import { registerSkillUsageTracking } from "../skills/runtime/skill-usage.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -56,6 +57,7 @@ it("records skill use for the executing plugin tool call and reads it back by pa
     await wrapToolWithBeforeToolCallHook(tool, ctx).execute("view-deploy", {});
     return new WeakRef(ctx);
   })();
+  await waitForDiagnosticEventsDrained();
   await stopTracking();
   await nextTurn();
   queryObjects(WeakRef);
