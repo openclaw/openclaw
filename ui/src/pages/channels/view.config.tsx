@@ -5,6 +5,7 @@ import { ConfigTierGroups } from "../../components/config-form.render.tsx";
 import { schemaType, type JsonSchema } from "../../components/config-form.shared.ts";
 import { SettingsLoadingSkeleton } from "../../components/solid/settings-ui.tsx";
 import { formatChannelExtraValue, resolveChannelConfigValue } from "../../lib/channels/index.ts";
+import { humanize, localizedHintForPath } from "../../lib/config-form-utils.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { applyChannelConfigEdits } from "./channel-config-draft.ts";
 import type { ChannelsProps } from "./view.types.ts";
@@ -33,26 +34,76 @@ function isSavingChannelConfig(channelId: string, props: ChannelsProps) {
   );
 }
 
+/** A changed field by the name its form row shows. */
+function channelConfigFieldLabel(props: ChannelsProps, path: Array<string | number>) {
+  const keys = path.filter((segment): segment is string => typeof segment === "string");
+  const schema = props.config.configSchema as JsonSchema | null;
+  return (
+    localizedHintForPath(path, props.config.configUiHints)?.label ??
+    resolveSchemaNode(schema, keys)?.title ??
+    humanize(keys.at(-1) ?? "")
+  );
+}
+
 /** Outside the form's scroll, so what happened to a save never depends on scrolling to it. */
 export function ChannelConfigFeedback(params: { channelId: string; props: ChannelsProps }) {
   const blockedSetup = () =>
     params.props.wizardHost.blockedByDirtyConfig() &&
     (params.props.config.configFormDirty || Object.keys(params.props.configEdits).length > 0);
+  // Only this channel's Save reports here; the shared config error can belong to another page.
+  const feedback = () =>
+    params.props.saveFeedback?.channelId === params.channelId ? params.props.saveFeedback : null;
+  const conflict = () => {
+    const current = feedback();
+    return current?.kind === "conflict" ? current.paths : null;
+  };
+  const message = () => {
+    const current = feedback();
+    return current?.kind === "error"
+      ? { tone: "danger", text: current.message }
+      : current?.kind === "notSaved"
+        ? { tone: "danger", text: t("channels.config.saveNotSaved") }
+        : current?.kind === "interrupted"
+          ? { tone: "warn", text: t("channels.config.saveInterrupted") }
+          : null;
+  };
+  const busy = () => isSavingChannelConfig(params.channelId, params.props);
   return (
-    <Show
-      when={
-        params.props.config.lastError ||
-        params.props.saveConflict === params.channelId ||
-        blockedSetup()
-      }
-    >
+    <Show when={feedback() || blockedSetup()}>
       <div class="channels-detail__feedback" role="alert">
-        <Show
-          when={params.props.config.lastError || params.props.saveConflict === params.channelId}
-        >
-          <div class={params.props.config.lastError ? "callout danger" : "callout warn"}>
-            {params.props.config.lastError ?? t("channels.config.conflictKept")}
-          </div>
+        <Show when={conflict()}>
+          {(paths) => (
+            <div class="callout warn callout--action">
+              <span class="callout__content">
+                {t("channels.config.conflict", {
+                  fields: paths()
+                    .map((path) => channelConfigFieldLabel(params.props, path))
+                    .join(", "),
+                })}
+              </span>
+              <div class="channels-detail__decide">
+                <button
+                  class="btn btn--sm"
+                  type="button"
+                  disabled={busy()}
+                  onClick={() => params.props.onConfigConflict(params.channelId, "latest")}
+                >
+                  {t("common.reload")}
+                </button>
+                <button
+                  class="btn btn--sm"
+                  type="button"
+                  disabled={busy() || !params.props.channels.connected}
+                  onClick={() => params.props.onConfigConflict(params.channelId, "keep")}
+                >
+                  {t("agents.files.overwrite")}
+                </button>
+              </div>
+            </div>
+          )}
+        </Show>
+        <Show when={message()}>
+          {(current) => <div class={`callout ${current().tone}`}>{current().text}</div>}
         </Show>
         <Show when={blockedSetup()}>
           <div class="callout warn">{t("channels.hub.saveBeforeSetup")}</div>

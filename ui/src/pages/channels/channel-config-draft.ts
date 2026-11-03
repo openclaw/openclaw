@@ -1,9 +1,10 @@
+import { jsonSchemaValuesEqual } from "@openclaw/normalization-core/json-schema";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   collectBaseArrayPaths,
   formatConfigPatchPath,
 } from "../../../../src/config/patch-replace-paths.js";
-import type { ChannelConfigEdit } from "../../lib/channels/index.ts";
+import type { ChannelConfigBase, ChannelConfigEdit } from "../../lib/channels/index.ts";
 import {
   pruneEmptyConfigForm,
   removePathValue,
@@ -93,4 +94,79 @@ export function buildChannelConfigPatch(params: {
     return null;
   }
   return { patch: { channels: { [channelId]: changes } }, replacePaths };
+}
+
+type ConfigPath = ChannelConfigBase["path"];
+
+function readConfigPath(root: unknown, path: ConfigPath): unknown {
+  let node = root;
+  for (const segment of path) {
+    if (Array.isArray(node) && typeof segment === "number") {
+      node = node[segment];
+    } else if (isRecord(node) && Object.hasOwn(node, segment)) {
+      node = node[segment];
+    } else {
+      return undefined;
+    }
+  }
+  return node;
+}
+
+/** A field that was or became absent counts too: an added or removed key is a change. */
+const sameConfigValue = (left: unknown, right: unknown) =>
+  left === undefined || right === undefined ? left === right : jsonSchemaValuesEqual(left, right);
+
+const startsWith = (path: ConfigPath, prefix: ConfigPath) =>
+  prefix.length <= path.length && prefix.every((segment, index) => path[index] === segment);
+
+/** The saved value an edit was made against, at the unit Save writes whole: the edited field,
+    or the whole list when the edit lands in one, since lists go out in full. */
+export function channelConfigEditBase(
+  saved: Readonly<Record<string, unknown>>,
+  path: ConfigPath,
+): ChannelConfigBase {
+  let node: unknown = saved;
+  for (const [index, segment] of path.entries()) {
+    if (Array.isArray(node) || typeof segment === "number") {
+      const unit = path.slice(0, index);
+      return { path: unit, value: structuredClone(readConfigPath(saved, unit)) };
+    }
+    node = isRecord(node) && Object.hasOwn(node, segment) ? node[segment] : undefined;
+  }
+  return { path: [...path], value: structuredClone(node) };
+}
+
+/** Edited fields whose saved value changed since the edit: writing them would drop that change. */
+export function findChannelConfigConflicts(
+  bases: readonly ChannelConfigBase[],
+  saved: Readonly<Record<string, unknown>>,
+): ConfigPath[] {
+  return bases
+    .filter((base) => !sameConfigValue(base.value, readConfigPath(saved, base.path)))
+    .map((base) => base.path);
+}
+
+/** Keep the edits: they now stand against the newer saved values. */
+export function rebaseChannelConfigEdits(
+  bases: readonly ChannelConfigBase[],
+  saved: Readonly<Record<string, unknown>>,
+): ChannelConfigBase[] {
+  return bases.map((base) => ({
+    path: base.path,
+    value: structuredClone(readConfigPath(saved, base.path)),
+  }));
+}
+
+/** Use the newer values: drop the edits to the changed fields, keep the rest. */
+export function dropConflictingChannelConfigEdits(
+  edits: readonly ChannelConfigEdit[],
+  bases: readonly ChannelConfigBase[],
+  conflicts: readonly ConfigPath[],
+): { edits: ChannelConfigEdit[]; bases: ChannelConfigBase[] } {
+  const overlaps = (path: ConfigPath) =>
+    conflicts.some((conflict) => startsWith(path, conflict) || startsWith(conflict, path));
+  return {
+    edits: edits.filter((edit) => !overlaps(edit.path)),
+    bases: bases.filter((base) => !overlaps(base.path)),
+  };
 }

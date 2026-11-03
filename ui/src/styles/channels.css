@@ -161,6 +161,15 @@
   overflow-wrap: anywhere;
 }
 
+/* A conflict's choice drops under its message once the dialog is too narrow for both. */
+.channels-detail__feedback .callout--action {
+  flex-wrap: wrap;
+}
+
+.channels-detail__feedback .callout__content {
+  flex-basis: 16rem;
+}
+
 .channels-pairing-filters {
   display: flex;
   flex-wrap: wrap;

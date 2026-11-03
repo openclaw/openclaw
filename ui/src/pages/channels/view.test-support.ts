@@ -60,7 +60,7 @@ export function createChannelsViewProps(
     configEdits: {},
     savingChannel: null,
     savedChannel: null,
-    saveConflict: null,
+    saveFeedback: null,
     presentation: {
       pluginCatalog: null,
       pluginIconUrls: {},
@@ -108,6 +108,7 @@ export function createChannelsViewProps(
     onConfigPatch: () => {},
     onConfigSave: () => {},
     onConfigDiscard: () => {},
+    onConfigConflict: () => {},
     ...props,
   };
 }

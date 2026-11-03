@@ -39,11 +39,15 @@ export type ChannelRead = {
 };
 
 export type ChannelConfigEdit = { path: Array<string | number>; value: unknown };
+/** The saved value at an edited path when the edit was made; Save compares it with the file. */
+export type ChannelConfigBase = { path: Array<string | number>; value: unknown };
 
 export type ChannelsState = {
   /** Unsaved form edits per channel. They stay out of the shared config draft, so
       nothing can autosave them and another page's write cannot carry them along. */
   configEdits: Readonly<Record<string, readonly ChannelConfigEdit[]>>;
+  /** What each edited path held when first edited, per channel. */
+  configEditBases: Readonly<Record<string, readonly ChannelConfigBase[]>>;
   /** The Gateway those edits were made against. */
   configEditsScope: number | null;
   client: ChannelGatewayClient | null;
@@ -185,6 +189,7 @@ export function createChannelCapability(gateway: {
   const initialSnapshot = gateway.snapshot;
   const state: ChannelsState = {
     configEdits: {},
+    configEditBases: {},
     configEditsScope: null,
     client: initialSnapshot.client ?? null,
     connected: initialSnapshot.phase === "connected",
@@ -613,20 +618,40 @@ export function createChannelCapability(gateway: {
         state.configEditsScope = scope;
         if (Object.keys(state.configEdits).length > 0) {
           state.configEdits = {};
+          state.configEditBases = {};
           publish();
         }
       }
     },
-    editConfig(channelId: string, edit: ChannelConfigEdit) {
+    /** The first edit at a path keeps its base: later edits there never saw a newer value. */
+    editConfig(channelId: string, edit: ChannelConfigEdit, base?: ChannelConfigBase) {
+      const bases = state.configEditBases[channelId] ?? [];
+      const key = base ? JSON.stringify(base.path) : null;
       state.configEdits = {
         ...state.configEdits,
         [channelId]: [...(state.configEdits[channelId] ?? []), edit],
       };
+      if (base && !bases.some((entry) => JSON.stringify(entry.path) === key)) {
+        state.configEditBases = { ...state.configEditBases, [channelId]: [...bases, base] };
+      }
+      publish();
+    },
+    replaceConfigEdits(
+      channelId: string,
+      edits: readonly ChannelConfigEdit[],
+      bases: readonly ChannelConfigBase[],
+    ) {
+      const { [channelId]: _edits, ...otherEdits } = state.configEdits;
+      const { [channelId]: _bases, ...otherBases } = state.configEditBases;
+      state.configEdits = edits.length > 0 ? { ...otherEdits, [channelId]: edits } : otherEdits;
+      state.configEditBases = edits.length > 0 ? { ...otherBases, [channelId]: bases } : otherBases;
       publish();
     },
     discardConfigEdits(channelId: string) {
       const { [channelId]: _discarded, ...remaining } = state.configEdits;
+      const { [channelId]: _bases, ...remainingBases } = state.configEditBases;
       state.configEdits = remaining;
+      state.configEditBases = remainingBases;
       publish();
     },
     refreshPairing: (): Promise<void> => run(() => loadChannelPairing()),

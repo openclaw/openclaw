@@ -369,8 +369,9 @@ const enSettings = {
       discard: "Discard",
       keepEditing: "Keep editing",
       review: "Review",
-      conflictKept:
-        "Settings changed elsewhere. Your edits are kept, and Save applies them to the latest version.",
+      conflict: "Settings changed elsewhere: {fields}",
+      saveInterrupted: "Connection lost during Save.",
+      saveNotSaved: "Connection lost during Save. Your changes weren't saved.",
     },
     generic: {
       subtitle: "Channel status and configuration.",

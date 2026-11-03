@@ -458,6 +458,10 @@ or the close button asks whether to save, discard, or keep editing; **Run
 setup** asks the same before setup starts. Leaving the page keeps the edits
 without saving them: a notice names every channel with edits, and each of those
 channels shows **Unsaved changes** in the list until you save or discard.
+If a field you edited was changed elsewhere in the meantime, Save writes
+nothing and names the field: **Reload** takes the newer value, **Overwrite**
+keeps yours. If the connection drops during Save, the dialog checks the saved
+configuration once reconnected and shows whether the change was saved.
 
 Devices node-binding controls also pause while configuration reloads, so a pending
 read cannot overwrite a new selection.
