@@ -113,8 +113,6 @@ suite.define(() => {
           for (const select of selects) {
             await expect(select.locator("option:checked")).toBeEnabled();
           }
-          const saveButton = section.getByRole("button", { name: "Save", exact: true });
-          await expect(saveButton).toBeDisabled();
           const capture = async (name: string) => {
             await section.scrollIntoViewIfNeeded();
             for (const select of selects) {
@@ -141,7 +139,6 @@ suite.define(() => {
             await Promise.all(selects.map((select) => select.inputValue())),
             "BINDING_SELECTION_LOSS_133032",
           ).toEqual(values);
-          await expect(saveButton).toBeDisabled();
           await expectBindings(
             selects,
             values,
@@ -153,7 +150,6 @@ suite.define(() => {
           await expect(defaultSelect).toBeEnabled();
           await expectBindings(selects, values, availableLabels);
           await capture("recovered.png");
-          await expect(saveButton).toBeDisabled();
           await expectWrites(gateway, 0);
         },
       );

@@ -204,11 +204,9 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
       view.state === dataState &&
       view.gateway === context.gateway &&
       view.epoch === gatewayBinding.readEpoch(),
-    read: (kind) => (kind === "bindings" ? configRead : approvalsSnapshot),
-    run: (kind) =>
-      kind === "bindings"
-        ? context.runtimeConfig.save()
-        : runPageTask((pageState) => saveExecApprovals(pageState, resolveExecApprovalsTarget())),
+    read: () => approvalsSnapshot,
+    run: () =>
+      runPageTask((pageState) => saveExecApprovals(pageState, resolveExecApprovalsTarget())),
     publish: () => publishData(),
   });
   const { scope: inventoryScope, read: inventoryRead } = createDeviceInventoryRead({
@@ -647,7 +645,6 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
       configForm: bindingConfig(config),
       configLoading: config.configLoading,
       configSaving: config.configSaving,
-      configDirty: config.configFormDirty,
       configFormMode: config.configFormMode,
       execApprovalsLoading: devices.execApprovalsLoading,
       execApprovalsSaving: devices.execApprovalsSaving,
@@ -688,7 +685,6 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
       onLoadExecApprovals: refreshExecApprovals,
       onBindDefault: (nodeId) => policyActions.bindNode(nodeId),
       onBindAgent: (agentId, nodeId) => policyActions.bindNode(nodeId, agentId),
-      onSaveBindings: () => void policyActions.save("bindings"),
       onExecApprovalsTargetChange: (kind, nodeId) => void changeExecApprovalsTarget(kind, nodeId),
       onExecApprovalsSelectAgent: (agentId) => {
         devices.execApprovalsSelectedAgent = agentId;
@@ -698,7 +694,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
         runAdminTask((pageState) => updateExecApprovalsFormValue(pageState, path, value)),
       onExecApprovalsRemove: (path) =>
         runAdminTask((pageState) => removeExecApprovalsFormValue(pageState, path)),
-      onSaveExecApprovals: () => void policyActions.save("approvals"),
+      onSaveExecApprovals: () => void policyActions.save(),
     };
   }
 
@@ -725,7 +721,6 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
         <DevicesView
           {...view()}
           inventorySaving={inventoryActions.saving()}
-          configSaving={policyActions.configSaving() || view().configSaving}
           execApprovalsSaving={policyActions.approvalsSaving() || view().execApprovalsSaving}
         />
       </SettingsWorkspace>
