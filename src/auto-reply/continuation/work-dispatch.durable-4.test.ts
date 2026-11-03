@@ -673,6 +673,8 @@ describe("durable continuation_work dispatch", () => {
     });
 
     const result = await dispatchPendingContinuationWork({ sessionKey });
+    // The idle waiter must fail (arming its recovery timer) before the lane recovers.
+    await flushAsyncWork();
 
     expect(result).toEqual({ dispatched: 0, failed: 0, reaped: 0 });
     commandLaneIdleError = undefined;
