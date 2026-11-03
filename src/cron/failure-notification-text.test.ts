@@ -42,6 +42,15 @@ describe("cronFailureDetailLines", () => {
     expect(cronFailureDetailLines(undefined, detail)).toEqual([expected]);
   });
 
+  it("renders a closed agent-stall recovery cause", () => {
+    expect(
+      cronFailureDetailLines(undefined, {
+        kind: "agent-stall",
+        classification: "blocked_tool_call",
+      }),
+    ).toEqual(["Cause: blocked_tool_call"]);
+  });
+
   it("labels script failures by their producer", () => {
     expect(
       cronFailureDetailLines(undefined, {

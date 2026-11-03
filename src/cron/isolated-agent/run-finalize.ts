@@ -21,7 +21,11 @@ import {
   createCronRunDiagnosticsFromError,
   mergeCronRunDiagnostics,
 } from "../run-diagnostics.js";
-import type { CronDeliveryTrace, CronRunTelemetry } from "../types.js";
+import type {
+  CronDeliveryTrace,
+  CronFailureNotificationDetail,
+  CronRunTelemetry,
+} from "../types.js";
 import { resolveCronChannelOutputPolicy } from "./channel-output-policy.js";
 import type { DispatchCronDeliveryState } from "./delivery-dispatch-types.js";
 import { resolveCronPayloadOutcome } from "./helpers.js";
@@ -221,6 +225,16 @@ export async function finalizeCronRun(params: {
     return prepared.withRunSession({
       status: "error",
       error,
+      // Project the closed recovery fact into the operator-facing notification
+      // contract so the chat alert shows the cause instead of a generic line.
+      ...(recoveryClassification && recoveryClassification.trim().length > 0
+        ? {
+            failureNotificationDetail: {
+              kind: "agent-stall",
+              classification: recoveryClassification,
+            } satisfies CronFailureNotificationDetail,
+          }
+        : {}),
       replyDisposition,
       diagnostics: mergeCronRunDiagnostics(
         prepared.preflightDiagnostics,

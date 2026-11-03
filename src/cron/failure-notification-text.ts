@@ -49,6 +49,9 @@ export function cronFailureDetailLines(
         : "Cause: command stopped after producing no output",
     ];
   }
+  if (failureNotificationDetail.kind === "agent-stall") {
+    return [`Cause: ${failureNotificationDetail.classification}`];
+  }
   const label =
     failureNotificationDetail.source === "payload" ? "automation script" : "trigger script";
   if (failureNotificationDetail.code === "plugin_reload_failed") {

@@ -1,6 +1,5 @@
 import { getActiveNativeAttempt } from "../agents/embedded-agent-runner/run-state.js";
 import { reconcileSessionControllerDiagnosticState } from "../sessions/session-controller.state.js";
-import { recordRecoveryClassification } from "../sessions/session-recovery-classification.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 import { diagnosticLogger as diag } from "./diagnostic-runtime.js";
 import {
@@ -88,9 +87,10 @@ export async function recoverStuckDiagnosticSession(
                     : "active_reply_work",
             };
     if (outcome.status === "aborted" && recoveryReason) {
-      // Surface the semantic cause on the operation so cron run finalization can
-      // include it in the run history instead of a cause-free literal.
-      recordRecoveryClassification(operation, recoveryReason);
+      // Surface the semantic cause on the controller-owned operation so cron run
+      // finalization can include it in both the run history and the chat alert,
+      // instead of a cause-free literal. No separate diagnostic-owned store needed.
+      operation.recoveryClassification = recoveryReason;
     }
     return reportOutcome(outcome);
   } catch (error) {

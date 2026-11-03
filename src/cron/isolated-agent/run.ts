@@ -37,7 +37,6 @@ import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generati
 import { isCommandLaneTaskTimeoutError } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { getCurrentSessionControllerOwner } from "../../sessions/session-controller.lifecycle.js";
-import { getRecoveryClassification } from "../../sessions/session-recovery-classification.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { isCronWithinActiveHours } from "../active-hours.js";
 import { isCronExecutionIdle } from "../execution-idle.js";
@@ -478,7 +477,7 @@ async function runCronIsolatedAgentTurnInTrace(
                 automationResult,
                 prepared: prepared.context,
                 execution,
-                recoveryClassification: getRecoveryClassification(ownReplyOperation),
+                recoveryClassification: ownReplyOperation?.recoveryClassification,
                 abortReason,
                 isAborted,
                 settleUsage,

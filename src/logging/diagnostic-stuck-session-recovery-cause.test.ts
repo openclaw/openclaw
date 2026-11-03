@@ -1,12 +1,9 @@
-import { expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ReplyOperation } from "../sessions/session-controller.contracts.js";
-import { getRecoveryClassification } from "../sessions/session-recovery-classification.js";
+import type { SessionAttentionClassification } from "./diagnostic-session-attention.js";
 import { requestStuckSessionRecovery } from "./diagnostic-session-recovery-coordinator.js";
 import { formatRecoveryOutcome } from "./diagnostic-session-recovery.js";
-import type {
-  SessionAttentionClassification,
-  StuckSessionRecoveryOutcome,
-} from "./diagnostic-session-recovery.js";
+import type { StuckSessionRecoveryOutcome } from "./diagnostic-session-recovery.js";
 import { recoverStuckDiagnosticSession } from "./diagnostic-stuck-session-recovery.runtime.js";
 
 const blockedToolCall: SessionAttentionClassification = {
@@ -49,7 +46,7 @@ describe("stuck-session recovery preserves the classification cause (#138528)", 
     expect(outcome).toMatchObject({ status: "aborted", reason: "semantic_stall" });
   });
 
-  it("records the semantic cause on the operation so run finalization can surface it", async () => {
+  it("records the semantic cause on the controller-owned operation so run finalization can surface it", async () => {
     const op = stubOperation();
     await recoverStuckDiagnosticSession({
       sessionId: "s",
@@ -58,13 +55,14 @@ describe("stuck-session recovery preserves the classification cause (#138528)", 
       operation: op,
       classification: blockedToolCall,
     });
-    expect(getRecoveryClassification(op)).toBe("blocked_tool_call");
+    // Read from the same controller-owned operation instance cron finalization reads.
+    expect(op.recoveryClassification).toBe("blocked_tool_call");
   });
 
   it("does not record a classification when the recovery does not abort", async () => {
     const op = stubOperation();
     // observe/keep_lane path (model_recovery) returns a skipped outcome.
-    vi.mocked(op.watchdog.tick).mockResolvedValue({
+    vi.spyOn(op.watchdog, "tick").mockResolvedValue({
       action: "observe",
       reason: "model_recovery",
     });
@@ -76,7 +74,7 @@ describe("stuck-session recovery preserves the classification cause (#138528)", 
       classification: blockedToolCall,
     });
     expect(outcome.status).not.toBe("aborted");
-    expect(getRecoveryClassification(op)).toBeUndefined();
+    expect(op.recoveryClassification).toBeUndefined();
   });
 
   it("prints the cause for the aborted branch instead of a cause-free literal", () => {
