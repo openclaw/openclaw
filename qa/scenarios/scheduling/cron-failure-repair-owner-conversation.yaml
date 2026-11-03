@@ -11,6 +11,14 @@ scenario:
       - automation.manual-cron-runs
       - automation.isolated-cron-execution
   gatewayConfigPatch:
+    agents:
+      defaults:
+        model:
+          fallbacks: []
+      entries:
+        qa:
+          model:
+            fallbacks: []
     tools:
       # Keep tools directly declared so the owner turn's scripted write call resolves.
       toolSearch: false
