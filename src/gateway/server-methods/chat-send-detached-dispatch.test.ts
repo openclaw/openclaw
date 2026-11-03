@@ -10,6 +10,8 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
+import { createOwnedTestInstance } from "../../plugins/plugin-instance.test-support.js";
+import { PluginInvocationScope } from "../../plugins/plugin-invocation-scope.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createGatewayRequestContext } from "../server-request-context.js";
@@ -19,7 +21,7 @@ import * as chatAdmission from "./chat-send-admission.js";
 import { handleChatSend } from "./chat-send-handler.js";
 import type { GatewayClient, RespondFn } from "./types.js";
 
-it("settles a detached dispatch failure when chat-run cleanup throws", async () => {
+it("settles detached dispatch after its parent plugin scope closes and cleanup throws", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     await loadOrCreateProcessDeviceIdentityAsync();
     const sessionKey = "agent:main:detached-failure";
@@ -67,11 +69,20 @@ it("settles a detached dispatch failure when chat-run cleanup throws", async () 
         }
         return result;
       });
+    const plugin = createOwnedTestInstance("spawn-parent");
+    const invocations = new PluginInvocationScope(plugin.owner!.registry!, [plugin], {
+      retained: true,
+    });
+    const names = plugin.wrap(["child_tool"]);
+    const parentReleased = createDeferred();
     const rejectDispatch = vi
       .spyOn(dispatch, "dispatchInboundMessageWithProjectedDispatcher")
-      .mockRejectedValue(
-        new SubagentRegistryMutationRejectedError("Replacement subagent cohort changed"),
-      );
+      .mockImplementation(async () => {
+        await parentReleased.promise;
+        // Registry adoption enumerates plugin-owned names after workspace preparation.
+        expect([...new Set(names)]).toEqual(["child_tool"]);
+        throw new SubagentRegistryMutationRejectedError("Replacement subagent cohort changed");
+      });
     try {
       const params = {
         sessionKey,
@@ -80,14 +91,18 @@ it("settles a detached dispatch failure when chat-run cleanup throws", async () 
         idempotencyKey: runId,
       };
       const respond = vi.fn<RespondFn>();
-      await handleChatSend({
-        req: { type: "req", id: "detached-proof", method: "chat.send", params },
-        params,
-        client,
-        context,
-        respond,
-        isWebchatConnect: () => true,
-      });
+      await invocations.run(() =>
+        handleChatSend({
+          req: { type: "req", id: "detached-proof", method: "chat.send", params },
+          params,
+          client,
+          context,
+          respond,
+          isWebchatConnect: () => true,
+        }),
+      );
+      invocations.release();
+      parentReleased.resolve();
       expect(respond).toHaveBeenCalledOnce();
       const [ok, response] = expectDefined(respond.mock.calls[0], "chat.send did not respond");
       expect([ok, response]).toEqual([true, expect.objectContaining({ runId, status: "started" })]);
@@ -129,6 +144,8 @@ it("settles a detached dispatch failure when chat-run cleanup throws", async () 
         ),
       ).toHaveLength(1);
     } finally {
+      invocations.release();
+      parentReleased.resolve();
       rejectDispatch.mockRestore();
       admission?.cleanupAdmittedRun();
       await admission?.gatewayWorkAdmission.released;
