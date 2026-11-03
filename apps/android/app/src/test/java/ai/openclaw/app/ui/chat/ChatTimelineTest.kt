@@ -699,6 +699,52 @@ class ChatTimelineTest {
   }
 
   @Test
+  fun terminalQuestionPlaysAfterToolActivityBySourceTime() {
+    val call = ChatToolActivity("call-1", "read", "path: README.md", null, false)
+    val result = ChatToolActivity("call-1", "read", null, "contents", false)
+    val messages =
+      listOf(
+        ChatMessage("user-old", "user", listOf(ChatMessageContent(type = "text", text = "before")), 100),
+        ChatMessage("call", "assistant", listOf(ChatMessageContent(type = "toolCall", toolActivity = call)), 150),
+        ChatMessage("result", "toolresult", listOf(ChatMessageContent(type = "toolResult", toolActivity = result)), 160),
+        ChatMessage("assistant-new", "assistant", listOf(ChatMessageContent(type = "text", text = "after")), 300),
+      )
+    val answered =
+      ChatQuestionPrompt(
+        QuestionRecord(
+          id = "ask-1",
+          questions = emptyList(),
+          createdAtMs = 200,
+          expiresAtMs = 1_000,
+          status = "answered",
+        ),
+      )
+
+    val timeline =
+      prepareChatHistory(messages, "agent:main:telegram:direct:projection", mainSessionKey = "agent:main:main")
+        .buildTimeline(
+          pendingRunCount = 0,
+          pendingToolCalls = emptyList(),
+          streamingAssistantText = null,
+          questions = listOf(answered),
+        )
+
+    val keys = timeline.items.map(::chatTimelineItemKey)
+    // reverseLayout index 0 is bottom: reply → question → tools → user (source chronology).
+    assertEquals(
+      listOf(
+        "message:assistant-new",
+        "question:ask-1",
+        "tools:user-old",
+        "message:user-old",
+      ),
+      keys,
+    )
+    val tools = timeline.items[keys.indexOf("tools:user-old")] as ChatTimelineItem.ToolActivity
+    assertEquals(160L, tools.timestampMs)
+  }
+
+  @Test
   fun sessionResetLeavesAnsweredSummaryAboveDividerNotInDock() {
     val messages =
       listOf(

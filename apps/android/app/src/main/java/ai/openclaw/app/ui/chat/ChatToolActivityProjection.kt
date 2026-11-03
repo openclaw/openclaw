@@ -52,11 +52,15 @@ internal fun projectToolActivity(
       if (previous == null) {
         group
       } else {
+        val previousTs = previous.timestampMs ?: Long.MIN_VALUE
+        val groupTs = group.timestampMs ?: Long.MIN_VALUE
+        val mergedTimestampMs = maxOf(previousTs, groupTs).takeIf { it != Long.MIN_VALUE }
         previous.copy(
           tools = previous.tools + group.tools,
           toolKeys = previous.toolKeys + group.toolKeys,
           knownRunIds = previous.knownRunIds + group.knownRunIds,
           settledToolKeys = previous.settledToolKeys + group.settledToolKeys,
+          timestampMs = mergedTimestampMs,
         )
       }
   }

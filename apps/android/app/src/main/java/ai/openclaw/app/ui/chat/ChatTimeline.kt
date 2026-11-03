@@ -50,6 +50,8 @@ internal sealed class ChatTimelineItem {
     val toolKeys: List<String> = tools.mapIndexed { index, tool -> tool.toolCallId ?: "anonymous:$index" },
     val liveTools: Map<String, ChatPendingToolCall> = emptyMap(),
     val settledToolKeys: Set<String> = emptySet(),
+    /** Newest source-message time so terminal rows can place themselves relative to tool activity. */
+    val timestampMs: Long? = null,
   ) : ChatTimelineItem()
 
   data class QuestionPrompt(
@@ -171,18 +173,24 @@ internal fun PreparedChatHistory.buildTimeline(
     )
   val sourceItems =
     buildList {
-      fun flushTerminalBefore(row: ChatTimelineItem) {
-        val rowTs =
-          when (row) {
-            is ChatTimelineItem.Message -> row.message.timestampMs
-            is ChatTimelineItem.SystemDivider -> row.timestampMs
-            else -> null
-          } ?: return
+      fun flushTerminalBeforeTimestamp(rowTs: Long?) {
+        if (rowTs == null) return
         while (terminalByNewest.isNotEmpty()) {
           val prompt = terminalByNewest.first().prompt
           if (prompt.record.createdAtMs <= rowTs) break
           add(terminalByNewest.removeFirst())
         }
+      }
+
+      fun flushTerminalBefore(row: ChatTimelineItem) {
+        val rowTs =
+          when (row) {
+            is ChatTimelineItem.Message -> row.message.timestampMs
+            is ChatTimelineItem.SystemDivider -> row.timestampMs
+            is ChatTimelineItem.ToolActivity -> row.timestampMs
+            else -> null
+          }
+        flushTerminalBeforeTimestamp(rowTs)
       }
 
       fun addRow(row: ChatTimelineItem) {
@@ -209,6 +217,19 @@ internal fun PreparedChatHistory.buildTimeline(
           } else {
             span.preservedRowIndexes.asReversed().forEach { addRow(rows[it]) }
             if (span.key in expandedWorkKeys) span.workRowIndexes.asReversed().forEach { addRow(rows[it]) }
+            // Collapsed work hides its ToolActivity rows; place terminal summaries by the work's source time.
+            var workEndMs: Long? = null
+            for (index in span.workRowIndexes) {
+              val rowTs =
+                when (val row = rows[index]) {
+                  is ChatTimelineItem.ToolActivity -> row.timestampMs
+                  is ChatTimelineItem.Message -> row.message.timestampMs
+                  is ChatTimelineItem.SystemDivider -> row.timestampMs
+                  else -> null
+                } ?: continue
+              workEndMs = maxOf(workEndMs ?: rowTs, rowTs)
+            }
+            flushTerminalBeforeTimestamp(workEndMs)
             add(ChatTimelineItem.WorkedSummary(span.key, span.durationMs, span.key in expandedWorkKeys, span.outcomes))
           }
           rowIndex = span.start - 1
@@ -265,6 +286,7 @@ private fun buildTranscriptTimeline(
     var completedToolsKey: String? = null
     var completedToolsTurnBoundary = false
     var completedToolsRunIds: Set<String> = emptySet()
+    var completedToolsTimestampMs: Long? = null
     var lastFailureMessageIndex = -1
     var hasUnresolvedTools = false
     var pendingTurnBoundary = false
@@ -272,11 +294,12 @@ private fun buildTranscriptTimeline(
 
     fun flushToolActivity() {
       if (completedTools.isEmpty()) return
-      add(ChatTimelineItem.ToolActivity(checkNotNull(completedToolsKey), coalesceToolActivity(completedTools), completedToolsTurnBoundary, lastFailureMessageIndex, hasUnresolvedTools, completedToolsRunIds, toolScope, coalescedToolKeys(completedTools, checkNotNull(completedToolsKey)), settledToolKeys = settledToolKeys(completedTools, checkNotNull(completedToolsKey))))
+      add(ChatTimelineItem.ToolActivity(checkNotNull(completedToolsKey), coalesceToolActivity(completedTools), completedToolsTurnBoundary, lastFailureMessageIndex, hasUnresolvedTools, completedToolsRunIds, toolScope, coalescedToolKeys(completedTools, checkNotNull(completedToolsKey)), settledToolKeys = settledToolKeys(completedTools, checkNotNull(completedToolsKey)), timestampMs = completedToolsTimestampMs))
       completedTools.clear()
       completedToolsKey = null
       completedToolsTurnBoundary = false
       completedToolsRunIds = emptySet()
+      completedToolsTimestampMs = null
       lastFailureMessageIndex = -1
       hasUnresolvedTools = false
     }
@@ -297,7 +320,16 @@ private fun buildTranscriptTimeline(
       val lastFailure = tools.maxOfOrNull { it.lastFailureMessageIndex } ?: -1
       val hasVisibleContent = message.content.any { it.toolActivity == null }
       // Empty or consumed result envelopes must not erase a pending turn boundary.
-      if (tools.isEmpty() && !hasVisibleContent && message.transcriptMarker == null) return@forEachIndexed
+      if (tools.isEmpty() && !hasVisibleContent && message.transcriptMarker == null) {
+        // Result envelopes merge into the call's displayedTools; still advance the
+        // group's source time so terminal summaries place after the result.
+        if (completedTools.isNotEmpty() && projection.relatedTools.isNotEmpty()) {
+          completedToolsTimestampMs =
+            maxOf(completedToolsTimestampMs ?: Long.MIN_VALUE, message.timestampMs ?: Long.MIN_VALUE)
+              .takeIf { it != Long.MIN_VALUE }
+        }
+        return@forEachIndexed
+      }
       val key = message.entryId ?: message.idempotencyKey ?: message.id
       if (tools.isNotEmpty() && !hasVisibleContent && message.transcriptMarker == null) {
         if (completedTools.isNotEmpty() && completedToolsRunIds != knownRunIds) flushToolActivity()
@@ -308,6 +340,9 @@ private fun buildTranscriptTimeline(
           pendingTurnBoundary = false
         }
         completedTools.addAll(tools)
+        completedToolsTimestampMs =
+          maxOf(completedToolsTimestampMs ?: Long.MIN_VALUE, message.timestampMs ?: Long.MIN_VALUE)
+            .takeIf { it != Long.MIN_VALUE }
         lastFailureMessageIndex = maxOf(lastFailureMessageIndex, lastFailure)
         hasUnresolvedTools = hasUnresolvedTools || unresolvedTools
       } else {
@@ -326,7 +361,7 @@ private fun buildTranscriptTimeline(
           classified?.let(::add)
         }
         if (tools.isNotEmpty()) {
-          add(ChatTimelineItem.ToolActivity(key, coalesceToolActivity(tools), pendingTurnBoundary, lastFailure, unresolvedTools, knownRunIds, toolScope, coalescedToolKeys(tools, key), settledToolKeys = settledToolKeys(tools, key)))
+          add(ChatTimelineItem.ToolActivity(key, coalesceToolActivity(tools), pendingTurnBoundary, lastFailure, unresolvedTools, knownRunIds, toolScope, coalescedToolKeys(tools, key), settledToolKeys = settledToolKeys(tools, key), timestampMs = message.timestampMs))
           pendingTurnBoundary = false
         }
       }
