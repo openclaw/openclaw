@@ -16,7 +16,9 @@ import { FloatingHeaderActions } from "../../components/solid/floating-header-ac
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
+  RetryAction,
   SettingsEmpty,
+  SettingsPage,
   SettingsPageHeader,
   SettingsSection,
   SettingsNavRow,
@@ -68,11 +70,11 @@ export type AgentsProps = Omit<
     | "configLoading"
     | "configSaving"
     | "configFormDirty"
+    | "configAutoSaveStatus"
     | "lastError"
   >;
   overview: Omit<AgentsPageView["overview"], "modelSelectionPolicy" | "modelCatalogRetired"> &
     Partial<Pick<AgentsPageView["overview"], "modelSelectionPolicy" | "modelCatalogRetired">>;
-  identitySavePending?: boolean;
   onOpenMemoryImport?: AgentsPageView["onOpenMemoryImport"];
   onOpenMemorySettings?: AgentsPageView["onOpenMemorySettings"];
 };
@@ -114,9 +116,6 @@ export function Agents(props: AgentsProps) {
     configSaving: props.config.configSaving,
     configDirty: props.config.configFormDirty,
     canUpdateConfig: props.access.canUpdateConfig,
-    presentationRetired: props.presentationRetired(),
-    onConfigReload: props.onConfigReload,
-    onConfigSave: props.onConfigSave,
   });
   const context = () =>
     buildAgentContext(
@@ -126,17 +125,6 @@ export function Agents(props: AgentsProps) {
       defaultId(),
       props.agentIdentityById[props.selectedAgentId!] ?? null,
     );
-  const tabCounts = (): Record<string, number | null> => ({
-    files: props.readData().agentFilesList?.files?.length ?? null,
-    skills:
-      props.selectedAgentId && props.readData().agentSkillsAgentId === props.selectedAgentId
-        ? (props.readData().agentSkillsReport?.skills.length ?? null)
-        : null,
-    channels: props.readChannels().channelsSnapshot
-      ? Object.keys(props.readChannels().channelsSnapshot?.channelAccounts ?? {}).length
-      : null,
-    cron: props.selectedAgentId ? props.readData().cron.cronJobsTotal || null : null,
-  });
   const phone = createMediaQuery(
     PHONE_WIDTH_QUERY,
     globalThis.matchMedia?.(PHONE_WIDTH_QUERY).matches ?? false,
@@ -200,6 +188,16 @@ export function Agents(props: AgentsProps) {
       </Show>
     </div>
   );
+  // Defaults apply to every agent, so this row stays out of the per-agent tab bar.
+  const agentDefaultsRow = () => (
+    <div class="settings-group">
+      <SettingsNavRow
+        title={t("agents.defaults.title")}
+        description={t("agents.defaults.description")}
+        onClick={props.onOpenAgentDefaults}
+      />
+    </div>
+  );
   return (
     <>
       <SettingsPageHeader
@@ -212,164 +210,175 @@ export function Agents(props: AgentsProps) {
         actions={pageActions()}
       />
       <SettingsWorkspace>
-        <div class="agents-layout">
-          <AgentReadNotice request={props.listRead} />
-          <section class="agents-main">
-            <div class="settings-group">
-              <SettingsNavRow
-                title={t("agents.defaults.title")}
-                description={t("agents.defaults.description")}
-                onClick={props.onOpenAgentDefaults}
-              />
-            </div>
-            <Show
-              when={selectedAgent()}
-              fallback={
-                <SettingsSection title={t("agents.selectTitle")}>
-                  <SettingsEmpty message={t("agents.selectSubtitle")} />
-                </SettingsSection>
-              }
-            >
-              {(agent) => (
-                <>
-                  <HubTabs
-                    {...{
-                      id: "agents",
-                      active: props.readData().agentsPanel,
-                      tabs: (
-                        [
-                          ["overview", "agents.tabs.overview"],
-                          ["files", "agents.tabs.files"],
-                          ["tools", "agents.tabs.tools"],
-                          ["skills", "agents.tabs.skills"],
-                          ["channels", "agents.tabs.channels"],
-                          ["cron", "agents.tabs.cronJobs"],
-                          ["memory", "agents.tabs.memory"],
-                        ] as const
-                      ).map(([value, key]) => ({
-                        value,
-                        label: t(key),
-                        count: tabCounts()[value],
-                      })),
-                      ariaLabel: t("tabs.agents"),
-                      panelId: "agent-panel",
-                      onSelect: props.onSelectPanel,
-                    }}
-                  />
-                  <div
-                    id="agent-panel"
-                    class="settings-stack"
-                    role="tabpanel"
-                    aria-labelledby={`agents-tab-${props.readData().agentsPanel}`}
-                  >
-                    <Show when={!props.config.configSaving}>
-                      <ConfigError message={props.config.lastError}>
-                        {(message) => (
-                          <div class="callout danger" role="alert">
-                            {message}
-                          </div>
-                        )}
-                      </ConfigError>
-                    </Show>
-                    <Loading on={panel()} fallback={<SettingsLoadingSkeleton />}>
-                      <Errored
-                        fallback={(error, reset) => (
-                          <div class="callout danger" role="alert">
-                            {formatUiError(error())}
-                            <button class="btn" onClick={() => reset()}>
-                              {t("common.retry")}
-                            </button>
-                          </div>
-                        )}
+        <SettingsPage wide>
+          <div class="agents-layout">
+            <AgentReadNotice request={props.listRead} />
+            <section class="agents-main">
+              <Show
+                when={selectedAgent()}
+                fallback={
+                  <>
+                    <SettingsSection title={t("agents.selectTitle")}>
+                      <SettingsEmpty message={t("agents.selectSubtitle")} />
+                    </SettingsSection>
+                    {agentDefaultsRow()}
+                  </>
+                }
+              >
+                {(agent) => (
+                  <>
+                    <HubTabs
+                      {...{
+                        id: "agents",
+                        active: props.readData().agentsPanel,
+                        tabs: (
+                          [
+                            ["overview", "agents.tabs.overview"],
+                            ["files", "agents.tabs.files"],
+                            ["tools", "agents.tabs.tools"],
+                            ["skills", "agents.tabs.skills"],
+                            ["channels", "agents.tabs.channels"],
+                            ["cron", "agents.tabs.cronJobs"],
+                            ["memory", "agents.tabs.memory"],
+                          ] as const
+                        ).map(([value, key]) => ({
+                          value,
+                          label: t(key),
+                        })),
+                        ariaLabel: t("tabs.agents"),
+                        panelId: "agent-panel",
+                        onSelect: props.onSelectPanel,
+                      }}
+                    />
+                    <div
+                      id="agent-panel"
+                      class="settings-stack"
+                      role="tabpanel"
+                      aria-labelledby={`agents-tab-${props.readData().agentsPanel}`}
+                    >
+                      {/* A failed write is reported by the save status, without moving this page. */}
+                      <Show
+                        when={
+                          !props.config.configSaving &&
+                          !["error", "rejected", "conflict"].includes(
+                            props.config.configAutoSaveStatus,
+                          )
+                        }
                       >
-                        <Switch>
-                          <Match when={props.readData().agentsPanel === "overview"}>
-                            <Show when={agent().id} keyed>
-                              {(agentId) => (
-                                <AgentOverview
-                                  {...props.overview}
-                                  identitySavePending={props.identitySavePending ?? false}
-                                  readData={props.readData}
-                                  {...configActions()}
-                                  agent={agent()}
-                                  defaultId={defaultId()}
-                                  agentFilesList={props.readData().agentFilesList}
-                                  agentIdentity={props.agentIdentityById[agentId] ?? null}
-                                  canUpdateIdentity={props.access.canUpdateIdentity}
-                                  onSelectPanel={props.onSelectPanel}
+                        <ConfigError message={props.config.lastError}>
+                          {(message) => (
+                            <div class="callout danger agent-config-error" role="alert">
+                              {message}
+                              <Show when={!props.config.configSnapshot}>
+                                <RetryAction
+                                  disabled={props.config.configLoading}
+                                  onRetry={props.onConfigRetry}
                                 />
-                              )}
-                            </Show>
-                          </Match>
-                          <Match when={props.readData().agentsPanel === "files"}>
-                            <AgentFiles
-                              {...props.agentFiles}
-                              readData={props.readData}
-                              presentationRetired={props.presentationRetired}
-                              agentId={agent().id}
-                              canWrite={props.access.canWriteFiles}
-                            />
-                          </Match>
-                          <Match when={props.readData().agentsPanel === "tools"}>
-                            <AgentTools
-                              {...props.tools}
-                              {...configActions()}
-                              readData={props.readData}
-                              agentId={agent().id}
-                            />
-                          </Match>
-                          <Match when={props.readData().agentsPanel === "skills"}>
-                            <AgentSkills
-                              {...props.agentSkills}
-                              readData={props.readData}
-                              {...configActions()}
-                              agentId={agent().id}
-                              canPatchConfig={props.access.canPatchConfig}
-                            />
-                          </Match>
-                          <Match when={props.readData().agentsPanel === "channels"}>
-                            <AgentChannels
-                              {...props.channels}
-                              readState={props.readChannels}
-                              context={context()}
-                              configForm={config()}
-                              onSelectPanel={props.onSelectPanel}
-                            />
-                          </Match>
-                          <Match when={props.readData().agentsPanel === "cron"}>
-                            <AgentCron
-                              {...props.cron}
-                              readState={() => props.readData().cron}
-                              basePath={props.basePath}
-                              context={context()}
-                              canRunNow={props.access.canRunCron}
-                              onSelectPanel={props.onSelectPanel}
-                            />
-                          </Match>
-                          <Match when={props.readData().agentsPanel === "memory"}>
-                            <div class="settings-group agent-memory-import-row">
-                              <SettingsNavRow
-                                title={t("tabs.memory")}
-                                description={t("subtitles.memory")}
-                                onClick={() => props.onOpenMemorySettings?.()}
-                              />
-                              <SettingsNavRow
-                                title={t("tabs.memoryImport")}
-                                description={t("subtitles.memoryImport")}
-                                onClick={() => props.onOpenMemoryImport?.()}
-                              />
+                              </Show>
                             </div>
-                            <AgentMemoryPanel initialAgentTarget={props.memoryTarget} />
-                          </Match>
-                        </Switch>
-                      </Errored>
-                    </Loading>
-                  </div>
-                </>
-              )}
-            </Show>
-          </section>
-        </div>
+                          )}
+                        </ConfigError>
+                      </Show>
+                      <Loading on={panel()} fallback={<SettingsLoadingSkeleton />}>
+                        <Errored
+                          fallback={(error, reset) => (
+                            <div class="callout danger" role="alert">
+                              {formatUiError(error())}
+                              <button class="btn" onClick={() => reset()}>
+                                {t("common.retry")}
+                              </button>
+                            </div>
+                          )}
+                        >
+                          <Switch>
+                            <Match when={props.readData().agentsPanel === "overview"}>
+                              <Show when={agent().id} keyed>
+                                {(agentId) => (
+                                  <AgentOverview
+                                    {...props.overview}
+                                    readData={props.readData}
+                                    {...configActions()}
+                                    agent={agent()}
+                                    defaultId={defaultId()}
+                                    agentFilesList={props.readData().agentFilesList}
+                                    agentIdentity={props.agentIdentityById[agentId] ?? null}
+                                    canUpdateIdentity={props.access.canUpdateIdentity}
+                                    onSelectPanel={props.onSelectPanel}
+                                  />
+                                )}
+                              </Show>
+                              {agentDefaultsRow()}
+                            </Match>
+                            <Match when={props.readData().agentsPanel === "files"}>
+                              <AgentFiles
+                                {...props.agentFiles}
+                                readData={props.readData}
+                                presentationRetired={props.presentationRetired}
+                                agentId={agent().id}
+                                canWrite={props.access.canWriteFiles}
+                              />
+                            </Match>
+                            <Match when={props.readData().agentsPanel === "tools"}>
+                              <AgentTools
+                                {...props.tools}
+                                {...configActions()}
+                                readData={props.readData}
+                                agentId={agent().id}
+                              />
+                            </Match>
+                            <Match when={props.readData().agentsPanel === "skills"}>
+                              <AgentSkills
+                                {...props.agentSkills}
+                                readData={props.readData}
+                                {...configActions()}
+                                agentId={agent().id}
+                                canPatchConfig={props.access.canPatchConfig}
+                              />
+                            </Match>
+                            <Match when={props.readData().agentsPanel === "channels"}>
+                              <AgentChannels
+                                {...props.channels}
+                                readState={props.readChannels}
+                                context={context()}
+                                configForm={config()}
+                                onSelectPanel={props.onSelectPanel}
+                              />
+                            </Match>
+                            <Match when={props.readData().agentsPanel === "cron"}>
+                              <AgentCron
+                                {...props.cron}
+                                readState={() => props.readData().cron}
+                                basePath={props.basePath}
+                                context={context()}
+                                canRunNow={props.access.canRunCron}
+                                onSelectPanel={props.onSelectPanel}
+                              />
+                            </Match>
+                            <Match when={props.readData().agentsPanel === "memory"}>
+                              <div class="settings-group agent-memory-import-row">
+                                <SettingsNavRow
+                                  title={t("tabs.memory")}
+                                  description={t("subtitles.memory")}
+                                  onClick={() => props.onOpenMemorySettings?.()}
+                                />
+                                <SettingsNavRow
+                                  title={t("tabs.memoryImport")}
+                                  description={t("subtitles.memoryImport")}
+                                  onClick={() => props.onOpenMemoryImport?.()}
+                                />
+                              </div>
+                              <AgentMemoryPanel initialAgentTarget={props.memoryTarget} />
+                            </Match>
+                          </Switch>
+                        </Errored>
+                      </Loading>
+                    </div>
+                  </>
+                )}
+              </Show>
+            </section>
+          </div>
+        </SettingsPage>
       </SettingsWorkspace>
     </>
   );

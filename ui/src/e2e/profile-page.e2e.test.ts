@@ -312,7 +312,7 @@ suite.define(() => {
       await expect(discord.getByRole("button", { name: "Connect Discord" })).toBeEnabled();
       const titles = await rows.locator(".settings-row__title").allTextContents();
       expect(titles.indexOf("Discord account")).toBe(titles.indexOf("Linked emails") + 1);
-      expect(titles.indexOf("GitHub account")).toBe(titles.indexOf("Discord account") + 1);
+      expect(titles.indexOf("GitHub sign-in")).toBe(titles.indexOf("Discord account") + 1);
       await screenshot(page, "20-discord-disconnected.png");
       await page.context().route("https://discord.example/**", (route) =>
         route.fulfill({
@@ -335,8 +335,10 @@ suite.define(() => {
         requestId: "test-request",
         authorizationUrl: "https://discord.example/consent",
       });
+      // Status, then the Discord ID as its identity, in the row itself.
       await expect(discord).toContainText("Verified");
       await expect(discord).toContainText("123456789012345678");
+      await expect(page.locator("#settings-profile-identity .settings-disclosure")).toHaveCount(0);
       await screenshot(page, "21-discord-linked.png");
       await gateway.setMethodResponse("users.channelIdentity", {
         status: "ready",
@@ -354,7 +356,9 @@ suite.define(() => {
         code: "INVALID_REQUEST",
         message: "Discord sign-in is unavailable. Try again.",
       });
-      await expect(discord.getByRole("alert")).toContainText("Try again");
+      await expect(page.locator("#settings-profile-identity").getByRole("alert")).toContainText(
+        "Try again",
+      );
       await screenshot(page, "22-discord-error.png");
       expect(
         await page.locator("body").evaluate((element) => element.scrollWidth),

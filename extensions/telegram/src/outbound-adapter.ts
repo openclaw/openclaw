@@ -42,6 +42,8 @@ type ResolveTelegramSendFn = (deps?: OutboundSendDeps) => Promise<TelegramSendFn
 type LoadTelegramSendModuleFn = () => Promise<TelegramSendModule>;
 
 type TelegramPayloadData = {
+  /** Copied recaps disable native link detection and previews. */
+  linkPreview?: boolean;
   buttons?: TelegramInlineButtons;
   quoteText?: string;
   reaction?: { emoji?: unknown; replyToId?: unknown; replyToCurrent?: unknown };
@@ -217,6 +219,7 @@ export async function sendTelegramPayloadMessages(params: {
     : {};
   const payloadOpts = {
     ...params.baseOpts,
+    ...(telegramData?.linkPreview === false ? { linkPreview: false } : {}),
     quoteText,
     ...(payload.audioAsVoice === true ? { asVoice: true } : {}),
     ...(payload.videoAsNote === true ? { asVideoNote: true } : {}),

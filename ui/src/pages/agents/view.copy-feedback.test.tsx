@@ -4,7 +4,10 @@ import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { AgentsPageMenu } from "./agents-page-menu.tsx";
 
 const showToast = vi.hoisted(() => vi.fn());
-vi.mock("../../lib/toast.ts", () => ({ showToast }));
+vi.mock("../../lib/toast.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../lib/toast.ts")>()),
+  showToast,
+}));
 
 function menuProps() {
   return {
