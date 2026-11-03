@@ -860,8 +860,8 @@ class ChatReaderScrollOwnershipLayoutTest {
   }
 
   @Test
-  fun finishingHistoryLoadDoesNotCancelAMovingNewUserTurn() {
-    showReader(initialHistoryLoading = true)
+  fun finishingHistoryLoadDoesNotCancelAMovingLocalUserTurn() {
+    showReader(initialHistoryLoading = true, localSend = true)
     composeRule.waitForIdle()
     click("Read earlier")
     composeRule.waitForIdle()
@@ -870,7 +870,7 @@ class ChatReaderScrollOwnershipLayoutTest {
     val originalAutoAdvance = composeRule.mainClock.autoAdvance
     composeRule.mainClock.autoAdvance = false
     try {
-      click("Append user turn")
+      click("Send user turn")
       composeRule.mainClock.advanceTimeByFrame()
       drainCurrentWork()
       val newTurnStart = viewport()
@@ -982,6 +982,7 @@ class ChatReaderScrollOwnershipLayoutTest {
 
   private fun showReader(
     initialHistoryLoading: Boolean = false,
+    localSend: Boolean = false,
     readLatestOnNavigation: Boolean = false,
     initialStreamingLines: Int? = null,
     growEarlierRow: Boolean = false,
@@ -1008,6 +1009,7 @@ class ChatReaderScrollOwnershipLayoutTest {
     composeRule.setContent {
       ClawDesignTheme {
         var messages by remember { mutableStateOf(initialMessages) }
+        var localSendAdmission by remember { mutableStateOf<String?>(null) }
         var historyLoading by remember { mutableStateOf(initialHistoryLoading) }
         var streamingLines by remember { mutableStateOf(initialStreamingLines) }
         var prefixVisible by remember { mutableStateOf(false) }
@@ -1031,7 +1033,7 @@ class ChatReaderScrollOwnershipLayoutTest {
               }
             prepareChatHistory(messages, "agent:main:telegram:direct:projection", mainSessionKey = "agent:main:main").buildTimeline(if (streamingLines == null) 0 else 1, pending, stream)
           }
-        val current = rememberChatReaderScrollController("animation-owner", timeline, historyLoading = historyLoading)
+        val current = rememberChatReaderScrollController("animation-owner", timeline, historyLoading = historyLoading, localSendAdmission = localSendAdmission)
         SideEffect { reader = current }
         LaunchedEffect(Unit) { observedScale = currentCoroutineContext()[MotionDurationScale]?.scaleFactor }
         CompositionLocalProvider(
@@ -1057,7 +1059,10 @@ class ChatReaderScrollOwnershipLayoutTest {
                 }
               }) { Text(if (readLatestOnNavigation) "Read latest" else "Read here") }
             }
-            TextButton(onClick = { messages = initialMessages + message("new user", "user", 1000) }) { Text("Append user turn") }
+            TextButton(onClick = {
+              messages = initialMessages + message("new user", "user", 1000)
+              if (localSend) localSendAdmission = "new-user-admission"
+            }) { Text(if (localSend) "Send user turn" else "Append user turn") }
             if (readLatestOnNavigation) {
               TextButton(onClick = { messages = messages + message("assistant ${messages.count { it.role == "assistant" }}", "assistant", messages.size + 1) }) { Text("Append assistant") }
             }

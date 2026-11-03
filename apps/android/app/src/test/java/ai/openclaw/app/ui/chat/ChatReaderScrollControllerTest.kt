@@ -64,11 +64,12 @@ class ChatReaderScrollControllerTest {
     val prompt = user("prompt")
     val reply = assistant("reply")
     val before = timeline(prompt, reply)
-    val reading = initialChatReaderTransition(before, "gateway|agent|session").state.copy(
-      followTarget = null,
-      readingItemKey = "message:reply",
-      readingOffset = 37,
-    )
+    val reading =
+      initialChatReaderTransition(before, "gateway|agent|session").state.copy(
+        followTarget = null,
+        readingItemKey = "message:reply",
+        readingOffset = 37,
+      )
     val prepended = timeline(user("older"), prompt, reply)
     val older = reading.onTimelineChanged(prepended)
     assertEquals(before.latestContentVersion, prepended.latestContentVersion)

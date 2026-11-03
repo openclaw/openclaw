@@ -293,9 +293,10 @@ internal fun rememberChatReaderScrollController(
     if (!restoring || timeline.items.isEmpty()) return@LaunchedEffect
     val index = timeline.items.indexOfFirst { chatTimelineItemKey(it) == readerState.readingItemKey }
     if (index >= 0) {
-      navigation.launch(this, automatic = true) {
-        listState.scrollToItem(index + currentItemIndexOffset, readerState.readingOffset)
-      }.join()
+      navigation
+        .launch(this, automatic = true) {
+          listState.scrollToItem(index + currentItemIndexOffset, readerState.readingOffset)
+        }.join()
     }
     if (index >= 0 || !historyLoading) restoring = false
   }

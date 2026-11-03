@@ -677,6 +677,7 @@ class MainViewModel internal constructor(
   internal val chatHistoryPaging: StateFlow<ChatHistoryPaging> = runtimeState(initial = ChatHistoryPaging()) { it.chat.historyPaging }
 
   internal fun loadChatHistoryPage(older: Boolean) = ensureRuntime().chat.loadHistoryPage(older)
+
   internal val chatSessionCreating: StateFlow<Boolean> = runtimeState(initial = false) { it.chat.isCreatingSession }
   val chatError: StateFlow<String?> = runtimeState(initial = null) { it.chat.errorText }
   val chatHealthOk: StateFlow<Boolean> = runtimeState(initial = false) { it.chat.healthOk }

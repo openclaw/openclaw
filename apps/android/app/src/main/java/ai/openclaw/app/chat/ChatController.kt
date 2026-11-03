@@ -808,6 +808,7 @@ class ChatController internal constructor(
   // across durable outbox suspension points; same-owner history reloads keep their projection.
   private val chatSelectionGeneration = MutableStateFlow(0L)
   internal val selectionGeneration: StateFlow<Long> = chatSelectionGeneration.asStateFlow()
+
   // Cursor reads serialize through publication: request order cannot order two
   // deltas read from the same cursor. Existing generations still retire routes.
   private data class HistoryWindow(
@@ -817,6 +818,7 @@ class ChatController internal constructor(
     val liveMessages: List<ChatMessage> = emptyList(),
     val paging: Boolean = false,
   )
+
   private var historyWindow: HistoryWindow? = null
   private val historyPagingMutable = MutableStateFlow(ChatHistoryPaging())
   internal val historyPaging: StateFlow<ChatHistoryPaging> = historyPagingMutable.asStateFlow()
@@ -3157,59 +3159,65 @@ class ChatController internal constructor(
 
   /** Page reads never reconcile branch/run/outbox state from an older slice. */
   internal fun loadHistoryPage(older: Boolean) {
-    val window = synchronized(gatewayScopeApplyLock) {
-      val current = currentHistoryOwner()
-      val window = historyWindow?.takeIf { it.owner == current } ?: return
-      if (window.paging) return
-      if ((if (older) window.history.olderCursor else window.history.newerCursor) == null) return
-      historyWindow = window.copy(paging = true)
-      historyPagingMutable.value = historyPagingMutable.value.copy(loading = true, failed = false)
-      window
-    }
+    val window =
+      synchronized(gatewayScopeApplyLock) {
+        val current = currentHistoryOwner()
+        val window = historyWindow?.takeIf { it.owner == current } ?: return
+        if (window.paging) return
+        if ((if (older) window.history.olderCursor else window.history.newerCursor) == null) return
+        historyWindow = window.copy(paging = true)
+        historyPagingMutable.value = historyPagingMutable.value.copy(loading = true, failed = false)
+        window
+      }
     val owner = window.owner
     scope.launch {
       try {
         window.mutex.withLock {
           val seen = mutableSetOf<String>()
           while (true) {
-            val window = synchronized(gatewayScopeApplyLock) {
-              historyWindow?.takeIf { it.owner == owner && owner == currentHistoryOwner() }
-            } ?: return@withLock
+            val window =
+              synchronized(gatewayScopeApplyLock) {
+                historyWindow?.takeIf { it.owner == owner && owner == currentHistoryOwner() }
+              } ?: return@withLock
             val cursor = (if (older) window.history.olderCursor else window.history.newerCursor) ?: return@withLock
             if (!seen.add(cursor)) error("History returned a repeated page boundary. Refresh chat to retry.")
-            val params = sessionRequestParams(owner.sessionKey, checkNotNull(owner.agentId)) {
-              put("cursor", JsonPrimitive(cursor))
-            }.toString()
+            val params =
+              sessionRequestParams(owner.sessionKey, checkNotNull(owner.agentId)) {
+                put("cursor", JsonPrimitive(cursor))
+              }.toString()
             val lease = captureRequestLease(owner.gatewayScope) ?: throw GatewayRequestNotEnqueued("not connected")
-            val response = lease.request("chat.history", params) { enqueue ->
-              synchronized(gatewayScopeApplyLock) {
-                if (owner != currentHistoryOwner()) throw GatewayRequestNotEnqueued("history owner changed")
-                enqueue()
+            val response =
+              lease.request("chat.history", params) { enqueue ->
+                synchronized(gatewayScopeApplyLock) {
+                  if (owner != currentHistoryOwner()) throw GatewayRequestNotEnqueued("history owner changed")
+                  enqueue()
+                }
               }
-            }
             val page = parseHistory(response, owner.sessionKey, window.history.messages, directional = true)
             if (page.sessionId != window.history.sessionId) throw InvalidHistoryCursor()
             val nextCursor = if (older) page.olderCursor else page.newerCursor
             if (nextCursor != null && nextCursor in seen) error("History returned a repeated page boundary. Refresh chat to retry.")
             var added = false
-            val applied = publishGatewayState(lease, { owner == currentHistoryOwner() }) {
-              val current = historyWindow?.takeIf { it.owner == owner && it.history === window.history } ?: return@publishGatewayState false
-              val messages = mergeHistoryMessages(current.history.messages, page.messages, older)
-              added = messages.size > current.history.messages.size
-              val merged = current.history.copy(
-                messages = messages,
-                olderCursor = if (older) page.olderCursor else current.history.olderCursor,
-                olderComplete = if (older) page.olderComplete else current.history.olderComplete,
-                newerCursor = if (older) current.history.newerCursor else page.newerCursor,
-                // An older page's reverse cursor describes the page, not our tail.
-                deltaCursor = if (older) current.history.deltaCursor else page.deltaCursor ?: current.history.deltaCursor,
-              )
-              historyWindow = current.copy(history = merged)
-              _messages.value = mergeOptimisticMessages(mergeHistoryMessages(messages, current.liveMessages), optimisticMessagesByRunId.values)
-              historyPagingMutable.value = ChatHistoryPaging(merged.olderCursor != null, merged.newerCursor != null, loading = true, olderComplete = merged.olderComplete)
-              enqueueTranscriptCacheWrite(owner.gatewayScope, checkNotNull(owner.agentId), owner.sessionKey, messages, null)
-              true
-            }
+            val applied =
+              publishGatewayState(lease, { owner == currentHistoryOwner() }) {
+                val current = historyWindow?.takeIf { it.owner == owner && it.history === window.history } ?: return@publishGatewayState false
+                val messages = mergeHistoryMessages(current.history.messages, page.messages, older)
+                added = messages.size > current.history.messages.size
+                val merged =
+                  current.history.copy(
+                    messages = messages,
+                    olderCursor = if (older) page.olderCursor else current.history.olderCursor,
+                    olderComplete = if (older) page.olderComplete else current.history.olderComplete,
+                    newerCursor = if (older) current.history.newerCursor else page.newerCursor,
+                    // An older page's reverse cursor describes the page, not our tail.
+                    deltaCursor = if (older) current.history.deltaCursor else page.deltaCursor ?: current.history.deltaCursor,
+                  )
+                historyWindow = current.copy(history = merged)
+                _messages.value = mergeOptimisticMessages(mergeHistoryMessages(messages, current.liveMessages), optimisticMessagesByRunId.values)
+                historyPagingMutable.value = ChatHistoryPaging(merged.olderCursor != null, merged.newerCursor != null, loading = true, olderComplete = merged.olderComplete)
+                enqueueTranscriptCacheWrite(owner.gatewayScope, checkNotNull(owner.agentId), owner.sessionKey, messages, null)
+                true
+              }
             if (applied != true || (older && added) || nextCursor == null) return@withLock
             // Hidden/duplicate-only pages still advance. Keep walking until visible
             // content or exhaustion; transport awaits remain cancellation points.
@@ -4499,9 +4507,10 @@ class ChatController internal constructor(
     // Snapshot-only Gateways retain their existing independent read semantics.
     // A cursor-backed window has one read/publication lane; route retirement does
     // not wait for an obsolete network request to release another owner's lock.
-    val mutex = synchronized(gatewayScopeApplyLock) {
-      historyWindow?.takeIf { it.owner == currentHistoryOwner() && (it.history.deltaCursor != null || it.history.newerCursor != null || it.history.olderCursor != null) }?.mutex
-    }
+    val mutex =
+      synchronized(gatewayScopeApplyLock) {
+        historyWindow?.takeIf { it.owner == currentHistoryOwner() && (it.history.deltaCursor != null || it.history.newerCursor != null || it.history.olderCursor != null) }?.mutex
+      }
     if (mutex != null) mutex.lock()
     try {
       return fetchAndApplyHistoryOwned(sessionKey, generation, purpose, runIdsToReconcile, markCompletedTranscript, refreshBranches, mutationReconciliationState, transcriptOwner)
@@ -4577,10 +4586,14 @@ class ChatController internal constructor(
         var historyBranchState = mutationReconciliationState ?: branchSnapshot?.let { branchState(it) }
         val activeRequestSequence = requestSequence
         synchronized(gatewayScopeApplyLock) { activeHistoryReads[activeRequestSequence] = ::isCurrent }
-        val windowOwner = ChatTranscriptHistoryRefresh.Owner(
-          sessionKey, generation, requestCacheScope, requestAgentId,
-          requestDefaultAgentRevision.takeIf { requestTracksDefaultAgent },
-        )
+        val windowOwner =
+          ChatTranscriptHistoryRefresh.Owner(
+            sessionKey,
+            generation,
+            requestCacheScope,
+            requestAgentId,
+            requestDefaultAgentRevision.takeIf { requestTracksDefaultAgent },
+          )
         val window = synchronized(gatewayScopeApplyLock) { historyWindow?.takeIf { it.owner == windowOwner } }
         val history: ChatHistory
         val publicationBeforeRead = synchronized(gatewayScopeApplyLock) { latestAppliedHistoryRequest }
@@ -4591,9 +4604,10 @@ class ChatController internal constructor(
             history =
               try {
                 suspend fun readHistory(cursor: String?): ChatHistory {
-                  val historyParams = sessionRequestParams(sessionKey, requestAgentId) {
-                    cursor?.let { put("cursor", JsonPrimitive(it)) }
-                  }.toString()
+                  val historyParams =
+                    sessionRequestParams(sessionKey, requestAgentId) {
+                      cursor?.let { put("cursor", JsonPrimitive(it)) }
+                    }.toString()
                   val historyJson =
                     if (transcriptOwner == null) {
                       requestGatewayBound(requestCacheScope?.gatewayId, "chat.history", historyParams)
@@ -4713,7 +4727,13 @@ class ChatController internal constructor(
                     }.forEach { clearPendingRun(it, publishRunState = false) }
                 }
                 val confirmedIds = history.messages.mapNotNullTo(mutableSetOf()) { it.entryId }
-                val pendingLive = window?.liveMessages.orEmpty().filter { it.entryId !in confirmedIds }.takeIf { usedDelta }.orEmpty()
+                val pendingLive =
+                  window
+                    ?.liveMessages
+                    .orEmpty()
+                    .filter { it.entryId !in confirmedIds }
+                    .takeIf { usedDelta }
+                    .orEmpty()
                 historyWindow = historyWindow?.copy(liveMessages = pendingLive)
                 val nextMessages = mergeOptimisticMessages(incoming = mergeHistoryMessages(history.messages, pendingLive), optimistic = optimisticMessagesByRunId.values)
                 _messagesFromCache.value = false
@@ -6629,11 +6649,21 @@ class ChatController internal constructor(
     }
     val phase = payload["phase"].asStringOrNull()
     val reason = payload["reason"].asStringOrNull()
-    if (reason == "compact" || reason == "reset" || phase == "reset") {
+    if (reason == "compact") {
       // Compaction events omit cleared fields. Read the full owner snapshot rather
       // than treating those omissions as a patch or inferring usage from the transcript.
       if (eventKey == _sessionKey.value) refreshHistoryForRecovery(reopenWindow = true) else refreshSessionsForCurrentWindow()
       return
+    }
+    if (eventKey == _sessionKey.value && (reason == "reset" || phase == "reset")) {
+      synchronized(gatewayScopeApplyLock) {
+        val history = historyWindow?.takeIf { it.owner == currentHistoryOwner() }?.history
+        if (history != null && (history.deltaCursor != null || history.olderCursor != null || history.newerCursor != null)) {
+          refreshHistoryForRecovery(reopenWindow = true)
+        }
+      }
+      // Reset metadata must still reach the session settings owner below so queued
+      // writes observe the new session identity. Snapshot-only reads stay unchanged.
     }
     // Durable transcript invalidations need no session snapshot or chat terminal event.
     if (eventKey == _sessionKey.value && (payload["message"] is JsonObject || phase == "message")) {
@@ -7670,8 +7700,9 @@ class ChatController internal constructor(
     previousHistory: ChatHistory? = null,
     directional: Boolean = false,
   ): ChatHistory {
-    val root = runCatching { json.parseToJsonElement(historyJson).asObjectOrNull() }.getOrNull()
-      ?: throw InvalidHistoryCursor()
+    val root =
+      runCatching { json.parseToJsonElement(historyJson).asObjectOrNull() }.getOrNull()
+        ?: throw InvalidHistoryCursor()
     val kind = root["kind"].asJsonStringOrNull()
     if (kind == "reset" || root["windowReset"] == JsonPrimitive(true)) throw InvalidHistoryCursor()
     val delta = kind == "delta"
@@ -7682,26 +7713,29 @@ class ChatController internal constructor(
     if (root.nonBlankString("sessionKey")?.let { !sameOutboxSession(it, sessionKey) } == true) throw InvalidHistoryCursor()
     val sid = root.nonBlankString("sessionId") ?: sessionInfo?.sessionId ?: previousHistory?.sessionId.takeIf { delta }
     if (delta && sid != previousHistory?.sessionId) throw InvalidHistoryCursor()
-    val array = root["messages"].asArrayOrNull()
-      ?: if (delta || directional || root.nonBlankString("deltaCursor") != null) throw InvalidHistoryCursor() else JsonArray(emptyList())
-    val activity = try {
-      root["activity"]?.let { json.decodeFromJsonElement<List<ChatHistoryActivity>>(it) }?.associate { it.messageId to it.items }
-    } catch (_: IllegalArgumentException) {
-      throw InvalidHistoryCursor()
-    }
-    val messages = if (delta) {
-      array.fold(checkNotNull(previousHistory).messages) { rows, element ->
-        reduceSessionMessage(rows, element.asObjectOrNull() ?: throw InvalidHistoryCursor(), sessionKey)
+    val array =
+      root["messages"].asArrayOrNull()
+        ?: if (delta || directional || root.nonBlankString("deltaCursor") != null) throw InvalidHistoryCursor() else JsonArray(emptyList())
+    val activity =
+      try {
+        root["activity"]?.let { json.decodeFromJsonElement<List<ChatHistoryActivity>>(it) }?.associate { it.messageId to it.items }
+      } catch (_: IllegalArgumentException) {
+        throw InvalidHistoryCursor()
       }
-    } else {
-      array.mapNotNull { element ->
-        val obj = element.asObjectOrNull() ?: throw InvalidHistoryCursor()
-        if (obj["role"].asJsonStringOrNull() == null) throw InvalidHistoryCursor()
-        parseMessage(obj)
+    val messages =
+      if (delta) {
+        array.fold(checkNotNull(previousHistory).messages) { rows, element ->
+          reduceSessionMessage(rows, element.asObjectOrNull() ?: throw InvalidHistoryCursor(), sessionKey)
+        }
+      } else {
+        array.mapNotNull { element ->
+          val obj = element.asObjectOrNull() ?: throw InvalidHistoryCursor()
+          if (obj["role"].asJsonStringOrNull() == null) throw InvalidHistoryCursor()
+          parseMessage(obj)
+        }
+      }.map { message ->
+        if (activity?.containsKey(message.entryId) == true) message.copy(activity = activity[message.entryId]) else message
       }
-    }.map { message ->
-      if (activity?.containsKey(message.entryId) == true) message.copy(activity = activity[message.entryId]) else message
-    }
     val defaults = root["defaults"].asObjectOrNull()
     return ChatHistory(
       sessionKey = sessionKey,
@@ -7739,7 +7773,14 @@ class ChatController internal constructor(
     val obj = payload["message"].asObjectOrNull() ?: throw InvalidHistoryCursor()
     // Anchored activity can precede the cursor. A full page owns its composed
     // position; never append it at the tail and commit past it (Apple parity).
-    if (obj["__openclaw"].asObjectOrNull()?.get("transcriptPosition").asObjectOrNull()?.get("activity") is JsonObject) throw InvalidHistoryCursor()
+    if (obj["__openclaw"]
+        .asObjectOrNull()
+        ?.get("transcriptPosition")
+        .asObjectOrNull()
+        ?.get("activity") is JsonObject
+    ) {
+      throw InvalidHistoryCursor()
+    }
     val content = obj["content"]
     if (content !is JsonArray && content.asJsonStringOrNull() == null && obj["text"].asJsonStringOrNull() == null) throw InvalidHistoryCursor()
     val parsed = parseMessage(obj) ?: throw InvalidHistoryCursor()
@@ -7754,10 +7795,11 @@ class ChatController internal constructor(
     older: Boolean = false,
   ): List<ChatMessage> {
     val canonical = previous.filter { it.entryId != null }.associateBy { it.entryId }
-    val reconciled = incoming.map { message ->
-      val old = canonical[message.entryId]
-      if (old == null) message else message.copy(id = old.id, content = preserveOptimisticAudioDuration(old, message))
-    }
+    val reconciled =
+      incoming.map { message ->
+        val old = canonical[message.entryId]
+        if (old == null) message else message.copy(id = old.id, content = preserveOptimisticAudioDuration(old, message))
+      }
     val replacements = reconciled.associateBy { it.id }
     val existingIds = previous.mapTo(mutableSetOf()) { it.id }
     val added = reconciled.filter { it.id !in existingIds }.distinctBy { it.id }
@@ -7783,7 +7825,7 @@ class ChatController internal constructor(
     val legacySuffix = "\n...(truncated)..."
     val truncated = metadata?.get("truncated")
     return ChatMessage(
-      id = metadata?.get("id").asJsonStringOrNull()?.takeIf { it.isNotBlank() } ?: UUID.randomUUID().toString(),
+      id = UUID.randomUUID().toString(),
       role = role,
       content = content,
       timestampMs = obj["timestamp"].asLongOrNull(),
@@ -9049,9 +9091,10 @@ internal fun reconcileMessageIds(
     }
     val key = messageIdentityKey(message) ?: return@map message
     val matches = messagesByKey[key]?.takeIf { it.isNotEmpty() } ?: return@map message
-    val matchIndex = matches.indexOfFirst { previousMessage ->
-      message.entryId == null || previousMessage.entryId == null || message.entryId == previousMessage.entryId
-    }
+    val matchIndex =
+      matches.indexOfFirst { previousMessage ->
+        message.entryId == null || previousMessage.entryId == null || message.entryId == previousMessage.entryId
+      }
     if (matchIndex < 0) return@map message
     val previousMessage = matches.removeAt(matchIndex)
     if (matches.isEmpty()) {

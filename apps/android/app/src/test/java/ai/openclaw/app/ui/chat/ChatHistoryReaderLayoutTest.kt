@@ -12,18 +12,18 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
-import androidx.compose.ui.test.hasScrollToIndexAction
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.CoroutineScope
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -61,11 +61,13 @@ class ChatHistoryReaderLayoutTest {
   fun pausedViewportSurvivesOlderPageRemotePromptAndRecreation() {
     var messages by mutableStateOf((1..30).map { row(it) })
     lateinit var reader: ChatReaderScrollController
+    lateinit var readerScope: CoroutineScope
     val restoration = StateRestorationTester(composeRule)
     restoration.setContent {
       ClawDesignTheme {
         val timeline = prepareChatHistory(messages, "session", "session").buildTimeline(0, emptyList(), null)
         reader = rememberChatReaderScrollController("gateway|agent|session", timeline, false)
+        readerScope = rememberCoroutineScope()
         CompositionLocalProvider(LocalChatReaderNavigation provides reader.navigation) {
           LazyColumn(
             state = reader.listState,
@@ -75,8 +77,16 @@ class ChatHistoryReaderLayoutTest {
             items(timeline.items, key = ::chatTimelineItemKey) { item ->
               ChatReaderItem(chatTimelineItemKey(item)) {
                 val anchor = rememberChatReaderAnchor()
-                val message = (item as ChatTimelineItem.Message).message
-                Text(message.content.single().text.orEmpty(), modifier = (anchor?.modifier ?: Modifier).height(60.dp), onTextLayout = anchor?.onTextLayout)
+                check(item is ChatTimelineItem.Message) { "Expected a final-answer row, got $item" }
+                val message = item.message
+                Text(
+                  message.content
+                    .single()
+                    .text
+                    .orEmpty(),
+                  modifier = (anchor?.modifier ?: Modifier).height(60.dp),
+                  onTextLayout = anchor?.onTextLayout,
+                )
               }
             }
           }
@@ -84,8 +94,10 @@ class ChatHistoryReaderLayoutTest {
       }
     }
     composeRule.waitForIdle()
-    composeRule.runOnIdle { reader.navigation.pause() }
-    composeRule.onNode(hasScrollToIndexAction()).performScrollToIndex(10)
+    // In-app navigation owns explicit reading intent; a raw LazyList jump bypasses it.
+    composeRule.runOnIdle {
+      reader.navigation.launch(readerScope) { reader.listState.scrollToItem(10) }
+    }
     composeRule.waitForIdle()
     val before = composeRule.onNodeWithText("Message 20").assertIsDisplayed().getUnclippedBoundsInRoot()
     composeRule.runOnIdle { messages = (0 downTo -10).reversed().map { row(it) } + messages + row(31, "user") }
@@ -99,10 +111,15 @@ class ChatHistoryReaderLayoutTest {
     assertEquals(updated.top.value, restored.top.value, 1f)
   }
 
-  private fun row(index: Int, role: String = "assistant") = ChatMessage(
+  private fun row(
+    index: Int,
+    role: String = "assistant",
+  ) = ChatMessage(
     id = "row-$index",
     entryId = "entry-$index",
     role = role,
+    // This fixture needs individual reader rows, not commentary collapsed into work.
+    phase = if (role == "assistant") "final_answer" else null,
     content = listOf(ChatMessageContent(text = "Message $index")),
     timestampMs = index.toLong(),
   )
