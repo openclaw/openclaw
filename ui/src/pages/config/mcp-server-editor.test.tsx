@@ -97,6 +97,31 @@ describe("McpServerEditor", () => {
     expect(onFormRemove).toHaveBeenCalledWith(["mcp", "servers", "local", "args"]);
   });
 
+  it("changes only the edited argument line and keeps the others as saved", () => {
+    const saved = ["--stdio", "  --padded  ", "", "multi\nline", "--last "];
+    const { container, onFormPatch } = mountEditor(
+      { local: { command: "npx", args: saved } },
+      summary("local", "stdio"),
+    );
+    const args = container.querySelector<HTMLTextAreaElement>('textarea[aria-label="Arguments"]')!;
+    expect(args.value).toBe("--stdio\n  --padded  \n\nmulti\nline\n--last ");
+    change(args, "--stdio\n  --padded  \n\nmulti\nline\n --changed ");
+    expect(onFormPatch).toHaveBeenLastCalledWith(
+      ["mcp", "servers", "local", "args"],
+      ["--stdio", "  --padded  ", "", "multi\nline", "--changed"],
+    );
+    change(args, "--first\n--stdio\n  --padded  \n\nmulti\nline\n--last ");
+    expect(onFormPatch).toHaveBeenLastCalledWith(
+      ["mcp", "servers", "local", "args"],
+      ["--first", "--stdio", "  --padded  ", "", "multi\nline", "--last "],
+    );
+    change(args, "--stdio\n  --padded  \n\nmulti\nline2\n--last ");
+    expect(onFormPatch).toHaveBeenLastCalledWith(
+      ["mcp", "servers", "local", "args"],
+      ["--stdio", "  --padded  ", "", "multi", "line2", "--last "],
+    );
+  });
+
   it("never saves a stdio server without a command", () => {
     const { container, onFormPatch } = mountEditor(
       { local: { command: "npx" } },

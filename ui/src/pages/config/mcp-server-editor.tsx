@@ -14,6 +14,47 @@ import type { ConfigProps } from "./view-types.ts";
 
 const SERVERS_PATH = ["mcp", "servers"];
 
+/** Applies an edit of the one-argument-per-line text. Only arguments on lines the edit
+    touched change; every other argument is kept as saved, spaces and empty ones included. */
+function editArgs(saved: readonly unknown[], text: string): unknown[] {
+  const spans = saved.map((arg) => String(arg).split("\n").length);
+  const before = saved.join("\n").split("\n");
+  const after = text.split("\n");
+  const max = Math.min(before.length, after.length);
+  let head = 0;
+  while (head < max && before[head] === after[head]) {
+    head++;
+  }
+  let tail = 0;
+  while (tail < max - head && before.at(-1 - tail) === after.at(-1 - tail)) {
+    tail++;
+  }
+  // Whole arguments outside the touched lines; one that spans them counts as touched.
+  let headArgs = 0;
+  let headLines = 0;
+  for (const span of spans) {
+    if (headLines + span > head) {
+      break;
+    }
+    headLines += span;
+    headArgs++;
+  }
+  let tailArgs = 0;
+  let tailLines = 0;
+  for (const span of spans.slice(headArgs).reverse()) {
+    if (tailLines + span > tail) {
+      break;
+    }
+    tailLines += span;
+    tailArgs++;
+  }
+  const touched = after
+    .slice(headLines, after.length - tailLines)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  return [...saved.slice(0, headArgs), ...touched, ...saved.slice(saved.length - tailArgs)];
+}
+
 /** One server's saved fields, using the same autosave and redaction as every config form. */
 export function McpServerEditor(props: {
   config: ConfigProps;
@@ -171,10 +212,11 @@ export function McpServerEditor(props: {
                         ref={argsValue}
                         disabled={disabled()}
                         onChange={(event) => {
-                          const args = event.currentTarget.value
-                            .split("\n")
-                            .map((line) => line.trim())
-                            .filter(Boolean);
+                          const saved = value()?.args;
+                          const args = editArgs(
+                            Array.isArray(saved) ? saved : [],
+                            event.currentTarget.value,
+                          );
                           if (args.length > 0) {
                             props.config.onFormPatch([...path(), "args"], args);
                           } else {
