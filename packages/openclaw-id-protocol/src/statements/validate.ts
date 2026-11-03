@@ -115,12 +115,12 @@ function object(shape: Record<string, Check>): Check {
     // SAFETY: the guard above rejected non-objects, null and arrays.
     const record = value as Record<string, unknown>;
     for (const key of Object.keys(record)) {
-      if (!(key in shape)) {
+      if (!Object.hasOwn(shape, key)) {
         fail(`${path}.${key}`, "unknown field");
       }
     }
     for (const [key, check] of Object.entries(shape)) {
-      if (!(key in record)) {
+      if (!Object.hasOwn(record, key)) {
         fail(`${path}.${key}`, "missing field");
       }
       check(record[key], `${path}.${key}`);
@@ -133,7 +133,9 @@ function tagged(field: string, variants: Record<string, Check>): Check {
   return (value, path) => {
     // SAFETY: optional member read; primitives and null yield undefined or a non-string tag.
     const tag = (value as Record<string, unknown> | null)?.[field];
-    const check = typeof tag === "string" ? variants[tag] : undefined;
+    // Own members only: a tag such as "__proto__" or "constructor" must not select a validator.
+    const check =
+      typeof tag === "string" && Object.hasOwn(variants, tag) ? variants[tag] : undefined;
     if (!check) {
       fail(`${path}.${field}`, "unknown variant");
     }

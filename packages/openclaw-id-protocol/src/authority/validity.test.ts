@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { fingerprint } from "../keys.js";
 import { signStatement } from "../statements/envelope.js";
 import { buildWorld, certBody, signChange, WORLD_NOW } from "../testing/world.js";
-import { submitStatement } from "./apply.js";
+import { submitStatement, type WriteContext } from "./apply.js";
 import {
   activeOwnerDevices,
   isAdmitted,
@@ -91,7 +91,12 @@ describe("owner certificate validity windows", () => {
       world.root,
     );
     const fp = await fingerprint(world.mallory.pub);
-    const record: OwnerDeviceRecord = { cert: future, approved_by: "root", last_seen: WORLD_NOW };
+    const record: OwnerDeviceRecord = {
+      cert: future,
+      caps: future.body.caps,
+      approved_by: "root",
+      last_seen: WORLD_NOW,
+    };
     const state = { ...world.state, owner_devices: { ...world.state.owner_devices, [fp]: record } };
     expect(await admittedAt(state, world.mallory, WORLD_NOW)).toBe(false);
     expect(await admittedAt(state, world.mallory, WORLD_NOW + 3600)).toBe(true);

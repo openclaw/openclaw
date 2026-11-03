@@ -12,7 +12,7 @@ import {
 import { parseStatement } from "../statements/validate.js";
 import { buildWorld, certBody, signChange, worldKey, WORLD_NOW } from "../testing/world.js";
 import { dropInactive, nextInactivityDrop, recordSeen } from "./allowlist.js";
-import { submitStatement } from "./apply.js";
+import { submitStatement, type WriteContext } from "./apply.js";
 import { isAdmitted, snapshotBody, type AuthorityState } from "./state.js";
 
 const tunnel = { channel: "tunnel" as const, now: WORLD_NOW };
@@ -23,7 +23,7 @@ type World = Awaited<ReturnType<typeof buildWorld>>;
 type Key = World["device1"];
 
 // Applies a write and fails loudly when it is refused.
-async function apply(state: AuthorityState, statement: unknown, context = tunnel) {
+async function apply(state: AuthorityState, statement: unknown, context: WriteContext = tunnel) {
   const result = await submitStatement(state, statement, context);
   if (!result.ok) {
     throw new Error(`refused: ${result.code} ${result.detail}`);
