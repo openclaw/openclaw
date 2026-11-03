@@ -24,7 +24,7 @@ import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-sessio
 import { isMobileBrowserPlatform, keepMobileReturnNative } from "../../lib/browser-platform.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import type { ComposerDraftSource } from "../../lib/chat/composer-draft-changes.ts";
-import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
+import { readHumanMentions, updateHumanMentions } from "../../lib/chat/human-mentions.ts";
 import {
   clearCompositionEnd,
   isComposingKeyboardEvent,
@@ -34,6 +34,7 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { liveValue as createLiveValue } from "../../lib/reactive/live-value.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
+import { detectTextDirection } from "../../lib/text-direction.ts";
 import { resolveChatAttachmentLimits } from "../chat/components/chat-attachment-admission.ts";
 import { createChatAttachmentInputHandle } from "../chat/components/chat-attachment-inputs.ts";
 import { ChatAttachmentInputs } from "../chat/components/chat-attachment-inputs.tsx";
@@ -50,11 +51,14 @@ import {
 } from "../chat/components/chat-composer-dom.ts";
 import "../../components/tooltip.ts";
 import { EmojiMenu } from "../chat/components/chat-composer-emoji.tsx";
+import {
+  ComposerMentionLayer,
+  createComposerMentionLayerBinding,
+} from "../chat/components/chat-composer-mention-layer.tsx";
 import type { HumanMentionMenuHost } from "../chat/components/chat-composer-mention-menu-state.ts";
 import { HumanMentionMenuView } from "../chat/components/chat-composer-mention-menu.tsx";
 import { resolveComposerMenus } from "../chat/components/chat-composer-menus.ts";
 import type { ChatComposerCapabilityMenuSource } from "../chat/components/chat-composer-plus-menu.types.ts";
-import { SelectedHumanMentions } from "../chat/components/chat-composer-selected-mentions.tsx";
 import type { SkillMenuHost } from "../chat/components/chat-composer-skill-menu-state.ts";
 import { SkillMenu } from "../chat/components/chat-composer-skill-menu.tsx";
 import type { SlashMenuHost } from "../chat/components/chat-composer-slash-menu-state.ts";
@@ -394,6 +398,10 @@ export function NewSessionComposer(props: {
   );
   const visibleMessage = createMemo(() => frame().visibleMessage);
   const messageValue = createLiveValue(visibleMessage);
+  const inlineMentions = createMemo(
+    () => readHumanMentions(frame().visibleMessage, options().mentions) ?? [],
+  );
+  const mentionLayer = createComposerMentionLayerBinding(() => input);
   let input: HTMLTextAreaElement | undefined;
   let composer: HTMLDivElement | undefined;
   let footer: HTMLDivElement | undefined;
@@ -495,12 +503,6 @@ export function NewSessionComposer(props: {
         <Show when={!options().nativeTerminal}>
           <ChatAttachmentInputs {...frame().attachmentProps} inputHandle={inputHandle} />
         </Show>
-        <SelectedHumanMentions
-          text={options().message}
-          mentions={options().mentions}
-          onRemove={() => options().onInput(options().message, [])}
-          avatarUrls={textarea.mentionMenu.selectedAvatarUrls}
-        />
         <AttachmentPreview {...frame().attachmentProps} readRevision={frame()} />
         <AttachmentReadStatus pendingReads={options().attachmentDraft.reads.pendingReads} />
         <div class="agent-chat__composer-lede">{options().dictationStatus}</div>
@@ -517,10 +519,14 @@ export function NewSessionComposer(props: {
               <SkillMenu menu={textarea.skillMenu} host={frame().skillMenuHost} />
             </Show>
             <textarea
-              ref={(element) => {
-                input = element;
-                messageValue(element);
-              }}
+              dir={detectTextDirection(frame().visibleMessage)}
+              ref={[
+                (element) => {
+                  input = element;
+                  messageValue(element);
+                },
+                mentionLayer.inputRef,
+              ]}
               class="new-session-page__message"
               rows="1"
               autofocus={globalThis.matchMedia?.("(max-width: 560px)")?.matches ?? false}
@@ -585,12 +591,14 @@ export function NewSessionComposer(props: {
                 }
               }}
               onBlur={(event) => {
+                event.currentTarget.removeAttribute("data-composing");
                 handleTextareaOverflowInteraction(event);
                 clearCompositionEnd(event);
                 textarea.composing = false;
                 textarea.emojiMenu.close();
               }}
               onCompositionEnd={(event) => {
+                event.currentTarget.removeAttribute("data-composing");
                 recordCompositionEnd(event);
                 textarea.composing = false;
                 frame().updateMenus(event.currentTarget);
@@ -600,6 +608,7 @@ export function NewSessionComposer(props: {
                 frame().handleComposerKeydown(event);
               }}
               onCompositionStart={(event) => {
+                event.currentTarget.dataset.composing = "true";
                 handleTextareaOverflowInteraction(event);
                 textarea.composing = true;
                 textarea.emojiMenu.close();
@@ -615,6 +624,14 @@ export function NewSessionComposer(props: {
                 }
               }}
             />
+            <Show when={inlineMentions().length > 0 && !options().dictationActive}>
+              <ComposerMentionLayer
+                text={frame().visibleMessage}
+                mentions={inlineMentions()}
+                dir={detectTextDirection(frame().visibleMessage)}
+                capture={mentionLayer.capture}
+              />
+            </Show>
             <span class="agent-chat__composer-placeholder" aria-hidden="true">
               {placeholder()}
             </span>

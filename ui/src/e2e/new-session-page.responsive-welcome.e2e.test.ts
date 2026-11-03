@@ -333,7 +333,7 @@ suite.define(() => {
     expect(await page.locator(".agent-chat__recent").isVisible()).toBe(true);
   });
 
-  it("keeps selected people and their remove control compact on a cold New Session", async () => {
+  it("shows selected people inline in the cold New Session native editor", async () => {
     const page = await openPage({ viewport: { width: 1280, height: 900 } });
     const gateway = await installMockGateway(page, {
       presenceUsers: [
@@ -361,61 +361,53 @@ suite.define(() => {
       agentId: "main",
     });
     await page.getByRole("option", { name: /Bob/ }).click();
-    const preview = page.locator(".new-session-page__composer .chat-reply-preview");
-    await pollText(preview).toContain("Will notify");
-    await pollText(preview.locator(".composer-context-strip__person-name")).toBe("Bob");
-    const remove = preview.getByRole("button", { name: "Remove mention" });
+    const layer = page.locator(".new-session-page__composer .chat-composer-mention-layer");
+    await pollText(layer).toContain("@averylongmentionlabel");
+    await pollCount(page.locator(".chat-compose__mention-preview")).toBe(0);
+    await pollAttribute(layer, "aria-hidden").toBe("true");
+    await pollCount(layer.locator(".markdown-person-reference__avatar")).toBe(1);
 
-    for (const viewport of [
-      { width: 1280, height: 900 },
-      { width: 390, height: 844 },
-    ]) {
-      await page.setViewportSize(viewport);
-      // CSS resizes before the shell commits its drawer layout.
-      await page
-        .locator(viewport.width === 390 ? ".shell--mobile-nav" : ".shell:not(.shell--mobile-nav)")
-        .waitFor();
-      await waitForLayoutSettled(
-        page,
-        ".new-session-page__composer .chat-reply-preview, .new-session-page__composer .chat-reply-preview button",
+    for (const width of [390, 320]) {
+      await page.setViewportSize({ width, height: 720 });
+      await waitForLayoutSettled(page, ".new-session-page__composer");
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+        width,
       );
-
-      const layout = await preview.evaluate((element) => {
-        const bar = element.getBoundingClientRect();
-        const text = element
-          .querySelector(".composer-context-strip__people")!
-          .getBoundingClientRect();
-        const button = element.querySelector("button")!.getBoundingClientRect();
+      const metrics = await layer.evaluate((element) => {
+        const nativeInput = element.parentElement!.querySelector("textarea")!;
+        const nativeStyle = getComputedStyle(nativeInput);
+        const mirrorStyle = getComputedStyle(element);
         return {
-          height: bar.height,
-          textBeforeButton: text.right <= button.left,
-          sameRow: Math.abs(text.top + text.height / 2 - button.top - button.height / 2) <= 1,
-          buttonContained:
-            button.left >= bar.left &&
-            button.right <= bar.right &&
-            button.top >= bar.top &&
-            button.bottom <= bar.bottom,
-          iconSizes: [...element.querySelectorAll("svg")].map((icon) => {
-            const bounds = icon.getBoundingClientRect();
-            return Math.max(bounds.width, bounds.height);
-          }),
+          nativeFont: [nativeStyle.fontFamily, nativeStyle.fontSize, nativeStyle.lineHeight],
+          mirrorFont: [mirrorStyle.fontFamily, mirrorStyle.fontSize, mirrorStyle.lineHeight],
+          nativeWidth: nativeInput.clientWidth,
+          mirrorWidth: element.clientWidth,
+          horizontalOverflow: element.scrollWidth > element.clientWidth,
         };
       });
-      expect(layout.height).toBeLessThanOrEqual(48);
-      expect(layout, JSON.stringify(layout)).toMatchObject({
-        textBeforeButton: true,
-        sameRow: true,
-        buttonContained: true,
-      });
-      for (const size of layout.iconSizes) {
-        expect(size).toBeGreaterThan(0);
-        expect(size).toBeLessThanOrEqual(24);
-      }
-      await expect.poll(() => remove.isVisible()).toBe(true);
+      expect(metrics.mirrorFont).toEqual(metrics.nativeFont);
+      expect(metrics.mirrorWidth).toBe(metrics.nativeWidth);
+      expect(metrics.horizontalOverflow).toBe(false);
     }
-
-    await remove.click();
-    await pollCount(preview).toBe(0);
-    expect(await textarea.inputValue()).toBe("@Bob ");
+    await textarea.press("Control+End");
+    await page.keyboard.insertText("x".repeat(700));
+    await waitForLayoutSettled(page, ".new-session-page__composer");
+    await expect
+      .poll(() =>
+        layer.evaluate((element) => {
+          const nativeInput = element.parentElement!.querySelector("textarea")!;
+          return {
+            scrolling: nativeInput.scrollHeight > nativeInput.clientHeight,
+            paddingMatches:
+              getComputedStyle(element).paddingInlineEnd ===
+              getComputedStyle(nativeInput).paddingInlineEnd,
+            heightMatches: element.scrollHeight === nativeInput.scrollHeight,
+          };
+        }),
+      )
+      .toEqual({ scrolling: true, paddingMatches: true, heightMatches: true });
+    await textarea.fill("Edited without a mention");
+    await pollCount(layer).toBe(0);
+    await expect.poll(() => textarea.inputValue()).toBe("Edited without a mention");
   });
 });

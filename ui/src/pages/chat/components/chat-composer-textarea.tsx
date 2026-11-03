@@ -1,5 +1,6 @@
-import { createMemo } from "solid-js";
+import { createMemo, Show } from "solid-js";
 import { isMobileBrowserPlatform } from "../../../lib/browser-platform.ts";
+import { readHumanMentions } from "../../../lib/chat/human-mentions.ts";
 import { clearCompositionEnd } from "../../../lib/ime.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
@@ -12,6 +13,10 @@ import {
   handleTextareaOverflowScroll,
 } from "./chat-composer-dom.ts";
 import type { createChatComposerContext } from "./chat-composer-frame.ts";
+import {
+  ComposerMentionLayer,
+  createComposerMentionLayerBinding,
+} from "./chat-composer-mention-layer.tsx";
 import { ComposerPluginPromptSlot } from "./chat-composer-plugin-prompt-slot.tsx";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 
@@ -47,6 +52,13 @@ export function renderComposerTextarea(
     // The native IME preview owns the field until composition commits.
     return ownerState.composerComposing && element ? element.value : next;
   });
+  const mentions = createMemo(
+    () => readHumanMentions(context().visibleDraft, composer.mentions) ?? [],
+  );
+  const showMentions = createMemo(
+    () => mentions().length > 0 && !context().predictionText && !context().dictation?.active,
+  );
+  const mentionLayer = createComposerMentionLayerBinding(() => element);
   const textareaRef = elementRef<HTMLTextAreaElement>((node) => {
     element = node;
     valueRef(node);
@@ -61,7 +73,7 @@ export function renderComposerTextarea(
   return (
     <>
       <textarea
-        ref={[textareaRef]}
+        ref={[textareaRef, mentionLayer.inputRef]}
 
         dir={detectTextDirection(value())}
         disabled={!context().canCompose}
@@ -144,6 +156,14 @@ export function renderComposerTextarea(
         placeholder={context().dictation?.active ? "" : view.placeholder}
         rows="1"
       />
+      <Show when={showMentions()}>
+        <ComposerMentionLayer
+          text={context().visibleDraft}
+          mentions={mentions()}
+          dir={detectTextDirection(context().visibleDraft)}
+          capture={mentionLayer.capture}
+        />
+      </Show>
       <ComposerPluginPromptSlot
         text={context().visibleDraft}
         mentions={composer.mentions}

@@ -370,7 +370,13 @@
 }
 
 .agent-chat__composer-combobox
-  > :where(textarea, input, .agent-chat__composer-placeholder, .agent-chat__composer-prediction),
+  > :where(
+    textarea,
+    input,
+    .chat-composer-mention-layer,
+    .agent-chat__composer-placeholder,
+    .agent-chat__composer-prediction
+  ),
 .agent-chat__composer-prediction-actions {
   /* Keep text aligned while the native scrollport reaches the surface edge. */
   padding-inline: calc(
@@ -378,7 +384,7 @@
   );
 }
 
-.agent-chat__composer-combobox > :is(textarea, input) {
+.agent-chat__composer-combobox > :is(textarea, input, .chat-composer-mention-layer) {
   --control-ui-touch-input-size: var(--chat-composer-editor-size);
 
   width: 100%;
@@ -417,7 +423,7 @@
     --chat-composer-editor-scroll-inset: 0px;
   }
 
-  .agent-chat__composer-combobox > textarea {
+  .agent-chat__composer-combobox > :is(textarea, .chat-composer-mention-layer) {
     --scrollbar-size: 8px;
     --scrollbar-thumb-inset: 1px;
 
@@ -432,6 +438,13 @@
     /* Exchange the same inset for a real gutter without changing the text width. */
     padding-inline-end: calc(var(--chat-composer-editor-inset-inline) - var(--scrollbar-size));
     scrollbar-gutter: stable;
+  }
+
+  /* The mirror width excludes the native gutter already; reclaim its padding
+     too, without reserving a second gutter. */
+  .agent-chat__composer-combobox:has(> textarea[data-composer-scrollable])
+    > .chat-composer-mention-layer {
+    padding-inline-end: calc(var(--chat-composer-editor-inset-inline) - var(--scrollbar-size));
   }
 
   .agent-chat__composer-combobox > textarea::-webkit-scrollbar-track {
@@ -1505,6 +1518,66 @@
   }
 }
 
+/* The native field owns editing. This noninteractive mirror paints only; keep
+   every glyph advance unchanged so wrapping, the caret and native selections agree. */
+.agent-chat__composer-combobox > .chat-composer-mention-layer {
+  position: absolute;
+  inset: 0;
+  height: 100%;
+  min-height: 0;
+  max-height: none;
+  overflow: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  pointer-events: none;
+  user-select: none;
+  z-index: 0;
+  color: var(--text-strong);
+}
+
+.agent-chat__composer-combobox:has(> .chat-composer-mention-layer) > textarea {
+  position: relative;
+  z-index: 1;
+}
+
+.agent-chat__composer-combobox:has(> .chat-composer-mention-layer)
+  > textarea:not([data-composing]) {
+  color: transparent;
+  caret-color: var(--text-strong);
+}
+
+.agent-chat__composer-combobox:has(> textarea[data-composing]) > .chat-composer-mention-layer {
+  visibility: hidden;
+}
+
+.agent-chat__composer-combobox:has(> .chat-composer-mention-layer) > textarea::selection {
+  color: var(--text-strong);
+}
+
+.chat-composer-mention {
+  position: relative;
+  padding: 0;
+  font-weight: inherit;
+  box-decoration-break: clone;
+}
+
+.chat-composer-mention .markdown-person-reference__prefix {
+  font-size: inherit;
+}
+
+.chat-composer-mention .markdown-person-reference__literal-prefix {
+  visibility: hidden;
+}
+
+.chat-composer-mention .markdown-person-reference__avatar {
+  position: absolute;
+  inset-inline-start: 0;
+  top: 0.05em;
+  width: 1em;
+  height: 1em;
+  margin: 0;
+}
+
 /* Only a nearly closed pane (a landscape phone keyboard, a collapsed desktop
    split) needs the editor's inset for the line and action row to fit. Portrait
    phone keyboards leave far more, so they never cross this step. */
@@ -1515,7 +1588,7 @@
 
   .agent-chat__input
     .agent-chat__composer-combobox
-    > :is(textarea, input, .agent-chat__composer-placeholder) {
+    > :is(textarea, input, .agent-chat__composer-placeholder, .chat-composer-mention-layer) {
     min-height: calc(var(--chat-composer-editor-line) + 4px);
     max-height: calc(var(--chat-composer-editor-line) + 4px);
     padding-block: 2px;
