@@ -176,16 +176,23 @@ const opaque = (pid: number, facts: Omit<ProcessRow, "pid"> = {}) => ({
   ...facts,
 });
 it("classifies retained-runtime custody from the native Windows census", () => {
-  const retained = () => {
-    const directory = fs.realpathSync(
-      fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-update-runtime-")),
-    );
+  const retained = (prefix = "openclaw-update-runtime-") => {
+    const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
     fs.writeFileSync(path.join(directory, "package.json"), '{"name":"openclaw"}');
     fs.writeFileSync(path.join(directory, "openclaw.mjs"), "");
     return directory;
   };
   const runtime = retained();
   const other = retained();
+  // The installed package's Gateway tree runs nothing from a retained runtime.
+  const installed = retained("openclaw-installed-");
+  fs.mkdirSync(path.join(installed, "dist/process/supervisor"), { recursive: true });
+  for (const entry of [
+    "dist/index.js",
+    "dist/process/supervisor/service-child-windows-job-anchor.js",
+  ]) {
+    fs.writeFileSync(path.join(installed, entry), "");
+  }
   try {
     windows.mockReturnValue([
       // The inspector's launcher has exited; Windows never reparents it.
@@ -198,6 +205,12 @@ it("classifies retained-runtime custody from the native Windows census", () => {
       opaque(peer + 5, { executable: "C:\\Program Files\\nodejs\\node.exe" }),
       opaque(peer + 6, { executable: "C:\\Windows\\System32\\cmd.exe", cwd: runtime }),
       opaque(peer + 7),
+      processRow(peer + 8, `node "${installed}/dist/index.js" gateway --port 18789`, installed),
+      processRow(
+        peer + 9,
+        `node "${installed}/dist/process/supervisor/service-child-windows-job-anchor.js"`,
+        installed,
+      ),
     ]);
     expect(inspectOtherOpenClawProcesses(runtime)).toEqual({
       pids: [peer, peer + 5, peer + 6, peer + 7],
@@ -208,5 +221,6 @@ it("classifies retained-runtime custody from the native Windows census", () => {
   } finally {
     fs.rmSync(runtime, { recursive: true, force: true });
     fs.rmSync(other, { recursive: true, force: true });
+    fs.rmSync(installed, { recursive: true, force: true });
   }
 });
