@@ -98,6 +98,8 @@ export async function maybeSpawnVisibleSession(params: {
   options?: VisibleSessionsSpawnOptions;
 }): Promise<Record<string, unknown> | undefined> {
   const promptedAt = Date.now();
+  // sessions_create shares this owner's admission and containment, not its supervision.
+  const independent = params.options?.independent === true;
   const worktree = params.raw.worktree === true;
   const requestedPlacement = params.raw.placement;
   if (
@@ -416,7 +418,9 @@ export async function maybeSpawnVisibleSession(params: {
             ...(childSessionPublication ? { childSessionPublication } : {}),
             requesterSenderIsOwner: params.options?.senderIsOwner === true,
             gitContributorProfileId: params.options?.gitContributorProfileId,
-            completionOwnerSessionKey: ownership.completionRequesterSessionKey,
+            ...(independent
+              ? {}
+              : { completionOwnerSessionKey: ownership.completionRequesterSessionKey }),
             ...(params.options?.sessionPermissionPolicy
               ? { inheritedPermissionMode: params.options.sessionPermissionPolicy.mode }
               : {}),
@@ -442,12 +446,15 @@ export async function maybeSpawnVisibleSession(params: {
       placement?: SessionsDispatchResult["placement"];
       initialTaskStatus?: "unknown" | "not-sent";
     };
-    const taskMessage = buildSubagentTaskMessage({
-      task: params.task,
-      spawnMode: "session",
-      childDepth: callerDepth + 1,
-      maxSpawnDepth: maxDepth,
-    });
+    // An independent session receives the user's brief verbatim and may start idle.
+    const taskMessage = independent
+      ? params.task
+      : buildSubagentTaskMessage({
+          task: params.task,
+          spawnMode: "session",
+          childDepth: callerDepth + 1,
+          maxSpawnDepth: maxDepth,
+        });
     try {
       const titleSource = placement && buildDashboardSessionTitleSource({ message: params.task });
       const createParams = {
@@ -457,7 +464,7 @@ export async function maybeSpawnVisibleSession(params: {
         ...(group ? { category: group } : {}),
         model: resolvedModelRef,
         ...(cyberAccessProgram !== undefined ? { cyberAccessProgram } : {}),
-        ...(placement ? { titleSource } : { task: taskMessage }),
+        ...(placement ? { titleSource } : taskMessage ? { task: taskMessage } : {}),
         timeoutMs:
           runTimeoutSeconds === 0
             ? 0
@@ -475,7 +482,8 @@ export async function maybeSpawnVisibleSession(params: {
         ...(worktreeBaseRef ? { worktreeBaseRef } : {}),
       };
       response = await runWithAgentToolSourceExecutionScope(assertActive, () =>
-        placement
+        // Placement and sessions_create fence cancellation before the creation commit.
+        placement || independent
           ? createGatewayCall("sessions.create", createParams, {
               signal: params.options?.signal,
               sessionMutationCommitGuard: assertActive,
@@ -579,6 +587,12 @@ export async function maybeSpawnVisibleSession(params: {
         status: "error",
         error: runError,
       };
+    }
+    if (independent) {
+      // Unsupervised: no run registration or completion route, and a failed
+      // opening run leaves the created session available for inspection.
+      const runStarted = response.runStarted === true;
+      return { status: "created", childSessionKey, sessionId, runStarted, runId, runError };
     }
     const cleanupCreatedSession = () =>
       cleanupVisibleSpawnSession({

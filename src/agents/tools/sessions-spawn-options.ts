@@ -36,5 +36,7 @@ export type SessionsSpawnToolOptions = {
   swarmCollector?: boolean;
   /** Backend-derived parent incarnation; never sourced from model arguments. */
   expectedParentSessionId?: string;
+  /** Host-owned sessions_create mode: a visible session without supervision or completion. */
+  independent?: boolean;
   signal?: AbortSignal;
 } & SpawnedToolContext;

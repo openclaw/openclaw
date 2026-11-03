@@ -474,6 +474,22 @@ function* createOpenClawToolsSteps(
     : null;
   const transcriptsTool = resolveTranscriptsTool(resolvedConfig, sessionAgentId, options);
   const githubSettingsOffered = options?.listingClientCaps?.includes("ui-agent-github-settings");
+  // sessions_create runs through the visible-spawn owner, so both tools share one trusted context.
+  const sessionsSpawnToolOptions = {
+    ...options,
+    // Only a keyed parent has a stored incarnation for spawn to check.
+    expectedParentSessionId:
+      (options?.runSessionKey ?? options?.agentSessionKey) ? options?.sessionId : undefined,
+    agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+    requesterTurnRunId: options?.runId,
+    completionOwnerKey: options?.runSessionKey,
+    currentMessagingTarget: options?.currentMessagingTarget ?? options?.currentChannelId,
+    currentChannelId: options?.nativeChannelId ?? options?.currentChannelId,
+    config: sessionConfig,
+    requesterAgentIdOverride: sessionAgentId,
+    requesterRunId: options?.runId,
+    workspaceDir: spawnWorkspaceDir,
+  };
   const tools: AnyAgentTool[] = [
     ...createInstalledSkillTools(options?.installedSkills ?? []),
     createDashboardTool({
@@ -510,7 +526,7 @@ function* createOpenClawToolsSteps(
             creatorAuthorityUnavailableReason: options?.cronCreatorAuthorityUnavailableReason,
             selfRemoveOnlyJobId: options?.cronSelfRemoveOnlyJobId,
           }),
-          createSessionsCreateTool({ sessionControlAuthority: options?.sessionControlAuthority }),
+          createSessionsCreateTool(sessionsSpawnToolOptions),
           createSessionsTool({
             ...options,
             stopAllowed: options?.swarmCollector !== true,
@@ -644,21 +660,7 @@ function* createOpenClawToolsSteps(
     }),
     ...(embedded ? [] : createHostedConversationTools(options, sessionAgentId, sessionConfig)),
     !embedded || options?.allowGatewaySubagentBinding === true
-      ? createSessionsSpawnTool({
-          ...options,
-          // Only a keyed parent has a stored incarnation for spawn to check.
-          expectedParentSessionId:
-            (options?.runSessionKey ?? options?.agentSessionKey) ? options?.sessionId : undefined,
-          agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
-          requesterTurnRunId: options?.runId,
-          completionOwnerKey: options?.runSessionKey,
-          currentMessagingTarget: options?.currentMessagingTarget ?? options?.currentChannelId,
-          currentChannelId: options?.nativeChannelId ?? options?.currentChannelId,
-          config: sessionConfig,
-          requesterAgentIdOverride: sessionAgentId,
-          requesterRunId: options?.runId,
-          workspaceDir: spawnWorkspaceDir,
-        })
+      ? createSessionsSpawnTool(sessionsSpawnToolOptions)
       : null,
     ...swarmToolGroups.agentsWait,
     createSessionsYieldTool({
