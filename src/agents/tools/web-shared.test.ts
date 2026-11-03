@@ -91,8 +91,8 @@ describe("readResponseText", () => {
     ['<meta http-equiv="Content-Type" content="text/html; charset=utf-16"><p>café</p>'],
   ] as const)(
     "decodes active metadata, not comments: %s",
-    (text, encoding = "utf8", type = "text/html") =>
-      expectDecoded(Buffer.from(text, encoding), type, text),
+    (text, encoding = "utf8", type?: string) =>
+      expectDecoded(Buffer.from(text, encoding), type ?? "text/html", text),
   );
 
   it("keeps truncated fallback charset decoding isolated between responses", async () => {
