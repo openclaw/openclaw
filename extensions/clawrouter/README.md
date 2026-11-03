@@ -2,6 +2,13 @@
 
 Managed multi-provider model routing and quota reporting for OpenClaw.
 
+Chat discovery uses the selected endpoint's versioned native capability facts
+for text/image input, context size, prompt threshold, and output ceiling. Facts
+from another endpoint do not transfer to the selected transport. Audio, video,
+and JSON input declarations do not enable those transports in chat. The router's
+pricing output cap still bounds the requested output; older catalogs without
+endpoint facts retain the existing fallback behavior.
+
 When `models.providers.clawrouter` is configured, the bundled plugin adds
 **ClawRouter** to the Control UI sidebar. Its read-only pool dashboard shows
 subscription quota windows, account and plan details, model eligibility,
