@@ -187,11 +187,48 @@ describe("my_reminders", () => {
           kind: "reminder",
           text: "Pay rent",
           schedule: 'repeats "0 9 1 * *" (Asia/Kolkata)',
-          nextRun: "2026-11-01T03:30:00.000Z",
+          nextRun: "Sun, 1 Nov, 2026, 9:00 am IST",
         },
       ],
     });
     expect(workflow.listSessionTurns).toHaveBeenCalledWith({ sessionKey: SESSION_KEY });
+  });
+
+  it("reports one-time reminders in the user's timezone even when given in UTC", async () => {
+    const { run } = setup();
+    const result = await run({ action: "add", text: "Check the deck", at: "2999-01-01T04:30:00Z" });
+
+    expect(result).toMatchObject({ ok: true, schedule: "once at Tue, 1 Jan, 2999, 10:00 am IST" });
+  });
+
+  it("returns the existing reminder when the same add is repeated", async () => {
+    const { workflow, run } = setup();
+    workflow.listSessionTurns.mockResolvedValue([
+      {
+        id: "job-1",
+        tag: "r1a2b3c4d",
+        message: "instruction\n\nReminder text:\nCheck the deck",
+        schedule: { kind: "at", at: "2999-01-01T04:30:00.000Z" },
+        enabled: true,
+      },
+    ] as never);
+
+    const repeated = await run({
+      action: "add",
+      text: "Check the deck",
+      at: "2999-01-01T10:00:00+05:30",
+    });
+    expect(repeated).toMatchObject({ ok: true, id: "r1a2b3c4d", alreadyScheduled: true });
+    expect(workflow.scheduleSessionTurn).not.toHaveBeenCalled();
+
+    const other = await run({
+      action: "add",
+      text: "Call Anirudh",
+      at: "2999-01-01T10:00:00+05:30",
+    });
+    expect(other).toMatchObject({ ok: true });
+    expect(other.alreadyScheduled).toBeUndefined();
+    expect(workflow.scheduleSessionTurn).toHaveBeenCalledTimes(1);
   });
 
   it("deletes only by a well-formed id inside the caller's session", async () => {

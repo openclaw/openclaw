@@ -3,6 +3,7 @@ import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-paylo
 import {
   appendUnscheduledReminderNote,
   hasUnbackedReminderCommitment,
+  isEnabledJobForSession,
 } from "./agent-runner-reminder-guard.js";
 
 describe("hasUnbackedReminderCommitment", () => {
@@ -26,6 +27,24 @@ describe("hasUnbackedReminderCommitment", () => {
         "I'll remember to use metric units when answering distance questions.",
       ),
     ).toBe(false);
+  });
+});
+
+describe("isEnabledJobForSession", () => {
+  const key = "agent:main:whatsapp:default:direct:+15550000001";
+
+  it("counts plugin-scheduled session turns, which record the session only as their target", () => {
+    expect(isEnabledJobForSession({ enabled: true, sessionTarget: `session:${key}` }, key)).toBe(
+      true,
+    );
+    expect(isEnabledJobForSession({ enabled: true, sessionKey: key }, key)).toBe(true);
+    expect(isEnabledJobForSession({ enabled: false, sessionTarget: `session:${key}` }, key)).toBe(
+      false,
+    );
+    expect(isEnabledJobForSession({ enabled: true, sessionTarget: "session:other" }, key)).toBe(
+      false,
+    );
+    expect(isEnabledJobForSession({ enabled: true, sessionTarget: "isolated" }, key)).toBe(false);
   });
 });
 

@@ -27,6 +27,20 @@ export function hasUnbackedReminderCommitment(text: string): boolean {
 }
 
 /**
+ * True when an enabled job delivers into this session: built-in cron records the
+ * session key, plugin-scheduled session turns record `session:<key>` as target.
+ */
+export function isEnabledJobForSession(
+  job: { enabled?: boolean; sessionKey?: string; sessionTarget?: string },
+  sessionKey: string,
+): boolean {
+  return (
+    job.enabled === true &&
+    (job.sessionKey === sessionKey || job.sessionTarget === `session:${sessionKey}`)
+  );
+}
+
+/**
  * Returns true when the cron store has at least one enabled job that shares the
  * current session key. Used to suppress the "no reminder scheduled" guard note
  * when an existing cron (created in a prior turn) already covers the commitment.
@@ -42,7 +56,8 @@ export async function hasSessionRelatedCronJobs(params: {
       return false;
     }
     if (params.sessionKey) {
-      return store.jobs.some((job) => job.enabled && job.sessionKey === params.sessionKey);
+      const sessionKey = params.sessionKey;
+      return store.jobs.some((job) => isEnabledJobForSession(job, sessionKey));
     }
     return false;
   } catch {

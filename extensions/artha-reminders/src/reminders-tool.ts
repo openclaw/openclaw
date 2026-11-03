@@ -108,14 +108,51 @@ function shortestRepeatGapMs(expr: string, timezone: string): number | undefined
   return shortest;
 }
 
-function describeSchedule(schedule: PluginScheduledSessionTurn["schedule"]): string {
+/** Users read times in their own zone; the model repeats whatever this returns. */
+function formatLocal(ms: number, timezone: string): string {
+  return new Intl.DateTimeFormat("en-IN", {
+    timeZone: timezone,
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short",
+  }).format(ms);
+}
+
+function describeSchedule(
+  schedule: PluginScheduledSessionTurn["schedule"],
+  defaultTimezone: string,
+): string {
   if (schedule.kind === "at") {
-    return `once at ${schedule.at}`;
+    const atMs = Date.parse(schedule.at);
+    return `once at ${Number.isFinite(atMs) ? formatLocal(atMs, defaultTimezone) : schedule.at}`;
   }
   if (schedule.kind === "cron") {
     return `repeats "${schedule.expr}"${schedule.tz ? ` (${schedule.tz})` : ""}`;
   }
   return "custom schedule";
+}
+
+/** Same kind, text and time as an existing schedule, so a repeated add can return it. */
+function sameSchedule(
+  turn: PluginScheduledSessionTurn,
+  wanted: { kind: string; text: string; atMs?: number; cron?: string; timezone: string },
+): boolean {
+  const existing = readScheduledText(turn.message);
+  if (existing.kind !== wanted.kind || existing.text !== wanted.text) {
+    return false;
+  }
+  if (turn.schedule.kind === "at") {
+    return wanted.atMs !== undefined && Date.parse(turn.schedule.at) === wanted.atMs;
+  }
+  return (
+    turn.schedule.kind === "cron" &&
+    turn.schedule.expr === wanted.cron &&
+    (turn.schedule.tz ?? wanted.timezone) === wanted.timezone
+  );
 }
 
 export function createRemindersTool(params: {
@@ -130,6 +167,7 @@ export function createRemindersTool(params: {
   minRepeatMinutes?: number;
 }): AnyAgentTool {
   const { workflow } = params;
+  const defaultTimezone = params.defaultTimezone || DEFAULT_TIMEZONE;
   return {
     ...remindersToolDefinition,
     execute: async (_toolCallId, rawParams) => {
@@ -154,10 +192,15 @@ export function createRemindersTool(params: {
               id: turn.tag,
               kind,
               text,
-              schedule: describeSchedule(turn.schedule),
+              schedule: describeSchedule(turn.schedule, defaultTimezone),
               nextRun:
                 turn.nextRunAtMs !== undefined
-                  ? new Date(turn.nextRunAtMs).toISOString()
+                  ? formatLocal(
+                      turn.nextRunAtMs,
+                      turn.schedule.kind === "cron" && turn.schedule.tz
+                        ? turn.schedule.tz
+                        : defaultTimezone,
+                    )
                   : undefined,
             };
           });
@@ -195,7 +238,8 @@ export function createRemindersTool(params: {
       if (Boolean(at) === Boolean(cron)) {
         return fail("Give exactly one of `at` (one time) or `cron` (repeating).");
       }
-      const timezone = input.tz?.trim() || params.defaultTimezone || DEFAULT_TIMEZONE;
+      const timezone = input.tz?.trim() || defaultTimezone;
+      let atMs: number | undefined;
       if (at) {
         // A time without an offset would be read in the Gateway's zone, not the user's.
         if (!UTC_OFFSET_SUFFIX.test(at)) {
@@ -203,7 +247,7 @@ export function createRemindersTool(params: {
             "`at` needs a UTC offset, e.g. 2026-11-03T10:00:00+05:30 for 10:00 India time.",
           );
         }
-        const atMs = Date.parse(at);
+        atMs = Date.parse(at);
         if (!Number.isFinite(atMs)) {
           return fail("`at` must be an ISO 8601 time with offset, e.g. 2026-11-03T10:00:00+05:30.");
         }
@@ -225,9 +269,25 @@ export function createRemindersTool(params: {
       }
       // Concurrent adds can overshoot the cap by one; that is accepted rather than locked.
       const maxSchedules = params.maxSchedulesPerUser ?? DEFAULT_MAX_SCHEDULES_PER_USER;
-      const active = (await workflow.listSessionTurns({ sessionKey })).filter(
+      const owned = (await workflow.listSessionTurns({ sessionKey })).filter(
         (turn) => turn.tag && REMINDER_ID_PATTERN.test(turn.tag),
-      ).length;
+      );
+      // Models sometimes repeat the add call; return the existing schedule instead of a
+      // second reminder. Two identical adds racing in parallel can still both create one.
+      const duplicate = owned.find((turn) =>
+        sameSchedule(turn, { kind, text, atMs, cron, timezone }),
+      );
+      if (duplicate) {
+        return jsonResult({
+          ok: true,
+          id: duplicate.tag,
+          kind,
+          text,
+          schedule: describeSchedule(duplicate.schedule, timezone),
+          alreadyScheduled: true,
+        });
+      }
+      const active = owned.length;
       if (active >= maxSchedules) {
         return fail(
           `You already have ${active} reminders and tasks (limit ${maxSchedules}). ` +
@@ -278,7 +338,10 @@ export function createRemindersTool(params: {
         id,
         kind,
         text,
-        schedule: at ? `once at ${at}` : `repeats "${cron}"`,
+        schedule:
+          atMs !== undefined
+            ? `once at ${formatLocal(atMs, timezone)}`
+            : `repeats "${cron}" (${timezone})`,
       });
     },
   };
