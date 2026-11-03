@@ -721,8 +721,12 @@ struct DashboardNativeBrowserFailureTests {
     func `deliberate interruptions keep the page without failure UI`(_ trigger: String) async throws {
         let server = try await Self.server()
         defer { server.stop() }
+        let requestReceived = AsyncTestGate()
+        let holdResponse = AsyncTestGate()
         let stalled = try await DashboardHTTPFixture.start(beforeResponse: {
-            try? await Task.sleep(for: .seconds(60))
+            // TCP preconnects do not reach this hook; wait for the actual HTTP request.
+            requestReceived.open()
+            await holdResponse.wait()
         })
         defer { stalled.stop() }
         let controller = Self.controller(server)
@@ -739,12 +743,12 @@ struct DashboardNativeBrowserFailureTests {
             expectedPath = "/article"
         case "stop":
             try controller.nativeBrowser.navigate(tabId: "mac-article", url: stalled.url("/pending"))
-            try await TestWait.state("request reaches the stalled server") { stalled.activeConnectionCount > 0 }
+            try await requestReceived.wait("request reaches the stalled server")
             try controller.nativeBrowser.perform(.stop, tabId: "mac-article")
             expectedPath = "/article"
         default:
             try controller.nativeBrowser.navigate(tabId: "mac-article", url: stalled.url("/pending"))
-            try await TestWait.state("request reaches the stalled server") { stalled.activeConnectionCount > 0 }
+            try await requestReceived.wait("request reaches the stalled server")
             try controller.nativeBrowser.navigate(tabId: "mac-article", url: server.url("/plain"))
             expectedPath = "/plain"
         }
