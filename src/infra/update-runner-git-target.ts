@@ -299,6 +299,7 @@ type GitTargetSchemaMetadata =
   | {
       status: "ok";
       version?: string;
+      nodeEngine: string | null;
       schemaVersions?: OpenClawSchemaVersions;
       databaseEngines?: unknown;
     }
@@ -332,6 +333,9 @@ export async function readGitTargetSchemaVersions(params: {
     const databaseEngines = asNullableRecord(asNullableRecord(manifest)?.openclaw)?.databaseEngines;
     return {
       status: "ok",
+      nodeEngine: normalizeNullableString(
+        asNullableRecord(asNullableRecord(manifest)?.engines)?.node,
+      ),
       ...(version ? { version } : {}),
       ...(schemaVersions ? { schemaVersions } : {}),
       ...(databaseEngines === undefined ? {} : { databaseEngines }),
