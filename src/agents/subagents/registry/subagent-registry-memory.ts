@@ -416,6 +416,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
         sources.some(
           (source) =>
             source?.operatorAuthority?.source !== original.source ||
+            source?.operatorAuthority?.invocation !== original.invocation ||
             !isDeepStrictEqual(source?.operatorAuthority?.scopes, original.scopes),
         )
       ) {
@@ -437,6 +438,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
       const source = custody?.authority.operatorAuthority;
       if (
         source?.source !== first?.source ||
+        source?.invocation !== first?.invocation ||
         !isDeepStrictEqual(source?.scopes, first?.scopes) ||
         !isDeepStrictEqual(custody?.authority.scopes, firstCustody?.authority.scopes)
       ) {

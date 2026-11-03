@@ -127,6 +127,7 @@ describe("native plugin browser builds", () => {
           ? {
               controlUi: {
                 entry: "dist/control-ui/authored/index.js",
+                panelIcon: "assets/panel.svg",
                 ...(settingsViews
                   ? {
                       activation: "settings-only",
@@ -154,6 +155,7 @@ describe("native plugin browser builds", () => {
       const generated = await readJson(project.rootDir, "dist/openclaw.plugin.json");
       expect(generated.controlUi.activation).toBe(settingsViews ? "settings-only" : undefined);
       expect(generated.controlUi.settingsViews).toEqual(settingsViews);
+      expect(generated.controlUi.panelIcon).toBe(authoredUi ? "assets/panel.svg" : undefined);
       expect(await buildPluginControlUi({ ...project, check: true })).toEqual(generated.controlUi);
       generated.id = "previous-name";
       generated.configSchema = { type: "object", properties: {} };

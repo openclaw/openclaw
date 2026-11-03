@@ -321,6 +321,21 @@ Gateway startup, restart, and agent concurrency benchmark fixtures use temporary
 
 Defaults to the built CLI entry at `dist/entry.js`; run `pnpm build` first. Pass `--entry scripts/run-node.mjs` to measure the source runner instead, and keep those results separate from built-entry baselines.
 
+Use `--exit-listeners` to capture main-thread process-exit registration stacks,
+removals, warnings, and peak/current counts after post-ready maintenance and
+handler prewarming. `--assert-exit-listeners` also fails above Node's default
+listener limit without changing it. The Linux startup regression includes the
+spawn broker, secret-egress proxy, eight agents, and 10,000 synthetic sessions:
+
+```bash
+node --import ./scripts/tsx.mjs scripts/bench-gateway-startup.ts --case teamBoot --fixture-root .artifacts/exit-fixture --seed-only --bundled-plugin-fixture scripts/fixtures/gateway-startup-exit-listeners.json
+node --import ./scripts/tsx.mjs scripts/bench-gateway-startup.ts --case teamBoot --fixture-root .artifacts/exit-fixture --runs 1 --warmup 0 --timeout-ms 120000 --assert-exit-listeners --bundled-plugin-fixture scripts/fixtures/gateway-startup-exit-listeners.json --output .artifacts/exit-listeners.json
+```
+
+Use a restrictive umask when creating fixtures so plugin-directory admission
+accepts them. Add `--team-scale` to both commands for the 35 GiB agent database
+and 62,000-file workspace fixture. Use fresh fixture copies for comparisons.
+
 Startup, restart, and concurrency accept `--gateway-runtime <executable>` to
 select only the Gateway executable, leaving the benchmark controller and mock
 provider on the runtime that launched the script. The default is that same

@@ -70,6 +70,7 @@ type ArchiveMigrationOptions = {
   start: ArchiveCursor;
   signal?: AbortSignal;
   verification?: { key: string; prepared?: ReadonlySet<string>; collect?: Set<string> };
+  prepareRewrite?: () => Promise<void>;
   beforeRewrite?: () => void;
   writeCursor?: (cursor: ArchiveCursor | { phase: "complete" }) => void;
 } & (
@@ -421,6 +422,7 @@ export async function migrateCanonicalTranscriptArchives(
       // Until file repair and cursor commit finish, changed rows remain pending.
       const needsRewrite = batch.some((planned) => planned.changed);
       if (!params.verifyOnly && needsRewrite) {
+        await params.prepareRewrite?.();
         write("historical-transcript-archive-directives", () => {
           params.beforeRewrite?.();
           const pending = new Map(

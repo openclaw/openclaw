@@ -37,7 +37,6 @@ export type DevicesProps = Omit<
   configForm: Record<string, unknown> | null;
   configLoading: boolean;
   configSaving: boolean;
-  configDirty: boolean;
   configFormMode: "form" | "raw";
   execApprovalsTarget: "gateway" | "node";
   execApprovalsTargetNodeId: string | null;
@@ -62,9 +61,7 @@ export type DevicesProps = Omit<
   onLoadExecApprovals: () => void;
   onBindDefault: (nodeId: string | null) => void;
   onBindAgent: (agentId: string, nodeId: string | null) => void;
-  onSaveBindings: () => void;
   onExecApprovalsTargetChange: (kind: "gateway" | "node", nodeId: string | null) => void;
-  onExecApprovalsSelectAgent: (agentId: string) => void;
   onExecApprovalsPatch: (path: Array<string | number>, value: unknown) => void;
   onExecApprovalsRemove: (path: Array<string | number>) => void;
   onSaveExecApprovals: () => void;

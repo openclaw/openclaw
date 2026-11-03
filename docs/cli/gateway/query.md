@@ -218,6 +218,10 @@ own state selectors. An inspecting CLI's `OPENCLAW_HOME`, `OPENCLAW_STATE_DIR`,
 `OPENCLAW_PROFILE`, and `OPENCLAW_CONFIG_PATH` do not fill in selectors omitted
 from the service definition.
 
+Plugin-version drift checks read committed install records without staging a copy
+of the shared state database. SQLite may update WAL/SHM coordination files; the
+check does not write plugin records or change the schema.
+
 ```bash
 openclaw gateway status
 openclaw gateway status --json

@@ -1,4 +1,5 @@
 import { createMemo, For } from "solid-js";
+import { TEXT_SCALE_STOPS, type TextScaleStop } from "../../app/settings.ts";
 import { normalizeTerminalFontFamily } from "../../app/terminal-font.ts";
 import type { ThemeName } from "../../app/theme.ts";
 import {
@@ -13,10 +14,18 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { themeBrandingProjection } from "../../lib/reactive/theme-branding.ts";
 import { APPEARANCE_SETTINGS_TARGET_IDS } from "./route-data.ts";
 import { SettingsSectionHeader } from "./settings-section-header.tsx";
-import { serverUiPrefProvenanceHint } from "./view-appearance-preferences.tsx";
+import { LanguageRow, serverUiPrefsScopeHint } from "./view-appearance-preferences.tsx";
 import type { ConfigProps } from "./view-types.ts";
 
-export function Typography(
+const TEXT_SCALE_LABELS: Record<TextScaleStop, string> = {
+  90: "configView.textSizes.small",
+  100: "configView.textSizes.default",
+  110: "configView.textSizes.large",
+  125: "configView.textSizes.xl",
+  140: "configView.textSizes.xxl",
+};
+
+export function TextSection(
   props: ConfigProps & {
     presentedTheme: {
       id: ThemeName;
@@ -38,8 +47,37 @@ export function Typography(
   const terminalFontFamily = createMemo(() => props.terminalFontFamily ?? "");
   return (
     <section id={APPEARANCE_SETTINGS_TARGET_IDS.typography} class="settings-section">
-      <SettingsSectionHeader title={t("configView.appearance.typography")} />
+      <SettingsSectionHeader title={t("configView.appearance.languageAndText")} />
       <div class="settings-group">
+        <LanguageRow {...props} />
+        <div id={APPEARANCE_SETTINGS_TARGET_IDS.textSize}>
+          <SettingsRow
+            title={t("configView.appearance.textSize")}
+            description={t("quickSettings.personal.browserOnly")}
+            stacked={true}
+            control={
+              <div class="settings-text-scale">
+                <div class="settings-text-scale__options">
+                  <For each={TEXT_SCALE_STOPS}>
+                    {(stop) => (
+                      <button
+                        type="button"
+                        class={["settings-text-scale__btn", { active: stop === props.textScale }]}
+                        aria-pressed={stop === props.textScale ? "true" : "false"}
+                        onClick={() => props.setTextScale(stop)}
+                      >
+                        <span class="settings-text-scale__sample">
+                          {t(TEXT_SCALE_LABELS[stop])}
+                        </span>
+                        <span class="settings-text-scale__label">{stop}%</span>
+                      </button>
+                    )}
+                  </For>
+                </div>
+              </div>
+            }
+          />
+        </div>
         <For each={["ui", "chat"] as const}>
           {(slot) => {
             const isUi = slot === "ui";
@@ -48,9 +86,6 @@ export function Typography(
             return (
               <SettingsRow
                 title={title()}
-                description={serverUiPrefProvenanceHint(
-                  isUi ? props.fontUiProvenance : props.fontChatProvenance,
-                )}
                 stackedOnNarrow={true}
                 control={
                   <openclaw-select-picker
@@ -91,9 +126,9 @@ export function Typography(
           title={t("configView.appearance.fonts.terminal")}
           description={
             <>
-              {t("configView.appearance.fonts.terminalHint")}
-              <br />
-              {t("configView.appearance.fonts.terminalLigatures")}
+              {t("configView.appearance.fonts.terminalHint")}{" "}
+              {t("configView.appearance.fonts.terminalLigatures")}{" "}
+              {t("quickSettings.personal.browserOnly")}
             </>
           }
           stacked={true}
@@ -148,6 +183,13 @@ export function Typography(
           </div>
         </div>
       </div>
+      <p class="settings-section__desc settings-section__scope">
+        {serverUiPrefsScopeHint([
+          props.localeProvenance,
+          props.fontUiProvenance,
+          props.fontChatProvenance,
+        ])}
+      </p>
     </section>
   );
 }
