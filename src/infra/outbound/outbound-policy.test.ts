@@ -1,6 +1,10 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { MessageToolsConfig } from "../../config/types.tools.js";
+
+type CrossContextConfig = NonNullable<MessageToolsConfig["crossContext"]>;
 
 let applyCrossContextDecoration: typeof import("./outbound-policy.js").applyCrossContextDecoration;
 let buildCrossContextDecoration: typeof import("./outbound-policy.js").buildCrossContextDecoration;
@@ -121,6 +125,59 @@ describe("outbound policy helpers", () => {
       args: { to: "C999" },
       toolContext: { currentChannelId: "C123", currentChannelProvider: "workspace" },
       agentId: "sandbox",
+    });
+  });
+
+  type ConfinementCase = {
+    name: string;
+    global?: CrossContextConfig;
+    agent?: CrossContextConfig;
+    channel?: string;
+    chatType?: ChatType;
+    expected: "allow" | RegExp;
+  };
+  const confined: CrossContextConfig = { confineChatTypes: ["group"] };
+
+  it.each<ConfinementCase>([
+    {
+      name: "a confined group turn sending to another provider",
+      global: { ...confined, allowAcrossProviders: true },
+      channel: "other",
+      expected: /target provider "other" while bound to "chat".*confineChatTypes/,
+    },
+    {
+      name: "a direct turn when groups are confined",
+      global: confined,
+      chatType: "direct",
+      expected: "allow",
+    },
+    {
+      name: "an untyped turn when groups are confined",
+      global: confined,
+      chatType: undefined,
+      expected: "allow",
+    },
+    {
+      name: "an agent lifting the global confinement",
+      global: confined,
+      agent: { confineChatTypes: [] },
+      expected: "allow",
+    },
+  ])("handles $name", ({ global, agent, channel = "chat", expected, ...rest }) => {
+    expectCrossContextPolicyResult(expected, {
+      cfg: {
+        tools: { message: { crossContext: global } },
+        agents: { entries: { main: { tools: { message: { crossContext: agent } } } } },
+      },
+      channel,
+      action: "send",
+      args: { to: "dm" },
+      toolContext: {
+        currentChannelProvider: "chat",
+        currentChannelId: "room",
+        currentChatType: "chatType" in rest ? rest.chatType : "group",
+      },
+      agentId: "main",
     });
   });
 

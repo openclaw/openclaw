@@ -525,6 +525,10 @@ const MessageToolConfigSchema = z
         allowWithinProvider: z.boolean().optional(),
         /** Allow sends across different providers (default: true). */
         allowAcrossProviders: z.boolean().optional(),
+        /** Conversation types whose bound turns may only target their current conversation. */
+        confineChatTypes: z
+          .array(z.union([z.literal("direct"), z.literal("group"), z.literal("channel")]))
+          .optional(),
         marker: z
           .strictObject({
             /** Enable origin markers for cross-context sends (default: true). */

@@ -36,14 +36,14 @@ Agents with message-tool access can send across conversations and channel provid
 
 `tools.message.crossContext.allowAcrossProviders` defaults to `true`. Upgrades adopt this default when the setting is omitted; an explicit `false` continues to block guarded message actions from crossing the bound source provider. Set it to `false` if your deployment relies on that restriction.
 
-`allowWithinProvider` defaults to `false`, so a bound turn can only send within its own conversation unless the operator explicitly opts in. Set it to `true` to allow cross-chat sends on the same provider; set `allowAcrossProviders` to `false` to block cross-provider messaging as well:
+`allowWithinProvider` also defaults to `true` and independently controls actions targeting another conversation on the same provider. To confine guarded message actions to the current bound conversation, set both options to `false`:
 
 ```json5
 {
   tools: {
     message: {
       crossContext: {
-        allowWithinProvider: true,
+        allowWithinProvider: false,
         allowAcrossProviders: false,
       },
     },
@@ -52,6 +52,24 @@ Agents with message-tool access can send across conversations and channel provid
 ```
 
 To apply this policy to one agent, put the same `message` block under `agents.entries.<agentId>.tools`. Per-agent values override the matching global settings; omitted fields inherit them.
+
+Both options apply to every bound turn. To confine only turns that start in certain kinds of conversation, list those kinds (`direct`, `group`, or `channel`) in `confineChatTypes`. A turn from a listed kind can only send to its own conversation: guarded actions that target any other conversation, on the same provider or on another one, are denied whatever `allowWithinProvider` and `allowAcrossProviders` say. Turns from other kinds keep those settings. For example, this stops a group or channel turn from messaging the owner's DM or another chat, while a DM turn can still post to a group:
+
+```json5
+{
+  tools: {
+    message: {
+      crossContext: {
+        confineChatTypes: ["group", "channel"],
+      },
+    },
+  },
+}
+```
+
+`confineChatTypes` is empty by default. It uses the conversation kind the channel reports for the turn, so calls without a bound source conversation are not confined. A per-agent `confineChatTypes` replaces the global list; `[]` lifts a global confinement for that agent. A broadcast from a confined turn is checked per target: the current conversation is delivered, and every other target reports a cross-context denial without being sent.
+
+Same-provider checks compare the conversation the message reaches. In a Telegram forum topic, the topic target, the chat id with that topic's `threadId`, and a bare chat id that inherits the current topic all count as the current conversation; another topic in the same chat does not.
 
 These controls guard message mutations such as sends, replies, edits, deletes, and thread creation. They do not restrict every channel action: reads and administrative actions have separate permissions. They also do not confine CLI calls without a bound source conversation or replace filesystem, shell, or sandbox restrictions. See [Tool policy](/gateway/config-tools/tool-policy) and [Per-agent access profiles](/gateway/security/tool-permissions#per-agent-access-profiles-multi-agent) for the related controls.
 
