@@ -136,6 +136,9 @@ const enPluginManagement = {
     },
   },
   pluginsPage: {
+    recommendedPrompts: {
+      label: "Recommended prompts",
+    },
     compatibilityDeprecatedDated:
       "Uses OpenClaw APIs that retire on {date}. It keeps working until then; check for a plugin update.",
     compatibilityDeprecatedUndated:

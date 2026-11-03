@@ -101,6 +101,7 @@ export const baseProps = () => ({
   onRawChange: vi.fn(),
   onFormModeChange: vi.fn(),
   onViewStateChange: vi.fn(),
+  secretFields: undefined,
   onFormPatch: vi.fn(),
   onFormRemove: vi.fn(),
   onSectionChange: vi.fn(),

@@ -174,6 +174,16 @@ export function Agents(props: AgentsProps) {
       onRefresh={props.onRefresh}
     />
   );
+  // Defaults apply to every agent, so this row stays out of the per-agent tab bar.
+  const agentDefaultsRow = () => (
+    <div class="settings-group">
+      <SettingsNavRow
+        title={t("agents.defaults.title")}
+        description={t("agents.defaults.description")}
+        onClick={props.onOpenAgentDefaults}
+      />
+    </div>
+  );
   return (
     <div class="agents-layout">
       <section class="agents-toolbar">
@@ -265,19 +275,15 @@ export function Agents(props: AgentsProps) {
         <AgentReadNotice request={props.listRead} style={{ "margin-top": "8px" }} />
       </section>
       <section class="agents-main">
-        <div class="settings-group">
-          <SettingsNavRow
-            title={t("agents.defaults.title")}
-            description={t("agents.defaults.description")}
-            onClick={props.onOpenAgentDefaults}
-          />
-        </div>
         <Show
           when={selectedAgent()}
           fallback={
-            <SettingsSection title={t("agents.selectTitle")}>
-              <SettingsEmpty message={t("agents.selectSubtitle")} />
-            </SettingsSection>
+            <>
+              <SettingsSection title={t("agents.selectTitle")}>
+                <SettingsEmpty message={t("agents.selectSubtitle")} />
+              </SettingsSection>
+              {agentDefaultsRow()}
+            </>
           }
         >
           {(agent) => (
@@ -346,6 +352,7 @@ export function Agents(props: AgentsProps) {
                             />
                           )}
                         </Show>
+                        {agentDefaultsRow()}
                       </Match>
                       <Match when={props.readData().agentsPanel === "files"}>
                         <AgentFiles

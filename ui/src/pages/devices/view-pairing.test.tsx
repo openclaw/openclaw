@@ -178,6 +178,31 @@ describe("device pairing dialog", () => {
     expect(onGetApps).toHaveBeenCalledTimes(1);
   });
 
+  it("moves the accent to Review once a device request is waiting", () => {
+    let setPendingCount!: (count: number) => void;
+    const lifecycle = {
+      ...createWaitingNodePairSetup(),
+      access: "full",
+    } as unknown as DevicePairSetupLifecycle;
+    const view = mountSolid(() => {
+      const [pendingCount, setCount] = createSignal(0);
+      setPendingCount = setCount;
+      return <Pairing lifecycle={lifecycle} nowMs={10_000} pendingCount={pendingCount()} />;
+    });
+    const copy = () => view.getByRole("button", { name: "Copy setup code" });
+
+    expect(copy().classList.contains("primary")).toBe(true);
+    expect(view.queryByRole("button", { name: "Review" })).toBeNull();
+    view.getByRole("button", { name: "Manage devices" });
+
+    setPendingCount(1);
+    flush();
+
+    expect(copy().classList.contains("primary")).toBe(false);
+    expect(view.getByRole("button", { name: "Review" }).classList.contains("primary")).toBe(true);
+    expect(view.queryByRole("button", { name: "Manage devices" })).toBeNull();
+  });
+
   it("renders node setup instructions and announces arriving device requests", () => {
     let setPendingCount!: (count: number) => void;
     const view = mountSolid(() => {

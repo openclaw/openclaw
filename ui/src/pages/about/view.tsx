@@ -178,11 +178,6 @@ export function AboutView(props: AboutProps) {
         )}
         <h2 class="about-hero__name">{branding.read().brandName}</h2>
         <p class="about-hero__tagline">{t("aboutPage.tagline")}</p>
-        {props.buildInfo.version && (
-          <code class="about-hero__version" dir="ltr">
-            v{props.buildInfo.version}
-          </code>
-        )}
         <nav class="about-hero__links" aria-label={t("aboutPage.linksLabel")}>
           <For each={branding.read().communityLinks ? ABOUT_LINKS : []}>
             {(link) => (

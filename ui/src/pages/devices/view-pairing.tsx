@@ -367,9 +367,12 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
             </Show>
           </div>
           <openclaw-modal-actions class="oc-dialog__footer device-pair-setup__footer device-pair-setup__actions">
-            <button class="btn btn--ghost" type="button" onClick={() => props.onManageDevices()}>
-              {t("devices.pairing.manageDevices")}
-            </button>
+            {/* Review opens the same page, and says why, once a request is waiting. */}
+            <Show when={!setup() || props.pendingCount === 0}>
+              <button class="btn btn--ghost" type="button" onClick={() => props.onManageDevices()}>
+                {t("devices.pairing.manageDevices")}
+              </button>
+            </Show>
             <Show when={props.lifecycle.phase === "selection"}>
               <button
                 class="btn primary"
@@ -393,22 +396,13 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
             <Show when={setup()}>
               {(current) => (
                 <>
-                  <Show when={props.pendingCount > 0}>
-                    <button
-                      class="btn btn--sm"
-                      type="button"
-                      onClick={() => props.onManageDevices()}
-                    >
-                      {t("devices.pairing.review")}
-                    </button>
-                  </Show>
                   <Show when={!isNodeSetup()}>
                     <For each={[current().setupCode]}>
                       {(code) => {
                         let label!: HTMLSpanElement;
                         return (
                           <button
-                            class="btn primary"
+                            class={["btn", { primary: props.pendingCount === 0 }]}
                             type="button"
                             onClick={(event) =>
                               void handleCopyButton(event, code, copyLabel(), { label })
@@ -422,6 +416,15 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
                         );
                       }}
                     </For>
+                  </Show>
+                  <Show when={props.pendingCount > 0}>
+                    <button
+                      class="btn primary"
+                      type="button"
+                      onClick={() => props.onManageDevices()}
+                    >
+                      {t("devices.pairing.review")}
+                    </button>
                   </Show>
                 </>
               )}

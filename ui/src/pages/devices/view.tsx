@@ -26,7 +26,7 @@ import "../../styles/devices.css";
 import type { DevicePolicyRead } from "./devices-policy-reads.ts";
 import { ExecApprovals, resolveExecApprovalsState } from "./view-exec-approvals.tsx";
 import { DeviceInventory } from "./view-inventory-readiness.tsx";
-import { resolveConfigAgents, resolveNodeTargets } from "./view-shared.tsx";
+import { MetaLine, resolveConfigAgents, resolveNodeTargets } from "./view-shared.tsx";
 import type { DevicesProps } from "./view.types.ts";
 
 registerEnglishCatalog(registerDevicesEnglish);
@@ -200,14 +200,16 @@ function AgentBinding(props: BindingState & { agent: BindingAgent }) {
     <SettingsRow
       title={label()}
       description={
-        <>
-          {props.agent.isDefault ? t("devices.binding.defaultAgent") : t("devices.binding.agent")} ·
-          {bindingValue() === "__default__"
-            ? t("devices.binding.usesDefault", {
-                node: props.defaultBinding ?? t("devices.binding.any"),
-              })
-            : t("devices.binding.override", { node: props.agent.binding ?? "" })}
-        </>
+        <MetaLine
+          parts={[
+            props.agent.isDefault ? t("devices.binding.defaultAgent") : t("devices.binding.agent"),
+            bindingValue() === "__default__"
+              ? t("devices.binding.usesDefault", {
+                  node: props.defaultBinding ?? t("devices.binding.any"),
+                })
+              : t("devices.binding.override", { node: props.agent.binding ?? "" }),
+          ]}
+        />
       }
       control={<BindingSelect {...props} agent={props.agent} />}
     />

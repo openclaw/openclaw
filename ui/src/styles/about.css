@@ -131,18 +131,6 @@
   line-height: 1.45;
 }
 
-.about-hero__version {
-  margin-top: 12px;
-  padding: 4px 12px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--bg-elevated) 55%, var(--card) 45%);
-  color: var(--text);
-  font: inherit;
-  font-size: var(--control-ui-text-xs);
-  font-variant-numeric: tabular-nums;
-}
-
 .about-hero__links {
   display: flex;
   flex-wrap: wrap;
