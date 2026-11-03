@@ -12,16 +12,11 @@ export function statementDomain(type: StatementType): string {
 
 /** Signing input: UTF-8(domain) || UTF-8(JCS(body)). A signature on one type never verifies as another. */
 export function signingInput<T extends StatementType>(type: T, body: StatementBodies[T]): Bytes {
-  // Widening to the body union lets TypeScript check every statement body as JSON data.
-  const json: JsonValue = widenBody(body);
+  // Generic indexed access hides the concrete body types; widening to the union of all
+  // bodies lets TypeScript check every statement body as JSON data.
+  const widened: StatementBodies[StatementType] = body;
+  const json: JsonValue = widened;
   return concatBytes(utf8(statementDomain(type)), utf8(canonicalize(json)));
-}
-
-// Generic indexed access hides the concrete body types; the union of all bodies does not.
-function widenBody<T extends StatementType>(
-  body: StatementBodies[T],
-): StatementBodies[StatementType] {
-  return body;
 }
 
 /** Signs a statement body as R or an owner device. */
