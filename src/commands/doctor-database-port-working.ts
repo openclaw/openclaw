@@ -8,9 +8,9 @@ import {
   createPrivateSqliteTempDirectory,
   resolvePrivateSqliteSnapshotStagingRoot,
 } from "../infra/sqlite-private-directory.js";
+import { removeTempDirectory } from "../infra/sqlite-readonly-location-cleanup.js";
 import { publishVerifiedSqliteFile } from "../infra/sqlite-snapshot.js";
 import { resolvePathJournalPolicy } from "../infra/sqlite-wal-filesystem.js";
-import { withStateInspectionCleanup } from "../infra/update-candidate-state.process.js";
 import { captureDatabaseArtifact } from "../snapshot/database-backup.js";
 import {
   type Context,
@@ -85,5 +85,8 @@ export async function withDatabasePortWorkingCopy<T>(
   // only after migration, checkpoint and the consuming stage have all joined.
   await privateMigrate(ctx, index, config, working);
   const result = await run(working);
-  return withStateInspectionCleanup(scratch, async () => result);
+  if (!removeTempDirectory(scratch)) {
+    throw new Error(`State schema inspection snapshot cleanup failed: ${scratch}`);
+  }
+  return result;
 }

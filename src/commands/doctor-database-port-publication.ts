@@ -59,6 +59,7 @@ async function verify(
   await runDatabasePortTask(
     {
       operation: "verify",
+      sourceKind: sourcePath === undefined ? "private" : "published",
       sourcePath: sourcePath ?? (original ? target.originalCapture.path : stagePath(ctx, index)),
       engine: original ? current.direction.from : current.direction.to,
       storeId: target.storeId,
@@ -225,9 +226,8 @@ export async function withDatabasePortConfigStateReceipt<T>(
     // The enclosing offline owner excludes other writers through the effect and receipt.
     ctx.assertCurrent();
     await closeDatabasePortState(ctx);
-    const { engine } = readBackupEngine(file);
-    const { verification } = await runDatabasePortTask(
-      { operation: "inspect", sourcePath: file, config: postgresConfig(config), to: engine },
+    const { engine, verification } = await runDatabasePortTask(
+      { operation: "inspect", sourcePath: file, config: postgresConfig(config) },
       ctx,
     );
     const receipt = { path: file, engine, verification: verification! };

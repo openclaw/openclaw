@@ -30,7 +30,7 @@ export const workerUrl = new URL("../worker.js", import.meta.url);
 export const optionalUrl = new URL("../absent.js", import.meta.url);
 export const load = () => import("../dynamic.js").then((module) => module.value);
 `,
-    "plugin-sdk/second.js": 'export { value } from "../shared.js";',
+    "plugin-sdk/nested/second.js": 'export { value } from "../../shared.js";',
     "shared.js": "export const value = 2;",
     "common.cjs": 'module.exports = require("./nested.cjs");',
     "nested.cjs": "module.exports = { value: 3 };",
@@ -67,10 +67,12 @@ module.exports = {
       ),
       "compiled SDK host",
     );
-  const host = createHost("first", "second");
-  const narrowHost = createHost("second");
+  const host = createHost("first", "nested/second");
+  const narrowHost = createHost("nested/second");
   expect(fs.existsSync(path.join(narrowHost, "dist/node_modules"))).toBe(false);
-  expect(require(path.join(narrowHost, "dist/plugin-sdk/second.js"))).toMatchObject({ value: 2 });
+  expect(require(path.join(narrowHost, "dist/plugin-sdk/nested/second.js"))).toMatchObject({
+    value: 2,
+  });
   expect(fs.existsSync(path.join(host, "dist/unrelated.js"))).toBe(false);
   expect(fs.existsSync(path.join(host, "dist/absent.js"))).toBe(false);
   // A host retains its own native files and package identity, not aliases into the source tree.
@@ -92,5 +94,5 @@ module.exports = {
   });
   await expect(first.load()).resolves.toBe(7);
   expect(require(fileURLToPath(first.workerUrl))).toMatchObject({ value: 11 });
-  expect(require(path.join(host, "dist/plugin-sdk/second.js"))).toMatchObject({ value: 2 });
+  expect(require(path.join(host, "dist/plugin-sdk/nested/second.js"))).toMatchObject({ value: 2 });
 });

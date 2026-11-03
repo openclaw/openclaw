@@ -56,6 +56,31 @@ import {
   maybeStopManagedServiceBeforeMutableUpdate,
 } from "./update-command-service.js";
 
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  const { resolveRuntimeProcessEntrypointUrl } = await import("../../infra/runtime-process-url.js");
+  const { resolveRuntimeWorkerArgv } = await import("../../infra/runtime-worker-url.js");
+  const hostExecPath = process.execPath;
+  const brokerUrl = resolveRuntimeProcessEntrypointUrl("spawnBroker");
+  const hostBrokerArgv = resolveRuntimeWorkerArgv(brokerUrl);
+  return {
+    ...actual,
+    spawn: (...args: Parameters<typeof actual.spawn>) => {
+      const brokerArgv = resolveRuntimeWorkerArgv(brokerUrl);
+      const childArgs = Array.isArray(args[1]) ? args[1] : [];
+      // Managed Node selection must not change the real broker's same-runtime IPC peer.
+      if (
+        args[0] === process.execPath &&
+        childArgs.length === brokerArgv.length &&
+        childArgs.every((arg, index) => arg === brokerArgv[index])
+      ) {
+        return actual.spawn(hostExecPath, hostBrokerArgv, args[2]);
+      }
+      return actual.spawn(...args);
+    },
+  };
+});
+
 const mocks = vi.hoisted(() => ({
   launchctl: vi.fn<typeof import("../../daemon/launchd-exec.js").execLaunchctl>(),
   terminateStale: vi.fn(async (pids: number[]) => pids),

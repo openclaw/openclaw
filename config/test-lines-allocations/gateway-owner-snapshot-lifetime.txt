@@ -1,0 +1,2 @@
+479
+# Unknown-owner zero-copy reads, hot-journal recovery, creator death, native cleanup faults, retained-consumer lifecycle, and native protocol/environment boundary proof, plus bounded port capture and operation-scope staging reuse/exit proof, and standalone Doctor fixture lifetime.

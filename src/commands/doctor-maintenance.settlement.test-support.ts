@@ -9,6 +9,8 @@ import type {
   revalidateManagedGatewayServiceAfterUpdate,
 } from "../cli/update-cli/update-command-service-maintenance.js";
 import type { GatewayService, readGatewayServiceState } from "../daemon/service.js";
+import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
+import { resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
 import type { recordUpdateRunStep, finishUpdateRun } from "../infra/update-run-ledger.js";
 import { resolveCommandProcessSignal, retainCommandProcessCleanup } from "../process/exec-spawn.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -100,6 +102,13 @@ vi.mock("../infra/update-run-ledger.js", () => ({
 vi.mock("../infra/update-run-activity.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/update-run-activity.js")>()),
   inspectUpdateRepairDriverAdmission: boundary.admission,
+}));
+vi.mock("../infra/update-managed-service-handoff-boot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/update-managed-service-handoff-boot.js")>()),
+  createManagedHandoffBootIdentityReader: () => () => ({
+    platform: "linux",
+    identity: "00000000-0000-4000-8000-000000000001",
+  }),
 }));
 vi.mock("../utils/sleep.js", () => ({ sleep: boundary.sleep }));
 vi.mock("node:timers/promises", async (importOriginal) => ({
@@ -300,6 +309,22 @@ function begin(assertCurrent?: () => void) {
     options: { repair: true, nonInteractive: true },
     runtime: { log: boundary.log, error: vi.fn(), exit: vi.fn() },
     assertCurrent,
+  });
+}
+
+export async function allowSnapshotBroker() {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  const expected = resolveRuntimeWorkerArgv(resolveRuntimeProcessEntrypointUrl("spawnBroker"));
+  // Real generation reads retain their private snapshots in this broker; service commands stay denied.
+  vi.mocked(childProcess.spawn).mockImplementation((command, args, options) => {
+    if (
+      command === process.execPath &&
+      args?.length === expected.length &&
+      args.every((arg, index) => arg === expected[index])
+    ) {
+      return actual.spawn(command, args, options);
+    }
+    return boundary.native();
   });
 }
 

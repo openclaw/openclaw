@@ -5,6 +5,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
+import * as readonlyWorker from "../infra/sqlite-readonly-worker.js";
 import { runPluginDoctorStateMigrationPlans } from "../infra/state-migrations.plugin-doctor.js";
 import type {
   PluginDoctorStateMigration,
@@ -18,7 +19,7 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import { assertDatabasePortPluginMigrationsComplete } from "./doctor-database-port-migrations.js";
+import * as migrations from "./doctor-database-port-migrations.js";
 import { doctorDatabasePort } from "./doctor-database-port.js";
 
 const controls = vi.hoisted(() => ({ entries: [] as PluginDoctorStateMigrationEntry[] }));
@@ -30,13 +31,16 @@ vi.mock("../plugins/doctor-contract-registry.js", async (importOriginal) => ({
 
 afterEach(() => {
   controls.entries = [];
+  vi.restoreAllMocks();
 });
 
 function portGate(state: OpenClawTestState, config: OpenClawConfig) {
   return (
-    options: Partial<Parameters<typeof assertDatabasePortPluginMigrationsComplete>[0]> = {},
+    options: Partial<
+      Parameters<typeof migrations.assertDatabasePortPluginMigrationsComplete>[0]
+    > = {},
   ) =>
-    assertDatabasePortPluginMigrationsComplete({
+    migrations.assertDatabasePortPluginMigrationsComplete({
       config,
       env: state.env,
       stateDir: state.stateDir,
@@ -58,6 +62,36 @@ function migrationEntry(
 }
 
 describe("database port legacy import preflight", () => {
+  it("bounds private captures while rejecting unrepaired incognito keys", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await state.writeConfig(sqlitePortConfig());
+      const { db, path: source } = openOpenClawStateDatabase({ env: state.env });
+      db.exec(`INSERT INTO session_state_heads (session_key, agent_id, last_sequence, updated_at)
+        VALUES ('agent:main:dashboard:incognito-adoption', 'main', 7, 1)`);
+      await closeOpenClawStateDatabaseAsync();
+      const before = await fs.readFile(source);
+      const reads = vi.spyOn(readonlyWorker, "runSqliteReadOnlyWorkerSync");
+      const inspect = migrations.inspectDatabasePortSources;
+      let captures = 0;
+      vi.spyOn(migrations, "inspectDatabasePortSources").mockImplementation(async (...args) => {
+        reads.mockClear();
+        try {
+          return await inspect(...args);
+        } finally {
+          captures = reads.mock.calls.filter(([pathname]) => pathname === source).length;
+        }
+      });
+      await expect(doctorDatabasePort({ family: "state", to: "postgres" })).rejects.toMatchObject({
+        code: "RESERVED_INCOGNITO_SESSION_KEYS",
+      });
+      expect(await fs.readFile(source)).toEqual(before);
+      await expect(
+        fs.stat(state.statePath("recovery", "database-port", "manifest.json")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      expect(captures).toBeLessThanOrEqual(3);
+    });
+  });
+
   it.each([
     { pluginId: "codex", id: "codex-native-task-assignments" },
     { pluginId: "matrix", id: "matrix-inbound-dedupe-to-claimable-dedupe" },

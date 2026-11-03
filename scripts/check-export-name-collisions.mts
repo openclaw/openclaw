@@ -702,6 +702,13 @@ const sealedRecoveryNativeLoaderModules = [
 // Other modules remain collisions, including while these consumers land separately.
 const sqliteWorkerProtocolModules = new Map<string, ReadonlySet<string>>([
   [
+    "createNativeWorkerResource",
+    new Set([
+      "src/infra/sqlite-readonly-native-resource.ts",
+      "src/infra/update-state-inspection-resource.ts",
+    ]),
+  ],
+  [
     "createSqliteWorkerBackend",
     new Set(["src/state/openclaw-state.worker.ts", "src/state/openclaw-agent-execution.worker.ts"]),
   ],

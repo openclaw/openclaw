@@ -5,6 +5,7 @@ import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { getStateDatabaseSchemaLease } from "../infra/gateway-state-owner.js";
 import { createSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import type { AgentDatabaseMigrationTarget } from "../infra/state-migrations.media-persistence-targets.js";
+import { createStateInspectionScope } from "../infra/update-candidate-state.process.js";
 import { runWithDoctorMigrationBackup } from "../infra/update-doctor-migration-attribution.js";
 import {
   createUpdateDoctorDatabaseWriteCapture,
@@ -43,6 +44,7 @@ export async function createDoctorMaintenanceState(options: {
   let resources: OpenClawDatabaseMaintenanceScope | undefined;
   let resourcesParent: OpenClawDatabaseMaintenanceScope | undefined;
   let inspections: ReturnType<typeof createSqliteReadOnlyWorkerScope> | undefined;
+  let commands: ReturnType<typeof createStateInspectionScope> | undefined;
   let owner: Awaited<ReturnType<typeof acquireDoctorGatewayMaintenanceOwner>> | undefined;
   // Post-repair work runs outside the checks callback. Its policy reads must
   // retain the repair scope's cached handles until that scope has drained.
@@ -132,6 +134,15 @@ export async function createDoctorMaintenanceState(options: {
         },
       );
     }
+    const currentCommands = commands;
+    if (currentCommands) {
+      await closeScope(
+        () => currentCommands.close(),
+        () => {
+          commands = undefined;
+        },
+      );
+    }
     await closeScope(
       async () => {
         // Auth inspection readers are pooled separately from canonical agent handles.
@@ -189,13 +200,14 @@ export async function createDoctorMaintenanceState(options: {
         signal: options.signal,
         deadlineOwnedByCaller: false,
       });
+      commands = createStateInspectionScope();
     } catch (error) {
       await acquired.release();
       setOwner(undefined);
       throw error;
     }
     if (capture && !captureAdmitted) {
-      await settle(() => resources!.run(() => capture.admit()));
+      await settle(() => resources!.run(() => commands!.run(() => capture.admit())));
       captureAdmitted = true;
     }
   };
@@ -224,8 +236,10 @@ export async function createDoctorMaintenanceState(options: {
       // Cancellation stops read-only inspections; admitted writers retain their resource scope.
       return resources!.run(() =>
         inspections!.run(() =>
-          runWithDoctorMigrationBackup(captureFreshDoctorMigrationTables, () =>
-            capture ? capture.run(operation) : operation(),
+          commands!.run(() =>
+            runWithDoctorMigrationBackup(captureFreshDoctorMigrationTables, () =>
+              capture ? capture.run(operation) : operation(),
+            ),
           ),
         ),
       );
@@ -442,7 +456,7 @@ export async function createDoctorMaintenanceState(options: {
       } catch (error) {
         // Uncertain command cleanup or a still-open scope can keep writing: retain
         // process ownership and publish no receipt.
-        if (hasCommandProcessCleanupError(error) || resources || inspections) {
+        if (hasCommandProcessCleanupError(error) || resources || inspections || commands) {
           throw error;
         }
         failures.push(error);

@@ -20,6 +20,7 @@ import { resolveUserPath } from "./home-dir.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { normalizeWindowsPathPreservingCase } from "./path-guards.js";
+import { resolveSqliteDatabaseFilePaths } from "./sqlite-files.js";
 import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
 import { tryInspectSqliteReadOnlyInProcess } from "./sqlite-readonly-inspection.js";
 import {
@@ -31,7 +32,6 @@ import {
   prepareSqliteReadOnlyLocationInProcess,
   prepareSqliteReadOnlyLocationSyncInProcess,
 } from "./sqlite-readonly-location.js";
-import { createSqliteSnapshotStagingDirectory } from "./sqlite-snapshot-staging.js";
 import {
   StateDatabaseDiscoverySchema,
   UPDATE_CANDIDATE_PLUGIN_PLAN_FILENAME,
@@ -54,7 +54,7 @@ import {
   parseUpdateStateInspectionWorker,
   runUpdateStateInspectionWorker,
 } from "./update-candidate-state.inspection.js";
-import { withStateInspectionCleanup } from "./update-candidate-state.process.js";
+import { withStateInspectionStaging } from "./update-candidate-state.process.js";
 import {
   collectRegisteredPaths,
   collectSupplementalStateDatabasePaths,
@@ -380,33 +380,31 @@ async function discoverLegacyUpdateStateSchemaInspection(
   if (!(await updateStateDatabaseExists(shared))) {
     return { files: [...files], sharedVersion: { path: shared, userVersion: null } };
   }
-  const stagingRoot = await createSqliteSnapshotStagingDirectory(
-    params.stagingRoot,
-    params.root !== undefined,
-    params.signal,
+  // Discovery already belongs to the caller's surviving command and staging owner.
+  const stagingRoot = params.stagingRoot;
+  // The selected candidate owns source access; the loaded parent only opens its private copy.
+  const snapshot = parseUpdateStateInspectionWorker(
+    await runUpdateStateInspectionWorker({ ...params, stagingRoot, readOnlySource: shared }),
+    z.object({ ok: z.literal(true), location: z.string() }),
   );
-  // Settle the copy worker and close the private reader before removing discovery staging.
-  return withStateInspectionCleanup(stagingRoot, async () => {
-    // The selected candidate owns source access; the loaded parent only opens its private copy.
-    const snapshot = parseUpdateStateInspectionWorker(
-      await runUpdateStateInspectionWorker({ ...params, stagingRoot, readOnlySource: shared }),
-      z.object({ ok: z.literal(true), location: z.string() }),
-    );
-    const relative = path.relative(stagingRoot, snapshot.location);
-    if (
-      !relative ||
-      relative === ".." ||
-      relative.startsWith(`..${path.sep}`) ||
-      path.isAbsolute(relative)
-    ) {
-      throw new Error("Legacy state inspection returned a snapshot outside parent-owned staging.");
-    }
-    const sharedVersion = {
-      path: shared,
-      ...(await readSharedDatabaseVersion(snapshot.location, shared, files, params.input)),
-    };
-    return { files: [...files], sharedVersion };
-  });
+  const relative = path.relative(stagingRoot, snapshot.location);
+  if (
+    !relative ||
+    relative === ".." ||
+    relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative)
+  ) {
+    throw new Error("Legacy state inspection returned a snapshot outside parent-owned staging.");
+  }
+  const sharedVersion = {
+    path: shared,
+    ...(await readSharedDatabaseVersion(snapshot.location, shared, files, params.input)),
+  };
+  // Legacy versions recopy shared state; release the completed discovery payload first.
+  for (const file of resolveSqliteDatabaseFilePaths(snapshot.location)) {
+    await fs.rm(file, { force: true });
+  }
+  return { files: [...files], sharedVersion };
 }
 
 async function discoverStateSchema(params: Parameters<typeof runUpdateStateInspectionWorker>[0]) {
@@ -423,8 +421,7 @@ async function discoverStateSchema(params: Parameters<typeof runUpdateStateInspe
 export async function readUpdateStateDatabaseInventory(input: StateInput) {
   const sourceEnv = input.env ?? process.env;
   const stagingParent = resolvePrivateSqliteSnapshotStagingRoot(sourceEnv);
-  const stagingRoot = await createSqliteSnapshotStagingDirectory(stagingParent);
-  return withStateInspectionCleanup(stagingRoot, async () => {
+  return withStateInspectionStaging(stagingParent, async (stagingRoot) => {
     const worker = { nodeRunner: process.execPath, sourceEnv, stagingRoot };
     const shared = path.join(input.stateDir, "state", "openclaw.sqlite");
     const { discovery } = await discoverStateSchema({
@@ -462,46 +459,45 @@ export async function readUpdateStateSchemaVersions({
     : controller.signal;
   signal.throwIfAborted();
   const sourceEnv = input.env ?? process.env;
-  const stagingRoot = await createSqliteSnapshotStagingDirectory(
+  const inspection = withStateInspectionStaging(
     resolvePrivateSqliteSnapshotStagingRoot(sourceEnv),
-    root !== undefined,
-    signal,
+    async (stagingRoot) => {
+      const shared = path.resolve(input.stateDir, "state", "openclaw.sqlite");
+      const sizeOptions = { nodeRunner, signal, sourceEnv, stagingRoot, timeoutMs };
+      const discoveryParams = {
+        input: { ...input, mode: "discover", stagingRoot },
+        nodeRunner,
+        root,
+        signal,
+        sourceEnv,
+        stagingRoot,
+        timeoutMs,
+        databases: await readUpdateStateDatabaseSizes([shared], sizeOptions),
+      };
+      // Activation may replace the updater package. Both legacy subprocesses must use the candidate.
+      const { discovery, legacyWorker } = await discoverStateSchema(discoveryParams);
+      onInventory?.(new Map(discovery.files));
+      const sharedIdentity = resolveUpdateCandidateStateIdentity(input.stateDir, shared);
+      // Legacy workers recopy the shared database and may inspect every raw alias.
+      // Current workers reuse the discovered shared version and inspect each remaining identity once.
+      const files = legacyWorker
+        ? discovery.files.flatMap(([, database]) => database.spellings)
+        : discovery.files
+            .filter(([identity]) => identity !== sharedIdentity)
+            .map(([, database]) => database.spellings[0]);
+      return parseUpdateStateInspectionWorker(
+        await runUpdateStateInspectionWorker({
+          ...discoveryParams,
+          input: legacyWorker
+            ? { ...input, mode: "versions" }
+            : { ...input, mode: "versions", stagingRoot, inspectionPlan: discovery },
+          databases: await readUpdateStateDatabaseSizes(files, sizeOptions),
+        }),
+        UpdateStateSchemaVersionsSchema,
+      );
+    },
+    { allowLegacyWorker: root !== undefined, signal },
   );
-  const inspection = withStateInspectionCleanup(stagingRoot, async () => {
-    const shared = path.resolve(input.stateDir, "state", "openclaw.sqlite");
-    const sizeOptions = { nodeRunner, signal, sourceEnv, stagingRoot, timeoutMs };
-    const discoveryParams = {
-      input: { ...input, mode: "discover", stagingRoot },
-      nodeRunner,
-      root,
-      signal,
-      sourceEnv,
-      stagingRoot,
-      timeoutMs,
-      databases: await readUpdateStateDatabaseSizes([shared], sizeOptions),
-    };
-    // Activation may replace the updater package. Both legacy subprocesses must use the candidate.
-    const { discovery, legacyWorker } = await discoverStateSchema(discoveryParams);
-    onInventory?.(new Map(discovery.files));
-    const sharedIdentity = resolveUpdateCandidateStateIdentity(input.stateDir, shared);
-    // Legacy workers recopy the shared database and may inspect every raw alias.
-    // Current workers reuse the discovered shared version and inspect each remaining identity once.
-    const files = legacyWorker
-      ? discovery.files.flatMap(([, database]) => database.spellings)
-      : discovery.files
-          .filter(([identity]) => identity !== sharedIdentity)
-          .map(([, database]) => database.spellings[0]);
-    return parseUpdateStateInspectionWorker(
-      await runUpdateStateInspectionWorker({
-        ...discoveryParams,
-        input: legacyWorker
-          ? { ...input, mode: "versions" }
-          : { ...input, mode: "versions", stagingRoot, inspectionPlan: discovery },
-        databases: await readUpdateStateDatabaseSizes(files, sizeOptions),
-      }),
-      UpdateStateSchemaVersionsSchema,
-    );
-  });
   return retainSnapshotWork(inspection, () => controller.abort());
 }
 

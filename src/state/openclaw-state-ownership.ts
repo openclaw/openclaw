@@ -19,11 +19,7 @@ import {
   OpenClawStateOwnershipMetadataError,
   runWithSqliteCleanup,
 } from "../infra/sqlite-lifecycle-errors.js";
-import {
-  prepareSqliteReadOnlyLocationSyncInProcess,
-  readSourceJournalMode,
-  readSourceSidecars,
-} from "../infra/sqlite-readonly-location.js";
+import { readSourceJournalMode, readSourceSidecars } from "../infra/sqlite-readonly-location.js";
 import { readSqliteSchemaCookie } from "../infra/sqlite-schema-contract.js";
 import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-snapshot-source.js";
 import { withSqliteSourceReadDatabase } from "../infra/sqlite-source-handle.js";
@@ -231,7 +227,7 @@ export function inspectOpenClawStateOwnershipInProcess(
     });
   }
   // Incomplete and recovery-required families retain private artifact-preserving inspection.
-  const prepared = prepareSqliteReadOnlyLocationSyncInProcess(databasePath);
+  const prepared = prepareSqliteReadOnlyLocationSync(databasePath);
   try {
     return inspectOwnershipThroughConnection(prepared.location, databasePath);
   } finally {

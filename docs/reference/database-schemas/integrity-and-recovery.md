@@ -647,9 +647,29 @@ Synchronous CLI snapshots also pause between source-change retries, so a brief
 write burst does not exhaust all ten attempts immediately. These retries only
 repeat private snapshot preparation; they do not resend Gateway commands.
 
+Fresh Gateway lease inspection uses a read-only connection to committed state,
+including when the recorded process owner cannot be verified. Reading the lease
+does not grant authority to replace it or mutate state. RPC-only CLI commands
+leave database admission to the serving Gateway.
+If SQLite reports that a hot rollback journal prevents the read, lease inspection
+recovers a private copy without replaying the source journal. Ordinary unknown-owner
+and WAL reads do not take that recovery path.
+
+Temporary update and Doctor inspection roots share a surviving owner with their
+inspection commands. Caller exit or command-scope cancellation stops the commands.
+The owner joins their process groups before removing staged files. Uncertain
+cleanup retains the files until process settlement is confirmed; durable restore
+staging keeps its existing recovery lifetime.
+Doctor migrations start this owner lazily and share it across their inspections,
+while each inspection retires its own directory. SQLite generation children use their
+parent's explicit cleanup custody instead of starting another snapshot custodian.
+
 Private snapshot files remain temporary artifacts: the creator registers cleanup
-before copying and publishes the finished copy by rename. Graceful shutdown
-drains existing shutdown owners and joins snapshot workers before cleanup. Cleanup
+before copying and publishes the finished copy by rename. Private inspection
+copies disable filesystem cloning to avoid sharing the live database's extents.
+Their retained worker owns cleanup after delivery, including when the requesting
+process is killed. Graceful shutdown drains existing shutdown owners and joins
+snapshot workers before cleanup. Cleanup
 keeps every token until copied data is removed, so partial removal remains recoverable.
 Large private payloads are truncated in steps of at most 64 MiB before unlinking.
 Asynchronous cleanup awaits truncation on the same retained descriptor while
@@ -669,6 +689,12 @@ payloads, independent of PID namespaces. Worker admission checks the parent's
 token; retirement is committed before handles close so a late worker cannot
 restart it. Updaters retain legacy-compatible token handling for released workers.
 Primary databases and backups are never removed by this owner.
+Database-port operations and updater generation-inspection and backup commands
+reuse staging transports within their read-only worker scope, while deleting each
+private image immediately when its reader finishes.
+Closing the scope joins the retained transports and native sessions.
+Verification reads the port's private captures and staged images directly;
+published database inputs retain isolated snapshot reads.
 
 The serving Gateway does not scan or reclaim abandoned snapshot directories.
 Legacy copies left by older releases or a machine-wide crash require explicit

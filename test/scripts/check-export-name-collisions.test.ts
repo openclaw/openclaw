@@ -61,6 +61,15 @@ it.each([
     "src/unrelated/extra.worker.ts",
     ["src/state/openclaw-state.worker.ts", "src/state/openclaw-agent-execution.worker.ts"],
   ],
+  [
+    "createNativeWorkerResource",
+    "otherBehavior",
+    "src/unrelated/native-resource.ts",
+    [
+      "src/infra/sqlite-readonly-native-resource.ts",
+      "src/infra/update-state-inspection-resource.ts",
+    ],
+  ],
 ] as const)("limits %s exemptions to the exact approved modules", (name, other, extra, paths) => {
   const modules = (symbol: string, files: readonly string[]) =>
     files.map((path) => ({ path, content: `export function ${symbol}() {}` }));

@@ -14,6 +14,7 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as runtimePins from "../../daemon/runtime-pin-state.js";
 import type { GatewayServiceState } from "../../daemon/service.js";
+import * as processAncestry from "../../infra/restart-stale-pids.js";
 import { createSqliteReadOnlyWorkerScope } from "../../infra/sqlite-readonly-worker.js";
 import { migrateDaemonRuntimePins } from "../../infra/state-migrations.daemon-runtime-pins.js";
 import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
@@ -51,6 +52,7 @@ import { createWindowsTaskAutoStartRecovery } from "./update-command-windows-tas
 
 // Real update/state/lease owners; simulated native manager, HTTP, and package transport.
 const mocks = vi.hoisted(() => ({
+  servicePid: 4242,
   state: vi.fn<() => Promise<GatewayServiceState>>(),
   stop: vi.fn(),
   package: vi.fn(),
@@ -68,7 +70,8 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock("../../daemon/service-process-membership.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/service-process-membership.js")>()),
-  inspectServiceProcessMembershipSync: (pid: number) => (pid === 4242 ? "outside" : "unknown"),
+  inspectServiceProcessMembershipSync: (pid: number) =>
+    pid === mocks.servicePid ? "outside" : "unknown",
 }));
 vi.mock("../../daemon/schtasks-control.js", async (original) => ({
   ...(await original<typeof import("../../daemon/schtasks-control.js")>()),
@@ -139,7 +142,10 @@ const readPackage = (root = rootB) => fs.readFile(path.join(root, "package.json"
 function healthObservation(expectedVersion?: string, expectedBuildId?: string, healthy = true) {
   return {
     healthy,
-    runtime: { status: healthy ? "running" : "stopped", pid: healthy ? 4242 : undefined },
+    runtime: {
+      status: healthy ? "running" : "stopped",
+      pid: healthy ? mocks.servicePid : undefined,
+    },
     gatewayVersion: expectedVersion,
     gatewayBuildId: expectedBuildId,
   };
@@ -211,6 +217,12 @@ function rollbackOriginal(
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  // The simulated service is outside this caller's real process tree.
+  const ancestry = processAncestry.inspectSelfAndAncestorPidsSync();
+  mocks.servicePid = 4242;
+  while (ancestry.pids.has(mocks.servicePid)) {
+    mocks.servicePid++;
+  }
   vi.spyOn(stateMetadata, "readUpdateStateDatabaseSizes").mockImplementation((files, { signal }) =>
     stateMetadata.readUpdateStateDatabaseSizesInProcess(files, signal),
   );
@@ -277,7 +289,11 @@ beforeEach(async () => {
         ),
       ),
     },
-    runtime: { status: "running", pid: 4242, systemd: { managerUid: process.getuid?.() ?? 501 } },
+    runtime: {
+      status: "running",
+      pid: mocks.servicePid,
+      systemd: { managerUid: process.getuid?.() ?? 501 },
+    },
   };
   mocks.state.mockImplementation(async () => ({
     ...serviceState,

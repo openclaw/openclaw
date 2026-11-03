@@ -1,0 +1,2 @@
+490
+# Current/legacy Node/Bun creator-death custody and observer-stop transport regressions, with existing consumer fixtures migrated to their owner boundary, plus real package-replacement, retained native-code cleanup, operation-scoped command custody, parent-owned generation staging, inherited command cancellation, and an ancestry-safe external-service fixture.

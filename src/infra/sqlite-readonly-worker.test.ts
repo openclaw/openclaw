@@ -24,7 +24,7 @@ import {
   prepareSqliteReadOnlyLocation,
   startSqliteReadOnlyLocationAsync,
 } from "./sqlite-snapshot-source.js";
-import { allocateWorkerOwnedSqliteSnapshotDirectory } from "./sqlite-snapshot-staging-allocation.js";
+import { allocateWorkerOwnedSqliteSnapshotDirectory } from "./sqlite-snapshot-staging-allocation-async.js";
 import { captureSqliteSnapshotStagingOwner } from "./sqlite-snapshot-staging-owner.js";
 import { waitForGate } from "./sqlite-snapshot-staging-owner.test-support.js";
 import { closeDefaultRetainedNativeWorkerSource } from "./worker-native-lifecycle.js";
@@ -548,12 +548,16 @@ it.runIf(process.platform !== "win32")(
     const moduleUrl = new URL(`./sqlite-snapshot-source${extension}`, workerUrl).href;
     const script = `
       const { prepareSqliteReadOnlyLocation } = await import(${JSON.stringify(moduleUrl)});
-      try {
-        await prepareSqliteReadOnlyLocation(${JSON.stringify(databasePath)});
-        process.exitCode = 24;
-      } catch (error) {
-        console.log(JSON.stringify({ message: error.message }));
+      const failures = [];
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          await prepareSqliteReadOnlyLocation(${JSON.stringify(databasePath)});
+          process.exitCode = 24;
+        } catch (error) {
+          failures.push({ message: error.message });
+        }
       }
+      console.log(JSON.stringify(failures));
     `;
     const child = spawnSync(
       "/bin/sh",
@@ -575,11 +579,14 @@ it.runIf(process.platform !== "win32")(
     );
 
     expect(child.status, child.stderr).toBe(0);
-    const reported = JSON.parse(child.stdout) as { message: string };
-    expect(reported.message).toContain(cacheRoot);
-    expect(reported.message).toContain("check filesystem health and write permissions");
-    expect(reported.message).not.toContain("free disk space/quota");
-    expect(reported.message).toContain("(code=ERR_SQLITE_ERROR, errcode=778)");
+    const failures = JSON.parse(child.stdout) as Array<{ message: string }>;
+    expect(failures).toHaveLength(2);
+    for (const reported of failures) {
+      expect(reported.message).toContain(cacheRoot);
+      expect(reported.message).toContain("check filesystem health and write permissions");
+      expect(reported.message).not.toContain("free disk space/quota");
+      expect(reported.message).toContain("(code=ERR_SQLITE_ERROR, errcode=778)");
+    }
   },
 );
 

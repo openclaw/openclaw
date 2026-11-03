@@ -6,13 +6,24 @@ import * as reads from "../state/artifact-preserving-state-reads.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { withOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import * as state from "../state/openclaw-state-db.js";
+import { retireIdleOpenClawStateReadWorkers } from "../state/openclaw-state-read-worker.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { openSqliteReadOnlyDatabase } from "./sqlite-snapshot-source.js";
 import { buildUpdateRehearsalPathEnv } from "./update-rehearsal-paths.js";
+import { captureRetainedNativeWorkerSource } from "./worker-native-lifecycle.js";
 
-const dirs = useAutoCleanupTempDirTracker(afterEach);
+const dirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    // The cached broker must close before its rehearsal TMPDIR socket is removed.
+    const source = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
+    expect(await retireIdleOpenClawStateReadWorkers(source)).toBe(true);
+    expect(await source.retireIdleBroker()).toBe(true);
+    cleanup();
+  }),
+);
 
 function rehearsalEnv(root: string): NodeJS.ProcessEnv {
   return {

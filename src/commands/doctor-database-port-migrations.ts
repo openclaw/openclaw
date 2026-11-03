@@ -3,6 +3,7 @@ import { resolveOAuthDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { discoverBackupDatabasePaths } from "../infra/backup-sqlite-snapshot.js";
 import { agentPortProvider } from "../infra/database-engine/agent-port.js";
+import { readEngineAnchorIdentity } from "../infra/database-engine/physical-store.js";
 import { DatabasePortError } from "../infra/database-engine/port-command.worker.js";
 import { databasePortProviders } from "../infra/database-engine/port-provider.js";
 import {
@@ -16,7 +17,6 @@ import { openSqliteReadOnlyDatabase } from "../infra/sqlite-snapshot-source.js";
 import { createPluginDoctorStateMigrationInput } from "../infra/state-migrations.plugin-doctor.js";
 import { listPluginDoctorStateMigrationEntries } from "../plugins/doctor-contract-registry.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import { readBackupEngine } from "../snapshot/database-backup.js";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import {
   privatePaths,
@@ -42,10 +42,10 @@ function assertDatabasePortReservedIncognitoKeysRepaired(params: {
   includeAgents: boolean;
 }): void {
   for (const pathname of params.paths) {
-    if (readBackupEngine(pathname).engine !== "sqlite") {
+    using db = openSqliteReadOnlyDatabase(pathname);
+    if (readEngineAnchorIdentity(db, pathname).engine !== "sqlite") {
       continue;
     }
-    using db = openSqliteReadOnlyDatabase(pathname);
     admitSqliteSchema(db);
     const tables = getAdmittedSqliteSchemaFacts(db)!.tables;
     let pending = false;

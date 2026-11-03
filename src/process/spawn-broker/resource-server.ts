@@ -151,9 +151,12 @@ export async function createBrokerNativeResourceServer(options: {
       return resource.nativeClose;
     }
     const closing = Promise.resolve().then(async () => {
-      await resource.owner?.close();
+      const outcome = await resource.owner?.close();
       resource.closed = true;
       seal(resource, [resource.target, resource.ownerPort]);
+      if (outcome) {
+        throw outcome.cleanupError;
+      }
     });
     resource.nativeClose = closing;
     void closing.catch(() => {
@@ -193,6 +196,9 @@ export async function createBrokerNativeResourceServer(options: {
     } catch (error) {
       if (live()) {
         closeError(resource, requestId, error);
+        if (resource.closed) {
+          publish(resource, { type: "resource-closed", id: resource.attachment.id, requestId });
+        }
       }
     }
   };

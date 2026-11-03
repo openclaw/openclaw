@@ -79,8 +79,21 @@ it("allows retirement after delivery while the producer's send callback is pendi
   });
 });
 
-it.skipIf(process.platform === "win32").for(["retained", "staged", "session", "one-shot"] as const)(
-  "retires a surviving %s copy after its creator is killed during publication",
+it
+  .skipIf(process.platform === "win32")
+  .for([
+    "retained",
+    "staged",
+    "session",
+    "one-shot",
+    "sync-delivered",
+    "async-delivered",
+    "retained-delivered",
+    "scoped-delivered",
+    "owned-delivered",
+    "generation-delivered",
+  ] as const)(
+  "retires a surviving %s copy after its creator is killed",
   async (mode, { expect, signal, onTestFinished }) => {
     const fixture = createFixtureLifetime();
     onTestFinished(() => fixture.cleanup());
@@ -96,6 +109,7 @@ it.skipIf(process.platform === "win32").for(["retained", "staged", "session", "o
       const processes = path.join(root, "processes");
       const tokenClosed = path.join(root, "token-closed");
       const preload = path.join(root, "preload.cjs");
+      const delivered = mode.endsWith("-delivered");
       fs.writeFileSync(
         preload,
         `
@@ -106,7 +120,7 @@ it.skipIf(process.platform === "win32").for(["retained", "staged", "session", "o
         if (process.argv[3] === "session") {
           process.once("exit", () => fs.writeFileSync(${JSON.stringify(tokenClosed)}, "closed"));
         }
-        if (["staged-sync", "session", "sync"].includes(process.argv[3])) {
+        if (${!delivered} && ["staged-sync", "session", "sync"].includes(process.argv[3])) {
           const rename = fs.renameSync;
           fs.renameSync = (from, to) => {
             if (String(to).endsWith("database.sqlite")) {
@@ -124,12 +138,39 @@ it.skipIf(process.platform === "win32").for(["retained", "staged", "session", "o
       `,
       );
       const producer =
-        mode === "retained"
+        mode === "generation-delivered"
           ? `
+        import fs from "node:fs";
+        import { readUpdateDatabaseGeneration } from ${JSON.stringify(new URL("./update-database-generations.ts", import.meta.url).href)};
+        readUpdateDatabaseGeneration(${JSON.stringify(source)}, location => {
+          fs.writeFileSync(${JSON.stringify(entered + ".partial")}, JSON.stringify({ pid: process.pid, location }));
+          fs.renameSync(${JSON.stringify(entered + ".partial")}, ${JSON.stringify(entered)});
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+        });
+      `
+          : delivered
+            ? `
+        import fs from "node:fs";
+        ${
+          mode === "owned-delivered"
+            ? `import { DatabaseSync } from "node:sqlite";
+        import { registerLiveSqliteSnapshotOwner } from ${JSON.stringify(new URL("./sqlite-live-snapshot.ts", import.meta.url).href)};
+        const database = new DatabaseSync(${JSON.stringify(source)});
+        registerLiveSqliteSnapshotOwner({ database, databasePath: ${JSON.stringify(source)}, assertCurrent() {} });`
+            : ""
+        }
+        import { prepareSqliteReadOnlyLocationSync, prepareSqliteReadOnlyLocation, startSqliteReadOnlyLocationAsync } from ${JSON.stringify(new URL("./sqlite-snapshot-source.ts", import.meta.url).href)};
+        import { createSqliteReadOnlyWorkerScope } from ${JSON.stringify(new URL("./sqlite-readonly-worker.ts", import.meta.url).href)};
+        const snapshot = ${mode === "scoped-delivered" ? "await createSqliteReadOnlyWorkerScope().run(async () => " : ""}${mode === "sync-delivered" ? "prepareSqliteReadOnlyLocationSync" : mode === "retained-delivered" ? "await startSqliteReadOnlyLocationAsync" : "await prepareSqliteReadOnlyLocation"}(${JSON.stringify(source)}${mode === "sync-delivered" || mode === "owned-delivered" ? "" : ", { preserveSourceArtifacts: true }"})${mode === "retained-delivered" ? ".result" : mode === "scoped-delivered" ? ")" : ""};
+        fs.writeFileSync(${JSON.stringify(entered)}, JSON.stringify({ pid: process.pid, location: snapshot.location }));
+        setInterval(() => {}, 1000);
+      `
+            : mode === "retained"
+              ? `
         import { startSqliteReadOnlyLocationAsync } from ${JSON.stringify(new URL("./sqlite-snapshot-source.ts", import.meta.url).href)};
         await startSqliteReadOnlyLocationAsync(${JSON.stringify(source)}, { preserveSourceArtifacts: true }).result;
       `
-          : `
+              : `
         import { captureSqliteReadOnlyWorkerLaunch, createScopedSqliteReadOnlyWorker, runSqliteReadOnlyWorkerOnce } from ${JSON.stringify(new URL("./sqlite-readonly-worker.ts", import.meta.url).href)};
         ${
           mode === "staged"
@@ -206,7 +247,7 @@ it.skipIf(process.platform === "win32").for(["retained", "staged", "session", "o
       expect(JSON.parse(result.stdout)).toMatchObject({
         copiedBytes: original.length,
         protected: true,
-        ...(mode !== "retained" ? { fenced: true, copyAlive: true } : {}),
+        ...(mode !== "retained" && !delivered ? { fenced: true, copyAlive: true } : {}),
         retained: false,
         surviving: [],
       });

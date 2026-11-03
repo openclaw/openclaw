@@ -17,7 +17,14 @@ async function snapshotCandidateState(): Promise<void> {
   }
   // SAFETY: Only typed updater launchers serialize this private worker's stdin.
   const input = JSON.parse(Buffer.concat(chunks).toString("utf8")) as UpdateStateInspectionInput;
-  const value = await inspectCandidateState(input);
+  const value =
+    input.mode === "sqlite-generations" ||
+    input.mode === "database-generations" ||
+    input.mode === "database-backup"
+      ? await (
+          await import("./sqlite-readonly-worker.js")
+        ).withSqliteReadOnlyWorkerScope(() => inspectCandidateState(input))
+      : await inspectCandidateState(input);
   const { writeUpdateStateResult } = await import("./update-candidate-state.result.js");
   await writeUpdateStateResult(value, input.resultPath);
 }
@@ -50,12 +57,18 @@ type UpdateStateInspectionInput = { resultPath?: string } & (
   | (Parameters<
       typeof import("./update-database-restore-source.js").prepareUpdateDatabaseRestoreSourceInProcess
     >[0] & { mode: "database-restore-preparation" })
-  | { mode: "sqlite-generations"; paths: string[]; stateDir: string }
+  | {
+      mode: "sqlite-generations";
+      paths: string[];
+      stateDir: string;
+      parentOwnedStagingRoot?: string;
+    }
   | { mode: "migration-filesystem-backup"; output: string; userPathBaseDirectory: string }
   | {
       mode: "database-generations";
       paths: string[];
       stateDir: string;
+      parentOwnedStagingRoot?: string;
       generationFormat?: "committed" | "paired";
       pluginOwners?: import("./database-engine/port-descriptor.js").DatabasePortPluginOwners;
     }
@@ -64,7 +77,7 @@ type UpdateStateInspectionInput = { resultPath?: string } & (
 async function inspectCandidateState(input: UpdateStateInspectionInput): Promise<unknown> {
   if (input.mode === "sqlite-generations") {
     const { readUpdateDatabaseGenerationPair } = await import("./update-database-generations.js");
-    return readUpdateDatabaseGenerationPair(input.paths);
+    return readUpdateDatabaseGenerationPair(input.paths, undefined, input.parentOwnedStagingRoot);
   }
   if (input.mode === "runtime-retention") {
     const { prepareRetainedRuntimeFiles } = await import("./update-retained-runtime-files.js");
@@ -109,7 +122,11 @@ async function inspectCandidateState(input: UpdateStateInspectionInput): Promise
     case "database-generations": {
       const { readUpdatePhysicalDatabaseGenerationPair, isLegacyUpdateGenerationRequest } =
         await import("./update-physical-database-generations.js");
-      const pair = await readUpdatePhysicalDatabaseGenerationPair(input.paths, input.pluginOwners);
+      const pair = await readUpdatePhysicalDatabaseGenerationPair(
+        input.paths,
+        input.pluginOwners,
+        input.parentOwnedStagingRoot,
+      );
       if (input.generationFormat === "paired") {
         return pair;
       }

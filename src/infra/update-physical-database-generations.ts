@@ -105,14 +105,19 @@ export async function readUpdatePhysicalDatabaseGenerations(
 export async function readUpdatePhysicalDatabaseGenerationPair(
   paths: readonly string[],
   pluginOwners?: DatabasePortPluginOwners,
+  stagingRoot?: string,
 ) {
   const postgres: string[] = [];
   // Classify the captured image without reacquiring the live source family.
-  const result = readUpdateDatabaseGenerationPair(paths, (imagePath, sourcePath) => {
-    if (readBackupEngineImage(imagePath, sourcePath).engine === "postgres") {
-      postgres.push(sourcePath);
-    }
-  });
+  const result = readUpdateDatabaseGenerationPair(
+    paths,
+    (imagePath, sourcePath) => {
+      if (readBackupEngineImage(imagePath, sourcePath).engine === "postgres") {
+        postgres.push(sourcePath);
+      }
+    },
+    stagingRoot,
+  );
   const fingerprints = await readUpdatePostgresDatabaseGenerations(postgres, pluginOwners);
   Object.assign(result.committed, fingerprints);
   Object.assign(result.physical, fingerprints);

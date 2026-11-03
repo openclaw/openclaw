@@ -249,6 +249,7 @@ export function createSqliteReadOnlyNativeResourceClient(port: MessagePort) {
 export function createSqliteReadOnlyNativeResourceConnection(callbacks: {
   receive(request: SqliteNativeOwnerRequest): void;
   onFailure(error: unknown): void;
+  onClosed?(): void;
 }): NativeWorkerResourceConnection {
   const { port1, port2 } = new MessageChannel();
   let disposed = false;
@@ -312,6 +313,7 @@ export function createSqliteReadOnlyNativeResourceConnection(callbacks: {
       port1.removeAllListeners();
       port1.close();
       port2.close();
+      callbacks.onClosed?.();
     },
   };
 }

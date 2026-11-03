@@ -36,6 +36,7 @@ import {
   readUpdateStateSchemaVersions,
   UpdateStateSchemaInspectionPlanSchema,
 } from "./update-candidate-state.js";
+import * as inspectionCommands from "./update-candidate-state.process.js";
 import { readUpdateStateDatabaseSizes } from "./update-candidate-state.sizes.js";
 import { materializeUpdateCandidateStateWorker } from "./update-candidate-state.test-support.js";
 import { UpdateDatabaseBackupSchema } from "./update-database-backup.js";
@@ -541,26 +542,28 @@ it.for([undefined, 600_000])(
     // The stat hook blocks its event loop; synchronous stderr still reaches the
     // command's existing output observer without waiting for a socket connection.
     const readyReceipt = createDeferred();
-    const run = commands.runUtf8CommandWithTimeout;
-    vi.spyOn(commands, "runUtf8CommandWithTimeout").mockImplementation((argv, options) => {
-      if (typeof options === "number") {
-        return run(argv, options);
-      }
-      let stderr = "";
-      return run(argv, {
-        ...options,
-        onOutputChunk(chunk, stream) {
-          const result = options.onOutputChunk?.(chunk, stream);
-          if (stream === "stderr") {
-            stderr += chunk.toString();
-            if (stderr.includes("metadata fixture ready\n")) {
-              readyReceipt.resolve();
+    const run = inspectionCommands.runStateInspectionCommand;
+    vi.spyOn(inspectionCommands, "runStateInspectionCommand").mockImplementation(
+      (argv, options) => {
+        if (typeof options === "number") {
+          return run(argv, options);
+        }
+        let stderr = "";
+        return run(argv, {
+          ...options,
+          onOutputChunk(chunk, stream) {
+            const result = options.onOutputChunk?.(chunk, stream);
+            if (stream === "stderr") {
+              stderr += chunk.toString();
+              if (stderr.includes("metadata fixture ready\n")) {
+                readyReceipt.resolve();
+              }
             }
-          }
-          return result;
-        },
-      });
-    });
+            return result;
+          },
+        });
+      },
+    );
     const timers = vi.spyOn(globalThis, "setTimeout");
     const controller = new AbortController();
     const operation = readUpdateStateDatabaseSizes([file], {
@@ -915,8 +918,8 @@ it("preserves an inventory worker output limit without blaming the process super
   const root = await fs.realpath(tempDirs.make("inventory-output-limit-"));
   const file = path.join(root, "source.sqlite");
   await fs.writeFile(file, "source");
-  const run = commands.runUtf8CommandWithTimeout;
-  vi.spyOn(commands, "runUtf8CommandWithTimeout").mockImplementation((argv, options) => {
+  const run = inspectionCommands.runStateInspectionCommand;
+  vi.spyOn(inspectionCommands, "runStateInspectionCommand").mockImplementation((argv, options) => {
     if (typeof options === "number") {
       throw new Error("Expected inventory capture options");
     }

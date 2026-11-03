@@ -14,12 +14,17 @@ import { captureRuntimeWorkerSource } from "./runtime-worker-generation.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
 import {
   registerRetainedSnapshotTempDirectory,
+  releaseRetainedSnapshotTempDirectory,
   startRemoveTempDirectory,
   sealRetainedSnapshotTempDirectory,
   SqliteSnapshotCleanupError,
 } from "./sqlite-readonly-location-cleanup.js";
 import { createSqliteReadOnlyNativeResourceConnection } from "./sqlite-readonly-native-resource.client.js";
 import { SQLITE_NATIVE_RESOURCE_PORT } from "./sqlite-readonly-native-resource.types.js";
+import {
+  readOnlyWorkerScope,
+  SqliteReadOnlyWorkerScopeClosedError,
+} from "./sqlite-readonly-worker-context.js";
 import { decodeSqliteSnapshotStagingError } from "./sqlite-snapshot-staging-error.js";
 import type {
   SqliteSnapshotStagingCommand,
@@ -74,6 +79,7 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
     },
   );
   const directories = new Map<string, SqliteSnapshotStagingDirectory>();
+  const failedDirectories = new Set<string>();
   const preparations = new Map<
     number,
     {
@@ -88,15 +94,18 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
   const activeRequests = new Set<RetainedOperation<SuccessfulReply>>();
   let servicingRequests = false;
   let requests = 0;
+  let scopes = 0;
   let admissionClosed = false;
   let idleClose: RetainedOperation<void> | undefined;
   let unavailable: { error: unknown } | undefined;
 
   function connectNativeResource() {
+    const ownedDirectories = new Set<string>();
     return createSqliteReadOnlyNativeResourceConnection({
       receive(value) {
         const directory = value.directory;
         if (value.type === "allocated") {
+          ownedDirectories.add(directory);
           const preparation = preparations.get(value.preparationId);
           if (!preparation) {
             throw new SqliteSnapshotCleanupError(
@@ -114,6 +123,18 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
       },
       onFailure(error) {
         unavailable ??= { error };
+      },
+      onClosed() {
+        for (const directory of ownedDirectories) {
+          if (failedDirectories.delete(directory)) {
+            releaseRetainedSnapshotTempDirectory(directory);
+            directories.delete(directory);
+            for (const preparation of preparations.values()) {
+              preparation.directories.delete(directory);
+              preparation.releaseIfComplete();
+            }
+          }
+        }
       },
     });
   }
@@ -140,12 +161,33 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
     if (idleClose?.read().status === "pending") {
       return idleClose;
     }
-    if (requests > 0 || directories.size > 0) {
+    if (requests > 0 || directories.size > failedDirectories.size) {
+      return completed();
+    }
+    if (failedDirectories.size > 0) {
+      const rotation = pool.startRotate();
+      return (idleClose = finallyRetainedOperation(
+        rotation,
+        // Keep the cleanup error, then clear the pool's failed-stop latch after native join.
+        () => (rotation.read().status === "rejected" ? pool.startRotate() : completed()),
+        (error, cleanupError) =>
+          createSqliteLifecycleAggregateError(
+            [error, cleanupError],
+            "SQLite snapshot native close failed",
+            error,
+          ),
+      ));
+    }
+    if (scopes > 0 && !admissionClosed && unavailable === undefined) {
       return completed();
     }
     return (idleClose = mapRetainedOperation(
       flatMapRetainedOperation(pool.startCloseResources(), () =>
-        requests > 0 || directories.size > 0 ? completed() : pool.startRotate(),
+        requests > 0 ||
+        directories.size > 0 ||
+        (scopes > 0 && !admissionClosed && unavailable === undefined)
+          ? completed()
+          : pool.startRotate(),
       ),
       () => {
         unavailable = undefined;
@@ -173,15 +215,30 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
         refused.reject(error);
         return refused.operation;
       }
-      return (pending = flatMapRetainedOperation(pool.startCloseResources(directory), () => {
-        directories.delete(directory);
-        if (preparationId !== undefined) {
-          const preparation = preparations.get(preparationId);
-          preparation?.directories.delete(directory);
-          preparation?.releaseIfComplete();
-        }
-        return closeWhenIdle();
-      }));
+      const removal = pool.startCloseResources(directory);
+      return (pending = finallyRetainedOperation(
+        mapRetainedOperation(removal, () => {
+          directories.delete(directory);
+          failedDirectories.delete(directory);
+          if (preparationId !== undefined) {
+            const preparation = preparations.get(preparationId);
+            preparation?.directories.delete(directory);
+            preparation?.releaseIfComplete();
+          }
+        }),
+        () => {
+          if (removal.read().status === "rejected") {
+            failedDirectories.add(directory);
+          }
+          return closeWhenIdle();
+        },
+        (error, cleanupError) =>
+          createSqliteLifecycleAggregateError(
+            [error, cleanupError],
+            "SQLite snapshot retirement failed",
+            error,
+          ),
+      ));
     };
     const owned = { directory, startRetire };
     directories.set(directory, owned);
@@ -349,6 +406,17 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
   const owner = {
     start,
     retainDirectory,
+    retainScope() {
+      scopes++;
+      let released = false;
+      return async () => {
+        if (!released) {
+          released = true;
+          scopes--;
+          await closeWhenIdle().result;
+        }
+      };
+    },
   };
   nativeSource.retain(owner, async () => {
     admissionClosed = true;
@@ -378,6 +446,13 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
 }
 
 export function captureSqliteSnapshotStagingOwner() {
+  const scope = readOnlyWorkerScope.getStore();
+  if (scope) {
+    if (!scope.active) {
+      throw new SqliteReadOnlyWorkerScopeClosedError();
+    }
+    scope.controller.signal.throwIfAborted();
+  }
   const { moduleUrl, runtimeGeneration } = captureRuntimeWorkerSource(
     resolveRuntimeProcessEntrypointUrl("sqliteSnapshotStaging"),
   );
@@ -390,6 +465,9 @@ export function captureSqliteSnapshotStagingOwner() {
   if (!owner) {
     owner = runInDetachedAsyncContext(() => createStagingOwner(moduleUrl, nativeSource));
     owners.set(nativeSource, owner);
+  }
+  if (scope && !scope.stagingOwners.has(owner)) {
+    scope.stagingOwners.set(owner, owner.retainScope());
   }
   return owner;
 }

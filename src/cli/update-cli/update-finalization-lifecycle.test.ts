@@ -240,6 +240,8 @@ it("records the plugin failure reason without finishing an inherited run", async
 });
 
 it("records the accepted CLI stop cause after admitted plugin work settles", async () => {
+  // Terminal cleanup joins real native workers retained by earlier inspection reads.
+  vi.useRealTimers();
   const previousExitCode = process.exitCode;
   const { lifecycle, read } = finalization(5_000);
   const entered = createDeferredCore<AbortSignal>();

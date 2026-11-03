@@ -24,7 +24,6 @@ import {
   removeTempDirectoryAsync,
   SqliteSnapshotCleanupError,
 } from "./sqlite-readonly-location-cleanup.js";
-import * as readOnlyWorker from "./sqlite-readonly-worker.js";
 import { createReadBarrier, observeSettlement } from "./sqlite-readonly.test-support.js";
 import { admitSqliteSchema } from "./sqlite-schema-facts.js";
 import { prepareSingleFlightSqliteSnapshot } from "./sqlite-snapshot-single-flight.js";
@@ -136,7 +135,6 @@ it("shares one awaited image across original-path inspection readers and drains 
   createDatabase(source, "CREATE TABLE probe(value TEXT); INSERT INTO probe VALUES('original');");
   const original = fs.readFileSync(source);
   vi.stubEnv("XDG_CACHE_HOME", root);
-  const worker = vi.spyOn(readOnlyWorker, "runSqliteReadOnlyWorker");
   await withArtifactPreservingStateReads(
     async () => {
       await Promise.all([
@@ -148,7 +146,7 @@ it("shares one awaited image across original-path inspection readers and drains 
       expect(first.location()).toBe(second.location());
       expect(first.location()).not.toBe(source);
       expect(second.prepare("SELECT value FROM probe").get()).toEqual({ value: "original" });
-      expect(worker.mock.calls.filter(([pathname]) => pathname === source)).toHaveLength(1);
+      expect(fs.readdirSync(path.join(root, "openclaw"))).toHaveLength(1);
     },
     { agentDatabases: true },
   );

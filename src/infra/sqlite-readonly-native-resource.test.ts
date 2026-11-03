@@ -362,6 +362,22 @@ it("seals creation and retries a failed close on the same native session", async
   expect(native.close).toHaveBeenCalledTimes(2);
 });
 
+it("reports filesystem cleanup failure only after the native child has joined", async () => {
+  const { resource, native, closed, inventory } = await allocatedFixture();
+  const failure = new Error("token retirement quota exhausted");
+  native.close.mockResolvedValue(undefined);
+  operations.copy.mockRejectedValue(failure);
+  const closing = resource.close();
+  const observation = observeSettlement(closing);
+  await nextTurn();
+  expect(observation.settled).toBe(false);
+  expect(operations.copy).not.toHaveBeenCalled();
+  closed.resolve();
+  await expect(closing).resolves.toMatchObject({ cleanupError: { errors: [failure] } });
+  expect(inventory).toEqual(new Set([tokenPath]));
+  expect(operations.remove).not.toHaveBeenCalled();
+});
+
 it("settles a refused native creation before a later session can allocate", async () => {
   const { client, launch } = fixture();
   const failure = new Error("native launch refused before creating a child");

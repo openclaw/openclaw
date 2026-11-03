@@ -3,13 +3,15 @@ import os from "node:os";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { z } from "zod";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
-import { runUtf8CommandWithTimeout } from "../process/exec.js";
 import { ignoreMissingPath } from "./errno.js";
 import { hasNodeErrorCode } from "./path-guards.js";
 import { prepareRuntimeProcessScriptInvocation } from "./runtime-process-url.js";
 import { resolveAggregateSqliteInspectionTimeoutMs } from "./sqlite-readonly-worker.js";
 import { createUpdateStateInspectionDiagnostics } from "./update-candidate-state.diagnostics.js";
-import { withUpdateStateInspectionWork } from "./update-candidate-state.process.js";
+import {
+  runStateInspectionCommand,
+  withUpdateStateInspectionWork,
+} from "./update-candidate-state.process.js";
 
 const inventorySchema = z.array(
   z.object({ path: z.string(), sizeBytes: z.string().regex(/^\d+$/).optional() }),
@@ -118,7 +120,7 @@ export async function readUpdateStateDatabaseSizes(
       }
       const result = await withUpdateStateInspectionWork(
         () =>
-          runUtf8CommandWithTimeout(script.argv, {
+          runStateInspectionCommand(script.argv, {
             cwd: os.tmpdir(),
             input: JSON.stringify({ files: batch }),
             baseEnv: options.sourceEnv,

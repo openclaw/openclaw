@@ -104,7 +104,8 @@ function executeEvidence(pathname: string, sql: string) {
   db.close();
 }
 
-function fingerprintReads() {
+async function fingerprintReads() {
+  await settlement.allowSnapshotBroker();
   // These SQLite fixtures exercise generation settlement without native engine inspection.
   vi.spyOn(databaseBackup, "readBackupEngine").mockReturnValue({ engine: "sqlite" });
   vi.spyOn(updateState, "readUpdateDatabaseGenerationPairIsolated").mockImplementation(
@@ -151,7 +152,7 @@ async function settleCleanup(
 }
 
 it("refuses rollback attribution for writes preceding Doctor admission", async () => {
-  fingerprintReads();
+  await fingerprintReads();
   const pathname = path.join(settlement.tempDirs.make("doctor-write-receipt-"), "agent.sqlite");
   const missing = `${pathname}.missing`;
   executeEvidence(
@@ -180,7 +181,7 @@ it("refuses rollback attribution for writes preceding Doctor admission", async (
 });
 
 it("refuses automatic restore after a NOCOW physical replacement during Doctor maintenance", async () => {
-  fingerprintReads();
+  await fingerprintReads();
   const pathname = path.join(settlement.tempDirs.make("doctor-nocow-receipt-"), "agent.sqlite");
   executeEvidence(
     pathname,
@@ -212,7 +213,7 @@ it("refuses automatic restore after a NOCOW physical replacement during Doctor m
 });
 
 it("keeps fingerprint failures advisory and publishes no database write proof", async () => {
-  fingerprintReads();
+  await fingerprintReads();
   const pathname = path.join(settlement.tempDirs.make("doctor-write-proof-unavailable-"), "db");
   fs.mkdirSync(pathname);
   const maintenance = await beginWithGenerations({ [pathname]: null });

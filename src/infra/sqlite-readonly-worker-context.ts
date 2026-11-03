@@ -11,6 +11,7 @@ export type SqliteReadOnlyWorkerScope = {
   deadlineOwnedByCaller: boolean;
   worker?: SqliteReadOnlyWorkerSession;
   releaseReadWorker?: () => Promise<void>;
+  stagingOwners: Map<object, () => Promise<void>>;
 };
 export const readOnlyWorkerScope = new AsyncContext<SqliteReadOnlyWorkerScope>(
   Symbol("sqliteReadOnlyWorkerScope"),
@@ -35,6 +36,7 @@ export function createSqliteReadOnlyWorkerScope(options?: {
     controller: new AbortController(),
     pending: new Set(),
     deadlineOwnedByCaller: options?.deadlineOwnedByCaller ?? false,
+    stagingOwners: new Map(),
   };
   const abort = () => scope.controller.abort(options?.signal.reason);
   options?.signal.addEventListener("abort", abort, { once: true });
@@ -56,7 +58,9 @@ export function createSqliteReadOnlyWorkerScope(options?: {
         const closed = await Promise.allSettled([
           scope.worker?.close(),
           scope.releaseReadWorker?.(),
+          ...Array.from(scope.stagingOwners.values(), (release) => release()),
         ]);
+        scope.stagingOwners.clear();
         throwSettledAggregate(closed, "SQLite read-only worker scope cleanup failed");
       })();
       return closing;
