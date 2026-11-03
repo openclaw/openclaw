@@ -387,7 +387,17 @@ suite.define(() => {
         if (input === "keyboard") {
           await workOption.press("Enter");
         } else {
-          await workOption.click();
+          await workOption.hover();
+          await page.mouse.down();
+          // A peer message refreshes history between pointer down and activation.
+          const historyRequests = await gateway.deferNext("chat.history");
+          await gateway.emitGatewayEvent("session.message", {
+            sessionKey,
+            session: await gateway.getSessionRow(sessionKey),
+            message: { role: "user", content: [{ type: "text", text: "Peer message" }] },
+          });
+          await gateway.waitForRequest("chat.history", { after: historyRequests });
+          await page.mouse.up();
         }
         const patch = await gateway.waitForRequest("sessions.patch");
         expect(patch.params).toEqual({
@@ -395,6 +405,9 @@ suite.define(() => {
           key: sessionKey,
           model: `openai/gpt-5.5@${work.authProfileId}`,
         });
+        if (input === "pointer") {
+          await gateway.resolveDeferred("chat.history");
+        }
         // A pending model override must not change the confirmed account.
         const currentOption = picker.locator('[data-chat-account-option="current"]');
         await expect.poll(() => currentOption.isVisible()).toBe(true);

@@ -1,0 +1,2 @@
+# Chat account picks remain active while accepted-session history refreshes.
+13
