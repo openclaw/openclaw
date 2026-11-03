@@ -1,5 +1,33 @@
-import { describe, expect, it } from "vitest";
-import { readClawRouterCapabilityOffers } from "./capability-offers.js";
+import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  fetchClawRouterCapabilityOffers,
+  resolveClawRouterCapabilityHttpContext,
+} from "./capability-offers.js";
+
+async function readOffers(payload: unknown, baseUrl: string) {
+  const release = vi.fn(async () => undefined);
+  vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockResolvedValueOnce({
+    response: Response.json(payload),
+    finalUrl: baseUrl + "/catalog",
+    release,
+  });
+  const offers = await fetchClawRouterCapabilityOffers({
+    context: resolveClawRouterCapabilityHttpContext(
+      {
+        models: {
+          providers: {
+            clawrouter: { baseUrl, models: [] },
+          },
+        },
+      },
+      "synthetic-router-key",
+    ),
+    timeoutMs: () => 1000,
+  });
+  expect(release).toHaveBeenCalledOnce();
+  return offers;
+}
 
 function catalog(offerPatch = {}, providerPatch = {}) {
   return {
@@ -39,8 +67,9 @@ function catalog(offerPatch = {}, providerPatch = {}) {
 }
 
 describe("ClawRouter capability offer projection", () => {
-  it("joins model-less search and manifest offers to their declared native format", () => {
-    const native = readClawRouterCapabilityOffers(catalog(), "https://router.example/v1");
+  afterEach(() => vi.restoreAllMocks());
+  it("joins model-less search and manifest offers to their declared native format", async () => {
+    const native = await readOffers(catalog(), "https://router.example/v1");
     expect(native).toEqual([
       {
         providerId: "tavily",
@@ -52,7 +81,7 @@ describe("ClawRouter capability offer projection", () => {
         responseFormat: "tavily.search",
       },
     ]);
-    const manifest = readClawRouterCapabilityOffers(
+    const manifest = await readOffers(
       catalog({
         routeKind: "manifest",
         route: "/v1/proxy/tavily/search",
@@ -62,7 +91,7 @@ describe("ClawRouter capability offer projection", () => {
     expect(manifest[0]?.url).toBe("https://other.example/prefix/v1/proxy/tavily/search");
   });
 
-  it("does not infer grants, formats, models, transports or external destinations", () => {
+  it("does not infer grants, formats, models, transports or external destinations", async () => {
     for (const patch of [
       { eligible: false },
       { affordability: "exact-blocked" },
@@ -74,9 +103,7 @@ describe("ClawRouter capability offer projection", () => {
       { route: "https://upstream.example/search" },
       { routeKind: "unified", route: "/v1/search" },
     ]) {
-      expect(readClawRouterCapabilityOffers(catalog(patch), "https://router.example/v1")).toEqual(
-        [],
-      );
+      expect(await readOffers(catalog(patch), "https://router.example/v1")).toEqual([]);
     }
     for (const patch of [
       { allowed: false },
@@ -84,13 +111,11 @@ describe("ClawRouter capability offer projection", () => {
       { routes: [] },
       { nativeBaseUrl: "https://upstream.example" },
     ]) {
-      expect(
-        readClawRouterCapabilityOffers(catalog({}, patch), "https://router.example/v1"),
-      ).toEqual([]);
+      expect(await readOffers(catalog({}, patch), "https://router.example/v1")).toEqual([]);
     }
   });
 
-  it("resolves only the listed model's template without allowing path injection", () => {
+  it("resolves only the listed model's template without allowing path injection", async () => {
     const body = catalog(
       { modelId: "tavily/fixture", route: "/v1/native/tavily/models/${model}" },
       {
@@ -106,7 +131,7 @@ describe("ClawRouter capability offer projection", () => {
         ],
       },
     );
-    expect(readClawRouterCapabilityOffers(body, "https://router.example/v1")[0]?.url).toBe(
+    expect((await readOffers(body, "https://router.example/v1"))[0]?.url).toBe(
       "https://router.example/v1/native/tavily/models/name%2Fwith%3Fquery",
     );
   });

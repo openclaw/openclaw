@@ -67,7 +67,7 @@ export function resolveClawRouterCapabilityHttpContext(
   };
 }
 
-export function readClawRouterCapabilityOffers(
+function readClawRouterCapabilityOffers(
   payload: unknown,
   baseUrl: string,
 ): ClawRouterCapabilityOffer[] {
