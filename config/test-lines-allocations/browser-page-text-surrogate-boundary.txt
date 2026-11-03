@@ -1,2 +1,0 @@
-# Preserve well-formed browser text at explicit truncation boundaries.
-12
