@@ -938,6 +938,28 @@ Apply the campaign's paired-delta, sample-count, and absolute pause rules.
 
 ## Gateway startup and restart acceptance
 
+`restart-lane-flood-measure.ts` starts 40 synthetic dashboard turns, gracefully
+stops a real Gateway, verifies all shutdown markers, then restarts at width eight
+while submitting 12 new cron runs at 100 ms intervals. A deterministic local
+Responses service holds resumed turns for one second. Every resume must finish
+once and every cron run must record a successful outcome.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/restart-lane-flood-measure.ts \
+  --checkout /path/to/built-checkout --output /path/to/new-result.json \
+  --fixture /path/to/session-read-transactions-fixture --profile
+```
+
+The optional fixture is copied into isolated state; its workspace is read by the
+synthetic agent. Use independent baseline and candidate builds, run serial A/A
+controls and counterbalanced A/B pairs, and keep host load comparable. Output
+separates restart startup, resume dispatch from first resume, and new cron
+request-to-model latency. `--profile` adds per-process queue-owner wait samples,
+process CPU (including workers), main-thread CPU and sampled allocations including
+collected objects. Profiles cover startup through graceful shutdown; match the
+second process in each pair for recovery. Main-isolate allocation samples do not
+include worker heaps. Report filesystem and profiling overhead explicitly.
+
 `post-restart-burst-measure.ts --cold-row-reads` measures cold session pages after
 a clean restart. Seed two independent, compact team-shaped fixtures sequentially:
 
