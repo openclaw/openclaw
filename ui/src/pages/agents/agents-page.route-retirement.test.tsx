@@ -114,7 +114,6 @@ it("leaves Agents through RouterOutlet while an admitted identity save settles l
         name: "Saved after departure",
       }),
     );
-    await waitForSolid(() => mounted.getByText("Saving…", { exact: true }));
     mounted.getByRole("button", { name: "Leave Agents" }).click();
     await waitForSolid(() => mounted.getByText("Identity destination body", { exact: true }));
     expect(mounted.container.querySelector("openclaw-agents-page")).toBeNull();

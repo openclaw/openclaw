@@ -81,6 +81,7 @@ export function createAgentViewTestProps(
       configLoading: false,
       configSaving: false,
       configFormDirty: false,
+      configAutoSaveStatus: "idle",
       lastError: null,
     },
     channels: {

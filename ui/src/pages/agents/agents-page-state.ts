@@ -159,7 +159,6 @@ export function createAgentsPageState(
   const identity = createAgentIdentityEditor(context, state, {
     snapshot: () => gateway.snapshot,
     saves: () => identitySaves,
-    retired: presentation.retired,
     canCall: (method) => canCall(method, "operator.admin"),
     isCurrent: isCurrentRequest,
     onSaved: syncAgentState,
@@ -708,7 +707,6 @@ export function createAgentsPageState(
     };
   });
   return {
-    identitySavePending: () => identity.saving() || readData().identitySaving,
     read() {
       observation.read();
       return viewProps();
