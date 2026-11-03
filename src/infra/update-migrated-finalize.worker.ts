@@ -45,9 +45,9 @@ import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 import { closePostgresPool, preparePostgresPoolForUpdate } from "./postgres-sync/pool.js";
 import { resolveEnvironmentValue } from "./process-env.js";
 import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
-import { stopSupervisedPredecessorGateway } from "./update-candidate-predecessor-stop.js";
 import { UPDATE_RUN_ID_ENV } from "./update-control-plane-sentinel.js";
 import { createDoctorServiceInspectionBudget } from "./update-doctor-deadline.js";
+import { withUpdateDoctorPredecessor } from "./update-doctor-predecessor.js";
 import {
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
   recordUpdateDoctorConfigWriteRefusal,
@@ -385,61 +385,68 @@ async function runDelegatedDoctor(input: DecodedUpdateDoctorInput): Promise<void
       const { runDoctorHealthFlow } = await import("../flows/doctor-health.js");
       assertCurrent();
       remaining();
-      await stopSupervisedPredecessorGateway(input, {
-        root: input.root,
-        assertCurrent,
-        serviceInspectionBudget: remaining,
-        warn: (message) => process.stderr.write(`${message}\n`),
-      });
-      assertCurrent();
-      const doctorBudget = remaining();
-      await withPluginCohortConfigCapture(
+      await withUpdateDoctorPredecessor(
+        input,
         {
-          runId: input.runId,
-          installKey: captureUpdateCommandExecutorAuthority(fence, input.runId).installKey,
-          env: process.env,
-          assertCurrent: fence.assertCurrent,
+          root: input.root,
+          assertCurrent,
+          serviceInspectionBudget: remaining,
+          warn: (message) => process.stderr.write(`${message}\n`),
         },
-        () =>
-          runDoctorHealthFlow(
+        async (databaseWriteCapture) => {
+          assertCurrent();
+          const doctorBudget = remaining();
+          await withPluginCohortConfigCapture(
             {
-              ...defaultRuntime,
-              exit: (code) => {
-                process.exitCode = code;
-              },
+              runId: input.runId,
+              installKey: captureUpdateCommandExecutorAuthority(fence, input.runId).installKey,
+              env: process.env,
+              assertCurrent: fence.assertCurrent,
             },
-            {
-              repair: input.repair,
-              fullIntegrityCheck: input.fullIntegrityCheck,
-              nonInteractive: true,
-              ...(input.yes !== undefined ? { yes: input.yes } : {}),
-              ...(input.workspaceSuggestions !== undefined
-                ? { workspaceSuggestions: input.workspaceSuggestions }
-                : {}),
-            },
-            {
-              inputHash: input.configInputHash,
-              retirementOnly: input.retirementOnly,
-              assertCurrent,
-              commandAuthority,
-              originalRecoveryCapture: {
-                runId: input.runId,
-                installRoot: captureUpdateCommandExecutorAuthority(fence, input.runId).installKey,
-                ref: input.originalRecoveryCapture,
-              },
-              ...(input.databaseGenerations
-                ? { databaseGenerations: input.databaseGenerations }
-                : {}),
-              ...(input.databasePluginOwners
-                ? { databasePluginOwners: input.databasePluginOwners }
-                : {}),
-              serviceInspectionDeadlineAtMs:
-                doctorBudget === undefined ? undefined : Date.now() + doctorBudget,
-              ...(input.postCoreSchemaRepair === true
-                ? { postCoreSchemaRepair: { runId: input.runId, assertCurrent } }
-                : {}),
-            },
-          ),
+            () =>
+              runDoctorHealthFlow(
+                {
+                  ...defaultRuntime,
+                  exit: (code) => {
+                    process.exitCode = code;
+                  },
+                },
+                {
+                  repair: input.repair,
+                  fullIntegrityCheck: input.fullIntegrityCheck,
+                  nonInteractive: true,
+                  ...(input.yes !== undefined ? { yes: input.yes } : {}),
+                  ...(input.workspaceSuggestions !== undefined
+                    ? { workspaceSuggestions: input.workspaceSuggestions }
+                    : {}),
+                },
+                {
+                  inputHash: input.configInputHash,
+                  databaseWriteCapture,
+                  retirementOnly: input.retirementOnly,
+                  assertCurrent,
+                  commandAuthority,
+                  originalRecoveryCapture: {
+                    runId: input.runId,
+                    installRoot: captureUpdateCommandExecutorAuthority(fence, input.runId)
+                      .installKey,
+                    ref: input.originalRecoveryCapture,
+                  },
+                  ...(input.databaseGenerations
+                    ? { databaseGenerations: input.databaseGenerations }
+                    : {}),
+                  ...(input.databasePluginOwners
+                    ? { databasePluginOwners: input.databasePluginOwners }
+                    : {}),
+                  serviceInspectionDeadlineAtMs:
+                    doctorBudget === undefined ? undefined : Date.now() + doctorBudget,
+                  ...(input.postCoreSchemaRepair === true
+                    ? { postCoreSchemaRepair: { runId: input.runId, assertCurrent } }
+                    : {}),
+                },
+              ),
+          );
+        },
       );
     },
   );

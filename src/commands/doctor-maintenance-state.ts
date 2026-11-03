@@ -70,14 +70,16 @@ export async function createDoctorMaintenanceState(options: {
     : env;
   let captureAdmitted = false;
   let liveAuthorityReadsAdmitted = false;
-  const capture = createUpdateDoctorDatabaseWriteCapture(params.databaseGenerations, {
-    env: selectedEnv,
-    pluginOwners: params.databasePluginOwners,
-    root: params.root ?? undefined,
-    signal: options.signal,
-    assertCurrent: () => owner!.assertCurrent(options.assertCurrent),
-    warn: options.warn,
-  });
+  const capture =
+    params.databaseWriteCapture ??
+    createUpdateDoctorDatabaseWriteCapture(params.databaseGenerations, {
+      env: selectedEnv,
+      pluginOwners: params.databasePluginOwners,
+      root: params.root ?? undefined,
+      signal: options.signal,
+      assertCurrent: () => owner!.assertCurrent(options.assertCurrent),
+      warn: options.warn,
+    });
   const closeResources = async (agentRoot?: string | null) => {
     const drainRoot =
       agentRoot === null

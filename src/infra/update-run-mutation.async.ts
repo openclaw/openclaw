@@ -4,11 +4,13 @@ import {
   CommandProcessCleanupError,
   hasCommandProcessCleanupError,
 } from "../process/exec-result.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import { hasSqliteWorkerOutcomeUnknown, isSqliteWorkerError } from "./sqlite-worker-contract.js";
 import { createSqliteWorkerWriteAdmission } from "./sqlite-worker-store.js";
+import { captureUpdateDoctorSqliteWrite } from "./update-doctor-migration-attribution.js";
 import type { PluginCohortRecoveryPair } from "./update-plugin-cohort-schema.js";
 import type { UpdateResultPayload } from "./update-result-payload.js";
 import { captureUpdateRunRedactionFacts, type UpdateRunLedgerOptions } from "./update-run-codec.js";
@@ -32,6 +34,8 @@ export type UpdateRunWriteOptions = UpdateRunLedgerOptions & {
   assertAccepting?: () => void;
   retainSettlement?: (settled: Promise<void>) => void;
   requireNoRecovery?: true;
+  /** Attribute this required receipt to the enclosing Doctor capture. */
+  captureDatabaseWrite?: true;
   pluginCohort?: PluginCohortRecoveryContinuation;
 };
 
@@ -51,12 +55,22 @@ export async function recordUpdateRunMutationAsync(
     ...(options.redactPaths ? { redactPaths: [...options.redactPaths] } : {}),
   };
   const context = captured.context ?? captureOpenClawStateWorkerContext(captured);
+  const sqliteCapture =
+    captured.captureDatabaseWrite &&
+    context.databaseEngineSelection?.effectiveEngines.state !== "postgres"
+      ? captureUpdateDoctorSqliteWrite(context.admission.databasePath)
+      : undefined;
   const continuation = captured.pluginCohort;
   let cohortPair: PluginCohortRecoveryPair | undefined;
+  let writerClosed = false;
   const assertCurrent = () => {
-    context.admission.assertCurrent();
+    // The retained physical maintenance owner replaces our intentionally retired read admission.
+    if (!writerClosed) {
+      context.admission.assertCurrent();
+    }
     captured.signal?.throwIfAborted();
     captured.assertCurrent?.();
+    sqliteCapture?.assertCurrent();
     if (continuation && cohortPair) {
       if (continuation.runId !== runId) {
         throw new Error("Plugin cohort bookkeeping requires its original update run");
@@ -75,6 +89,7 @@ export async function recordUpdateRunMutationAsync(
       requireNoRecovery: captured.requireNoRecovery,
       busyTimeoutMs: captured.busyTimeoutMs,
       redactPaths: captured.redactPaths,
+      sqliteCaptureGeneration: sqliteCapture?.expected,
     }),
   );
   // Retain the accepted receipt before the metadata read yields; settlement owns
@@ -106,15 +121,51 @@ export async function recordUpdateRunMutationAsync(
       }
       command.input.pluginCohort = pluginCohort;
     }
-    return runOpenClawStateWorkerOperation(context, (scope) => scope.execute(command), {
-      existingOnly: command.type !== "updateRuns.create",
-      assertCurrent,
-      createAdmission: createSqliteWorkerWriteAdmission(
+    const reply = await runOpenClawStateWorkerOperation(
+      context,
+      (scope) => scope.execute(command),
+      {
+        existingOnly: command.type !== "updateRuns.create",
         assertCurrent,
+        createAdmission: createSqliteWorkerWriteAdmission(
+          assertCurrent,
+          [context.admission.databasePath],
+          pluginCohort,
+        ),
+      },
+    );
+    if (sqliteCapture) {
+      // The writer supplied the exact post-close content generation while native
+      // exclusion was held. Closing must settle before publishing that receipt.
+      await closeOpenClawStateDatabaseByPathAsync(context.admission.databasePath);
+      writerClosed = true;
+      assertCurrent();
+      if (reply?.kind !== "recorded" || !reply.sqliteWriteReceipt?.afterClose) {
+        throw new Error("Update receipt writer did not publish its native close generation.");
+      }
+      const { readUpdateSqliteDatabaseGenerationPairIsolated } =
+        await import("./update-candidate-state.inspection.js");
+      const observed = await readUpdateSqliteDatabaseGenerationPairIsolated(
         [context.admission.databasePath],
-        pluginCohort,
-      ),
-    });
+        { env: captured.env, signal: captured.signal },
+      );
+      assertCurrent();
+      const pathname = context.admission.databasePath;
+      const actual = observed.committed[pathname];
+      const allowed = new Set([
+        reply.sqliteWriteReceipt.after,
+        reply.sqliteWriteReceipt.afterClose,
+      ]);
+      const alternate = observed.emptyReaderAlternates[pathname];
+      if (
+        actual === undefined ||
+        (!allowed.has(actual) && (alternate === undefined || !allowed.has(alternate)))
+      ) {
+        throw new Error("Update receipt database changed before native close settlement.");
+      }
+      reply.sqliteWriteReceipt.after = actual ?? null;
+    }
+    return reply;
   })();
   const completion = pending.catch((error: unknown) => {
     if (hasSqliteWorkerOutcomeUnknown(error) && !hasCommandProcessCleanupError(error)) {
@@ -133,7 +184,13 @@ export async function recordUpdateRunMutationAsync(
     throw error;
   });
   captured.retainSettlement?.(completion.then(() => undefined));
-  const reply = await completion;
+  let reply: Awaited<typeof completion>;
+  try {
+    reply = await completion;
+  } catch (error) {
+    sqliteCapture?.refuse();
+    throw error;
+  }
   assertCurrent();
   if (!reply) {
     throw new Error("Update history disappeared before recording its outcome");
@@ -147,5 +204,18 @@ export async function recordUpdateRunMutationAsync(
     );
     return undefined;
   }
-  return reply;
+  if (sqliteCapture) {
+    if (reply.sqliteWriteReceipt?.afterClose) {
+      sqliteCapture.accept({
+        ...reply.sqliteWriteReceipt,
+        after: reply.sqliteWriteReceipt.afterClose,
+      });
+    } else {
+      sqliteCapture.refuse();
+    }
+  }
+  return {
+    record: reply.record,
+    ...(reply.updateResult ? { updateResult: reply.updateResult } : {}),
+  };
 }

@@ -126,10 +126,10 @@ async function inspect(
       throw new Error("SQLite staged snapshot requires its owner-allocated directory");
     }
     if (mode === "update-generation") {
-      const { readUpdateDatabaseGenerations } = await import("./update-database-generations.js");
+      const { readUpdateSqliteWriterGeneration } = await import("./update-database-generations.js");
       return {
         ok: true,
-        generation: JSON.stringify(readUpdateDatabaseGenerations([pathname])[pathname]),
+        generation: JSON.stringify(readUpdateSqliteWriterGeneration(pathname)),
       };
     }
     if (mode === "staging-reconcile") {
