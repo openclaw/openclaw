@@ -36,6 +36,10 @@ import {
   registerDiagnosticTracePropagationBridge,
   runWithDiagnosticTraceContext,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { resetSystemEventsForTest } from "openclaw/plugin-sdk/test-fixtures";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
@@ -474,6 +478,8 @@ test("exports the typed-tool origin through delayed continuation custody restart
     { layout: "state-only", prefix: "openclaw-typed-tool-trace-" },
     async () => {
       vi.useFakeTimers({ now: 1_780_000_000_000, toFake: ["Date", "setTimeout", "clearTimeout"] });
+      // An election captures its session's recipient authority from the prepared runtime config.
+      setRuntimeConfigSnapshot({});
       const originalContextManager = registeredContextManager();
       context.disable();
       const contextManager = new AsyncLocalStorageContextManager().enable();
@@ -593,6 +599,7 @@ test("exports the typed-tool origin through delayed continuation custody restart
         resetDiagnosticEventsForTest();
         diagnostics.traces.stopActiveTrustedSpans();
         await provider.shutdown();
+        clearRuntimeConfigSnapshot();
         vi.useRealTimers();
         if (registeredContextManager() !== originalContextManager) {
           context.disable();
