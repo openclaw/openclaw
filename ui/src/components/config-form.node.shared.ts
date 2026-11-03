@@ -60,6 +60,8 @@ export type ConfigNodeRenderParams = {
   maskSensitive?: boolean;
   isSensitivePathRevealed?: (path: Array<string | number>) => boolean;
   onToggleSensitivePath?: (path: Array<string | number>) => void;
+  /** Switches this page to its Raw tab; absent where the page has none. */
+  onOpenRaw?: () => void;
   /** Secret-marked fields hold their edit here and write through their own Save. */
   secretFields?: ConfigSecretFields;
   /** The form's own Save writes these edits, so a stored secret can be typed over. */
@@ -84,6 +86,7 @@ export function configChildRenderOptions(params: ConfigNodeRenderParams) {
     revealSensitive: params.revealSensitive,
     isSensitivePathRevealed: params.isSensitivePathRevealed,
     onToggleSensitivePath: params.onToggleSensitivePath,
+    onOpenRaw: params.onOpenRaw,
     secretFields: params.secretFields,
     replaceStoredSecrets: params.replaceStoredSecrets,
   };
@@ -96,6 +99,7 @@ export function resolveConfigFieldPresentation(params: ConfigNodeRenderParams) {
     label,
     help,
     showLabel,
+    path: params.path,
     required: configFieldRequiresInput(params),
     helpId:
       params.descriptionId ??

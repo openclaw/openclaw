@@ -77,7 +77,8 @@ describe("config form scalar integrity", () => {
       value: { runtime: { enabled: false } },
       onPatch: vi.fn(),
     });
-    expect(container.textContent).toContain("Controls runtime processing. Default: true");
+    expect(container.textContent).toContain("Controls runtime processing.");
+    expect(container.textContent).not.toContain("Default: true");
   });
 
   it.each(["text", "number"] as const)(
@@ -188,8 +189,8 @@ describe("config form scalar integrity", () => {
       onPatch,
       onRemove,
     });
-    expect(container.textContent).toContain("Default: 3");
-    expect(container.textContent).toContain("Controls retry attempts. Default: 3");
+    expect(container.textContent).toContain("Controls retry attempts.");
+    expect(container.textContent).not.toContain("Default: 3");
     const numberInput = expectElement(
       container.querySelector<HTMLInputElement>("input[type='number']"),
       "number input",

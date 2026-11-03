@@ -61,7 +61,6 @@ describe("config form collection defaults", () => {
       { mode: "custom" },
     );
 
-    expect(container.textContent).toContain('Default: {"mode":"balanced"}');
     const json = textarea(container);
     expect(json.value).toBe('{\n  "mode": "custom"\n}');
     json.value = "";
@@ -82,7 +81,6 @@ describe("config form collection defaults", () => {
       reject: true,
     });
 
-    expect(container.textContent).toContain('Default: ["a","b"]');
     expect(container.textContent).toContain("1 item");
     expect(input(container).value).toBe("custom");
 

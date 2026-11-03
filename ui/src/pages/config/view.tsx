@@ -224,6 +224,7 @@ export function Config(props: ConfigProps) {
       analysis,
       unsupportedActivePaths,
       rawAvailable,
+      openRaw: showModeToggle && rawAvailable ? () => props.onFormModeChange("raw") : undefined,
       rawDraftPending,
       formMode,
       categories,
@@ -456,6 +457,7 @@ export function Config(props: ConfigProps) {
         value={props.formValue}
         embedded={props.embeddedEditor === true || state().showSetup}
         rawAvailable={state().rawAvailable}
+        onOpenRaw={state().openRaw}
         disabled={state().formBusy || !props.formValue || !state().mutationAllowed}
         unsupportedPaths={state().analysis.unsupportedPaths}
         secretFields={props.secretFields}
@@ -626,17 +628,11 @@ export function Config(props: ConfigProps) {
             ) : null
           ) : state().formMode === "form" ? (
             <>
-              {state().unsupportedActivePaths.length > 0 &&
-              state().showModeToggle &&
-              state().rawAvailable ? (
+              {state().unsupportedActivePaths.length > 0 && state().openRaw ? (
                 <div class="config-content-callout">
                   <div class="callout info">
                     <UnsupportedPathSummary paths={state().unsupportedActivePaths} />{" "}
-                    <button
-                      type="button"
-                      class="btn btn--sm"
-                      onClick={() => props.onFormModeChange("raw")}
-                    >
+                    <button type="button" class="btn btn--sm" onClick={() => state().openRaw?.()}>
                       {t("configView.openRawEditor")}
                     </button>
                   </div>

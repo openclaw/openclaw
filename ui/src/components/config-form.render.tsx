@@ -188,6 +188,7 @@ function ConfigSection(props: { section: Section; form: ConfigFormProps }): Soli
               path: props.section.path,
               hints: props.form.uiHints,
               rawAvailable: props.form.rawAvailable ?? true,
+              onOpenRaw: props.form.onOpenRaw,
               unsupported: new Set(props.form.unsupportedPaths ?? []),
               disabled: props.form.disabled ?? false,
               showLabel: false,
