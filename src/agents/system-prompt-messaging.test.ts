@@ -79,14 +79,43 @@ describe("system prompt messaging routing", () => {
     });
     expect(prompt).not.toContain("After visible `message(send)`, final ONLY");
     expect(prompt).toContain("Do not repeat replies already delivered to this conversation");
-    expect(prompt).toContain(
-      "Use `final=false` for message-tool sends when more work or another reply must follow",
-    );
+    expect(prompt).toContain("Use `final=false` for chat updates and mid-task answers");
     expect(prompt).toContain("A send to another conversation does not answer this one");
     expect(prompt).toContain(
       "If a send or reaction has already answered this conversation and no further reply is needed",
     );
     expect(prompt).toContain("your entire final response MUST be exactly NO_REPLY");
+  });
+
+  it("preserves required visible-source message-tool guidance in minimal prompts", () => {
+    const restricted = (toolNames: string[], promptMode: "minimal" | "full" = "minimal") =>
+      buildAgentSystemPrompt({
+        workspaceDir: "/tmp/openclaw",
+        toolNames,
+        promptMode,
+        sourceReplyDeliveryMode: "message_tool_only",
+        runtimeInfo: { channel: "webchat" },
+      });
+    expect(restricted(["message"])).toContain(
+      "You MUST use `message(action=send)` for visible text replies. Current-turn delivery instructions override this default.",
+    );
+    for (const promptMode of ["minimal", "full"] as const) {
+      const unavailable = restricted(["read"], promptMode);
+      expect(unavailable).not.toContain("message(action=send)");
+      expect(unavailable).toContain(
+        "Visible reply unavailable; your final response is not sent here",
+      );
+      expect(unavailable).not.toContain("## Assistant Output Directives");
+      expect(unavailable).not.toContain("## Control UI Embed");
+    }
+    expect(
+      buildAgentSystemPrompt({
+        workspaceDir: "/tmp/openclaw",
+        promptMode: "minimal",
+        toolNames: ["message"],
+        sourceReplyDeliveryMode: "automatic",
+      }),
+    ).not.toContain("message(action=send)");
   });
 
   it("omits silence guidance for a private completion on an external channel", () => {

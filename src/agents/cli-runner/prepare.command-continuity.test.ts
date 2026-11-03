@@ -312,12 +312,10 @@ describe("direct CLI command continuity", () => {
       expect(second.messageToolPolicyHash).toBe(first.messageToolPolicyHash);
       expect(second.promptToolNamesHash).toBe(first.promptToolNamesHash);
 
-      expect(first.systemPrompt).toContain(
-        "Your final response is normally sent to this conversation",
-      );
+      expect(first.systemPrompt).toContain("Your final response is normally sent here");
       expect(first.systemPrompt).toContain("Follow any current-turn delivery override.");
       expect(first.params.prompt).toContain(
-        "Your final response is not automatically sent to this conversation for this turn.",
+        "Your final response is not automatically sent here for this turn.",
       );
       expect(first.params.prompt).toContain(
         "`send`: `target` + `message`; target required this turn.",
@@ -327,7 +325,7 @@ describe("direct CLI command continuity", () => {
         "OpenClaw delivers your final response automatically unless",
       );
       expect(second.params.prompt).not.toContain(
-        "Your final response is not automatically sent to this conversation for this turn.",
+        "Your final response is not automatically sent here for this turn.",
       );
       expect(second.params.transcriptPrompt).toBe("second ask");
 

@@ -328,7 +328,7 @@ describe("runReplyAgent stranded message_tool_only finals (#85714)", () => {
       expect(retryRun.prompt).toContain("Done — deployed v2 to staging.");
       expect(retryRun.prompt).toMatch(/^\[System\] /);
       expect(retryRun.prompt).toContain("message(action=send)");
-      expect(retryRun.prompt).toContain("If a reply is needed and the message tool is available");
+      expect(retryRun.prompt).toContain("To reply here, use message(action=send)");
       expect(retryRun.prompt).toContain("If no reply is needed, answer exactly NO_REPLY.");
       expect(retryRun.prompt).not.toContain("Please deliver this reply now");
       expect(retryRun.prompt).not.toBe(initial.followupRun.prompt);

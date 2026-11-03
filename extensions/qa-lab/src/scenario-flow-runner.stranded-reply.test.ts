@@ -6,7 +6,9 @@ import { waitForOutboundMessage } from "./suite-runtime-transport.js";
 
 const diagnostic = "I generated a reply but could not deliver it to this chat. Please try again.";
 const rawMarker = "QA-STRANDED-RETRY-FAIL-RAW";
-const retryRequest = { allInputText: `${rawMarker}: you did not call message(action=send)` };
+const retryRequest = {
+  allInputText: `${rawMarker}: Your previous final response was not sent automatically.`,
+};
 
 async function runStrandedRetryFailureFlow(
   options: {

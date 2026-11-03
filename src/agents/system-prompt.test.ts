@@ -254,35 +254,6 @@ describe("buildAgentSystemPrompt", () => {
     }
   });
 
-  it("preserves required visible-source message-tool guidance in minimal prompts", () => {
-    const restricted = (toolNames: string[], promptMode: PromptParams["promptMode"] = "minimal") =>
-      renderPrompt({
-        toolNames,
-        promptMode,
-        sourceReplyDeliveryMode: "message_tool_only",
-        runtimeInfo: { channel: "webchat" },
-      });
-    expect(restricted(["message"])).toContain(
-      "You MUST use `message(action=send)` for visible text replies. Current-turn delivery instructions override this default.",
-    );
-    for (const promptMode of ["minimal", "full"] as const) {
-      const unavailable = restricted(["read"], promptMode);
-      expect(unavailable).not.toContain("message(action=send)");
-      expect(unavailable).toContain(
-        "Visible reply unavailable; your final response is not sent to this conversation",
-      );
-      expect(unavailable).not.toContain("## Assistant Output Directives");
-      expect(unavailable).not.toContain("## Control UI Embed");
-    }
-    expect(
-      renderPrompt({
-        promptMode: "minimal",
-        toolNames: ["message"],
-        sourceReplyDeliveryMode: "automatic",
-      }),
-    ).not.toContain("message(action=send)");
-  });
-
   it.each<PromptCase>([
     [
       "keeps generic callback guidance without a plugin override",

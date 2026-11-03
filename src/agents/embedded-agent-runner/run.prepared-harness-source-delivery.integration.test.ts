@@ -555,24 +555,22 @@ describe("prepared harness source delivery", () => {
         sourceReplyDeliveryMode: "automatic",
       });
     } else if (testCase.preparedVisibleReplies === "automatic") {
+      expect(modelVisiblePrompt).toContain("Your final response is normally sent here");
       expect(modelVisiblePrompt).toContain(
-        "Your final response is normally sent to this conversation",
-      );
-      expect(modelVisiblePrompt).toContain(
-        "By default, your final response is automatically sent to this conversation",
+        "By default, your final response is sent here automatically",
       );
       expect(modelVisiblePrompt).not.toContain(
-        "By default, your final response is not automatically sent to this conversation",
+        "By default, your final response is not automatically sent here",
       );
     } else {
       expect(modelVisiblePrompt).toContain(
         "You MUST use `message(action=send)` for visible text replies. Current-turn delivery instructions override this default.",
       );
       expect(modelVisiblePrompt).toContain(
-        "By default, your final response is not automatically sent to this conversation",
+        "By default, your final response is not automatically sent here",
       );
       expect(modelVisiblePrompt).not.toContain(
-        "By default, your final response is automatically sent to this conversation",
+        "By default, your final response is sent here automatically",
       );
     }
   });

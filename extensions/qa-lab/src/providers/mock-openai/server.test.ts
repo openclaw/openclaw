@@ -431,7 +431,7 @@ describe("qa mock openai server", () => {
       server,
       [
         "qa stranded final recovery check.",
-        "Your previous reply did not reach this conversation.",
+        "Your previous final response was not sent automatically.",
         initialText,
       ].join(" "),
       { tools: [MESSAGE_TOOL] },
@@ -452,7 +452,7 @@ describe("qa mock openai server", () => {
     {
       name: "retry failure",
       prompt:
-        "Your previous reply did not reach this conversation. Include `QA-STRANDED-RETRY-FAIL-RAW` in a thorough multi-sentence answer, but do not call any tool.",
+        "Your previous final response was not sent automatically. Include `QA-STRANDED-RETRY-FAIL-RAW` in a thorough multi-sentence answer, but do not call any tool.",
       marker: "QA-STRANDED-RETRY-FAIL-RAW",
       tools: [MESSAGE_TOOL],
     },

@@ -108,10 +108,10 @@ it(
           expect(currentUser).toBeGreaterThan(policyIndex);
           const policy = JSON.stringify(input[policyIndex]?.content);
           expect(policy).toContain("replaces earlier source-delivery guidance");
-          expect(policy).toContain("current source is default target");
+          expect(policy).toContain("this conversation is the default target");
           expect(policy).toContain(
             mode === "message_tool_only"
-              ? "not automatically delivered"
+              ? "not automatically sent here for this turn"
               : "delivers your final response automatically",
           );
           expect(Buffer.byteLength(policy)).toBeLessThan(1_000);

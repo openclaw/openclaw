@@ -164,15 +164,15 @@ it.each(
     expect(prompt).toContain("Current-turn delivery rules override these defaults.");
     expect(prompt).toContain(
       turnMode === "message_tool_only"
-        ? "Your final response is not automatically sent to this conversation for this turn."
+        ? "Your final response is not automatically sent here for this turn."
         : "OpenClaw delivers your final response automatically unless you have already completed the reply",
     );
     expect(prompt).toContain(
       sessionMode === "automatic"
-        ? "By default, your final response is automatically sent"
-        : "By default, your final response is not automatically sent to this conversation",
+        ? "By default, your final response is sent here automatically"
+        : "By default, your final response is not automatically sent here",
     );
-    expect(prompt).toContain("including attachments");
+    expect(prompt).toContain("for chat updates and mid-task answers, then resume work");
     expect(prompt).toContain("do not expect another model step after confirmed final delivery");
     expect(prompt).not.toContain("Do not repeat delivered content.");
     expect(prompt).not.toContain("For ordinary text, do not use the message tool");

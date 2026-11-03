@@ -155,7 +155,7 @@
     },
     "openclaw_source_delivery": {
       "kind": "application",
-      "value": "Current source-delivery policy for this turn (replaces earlier source-delivery guidance):\nThis turn has no current conversation. Reply normally in your final assistant message; OpenClaw delivers your final response automatically to the caller.\n\n`send`: `target` + `message`; target required this turn.\n\nCommentary is optional progress and may be hidden. Include answers to every still-pending user question, including questions received during ongoing work, in your final response."
+      "value": "Current source-delivery policy for this turn (replaces earlier source-delivery guidance):\nThis turn has no current conversation. Reply normally in your final assistant message; OpenClaw delivers your final response automatically to the caller.\n\n`send`: `target` + `message`; target required this turn.\n\nInclude all pending answers in your final response; do not rely on intermediate narration being delivered."
     },
     "openclaw_temporal_context": {
       "kind": "application",
@@ -239,8 +239,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
 ```json
 {
   "additionalContext": {
-    "chars": 973,
-    "roughTokens": 244
+    "chars": 901,
+    "roughTokens": 226
   },
   "codexCollaborationModeDeveloperInstructions": {
     "chars": 0,
@@ -259,24 +259,24 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 85375,
-    "roughTokens": 21344
+    "chars": 85588,
+    "roughTokens": 21397
   },
   "openClawDeveloperInstructions": {
-    "chars": 3928,
-    "roughTokens": 982
+    "chars": 3773,
+    "roughTokens": 944
   },
   "openClawParentLocalInstructions": {
     "chars": 507,
     "roughTokens": 127
   },
   "totalTextOnly": {
-    "chars": 27939,
-    "roughTokens": 6985
+    "chars": 27712,
+    "roughTokens": 6928
   },
   "totalWithDynamicToolsJson": {
-    "chars": 113316,
-    "roughTokens": 28329
+    "chars": 113302,
+    "roughTokens": 28326
   },
   "userInputText": {
     "chars": 879,
@@ -516,7 +516,7 @@ When explicitly_mentioned_bot is true, the incoming message mentions your channe
 ```
 
 
-You are in a Telegram direct conversation. Normal final replies are private and are not automatically sent to this conversation. To post visible output here, use the message tool with action=send; the target defaults to this conversation. If no visible direct response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to the conversation.
+You are in a Telegram direct conversation. By default, your final response is not automatically sent here. Visible replies require the message tool. If no reply is needed, do not send one. Current-turn delivery rules override these defaults.
 ````
 
 ### Developer: Codex Collaboration Mode Instructions
@@ -543,7 +543,7 @@ This turn has no current conversation. Reply normally in your final assistant me
 
 `send`: `target` + `message`; target required this turn.
 
-Commentary is optional progress and may be hidden. Include answers to every still-pending user question, including questions received during ongoing work, in your final response.</openclaw_source_delivery>
+Include all pending answers in your final response; do not rely on intermediate narration being delivered.</openclaw_source_delivery>
 ```
 
 ### Developer: OpenClaw Additional Context (openclaw_temporal_context)
@@ -688,7 +688,7 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
           "type": "string"
         },
         "final": {
-          "description": "For source replies, set false for progress; set true, or omit, for a completed send. For react, set true when adding a reaction to the current source message is your complete response; omit or set false when more work follows. A confirmed final source reply ends the turn.",
+          "description": "For sends to the current conversation, set false for chat updates and mid-task answers; set true only for the completed reply. For sends, omitting `final` means `final=true` unless this turn explicitly says omission means `final=false`. For react, set true only when adding a reaction to the current message is the complete reply; otherwise omit or set false. Finish the work before a final send. Treat confirmed final delivery as the end of the turn; do not expect another model step.",
           "type": "boolean"
         },
         "forceDocument": {

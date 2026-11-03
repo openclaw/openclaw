@@ -43,7 +43,7 @@ export function planSubagentFanoutTurn(params: {
   // turns whose private-reply policy may no longer apply.
   const fanoutHasPrivateSourceReply =
     isSubagentFanoutPrompt &&
-    /your final response is not automatically sent to this conversation for this turn\.\s*you must use `?message\(action=send\)`?/i.test(
+    /your final response is not automatically sent here for this turn\.\s*you must use `?message\(action=send\)`?/i.test(
       currentFanoutInstructions,
     );
   const fanoutRequiresMessageTool = fanoutHasPrivateSourceReply && canCallMessage;

@@ -86,9 +86,9 @@ export function resolveStrandedReplyRecovery(params: {
 
 function buildStrandedReplyRetryPrompt(finalText: string): string {
   return formatSystemTurnPrompt(
-    `Your previous reply did not reach this conversation. ` +
+    `Your previous final response was not sent automatically. ` +
       `Your reply text was: "${finalText}". ` +
-      `If a reply is needed and the message tool is available, send it now with message(action=send). If that tool is unavailable, report the delivery limitation; do not claim the reply was sent. ` +
+      `To reply here, use message(action=send). If that tool is unavailable, report the delivery limitation; do not claim the reply was sent. ` +
       `If no reply is needed, answer exactly NO_REPLY.`,
   );
 }

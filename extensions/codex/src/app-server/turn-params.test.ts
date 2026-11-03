@@ -162,7 +162,9 @@ it("carries explicit current policy without changing native turn input", async (
   const values = turns.map(deliveryValue);
   expect(values[0]).toContain("OpenClaw delivers your final response automatically");
   expect(values[1]).toContain("You MUST use `message(action=send)`");
-  expect(values[1]).toContain("Use `final=false` when more work or another reply must follow");
+  expect(values[1]).toContain(
+    "Use `message(action=send, final=false)` for chat updates and mid-task answers",
+  );
   expect(values[1]).toContain("Set `final=true`, or omit it,");
   expect(values[1]).toContain("this conversation is the default target");
   expect(values[1]).toContain("`message(action=send, final=false)`");

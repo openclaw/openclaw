@@ -14,9 +14,9 @@ describe("ACP turn delivery guidance", () => {
       sourceReplyDeliveryMode: "message_tool_only",
     });
     expect(text).toContain("not automatically sent");
-    expect(text).toContain("If available");
+    expect(text).toContain("Without that tool, you cannot send a reply here");
     expect(text).toContain("follow its target requirements");
-    expect(text).toContain("final=false when more work or another reply must follow");
+    expect(text).toContain("final=false for chat updates and mid-task answers");
     expect(text).not.toMatch(/commentary|progress_card|or omit|default target/);
     expect(text.endsWith("\n\nAnswer this")).toBe(true);
   });

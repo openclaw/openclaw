@@ -912,7 +912,7 @@ async function buildResponsesPayload(
           body,
         );
         const requiresFinal =
-          /(?:visible source replies are not automatically delivered for this run|your final response is not automatically sent to this conversation for this turn)\.[\s\S]*set `?final=true`?/i.test(
+          /(?:visible source replies are not automatically delivered for this run|your final response is not automatically sent here for this turn)\.[\s\S]*set `?final=true`?/i.test(
             deliveryInstructions,
           );
         return buildToolCallEventsWithArgs("message", {

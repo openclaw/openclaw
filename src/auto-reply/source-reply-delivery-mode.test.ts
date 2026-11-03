@@ -39,9 +39,9 @@ describe("buildHarnessVisibleReplyGuidance", () => {
       }),
     ).toBe(
       "OpenClaw delivers your final response automatically unless you have already completed the reply to this conversation with the message tool.\n\n" +
-        "Use `final=false` when more work or another reply must follow, including attachments before the final answer. Set `final=true`, or omit it, for a completed reply to this conversation. Finish work before that send; do not expect another model step after confirmed final delivery. You MUST NOT repeat it in your final response or another send. If reactions are permitted, adding a reaction to the current message with `final=true` can also complete the reply.\n\n" +
+        "Use `message(action=send, final=false)` for chat updates and mid-task answers, then resume work. Set `final=true`, or omit it, for a completed reply to this conversation. Finish work before that send; do not expect another model step after confirmed final delivery. You MUST NOT repeat it in your final response or another send. If reactions are permitted, adding a reaction to the current message with `final=true` can also complete the reply.\n\n" +
         "`send`: `message`; this conversation is the default target. Set `target` only for another destination.\n\n" +
-        "Answer mid-task questions or status requests with `message(action=send, final=false)`, then resume work. Deliver all pending answers before finishing; do not rely on narration being delivered.",
+        "Deliver all pending answers before finishing; do not rely on narration being delivered.",
     );
   });
 });

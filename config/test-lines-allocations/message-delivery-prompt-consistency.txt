@@ -1,2 +1,2 @@
-# Composed direct/group/channel delivery modes, final-send scope, and historical hint recognition regressions.
-91
+# Delivery-mode composition, harness default propagation, final-send scope, and historical hint recognition regressions.
+254

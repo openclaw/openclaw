@@ -108,16 +108,15 @@ function buildGroupChatContext(params: {
     normalizeOptionalLowercaseString(params.sessionCtx.ChatType) === "channel"
       ? "channel"
       : "group chat";
-  const destinationLabel = `this ${sharedChatNoun}`;
 
   const lines = [`You are in a ${providerLabel} ${sharedChatNoun}.`];
   if (messageToolOnly) {
     lines.push(
-      "By default, your final response is not automatically sent to this conversation. Visible replies require the message tool.",
+      "By default, your final response is not automatically sent here. Visible replies require the message tool.",
     );
   } else {
     lines.push(
-      `By default, your final response is automatically sent to ${destinationLabel}. Use the message tool for attachments when available.`,
+      "By default, your final response is sent here automatically. Use the message tool for attachments when available.",
     );
   }
   lines.push(
@@ -159,10 +158,10 @@ function buildDirectChatContext(params: {
     `You are in a ${providerLabel} direct conversation.`,
     ...(params.sourceReplyDeliveryMode === "message_tool_only"
       ? [
-          "By default, your final response is not automatically sent to this conversation. Visible replies require the message tool.",
+          "By default, your final response is not automatically sent here. Visible replies require the message tool.",
           "If no reply is needed, do not send one.",
         ]
-      : ["By default, your final response is automatically sent to this conversation."]),
+      : ["By default, your final response is sent here automatically."]),
     SOURCE_DELIVERY_DEFAULTS_GUIDANCE,
   ].join(" ");
 }

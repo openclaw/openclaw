@@ -873,7 +873,7 @@ describe("embedded session prompt delivery", () => {
     expect(
       cli.prepared.runtimeContextFragments?.map((fragment) => fragment.text).join("\n"),
     ).toContain(
-      "For this turn, reply normally in your final assistant message; OpenClaw delivers it to this conversation automatically. You MUST NOT also send the same reply with the message tool.",
+      "For this turn, reply normally in your final assistant message; OpenClaw delivers it here automatically. You MUST NOT send the same reply both with the message tool and in your final response.",
     );
     expect(user.prepared.runtimeContextFragments).toEqual([]);
   });
