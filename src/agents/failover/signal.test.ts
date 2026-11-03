@@ -6,6 +6,7 @@ describe("FAILOVER_REASONS", () => {
     expect(FAILOVER_REASONS).toEqual([
       "auth",
       "auth_permanent",
+      "session_authority",
       "format",
       "rate_limit",
       "overloaded",
