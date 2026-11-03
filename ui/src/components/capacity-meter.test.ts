@@ -59,7 +59,9 @@ it.each([
     expect(fill?.style.width).toBe(width);
     expect(meter?.classList.contains(`session-context-meter--${tone}`)).toBe(true);
     expect(meter?.getAttribute("aria-label")).toBe(
-      unavailable ? "Slot utilization unavailable" : `${total - available} of ${total} slots busy`,
+      unavailable
+        ? "Couldn’t load device capacity. Try again."
+        : `${total - available} of ${total} slots busy`,
     );
   },
 );
