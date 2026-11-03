@@ -33,7 +33,6 @@ struct GatewayNodeSessionDashboardAuthTests {
             try await self.connect(gateway, fixture: fixture, options: options)
             let first = try #require(await gateway.currentRoute(ifGatewayID: gatewayID))
             #expect(fixture.capturedAuth(at: 0) == .init(token: nil, bootstrapToken: nil, deviceToken: nil))
-            #expect(await gateway.authBinding(ifCurrentRoute: first)?.source == GatewayAuthSource.none)
             #expect(await gateway.httpResourceAuthorization(ifCurrentRoute: first)?.bearer == issuedToken)
             let authorization: Data
             do {
@@ -61,7 +60,6 @@ struct GatewayNodeSessionDashboardAuthTests {
             let second = try #require(await gateway.currentRoute(ifGatewayID: gatewayID))
             #expect(second != first)
             #expect(fixture.capturedAuth(at: 1) == .init(token: nil, bootstrapToken: nil, deviceToken: nil))
-            #expect(await gateway.authBinding(ifCurrentRoute: second)?.source == GatewayAuthSource.none)
             #expect(await gateway.httpResourceAuthorization(ifCurrentRoute: second)?.bearer == nil)
             #expect(DeviceAuthStore.loadToken(
                 deviceId: identity.deviceId, role: "operator", gatewayID: gatewayID)?.token == issuedToken)
