@@ -618,6 +618,48 @@ data class ChatHistory(
   val sessionInfo: ChatSessionEntry? = null,
   val inFlightRun: ChatInFlightRun? = null,
   val defaultModelRef: String? = null,
+  /** Omission preserves the current physical session's custody projection. */
+  val pendingInputs: ChatPendingInputsPage? = null,
+  val inputReceipts: List<ChatInputReceipt> = emptyList(),
+)
+
+/** A bounded Gateway-owned display page, never canonical transcript or local send storage. */
+data class ChatPendingInputsPage(
+  val items: List<ChatPendingInput>,
+  val total: Int,
+  val queuedCount: Int?,
+  val nextBefore: Long?,
+)
+
+data class ChatPendingInput(
+  val id: String,
+  val runId: String?,
+  val message: ChatMessage?,
+  val acceptedAtMs: Long,
+  val state: String,
+  val queued: Boolean,
+)
+
+sealed interface ChatInputReceipt {
+  val runId: String
+
+  data class Pending(
+    override val runId: String,
+    val queued: Boolean,
+    val cancelled: Boolean,
+  ) : ChatInputReceipt
+
+  data class Consumed(
+    override val runId: String,
+    val consumedByEventId: String,
+  ) : ChatInputReceipt
+}
+
+/** Selected Gateway/agent/logical and physical session own this transient view together. */
+internal data class ChatPendingInputView(
+  val owner: ChatComposerOwner,
+  val sessionId: String,
+  val page: ChatPendingInputsPage,
 )
 
 /**
