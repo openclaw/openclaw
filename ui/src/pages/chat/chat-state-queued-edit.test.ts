@@ -10,7 +10,7 @@ import { createStorageMock } from "../../test-helpers/storage.ts";
 import { createInitializationContext } from "./chat-application-context.test-support.ts";
 import { storeChatComposerMemoryFallback } from "./chat-composer-memory-fallback.ts";
 import { enqueueChatMessage } from "./chat-queue.ts";
-import { OFFLINE_QUEUE_STORAGE_ERROR as storageError } from "./chat-send-support.ts";
+import { chatOfflineQueueStorageError as storageError } from "./chat-send-support.ts";
 import { createChatState } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";

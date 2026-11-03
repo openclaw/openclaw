@@ -244,11 +244,7 @@ it("requires explicit safe review, retains the pause, and retries status without
   await waitForSolid(() => expect(f.text()).toContain("Checking continuation status"));
   firstRefresh.resolve({ status: "failed", error: "Disconnected during refresh" });
   await firstRefresh.promise;
-  await waitForSolid(() =>
-    expect(f.text()).toContain(
-      "Continuation was requested, but its status could not be refreshed.",
-    ),
-  );
+  await waitForSolid(() => expect(f.text()).toContain("Couldn’t refresh the continuation status."));
   expect(f.text()).not.toContain("Waiting for the provider to accept it.");
   f.expectPaused(true);
   expect(f.refresh).toHaveBeenCalledTimes(1);
@@ -259,7 +255,7 @@ it("requires explicit safe review, retains the pause, and retries status without
   secondRefresh.resolve({ status: "refreshed" });
   await secondRefresh.promise;
   await waitForSolid(() => expect(f.text()).toContain("Waiting for the provider to accept it."));
-  expect(f.text()).not.toContain("status could not be refreshed");
+  expect(f.text()).not.toContain("Couldn’t refresh the continuation status");
   f.expectPaused(true);
   f.setRow({ providerReview: undefined });
   f.publishSource();
@@ -297,7 +293,7 @@ it.each([
       });
     }
     f.publishSource();
-    await waitForSolid(() => expect(f.text()).toContain("Continuation was not accepted."));
+    await waitForSolid(() => expect(f.text()).toContain("Couldn’t continue this session."));
     if (source === "row") {
       expect(f.text()).toContain("Provider authentication failed before acceptance.");
       expect(f.text()).not.toContain("Waiting for the provider to accept it.");
@@ -309,7 +305,7 @@ it.each([
       // A later row may omit the terminal receipt; only an explicit retry retires it.
       f.setRow({}, 3);
       f.publishSource();
-      expect(f.text()).toContain("Continuation was not accepted.");
+      expect(f.text()).toContain("Couldn’t continue this session.");
       f.expectPaused(false);
     }
     await expectFreshRetry(f, first);
@@ -336,7 +332,7 @@ it.each(["acknowledgment", "refresh"] as const)(
     await Promise.resolve();
     f.publishSource();
     await waitForSolid(() => f.expectPaused(false));
-    expect(f.text()).toContain("Continuation was not accepted.");
+    expect(f.text()).toContain("Couldn’t continue this session.");
   },
 );
 
@@ -451,7 +447,7 @@ it("prioritizes terminal owner feedback over a rejected refresh and admits an ex
   });
   f.publishSource();
   await waitForSolid(() => {
-    expect(f.text()).toContain("Continuation was not accepted.");
+    expect(f.text()).toContain("Couldn’t continue this session.");
     expect(f.text()).toContain("Provider access revoked");
     expect(f.text()).not.toContain("Status refresh unavailable");
   });

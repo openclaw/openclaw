@@ -32,7 +32,7 @@ import {
   steerQueuedChatMessage as steerQueued,
 } from "./chat-send-actions.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
-import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
+import { chatOfflineQueueStorageError } from "./chat-send-support.ts";
 import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
 import {
   activeQueuedMessageEdit as activeEdit,
@@ -328,14 +328,14 @@ it("clears reorder conflicts after editing ends", () => {
 it("preserves unrelated errors after a queue move", () => {
   const { host } = queueHost([{}, {}]);
   host.lastError = "History could not be refreshed";
-  host.chatError = OFFLINE_QUEUE_STORAGE_ERROR;
+  host.chatError = chatOfflineQueueStorageError();
 
   expect(moveQueued(host as never, "queued-2", "queued-1")).toBe("moved");
 
   expect(storedOrder(host)).toEqual(["message 2", "message 1"]);
   expect(host).toMatchObject({
     lastError: "History could not be refreshed",
-    chatError: OFFLINE_QUEUE_STORAGE_ERROR,
+    chatError: chatOfflineQueueStorageError(),
   });
 });
 

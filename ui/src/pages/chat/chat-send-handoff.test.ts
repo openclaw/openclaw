@@ -41,7 +41,7 @@ it.each([false, true])("rejects cross-account handoffs (owned: %s)", async (owne
   );
   expect(host.chatError ?? null).toBe(
     owned
-      ? "Could not store the previous draft in browser storage. It remains available in this tab."
+      ? "Couldn’t save the previous draft. It’s still available in this tab. Free browser storage and try again."
       : null,
   );
   expect(host.lastError ?? null).toBe(host.chatError ?? null);

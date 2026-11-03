@@ -25,7 +25,7 @@ import { readQueuedMessageById, updateQueuedMessage } from "./chat-queue.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import { deliverChatQueueItem } from "./chat-send-delivery.ts";
 import { canSendVolatileQueueItem, reconnectSafeQueuedSendState } from "./chat-send-eligibility.ts";
-import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
+import { chatOfflineQueueStorageError } from "./chat-send-support.ts";
 import {
   isQueuedMessageBeingEdited,
   QUEUED_MESSAGE_RETRY_CONFLICT_ERROR,
@@ -87,7 +87,7 @@ export async function steerQueuedChatMessage(host: ChatHost, id: string): Promis
   }
   const item = updateQueuedMessage(host, id, (entry) => ({ ...entry, queueMode: "steer" }));
   if (!item) {
-    setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
+    setChatError(host, chatOfflineQueueStorageError());
     return;
   }
   await retryQueuedChatMessage(host, id);
@@ -160,7 +160,7 @@ export function moveQueuedChatMessage(
     })),
   );
   if (applied === null) {
-    setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
+    setChatError(host, chatOfflineQueueStorageError());
     return "rejected";
   }
   for (const key of ["lastError", "chatError"] as const) {
@@ -239,7 +239,7 @@ export async function retryQueuedChatMessage(
           resetRetryState(entry, undefined, reviewedSessionId),
         );
         if (!retry) {
-          setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
+          setChatError(host, chatOfflineQueueStorageError());
           return;
         }
         await deliverChatQueueItem(host, retry, {
@@ -249,7 +249,7 @@ export async function retryQueuedChatMessage(
         });
         return;
       }
-      setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
+      setChatError(host, chatOfflineQueueStorageError());
       return;
     }
   }
@@ -257,12 +257,12 @@ export async function retryQueuedChatMessage(
     resetRetryState(entry, reconnectSafeQueuedSendState(host), reviewedSessionId),
   );
   if (!retry) {
-    setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
+    setChatError(host, chatOfflineQueueStorageError());
     return;
   }
   const retried = owner.locate(host, retry.id);
   if (!retried?.durable) {
-    setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
+    setChatError(host, chatOfflineQueueStorageError());
     return;
   }
   const outbox = retried.scope;

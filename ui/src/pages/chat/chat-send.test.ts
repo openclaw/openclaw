@@ -119,7 +119,7 @@ type TestChatHost = ReturnType<typeof makeChatHost>;
 
 const startupOptions = { startup: true, awaitHistory: true, deferBranches: true };
 const storageError =
-  "Could not store this message for reconnect. Free browser storage or reconnect before sending.";
+  "Couldn’t save this message for reconnecting. Free browser storage or reconnect before sending.";
 
 function admitItem(
   host: TestChatHost,

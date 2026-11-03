@@ -171,6 +171,10 @@ const catalog = {
       voiceTranscript: "Voice transcript",
     },
     queue: {
+      storageFailed:
+        "Couldn’t save this message for reconnecting. Free browser storage or reconnect before sending.",
+      draftStorageFailed:
+        "Couldn’t save the previous draft. It’s still available in this tab. Free browser storage and try again.",
       reviewEdit: "Review edit",
       reloadBlocked: "Save or cancel your queued message edit before reloading.",
       memoryOnlyReloadBlocked:
@@ -184,7 +188,7 @@ const catalog = {
       memoryOnlyChanged:
         "The pending input changed or is being edited. It has not been discarded; review the current input before refreshing.",
       memoryOnlyUnavailable:
-        "The pending input could not be opened. It remains protected in this tab; try Review pending input again.",
+        "Couldn’t open the pending input. It’s still saved in this tab. Try Review pending input again.",
       connectionPending: "Finishing connection recovery. Try sending again when it is ready.",
       editSourceChanged:
         "This queued message changed while you were editing. Your edit is still here. Copy it, cancel the edit, and review the queue before trying again.",

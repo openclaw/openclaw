@@ -31,7 +31,7 @@ import type { PendingComposerSnapshot } from "./chat-send-composer.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import {
   chatSendHoldReason,
-  OFFLINE_QUEUE_STORAGE_ERROR,
+  chatOfflineQueueStorageError,
   surfaceChatDeliveryFailure,
 } from "./chat-send-support.ts";
 import { isQueuedMessageBeingEdited } from "./queued-message-edit.ts";
@@ -299,7 +299,7 @@ async function drainStoredChatOutbox(
             host,
             outbox.sessionKey,
             outbox.agentId,
-            updated ? error : OFFLINE_QUEUE_STORAGE_ERROR,
+            updated ? error : chatOfflineQueueStorageError(),
           );
         }
       };
@@ -339,7 +339,7 @@ async function drainStoredChatOutbox(
               sendState: "held",
             }))
           ) {
-            setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
+            setChatError(host, chatOfflineQueueStorageError());
             // Keep the claimed clear row as the reload-safe barrier.
             return;
           }
@@ -349,7 +349,7 @@ async function drainStoredChatOutbox(
             host,
             outbox.sessionKey,
             outbox.agentId,
-            OFFLINE_QUEUE_STORAGE_ERROR,
+            chatOfflineQueueStorageError(),
           );
           return;
         }
