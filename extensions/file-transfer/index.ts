@@ -1,3 +1,4 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   definePluginEntry,
   type AnyAgentTool,
@@ -31,6 +32,14 @@ function createLazyTool(
     },
   };
 }
+
+// The first turn invokes workspace.memory and workspace.skills together. When plugins load
+// from TypeScript source, two concurrent on-demand imports of this module can race: the
+// second caller can receive it before its own imports are bound. Built dist output uses
+// static chunk imports and is unaffected. Both commands share one import.
+const loadWorkspaceCommandModule = createLazyRuntimeModule(
+  () => import("./src/node-host/workspace-memory.js"),
+);
 
 const fileTransferNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
   {
@@ -117,7 +126,7 @@ export default definePluginEntry({
         dangerous: true,
         duplex: true,
         handle: async (...args) => {
-          const { handleWorkspaceCommand } = await import("./src/node-host/workspace-memory.js");
+          const { handleWorkspaceCommand } = await loadWorkspaceCommandModule();
           return await handleWorkspaceCommand(api, kind, ...args);
         },
       });
