@@ -1,8 +1,8 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mountSolid } from "../test-helpers/mount-solid.ts";
-import "./login-gate-solid.tsx";
+import { canPairBrowserWithGateway, createBrowserPairSession } from "../lib/browser-pair.ts";
+import { mountFailure } from "./login-gate.test-support.ts";
 
 vi.mock("../lib/nodes/index.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/nodes/index.ts")>()),
@@ -14,57 +14,53 @@ vi.mock("../lib/nodes/index.ts", async (importOriginal) => ({
   signDevicePayload: vi.fn(async () => "signature"),
 }));
 
-type GateElement = HTMLElement & {
-  props: Record<string, unknown>;
-  updateComplete: Promise<boolean>;
-};
-
 const started = { requestId: "request-1", code: "ABCDEFGH", expiresAtMs: Date.now() + 600_000 };
+const approved = { status: "approved", bootstrapToken: "bootstrap" };
 const gatewayUrl = `ws://${window.location.host}`;
 
-function json(body: unknown) {
-  return new Response(JSON.stringify(body), { status: 200 });
+function json(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), { status });
+}
+
+function stubReplies(...replies: Response[]) {
+  const fetchMock = vi.fn(async () => replies.shift()!);
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+function session() {
+  const handlers = { onState: vi.fn(), onApproved: vi.fn() };
+  return { ...handlers, ...createBrowserPairSession({ basePath: "", ...handlers }) };
 }
 
 async function settle() {
   await vi.advanceTimersByTimeAsync(10);
 }
 
-async function mountWaitingGate(overrides: Record<string, unknown> = {}) {
-  const collect = vi.fn(async () => json({ status: "approved", bootstrapToken: "bootstrap" }));
+async function mountWaitingGate(lastError = "", code: string | null = null) {
+  const collect = vi.fn(async () => json(approved));
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string) => (url.endsWith("/start") ? json(started) : collect())),
   );
   const onBrowserPaired = vi.fn();
   const onConnect = vi.fn();
-  const element = document.createElement("openclaw-login-gate") as GateElement;
+  const element = await mountFailure(lastError, code);
   element.props = {
-    resourceBasePath: "",
-    connected: false,
-    lastError: null,
-    lastErrorCode: null,
-    hasToken: false,
-    hasPassword: false,
+    ...element.props,
     gatewayUrl,
-    secret: "",
-    showGatewaySecret: false,
+    onBrowserPaired,
+    onConnect,
     onGatewayUrlChange: (value: string) => {
       element.props = { ...element.props, gatewayUrl: value };
     },
-    onSecretChange: vi.fn(),
-    onBrowserPaired,
-    onToggleGatewaySecret: vi.fn(),
-    onConnect,
-    ...overrides,
   };
-  mountSolid(() => element);
   await settle();
   // Hold the first poll so each test decides what happens before an approval arrives.
   const hold = Promise.withResolvers<void>();
   collect.mockImplementationOnce(async () => {
     await hold.promise;
-    return json({ status: "approved", bootstrapToken: "bootstrap" });
+    return json(approved);
   });
   element.querySelector<HTMLButtonElement>(".login-gate__browser-pair-start")!.click();
   await settle();
@@ -72,13 +68,28 @@ async function mountWaitingGate(overrides: Record<string, unknown> = {}) {
   return { element, collect, onBrowserPaired, onConnect, approve: hold.resolve };
 }
 
-function typeGatewayUrl(element: HTMLElement, value: string) {
-  const input = element.querySelector<HTMLInputElement>("#login-gate-url")!;
-  input.value = value;
+type WaitingGate = Awaited<ReturnType<typeof mountWaitingGate>>;
+
+async function expectRetired(gate: WaitingGate) {
+  await settle();
+  gate.approve();
+  await settle();
+  await vi.advanceTimersByTimeAsync(10_000);
+  expect(gate.onBrowserPaired).not.toHaveBeenCalled();
+  expect(gate.collect).toHaveBeenCalledTimes(1);
+}
+
+function typeGatewayUrl(gate: WaitingGate) {
+  const input = gate.element.querySelector<HTMLInputElement>("#login-gate-url")!;
+  input.value = `${gatewayUrl}/edited`;
   input.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
-describe("login gate browser pairing", () => {
+function replaceGatewayTarget(gate: WaitingGate) {
+  gate.element.props = { ...gate.element.props, gatewayUrl: `${gatewayUrl}/replaced` };
+}
+
+describe("browser pairing", () => {
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -87,77 +98,95 @@ describe("login gate browser pairing", () => {
     vi.unstubAllGlobals();
   });
 
-  it("connects to the Gateway that issued the approval", async () => {
-    const gate = await mountWaitingGate();
-    gate.approve();
-    await settle();
-    expect(gate.onBrowserPaired).toHaveBeenCalledWith("bootstrap", gatewayUrl);
-  });
-
-  it("retires a waiting attempt when the Gateway URL is edited", async () => {
-    const gate = await mountWaitingGate();
-    typeGatewayUrl(gate.element, `${gatewayUrl}/edited`);
-    await settle();
-    gate.approve();
-    await settle();
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(gate.onBrowserPaired).not.toHaveBeenCalled();
-    expect(gate.collect).toHaveBeenCalledTimes(1);
-    expect(gate.element.querySelector(".login-gate__browser-pair-code")).toBeNull();
-  });
-
-  it("retires a waiting attempt when the Gateway target is replaced from outside", async () => {
-    const gate = await mountWaitingGate();
-    gate.element.props = { ...gate.element.props, gatewayUrl: `${gatewayUrl}/replaced` };
-    await settle();
-    gate.approve();
-    await settle();
-    expect(gate.onBrowserPaired).not.toHaveBeenCalled();
-  });
-
-  it("keeps waiting through refreshed props for the same Gateway", async () => {
+  it("waits through refreshed props, then connects to the issuing Gateway", async () => {
     const gate = await mountWaitingGate();
     gate.element.props = { ...gate.element.props, hasToken: true };
     await settle();
     gate.approve();
     await settle();
-    expect(gate.onBrowserPaired).toHaveBeenCalledTimes(1);
+    expect(gate.onBrowserPaired).toHaveBeenCalledWith("bootstrap", gatewayUrl);
   });
 
-  it("retires a waiting attempt on a manual connect from the form", async () => {
+  it.each([
+    ["the Gateway URL is edited", typeGatewayUrl],
+    ["the Gateway target is replaced from outside", replaceGatewayTarget],
+  ])("retires a waiting attempt when %s", async (_name, change) => {
     const gate = await mountWaitingGate();
-    gate.element.querySelector<HTMLButtonElement>(".login-gate__connect")!.click();
-    await settle();
-    gate.approve();
-    await settle();
-    expect(gate.onConnect).toHaveBeenCalledTimes(1);
-    expect(gate.onBrowserPaired).not.toHaveBeenCalled();
+    change(gate);
+    await expectRetired(gate);
+    expect(gate.element.querySelector(".login-gate__browser-pair-code")).toBeNull();
   });
 
-  it("retires a waiting attempt on a manual connect from the status view", async () => {
-    const gate = await mountWaitingGate({
-      lastError: "pairing required",
-      lastErrorCode: "PAIRING_REQUIRED",
-    });
-    expect(gate.element.querySelector('.login-gate__body[data-kind="pairing-required"]')).not.toBe(
-      null,
-    );
+  it.each([
+    ["the form", "", null],
+    ["the status view", "pairing required", "PAIRING_REQUIRED"],
+  ])("retires a waiting attempt on a manual connect from %s", async (_, error, code) => {
+    const gate = await mountWaitingGate(error, code);
+    const status = gate.element.querySelector('.login-gate__body[data-kind="pairing-required"]');
+    expect(status !== null).toBe(error !== "");
     gate.element.querySelector<HTMLButtonElement>(".login-gate__connect")!.click();
-    await settle();
-    gate.approve();
-    await settle();
+    await expectRetired(gate);
     expect(gate.onConnect).toHaveBeenCalledTimes(1);
-    expect(gate.onBrowserPaired).not.toHaveBeenCalled();
   });
 
   it("stops polling when the gate is removed", async () => {
     const gate = await mountWaitingGate();
     gate.element.remove();
+    await expectRetired(gate);
+  });
+
+  it("keeps waiting through failed polls, then hands over the approval", async () => {
+    const fetchMock = stubReplies(
+      json(started),
+      json({ status: "pending" }),
+      json({ error: "rate_limited" }, 429),
+      json(approved),
+    );
+    const pair = session();
+    await pair.start("ws://gateway.example");
+    expect(pair.onState).toHaveBeenLastCalledWith({
+      kind: "waiting",
+      code: "ABCD-EFGH",
+      browserId: "01234567",
+    });
+    await vi.advanceTimersByTimeAsync(4_100);
+    expect(pair.onApproved).toHaveBeenCalledWith("bootstrap", "ws://gateway.example");
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
+  it.each([
+    [{ status: "rejected" }, 200, "declined"],
+    [{ status: "expired" }, 200, "expired"],
+    [{ error: "not_found" }, 404, "expired"],
+  ])("stops on a final answer %j", async (body, status, reason) => {
+    stubReplies(json(started), json(body, status));
+    const pair = session();
+    await pair.start("ws://gateway.example");
     await settle();
-    gate.approve();
+    expect(pair.onState).toHaveBeenLastCalledWith({ kind: "failed", reason });
+  });
+
+  it("stops polling once cancelled", async () => {
+    const fetchMock = stubReplies(json(started), json({ status: "pending" }));
+    const pair = session();
+    await pair.start("ws://gateway.example");
     await settle();
+    pair.cancel();
     await vi.advanceTimersByTimeAsync(10_000);
-    expect(gate.onBrowserPaired).not.toHaveBeenCalled();
-    expect(gate.collect).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(pair.onState).toHaveBeenLastCalledWith({ kind: "idle" });
+  });
+
+  it("names a full Gateway separately from a broken one", async () => {
+    stubReplies(json({ error: "capacity" }, 429));
+    const pair = session();
+    await pair.start("ws://gateway.example");
+    expect(pair.onState).toHaveBeenLastCalledWith({ kind: "failed", reason: "busy" });
+  });
+
+  it("offers pairing only for the Gateway serving this page", () => {
+    expect(canPairBrowserWithGateway(gatewayUrl)).toBe(true);
+    expect(canPairBrowserWithGateway("wss://other.example")).toBe(false);
+    expect(canPairBrowserWithGateway("")).toBe(false);
   });
 });

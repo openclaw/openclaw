@@ -5,7 +5,6 @@ const mocks = vi.hoisted(() => ({
   call: vi.fn<(method: string, params: Record<string, unknown>) => Promise<unknown>>(),
   prompt: vi.fn<() => Promise<boolean>>(),
   log: vi.fn<(line: string) => void>(),
-  writeJson: vi.fn(),
 }));
 
 vi.mock("./gateway-rpc.js", async (importOriginal) => ({
@@ -22,7 +21,7 @@ vi.mock("./prompt.js", async (importOriginal) => ({
 }));
 vi.mock("../runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../runtime.js")>()),
-  defaultRuntime: { log: mocks.log, error: vi.fn(), exit: vi.fn(), writeJson: mocks.writeJson },
+  defaultRuntime: { log: mocks.log, error: vi.fn(), exit: vi.fn(), writeJson: vi.fn() },
 }));
 
 import { registerPairCli } from "./pair-cli.js";
