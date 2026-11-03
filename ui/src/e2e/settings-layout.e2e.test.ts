@@ -57,11 +57,8 @@ const learnMoreRoutes = [
   "talk",
 ] as const;
 
-const settingsGuidanceLinks: ReadonlyArray<{
-  route: string;
-  container: string;
-  section?: string;
-}> = [{ route: "mcp", section: "Configured servers", container: ".settings-section__desc" }];
+const settingsGuidanceLinks: ReadonlyArray<{ route: string; container: string; section?: string }> =
+  [{ route: "mcp", section: "Configured servers", container: ".settings-section__desc" }];
 
 const sectionAlignmentRoutes = [
   "appearance",
@@ -1012,7 +1009,9 @@ suite.define(() => {
         }
 
         if ((sectionAlignmentRoutes as readonly string[]).includes(route)) {
-          const heading = page.locator(".settings-section__heading").first();
+          const heading = page
+            .locator(route === "secrets" ? ".page-title" : ".settings-section__heading")
+            .first();
           const group = page.locator(".settings-section .settings-group").first();
           await heading.waitFor();
           await group.waitFor();
