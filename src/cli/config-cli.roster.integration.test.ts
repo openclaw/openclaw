@@ -64,6 +64,7 @@ describe("config cli roster integration", () => {
       // clears the name but keeps the research entry so the roster-loss guard passes.
       expect(saved.agents.entries).toEqual({ main: {}, research: {} });
       expect(read(`${configPath}.bak`)).toBe(raw);
+      expect((await readConfigFileSnapshot()).valid).toBe(true);
       expect(errors).toEqual([]);
     });
   });
