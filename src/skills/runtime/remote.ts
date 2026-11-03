@@ -14,6 +14,7 @@ import { sleepWithAbort } from "../../infra/backoff.js";
 import { updatePairedNodeBins } from "../../infra/device-pairing-node-facts.js";
 import { listNodePairing } from "../../infra/device-pairing-node.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { monotonicNow } from "../../shared/monotonic-time.js";
 import { isOsRequirementSatisfied } from "../../shared/requirements.js";
 import type { SkillEligibilityContext, SkillEntry } from "../types.js";
 import { bumpSkillsSnapshotVersion } from "./refresh-state.js";
@@ -58,6 +59,9 @@ type RemoteBinProbeInflight = RemoteNodeOwner & {
 
 const remoteBinProbeInflight = new Map<string, RemoteBinProbeInflight>();
 let remoteRegistry: NodeRegistry | null = null;
+// Probe suppression is process-local, so both windows run on elapsed time: a
+// host clock correction must not keep a settled snapshot suppressed or expire
+// a fresh one early.
 const REMOTE_BIN_PROBE_SUCCESS_TTL_MS = 30 * 60 * 1000;
 const REMOTE_BIN_PROBE_FAILURE_BASE_BACKOFF_MS = 15_000;
 const REMOTE_BIN_PROBE_FAILURE_MAX_BACKOFF_MS = 5 * 60 * 1000;
@@ -484,7 +488,7 @@ async function refreshRemoteNodeBinsUncoalesced(params: RemoteNodeBinRefreshPara
   if (
     cachedProbe?.pairingGeneration === probeOwner.pairingGeneration &&
     cachedProbe.signature === probeSignature &&
-    Date.now() < cachedProbe.nextProbeAfterMs
+    monotonicNow() < cachedProbe.nextProbeAfterMs
   ) {
     const node = remoteNodes.get(params.nodeId);
     if (
@@ -505,7 +509,7 @@ async function refreshRemoteNodeBinsUncoalesced(params: RemoteNodeBinRefreshPara
     phase?: "preflight" | "probe",
   ) => {
     const nodeId = params.nodeId;
-    const nowMs = Date.now();
+    const nowMs = monotonicNow();
     if (!isCurrentRemoteNodeOwner(nodeId, probeOwner)) {
       return;
     }
@@ -601,7 +605,7 @@ async function refreshRemoteNodeBinsUncoalesced(params: RemoteNodeBinRefreshPara
     remoteNodeProbeStates.set(params.nodeId, {
       signature: probeSignature,
       pairingGeneration: probeOwner.pairingGeneration,
-      nextProbeAfterMs: Date.now() + REMOTE_BIN_PROBE_SUCCESS_TTL_MS,
+      nextProbeAfterMs: monotonicNow() + REMOTE_BIN_PROBE_SUCCESS_TTL_MS,
       failedProbeCount: 0,
       bins: nextBins,
     });
