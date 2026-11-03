@@ -1,0 +1,4 @@
+# PR #164607: unique Profile channel-link, authority, lifecycle, and persistence regressions.
+# After RPC/input fixture consolidation: +1239 counted lines vs df9d3240e52a533ea176e98cf047ed6b40cf37d6.
+# Main has 19 lines of headroom and no inherited debt; 1220 is the exact remaining excess.
+1220

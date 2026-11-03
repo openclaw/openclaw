@@ -13,6 +13,8 @@ import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   channelIdentityMethods,
   createChannelIdentityHarness,
+  fillChannelIdentityDraft,
+  createChannelIdentityRequest,
 } from "./profile-page.channel-identities.test-support.ts";
 import { modelAccountProfile, mountProfilePage } from "./profile-page.test-support.tsx";
 
@@ -37,27 +39,19 @@ it.each(["removed", "already absent", "ownership rejected"])(
     };
     let emitProfileIdentityChange = () => {};
     let links = [original];
-    const request = vi.fn(async (method: string, params?: unknown) => {
-      if (method === "users.self") {
-        return { profile: modelAccountProfile };
-      }
-      if (method === "users.listModelAccounts") {
-        return { profileId: modelAccountProfile.id, accounts: [], links: [] };
-      }
-      if (method === "users.prefs.get") {
-        return { status: "no_durable_identity" };
-      }
-      if (method === "users.listChannelIdentities") {
+    const request = createChannelIdentityRequest({
+      "users.prefs.get": () => ({ status: "no_durable_identity" }),
+      "users.listChannelIdentities": (params) => {
         expect(params).toEqual({ profileId: modelAccountProfile.id });
         return { links };
-      }
-      if (method === "users.linkChannelIdentity") {
+      },
+      "users.linkChannelIdentity": (params) => {
         const linked = params as typeof original;
         links = [...links, linked];
         emitProfileIdentityChange();
         return linked;
-      }
-      if (method === "users.unlinkChannelIdentity") {
+      },
+      "users.unlinkChannelIdentity": (params) => {
         if (outcome === "ownership rejected") {
           throw new Error("That channel identity is already linked to another profile.");
         }
@@ -75,8 +69,7 @@ it.each(["removed", "already absent", "ownership rejected"])(
           emitProfileIdentityChange();
         }
         return { removed: outcome === "removed" };
-      }
-      throw new Error("unexpected method: " + method);
+      },
     });
     const harness = createChannelIdentityHarness(request as GatewayBrowserClient["request"]);
     const eventListeners = new Set<Parameters<typeof harness.context.gateway.subscribeEvents>[0]>();
@@ -120,15 +113,7 @@ it.each(["removed", "already absent", "ownership rejected"])(
     };
     const submit = section.querySelector<HTMLButtonElement>('button[type="submit"]')!;
     await waitForFast(() => expect(submit.disabled).toBe(false));
-    for (const [label, value] of [
-      ["Channel ID", entered.channelId],
-      ["Configured account ID", entered.accountId],
-      ["Native sender ID", entered.senderId],
-    ] as const) {
-      const input = section.querySelector<HTMLInputElement>('input[aria-label="' + label + '"]')!;
-      input.value = value;
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-    }
+    fillChannelIdentityDraft(section, entered);
     submit.click();
     await waitForFast(() =>
       expect(section.querySelector('[role="status"]')?.textContent).toContain(
@@ -173,20 +158,11 @@ it.each(["removed", "already absent", "ownership rejected"])(
 );
 
 it("keeps exact identity input visible when the server rejects a colliding link", async () => {
-  const request = vi.fn(async (method: string) => {
-    if (method === "users.self") {
-      return { profile: modelAccountProfile };
-    }
-    if (method === "users.listModelAccounts") {
-      return { profileId: modelAccountProfile.id, accounts: [], links: [] };
-    }
-    if (method === "users.listChannelIdentities") {
-      return { links: [] };
-    }
-    if (method === "users.linkChannelIdentity") {
+  const request = createChannelIdentityRequest({
+    "users.listChannelIdentities": () => ({ links: [] }),
+    "users.linkChannelIdentity": () => {
       throw new Error("That channel identity is already linked to another profile.");
-    }
-    throw new Error("unexpected method: " + method);
+    },
   });
   const harness = createChannelIdentityHarness(request as GatewayBrowserClient["request"]);
   const page = mountProfilePage(harness.context);
@@ -220,21 +196,14 @@ it("keeps exact identity input visible when the server rejects a colliding link"
 
 it("offers an accessible retry after a failed list and renders the empty state", async () => {
   let listCalls = 0;
-  const request = vi.fn(async (method: string) => {
-    if (method === "users.self") {
-      return { profile: modelAccountProfile };
-    }
-    if (method === "users.listModelAccounts") {
-      return { profileId: modelAccountProfile.id, accounts: [], links: [] };
-    }
-    if (method === "users.listChannelIdentities") {
+  const request = createChannelIdentityRequest({
+    "users.listChannelIdentities": () => {
       listCalls += 1;
       if (listCalls === 1) {
         throw new Error("temporary identity service failure");
       }
       return { links: [] };
-    }
-    throw new Error("unexpected method: " + method);
+    },
   });
   const harness = createChannelIdentityHarness(request as GatewayBrowserClient["request"]);
   const page = mountProfilePage(harness.context);
@@ -264,22 +233,14 @@ it("renders first-link and last-unlink transitions with single-flight mutation a
   }>();
   const identity = { channelId: "telegram", accountId: "main", senderId: "same-turn" };
   let links: Array<{ profileId: string; identity: typeof identity }> = [];
-  const request = vi.fn(async (method: string, params?: unknown) => {
-    if (method === "users.self") {
-      return { profile: modelAccountProfile };
-    }
-    if (method === "users.listModelAccounts") {
-      return { profileId: modelAccountProfile.id, accounts: [], links: [] };
-    }
-    if (method === "users.listChannelIdentities") {
-      return { links };
-    }
-    if (method === "users.linkChannelIdentity") {
+  const request = createChannelIdentityRequest({
+    "users.listChannelIdentities": () => ({ links }),
+    "users.linkChannelIdentity": (params) => {
       expect(params).toEqual({ profileId: modelAccountProfile.id, identity });
       links = [{ profileId: modelAccountProfile.id, identity }];
       return pendingLink.promise;
-    }
-    if (method === "users.unlinkChannelIdentity") {
+    },
+    "users.unlinkChannelIdentity": () => {
       links = links.filter(
         (link) =>
           link.profileId !== modelAccountProfile.id ||
@@ -288,11 +249,8 @@ it("renders first-link and last-unlink transitions with single-flight mutation a
           link.identity.senderId !== identity.senderId,
       );
       return { removed: true };
-    }
-    if (method === "users.prefs.get") {
-      return { status: "no_durable_identity" };
-    }
-    throw new Error("unexpected method: " + method);
+    },
+    "users.prefs.get": () => ({ status: "no_durable_identity" }),
   });
   const harness = createChannelIdentityHarness(request as GatewayBrowserClient["request"]);
   const page = mountProfilePage(harness.context);
@@ -306,15 +264,7 @@ it("renders first-link and last-unlink transitions with single-flight mutation a
     );
 
     const section = page.querySelector<HTMLFormElement>("#settings-profile-channel-identities")!;
-    for (const [label, value] of [
-      ["Channel ID", identity.channelId],
-      ["Configured account ID", identity.accountId],
-      ["Native sender ID", identity.senderId],
-    ] as const) {
-      const input = section.querySelector<HTMLInputElement>('input[aria-label="' + label + '"]')!;
-      input.value = value;
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-    }
+    fillChannelIdentityDraft(section, identity);
     flush();
 
     const form = section;
@@ -373,28 +323,24 @@ it("reloads links after a stale mutation releases its guard without a view flush
   let listCalls = 0;
   let selfCalls = 0;
   let preferenceCalls = 0;
-  const request = vi.fn(async (method: string, params?: unknown) => {
-    if (method === "users.self") {
+  const request = createChannelIdentityRequest({
+    "users.self": () => {
       selfCalls += 1;
       return { profile: modelAccountProfile };
-    }
-    if (method === "users.listModelAccounts") {
-      return { profileId: modelAccountProfile.id, accounts: [], links: [] };
-    }
-    if (method === "users.prefs.get") {
+    },
+    "users.prefs.get": () => {
       preferenceCalls += 1;
       return { status: "no_durable_identity" };
-    }
-    if (method === "users.listChannelIdentities") {
+    },
+    "users.listChannelIdentities": (params) => {
       expect(params).toEqual({ profileId: modelAccountProfile.id });
       listCalls += 1;
       return { links };
-    }
-    if (method === "users.linkChannelIdentity") {
+    },
+    "users.linkChannelIdentity": (params) => {
       links = [params as { profileId: string; identity: typeof identity }];
       return pendingLink.promise;
-    }
-    throw new Error("unexpected method: " + method);
+    },
   });
   const harness = createChannelIdentityHarness(request as GatewayBrowserClient["request"]);
   const page = mountProfilePage(harness.context);
@@ -410,15 +356,7 @@ it("reloads links after a stale mutation releases its guard without a view flush
     expect(selfCalls).toBe(1);
 
     const section = page.querySelector<HTMLFormElement>("#settings-profile-channel-identities")!;
-    for (const [label, value] of [
-      ["Channel ID", identity.channelId],
-      ["Configured account ID", identity.accountId],
-      ["Native sender ID", identity.senderId],
-    ] as const) {
-      const input = section.querySelector<HTMLInputElement>('input[aria-label="' + label + '"]')!;
-      input.value = value;
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-    }
+    fillChannelIdentityDraft(section, identity);
     section.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
     await waitForFast(() =>
       expect(request.mock.calls.some(([method]) => method === "users.linkChannelIdentity")).toBe(
@@ -456,14 +394,8 @@ it("retires an in-flight channel identity list when negotiated grants change", a
     }>;
   }>();
   let listCalls = 0;
-  const request = vi.fn(async (method: string) => {
-    if (method === "users.self") {
-      return { profile: modelAccountProfile };
-    }
-    if (method === "users.listModelAccounts") {
-      return { profileId: modelAccountProfile.id, accounts: [], links: [] };
-    }
-    if (method === "users.listChannelIdentities") {
+  const request = createChannelIdentityRequest({
+    "users.listChannelIdentities": () => {
       listCalls += 1;
       return listCalls === 1
         ? oldList.promise
@@ -475,8 +407,7 @@ it("retires an in-flight channel identity list when negotiated grants change", a
               },
             ],
           };
-    }
-    throw new Error("unexpected method: " + method);
+    },
   });
   const harness = createChannelIdentityHarness(request as GatewayBrowserClient["request"]);
   const page = mountProfilePage(harness.context);
@@ -513,14 +444,9 @@ it("retires an in-flight channel identity list when negotiated grants change", a
 
 it("does not show or request channel identity links without the negotiated admin scope", async () => {
   const profile = { ...modelAccountProfile, role: "admin" };
-  const request = vi.fn(async (method: string) => {
-    if (method === "users.self") {
-      return { profile };
-    }
-    if (method === "users.listModelAccounts") {
-      return { profileId: profile.id, accounts: [], links: [] };
-    }
-    throw new Error("unexpected method: " + method);
+  const request = createChannelIdentityRequest({
+    "users.self": () => ({ profile }),
+    "users.listModelAccounts": () => ({ profileId: profile.id, accounts: [], links: [] }),
   });
   const harness = createChannelIdentityHarness(
     request as GatewayBrowserClient["request"],
@@ -539,23 +465,13 @@ it("does not show or request channel identity links without the negotiated admin
 });
 
 it("retires a hidden channel identity owner before a same-turn reconnect", async () => {
-  const request = vi.fn(async (method: string, params?: unknown) => {
-    if (method === "users.self") {
-      return { profile: modelAccountProfile };
-    }
-    if (method === "users.listModelAccounts") {
-      return { profileId: modelAccountProfile.id, accounts: [], links: [] };
-    }
-    if (method === "users.listChannelIdentities") {
-      return { links: [] };
-    }
-    if (method === "users.linkChannelIdentity") {
-      return params as {
+  const request = createChannelIdentityRequest({
+    "users.listChannelIdentities": () => ({ links: [] }),
+    "users.linkChannelIdentity": (params) =>
+      params as {
         profileId: string;
         identity: { channelId: string; accountId: string; senderId: string };
-      };
-    }
-    throw new Error("unexpected method: " + method);
+      },
   });
   const harness = createChannelIdentityHarness(request as GatewayBrowserClient["request"]);
   const connectedSnapshot = { ...harness.context.gateway.snapshot };
@@ -638,14 +554,9 @@ it("retires a hidden channel identity owner before a same-turn reconnect", async
 
 it("does not expose channel identity management for the shared Gateway Owner profile", async () => {
   const profile = { ...modelAccountProfile, id: GATEWAY_OWNER_PROFILE_ID, role: "owner" };
-  const request = vi.fn(async (method: string) => {
-    if (method === "users.self") {
-      return { profile };
-    }
-    if (method === "users.listModelAccounts") {
-      return { profileId: profile.id, accounts: [], links: [] };
-    }
-    throw new Error("unexpected method: " + method);
+  const request = createChannelIdentityRequest({
+    "users.self": () => ({ profile }),
+    "users.listModelAccounts": () => ({ profileId: profile.id, accounts: [], links: [] }),
   });
   const harness = createChannelIdentityHarness(request as GatewayBrowserClient["request"], profile);
   const page = mountProfilePage(harness.context);
@@ -668,21 +579,14 @@ it("retires the prior personal identity and channel form on principal change", a
   };
   let profile = modelAccountProfile;
   const linkRequests: unknown[] = [];
-  const request = vi.fn(async (method: string, params?: unknown) => {
-    if (method === "users.self") {
-      return { profile };
-    }
-    if (method === "users.listModelAccounts") {
-      return { profileId: profile.id, accounts: [], links: [] };
-    }
-    if (method === "users.listChannelIdentities") {
-      return { links: [] };
-    }
-    if (method === "users.linkChannelIdentity") {
+  const request = createChannelIdentityRequest({
+    "users.self": () => ({ profile }),
+    "users.listModelAccounts": () => ({ profileId: profile.id, accounts: [], links: [] }),
+    "users.listChannelIdentities": () => ({ links: [] }),
+    "users.linkChannelIdentity": (params) => {
       linkRequests.push(params);
       return params;
-    }
-    throw new Error("unexpected method: " + method);
+    },
   });
   const harness = createChannelIdentityHarness(request as GatewayBrowserClient["request"]);
   const page = mountProfilePage(harness.context);
@@ -741,21 +645,12 @@ it("does not report a pending link as successful after the admin grant is revoke
   }>();
   const identity = { channelId: "telegram", accountId: "main", senderId: "pending-sender" };
   let links: Array<{ profileId: string; identity: typeof identity }> = [];
-  const request = vi.fn(async (method: string, params?: unknown) => {
-    if (method === "users.self") {
-      return { profile: modelAccountProfile };
-    }
-    if (method === "users.listModelAccounts") {
-      return { profileId: modelAccountProfile.id, accounts: [], links: [] };
-    }
-    if (method === "users.listChannelIdentities") {
-      return { links };
-    }
-    if (method === "users.linkChannelIdentity") {
+  const request = createChannelIdentityRequest({
+    "users.listChannelIdentities": () => ({ links }),
+    "users.linkChannelIdentity": (params) => {
       links = [params as { profileId: string; identity: typeof identity }];
       return pendingLink.promise;
-    }
-    throw new Error("unexpected method: " + method);
+    },
   });
   const harness = createChannelIdentityHarness(request as GatewayBrowserClient["request"]);
   const page = mountProfilePage(harness.context);
@@ -770,15 +665,7 @@ it("does not report a pending link as successful after the admin grant is revoke
       )?.disabled,
     ).toBe(false),
   );
-  for (const [label, value] of [
-    ["Channel ID", identity.channelId],
-    ["Configured account ID", identity.accountId],
-    ["Native sender ID", identity.senderId],
-  ] as const) {
-    const input = section.querySelector<HTMLInputElement>('input[aria-label="' + label + '"]')!;
-    input.value = value;
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-  }
+  fillChannelIdentityDraft(section, identity);
   section.querySelector<HTMLButtonElement>('button[type="submit"]')!.click();
   await waitForFast(() =>
     expect(request.mock.calls.some(([method]) => method === "users.linkChannelIdentity")).toBe(

@@ -11,6 +11,7 @@ import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   channelIdentityMethods,
   createChannelIdentityHarness,
+  fillChannelIdentityDraft,
 } from "./profile-page.channel-identities.test-support.ts";
 import { modelAccountProfile, mountProfilePage } from "./profile-page.test-support.tsx";
 
@@ -67,15 +68,7 @@ it.each(["link", "unlink"] as const)(
       );
       let section = page.querySelector<HTMLElement>("#settings-profile-channel-identities")!;
       if (operation === "link") {
-        for (const [label, value] of [
-          ["Channel ID", identity.channelId],
-          ["Configured account ID", identity.accountId],
-          ["Native sender ID", identity.senderId],
-        ] as const) {
-          const input = section.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)!;
-          input.value = value;
-          input.dispatchEvent(new Event("input", { bubbles: true }));
-        }
+        fillChannelIdentityDraft(section, identity);
         section.querySelector<HTMLButtonElement>('button[type="submit"]')!.click();
       } else {
         section
@@ -103,15 +96,7 @@ it.each(["link", "unlink"] as const)(
         ).toBe(false),
       );
       section = page.querySelector<HTMLElement>("#settings-profile-channel-identities")!;
-      for (const [label, value] of [
-        ["Channel ID", freshDraft.channelId],
-        ["Configured account ID", freshDraft.accountId],
-        ["Native sender ID", freshDraft.senderId],
-      ] as const) {
-        const input = section.querySelector<HTMLInputElement>('input[aria-label="' + label + '"]')!;
-        input.value = value;
-        input.dispatchEvent(new Event("input", { bubbles: true }));
-      }
+      fillChannelIdentityDraft(section, freshDraft);
 
       pendingMutation.resolve(operation === "link" ? { profileId, identity } : { removed: true });
       await pendingMutation.promise;
