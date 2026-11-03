@@ -47,7 +47,7 @@ const enRouteSubtitles = {
     modelSetup: "Connect a verified AI model",
     modelProviders: "Global model defaults and provider access for your agents.",
     memoryImport: "Bring Codex and Claude Code memory into an agent workspace.",
-    notifications: "Browser push notifications from your gateway.",
+    notifications: "Choose when you get notifications.",
     security: "Gateway auth, exec policy, tool profile, and approvals.",
     advanced: "Every remaining config section, plus the raw file editor.",
     debug: "Snapshots, events, RPC.",
