@@ -1,5 +1,5 @@
 diff --git a/docs/PROVIDER_ARTWORK.md b/docs/PROVIDER_ARTWORK.md
-index 054a3fd39fc651dccadcb143dca85166741c93b9..32afeba748c7e0711f67ffc1498db1e8144d9755 100644
+index 054a3fd..32afeba 100644
 --- a/docs/PROVIDER_ARTWORK.md
 +++ b/docs/PROVIDER_ARTWORK.md
 @@ -4,6 +4,11 @@
@@ -11,11 +11,11 @@ index 054a3fd39fc651dccadcb143dca85166741c93b9..32afeba748c7e0711f67ffc1498db1e8
 +text title through notes, inputs and confirmation. It borrows the page session;
 +dismissal detaches its control without disposing the session used by the chooser.
 +The existing page close path cancels all artwork before connection cleanup.
- 
+
  ## Pinned platform comparison
- 
+
 diff --git a/src/OpenClaw.SetupEngine.UI/Controls/ProviderSetupDialog.xaml b/src/OpenClaw.SetupEngine.UI/Controls/ProviderSetupDialog.xaml
-index e9a2dee82315e1e7e83d546c174e5cdd3eb93b16..0771c7037e15ccb88dac3435778dc510c8e7a048 100644
+index e9a2dee..0771c70 100644
 --- a/src/OpenClaw.SetupEngine.UI/Controls/ProviderSetupDialog.xaml
 +++ b/src/OpenClaw.SetupEngine.UI/Controls/ProviderSetupDialog.xaml
 @@ -3,13 +3,18 @@
@@ -40,7 +40,7 @@ index e9a2dee82315e1e7e83d546c174e5cdd3eb93b16..0771c7037e15ccb88dac3435778dc510
                         AutomationProperties.LiveSetting="Polite" />
              <InfoBar x:Name="DialogError" IsOpen="False" IsClosable="False" Severity="Error" />
 diff --git a/src/OpenClaw.SetupEngine.UI/Controls/ProviderSetupDialog.xaml.cs b/src/OpenClaw.SetupEngine.UI/Controls/ProviderSetupDialog.xaml.cs
-index 1e18e9188641962a810bd11c95253ea8f00d8b33..3132de3fdbc6283cfaaeed1e9e27faec5ba9e445 100644
+index 1e18e91..3132de3 100644
 --- a/src/OpenClaw.SetupEngine.UI/Controls/ProviderSetupDialog.xaml.cs
 +++ b/src/OpenClaw.SetupEngine.UI/Controls/ProviderSetupDialog.xaml.cs
 @@ -81,6 +81,12 @@ public sealed partial class ProviderSetupDialog : ContentDialog
@@ -55,9 +55,9 @@ index 1e18e9188641962a810bd11c95253ea8f00d8b33..3132de3fdbc6283cfaaeed1e9e27faec
 +        ProviderHeader.Visibility = Visibility.Collapsed;
          Hide();
      }
- 
+
 @@ -93,7 +99,8 @@ public sealed partial class ProviderSetupDialog : ContentDialog
- 
+
      public void Update(GatewayAiSetupWizardStep? step, GatewayAiSetupPhase phase,
          bool busy, bool canCancel, bool cancelling, string status, string? error, string? providerTitle = null,
 -        bool isSubmittingAnswer = false)
@@ -85,7 +85,7 @@ index 1e18e9188641962a810bd11c95253ea8f00d8b33..3132de3fdbc6283cfaaeed1e9e27faec
              DialogStatus.Text = cancelling ? S("Cancelling") : status;
              DialogStatus.Visibility = !cancelling && phase == GatewayAiSetupPhase.Running && step is not null
 diff --git a/src/OpenClaw.SetupEngine.UI/Pages/AiSetupPage.xaml b/src/OpenClaw.SetupEngine.UI/Pages/AiSetupPage.xaml
-index 7771ed9dea2d187d736be8315c92a69804b8be69..449036a3e3974681cc410b88dd67c6d99a063b59 100644
+index 7771ed9..449036a 100644
 --- a/src/OpenClaw.SetupEngine.UI/Pages/AiSetupPage.xaml
 +++ b/src/OpenClaw.SetupEngine.UI/Pages/AiSetupPage.xaml
 @@ -36,7 +36,13 @@
@@ -104,7 +104,7 @@ index 7771ed9dea2d187d736be8315c92a69804b8be69..449036a3e3974681cc410b88dd67c6d9
      </Page.Resources>
      <Grid RowDefinitions="Auto,*,Auto" Padding="40,4,40,24">
 diff --git a/src/OpenClaw.SetupEngine.UI/Pages/AiSetupPage.xaml.cs b/src/OpenClaw.SetupEngine.UI/Pages/AiSetupPage.xaml.cs
-index 4e7a01922f2e21664ec00d1822f7adbe766a1a87..f1843e3627bf60c2bcb90430b2756d864105bd3a 100644
+index 4e7a019..f1843e3 100644
 --- a/src/OpenClaw.SetupEngine.UI/Pages/AiSetupPage.xaml.cs
 +++ b/src/OpenClaw.SetupEngine.UI/Pages/AiSetupPage.xaml.cs
 @@ -73,6 +73,7 @@ public sealed partial class AiSetupPage : Page, IAsyncDisposable
@@ -132,8 +132,134 @@ index 4e7a01922f2e21664ec00d1822f7adbe766a1a87..f1843e3627bf60c2bcb90430b2756d86
                  if (XamlRoot is not null)
                  {
                      var showing = _providerDialog.ShowOwnedAsync(XamlRoot, ActualTheme);
+diff --git a/tests/OpenClaw.Tray.UITests/MountedControlCapture.cs b/tests/OpenClaw.Tray.UITests/MountedControlCapture.cs
+index 681e17cbc13b7a4d08ca796b59798d4ed84fb094..838c62b7ce3d0c8088320b7c36c11e43663a48d7 100644
+GIT binary patch
+literal 16760
+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
+
+delta 1401
+zcma)6O-vI(6i)dIU0JAsLP3zB^0S3yp#`K+YO5hc2u2iw;esse7FOEbW;+cM!T59V
+zXvvFSNK8B!<H^61iAIe_4|>p}F(#Zb9yA_2_-0!uiyYj;%=`P^+xgy``F+FjS<1Kz
+zcrH`LNuvpQQPUSg{6<f!gWs5GcJo|1g%&conxbk#no=)Q^kzKhed{R-@f;81j;2Dk
+z>khGq=dSSZ!!cIMa|AzBPC69_4-cFHPu9fD>@!uGHgzk(Pre15oD0M5^EHqO)}WLu
+z_rU9*0C&A^pGX3t9jvISWojfv(&rC|#7I+e(dP^CP|G#Db3SRxn4~8Dx?p);aHG!M
+z9PlAh2jkr?r?H}|CIUH#mb&5Qp=PWc^;W@hnHL7iT2PxU8^d+0K*e>mZ~}RPhwUM@
+zF~pzt3bZH7-7wTqi_(cBjogx~D{<8-nk+vCACEH!3whTu$Z!F1mTh;$0e<&~kSGqm
+ziEXWU3*(5It9Ap1F+0rFdx8^qIC??T6=Oxn))a}dfLtM8-m`cxrE|sdk_9=5T&pA|
+zYjIV9YU${(J?*+(jcK|Zj~`r`mCt=}O{%T8Bljdi5w;|O9rbXR#apcFJkwrvg^-X>
+zEfQ01`-fn<Rcy+q$sKX0NQ%l-#qL9GpaGt?4lvNmzzAmWx6R?Y(RM4C2QyTz|0KL4
+z?U@Ao7(u6ia}4VOvD*ob7Q*L^w63HOowU2*u~5CQQS%0+Mk0?nW$7XhUxY?Gn5-D)
+zGN!~>CP_1PH<bH4g8e)!?6j&aF3}xKR>SO3Uma}rvWxS`7bwfa)<xKE_Lq?L+!VTD
+zt-l+iu6I<z^L_$f``h-+9&!dH!6^FKls@aOjC#-D(W$DCq-iMW1*#c(=YpYA(}<Ip
+zDJN8-rO13-)|ZK45?z(e&a|$@3^O5lt=m-WA7YIf@r&6e&;3_}?;X%wX8P4L!?vm3
+zrhT+8?a(r>(S)3o_7lTU6@A_RFjJ9b#=1*5r#yTgY%jLxgC~O#>oIeM<4DL_co^3=
+z;Y+x>!h_HfY0ODiBW!eB;XZgDiJ-(q&*k(?l)W3Sa6N1eHK4Q|UE1^VOrLDTN?7zS
+Dz(rMg
+
 diff --git a/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs b/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs
-index 84479dcc5b9c67f133a9edaa68f34997cf3c12ca..1769e05066c4805458d7a5aca409e44c770c5ee3 100644
+index 84479dc..1769e05 100644
 --- a/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs
 +++ b/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs
 @@ -6,6 +6,7 @@ using Microsoft.UI.Xaml.Automation.Peers;
@@ -147,7 +273,7 @@ index 84479dcc5b9c67f133a9edaa68f34997cf3c12ca..1769e05066c4805458d7a5aca409e44c
 @@ -22,6 +23,161 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
  {
      private bool _nativeProof;
- 
+
 +    [Theory]
 +    [InlineData(ElementTheme.Light)]
 +    [InlineData(ElementTheme.Dark)]
@@ -307,13 +433,13 @@ index 84479dcc5b9c67f133a9edaa68f34997cf3c12ca..1769e05066c4805458d7a5aca409e44c
      public async Task AiGroups_KeepManualInputSeparateFromAuthenticationInTheMountedPage()
      {
 diff --git a/tests/OpenClaw.Tray.UITests/OnboardingArtworkRenderingTests.cs b/tests/OpenClaw.Tray.UITests/OnboardingArtworkRenderingTests.cs
-index b0c2c596773e1ffaf0d5008bb44ca796df7cc1aa..cdd19006232624076c14b218bfab797edcbdeae5 100644
+index b0c2c59..cdd1900 100644
 --- a/tests/OpenClaw.Tray.UITests/OnboardingArtworkRenderingTests.cs
 +++ b/tests/OpenClaw.Tray.UITests/OnboardingArtworkRenderingTests.cs
 @@ -693,6 +693,49 @@ public sealed class OnboardingArtworkRenderingTests(UIThreadFixture ui, ITestOut
          });
      }
- 
+
 +    [Fact]
 +    public async Task ProviderArtwork_RebindingDetachesThePreviousSessionWithoutClosingTheBorrowedReplacement()
 +    {

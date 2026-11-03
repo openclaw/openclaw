@@ -55,6 +55,14 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper 
                 await OnboardingNativeProof.NextCompositionAsync();
                 await TestSupport.WaitForRenderedConditionAsync(() => scrollSettled, "provider scroller settled");
                 OnboardingNativeProof.AssertFullyVisible(picker, scroller);
+                await ProviderArtworkPrivatePresentation.CaptureRequiredAsync(_privateProofWindow!, $"provider-inventory-parent-{theme}", output,
+                    ["API key provider", "API key or token"], requiredContent: picker);
+                Assert.False(picker.IsDropDownOpen);
+                var rejectedState = $"provider-popup-closed-{theme}";
+                var rejected = await Assert.ThrowsAnyAsync<Xunit.Sdk.XunitException>(() =>
+                    MountedControlCapture.OptionalPopupAsync(_privateProofWindow!, picker, rejectedState));
+                Assert.Contains("An active owned ComboBox popup is required.", rejected.Message);
+                Assert.False(File.Exists(Path.Combine(OnboardingNativeProof.RequireProofDirectory(), rejectedState + ".png")));
                 picker.IsDropDownOpen = true;
                 await TestSupport.WaitForRenderedConditionAsync(
                     () => picker.ContainerFromIndex(3) is ComboBoxItem { IsLoaded: true }, "provider inventory mounted");
@@ -69,8 +77,8 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper 
                     Assert.Equal(Visibility.Visible, Assert.IsType<FontIcon>(mark.FindName("FallbackIcon")).Visibility);
                 }
                 Assert.All(marks, mark => Assert.Same(marks[0].Session, mark.Session));
-                await ProviderArtworkPrivatePresentation.CaptureRequiredAsync(_privateProofWindow!, $"provider-inventory-{theme}", output,
-                        ["Llama app", "Ollama", "llama.cpp", "Unknown provider"], requiredContent: picker);
+                await ProviderArtworkPrivatePresentation.CaptureRequiredAsync(_privateProofWindow!, $"provider-inventory-popup-{theme}", output,
+                        ["Llama app", "Ollama", "llama.cpp", "Unknown provider"], requiredContent: picker, popupPicker: picker);
                 Assert.Equal(-1, picker.SelectedIndex);
                 Assert.Equal(["openclaw.setup.detect"], transport.MethodCalls);
                 Assert.Equal(0, completed());
@@ -3081,12 +3089,12 @@ internal static class ProviderArtworkPrivatePresentation
     }
 
     internal static async Task CaptureRequiredAsync(Window window, string state, ITestOutputHelper output,
-        string[] requiredLabels, FrameworkElement requiredContent)
+        string[] requiredLabels, FrameworkElement requiredContent, ComboBox? popupPicker = null)
     {
         RequireJob();
         var allowed = new[] { "", "before-" }.SelectMany(prefix =>
             new[] { "Light", "Dark" }.SelectMany(theme =>
-                new[] { prefix + "provider-inventory-" + theme }.Concat(
+                new[] { prefix + "provider-inventory-parent-" + theme, prefix + "provider-inventory-popup-" + theme }.Concat(
                     new[] { "llama-app", "ollama" }.SelectMany(brand =>
                         new[] { "note", "text", "confirm" }.Select(step => prefix + "provider-" + brand + "-" + step + "-" + theme)))))
             .ToArray();
@@ -3106,16 +3114,44 @@ internal static class ProviderArtworkPrivatePresentation
 
         // The existing owner performs DwmFlush, PW_RENDERFULLCONTENT, no fallback,
         // private-desktop, PID, visibility, work-area and nonblank-frame admission.
-        await MountedControlCapture.OptionalAsync(window, state);
+        if (popupPicker is null) await MountedControlCapture.OptionalAsync(window, state);
+        else
+        {
+            Assert.Same(requiredContent, popupPicker);
+            await MountedControlCapture.OptionalPopupAsync(window, popupPicker, state);
+        }
         Assert.True(File.Exists(path), "The optional owner must actually produce this required frame.");
         Assert.Equal(before, Measure(window));
         OnboardingNativeProof.AssertFullyVisible(requiredContent, root);
         using var attempt = JsonDocument.Parse(File.ReadAllText(Path.Combine(directory, state + ".attempt.json")));
         var observed = attempt.RootElement;
-        Assert.Equal(before.Left, observed.GetProperty("left").GetInt32());
-        Assert.Equal(before.Top, observed.GetProperty("top").GetInt32());
-        Assert.Equal(before.Right, observed.GetProperty("right").GetInt32());
-        Assert.Equal(before.Bottom, observed.GetProperty("bottom").GetInt32());
+        var target = new NativeTarget(before.Hwnd, before.Left, before.Top, before.Right, before.Bottom);
+        JsonElement? popupAdmission = null;
+        if (popupPicker is not null)
+        {
+            var admitted = observed.GetProperty("popup");
+            Assert.Equal(before.Hwnd, admitted.GetProperty("parentHwnd").GetInt64());
+            Assert.Equal(Environment.ProcessId, admitted.GetProperty("ProcessId").GetInt32());
+            Assert.Equal(GetCurrentThreadId(), admitted.GetProperty("ThreadId").GetUInt32());
+            Assert.Equal(before.Desktop, admitted.GetProperty("Desktop").GetString());
+            Assert.Equal("Microsoft.UI.Content.PopupWindowSiteBridge", admitted.GetProperty("className").GetString());
+            Assert.True(admitted.GetProperty("xamlPopupOpen").GetBoolean());
+            Assert.Equal(popupPicker.Items.Count, admitted.GetProperty("Rows").GetArrayLength());
+            var chain = admitted.GetProperty("OwnerChain").EnumerateArray().Select(owner => owner.GetInt64()).ToArray();
+            Assert.NotEmpty(chain);
+            Assert.Equal(before.Hwnd, chain[^1]);
+            var bounds = admitted.GetProperty("Bounds");
+            target = new(admitted.GetProperty("hwnd").GetInt64(), bounds.GetProperty("Left").GetInt32(),
+                bounds.GetProperty("Top").GetInt32(), bounds.GetProperty("Right").GetInt32(), bounds.GetProperty("Bottom").GetInt32());
+            Assert.NotEqual(before.Hwnd, target.Hwnd);
+            popupAdmission = admitted.Clone();
+        }
+        Assert.Equal(target.Left, observed.GetProperty("left").GetInt32());
+        Assert.Equal(target.Top, observed.GetProperty("top").GetInt32());
+        Assert.Equal(target.Right, observed.GetProperty("right").GetInt32());
+        Assert.Equal(target.Bottom, observed.GetProperty("bottom").GetInt32());
+        Assert.Equal(target.Hwnd, observed.GetProperty("hwnd").GetInt64());
+        Assert.Equal(before.Hwnd, observed.GetProperty("parentHwnd").GetInt64());
         Assert.Equal(before.Desktop, observed.GetProperty("desktop").GetString());
         Assert.Equal(Environment.ProcessId, observed.GetProperty("ownerProcessId").GetInt32());
         var imageSha256 = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path)));
@@ -3126,21 +3162,24 @@ internal static class ProviderArtworkPrivatePresentation
         Assert.Equal("PrintWindow(PW_RENDERFULLCONTENT); no fallback", receipt.RootElement.GetProperty("method").GetString());
         Assert.Equal(Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(typeof(UIThreadFixture).Assembly.Location))),
             receipt.RootElement.GetProperty("assemblySha256").GetString());
-        Assert.Equal(before.Right - before.Left, receipt.RootElement.GetProperty("width").GetInt32());
-        Assert.Equal(before.Bottom - before.Top, receipt.RootElement.GetProperty("height").GetInt32());
+        Assert.Equal(target.Right - target.Left, receipt.RootElement.GetProperty("width").GetInt32());
+        Assert.Equal(target.Bottom - target.Top, receipt.RootElement.GetProperty("height").GetInt32());
 
         // Analyze the original complete PNG. Preserve the existing two-pass OCR policy,
         // including its explicitly unverified title exceptions, plus exact HWND-scoped UIA.
         var ocr = await ReadLabelsAsync(path, requiredLabels);
-        var labels = await Task.Run(() => ReadNativeLabels(before, requiredLabels))
+        var labels = await Task.Run(() => ReadNativeLabels(target, requiredLabels))
             .WaitAsync(OnboardingNativeProof.OcrPassTimeout);
         Assert.Equal(before, Measure(window));
         OnboardingNativeProof.AssertFullyVisible(requiredContent, root);
         OnboardingNativeProof.AssertSourceUnchanged();
         Assert.Equal(imageSha256, Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))));
+        if (popupPicker is not null) Assert.True(popupPicker.IsDropDownOpen);
         var metadata = new
         {
-            schema = "provider-artwork-private-mounted-required-v1", state,
+            schema = "provider-artwork-private-mounted-required-v2", state,
+            targetKind = popupPicker is null ? "parent" : "owned-combobox-popup", captureTarget = target, popupAdmission,
+            processId = Environment.ProcessId, uiThreadId = GetCurrentThreadId(),
             qualification = "Private owned mounted production controls. Synthetic selected Gateway. Not foreground, native compositor, keyboard, installed-app, or live Gateway proof.",
             method = "PrintWindow(PW_RENDERFULLCONTENT); no fallback",
             head = Environment.GetEnvironmentVariable("OPENCLAW_MOUNTED_CONTROL_CAPTURE_HEAD"),
@@ -3228,7 +3267,7 @@ internal static class ProviderArtworkPrivatePresentation
             root.XamlRoot.Size.Width, root.XamlRoot.Size.Height);
     }
 
-    private static NativeLabel[] ReadNativeLabels(Geometry geometry, string[] requiredLabels)
+    private static NativeLabel[] ReadNativeLabels(NativeTarget geometry, string[] requiredLabels)
     {
         Assert.Equal(ApartmentState.MTA, Thread.CurrentThread.GetApartmentState());
         RuntimeHelpers.RunModuleConstructor(typeof(System.Windows.Media.Visual).Module.ModuleHandle);
@@ -3286,6 +3325,7 @@ internal static class ProviderArtworkPrivatePresentation
     }
 
     private sealed record Labels(string OriginalText, string Text, double AnalysisScale, string[] MissingLabels);
+    private sealed record NativeTarget(long Hwnd, int Left, int Top, int Right, int Bottom);
     private sealed record NativeLabel(string Expected, string ActualName, double Left, double Top, double Width, double Height);
     private sealed record Geometry(long Hwnd, string Desktop, int Left, int Top, int Right, int Bottom,
         int ClientLeft, int ClientTop, int ClientWidth, int ClientHeight, int ContentTopInset,

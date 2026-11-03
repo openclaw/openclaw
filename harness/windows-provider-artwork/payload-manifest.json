@@ -1,9 +1,9 @@
 {
   "v": 1,
-  "name": "windows-provider-popup-boundary-diagnostic-light-v1",
+  "name": "windows-provider-artwork-owned-popup-v1",
   "baseCommit": "c550174d517b5e8830726cd5c32d4e132c144659",
-  "candidateTree": "d58d740ce7e5beb1b43889e6897ae96cf54370ba",
-  "baselineCaptureTree": "c657bbcfc2d034ede260118d8c0093f3f37a96d4",
+  "candidateTree": "746f015b26b6144f0743a488334d4dfe5ff3e52a",
+  "baselineCaptureTree": "7afcb904c7e89201124644e022e792471234c36f",
   "sourceContracts": [
     {
       "path": "Directory.Build.props",
@@ -63,8 +63,8 @@
     },
     {
       "path": "CONTROLLER-STATIC.json",
-      "bytes": 1364,
-      "sha256": "0386d8e688c56b993458c6b9178d656079bdbe6bca1932c7723e7ffc2028e680"
+      "bytes": 515,
+      "sha256": "c84fe61995e999693242eb3ee3a0e973cfa0709ebcc500c33d72403fa63c560b"
     },
     {
       "path": "Initialize-NativeRuntime.ps1",
@@ -73,33 +73,33 @@
     },
     {
       "path": "Invoke-ProviderArtworkCI.ps1",
-      "bytes": 7901,
-      "sha256": "b6e02496cc12204739f1480aed349a38783d27a9e1b674435b195ee421e3ea4e"
+      "bytes": 8141,
+      "sha256": "f24490ea18c25cc5ed421268af204aa1ad289e7a39c3cde9dbf21d32318182c8"
     },
     {
       "path": "Invoke-ProviderArtworkProof.ps1",
-      "bytes": 17761,
-      "sha256": "b7d1a7c86fd38b87733553ca364e5ae59d73c59ab039e7ca51a825e7db983aff"
+      "bytes": 22352,
+      "sha256": "21df5035ee6481f9de5bf256df0eeb07966a469c60f533668d75f1cfba192015"
     },
     {
-      "path": "POPUP-DIAGNOSTIC.md",
-      "bytes": 5312,
-      "sha256": "965ed861e49f96878c1e5a00209e8c6e3f9a2f403db36906e98ac582590c6e85"
+      "path": "OWNED-POPUP.md",
+      "bytes": 5565,
+      "sha256": "dccf5df392c5b090ed37bc6c58aad5e2856a920d8965f7492c677e081776026a"
     },
     {
       "path": "PRIVATE-CUTOVER.md",
-      "bytes": 577,
-      "sha256": "71c7d37f854b1dd5fad99694ee7754082a4bfd30f21128398221d0d34e459a8d"
+      "bytes": 659,
+      "sha256": "5398077caff86d758f454a10a03939fca142ff6e748c219df6ba86dfdc493405"
     },
     {
       "path": "PROOF-OVERLAYS.json",
-      "bytes": 3440,
-      "sha256": "42734d1579e013204d280ec0b430c5cfe84f6727416e03cfbdf74ce27bc7071b"
+      "bytes": 3343,
+      "sha256": "93fbb5c2b6501b3ba6ed885877c4ea443c03040005e4ba1aa02a164a0fd2fde6"
     },
     {
       "path": "PROOF-PLAN.md",
-      "bytes": 577,
-      "sha256": "71c7d37f854b1dd5fad99694ee7754082a4bfd30f21128398221d0d34e459a8d"
+      "bytes": 659,
+      "sha256": "5398077caff86d758f454a10a03939fca142ff6e748c219df6ba86dfdc493405"
     },
     {
       "path": "Program.cs",
@@ -118,8 +118,8 @@
     },
     {
       "path": "README.md",
-      "bytes": 577,
-      "sha256": "71c7d37f854b1dd5fad99694ee7754082a4bfd30f21128398221d0d34e459a8d"
+      "bytes": 659,
+      "sha256": "5398077caff86d758f454a10a03939fca142ff6e748c219df6ba86dfdc493405"
     },
     {
       "path": "REVIEW-RUNTIME2.md",
@@ -133,8 +133,8 @@
     },
     {
       "path": "STATIC-PREPARATION.json",
-      "bytes": 1364,
-      "sha256": "0386d8e688c56b993458c6b9178d656079bdbe6bca1932c7723e7ffc2028e680"
+      "bytes": 515,
+      "sha256": "c84fe61995e999693242eb3ee3a0e973cfa0709ebcc500c33d72403fa63c560b"
     },
     {
       "path": "Save-CalculatedVersion.ps1",
@@ -143,8 +143,8 @@
     },
     {
       "path": "TEST-COST.json",
-      "bytes": 597,
-      "sha256": "da9257ac5192888f169cd3edf667bcc13a7461245e1b742de6afdb3074c822a2"
+      "bytes": 702,
+      "sha256": "51c635b76cd676b6c897a427c714c0ebb991b799f1a55d43aafe690b77f0202a"
     },
     {
       "path": "Test-PacketSyntaxAndStage.ps1",
@@ -158,33 +158,28 @@
     },
     {
       "path": "after-private-capture.patch",
-      "bytes": 29764,
-      "sha256": "d176772f8a3886868def375ca494dbd2715abf72c7edae26e3723b0248f7507a"
+      "bytes": 33493,
+      "sha256": "e6c194687d87e6f7ca79f6cf038a625c6c960b9303ff8026f23a10294a3bc2af"
     },
     {
       "path": "baseline-capture.patch",
-      "bytes": 47747,
-      "sha256": "91dd12a2900b5de7c651fe527def452941dda870948ff4f6fc1d0b20d5106918"
-    },
-    {
-      "path": "baseline-captures.cs.append",
-      "bytes": 6933,
-      "sha256": "7f26c17fe3c8c2d88a2b677703c167e441fb7f390987614aba6c5e6b65d60f03"
+      "bytes": 44838,
+      "sha256": "e38e5c3c4a3dc7015489bbd37400e2b87f219b899a2a8be7e53a612035ac213e"
     },
     {
       "path": "baseline-postimages/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs",
-      "bytes": 193647,
-      "sha256": "8daac42573566d1339688c890331a2292d988d828c77b4ea6e351a4f85badda1"
+      "bytes": 184597,
+      "sha256": "c70a26b6bc87c0e36636a7528296725669fab6181533d0bf0e1194e34f85705e"
     },
     {
       "path": "candidate-source.json",
-      "bytes": 352821,
-      "sha256": "796084880fbaf2281d407519d5922ee20347214fbfd1c63c2a6cee48932274a1"
+      "bytes": 353221,
+      "sha256": "f30417939fce96f15e26822de621c8d05eef5a6ecd483a641361e1e9fa85b2d4"
     },
     {
       "path": "candidate.patch",
-      "bytes": 23025,
-      "sha256": "50f96d4a30931a824286553cdc78e94c51ccc3067f958e66e470622395229eac"
+      "bytes": 30706,
+      "sha256": "26b1aa601e77ab6e4b7d7a38fb13af9464c090d77bb5e89a11ed8d7bdca115e4"
     },
     {
       "path": "postimages/docs/PROVIDER_ARTWORK.md",
@@ -212,6 +207,11 @@
       "sha256": "311f6f8acfa1f1769bbb85474eaa46d8b192bba6d576ba3895f74ff2b1fdb718"
     },
     {
+      "path": "postimages/tests/OpenClaw.Tray.UITests/MountedControlCapture.cs",
+      "bytes": 16760,
+      "sha256": "4e34fed061695eb0d7cf2e2e5a7fbda26af509f2bd24d7c5b60d4851aaa263da"
+    },
+    {
       "path": "postimages/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs",
       "bytes": 166118,
       "sha256": "dfe194defb9a29440ea7b5ad3e7fa3f36ed2eb77f5d9bb8f35ae6c8e1c4385af"
@@ -222,35 +222,30 @@
       "sha256": "eb50ede485aa22b8088269e3f3ccc5e516b867c29753bb628e29a583fbe4dada"
     },
     {
-      "path": "private-overlay/ProviderArtworkPopupBoundary.cs",
-      "bytes": 9338,
-      "sha256": "b3f4ee67436b88496f29abe66c8f0d1dbd6c14208d6f320ff0381ec3b631bdc2"
-    },
-    {
       "path": "private-overlay/ProviderArtworkPrivatePresentation.cs",
-      "bytes": 17420,
-      "sha256": "be0653ecfb025cd5debd895a3fbe740b215bd513d003314d6d9ca3286ba6b892"
+      "bytes": 19769,
+      "sha256": "974cf52be4b2b4a973dbc79363c742b5c3af8d4687536538147ed8fc8283c168"
     },
     {
       "path": "proof-postimages/After/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs",
-      "bytes": 184553,
-      "sha256": "a6ca3a5029c54751d9bea1c256d9cc63ff998743bba5fe2e8186c7ca71760dc3"
+      "bytes": 187711,
+      "sha256": "07242a4bb62615c53b7bf55401171a38a2215c9a9605ba5544da90d1ef1dc9fa"
     },
     {
       "path": "proof-postimages/Before/tests/OpenClaw.Tray.UITests/MountedControlCapture.cs",
-      "bytes": 6379,
-      "sha256": "5114c3c7ea6a3ef8795024c961ab2aa24b289d3d1d1be7a9ae459770cb09a0bf"
+      "bytes": 16760,
+      "sha256": "4e34fed061695eb0d7cf2e2e5a7fbda26af509f2bd24d7c5b60d4851aaa263da"
     },
     {
       "path": "proof-postimages/Before/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs",
-      "bytes": 193647,
-      "sha256": "8daac42573566d1339688c890331a2292d988d828c77b4ea6e351a4f85badda1"
+      "bytes": 184597,
+      "sha256": "c70a26b6bc87c0e36636a7528296725669fab6181533d0bf0e1194e34f85705e"
     },
     {
       "path": "source-pins.json",
-      "bytes": 11736,
-      "sha256": "7abd69814d448bd2865490d5e6378773f8bf1718d2abc3e170ceebedd774096b"
+      "bytes": 12003,
+      "sha256": "c249a4a0a76265570595906569b6d9cb33c9fd832a126f9f5a432d44ed2773c3"
     }
   ],
-  "afterCaptureTree": "ba0180569e297f63934a27c540adf006d1834aad"
+  "afterCaptureTree": "c271b3b704538214ea8999eab808c0c7278a7702"
 }

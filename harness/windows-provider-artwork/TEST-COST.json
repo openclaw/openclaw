@@ -1,24 +1,25 @@
 {
-  "status": "UNRUN-UNMEASURED-new-diagnostic-bytes",
-  "diagnosticCases": 2,
-  "themes": [
-    "Light"
-  ],
-  "Dark": "UNRUN",
-  "suiteBoots": 1,
-  "taskOwnedWindows": 2,
-  "rawAttempts": 2,
-  "qualifiedFrames": 0,
-  "After": "independent current UI build only; source+proof source admitted; tests unrun",
-  "prior41586364473": {
-    "BeforeBuildWallSeconds": 109.7058327,
-    "BeforePickerWallSeconds": 12.0918625,
-    "executed": 2,
-    "failed": 2,
-    "qualifiedFrames": 0
+  "state": "NEW-CAPTURE-OWNER-UNCOMPILED-UNEXECUTED-COST-UNMEASURED",
+  "Before": {
+    "cases": 6,
+    "frames": 16,
+    "suiteBoots": 2
   },
-  "newWallSeconds": null,
-  "newCISeconds": null,
-  "noSleepsOrNewBootOwner": true,
+  "After": {
+    "cases": 7,
+    "frames": 16,
+    "suiteBoots": 1
+  },
+  "newBootOrTimerOwner": false,
+  "negativeControl": "closed genuine mounted ComboBox rejected in each existing picker case, no extra boot/window/PNG",
+  "priorRun41589214068": {
+    "AfterD58PlusBa01BuildWallSeconds": 123.6345076,
+    "warnings": 0,
+    "errors": 0,
+    "closure": "unchanged production seven files only; new eighth helper/proof still needs current build",
+    "AfterNativeTests": "UNRUN"
+  },
+  "wallSeconds": null,
+  "ciSeconds": null,
   "Shared": "RED-unwaived"
 }

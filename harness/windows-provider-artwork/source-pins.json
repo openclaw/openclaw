@@ -1,7 +1,7 @@
 {
   "baseCommit": "c550174d517b5e8830726cd5c32d4e132c144659",
   "baseTree": "eab5a16b2c6b57a741c7a1a22f830f737592d1ee",
-  "candidateTree": "d58d740ce7e5beb1b43889e6897ae96cf54370ba",
+  "candidateTree": "746f015b26b6144f0743a488334d4dfe5ff3e52a",
   "changedFiles": [
     {
       "path": "docs/PROVIDER_ARTWORK.md",
@@ -51,79 +51,85 @@
       "afterSha256": "eb50ede485aa22b8088269e3f3ccc5e516b867c29753bb628e29a583fbe4dada",
       "bytes": 41925,
       "afterBlob": "cdd19006232624076c14b218bfab797edcbdeae5"
+    },
+    {
+      "path": "tests/OpenClaw.Tray.UITests/MountedControlCapture.cs",
+      "beforeSha256": "04ba3c57ffc976063b42bbde41f5fc835912bf18a51fe1e6ac961c1a2d8fbd84",
+      "afterSha256": "4e34fed061695eb0d7cf2e2e5a7fbda26af509f2bd24d7c5b60d4851aaa263da",
+      "bytes": 16760,
+      "afterBlob": "838c62b7ce3d0c8088320b7c36c11e43663a48d7"
     }
   ],
   "count": 2090,
-  "patchSha256": "50f96d4a30931a824286553cdc78e94c51ccc3067f958e66e470622395229eac",
+  "patchSha256": "26b1aa601e77ab6e4b7d7a38fb13af9464c090d77bb5e89a11ed8d7bdca115e4",
   "sourceCommit": "NOT_CREATED",
-  "state": "diagnostic-preparation-only-uncompiled-unexecuted",
+  "state": "PREPARED-UNCOMPILED-UNEXECUTED",
   "testCases": 7,
-  "expectedNativeFrames": 14,
+  "expectedNativeFrames": 16,
   "Shared": "RED-unwaived",
   "packetFiles": {
     "BootstrapProbe.csproj": "f7d88528ac41739f81684ff10c6a0842387105703b299b7a78dcfed19fc16591",
     "CAUSAL-GIT-REPAIR.json": "06e84d27bba77a9d62c1187b11e92323818a4b21141203d9badbb3d92416fe94",
-    "CONTROLLER-STATIC.json": "0386d8e688c56b993458c6b9178d656079bdbe6bca1932c7723e7ffc2028e680",
+    "CONTROLLER-STATIC.json": "c84fe61995e999693242eb3ee3a0e973cfa0709ebcc500c33d72403fa63c560b",
     "Initialize-NativeRuntime.ps1": "3f042d5b6492c1271c6f5247ba38608104fa229cb16a768cad937776cca0e4f9",
-    "Invoke-ProviderArtworkCI.ps1": "b6e02496cc12204739f1480aed349a38783d27a9e1b674435b195ee421e3ea4e",
-    "Invoke-ProviderArtworkProof.ps1": "b7d1a7c86fd38b87733553ca364e5ae59d73c59ab039e7ca51a825e7db983aff",
-    "POPUP-DIAGNOSTIC.md": "965ed861e49f96878c1e5a00209e8c6e3f9a2f403db36906e98ac582590c6e85",
-    "PRIVATE-CUTOVER.md": "71c7d37f854b1dd5fad99694ee7754082a4bfd30f21128398221d0d34e459a8d",
-    "PROOF-OVERLAYS.json": "42734d1579e013204d280ec0b430c5cfe84f6727416e03cfbdf74ce27bc7071b",
-    "PROOF-PLAN.md": "71c7d37f854b1dd5fad99694ee7754082a4bfd30f21128398221d0d34e459a8d",
+    "Invoke-ProviderArtworkCI.ps1": "f24490ea18c25cc5ed421268af204aa1ad289e7a39c3cde9dbf21d32318182c8",
+    "Invoke-ProviderArtworkProof.ps1": "21df5035ee6481f9de5bf256df0eeb07966a469c60f533668d75f1cfba192015",
+    "OWNED-POPUP.md": "dccf5df392c5b090ed37bc6c58aad5e2856a920d8965f7492c677e081776026a",
+    "PRIVATE-CUTOVER.md": "5398077caff86d758f454a10a03939fca142ff6e748c219df6ba86dfdc493405",
+    "PROOF-OVERLAYS.json": "93fbb5c2b6501b3ba6ed885877c4ea443c03040005e4ba1aa02a164a0fd2fde6",
+    "PROOF-PLAN.md": "5398077caff86d758f454a10a03939fca142ff6e748c219df6ba86dfdc493405",
     "Program.cs": "d7337e908472033755a5c1c83046875523931ada52ad08f4f86ef736b9eb54a2",
     "Proof.Common.ps1": "c2a8a7aad4d70af850bd0581008714b0e5e6b3767cc4550219d2cbe996a45edc",
     "QUALIFIED-OWNERS.json": "8633c2447acb427f557f5994e5f963a575edfdc62856e08a985df3b340887efb",
-    "README.md": "71c7d37f854b1dd5fad99694ee7754082a4bfd30f21128398221d0d34e459a8d",
+    "README.md": "5398077caff86d758f454a10a03939fca142ff6e748c219df6ba86dfdc493405",
     "REVIEW-RUNTIME2.md": "f6714d5058ab39c2ff14ff47a86aedfb264e29b95d9cfc16b208668c4d9b5c22",
     "REVIEW.md": "c99f1e33950182b8c87c071e988c856ac6521585e2d28d0b1d1716619e709da3",
-    "STATIC-PREPARATION.json": "0386d8e688c56b993458c6b9178d656079bdbe6bca1932c7723e7ffc2028e680",
+    "STATIC-PREPARATION.json": "c84fe61995e999693242eb3ee3a0e973cfa0709ebcc500c33d72403fa63c560b",
     "Save-CalculatedVersion.ps1": "a045b196c0e98341735aa8a21dc80cfdacf4504f574c602775e3e31f728e7e39",
-    "TEST-COST.json": "da9257ac5192888f169cd3edf667bcc13a7461245e1b742de6afdb3074c822a2",
+    "TEST-COST.json": "51c635b76cd676b6c897a427c714c0ebb991b799f1a55d43aafe690b77f0202a",
     "Test-PacketSyntaxAndStage.ps1": "9d39f26da301934b0d238bb1edf4d7376909c92f0c1f08700bc077aaf0574f5d",
     "W4-FOREGROUND-ALTERNATIVE.md": "b43ebcd08488141fcc369bc00dbfd70486f2cdc94e27648ad930f2d749c5a8da",
-    "after-private-capture.patch": "d176772f8a3886868def375ca494dbd2715abf72c7edae26e3723b0248f7507a",
-    "baseline-capture.patch": "91dd12a2900b5de7c651fe527def452941dda870948ff4f6fc1d0b20d5106918",
-    "baseline-captures.cs.append": "7f26c17fe3c8c2d88a2b677703c167e441fb7f390987614aba6c5e6b65d60f03",
-    "baseline-postimages/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs": "8daac42573566d1339688c890331a2292d988d828c77b4ea6e351a4f85badda1",
-    "candidate-source.json": "796084880fbaf2281d407519d5922ee20347214fbfd1c63c2a6cee48932274a1",
-    "candidate.patch": "50f96d4a30931a824286553cdc78e94c51ccc3067f958e66e470622395229eac",
+    "after-private-capture.patch": "e6c194687d87e6f7ca79f6cf038a625c6c960b9303ff8026f23a10294a3bc2af",
+    "baseline-capture.patch": "e38e5c3c4a3dc7015489bbd37400e2b87f219b899a2a8be7e53a612035ac213e",
+    "baseline-postimages/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs": "c70a26b6bc87c0e36636a7528296725669fab6181533d0bf0e1194e34f85705e",
+    "candidate-source.json": "f30417939fce96f15e26822de621c8d05eef5a6ecd483a641361e1e9fa85b2d4",
+    "candidate.patch": "26b1aa601e77ab6e4b7d7a38fb13af9464c090d77bb5e89a11ed8d7bdca115e4",
     "postimages/docs/PROVIDER_ARTWORK.md": "98af31e92d4006b8b3a945b1b98d94b8ddd5a55e5074ac8f812acc2d5f4be598",
     "postimages/src/OpenClaw.SetupEngine.UI/Controls/ProviderSetupDialog.xaml": "4d1e60bc7967eccdd16abaa1fc4c7d797cf66bd994e0b83e414bc660b859c586",
     "postimages/src/OpenClaw.SetupEngine.UI/Controls/ProviderSetupDialog.xaml.cs": "54607109071889bed77871ef707bfd1a5fe8e40ae846a1304a12bb59217487e9",
     "postimages/src/OpenClaw.SetupEngine.UI/Pages/AiSetupPage.xaml": "2661b7e401db9ee9f5db484c7e1f9112a2abcf5569e3724794020ddffe69ce25",
     "postimages/src/OpenClaw.SetupEngine.UI/Pages/AiSetupPage.xaml.cs": "311f6f8acfa1f1769bbb85474eaa46d8b192bba6d576ba3895f74ff2b1fdb718",
+    "postimages/tests/OpenClaw.Tray.UITests/MountedControlCapture.cs": "4e34fed061695eb0d7cf2e2e5a7fbda26af509f2bd24d7c5b60d4851aaa263da",
     "postimages/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs": "dfe194defb9a29440ea7b5ad3e7fa3f36ed2eb77f5d9bb8f35ae6c8e1c4385af",
     "postimages/tests/OpenClaw.Tray.UITests/OnboardingArtworkRenderingTests.cs": "eb50ede485aa22b8088269e3f3ccc5e516b867c29753bb628e29a583fbe4dada",
-    "private-overlay/ProviderArtworkPopupBoundary.cs": "b3f4ee67436b88496f29abe66c8f0d1dbd6c14208d6f320ff0381ec3b631bdc2",
-    "private-overlay/ProviderArtworkPrivatePresentation.cs": "be0653ecfb025cd5debd895a3fbe740b215bd513d003314d6d9ca3286ba6b892",
-    "proof-postimages/After/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs": "a6ca3a5029c54751d9bea1c256d9cc63ff998743bba5fe2e8186c7ca71760dc3",
-    "proof-postimages/Before/tests/OpenClaw.Tray.UITests/MountedControlCapture.cs": "5114c3c7ea6a3ef8795024c961ab2aa24b289d3d1d1be7a9ae459770cb09a0bf",
-    "proof-postimages/Before/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs": "8daac42573566d1339688c890331a2292d988d828c77b4ea6e351a4f85badda1"
+    "private-overlay/ProviderArtworkPrivatePresentation.cs": "974cf52be4b2b4a973dbc79363c742b5c3af8d4687536538147ed8fc8283c168",
+    "proof-postimages/After/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs": "07242a4bb62615c53b7bf55401171a38a2215c9a9605ba5544da90d1ef1dc9fa",
+    "proof-postimages/Before/tests/OpenClaw.Tray.UITests/MountedControlCapture.cs": "4e34fed061695eb0d7cf2e2e5a7fbda26af509f2bd24d7c5b60d4851aaa263da",
+    "proof-postimages/Before/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs": "c70a26b6bc87c0e36636a7528296725669fab6181533d0bf0e1194e34f85705e"
   },
-  "baselineCaptureTree": "c657bbcfc2d034ede260118d8c0093f3f37a96d4",
+  "baselineCaptureTree": "7afcb904c7e89201124644e022e792471234c36f",
   "baselineChangedFiles": [
-    {
-      "path": "tests/OpenClaw.Tray.UITests/MountedControlCapture.cs",
-      "beforeSha256": "04ba3c57ffc976063b42bbde41f5fc835912bf18a51fe1e6ac961c1a2d8fbd84",
-      "afterSha256": "5114c3c7ea6a3ef8795024c961ab2aa24b289d3d1d1be7a9ae459770cb09a0bf",
-      "bytes": 6379,
-      "afterBlob": "f4b6db6fef98ec6faceeb16f434bce3792b5e9e5"
-    },
     {
       "path": "tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs",
       "beforeSha256": "f238918a76271fee64392bd3fbd3a93da912d24fedebad80b705a136628697e6",
-      "afterSha256": "8daac42573566d1339688c890331a2292d988d828c77b4ea6e351a4f85badda1",
-      "bytes": 193647,
-      "afterBlob": "d4eaf6e8ac6cb34f9c2d7e5538be5e8f4293635b"
+      "afterSha256": "c70a26b6bc87c0e36636a7528296725669fab6181533d0bf0e1194e34f85705e",
+      "bytes": 184597,
+      "afterBlob": "e01bb84ccf302b75ce5e26b5b0c5f202e789c085"
+    },
+    {
+      "path": "tests/OpenClaw.Tray.UITests/MountedControlCapture.cs",
+      "beforeSha256": "04ba3c57ffc976063b42bbde41f5fc835912bf18a51fe1e6ac961c1a2d8fbd84",
+      "afterSha256": "4e34fed061695eb0d7cf2e2e5a7fbda26af509f2bd24d7c5b60d4851aaa263da",
+      "bytes": 16760,
+      "afterBlob": "838c62b7ce3d0c8088320b7c36c11e43663a48d7"
     }
   ],
-  "sourceState": "natural-entry-only canonical test correction; private presentation/capture/invocation remains separately frozen proof overlay",
+  "sourceState": "EIGHT-CANONICAL-FILES-UNCOMMITTED",
   "nativeGitWrapperSha256": "fbeb977dca0320c14edd0b2d0888091d121b1449cce16d9c56f619aabbf5589f",
-  "qualification": "native-icons-w5-popup-boundary-light-v1",
-  "priorCandidateTree": "6bdc3018768492e101bb12ea603a067b4e2414bd",
+  "qualification": "native-icons-w5-owned-popup-v1",
+  "priorCandidateTree": "d58d740ce7e5beb1b43889e6897ae96cf54370ba",
   "priorCandidatePatchSha256": "6194060d067b8858d832ab17951c0f518bc0750f9f6b26e807b744947bd3dc7e",
-  "afterCaptureTree": "ba0180569e297f63934a27c540adf006d1834aad",
+  "afterCaptureTree": "c271b3b704538214ea8999eab808c0c7278a7702",
   "afterCaptureChangedFiles": [
     {
       "path": "docs/PROVIDER_ARTWORK.md",
@@ -162,10 +168,10 @@
     },
     {
       "path": "tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs",
-      "beforeSha256": "dfe194defb9a29440ea7b5ad3e7fa3f36ed2eb77f5d9bb8f35ae6c8e1c4385af",
-      "afterSha256": "a6ca3a5029c54751d9bea1c256d9cc63ff998743bba5fe2e8186c7ca71760dc3",
-      "bytes": 184553,
-      "afterBlob": "b900a016275ec28fd957e8b7b6e844c412ae07a6"
+      "beforeSha256": "f238918a76271fee64392bd3fbd3a93da912d24fedebad80b705a136628697e6",
+      "afterSha256": "07242a4bb62615c53b7bf55401171a38a2215c9a9605ba5544da90d1ef1dc9fa",
+      "bytes": 187711,
+      "afterBlob": "89c2d3c108290d32c965f3734e9a5baff6d12c7b"
     },
     {
       "path": "tests/OpenClaw.Tray.UITests/OnboardingArtworkRenderingTests.cs",
@@ -173,27 +179,23 @@
       "afterSha256": "eb50ede485aa22b8088269e3f3ccc5e516b867c29753bb628e29a583fbe4dada",
       "bytes": 41925,
       "afterBlob": "cdd19006232624076c14b218bfab797edcbdeae5"
+    },
+    {
+      "path": "tests/OpenClaw.Tray.UITests/MountedControlCapture.cs",
+      "beforeSha256": "04ba3c57ffc976063b42bbde41f5fc835912bf18a51fe1e6ac961c1a2d8fbd84",
+      "afterSha256": "4e34fed061695eb0d7cf2e2e5a7fbda26af509f2bd24d7c5b60d4851aaa263da",
+      "bytes": 16760,
+      "afterBlob": "838c62b7ce3d0c8088320b7c36c11e43663a48d7"
     }
   ],
   "afterProofOverlayChangedFiles": [
     {
       "path": "tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs",
       "beforeSha256": "dfe194defb9a29440ea7b5ad3e7fa3f36ed2eb77f5d9bb8f35ae6c8e1c4385af",
-      "afterSha256": "a6ca3a5029c54751d9bea1c256d9cc63ff998743bba5fe2e8186c7ca71760dc3",
-      "bytes": 184553,
-      "afterBlob": "b900a016275ec28fd957e8b7b6e844c412ae07a6"
+      "afterSha256": "07242a4bb62615c53b7bf55401171a38a2215c9a9605ba5544da90d1ef1dc9fa",
+      "bytes": 187711,
+      "afterBlob": "89c2d3c108290d32c965f3734e9a5baff6d12c7b"
     }
   ],
-  "priorBaselineCaptureTree": "a1c05f702d256b3675ca787bdebf18f588f8db08",
-  "diagnostic": {
-    "cases": 2,
-    "theme": "Light",
-    "arms": [
-      "same-position-move",
-      "conditional-move"
-    ],
-    "qualifiedFrames": 0,
-    "rawAttempts": 2,
-    "canonicalUnchanged": true
-  }
+  "priorBaselineCaptureTree": "a1c05f702d256b3675ca787bdebf18f588f8db08"
 }

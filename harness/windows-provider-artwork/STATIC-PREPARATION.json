@@ -1,38 +1,20 @@
 {
-  "state": "CURRENT-DIAGNOSTIC-STATIC-ONLY-NO-NATIVE-RESULT",
-  "harnessBase": "34c97aa88a3e9faef04421d41a0f388dda14c248",
-  "canonicalSourceUnchanged": true,
-  "AfterProofOverlayUnchanged": true,
-  "AfterBuildOnlyFirst": true,
-  "BeforeDiagnostic": {
-    "cases": 2,
-    "theme": "Light",
-    "arms": [
-      "same-position-move",
-      "conditional-move"
-    ],
-    "rawAttempts": 2,
-    "qualifiedFrames": 0,
-    "phases": 9
+  "state": "PREPARATION-STATIC-ONLY-NO-NATIVE",
+  "base": "d1a1f32fc450c8ec9e5d3d5891bc967ea7b5ce04",
+  "canonicalFiles": 8,
+  "priorSevenUnchanged": true,
+  "onePrintWindowCallsite": true,
+  "noArbitraryHandleAPI": true,
+  "activeABRetired": true,
+  "frameContract": {
+    "BeforeCases": 6,
+    "AfterCases": 7,
+    "framesEach": 16
   },
-  "terminal": {
-    "Before": "all source/binary hashes + source inventory count + exact tree",
-    "After": "all source/binary hashes + source inventory count + exact tree; no tests"
-  },
-  "staticChecks": [
-    "all three source patches apply to exact bases and expected trees with whitespace=error",
-    "outer harness patch applies to exact34c and expected tree with whitespace=error",
-    "seven canonical source postimages unchanged",
-    "capture owner original statements exactly restored LF-normalized by removing observations and move conditional",
-    "original six Before cases/private fixture/required consumer preserved",
-    "all eight other full workflow jobs unchanged",
-    "manifest and packet seals exact"
-  ],
   "localGates": {
-    "pwshAST": "UNRUN-unavailable",
-    "dotnetBuild": "UNRUN-unavailable",
-    "WindowsNative": "UNRUN-unavailable",
-    "newCost": "UNMEASURED"
+    "PowerShellAST": "UNRUN-unavailable",
+    "CSharpBuild": "UNRUN-unavailable",
+    "NativePixels": "UNRUN-unavailable"
   },
   "Shared": "RED-unwaived"
 }
