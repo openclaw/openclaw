@@ -9,6 +9,7 @@ import type {
 import { registerGitHubEnglish } from "../i18n/locales/en-github.ts";
 import { registerSessionProgressEnglish } from "../i18n/locales/en-session-progress.ts";
 import { i18nRevision, registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
+import { createLayoutMeasurement } from "../lib/reactive/layout-measurement.ts";
 import { sessionOwnerInitials } from "../lib/session-owner.ts";
 import {
   displaySessionPullRequests,
@@ -22,7 +23,12 @@ import { personActivityLink, type PersonActivityRouting } from "./person-activit
 import { createHovercardControlRef, HovercardControlsContext } from "./portaled-hovercard-focus.ts";
 import { sessionAttentionSubtitle } from "./session-attention-presentation.ts";
 import { SessionGitDiff } from "./session-git-diff.tsx";
-import { participantLabel, formatSessionAge, sessionAttribution } from "./session-hovercard.ts";
+import {
+  participantLabel,
+  formatSessionAge,
+  sessionAttribution,
+  writeHovercardExcerpt,
+} from "./session-hovercard.ts";
 import { ProgressCardMarkdown } from "./session-progress-card-view.tsx";
 import { progressCardHeadsUp } from "./session-progress-card.ts";
 import { ChannelAvatar } from "./solid/channel-avatar.tsx";
@@ -523,6 +529,24 @@ function PullRequestDetails(props: { snapshot?: ControlUiSessionPullRequestSnaps
   );
 }
 
+function HovercardExcerpt(props: { text: string }) {
+  let element!: HTMLDivElement;
+  createLayoutMeasurement(
+    () => props.text,
+    (text) => () => writeHovercardExcerpt(element, text!),
+    { targets: () => [element], fonts: true, changeTiming: "sync" },
+  );
+  return (
+    <div
+      class="session-hovercard__excerpt"
+      dir="auto"
+      ref={(node) => {
+        element = node;
+      }}
+    />
+  );
+}
+
 export function SessionHovercard(props: SessionHovercardInput) {
   const controls = useContext(HovercardControlsContext);
   const headsUp = createMemo(() =>
@@ -608,7 +632,7 @@ export function SessionHovercard(props: SessionHovercardInput) {
         </Show>
         <Show when={preview()}>
           <section class="session-hovercard__section session-hovercard__task">
-            <div class="session-hovercard__excerpt">{preview()}</div>
+            <HovercardExcerpt text={preview()!} />
           </section>
         </Show>
         <Show when={hasPullRequestSection()}>

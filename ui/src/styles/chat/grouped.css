@@ -1651,30 +1651,6 @@ button.chat-reply-attribution__target:disabled {
   color: var(--text);
 }
 
-/* Reuse the shared text-shimmer owner; accessibility modes keep static text. */
-@media (prefers-reduced-motion: no-preference) and (forced-colors: none) {
-  .agent-chat__typing-text[data-typing] {
-    background-image: linear-gradient(
-      90deg,
-      var(--muted) 0%,
-      var(--muted) 35%,
-      var(--text) 50%,
-      var(--muted) 65%,
-      var(--muted) 100%
-    );
-    background-size: 200% 100%;
-    background-repeat: repeat-x;
-    background-clip: text;
-    color: transparent;
-    -webkit-text-fill-color: transparent;
-    animation: text-shimmer 2.4s ease-in-out infinite;
-  }
-
-  .agent-chat__typing-text[data-typing] .agent-chat__typing-name {
-    color: inherit;
-  }
-}
-
 .agent-chat__typing-preview-text {
   display: block;
   white-space: pre-wrap;

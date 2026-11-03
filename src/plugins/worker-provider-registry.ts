@@ -22,6 +22,7 @@ export function validateWorkerProviderContract(
     "prepareProvision",
     "listMachineOptions",
     "runSetupCommand",
+    "setRetainedState",
   ] as const) {
     if (provider[method] !== undefined && typeof provider[method] !== "function") {
       return { ok: false, message: `worker provider registration ${method} must be a function` };

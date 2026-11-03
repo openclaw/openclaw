@@ -466,9 +466,12 @@ it.each(["removed", "disabled"] as const)(
         }).entries,
         expected,
       );
-      expect(latestRunReceipt(state.deps.storePath, job.id)).toEqual({
-        status: "error",
-        error: reason,
+      // Terminal history can precede the separate execution-receipt write.
+      await vi.waitFor(() => {
+        expect(latestRunReceipt(state.deps.storePath, job.id)).toEqual({
+          status: "error",
+          error: reason,
+        });
       });
       const storedJob = state.store?.jobs.find((entry) => entry.id === job.id);
       if (mutation === "removed") {

@@ -548,13 +548,12 @@ describe("runEmbeddedAttemptPromptPhase", () => {
       });
       mocks.submitPrompt.mockImplementation(async (submission: PromptSubmissionCall) => {
         expect(submission.compactionRequestBudget).toBe(budgets[0]);
-        const model = fixture.input.attempt.model;
         const context = {
           systemPrompt: "Current foreground context. ".repeat(200),
           messages: [],
           tools: [{ ...tool, description: "Complete schema guidance. ".repeat(100) }],
         };
-        await activeSession.agent.streamFn(model, context);
+        submission.prepareRequestTokenPressure!(context);
         expect(budgets).toHaveLength(2);
         expect(budgets[1]).toMatchObject({
           contextWindow: 32_000,
@@ -564,16 +563,18 @@ describe("runEmbeddedAttemptPromptPhase", () => {
         expect(budgets[1]?.fixedTokens).toBeGreaterThan(budgets[0]?.fixedTokens ?? 0);
         expect(budgets[1]?.pendingUserIdempotencyKey).toBeUndefined();
         compacting = true;
-        await activeSession.agent.streamFn(
-          { ...model, contextWindow: 200_000 },
-          { systemPrompt: "Separate summarizer", messages: [], tools: [] },
-        );
+        submission.prepareRequestTokenPressure!({
+          systemPrompt: "Separate summarizer",
+          messages: [],
+          tools: [],
+        });
         expect(budgets).toHaveLength(2);
         compacting = false;
       });
 
       await runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
 
+      expect(mocks.handlePromptError.mock.calls.map(([input]) => input.error)).toEqual([]);
       expect(fixture.readState().promptError).toBeNull();
     },
   );

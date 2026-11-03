@@ -288,7 +288,7 @@ async function resolveUsageCostTranscriptSource(
   }
 }
 
-export async function resolveUsageCostTranscriptSources(
+async function resolveUsageCostTranscriptSources(
   sessionFiles: readonly string[],
   access: UsageCostCollectionAccess,
 ): Promise<Array<UsageCostTranscriptSource | undefined>> {

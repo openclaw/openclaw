@@ -20,55 +20,21 @@ import type { GatewayClient } from "./client.js";
 import type { HealthSummary } from "./health/types.js";
 import type { ManagedGatewayConfigReloaderParams } from "./server-reload-contracts.js";
 
-const readonlyPreparation = vi.hoisted(() => ({
-  prepared: [] as Array<{ pathname: string; location?: string; progressed: boolean }>,
-  turns: [] as Promise<void>[],
-}));
+const readonlyPreparation = vi.hoisted(() => [] as string[]);
 
 vi.mock("../infra/sqlite-snapshot-source.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/sqlite-snapshot-source.js")>();
-  const observe = (pathname: string) => {
-    let progressed = false;
-    readonlyPreparation.turns.push(
-      new Promise<void>((resolve) => {
-        setImmediate(() => {
-          progressed = true;
-          resolve();
-        });
-      }),
-    );
-    return (prepared?: { location: string }) =>
-      readonlyPreparation.prepared.push({ pathname, location: prepared?.location, progressed });
-  };
   const track =
-    <Args extends [string, ...unknown[]], Prepared extends { location: string }, Result>(
-      prepare: (...args: Args) => Result,
-      location: (result: Result) => Prepared | Promise<Prepared>,
-    ) =>
+    <Args extends [string, ...unknown[]], Result>(prepare: (...args: Args) => Result) =>
     (...args: Args) => {
-      const finish = observe(args[0]);
-      try {
-        const result = prepare(...args);
-        const prepared = location(result);
-        if (prepared instanceof Promise) {
-          void prepared.then(finish, () => finish());
-        } else {
-          finish(prepared);
-        }
-        return result;
-      } catch (error) {
-        finish();
-        throw error;
-      }
+      readonlyPreparation.push(args[0]);
+      return prepare(...args);
     };
   return {
     ...actual,
-    prepareSqliteReadOnlyLocationSync: track(actual.prepareSqliteReadOnlyLocationSync, (p) => p),
-    prepareSqliteReadOnlyLocation: track(actual.prepareSqliteReadOnlyLocation, (p) => p),
-    startSqliteReadOnlyLocationAsync: track(
-      actual.startSqliteReadOnlyLocationAsync,
-      (p) => p.result,
-    ),
+    prepareSqliteReadOnlyLocationSync: track(actual.prepareSqliteReadOnlyLocationSync),
+    prepareSqliteReadOnlyLocation: track(actual.prepareSqliteReadOnlyLocation),
+    startSqliteReadOnlyLocationAsync: track(actual.startSqliteReadOnlyLocationAsync),
   };
 });
 

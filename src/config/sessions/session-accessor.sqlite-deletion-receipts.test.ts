@@ -2,12 +2,16 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as sqliteQueries from "../../infra/kysely-sync.js";
 import * as admission from "../../infra/sqlite-database-admission.js";
 import { deleteSessionEntry } from "../../plugin-sdk/session-store-runtime.js";
 import * as agentDb from "../../state/openclaw-agent-db.js";
 import * as stateDb from "../../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config.js";
+import { loadSessionEntry, loadTranscriptEvents, replaceSessionEntry } from "./session-accessor.js";
 import * as sessionArchive from "./session-accessor.sqlite-archive.js";
 import { cleanupSessionLifecycleArtifactsCore } from "./session-accessor.sqlite-artifact-cleanup.js";
 import {
@@ -23,11 +27,13 @@ import { emptySessionEntryMaintenancePlan } from "./session-accessor.sqlite-main
 import { finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort as finalizeMaintenance } from "./session-accessor.sqlite-maintenance.js";
 import { applySessionEntryLifecycleMutation as mutate } from "./session-accessor.sqlite-projection.js";
 import * as reclamationWorker from "./session-accessor.sqlite-reclamation-worker.js";
+import * as sessionReferences from "./session-accessor.sqlite-references.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { mutateMemory } from "./session-actor-memory-publication.test-support.js";
 import { acquireSessionActorStorage } from "./session-actor-storage-acquisition.js";
+import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -385,3 +391,152 @@ it("retains personal publication receipts when deletion aborts or the context re
   expect(read()).toMatchObject({ sessionId, label: "context reset" });
   expect(receipt()).toEqual(before);
 });
+
+it.each([
+  "a shared window",
+  "a placeholder successor",
+  "a stale successor",
+  "a duplicate timestamp successor",
+  "a plain current successor",
+] as const)(
+  "does not materialize surviving prompts when deleting a node with %s",
+  async (scenario) => {
+    const reclaimedKey = "agent:main:reclaimed-node";
+    const survivorKeys = ["agent:main:survivor-a", "agent:main:survivor-b"] as const;
+    const entry = { sessionId: "reclaimed-session", updatedAt: Date.now() };
+    const historicalId = "reclaimed-history";
+    const retainedEvent = { type: "session", id: entry.sessionId, content: "retained history" };
+    await replaceSessionEntry({ sessionKey: reclaimedKey, storePath }, entry);
+    for (const survivorKey of survivorKeys.toReversed()) {
+      await replaceSessionEntry(
+        { sessionKey: survivorKey, storePath },
+        {
+          sessionId: `${survivorKey}-session`,
+          previousSessionId: entry.sessionId,
+          usageFamilySessionIds: [historicalId],
+          updatedAt: entry.updatedAt,
+          skillsSnapshot: { prompt: "saved skill prompt".repeat(4096), skills: [] },
+          systemPromptReport: {
+            source: "run",
+            generatedAt: entry.updatedAt,
+            systemPrompt: { chars: 1, projectContextChars: 0, nonProjectContextChars: 1 },
+            injectedWorkspaceFiles: [],
+            skills: { promptChars: 0, entries: [{ name: "saved-report-skill", blockChars: 0 }] },
+            tools: { listChars: 0, schemaChars: 0, entries: [] },
+          },
+        },
+      );
+    }
+    // Large entry metadata remains in entry_json (saved prompts have a separate owner).
+    await replaceSessionEntry(
+      { sessionKey: "agent:main:unrelated-node", storePath },
+      {
+        sessionId: "unrelated-session",
+        updatedAt: entry.updatedAt,
+        label: "unrelated metadata".repeat(4096),
+      },
+    );
+    const deletionScope = {
+      agentId: "main",
+      path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
+    };
+    const database = agentDb.openOpenClawAgentDatabase(deletionScope);
+    database.db
+      .prepare(
+        "INSERT INTO session_windows(session_id, session_key, created_at, updated_at) VALUES (?, ?, 1, 1)",
+      )
+      .run(historicalId, reclaimedKey);
+    await replaceTranscriptEvents(
+      { sessionKey: reclaimedKey, sessionId: entry.sessionId, storePath },
+      [retainedEvent],
+    );
+    if (scenario === "a placeholder successor") {
+      database.db
+        .prepare(
+          "UPDATE session_nodes SET current_session_id = ?, entry_json = '{}', entry_valid = -1 WHERE session_key = ?",
+        )
+        .run(entry.sessionId, survivorKeys[0]);
+    }
+    if (scenario === "a stale successor") {
+      database.db
+        .prepare("UPDATE session_nodes SET updated_at = updated_at + 1 WHERE session_key = ?")
+        .run(survivorKeys[0]);
+    }
+    if (scenario === "a duplicate timestamp successor") {
+      const survivor = database.db
+        .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
+        .get(survivorKeys[0]);
+      const entryJson = String(survivor?.entry_json);
+      const duplicate = entryJson.replace(
+        `"updatedAt":${entry.updatedAt}`,
+        `"updatedAt":${entry.updatedAt},"updatedAt":${entry.updatedAt + 1}`,
+      );
+      expect(duplicate).not.toBe(entryJson);
+      database.db
+        .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
+        .run(duplicate, survivorKeys[0]);
+    }
+    if (scenario === "a plain current successor") {
+      database.db
+        .prepare(
+          "UPDATE session_nodes SET current_session_id = ?, entry_json = ?, has_optional_references = 0 WHERE session_key = ?",
+        )
+        .run(entry.sessionId, JSON.stringify(entry), survivorKeys[0]);
+    }
+    const readSurvivors = () =>
+      database.db
+        .prepare(
+          "SELECT session_key, current_session_id, entry_json, entry_valid FROM session_nodes WHERE session_key != ? ORDER BY session_key",
+        )
+        .all(reclaimedKey);
+    const survivorsBefore = readSurvivors();
+    const counter = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["nodes"],
+      (sql) =>
+        /^(?:select|with)\b/iu.test(sql) && sql.includes('"session_nodes"') ? "nodes" : null,
+    );
+    const queries = vi.spyOn(sqliteQueries, "executeSqliteQuerySync");
+    const references = vi.spyOn(sessionReferences, "collectSessionStateIdsForEntry");
+    await withDeletions(deletionScope, [{ sessionKey: reclaimedKey, entry }], async () => {
+      transaction((current) => {
+        deleteSessionEntryRows(current, reclaimedKey, {
+          deleteOwnedWindows: scenario === "a shared window",
+        });
+      }, deletionScope);
+    });
+    counter.restore();
+    expect(counter.textBytes.nodes).toBeLessThan(16 * 1024);
+    const rows = queries.mock.results.flatMap((result) =>
+      result.type === "return" ? result.value.rows : [],
+    );
+    expect(JSON.stringify(rows)).not.toMatch(
+      /saved skill prompt|saved-report-skill|unrelated metadata/,
+    );
+    for (const survivor of survivorsBefore) {
+      expect(
+        references.mock.calls.filter(([value]) => value.sessionId === survivor.current_session_id)
+          .length,
+      ).toBeLessThanOrEqual(1);
+    }
+    expect(loadSessionEntry({ sessionKey: reclaimedKey, storePath })).toBeUndefined();
+    expect(readSurvivors()).toEqual(survivorsBefore);
+    const windowOwner = (id: string) =>
+      database.db.prepare("SELECT session_key FROM session_windows WHERE session_id = ?").get(id);
+    const currentOwner =
+      survivorKeys[
+        scenario === "a stale successor" || scenario === "a duplicate timestamp successor" ? 1 : 0
+      ];
+    expect(windowOwner(entry.sessionId)).toEqual({ session_key: currentOwner });
+    expect(windowOwner(historicalId)).toEqual({
+      session_key: survivorKeys[scenario === "a shared window" ? 0 : 1],
+    });
+    await expect(
+      loadTranscriptEvents({
+        sessionKey: currentOwner,
+        sessionId: entry.sessionId,
+        storePath,
+      }),
+    ).resolves.toEqual([retainedEvent]);
+  },
+);

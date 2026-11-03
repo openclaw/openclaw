@@ -4,6 +4,9 @@
  * Run separate timing and allocation processes, alternating baseline/candidate:
  *   node --expose-gc --import ./scripts/tsx.mjs scripts/perf/responses-continuation.ts \
  *     --flow commit --conversations 10 [--allocation] [--module <path>]
+ * For long mixed history use --initial-turns 120 --frozen (600+ items, images/reasoning).
+ * Accept exact byte-budget parity and CPU/allocation reductions beyond A/A spread;
+ * use at least five alternating samples per side, timing and allocation separately.
  * Repeat with --flow prefix or --flow resolve. Defaults to the working-tree owner. For a baseline:
  *   git show <base>:packages/ai/src/transports/openai-responses-continuation.ts \
  *     > packages/ai/src/transports/.responses-continuation-baseline.ts
@@ -25,11 +28,13 @@ import { resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { GCProfiler } from "node:v8";
+import { configureAiTransportHost } from "../../packages/ai/src/host.js";
 import { cleanupSessionResources } from "../../packages/ai/src/session-resources.js";
 import type {
   ResponsesContinuationRequest,
   ResponsesContinuationState,
 } from "../../packages/ai/src/transports/openai-responses-continuation.js";
+import { freezeJsonSnapshot, isDeeplyFrozenPlainData } from "../../src/shared/immutable-data.js";
 import { summarizeGcByKind } from "../lib/gc-profile-summary.ts";
 
 const { values } = parseArgs({
@@ -37,6 +42,8 @@ const { values } = parseArgs({
     module: { type: "string" },
     flow: { type: "string", default: "commit" },
     conversations: { type: "string", default: "10" },
+    frozen: { type: "boolean", default: false },
+    "initial-turns": { type: "string", default: "0" },
     allocation: { type: "boolean", default: false },
   },
 });
@@ -52,8 +59,13 @@ const modulePath = values.module
 const owner: typeof import("../../packages/ai/src/transports/openai-responses-continuation.js") =
   await import(pathToFileURL(modulePath).href);
 const turns = 200;
+const initialTurns = Number(values["initial-turns"]);
+assert(Number.isSafeInteger(initialTurns) && initialTurns >= 0);
+if (values.frozen) {
+  configureAiTransportHost({ immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData } });
+}
 const history: NonNullable<ResponsesContinuationRequest["input"]> = [];
-const fixtures = Array.from({ length: turns }, (_, index) => {
+const fixtures = Array.from({ length: turns + initialTurns }, (_, index) => {
   const callId = `call_bench_${index}`;
   history.push(
     {
@@ -68,6 +80,38 @@ const fixtures = Array.from({ length: turns }, (_, index) => {
       output: `result ${index} ${"t".repeat(2048)}`,
     },
   );
+  history.push({
+    type: "reasoning",
+    id: `rs_${index}`,
+    summary: [],
+    encrypted_content: `sealed-${index}`,
+  });
+  if (index % 25 === 0) {
+    history.push({
+      role: "user",
+      content: [
+        {
+          type: "input_image",
+          detail: "auto",
+          image_url: `data:image/png;base64,${"eA==".repeat(4096)}`,
+        },
+      ],
+    });
+  }
+  if (values.frozen) {
+    // Conversion reuses text/tool/reasoning items, but rebuilds image publications.
+    for (const item of history) {
+      if (
+        !(
+          "content" in item &&
+          Array.isArray(item.content) &&
+          item.content.some((part) => part.type === "input_image")
+        )
+      ) {
+        freezeJsonSnapshot(item);
+      }
+    }
+  }
   const request: ResponsesContinuationRequest = {
     model: "fixture-model",
     store: true,
@@ -93,6 +137,7 @@ const fixtures = Array.from({ length: turns }, (_, index) => {
   history.push(...output);
   return { request, response: { id: `resp_${index}`, output } };
 });
+fixtures.splice(0, initialTurns);
 const continuations = (values.flow === "resolve" ? fixtures : []).map(({ request, response }) => ({
   state: {
     lastRequest: request,
@@ -184,6 +229,9 @@ console.log(
     mode: values.allocation ? "allocation" : "timing",
     node: process.version,
     turnsPerConversation: turns,
+    initialTurns,
+    frozen: values.frozen,
+    firstInputItems: fixtures[0]?.request.input?.length,
     conversations,
     iterations,
     wallMs,

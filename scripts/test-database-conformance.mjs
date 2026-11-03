@@ -3,7 +3,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { readFileSync, statSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
-import { parseArgs } from "node:util";
+import { parseArgs, promisify } from "node:util";
 import { listDirectoryTreeStrictSync } from "../src/infra/directory-walk.ts";
 import {
   assignPostgresConformanceShards,
@@ -78,13 +78,16 @@ let targets = explicitTargets
       "src/config/sessions/session-turn-resident.postgres.test.ts",
       "src/config/sessions/session-turn-commit.postgres.test.ts",
       "src/infra/client-credential-migration.postgres.test.ts",
+      "src/infra/client-credential-startup.gateway.postgres.test.ts",
       "src/infra/state-migrations.plugin-doctor-context.postgres.test.ts",
       "src/infra/gateway-lock-recovery.postgres.test.ts",
       "src/infra/exec-approvals-native.test.ts",
       "src/infra/client-credential-update.test.ts",
       "src/infra/update-candidate-state.postgres.test.ts",
+      "src/infra/update-managed-service-handoff-engine.test.ts",
       "src/snapshot/postgres-generation.postgres.test.ts",
       "src/state/openclaw-state-db.postgres.test.ts",
+      "src/state/openclaw-state-db-open.postgres.test.ts",
       "src/state/openclaw-agent-db.postgres.test.ts",
       "src/state/openclaw-agent-doctor-media.postgres.test.ts",
       "src/state/openclaw-agent-db-engine.postgres.test.ts",
@@ -125,7 +128,9 @@ if (shardCount) {
   targets = targets.filter((target) => selected.has(target));
 }
 if (values.list) {
-  console.log(JSON.stringify(explicitTargets ? forwarded : [...targets, ...forwarded], null, 2));
+  await promisify(process.stdout.write.bind(process.stdout))(
+    `${JSON.stringify(explicitTargets ? forwarded : [...targets, ...forwarded], null, 2)}\n`,
+  );
   process.exit(0);
 }
 

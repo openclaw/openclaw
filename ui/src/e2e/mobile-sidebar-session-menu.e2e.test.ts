@@ -32,6 +32,7 @@ const widthOf = (item: Locator) =>
   item.evaluate((element) => element.getBoundingClientRect().width);
 const pageOptions = (width: number, height: number, hasTouch: boolean): BrowserContextOptions => ({
   colorScheme: "dark",
+  reducedMotion: "reduce",
   hasTouch,
   viewport: { width, height },
 });

@@ -110,7 +110,7 @@ shell-completion metadata.
   `image describe`, `image describe-many`, `audio transcribe`, `video generate`, `video describe`,
   `embedding create`, and `model auth login/logout/status`) also accept `--agent <id>`. They resolve
   an explicit id first, then `agents.defaults.systemAgent.agentId`, then the sole configured agent.
-- Generated image and video `--output` files are staged beside the destination and replace it only after the complete buffer is written; a failed write leaves an existing destination unchanged. An interrupt stops an in-progress provider-URL video download instead of letting it finish and publish a late result.
+- Generated image and video `--output` files are staged beside the destination and replace it only after the complete buffer is written; a failed write leaves an existing destination unchanged. An interrupt cancels image generation or editing and discards late provider results before output writes begin. It also stops an in-progress provider-URL video download instead of letting it finish and publish a late result.
 - Local `model run` is a lean one-shot provider completion: it resolves the configured agent model and auth but does not start a chat-agent turn, load tools, or open bundled MCP servers.
 - Model runs load the catalog for case correction only when an explicit model override contains uppercase characters. Runs using the configured default or a lowercase model ref skip that catalog lookup.
 - `model run --file` attaches image files (auto-detected MIME type) to the prompt; repeat `--file` for multiple images. Non-image files are rejected — use `infer audio transcribe` or `infer video describe` instead.
@@ -158,7 +158,7 @@ Notes:
 - OpenAI ChatGPT/Codex OAuth (`openai-chatgpt-responses` API) local checks add a minimal system instruction so the transport can populate its required `instructions` field — no full agent context, tools, memory, or session transcript.
 - `model run --file` attaches image content directly to the single user message. Common formats (PNG, JPEG, WebP) work when MIME type is detected as `image/*`; unsupported or unrecognized files fail before the provider is called. Use `infer image describe` instead when you want OpenClaw's image-model routing and fallbacks rather than a direct multimodal-model check.
 - The selected model must support image input; text-only models may reject the request at the provider layer.
-- Use exactly one of `model run --prompt <text>`, `--prompt-file <path>`, or `--prompt-stdin`. The file path must be relative to the current directory and remain inside it; symlinks and hardlinks are rejected. File and stdin input are read at invocation time as UTF-8 with a 1 MiB limit. Stdin is read only with `--prompt-stdin`; invalid UTF-8, read errors, and overflow fail before inference. Empty or whitespace-only prompts are rejected before any provider or Gateway call. File and stdin input keep prompt text out of process arguments and do not add it to command output or a chat transcript; the selected provider still receives the prompt.
+- Use exactly one of `model run --prompt <text>`, `--prompt-file <path>`, or `--prompt-stdin`. The file path must be relative to the current directory and remain inside it; symlinks and hardlinks are rejected. File and stdin input are read at invocation time as UTF-8 with a 1 MiB limit. Malformed UTF-8 files are rejected rather than silently replacing invalid bytes. Stdin is read only with `--prompt-stdin`; invalid UTF-8, read errors, and overflow fail before inference. Empty or whitespace-only prompts are rejected before any provider or Gateway call. File and stdin input keep prompt text out of process arguments and do not add it to command output or a chat transcript; the selected provider still receives the prompt.
 - Local `model run` exits non-zero for empty output or a failed/aborted response, even when partial text was received. These runs do not emit a successful JSON envelope.
 - `model run --gateway` also exits non-zero when the Gateway reports a failed, timed-out, or cancelled run, preserving its error detail instead of wrapping the reply in a successful JSON envelope.
 - When a completed response contains only reasoning and no final text, local `model run` reports that it returned reasoning but no text output, and notes when it stopped at the output token limit. Failed or aborted responses keep the generic no-text error with any provider error detail. Reasoning content is not printed as the answer.
@@ -238,6 +238,7 @@ Speech synthesis and TTS provider/persona state.
 openclaw infer tts convert --text "hello from openclaw" --output ./hello.mp3 --json
 openclaw infer tts convert --text "Your build is complete" --output ./build-complete.mp3 --json
 openclaw infer tts convert --provider xiaomi --text "Provider-only selection" --output ./xiaomi.mp3 --json
+openclaw infer tts convert --channel telegram --text "Voice-note format" --output ./voice.opus --json
 openclaw infer tts providers --json
 openclaw infer tts personas --json
 openclaw infer tts status --json
@@ -247,8 +248,12 @@ Notes:
 
 - `tts status` only supports `--gateway` (it reflects gateway-managed TTS state).
 - Local and loopback-Gateway `tts convert --output` copies stage beside the destination and replace it only after success; a failed copy leaves an existing file unchanged.
+- If interruption is accepted before the output copy begins, `tts convert` leaves the requested destination unchanged. Completed synthesis audio remains in the media store for its normal lifetime.
 - Remote-Gateway `tts convert --output` is rejected before requesting speech synthesis.
 - Use `tts convert --provider <id>` when selecting a provider without overriding its model.
+- `--channel <id>` is an output-format hint, not a delivery request. Local conversion
+  uses bundled voice capabilities even without a loaded channel account; Telegram
+  requests voice-note audio (Opus with OpenAI) instead of the default MP3 audio file.
 - Use `tts providers`, `tts voices`, `tts personas`, `tts set-provider`, and `tts set-persona` to inspect and configure TTS behavior.
 
 ## Video
@@ -284,6 +289,9 @@ openclaw infer web providers --agent <id> --json
 ```
 
 `web providers` lists available, configured, and selected providers for search and fetch.
+
+Interrupting web search or fetch forwards cancellation to the request and suppresses
+late provider results and failures.
 
 `web fetch --max-chars <n>` requests a per-call character budget of at least 100.
 The default fetch path retains `tools.web.fetch.maxCharsCap`. With `--provider`,

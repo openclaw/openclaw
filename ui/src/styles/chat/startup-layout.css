@@ -49,7 +49,7 @@
 @supports (corner-shape: superellipse(1.5)) {
   .chat.chat {
     border-radius: calc(14px * var(--openclaw-corner-radius-scale));
-    corner-shape: superellipse(1.5);
+    corner-shape: round;
   }
 }
 
@@ -425,8 +425,15 @@ div.chat-thread:where(.chat-thread--annotations) {
 .chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__identity-actions {
   display: flex;
   flex: 0 0 auto;
+  /* Reserve the native menu's hit area before its session descriptor arrives. */
+  min-width: calc(var(--chat-pane-header-icon-size) * var(--chat-pane-menu-count, 1));
+  min-height: var(--chat-pane-header-icon-size);
   align-items: center;
   gap: 0;
+
+  & > openclaw-chat-pane-versions-menu {
+    margin-inline-start: auto;
+  }
 }
 
 .chat-pane__header:not(.chat-pane__header--mobile)
@@ -490,6 +497,8 @@ div.chat-thread:where(.chat-thread--annotations) {
 
 /* Desktop composition; mobile keeps its own presenter and touch targets. */
 .chat-pane__header:not(.chat-pane__header--mobile) {
+  --chat-pane-header-icon-size: 32px;
+
   min-height: var(--desktop-header-height, calc(var(--rail-header-height) - var(--space-1)));
   padding-inline: 12px 8px;
   gap: 4px;
@@ -501,8 +510,8 @@ div.chat-thread:where(.chat-thread--annotations) {
   }
 
   & .chat-icon-btn {
-    width: 32px;
-    min-width: 32px;
+    width: var(--chat-pane-header-icon-size);
+    min-width: var(--chat-pane-header-icon-size);
     padding: 0;
   }
 
@@ -512,7 +521,7 @@ div.chat-thread:where(.chat-thread--annotations) {
   }
 
   & .chat-pane__panels-toggle svg {
-    stroke-width: 1.8;
+    stroke-width: 1.6;
   }
 
   /* Header composition supplies the approved glyph to the native Details trigger. */
@@ -525,17 +534,13 @@ div.chat-thread:where(.chat-thread--annotations) {
     padding: 0;
     justify-content: center;
     border-color: transparent;
-    border-radius: var(--radius-full);
+    border-radius: calc(8px * var(--openclaw-corner-radius-scale));
+    corner-shape: superellipse(1.5);
     background: transparent;
   }
 
-  & .chat-details-toggle {
-    border-radius: calc(8px * var(--openclaw-corner-radius-scale));
-    corner-shape: superellipse(1.5);
-  }
-
-  & .chat-details-toggle:is(:hover, [aria-expanded="true"]) {
-    background: var(--session-header-control-hover-bg, var(--bg-hover));
+  & :is(.chat-details-toggle, .chat-pane__panels-toggle):hover {
+    background: var(--session-header-control-hover-bg);
   }
 
   & .chat-details-toggle svg,
@@ -1343,23 +1348,28 @@ openclaw-chat-sidebar-region,
   min-height: var(--rail-header-action-size);
   padding: 0;
   border-color: transparent;
-  border-radius: var(--radius-full);
+  border-radius: calc(8px * var(--openclaw-corner-radius-scale));
+  corner-shape: superellipse(1.5);
   background: transparent;
 }
 
 .sidebar-region__panels-toggle .chat-icon-btn.chat-pane__panels-toggle:hover {
-  background: var(--session-header-control-hover-bg, var(--bg-hover));
+  background: var(--session-header-control-hover-bg);
 }
 
 .sidebar-region__panels-toggle .chat-pane__panels-toggle svg {
   width: 16px;
   height: 16px;
-  stroke-width: 1.8;
+  stroke-width: 1.6;
 }
 
 .sidebar-region__panels-toggle .chat-icon-btn.chat-pane__panels-toggle[aria-expanded="true"] {
   background: var(--session-header-control-surface);
   color: var(--session-header-control-active-color, var(--text));
+}
+
+.sidebar-region__panels-toggle .chat-icon-btn.chat-pane__panels-toggle[aria-expanded="true"]:hover {
+  background: var(--session-header-control-active-hover-bg);
 }
 
 .sidebar-region--desktop.sidebar-region--external-toggle > .sidebar-region__header {
@@ -1468,10 +1478,6 @@ openclaw-chat-sidebar-region,
     height var(--desktop-frame-motion),
     opacity var(--desktop-frame-motion),
     display var(--desktop-frame-motion) allow-discrete;
-
-  @starting-style {
-    opacity: 0;
-  }
 }
 
 .sidebar-region--desktop [data-region-header="side"] {

@@ -27,6 +27,7 @@ const commandResult = (name: string) => ({ commands: [remoteCommand(name, name)]
 
 function catalogFixture() {
   const client = new GatewayBrowserClient({ url: "ws://127.0.0.1:12345" });
+  vi.spyOn(client, "hello", "get").mockReturnValue(gatewayHelloForMethods(["commands.list"]));
   const request = vi.spyOn(client, "request");
   onTestFinished(async () => {
     request.mockRestore();

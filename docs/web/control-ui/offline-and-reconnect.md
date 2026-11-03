@@ -30,6 +30,13 @@ sockets keep their normal handshake. Announced startup, restart, suspension, and
 busy-Gateway waits keep their existing retry pacing; hidden tabs do not poll.
 Expected reachability failures do not trigger sign-in recovery notifications.
 
+After connecting, requests refused because the Gateway is still starting stay
+pending. The shared client honors the server's retry delay and doubles the wait
+after repeated startup refusals, up to eight seconds (or a longer server hint).
+Requests load their data on the next successful retry; their original timeout
+and cancellation still apply. Other requests can proceed independently while an
+agent or method is starting.
+
 An unanswered send starts a liveness check after about five seconds. Any inbound
 frame proves the connection is alive; otherwise, ten more seconds without a
 response moves the UI into reconnecting so queued input can recover. Idle

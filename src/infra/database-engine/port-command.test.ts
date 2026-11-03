@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import "./database-suite-workers.test-support.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { OPENCLAW_AGENT_SCHEMA_V24_SQL } from "../../state/openclaw-agent-schema-v24.test-support.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { seedPortSqlite } from "./port-command.integration.test-support.js";
@@ -35,9 +36,13 @@ async function hash(file: string) {
     .digest("hex");
 }
 
-it.each(["agent", "state"])(
-  "accepts legal first-use absence in %s inspection and completes only the private copy",
-  async (family) => {
+it.each([
+  ["agent", true],
+  ["agent", false],
+  ["state", true],
+] as const)(
+  "accepts legal first-use absence in %s inspection (columns absent: %s) and completes only the private copy",
+  async (family, missingColumns) => {
     const directory = tempDirs.make("port-first-use-");
     const sourcePath = path.join(directory, "source.sqlite");
     const current = await loadDatabasePortDescriptor(family);
@@ -50,8 +55,8 @@ it.each(["agent", "state"])(
         `; PRAGMA user_version = ${current.version};` +
         (family === "agent"
           ? `INSERT INTO schema_meta VALUES ('primary', 'agent', ${current.version}, 'main', NULL, 1, 1);
-          ALTER TABLE session_nodes DROP COLUMN legacy_acp_migration_json;
-          ALTER TABLE session_key_contract DROP COLUMN canonical_ready;
+          DROP TABLE session_goal_operations;
+          ${missingColumns ? "ALTER TABLE session_nodes DROP COLUMN legacy_acp_migration_json; ALTER TABLE session_key_contract DROP COLUMN canonical_ready;" : ""}
           INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
           VALUES ('agent:main:main', 'retained-session', '{"sessionId":"retained-session"}', 17);`
           : `INSERT INTO schema_meta VALUES ('primary', 'global', ${current.version}, NULL, NULL, 1, 1);
@@ -67,6 +72,9 @@ it.each(["agent", "state"])(
     await fs.copyFile(sourcePath, copy);
     const prepared = await runDatabasePortTask({ operation: "migrate", sourcePath: copy }, scope);
     expect(prepared.verification.tables[table]?.rows).toBe(1);
+    if (family === "agent") {
+      expect(prepared.verification.tables.session_goal_operations?.rows).toBe(0);
+    }
     await expect(inspect(copy)).resolves.toMatchObject({
       migrationRequired: false,
       verification: prepared.verification,
@@ -88,9 +96,11 @@ it.each(["agent", "state"])(
     expect(await hash(sourcePath)).toBe(original);
     {
       using db = openNodeSqliteDatabase(sourcePath);
-      expect(
-        db.prepare(`SELECT name FROM pragma_table_info('${table}') WHERE name = ?`).get(column),
-      ).toBeUndefined();
+      if (missingColumns) {
+        expect(
+          db.prepare(`SELECT name FROM pragma_table_info('${table}') WHERE name = ?`).get(column),
+        ).toBeUndefined();
+      }
       db.exec(`ALTER TABLE ${extraTable} ADD COLUMN unported_data TEXT`);
     }
     await expect(inspect(sourcePath)).rejects.toThrow(
@@ -98,6 +108,92 @@ it.each(["agent", "state"])(
     );
   },
 );
+
+it.each([24, "current"] as const)(
+  "retains original recovery envelopes while preparing agent v%s for port",
+  async (selectedVersion) => {
+    const directory = tempDirs.make("port-legacy-envelopes-");
+    const sourcePath = path.join(directory, "original.sqlite");
+    const copy = path.join(directory, "private.sqlite");
+    const current = await loadDatabasePortDescriptor("agent");
+    const version = selectedVersion === "current" ? current.version : selectedVersion;
+    {
+      using db = openNodeSqliteDatabase(sourcePath);
+      db.exec(version === 24 ? OPENCLAW_AGENT_SCHEMA_V24_SQL : current.sqlite);
+      db.exec(`PRAGMA user_version = ${version};
+      INSERT INTO schema_meta VALUES ('primary', 'agent', ${version}, 'main', NULL, 1, 1);
+      ALTER TABLE session_pending_inputs ADD COLUMN recovery_intent_json TEXT;
+      INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
+        VALUES ('agent:main:retained', 'retained', '{"sessionId":"retained"}', 1);
+      INSERT INTO session_windows (session_id, session_key, created_at, updated_at)
+        VALUES ('retained', 'agent:main:retained', 1, 1);`);
+      for (const state of ["queued", "interrupted", "cancelled"]) {
+        db.prepare(`INSERT INTO session_pending_inputs
+        (input_id, session_key, session_id, idempotency_key, run_id, request_hash,
+         message_json, lifecycle_generation, state, accepted_at, recovery_intent_json)
+        VALUES (?, 'agent:main:retained', 'retained', ?, ?, 'hash', ?, 'generation', ?, 1, ?)`).run(
+          state,
+          state,
+          `run-${state}`,
+          JSON.stringify({ text: state }),
+          state,
+          '{"historical":"evidence-only"}',
+        );
+      }
+    }
+    const original = await hash(sourcePath);
+    await expect(inspect(sourcePath)).resolves.toMatchObject({
+      family: "agent",
+      migrationRequired: true,
+    });
+    await fs.copyFile(sourcePath, copy);
+    const prepared = await runDatabasePortTask({ operation: "migrate", sourcePath: copy }, scope);
+    expect(prepared.verification.tables.session_pending_inputs?.rows).toBe(3);
+    {
+      using db = openNodeSqliteDatabase(copy);
+      expect(
+        db
+          .prepare("SELECT input_id, message_json, state FROM session_pending_inputs ORDER BY seq")
+          .all(),
+      ).toEqual(
+        ["queued", "interrupted", "cancelled"].map((state) => ({
+          input_id: state,
+          message_json: JSON.stringify({ text: state }),
+          state: version === 24 && state === "queued" ? "interrupted" : state,
+        })),
+      );
+      expect(
+        db
+          .prepare(
+            "SELECT name FROM pragma_table_info('session_pending_inputs') WHERE name='recovery_intent_json'",
+          )
+          .get(),
+      ).toBeUndefined();
+      db.exec("ALTER TABLE session_pending_inputs ADD COLUMN unported_data TEXT");
+    }
+    await expect(
+      runDatabasePortTask({ operation: "migrate", sourcePath: copy }, scope),
+    ).rejects.toThrow(/Unknown or missing columns in session_pending_inputs|database validation/);
+    expect(await hash(sourcePath)).toBe(original);
+  },
+);
+
+it("refuses an unrecognized recovery-envelope column shape", async () => {
+  const sourcePath = path.join(tempDirs.make("port-unknown-recovery-"), "source.sqlite");
+  const current = await loadDatabasePortDescriptor("agent");
+  {
+    using db = openNodeSqliteDatabase(sourcePath);
+    db.exec(`${current.sqlite}
+      PRAGMA user_version = ${current.version};
+      INSERT INTO schema_meta VALUES ('primary', 'agent', ${current.version}, 'main', NULL, 1, 1);
+      ALTER TABLE session_pending_inputs ADD COLUMN recovery_intent_json BLOB;`);
+  }
+  const before = await hash(sourcePath);
+  await expect(inspect(sourcePath)).rejects.toThrow(
+    /Unknown or missing columns in session_pending_inputs|database validation/,
+  );
+  expect(await hash(sourcePath)).toBe(before);
+});
 
 it.each([false, true])(
   "skips only empty retained state tables (pending columns: %s)",

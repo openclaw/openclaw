@@ -1,4 +1,4 @@
-import { isSettingsNavigationRoute, isSettingsTakeover } from "../app-navigation.ts";
+import { isSettingsNavigationRoute, isSettingsTakeover, titleForRoute } from "../app-navigation.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
 import { APP_ROUTE_IDS } from "../app-routes.ts";
 import type { GatewayStatusProps } from "../components/gateway-status.ts";
@@ -17,7 +17,11 @@ import type { ApplicationRuntime } from "./bootstrap.ts";
 import { canGoBackInNativeEmbed } from "./browser.ts";
 import type { ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
 import { gatewayPresentationScope } from "./gateway-presentation-scope.ts";
-import { isMobileNavLayout, shouldMergeChatChrome } from "./mobile-nav-layout.ts";
+import {
+  isMobileNavLayout,
+  shouldFloatShellHeader,
+  shouldMergeChatChrome,
+} from "./mobile-nav-layout.ts";
 import type { NativeHistoryState } from "./native-web-chrome.ts";
 import { isNativeEmbedHost, nativeEmbedHost, isNativeWebChromeHost } from "./native-web-chrome.ts";
 import {
@@ -35,6 +39,7 @@ import {
 import { resolveProfileAppearancePrefs } from "./server-prefs-profile.ts";
 import { NAV_WIDTH_MAX, normalizeCatalogOpenTarget } from "./settings.ts";
 import type { ShellLayoutOwner } from "./shell-layout-owner.ts";
+import { currentThemeBranding } from "./theme-branding.ts";
 
 export interface ShellViewHost extends ShellLazyOverlayHost, ShellNavigationElements {
   mobileGatewayStatus: GatewayStatusProps | null;
@@ -144,6 +149,13 @@ export function readShellView(host: ShellViewHost) {
     routeId: activeRoute,
     onboarding,
   });
+  const floatingHeader =
+    !nativeEmbed &&
+    shouldFloatShellHeader({
+      mobileNavLayout,
+      routeId: activeRoute,
+      onboarding,
+    });
   // Drawer navigation always opens expanded; the tab's desktop collapse state
   // stays in memory for when the viewport returns to the desktop layout.
   // Settings needs expanded navigation, so the collapse state pauses there too.
@@ -325,6 +337,13 @@ export function readShellView(host: ShellViewHost) {
     mobileNavLayout,
     nativeWebChrome,
     mergedChatChrome,
+    floatingHeader,
+    get pageTitle() {
+      // The brand alone: "Ask OpenClaw" has no centered room beside History's three-button pill.
+      return activeRoute === "custodian"
+        ? currentThemeBranding().brandName
+        : titleForRoute(activeRoute);
+    },
     get navCollapsed() {
       return navCollapsed();
     },

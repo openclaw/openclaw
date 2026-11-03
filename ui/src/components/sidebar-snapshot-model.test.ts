@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { captureBootRoster } from "../lib/sessions/session-boot-roster.ts";
 import { sessionsResult } from "../lib/sessions/session-capability.test-support.ts";
+import { projectSidebarSession } from "./app-sidebar-session-navigation.test-support.ts";
 import type { SidebarInboxEntry } from "./sidebar-attention-entries.ts";
 import { inboxMention } from "./sidebar-inbox.test-support.ts";
 import {
@@ -30,6 +31,40 @@ function displayRow(key: string, label: string, pinned = false) {
   );
 }
 const parse = (patch: Record<string, unknown>) => parseSidebarSnapshot({ ...model, ...patch });
+
+it("retains pin action geometry without restoring mutation authority", () => {
+  const rows = [
+    { key: "agent:main:dashboard:root", parentSessionKey: "agent:main:main" },
+    { key: "agent:main:subagent:run", sidebarRoot: true },
+    { key: "agent:main:promoted", spawnedBy: "agent:main:parent" },
+    { key: "agent:main:promoted-root", spawnedBy: "agent:main:parent", sidebarRoot: true },
+  ].map((row) => projectSidebarSession(row));
+  const saved = parse({ pinnedSessions: structuredClone(snapshotSessions(rows)) });
+  expect(saved).not.toBeNull();
+  const restored = saved!.pinnedSessions.map((row) => restoreSnapshotSession(row, ""));
+  expect(restored.every((row) => !row.pinnable)).toBe(true);
+  const recaptured = parse({ pinnedSessions: snapshotSessions(restored) });
+  expect(recaptured!.pinnedSessions.map((row) => row.state?.pinnable !== false)).toEqual([
+    true,
+    false,
+    false,
+    true,
+  ]);
+});
+
+it("retains a collapsed parent's disclosure without inventing loaded children", () => {
+  const row = projectSidebarSession({
+    key: "agent:main:parent",
+    childSessions: ["agent:main:child", "agent:main:dashboard:incognito-private"],
+  });
+  const saved = parse({ pinnedSessions: structuredClone(snapshotSessions([row])) });
+  const restored = restoreSnapshotSession(saved!.pinnedSessions[0]!, "");
+  expect(restored.children).toEqual([]);
+  expect(restored.childSessionKeys).toEqual([]);
+  expect(restored.snapshot).toMatchObject({ childCount: 1 });
+  const recaptured = snapshotSessions([restored]);
+  expect(recaptured[0]?.state).toMatchObject({ childCount: 1 });
+});
 
 it.each(["none", "error"] as const)(
   "restores only own failure attention (%s) from older snapshots",

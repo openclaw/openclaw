@@ -51,6 +51,7 @@ import { getPostgresPhysicalFacts } from "./database-engine/physical-facts.js";
 import { resolveDatabaseFamilyEngines } from "./database-engine/registry.js";
 import { generateStoredDeviceIdentity } from "./device-identity-material.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { createNpmTarget } from "./package-update-steps.test-support.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { isPostgresSqlConnection, type EngineConnection } from "./sql-connection.js";
 import { inspectScopedMigrationSnapshot } from "./sqlite-migration-scoped-snapshot.js";
@@ -315,6 +316,7 @@ async function capture(f: Fixture, fresh = false) {
     root: f.root,
     installKind: "package",
     updateInstallKind: "package",
+    packageInstallTarget: { ...createNpmTarget(path.dirname(f.root)), packageRoot: f.root },
     switchToGit: false,
     timeoutMs: undefined,
     updateStepTimeoutMs: 30_000,

@@ -760,8 +760,9 @@
 .config-loading__spinner {
   width: 32px;
   height: 32px;
-  border: 2.5px solid var(--border);
-  border-top-color: var(--accent);
+  color: var(--accent);
+  background: currentColor;
+  mask: var(--spinner-mask-large);
   border-radius: var(--radius-full);
   animation: btn-spinner-spin 0.7s linear infinite;
 }

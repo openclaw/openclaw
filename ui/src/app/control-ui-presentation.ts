@@ -113,9 +113,6 @@ export function syncControlUiSystemChrome(
   // iOS Safari shows the document canvas around its browser chrome. Where that canvas
   // differs from the page surface, it follows the published chrome color.
   const documentCanvas = narrowCanvas || navScrim;
-  if (root.classList.contains("control-ui-system-chrome-canvas") !== documentCanvas) {
-    root.classList.toggle("control-ui-system-chrome-canvas", documentCanvas);
-  }
   const revision = (style: string | null) =>
     JSON.stringify([root.dataset.theme, root.dataset.themeMode, style, narrowCanvas, navScrim]);
   const source = revision(root.getAttribute("style"));
@@ -135,7 +132,10 @@ export function syncControlUiSystemChrome(
       return;
     }
     const background = navScrim ? behindNavScrim(surface) : surface;
-    root.style.setProperty("--control-ui-system-chrome-background", background);
+    // Background color does not inherit: drawer changes must not invalidate
+    // the entire transcript through a root class or custom property.
+    root.style.backgroundColor = documentCanvas ? background : "";
+    document.body.style.backgroundColor = documentCanvas ? background : "";
     for (const meta of controlUiDocumentHead().themeColors) {
       meta.content = background;
       meta.removeAttribute("media");

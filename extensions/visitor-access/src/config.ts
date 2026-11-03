@@ -20,6 +20,10 @@ export const visitorConfigSchema = z.strictObject({
   maxVisitors: z.number().int().min(1).max(500).default(50),
 });
 
+export const visitorLimitsSchema = visitorConfigSchema
+  .pick({ maxVisitors: true, defaultTtlDays: true })
+  .strip();
+
 export type VisitorAccessConfig = z.output<typeof visitorConfigSchema>;
 
 export const visitorPluginSchema = buildPluginConfigSchema(visitorConfigSchema);

@@ -371,6 +371,9 @@ export function createSqliteSessionActorExecutor(
                       true,
                       entry,
                       entry,
+                      new Set(
+                        committed.receipt.postimage.members.map((member) => member.identityId),
+                      ),
                     );
                     if (entry && (previousEntry || !metadata?.length)) {
                       // Metadata publication owns initial age facts; later settlement can release claims.

@@ -742,7 +742,7 @@ plain code without interactive controls.
 ## Chat behavior
 
 Active-run progress stays in the transcript rather than repeating a **Working…**
-row inside the composer. The composer keeps its **Stop generating** control and
+row inside the composer. The composer keeps its **Stop** control and
 screen-reader run announcements; subagent-wait details remain above it.
 
 The model picker displays your selected preference, even while a reply is sending,
@@ -1044,9 +1044,13 @@ to read it in **Review**. The card shows up to 400 lines and rereads the file
 each time it opens; the full-file view includes all lines. Press Escape to
 dismiss it.
 
-Long clipboard text appears as a file-sized card in the composer and a compact
-chip in the transcript. Its label shows the first 30 characters of a plain-text
-excerpt, with HTML and Markdown formatting removed. Empty or unavailable excerpts
+Clipboard text stays in the message input, including long pastes into an existing
+draft, and reaches the model as your message. Uploaded files retain their
+external-content boundary.
+
+Saved pasted-text attachments from earlier clients still appear as a file-sized
+card in the composer and a compact chip in the transcript. Their labels show the
+first 30 characters of a plain-text excerpt, with HTML and Markdown formatting removed. Empty or unavailable excerpts
 show **Pasted text**. In the transcript, chips sit above the text bubble alongside
 other attachments; multiple chips share a row and wrap when needed. Click the
 composer excerpt or icon, or a transcript chip, to open the existing attachment

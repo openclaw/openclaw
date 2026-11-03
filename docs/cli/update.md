@@ -759,6 +759,31 @@ the supervisor to fall back. It does not perform managed-service ancestry checks
 The default admission budget is 120 seconds and follows the canary timeout
 budget resolution.
 
+### External supervisor readiness
+
+Candidates that declare `openclaw.updatePreflightProtocol: 1` in `package.json`
+support the hidden `openclaw update preflight --json` command. An external
+supervisor can run this candidate before stopping its serving Gateway, using the
+serving profile's environment and `--source-root <absolute-package-root>` for its
+bundled plugin paths. `--timeout <seconds>` controls the candidate check budget.
+The command rejects inherited update and service continuation authority.
+
+Preflight reuses the isolated candidate rehearsal: copy state, run candidate
+Doctor and validation, then probe a private Gateway's startup and readiness.
+It does not repair the live profile, stop its service, or admit an update run.
+Stdout contains one JSON receipt with `protocol: 1`, `mode: "preflight"`,
+`candidateVersion`, `status`, and `coverage: "isolated-core-startup"`. Exit `0`
+means `ready`, `3` means `blocked`, and `2` means `unverified`. Missing runtime
+support, inconclusive probes, cancellation, and execution failures never mean
+ready. Diagnostic output goes to stderr; the receipt follows child cleanup.
+
+This proves isolated core startup against copied state. Plugin downloads and
+convergence remain deferred to finalization; channels, providers, sidecars, and
+production listener and authentication settings are not exercised. A ready
+receipt does not guarantee finalization or production service readiness.
+Candidates without this capability retain their supervisor's legacy upgrade
+and rollback flow.
+
 Run JSON includes `run.admission` with `owner: "candidate"` or `"installed"`,
 and optional `protocol`, `candidateVersion`, `checks`, and `fallbackReason`.
 The ledger stores this metadata in its existing origin JSON;

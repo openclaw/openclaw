@@ -12,6 +12,8 @@ import {
   createSignal,
   Errored,
   For,
+  action,
+  createOptimistic,
   isPending,
   latest,
   Loading,
@@ -24,6 +26,7 @@ import { AgentRowChip } from "../../components/agent-row-chip.tsx";
 import { CronJobsPagination } from "../../components/cron-jobs-pagination.tsx";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon, sessionIcon } from "../../components/solid/icon.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import { SettingsSection, SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { isCronJobActiveFailure, isCronJobRunning } from "../../lib/cron-status.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -37,8 +40,8 @@ import {
   NoticeBanner,
 } from "./view-controls.tsx";
 import {
-  describeJobSchedule,
   describeJobNextRun,
+  JobSchedule,
   JobStateIndicator,
   TriggerIndicator,
   DisabledNote,
@@ -92,7 +95,7 @@ export function ListView(props: CronProps) {
               <button
                 class="btn btn--sm"
                 onClick={() => {
-                  props.onRefresh();
+                  void props.onRefresh();
                   reset();
                 }}
               >
@@ -215,8 +218,35 @@ function Toolbar(
     hasAdvancedJobsFilters: boolean;
   },
 ) {
+  // The jobs read holds its results in a transition; only an optimistic value shows during it.
+  const [manualRefresh, setManualRefresh] = createOptimistic(false);
+  const refreshing = () => manualRefresh() || props.loading;
+  const refresh = action(function* () {
+    const retired = props.getActionRetired();
+    setManualRefresh(true);
+    yield Promise.race([props.onRefresh(), retired]);
+  });
+  const newTask = () =>
+    (props.canCreate ?? props.canManage) ? (
+      <button
+        ref={props.focus?.ref("create")}
+        type="button"
+        class="btn primary btn--sm cron-new-task"
+        data-test-id="cron-new-task"
+        onClick={() => props.onOpenCreate()}
+      >
+        <Icon name="plus" /> {t("cron.list.newTask")}
+      </button>
+    ) : undefined;
+
   return (
     <div class="cron-toolbar">
+      {props.phoneLayout ? (
+        <div class="cron-toolbar__scope">
+          {props.toolbarScope}
+          {newTask()}
+        </div>
+      ) : undefined}
       {props.listTab === "tasks" ? (
         <div class="cron-toolbar__filters">
           <div class="cron-search-box">
@@ -224,6 +254,7 @@ function Toolbar(
               <Icon name="search" />
             </span>
             <input
+              ref={props.focus?.ref("search")}
               type="search"
               class="settings-input"
               value={props.jobsQuery}
@@ -242,29 +273,14 @@ function Toolbar(
       <div class="cron-toolbar__primary">
         <ListTabs {...props} />
         <div class="cron-toolbar__actions">
-          <button
-            type="button"
-            class={[
-              "btn btn--sm btn--ghost cron-refresh",
-              { "cron-refresh--loading": props.loading },
-            ]}
-            disabled={props.loading}
-            title={props.loading ? t("cron.list.refreshing") : t("cron.list.refresh")}
-            aria-label={t("cron.list.refresh")}
-            onClick={() => props.onRefresh()}
-          >
-            <Icon name="refresh" />
-          </button>
-          {(props.canCreate ?? props.canManage) ? (
-            <button
-              type="button"
-              class="btn primary btn--sm cron-new-task"
-              data-test-id="cron-new-task"
-              onClick={() => props.onOpenCreate()}
-            >
-              <Icon name="plus" /> {t("cron.list.newTask")}
-            </button>
-          ) : undefined}
+          <RefreshButton
+            class="cron-refresh"
+            label={t("cron.list.refresh")}
+            tooltip={refreshing() ? t("cron.list.refreshing") : t("cron.list.refresh")}
+            busy={refreshing()}
+            onClick={() => void refresh()}
+          />
+          {props.phoneLayout ? undefined : newTask()}
         </div>
       </div>
     </div>
@@ -335,6 +351,7 @@ function JobRows(props: CronProps & { rows: CronJob[] }) {
   const elements = new Set<HTMLDivElement>();
   const windowed = () => props.rows.length > 20;
   const canManage = createMemo(() => props.canManage);
+  const canCreate = createMemo(() => props.canCreate);
   const busy = createMemo(() => props.busy);
   const connected = createMemo(() => props.connected);
   const getItemKey = createMemo(() => {
@@ -387,6 +404,7 @@ function JobRows(props: CronProps & { rows: CronJob[] }) {
         return;
       }
       const { rows } = next;
+      focusedId ??= props.focus?.target;
       scroller = list.closest<HTMLElement>(".content");
       current = rows;
       const margin = scroller
@@ -434,6 +452,8 @@ function JobRows(props: CronProps & { rows: CronJob[] }) {
   function Row(row: { job: CronJob }) {
     let element: HTMLDivElement;
     const item = () => geometry().get(row.job.id);
+    // Equal permission results must not wake the retained row controls.
+    const canManageJob = createMemo(() => props.canManageJob?.(row.job) ?? canManage());
     onSettled(() => {
       elements.add(element);
       virtualizer.measureElement(element);
@@ -446,8 +466,8 @@ function JobRows(props: CronProps & { rows: CronJob[] }) {
       <JobRow
         job={row.job}
         jobs={props.jobs}
-        canManage={props.canManageJob?.(row.job) ?? canManage()}
-        canCreate={props.canCreate}
+        canManage={canManageJob()}
+        canCreate={canCreate()}
         busy={busy()}
         connected={connected()}
         toggleSavingJobId={props.toggleSavingJobId}
@@ -455,9 +475,16 @@ function JobRows(props: CronProps & { rows: CronJob[] }) {
         onToggle={(job, enabled) => props.onToggle(job, enabled)}
         onClone={(job) => props.onClone(job)}
         onRemove={(job) => props.onRemove(job)}
-        onSelectJob={(job) => props.onSelectJob(job)}
+        onSelectJob={(job) => {
+          props.focus?.remember(
+            job.id,
+            props.rows.map((entry) => entry.id),
+          );
+          props.onSelectJob(job);
+        }}
         index={byId().get(row.job.id)!.index}
         count={props.rows.length}
+        focus={props.focus}
         rowRef={(node) => (element = node)}
         onFocus={() => {
           if (focusedId === row.job.id) {
@@ -522,7 +549,7 @@ function JobsTableFrame(props: { canManage: boolean; busy: boolean; children: JS
 }
 function JobRow(
   props: CronJobActionProps &
-    Pick<CronProps, "jobs" | "onSelectJob"> & {
+    Pick<CronProps, "jobs" | "onSelectJob" | "focus"> & {
       job: CronJob;
       index: number;
       count: number;
@@ -551,7 +578,7 @@ function JobRow(
         }
       }}
     >
-      <button type="button" class="cron-table__name">
+      <button ref={props.focus?.ref(props.job.id)} type="button" class="cron-table__name">
         <JobStateIndicator job={props.job} />
         <span class="cron-table__name-copy">
           <span class="cron-table__name-line">
@@ -580,25 +607,27 @@ function JobRow(
           ) : undefined}
         </span>
       </button>
-      <JobCell
-        class="cron-table__schedule"
-        label={t("cron.jobs.schedule")}
-        value={describeJobSchedule(props.job)}
-      />
-      <JobCell
-        class="cron-table__next"
-        label={t("cron.jobs.nextRun")}
-        value={
-          <span class={{ "cron-table__running": isCronJobRunning(props.job) }}>
-            {describeJobNextRun(props.job)}
-          </span>
-        }
-      />
-      <JobCell
-        class="cron-table__last"
-        label={t("cron.jobs.lastRun")}
-        value={<LastRunCell job={props.job} />}
-      />
+      <span class="cron-table__meta">
+        <JobCell
+          class="cron-table__schedule"
+          label={t("cron.jobs.schedule")}
+          value={<JobSchedule job={props.job} />}
+        />
+        <JobCell
+          class="cron-table__next"
+          label={t("cron.jobs.nextRun")}
+          value={
+            <span class={{ "cron-table__running": isCronJobRunning(props.job) }}>
+              {describeJobNextRun(props.job)}
+            </span>
+          }
+        />
+        <JobCell
+          class="cron-table__last"
+          label={t("cron.jobs.lastRun")}
+          value={<LastRunCell job={props.job} />}
+        />
+      </span>
       {props.canManage ? (
         <span class="cron-table__actions" onClick={(e: Event) => e.stopPropagation()}>
           <button

@@ -32,6 +32,10 @@
   margin-left: auto;
 }
 
+.agents-page-menu {
+  display: none;
+}
+
 .agent-file-tabs {
   display: flex;
   align-items: flex-end;
@@ -209,6 +213,12 @@
 .agent-file-field,
 .field textarea.agent-file-textarea {
   min-height: clamp(320px, 56vh, 720px);
+}
+
+/* Without write permission this is how the file gets read, so its text stays at
+   full contrast. An editor with nothing loaded shows its placeholder and stays dimmed. */
+.field textarea.agent-file-textarea:disabled:not(:placeholder-shown) {
+  opacity: 1;
 }
 
 .agent-file-header {
@@ -1223,6 +1233,61 @@
     margin-left: 0;
     max-width: 100%;
     flex-wrap: wrap;
-    justify-content: flex-start;
+    justify-content: space-between;
+  }
+
+  .agents-toolbar-actions .agents-toolbar-secondary {
+    display: none;
+  }
+
+  .agents-page-menu {
+    display: inline-flex;
+    flex: none;
+  }
+
+  .btn.agents-page-menu__trigger {
+    width: 44px;
+    height: 44px;
+    padding: 0;
+  }
+
+  .agents-page-menu__trigger > .oc-menu-item__label {
+    display: contents;
+  }
+
+  .agents-page-menu__trigger svg {
+    display: block;
+    width: 14px;
+    height: 14px;
+  }
+
+  /* With the menu in the floating header, New agent has the row to itself. */
+  .shell--floating-header .agents-toolbar-actions {
+    width: 100%;
+  }
+
+  .shell--floating-header .agents-toolbar-actions > :has(.agents-create-btn),
+  .shell--floating-header .agents-toolbar-actions .agents-create-btn {
+    flex: 1;
+    width: 100%;
+  }
+
+  /* Alone on its row, New agent needs the regular button shape to read as an action. */
+  .agents-toolbar-actions .agents-create-btn.btn--ghost {
+    border-color: var(--border);
+    background: var(--btn-bg, var(--bg-elevated));
+    color: var(--text);
+  }
+
+  :root[data-theme-mode="light"] .agents-toolbar-actions .agents-create-btn.btn--ghost {
+    border-color: var(--input);
+    background: var(--bg);
+  }
+}
+
+/* The phone menu carries Refresh even when portaled; the tooltip uses display: contents. */
+@media (max-width: 640px) {
+  .agents-toolbar-actions > openclaw-tooltip > .agents-refresh-btn {
+    display: none;
   }
 }

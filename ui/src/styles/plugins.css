@@ -21,6 +21,26 @@
   }
 }
 
+/* The settings gear shares the tabs row instead of spending a row of its own. */
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .content-header.hub-page-header--stacked.plugins-hub-header {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "title title"
+      "tabs actions";
+    align-items: center;
+    column-gap: var(--space-2);
+  }
+
+  .plugins-hub-header .hub-page-header__tabs {
+    min-width: 0;
+  }
+
+  .plugins-hub-header .hub-tabs {
+    box-shadow: none;
+  }
+}
+
 .installed-plugins-card__head {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -189,6 +209,11 @@
   width: 100%;
   min-height: 44px;
   padding-left: 34px;
+}
+
+/* The field radius runs tighter than the control radius in square themes. */
+.plugin-catalog-search input.settings-input {
+  border-radius: max(var(--field-radius), var(--radius-md));
 }
 
 .plugin-catalog-results__empty {
@@ -377,7 +402,7 @@
    two summary lines), so the loaded cards land exactly where the placeholders were. */
 .plugin-catalog-card--skeleton {
   /* Lighter than the default skeleton fill: eight cards of solid bars read as a wall. */
-  --skeleton-base: color-mix(in srgb, var(--bg-muted) 55%, var(--bg-elevated));
+  --skeleton-base: color-mix(in srgb, var(--muted) 8%, transparent);
 
   pointer-events: none;
 }
@@ -449,6 +474,30 @@
     overflow-x: auto;
     flex-wrap: nowrap;
     padding-bottom: 2px;
+    scrollbar-width: none;
+  }
+
+  .plugin-catalog-chips::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* A chip that runs past the row fades out, so it reads as more to scroll to. */
+  .plugin-catalog-chips[data-scrollable="true"][data-at-end="false"] {
+    mask-image: linear-gradient(to right, black calc(100% - 32px), transparent);
+  }
+
+  .plugin-catalog-chips[data-scrollable="true"][data-at-start="false"] {
+    mask-image: linear-gradient(to right, transparent, black 32px);
+  }
+
+  .plugin-catalog-chips[data-scrollable="true"][data-at-start="false"][data-at-end="false"] {
+    mask-image: linear-gradient(
+      to right,
+      transparent,
+      black 32px,
+      black calc(100% - 32px),
+      transparent
+    );
   }
 
   .plugin-catalog-grid {
@@ -481,6 +530,14 @@
 .plugins-toolbar--fields > .settings-segmented,
 .plugins-toolbar--fields > .btn {
   height: var(--settings-control-height);
+}
+
+.skill-library-search {
+  display: contents;
+}
+
+.skill-library-search__action {
+  display: none;
 }
 
 .plugins-toolbar__hint {
@@ -848,6 +905,7 @@ openclaw-plugins-page
 .plugins-settings-search .settings-input {
   width: 100%;
   padding-left: calc(var(--space-3) + 24px);
+  border-radius: max(var(--field-radius), var(--radius-md));
 }
 
 .plugins-settings-row {
@@ -1461,6 +1519,83 @@ openclaw-plugins-page
     max-width: 100%;
     white-space: normal;
   }
+
+  /* Every library tab keeps one rhythm under the tabs; groups stay apart. */
+  openclaw-skills-page .settings-page:has(> .skill-library-toolbar__actions) {
+    gap: var(--space-3);
+  }
+
+  openclaw-skills-page .settings-page:has(> .skill-library-toolbar__actions) > p.muted {
+    margin: 0;
+  }
+
+  openclaw-skills-page
+    .settings-page:has(> .skill-library-toolbar__actions)
+    > .skills-group
+    + .skills-group {
+    margin-top: var(--space-4);
+  }
+
+  openclaw-skills-page :is(.skill-library-toolbar__actions, .skill-library-toolbar__refresh) {
+    display: none;
+  }
+
+  openclaw-skills-page .skill-library-search {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  openclaw-skills-page .skill-library-search > .field {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  /* The placeholder names the field; the label stays for assistive technology. */
+  openclaw-skills-page .skill-library-search > .field > span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  openclaw-skills-page .skill-library-search input {
+    min-width: 0;
+    text-overflow: ellipsis;
+  }
+
+  openclaw-skills-page .skill-library-search__action,
+  .topnav-shell__page-actions .skill-library-search__action {
+    display: inline-flex;
+    flex: none;
+  }
+
+  openclaw-skills-page .btn.skill-library-search__icon {
+    width: var(--settings-control-height);
+    height: var(--settings-control-height);
+    padding: 0;
+  }
+
+  /* Refresh sits beside the page menu here, not at the end of the row. */
+  openclaw-skills-page .skill-library-search__action .btn.refresh-button {
+    justify-content: center;
+  }
+
+  openclaw-skills-page .skill-library-search__icon > .oc-menu-item__label {
+    display: contents;
+  }
+
+  openclaw-skills-page .skill-library-search__icon svg {
+    display: block;
+    width: 14px;
+    height: 14px;
+  }
+
+  openclaw-skills-page .plugins-toolbar--fields:has(> .skill-library-search__action) {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+  }
 }
 
 @media (max-width: 560px) {
@@ -1522,4 +1657,189 @@ openclaw-plugins-page
     align-items: flex-end;
     gap: 6px;
   }
+}
+
+/* A phone has no hover to reveal the status tooltip, so the state is spelled out. */
+.plugin-catalog-card__status-label {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  .plugin-catalog-card__status-label {
+    display: inline;
+  }
+}
+
+/* Recommended plugin prompts and their inline composer reference. */
+.plugin-recommended-prompts {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  min-height: clamp(0px, 20vw, 250px);
+  padding: 24px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: rgb(8 8 8);
+}
+
+/* The neutral substrate stays fixed. Independent RGB intensity masks retain the
+   original grain and brightness levels while CSS follows the live primary token. */
+.plugin-recommended-prompts__art {
+  position: absolute;
+  inset: 0;
+  isolation: isolate;
+  pointer-events: none;
+  background: url("../assets/plugin-prompts-ember-substrate.png") 38% 50% / cover no-repeat;
+}
+
+.plugin-recommended-prompts__art > span {
+  position: absolute;
+  inset: 0;
+  mix-blend-mode: screen;
+  mask: var(--plugin-prompt-mask) 38% 50% / cover no-repeat;
+}
+
+.plugin-recommended-prompts__art > [data-channel="r"] {
+  --plugin-prompt-mask: url("../assets/plugin-prompts-ember-r.png");
+
+  background: rgb(from var(--primary) r 0 0);
+}
+
+.plugin-recommended-prompts__art > [data-channel="g"] {
+  --plugin-prompt-mask: url("../assets/plugin-prompts-ember-g.png");
+
+  background: rgb(from var(--primary) 0 g 0);
+}
+
+.plugin-recommended-prompts__art > [data-channel="b"] {
+  --plugin-prompt-mask: url("../assets/plugin-prompts-ember-b.png");
+
+  background: rgb(from var(--primary) 0 0 b);
+}
+
+.plugin-recommended-prompts__list {
+  position: relative;
+  display: grid;
+  gap: 12px;
+  width: min(100%, 680px);
+}
+
+.plugin-recommended-prompts__list > button.btn.plugin-recommended-prompts__prompt {
+  gap: 12px;
+  width: 100%;
+  padding: 12px 16px;
+  color: rgb(255 255 255);
+  font: inherit;
+  text-align: start;
+  background: rgb(17 19 24 / 88%);
+  border: 1px solid rgb(255 255 255 / 10%);
+  border-radius: var(--radius-lg);
+}
+
+.plugin-recommended-prompts__list
+  > button.btn.plugin-recommended-prompts__prompt:hover:not(:disabled) {
+  background: rgb(17 19 24 / 96%);
+}
+
+.plugin-recommended-prompts__prompt:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.plugin-recommended-prompts__text {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.plugin-prompt-mention {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent);
+}
+
+.plugin-prompt-mention__icon {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  overflow: hidden;
+  border-radius: 4px;
+  vertical-align: middle;
+}
+
+.plugin-prompt-mention__icon :is(img, svg) {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.plugin-recommended-prompts__prompt .plugin-prompt-mention {
+  color: color-mix(in srgb, var(--accent) 55%, white);
+}
+
+.plugin-recommended-prompts__action {
+  display: grid;
+  flex: 0 0 30px;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  background: rgb(255 255 255 / 8%);
+  border-radius: 50%;
+}
+
+/* Reference mode preserves the raw @id glyph widths, so native caret and wrapping
+   remain aligned with the advisory composer overlay. */
+.plugin-prompt-mention--reference {
+  display: inline;
+  background: var(--accent-subtle);
+  border-radius: 3px;
+}
+
+.plugin-prompt-mention--reference .plugin-prompt-mention__mark {
+  position: relative;
+}
+
+.plugin-prompt-mention--reference .plugin-prompt-mention__at {
+  visibility: hidden;
+}
+
+.plugin-prompt-mention--reference .plugin-prompt-mention__icon {
+  position: absolute;
+  inset-inline-start: 0;
+  top: 50%;
+  width: 100%;
+  height: 1em;
+  transform: translateY(-50%);
+}
+
+.agent-chat__composer-prediction.agent-chat__plugin-draft-overlay {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  max-height: none;
+  padding-inline: calc(
+      var(--chat-composer-editor-inset-inline) - var(--chat-composer-editor-scroll-inset)
+    )
+    var(--chat-composer-editor-inset-inline);
+  color: var(--text-strong);
+}
+
+.agent-chat__composer-combobox
+  > textarea:has(~ .agent-chat__plugin-draft-overlay):not(
+    [data-composer-overflow],
+    [data-composing]
+  ) {
+  color: transparent;
+  caret-color: var(--text-strong);
+}
+
+.agent-chat__composer-combobox
+  > textarea:is([data-composer-overflow], [data-composing])
+  ~ .agent-chat__plugin-draft-overlay {
+  display: none;
 }

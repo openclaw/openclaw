@@ -22,11 +22,26 @@ On Linux, Gateway-hosted exec commands have a default memory bound across the co
 
 OpenClaw samples resident memory plus swapped private pages and kills the owned process tree when it exceeds the bound. Sampling starts within one second. Trees below half their bound are sampled every five seconds; usage at or above half the bound, or a newly discovered descendant, restores the one-second interval. A fast runaway from a previously quiet tree can therefore take about six seconds to be detected and killed, including sampling overhead. The tool reports `memory-limit`, the observed usage, and the applied limit in MiB; background `process` polling and logs retain the diagnostic. Reduce concurrency or input size, split the work, or move it to a separately resource-limited worker.
 
-Concurrent watchers share a sampling clock. With many active commands, OpenClaw reads the process forest once per sample; with few watchers, it walks individual command trees. The switch uses hysteresis and does not extend the intervals above. A shared tick can bring another watcher's sample forward by less than one second. A census that takes more than 250 ms falls back to independent tree walks, so a pending procfs read cannot stop unrelated watchers. The pending census is not repeated until its read settles.
+Concurrent watchers share a sampling clock and procfs reads within each tick. OpenClaw follows every thread's children from watched roots, so unrelated host processes add no census work and descendants remain covered if they move to another cgroup while retaining their ancestry. A shared tick can bring another watcher's sample forward by less than one second. Pending reads do not block unrelated watchers; each tick reads fresh kernel facts.
 
 This is a sampled safeguard, not a kernel-enforced ceiling: rapid allocations can overshoot it, shared resident pages may count more than once across processes, and concurrent commands do not share an aggregate budget. Virtual address reservations are not counted. Ordinary child execution retains a tree owner for reparented descendants. PTY monitoring follows the live command's descendants only; daemonized children that reparent outside that tree are not covered. Use `background: true` without PTY for supervised long-running work instead of shell daemonization. Sandbox backends retain their own limits. This watchdog does not apply to remote `host=node`, Codex-native shell commands, or non-Linux hosts.
 
 Durable commands apply the same computed bound through the systemd unit's `MemoryMax` instead of the sampler. The kernel bounds the unit's cgroup, including its descendants. Each durable command has its own bound; commands do not share an aggregate budget.
+
+## Host I/O isolation
+
+When a Linux Gateway service delegates CPU, I/O, and memory controllers, ordinary
+Gateway-hosted agent commands run below a shared I/O ceiling that protects the
+Gateway database. Commands with the same session key share a child ceiling of
+half that aggregate read/write bandwidth and IOPS budget. Starting more commands
+in one session does not increase its share. Commands without a session key share
+one separate child ceiling.
+
+This reserves headroom against one session monopolizing the aggregate budget; it
+is not equal-share scheduling among every active session. Command cancellation
+and memory-limit enforcement still target the owned command tree. They do not
+terminate other commands sharing its session budget. Startup reports unavailable
+delegation with Doctor guidance; hosts without it retain their existing behavior.
 
 ## Parameters
 
@@ -241,6 +256,14 @@ openclaw config set 'agents.entries.main.tools.exec.node' "node-id-or-name"
 ```
 
 Control UI: the **Devices** page includes a small "Exec node binding" panel for the same settings. A saved target can become unresolvable or stop advertising execution support. Its binding then stays selected and is marked **Unavailable**. You can clear it with **Any node** or **Use default**, even when no execution-capable nodes are available. Supported names, addresses, and ID prefixes resolve without rewriting the saved reference.
+
+### macOS Local Network access
+
+A Gateway running as a macOS LaunchAgent can fail to reach LAN devices even when
+the same command succeeds in Terminal. Check [Local Network permission for the
+Gateway runtime](/platforms/mac/permissions#local-network-access-for-the-gateway)
+when Gateway-hosted commands fail with `EHOSTUNREACH`. If a connected node already
+has access, select that node with `host=node` for the command.
 
 ### Python environments (`uv`)
 

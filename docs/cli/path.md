@@ -221,13 +221,23 @@ For JSONL, `**` can span both the physical line and nested value keys:
 text plus a `leafType` so plugin authors can render previews without
 depending on the per-kind AST shape.
 
+Markdown frontmatter string reads decode YAML quoting and inline comments:
+`key: value # note` resolves to `value`. A quoted `#` or adjacent hash such as
+`a#b` remains part of the string, and non-string scalar spelling such as
+`00123` is preserved. Reads leave the source bytes unchanged.
+
 ## Mutation contract
 
 `set` writes one concrete target:
 
 - Markdown frontmatter values and `- key: value` item fields are string
-  leaves. Values are literal, including `$1`, `$&`, and `$$`. Markdown
-  insertions append sections, frontmatter keys, or section items. Edits replace
+  leaves. Item field replacements must contain non-whitespace text; blank
+  replacements are rejected without writing. Frontmatter values may be empty.
+  Values are literal, including `$1`, `$&`, and `$$`. Markdown
+  insertions append sections, frontmatter keys, or section items. New frontmatter
+  keys must start with an ASCII letter or underscore and contain only ASCII
+  letters, digits, underscores, or hyphens; unsupported keys are rejected before
+  writing. Edits replace
   only the selected source range: body edits preserve the original frontmatter,
   and frontmatter edits preserve the body, including comments, quoting, blank
   lines, CRLF, and a missing final newline. Frontmatter uses `---` delimiters;
