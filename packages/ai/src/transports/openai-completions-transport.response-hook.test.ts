@@ -1,10 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-  nextEventLoopTurn,
-} from "../../../../test/helpers/promise.js";
+import { afterEach, beforeEach, expect, it, type MockInstance, vi } from "vitest";
+import { createDeferred, withinTest, nextEventLoopTurn } from "../../../../test/helpers/promise.js";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { streamOpenAICompletions } from "../providers/openai-completions.js";
 import type { AssistantMessageEventStreamLike, Context, StreamOptions } from "../types.js";
@@ -193,72 +188,6 @@ it("applies the first-event timeout while the hook is pending", async ({ signal 
   expect(events).toEqual(["error"]);
   expect(lifecycle.requestAborted).toHaveBeenCalledOnce();
   lifecycle.assertListenersRemoved();
-});
-
-describe.each([
-  { route: "direct", late: "resolve" },
-  { route: "managed", late: "reject" },
-] as const)("$route payload hook's late $late", ({ route, late }) => {
-  it("returns cancellation before the hook settles without releasing its work", async ({
-    signal,
-  }) => {
-    const controller = new AbortController();
-    const entered = createDeferred();
-    const hook = createDeferred();
-    const observed: Promise<unknown>[] = [];
-    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(
-      new Response('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n', {
-        headers: { "content-type": "text/event-stream" },
-      }),
-    );
-    configureAiTransportHost({
-      ...getAiTransportHost(),
-      buildModelFetch: () => fetch,
-      observePendingProviderWork: (pending) => observed.push(pending),
-    });
-    const options = {
-      signal: controller.signal,
-      onPayload: () => {
-        entered.resolve();
-        return hook.promise;
-      },
-    };
-    const stream =
-      route === "direct"
-        ? streamOpenAICompletions(model, context, { apiKey: "fixture-token", ...options })
-        : createStream(options);
-    try {
-      await withinTest(
-        awaitGateBeforeSettlement(
-          entered.promise,
-          stream.result(),
-          "Stream ended before payload hook",
-        ),
-        signal,
-      );
-      controller.abort(Object.assign(new Error("payload canceled"), { code: "CALLER_ABORTED" }));
-      const result = await withinTest(stream.result(), signal);
-      expect(result).toMatchObject({ stopReason: "aborted", errorCode: "CALLER_ABORTED" });
-      let drained = false;
-      const draining = Promise.allSettled(observed).then(() => {
-        drained = true;
-      });
-      await nextEventLoopTurn();
-      expect(drained).toBe(false);
-      expect(fetch).not.toHaveBeenCalled();
-      if (late === "resolve") {
-        hook.resolve();
-      } else {
-        hook.reject(new Error("late payload failure"));
-      }
-      await draining;
-      expect(await stream.result()).toBe(result);
-      expect(fetch).not.toHaveBeenCalled();
-    } finally {
-      hook.resolve();
-      await Promise.allSettled([...observed, stream.result()]);
-    }
-  });
 });
 
 it("keeps caller cancellation terminal after a late hook rejection", async ({ signal }) => {

@@ -80,7 +80,7 @@ const modelPickerLabels = {
   primary: "Model",
   utility: "Utility Model",
   fallback: "Fallback Model",
-  decision: "Decision Model",
+  decision: "Decision model",
 };
 
 export function modelPicker(
@@ -220,7 +220,8 @@ export async function openApiKeyProvider(page: ModelProvidersPageTestElement, pr
   expect(choice).not.toBeNull();
   choice!.click();
   await page.updateComplete;
-  page.querySelector<HTMLButtonElement>("[data-models-login-api-key]")!.click();
+  // A provider with only a key opens its form directly, without the method step.
+  page.querySelector<HTMLButtonElement>("[data-models-login-api-key]")?.click();
   await page.updateComplete;
 }
 

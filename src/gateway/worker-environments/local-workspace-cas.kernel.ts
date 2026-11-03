@@ -240,7 +240,13 @@ export function readLocalWorkspaceSweepCandidates(
   // GC reads only child-pack arrays, never record payloads or decoded manifest maps.
   const pending = new Set(roots);
   while (pending.size) {
-    const batch = [...pending].slice(0, LOCAL_WORKSPACE_CONTENT_BATCH);
+    const batch: string[] = [];
+    for (const ref of pending) {
+      batch.push(ref);
+      if (batch.length === LOCAL_WORKSPACE_CONTENT_BATCH) {
+        break;
+      }
+    }
     const rows = executeSqliteQuerySync(
       db,
       query(db)

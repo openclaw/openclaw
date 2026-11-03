@@ -4,6 +4,10 @@ import type { GitHubIdentityFacts } from "../../../../packages/gateway-protocol/
 import { handleCopyButton } from "../../components/copy-button-state.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
+  SettingsDetailsRow,
+  SettingsDisclosure,
+} from "../../components/solid/settings-disclosure.tsx";
+import {
   SettingsRow,
   SettingsSecretInput,
   SettingsSection,
@@ -93,57 +97,53 @@ export function GitHubHealth(props: {
   );
 }
 
+/** Connection facts for one GitHub account, opened from that account's row. */
 export function GitHubDetails(props: { identity: GitHubIdentityFacts | null }) {
   return (
     <Show when={props.identity}>
       {(identity) => (
-        <details class="settings-row settings-row--stacked">
-          <summary class="settings-row__title">{t("githubConnections.details")}</summary>
-          <div class="settings-subrows">
+        <>
+          <SettingsRow
+            title={t("agentTools.githubEffectiveAuthor")}
+            control={
+              <SettingsValue
+                value={
+                  [identity().gitAuthor.name, identity().gitAuthor.email]
+                    .filter(Boolean)
+                    .join(" · ") || t("agentTools.githubAuthorUnset")
+                }
+              />
+            }
+          />
+          <SettingsRow
+            title={t("agentTools.githubEffectiveCredential")}
+            control={<SettingsValue value={t(GITHUB_CREDENTIAL_KIND[identity().credentialKind])} />}
+          />
+          <Show when={identity().credentialKind === "managed-oauth"}>
             <SettingsRow
-              title={t("agentTools.githubEffectiveAuthor")}
+              title={t("agentTools.githubEffectiveAccessExpiry")}
               control={
                 <SettingsValue
                   value={
-                    [identity().gitAuthor.name, identity().gitAuthor.email]
-                      .filter(Boolean)
-                      .join(" · ") || t("agentTools.githubAuthorUnset")
+                    identity().accessExpiresAtMs
+                      ? formatDateTimeMs(identity().accessExpiresAtMs!)
+                      : t("common.na")
                   }
                 />
               }
             />
             <SettingsRow
-              title={t("agentTools.githubEffectiveCredential")}
+              title={t("agentTools.githubEffectiveRefresh")}
+              control={<SettingsValue value={t(GITHUB_REFRESH_STATE[identity().refreshState])} />}
+            />
+            <SettingsRow
+              title={t("agentTools.githubEffectiveScopes")}
               control={
-                <SettingsValue value={t(GITHUB_CREDENTIAL_KIND[identity().credentialKind])} />
+                <SettingsValue value={identity().oauthScopes.join(", ") || t("common.none")} />
               }
             />
-            <Show when={identity().credentialKind === "managed-oauth"}>
-              <SettingsRow
-                title={t("agentTools.githubEffectiveAccessExpiry")}
-                control={
-                  <SettingsValue
-                    value={
-                      identity().accessExpiresAtMs
-                        ? formatDateTimeMs(identity().accessExpiresAtMs!)
-                        : t("common.na")
-                    }
-                  />
-                }
-              />
-              <SettingsRow
-                title={t("agentTools.githubEffectiveRefresh")}
-                control={<SettingsValue value={t(GITHUB_REFRESH_STATE[identity().refreshState])} />}
-              />
-              <SettingsRow
-                title={t("agentTools.githubEffectiveScopes")}
-                control={
-                  <SettingsValue value={identity().oauthScopes.join(", ") || t("common.none")} />
-                }
-              />
-            </Show>
-          </div>
-        </details>
+          </Show>
+        </>
       )}
     </Show>
   );
@@ -512,7 +512,9 @@ export function GitHubIdentity(props: IdentityProps & { onOpenConnections: () =>
           </Show>
         }
       >
-        <SettingsRow
+        <SettingsDetailsRow
+          detailsLabel={t("githubConnections.details")}
+          hasDetails={identity() !== null}
           title={
             identity()?.account ? `@${identity()!.account!.login}` : t("agentTools.githubNoAccount")
           }
@@ -529,40 +531,38 @@ export function GitHubIdentity(props: IdentityProps & { onOpenConnections: () =>
               </button>
             </>
           }
-        />
+        >
+          <GitHubDetails identity={identity()} />
+        </SettingsDetailsRow>
         <GitHubConnectionError error={view().error} completion={view().completion} />
         <Show when={view().configurable}>
-          <details class="settings-row settings-row--stacked">
-            <summary class="settings-row__title">{t("githubConnections.advancedOverride")}</summary>
-            <div class="settings-subrows">
+          <SettingsDisclosure quiet title={t("githubConnections.advancedOverride")}>
+            <SettingsRow
+              title={t("githubConnections.agentOverride")}
+              description={
+                view().status?.selected.configured
+                  ? t("agentTools.githubConfiguredHere")
+                  : t("agentTools.githubInheritedHere")
+              }
+            />
+            <GitHubConnectionSetup identity={props.identity} />
+            <Show when={view().status?.selected.configured}>
               <SettingsRow
-                title={t("githubConnections.agentOverride")}
-                description={
-                  view().status?.selected.configured
-                    ? t("agentTools.githubConfiguredHere")
-                    : t("agentTools.githubInheritedHere")
+                title={t("agentTools.githubUseSystemNewRuns")}
+                description={t("agentTools.githubAgentMutationHint")}
+                control={
+                  <button
+                    class="btn"
+                    disabled={view().busy || view().authorizationActive}
+                    onClick={() => void props.identity.inherit()}
+                  >
+                    {t("agentTools.githubUseSystemNewRuns")}
+                  </button>
                 }
               />
-              <GitHubConnectionSetup identity={props.identity} />
-              <Show when={view().status?.selected.configured}>
-                <SettingsRow
-                  title={t("agentTools.githubUseSystemNewRuns")}
-                  description={t("agentTools.githubAgentMutationHint")}
-                  control={
-                    <button
-                      class="btn"
-                      disabled={view().busy || view().authorizationActive}
-                      onClick={() => void props.identity.inherit()}
-                    >
-                      {t("agentTools.githubUseSystemNewRuns")}
-                    </button>
-                  }
-                />
-              </Show>
-            </div>
-          </details>
+            </Show>
+          </SettingsDisclosure>
         </Show>
-        <GitHubDetails identity={identity()} />
       </SettingsSection>
     </openclaw-github-identity>
   );

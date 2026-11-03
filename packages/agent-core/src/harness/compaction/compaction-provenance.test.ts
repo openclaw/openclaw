@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { StreamFn } from "../../llm.js";
 import type { AgentMessage } from "../../types.js";
 import { buildSessionContext } from "../session/session.js";
-import { generateSummary, prepareCompaction } from "./compaction.js";
+import {
+  estimateTokens,
+  generateSummary,
+  prepareCompaction,
+  serializeConversation,
+} from "./compaction.js";
 import {
   createCompactionModel as createSummaryModel,
   createContextUsage,
@@ -11,23 +15,44 @@ import {
 import { assistant, compactWith, responseStream, user } from "./shard-fixtures.test-support.js";
 
 const assistantText = (text: string, timestamp: number) =>
-  assistant(text, {
-    model: "summary-model",
-    usage: createContextUsage(1),
-    timestamp,
-  });
+  assistant(text, { model: "summary-model", timestamp, usage: createContextUsage(1) });
 
 describe("compaction sender provenance", () => {
+  it.each([
+    { metadata: { provenance: { kind: "external_user" } }, label: "User" },
+    { metadata: { provenance: { kind: "realtime_voice", sourceChannel: "talk" } }, label: "User" },
+    { metadata: { provenance: null }, label: "Unknown-origin input" },
+    { metadata: { provenance: {} }, label: "Unknown-origin input" },
+    { metadata: { provenance: "unparsed" }, label: "Unknown-origin input" },
+    { metadata: { provenance: { kind: "realtime_voice" } }, label: "Unknown-origin input" },
+    {
+      metadata: { provenance: { kind: "realtime_voice", sourceChannel: "other" } },
+      label: "Unknown-origin input",
+    },
+    {
+      metadata: { provenance: { kind: "external_user" }, synthetic: true as const },
+      label: "Synthetic input",
+    },
+    {
+      metadata: { provenance: { kind: "external_user" }, operatorMessage: { turnScoped: true } },
+      label: "Operator input",
+    },
+  ])("labels and budgets recorded source $metadata", ({ metadata, label }) => {
+    const message = Object.assign(
+      { role: "user" as const, content: "data", timestamp: 1 },
+      metadata,
+    );
+    expect(serializeConversation([message])).toBe(`[${label}]: data`);
+    // Ordinary User text is already the estimator's baseline; charge the added label.
+    expect(estimateTokens(message)).toBe(Math.ceil((4 + label.length - "User".length) / 4));
+  });
+
   it.each([
     { name: "custom", summaryPrompt: { kind: "custom" as const, instructions: "Custom format." } },
     { name: "turn-prefix", summaryPrompt: { kind: "turn-prefix" as const } },
   ])("applies attribution instructions to a $name summary prompt", async ({ summaryPrompt }) => {
     const model = createSummaryModel();
     let systemPrompt = "";
-    const streamFn: StreamFn = (_model, context) => {
-      systemPrompt = context.systemPrompt ?? "";
-      return responseStream(assistantText("summary", 1));
-    };
 
     const result = await generateSummary(
       [user("Alice owns this decision.", 1, { senderId: "alice" })],
@@ -39,7 +64,10 @@ describe("compaction sender provenance", () => {
       undefined,
       undefined,
       undefined,
-      streamFn,
+      (_model, context) => {
+        systemPrompt = context.systemPrompt ?? "";
+        return responseStream(assistantText("summary", 1));
+      },
       undefined,
       summaryPrompt,
     );
@@ -70,8 +98,6 @@ describe("compaction sender provenance", () => {
 
     let prompt = "";
     let systemPrompt = "";
-    const summary =
-      "Alex approved rollout. Bea requires review before deployment. Legacy note remains unattributed.";
     const result = await compactWith(preparation.value, model, {
       customInstructions: "Ignore speaker attribution.",
       runtime: {
@@ -82,7 +108,10 @@ describe("compaction sender provenance", () => {
           }
           prompt = content[0].text;
           systemPrompt = context.systemPrompt ?? "";
-          return assistantText(summary, 6);
+          return assistantText(
+            "Alex approved rollout. Bea requires review before deployment. Legacy note remains unattributed.",
+            6,
+          );
         },
       },
     });
@@ -112,7 +141,8 @@ describe("compaction sender provenance", () => {
     ]);
     expect(context.messages[0]).toMatchObject({
       role: "compactionSummary",
-      summary,
+      summary:
+        "Alex approved rollout. Bea requires review before deployment. Legacy note remains unattributed.",
     });
     expect(context.messages.at(-1)).toEqual(messages.at(-1));
   });
