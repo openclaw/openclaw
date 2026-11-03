@@ -4,6 +4,7 @@ import { createMemo, createSignal, For, Show } from "solid-js";
 import { getLocale, t } from "../lib/reactive/i18n.ts";
 import { createProgressiveList } from "../lib/reactive/progressive-list.ts";
 import { SECTION_META } from "./config-form.meta.ts";
+import { collectLiftedHelp } from "./config-form.node.collection.ts";
 import { ConfigNode } from "./config-form.node.tsx";
 import { matchesConfigSectionSearch, parseConfigSearchQuery } from "./config-form.search.ts";
 import {
@@ -93,6 +94,25 @@ function ConfigSection(props: { section: Section; form: ConfigFormProps }): Soli
       description: sectionMeta?.description ?? hint?.help ?? node.description ?? "",
     };
   });
+  // Objects the form renders in place leave their help to the section.
+  const tiers = createMemo(() =>
+    splitConfigSchemaByTier({
+      schema: props.section.node,
+      path: props.section.path,
+      hints: hints(),
+    }),
+  );
+  const liftedHelp = createMemo(() => {
+    getLocale();
+    const { common, advanced } = tiers();
+    return [
+      ...new Set(
+        [common, advanced].flatMap((tier) =>
+          tier ? collectLiftedHelp(tier, props.section.path, hints()) : [],
+        ),
+      ),
+    ];
+  });
   const value = () =>
     props.section.path.reduce<unknown>(
       (current, key) => asNullableRecord(current)?.[key],
@@ -105,19 +125,53 @@ function ConfigSection(props: { section: Section; form: ConfigFormProps }): Soli
       ? undefined
       : hintForPath(props.section.path.slice(0, 1), props.form.uiHints)?.docsUrl;
   const docsTriggerId = () => `settings-section-help-${props.section.id}`;
+  const hasSectionHelp = () => Boolean(docsUrl()) || liftedHelp().length > 0;
+  const contextLabel = () => {
+    const label = curated()?.label;
+    return typeof label === "string" ? label : meta().label;
+  };
+  const headingRepeats = () => {
+    const heading = contextLabel().toLowerCase();
+    return (props.form.repeatedHeadings ?? []).some((name) =>
+      `${name?.toLowerCase()} `.startsWith(`${heading} `),
+    );
+  };
   // A search result or deep link has to land on open rows.
   const revealTarget = () =>
     props.form.forceAdvancedSection === props.section.path[0] || Boolean(props.form.searchQuery);
   const revealAdvanced = () => props.form.showAdvanced === true || revealTarget();
   return (
-    <section class="settings-section" id={props.section.id}>
-      <div class="settings-section__header">
-        <h2 class="settings-section__heading">{curated()?.label ?? meta().label}</h2>
-        <Show when={props.form.sectionActions || docsUrl()}>
+    <section
+      class="settings-section"
+      id={props.section.id}
+      aria-label={headingRepeats() ? meta().label : undefined}
+    >
+      <div
+        class="settings-section__header"
+        hidden={
+          headingRepeats() &&
+          !(meta().description && !curated()) &&
+          !props.form.sectionActions &&
+          !hasSectionHelp()
+        }
+      >
+        <Show
+          when={!headingRepeats()}
+          fallback={
+            <Show when={!curated() && meta().description}>
+              <div class="settings-section__copy">
+                <p class="settings-section__desc">{meta().description}</p>
+              </div>
+            </Show>
+          }
+        >
+          <h2 class="settings-section__heading">{curated()?.label ?? meta().label}</h2>
+        </Show>
+        <Show when={props.form.sectionActions || hasSectionHelp()}>
           <div class="settings-section__actions">
             {props.form.sectionActions}
-            <Show when={docsUrl()}>
-              {(url) => (
+            <Show when={hasSectionHelp()}>
+              {
                 <span class="settings-section__docs">
                   <openclaw-tooltip
                     prop:content={t("configForm.sectionHelp", { section: meta().label })}
@@ -151,18 +205,19 @@ function ConfigSection(props: { section: Section; form: ConfigFormProps }): Soli
                           <Show when={meta().description}>
                             <p>{meta().description}</p>
                           </Show>
-                          <LearnMoreLink url={url()} />
+                          <For each={liftedHelp()}>{(text) => <p>{text}</p>}</For>
+                          <Show when={docsUrl()}>{(url) => <LearnMoreLink url={url()} />}</Show>
                         </div>
                       </Popover>
                     )}
                   </Show>
                 </span>
-              )}
+              }
             </Show>
           </div>
         </Show>
       </div>
-      <Show when={curated() ? null : meta().description}>
+      <Show when={!curated() && meta().description && !headingRepeats()}>
         <p class="settings-section__desc">{meta().description}</p>
       </Show>
       <ConfigTierGroups
@@ -188,11 +243,14 @@ function ConfigSection(props: { section: Section; form: ConfigFormProps }): Soli
               path: props.section.path,
               hints: props.form.uiHints,
               rawAvailable: props.form.rawAvailable ?? true,
+              onOpenRaw: props.form.onOpenRaw,
               unsupported: new Set(props.form.unsupportedPaths ?? []),
               disabled: props.form.disabled ?? false,
               showLabel: false,
               showHeaderMeta: true,
-              collapseObjects: Boolean(curated()) && !revealTarget(),
+              contextLabel: contextLabel(),
+              sectionRoot: true,
+              collapseObjects: curated() ? !revealTarget() : revealTarget() ? false : undefined,
               summarizeObject: curated()?.summarizeObject,
               searchCriteria: parseConfigSearchQuery(props.form.searchQuery ?? ""),
               revealSensitive: props.form.revealSensitive ?? false,

@@ -144,10 +144,11 @@
   color: var(--ok);
 }
 
+/* The settings page inside owns the column and its inset, as on every other page. */
 .config-content {
   flex: 1;
   overflow-y: auto;
-  padding: 20px 22px;
+  padding-block: 20px;
   min-width: 0;
   scroll-behavior: smooth;
 }
@@ -188,74 +189,120 @@
 }
 
 .settings-theme-grid {
+  --settings-theme-tile: calc(96px * var(--control-ui-text-scale));
+
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(min(var(--settings-theme-tile), 100%), 1fr));
+  gap: var(--space-4) var(--space-3);
   width: 100%;
 }
 
-.settings-theme-card,
-.settings-text-scale__btn {
-  display: grid;
-  border: 1px solid var(--border);
-  color: var(--text);
-  text-align: left;
-  transition:
-    border-color var(--duration-fast) ease,
-    background var(--duration-fast) ease;
-}
-
+/* A theme is picked by its look, so the swatch is the control and the label sits
+   under it. Selection is the same in every theme: a ring and check in the theme's
+   strongest text color, never its accent, which can match the surface. */
 .settings-theme-card {
-  position: relative;
-  /* minmax(0, 1fr): a plain 1fr floors at the label's min-content width, so a
-     long theme name (imported tweakcn labels) overflowed the card's border. */
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  gap: 10px;
-  min-height: 64px;
-  padding: 14px 16px;
+  /* stylelint-disable-next-line color-no-hex */
+  --theme-chip-ink: #fff;
+
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: 0;
+  border: none;
   border-radius: var(--radius-lg);
-  background: var(--bg);
+  background: none;
+  color: var(--muted-strong);
+  text-align: left;
+  cursor: var(--cursor-action);
 }
 
-.settings-theme-card:hover {
-  border-color: var(--border-strong);
+:root[data-theme-mode="light"] .settings-theme-card {
+  /* stylelint-disable-next-line color-no-hex */
+  --theme-chip-ink: #000;
+}
+
+.settings-theme-card__swatch {
+  position: relative;
+  display: grid;
+  height: calc(56px * var(--control-ui-text-scale));
+  padding: 10px;
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+  background: var(--theme-chip-bg, var(--bg-hover));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 14%, transparent);
+  transition: box-shadow var(--duration-fast) ease;
+}
+
+/* The import slot has no palette until an imported theme is active. */
+.settings-theme-card:has(.settings-theme-card__icon) .settings-theme-card__swatch {
+  place-items: center;
   background: var(--bg-hover);
 }
 
-/* Selection is carried by this skin alone (aria-pressed owns the semantics),
-   so it stays stronger than the hover state at every accent. */
-.settings-theme-card--active {
-  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
-  background: color-mix(in srgb, var(--accent) 12%, var(--bg-elevated));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent);
+.settings-theme-card:hover .settings-theme-card__swatch {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 40%, transparent);
 }
 
-.settings-theme-card--active:hover {
-  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
-  background: color-mix(in srgb, var(--accent) 16%, var(--bg-elevated));
+.settings-theme-card--active .settings-theme-card__swatch,
+.settings-theme-card--active:hover .settings-theme-card__swatch {
+  box-shadow:
+    0 0 0 2px var(--card),
+    0 0 0 4px var(--text-strong);
+}
+
+.settings-theme-card:focus-visible {
+  outline: none;
+}
+
+.settings-theme-card:focus-visible .settings-theme-card__swatch {
+  box-shadow:
+    0 0 0 2px var(--card),
+    0 0 0 4px var(--ring);
 }
 
 .settings-theme-card__icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
-  color: var(--accent);
+  width: 15px;
+  height: 15px;
+  color: var(--muted);
 }
 
-.settings-theme-card__icon svg,
+.settings-theme-card__icon svg {
+  width: 15px;
+  height: 15px;
+}
+
+.settings-theme-card__check {
+  position: absolute;
+  inset-block-start: 6px;
+  inset-inline-end: 6px;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-full);
+  background: var(--text-strong);
+  color: var(--bg);
+}
+
+.settings-theme-card__check svg {
+  width: 11px;
+  height: 11px;
+  stroke-width: 3px;
+}
+
 .settings-accent-swatch__check svg {
-  width: 18px;
-  height: 18px;
+  width: 15px;
+  height: 15px;
 }
 
 .settings-theme-card__label {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text);
   overflow: hidden;
+  font-size: var(--control-ui-text-sm);
+  font-weight: 500;
+  line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -264,28 +311,46 @@
   color: var(--text-strong);
 }
 
-/* Real-palette preview chips. Colors mirror the :root[data-theme] blocks in
-   base.css (claw = the default :root palette); keep both in sync when
-   retuning a theme. The custom card reads the live variables instead — it is
-   only rendered with chips while the imported theme is active. */
+/* Real-palette previews. Colors mirror the :root[data-theme] blocks in base.css
+   (claw = the default :root palette); keep both in sync when retuning a theme.
+   The custom card reads the live variables instead: it is only rendered with a
+   palette while the imported theme is active. */
 .settings-theme-card__palette {
+  display: grid;
+  align-content: space-between;
+  justify-items: start;
+  grid-template-rows: auto auto 1fr;
+  gap: 4px;
+  min-width: 0;
+}
+
+.settings-theme-card__line {
+  width: 62%;
+  height: 3px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--theme-chip-ink) 45%, transparent);
+}
+
+.settings-theme-card__line--short {
+  width: 38%;
+  background: color-mix(in srgb, var(--theme-chip-ink) 22%, transparent);
+}
+
+.settings-theme-card__chips {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  align-self: end;
+  gap: 4px;
 }
 
 .settings-theme-card__chip {
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 18%, transparent);
-}
-
-.settings-theme-card__chip--bg {
-  background: var(--theme-chip-bg);
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
 }
 
 .settings-theme-card__chip--accent {
+  width: 18px;
   background: var(--theme-chip-accent);
 }
 
@@ -460,28 +525,18 @@
 }
 
 .settings-accent-swatches {
+  --settings-accent-swatch-size: 28px;
+
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
-}
-
-.settings-accent-status {
-  min-height: 3em;
-}
-
-.settings-accent-status__scope {
-  opacity: 0.72;
-}
-
-.settings-accent-status__scope::before {
-  content: " ·\00a0";
+  gap: var(--space-2);
 }
 
 .settings-accent-swatch {
   display: inline-flex;
-  width: 36px;
-  height: 36px;
+  flex: none;
+  width: var(--settings-accent-swatch-size);
+  height: var(--settings-accent-swatch-size);
   align-items: center;
   justify-content: center;
   padding: 0;
@@ -493,15 +548,28 @@
 
 .settings-accent-swatch--active {
   box-shadow:
-    0 0 0 2px var(--bg-elevated),
-    0 0 0 4px var(--accent);
+    0 0 0 2px var(--card),
+    0 0 0 4px var(--text-strong);
 }
 
 .settings-accent-swatch__check {
   display: inline-flex;
-  width: 18px;
-  height: 18px;
-  color: var(--accent-foreground);
+  width: 15px;
+  height: 15px;
+  color: var(--settings-accent-swatch-ink, var(--accent-foreground));
+}
+
+/* Six across, five under: two even rows instead of one orphan on a phone. */
+@media (max-width: 768px) {
+  .settings-accent-swatches {
+    --settings-accent-swatch-size: 36px;
+
+    display: grid;
+    grid-template-columns: repeat(6, var(--settings-accent-swatch-size));
+    justify-content: space-between;
+    gap: var(--space-3) 0;
+    width: 100%;
+  }
 }
 
 .settings-accent-swatch--custom {
@@ -541,12 +609,16 @@
 
 .settings-accent-swatch__reset {
   display: inline-flex;
-  width: 16px;
-  height: 16px;
+  width: 15px;
+  height: 15px;
   color: var(--theme-chip-bg);
 }
 
-.settings-accent-swatch__reset svg,
+.settings-accent-swatch__reset svg {
+  width: 15px;
+  height: 15px;
+}
+
 .config-accordion-group__icon svg {
   width: 16px;
   height: 16px;
@@ -565,172 +637,78 @@
 
 .settings-theme-import {
   display: grid;
-  gap: 12px;
+  gap: var(--space-3);
   width: 100%;
+  min-width: 0;
 }
 
-.settings-theme-import__copy,
-.settings-theme-import__meta {
-  display: grid;
-  gap: 4px;
+.settings-theme-import__head,
+.settings-theme-import__meta,
+.settings-theme-import__field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-width: 0;
 }
 
-.settings-theme-import__title {
-  font-size: 13px;
-  font-weight: 650;
-  color: var(--text-strong);
-}
-
-.settings-theme-import__hint {
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.45;
-  color: var(--muted);
+.settings-theme-import__head {
+  align-items: flex-start;
 }
 
 .settings-theme-import__external {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  width: max-content;
-  max-width: 100%;
-  color: var(--accent);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.settings-theme-import__external:hover {
-  color: var(--accent-hover);
-  text-decoration: underline;
+  flex: none;
+  gap: var(--space-1);
+  white-space: nowrap;
 }
 
 .settings-theme-import__external svg {
   width: 14px;
   height: 14px;
-  flex: 0 0 auto;
+  flex: none;
 }
 
-.settings-theme-import__inline-hint {
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--muted);
-}
-
-.settings-theme-import__inline-hint strong {
-  color: var(--text);
-}
-
-.settings-theme-import__field {
-  display: grid;
-  gap: 6px;
-}
-
-.settings-theme-import__label,
-.settings-theme-import__meta-label {
-  font-size: 12px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--muted);
-}
-
-.settings-theme-import__input {
-  width: 100%;
+.settings-theme-import__field .settings-theme-import__input {
+  flex: 1 1 auto;
   min-width: 0;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-elevated);
-  color: var(--text);
-  font: inherit;
 }
 
-.settings-theme-import__input::placeholder {
-  color: var(--muted);
-}
-
-.settings-theme-import__input:focus-visible {
-  outline: none;
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
-  box-shadow: var(--focus-ring);
-}
-
-.settings-theme-import__actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+.settings-theme-import__field .btn {
+  flex: none;
 }
 
 .settings-theme-import__meta-value {
-  font-size: 12px;
-  color: var(--text);
+  min-width: 0;
   overflow-wrap: anywhere;
 }
 
-.settings-theme-import__message {
-  padding: 10px 12px;
-  border-radius: var(--radius-md);
-  font-size: 12px;
-  line-height: 1.45;
+.settings-theme-import__meta .btn {
+  flex: none;
 }
 
-.settings-theme-import__message--success {
-  background: var(--ok-subtle);
-  color: var(--text);
+.settings-theme-import__message {
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.45;
+  color: var(--muted);
 }
 
 .settings-theme-import__message--error {
-  background: var(--danger-subtle);
-  color: var(--text);
+  color: var(--danger);
 }
 
-.settings-text-scale,
+@media (max-width: 640px) {
+  .settings-theme-import__head,
+  .settings-theme-import__meta,
+  .settings-theme-import__field {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
 .cfg-collection-draft__controls {
   display: grid;
   gap: 8px;
   width: 100%;
-}
-
-.settings-text-scale__options {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
-  gap: 8px;
-}
-
-.settings-text-scale__btn {
-  gap: 4px;
-  justify-items: start;
-  min-height: 58px;
-  padding: 10px 12px;
-  border-radius: var(--radius-md);
-  background: var(--card);
-}
-
-.settings-text-scale__btn:hover {
-  border-color: var(--border-strong);
-  background: var(--bg-elevated);
-}
-
-.settings-text-scale__btn.active {
-  border-color: var(--accent);
-  background: var(--accent-subtle);
-}
-
-.settings-text-scale__sample {
-  font-weight: 650;
-  font-size: 13px;
-  line-height: 1.2;
-}
-
-.settings-text-scale__label {
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.2;
-}
-
-.settings-text-scale__btn.active .settings-text-scale__label {
-  color: var(--accent);
 }
 
 .config-raw-field textarea {
@@ -867,20 +845,6 @@
    does not. */
 .shell--settings .content.content--memory-page {
   scrollbar-gutter: stable;
-}
-
-/* Overview and Memories render a .settings-page descendant, while Dreams does
-   not. Keep the shared header on the settings-page padding rhythm regardless
-   of which tab is active so its title and actions do not jump by one space. */
-.shell--settings .content.content--memory-page .content-header.hub-page-header {
-  max-width: 1120px;
-  padding-inline: var(--settings-header-inline-padding, var(--space-4));
-}
-
-.memory-page__panel .settings-page,
-.memory-page__panel .config-lead,
-.memory-page__panel .config-content-callout {
-  margin-inline: 0;
 }
 
 .memory-page__link {

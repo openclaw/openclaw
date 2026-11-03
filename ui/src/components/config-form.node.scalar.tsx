@@ -19,7 +19,7 @@ import {
   isSecretRefObject,
   jsonValue,
   FieldRow,
-  renderSchemaDefaultDescription,
+  schemaDefaultValueText,
   SensitiveToggleButton,
   resolveConfigFieldPresentation,
   type ConfigNodeRenderParams,
@@ -599,10 +599,10 @@ function ScalarInput(props: {
       {...state().field}
       errorId={state().errorId}
       errorRef={draft.errorRef}
-      defaultDescription={
+      defaultValue={
         state().effectiveRedacted || state().masked
           ? undefined
-          : renderSchemaDefaultDescription(props.params.schema, props.params.value)
+          : schemaDefaultValueText(props.params.schema)
       }
       control={
         props.stepped ? (
@@ -649,7 +649,7 @@ export function SelectInput(props: {
   return (
     <FieldRow
       {...field()}
-      defaultDescription={renderSchemaDefaultDescription(props.params.schema, props.params.value)}
+      defaultValue={schemaDefaultValueText(props.params.schema)}
       control={
         <select
           class="settings-select"

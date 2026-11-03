@@ -2799,7 +2799,7 @@ async function createChatPickerScenario(
         qrDataUrl: whatsappLoginQrDataUrl,
       },
       "web.login.wait": { message: "Linked.", connected: true },
-      ...buildSearchMocks(),
+      ...buildSearchMocks(configMocks.get.hash),
       "wizard.start": channelWizard.start,
       "wizard.next": channelWizard.next,
       "wizard.cancel": { status: "cancelled" },

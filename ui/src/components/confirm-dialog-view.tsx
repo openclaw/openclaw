@@ -7,6 +7,7 @@ import type {
   ConfirmDialogChoiceOptions,
   ConfirmDialogOptions,
 } from "./confirm-dialog-types.ts";
+import { DialogHeader } from "./solid/dialog-header.tsx";
 
 export type ConfirmDialogViewOptions = ConfirmDialogOptions & Partial<ConfirmDialogChoiceOptions>;
 
@@ -101,44 +102,47 @@ export function ConfirmDialogView(props: {
       description={initialOptions.message}
       onModal-cancel={() => props.finish(null)}
     >
-      <div class="exec-approval-card">
-        <div class="exec-approval-header">
-          <div>
-            <div class="exec-approval-title">{initialOptions.title}</div>
-            <div class="exec-approval-sub" style={{ "white-space": "pre-line" }}>
-              {initialOptions.message}
-            </div>
+      <div class="oc-dialog confirm-dialog">
+        <DialogHeader
+          title={initialOptions.title}
+          description={<p>{initialOptions.message}</p>}
+          onClose={() => props.finish(null)}
+        />
+        {initialOptions.details ||
+        initialOptions.requiredAcknowledgement ||
+        initialOptions.skipPreference ? (
+          <div class="oc-dialog__body">
+            {initialOptions.details ? (
+              <div class="exec-approval-command mono">{initialOptions.details}</div>
+            ) : undefined}
+            {initialOptions.requiredAcknowledgement ? (
+              <label class="field checkbox">
+                <input
+                  type="checkbox"
+                  checked={acknowledged()}
+                  onChange={(event) => setAcknowledged(event.currentTarget.checked)}
+                />
+                <span>{initialOptions.requiredAcknowledgement}</span>
+              </label>
+            ) : undefined}
+            {initialOptions.skipPreference && !initialOptions.requiredAcknowledgement ? (
+              <label class="field checkbox exec-approval-skip">
+                <input
+                  type="checkbox"
+                  onChange={(event) => {
+                    skipRequested = event.currentTarget.checked;
+                  }}
+                />
+                <span>{initialOptions.skipPreference.label ?? t("common.dontAskAgain")}</span>
+              </label>
+            ) : undefined}
           </div>
-        </div>
-        {initialOptions.details ? (
-          <div class="exec-approval-command mono">{initialOptions.details}</div>
-        ) : undefined}
-        {initialOptions.requiredAcknowledgement ? (
-          <label class="field checkbox">
-            <input
-              type="checkbox"
-              checked={acknowledged()}
-              onChange={(event) => setAcknowledged(event.currentTarget.checked)}
-            />
-            <span>{initialOptions.requiredAcknowledgement}</span>
-          </label>
-        ) : undefined}
-        {initialOptions.skipPreference && !initialOptions.requiredAcknowledgement ? (
-          <label class="field checkbox exec-approval-skip">
-            <input
-              type="checkbox"
-              onChange={(event) => {
-                skipRequested = event.currentTarget.checked;
-              }}
-            />
-            <span>{initialOptions.skipPreference.label ?? t("common.dontAskAgain")}</span>
-          </label>
         ) : undefined}
         <openclaw-modal-actions
           ref={(element) => {
             actions = element;
           }}
-          class={["exec-approval-actions", { "confirm-dialog-actions--stacked": mobileChoices() }]}
+          class={["oc-dialog__footer", { "confirm-dialog-actions--stacked": mobileChoices() }]}
         >
           {initialOptions.groupChoicesOnMobile ? (
             <For each={mobileChoices() ? ["choices", "cancel"] : ["cancel", "choices"]}>

@@ -71,7 +71,7 @@ suite.define(() => {
         expect(
           await page.locator("main.content").getByRole("button", { name: "Refresh" }).count(),
         ).toBe(0);
-        const row = (await page.locator(".agents-toolbar-row").boundingBox())!;
+        const row = (await page.locator(".agents-toolbar-actions").boundingBox())!;
         const button = (await create.boundingBox())!;
         expect(Math.abs(button.x + button.width - (row.x + row.width))).toBeLessThan(1);
       },

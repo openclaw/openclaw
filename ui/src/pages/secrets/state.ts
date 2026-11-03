@@ -282,7 +282,7 @@ export class SecretsPageState {
       !this.canCall("secrets.store.delete") ||
       !(await showConfirmDialog({
         title: t("secretsStore.confirmDelete", { name: entry.name }),
-        message: t("secretsStore.confirmDeleteBody"),
+        message: t("secretsStore.confirmDeleteMessage"),
         confirmLabel: t("common.delete"),
         danger: true,
       }))

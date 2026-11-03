@@ -15,6 +15,8 @@ background. A refreshing indicator stays visible until the Gateway sends the
 updated options; slow Git keeps cached choices available. Discovery never fetches
 from a remote or scans checkout contents. Ref changes invalidate the suggestions,
 and session creation validates the selected base before changing a checkout.
+Failed or non-Git discovery becomes eligible for another user-requested read after
+five seconds of elapsed time, even if the system wall clock moves backward.
 
 When the selected source is a folder inside a Git repository, **Recents** keeps
 that folder rather than replacing it with the repository root or the managed

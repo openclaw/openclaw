@@ -38,7 +38,7 @@ Query with bounded slices:
 
 ```bash
 slacrawl search --limit 20 "query"
-slacrawl messages --since 7d --limit 50
+slacrawl messages --limit 50
 slacrawl sql "select count(*) from messages;"
 ```
 
