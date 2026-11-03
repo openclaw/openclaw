@@ -719,7 +719,12 @@ defineDiscordVoiceTests(
       expect(controlRealtimeVoiceAgentRunMock).not.toHaveBeenCalled();
       expect(agentCommandMock).not.toHaveBeenCalled();
 
-      bridgeParams?.onTranscript?.("user", "What's your take on rebuilding everything?", true);
+      // The follow-up activation must consume the wake-name follow-up in the same
+      // fake-timer domain that armed it: the follow-up window is monotonic
+      // (performance.now), so reading it on the real clock would mis-expire it.
+      await flushRealtimeForcedConsultTimers(() => {
+        bridgeParams?.onTranscript?.("user", "What's your take on rebuilding everything?", true);
+      });
 
       await vi.waitFor(() => expect(agentCommandMock).toHaveBeenCalledTimes(1));
       expect(controlRealtimeVoiceAgentRunMock).not.toHaveBeenCalled();
