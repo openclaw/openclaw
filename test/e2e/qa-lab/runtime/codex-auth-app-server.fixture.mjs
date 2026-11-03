@@ -115,31 +115,20 @@ runFakeCodexAppServer({
       });
       setImmediate(() => {
         const completedAtMs = Date.now();
-        // Opt-in host authority refusal: the local inference relay denies the run before the
-        // provider is touched, and Codex renders only the body's message as status prose.
-        const refusedTurns = Number(process.env.OPENCLAW_QA_CODEX_REFUSED_TURNS ?? "0");
-        const refused = Number.isInteger(refusedTurns) && turnCount <= refusedTurns;
-        if (!refused) {
-          notify("item/completed", {
-            item: message,
-            threadId,
-            turnId,
-            completedAtMs,
-          });
-        }
+        notify("item/completed", {
+          item: message,
+          threadId,
+          turnId,
+          completedAtMs,
+        });
         notify("turn/completed", {
           threadId,
           turn: {
             id: turnId,
-            items: refused ? [] : [message],
-            itemsView: refused ? "notLoaded" : "full",
-            status: refused ? "failed" : "completed",
-            error: refused
-              ? {
-                  message:
-                    "unexpected status 403 Forbidden: Codex cannot verify the owner of this model request. Start a fresh request before retrying., url: http://127.0.0.1:20128/backend-api/codex/responses",
-                }
-              : null,
+            items: [message],
+            itemsView: "full",
+            status: "completed",
+            error: null,
             startedAt: Math.floor(completedAtMs / 1000),
             completedAt: Math.floor(completedAtMs / 1000),
             durationMs: 0,
