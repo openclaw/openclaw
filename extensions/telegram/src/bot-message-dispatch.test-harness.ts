@@ -276,7 +276,8 @@ vi.mock("./bot/delivery.replies.js", () => ({
   deliverStructuredReplies: deliverRepliesHoisted,
 }));
 
-vi.mock("./send.js", async () => ({
+vi.mock("./send.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./send.js")>()),
   buildInlineKeyboard: (await import("./inline-keyboard.js")).buildInlineKeyboard,
   editMessageReplyMarkupTelegram: editMessageReplyMarkupTelegramHoisted,
   editMessageTelegram: editMessageTelegramHoisted,

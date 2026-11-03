@@ -10,9 +10,7 @@ import {
   resolveChunkMode,
 } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { createSubsystemLogger, danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { resolveTelegramAccountOwnerAgentId } from "./account-owner.js";
 import { resolveAutoTopicLabelConfig } from "./auto-topic-label-config.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import { resolveDispatchTelegramContext } from "./bot-message-dispatch-context.js";
@@ -45,7 +43,7 @@ import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
 import { resolveStickerVisionSupport } from "./sticker-vision.js";
 import {
   getTopicName,
-  resolveTelegramDirectTopicNameCacheScope,
+  resolveTelegramTopicNameCacheScope,
   updateTopicName,
 } from "./topic-name-cache.js";
 
@@ -291,15 +289,11 @@ export const dispatchTelegramMessage = async (
       const sessionKey = dispatchContext.ctxPayload.SessionKey;
       if (sessionKey) {
         const { entry } = await loadFreshSessionEntry(dispatchContext.route.agentId, sessionKey);
-        topicNameScope = resolveTelegramDirectTopicNameCacheScope(
-          resolveStorePath(cfg.session?.store, {
-            agentId: resolveTelegramAccountOwnerAgentId({
-              cfg,
-              accountId: dispatchContext.accountId,
-            }),
-          }),
-          dispatchContext.accountId,
-        );
+        topicNameScope = resolveTelegramTopicNameCacheScope({
+          cfg,
+          accountId: dispatchContext.accountId,
+          direct: true,
+        });
         topicNameBeforeLabel = dispatchContext.ctxPayload.ThreadLabel ?? entry?.topicName;
         // Reply completion is not title completion: a failed background label must
         // remain eligible on the next message while the native placeholder remains.
@@ -491,6 +485,7 @@ export const dispatchTelegramMessage = async (
           topicNameScope,
         );
         if (observedName && observedName !== topicNameBeforeLabel) {
+          logVerbose("auto-topic-label: topic name changed, skipping rename");
           return;
         }
         await bot.api.editForumTopic(dispatchContext.chatId, topicThreadId, { name: label });
