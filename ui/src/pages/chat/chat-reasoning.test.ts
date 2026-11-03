@@ -437,7 +437,6 @@ it("keeps persisted tool-step reasoning visible until its run finishes", async (
   expect(worked()).toHaveLength(1);
   worked()[0]!.click();
   show();
-  // The earlier run's reasoning stays in order beside its reads, not in a nested log.
   await waitForSolid(() => expect(thinkingNodes()).toHaveLength(5));
   worked()[0]!.click();
   show();

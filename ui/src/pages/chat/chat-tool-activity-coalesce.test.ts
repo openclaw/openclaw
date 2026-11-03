@@ -113,3 +113,11 @@ it.each([true, false])("retains durable outcomes over stale live (raw=%s)", (has
     expect(outcomes(rows)).toEqual([activity()]);
   }
 });
+
+it("moves commentary's calls into tool rows beside its prose", () => {
+  const text = (value: string) => ({ type: "text", text: value });
+  const content = [text("Now."), toolCall("a"), text("Then."), toolCall("b")];
+  const rows = coalesceToolActivityMessages([item(assistant(content))]);
+  const cards = rows.map((row) => extractToolCardsCached(row.kind === "message" && row.message));
+  expect(cards.map((list) => list.map((card) => card.callId))).toEqual([[], ["a"], [], ["b"]]);
+});

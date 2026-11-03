@@ -764,7 +764,6 @@ describe("buildCachedChatItems", () => {
       ],
     });
 
-    // The text keeps its own row; the bundled calls render together after it.
     expect(groups.map((group) => group.role)).toEqual(["user", "tool"]);
     expect(firstMessageContent(groupAt(groups, 0))).toEqual([mixedContent[0]]);
     const entries = groupAt(groups, 1).messages;

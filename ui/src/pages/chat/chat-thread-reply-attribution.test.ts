@@ -174,7 +174,6 @@ it.each(["human", "forwarded", "projected source"] as const)(
       searchOpen: true,
       searchQuery: "Rollout",
     }).flatMap((group) => group.messages);
-    // Narration keeps its own row beside the call it introduced.
     expect(sources.map((source) => source.message)).toEqual([
       { ...invocation, content: [narration] },
       { ...invocation, content: [call] },
