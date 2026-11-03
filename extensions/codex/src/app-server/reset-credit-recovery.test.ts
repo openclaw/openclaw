@@ -5,7 +5,7 @@ import {
 } from "./reset-credit-recovery.js";
 
 const accountId = "account-one";
-const blocked = (credits: unknown = { availableCount: 1, credits: null }) => ({
+const blocked = (credits: unknown) => ({
   accountId,
   ordinaryUsageAllowed: false,
   rateLimits: {
