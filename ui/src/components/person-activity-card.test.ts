@@ -166,6 +166,23 @@ it("exposes the activity link while presence is offline", () => {
   expect(link.getAttribute("href")).toBe("/ui/activity/alice");
 });
 
+it("keeps subagent sessions out of recent sessions", async () => {
+  show({
+    sessionData: data([
+      session("subagent:child", 4),
+      { ...session("spawned", 3), spawnedBy: "agent:main:one" },
+      session("one", 2),
+      session("two", 1),
+    ]),
+  });
+  await waitForSolid(() =>
+    expect(links().map((link) => link.textContent)).toEqual([
+      expect.stringContaining("one"),
+      expect.stringContaining("two"),
+    ]),
+  );
+});
+
 it("localizes connection and session labels without replacing the focused link", async () => {
   const restoreI18n = captureI18nStateForTesting();
   try {

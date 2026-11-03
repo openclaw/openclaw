@@ -2,6 +2,7 @@ import "../styles/session-progress-hovercard.css";
 import "../styles/person-activity-card.css";
 import { render, spread } from "@solidjs/web";
 import { createMemo, createSignal, Errored, For, Loading, runWithOwner, Show } from "solid-js";
+import { isSubagentSessionRow } from "../../../src/shared/session-list-visibility.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { registerChatComposerEnglish } from "../i18n/locales/en-chat-composer.ts";
 import { handleNavigationClick } from "../lib/navigation-click.ts";
@@ -226,6 +227,7 @@ function PersonActivityCard(props: { input: PersonCardInput }) {
     ).filter(
       ({ row, agentId }) =>
         !watched.has(sessionIdentity(row.key, agentId, input)) &&
+        !isSubagentSessionRow(row.key, row) &&
         [row.owner?.actor, row.createdActor].some((actor) =>
           presenceMatchesProfile(input.user, actor?.identity),
         ),
