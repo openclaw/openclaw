@@ -85,6 +85,7 @@ describe("gateway presence audience", () => {
           restricted: { sessions: { others: "none" }, agents: "*", scopes: ["operator.read"] },
           maintainer: { sessions: { others: "write" }, agents: "*", scopes: ["operator.admin"] },
           pairing: { sessions: { others: "none" }, agents: [], scopes: ["operator.pairing"] },
+          guest: { sessions: { others: "view" }, agents: "*", scopes: ["operator.sessions.write"] },
         },
       },
     );
@@ -97,6 +98,7 @@ describe("gateway presence audience", () => {
     setDisplayName(watcherProfile.id, "Presence Watcher");
     setUserProfileRole(ensureProfileForEmail("writer@example.com").id, "writer");
     setUserProfileRole(ensureProfileForEmail("pairing@example.com").id, "pairing");
+    setUserProfileRole(ensureProfileForEmail("guest@example.com").id, "guest");
     const sharedKey = "agent:main:presence-shared";
     const sharedSessionId = randomUUID();
     const draftKey = "agent:main:presence-draft";
@@ -198,6 +200,25 @@ describe("gateway presence audience", () => {
         };
       };
       try {
+        const guest = await openRecipient("guest", ["operator.sessions.write"]);
+        for (const method of ["users.list", "presence.query", "system-presence"]) {
+          expect(await rpcReq(guest.ws, method, {})).toMatchObject({
+            ok: false,
+            error: { code: "FORBIDDEN" },
+          });
+        }
+        expect(guest.hello.snapshot.presence).toEqual([]);
+        expect(await rpcReq(guest.ws, "sessions.describe", { key: sharedKey })).toMatchObject({
+          ok: true,
+          payload: { session: { sessionId: sharedSessionId } },
+        });
+        expect(
+          await rpcReq(guest.ws, "sessions.list", {
+            source: "activity",
+            involvingProfileId: creator.id,
+            includePeople: true,
+          }),
+        ).toMatchObject({ ok: false, error: { code: "FORBIDDEN" } });
         const watcher = await openRecipient("watcher", ["operator.admin"]);
         // Join publication itself: an RPC response can precede the coalescing window.
         const firstConnect = onceMessage<{
