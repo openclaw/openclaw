@@ -60,6 +60,10 @@ suite.define(() =>
         const startReload = async () => {
           const after = await gateway.deferNext("config.get");
           await reload.click();
+          await page
+            .getByRole("dialog")
+            .getByRole("button", { name: "Discard changes", exact: true })
+            .click();
           await gateway.waitForRequest("config.get", { after });
         };
         await startReload();
