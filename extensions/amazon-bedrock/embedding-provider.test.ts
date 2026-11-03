@@ -236,7 +236,7 @@ it.each([
     queryResponse: '{"embeddings":{"float":[[3,4]]}}',
     batchResponse: '{"embeddings":{"float":[[0,2],[3,4]]}}',
     dimensions: 1536,
-    requestFields: { embedding_types: ["float"], output_dimension: 1536 },
+    requestFields: { embedding_types: ["float"], output_dimension: 1536, truncate: "RIGHT" },
     maxInputTokens: 128_000,
   },
 ])("preserves $model query and document batch contracts", async (testCase) => {
