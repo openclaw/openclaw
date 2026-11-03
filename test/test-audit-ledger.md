@@ -161,24 +161,16 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 - [191867](https://github.com/openclaw/openclaw/pull/191867): Require the replacement thinking-profile row and remove unrequested defaults setup. All four cases and original assertions remain; actual null/empty-row faults pass originals and fail only the repaired case. Zero matching defaults RPCs; baseline/candidate/published four, focused checks, all seven removal components and fresh review pass. Exact-head CI completed 60 jobs: 32 success/28 intentional skips, no failures. Four fewer test lines; production/shared scalar unchanged. Native receipt and closeout complete.
 
+- [191917](https://github.com/openclaw/openclaw/pull/191917): Remove the first fingerprint's synthetic-text absence assertion implied by its anchored hash format. All eight declarations/12 cases remain; actual first-result disclosure fails the same keeper on original and candidate. Baseline/candidate/published12, scoped checks and fresh review pass; seven removal components completed with four identical original-test export failures attributed. Exact-head CI29 success/29 intentional skips, no failures. One fewer test line; production/shared scalar unchanged. Native receipt and closeout complete.
+
 ## Current qualification
 
-[191917](https://github.com/openclaw/openclaw/pull/191917), pinned main974f1533bcb7:
-remove only the first fingerprint's synthetic-text absence assertion implied by
-its anchored sha256 format check. Keep all eight declarations/12 cases, every
-input, inequality and independent second-result assertion. Production and shared
-test-line scalar are unchanged; one fewer test line.
-
-Untouched baseline and clean candidate pass 12 without skips. An actual
-first-result disclosure fault fails the same retained format keeper on both,
-with 11 other passes each; owner/test controls restore byte-for-byte. Focused
-types, lint, format, test-line ratchet and ledger MDX pass. All seven removal
-components completed: both unused-file phases and script exports pass; both
-dependency phases and production/full-tree exports retain the identical unused
-`hasSkillLibraryToolSplitMigrationMarker` export, reproduced on the original
-test in all four failed surfaces. No suppression or passing reclassification.
-Published proof, fresh review and hosted CI remain pending. This checks local
-fingerprint serialization; no native Codex, Gateway or model execution claim.
+Batch80, pinned main32aafab01c35: qualify the stale-bootstrap deletion row's
+held response at the actual sessions.list boundary. The one-shot fixture currently
+intercepts sessions.subscribe and attaches a list its owner never consumes.
+Preserve all eight declarations/24 cases and every original outcome/assertion.
+Runtime control, candidate, owner-fault and focused proof are pending. No product
+change, deletion or passing runtime verdict is claimed at this checkpoint.
 
 ## Completed source review
 
