@@ -471,6 +471,56 @@ cover catalog lookup, generation, and result downloads. Prompt, image-count, and
 explicit size bounds come from that model’s current catalog generation limits;
 unknown limits do not authorize generation.
 
+## Native Gradium speech
+
+ClawRouter speech can consume a qualified, model-less Gradium offer for
+`gradium.speech` → `audio.binary` at `POST /api/post/speech/tts`. This requires an
+active Worker implementation and an eligible offer in the selected proxy key's
+current catalog. Client support alone does not activate the route.
+
+Select Gradium in the ClawRouter speech settings, rather than inventing a model
+ID or configuring a direct Gradium key:
+
+```json5
+{
+  tts: {
+    provider: "clawrouter",
+    providers: {
+      clawrouter: {
+        upstreamProvider: "gradium",
+        voiceId: "your-gradium-voice",
+      },
+    },
+  },
+  talk: {
+    provider: "clawrouter",
+    providers: {
+      clawrouter: {
+        upstreamProvider: "gradium",
+        speakerVoiceId: "your-gradium-voice",
+      },
+    },
+  },
+}
+```
+
+Keep `models.providers.clawrouter` configured with the router base URL and proxy
+credential. An explicit speech `profileId` remains bound to a ClawRouter profile.
+Missing or rejected proxy credentials never fall back to `GRADIUM_API_KEY`.
+Do not set a speech `model`/`modelId` or an agent `voiceModel` for this model-less
+route. Speed and instruction overrides are unsupported and rejected.
+
+Audio files use WAV and voice notes use Opus. Proxy telephony is not qualified
+and fails before submission; direct Gradium telephony behavior is unchanged.
+Talk voice overrides select native `voice_id`; unary requests retain
+`only_audio: true` and `json_config: '{"padding_bonus":0}'`. Native and manifest
+offers are supported. Each synthesis refreshes the credential-scoped catalog;
+stale observations, foreign routes, unknown formats, and revoked offers fail
+closed. Only HTTP 200 with WAV/`audio/wav` or Opus/`audio/ogg` is accepted.
+Synthesis redirects are rejected, and complete binary reads retain the caller's
+deadline and the smaller of its configured audio cap and 16 MiB. No streaming, WebSocket, or live billing
+qualification is implied.
+
 ## Quotas and usage
 
 ClawRouter's `/v1/usage` response feeds the normal OpenClaw provider-usage
