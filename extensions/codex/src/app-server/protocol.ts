@@ -516,6 +516,10 @@ type CodexAppServerRequests = {
   >;
   initialize: CodexRequestContract<unknown, CodexInitializeResponse>;
   "account/rateLimits/read": CodexRequestContract<unknown, JsonValue>;
+  "account/rateLimitResetCredit/consume": CodexRequestContract<
+    { idempotencyKey: string; creditId?: string | null },
+    { outcome: "reset" | "alreadyRedeemed" | "nothingToReset" | "noCredit" }
+  >;
   "account/read": CodexRequestContract<unknown, CodexGetAccountResponse>;
   "app/installed": CodexRequestContract<
     Control.CodexAppsInstalledParams,
