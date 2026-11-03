@@ -156,21 +156,20 @@ describe("config form renderer", () => {
     expect([first.selectionStart, first.selectionEnd]).toEqual([2, 8]);
   });
 
-  it.each([
-    { label: "Ingress", initiallyOpen: false },
-    { label: "Portals", initiallyOpen: true },
-  ])(
-    "retains the manually toggled $label disclosure across a form update",
-    async ({ label, initiallyOpen }) => {
+  it.each(["Ingress", "Portals"])(
+    "retains the manually toggled %s disclosure across a form update",
+    async (label) => {
       const props = {
         schema: object({
           gateway: object({
             portals: object(
               {
                 ingress: object({ port: { type: "integer" } }, { title: "Ingress" }),
+                name: { type: "string" },
               },
               { title: "Portals" },
             ),
+            mode: { type: "string" },
           }),
         }),
         value: { gateway: { portals: { ingress: { port: 443 } } } },
@@ -182,30 +181,29 @@ describe("config form renderer", () => {
             name,
         );
       renderRaw(props);
-      const disclosure = expectElement(findDisclosure(), label);
-      expect(disclosure.open).toBe(initiallyOpen);
       expect(container.querySelector('input[type="number"]')).toBeNull();
 
+      const portals = expectElement(findDisclosure("Portals"), "Portals");
+      expect(portals.open).toBe(false);
+      query("summary", HTMLElement, portals).click();
+      await waitForSolid(() => expect(findDisclosure("Ingress")).toBeDefined());
       const ingress = expectElement(findDisclosure("Ingress"), "Ingress");
+      expect(ingress.open).toBe(false);
       query("summary", HTMLElement, ingress).click();
       await waitForSolid(() =>
         expect(container.querySelector('input[type="number"]')).not.toBeNull(),
       );
       const input = query('input[type="number"]', HTMLInputElement);
       expect(input.value).toBe("443");
-      if (initiallyOpen) {
-        query("summary", HTMLElement, disclosure).click();
-      }
-      expect(disclosure.open).toBe(!initiallyOpen);
 
       // Once opened, native disclosure toggles keep the actual editor and its draft.
+      const disclosure = expectElement(findDisclosure(), label);
       input.value = "9443";
       input.dispatchEvent(new Event("input", { bubbles: true }));
       query("summary", HTMLElement, disclosure).click();
-      await waitForSolid(() => expect(container.querySelector('input[type="number"]')).toBe(input));
+      await waitForSolid(() => expect(disclosure.open).toBe(false));
+      expect(container.querySelector('input[type="number"]')).toBe(input);
       expect(input.value).toBe("9443");
-      query("summary", HTMLElement, disclosure).click();
-      await waitForSolid(() => expect(disclosure.open).toBe(!initiallyOpen));
 
       renderRaw({
         ...props,
@@ -215,7 +213,7 @@ describe("config form renderer", () => {
       expect(findDisclosure()).toBe(disclosure);
       expect(container.querySelector('input[type="number"]')).toBe(input);
       expect(input.value).toBe("8443");
-      expect(disclosure.open).toBe(!initiallyOpen);
+      expect(disclosure.open).toBe(false);
     },
   );
 
@@ -538,7 +536,6 @@ describe("config form renderer", () => {
     });
     expect(texts(".settings-section__heading")[0]).toBe("Gateway");
     expect(texts(".settings-row:not(.settings-disclosure__summary) .settings-row__title")).toEqual([
-      "Auth",
       "Token",
     ]);
   });
@@ -614,6 +611,23 @@ describe("config form renderer", () => {
     expect(descriptions.filter((text) => text === help)).toHaveLength(1);
     expect(container.querySelectorAll('button[aria-label^="Help for"]')).toHaveLength(1);
     expect(descriptions.some((text) => text?.includes("nested-default"))).toBe(false);
+  });
+
+  it("moves the help of a level's only group behind the section's help", () => {
+    const help = "Reload strategy for this gateway.";
+    renderForm(
+      analyze({
+        gateway: object({
+          reload: object(
+            { mode: { type: "string" }, debounce: { type: "string" } },
+            { title: "Reload" },
+          ),
+        }),
+      }),
+      { uiHints: { "gateway.reload": { help } }, activeSection: "gateway" },
+    );
+    expect(query(".settings-section__help-popover", HTMLElement).textContent).toContain(help);
+    expect(texts(".settings-section__desc")).not.toContain(help);
   });
 
   it.each([true, false])("renders section help only with a docs URL: %s", async (hasDocs) => {

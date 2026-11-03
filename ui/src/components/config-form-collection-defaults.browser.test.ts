@@ -6,6 +6,7 @@ import {
   renderObjectFixture,
   expandConfigObjects,
 } from "../test-helpers/config-form-fixtures.tsx";
+import { flush } from "../test-helpers/solid-settle.ts";
 
 type Options = Parameters<typeof renderNodeFixture>[1];
 function fixture(
@@ -165,6 +166,9 @@ describe("config form collection defaults", () => {
 
     const inheritedProfile = findText(container, "details", "Profile");
     expect(inheritedProfile.textContent).not.toContain('{"enabled":true,"mode":"balanced"}');
+    (inheritedProfile as HTMLDetailsElement).open = true;
+    inheritedProfile.dispatchEvent(new Event("toggle"));
+    flush();
     const modeRow = findText(inheritedProfile, ".settings-row", "Mode");
     expect(inheritedProfile.textContent).not.toContain("Using default:");
     expect(input(modeRow).placeholder).toBe("Default: balanced");

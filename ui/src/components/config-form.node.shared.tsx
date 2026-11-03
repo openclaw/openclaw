@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createSignal, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import type { ConfigUiHints } from "../api/types.ts";
 import { registerSettingsEnglish } from "../i18n/locales/en-settings.ts";
 import { REDACTED_SENTINEL } from "../lib/config-form-utils.ts";
@@ -68,6 +68,7 @@ export function ConfigFieldHelp(props: {
   path: Array<string | number>;
   label: string;
   help?: string;
+  context?: readonly string[];
   defaultValue?: string;
 }): JSX.Element {
   const [mounted, setMounted] = createSignal(false);
@@ -116,6 +117,7 @@ export function ConfigFieldHelp(props: {
             <Show when={props.help}>
               <p>{props.help}</p>
             </Show>
+            <For each={props.context ?? []}>{(text) => <p>{text}</p>}</For>
             <Show when={props.defaultValue !== undefined}>
               <p>{t("configForm.defaultValue", { value: props.defaultValue! })}</p>
             </Show>
@@ -130,11 +132,15 @@ export function ConfigFieldHelp(props: {
 export function configRowCopy(row: {
   label?: string;
   help?: string;
+  context?: readonly string[];
   defaultValue?: string;
   width?: "beside" | "full";
 }) {
   const { summary, clipped } = summarizeConfigHelp(row.help, row.width, row.label);
-  return { summary, hasHelp: clipped || row.defaultValue !== undefined };
+  return {
+    summary,
+    hasHelp: clipped || Boolean(row.context?.length) || row.defaultValue !== undefined,
+  };
 }
 
 /** Says a setting is edited elsewhere. Nothing is wrong with it, so it is not an error. */
@@ -158,6 +164,7 @@ export function FieldRow(props: {
   path?: Array<string | number>;
   help?: string;
   helpId?: string;
+  helpContext?: readonly string[];
   defaultValue?: string;
   showLabel: boolean;
   required?: boolean;
@@ -176,6 +183,7 @@ export function FieldRow(props: {
       ? configRowCopy({
           label: props.label,
           help: props.help,
+          context: props.helpContext,
           defaultValue: props.defaultValue,
           width: props.stacked ? "full" : "beside",
         })
@@ -204,6 +212,7 @@ export function FieldRow(props: {
                   path={props.path}
                   label={props.label}
                   help={props.help}
+                  context={props.helpContext}
                   defaultValue={props.defaultValue}
                 />
               )}

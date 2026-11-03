@@ -1,5 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Match, Show, Switch } from "solid-js";
+import { objectFormOfUnion } from "../lib/config-form-utils.ts";
 import { getLocale, t } from "../lib/reactive/i18n.ts";
 import { resolveStructuredDraftInitialValue } from "./config-form-structured-draft.ts";
 import { ConfigStructuredDraft } from "./config-form-structured-draft.tsx";
@@ -30,6 +31,9 @@ import {
 import { hintForPath, pathKey, schemaType, type JsonSchema } from "./config-form.shared.ts";
 import { SettingsToggle, SettingsToggleRow } from "./solid/settings-ui.tsx";
 
+const isConfigObjectValue = (value: unknown) =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
 function resolveNode(
   schema: JsonSchema,
   params: ConfigNodeRenderParams,
@@ -39,6 +43,7 @@ function resolveNode(
   options?: unknown[];
   nullable?: boolean;
   inputType?: "text" | "number";
+  shorthandObject?: boolean;
 } {
   if (schema.anyOf || schema.oneOf) {
     const nonNull = (schema.anyOf ?? schema.oneOf ?? []).filter(
@@ -94,6 +99,19 @@ function resolveNode(
         };
       }
     }
+    const objectForm = objectFormOfUnion(schema);
+    if (
+      objectForm &&
+      (params.value === undefined ||
+        typeof params.value === "string" ||
+        isConfigObjectValue(params.value))
+    ) {
+      return {
+        schema: { ...schema, ...objectForm, anyOf: undefined, oneOf: undefined },
+        kind: "object",
+        shorthandObject: true,
+      };
+    }
     return { schema, kind: "json" };
   }
   if (schema.enum) {
@@ -119,7 +137,11 @@ function resolveNode(
 
 export function ConfigNode(props: { params: ConfigNodeRenderParams }): JSX.Element {
   const node = createMemo(() => resolveNode(props.params.schema, props.params));
-  const params = createMemo(() => ({ ...props.params, schema: node().schema }));
+  const params = createMemo(() => ({
+    ...props.params,
+    schema: node().schema,
+    shorthandObject: node().shorthandObject,
+  }));
   const meta = createMemo(
     () => {
       getLocale();
@@ -307,7 +329,12 @@ function BooleanNode(props: { params: ConfigNodeRenderParams }): JSX.Element {
   const onChange = (value: boolean) => props.params.onPatch(props.params.path, value);
   const defaultValue = createMemo(() => schemaDefaultValueText(props.params.schema));
   const copy = createMemo(() =>
-    configRowCopy({ label: meta().label, help: meta().help, defaultValue: defaultValue() }),
+    configRowCopy({
+      label: meta().label,
+      help: meta().help,
+      context: props.params.helpContext,
+      defaultValue: defaultValue(),
+    }),
   );
   return (
     <Switch
@@ -340,6 +367,7 @@ function BooleanNode(props: { params: ConfigNodeRenderParams }): JSX.Element {
           label={meta().label}
           path={props.params.path}
           help={meta().help}
+          helpContext={props.params.helpContext}
           showLabel={props.params.showLabel ?? true}
           control={
             <input
@@ -367,6 +395,7 @@ function BooleanNode(props: { params: ConfigNodeRenderParams }): JSX.Element {
                   path={props.params.path}
                   label={meta().label}
                   help={meta().help}
+                  context={props.params.helpContext}
                   defaultValue={defaultValue()}
                 />
               </Show>

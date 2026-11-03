@@ -202,11 +202,6 @@ suite.define(() => {
       const enabledRow = settingsRow(page, "Enabled");
       const modeRow = settingsRow(page, "Mode");
       const payloadRow = settingsRow(page, "Payload");
-      const profileBlock = panel.locator("details.cfg-object").filter({
-        has: page.locator(".cfg-object__summary .settings-row__title").getByText("Profile", {
-          exact: true,
-        }),
-      });
       const retriesRow = settingsRow(page, "Retries");
       const tagsBlock = panel.locator(".cfg-array").filter({ hasText: "Tags" });
 
@@ -227,7 +222,7 @@ suite.define(() => {
       await expect.poll(() => modeRow.locator("select").inputValue()).not.toBe("__unset__");
       expect(await helpText(payloadRow, "Payload")).toContain('Default: {"mode":"balanced"}');
       await expect
-        .poll(() => profileBlock.textContent())
+        .poll(() => panel.textContent())
         .not.toContain('{"enabled":true,"mode":"balanced"}');
       await expect.poll(() => retriesRow.getByRole("spinbutton").inputValue()).toBe("9");
       expect(await helpText(tagsBlock, "Tags")).toContain('Default: ["stable","default"]');

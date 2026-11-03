@@ -544,7 +544,7 @@ suite.define(() => {
         // The generic UI prefs form must not re-render it as a bare text box.
         await page.getByRole("tab", { name: "UI", exact: true }).click();
         const panel = page.locator("#config-section-panel");
-        await expect.poll(() => panel.textContent()).toContain("Prefs");
+        await expect.poll(() => panel.locator(".settings-row").count()).toBeGreaterThan(0);
         expect(await panel.locator('input[aria-label="Locale"]').count()).toBe(0);
         expect(await panel.locator('input[aria-label="Interface language"]').count()).toBe(0);
       },
