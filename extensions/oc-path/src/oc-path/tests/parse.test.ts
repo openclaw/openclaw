@@ -15,6 +15,7 @@ describe("parseMd — frontmatter", () => {
     [String.raw`'C:\Tools\bin'`, String.raw`C:\Tools\bin`],
     [String.raw`"bad\qescape"`, String.raw`bad\qescape`],
     ["ready # operator note", "ready"],
+    ["ready\n...", "ready"],
     ["|-\n  alpha\n  beta", "alpha\nbeta"],
     ["|\n  alpha\n  beta", "alpha\nbeta\n"],
     ["|+\n  alpha\n  beta\n", "alpha\nbeta\n\n"],

@@ -82,7 +82,6 @@ function detectFrontmatter(lines: readonly string[]): FrontmatterRange | null {
   // Keep the final newline so YAML owns multiline folding and chomping.
   const doc = parseDocument(frontmatter.join("\n") + "\n", {
     prettyErrors: false,
-    logLevel: "silent",
     lineCounter,
   });
   const entries: FrontmatterEntry[] = [];
