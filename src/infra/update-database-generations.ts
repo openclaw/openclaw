@@ -212,7 +212,7 @@ export function readUnchangedUpdateDatabaseGeneration(
 export function readUpdateDatabaseGeneration(
   pathname: string,
   inspectImage?: (imagePath: string, sourcePath: string) => void,
-  retain?: { stagingRoot: string; accept: () => boolean },
+  snapshot?: { stagingRoot: string; accept?: () => boolean },
 ): DatabaseGenerationObservation {
   const entries = readGenerationFamily(pathname);
   const entry = entries[0];
@@ -224,7 +224,7 @@ export function readUpdateDatabaseGeneration(
   // below verifies the whole family before its generation can be published.
   const readGeneration = createSqliteFileGenerationReader();
   const generation = readGeneration(pathname);
-  const staging = retain
+  const staging = snapshot
     ? undefined
     : allocateWorkerOwnedSqliteSnapshotDirectorySync(resolvePrivateSqliteSnapshotStagingRoot());
   return runWithSqliteCleanup(
@@ -233,7 +233,7 @@ export function readUpdateDatabaseGeneration(
     () => {
       const prepared = prepareSqliteReadOnlyLocationSyncInProcess(
         pathname,
-        retain?.stagingRoot ?? staging?.directory,
+        snapshot?.stagingRoot ?? staging?.directory,
         { key: `file:${databaseFileIdentityKey(generation.database)}` },
         !generation.journal && (generation.wal?.size ?? 0n) === 0n
           ? { sha256: generation.database.sha256, sizeBytes: Number(generation.database.size) }
@@ -246,7 +246,7 @@ export function readUpdateDatabaseGeneration(
             if (retained) {
               return;
             }
-            if (!retain) {
+            if (!snapshot) {
               prepared.cleanup();
               return;
             }
@@ -263,7 +263,7 @@ export function readUpdateDatabaseGeneration(
         },
         "Database generation snapshot",
         () => {
-          const content = readCommittedContent(pathname, prepared, inspectImage, retain?.accept);
+          const content = readCommittedContent(pathname, prepared, inspectImage, snapshot?.accept);
           const current = readStableSqliteFileGeneration(pathname, readGeneration);
           const after = readWalIndexHeader(pathname);
           verifyGenerationFamily(pathname, entries, current);
@@ -333,16 +333,22 @@ export function readUpdateDatabaseGenerations(
   return readUpdateDatabaseGenerationPair(paths, inspectImage).committed;
 }
 
-/** Both wire formats come from the same verified family observation. */
+/** Both wire formats come from the same verified family observation. A supplied
+ * staging root must remain owned by the command through native process settlement. */
 export function readUpdateDatabaseGenerationPair(
   paths: readonly string[],
   inspectImage?: (imagePath: string, sourcePath: string) => void,
+  stagingRoot?: string,
 ): UpdateDatabaseGenerationPair {
   const committed: UpdateDatabaseGenerations = {};
   const physical: UpdateDatabaseGenerations = {};
   const emptyReaderAlternates: Record<string, string> = {};
   for (const pathname of paths) {
-    const observation = readUpdateDatabaseGeneration(pathname, inspectImage);
+    const observation = readUpdateDatabaseGeneration(
+      pathname,
+      inspectImage,
+      stagingRoot === undefined ? undefined : { stagingRoot },
+    );
     committed[pathname] = observation.generation;
     physical[pathname] = observation.physical;
     if (observation.emptyReaderAlternate) {

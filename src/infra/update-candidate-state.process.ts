@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { isPromise } from "node:util/types";
 import { MessageChannel } from "node:worker_threads";
 import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { resolveCommandProcessSignal, withCommandProcessScope } from "../process/exec-spawn.js";
@@ -21,9 +22,17 @@ import type {
 } from "./update-state-inspection-resource.js";
 import { decodeNativeWorkerFailure } from "./worker-native-error.js";
 
-const inspectionCommands = new AsyncLocalStorage<
-  (argv: string[], options: StateInspectionOptions) => Promise<SpawnResult>
->();
+type StateInspectionScope = {
+  source: ReturnType<typeof captureRuntimeWorkerSource>;
+  broker?: ReturnType<typeof createSpawnBrokerHost>;
+  pending: Set<Promise<unknown>>;
+  closing: boolean;
+};
+const inspectionScopes = new AsyncLocalStorage<StateInspectionScope>();
+const inspectionCommands = new AsyncLocalStorage<{
+  directory: string;
+  run: (argv: string[], options: StateInspectionOptions) => Promise<SpawnResult>;
+}>();
 function decodeInspectionFailure(failure: StateInspectionFailure): unknown {
   const cause = decodeNativeWorkerFailure(failure.error);
   return failure.uncertain ? new CommandProcessCleanupError({ cause }) : cause;
@@ -33,21 +42,109 @@ export function runStateInspectionCommand(
   argv: string[],
   options: StateInspectionOptions,
 ): Promise<SpawnResult> {
-  return inspectionCommands.getStore()?.(argv, options) ?? runUtf8CommandWithTimeout(argv, options);
+  return (
+    inspectionCommands.getStore()?.run(argv, options) ?? runUtf8CommandWithTimeout(argv, options)
+  );
+}
+
+/** Only the command owner can lend its cleanup tree to an isolated inspection. */
+export function getStateInspectionStagingRoot(): string | undefined {
+  return inspectionCommands.getStore()?.directory;
+}
+
+/** Maintenance shares native custody startup; each inspection still retires its own tree. */
+export function createStateInspectionScope() {
+  const source = captureRuntimeWorkerSource(resolveRuntimeProcessEntrypointUrl("spawnBroker"));
+  const scope: StateInspectionScope = { source, pending: new Set(), closing: false };
+  const operations = new Set<Promise<unknown>>();
+  let closing: Promise<void> | undefined;
+  const close = () =>
+    (closing ??= (async () => {
+      // Admitted callbacks may still need to launch their next isolated observation.
+      await Promise.allSettled(operations);
+      scope.closing = true;
+      await Promise.allSettled(scope.pending);
+      // Open native claims refuse shutdown even if a caller caught uncertain cleanup.
+      await scope.broker?.close();
+    })());
+  source.runtimeGeneration?.retain(scope, close);
+  return {
+    run<T>(operation: () => T): T {
+      if (closing) {
+        throw new Error("State inspection scope is closing");
+      }
+      const value = inspectionScopes.run(scope, operation);
+      // Preserve synchronous values without assimilating user-defined thenables.
+      if (isPromise(value)) {
+        operations.add(value);
+        void value.then(
+          () => operations.delete(value),
+          () => operations.delete(value),
+        );
+      }
+      return value;
+    },
+    close,
+  };
+}
+
+async function withStateInspectionScope<T>(operation: () => Promise<T>): Promise<T> {
+  const scope = createStateInspectionScope();
+  let outcome: { value: T } | { cause: unknown };
+  try {
+    outcome = { value: await scope.run(operation) };
+  } catch (cause) {
+    outcome = { cause };
+  }
+  try {
+    await scope.close();
+  } catch (cause) {
+    throw new AggregateError(
+      "cause" in outcome ? [outcome.cause, cause] : [cause],
+      "State inspection scope cleanup failed",
+      { cause },
+    );
+  }
+  if ("cause" in outcome) {
+    throw outcome.cause;
+  }
+  return outcome.value;
 }
 
 /** One surviving command owner keeps temporary state images through creator exit. */
-export async function withStateInspectionStaging<T>(
+export function withStateInspectionStaging<T>(
   root: string,
   inspect: (stagingRoot: string) => Promise<T>,
   options: { allowLegacyWorker?: boolean; signal?: AbortSignal } = {},
 ): Promise<T> {
+  const scope = inspectionScopes.getStore();
+  if (!scope) {
+    return withStateInspectionScope(() => withStateInspectionStaging(root, inspect, options));
+  }
+  if (scope.closing) {
+    return Promise.reject(new Error("State inspection scope is closing"));
+  }
+  const work = runStateInspectionStaging(scope, root, inspect, options);
+  scope.pending.add(work);
+  void work.then(
+    () => scope.pending.delete(work),
+    () => scope.pending.delete(work),
+  );
+  return work;
+}
+
+async function runStateInspectionStaging<T>(
+  scope: StateInspectionScope,
+  root: string,
+  inspect: (stagingRoot: string) => Promise<T>,
+  options: { allowLegacyWorker?: boolean; signal?: AbortSignal },
+): Promise<T> {
   options.signal?.throwIfAborted();
-  const source = captureRuntimeWorkerSource(resolveRuntimeProcessEntrypointUrl("spawnBroker"));
-  const broker = createSpawnBrokerHost({ nativeResources: true, workerUrl: source.moduleUrl });
-  const retired = createDeferredCore();
-  void retired.promise.catch(() => {});
-  source.runtimeGeneration?.retain(broker, () => retired.promise);
+  const { source } = scope;
+  const broker = (scope.broker ??= createSpawnBrokerHost({
+    nativeResources: true,
+    workerUrl: source.moduleUrl,
+  }));
   const { port1, port2 } = new MessageChannel();
   const allocated = createDeferredCore<string>();
   let sequence = 0;
@@ -82,13 +179,6 @@ export async function withStateInspectionStaging<T>(
   } catch (error) {
     port1.close();
     port2.close();
-    try {
-      await broker.close();
-      retired.resolve();
-    } catch (cause) {
-      retired.reject(cause);
-      throw cause;
-    }
     throw error;
   }
   const send = (request: StateInspectionRequest) => port2.postMessage(request);
@@ -162,7 +252,9 @@ export async function withStateInspectionStaging<T>(
   try {
     const directory = await allocated.promise;
     options.signal?.throwIfAborted();
-    outcome = { value: await inspectionCommands.run(run, () => inspect(directory)) };
+    outcome = {
+      value: await inspectionCommands.run({ directory, run }, () => inspect(directory)),
+    };
   } catch (cause) {
     outcome = { cause };
   }
@@ -172,10 +264,7 @@ export async function withStateInspectionStaging<T>(
     await client.close().catch((error: unknown) => cleanupErrors.push(error));
     await lease.close();
     lease.release();
-    await broker.close();
-    retired.resolve();
   } catch (cause) {
-    retired.reject(cause);
     cleanupErrors.push(cause);
   } finally {
     client.dispose();

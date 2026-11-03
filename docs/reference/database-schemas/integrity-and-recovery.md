@@ -660,6 +660,9 @@ inspection commands. Caller exit or command-scope cancellation stops the command
 The owner joins their process groups before removing staged files. Uncertain
 cleanup retains the files until process settlement is confirmed; durable restore
 staging keeps its existing recovery lifetime.
+Doctor migrations start this owner lazily and share it across their inspections,
+while each inspection retires its own directory. SQLite generation children use their
+parent's explicit cleanup custody instead of starting another snapshot custodian.
 
 Private snapshot files remain temporary artifacts: the creator registers cleanup
 before copying and publishes the finished copy by rename. Private inspection

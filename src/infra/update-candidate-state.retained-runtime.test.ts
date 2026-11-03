@@ -14,6 +14,7 @@ import { createCompiledSdkHost } from "../plugins/compiled-sdk-host.test-support
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { withRuntimeWorkerGeneration } from "./runtime-worker-generation.js";
 import {
+  createStateInspectionScope,
   runStateInspectionCommand,
   withStateInspectionStaging,
 } from "./update-candidate-state.process.js";
@@ -82,15 +83,20 @@ it("retains inspection broker and resource code through package replacement and 
       await rename(root, retained);
       await mkdir(root);
       await writeFile(path.join(root, "package.json"), '{"name":"openclaw","type":"module"}');
-      inspection = withStateInspectionStaging(base, async (directory) => {
-        stagingRoot = directory;
-        const result = await runStateInspectionCommand(
-          [process.execPath, "-e", "process.stdout.write('retained')"],
-          { signal, timeoutMs: 5_000 },
-        );
-        expect(result).toMatchObject({ code: 0, stdout: "retained" });
+      // Refused Doctor admission can leave even an unused scope without an explicit close.
+      createStateInspectionScope();
+      const commands = createStateInspectionScope();
+      inspection = commands.run(async () => {
         entered.resolve();
         await resume.promise;
+        await withStateInspectionStaging(base, async (directory) => {
+          stagingRoot = directory;
+          const result = await runStateInspectionCommand(
+            [process.execPath, "-e", "process.stdout.write('retained')"],
+            { signal, timeoutMs: 5_000 },
+          );
+          expect(result).toMatchObject({ code: 0, stdout: "retained" });
+        });
       });
       await awaitGateBeforeSettlement(
         entered.promise,
@@ -110,7 +116,7 @@ it("retains inspection broker and resource code through package replacement and 
       awaitGateBeforeSettlement(entered.promise, generation, "Retained inspection did not start"),
       signal,
     );
-    // Let generation finalizers run while the real native resource still owns its staging root.
+    // Finalizers must retain code while the admitted callback has not launched its command yet.
     await nextEventLoopTurn();
     expect(fsSync.existsSync(retained)).toBe(true);
   } finally {

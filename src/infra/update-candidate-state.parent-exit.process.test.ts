@@ -1,24 +1,35 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { it } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
+import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { runUtf8CommandWithTimeout } from "../process/exec.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { runtimeProcessScriptEntrypoints } from "./runtime-process-manifest.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { runUpdateStateInspectionWorker } from "./update-candidate-state.inspection.js";
 import {
+  createStateInspectionScope,
   runStateInspectionCommand,
   withStateInspectionStaging,
   withUpdateStateInspectionWork,
 } from "./update-candidate-state.process.js";
 
-it.for(["sqlite-generations", "database-generations"] as const)(
+it.for([
+  { mode: "sqlite-generations", parentOwned: false },
+  { mode: "database-generations", parentOwned: false },
+  { mode: "sqlite-generations", parentOwned: true },
+  { mode: "database-generations", parentOwned: true },
+] as const)(
   "shares staging within one %s command and retires it before returning",
-  async (mode, { expect, signal, onTestFinished }) => {
+  async ({ mode, parentOwned }, { expect, signal, onTestFinished, skip }) => {
+    if (parentOwned && process.platform === "win32") {
+      skip(); // The observer executable uses a POSIX shell wrapper.
+    }
     const fixture = createFixtureLifetime();
     onTestFinished(() => fixture.cleanup());
     await fixture.run(async () => {
@@ -30,6 +41,7 @@ it.for(["sqlite-generations", "database-generations"] as const)(
       }
       const original = paths.map((file) => fs.readFileSync(file));
       const events = path.join(root, "workers");
+      fs.writeFileSync(events, "");
       const worker = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.updateCandidateState);
       const observer = new URL("./worker-request-diagnostics.ts", import.meta.url);
       const entry = path.join(root, "observe.mts");
@@ -44,22 +56,44 @@ await runWithWorkerStartObserver(script => {
 `,
       );
       const cache = path.join(root, "cache");
+      const stagingParent = path.join(cache, "openclaw");
+      fs.mkdirSync(stagingParent, { recursive: true });
       const executable = resolveTestNodeExecPath();
-      const result = await runUtf8CommandWithTimeout(
-        [executable, ...resolveRuntimeWorkerArgv(pathToFileURL(entry), executable)],
-        {
-          signal,
-          timeoutMs: 30_000,
-          env: { HOME: root, XDG_CACHE_HOME: cache },
-          input: JSON.stringify({
-            mode,
-            paths,
-            stateDir: root,
-            config: {},
-            generationFormat: "paired",
-          }),
-        },
-      );
+      const argv = [executable, ...resolveRuntimeWorkerArgv(pathToFileURL(entry), executable)];
+      const input = { mode, paths, stateDir: root, config: {}, generationFormat: "paired" };
+      const env = { HOME: root, XDG_CACHE_HOME: cache };
+      const runner = path.join(root, "observe-worker");
+      if (parentOwned) {
+        fs.writeFileSync(runner, `#!/bin/sh\nexec ${argv.map(quoteCliArg).join(" ")} "$@"\n`, {
+          mode: 0o755,
+        });
+      }
+      const result = parentOwned
+        ? await withStateInspectionStaging(stagingParent, (stagingRoot) =>
+            runUpdateStateInspectionWorker({
+              input,
+              nodeRunner: runner,
+              sourceEnv: {
+                ...process.env,
+                ...env,
+                TSX_TSCONFIG_PATH: fileURLToPath(new URL("../../tsconfig.json", import.meta.url)),
+              },
+              stagingRoot,
+              databases: paths.map((file) => ({
+                path: file,
+                sizeBytes: fs.statSync(file, { bigint: true }).size,
+              })),
+              timeoutMs: 30_000,
+              ioBudget: "deadline",
+              signal,
+            }),
+          )
+        : await runUtf8CommandWithTimeout(argv, {
+            signal,
+            timeoutMs: 30_000,
+            env,
+            input: JSON.stringify(input),
+          });
       expect(result, result.stderr).toMatchObject({ code: 0 });
       expect(JSON.parse(result.stdout)).toMatchObject({
         committed: Object.fromEntries(
@@ -67,11 +101,52 @@ await runWithWorkerStartObserver(script => {
         ),
       });
       expect(paths.map((file) => fs.readFileSync(file))).toEqual(original);
-      expect(fs.readdirSync(path.join(cache, "openclaw"))).toEqual([]);
-      expect(fs.readFileSync(events, "utf8").trim().split("\n")).toEqual(["start"]);
+      expect(fs.readdirSync(stagingParent)).toEqual([]);
+      expect(fs.readFileSync(events, "utf8")).toBe(parentOwned ? "" : "start\n");
     });
   },
 );
+
+it("shares command custody while retiring each inspection tree before the next", async ({
+  expect,
+  signal,
+  onTestFinished,
+}) => {
+  const fixture = createFixtureLifetime();
+  onTestFinished(() => fixture.cleanup());
+  await fixture.run(async () => {
+    const root = fixture.createTempDir("update-inspection-scope-");
+    const directories: string[] = [];
+    const parents: number[] = [];
+    const scope = createStateInspectionScope();
+    try {
+      await scope.run(async () => {
+        for (let index = 0; index < 2; index++) {
+          await withStateInspectionStaging(root, async (directory) => {
+            directories.push(directory);
+            const result = await runStateInspectionCommand(
+              [process.execPath, "-e", "process.stdout.write(String(process.ppid))"],
+              { signal, timeoutMs: 5_000 },
+            );
+            expect(result, result.stderr).toMatchObject({ code: 0, termination: "exit" });
+            parents.push(Number(result.stdout));
+          });
+          expect(fs.readdirSync(root)).toEqual([]);
+        }
+      });
+    } finally {
+      await scope.close();
+    }
+    expect(new Set(directories).size).toBe(2);
+    const brokerPid = parents[0];
+    if (brokerPid === undefined) {
+      throw new Error("Inspection command did not report its native parent");
+    }
+    expect(brokerPid).toBeGreaterThan(0);
+    expect(parents[1]).toBe(brokerPid);
+    expect(() => process.kill(brokerPid, 0)).toThrow();
+  });
+});
 
 it.for([false, true])(
   "cancels inspection commands with their enclosing work (explicit signal=%s)",
@@ -199,7 +274,12 @@ setInterval(() => {}, 1000);
       );
       const producer = `
 import { readUpdateStateSchemaVersions } from ${JSON.stringify(new URL("./update-candidate-state.ts", import.meta.url).href)};
-await readUpdateStateSchemaVersions({ stateDir: ${JSON.stringify(stateDir)}, config: {}, nodeRunner: ${JSON.stringify(runner)} });
+import { createStateInspectionScope, withStateInspectionStaging } from ${JSON.stringify(new URL("./update-candidate-state.process.ts", import.meta.url).href)};
+const scope = createStateInspectionScope();
+try { await scope.run(async () => {
+  await withStateInspectionStaging(${JSON.stringify(path.join(root, "cache"))}, async () => {});
+  await readUpdateStateSchemaVersions({ stateDir: ${JSON.stringify(stateDir)}, config: {}, nodeRunner: ${JSON.stringify(runner)} });
+}); } finally { await scope.close(); }
 `;
       const supervisor = `
 import fs from "node:fs";

@@ -24,6 +24,7 @@ import {
   type UpdateStateInspectionProgress,
 } from "./update-candidate-state.diagnostics.js";
 import {
+  getStateInspectionStagingRoot,
   withStateInspectionStaging,
   runStateInspectionCommand,
   withUpdateStateInspectionWork,
@@ -120,6 +121,10 @@ export async function runUpdateStateInspectionWorker(params: {
             ? undefined
             : JSON.stringify({
                 ...params.input,
+                ...(params.input.mode === "sqlite-generations" ||
+                params.input.mode === "database-generations"
+                  ? { parentOwnedStagingRoot: getStateInspectionStagingRoot() }
+                  : {}),
                 resultPath,
                 includeLocalStoreVersions: true,
                 includeClientCredentialStoreVersion: true,
