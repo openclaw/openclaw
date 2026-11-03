@@ -236,7 +236,7 @@ const enSessionOrganization = {
       "Group created, but the move was skipped because the list changed. Move from the row menu.",
     stopCloudWorkerConfirm: sharedSessions.stopCloudWorkerConfirm,
     stopCloudWorkerConfirmAction: sharedSessions.stopCloudWorkerConfirmAction,
-    stopCloudWorkerBody: sharedSessions.stopCloudWorkerBody,
+    stopCloudWorkerBody: "Any work running on it stops.",
     stopCloudWorkerStale:
       'Gateway connection replaced before the cloud worker for "{session}" was stopped. Try again.',
     deleteSessionTitle: "Delete “{session}”?",

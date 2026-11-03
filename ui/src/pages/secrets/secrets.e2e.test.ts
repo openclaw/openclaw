@@ -260,7 +260,9 @@ suite.define(() => {
         const deletions = () => gateway.getRequests("secrets.store.delete");
         const entryRow = await rowAction(page, "SERVICE_URL", "delete");
         const confirmation = modal(page, "Delete SERVICE_URL?");
-        await confirmation.getByText("The stored value can't be recovered.", { exact: true }).waitFor();
+        await confirmation
+          .getByText("The stored value can't be recovered.", { exact: true })
+          .waitFor();
         const original = await gatewayIdentity(page);
         expect(original.clientInstanceId).toBeDefined();
         const listCount = (await gateway.getRequests("secrets.store.list")).length;
