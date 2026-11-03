@@ -353,6 +353,10 @@ Managed Chrome profiles save ordinary click-triggered downloads into the OpenCla
 
 For remote browser nodes, OpenClaw stages private copies and normalizes filenames for portability, including Windows device names and trailing dots or spaces. File bytes remain unchanged.
 
+File-chooser uploads measure their completion timeout using elapsed time.
+Adjusting the Gateway host's wall clock does not shorten or extend that budget;
+the existing timeout and cancellation still apply.
+
 Explicit download paths and `trace stop --out` preserve filename whitespace where the filesystem supports it. Quote these paths, for example `openclaw browser download <ref> " report.pdf "`. Output paths must stay inside their managed download or trace directory.
 
 If saving a download fails, OpenClaw requests cancellation of the transfer and reports the original save error. Correct the output path or filesystem problem before starting a new download.

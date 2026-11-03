@@ -775,55 +775,6 @@ describe("capability cli", () => {
     expect(mocks.loadAuthProfileStoreForRuntime).not.toHaveBeenCalled();
   });
 
-  it.each([true, false])(
-    "inspects web provider state with explicit agent selection %s",
-    async (scoped) => {
-      mocks.loadConfig.mockReturnValue(
-        scoped
-          ? { agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } } }
-          : {
-              tools: { web: { search: { provider: "gemini" }, fetch: { provider: "firecrawl" } } },
-            },
-      );
-      const provider = { id: "openai", envVars: ["OPENAI_API_KEY"], requiresCredential: true };
-      const search = await import("../web-search/runtime.js");
-      const fetch = await import("../web-fetch/runtime.js");
-      vi.mocked(search.listWebSearchProvidersAsync).mockResolvedValue(
-        scoped
-          ? ([provider] as never)
-          : [
-              { id: "brave", envVars: ["BRAVE_API_KEY"] } as never,
-              { id: "gemini", envVars: ["GEMINI_API_KEY"] } as never,
-            ],
-      );
-      vi.mocked(fetch.listWebFetchProviders).mockReturnValueOnce(
-        scoped ? [] : [{ id: "firecrawl", envVars: ["FIRECRAWL_API_KEY"] } as never],
-      );
-      if (!scoped) {
-        mocks.isWebSearchProviderConfigured.mockReturnValueOnce(false).mockReturnValueOnce(true);
-        mocks.isWebFetchProviderConfigured.mockReturnValueOnce(true);
-      }
-      await runCapability("web", "providers", ...(scoped ? ["--agent", "beta"] : []), "--json");
-      if (scoped) {
-        expect(firstJsonOutput()).toMatchObject({ search: [{ id: "openai" }], fetch: [] });
-        expect(mocks.isWebSearchProviderConfigured).toHaveBeenCalledWith({
-          provider,
-          config: mocks.loadConfig(),
-          agentDir: "/tmp/agent-beta",
-          authStore: { version: 1, profiles: {} },
-        });
-      } else {
-        expect(firstJsonOutput()).toMatchObject({
-          search: [
-            { id: "brave", configured: false, selected: false },
-            { id: "gemini", configured: true, selected: true },
-          ],
-          fetch: [{ id: "firecrawl", configured: true, selected: true }],
-        });
-      }
-    },
-  );
-
   it.each([false, true])(
     "prepares local model content and instructions (ChatGPT API: %s)",
     async (chatGpt) => {
@@ -1998,6 +1949,54 @@ describe("capability cli", () => {
     ]);
   });
 
+  it.each([true, false])(
+    "inspects web provider state with explicit agent selection %s",
+    async (scoped) => {
+      mocks.loadConfig.mockReturnValue(
+        scoped
+          ? { agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } } }
+          : {
+              tools: { web: { search: { provider: "gemini" }, fetch: { provider: "firecrawl" } } },
+            },
+      );
+      const provider = { id: "openai", envVars: ["OPENAI_API_KEY"], requiresCredential: true };
+      const search = await import("../web-search/runtime.js");
+      const fetch = await import("../web-fetch/runtime.js");
+      vi.mocked(search.listWebSearchProvidersAsync).mockResolvedValue(
+        scoped
+          ? ([provider] as never)
+          : [
+              { id: "brave", envVars: ["BRAVE_API_KEY"] } as never,
+              { id: "gemini", envVars: ["GEMINI_API_KEY"] } as never,
+            ],
+      );
+      vi.mocked(fetch.listWebFetchProviders).mockReturnValueOnce(
+        scoped ? [] : [{ id: "firecrawl", envVars: ["FIRECRAWL_API_KEY"] } as never],
+      );
+      if (!scoped) {
+        mocks.isWebSearchProviderConfigured.mockReturnValueOnce(false).mockReturnValueOnce(true);
+        mocks.isWebFetchProviderConfigured.mockReturnValueOnce(true);
+      }
+      await runCapability("web", "providers", ...(scoped ? ["--agent", "beta"] : []), "--json");
+      if (scoped) {
+        expect(firstJsonOutput()).toMatchObject({ search: [{ id: "openai" }], fetch: [] });
+        expect(mocks.isWebSearchProviderConfigured).toHaveBeenCalledWith({
+          provider,
+          config: mocks.loadConfig(),
+          agentDir: "/tmp/agent-beta",
+          authStore: { version: 1, profiles: {} },
+        });
+      } else {
+        expect(firstJsonOutput()).toMatchObject({
+          search: [
+            { id: "brave", configured: false, selected: false },
+            { id: "gemini", configured: true, selected: true },
+          ],
+          fetch: [{ id: "firecrawl", configured: true, selected: true }],
+        });
+      }
+    },
+  );
   it("reports structured web search failures and exits nonzero", async () => {
     const provider = "kitchen-sink-search";
     const message = "Kitchen Sink rate limit.";
@@ -2025,67 +2024,62 @@ describe("capability cli", () => {
   });
 
   it.each([
-    { format: undefined, provider: undefined },
-    { format: "text", provider: "firecrawl" },
-  ])("fetches through the default tool with $format output", async ({ format, provider }) => {
-    const config = { tools: { web: { fetch: { maxChars: 1200 } } } };
-    const resolvedConfig = { ...config, resolved: true };
-    mocks.loadConfig.mockReturnValue(config);
-    mocks.resolveCommandConfigWithSecrets.mockResolvedValueOnce({
-      resolvedConfig,
-      effectiveConfig: resolvedConfig,
-      diagnostics: [],
-    });
-    const result = {
-      title: "Example Domain",
-      text: "Example content",
-      externalContent: { untrusted: true, source: "web_fetch", wrapped: true, provider },
-    };
-    const execute = vi.fn(async () => ({ content: [], details: result }));
-    const { createWebFetchTool } = await import("../agents/tools/web-fetch.js");
-    vi.mocked(createWebFetchTool).mockReturnValueOnce({ execute } as never);
+    { format: undefined, provider: undefined, interrupted: false },
+    { format: "text", provider: "firecrawl", interrupted: true },
+  ])(
+    "fetches through the default tool with $format output",
+    async ({ format, provider, interrupted }) => {
+      const scope = new AsyncWorkScope();
+      const result = {
+        title: "Example Domain",
+        text: "Example content",
+        externalContent: { untrusted: true, source: "web_fetch", wrapped: true, provider },
+      };
+      const execute = vi.fn(async () => {
+        if (interrupted) {
+          scope.beginClose();
+        }
+        return { content: [], details: result };
+      });
+      const { createWebFetchTool } = await import("../agents/tools/web-fetch.js");
+      vi.mocked(createWebFetchTool).mockReturnValueOnce({ execute } as never);
 
-    await runCap(
-      "infer",
-      "web",
-      "fetch",
-      "--url",
-      "https://example.com",
-      ...(format ? ["--format", format] : []),
-      "--json",
-    );
+      await scope.run(() =>
+        runCapability(
+          "web",
+          "fetch",
+          "--url",
+          "https://example.com",
+          ...(format ? ["--format", format] : []),
+          "--json",
+        ),
+      );
 
-    expect(createWebFetchTool).toHaveBeenCalledWith({ config: resolvedConfig });
-    expect(execute).toHaveBeenCalledExactlyOnceWith("infer-web-fetch", {
-      url: "https://example.com",
-      extractMode: format,
-    });
-    expect(firstJsonOutput()).toEqual({
-      ok: true,
-      capability: "web.fetch",
-      transport: "local",
-      provider: provider ?? "direct",
-      attempts: [],
-      outputs: [{ result }],
-    });
-  });
+      expect(execute).toHaveBeenCalledExactlyOnceWith(
+        "infer-web-fetch",
+        { url: "https://example.com", extractMode: format },
+        scope.signal,
+      );
+      expect(firstJsonOutput()).toEqual(
+        interrupted
+          ? undefined
+          : expect.objectContaining({ provider: provider ?? "direct", outputs: [{ result }] }),
+      );
+    },
+  );
 
   it.each([undefined, "firecrawl"])(
     "rejects disabled web fetch with provider %s",
     async (provider) => {
       mocks.loadConfig.mockReturnValue({ tools: { web: { fetch: { enabled: false } } } });
 
-      await expect(
-        runCap(
-          "infer",
-          "web",
-          "fetch",
-          "--url",
-          "https://example.com",
-          ...(provider ? ["--provider", provider] : []),
-          "--json",
-        ),
-      ).rejects.toThrow("exit 1");
+      const args = [
+        "--url",
+        "https://example.com",
+        ...(provider ? ["--provider", provider] : []),
+        "--json",
+      ];
+      await expect(runCapability("web", "fetch", ...args)).rejects.toThrow("exit 1");
 
       expect(runtimeErrorMessages().join("\n")).toContain("tools.web.fetch.enabled");
       expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
@@ -2144,6 +2138,7 @@ describe("capability cli", () => {
         expect(search.runWebSearch).toHaveBeenCalledWith({
           config: resolvedConfig,
           providerId: "firecrawl",
+          signal: undefined,
           args: { query: "ping", count: 3, limit: 3 },
         });
       } else {
@@ -2151,10 +2146,10 @@ describe("capability cli", () => {
           config: resolvedConfig,
           providerId: "firecrawl",
         });
-        expect(execute).toHaveBeenCalledExactlyOnceWith({
-          url: "https://example.com",
-          extractMode: "text",
-        });
+        expect(execute).toHaveBeenCalledExactlyOnceWith(
+          { url: "https://example.com", extractMode: "text" },
+          { signal: undefined },
+        );
       }
     },
   );

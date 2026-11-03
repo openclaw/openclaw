@@ -389,8 +389,8 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
     bindSessionIdentity = true,
   ): void => {
     const prepared = committingFacts ?? supplied;
-    // Outside a committing frame, admitted input can reenter its own writer guard.
-    if (!prepared && params.preparedTargets && (!consuming.sharing || !bindSessionIdentity)) {
+    // A prepared consuming frame already owns the current source facts.
+    if (!prepared && !consuming.sharing && params.preparedTargets) {
       const retained = findPreparedSharingTarget(params, targetRef);
       if (!retained) {
         throw targetChanged(targetRef.sessionKey);
