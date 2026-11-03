@@ -42,6 +42,7 @@ import { containsAsciiControlCharacter } from "openclaw/plugin-sdk/string-normal
 import { clawrouterMediaUnderstandingProvider } from "./audio-transcription.js";
 import { normalizeClawRouterApiBaseUrl, normalizeClawRouterRootUrl } from "./base-url.js";
 import { buildClawRouterDecisionProvider } from "./decision-provider.js";
+import { clawrouterEmbeddingProvider } from "./embedding-provider.js";
 import { buildClawRouterImageGenerationProvider } from "./image-generation-provider.js";
 import { listClawRouterImageModelCatalog } from "./image-model-catalog.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
@@ -447,6 +448,7 @@ export default defineSingleProviderPluginEntry({
   manifest,
   register(api) {
     api.registerSpeechProvider(buildClawRouterSpeechProvider);
+    api.registerEmbeddingProvider(clawrouterEmbeddingProvider);
     api.registerMediaUnderstandingProvider(clawrouterMediaUnderstandingProvider);
     api.registerDecisionProvider(buildClawRouterDecisionProvider());
     api.registerImageGenerationProvider(buildClawRouterImageGenerationProvider());

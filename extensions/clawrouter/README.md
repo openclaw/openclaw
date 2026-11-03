@@ -123,3 +123,18 @@ can return `pricing_required` before upstream dispatch. This adapter never chang
 a policy to soft, fixed-price, or unmetered mode to make a request pass. Streaming,
 diarization, other response formats/models, and realtime transcription remain
 outside this adapter.
+
+## Memory embeddings
+
+Choose `clawrouter` as the memory embedding provider and select a catalog model
+such as `openai/text-embedding-3-small`. Each request resolves the router credential
+and refreshes the catalog, then uses the eligible declared `openai.embeddings`
+native, manifest or unified route. Native/manifest requests use the upstream model
+ID; unified requests use the catalog ID. The existing memory transport validates
+and orders vectors and reports usage.
+
+The initial adapter supports default text embeddings at declared `/embeddings`
+endpoints. Custom dimensions, task-specific input types and multimodal inputs fail
+explicitly. Remote destination overrides retain the memory transport's separate
+credential requirement; upstream OpenAI keys are never a fallback. A router
+deployment that declares endpoint formats for the offered route is required.
