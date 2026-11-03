@@ -13,6 +13,8 @@ export type SessionResetPolicy = {
   mode: SessionResetMode;
   atHour: number;
   idleMinutes?: number;
+  /** Recent user/assistant messages an automatic reset carries into the new session. */
+  tailMessages: number;
   configured?: boolean;
 };
 
@@ -26,6 +28,7 @@ export type SessionFreshness = {
 const DEFAULT_RESET_MODE: SessionResetMode = "none";
 const DEFAULT_RESET_AT_HOUR = 4;
 const DEFAULT_IDLE_MINUTES = 0;
+export const DEFAULT_RESET_TAIL_MESSAGES = 6;
 
 /** Returns the most recent daily reset boundary for the supplied wall-clock time. */
 function resolveDailyResetAtMs(now: number, atHour: number): number {
@@ -68,7 +71,13 @@ export function resolveSessionResetPolicy(params: {
     idleMinutes = DEFAULT_IDLE_MINUTES;
   }
 
-  return { mode, atHour, idleMinutes, configured };
+  const tailMessagesRaw = typeReset?.tailMessages ?? baseReset?.tailMessages;
+  const tailMessages =
+    tailMessagesRaw != null && Number.isFinite(tailMessagesRaw)
+      ? Math.max(Math.floor(tailMessagesRaw), 0)
+      : DEFAULT_RESET_TAIL_MESSAGES;
+
+  return { mode, atHour, idleMinutes, tailMessages, configured };
 }
 
 /** Evaluates whether a persisted session is still fresh under the resolved reset policy. */

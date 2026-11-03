@@ -16,6 +16,7 @@ export const SESSION_FIELD_LABELS: Record<string, string> = {
   "session.reset.mode": "Session Reset Mode",
   "session.reset.atHour": "Session Daily Reset Hour",
   "session.reset.idleMinutes": "Session Reset Idle Minutes",
+  "session.reset.tailMessages": "Session Reset Tail Messages",
   "session.resetByType": "Session Reset by Chat Type",
   "session.resetByType.direct": "Session Reset (Direct)",
   "session.resetByType.group": "Session Reset (Group)",

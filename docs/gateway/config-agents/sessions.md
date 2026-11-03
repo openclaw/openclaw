@@ -59,6 +59,7 @@ of tool and session policy.
       mode: "daily", // daily | idle
       atHour: 4,
       idleMinutes: 60,
+      tailMessages: 6, // recent messages kept by an automatic reset
     },
     resetByType: {
       thread: { mode: "daily", atHour: 4 },
@@ -119,6 +120,7 @@ of tool and session policy.
 - **`identityLinks`**: map shared identity ids to provider-prefixed peers for cross-channel session sharing.
 - **`resetTriggers`**: explicit commands or phrases that reset the session. Matching is case-insensitive; list each desired spelling because command aliases are not added automatically. For example, `["/tell"]` resets `/tell` messages, while `/steer` keeps its normal steering behavior. Follow-up text after a matching trigger is preserved, including later lines.
 - **`reset`**: primary reset policy. `none` disables automatic reset and is the default; compaction bounds active context instead. `daily` resets at `atHour` local time; `idle` resets after `idleMinutes`. When both configured, whichever expires first wins. `/new` and `/reset` remain available in every mode. Daily reset freshness uses the session row's `sessionStartedAt`; idle reset freshness uses `lastInteractionAt`. Background/system-event writes such as heartbeat, cron wakeups, exec notifications, and gateway bookkeeping can update `updatedAt`, but they do not keep daily/idle sessions fresh.
+  - **`tailMessages`**: how many recent user/assistant messages an automatic reset carries into the new session (default `6`; `0` starts empty). A run of consecutive messages from the same role keeps only its newest message. `/new` and `/reset` always start empty. Accepted in `resetByType` and `resetByChannel` entries too.
   - **`resetByType`**: per-type overrides (`direct`, `group`, `thread`). Doctor migrates legacy `dm` entries to `direct`; the schema rejects `dm`.
 - **`resetByChannel`**: per-channel reset overrides keyed by provider/channel id. When the session's channel has a matching entry, it wins outright over `resetByType`/`reset` for that session. Use only when one channel needs reset behavior different from the type-level policy.
 - **`mainKey`**: accepted but ignored. The per-agent main-session suffix is always `main`; omit this field. Global session scope uses `global` instead.

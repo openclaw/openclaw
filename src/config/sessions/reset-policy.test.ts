@@ -88,3 +88,30 @@ it("accepts none in the session schema and ignores reset deadlines", () => {
     fresh: true,
   });
 });
+
+it.each([
+  ["defaults to six", undefined, 6],
+  ["reads the base policy", { reset: { tailMessages: 20 } }, 20],
+  [
+    "prefers the chat type override",
+    { reset: { tailMessages: 20 }, resetByType: { direct: { tailMessages: 0 } } },
+    0,
+  ],
+] as const)("resolves the reset tail %s", (_name, sessionCfg, tailMessages) => {
+  expect(resolveSessionResetPolicy({ sessionCfg, resetType: "direct" })).toMatchObject({
+    tailMessages,
+  });
+});
+
+it("applies a channel override to the reset tail", () => {
+  const sessionCfg = SessionSchema.parse({
+    reset: { mode: "idle", tailMessages: 20 },
+    resetByChannel: { whatsapp: { mode: "idle", tailMessages: 3 } },
+  });
+  const resetOverride = resolveChannelResetConfig({ sessionCfg, channel: "whatsapp" });
+
+  expect(
+    resolveSessionResetPolicy({ sessionCfg, resetType: "direct", resetOverride }),
+  ).toMatchObject({ tailMessages: 3 });
+  expect(() => SessionSchema.parse({ reset: { tailMessages: -1 } })).toThrow();
+});
