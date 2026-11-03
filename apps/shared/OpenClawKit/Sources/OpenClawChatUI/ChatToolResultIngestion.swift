@@ -53,8 +53,8 @@ extension OpenClawChatMessage {
     }
 }
 
-private extension OpenClawChatMessageContent {
-    var toolResultContent: [OpenClawChatMessageContent] {
+extension OpenClawChatMessageContent {
+    fileprivate var toolResultContent: [OpenClawChatMessageContent] {
         if let text = self.text { return [.init(type: "text", text: text)] }
         return self.content.flatMap { payload -> [OpenClawChatMessageContent]? in
             if let text = payload.stringValue { return [.init(type: "text", text: text)] }

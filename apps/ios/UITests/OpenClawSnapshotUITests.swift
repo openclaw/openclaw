@@ -1194,7 +1194,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
             XCTAssertTrue(
                 (row.value as? String)?.hasPrefix(expectedStatus) == true,
                 "The row must retain the prepared outcome for \(command)")
-            // Like web, the collapsed row shows identity without an unknown-outcome badge.
+            // Rows without output retain a visible uncertainty cue.
             let image = try XCTUnwrap(row.screenshot().image.cgImage)
             let recognition = VNRecognizeTextRequest()
             recognition.recognitionLevel = .accurate
@@ -1203,7 +1203,9 @@ final class OpenClawSnapshotUITests: XCTestCase {
             let text = (recognition.results ?? []).compactMap { $0.topCandidates(1).first?.string }
                 .joined(separator: " ").lowercased()
             XCTAssertTrue(text.contains("exec"), "Rendered tool title was not recognized: \(text)")
-            XCTAssertFalse(text.contains("outcome unknown"), "Step still uses the fallback title: \(text)")
+            XCTAssertEqual(
+                text.contains("outcome unknown"), command == "printf missing",
+                "Non-expandable rows must retain their outcome: \(text)")
             XCTAssertFalse(text.contains("no result"), "Collapsed row has a status badge: \(text)")
             XCTAssertFalse(text.contains("finished"), "Collapsed row has a status badge: \(text)")
             if command == "printf ready" {
