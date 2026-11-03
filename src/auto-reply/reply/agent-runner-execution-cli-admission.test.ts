@@ -193,7 +193,12 @@ it("reads cold CLI fallback metadata while another connection holds a shared-sta
       holder = new DatabaseSync(resolveOpenClawStateSqlitePath());
       holder.exec("BEGIN IMMEDIATE");
       try {
-        expect(() => loadSessionEntry(scope)).toThrow(/database is locked/iu);
+        {
+          // Keep session readers cold while probing the shared writer lock without waiting.
+          using probe = new DatabaseSync(resolveOpenClawStateSqlitePath());
+          probe.exec("PRAGMA busy_timeout = 0");
+          expect(() => probe.exec("BEGIN IMMEDIATE")).toThrow(/database is locked/iu);
+        }
         return await runLocal();
       } finally {
         if (holder?.isTransaction) {

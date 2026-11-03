@@ -48,10 +48,10 @@ export function beamTestHandler(
   };
 }
 
-export function persistentBeamTestStore(pluginId = "beam") {
+export function persistentBeamTestStore() {
   resetPluginStateStoreForTests();
   const keyedStore = createPluginStateKeyedStoreV2ForTests<BeamStoredSession>(
-    pluginId,
+    "beam",
     {
       namespace: "sessions",
       maxEntries: BEAM_MAX_SESSIONS,

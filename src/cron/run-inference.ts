@@ -55,7 +55,7 @@ function incompatibleCandidateError(params: {
   return new Error(
     `Automation candidate ${params.provider}${params.runtime ? ` on runtime ${params.runtime}` : ""} is incompatible with its recorded inference account and route (${describeCronInferenceBinding(binding)}). ` +
       reason +
-      "Select a model compatible with the recorded account, or explicitly select a stored account with " +
+      "Select a model compatible with the recorded account, or explicitly select an account with " +
       "openclaw automations edit <jobId> --model <provider/model>@<profileId>.",
     params.cause === undefined ? undefined : { cause: params.cause },
   );

@@ -65,16 +65,11 @@
 }
 
 .session-hovercard__excerpt {
-  --session-hovercard-fade: linear-gradient(to bottom, black calc(100% - 14px), transparent);
-
-  overflow: hidden;
-  @supports (animation-timeline: scroll(self block)) {
-    animation-name: session-hovercard-fade;
-    animation-duration: 1s;
-    animation-timing-function: linear;
-    animation-fill-mode: both;
-    animation-timeline: scroll(self block);
-  }
+  display: -webkit-box;
+  overflow: clip;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
 }
 
 .session-hovercard__commentary .session-progress-card__markdown {

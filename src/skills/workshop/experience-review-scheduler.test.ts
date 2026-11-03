@@ -1,6 +1,7 @@
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
+import { workshopPluginConfig } from "./config.test-support.js";
 import {
   createSkillExperienceReviewScheduler,
   type ExperienceReviewCandidate,
@@ -47,12 +48,8 @@ function turn(
       modelProviderId: "openai",
       modelId: "gpt-test",
       toolNames: ["read", "skill_workshop"],
-      foregroundPromptContext: {
-        agentId: "main",
-        workspaceDir: "/workspace",
-        sandboxSessionKey: sessionKey,
-        trigger: "user",
-      },
+      agentId: "main",
+      trigger: "user",
     },
     config: {},
     source,
@@ -164,11 +161,11 @@ it("waits for 30 quiet seconds after the session's latest turn", async () => {
 it("ignores errored turns and sessions while Workshop is off", () => {
   turn(8);
   turn(20, { event: { messages: [], success: false, error: "provider 500" } });
-  turn(20, { config: { skills: { workshop: { autonomous: { mode: "off" } } } } });
+  turn(20, { config: workshopPluginConfig({ autonomous: { mode: "off" } }) });
   countedTurn(8, 0);
 });
 it("still queues reviews while Workshop proposes drafts", () => {
-  countedTurn(10, 1, { config: { skills: { workshop: { autonomous: { mode: "propose" } } } } });
+  countedTurn(10, 1, { config: workshopPluginConfig({ autonomous: { mode: "propose" } }) });
 });
 it("never reviews ACP child sessions", () => {
   countedTurn(20, 0, { sessionKey: "agent:main:acp:child-1" });

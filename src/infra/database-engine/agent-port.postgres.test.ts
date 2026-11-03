@@ -12,6 +12,7 @@ import {
   memoryStandingIntentSearchSchema,
   memoryVectorSearchSchema,
 } from "../../../packages/memory-host-sdk/src/host/memory-search-schema.js";
+import { expectBytesEqual } from "../../../test/helpers/file-snapshots.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { doctorDatabasePort } from "../../commands/doctor-database-port.js";
 import { readSessionTranscriptHistoryEventPage } from "../../config/sessions/session-accessor.sqlite-history-events.js";
@@ -924,7 +925,7 @@ describe.skipIf(!connection)("agent database port", () => {
         (advancement_key, engine_id, session_id, payload_json, created_at)
         VALUES ('next', 'engine', 'session', '{}', 0) RETURNING enqueue_sequence`),
       ).toEqual([{ enqueue_sequence: "11" }]);
-      expect(fs.readFileSync(anchorPath)).toEqual(anchorBytes);
+      expectBytesEqual(fs.readFileSync(anchorPath), anchorBytes, `${profile}: source anchor`);
     }
     await client.query(
       `SELECT setval('"${namespace}".context_engine_turn_outbox_enqueue_sequence_seq', 3, false)`,
@@ -991,7 +992,7 @@ describe.skipIf(!connection)("agent database port", () => {
         /PostgreSQL catalog differs/,
       );
     }
-    expect(fs.readFileSync(sourcePath)).toEqual(sourceBytes);
+    expectBytesEqual(fs.readFileSync(sourcePath), sourceBytes, "source after PostgreSQL port");
 
     const provider = createLocalSnapshotProvider({
       repositoryPath: path.join(directory, "snapshots"),
@@ -1004,8 +1005,8 @@ describe.skipIf(!connection)("agent database port", () => {
     const artifactBytes = fs.readFileSync(artifactPath);
     const restoredSqlite = path.join(directory, "sqlite-restored.sqlite");
     await provider.restoreFresh(snapshot.ref, restoredSqlite);
-    expect(fs.readFileSync(restoredSqlite)).toEqual(artifactBytes);
-    expect(fs.readFileSync(artifactPath)).toEqual(artifactBytes);
-    expect(fs.readFileSync(sourcePath)).toEqual(sourceBytes);
+    expectBytesEqual(fs.readFileSync(restoredSqlite), artifactBytes, "restored SQLite snapshot");
+    expectBytesEqual(fs.readFileSync(artifactPath), artifactBytes, "SQLite snapshot artifact");
+    expectBytesEqual(fs.readFileSync(sourcePath), sourceBytes, "source after snapshot restore");
   });
 });

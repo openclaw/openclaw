@@ -216,6 +216,8 @@ describe("production lint suppressions", () => {
         "scripts/perf/plugin-transform-preload.mjs|typescript/unbound-method|1",
         // The provider probe forwards native methods with their original receivers.
         "scripts/perf/provider-request-prepare-measure.ts|typescript/unbound-method|3",
+        // SQLite observers preserve native methods for restoration and forward each live receiver.
+        "scripts/perf/schema-crossing-observer.ts|@typescript-eslint/unbound-method|1",
         // Native transaction timing forwards the live receiver and restores the original method.
         "scripts/perf/session-cold-selection.ts|typescript/unbound-method|1",
         // Node worker ports have no browser target origin.
@@ -224,8 +226,12 @@ describe("production lint suppressions", () => {
         "scripts/perf/session-history-reader-setup-measure.mjs|typescript/no-implied-eval|1",
         // The subscription probe forwards track with the original AsyncWorkScope receiver.
         "scripts/perf/session-pr-subscriptions-measure.ts|typescript/unbound-method|1",
+        // Backup attribution forwards the native SQLite receiver and restores both methods in finally.
+        "scripts/perf/stopped-backup-measure.ts|@typescript-eslint/unbound-method|2",
         // The registry-copy probe forwards Map.set with the original map receiver.
         "scripts/perf/subagent-maintenance-capture-measure.ts|typescript/unbound-method|1",
+        // The opt-in syscall census intercepts native addon exports that bypass node:fs.
+        "scripts/perf/sync-fs-turn-preload.mjs|no-underscore-dangle|2",
         // The retention probe measures fresh strings from the transcript JSON decode boundary.
         "scripts/perf/system-prompt-pool-retention.ts|unicorn/prefer-structured-clone|1",
         // The counts-only probe wraps toSorted and restores it in finally; timing uses native methods.
@@ -234,6 +240,8 @@ describe("production lint suppressions", () => {
         "scripts/perf/trajectory-runtime-append.ts|typescript/unbound-method|2",
         // The browser probe forwards IndexedDB writes with each store receiver and restores both methods.
         "scripts/perf/ui-streaming-render-measure.ts|typescript/unbound-method|2",
+        // The pager probe forwards native prepare with its original receiver and restores it.
+        "scripts/perf/usage-refresh-stats-measure.ts|typescript/unbound-method|1",
         // Rollback failure retains both caught errors in one AggregateError cause.
         "scripts/pr-lib/cache-lifetime.mjs|preserve-caught-error|1",
         // These owners sort only fresh private arrays, preserving their source collections.

@@ -157,6 +157,7 @@ packages/normalization-core/src/utf16-slice.ts
 packages/plugin-package-contract/package.json
 packages/plugin-package-contract/src/categories.ts
 packages/plugin-package-contract/src/index.ts
+packages/plugin-package-contract/src/recommended-prompts.ts
 packages/retry/package.json
 packages/retry/src/index.ts
 packages/session-url-contract/package.json
@@ -1240,6 +1241,7 @@ src/infra/sqlite-private-directory.ts
 src/infra/sqlite-private-snapshot-fork.ts
 src/infra/sqlite-read-cache.ts
 src/infra/sqlite-reader-lifecycle.ts
+src/infra/sqlite-reader-metrics.ts
 src/infra/sqlite-readonly-auth-schema.ts
 src/infra/sqlite-readonly-auth-transfer.ts
 src/infra/sqlite-readonly-location-cleanup.ts
@@ -1335,9 +1337,16 @@ src/infra/state-migrations.media-persistence-targets.ts
 src/infra/state-migrations.receipts.ts
 src/infra/tcp-port.ts
 src/infra/temp-artifact-cleanup.ts
+src/infra/thread-disk-io.ts
 src/infra/test-runtime-env.ts
 src/infra/tls-certificate-errors.ts
 src/infra/tmp-openclaw-dir.ts
+src/infra/update-candidate-io.ts
+src/infra/update-candidate-state.diagnostics.ts
+src/infra/update-candidate-state.inspection.ts
+src/infra/update-candidate-state.process.ts
+src/infra/update-candidate-state.result.ts
+src/infra/update-candidate-state.sizes.ts
 src/infra/update-capture-space.ts
 src/infra/update-channels.ts
 src/infra/update-database-generations.ts
@@ -1385,14 +1394,21 @@ src/infra/update-rehearsal-paths.ts
 src/infra/update-result-claim.ts
 src/infra/update-result-payload.ts
 src/infra/update-run-activation.ts
+src/infra/restart-sentinel-store.ts
+src/infra/update-run-activity.ts
+src/infra/update-run-admission.read.ts
+src/infra/update-run-admission.types.ts
 src/infra/update-run-admission.ts
 src/infra/update-run-codec.ts
+src/infra/update-run-gateway-stop.ts
 src/infra/update-run-legacy-expiry.ts
 src/infra/update-run-limits.ts
 src/infra/update-run-driver-schema.ts
+src/infra/update-run-driver.ts
 src/infra/update-run-read-admission.ts
 src/infra/update-run-read.kernel.ts
 src/infra/update-run-record.ts
+src/infra/update-run-reconciliation.read.ts
 src/infra/update-run-recovery-keys.ts
 src/infra/update-run-recovery-native-schema.ts
 src/infra/update-run-recovery-package-schema.ts
@@ -1400,6 +1416,7 @@ src/infra/update-run-recovery-schema.ts
 src/infra/update-run-recovery-store.ts
 src/infra/update-run-schema.ts
 src/infra/update-run-step-key.ts
+src/infra/update-run-step-upsert.ts
 src/infra/update-run-step.ts
 src/infra/update-run-timeouts.ts
 src/infra/update-run-verification.ts
@@ -1407,6 +1424,7 @@ src/infra/update-run-write.ts
 src/infra/update-runtime-path-index.ts
 src/infra/update-runtime-staging.ts
 src/infra/update-snapshot-capacity-schema.ts
+src/infra/update-state-inspection-protocol.ts
 src/infra/update-step-identity.ts
 src/infra/warning-filter.ts
 src/infra/windows-appcontainer-spawn.ts
@@ -1932,6 +1950,7 @@ src/shared/lazy-runtime.ts
 src/shared/listeners.ts
 src/shared/model-context-message.ts
 src/shared/model-key.ts
+src/shared/monotonic-time.ts
 src/shared/node-list-parse.ts
 src/shared/oauth-refresh-outcome.ts
 src/shared/path-array-index.ts
@@ -1995,9 +2014,11 @@ src/state/openclaw-agent-db-close.ts
 src/state/openclaw-agent-db-contract.ts
 src/state/openclaw-agent-db-discovery-paths.ts
 src/state/openclaw-agent-db-disposal.ts
+src/state/openclaw-agent-creation-operations-schema.ts
 src/state/openclaw-agent-db-engine.ts
 src/state/openclaw-agent-db-existing-write.ts
 src/state/openclaw-agent-db-identity.ts
+src/state/openclaw-agent-db-lease-inspection.ts
 src/state/openclaw-agent-db-lease-provenance.ts
 src/state/openclaw-agent-db-lease.ts
 src/state/openclaw-agent-db-legacy-schema.ts
@@ -2062,6 +2083,7 @@ src/state/openclaw-agent-session-snapshots-migration.ts
 src/state/openclaw-agent-session-snapshots-schema.ts
 src/state/openclaw-agent-session-transcript-archive-schema.ts
 src/state/openclaw-agent-standing-intents-schema.ts
+src/state/openclaw-agent-storage-migration.ts
 src/state/openclaw-agent-storage-schema.ts
 src/state/openclaw-agent-text-search-migration.ts
 src/state/openclaw-agent-trajectory-storage-migration.ts
@@ -2136,6 +2158,7 @@ src/state/openclaw-state-db-schema-v35-workspace-cas.ts
 src/state/openclaw-state-db-schema-v36-template-names.ts
 src/state/openclaw-state-db-schema-v37-resource-receipts.ts
 src/state/openclaw-state-db-schema-v38-repository-disk.ts
+src/state/openclaw-state-db-schema-v39-worker-retention.ts
 src/state/openclaw-state-db-schema-v22-columns.ts
 src/state/openclaw-state-db-schema-v24-indexes.ts
 src/state/openclaw-state-db-schema-v26-layout.ts
@@ -2146,6 +2169,7 @@ src/state/openclaw-state-db-session-watch-migration.ts
 src/state/openclaw-state-db-snapshot-owner.ts
 src/state/openclaw-state-db-startup-checkpoint.ts
 src/state/openclaw-state-db-table-retirements.ts
+src/state/openclaw-state-db-task-delivery-recovery-preservation.ts
 src/state/openclaw-state-db-task-delivery-recovery.ts
 src/state/openclaw-state-db-transaction.ts
 src/state/openclaw-state-postgres-admission.ts
@@ -2421,6 +2445,7 @@ src/config/sessions/session-transcript-projection-writer.ts
 src/config/sessions/session-transcript-reconcile-pool.ts
 src/config/sessions/session-transcript-reconcile-readiness.ts
 src/config/sessions/session-transcript-reconcile.ts
+src/config/sessions/session-transcript-hydration-caller.ts
 src/config/sessions/session-transcript-worker-readers.ts
 src/config/sessions/session-transcript-worker-resources.ts
 src/config/sessions/session-transcript-worker-runtime.ts
@@ -2842,8 +2867,11 @@ src/plugins/inline-view.ts
 src/plugins/service-scheduler-binding.ts
 src/plugins/setup-registry.ts
 src/plugins/worker-resource-receipt.ts
+src/plugins/worker-retention.ts
+src/plugins/worker-retention.types.ts
 src/shared/map-nested-strings.ts
 src/shared/owned-buffer.ts
+src/shared/pending-promises.ts
 src/shared/state-lease-loss.ts
 src/shared/weak-owner-map.ts
 src/status/utility-model-warnings.ts

@@ -107,6 +107,50 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
   });
 
   it.each([false, true])(
+    "keeps the row gap, none after the last (windowed=%s)",
+    async (windowed) => {
+      const { role } = await browser(1280);
+      const gap = Number.parseFloat(
+        getComputedStyle(document.documentElement).getPropertyValue("--menu-item-gap"),
+      );
+      expect(gap).toBeGreaterThan(0);
+      const count = windowed ? 1000 : 60;
+      const { picker } = await mountModel(numberedModels(count), "width:240px;margin:24px", {
+        windowed,
+      });
+      await role("button", "Model: Model 0").click();
+      const list = picker.querySelector<HTMLElement>(".picker-select__options")!;
+      const settle = () =>
+        new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+        });
+      // The current value stays mounted while windowed, so the far end skips that row.
+      const rows = (from = 0) =>
+        [...picker.querySelectorAll<HTMLElement>('.picker-select__options [role="option"]')]
+          .filter((row) => Number(row.dataset.value?.split("-").at(-1)) >= from)
+          .map((row) => row.getBoundingClientRect())
+          .toSorted((left, right) => left.top - right.top);
+      const gaps = (current: DOMRect[]) =>
+        current.slice(1).map((row, index) => row.top - current[index]!.bottom);
+      await expect.poll(() => rows()[0]?.height ?? 0).toBeGreaterThan(0);
+      await settle();
+      const openHeight = list.scrollHeight;
+      expect(openHeight).toBe(count * (rows()[0]!.height + gap) - gap);
+      expect(new Set(gaps(rows()))).toEqual(new Set([gap]));
+      list.scrollTop = list.scrollHeight;
+      list.dispatchEvent(new Event("scroll"));
+      await expect
+        .poll(() => list.querySelector(`[data-value="fixture/model-${count - 1}"]`))
+        .not.toBeNull();
+      await settle();
+      expect(list.scrollHeight).toBe(openHeight);
+      const end = rows(1);
+      expect(new Set(gaps(end))).toEqual(new Set([gap]));
+      expect(end.at(-1)!.bottom).toBeCloseTo(list.getBoundingClientRect().bottom, 0);
+    },
+  );
+
+  it.each([false, true])(
     "keeps the scroll position on clipped edge hover (windowed=%s)",
     async (windowed) => {
       const { userEvent, role } = await browser(1280);
@@ -123,13 +167,20 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
       await expect.poll(() => list.scrollHeight).toBeGreaterThan(list.clientHeight);
       await expect.poll(() => rows()[0]?.getBoundingClientRect().height ?? 0).toBeGreaterThan(0);
       const rowHeight = rows()[0]!.getBoundingClientRect().height;
+      const rowStep =
+        rowHeight +
+        Number.parseFloat(
+          getComputedStyle(document.documentElement).getPropertyValue("--menu-item-gap"),
+        );
       const settle = () =>
         new Promise<void>((resolve) => {
           requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
         });
+      // Opening reveals the current value; scroll only once that has settled.
+      await settle();
       for (const edge of ["bottom", "top"] as const) {
         // Leave half a row clipped at each edge, as a wheel or trackpad scroll does.
-        const middle = rowHeight * 10 + Math.round(rowHeight / 2);
+        const middle = rowStep * 10 + Math.round(rowHeight / 2);
         list.scrollTop = edge === "bottom" ? middle - list.clientHeight : middle;
         list.dispatchEvent(new Event("scroll"));
         await settle();

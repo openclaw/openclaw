@@ -155,9 +155,8 @@ export function createRealtimeCallPlayback(params: {
     harness,
     isOpen: () => !params.isClosed() && ws.readyState === WebSocket.OPEN,
     isBlocked: () => outboundGreeting.isBlocked() && !hostSpeech.isActive(),
-    onAudibleOutput: () => {
-      outboundGreeting.claim();
-    },
+    isOpening: () => Boolean(initialGreetingInstructions) && !outboundGreeting.isBlocked(),
+    onAudibleOutput: outboundGreeting.claim,
     pendingMarkAcks,
     providerCallId: callSid,
   });

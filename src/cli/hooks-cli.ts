@@ -34,11 +34,8 @@ import { summarizeStringEntries } from "../shared/string-sample.js";
 import { displayPath } from "../utils.js";
 import { resolveOptionFromCommand } from "./cli-utils.js";
 import { formatCliCommand } from "./command-format.js";
-import {
-  ExpectedCliError,
-  formatCliJsonFailure,
-  rethrowExpectedCliError,
-} from "./failure-output.js";
+import { ExpectedCliError } from "./expected-cli-error.js";
+import { formatCliJsonFailure, rethrowExpectedCliError } from "./failure-output.js";
 import { canFallbackToImplicitLocalGateway } from "./gateway-rpc.js";
 import { formatDocsHelp } from "./help-format.js";
 import { runWithLocalStateOwner } from "./local-state-owner.js";

@@ -47,6 +47,14 @@ flight. Once an active-call helper accepts a hang-up, cancelling the consult
 does not interrupt that control action. The helper still checks that its bound
 call is active before acting.
 
+Caller transcripts during carrier playback and its 400 ms echo tail require
+detected caller speech or a provider barge-in. This prevents unconfirmed echo
+from becoming a new host caller turn. During opening-greeting playback, caller
+audio and transcripts are withheld and provider barge-in cannot clear the greeting.
+Normal interruption resumes after the greeting response ends and carrier playback
+drains. Before greeting audio starts and on later turns, audio reaches the realtime
+provider, which owns its own speech detection and responses.
+
 ### GPT-Live
 
 Voice Call uses the same Gateway-owned GPT-Live bridge as Discord and Talk.
@@ -120,6 +128,11 @@ Every brief field is optional:
 | `voicemailMessage`   | Exact message to leave when voicemail is detected.                                 |
 | `successCriteria`    | What counts as completing the task.                                                |
 | `maxDurationSeconds` | Positive integer override, capped by plugin `maxDurationSeconds`.                  |
+
+For realtime transcription, a recognized two-letter language code such as `cs`
+also supplies the input-language hint. Regional tags such as `cs-CZ` use their
+base language. Free-form descriptions remain voice instructions only; they are
+not sent as transcription language codes.
 
 The encoded brief is limited to 8,000 characters. See the plugin README for
 individual field limits and a plumber booking example. Treat both the brief

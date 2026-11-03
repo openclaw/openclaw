@@ -11,6 +11,7 @@ import {
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import "./sidebar-attention.tsx";
 import "./tooltip.ts";
+import { SidebarOnlineHeader, SidebarPagesHeader } from "./app-sidebar-panel-headers.tsx";
 import { hidePersonalSidebarCatalog } from "./app-sidebar-personal-navigation.ts";
 import { renderSidebarRail } from "./app-sidebar-rail.tsx";
 import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.tsx";
@@ -542,10 +543,17 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
           {rail}
           <div class="sidebar-shell" onMouseDown={beginNativeWindowDragFromTopInset}>
             <div class="sidebar-shell__content">
-              {/* The session toolbar sits above the scroller so it stays pinned and
-                  the scroll fade starts below it instead of masking it. */}
-              <Show when={this.navigationView !== "pages" && this.navigationView !== "online"}>
-                {toolbar}
+              {/* Every panel header sits above the scroller so it stays pinned, keeps
+                  one geometry across views, and the scroll fade starts below it. */}
+              <Show
+                when={this.navigationView === "pages"}
+                fallback={
+                  <Show when={this.navigationView === "online"} fallback={toolbar}>
+                    <SidebarOnlineHeader host={this} />
+                  </Show>
+                }
+              >
+                <SidebarPagesHeader host={this} />
               </Show>
               <div
                 ref={scrollRef}

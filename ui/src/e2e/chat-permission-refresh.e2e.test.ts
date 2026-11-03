@@ -43,6 +43,7 @@ suite.define(() => {
         const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
         const trigger = pane.locator('[data-chat-permission-select="true"]');
         await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("guarded");
+        await expect.poll(async () => (await trigger.textContent())?.trim()).toBe("Ask me");
         const patchMatch = { key: session.key, permissionMode: "workspace" };
         await gateway.deferNext("sessions.patch", patchMatch);
 
@@ -77,14 +78,11 @@ suite.define(() => {
         });
 
         await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("workspace");
+        await expect.poll(async () => (await trigger.textContent())?.trim()).toBe("Auto-review");
         await expect.poll(() => trigger.isEnabled()).toBe(true);
         await pane
           .locator(".chat-error")
-          .getByText("Permissions were saved", { exact: false })
-          .waitFor();
-        await pane
-          .locator(".chat-error")
-          .getByText("Roster refresh unavailable", { exact: false })
+          .getByText("Permissions saved, but this chat didn't refresh.", { exact: false })
           .waitFor();
       },
       async ({ page }) => {
@@ -255,7 +253,7 @@ suite.define(() => {
       await gateway.resolveDeferred("sessions.list", workspaceList);
       await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("workspace");
       await expect.poll(() => trigger.isEnabled()).toBe(true);
-      expect(await trigger.getAttribute("aria-label")).toContain("Workspace");
+      expect(await trigger.getAttribute("aria-label")).toContain("Auto-review");
 
       // Admit this event's refresh before measuring the next mutation's own roster request.
       await waitForRequests(gateway, "sessions.list", workspaceEventListCount + 1, rosterMatch);
@@ -301,7 +299,7 @@ suite.define(() => {
       });
       await pane
         .locator(".chat-error")
-        .getByText("Failed to update permissions", { exact: false })
+        .getByText("Couldn't change permissions", { exact: false })
         .waitFor();
       await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("");
       await expect.poll(() => trigger.isEnabled()).toBe(true);

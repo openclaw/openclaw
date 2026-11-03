@@ -82,6 +82,33 @@ without changing the old transcript. `/stop` records the command with its abort
 notice. `/btw` and `/side` remain ephemeral; ordinary message edits and deletions
 do not rewrite transcript history.
 
+## Fork a conversation
+
+Use /fork [title] in a Telegram forum topic to create a sibling topic in the
+same supergroup. Thread bindings must be enabled and the bot needs **Manage
+Topics**. DMs, channel-direct topics, and unthreaded groups are not supported.
+The original topic keeps its session; future replies in the new topic use the
+copied session. The new topic has the same supergroup audience.
+
+The new topic starts with a literal recap of the last three available visible
+text messages. This recap is not the context limit: the session fork inherits the
+existing conversation snapshot. Hidden reasoning and tool output are not posted.
+Links and mentions in copied excerpts do not notify people or expand previews.
+A busy source forks through its last completed turn, not an in-flight partial
+answer. A fork does not clone the workspace or undo file and external effects.
+
+In the Control UI, **Fork conversation** uses the same session-copy operation
+and selects the new session. Inherited messages already appear in
+history, so the UI does not insert a duplicate recap. **Fork from here** remains
+the separate message-level action that cuts before the selected user message.
+
+Session ancestry and the exact inherited history cut use the existing session
+fork records. Channel setup and recap delivery can fail independently: the
+command reports whether the copied session, native thread, and recap were
+confirmed. A known copied session or created thread is retained after a later
+failure. Check that outcome and the thread list before retrying; do not assume a
+failed acknowledgment means nothing was created.
+
 <a id="config" />
 
 ## Configuration
@@ -237,6 +264,7 @@ plugins, and installed skills.
     | `/new [model]` | Archive the current session and start a fresh one |
     | `/reset [soft [message]]` | Reset the current session in place. `soft` keeps the transcript, drops reused CLI backend session ids, and reruns startup |
     | `/name <title>` | Name or rename the current session. Omit the title to see the current name and a suggestion |
+    | `/fork [title]` | Copy the current conversation into an independent session; supported channel threads create a sibling thread |
     | `/compact [instructions]` | Compact the session context. See [Compaction](/concepts/compaction) |
     | `/stop` | Abort the current run |
     | `/session idle <duration\|off>` | Manage thread-binding idle expiry |
@@ -485,6 +513,10 @@ Numeric selections such as `/model 3` are not supported.
 /model status      # detailed view with endpoint and API mode
 ```
 
+For plain-text model browsing, `/models openai limit=5` selects a custom page size
+(`size=5` is an alias). Emitted **More** and out-of-range **Try** commands retain
+that size; omit it for the default 20 models per page, or use `all` to disable pagination.
+
 On Discord, the bare native `/model` and `/models` commands open an interactive
 picker. Choose a provider and model from the dropdowns, then select **Submit**.
 Discord follows the direct command behavior, including `modelSelectionScope`.
@@ -666,6 +698,7 @@ See [BTW side questions](/tools/btw) for the full behavior.
     - Command-only messages from allowlisted senders are handled immediately (bypass queue + model).
     - Inline shortcuts (`/help`, `/commands`, `/status`, `/whoami`) also work embedded in normal messages and are stripped before the model sees the remaining text.
     - In Control UI, every non-skill slash command can be selected in the middle of a draft. The command runs separately, only the command invocation is removed, and the surrounding draft remains unsent.
+    - A later slash token at the caret keeps its completion menu even when the draft starts with another command. Enter or clicking a command runs only that invocation; Tab completes without sending. Active freeform argument collection still owns slash-like argument text.
     - In Control UI (WebChat), selecting a skill from slash completion inserts the existing `$skill-name` reference into the message (for example, `Please use $weather to check Sydney`).
     - Inline command dispatch follows the same connection, permission, and confirmation checks as sending that command by itself. Typing slash-like prose without selecting or submitting the completion does not execute it.
     - On external channels, unauthorized text command-only messages are silently ignored. Inline `/...` tokens are treated as plain text. Native `/compact` returns an authorization refusal when a channel-admitted sender cannot use the command. Reset denials show a permission reply only when the request and reply stay in WebChat.

@@ -10,6 +10,17 @@ title: "Managed worktrees"
 
 Managed worktrees give an agent task its own git branch and checkout without placing temporary directories inside the source repository. OpenClaw records them in the shared state database and snapshots their tracked and non-ignored untracked contents before ordinary removal. [Capacity eviction](#capacity-and-eviction) can purge unsaved data when a snapshot cannot be made.
 
+Branch pickers display the last recorded local refs while discovery refreshes in
+background. A refreshing indicator stays visible until the Gateway sends the
+updated options; slow Git keeps cached choices available. Discovery never fetches
+from a remote or scans checkout contents. Ref changes invalidate the suggestions,
+and session creation validates the selected base before changing a checkout.
+
+When the selected source is a folder inside a Git repository, **Recents** keeps
+that folder rather than replacing it with the repository root or the managed
+checkout. Choosing the recent source again starts the next session in the same
+selected folder.
+
 When a new chat starts a managed worktree, OpenClaw can begin the first model
 turn while the checkout finishes. It first prepares the project instructions,
 workspace skills, and other prompt files from the selected Git commit in the
@@ -40,7 +51,7 @@ checkouts keep their index unchanged.
 
 ## Existing folders on devices
 
-**Existing folder on device** is separate from a managed worktree. A compatible
+An existing folder on a device is separate from a managed worktree. A compatible
 paired session host can run a session directly in an absolute folder on that
 specific device. OpenClaw does not clone, snapshot, transfer, reconcile, or remove
 that folder as a managed worktree. Choose **New workspace** or a repository source
@@ -62,7 +73,12 @@ with sandbox mode `all` or `non-main` in the background. Agents with sandbox mod
 still prepare dependencies on first use. A session arriving during preparation
 waits for the same build; later checkouts arrive with `node_modules`. Other selected commits
 still prepare their dependencies on first use. Shutdown cancels preparation and
-waits for the disposable installer to be removed.
+drains accepted installer cleanup. Before publishing a template, OpenClaw fences
+the disposable installer against restart and verifies that it has stopped. Container
+removal runs serially in the background, so a slow Docker or Podman removal does
+not delay the prepared workspace. Failed removals remain registered, log a warning,
+and retry during housekeeping, including after a Gateway restart. This cleanup
+also runs when ordinary sandbox idle and age pruning are disabled.
 The private checkout storage must support filesystem acceleration, and
 `worktreeAcceleration: false` disables this preparation too.
 
@@ -79,8 +95,8 @@ cache falls back promptly instead of waiting through network retries.
 
 The reusable generation binds the source commit, frozen lockfile, immutable image
 (including its Node and pnpm versions), guest path, and sandbox policy. A changed
-generation prepares a new template; the existing seven-day template cleanup also
-retires interrupted builders. Installation failure or changed tracked source
+generation prepares a new template with a distinct builder identity; background
+housekeeping recovers interrupted builders independently of template expiration. Installation failure or changed tracked source
 records a warning and keeps a source-only template for that generation. Missing
 lockfiles, unsupported filesystems, and unavailable images use source-only
 checkout. The agent can install normally in that private checkout. Dependency
@@ -217,6 +233,8 @@ The Gateway keeps one prepared checkout per active repository and destination ro
 Preparation logs include `templateDetails` with the backend, selection or failure reason, clone-byte estimate, and an error code when available. Reasons distinguish disabled acceleration, empty or profiled checkouts, native probing, ACL rejection, checkout policy, missing or stale templates, template creation, and disk admission.
 
 The `checkout` phase includes its child phases; do not add it to `templateApply`. Sub-phases separate registration metadata and inspection, commit preparation, clone admission estimates, destination preparation, marker replacement, index location/copy/refresh, prompt publication, template release, and warm-slot acquisition/application. The clone-byte estimate is a disk-admission allowance, not measured bytes written.
+
+The `provision` phase includes ignored-file selection (`provisionInspect`), safe file copying (`provisionCopy`), and repository script execution (`setup`). Selection includes the Git worker queue; copying includes per-file eligibility and mutation safety checks. `provisionCopy` is absent when selection finds no files. Source custody waits and disk admission also occur inside `provision`; `diskAdmission` accumulates space checks across the entire preparation, so it is not exclusively a provisioning sub-phase. These timings do not log paths or setup output.
 
 Private Git index copies for template checkouts prefer native copy-on-write, including on APFS, and fall back to independent byte copies when cloning is unavailable. Safety snapshots use Git's read-only status and cached file metadata to identify changes. Clean checkouts reuse the committed tree without building a private snapshot index; changed checkouts hash only selected paths. Hidden index flags do not exclude edits from snapshots.
 

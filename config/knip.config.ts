@@ -46,9 +46,13 @@ const repositoryScriptEntries = [
   "scripts/perf/agent-startup-inspection.ts!",
   "scripts/perf/anthropic-request-construction.ts!",
   "scripts/perf/auth-file-watch-events-measure.ts!",
+  "scripts/perf/native-pr-bootstrap-measure.mjs!",
   "scripts/perf/backup-verify-fixture.mjs!",
   "scripts/perf/backup-verify-measure.mjs!",
   "scripts/perf/board-read-admission-measure.ts!",
+  "scripts/perf/podman-exec-measure.ts!",
+  "scripts/perf/responses-policy-fingerprint-measure.ts!",
+  "scripts/perf/cron-own-receipts-measure.mjs!",
   "scripts/perf/spawn-broker-shutdown-measure.ts!",
   "scripts/perf/workspace-inventory-spawn-measure.ts!",
   // catalog-compare-released.mts copies and spawns this sandboxed reader by path.
@@ -82,14 +86,15 @@ const repositoryScriptEntries = [
   "scripts/annotate-proof-image.mts!",
   "scripts/render-proof-video.mts!",
   "scripts/ci-shard-timings-refresh.mts!",
+  "scripts/ci-test-observations.mjs!",
+  "scripts/ci-adaptive-select.mjs!",
+  "scripts/ci-adaptive-costs.mjs!",
   // The scheduled-run execution context design invokes this development replay by path.
   "scripts/dev/cron-context-replay.mts!",
   // #183131 invokes this fresh-process cron flake workload by path.
   "scripts/perf/repeat-cron-test.mjs!",
   // Its header documents the paired operator-role currency-check benchmark.
   "scripts/perf/operator-role-source-policy-measure.mjs!",
-  // db:postgres:gen/check invoke this generator through the source loader.
-  "scripts/generate-postgres-schema.mts!",
   // CI preflight executes the manifest from its trusted harness checkout.
   "scripts/ci-build-manifest.mjs!",
   // CI security-fast runs this from its trusted harness checkout.
@@ -131,6 +136,10 @@ const repositoryScriptEntries = [
   "scripts/bench-plugin-registration.mts!",
   // The cold-load benchmark guide invokes this opt-in CLI by path.
   "scripts/bench-control-ui-cold-load.ts!",
+  // The history-depth benchmark guide invokes this opt-in CLI by path.
+  "scripts/bench-control-ui-history-depth.ts!",
+  // The hosted Doctor benchmark guide invokes this opt-in CLI by path.
+  "scripts/perf/hosted-doctor-measure.mts!",
   // scripts/control-ui-retention/README.md invokes this opt-in production census.
   "scripts/control-ui-retention/retention-suite.ts!",
   // #179175 invokes this development-loop benchmark CLI by path.
@@ -157,6 +166,8 @@ const repositoryScriptEntries = [
   "scripts/bench-channel-ingress-writer.ts!",
   // The performance guide and transcript driver invoke these tools and preloads by path.
   "scripts/lib/gateway-bench-transport-preload.ts!",
+  // Its source header documents this opt-in Node worker allocation preload.
+  "scripts/lib/gateway-bench-heap-profile.mjs!",
   // The performance guide and retained package-integrity rerun invoke these benchmarks by path.
   "scripts/bench-package-integrity.ts!",
   "scripts/perf/cron-delivery-gateway-entry.ts!",
@@ -189,6 +200,7 @@ const repositoryScriptEntries = [
   "scripts/perf/mcp-http-dispatcher-measure.ts!",
   "scripts/perf/prepared-gateway-startup-measure.mjs!",
   "scripts/perf/sandbox-paths-measure.ts!",
+  "scripts/perf/github-publication-snapshot-measure.ts!",
   // Maintained source headers invoke these standalone commands and external preload by exact path.
   "scripts/bench-control-ui-talk.ts!",
   // Maintained source headers invoke these standalone analysis commands by exact path.
@@ -334,6 +346,8 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/native-assignment-app-server.mjs!",
   // native-plugin-ui.sh invokes fixture creation and packaged upgrade probes through Node.
   "scripts/e2e/lib/upgrade-survivor/native-plugin-ui.mjs!",
+  // Published driver CI and documented Crabbox runs invoke the native matrix.
+  "scripts/e2e/lib/upgrade-survivor/native-systemd.mjs!",
   // package-activation-recovery.sh preloads this observer into the released updater.
   "scripts/e2e/lib/upgrade-survivor/package-activation-fault.mjs!",
   // run.sh preloads this fixture adapter through NODE_OPTIONS by path.
@@ -365,8 +379,6 @@ const repositoryScriptEntries = [
   "scripts/fixtures/packed-plugin-sdk-type-smoke.ts!",
   // Generates the native browser page scripts from their UI source modules.
   "scripts/generate-browser-inspect-script-swift.mts!",
-  // db:postgres:gen and db:postgres:check invoke the canonical schema generator by path.
-  "scripts/generate-postgres-schema.mts!",
   // The diagnostics guide invokes the sustained Gateway heap rig by path.
   "scripts/gateway-heap-rig.mjs!",
   // The diagnostics guide invokes this offline snapshot comparison CLI by path.
@@ -710,8 +722,6 @@ const rootEntries = [
   // Required metadata readers load this tsdown entry by computed source/dist path.
   "src/plugins/plugin-metadata-readers.runtime.ts!",
   "src/commands/doctor/shared/legacy-config-binding-repair.runtime.ts!",
-  // Released Gateways still import this stable entry after an on-disk update.
-  "src/gateway/plugin-channel-reload-targets.ts!",
   // Package-script owners invoke these generated-artifact modules directly.
   "src/config/doc-baseline.ts!",
   "src/plugins/runtime-sidecar-paths-baseline.ts!",
@@ -1202,6 +1212,8 @@ const config = {
         // doctor-sqlite-inspection.mjs compiles its native read counter with the host compiler.
         "cc",
         "ffmpeg",
+        // sqlite-snapshot-retirement.mts inspects its btrfs fixture with this host tool.
+        "filefrag",
         "lsattr",
         "mint",
         // Muse E2E setup installs this CLI outside npm (scripts/e2e/lib/muse-runtime/setup.sh).
@@ -1210,6 +1222,8 @@ const config = {
         "open",
         "openclaw",
         "sleep",
+        // usage-refresh-stats-measure.ts inspects benchmark fixtures with the host SQLite CLI.
+        "sqlite3",
         "swiftlint",
         "uptime",
         "xcrun",

@@ -446,6 +446,24 @@ Each `SessionTranscriptMessageEntry` contains:
 
     `resolveThinkingPolicy(...)` returns the provider/model's supported thinking levels and optional default. Provider plugins own the model-specific profile through their thinking hooks, so tool plugins should call this runtime helper instead of importing or duplicating provider lists.
 
+    `explainToolAvailability({ agentId?, sessionKey?, toolNames, pluginId? })` explains whether named tools reach an agent or one session. It replays the same final tool-policy composition that agent runs use, with the current runtime config. Pass `pluginId` for tools your plugin owns, so plugin-ID and `group:plugins` policy entries match; omit it for core tools.
+
+    ```typescript
+    const report = await api.runtime.agent.explainToolAvailability({
+      sessionKey,
+      toolNames: ["memory_save"],
+      pluginId: "my-memory",
+    });
+    for (const tool of report.tools) {
+      if (!tool.available) {
+        // tool.block: { stage, source?, detail, fix }
+        console.warn(`${tool.name} hidden at ${tool.block.stage}: ${tool.block.detail} ${tool.block.fix}`);
+      }
+    }
+    ```
+
+    The result is `{ agentId, sandbox: { mode, source, sandboxed? }, tools }`. Each blocked tool names one stage: `deny` (an explicit deny entry, which wins over earlier exclusions), `harness` (the harness or CLI backend does not expose OpenClaw tools), `model` (the model has no tool support), `sandbox` (sandbox tool policy), `profile`, `provider-policy` (`tools.byProvider`), `allowlist`, or `session` (group, sender, subagent, or inherited policy). `source` names the config path that removed the tool, and `fix` gives a generic remedy. An agent query (no `sessionKey`) covers configured policy only; a session query adds that session's model, harness, and sandbox, and matches group and account tool policy through the session's delivery route. Plugin manifest tool-profile grants apply as they do for real runs. `sandbox.mode` and `sandbox.source` report the agent's sandbox setting, so a plugin whose tool factory refuses sandboxed runs can explain that gate in its own words. The call is read-only and does not grant access.
+
     `normalizeThinkingLevel(...)` converts user text such as `on`, `x-high`, or `extra high` to the standard stored level before checking it against the resolved policy.
 
     `resolveSessionCatalogCreateTarget(...)` is the supported synchronous policy interface for trusted native plugins that implement `SessionCatalogProvider.resolveCreateSession`. It selects the first candidate model routed to the requested runtime and allowed for the requested or default agent. It returns `undefined` when no candidate satisfies both policies. Use this helper instead of importing or duplicating core model-selection policy in a plugin.
@@ -487,6 +505,10 @@ Each `SessionTranscriptMessageEntry` contains:
     ```
 
     Prefer `getSessionEntryAsync(...)`, `getSessionEntryByIdAsync(...)`, `prepareSessionEntryPatch(...)`, or `upsertSessionEntry(...)` for session workflows. These helpers address sessions by agent/session identity so plugins do not depend on the legacy `sessions.json` storage shape. Use `preserveActivity: true` for metadata-only patches that should not refresh session activity, and `replaceEntry: true` only when the callback returns a complete entry and deleted fields must stay deleted. Doctor and migration paths can combine `fallbackEntry`, `skipMaintenance`, and `requireWriteSuccess` for one atomic repair of the underlying store.
+
+    The deprecated synchronous `listSessionEntries(...)` accepts `projection: "list"` for metadata-only scans. Its default remains `"full"`. The list projection omits saved `skillsSnapshot`, `systemPromptReport`, and `sessionDiffBaseline` payloads; never write a projected entry back as a complete replacement. New asynchronous callers should use the existing metadata-only `listSessionEntriesAsync(...)`.
+
+    `listSessionCatalogEntries(...)` from `openclaw/plugin-sdk/session-catalog` uses metadata entries in its direct-listing fallback, matching the Gateway-supplied catalog snapshot. Consumers needing saved snapshots should read that session with `getSessionEntryAsync(...)`.
 
     Both async getters are also exported from the existing `openclaw/plugin-sdk/session-store-runtime` subpath. They return the complete public entry projection, excluding host-private fields, or `undefined` for a missing entry. The by-ID result includes `{ sessionKey, entry }` from the same selected owner. An explicit `storePath` selects that physical store; an omitted path inside a host-supplied incognito scope retains that scope. Managed runtime calls reject if their plugin owner retires while the read is pending. Returned metadata does not authorize a later effect; revalidate the caller's current authority at that boundary. The SDK and runtime `getSessionEntry(...)` getters are deprecated in favor of `getSessionEntryAsync(...)` and remain supported through 2026-12-31, with removal in the first January 2027 stable release. Their synchronous behavior remains unchanged during the migration window. The existing `readSessionUpdatedAt(...)` deprecation follows the same removal window; await `readSessionUpdatedAtAsync(...)` instead.
 
