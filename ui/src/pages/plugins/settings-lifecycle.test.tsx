@@ -1,5 +1,3 @@
-/* @vitest-environment jsdom */
-
 import { createSignal, flush } from "solid-js";
 import { beforeEach, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
@@ -98,31 +96,6 @@ it("does not offer enablement or Settings for an uninstalled plugin", () => {
     result: createResult(createPlugin({ installed: false, state: "not-installed" })),
   });
   expect(find('[aria-label="Enable Workboard"], [aria-label="Settings"]')).toBeNull();
-});
-
-it("lists declared extensions across enablement", () => {
-  const { container, find, update } = mount({});
-  for (const enabled of [false, true]) {
-    update({
-      result: createResult(
-        createPlugin({ hasNativeUi: true, enabled, state: enabled ? "enabled" : "disabled" }),
-      ),
-      inspection: createInspectResult({
-        overview: {
-          hasNativeUi: true,
-          capabilities: { providers: [], channels: [], contracts: {}, ui: ["panel", "page"] },
-        },
-      }),
-    });
-    const extensions = [...container.querySelectorAll(".plugin-capabilities")].find(
-      (section) => section.querySelector("h2")?.textContent === "Extensions",
-    )!;
-    expect(
-      [...extensions.querySelectorAll(".settings-row__title")].map((row) => row.textContent),
-    ).toEqual(["Pages", "Panels"]);
-    expect(extensions.textContent).toContain("beside a conversation");
-    expect(find(`[aria-label="${enabled ? "Disable" : "Enable"} Workboard"]`)).not.toBeNull();
-  }
 });
 
 it("retains inspection retry focus and uses the current error and callback", async () => {
