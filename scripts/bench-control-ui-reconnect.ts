@@ -1,5 +1,6 @@
 // Production renderer + synthetic WebSocket transport. No live Gateway/provider timing claims.
 // Example: pnpm exec tsx scripts/bench-control-ui-reconnect.ts --bundle-dir BASE --compare-bundle-dir HEAD --pairs 10 --thread-cpu-time
+import { createHash } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import { cp, mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -45,15 +46,24 @@ const { values } = parseArgs({
     "aa-control": { type: "boolean", default: false },
     "update-reload": { type: "boolean", default: false },
     "asset-latency-ms": { type: "string", default: "0" },
+    "service-workers": { type: "string", default: "allow" },
     "warm-picker": { type: "boolean", default: false },
+    "graph-counts": { type: "boolean", default: false },
   },
 });
+if (values["graph-counts"] && values.trace) {
+  throw new Error("Run reactive graph counts separately from CPU traces");
+}
 type Scenario = "brief-drop" | "long-sleep" | "restart" | "update";
 const scenarios = (values.smoke ? ["brief-drop"] : values.scenarios.split(",")) as Scenario[];
 const rtts = values.smoke ? [100] : values.rtt.split(",").map(Number);
 const paneCounts = values.smoke ? [1] : values.panes.split(",").map(Number);
 const pairs = values.smoke ? 1 : Number(values.pairs);
 const assetLatencyMs = Number(values["asset-latency-ms"]);
+const serviceWorkers = values["service-workers"];
+if (serviceWorkers !== "allow" && serviceWorkers !== "block") {
+  throw new Error("Expected --service-workers allow or block");
+}
 if (
   !Number.isInteger(pairs) ||
   pairs < 1 ||
@@ -346,6 +356,7 @@ type Sample = {
     byMethod: Record<string, number>;
   };
   trace?: ReturnType<typeof summarizeInteractionTrace>;
+  reactiveGraphArtifact?: string;
   retainedPicker?: { sameNode: true; mutationRequests: 0 };
   updateReload?: {
     wallMs: number;
@@ -365,6 +376,7 @@ const servers: Array<{
   name: string;
   dir: string;
   build: { buildId: string; version: string };
+  indexSha256: string;
   upgradedDir?: string;
   server: Awaited<ReturnType<typeof startControlUiBenchGatewayServer>>;
 }> = [];
@@ -433,6 +445,7 @@ async function writeSummary() {
         trace: values.trace,
         updateReload: values["update-reload"],
         assetLatencyMs,
+        serviceWorkers,
         warmPicker: values["warm-picker"],
         host: { platform: os.platform(), arch: os.arch(), cpus: os.cpus().length },
         notes: [
@@ -460,7 +473,8 @@ async function writeSummary() {
 try {
   for (const bundle of bundles) {
     const dir = path.resolve(bundle.dir);
-    const html = await readFile(path.join(dir, "index.html"), "utf8");
+    const index = await readFile(path.join(dir, "index.html"));
+    const html = index.toString("utf8");
     const raw = html.match(
       /globalThis\.OPENCLAW_CONTROL_UI_BUILD_INFO=(\{.*?\});<\/script>/su,
     )?.[1];
@@ -484,6 +498,7 @@ try {
       dir,
       upgradedDir,
       build: JSON.parse(raw),
+      indexSha256: createHash("sha256").update(index).digest("hex"),
       server: await startControlUiBenchGatewayServer(dir, 0, assetLatencyMs),
     });
   }
@@ -491,13 +506,19 @@ try {
     path.join(output, "manifest.json"),
     JSON.stringify(
       {
-        bundles: servers.map(({ name, dir, build }) => ({ name, dir, build })),
+        bundles: servers.map(({ name, dir, build, indexSha256 }) => ({
+          name,
+          dir,
+          build,
+          indexSha256,
+        })),
         pairs,
         scenarios,
         rtts,
         paneCounts,
         updateReload: values["update-reload"],
         assetLatencyMs,
+        serviceWorkers,
         warmPicker: values["warm-picker"],
         planned: pairs * scenarios.length * rtts.length * paneCounts.length * servers.length,
         acceptance:
@@ -525,7 +546,10 @@ try {
               load: os.loadavg(),
             };
             samples.push(result);
-            const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+            const context = await browser.newContext({
+              viewport: { width: 1920, height: 1080 },
+              serviceWorkers,
+            });
             const page = await context.newPage();
             page.setDefaultTimeout(30_000);
             await page.addInitScript(installInteractionNavigationPreloadObserver);
@@ -799,6 +823,15 @@ try {
               }
               const before = await metrics(cdp);
               result.stage = "restore";
+              if (values["graph-counts"]) {
+                await page.evaluate((label) => {
+                  const graph = Reflect.get(window, "__openclawReactiveGraph");
+                  if (!graph) {
+                    throw new Error("--graph-counts requires the explicit reactive graph build");
+                  }
+                  graph.start(label);
+                }, id);
+              }
               await page.evaluate(
                 (restorationSignal) =>
                   Reflect.get(window, "reconnectBench").change(true, restorationSignal),
@@ -835,6 +868,14 @@ try {
                 performance.mark("reconnect:end");
               });
               const after = await metrics(cdp);
+              if (values["graph-counts"]) {
+                const graph = await page.evaluate(() =>
+                  Reflect.get(window, "__openclawReactiveGraph").stop(),
+                );
+                const artifact = `${id}.reactive-graph.json`;
+                await writeFile(path.join(output, artifact), JSON.stringify(graph, null, 2));
+                result.reactiveGraphArtifact = artifact;
+              }
               result.wallMs = await page.evaluate(() => {
                 const state = Reflect.get(window, "reconnectBench");
                 return state.completedAt - state.restoredAt;

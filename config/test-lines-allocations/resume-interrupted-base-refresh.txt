@@ -1,0 +1,2 @@
+# Real Git/SQLite regression: a stopped turn must not roll back an applied base refresh.
+120

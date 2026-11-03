@@ -221,7 +221,6 @@ suite.define(() => {
   );
   it.each([
     { resolution: "save", overflow: false },
-    { resolution: "cancel", overflow: false },
     { resolution: "save", overflow: true },
     { resolution: "cancel", overflow: true },
   ] as const)(

@@ -1,3 +1,4 @@
+import { withTimeout } from "@openclaw/fs-safe/advanced";
 // Browser edits persist through the normal built Gateway with independent readback.
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
@@ -11,7 +12,10 @@ import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts
 import { createRequireRecord } from "../../../test/helpers/record.js";
 import type { CronJob } from "../api/types.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
-import { captureControlUiE2eFailureDiagnostics } from "../test-helpers/control-ui-e2e-diagnostics.ts";
+import {
+  captureControlUiE2eFailureDiagnostics,
+  recordControlUiE2eFailureFacts,
+} from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { installControlUiE2eRendererStallProbe } from "../test-helpers/control-ui-e2e-renderer-stall.ts";
 import { openPicker, pickerValue, selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
@@ -160,6 +164,13 @@ catalogSuite.define(() => {
     const url = new URL("cron", browserUrl);
     url.hash = new URL(browserUrl).hash;
     const catalogRequests = new Set<string>();
+    const catalogTrace: string[] = [];
+    const traceCatalog = (event: string) => {
+      catalogTrace.push(event);
+      if (catalogTrace.length > 24) {
+        catalogTrace.shift();
+      }
+    };
     let rejectCatalogReplies = false;
     const rejected = new Set<string>();
     let catalogDrained: (() => void) | undefined;
@@ -196,6 +207,7 @@ catalogSuite.define(() => {
             if (frame.type === "req" && frame.method !== "connect") {
               if (frame.method === "models.list" && typeof frame.id === "string") {
                 catalogRequests.add(frame.id);
+                traceCatalog("catalog-request");
               }
             }
             server.send(message);
@@ -206,6 +218,7 @@ catalogSuite.define(() => {
             const catalogChange =
               frame.event === "config.changed" || frame.event === "chat.metadata.changed";
             if (catalogReply && typeof frame.id === "string") {
+              traceCatalog(frame.ok ? "catalog-reply-ok" : "catalog-reply-error");
               catalogRequests.delete(frame.id);
               if (!catalogRequests.size) {
                 catalogDrained?.();
@@ -214,12 +227,16 @@ catalogSuite.define(() => {
             // Exercise reads after real publication, not config changes during an in-flight read.
             // Keep the Gateway's notifications intact and in their original order.
             if (awaitCatalogPublication && catalogChange) {
+              traceCatalog(
+                frame.event === "config.changed" ? "config-changed-held" : "metadata-changed-held",
+              );
               pendingNotifications.push(() => socket.send(message));
               if (
                 frame.event === "chat.metadata.changed" &&
                 requireRecord(frame.payload).modelCatalogChanged === true
               ) {
                 awaitCatalogPublication = false;
+                traceCatalog("catalog-publication-released");
                 for (const send of pendingNotifications.splice(0)) {
                   send();
                 }
@@ -229,6 +246,7 @@ catalogSuite.define(() => {
             // Inject failure after observing the real reply. Notifications and recovery
             // still come from the Gateway; no synthetic catalog or event replaces them.
             if (catalogReply && rejectCatalogReplies && typeof frame.id === "string") {
+              traceCatalog("catalog-reply-rejected");
               rejected.add(frame.id);
               socket.send(
                 JSON.stringify({
@@ -251,13 +269,62 @@ catalogSuite.define(() => {
         const picker = page.locator("openclaw-select-picker:has(#cron-payload-model-picker)");
         const modelOption = (id: string) =>
           picker.locator(`[role="option"][data-value="fixture/${id}"]`);
-        const waitForModel = (id: string) =>
-          expect
-            .poll(async () => {
-              await openPicker(picker);
-              return modelOption(id).count();
-            })
-            .toBe(1);
+        const waitForModel = async (id: string) => {
+          try {
+            await expect
+              .poll(async () => {
+                await openPicker(picker);
+                return modelOption(id).count();
+              })
+              .toBe(1);
+          } catch (error) {
+            recordControlUiE2eFailureFacts(page, {
+              expectedModel: id,
+              catalogTrace: [...catalogTrace],
+              catalogRequestsInFlight: catalogRequests.size,
+              rejectedCatalogReplies: rejected.size,
+              awaitingCatalogPublication: awaitCatalogPublication,
+              heldCatalogNotifications: pendingNotifications.length,
+            });
+            await withTimeout(
+              page.evaluate(() => {
+                const pickerElement = document.querySelector(
+                  "openclaw-select-picker:has(#cron-payload-model-picker)",
+                );
+                const values = Array.from(
+                  pickerElement?.querySelectorAll('[role="option"]') ?? [],
+                ).map((option) => option.getAttribute("data-value"));
+                return {
+                  catalogPickerPresent: Boolean(pickerElement),
+                  catalogPickerExpanded:
+                    pickerElement
+                      ?.querySelector(".picker-select__trigger")
+                      ?.getAttribute("aria-expanded") ?? null,
+                  catalogOptionCount: values.length,
+                  catalogFixtureOptions: [
+                    "anchor",
+                    "retiring",
+                    "published",
+                    "held",
+                    "recovered",
+                  ].filter((modelId) => values.includes(`fixture/${modelId}`)),
+                  catalogDraftNameRetained:
+                    document.querySelector<HTMLInputElement>("#cron-name")?.value ===
+                    "Retain this draft",
+                  catalogDraftPayloadRetained:
+                    document.querySelector<HTMLTextAreaElement>("#cron-payload-text")?.value ===
+                    "Do not submit this draft",
+                };
+              }),
+              500,
+            )
+              .then((facts) =>
+                recordControlUiE2eFailureFacts(page, { ...facts, catalogDomRead: true }),
+              )
+              .catch(() => recordControlUiE2eFailureFacts(page, { catalogDomRead: false }));
+            throw error;
+          }
+        };
         await waitForModel("retiring");
         await publish("published");
         await waitForModel("published");

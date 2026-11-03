@@ -26,6 +26,7 @@ import {
   profileCatalogPath,
   projectHasMultipleSessionSharingIdentities,
   readCatalogUserProfileAuthority,
+  readCatalogGitHubEmailIdentity,
   resolveUserProfileReferenceInCatalog,
 } from "./user-profile-identity.read.js";
 import type { UserProfileEmailBindingChange } from "./user-profile-mutation.js";
@@ -654,6 +655,7 @@ export async function prepareUserProfileCatalog(options: OpenClawStateDatabaseOp
     readCurrentAuthority(this: void, profileId: string, includeProfile = false) {
       return readCatalogUserProfileAuthority(catalog, profileId, includeProfile);
     },
+    readCurrentGitHubEmailIdentity: readCatalogGitHubEmailIdentity.bind(undefined, catalog),
     release: catalog.release,
   };
 }

@@ -301,10 +301,12 @@ function stripInputItemStatuses(input: unknown): void {
   if (!Array.isArray(input)) {
     return;
   }
-  for (const item of input) {
-    if (item && typeof item === "object" && !Array.isArray(item)) {
-      // Only item-level status is provider metadata. Nested values may be user or tool payloads.
-      delete (item as Record<string, unknown>).status;
+  for (let index = 0; index < input.length; index++) {
+    const item = input[index];
+    if (item && typeof item === "object" && !Array.isArray(item) && "status" in item) {
+      // Converted history can be shared; strip metadata on the request's own item.
+      const { status: _, ...rest } = item;
+      input[index] = rest;
     }
   }
 }

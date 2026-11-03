@@ -108,6 +108,7 @@ suite.define(() => {
           messages: rows,
           hasMore,
           nextOffset,
+          ...(hasMore ? { olderCursor: `older-export-${nextOffset}` } : {}),
           totalMessages: messages.length,
           sessionId: "export-pagination",
           deltaCursor: "stable-export-cursor",
@@ -187,10 +188,11 @@ suite.define(() => {
           nodes.findIndex((node) => node.textContent?.trim().startsWith("/viewport-15")),
         );
         expect(targetIndex).toBeGreaterThan(10);
+        await polledAttribute(options.first(), "aria-selected").toBe("true");
         for (let index = 0; index < targetIndex; index += 1) {
           await composer.press("ArrowDown");
+          await polledAttribute(options.nth(index + 1), "aria-selected").toBe("true");
         }
-        await polledAttribute(options.nth(targetIndex), "aria-selected").toBe("true");
         await expect.poll(() => scroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
         if (selection === "pointer") {
           await options.nth(targetIndex).click();
@@ -228,6 +230,7 @@ suite.define(() => {
         expect(activeIndex).toBeGreaterThanOrEqual(0);
         for (let index = activeIndex; index < choices.length - 1; index += 1) {
           await composer.press("ArrowDown");
+          await polledAttribute(options.nth(index + 1), "aria-selected").toBe("true");
         }
         await expect.poll(() => scroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
         await composer.fill("/viewport-");
@@ -238,7 +241,7 @@ suite.define(() => {
     },
   );
 
-  it("keeps visible search results and keyboard selection in relevance order", async () => {
+  it.each(["", "/help "])("ranks slash commands and selection (%s)", async (prefix) => {
     await withPage(async ({ page }) => {
       const commands = [
         makeCommand("pair", "Generate setup codes.", "tools"),
@@ -247,7 +250,7 @@ suite.define(() => {
       const gateway = await installCommands(page, commands, "slash-command-ranking-session");
       const composer = await openChat(page, gateway);
       await expect.poll(() => composer.isEnabled()).toBe(true);
-      await composer.fill("/pair");
+      await composer.fill(prefix + "/pair");
 
       const picker = page.locator(".slash-menu[role='listbox']");
       await picker.waitFor({ state: "visible" });
@@ -259,12 +262,13 @@ suite.define(() => {
         )
         .toEqual(["/pair", "/pair-device", "/openclaw"]);
 
+      await polledAttribute(options.first(), "aria-selected").toBe("true");
       await composer.press("ArrowDown");
       await polledAttribute(options.nth(1), "aria-selected").toBe("true");
       await polledText(options.nth(1).locator(".slash-menu-name")).toContain("/pair-device");
 
       await composer.press("Enter");
-      await expect.poll(() => composer.inputValue()).toBe("/pair-device ");
+      await expect.poll(() => composer.inputValue()).toBe(prefix || "/pair-device ");
       await expect.poll(() => picker.count()).toBe(0);
     });
   });

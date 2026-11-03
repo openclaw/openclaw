@@ -1,4 +1,4 @@
-import { fnv1aUtf16 } from "../../lib/fnv1a.ts";
+import { fnv1aUtf16 } from "../../../../src/shared/fnv1a.js";
 
 export function configHintTranslationKey(
   hintPath: string,

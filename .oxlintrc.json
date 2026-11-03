@@ -475,6 +475,13 @@
       }
     },
     {
+      "files": ["src/agents/agent-command.live-model-switch.test.ts"],
+      "rules": {
+        // expectations updated for equal-primary saved selections keeping configured fallbacks; #185496
+        "max-lines": ["error", { "max": 3736, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
       "files": ["extensions/copilot/src/event-bridge.ts"],
       "rules": {
         "max-lines": ["error", { "max": 950, "skipBlankLines": true, "skipComments": true }]

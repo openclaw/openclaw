@@ -16,6 +16,13 @@ import {
   resetConfigRuntimeState,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import {
+  areDiagnosticsEnabledForProcess,
+  onTrustedInternalDiagnosticEvent,
+  setDiagnosticsEnabledForProcess,
+  waitForDiagnosticEventsDrained,
+  type DiagnosticEventPayload,
+} from "../../infra/diagnostic-events.js";
 import * as gitExec from "../../infra/git-exec.js";
 import * as gitWorker from "../../infra/git-worker.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
@@ -46,6 +53,7 @@ import { getRegistryWorktree } from "./registry.test-support.js";
 import { ManagedWorktreeService } from "./service.js";
 import { materializeManagedWorktreeFixture } from "./service.test-support.js";
 import { captureManagedWorktreeSnapshot } from "./snapshot-host.js";
+import type { ManagedWorktreeRecord } from "./types.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -155,11 +163,32 @@ describe("ManagedWorktreeService provisioned state", () => {
       paths: [".env.local", "dependencies/package/settings.local"],
       estimatedBytes: 8192,
     });
-    const created = await service.create({
-      repoRoot: repo,
-      name: "dependencies",
-      baseRef: "HEAD",
+    const phases: DiagnosticEventPayload[] = [];
+    const diagnosticsEnabled = areDiagnosticsEnabledForProcess();
+    setDiagnosticsEnabledForProcess(true);
+    const unsubscribe = onTrustedInternalDiagnosticEvent((event) => {
+      if (event.type === "diagnostic.phase.completed" && event.name === "worktree.preparation") {
+        phases.push(event);
+      }
     });
+    let created: ManagedWorktreeRecord;
+    try {
+      created = await service.create({ repoRoot: repo, name: "dependencies", baseRef: "HEAD" });
+      await waitForDiagnosticEventsDrained();
+    } finally {
+      unsubscribe();
+      setDiagnosticsEnabledForProcess(diagnosticsEnabled);
+    }
+    expect(phases).toEqual([
+      expect.objectContaining({
+        details: expect.objectContaining({
+          outcome: "returned",
+          provisionInspect: expect.any(Number),
+          provisionCopy: expect.any(Number),
+        }),
+      }),
+    ]);
+    expect(JSON.stringify(phases)).not.toContain("synthetic provisioned");
     expect(await getRegistryWorktreeProvisionedPaths(env, created.id)).toEqual(inspection.paths);
     expect(await fs.readFile(path.join(created.path, ".env.local"), "utf8")).toBe(
       "synthetic provisioned\n",
@@ -220,6 +249,36 @@ describe("ManagedWorktreeService provisioned state", () => {
         : lstat(target, options),
     );
     await expect(provisionIncludedFiles(repo, destination)).resolves.toEqual([]);
+  });
+
+  it("preserves modification times when provisioning prepared build inputs and outputs", async () => {
+    await fs.writeFile(path.join(repo, ".gitignore"), "prepared/\n");
+    await fs.writeFile(path.join(repo, ".worktreeinclude"), "prepared/**\n");
+    await git(repo, "add", ".gitignore", ".worktreeinclude");
+    await git(repo, "commit", "-m", "include prepared build state");
+    const prepared = path.join(repo, "prepared");
+    await fs.mkdir(prepared);
+    // The output sorts first; recreating times would make its input appear newer.
+    const entries = [
+      { name: "artifact", content: "compiled output\n", seconds: 1_700_000_010 },
+      { name: "input", content: "build input\n", seconds: 1_700_000_000 },
+    ];
+    for (const entry of entries) {
+      const source = path.join(prepared, entry.name);
+      await fs.writeFile(source, entry.content);
+      await fs.utimes(source, entry.seconds, entry.seconds);
+    }
+
+    const created = await service.create({ repoRoot: repo, name: "prepared", baseRef: "HEAD" });
+
+    for (const entry of entries) {
+      const target = path.join(created.path, "prepared", entry.name);
+      expect(await fs.readFile(target, "utf8")).toBe(entry.content);
+      expect((await fs.stat(target)).mtimeMs).toBe(entry.seconds * 1000);
+    }
+    const output = await fs.stat(path.join(created.path, "prepared", "artifact"));
+    const input = await fs.stat(path.join(created.path, "prepared", "input"));
+    expect(output.mtimeMs).toBeGreaterThan(input.mtimeMs);
   });
 
   it.skipIf(process.platform === "win32")(

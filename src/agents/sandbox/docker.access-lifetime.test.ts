@@ -92,6 +92,9 @@ vi.mock("./container-engine.js", () => ({
       return result();
     }
     if (args[0] === "create") {
+      if (fixture.imageFails) {
+        throw new Error("image unavailable");
+      }
       const name = args[args.indexOf("--name") + 1];
       const id = (++fixture.serial).toString(16).padStart(64, "0");
       const hash = args
@@ -197,6 +200,7 @@ function provision(owner?: ReturnType<typeof source>, scopeKey = "guest") {
     engine: DOCKER_SANDBOX_ENGINE,
     operatorAuthority: owner?.authority,
     scopeKey,
+    sessionKey: scopeKey,
     workspaceDir: "/workspace",
     agentWorkspaceDir: "/workspace",
     cfg: structuredClone(sandboxConfig),
@@ -255,6 +259,25 @@ afterEach(async () => {
     await removeSandboxContainerRuntime(DOCKER_SANDBOX_ENGINE, name);
   }
 });
+
+it.each([false, true])(
+  "cleans only fresh allocations after backend preparation fails (reused: %s)",
+  async (reused) => {
+    const owner = source();
+    const params = provision(owner);
+    if (reused) {
+      await ensureSandboxContainer(params);
+    }
+    const failure = new Error("backend inspection failed");
+    fixture.inspectState = async () => {
+      throw failure;
+    };
+    await expect(createDockerSandboxBackend(params, owner.authority)).rejects.toBe(failure);
+    expectCounts({ create: 1, start: 1, rm: reused ? 0 : 1 });
+    expect(fixture.containers.size).toBe(reused ? 1 : 0);
+    expect(fixture.registry.size).toBe(reused ? 1 : 0);
+  },
+);
 
 it("retains original access after foreground close and stops only its private generation", async () => {
   const { owner, params, name, id } = await start();
@@ -456,7 +479,7 @@ it("recovers a pending unallocated attempt when setup is removed", async () => {
   const created = await ensureSandboxContainer(params);
   await expect(ensureSandboxContainer(params)).resolves.toEqual(created);
   expect(fixture.registry.get(created.containerName)?.runtimeState).toBe("ready");
-  expectCounts({ create: 1, exec: 0 });
+  expectCounts({ create: 2, exec: 0 });
 });
 
 it("preserves management removal intent across failed setup and queued reuse", async () => {

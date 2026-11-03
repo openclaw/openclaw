@@ -5,7 +5,9 @@
  *
  * The optional root supplies exact context/store/projection source snapshots; all
  * other modules retain their canonical identity. Run alternating base/candidate.
- * One synthetic active projection exercises shared authority (no session scan).
+ * One synthetic active projection with 10k admitted paths exercises shared authority
+ * (no session scan). Use --iterations 10000 for the fs-safe mutation pass, which
+ * disables fsync to measure mutation authority rather than storage durability.
  * CPU, sampled allocation and filesystem work counts run separately. No Gateway,
  * provider, container, Git checkout or operator state is used. State is removed.
  */
@@ -19,6 +21,7 @@ import path from "node:path";
 import { setImmediate as immediate } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { root as safeRoot } from "@openclaw/fs-safe/root";
 import { transformSync } from "esbuild";
 
 const { values } = parseArgs({
@@ -35,6 +38,7 @@ const files = [
   "src/agents/sandbox/context.ts",
   "src/gateway/worker-environments/local-workspace-store.ts",
   "src/gateway/worker-environments/local-workspace-projection.ts",
+  "src/gateway/worker-environments/local-workspace-state.ts",
 ];
 const sources = new Map(
   files.map((file) => {
@@ -141,9 +145,13 @@ try {
     lifecycle_revision: null,
     projection_path: path.join(fs.realpathSync(root), "worktree-projections", id, "workspace"),
     base_commit: "a".repeat(40),
-    source_paths_json: "[]",
+    source_paths_json: JSON.stringify(Array.from({ length: 10000 }, (_, i) => `src/file-${i}.ts`)),
     baseline_json: null,
     baseline_ref: null,
+    tree_root_digest: null,
+    source_paths_digest: null,
+    canonical_fingerprints: null,
+    projection_fingerprints: null,
     checkpoint_json: null,
     pending_ref: null,
     pending_target: null,
@@ -178,22 +186,28 @@ try {
   await withLocalWorkspaceProjection(
     workspaceOwner,
     async (state) => {
+      fs.mkdirSync(row.projection_path, { recursive: true });
+      const workspace = await safeRoot(row.projection_path, {
+        assertBeforeMutation: state.current,
+        durable: false,
+      });
       for (const [name, run] of [
         ["runtime", runtimeAssert],
         ["projection", state.current],
         ["worker", state.workerAuthority.assertCurrent],
+        ["fs-safe", () => workspace.write("probe.txt", "synthetic\n")],
       ]) {
         console.log(`Measuring ${name}`);
         const repeat = async (count) => {
           for (let i = 0; i < count; i++) {
-            run();
+            await run();
             if (i % 25 === 24) {
               await immediate();
             }
           }
         };
         for (let i = 0; i < 100; i++) {
-          run();
+          await run();
         }
         let rootStats = 0;
         const original = fs.lstatSync;
@@ -206,7 +220,7 @@ try {
         syncBuiltinESMExports();
         try {
           for (let i = 0; i < 100; i++) {
-            run();
+            await run();
           }
         } finally {
           fs.lstatSync = original;

@@ -22,7 +22,7 @@ import { projectChatWorkContextForDisplay } from "../../../../src/chat/work-cont
 import { splitMediaFromOutput } from "../../../../src/media/parse.js";
 import { readClawHubRecommendation } from "../../../../src/shared/clawhub-recommendations.js";
 import { readPluginInlineViewBlock } from "../../../../src/shared/plugin-inline-view.js";
-import { getMediaFileExtension } from "../media-file-extension.ts";
+import { getMediaFileExtension, labelForMediaPath } from "../media-file-extension.ts";
 import type { NormalizedMessage, MessageContentItem, MessageImageSource } from "./chat-types.ts";
 import { normalizeAttachmentContentBlock } from "./message-normalizer-attachments.ts";
 import { resolveMessageSender, resolveMessageSenderLabel } from "./sender-label.ts";
@@ -423,19 +423,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
           !inferredKind || inferredKind === "sticker" || inferredKind === "unknown"
             ? "document"
             : inferredKind;
-        const label = (() => {
-          try {
-            if (/^https?:\/\//i.test(url)) {
-              const parsedUrl = new URL(url);
-              const name = parsedUrl.pathname.split("/").pop()?.trim();
-              return name || parsedUrl.hostname || url;
-            }
-          } catch {
-            // Malformed URLs still get a filename label from the original path below.
-          }
-          const name = url.split(/[\\/]/).pop()?.trim();
-          return name || url;
-        })();
+        const label = labelForMediaPath(url);
         parts.push({
           type: "attachment",
           attachment: {
@@ -546,10 +534,12 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
       if (
         text !== undefined &&
         (type === "text" ||
-          (role === "user" && type === "input_text") ||
-          (role === "assistant" && (type === "input_text" || type === "output_text")))
+          (type === "input_text" && (role === "user" || isAssistantMessage)) ||
+          (type === "output_text" && isAssistantMessage))
       ) {
-        return normalizeText(text, true);
+        return isAssistantMessage && item.openclawFallback === true
+          ? []
+          : normalizeText(text, true);
       }
       return [
         {

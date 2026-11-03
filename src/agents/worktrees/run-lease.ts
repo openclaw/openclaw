@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { materializeErrorStack } from "../../infra/error-graph-internal.js";
 import { formatErrorMessage as errorMessage, toErrorObject } from "../../infra/errors.js";
 import { realpathOrResolve } from "../../infra/path-existence.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
@@ -237,6 +238,7 @@ async function runLeaseCleanup(cleanup: LeaseCleanup): Promise<boolean> {
 }
 
 function retainCleanupFailure(cleanup: LeaseCleanup, error: unknown): void {
+  materializeErrorStack(error);
   cleanup.failure = error;
   pendingLeaseCleanups.add(cleanup);
   setWorktreeRunEndCleanupFailure(cleanup.context, cleanup, { error });

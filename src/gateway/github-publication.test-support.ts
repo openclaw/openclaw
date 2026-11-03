@@ -306,6 +306,19 @@ export function commandResult(stdout = "", code = 0) {
   };
 }
 
+type CommandOverride = ReturnType<typeof commandResult> | void;
+
+/** Answer or observe selected commands; unanswered ones fall through to the installed transport. */
+export function overrideCommands(
+  override: (argv: string[], input?: string) => CommandOverride | Promise<CommandOverride>,
+) {
+  const fallback = mocks.runCommand.getMockImplementation()!;
+  mocks.runCommand.mockImplementation(
+    async (argv: string[], options?: { input?: string }) =>
+      (await override(argv, options?.input)) ?? (await fallback(argv, options)),
+  );
+}
+
 export function seedLocalPublication(
   database: OpenClawStateDatabase,
   params: {
@@ -314,49 +327,44 @@ export function seedLocalPublication(
     repositoryFingerprint?: string;
     headCommit?: string | null;
     requester?: GitHubPublicationRequesterSnapshot | null;
+    createdAtMs?: number;
   },
 ): void {
   ensureGitHubPublicationSchema(database.db);
+  // Omitted nullable columns retain the schema's NULL defaults.
+  const row = {
+    request_id: params.requestId,
+    idempotency_key: `idempotency-${params.requestId}`,
+    request_digest: `digest-${params.requestId}`,
+    session_id: SESSION_ID,
+    session_key: SESSION_KEY,
+    agent_id: "main",
+    worktree_id: "worktree-1",
+    repository_fingerprint: params.repositoryFingerprint ?? "fingerprint-1",
+    identity_source: "system-configured",
+    identity_profile_id: "ghp_11111111111111111111111111111111",
+    identity_account_id: 42,
+    identity_login: "roboclaw-bot",
+    title: "Resume the publication",
+    body: "Recovered after Gateway restart.",
+    status: params.status,
+    gateway_instance_id: params.headCommit === null ? null : "previous-gateway-instance",
+    repository: params.headCommit === null ? null : "openclaw/openclaw",
+    branch: BRANCH,
+    base_branch: params.headCommit === null ? null : "main",
+    source_head_commit: OLD_HEAD,
+    source_index_tree: WORKSPACE_TREE,
+    workspace_tree: WORKSPACE_TREE,
+    head_commit: params.headCommit === undefined ? NEW_HEAD : params.headCommit,
+    created_at_ms: params.createdAtMs ?? 1_000,
+    updated_at_ms: 1_001,
+  };
+  const columns = Object.keys(row);
   database.db
     .prepare(
-      `INSERT INTO github_publication_requests (
-        request_id, idempotency_key, request_digest, session_id, session_key, agent_id,
-        worktree_id, repository_fingerprint, claim_id, run_id, environment_id, owner_epoch,
-        placement_generation, identity_source, identity_profile_id, identity_account_id,
-        identity_login, title, body, status, gateway_instance_id, repository, branch,
-        base_branch, source_head_commit, source_index_tree, workspace_tree, head_commit,
-        pull_request_url,
-        error_code, next_action, created_at_ms, updated_at_ms, reported_at_ms
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?,
-        ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, NULL)`,
+      `INSERT INTO github_publication_requests (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`,
     )
-    .run(
-      params.requestId,
-      `idempotency-${params.requestId}`,
-      `digest-${params.requestId}`,
-      SESSION_ID,
-      SESSION_KEY,
-      "main",
-      "worktree-1",
-      params.repositoryFingerprint ?? "fingerprint-1",
-      "system-configured",
-      "ghp_11111111111111111111111111111111",
-      42,
-      "roboclaw-bot",
-      "Resume the publication",
-      "Recovered after Gateway restart.",
-      params.status,
-      params.headCommit === null ? null : "previous-gateway-instance",
-      params.headCommit === null ? null : "openclaw/openclaw",
-      BRANCH,
-      params.headCommit === null ? null : "main",
-      OLD_HEAD,
-      WORKSPACE_TREE,
-      WORKSPACE_TREE,
-      params.headCommit === undefined ? NEW_HEAD : params.headCommit,
-      1_000,
-      1_001,
-    );
+    .run(...Object.values(row));
   insertGitHubPublicationSessionLifecycle(database.db, {
     publicationKind: "shared",
     requestId: params.requestId,
@@ -614,88 +622,22 @@ export function installGitHubPublicationTestHarness(
         worktree: { id: "worktree-1", branch: BRANCH, repoRoot: "/repo" },
       },
     }));
-    const replies: Record<string, [string?, number?]> = {
-      "git symbolic-ref --quiet --short HEAD": [`${BRANCH}\n`],
-      [`git symbolic-ref --quiet refs/heads/${BRANCH}`]: ["", 1],
-      "git rev-parse --verify --quiet MERGE_HEAD": ["", 1],
-      "git rev-parse --verify HEAD^{commit}": [`${OLD_HEAD}\n`],
-      "git show -s --no-show-signature --format=%H%n%T%n%P%n%B HEAD": [
-        `${OLD_HEAD}\n${WORKSPACE_TREE}\n${OLD_HEAD}\nexisting commit\n`,
-      ],
-      "git config --local --includes --bool --get extensions.worktreeConfig": ["", 1],
-      "git rev-parse --git-path info/attributes": [path.join(root, "missing-info-attributes")],
-      "git rev-parse --git-path info/grafts": [path.join(root, "missing-grafts")],
-      "git var GIT_ATTR_GLOBAL": [path.join(root, "missing-global-attributes")],
-      "git var GIT_ATTR_SYSTEM": [path.join(root, "missing-global-attributes")],
-      [`git rev-parse ${BASE_HEAD}^{tree}`]: ["e".repeat(40) + "\n"],
-      "git rev-parse --verify --end-of-options origin/main^{commit}": [`${BASE_HEAD}\n`],
-    };
-    let remotePublished = false;
-    mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
-      commands.push(argv);
-      commandCalls.push({ argv, input: options?.input });
-      const command = argv.join(" ");
-      if (replies[command]) {
-        return commandResult(...replies[command]);
-      }
-
-      if (
-        command.startsWith(
-          "gh api --hostname github.com repos/openclaw/openclaw --jq {fork, default_branch, parent:",
-        )
-      ) {
-        return commandResult('{"fork":false,"default_branch":"main"}\n');
-      }
-      const baseRefPrefix = "gh api --hostname github.com repos/openclaw/openclaw/git/ref/heads/";
-      if (command.startsWith(baseRefPrefix)) {
-        const branch = command.slice(baseRefPrefix.length).split(" --jq", 1)[0];
-        return commandResult(JSON.stringify({ ref: `refs/heads/${branch}`, sha: BASE_HEAD }));
-      }
-
-      if (
-        (argv.includes("--includes") && argv.includes("--get-regexp")) ||
-        (argv[0] === "git" &&
-          argv[1] === "config" &&
-          (argv.includes("--global") || argv.includes("--system")) &&
-          argv.includes("core.attributesFile"))
-      ) {
-        return commandResult("", 1);
-      }
-      if (command.startsWith("git ls-tree -r -z --full-tree ")) {
-        return commandResult();
-      }
-      if (argv.includes("rev-parse") && argv.includes("--git-path") && argv.at(-1) === "index") {
-        return commandResult(syntheticIndex);
-      }
-      if (command.endsWith("write-tree")) {
-        return commandResult(`${WORKSPACE_TREE}\n`);
-      }
-      if (command.startsWith("git commit-tree ")) {
-        return commandResult(`${NEW_HEAD}\n`);
-      }
-
-      if (
-        command.startsWith(
-          "git -c credential.helper= -c credential.helper=!gh auth git-credential ls-remote",
-        )
-      ) {
-        return commandResult(remotePublished ? `${NEW_HEAD}\trefs/heads/${BRANCH}\n` : "");
-      }
-      if (argv.includes("push")) {
-        remotePublished = true;
-        return commandResult();
-      }
-      if (command.includes(" repos/openclaw/openclaw/pulls ") && command.includes("state=all")) {
-        return commandResult("[]\n");
-      }
-      if (
-        command ===
-        "gh api --hostname github.com --method POST repos/openclaw/openclaw/pulls --input -"
-      ) {
-        return commandResult('{"html_url":"https://github.com/openclaw/openclaw/pull/125200"}\n');
-      }
-      return commandResult();
-    });
+    const { createSyntheticPublicationTransport } =
+      await import("./github-publication-git.test-support.js");
+    mocks.runCommand.mockImplementation(
+      createSyntheticPublicationTransport({
+        root,
+        syntheticIndex,
+        branch: BRANCH,
+        oldHead: OLD_HEAD,
+        newHead: NEW_HEAD,
+        workspaceTree: WORKSPACE_TREE,
+        baseHead: BASE_HEAD,
+        commands,
+        commandCalls,
+        commandResult,
+      }),
+    );
     // Source-policy selection reads canonical session custody, including the
     // creation-time sandbox required by authenticated requester fixtures.
     setRuntimeConfigSnapshot({

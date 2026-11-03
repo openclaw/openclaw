@@ -142,10 +142,12 @@ it("publishes attachment read progress through the composer owner without a draf
     [new File(["progress"], "progress.txt", { type: "text/plain" })],
     props,
   );
-  await waitForSolid(() => expect(view.query(".chat-attachment-loading > span")).not.toBeNull());
+  await waitForSolid(() =>
+    expect(view.query('.chat-attachment-thumb[aria-busy="true"]')).not.toBeNull(),
+  );
   reportProgress?.();
   flush();
-  expect(view.query<HTMLElement>(".chat-attachment-loading > span")?.style.transform).toBe(
+  expect(view.query<HTMLElement>(".chat-attachment-loading__line > span")?.style.transform).toBe(
     "scaleX(0.5)",
   );
   expect(view.textarea().value).toBe("");
@@ -334,7 +336,8 @@ it("updates composer text on a live locale change without disturbing an IME draf
   );
   const textarea = view.textarea();
   const heading = view.query(".chat-controls__permission-heading")!;
-  expect(heading.textContent).toBe("Execution permissions");
+  const learnMore = () => view.query(".chat-controls__permission-learn-more")?.textContent?.trim();
+  expect(learnMore()).toBe("Learn more");
   expect(textarea.placeholder).toBe("Message Locale fixture");
 
   textarea.focus();
@@ -347,7 +350,7 @@ it("updates composer text on a live locale change without disturbing an IME draf
   await i18n.setLocale("de");
   flush();
 
-  expect(heading.textContent).toBe("Ausführungsberechtigungen");
+  expect(learnMore()).toBe("Mehr erfahren");
   expect(textarea.placeholder).toBe("Nachricht an Locale fixture");
   expect(view.query(".chat-controls__permission-heading")).toBe(heading);
   expect(view.textarea()).toBe(textarea);

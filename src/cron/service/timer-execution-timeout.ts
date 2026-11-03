@@ -30,6 +30,7 @@ export type TimedCronRunOutcome = CronJobExecutionResult & {
   activeJobMarker?: CronActiveJobMarker;
   runReceipt?: CronRunReceiptHandle;
   runReceiptContext?: OpenClawStateWorkerContext;
+  executionSettlement?: Promise<unknown>;
   request?: {
     executionJob: CronJob;
     preserveCadence: boolean;
@@ -113,6 +114,7 @@ export async function resolveMainSessionCronDeliveryContext(
       agentId,
       sessionKey: targetSessionKey,
       storePath,
+      projection: "list",
     });
     return deliveryContextFromSession(sessionEntry);
   } catch {

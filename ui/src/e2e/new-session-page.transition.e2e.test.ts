@@ -265,7 +265,8 @@ async function assertCreateRecovery(
   expect(await placeSelect.isVisible()).toBe(false);
   // The visible chat header now owns the titlebar, not a second draft-scroll inset.
   const pendingChat = page.locator("openclaw-pending-session-create");
-  expect(await pendingChat.locator(".chat-pane__header").isVisible()).toBe(true);
+  const header = width < 900 ? ".agent-chat__header--mobile" : ".chat-pane__header";
+  expect(await pendingChat.locator(header).isVisible()).toBe(true);
   const followUpComposer = pendingChat.locator(".agent-chat__composer-combobox textarea");
   expect(await followUpComposer.isEnabled()).toBe(true);
   expect(await followUpComposer.inputValue()).toBe("");
@@ -443,7 +444,7 @@ suite.define(() => {
       if (captureProofEnabled) {
         await page.waitForTimeout(800);
       }
-      await button(toast, "Open").click();
+      await toast.getByRole("link", { name: "Open session", exact: true }).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionKey));
       await waitForCommittedChatRoute(page);
       await page.locator("openclaw-chat-page").waitFor();

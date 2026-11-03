@@ -46,12 +46,22 @@ serveWorkerTasks<UpdateStepResult | RecoveryCleanupReport | undefined, Automatic
           pluginValidation: "core-only",
         });
         const readConfig = () => io.readSourceConfigBestEffort();
-        const preview = inspectSessionSqliteRecovery({ cfg: await readConfig(), env: input.env });
+        const preview = await inspectSessionSqliteRecovery({
+          cfg: await readConfig(),
+          env: input.env,
+        });
         assertCurrent();
         return input.dryRun
           ? preview
           : retireOwnedSessionSqliteRecovery(
-              { env: input.env, preview, readConfig, confirm: async () => true },
+              {
+                env: input.env,
+                preview,
+                readConfig,
+                confirm: async () => true,
+                // Manual retirement shares the serving owner's ordinary destination writes.
+                allowOwnedDestinationMutation: true,
+              },
               { assertCurrent },
             );
       });

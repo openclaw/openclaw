@@ -1,6 +1,6 @@
 import { flush } from "solid-js";
 import { afterEach, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type { AgentsFilesListResult, AgentsListResult } from "../../api/types.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
@@ -22,6 +22,8 @@ const AGENTS_PAGE_GATEWAY_HELLO = gatewayHelloForMethods([
   "agents.update",
   "cron.list",
   "cron.status",
+  "tools.effective",
+  "tools.catalog",
 ]);
 
 const pages = new Set<() => void>();
@@ -188,8 +190,15 @@ export function emitCatalogChanged(currentGateway: ApplicationContext["gateway"]
   if (client) {
     invalidateChatMetadataStore(client);
   }
+  emitGatewayEvent(currentGateway, { type: "event", event: "chat.metadata.changed", payload: {} });
+}
+
+export function emitGatewayEvent(
+  currentGateway: ApplicationContext["gateway"],
+  event: GatewayEventFrame,
+) {
   for (const listener of eventListeners.get(currentGateway) ?? []) {
-    listener({ type: "event", event: "chat.metadata.changed", payload: {} });
+    listener(event);
   }
 }
 

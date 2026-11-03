@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { writeFile, readFile, rm, rename } from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { Check } from "typebox/value";
 import { expect, it } from "vitest";
 import type { VaultAccess } from "./access.js";
@@ -9,6 +10,7 @@ import { contract } from "./contract.js";
 import { SqliteIdentityStore } from "./identity-store.js";
 import { createKnowledgeService } from "./service.js";
 import { KnowledgeStorage } from "./storage.js";
+import { draft, edit } from "./structured-write.test-support.js";
 import {
   accessFor,
   childEvalArgs,
@@ -39,21 +41,6 @@ async function fixture() {
     },
   };
 }
-const draft = () => ({
-  requestId: randomUUID(),
-  title: "Publication test",
-  type: "note",
-  body: "Authored text.\n",
-});
-const edit = (record: any, fields = {}) => ({
-  requestId: randomUUID(),
-  id: record.id,
-  expectedRevision: record.revision,
-  expectedHash: record.hash,
-  title: record.title,
-  body: record.body,
-  ...fields,
-});
 
 it("UI creates sourced page; agent reads and edits; durable retry/history/readback agree", async () => {
   const f = await fixture(),
@@ -124,6 +111,7 @@ it("stale hash/revision, rename, deletion, and unknown metadata preservation", a
 });
 
 for (const stage of [
+  "before-accept-commit",
   "after-accept",
   "after-install:private/artifacts/",
   "after-link:private/artifacts/",
@@ -131,6 +119,8 @@ for (const stage of [
   "after-displace:vault.json",
   "after-install:vault.json",
   "before-receipt",
+  "before-settlement",
+  "after-settlement",
 ]) {
   it(`interruption at ${stage} recovers once across restart`, async () => {
     const f = await fixture(),
@@ -141,14 +131,55 @@ for (const stage of [
       }
     });
     await expect(publisher.save(input, f.access(), "agent")).rejects.toThrow(/simulated crash/);
-    await expect(f.service.records({}, f.owner)).rejects.toThrow(/publication|identity/);
-    const resumed = await createKnowledgeService(f.api).save_page(input, f.owner);
+    if (stage === "before-accept-commit" || stage === "after-settlement") {
+      expect((await f.service.records({}, f.owner)).total).toBe(
+        stage === "after-settlement" ? 1 : 0,
+      );
+    } else {
+      await expect(f.service.records({}, f.owner)).rejects.toThrow(/publication|identity/);
+    }
+    const service = createKnowledgeService(f.api);
+    let resumed;
+    if (stage === "after-accept") {
+      const [first, second] = await Promise.all([
+        service.resume({ requestId: input.requestId }, f.owner),
+        service.resume({ requestId: input.requestId }, f.owner),
+      ]);
+      expect(second).toStrictEqual(first);
+      resumed = first;
+    } else {
+      resumed = await service.save_page(input, f.owner);
+    }
     expect(resumed.state).toBe("published");
     expect((await f.service.records({}, f.owner)).total).toBe(1);
     expect((await f.service.history({}, f.owner)).mutations.length).toBe(1);
     expect(await f.service.save_page(input, f.owner)).toStrictEqual(resumed);
   });
 }
+
+it("publication and authority callbacks leave the SQLite writer available", async () => {
+  const f = await fixture();
+  await f.service.status({}, f.owner);
+  const peer = new DatabaseSync(f.config.statePath, { timeout: 0 });
+  let checkpoints = 0;
+  const assertWriterAvailable = () => {
+    peer.exec("BEGIN IMMEDIATE");
+    peer.exec("COMMIT");
+    checkpoints++;
+  };
+  try {
+    const storage = new KnowledgeStorage(f.config, f.store, assertWriterAvailable);
+    const access = { ...f.access(), assertCurrent: assertWriterAvailable };
+    const input = { ...draft(), source: { text: "Durable evidence", attribution: "Synthetic" } };
+    const receipt = await storage.save(input, access, "agent");
+    expect(receipt.state).toBe("published");
+    expect(storage.resume(access, input.requestId)).toStrictEqual(receipt);
+    expect(checkpoints).toBeGreaterThan(10);
+    expect((await f.service.record({ id: receipt.id }, f.owner)).record!.body).toBe(input.body);
+  } finally {
+    peer.close();
+  }
+});
 
 it("external rewrite immediately before displacement retains editor and intended versions", async () => {
   const f = await fixture(),
@@ -258,16 +289,25 @@ async function childWrite(f: any, input: any, crashAt?: string): Promise<ChildRe
   });
 }
 
-it("actual process death with a live SQLite transaction and two stage hardlinks recovers", async () => {
-  const f = await fixture(),
-    input = draft();
-  await f.service.status({}, f.owner);
-  const killed = await childWrite(f, input, "after-link:vault.json");
-  expect(killed.code).toBe(77);
-  const receipt = await f.service.save_page(input, f.owner);
-  expect(receipt.state).toBe("published");
-  expect((await f.service.records({}, f.owner)).total).toBe(1);
-});
+for (const stage of [
+  "after-accept",
+  "after-link:vault.json",
+  "before-settlement",
+  "after-settlement",
+]) {
+  it(`process death at ${stage} recovers publication exactly once`, async () => {
+    const f = await fixture(),
+      input = draft();
+    await f.service.status({}, f.owner);
+    const killed = await childWrite(f, input, stage);
+    expect(killed.code).toBe(77);
+    const receipt = await f.service.save_page(input, f.owner);
+    expect(receipt.state).toBe("published");
+    expect((await f.service.records({}, f.owner)).total).toBe(1);
+    expect((await f.service.history({}, f.owner)).entries).toHaveLength(1);
+    expect(await f.service.save_page(input, f.owner)).toStrictEqual(receipt);
+  });
+}
 
 it("cross-process publishers fence competing edits and never lose the winner", async () => {
   const f = await fixture(),
@@ -281,6 +321,40 @@ it("cross-process publishers fence competing edits and never lose the winner", a
   const current = (await f.service.record({ id: created.id }, f.owner)).record;
   expect(current!.hash).toBe(winner.hash);
   expect(current!.revision).toBe(2);
+});
+
+it("returns a resume receipt without loading the retained publication plan twice", async () => {
+  const f = await fixture();
+  // Just under the 24,000-character page budget.
+  const input = { ...draft(), body: "Synthetic publication body.\n".repeat(850) };
+  const storage = new KnowledgeStorage(f.config, f.store);
+  const original = await storage.save(input, f.access(), "agent");
+  let returnedBytes = 0;
+  const withDatabase = f.store.withDatabase.bind(f.store);
+  f.store.withDatabase = (run) =>
+    withDatabase((db) => {
+      const prepare = db.prepare.bind(db);
+      db.prepare = (sql) => {
+        const statement = prepare(sql);
+        statement.get = new Proxy(statement.get.bind(statement), {
+          apply(get, receiver, args) {
+            const row: ReturnType<typeof get> = Reflect.apply(get, receiver, args);
+            for (const value of Object.values(row ?? {})) {
+              if (typeof value === "string") {
+                returnedBytes += Buffer.byteLength(value);
+              }
+            }
+            return row;
+          },
+        });
+        return statement;
+      };
+      return run(db);
+    });
+  expect(storage.resume(f.access(), input.requestId)).toStrictEqual(original);
+  // This fixed fixture needs ~153 KB for identity validation. A second plan
+  // read doubles it; receipt readback must fit within the remaining budget.
+  expect(returnedBytes).toBeLessThan(180_000);
 });
 
 it("revision snapshots and publication details never cross conversation boundaries", async () => {

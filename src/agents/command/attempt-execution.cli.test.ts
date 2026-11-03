@@ -1829,7 +1829,7 @@ describe("CLI attempt execution", () => {
         : testCase.requireExplicitMessageTarget,
       toolsAllow: testCase.expectedToolsAllow,
       disableTools: testCase.expectedDisableTools,
-      terminalReplyExpectation: "required",
+      terminalReplyExpectation: "optional",
       ...(!cli
         ? {
             disableMessageTool: testCase.disableMessageTool || undefined,
@@ -2076,7 +2076,7 @@ describe("CLI attempt execution", () => {
     });
 
     expect(embeddedArg.suppressLiveStreamOutput).toBe(false);
-    expect(embeddedArg.terminalReplyExpectation).toBe("result-required");
+    expect(embeddedArg.terminalReplyExpectation).toBe("optional");
     expect(embeddedArg.cronCreatorAuthorityCapability).toBe(capability);
     const callback = embeddedArg.onExecutionStarted;
     if (typeof callback !== "function") {

@@ -192,6 +192,11 @@ export function WorkspaceRows(props: {
   const rowIndexes = createMemo(
     () => new Map<VirtualItem["key"], number>(props.rows.map((row, index) => [row.key, index])),
   );
+  const getItemKey = createMemo(() => {
+    const rows = props.rows;
+    // Geometry updates reuse positions; replacing rows invalidates the key mapping.
+    return (index: number) => rows[index]!.key;
+  });
   const activeId = createMemo(() => props.workspace.activeId);
   const selectedKey = createMemo(
     () =>
@@ -250,6 +255,7 @@ export function WorkspaceRows(props: {
     () => ({
       rows: props.rows,
       indexes: rowIndexes(),
+      getItemKey: getItemKey(),
       pinned: pinned(),
       active: rowsActive(),
       windowed: windowed(),
@@ -272,7 +278,7 @@ export function WorkspaceRows(props: {
         count: next.rows.length,
         enabled: next.windowed,
         useCachedMeasurements: false,
-        getItemKey: (index) => next.rows[index]!.key,
+        getItemKey: next.getItemKey,
         scrollMargin:
           list.getBoundingClientRect().top -
           scroller.getBoundingClientRect().top +

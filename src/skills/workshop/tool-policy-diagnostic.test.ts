@@ -41,8 +41,8 @@ describe("detectSkillWorkshopToolPolicyDiagnostic", () => {
       "defaults",
       "In non-main sessions",
     ],
-  ] as const)("reports the sandbox construction gate: %j", (config, owner, detail) => {
-    const diagnostic = detect(config);
+  ] as const)("reports the sandbox construction gate: %j", async (config, owner, detail) => {
+    const diagnostic = await detect(config);
     expect(diagnostic).toMatchObject({ source: `agents.${owner}.sandbox.mode` });
     expect(diagnostic?.detail).toContain(detail);
     expect(diagnostic?.fix).toContain("non-sandboxed session");
@@ -50,10 +50,10 @@ describe("detectSkillWorkshopToolPolicyDiagnostic", () => {
     expect(diagnostic?.fix).not.toContain("alsoAllow");
   });
 
-  it("returns no diagnostic for an included tool or an unsandboxed additive grant", () => {
-    expect(detect({ tools: { profile: "coding" } })).toBeNull();
+  it("returns no diagnostic for an included tool or an unsandboxed additive grant", async () => {
+    expect(await detect({ tools: { profile: "coding" } })).toBeNull();
     expect(
-      detect(
+      await detect(
         agent(
           {
             sandbox: { mode: "off" },
@@ -65,8 +65,8 @@ describe("detectSkillWorkshopToolPolicyDiagnostic", () => {
     ).toBeNull();
   });
 
-  it("returns no diagnostic when Workshop capture is disabled", () => {
-    expect(detect({ tools: { profile: "messaging" } }, false)).toBeNull();
+  it("returns no diagnostic when Workshop capture is disabled", async () => {
+    expect(await detect({ tools: { profile: "messaging" } }, false)).toBeNull();
   });
 
   it.each([
@@ -92,8 +92,8 @@ describe("detectSkillWorkshopToolPolicyDiagnostic", () => {
     ],
   ] satisfies [OpenClawConfig, string, string][])(
     "targets %s with source %s",
-    (config, source, fix) => {
-      expect(detect(config)).toMatchObject({ source, fix });
+    async (config, source, fix) => {
+      expect(await detect(config)).toMatchObject({ source, fix });
     },
   );
 
@@ -104,7 +104,10 @@ describe("detectSkillWorkshopToolPolicyDiagnostic", () => {
     agentTools({ profile: "minimal", deny: ["group:agents"] }),
     agentTools(byProvider({ deny: ["skill_workshop"] })),
     agent({ sandbox: { mode: "all" }, tools: { deny: ["skill_workshop"] } }),
-  ] satisfies OpenClawConfig[])("treats a matching deny as an intentional opt-out: %j", (cfg) => {
-    expect(detect(withModel(cfg))).toBeNull();
-  });
+  ] satisfies OpenClawConfig[])(
+    "treats a matching deny as an intentional opt-out: %j",
+    async (cfg) => {
+      expect(await detect(withModel(cfg))).toBeNull();
+    },
+  );
 });

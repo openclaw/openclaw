@@ -1,6 +1,7 @@
 import http from "node:http";
 import { assert, describe, expect, it } from "vitest";
 import * as httpFixtures from "../../../../test/helpers/gateway-integration-fixtures.js";
+import { withinTest } from "../../../../test/helpers/promise.js";
 import { createBoundedMistralFetcher, streamMistral } from "./mistral.js";
 import { makeProviderModel } from "./provider-model.test-support.js";
 import { makeStallingStream, serializeSse } from "./provider-stream.test-support.js";
@@ -15,20 +16,6 @@ async function withServer<T>(handler: http.RequestListener, run: (url: string) =
     return await run(url);
   } finally {
     await httpFixtures.closeHttpServer(server);
-  }
-}
-
-async function settleWithin<T>(promise: Promise<T>, label: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(new Error(`${label} did not settle`)), 250);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -69,7 +56,9 @@ describe("Mistral bounded-stream-read real wire proof (loopback http.createServe
 });
 
 describe("Mistral bounded-stream-read direct (synthetic ReadableStream)", () => {
-  it("finishes wrapped response cancellation after handing cleanup upstream", async () => {
+  it("finishes wrapped response cancellation after handing cleanup upstream", async ({
+    signal,
+  }) => {
     let cancelStarted = false;
     const upstreamBody = makeStallingStream([], () => {
       cancelStarted = true;
@@ -82,9 +71,7 @@ describe("Mistral bounded-stream-read direct (synthetic ReadableStream)", () => 
     const reader = wrapped.body?.getReader();
     assert(reader, "bounded Mistral response did not expose a body reader");
 
-    await expect(
-      settleWithin(reader.cancel("done"), "wrapped response cancel"),
-    ).resolves.toBeUndefined();
+    await expect(withinTest(reader.cancel("done"), signal)).resolves.toBeUndefined();
     expect(cancelStarted).toBe(true);
     reader.releaseLock();
   });

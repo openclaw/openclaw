@@ -4,6 +4,7 @@ import type { SkillStatusEntry } from "../../api/types.ts";
 import { handleMarkdownCodeBlockClick } from "../../components/markdown-code-blocks.ts";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
   SettingsEmpty,
   SettingsPage,
@@ -18,6 +19,7 @@ import { clampText } from "../../lib/format.ts";
 import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { groupSkills, type SkillGroup } from "../../lib/skills-grouping.ts";
+import "../../styles/carapace-control-ui.css";
 import "../../styles/plugins.css";
 import "../../styles/sidebar-markdown.css";
 import {
@@ -97,12 +99,12 @@ export function Skills(props: SkillsProps) {
       props.state.skillsStatusFilter === "all"
         ? items
         : items.filter((skill) => skillStatus(skill) === props.state.skillsStatusFilter);
-    const filter = normalizeLowercaseStringOrEmpty(props.state.skillsFilter);
+    const filter = normalizeLowercaseStringOrEmpty(props.state.skillsFilter).normalize("NFC");
     return filter
       ? afterStatus.filter((skill) =>
-          normalizeLowercaseStringOrEmpty(
-            [skill.name, skill.description, skill.source].join(" "),
-          ).includes(filter),
+          normalizeLowercaseStringOrEmpty([skill.name, skill.description, skill.source].join(" "))
+            .normalize("NFC")
+            .includes(filter),
         )
       : afterStatus;
   };
@@ -224,26 +226,17 @@ function SkillsToolbar(props: {
       </span>
       <Loading
         fallback={
-          <button type="button" class="btn" disabled>
-            {t("common.loading")}
-          </button>
+          <RefreshButton label={t("common.refresh")} busy onClick={() => props.view.onRefresh()} />
         }
       >
-        <button
-          type="button"
-          class="btn"
-          disabled={
-            isPending(props.readInventory) ||
-            skillControlsLocked(props.view) ||
-            !props.view.state.connected
-          }
+        <RefreshButton
+          label={t("common.refresh")}
+          busy={isPending(props.readInventory) || props.view.loading}
+          disabled={skillControlsLocked(props.view) || !props.view.state.connected}
           onClick={() => props.view.onRefresh()}
-        >
-          {isPending(props.readInventory) || props.view.loading
-            ? t("common.loading")
-            : t("common.refresh")}
-        </button>
+        />
       </Loading>
+      {props.view.pageMenu?.()}
     </div>
   );
 }

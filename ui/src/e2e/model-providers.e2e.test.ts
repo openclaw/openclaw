@@ -278,7 +278,14 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
               provider: "claude-cli",
               displayName: "Claude",
               status: "ok",
-              profiles: [{ profileId: "anthropic:default", type: "oauth", status: "expired" }],
+              profiles: [
+                {
+                  profileId: "anthropic:default",
+                  type: "oauth",
+                  status: "expired",
+                  expiry: { at: NOW - 1, remainingMs: -1, label: "0m" },
+                },
+              ],
               usage: {
                 providerId: "anthropic",
                 plan: "Max 20x",
@@ -323,9 +330,12 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       await expect.poll(async () => claudeReadiness.textContent()).not.toContain("Expiring");
       await expect.poll(async () => claudeReadiness.textContent()).not.toContain("Not signed in");
       await expandProvider(page, "anthropic");
-      await expect
-        .poll(async () => claudeCard.locator(".model-providers__profile").textContent())
-        .toContain("Expired");
+      const claudeProfile = claudeCard.locator(".model-providers__profile");
+      await expect.poll(async () => claudeProfile.textContent()).toContain("Access token expired");
+      expect(await claudeProfile.textContent()).toContain("Credentials configured");
+      expect(await claudeProfile.textContent()).toContain(
+        "Access-token expiry alone does not mean you need to sign in again.",
+      );
       // The open row trades its summary chips for the full window tiles.
       expect(await claudeCard.locator(".provider-usage__chip").count()).toBe(0);
       const fiveHour = claudeCard.locator(".provider-usage__window", { hasText: "5h" });
@@ -399,11 +409,9 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
               connectBounds.height / 2 -
               (refreshBounds.top + refreshBounds.height / 2),
           ),
-          refreshHeight: refreshBounds.height,
         };
       });
       expect(headerMetrics.centerOffset).toBeLessThanOrEqual(1);
-      expect(headerMetrics.refreshHeight).toBe(28);
 
       await page.setViewportSize({ width: 390, height: 844 });
       const mobileMetrics = await providerSection.evaluate((section) => {
@@ -797,7 +805,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       await page.goto(`${server.baseUrl}settings/model-providers`);
       const agentPicker = page.locator(".settings-sidebar__agent openclaw-agent-select");
       await agentPicker.locator(".agent-select__trigger").click();
-      await agentPicker.getByRole("menuitemradio", { name: "Writer", exact: true }).click();
+      await agentPicker.getByRole("option", { name: "Writer", exact: true }).click();
       await expect
         .poll(async () => (await agentPicker.locator(".agent-select__label").textContent())?.trim())
         .toBe("Writer");

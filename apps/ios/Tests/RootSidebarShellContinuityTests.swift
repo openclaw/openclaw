@@ -54,8 +54,29 @@ struct RootSidebarShellContinuityTests {
                 onShow: {},
                 onHide: {},
                 sidebar: Color.clear,
-                detail: StatefulDetail(recorder: self.recorder))
+                detail: StatefulDetail(recorder: self.recorder),
+                contentSafeAreaInsets: .init())
         }
+    }
+
+    @Test func `closed card mask includes native bars on every safe area edge`() {
+        let bounds = CGRect(x: 0, y: 0, width: 500, height: 700)
+        let insets = EdgeInsets(top: 50, leading: 70, bottom: 30, trailing: 90)
+        let closed = RootSidebarContentClipShape(progress: 0, safeAreaInsets: insets).path(in: bounds)
+        let open = RootSidebarContentClipShape(progress: 1, safeAreaInsets: insets).path(in: bounds)
+        for barPoint in [
+            CGPoint(x: 250, y: -25), CGPoint(x: -35, y: 350),
+            CGPoint(x: 250, y: 715), CGPoint(x: 545, y: 350),
+        ] {
+            #expect(closed.contains(barPoint))
+            #expect(!open.contains(barPoint))
+        }
+        #expect(closed.contains(CGPoint(x: 1, y: 1)))
+        #expect(!open.contains(CGPoint(x: 1, y: 1)))
+        #expect(RootSidebarContentClipShape(progress: -0.05, safeAreaInsets: insets).path(in: bounds).boundingRect ==
+            closed.boundingRect)
+        #expect(RootSidebarContentClipShape(progress: 1.05, safeAreaInsets: insets).path(in: bounds).boundingRect ==
+            open.boundingRect)
     }
 
     @Test(arguments: [false, true])
