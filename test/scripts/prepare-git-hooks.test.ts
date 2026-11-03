@@ -200,7 +200,10 @@ describe("prepare entrypoint", () => {
     mkdirSync(join(root, "git-hooks"));
     writeFileSync(join(root, "src/state/openclaw-state-schema.sql"), "");
     writeFileSync(join(scripts, "native-protocol-inputs.json"), "{}");
-    for (const file of ["scripts/prepare-git-hooks.mjs", "runtime-process-bootstrap.generated.mjs"]) {
+    for (const file of [
+      "scripts/prepare-git-hooks.mjs",
+      "runtime-process-bootstrap.generated.mjs",
+    ]) {
       copyFileSync(new URL(`../../${file}`, import.meta.url), join(root, file));
     }
     writeFileSync(
