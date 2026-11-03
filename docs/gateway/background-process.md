@@ -33,6 +33,7 @@ Behavior:
 - When backgrounded (explicit or via `yieldMs` timeout), the tool returns `status: "running"` + `sessionId` and a short output tail. On the Gateway and in its sandbox, a yielded handle does not make an ordinary command independent: the browser's **Stop** button and typed `/stop` cancel the selected request's commands. Stop waits for process cleanup and reports when cleanup could not be confirmed. Completed output remains available, and canceled commands do not emit a new completion notification. Managed workers retain the separate behavior described below.
 - Use `background: true` only for a deliberately independent service. Request Stop leaves that service running; use its process handle to stop it separately. Normal turn completion also preserves ordinary commands that are still running.
 - Launch failures return the operating-system error and release worker cleanup even when no process starts.
+- Ordinary non-PTY Gateway-hosted exec on Linux and macOS completes when its root command exits, after up to 250 ms to drain output. Later descendant output is discarded. Background descendants retain their existing cleanup and memory ownership; completion does not terminate them. Keep long-running work in the foreground of the shell when you need its eventual output.
 - Native Windows command shells retain `SystemRoot` when launched with a replacement environment, including on ARM64. Other omitted variables stay absent, and an explicitly supplied `SystemRoot` takes precedence.
 - Managed sandbox workspace finalization bounds each container inspection, pause, and resume command to 30 seconds. A failed or timed-out operation preserves its recovery receipt rather than treating an uncertain pause or resume as successful.
 - Backgrounded and `yieldMs` runs inherit `tools.exec.timeoutSeconds` unless the call passes an explicit `timeoutSeconds`.
@@ -359,7 +360,7 @@ Notes:
 - `process list`, `poll`, and `log` report `waitingForInput` only when the session still has writable stdin and has been idle longer than the input-wait threshold (default 15000 ms, `OPENCLAW_PROCESS_INPUT_WAIT_IDLE_MS`).
 - `process log` uses line-based `offset`/`limit`. When both are omitted, it returns the last 200 lines with a paging hint. When `offset` is set and `limit` isn't, it returns from `offset` to the end (not capped to 200).
 - `process poll` and `process log` distinguish output discarded at the aggregate retention cap from output merely omitted by the pending buffer or retained tail. Paged logs can inspect only the retained portion; a durable command's separate local log artifact can still contain earlier output.
-- `poll`'s `timeout` waits up to that many milliseconds before returning; values above 30000 are clamped to 30000.
+- `poll`'s `timeout` waits up to that many milliseconds before returning; values above 30000 are clamped to 30000. The wait ends as soon as the process owner records new output or completion.
 - Polling is for on-demand status, not wait-loop scheduling. If the work should happen later, use cron.
 
 Conversational requests can stop an authorized process or remove its retained status by its exact ID without another confirmation. The process owner checks the current record and scope immediately before acting. A stop request does not confirm termination; inspect the resulting process state before reporting it stopped.

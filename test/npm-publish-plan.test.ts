@@ -70,6 +70,70 @@ async function expectTarballFailure(
 }
 
 describe("fetchNpmRegistryPackumentWithRetry", () => {
+  it("revalidates a version missing from abbreviated metadata through the exact full endpoint", async () => {
+    const exactVersion = "2026.10.2";
+    const requested: Array<{ url: string; accept: string | null }> = [];
+    const packument = {
+      name: "@openclaw/meta-provider",
+      versions: { "2026.10.1": { name: "@openclaw/meta-provider", version: "2026.10.1" } },
+      "dist-tags": { latest: exactVersion },
+    };
+    const exact = {
+      name: "@openclaw/meta-provider",
+      version: exactVersion,
+      dist: { integrity: "sha512-fixture" },
+    };
+    const result = await fetchPackument({
+      exactVersion,
+      fetchImpl: async (input, init) => {
+        requested.push({
+          url: input,
+          accept: new Headers(init.headers).get("accept"),
+        });
+        return Response.json(input.endsWith(`/${exactVersion}`) ? exact : packument);
+      },
+    });
+
+    expect(requested).toEqual([
+      {
+        url: "https://registry.npmjs.org/%40openclaw%2Fmeta-provider",
+        accept: "application/vnd.npm.install-v1+json",
+      },
+      {
+        url: `https://registry.npmjs.org/%40openclaw%2Fmeta-provider/${exactVersion}`,
+        accept: "application/json",
+      },
+    ]);
+    expect(result).toEqual({
+      status: 200,
+      ok: true,
+      packument: {
+        ...packument,
+        versions: { ...packument.versions, [exactVersion]: exact },
+      },
+    });
+  });
+
+  it("requires exact-version metadata to match the requested package identity", async () => {
+    await expect(
+      fetchPackument({
+        exactVersion: "2026.10.2",
+        fetchImpl: async (input) =>
+          input.endsWith("/2026.10.2")
+            ? Response.json({ name: "@openclaw/other", version: "2026.10.2" })
+            : Response.json({ versions: {}, "dist-tags": { latest: "2026.10.2" } }),
+      }),
+    ).rejects.toThrow("mismatched package metadata");
+  });
+
+  it("rejects an unsafe exact-version selector before a second registry read", async () => {
+    const fetchImpl = vi.fn(async () => Response.json({ versions: {}, "dist-tags": {} }));
+    await expect(fetchPackument({ exactVersion: "..", fetchImpl })).rejects.toThrow(
+      "invalid exact npm version selector",
+    );
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
   it("bounds decoded packument bytes and cancels an oversized stream without retrying", async () => {
     let cancelled = false;
     await expect(

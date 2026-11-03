@@ -423,8 +423,8 @@ it.each(["direct", "lifecycle", "agent"])("shares %s envelopes", async (producer
       expect(fieldNameInsertions).toBe(0);
       // Index construction must not stage a tuple for every field before inserting it.
       expect(stagedFieldIndexTuples).toBe(0);
-      // Eight current delta recipients were primed at this revision; sixteen were not.
-      expect(sharingKeyEncodings).toBe(16);
+      // Row changes retain connection keys; only four unprimed legacy sockets need encoding.
+      expect(sharingKeyEncodings).toBe(4);
       // Four authority/baseline groups share row planning across both delta capabilities.
       expect(rowEncodings).toBeLessThanOrEqual(16);
       // Two wire capabilities per group, plus one legacy envelope per authority.

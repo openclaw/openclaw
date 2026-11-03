@@ -88,6 +88,7 @@ describe("Crabbox prepared image demand and custody", () => {
       }
       const lease = await provider.provision(profile, "private-disk-reserve", {
         ...current.options,
+        recordResourceReceipt: async () => {},
         machineClass,
       });
       const allocation = calls.find(({ argv }) => argv[1] === "warmup")!.argv;
@@ -100,7 +101,7 @@ describe("Crabbox prepared image demand and custody", () => {
         { leaseId: lease.leaseId, profile },
         { preparationKey: preparation.key, demandAtMs: preparation.demandAtMs },
       );
-      await destroyAndWait(provider, { leaseId: lease.leaseId, profile });
+      await destroyAndWait(provider, { ...lease, profile, assertCurrent() {} });
       expect(calls.some(({ argv }) => argv[1] === "checkpoint")).toBe(false);
       expect(await listCrabboxWarmImages(crabboxState)).toEqual([]);
     },

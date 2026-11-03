@@ -7,6 +7,12 @@ inputs:
   proof-jobs:
     description: Newline-separated job names that must have completed successfully in the previous run.
     required: true
+  codeql-config:
+    description: Optional CodeQL profile whose extraction paths are additional inputs (requires yq).
+    default: ""
+  git-diff:
+    description: Recover capped comparisons using the exact checked-out event SHA and a shallow baseline fetch.
+    default: "false"
 outputs:
   changed:
     description: Whether fresh validation is needed.
@@ -21,6 +27,8 @@ runs:
         SCHEDULED_PATHS: ${{ inputs.paths }}
         SCHEDULED_PROOF_JOBS: ${{ inputs.proof-jobs }}
         SCHEDULED_WORKFLOW_REF: ${{ github.workflow_ref }}
+        SCHEDULED_CODEQL_CONFIG: ${{ inputs.codeql-config }}
+        SCHEDULED_GIT_DIFF: ${{ inputs.git-diff }}
       with:
         script: |
           const { matchesGlob } = require('node:path');
@@ -33,6 +41,30 @@ runs:
             core.notice(`${changed ? 'Run' : 'Skip'} scheduled validation: ${reason}`);
           };
           try {
+            let extractionPaths = [];
+            if (process.env.SCHEDULED_CODEQL_CONFIG) {
+              const result = await exec.getExecOutput('yq', ['-o=json', '.', process.env.SCHEDULED_CODEQL_CONFIG], { silent: true });
+              const profile = JSON.parse(result.stdout);
+              // Only built-in queries have no additional repository inputs outside the profile.
+              if (!Array.isArray(profile.paths) || !profile.paths.length ||
+                  Object.keys(profile).some(key => !['name', 'disable-default-queries', 'queries', 'query-filters', 'paths', 'paths-ignore'].includes(key)) ||
+                  JSON.stringify(profile.queries) !== JSON.stringify([{ uses: 'security-extended' }])) {
+                throw new Error('unsupported CodeQL input configuration');
+              }
+              extractionPaths = profile.paths.map(pattern => {
+                if (typeof pattern !== 'string' || !/^[\w./*-]+$/.test(pattern) ||
+                    pattern.split('/').some(part => ['', '.', '..'].includes(part))) {
+                  throw new Error('unsupported CodeQL path pattern');
+                }
+                // CodeQL paths include directory descendants and dotfiles. Ignore exclusions
+                // conservatively, and overmatch stars rather than miss extraction inputs.
+                const source = pattern.split(/(\*\*\/|\*+)/).map(part =>
+                  part === '**/' ? '(?:.*/)?' : part.startsWith('*') ? '.*' : part.replace(/\./g, '\\.')).join('');
+                return new RegExp(`^${source}(?:/|$)`);
+              });
+            }
+            const relevant = name => paths.some(pattern => matchesGlob(name, pattern)) ||
+              extractionPaths.some(pattern => pattern.test(name));
             const { data } = await github.rest.actions.listWorkflowRuns({
               ...context.repo, workflow_id: workflow, branch: context.ref.replace('refs/heads/', ''),
               status: 'success', per_page: 30,
@@ -60,11 +92,21 @@ runs:
                 ...context.repo, basehead: `${run.head_sha}...${context.sha}`,
               });
               // GitHub returns at most 300 files. Divergence or a partial diff cannot authorize reuse.
-              const complete = ['ahead', 'identical'].includes(diff.status) &&
+              let complete = ['ahead', 'identical'].includes(diff.status) &&
                 Array.isArray(diff.files) && diff.files.length < 300;
-              const changed = !complete || diff.files.some(file =>
-                [file.filename, file.previous_filename].filter(Boolean).some(name =>
-                  paths.some(pattern => matchesGlob(name, pattern))));
+              let names = (diff.files ?? []).flatMap(file => [file.filename, file.previous_filename].filter(Boolean));
+              if (!complete && diff.status === 'ahead' && process.env.SCHEDULED_GIT_DIFF === 'true' && !names.some(relevant)) {
+                if (![run.head_sha, context.sha].every(sha => /^[a-f0-9]{40}$/.test(sha))) throw new Error('invalid comparison SHA');
+                const checkedOut = await exec.getExecOutput('git', ['rev-parse', 'HEAD'], { silent: true });
+                if (checkedOut.stdout.trim() !== context.sha) throw new Error('event checkout mismatch');
+                // Only trees are needed; do not fetch repository history or source blobs.
+                await exec.getExecOutput('git', ['-c', 'gc.auto=0', 'fetch', '--no-tags', '--no-write-fetch-head', '--depth=1', '--filter=blob:none', 'origin', run.head_sha], { silent: true });
+                const result = await exec.getExecOutput('git', ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-only', '-z', run.head_sha, context.sha, '--'], { silent: true });
+                if (result.stdout && !result.stdout.endsWith('\0')) throw new Error('incomplete Git path output');
+                names = result.stdout.split('\0').filter(Boolean);
+                complete = true;
+              }
+              const changed = !complete || names.some(relevant);
               report(changed, `${complete ? 'input comparison' : 'incomplete comparison'} against ` +
                 `${run.head_sha}; jobs ${proofJobs.join(', ')} passed in run ${run.id}`);
               return;

@@ -100,7 +100,11 @@ it("reuses only exact successful page checks and checks docs.json on warm runs",
   const { read, write, json, append } = files(root);
   const checker = path.join(root, ".openclaw-sync", "check-docs-mdx.mts");
   fs.mkdirSync(path.join(root, ".openclaw-sync", "lib"), { recursive: true });
-  for (const name of ["check-docs-mdx.mts", "lib/arg-utils.runtime.mjs"]) {
+  for (const name of [
+    "check-docs-mdx.mts",
+    "lib/arg-utils.runtime.mjs",
+    "lib/numeric-options.mjs",
+  ]) {
     fs.copyFileSync(path.join("scripts", name), path.join(root, ".openclaw-sync", name));
   }
   files(path.join(root, ".openclaw-sync")).linkDependencies("junction");
@@ -139,6 +143,7 @@ it("reuses only exact successful page checks and checks docs.json on warm runs",
   expect(Object.keys(json("cache.json").files)).toEqual(["docs/b.MD"]);
   for (const name of [
     ".openclaw-sync/check-docs-mdx.mts",
+    ".openclaw-sync/lib/numeric-options.mjs",
     "package-lock.json",
     "node_modules/.package-lock.json",
   ]) {
@@ -157,7 +162,13 @@ it("executes the copied MDX checker and shared anchor runtime closures", () => {
   write("docs/fa/index.md", translation);
   files(publishRoot).linkDependencies();
   sync();
-  runNode(publishRoot, path.join(publishRoot, ".openclaw-sync/check-docs-mdx.mjs"), minimalMdx);
+  runNode(
+    publishRoot,
+    path.join(publishRoot, ".openclaw-sync/check-docs-mdx.mjs"),
+    minimalMdx,
+    "--max-errors",
+    "7",
+  );
   expect(read("docs/fa/index.md")).toBe(translation);
   expect(read("docs/reference/templates/AGENTS.md")).toBe(
     fs.readFileSync("docs/reference/templates/AGENTS.md", "utf8"),

@@ -68,6 +68,7 @@ import {
   runParallelsPrerequisiteEval,
 } from "../../scripts/e2e/parallels/provider-auth-prerequisite.mjs";
 import { assertDevChannelUpdate } from "../../scripts/e2e/parallels/smoke-common.ts";
+import { ensureGuestGit } from "../../scripts/e2e/parallels/windows-git.ts";
 import { parseArgs as parseWindowsSmokeArgs } from "../../scripts/e2e/parallels/windows-smoke.ts";
 import { scriptProcessEntrypoints } from "../../scripts/script-process-runtime.test-support.js";
 import {
@@ -303,7 +304,7 @@ function runWindowsPrepare(
   });
 }
 
-function runMacosSmoke(
+function runSmoke(
   tempDir: string,
   options: {
     version: string;
@@ -932,7 +933,7 @@ ensure_vm_running`,
     );
     chmodSync(fakePnpm, 0o755);
 
-    const result = runMacosSmoke(tempDir, {
+    const result = runSmoke(tempDir, {
       version: "2026.8.25",
       artifactRoot: join(tempDir, "artifacts"),
       env: {
@@ -948,6 +949,71 @@ ensure_vm_running`,
     expect(result.stderr).toContain("FAKE_GUEST_COMMAND_BOUNDARY");
     expect(result.stderr).not.toContain("UNEXPECTED_HOST_PACKAGE_BUILD");
   });
+
+  it.runIf(process.platform !== "win32")(
+    "defers Windows Git preparation until the guest needs it",
+    async () => {
+      const tempDir = makeTempDir(tempDirs, "openclaw-windows-lazy-git-");
+      writeNodeFakePrlctl(tempDir, "process.exit(73);");
+      const fakePython = join(tempDir, "python3");
+      writeFileSync(
+        fakePython,
+        `#!/usr/bin/env node
+process.stderr.write(process.argv.some((arg) => arg.includes("git-for-windows")) ? "UNEXPECTED_GIT_DOWNLOAD" : "HOST_SERVER_BOUNDARY");
+process.exit(73);
+`,
+      );
+      chmodSync(fakePython, 0o755);
+      const claim = await acquireTestPortBlock({ offsets: [0] });
+      try {
+        const result = runSmoke(tempDir, {
+          version: "2026.8.25",
+          artifactRoot: join(tempDir, "artifacts"),
+          runtimeArgs: [
+            "--import",
+            "tsx",
+            TS_PATHS.windows,
+            "--host-ip",
+            "192.0.2.10",
+            "--host-port",
+            String(claim.port),
+          ],
+          env: { OPENCLAW_PARALLELS_SKIP_SNAPSHOT_RESTORE: "1", TMPDIR: tempDir },
+        });
+        expect(result.stderr).toContain("HOST_SERVER_BOUNDARY");
+        expect(result.stderr).not.toContain("UNEXPECTED_GIT_DOWNLOAD");
+      } finally {
+        await claim.release();
+      }
+    },
+  );
+
+  it.each([true, false])(
+    "prepares fallback Git only when absent (installed=%s)",
+    async (installed) => {
+      const guest = new WindowsGuest(
+        "Windows VM",
+        new PhaseRunner(makeTempDir(tempDirs, "openclaw-windows-git-")),
+      );
+      vi.spyOn(guest, "exec").mockReturnValue(installed ? "git version 2.56.0" : "");
+      const installGit = vi.spyOn(guest, "powershell").mockReturnValue("");
+      const getMinGitZipPath = vi.fn().mockResolvedValue("/tmp/mingit.zip");
+      await ensureGuestGit({
+        guest,
+        getMinGitZipPath,
+        server: installed
+          ? null
+          : {
+              hostIp: "192.0.2.10",
+              port: 8080,
+              urlFor: () => "http://192.0.2.10:8080/mingit.zip",
+              stop: async () => {},
+            },
+      });
+      expect(getMinGitZipPath).toHaveBeenCalledTimes(installed ? 0 : 1);
+      expect(installGit).toHaveBeenCalledTimes(installed ? 0 : 1);
+    },
+  );
 
   it("rejects short flags as Parallels smoke option values", () => {
     const cases = [
@@ -1284,7 +1350,7 @@ if (commandArgs[0] === "list") {
 }`,
       );
 
-      const result = runMacosSmoke(tempDir, {
+      const result = runSmoke(tempDir, {
         version: "2026.1.1",
         artifactRoot: tempDir,
         timeout: 20_000,
@@ -1952,6 +2018,28 @@ if (commandArgs[0] === "list") {
       "Set-Item -LiteralPath 'Env:NPM_CONFIG_REGISTRY' -Value 'http://192.0.2.2:48123/candidate''s'\nWrite-Output $env:NPM_CONFIG_REGISTRY",
     );
   });
+
+  it.each([false, true])(
+    "reuses successful Windows staging readiness (write retry=%s)",
+    async (retry) => {
+      const beforeLaunchAttempt = vi.fn();
+      let writes = 0;
+      await expect(
+        runWindowsBackground({
+          label: "staging readiness",
+          beforeLaunchAttempt,
+          runCommand: (_command, _args, options) => {
+            if (options?.input) {
+              return fakeResult(++writes === 1 && retry ? 255 : 0);
+            }
+            return fakeResult(1);
+          },
+        }),
+      ).rejects.toThrow("background launch failed with exit code 1");
+      expect(beforeLaunchAttempt).toHaveBeenCalledTimes(retry ? 1 : 0);
+      expect(writes).toBe(retry ? 2 : 1);
+    },
+  );
 
   it("paces ambiguous Windows background launch materialization probes", async () => {
     let calls = 0;

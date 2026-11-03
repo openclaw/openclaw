@@ -467,8 +467,9 @@ suite.define(() => {
             contentLeft: 12,
             contentRightInset: 12,
             headerLeft: 12,
-            headerTop: 70,
-            titleLeft: 12,
+            // Clears the floating header; the title stays for assistive tech only.
+            headerTop: 64,
+            titleLeft: 11,
             workspaceLeft: 12,
             workspaceRightInset: 12,
           });

@@ -56,7 +56,7 @@ export type SessionEventReceipt = {
   id: string;
   cancel: () => boolean;
   /** Resolves after ordinary turn adoption or committed follow-up queue admission. */
-  accepted: Promise<{ ok: true } | { ok: false; error: string }>;
+  accepted: Promise<{ ok: true } | { ok: false; error: string; cause?: Error }>;
   settled: Promise<SessionEventOutcome>;
 };
 

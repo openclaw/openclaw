@@ -37,6 +37,7 @@ import {
   WebSocket,
   WebSocketServer,
 } from "openclaw/plugin-sdk/websocket-runtime";
+import { resolveCallTranscriptionLanguage } from "../call-brief.js";
 import { resolveVoiceCallPublicPathPrefix, type VoiceCallRealtimeConfig } from "../config.js";
 import type { CallManager } from "../manager.js";
 import { REALTIME_VOICE_END_CALL_TOOL_NAME } from "../realtime-call-control.js";
@@ -778,6 +779,7 @@ export class RealtimeCallHandler {
       });
     let sessionClosed = false;
     const userTranscriptOwner: UserTranscriptState = {};
+    let transcriptStartedAt: Partial<Record<"user" | "assistant", number>> = {};
     let transcriptPersistence = Promise.resolve();
     let transcriptFailure: { error: unknown } | undefined;
     const reportTranscriptFailure = (error: unknown) => {
@@ -928,6 +930,7 @@ export class RealtimeCallHandler {
       agentId,
       providerConfig,
       capabilities,
+      language: resolveCallTranscriptionLanguage(callRecord),
       audioFormat: REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
       interruptResponseOnInputAudio,
       instructions: handlesAgentConsult
@@ -993,10 +996,20 @@ export class RealtimeCallHandler {
         ) {
           return;
         }
+        if (role === "user" && !audioController.acceptUserTranscript(isFinal)) {
+          if (isFinal) {
+            delete transcriptStartedAt.user;
+            console.log(
+              `[voice-call] Ignoring unconfirmed caller transcript during playback callId=${callId}`,
+            );
+          }
+          return;
+        }
         if (text.trim()) {
           outboundGreeting.claim();
           activity.noteSpeech();
         }
+        const timestamp = (transcriptStartedAt[role] ??= Date.now());
         const turnId = harness.ensureTurn();
         const eventType =
           role === "assistant"
@@ -1031,6 +1044,7 @@ export class RealtimeCallHandler {
           }
           return;
         }
+        delete transcriptStartedAt[role];
         let transcript = text;
         let consultTranscript: TranscriptSnapshot | undefined;
         if (role === "user") {
@@ -1058,7 +1072,7 @@ export class RealtimeCallHandler {
           id: `realtime-${role === "user" ? "speech" : "bot"}-${callSid}-${randomUUID()}`,
           callId,
           providerCallId: callSid,
-          timestamp: Date.now(),
+          timestamp,
           transcript,
           ...(role === "user"
             ? { type: "call.speech", isFinal: true }
@@ -1118,10 +1132,12 @@ export class RealtimeCallHandler {
       },
       onEvent: (event) => {
         if (event.direction === "client" && event.type === "session.continuity.reset") {
+          audioController.finishGreeting();
           // Clear current playback and cancel consult work on a provider reset.
           const turnId = harness.talk.activeTurnId;
           const owner = nativeConsultOwner;
           if (owner && this.isActiveBridgeOwner(callId, owner)) {
+            transcriptStartedAt = {};
             userTranscriptOwner.partial = undefined;
             clearRecentFinalUserTranscript(userTranscriptOwner);
             this.cancelConsultSession(callId, owner, harness.forcedConsults, "continuity-reset");
@@ -1139,6 +1155,7 @@ export class RealtimeCallHandler {
           return;
         }
         if (event.type === "input_audio_buffer.speech_started" && !outboundGreeting.isBlocked()) {
+          transcriptStartedAt.user = Date.now();
           outboundGreeting.claim();
           activity.noteSpeech();
           harness.ensureTurn();
@@ -1166,6 +1183,7 @@ export class RealtimeCallHandler {
         }
       },
       onResponseDone: (outcome) => {
+        audioController.finishGreeting();
         if (outcome.status === "failed" || outcome.status === "incomplete") {
           console.warn(`[voice-call] realtime response ${outcome.status}: ${outcome.message}`);
         }
@@ -1256,7 +1274,12 @@ export class RealtimeCallHandler {
         return;
       }
       outboundGreeting.noteInputAudio(audio);
-      if (outboundGreeting.isBlocked() || hostSpeech.isActive()) {
+      // Withhold overlapping input so neither local nor provider VAD cuts off the opening.
+      if (
+        outboundGreeting.isBlocked() ||
+        hostSpeech.isActive() ||
+        audioController.isGreetingPlaying()
+      ) {
         return;
       }
       const inputRms = calculateMulawRms(audio);
@@ -1264,6 +1287,7 @@ export class RealtimeCallHandler {
         activity.noteSpeech();
       }
       if (speechDetector.accept({ rms: inputRms, peak: 0 })) {
+        audioController.noteCallerSpeech();
         outboundGreeting.claim();
         if (localBargeIn && !activity.isPaused()) {
           audioController.cancelOutputAudioForBargeIn("local", (audioPlaybackActive) => {

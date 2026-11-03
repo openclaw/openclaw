@@ -183,6 +183,7 @@ it("retains the focused capability row and management link through catalog refre
       capabilityMenu: makeCapabilities({ ...previous.capabilityMenu!.read()!, ...capability }),
     }));
   await import("./chat-composer-plus-menu-content.tsx");
+  await import("./chat-composer-plus-menu-subview.tsx");
   await waitForSolid(() => expect(checkbox("Focused skill")).toBeTruthy());
   for (const [name, description] of [
     ["Broken", "deps missing"],
@@ -589,9 +590,9 @@ it("filters skills across groups and restores the catalog when header search clo
   );
   view.getByRole("button", { name: "Search skills", hidden: true }).click();
   await waitForSolid(() =>
-    expect(view.queryByRole("textbox", { name: "Search skills", hidden: true })).not.toBeNull(),
+    expect(view.queryByRole("searchbox", { name: "Search skills", hidden: true })).not.toBeNull(),
   );
-  const input = view.getByRole("textbox", {
+  const input = view.getByRole("searchbox", {
     name: "Search skills",
     hidden: true,
   }) as HTMLInputElement;
@@ -610,7 +611,7 @@ it("filters skills across groups and restores the catalog when header search clo
   );
   view.getByRole("menuitem", { name: "Skills", hidden: true }).click();
   await waitForSolid(() => {
-    expect(view.queryByRole("textbox", { name: "Search skills", hidden: true })).toBeNull();
+    expect(view.queryByRole("searchbox", { name: "Search skills", hidden: true })).toBeNull();
     expect(view.getByRole("menuitemcheckbox", { name: "Notes", hidden: true })).not.toBeNull();
     expect(view.getByRole("menuitem", { name: "e\u0301", hidden: true })).not.toBeNull();
   });

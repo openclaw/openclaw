@@ -27,6 +27,7 @@ import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
@@ -35,8 +36,9 @@ import { revokeCronCreatorAuthorityRunScope } from "../cron-creator-authority-gr
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
+import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { cronHandlers } from "./cron.js";
-import type { RespondFn } from "./types.js";
+import type { GatewayClient, RespondFn } from "./types.js";
 
 const gatewayCall = vi.hoisted(() => vi.fn());
 vi.mock("../../agents/tools/gateway.js", async (importOriginal) => ({
@@ -157,8 +159,9 @@ function createPolicyFixture(storePath: string) {
     identity?: AgentRuntimeIdentity,
     commitGuard?: () => void,
     scopes = identity ? ["operator.write"] : ["operator.admin"],
+    directClient?: GatewayClient,
   ) => {
-    const client = createSyntheticPluginRuntimeClient({ scopes });
+    const client = directClient ?? createSyntheticPluginRuntimeClient({ scopes });
     if (identity) {
       client.internal = { ...client.internal, agentRuntimeIdentity: identity };
     }
@@ -464,6 +467,68 @@ describe("Gateway automation policy", () => {
           bindCronManagementGrant(identity.operationalRunInstance.runId, config) !== undefined,
         ).toBe(managementAllowed);
       });
+    },
+  );
+});
+
+it("allows only the current human owner or admin to edit and transfer an automation", async () => {
+  await withOpenClawTestState(
+    { scenario: "minimal", prepareProfileCatalog: true },
+    async (state) => {
+      const cfg = rolePolicyConfig();
+      await state.writeConfig(cfg);
+      setRuntimeConfigSnapshot(cfg);
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      const alice = roleClient("view", "automation-alice");
+      const bob = roleClient("view", "automation-bob");
+      const aliceId = expectDefined(alice.authenticatedUserProfile, "Alice").profileId;
+      const bobId = expectDefined(bob.authenticatedUserProfile, "Bob").profileId;
+      const fixture = createPolicyFixture(state.path("cron", "jobs.json"));
+      const { cron, invoke } = fixture;
+      try {
+        const job = await cron.add(jobInput, {
+          createdActor: { type: "human", source: "profile", id: aliceId },
+        });
+        expect(job.ownerProfileId).toBe(aliceId);
+        const update = (client: GatewayClient, patch: Record<string, unknown>) =>
+          invoke("cron.update", { id: job.id, patch }, undefined, undefined, undefined, client);
+        expect((await update(alice, { description: "owned edit" }))[0]).toBe(true);
+        expect(
+          (await invoke("cron.update", { id: job.id, patch: { description: "admin edit" } }))[0],
+        ).toBe(true);
+        expectDenied(await update(bob, { description: "foreign edit" }), "Automation not found");
+        expectDenied(await update(bob, { ownerProfileId: bobId }), "Automation not found");
+        expectDenied(
+          await update(alice, { ownerProfileId: "missing-profile" }),
+          "existing human owner",
+        );
+        expect((await update(alice, { ownerProfileId: bobId }))[0]).toBe(true);
+        expect(cron.getJob(job.id)).toMatchObject({
+          ownerProfileId: bobId,
+          enabled: false,
+          createdActor: { id: aliceId },
+        });
+        expect(
+          (await fixture.readJobs()).jobs.find((stored) => stored.id === job.id),
+        ).toMatchObject({
+          ownerProfileId: bobId,
+          enabled: false,
+          runtimeAuthorityRecoveryRequired: true,
+          createdActor: { id: aliceId },
+        });
+        expectDenied(await update(alice, { description: "former owner" }), "Automation not found");
+        expect((await update(bob, { description: "new owner" }))[0]).toBe(true);
+        expectDenied(
+          await invoke("cron.remove", { id: job.id }, undefined, undefined, undefined, alice),
+          "Automation not found",
+        );
+        expect(
+          (await invoke("cron.remove", { id: job.id }, undefined, undefined, undefined, bob))[0],
+        ).toBe(true);
+      } finally {
+        cron.stop();
+        await fixture.scheduler.stop();
+      }
     },
   );
 });

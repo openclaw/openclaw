@@ -232,10 +232,6 @@ export function handleModelSearchKeydown(event: KeyboardEvent): void {
   if (next) {
     view.highlight(next.row.key);
     view.reveal(next.row.key);
-    onSettled(() => {
-      // Chromium returns a promise; settlement callbacks must not return it as cleanup.
-      state.rows.get(next.row.key)?.scrollIntoView?.({ block: "nearest" });
-    });
   }
 }
 

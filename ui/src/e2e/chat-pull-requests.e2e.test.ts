@@ -428,14 +428,28 @@ suite.define(() => {
             .closest(".chat-mobile-host, .chat-details")!
             .getBoundingClientRect();
           const stackBounds = element.getBoundingClientRect();
+          const scrollPort = element.closest(".chat-details-desktop-body") ?? element;
           return {
             detailsBottom: detailsBounds.bottom,
+            detailsLeft: detailsBounds.left,
+            detailsRight: detailsBounds.right,
             stackLeft: stackBounds.left,
             stackWidth: stackBounds.width,
-            fitsHorizontally: element.scrollWidth <= element.clientWidth + 1,
+            fitsHorizontally: scrollPort.scrollWidth <= scrollPort.clientWidth + 1,
             rows: [...element.children].map((row) => {
               const rect = row.getBoundingClientRect();
-              return { top: rect.top, bottom: rect.bottom, left: rect.left, width: rect.width };
+              const style = getComputedStyle(row);
+              const paddingLeft = Number.parseFloat(style.paddingLeft);
+              const paddingRight = Number.parseFloat(style.paddingRight);
+              return {
+                top: rect.top,
+                bottom: rect.bottom,
+                left: rect.left,
+                right: rect.right,
+                width: rect.width,
+                contentLeft: rect.left + paddingLeft,
+                contentWidth: rect.width - paddingLeft - paddingRight,
+              };
             }),
           };
         });
@@ -444,8 +458,11 @@ suite.define(() => {
         for (const row of bounds.rows) {
           expect(row.top).toBeGreaterThanOrEqual(previousBottom);
           expect(row.bottom).toBeLessThanOrEqual(bounds.detailsBottom);
-          expect(row.left).toBeCloseTo(bounds.stackLeft, 1);
-          expect(row.width).toBeCloseTo(bounds.stackWidth, 1);
+          expect(row.left).toBeGreaterThanOrEqual(bounds.detailsLeft);
+          expect(row.right).toBeLessThanOrEqual(bounds.detailsRight);
+          // Desktop hover surfaces extend into padding; their content stays on the heading axis.
+          expect(mobile ? row.left : row.contentLeft).toBeCloseTo(bounds.stackLeft, 1);
+          expect(mobile ? row.width : row.contentWidth).toBeCloseTo(bounds.stackWidth, 1);
           previousBottom = row.bottom;
         }
       }
@@ -575,7 +592,10 @@ suite.define(() => {
             rowBox.x + rowBox.width <= detailsBox.x + detailsBox.width &&
             detailsBox.x >= 0 &&
             detailsBox.x + detailsBox.width <= viewport.width &&
-            (await row.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)),
+            (await row.evaluate((element) => {
+              const scrollPort = element.closest(".chat-details-desktop-body") ?? element;
+              return scrollPort.scrollWidth <= scrollPort.clientWidth + 1;
+            })),
           );
         })
         .toBe(true);

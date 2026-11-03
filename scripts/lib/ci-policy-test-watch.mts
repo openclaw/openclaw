@@ -664,12 +664,12 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: ["src/agents/mcp-oauth-store.worker.ts"],
   },
   {
+    testFile: "src/commands/doctor-db-bloat.worker.test.ts",
+    watchGlobs: ["src/commands/doctor-db-bloat.worker.ts"],
+  },
+  {
     testFile: "src/commands/doctor-maintenance.worker.test.ts",
-    watchGlobs: [
-      "src/commands/doctor-state.worker.ts",
-      "src/infra/sqlite-store.worker.ts",
-      "src/state/openclaw-state.worker.ts",
-    ],
+    watchGlobs: ["src/infra/sqlite-store.worker.ts", "src/state/openclaw-state.worker.ts"],
   },
   {
     testFile: "src/commands/models/auth.minimax-chat.test.ts",
@@ -2066,10 +2066,16 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   ...[
     "test/scripts/pr-worktree-provision.test.ts",
     "test/scripts/eager-import-closure.test.ts",
+    "test/scripts/pr-wrapper-source-closure.test.ts",
+    "test/scripts/ci-workflow-cost.test.ts",
   ].map((testFile): PolicyTestWatch => ({
     testFile,
     ownerGlobs: ["scripts/pr-lib/wrapper-components.txt"],
     watchGlobs: [
+      ".github/workflows/pr-tooling-darwin.yml",
+      "test/vitest/**",
+      "test/non-isolated-runner.ts",
+      "test/setup*.ts",
       "scripts/pr",
       "scripts/pr-lib/**",
       ...readFileSync(new URL("../pr-lib/wrapper-components.txt", import.meta.url), "utf8")

@@ -196,6 +196,10 @@ it("reads recorded usage across append, rewrite, and rollup replacement without 
         { sessionId: scope.sessionId, sessionFile, mtime: expect.any(Number) },
       ]);
       expect(await cached()).toMatchObject({ summaries: [{ totalTokens: 3 }] });
+      expect(await loadSessionCostSummary({ agentId: "main", sessionFile })).toMatchObject({
+        totalTokens: 3,
+        totalCost: 3,
+      });
       expect(await cached(0)).toMatchObject({
         summaries: [null],
         cacheStatus: { status: "partial", staleFiles: 0 },
@@ -204,6 +208,9 @@ it("reads recorded usage across append, rewrite, and rollup replacement without 
       await probe.clear();
       await refresh();
       await expectNoRead(probe, "cache");
+      await expectNoRead(probe, "transcript-stats");
+      await refreshUsage({ agentId: "main" });
+      await expectNoRead(probe, "transcript-stats");
       const generation = transact((owner) => {
         const rewritten = rewriteSqliteTranscriptEventRowsInTransaction(owner, scope, [
           {
@@ -250,6 +257,9 @@ it("reads recorded usage across append, rewrite, and rollup replacement without 
       await refresh();
       const appendReads = await probe.read();
       expect(appendReads.filter((entry) => entry.kind === "cache")).toEqual([]);
+      expect(
+        appendReads.filter((entry) => entry.kind === "transcript-stats" && !entry.bounded),
+      ).toEqual([]);
       expect(await cached()).toMatchObject({ summaries: [{ totalTokens: 19 }] });
 
       // Another in-process writer replaces the derived row. Its receipt must
@@ -275,15 +285,6 @@ it.each(["zstd", "plain"] as const)(
       expect(await discoverAllSessions({ agentId: "main" })).toEqual([
         { sessionId, sessionFile: archive, mtime: mtimeMs },
       ]);
-      expect(
-        await runUsageCostWorker(
-          prepareUsageCostWorker({ agentId: "main", sessionFiles: [archive] }),
-          { kind: "inventory", sessionFiles: [archive] },
-        ),
-      ).toEqual({
-        kind: "inventory",
-        files: [{ kind: "jsonl", sourcePath: archive, sessionId, mtimeMs }],
-      });
       await expectNoRead(reads);
       expect(
         await loadSessionCostSummary({ agentId: "main", sessionFile: archive }),

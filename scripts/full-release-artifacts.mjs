@@ -43,7 +43,19 @@ function requireValue(condition, message) {
 }
 
 function api(repository, path) {
-  return JSON.parse(runReleaseToolingGh(["api", `repos/${repository}/${path}`]));
+  const args = ["api", `repos/${repository}/${path}`];
+  let response;
+  try {
+    response = runReleaseToolingGh(args);
+  } catch (error) {
+    if (!isRecord(error) || String(error.stderr).trim() !== "unexpected end of JSON input") {
+      throw error;
+    }
+    // Replay this GET once when gh could not decode its response; a successful
+    // command's invalid JSON and all producer identity failures remain fatal.
+    response = runReleaseToolingGh(args);
+  }
+  return JSON.parse(response);
 }
 
 function artifactRequest(env) {
