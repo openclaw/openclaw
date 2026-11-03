@@ -370,7 +370,7 @@ describe("Cloud environments", () => {
     ).toBeNull();
     change(input(page, "Refresh after"), "30m");
     click(page, "Save retention policy");
-    await waitText(() => page, "Enter a duration of at least 1h");
+    await waitText(() => page, "Use up to eight digits and m, h, or d; minimum 1h.");
     expect(request.mock.calls.some(([method]) => method === "config.patch")).toBe(false);
     change(input(page, "Refresh after"), "2h");
     change(input(page, "Retain unused"), "3d");
@@ -626,12 +626,12 @@ it.each(["creating", "retiring"] as const)("keeps %s snapshot guidance accurate"
     ).click();
     flush();
     const remove = document.querySelector(
-      '[title="Wait for the active capture to finish before deleting this snapshot."]',
+      '[title="Wait for capture to finish before deleting this snapshot."]',
     );
     expect(remove?.getAttribute("aria-disabled")).toBe("true");
   } else {
     expect(sheet(page).textContent).toContain(
-      "Cleanup retries during the next snapshot capture or cloud device cleanup.",
+      "Cleanup retries at the next capture or cloud device cleanup.",
     );
   }
   expect(request).not.toHaveBeenCalledWith("crabbox.images.delete", expect.anything());
@@ -650,7 +650,7 @@ it("fences recovery when the connection changes during confirmation", async () =
   click(sheet(fixture.page), "Recover");
   await waitForSolid(() => expect(showConfirmDialog).toHaveBeenCalled());
   expect(vi.mocked(showConfirmDialog).mock.calls[0]?.[0].requiredAcknowledgement).toBe(
-    "I stopped the active capture and cloud device and resolved any remaining provider resources",
+    "I stopped the capture and cloud device and resolved remaining provider resources",
   );
   fixture.harness.publish(false);
   flush();

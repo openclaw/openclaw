@@ -863,7 +863,7 @@ const enSettings = {
     },
     snapshots: {
       retirementHint:
-        "Snapshot {checkpoint} is awaiting deletion. Cleanup retries during the next snapshot capture or cloud device cleanup. If it stays pending, check the provider’s deletion errors.",
+        "Snapshot {checkpoint} is awaiting deletion. Cleanup retries at the next capture or cloud device cleanup. Check provider deletion errors.",
       uncertain: "Paused: uncertain",
       lastUsed: "Last used {age}",
       pin: "Pin",
@@ -871,48 +871,45 @@ const enSettings = {
       delete: "Delete",
       deleteTitle: "Delete this snapshot?",
       deleteMessage:
-        "Delete this snapshot from the provider. This can’t be undone. If deletion fails, it stays pending and retries during maintenance.",
+        "Delete this snapshot. This can’t be undone. Failed deletion stays pending for maintenance to retry.",
       deletePinned: "Unpin this snapshot before deleting it.",
       deleteHeld: "This snapshot is still allocated and can’t be deleted yet.",
-      deleteCapturing: "Wait for the active capture to finish before deleting this snapshot.",
-      deletionRetiring: "Snapshot deletion is pending. Maintenance will retry provider cleanup.",
+      deleteCapturing: "Wait for capture to finish before deleting this snapshot.",
+      deletionRetiring: "Deletion is pending. Maintenance retries provider cleanup.",
       rollback: "Roll back",
       rollbackTitle: "Roll back this snapshot?",
       rollbackMessage:
-        "Use this previous snapshot as the current image. The current image becomes the previous generation, or is scheduled for deletion if retention keeps no previous generation and it isn’t pinned. Existing cloud devices keep their recorded snapshot.",
+        "Use this snapshot as the current image. Keep the replaced image if it’s pinned or retention allows it; otherwise, schedule deletion. Existing cloud devices keep their snapshot.",
       refreshAfter: "Refresh after",
-      refreshAfterHelp: "Default: 24h. Use whole minutes, hours, or days; minimum 1h.",
-      refreshAfterInvalid:
-        "Enter a duration of at least 1h using up to eight digits and m, h, or d.",
+      refreshAfterHelp: "Default: 24h; minimum: 1h. Use m, h, or d.",
+      refreshAfterInvalid: "Use up to eight digits and m, h, or d; minimum 1h.",
       retainUnused: "Retain unused",
-      retainUnusedHelp: "Default: 14d. Use whole minutes, hours, or days; minimum 1d.",
-      retainUnusedInvalid:
-        "Enter a duration of at least 1d using up to eight digits and m, h, or d.",
+      retainUnusedHelp: "Default: 14d; minimum: 1d. Use m, h, or d.",
+      retainUnusedInvalid: "Use up to eight digits and m, h, or d; minimum 1d.",
       keepPrevious: "Previous generations",
       keepNone: "None (default)",
       keepOne: "Keep one",
       savePolicy: "Save retention policy",
       policySaved: "Retention policy saved",
-      policySaveFailed: "Couldn’t save the retention policy. Refresh the settings and try again.",
+      policySaveFailed: "Couldn’t save the retention policy. Refresh settings and try again.",
       rebuild: "Rebuild",
       selectBuildInputs: "Choose an enabled profile and a local repository.",
       buildStarted: "Build started",
       buildReused: "Reusing the build already in progress",
       capacity:
         "No cloud devices are available. Raise the pool limit or remove an unused cloud device, then try again.",
-      invalidProject:
-        "Couldn’t build the snapshot. Select an accessible local Git repository with a HEAD commit, or fix the checkout and try again.",
+      invalidProject: "Couldn’t build the snapshot. Choose a local Git checkout with a commit.",
       invalidProfile:
-        "Couldn’t build the snapshot on this cloud device. Choose an available device that supports project preparation, or check its settings and try again.",
+        "Couldn’t build the snapshot. Choose an available cloud device that supports project preparation, or check its settings.",
       cancelBuild: "Cancel build",
       cancelBuildTitle: "Cancel this snapshot build?",
       cancelBuildMessage:
-        "The build stops and its cloud device is removed. OpenClaw waits for provider work and cleanup to finish.",
+        "Stop the build and clean up its cloud device after provider work finishes.",
       buildCancelled: "Build canceled",
       dismiss: "Dismiss",
       dismissBuild: "Dismiss this failed build?",
       dismissBuildMessage:
-        "Request cleanup for this failed build and hide it from this view. The failed record stays until its retention window ends, so it can reappear after a reload.",
+        "Request cleanup and hide this failed build. It can reappear after reload until the record’s retention period ends.",
       buildDismissed: "Failed build dismissed",
       buildStates: {
         requested: "Requested",
@@ -930,9 +927,9 @@ const enSettings = {
       recover: "Recover",
       recoverTitle: "Recover this paused snapshot?",
       recoverMessage:
-        "Clear this capture reservation after manual provider cleanup. Recorded snapshots and allocation choices stay. This won’t stop cloud devices or delete provider resources.",
+        "Clear the capture reservation. Snapshots and allocation choices stay. This won’t stop cloud devices or clean up provider resources.",
       acknowledgement:
-        "I stopped the active capture and cloud device and resolved any remaining provider resources",
+        "I stopped the capture and cloud device and resolved remaining provider resources",
       recovered: "Capture reservation cleared",
       recoveryChanged: "The connection changed. Select the repository and try recovery again.",
     },
