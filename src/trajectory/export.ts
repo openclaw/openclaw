@@ -146,6 +146,7 @@ async function readSessionEntries(params: {
       agentId: completeTarget.agentId,
       sessionKey: completeTarget.sessionKey,
       storePath: completeTarget.storePath,
+      projection: "list",
     });
     // Export remains available after the session index row is pruned. A row
     // that still exists must agree with the artifact's complete target.
@@ -192,13 +193,14 @@ async function readSessionEntries(params: {
     throw new Error("Trajectory export legacy marker does not match the requested session");
   }
   const targetKeyAgentId = parseAgentSessionKey(incompleteTarget?.sessionKey)?.agentId;
-  const targetKeyEntry = incompleteTarget?.sessionKey
-    ? loadSessionEntryReadOnly({
-        agentId: marker.agentId,
-        sessionKey: incompleteTarget.sessionKey,
-        storePath: marker.storePath,
-      })
-    : undefined;
+  const markerEntries = new Map(
+    listSessionEntriesReadOnly({
+      agentId: marker.agentId,
+      storePath: marker.storePath,
+      projection: "list",
+    }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+  );
+  const targetKeyEntry = markerEntries.get(incompleteTarget?.sessionKey ?? "");
   if (
     incompleteTarget &&
     ((incompleteTarget.agentId && incompleteTarget.agentId !== marker.agentId) ||
@@ -210,30 +212,19 @@ async function readSessionEntries(params: {
   ) {
     throw new Error("Trajectory export transcript target conflicts with the legacy marker");
   }
-  const suppliedKeyEntry = params.sessionKey
-    ? loadSessionEntryReadOnly({
-        agentId: marker.agentId,
-        sessionKey: params.sessionKey,
-        storePath: marker.storePath,
-      })
-    : undefined;
-  const markerMatches = listSessionEntriesReadOnly({
-    agentId: marker.agentId,
-    storePath: marker.storePath,
-  }).filter(({ entry }) => entry.sessionId === marker.sessionId);
+  const suppliedKeyEntry = markerEntries.get(params.sessionKey ?? "");
+  const matches = [...markerEntries].filter(([, entry]) => entry.sessionId === marker.sessionId);
   if (suppliedKeyEntry && suppliedKeyEntry.sessionId !== marker.sessionId) {
     throw new Error("Trajectory export session key conflicts with the legacy marker");
   }
-  if (params.sessionKey && !suppliedKeyEntry && markerMatches.length > 0) {
+  if (params.sessionKey && !suppliedKeyEntry && matches.length > 0) {
     throw new Error("Trajectory export session key is not mapped to the legacy marker");
   }
   const markerSessionKey = suppliedKeyEntry
     ? params.sessionKey
-    : (resolvePreferredSessionKeyForSessionIdMatches(
-        markerMatches.map(({ sessionKey, entry }) => [sessionKey, entry]),
-        marker.sessionId,
-      ) ?? (markerMatches.length === 0 ? params.sessionKey : undefined));
-  if (!markerSessionKey && markerMatches.length > 0) {
+    : (resolvePreferredSessionKeyForSessionIdMatches(matches, marker.sessionId) ??
+      (matches.length === 0 ? params.sessionKey : undefined));
+  if (!markerSessionKey && matches.length > 0) {
     throw new Error("Trajectory export legacy marker session key is ambiguous");
   }
   return collectSessionEntries(
