@@ -7,6 +7,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
+import { runWithSessionMcpToolCallAuthority } from "../agents/agent-bundle-mcp-request-context.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { runBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
 import { getChannelAgentToolMeta } from "../agents/channel-tool-metadata.js";
@@ -69,6 +70,7 @@ import {
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
+import { resolveToolsWithInvocationMcp } from "./tools-invoke-mcp.js";
 import {
   areGatewayUploadsEnabled,
   assertGatewayUploadsEnabled,
@@ -114,7 +116,7 @@ type ToolsInvokeOutcome =
       ok: true;
       status: 200;
       toolName: string;
-      source: "core" | "plugin" | "channel";
+      source: "core" | "plugin" | "mcp" | "channel";
       result: unknown;
     }
   | {
@@ -200,9 +202,9 @@ function resolveToolInputErrorStatus(err: unknown): number | null {
   return name === "ToolAuthorizationError" ? 403 : 400;
 }
 
-function resolveToolSource(tool: AnyAgentTool): "core" | "plugin" | "channel" {
+function resolveToolSource(tool: AnyAgentTool): "core" | "plugin" | "mcp" | "channel" {
   if (getPluginToolMeta(tool)) {
-    return "plugin";
+    return getPluginToolMeta(tool)?.mcp ? "mcp" : "plugin";
   }
   if (getChannelAgentToolMeta(tool)) {
     return "channel";
@@ -236,6 +238,7 @@ async function invokeGatewayToolWithSignal(
     signal: AbortSignal;
     preparedSession?: { entry: SessionEntry | undefined };
     releaseSessionFacts: Array<() => void>;
+    disposals: Array<() => Promise<void>>;
   },
 ): Promise<ToolsInvokeOutcome> {
   let hasClientUploads = false;
@@ -494,35 +497,45 @@ async function invokeGatewayToolWithSignal(
     sessionEntry,
     sessionWorkspace,
   );
-  const resolveTools = (disablePluginTools: boolean) =>
-    resolveGatewayScopedTools({
+  // Gateway tools resolve first; a configured MCP server connects only for a name none holds.
+  const { resolved, mcpUnavailable } = await resolveToolsWithInvocationMcp({
+    toolName,
+    knownCoreTool,
+    resolveTools: (disablePluginTools, overrides) =>
+      resolveGatewayScopedTools({
+        cfg: params.cfg,
+        sessionKey,
+        sessionId: sessionEntry?.sessionId,
+        sessionPermissionPolicy,
+        preparedSessionWorkspaceDir: sessionWorkspace,
+        agentId: selectedAgentId,
+        messageProvider: params.messageChannel,
+        accountId: params.accountId,
+        agentTo: params.agentTo,
+        agentThreadId: params.agentThreadId,
+        approvalReviewerDeviceId: params.approvalReviewerDeviceId,
+        senderIsOwner: params.senderIsOwner,
+        clientCaps: params.clientCaps,
+        conversationReadOrigin,
+        allowGatewaySubagentBinding: true,
+        allowMediaInvokeCommands: true,
+        surface: "http",
+        assertInvocationCurrent,
+        assertInputCommitAllowed,
+        disablePluginTools,
+        gatewayRequestedTools,
+        ...overrides,
+      }),
+    mcp: {
       cfg: params.cfg,
-      sessionKey,
-      sessionId: sessionEntry?.sessionId,
-      sessionPermissionPolicy,
-      preparedSessionWorkspaceDir: sessionWorkspace,
+      workspaceDir: sessionWorkspace,
       agentId: selectedAgentId,
-      messageProvider: params.messageChannel,
-      accountId: params.accountId,
-      agentTo: params.agentTo,
-      agentThreadId: params.agentThreadId,
-      approvalReviewerDeviceId: params.approvalReviewerDeviceId,
-      senderIsOwner: params.senderIsOwner,
-      clientCaps: params.clientCaps,
-      conversationReadOrigin,
-      allowGatewaySubagentBinding: true,
-      allowMediaInvokeCommands: true,
-      surface: "http",
-      assertInvocationCurrent,
-      assertInputCommitAllowed,
-      disablePluginTools,
-      gatewayRequestedTools,
-    });
-
-  let { agentId, tools, workspaceDir } = await resolveTools(knownCoreTool);
-  if (knownCoreTool && !tools.some((candidate) => candidate.name === toolName)) {
-    ({ agentId, tools, workspaceDir } = await resolveTools(false));
-  }
+      session: { key: sessionKey, entry: sessionEntry },
+      owner: { disposals: params.disposals, sessionChecks },
+      signal: params.signal,
+    },
+  });
+  const { agentId, tools, workspaceDir } = resolved;
   const requestedAgentId = normalizeOptionalString(params.input.agentId);
   if (requestedAgentId && agentId && selectedAgentId !== agentId) {
     return failure(
@@ -533,6 +546,9 @@ async function invokeGatewayToolWithSignal(
   }
   const tool = tools.find((candidate) => candidate.name === toolName);
   if (!tool) {
+    if (mcpUnavailable) {
+      return failure(500, "tool_error", mcpUnavailable);
+    }
     return failure(404, "not_found", `Tool not available: ${toolName}`);
   }
 
@@ -588,7 +604,11 @@ async function invokeGatewayToolWithSignal(
         assertInvocationCurrent();
         assertCapturedInputCommitAllowed();
         createGatewayToolPolicyAssertion(tool, params.cfg)(hookResult.params);
-        return await tool.execute?.(toolCallId, hookResult.params, params.signal);
+        // MCP requests recheck caller authority at server I/O, after reconnection or catalog waits.
+        return await runWithSessionMcpToolCallAuthority(
+          getPluginToolMeta(tool)?.mcp ? assertInvocationCurrent : undefined,
+          () => tool.execute?.(toolCallId, hookResult.params, params.signal),
+        );
       },
     );
     const executedAction = asOptionalRecord(hookResult.params)?.action;
@@ -631,12 +651,13 @@ async function invokeGatewayToolWithSignal(
   }
 }
 
-/** Resolves, authorizes, and invokes one gateway-visible core/plugin/channel tool. */
+/** Resolves, authorizes, and invokes one gateway-visible core/plugin/MCP/channel tool. */
 export async function invokeGatewayTool(
   params: InvokeGatewayToolParams,
 ): Promise<ToolsInvokeOutcome> {
   const requestAbort = new AbortController();
   const releaseSessionFacts: Array<() => void> = [];
+  const disposals: Array<() => Promise<void>> = [];
   const signal = params.signal
     ? AbortSignal.any([params.signal, requestAbort.signal])
     : requestAbort.signal;
@@ -675,6 +696,7 @@ export async function invokeGatewayTool(
               ...params,
               signal,
               releaseSessionFacts,
+              disposals,
               preparedSession: { entry },
               assertInvocationCurrent: assertCurrent,
             });
@@ -687,21 +709,23 @@ export async function invokeGatewayTool(
         }
       );
     }
-    return await invokeGatewayToolWithSignal({ ...params, signal, releaseSessionFacts });
+    return await invokeGatewayToolWithSignal({ ...params, signal, releaseSessionFacts, disposals });
   } catch (error) {
-    if (!(error instanceof SessionMutationFactsUnavailableError)) {
+    const revoked = resolveToolInputErrorStatus(error) === 403;
+    if (!revoked && !(error instanceof SessionMutationFactsUnavailableError)) {
       throw error;
     }
     return {
       ok: false,
       status: 403,
       toolName: normalizeOptionalString(params.input.name ?? params.input.tool) ?? "",
-      error: { type: "tool_call_blocked", message: error.message },
+      error: { type: "tool_call_blocked", message: formatErrorMessage(error) },
     };
   } finally {
     for (const release of releaseSessionFacts) {
       release();
     }
+    await Promise.all(disposals.map(async (dispose) => await dispose()));
     requestAbort.abort();
   }
 }

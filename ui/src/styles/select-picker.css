@@ -248,6 +248,12 @@ openclaw-select-picker {
   width: max-content;
 }
 
+@media (max-width: 640px) {
+  .oc-modal-dialog .picker-select__menu.oc-overlay {
+    max-width: anchor-size(width);
+  }
+}
+
 .picker-select__menu[hidden],
 .picker-select__menu:not(:popover-open):not([data-phase="opening"]):not([data-phase="open"]):not(
     [data-phase="closing"]

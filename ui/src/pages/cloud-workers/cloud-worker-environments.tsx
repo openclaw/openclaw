@@ -19,6 +19,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { GatewayRequestError, resolveGatewayErrorDetailCode } from "../../api/gateway.ts";
 import { showConfirmDialog, type ConfirmDialogOptions } from "../../components/confirm-dialog.ts";
+import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
 import {
   DocsLink,
   SettingsEmpty,
@@ -677,8 +678,7 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
         </Show>
       </SettingsPage>
       <SettingsPage>
-        <details class="cloud-environments__advanced">
-          <summary>{t("cloudWorkersPage.environments.advanced")}</summary>
+        <SettingsDisclosure sections title={t("cloudWorkersPage.environments.advanced")}>
           {props.machines()}
           <CloudWorkerMachinePool inventory={view.inventory} />
           <CloudWorkerSnapshotPolicy />
@@ -722,7 +722,7 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
               </For>
             </SettingsSection>
           </Show>
-        </details>
+        </SettingsDisclosure>
       </SettingsPage>
     </>
   );

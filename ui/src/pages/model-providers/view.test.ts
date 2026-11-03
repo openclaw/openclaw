@@ -327,7 +327,7 @@ describe("renderModelProviders", () => {
 
   it("keeps decision model help behind the standard info button", () => {
     const container = mount(props());
-    const row = settingsRow(container, "Decision Model");
+    const row = settingsRow(container, "Decision model");
     const help = row.querySelector('button[aria-label="About the decision model"]');
     expect(help).not.toBeNull();
     expect(row.querySelector(".settings-row__desc")).toBeNull();
@@ -450,7 +450,7 @@ describe("renderModelProviders", () => {
     expect(
       [
         ...(addForm?.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>(
-          "select, input, button",
+          "select, input, button:not(.oc-dialog__close)",
         ) ?? []),
       ].map((control) => control.disabled),
     ).toEqual([true, false, true]);
@@ -480,7 +480,7 @@ describe("renderModelProviders", () => {
     const addForm = container.querySelector("[data-models-key-dialog]");
     const controls = [
       ...(addForm?.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>(
-        "select, input, button",
+        "select, input, button:not(.oc-dialog__close)",
       ) ?? []),
     ];
 

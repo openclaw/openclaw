@@ -24,6 +24,7 @@ const enAbout = {
     branch: "Branch",
     built: shared.built,
     unavailable: shared.unavailable,
+    copyBuild: "Copy version and commit",
     copyCommit: shared.copyCommit,
     copiedCommit: shared.copiedCommit,
     gateway: shared.gateway,

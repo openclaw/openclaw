@@ -81,6 +81,11 @@ and context. Changes to configuration or include files during execution cannot
 rewrite that frozen identity. A missing or invalid terminal receipt leaves the
 incomplete snapshot available if the artifact upload runs.
 
+If expanded dependency paths exceed the export limit, the capture retains
+terminal outcomes and the frozen snapshot with all dependencies set to `null`,
+and emits a warning. Missing graph data still requires conservative selection.
+If that smaller export also exceeds the limit, the incomplete snapshot remains.
+
 This snapshot follows configuration evaluation and native test selection. It
 does not contain a prior graph, source diff, model ranking or selection decision.
 Global setup can still change worker settings after capture. The local recording

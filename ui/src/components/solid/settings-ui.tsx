@@ -173,9 +173,7 @@ export function SettingsSection(props: {
         </div>
       </Show>
       {props.notice}
-      <SettingsGroup danger={props.danger} carapace={props.carapace}>
-        {props.children}
-      </SettingsGroup>
+      <SettingsGroup carapace={props.carapace}>{props.children}</SettingsGroup>
     </section>
   );
 }
@@ -195,20 +193,9 @@ export function SettingsSummary(props: { items: ReadonlyArray<{ label: string; v
   );
 }
 
-export function SettingsGroup(props: {
-  children?: JSX.Element;
-  danger?: boolean;
-  carapace?: boolean;
-}) {
+export function SettingsGroup(props: { children?: JSX.Element; carapace?: boolean }) {
   return (
-    <div
-      class={[
-        "settings-group",
-        { "settings-group--danger": props.danger, "oc-settings-group": props.carapace },
-      ]}
-    >
-      {props.children}
-    </div>
+    <div class={["settings-group", { "oc-settings-group": props.carapace }]}>{props.children}</div>
   );
 }
 

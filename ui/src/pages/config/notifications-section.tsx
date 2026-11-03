@@ -56,15 +56,6 @@ function NotificationActions(props: { children: JSX.Element }) {
     </div>
   );
 }
-function BlockedNotifications(props: { description: string }) {
-  return (
-    <SettingsRow
-      title={t("configView.notifications.blocked")}
-      description={props.description}
-      control={<SettingsStatus kind="danger" label={t("configView.notifications.denied")} />}
-    />
-  );
-}
 function NotificationSection(props: {
   title: string;
   status: JSX.Element;
@@ -150,6 +141,11 @@ function NativeNotificationSection(props: {
       </span>
       <SettingsRow
         title={t("configView.notifications.permission")}
+        description={
+          props.native.permission === "denied"
+            ? t("configView.notifications.nativeBlockedHint")
+            : undefined
+        }
         control={<SettingsValue value={status().label} />}
       />
       <Show
@@ -161,7 +157,7 @@ function NativeNotificationSection(props: {
       >
         <NotificationActions>
           {props.native.permission === "granted" ? (
-            <button class="btn primary" disabled={testPending()} onClick={() => void sendTest()}>
+            <button class="btn" disabled={testPending()} onClick={() => void sendTest()}>
               <Icon name={testPending() ? "loader" : "send"} />
               {testPending()
                 ? t("configView.notifications.sendingTest")
@@ -180,9 +176,6 @@ function NativeNotificationSection(props: {
             </button>
           )}
         </NotificationActions>
-      </Show>
-      <Show when={props.native.permission === "denied"}>
-        <BlockedNotifications description={t("configView.notifications.nativeBlockedHint")} />
       </Show>
       <Show
         when={testPending()}
@@ -340,6 +333,11 @@ function WebPushSection(props: {
         />
         <SettingsRow
           title={t("configView.notifications.permission")}
+          description={
+            props.push.permission === "denied"
+              ? t("configView.notifications.blockedHint")
+              : undefined
+          }
           control={<SettingsValue value={permissionLabel()} />}
         />
         <SettingsRow
@@ -380,7 +378,7 @@ function WebPushSection(props: {
                 </button>
                 <Show when={registered() && props.push.canManage}>
                   <button
-                    class="btn primary"
+                    class="btn"
                     disabled={busy() || !props.actions.connected}
                     onClick={() => submit(props.actions.onWebPushTest?.())}
                   >
@@ -407,9 +405,6 @@ function WebPushSection(props: {
               </Show>
             )}
           </NotificationActions>
-        </Show>
-        <Show when={props.push.permission === "denied"}>
-          <BlockedNotifications description={t("configView.notifications.blockedHint")} />
         </Show>
         <Show when={props.push.error}>
           <div class="settings-row">
