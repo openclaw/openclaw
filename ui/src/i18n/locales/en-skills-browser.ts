@@ -12,7 +12,6 @@ const catalog = {
     },
     defaultAgent: "{name} (default)",
     filterPlaceholder: "Filter installed skills",
-    shown: "{count} shown",
     clawHub: "ClawHub",
     clawHubSubtitle: "Search and install skills from the registry",
     searchClawHub: "Search ClawHub skills…",
