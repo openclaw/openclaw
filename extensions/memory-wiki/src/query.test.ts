@@ -305,11 +305,7 @@ describe("searchMemoryWiki", () => {
       ["ru", "Альфа — это новый внутренний проект.", "проект альфа"],
       ["ja", "会議は来週東京で開きます。", "東京 会議"],
       ["de", "Die Straße gehört Herrn Müller.", "Müller Straße"],
-      [
-        "controller",
-        "The controller strategy is documented in config.yaml.",
-        "config.yaml strategy.",
-      ],
+      ["controller", "The controller strategy is in config.yaml.", "config.yaml strategy."],
     ] as const;
     for (const [slug, body] of pages) {
       await writeNote(`entities/${slug}.md`, `Notes ${slug}`, body);
