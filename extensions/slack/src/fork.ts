@@ -1,7 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { getSessionBindingService } from "openclaw/plugin-sdk/session-binding-runtime";
 import { resolveSlackAccount, resolveSlackOperationToken } from "./accounts.js";
 import { createSlackReadClient, createSlackWriteClient } from "./client.js";
@@ -78,7 +77,8 @@ export const prepareSlackFork: PrepareFork = async (params) => {
   const read = createSlackReadClient(readToken, {}, undefined, assertCurrent);
   // No SDK or transport retry can replay an ambiguous native root creation.
   const write = createSlackWriteClient(writeToken, { rejectRateLimitedCalls: true }, assertCurrent);
-  const postRoot = write.chat.postMessage.bind(write.chat);
+  // Slack API methods are already bound to their WebClient.
+  const { postMessage: postRoot } = write.chat;
   try {
     const info = await write.conversations.info({ channel: channelId });
     assertCurrent();
@@ -129,7 +129,6 @@ export const prepareSlackFork: PrepareFork = async (params) => {
     };
   }
   let creation: { sessionKey: string; result: ReturnType<PreparedFork["create"]> } | undefined;
-  const effect = captureEffectAuthority();
   return {
     ok: true,
     assertCurrent,
@@ -147,9 +146,10 @@ export const prepareSlackFork: PrepareFork = async (params) => {
         let rootTs: string | undefined;
         let returnedIdentity: string | undefined;
         try {
-          const posted = await effect.initiate(() => {
-            assertCurrent();
-            return postRoot({ channel: channelId, ...buildSlackLiteralText(title) });
+          assertCurrent();
+          const posted = await postRoot({
+            channel: channelId,
+            ...buildSlackLiteralText(title),
           });
           rootTs = normalizeSlackThreadTsCandidate(posted.ts);
           returnedIdentity =

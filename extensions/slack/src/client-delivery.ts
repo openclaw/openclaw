@@ -2,7 +2,6 @@
 import type { MessageMetadata } from "@slack/types";
 import type { Block, ChatPostMessageResponse, KnownBlock, WebClient } from "@slack/web-api";
 import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   extractErrorCode,
   PlatformMessageNotDispatchedError,
@@ -10,11 +9,8 @@ import {
 } from "openclaw/plugin-sdk/error-runtime";
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
-import { chunkMarkdownTextWithMode, resolveChunkMode } from "openclaw/plugin-sdk/reply-chunking";
-import { resolveTextChunksWithFallback } from "openclaw/plugin-sdk/reply-payload";
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import { logVerbose, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -24,9 +20,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 import { formatSlackError, getSlackWebApiErrorData } from "./errors.js";
-import { chunkSlackMrkdwnText, markdownToSlackMrkdwnChunks } from "./format.js";
 import { buildSlackLiteralText } from "./literal-text.js";
 import {
   buildSlackMessageIdentityPayload,
@@ -240,36 +234,6 @@ function classifySlackCustomIdentityError(err: unknown): "scope" | "argument" | 
     ...normalizeTrimmedStringList(data?.response_metadata?.acceptedScopes),
   ].map((scope) => normalizeLowercaseStringOrEmpty(scope));
   return scopes.includes("chat:write.customize") ? "scope" : undefined;
-}
-
-export function prepareSlackMessageTextChunks(params: {
-  cfg: OpenClawConfig;
-  accountId: string;
-  text: string;
-  textLimit: number;
-  textIsSlackPlainText?: boolean;
-  textIsSlackMrkdwn?: boolean;
-  literalText?: boolean;
-}): string[] {
-  const { text, textLimit } = params;
-  if (params.textIsSlackPlainText || params.literalText) {
-    return text ? chunkTextForOutbound(text, textLimit, { preserveWhitespace: true }) : [];
-  }
-  if (params.textIsSlackMrkdwn) {
-    return resolveTextChunksWithFallback(text, chunkSlackMrkdwnText(text, textLimit));
-  }
-  const tableMode = resolveMarkdownTableMode({
-    cfg: params.cfg,
-    channel: "slack",
-    ...(params.accountId ? { accountId: params.accountId } : {}),
-  });
-  const chunkMode = resolveChunkMode(params.cfg, "slack", params.accountId);
-  const markdownChunks =
-    chunkMode === "newline" ? chunkMarkdownTextWithMode(text, textLimit, chunkMode) : [text];
-  const chunks = markdownChunks.flatMap((markdown) =>
-    markdownToSlackMrkdwnChunks(markdown, textLimit, { tableMode }),
-  );
-  return resolveTextChunksWithFallback(text, chunks);
 }
 
 export async function postSlackMessageBestEffort(params: {
