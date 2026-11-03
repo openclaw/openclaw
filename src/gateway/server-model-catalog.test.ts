@@ -371,8 +371,8 @@ describe("gateway prepared model catalog", () => {
         await import("../agents/prepared-model-catalog.js"),
         "loadPreparedModelCatalogSnapshot",
       )
-      .mockImplementation(async ({ config }) => {
-        if (config === staleConfig) {
+      .mockImplementation(async (params) => {
+        if (params?.config === staleConfig) {
           replaced = true;
           return staleCatalog;
         }
