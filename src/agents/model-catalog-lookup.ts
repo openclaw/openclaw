@@ -227,3 +227,10 @@ export function findModelCatalogEntry(
     : catalog.filter((entry) => normalizeLowercaseStringOrEmpty(entry.id) === normalizedModelId);
   return matches.length === 1 ? matches[0] : undefined;
 }
+
+/**
+ * Check if a model supports image input based on its catalog entry.
+ */
+export function modelSupportsVision(entry: ModelCatalogEntry | undefined): boolean {
+  return modelSupportsInput(entry, "image");
+}

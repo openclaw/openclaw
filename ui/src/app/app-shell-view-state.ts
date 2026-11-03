@@ -310,6 +310,7 @@ export function readShellView(host: ShellViewHost) {
         host.shellNavigation.navigate("settings");
       }
     },
+    onEscape: nativeEmbed ? undefined : () => host.shellNavigation.leaveSettingsLevel(),
     canAdmin: operatorAccess.canAdmin,
     nativeDeviceSettings: context.nativeDeviceSettings,
   };

@@ -129,11 +129,8 @@ afterEach(async () => {
 describe("settings sidebar search", () => {
   it("keeps Usage and Logs copy narrow until the first search without replacing the input", async () => {
     for (const activeRouteId of ["usage", "logs"] as const) {
-      render({ activeRouteId, saveIndicator: { ...saveIndicator(), status: "paused" } });
+      render({ activeRouteId });
       expect(labels()).toContain("Appearance");
-      await waitForSolid(() =>
-        expect(container.textContent).toContain("Autosave paused after reconnect"),
-      );
       expect(t("configView.chatPrefs.title")).toBe("configView.chatPrefs.title");
     }
     const search = searchHarness("", {
@@ -379,6 +376,26 @@ describe("settings sidebar search", () => {
     expect(onExit).toHaveBeenCalledOnce();
   });
 
+  it("sends Escape from an empty search up a level and shows esc only where it exits", () => {
+    const onExit = vi.fn();
+    const onEscape = vi.fn();
+    render({ activeRouteId: "appearance", onExit, onEscape });
+    expect(container.querySelector(".settings-sidebar__esc")).not.toBeNull();
+    render({ activeRouteId: "lobsterdex", onExit, onEscape });
+    expect(container.querySelector(".settings-sidebar__esc")).toBeNull();
+    expect(
+      container.querySelector('.settings-sidebar__item[href="/settings/appearance"]')?.className,
+    ).toContain("settings-sidebar__item--active");
+
+    container
+      .querySelector<HTMLInputElement>(".settings-sidebar__search-input")
+      ?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+      );
+    expect(onEscape).toHaveBeenCalledOnce();
+    expect(onExit).not.toHaveBeenCalled();
+  });
+
   it("clears the visible search before its projected query commits", () => {
     const onExit = vi.fn();
     const onSearchQueryChange = vi.fn((searchQuery: string) => {
@@ -426,7 +443,7 @@ describe("settings sidebar search", () => {
   });
 
   it.each(["sidebar", "embed-list", "embed-page"] as const)(
-    "preserves actionable save feedback in web settings and native connection recovery in %s",
+    "keeps save feedback in the native header and connection recovery in %s",
     async (presentation) => {
       const onRetryConnect = vi.fn();
       const renderSidebar = (
@@ -448,17 +465,20 @@ describe("settings sidebar search", () => {
 
       renderSidebar(null);
       expect(container.querySelector<HTMLElement>(".gateway-status__outbox")).toBeNull();
-      await vi.waitFor(() => {
-        expect(
-          container.querySelector<HTMLElement>(".settings-save-indicator")?.textContent,
-        ).toContain(t("configView.autoSaveFailed"));
-      });
+      // The web page floats this feedback over its content instead of the sidebar.
+      if (presentation !== "sidebar") {
+        await vi.waitFor(() => {
+          expect(
+            container.querySelector<HTMLElement>(".settings-save-indicator")?.textContent,
+          ).toContain(t("configView.autoSaveFailed"));
+        });
+      }
 
       renderSidebar(null);
       expect(container.querySelector<HTMLElement>(".gateway-status")).toBeNull();
       expect(
-        container.querySelector<HTMLElement>("openclaw-settings-save-indicator"),
-      ).not.toBeNull();
+        container.querySelector<HTMLElement>("openclaw-settings-save-indicator") !== null,
+      ).toBe(presentation !== "sidebar");
 
       for (const kind of [
         "connecting",
@@ -482,23 +502,14 @@ describe("settings sidebar search", () => {
       expect(suspended?.textContent).toContain(t("connection.suspended"));
       expect(suspended?.textContent).not.toContain("in outbox");
       expect(container.querySelector<HTMLElement>(".gateway-status__retry")).toBeNull();
-      expect(
-        container.querySelector<HTMLElement>("openclaw-settings-save-indicator") !== null,
-      ).toBe(presentation === "sidebar");
       if (presentation === "sidebar") {
         expect(
           container.querySelector<HTMLElement>(".sidebar-shell__footer")?.textContent,
         ).toContain("2 queued");
         expect(suspended?.hasAttribute("role")).toBe(false);
-        expect(
-          container.querySelector<HTMLElement>(".settings-save-indicator")?.textContent,
-        ).toContain(t("configView.autoSaveFailed"));
       }
 
       renderSidebar("offline", "connection refused?token=settings-secret");
-      expect(
-        container.querySelector<HTMLElement>("openclaw-settings-save-indicator") !== null,
-      ).toBe(presentation === "sidebar");
       const button = container.querySelector<HTMLButtonElement>(".gateway-status__retry");
       expect(button?.hasAttribute("title")).toBe(false);
       expect(

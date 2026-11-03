@@ -1,5 +1,6 @@
 import { stripMemoryAnnotationCarriers } from "../../packages/memory-host-sdk/src/host/curated-annotations.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { observeDiagnosticsTimelinePhases } from "../infra/diagnostics-timeline.js";
 import {
   isAutomaticMemoryEntryEligible,
   readMemorySearchManagerStatus,
@@ -99,12 +100,15 @@ export function bindMemoryProvider(
     }
   };
   const invoke = async <T>(run: () => Promise<T>): Promise<T> => {
+    using phases = observeDiagnosticsTimelinePhases("memory.provider-call.authority");
     const before = prepareMemoryCallerRead(context);
     if (before) {
       await racePromiseWithAbortSignal(before, context.signal);
     }
     assertCurrent(true);
+    phases.mark("memory.provider-call.execute");
     const result = await run();
+    phases.mark("memory.provider-call.revalidate");
     const after = prepareMemoryCallerRead(context);
     if (after) {
       await racePromiseWithAbortSignal(after, context.signal);

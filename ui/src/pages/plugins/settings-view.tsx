@@ -14,8 +14,8 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { renderPluginReadme } from "./catalog-detail.tsx";
 import { PluginArtTile } from "./consent-dialog.tsx";
 import { renderPluginDetailShell as PluginDetailShell } from "./detail-shell.tsx";
-import "./custom-elements.ts";
 import type { InstalledPluginDetailTab } from "./detail-tabs.ts";
+import "./custom-elements.ts";
 import { PluginInstallAction, type PluginInstallActionProps } from "./install-action.tsx";
 import type { PluginInstallProgress } from "./install-progress.ts";
 import {
@@ -33,6 +33,7 @@ import {
 } from "./plugin-row-message.tsx";
 import type { PluginDetailRead } from "./plugins-detail-reads.ts";
 import type { PluginMutationAction } from "./plugins-page-model.ts";
+import { PluginRecommendedPrompts } from "./recommended-prompts.tsx";
 import {
   flattenPluginSettingsFields,
   pluginSettingsNodeOptions,
@@ -80,6 +81,9 @@ export type DetailProps = SharedProps &
   PluginSettingsEditorModel & {
     resolveCredential?: PluginSettingsEditorProps["resolveCredential"];
     onAskPlugin?: () => void;
+    onSelectPrompt?: (prompt: string) => void;
+    promptBusy?: boolean;
+    promptBlockedReason?: string | null;
     mcpLoginBusy?: boolean;
     canMcpLogin?: boolean;
     onMcpLogin?: (serverName: string) => void;
@@ -347,6 +351,24 @@ function PluginOverview(props: DetailProps): JSX.Element {
           />
         }
         identity={renderPluginPublisher(catalog(), props.inspection?.overview?.publisherName)}
+        recommendations={
+          <PluginRecommendedPrompts
+            id={plugin().id}
+            name={plugin().name}
+            prompts={
+              plugin().recommendedPrompts ??
+              props.inspection?.overview?.recommendedPrompts ??
+              catalog()?.detail.recommendedPrompts
+            }
+            iconUrl={props.iconUrls[plugin().id] ?? catalogIcon().src}
+            registerIcon={props.registerIcon}
+            onIconError={() => props.onIconError(plugin().id)}
+            busy={Boolean(props.busy[pluginRowKey(plugin().id)]) || props.promptBusy}
+            disabled={Boolean(props.promptBlockedReason)}
+            disabledReason={props.promptBlockedReason}
+            onSelect={props.onSelectPrompt}
+          />
+        }
         titleAction={
           <Show
             when={Boolean(props.installProgress)}
