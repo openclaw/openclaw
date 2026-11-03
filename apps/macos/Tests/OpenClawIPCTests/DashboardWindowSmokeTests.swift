@@ -596,6 +596,22 @@ struct DashboardWindowSmokeTests {
             "url": "mailto:hello@example.com",
             "target": "inline",
         ]) == nil)
+        // 1Password approval links reach macOS only through the trusted Control UI bridge.
+        let approvalURL = try #require(URL(string: "onepassword://example-approval"))
+        #expect(DashboardWindowController.linkRequest(from: [
+            "type": "open-link",
+            "url": approvalURL.absoluteString,
+            "target": "external",
+        ]) == approvalURL)
+        #expect(DashboardWindowController.linkRequest(from: [
+            "type": "open-link",
+            "url": approvalURL.absoluteString,
+            "target": "inline",
+        ]) == nil)
+        #expect(!ControlUIDocumentHost.shouldOpenExternalDashboardNavigation(
+            approvalURL,
+            navigationType: .linkActivated,
+            buttonNumber: 1))
         #expect(DashboardWindowController.linkRequest(from: [
             "type": "open-link",
             "url": "https:hostless",

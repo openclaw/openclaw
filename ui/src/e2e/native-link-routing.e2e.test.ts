@@ -101,6 +101,21 @@ suite.define(() => {
         url: "mailto:hello@example.com",
         target: "external",
       });
+    await page.evaluate(() => {
+      const anchor = document.createElement("a");
+      anchor.href = "onepassword://example-approval";
+      anchor.textContent = "Open 1Password";
+      document.body.append(anchor);
+    });
+    await page.getByRole("link", { name: "Open 1Password" }).focus();
+    await page.keyboard.press("Enter");
+    await expect
+      .poll(() => linkMessages(page))
+      .toContainEqual({
+        type: "open-link",
+        url: "onepassword://example-approval",
+        target: "external",
+      });
     const messageCount = (await linkMessages(page))?.length ?? 0;
     await emailLink.evaluate((anchor) => (anchor as HTMLAnchorElement).click());
     await expect.poll(async () => (await linkMessages(page))?.length ?? 0).toBe(messageCount);
@@ -125,6 +140,7 @@ suite.define(() => {
       .poll(() => linkMessages(page))
       .toEqual([
         { type: "open-link", url: "mailto:hello@example.com", target: "external" },
+        { type: "open-link", url: "onepassword://example-approval", target: "external" },
         { type: "open-link", url: "https://example.com/report", target: "external" },
       ]);
 

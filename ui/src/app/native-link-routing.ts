@@ -74,6 +74,8 @@ export function postNativeUpdate(): boolean {
   return true;
 }
 
+const trustedAppLinkProtocols = new Set(["mailto:", "tel:", "onepassword:"]);
+
 function trustedExternalAppUrl(event: MouseEvent): { anchor: HTMLAnchorElement; url: URL } | null {
   if (!event.isTrusted) {
     return null;
@@ -83,7 +85,9 @@ function trustedExternalAppUrl(event: MouseEvent): { anchor: HTMLAnchorElement; 
     return null;
   }
   const url = URL.parse(anchor.href, window.location.href);
-  return url && (url.protocol === "mailto:" || url.protocol === "tel:") ? { anchor, url } : null;
+  // The native host accepts these only from the trusted Control UI frame; 1Password
+  // Agentic Autofill approvals open the desktop app through onepassword:// links.
+  return url && trustedAppLinkProtocols.has(url.protocol) ? { anchor, url } : null;
 }
 
 function postNativeLink(postMessage: NativeLinkPoster, url: URL | string): boolean {

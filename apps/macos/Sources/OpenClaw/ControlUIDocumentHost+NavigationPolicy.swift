@@ -45,6 +45,13 @@ extension ControlUIDocumentHost {
         return scheme == "mailto" || scheme == "tel"
     }
 
+    /// App links the trusted Control UI may hand to macOS through its privileged link bridge.
+    /// Unlike `isExternalURL`, reading tabs and page navigation never reach these schemes.
+    /// `onepassword://` carries 1Password Agentic Autofill approval requests to the desktop app.
+    static func isTrustedAppLinkURL(_ url: URL) -> Bool {
+        url.scheme?.lowercased() == "onepassword"
+    }
+
     static func isEditorURL(_ url: URL) -> Bool {
         guard let scheme = url.scheme?.lowercased(),
               url.host?.lowercased() == "file",
@@ -373,7 +380,7 @@ extension ControlUIDocumentHost {
     }
 
     static func openExternal(_ url: URL) {
-        guard self.isExternalURL(url) || self.isEditorURL(url) else { return }
+        guard self.isExternalURL(url) || self.isEditorURL(url) || self.isTrustedAppLinkURL(url) else { return }
         AppActivation.shared.open(url)
     }
 }
