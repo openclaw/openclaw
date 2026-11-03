@@ -156,7 +156,9 @@ it("keeps the extension and whole code points when the staging name is too long"
 
   await stage({ localPath: `/gateway/${"𠮷".repeat(60)}.docx` });
 
-  const staged = String(use.mock.calls[0]?.[0]).slice(remoteDir.length + 1);
+  const upload = runCommand.mock.calls.find(([argv]) => argv[0] === "scp");
+  const target = String(upload?.[0].at(-1));
+  const staged = target.slice(target.lastIndexOf("/") + 1);
   expect(Buffer.byteLength(staged, "utf8")).toBeLessThanOrEqual(200);
   expect(staged.endsWith(".docx")).toBe(true);
   expect(staged.isWellFormed()).toBe(true);
