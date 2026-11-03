@@ -3,6 +3,7 @@
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { enqueueSystemEventRaw as enqueueSystemEvent } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
@@ -10,6 +11,7 @@ import { deliveryContextFromSession } from "../../utils/delivery-context.read.js
 import { resolveContinuationRuntimeConfig } from "./config.js";
 import { DelegateTerminalChainStatePersistError } from "./delegate-dispatch-chain-state.js";
 import type { DelegateDispatchContext } from "./delegate-dispatch-contract.js";
+import { armDelegateDispatchHedge } from "./delegate-dispatch-hedge.js";
 import { dispatchToolDelegates } from "./delegate-dispatch.js";
 import {
   deliverOwedDelegateNotice,
@@ -25,6 +27,8 @@ import {
   classifyRecoverablePendingDelegates,
   clearRecoverableDelegatesChainTokensFold,
   listPendingDelegateSessionKeysForRecovery,
+  listUnresolvedDelegateClaims,
+  peekEarliestQueuedDelegateDueAt,
   reconcileContinuationDelegateAttachmentCustody,
 } from "./delegate-store.js";
 import { formatDelegateTaskForSystemEvent } from "./delegate-system-event.js";
@@ -39,9 +43,85 @@ import { withContinuationOwner } from "./system-event-ownership.js";
 import type { PendingContinuationDelegate } from "./types.js";
 
 const log = createSubsystemLogger("continuation/delegate-dispatch");
+// A claim a head swap aborted is requeued by the dispatch holding it; look again after this.
+const ABORTED_CLAIM_REARM_MS = 30_000;
 
 function formatErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Chain state read from and persisted to the session row instead of a turn's closures. The
+ * in-memory mirror keeps `loadFreshChainState` fresh so sequential hedge fires for several
+ * delayed delegates see the advancing basis instead of the stale pre-dispatch entry.
+ */
+function sessionRowChainState(sessionKey: string, storePath: string, entry: SessionEntry) {
+  const persistChainState = async (nextState: ChainState): Promise<void> => {
+    const updated = await updateSessionEntry(
+      { sessionKey, storePath },
+      (sessionEntry) => {
+        persistContinuationChainState({
+          sessionEntry,
+          count: nextState.currentChainCount,
+          startedAt: nextState.chainStartedAt,
+          tokens: nextState.accumulatedChainTokens,
+          ...(nextState.chainId ? { chainId: nextState.chainId } : {}),
+        });
+        return sessionEntry;
+      },
+      { requireWriteSuccess: true },
+    );
+    if (!updated) {
+      throw new Error(`session entry disappeared during recovery: ${sessionKey}`);
+    }
+    persistContinuationChainState({
+      sessionEntry: entry,
+      count: nextState.currentChainCount,
+      startedAt: nextState.chainStartedAt,
+      tokens: nextState.accumulatedChainTokens,
+      ...(nextState.chainId ? { chainId: nextState.chainId } : {}),
+    });
+  };
+  return {
+    persistChainState,
+    persistBeforeTerminalCommit: true,
+    loadFreshChainState: () => loadContinuationChainState(entry),
+  };
+}
+
+/**
+ * A /new or /reset cleared the replaced head's hedge, whose chain-state callbacks wrote through
+ * that head's run. Re-arm the delegates the reset kept as startup recovery drives them, on the
+ * session row alone. A claim the reset aborted stays with the dispatch holding it, which requeues
+ * it if it never dispatched; it is never resolved here.
+ */
+export async function rearmPendingContinuationDelegates(params: {
+  sessionKey: string;
+  storePath: string;
+  entry: SessionEntry;
+}): Promise<void> {
+  const { sessionKey, storePath, entry } = params;
+  const earliestQueuedDueAt = await peekEarliestQueuedDelegateDueAt(sessionKey);
+  const claimed =
+    (await listUnresolvedDelegateClaims(sessionKey, { updatedAtOrBefore: Date.now() })).length > 0;
+  const fireAt = claimed
+    ? Math.min(earliestQueuedDueAt ?? Infinity, Date.now() + ABORTED_CLAIM_REARM_MS)
+    : earliestQueuedDueAt;
+  if (fireAt === undefined) {
+    return;
+  }
+  armDelegateDispatchHedge(
+    sessionKey,
+    fireAt,
+    {
+      chainState: loadContinuationChainState(entry),
+      ctx: { sessionKey },
+      maxChainLength: resolveContinuationRuntimeConfig().maxChainLength,
+      applyDelegateChainTokensFold: true,
+      ...sessionRowChainState(sessionKey, storePath, entry),
+    },
+    dispatchToolDelegates,
+  );
 }
 
 /** Deliver every interrupted-spawn notice custody still owes (RFC §5.4.2). */
@@ -139,40 +219,12 @@ export async function recoverPendingContinuationDelegates(
       recoveryChainState = loadContinuationChainState(recoveredEntry);
     }
     recoveredSessions++;
-    // Persist the advanced chain state to BOTH the durable store and the
-    // in-memory copy this recovery loop reads. The in-memory mirror keeps
-    // `loadFreshChainState` fresh so sequential hedge fires for multiple delayed
-    // delegates see the advancing basis instead of the stale pre-dispatch entry.
-    // When the caller provides their own chainState they own persistence; skip.
-    let persistRecoveredChainState: ((nextState: ChainState) => Promise<void>) | undefined;
-    if (!params.chainState && recoveredEntry) {
-      persistRecoveredChainState = async (nextState: ChainState): Promise<void> => {
-        const updated = await updateSessionEntry(
-          { sessionKey, storePath },
-          (sessionEntry) => {
-            persistContinuationChainState({
-              sessionEntry,
-              count: nextState.currentChainCount,
-              startedAt: nextState.chainStartedAt,
-              tokens: nextState.accumulatedChainTokens,
-              ...(nextState.chainId ? { chainId: nextState.chainId } : {}),
-            });
-            return sessionEntry;
-          },
-          { requireWriteSuccess: true },
-        );
-        if (!updated) {
-          throw new Error(`session entry disappeared during recovery: ${sessionKey}`);
-        }
-        persistContinuationChainState({
-          sessionEntry: recoveredEntry,
-          count: nextState.currentChainCount,
-          startedAt: nextState.chainStartedAt,
-          tokens: nextState.accumulatedChainTokens,
-          ...(nextState.chainId ? { chainId: nextState.chainId } : {}),
-        });
-      };
-    }
+    // When the caller provides their own chainState they own persistence.
+    const rowChainState =
+      !params.chainState && recoveredEntry
+        ? sessionRowChainState(sessionKey, storePath, recoveredEntry)
+        : undefined;
+    const persistRecoveredChainState = rowChainState?.persistChainState;
     let result: Awaited<ReturnType<typeof dispatchToolDelegates>>;
     try {
       result = await dispatchToolDelegates({
@@ -193,13 +245,7 @@ export async function recoverPendingContinuationDelegates(
         // A recovered delayed delegate only arms a hedge here; pass the persist +
         // fresh-load callbacks so the eventual hedge fire durably advances the
         // folded chain state instead of losing it (cost-cap bypass).
-        ...(persistRecoveredChainState
-          ? {
-              persistChainState: persistRecoveredChainState,
-              persistBeforeTerminalCommit: true,
-              loadFreshChainState: () => loadContinuationChainState(recoveredEntry),
-            }
-          : {}),
+        ...rowChainState,
       });
     } catch (err) {
       if (err instanceof DelegateTerminalChainStatePersistError) {

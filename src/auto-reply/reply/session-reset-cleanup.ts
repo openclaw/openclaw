@@ -26,9 +26,16 @@ import type { SessionTarget } from "../../sessions/session-controller.lifecycle.
 import { isReplyOperationPreBackendPhase } from "../../sessions/session-controller.state.js";
 import { abortContinuationDispatchClaims } from "../continuation/continuation-dispatch-claims.js";
 import { clearDelegateDispatchHedge } from "../continuation/delegate-dispatch-hedge.js";
-import { cancelSessionContinuations } from "../continuation/session-reset.js";
+import {
+  cancelSessionContinuations,
+  retireReplacedHeadContinuations,
+} from "../continuation/session-reset.js";
 import { clearTrackedContinuationTimers } from "../continuation/state.js";
 import { clearContinuationWorkDispatch } from "../continuation/work-dispatch.js";
+import {
+  releaseSessionWorkOperatorContinuations,
+  releaseWorkOperatorContinuation,
+} from "../continuation/work-operator-continuation.js";
 import { clearSessionQueues } from "./queue/cleanup.js";
 
 export class SessionResetCleanupError extends Error {}
@@ -160,11 +167,21 @@ export async function clearSessionResetRuntimeState(
     ...new Set(keys.flatMap((key) => (typeof key === "string" && key.trim() ? [key.trim()] : []))),
   ].filter((key) => isOwnedByResettingAgent(key, opts.agentId));
   const interruptContinuations = interruptsContinuationAuthority(opts.reason);
+  // Delete ends the session's custody. /new and /reset end only what the replaced head owned;
+  // the elections they keep, with their operator custody, are re-armed once the reset settles.
+  const endsSession = opts.reason === "delete";
   if (interruptContinuations) {
     // Durable authority must close before timers, waiters, or queues are destroyed.
     // A persistence failure leaves every transient claim path intact for retry.
     for (const key of ownedKeys) {
-      await cancelSessionContinuations(key, opts.assertCurrent);
+      if (endsSession) {
+        await cancelSessionContinuations(key, opts.assertCurrent);
+        releaseSessionWorkOperatorContinuations(key);
+        continue;
+      }
+      for (const recordId of await retireReplacedHeadContinuations(key, opts.assertCurrent)) {
+        releaseWorkOperatorContinuation(recordId);
+      }
     }
     opts.assertCurrent();
   }

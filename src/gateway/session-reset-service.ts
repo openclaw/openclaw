@@ -389,7 +389,7 @@ async function performPreparedGatewaySessionReset({
   let preparedLifecycle: SessionLifecycle.PreparedGatewaySessionLifecycle | undefined;
   let lifecyclePreparationCommitted = false;
   // Continuation: the reset keeps its continuation-elected delegate tree.
-  const retention = prepareGatewayResetRetention(resetTarget, params.reason);
+  const retention = prepareGatewayResetRetention(resetTarget);
   try {
     return await runSessionMutation({
       diagnosticLabel: "reset",
@@ -563,6 +563,7 @@ async function performPreparedGatewaySessionReset({
           target,
           sessionId: entry?.sessionId,
           sessionLifecycleRevision: resetLifecycleRevision,
+          reason: incognito ? "delete" : params.reason,
         });
         if (runtimeCleanupError) {
           return { ok: false, error: runtimeCleanupError };

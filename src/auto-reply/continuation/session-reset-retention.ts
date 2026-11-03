@@ -4,13 +4,16 @@
 // each mark against the session row: the successor revision adopted the tree, the old revision
 // means the reset did not commit, and a missing row orphans it. Results held while a mark was
 // pending are then released (adopted, aborted) or terminalized and the run stopped (orphaned).
-// Requester identity is never re-keyed.
+// Requester identity is never re-keyed. The elections the reset kept before admission (queued
+// wakes and delegates, session-reset.ts) lost their timers with the replaced head; settlement
+// re-arms them from custody while the session row still exists.
 import { randomUUID } from "node:crypto";
 import {
   type ActiveContinuationReset,
   runWithActiveContinuationReset,
 } from "../../agents/subagents/registry/subagent-continuation-reset-active.js";
 import { markContinuationRunsRetainedByReset } from "../../agents/subagents/registry/subagent-continuation-reset-retention.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -77,6 +80,14 @@ export function prepareContinuationResetRetention(params: {
         `[continuation:reset-retention] reset ${reset.resetId} for ${params.sessionKey} left unresolved until the next Gateway boot: ${String(error)}`,
       );
     }
+    try {
+      await rearmKeptElections(params);
+    } catch (error) {
+      // The kept records stay durable; the next turn's drain or Gateway boot re-drives them.
+      log.warn(
+        `[continuation:reset-retention] reset ${reset.resetId} for ${params.sessionKey} could not re-arm its kept elections: ${String(error)}`,
+      );
+    }
   };
   const scope: ContinuationResetRetentionScope = {
     successorRevision,
@@ -128,4 +139,22 @@ export function prepareContinuationResetRetention(params: {
     },
   };
   return scope;
+}
+
+/** Timers and arming run detached: a wake or spawn never runs inside the reset's mutation. */
+async function rearmKeptElections(params: { sessionKey: string; storePath: string }) {
+  const entry = loadSessionEntry({
+    hydrateSkillPromptRefs: false,
+    readConsistency: "latest",
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+  });
+  // A missing row is a deletion (or an incognito reset), which cancelled the custody.
+  if (!entry) {
+    return;
+  }
+  const [{ rearmContinuationWorkDispatch }, { rearmPendingContinuationDelegates }] =
+    await Promise.all([import("./work-dispatch.js"), import("./delegate-dispatch-recovery.js")]);
+  rearmContinuationWorkDispatch(params.sessionKey);
+  await rearmPendingContinuationDelegates({ ...params, entry });
 }

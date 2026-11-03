@@ -1,5 +1,6 @@
-// Explicit reset is an interruption boundary for continuation custody (RFC
-// docs/design/continue-work-signal-v2.md §5.4.4, "Reset at any boundary").
+// Lifecycle boundaries for continuation custody (RFC docs/design/continue-work-signal-v2.md
+// §5.4.4, "Reset at any boundary"): /new and /reset replace the conversational head and keep the
+// elections it has not driven yet; delete ends the session and terminalizes all of its custody.
 import { listContinuationRecords, updateContinuationRecords } from "./custody/custody-store.js";
 import type { ContinuationRecord, ContinuationRecordPatch } from "./custody/custody-store.types.js";
 
@@ -41,13 +42,42 @@ function stateHasAcceptedChild(record: ContinuationRecord): boolean {
   }
 }
 
-function resetPatch(record: ContinuationRecord, now: number): ContinuationRecordPatch | undefined {
+/** What a lifecycle boundary ends: the conversational head (/new, /reset) or the session (delete). */
+type SessionContinuationBoundary = "head" | "session";
+
+/**
+ * Elections no head has driven yet outlive a head swap: a queued continue_work wake, and a
+ * delegate queued or claimed. A claimed delegate's spawn still resolves at most once (requeued
+ * before dispatch, handed off, or interrupted). A wake already driving a turn belongs to the
+ * replaced head, and a post-compaction shard needs a rebind rule before it may outlive the
+ * context that staged it.
+ */
+function survivesHeadSwap(record: ContinuationRecord): boolean {
+  return record.kind === "delegate" || (record.kind === "work" && record.status === "queued");
+}
+
+function cancelPatch(
+  record: ContinuationRecord,
+  now: number,
+  phase: string,
+): ContinuationRecordPatch | undefined {
   if (record.status === "queued" || record.status === "running") {
     // Cancel is terminal: the same commit scrubs the attachment reference and
     // the store releases the payload file right after it (§5.4.9 item 6).
-    return { status: "cancelled", phase: "Cancelled by session reset", cancelRequestedAt: now };
+    return { status: "cancelled", phase, cancelRequestedAt: now };
   }
   return isUnacceptedPostCompactionHandoff(record) ? { cancelRequestedAt: now } : undefined;
+}
+
+function resetPatch(
+  record: ContinuationRecord,
+  now: number,
+  boundary: SessionContinuationBoundary,
+): ContinuationRecordPatch | undefined {
+  if (boundary === "head" && survivesHeadSwap(record)) {
+    return undefined;
+  }
+  return cancelPatch(record, now, "Cancelled by session reset");
 }
 
 /**
@@ -69,14 +99,35 @@ async function readRecordsForReset(
 }
 
 /**
- * Terminalize durable continuation work owned by one reset session.
- * `assertCurrent` is the reset's incarnation fence; it throws once a newer
+ * Terminalize all durable continuation work owned by a session that ends (delete).
+ * `assertCurrent` is the boundary's incarnation fence; it throws once a newer
  * incarnation owns the session.
  */
 export async function cancelSessionContinuations(
   sessionKey: string,
   assertCurrent: () => void,
-): Promise<void> {
+): Promise<string[]> {
+  return await terminalizeAtBoundary(sessionKey, assertCurrent, "session");
+}
+
+/**
+ * Retire the custody a /new or /reset head swap ends: a wake already driving the replaced head's
+ * turn and post-compaction shards. Queued wakes and delegates stay for the successor. Returns the
+ * record IDs it retired.
+ */
+export async function retireReplacedHeadContinuations(
+  sessionKey: string,
+  assertCurrent: () => void,
+): Promise<string[]> {
+  return await terminalizeAtBoundary(sessionKey, assertCurrent, "head");
+}
+
+async function terminalizeAtBoundary(
+  sessionKey: string,
+  assertCurrent: () => void,
+  boundary: SessionContinuationBoundary,
+): Promise<string[]> {
+  const retired: string[] = [];
   const now = Date.now();
   const records = await readRecordsForReset(`owned by ${sessionKey}`, () =>
     listContinuationRecords({ ownerSessionKey: sessionKey }),
@@ -84,7 +135,7 @@ export async function cancelSessionContinuations(
   for (const initial of records) {
     let current: ContinuationRecord | undefined = initial;
     for (let attempt = 0; current; attempt += 1) {
-      const patch = resetPatch(current, now);
+      const patch = resetPatch(current, now, boundary);
       if (!patch) {
         break;
       }
@@ -114,7 +165,11 @@ export async function cancelSessionContinuations(
           err instanceof Error ? err.message : String(err),
         );
       }
-      if (result.outcome === "applied" || result.outcome === "not_found") {
+      if (result.outcome === "applied") {
+        retired.push(current.recordId);
+        break;
+      }
+      if (result.outcome === "not_found") {
         break;
       }
       if (
@@ -131,4 +186,5 @@ export async function cancelSessionContinuations(
       )[0];
     }
   }
+  return retired;
 }

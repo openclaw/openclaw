@@ -43,7 +43,6 @@ import {
 import type { ContinuationWorkReasonCategory, PendingContinuationWork } from "./work-flow-state.js";
 import {
   captureWorkOperatorContinuation,
-  releaseSessionWorkOperatorContinuations,
   releaseWorkOperatorContinuation,
   resetWorkOperatorContinuationsForTests,
   retainWorkOperatorContinuation,
@@ -138,9 +137,11 @@ function clearIdleRetryControllersForTests(): void {
   idleRetryControllers.clear();
 }
 
-/** Cancel timers and idle waiters that can re-drive one session's durable work. */
+/**
+ * Cancel timers and idle waiters that can re-drive one session's durable work. Operator custody
+ * belongs to each election, so the boundary that ends an election releases it.
+ */
 export function clearContinuationWorkDispatch(sessionKey: string): void {
-  releaseSessionWorkOperatorContinuations(sessionKey);
   clearWorkTimer(sessionKey);
   clearIdleRetryFailureTimer(sessionKey);
   for (const trigger of [
@@ -152,6 +153,15 @@ export function clearContinuationWorkDispatch(sessionKey: string): void {
     idleRetryControllers.delete(key);
   }
   abortContinuationDispatchClaims(sessionKey);
+}
+
+/**
+ * A /new or /reset cleared the timers and idle waiters of the head it replaced. The hedge re-reads
+ * custody when it fires, so a kept wake keeps its due time, and arming again replaces the timer
+ * instead of adding a second wake.
+ */
+export function rearmContinuationWorkDispatch(sessionKey: string): void {
+  armWorkTimer(sessionKey, Date.now(), { includeIdleRetry: true });
 }
 
 function armWorkTimer(
