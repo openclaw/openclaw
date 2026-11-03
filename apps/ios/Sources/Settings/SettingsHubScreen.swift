@@ -23,7 +23,7 @@ struct SettingsHubScreen: View {
 
     @ViewBuilder private var root: some View {
         let config = self.appModel.activeGatewayConnectConfig
-        if config?.ingressAuthorization == nil, Self.usesDashboard(
+        if Self.usesDashboard(
             isOperatorConnected: self.appModel.isOperatorGatewayConnected,
             hasOperatorAdminScope: self.appModel.hasOperatorAdminScope,
             isDemoMode: self.appModel.isAppleReviewDemoModeEnabled,
