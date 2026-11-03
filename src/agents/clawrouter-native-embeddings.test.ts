@@ -1,11 +1,26 @@
 import { once } from "node:events";
 import { createServer } from "node:http";
 import { buffer } from "node:stream/consumers";
-import type { EmbeddingProviderCreateOptions } from "openclaw/plugin-sdk/embedding-providers";
-import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { acquireTestPortBlock, useIsolatedStateGuard } from "openclaw/plugin-sdk/test-env";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import plugin from "./index.js";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createCapturedPluginRegistration,
+  getActivePluginRegistry,
+  setActivePluginRegistry,
+  createEmptyPluginRegistry,
+  registerEmbeddingProvider,
+} from "../plugin-sdk/plugin-test-runtime.js";
+import { acquireTestPortBlock, useIsolatedStateGuard } from "../plugin-sdk/test-env.js";
+import type {
+  EmbeddingProviderCreateOptions,
+  EmbeddingProviderCreateResult,
+} from "../plugins/embedding-provider-types.js";
+import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
+import { resolveMemorySearchConfig } from "./memory-search.js";
+type MemoryEmbeddingOptions = Omit<EmbeddingProviderCreateOptions, "dimensions"> & {
+  provider: string;
+  fallback: string;
+  outputDimensionality?: number;
+};
 
 const axis = (dimensions: number) =>
   Array.from({ length: dimensions }, (_, i) => (i === 0 ? 1 : 0));
@@ -32,7 +47,12 @@ const cases = [
 describe("actual ClawRouter native memory embeddings", () => {
   useIsolatedStateGuard();
   const captured = createCapturedPluginRegistration();
-  plugin.register?.(captured.api);
+  let memory: {
+    createEmbeddingProvider: (
+      options: MemoryEmbeddingOptions,
+    ) => Promise<EmbeddingProviderCreateResult>;
+  };
+  let previousRegistry: ReturnType<typeof getActivePluginRegistry>;
   let baseUrl: string, releasePort: () => Promise<void>;
   let selected: readonly [string, string, string, number] = cases[0];
   let routeKind = "native",
@@ -141,6 +161,17 @@ describe("actual ClawRouter native memory embeddings", () => {
     });
   });
   beforeAll(async () => {
+    const entry = await loadBundledPluginFacade<{
+      default: { register?: (api: typeof captured.api) => void };
+    }>({
+      pluginId: "clawrouter",
+      artifactBasename: "index.js",
+    });
+    entry.default.register?.(captured.api);
+    memory = await loadBundledPluginFacade<typeof memory>({
+      pluginId: "memory-core",
+      artifactBasename: "runtime-api.js",
+    });
     const claim = await acquireTestPortBlock({ offsets: [0] });
     releasePort = claim.release;
     server.listen(claim.port, "127.0.0.1");
@@ -153,7 +184,11 @@ describe("actual ClawRouter native memory embeddings", () => {
     await closed;
     await releasePort();
   });
+  afterEach(() => setActivePluginRegistry(previousRegistry ?? createEmptyPluginRegistry()));
   beforeEach(() => {
+    previousRegistry = getActivePluginRegistry();
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    registerEmbeddingProvider(adapter());
     selected = cases[0];
     routeKind = "native";
     eligible = true;
@@ -164,6 +199,7 @@ describe("actual ClawRouter native memory embeddings", () => {
     model: selected[0] + "/" + selected[1],
     dimensions: selected[3],
     config: {
+      plugins: { enabled: false },
       models: {
         providers: {
           clawrouter: { baseUrl, models: [] },
@@ -178,6 +214,13 @@ describe("actual ClawRouter native memory embeddings", () => {
     remote: { apiKey: "synthetic-router-key" },
   });
   const adapter = () => captured.embeddingProviders.find((row) => row.id === "clawrouter")!;
+  const create = ({ dimensions, ...value }: EmbeddingProviderCreateOptions) =>
+    memory.createEmbeddingProvider({
+      ...value,
+      provider: "clawrouter",
+      fallback: "none",
+      outputDimensionality: dimensions,
+    });
   it.each(cases)(
     "runs %s/%s through native and manifest memory consumers",
     async (id, model, format, dimensions) => {
@@ -185,7 +228,7 @@ describe("actual ClawRouter native memory embeddings", () => {
       for (const kind of ["native", "manifest"]) {
         routeKind = kind;
         wires.length = 0;
-        const { provider } = await adapter().create(options());
+        const { provider } = await create(options());
         const onUsage = vi.fn();
         expect(await provider!.embed("query", { inputType: "query", onUsage })).toEqual(
           axis(dimensions),
@@ -223,8 +266,24 @@ describe("actual ClawRouter native memory embeddings", () => {
   );
   it("aggregates qualified Google parts, preserves prepared text and rejects incomplete vectors", async () => {
     selected = cases[5];
+    expect(
+      resolveMemorySearchConfig(
+        {
+          ...options().config,
+          memory: {
+            search: {
+              provider: "clawrouter",
+              model: "google-gemini/gemini-embedding-2",
+              fallback: "none",
+              multimodal: { enabled: true, modalities: ["image"] },
+            },
+          },
+        },
+        "main",
+      )?.multimodal.enabled,
+    ).toBe(true);
     routeKind = "manifest";
-    const { provider } = await adapter().create(options());
+    const { provider } = await create(options());
     expect(
       await provider!.embed({
         text: "",
@@ -263,9 +322,9 @@ describe("actual ClawRouter native memory embeddings", () => {
     expect(adapter().resolveIndexIdentity?.(cfg)).not.toEqual(
       adapter().resolveIndexIdentity?.({ ...cfg, dimensions: 512 }),
     );
-    const { provider } = await adapter().create({ ...cfg, dimensions: 384 });
+    const { provider } = await create({ ...cfg, dimensions: 384 });
     await expect(provider!.embed("bad dimension")).rejects.toThrow("dimensions");
-    const { provider: valid } = await adapter().create(cfg);
+    const { provider: valid } = await create(cfg);
     await expect(
       valid!.embed({
         text: "",

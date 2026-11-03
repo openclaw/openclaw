@@ -1,7 +1,6 @@
 import { voyageEmbeddingRequestFields } from "openclaw/plugin-sdk/embedding-native-runtime";
 import type {
   EmbeddingInput,
-  EmbeddingProviderAdapter,
   EmbeddingProviderCallOptions,
   EmbeddingProviderCreateOptions,
 } from "openclaw/plugin-sdk/embedding-providers";
@@ -10,6 +9,7 @@ import {
   embeddingProviderOwnsDestination,
   resolveRemoteEmbeddingClient,
   sanitizeEmbeddingCacheHeaders,
+  type MemoryEmbeddingProviderAdapter,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
   fetchWithTimeoutGuarded,
@@ -67,11 +67,16 @@ function indexIdentity(options: EmbeddingProviderCreateOptions) {
   };
 }
 
-export const clawrouterEmbeddingProvider: EmbeddingProviderAdapter = {
+export const clawrouterEmbeddingProvider: MemoryEmbeddingProviderAdapter = {
   id: "clawrouter",
   transport: "remote",
   authProviderId: "clawrouter",
   normalizeModel,
+  // Codec support only; each effect still requires a current qualified catalog offer.
+  supportsMultimodalEmbeddings: ({ model }) =>
+    /^(?:clawrouter\/)?(?:google|google-gemini|gemini)\/gemini-embedding-2(?:-preview)?$/u.test(
+      model.trim(),
+    ),
   resolveIndexIdentity: indexIdentity,
   create: async (options) => {
     const model = normalizeModel(options);
