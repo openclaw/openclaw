@@ -111,7 +111,7 @@ describe("earned Codex reset-credit inventory", () => {
 
   it("never spends earned credits when purchased monetary credits are available", () => {
     for (const credits of [{ hasCredits: true }, { unlimited: true }]) {
-      expect(chooseEarnedCodexResetCredit(blocked(oneCredit) && {
+      expect(chooseEarnedCodexResetCredit({
         ...blocked(oneCredit),
         rateLimits: { rateLimitReachedType: "rate_limit_reached", credits },
       }, accountId, Date.now())).toBeUndefined();
@@ -213,6 +213,25 @@ describe("earned Codex reset-credit recovery", () => {
     const h = harness({ isResettableBlocked: async (id: string) => id !== "openai:second" });
     expect(await recoverWithEarnedCodexReset(h.options)).toEqual({ status: "not-eligible" });
     expect(h.claim).not.toHaveBeenCalled();
+    expect(h.consume).not.toHaveBeenCalled();
+  });
+
+  it("joins a bounded peer result, then revalidates the chain without a new spend", async () => {
+    let reads = 0;
+    const h = harness({
+      claim: async () => ({ status: "busy" }),
+      waitForPending: async () => "settled",
+      readLimits: async (id: string) => {
+        if (id === "openai:second") {
+          return blocked({ availableCount: 0, credits: [] });
+        }
+        reads++;
+        return reads === 1 ? blocked(oneCredit) : recovered;
+      },
+    });
+    expect(await recoverWithEarnedCodexReset(h.options)).toEqual({
+      status: "available", profileId: "openai:first",
+    });
     expect(h.consume).not.toHaveBeenCalled();
   });
 
