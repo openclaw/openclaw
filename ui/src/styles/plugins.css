@@ -776,7 +776,19 @@
   letter-spacing: -0.02em;
 }
 
-.plugins-consent__name {
+/* Art beside the name, with version and meta aligned under it; close keeps the shell's spot. */
+.oc-dialog__header.plugins-consent__header {
+  grid-template-columns: auto minmax(0, 1fr) var(--overlay-modal-close-size);
+  column-gap: var(--space-3);
+  padding-block-start: var(--overlay-modal-padding);
+}
+
+.plugins-consent__header > .oc-dialog__close {
+  align-self: start;
+  margin-block-start: calc(12px - var(--overlay-modal-padding));
+}
+
+.plugins-consent__identity {
   min-width: 0;
   overflow-wrap: anywhere;
 }

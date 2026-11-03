@@ -5,7 +5,6 @@ import {
   PLUGIN_DECLARED_SURFACE_GROUPS,
   type PluginDeclaredSurfaceGroup,
 } from "../../../../packages/gateway-protocol/src/schema/plugin-declared-surface-groups.js";
-import { DialogHeader } from "../../components/solid/dialog-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import "../../components/modal-dialog.tsx";
 import {
@@ -361,8 +360,10 @@ function pluginOriginLabel(origin: string | undefined, official?: boolean): stri
   return label ? t(label) : (origin ?? (official === false ? t("pluginConsent.community") : null));
 }
 
+/** The header names the source kind and package; this adds only a distinct spec and the pin. */
 function renderProvenance(source: PluginInspectSource | undefined) {
-  if (!source) {
+  const spec = source?.spec && source.spec !== source.packageName ? source.spec : undefined;
+  if (!source || (!spec && !source.integrity)) {
     return undefined;
   }
   const integrityLabel =
@@ -374,11 +375,7 @@ function renderProvenance(source: PluginInspectSource | undefined) {
   return (
     <>
       <div class="plugins-consent__provenance">
-        <span>
-          {[t(SOURCE_KIND_LABELS[source.kind]), source.spec ?? source.packageName]
-            .filter(Boolean)
-            .join(" · ")}
-        </span>
+        {spec ? <span>{spec}</span> : undefined}
         {source.integrity ? (
           <span title={source.integrity}>
             {integrityLabel}: <code>{source.integrity.slice(0, 20)}…</code>
@@ -435,14 +432,16 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): JSX.
   const name = () => plugin()?.name ?? fallback().name;
   const version = () => plugin()?.version ?? fallback().version;
   const origin = () => pluginOriginLabel(plugin()?.origin, fallback().official);
-  // The source line below names the package, unless its spec is a URL or path without it.
-  const distinctPackage = () => {
+  // Origin, source and package once, under the name: "Global · ClawHub · calendar-plus".
+  const meta = () => {
     const source = inspection()?.source;
-    return source?.spec && source.packageName && !source.spec.includes(source.packageName)
-      ? source.packageName
-      : undefined;
+    const parts = [
+      origin(),
+      source ? t(SOURCE_KIND_LABELS[source.kind]) : undefined,
+      source?.packageName,
+    ];
+    return [...new Set(parts.filter(Boolean))].join(" · ");
   };
-  const meta = () => [origin(), distinctPackage()].filter(Boolean).join(" · ");
   const action = () =>
     props.busy ? t("pluginsPage.working") : t("pluginConsent.enableNamed", { name: name() });
   const confirmUnavailable = () =>
@@ -495,23 +494,30 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): JSX.
       onModal-cancel={() => props.onCancel()}
     >
       <section class="oc-dialog plugins-consent" data-plugin-consent={consent().intent.kind}>
-        <DialogHeader
-          title={
-            <>
-              <PluginArtTile
-                registerIcon={props.registerIcon}
-                slug={slug()}
-                name={name()}
-                iconUrl={props.iconUrl}
-                loading={props.iconLoading}
-              />
-              <span class="plugins-consent__name">{name()}</span>
+        <header class="oc-dialog__header plugins-consent__header">
+          <PluginArtTile
+            registerIcon={props.registerIcon}
+            slug={slug()}
+            name={name()}
+            iconUrl={props.iconUrl}
+            loading={props.iconLoading}
+          />
+          <div class="plugins-consent__identity">
+            <div class="plugins-detail__title">
+              <h2>{name()}</h2>
               {version() ? <span class="plugins-version">{`v${version()}`}</span> : undefined}
-            </>
-          }
-          description={meta() ? <p>{meta()}</p> : undefined}
-          onClose={() => props.onCancel()}
-        />
+            </div>
+            {meta() ? <p class="plugins-consent__description">{meta()}</p> : undefined}
+          </div>
+          <button
+            type="button"
+            class="oc-dialog__close"
+            aria-label={t("common.close")}
+            onClick={() => props.onCancel()}
+          >
+            <Icon name="x" />
+          </button>
+        </header>
         <div class="oc-dialog__body">
           <Loading
             on={receipt()}
