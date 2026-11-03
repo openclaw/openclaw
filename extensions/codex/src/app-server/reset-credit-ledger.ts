@@ -140,9 +140,13 @@ export function createCodexResetCreditLedger(deps: LedgerDeps) {
         observed.comparison,
         { operation: "update", action: "set", value: decision.next },
       );
-      if (result.status === "applied" || result.status === "unchanged") {
+      if (result.status === "applied") {
         decision.onCommit?.();
         return decision.value;
+      }
+      if (result.status === "unchanged") {
+        // Never grant ownership without evidence the durable claim was written.
+        throw new Error("Codex reset ledger write was not committed");
       }
       // On conflict, compare again against the latest committed state.
     }
