@@ -424,8 +424,17 @@ describeControlUiE2e("Plugin overview", () => {
     expect(modalBounds!.height).toBeLessThanOrEqual(804);
     await captureScreenshot(page, "overview-tool-mobile.png", "viewport");
     const body = page.locator(".plugin-tool-preview__body");
+    // Inputs lead, so a long description never pushes them out of the first view.
+    expect(
+      await body.evaluate(
+        (element) =>
+          element.scrollTop === 0 &&
+          element.querySelector(".plugin-tool-preview__parameters")!.getBoundingClientRect()
+            .bottom <= element.getBoundingClientRect().bottom,
+      ),
+    ).toBe(true);
     await body.evaluate((element) => {
-      element.querySelector("p")?.scrollIntoView({ block: "end" });
+      element.scrollTop = element.scrollHeight;
     });
     expect(
       await body.evaluate((element) => {

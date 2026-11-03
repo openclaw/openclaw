@@ -1339,6 +1339,9 @@ openclaw-plugins-page
   overflow-wrap: anywhere;
   line-height: 1.6;
 }
+.plugin-tool-preview__parameters + p {
+  margin-block-start: var(--space-2);
+}
 .plugin-tool-preview__parameters h3 {
   margin: 0 0 12px;
   font-size: var(--control-ui-text-base);

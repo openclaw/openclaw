@@ -23,7 +23,6 @@ export function showPluginToolPreview(tool: PluginToolPreview, signal: AbortSign
         <article class="oc-dialog plugin-tool-preview">
           <DialogHeader title={tool.name} onClose={() => finish(undefined)} />
           <div class="oc-dialog__body plugin-tool-preview__body">
-            {tool.description?.trim() ? <p>{tool.description}</p> : ""}
             {tool.parameters?.length ? (
               <section class="plugin-tool-preview__parameters">
                 <h3>{t("pluginsPage.detailToolInputs")}</h3>
@@ -51,6 +50,7 @@ export function showPluginToolPreview(tool: PluginToolPreview, signal: AbortSign
             ) : (
               ""
             )}
+            {tool.description?.trim() ? <p>{tool.description}</p> : ""}
           </div>
         </article>
       </openclaw-modal-dialog>
