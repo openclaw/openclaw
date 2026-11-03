@@ -1260,16 +1260,40 @@ openclaw-plugins-page
 .plugin-mcp-details dd {
   margin: 0;
 }
-/* A file's role is the one row glyph that informs, so it stays, without a box. */
+/* Each section keeps its own icon, in main's box, size and accent color. */
 .plugin-capability__icon {
   display: grid;
   place-items: center;
-  flex: 0 0 var(--list-row-icon-size);
-  color: var(--muted);
+  flex: 0 0 36px;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--accent);
 }
 .plugin-capability__icon svg {
-  width: var(--list-row-icon-size);
-  height: var(--list-row-icon-size);
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+/* With the icon in the row, the shared narrow rule would drop the actions under the
+   icon; keep them at the row end and stack status over the button, as main did. */
+@media (max-width: 640px) {
+  .plugin-capabilities .settings-row:has(> .plugin-capability__icon) {
+    flex-wrap: nowrap;
+  }
+  .plugin-capabilities .settings-row:has(> .plugin-capability__icon) > .settings-row__control {
+    width: auto;
+    max-width: 50%;
+    justify-content: flex-end;
+  }
+}
+@media (max-width: 560px) {
+  .plugin-capabilities .settings-row:has(> .plugin-capability__icon) > .settings-row__control {
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 6px;
+  }
 }
 .plugin-tool-dialog {
   --openclaw-modal-width: 760px;

@@ -303,6 +303,7 @@ function PluginCapabilityRowControl(props: { value: PluginCapabilityRow; chevron
 export function renderPluginCapabilitySection(
   title: string,
   values: PluginCapabilityRow[],
+  icon: () => JSX.Element,
 ): JSX.Element {
   return values.length ? (
     <div class="plugin-capabilities">
@@ -311,6 +312,9 @@ export function renderPluginCapabilitySection(
           {(value) => {
             const content = (chevron: boolean) => (
               <>
+                <span class="plugin-capability__icon" aria-hidden="true">
+                  {icon()}
+                </span>
                 <PluginCapabilityRowText value={value} />
                 <PluginCapabilityRowControl value={value} chevron={chevron} />
               </>
@@ -386,6 +390,7 @@ function renderPluginMcpServers(
         ),
       };
     }),
+    () => <Icon name="plug" />,
   );
 }
 
@@ -424,6 +429,7 @@ function renderPluginDeclaredCapabilities(
       name: t(`pluginsPage.${key}.name`),
       description: t(`pluginsPage.${key}.description`),
     })),
+    () => <Icon name="layers" />,
   );
 }
 
@@ -441,8 +447,12 @@ export function renderPluginContentCapabilities(params: {
     <>
       {renderPluginDeclaredCapabilities(params.contracts, params.uiCapabilities)}
       {params.skillsSection ??
-        renderPluginCapabilitySection(t("pluginsPage.detailTabs.skills"), params.skills)}
-      {renderPluginCapabilitySection(t("pluginsPage.detailTools"), params.tools)}
+        renderPluginCapabilitySection(t("pluginsPage.detailTabs.skills"), params.skills, () => (
+          <Icon name="bookOpenText" />
+        ))}
+      {renderPluginCapabilitySection(t("pluginsPage.detailTools"), params.tools, () => (
+        <Icon name="wrench" />
+      ))}
       {renderPluginMcpServers(params.mcpServers, params.mcpServerDetails, params.mcpDescription)}
     </>
   );

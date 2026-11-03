@@ -4,6 +4,7 @@ import type {
   PluginsSkillsReadResult,
 } from "../../../../packages/gateway-protocol/src/schema/plugin-skills.ts";
 import "../../components/modal-dialog.tsx";
+import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsLoadingSkeleton } from "../../components/solid/settings-ui.tsx";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { formatUiError, UserFacingError } from "../../lib/format-error.ts";
@@ -304,6 +305,9 @@ export function renderPluginSkillsSection(
       {PluginCapabilitySection(
         t("pluginsPage.detailTabs.skills"),
         skills.map((skill) => ({ ...skill, onOpen: () => onOpen(skill.name) })),
+        () => (
+          <Icon name="bookOpenText" />
+        ),
       )}
     </div>
   );

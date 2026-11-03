@@ -406,6 +406,9 @@ function PluginOverview(props: DetailProps): JSX.Element {
                   />
                 ),
               })),
+              () => (
+                <Icon name="circleUser" />
+              ),
             )}
             {renderPluginCapabilitySection(
               t("pluginsPage.auth.credentials"),
@@ -420,6 +423,9 @@ function PluginOverview(props: DetailProps): JSX.Element {
                   />
                 ),
               })),
+              () => (
+                <Icon name="key" />
+              ),
             )}
             {renderPluginContentCapabilities({
               contracts: props.inspection?.overview?.capabilities?.contracts,
