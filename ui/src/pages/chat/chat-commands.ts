@@ -39,6 +39,7 @@ export type ChatCommandHost = Parameters<typeof handleAbortChat>[0] &
     sessions: SessionCapability;
     chatModelCatalog: ModelCatalogEntry[];
     createChatSession?: () => Promise<boolean>;
+    forkChatSession?: (title?: string) => Promise<ChatCommandDispatchResult>;
     confirmConversationReset?: () => Promise<boolean>;
     exportCurrentChat?: () => Promise<ChatExportResult> | ChatExportResult;
   } & UiSessionDefaultsHost &
@@ -119,7 +120,7 @@ export function readChatResetTargetAccess(
 }
 
 export function shouldQueueLocalSlashCommand(name: string): boolean {
-  return !["stop", "export-session", "steer", "redirect", "new"].includes(name);
+  return !["stop", "export-session", "steer", "redirect", "new", "fork"].includes(name);
 }
 
 export async function confirmConversationResetForCurrentSession(

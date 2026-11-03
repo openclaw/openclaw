@@ -16,6 +16,7 @@ import type {
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { applySharedChannelFieldHelp } from "../src/config/schema.channel-field-help.js";
 import { buildBaseHints } from "../src/config/schema.hints.js";
+import { buildConfigSchemaCore } from "../src/config/schema.js";
 import { applyConfigTierHints, applyResolvedConfigTierHints } from "../src/config/schema.tiers.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../src/gateway/control-ui-contract.js";
 import {
@@ -77,6 +78,7 @@ import {
   pluginLifecycleMockInitScript,
 } from "./control-ui-mock-plugins.ts";
 import { createControlUiPreviewInitScript } from "./control-ui-mock-preview.ts";
+import { buildSearchMocks } from "./control-ui-mock-search.ts";
 import {
   createSessionDesignPortalFixturePlugin,
   createSessionDesignDesktopFixturePlugin,
@@ -97,6 +99,7 @@ const FIXTURES = [
   "backgrounds",
   "board",
   "code-fences",
+  "config-full",
   "dashboards",
   "goal",
   "header-idle",
@@ -1027,7 +1030,9 @@ const MCP_EFFECTIVE_TOOLS = {
  * across a few real section keys, and `config.get` returns a matching
  * snapshot with the hash `config.set`/`config.apply` are guarded by.
  */
-function buildConfigMocks(options: { swarmEnabled?: boolean; workboardEnabled?: boolean } = {}) {
+function buildConfigMocks(
+  options: { fullSchema?: boolean; swarmEnabled?: boolean; workboardEnabled?: boolean } = {},
+) {
   const config = {
     logging: { level: "info", consoleTimestamps: true },
     messages: { queueLimit: 5, responsePrefix: "" },
@@ -1245,6 +1250,19 @@ function buildConfigMocks(options: { swarmEnabled?: boolean; workboardEnabled?: 
       },
     },
   };
+  // The schema the Gateway generates, so every generated settings form shows its real labels,
+  // help and tiers. Channels keep the fixture's entry: plugins supply theirs at runtime.
+  const full = options.fullSchema ? buildConfigSchemaCore() : null;
+  if (full) {
+    Object.assign(config, {
+      gateway: { ...config.gateway, trustedProxies: ["10.0.0.1", "10.0.0.2"] },
+      browser: { enabled: true, defaultProfile: "work", profiles: { work: { cdpPort: 18800 } } },
+      agents: {
+        ...config.agents,
+        defaults: { ...config.agents.defaults, model: "openai/gpt-5.2" },
+      },
+    });
+  }
   const get = {
     path: "~/.openclaw/openclaw.json",
     exists: true,
@@ -1274,15 +1292,24 @@ function buildConfigMocks(options: { swarmEnabled?: boolean; workboardEnabled?: 
       },
     },
     schema: {
-      schema,
+      schema: full
+        ? {
+            ...full.schema,
+            properties: {
+              ...(full.schema as { properties?: object }).properties,
+              channels: schema.properties.channels,
+            },
+          }
+        : schema,
       // Resolve tiers and shared channel help the way the gateway does so the
       // mock reproduces the real split and subtext instead of bare labels.
       uiHints: applySharedChannelFieldHelp(
         applyResolvedConfigTierHints(
-          schema,
+          full ? (full.schema as typeof schema) : schema,
           // Seed with base hints so the mock carries the gateway's labels,
           // help, and docsUrl metadata instead of bare tier scaffolding.
-          applyConfigTierHints(buildBaseHints(), { includePluginOwnedChannels: true }),
+          full?.uiHints ??
+            applyConfigTierHints(buildBaseHints(), { includePluginOwnedChannels: true }),
         ),
       ),
       version: "mock-config-schema",
@@ -2252,6 +2279,7 @@ async function createChatPickerScenario(
     : modelProviders.authStatus;
   const channelWizard = buildChannelWizardMocks();
   const configMocks = buildConfigMocks({
+    fullSchema: fixture === "config-full",
     swarmEnabled: fixture === "swarm",
     workboardEnabled: fixture === "workboard" || fixture === "workboard-states",
   });
@@ -2394,6 +2422,8 @@ async function createChatPickerScenario(
       "chat.abort",
       "chat.history",
       "chat.send",
+      // Only this fixture's forms are for editing; the others stay read-only as before.
+      ...(fixture === "config-full" ? ["config.apply", "config.set"] : []),
       "config.patch",
       "config.schema",
       "config.set",
@@ -2899,6 +2929,7 @@ async function createChatPickerScenario(
         qrDataUrl: whatsappLoginQrDataUrl,
       },
       "web.login.wait": { message: "Linked.", connected: true },
+      ...buildSearchMocks(configMocks.get.hash),
       "wizard.start": channelWizard.start,
       "wizard.next": channelWizard.next,
       "wizard.cancel": { status: "cancelled" },
@@ -3002,8 +3033,11 @@ async function createChatPickerScenario(
         gatewayUrl: "wss://gateway.example.test",
         qrDataUrl: devicePairQrDataUrl,
         setupCode: devicePairSetupCode,
+        setupId: "mock-pair-setup",
+        expiresAtMs: Date.now() + 86_400_000,
         urlSource: "mock",
       },
+      "device.pair.setupStatus": {},
       "node.list": {
         nodes: [
           createOfflineDeviceNode(),

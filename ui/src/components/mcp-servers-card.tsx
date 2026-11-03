@@ -2,7 +2,6 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX } from "@solidjs/web";
 import {
   action,
-  createEffect,
   createMemo,
   createOptimistic,
   createSignal,
@@ -374,10 +373,8 @@ export function McpServersCard(props: McpServersCardProps) {
     const client = snapshot.client;
     const sessionKey = snapshot.sessionKey?.trim();
     const savedConfig = context.runtimeConfig.state.configSnapshot;
-    if (!savedConfig) {
-      return;
-    }
     if (
+      !savedConfig ||
       !client ||
       !sessionKey ||
       !canCallGatewayMethod(snapshot, "tools.effective", "operator.read")
@@ -394,6 +391,7 @@ export function McpServersCard(props: McpServersCardProps) {
       return;
     }
     toolsReadKey = key;
+    setToolsRead(null);
     const read = ++toolsReadId;
     const servers = savedServers(savedConfig);
     try {
@@ -414,24 +412,19 @@ export function McpServersCard(props: McpServersCardProps) {
       if (snapshot.hello !== hello) {
         hello = snapshot.hello;
         login.reset();
-        void readEffectiveTools();
       }
+      void readEffectiveTools();
     });
+    const stopConfig = context.runtimeConfig.subscribe(() => void readEffectiveTools());
     const stopSelection = context.agentSelection.subscribe(() => login.reset());
+    void readEffectiveTools();
     return () => {
       active = false;
       stopGateway();
+      stopConfig();
       stopSelection();
     };
   });
-  createEffect(
-    () => Boolean(config.read().configSnapshot),
-    (loaded) => {
-      if (loaded) {
-        void readEffectiveTools();
-      }
-    },
-  );
 
   const mutationBlockedReason = (): string | null => {
     const snapshot = gateway.read().snapshot;

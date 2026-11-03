@@ -41,7 +41,7 @@ function editArgs(saved: readonly unknown[], text: string): unknown[] {
   }
   let tailArgs = 0;
   let tailLines = 0;
-  for (const span of spans.slice(headArgs).reverse()) {
+  for (const span of spans.slice(headArgs).toReversed()) {
     if (tailLines + span > tail) {
       break;
     }
@@ -89,9 +89,7 @@ export function McpServerEditor(props: {
     return { ...asConfigRecord(next), ...Object.fromEntries(outside.map((k) => [k, current[k]])) };
   };
   const hints = createMemo(() => mcpServerHints(props.config.uiHints));
-  const schema = createMemo(
-    () => mcpServerSchema(props.config.schema, value(), stdio()) as JsonSchema | null,
-  );
+  const schema = createMemo(() => mcpServerSchema(props.config.schema, value(), stdio()));
   const disabled = () =>
     props.config.loading ||
     props.config.saving ||

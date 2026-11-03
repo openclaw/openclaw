@@ -241,13 +241,6 @@
     },
     {
       "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/about/view.tsx",
-      "text": "v"
-    },
-    {
-      "count": 1,
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/pages/activity/session-activity-view.test-harness.ts",
@@ -301,20 +294,6 @@
       "name": "text",
       "path": "ui/src/pages/chat/components/chat-message-timestamp-view.tsx",
       "text": "% ctx"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "aria-label",
-      "path": "ui/src/pages/chat/components/chat-welcome.tsx",
-      "text": "Assistant"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-welcome.tsx",
-      "text": "Assistant"
     },
     {
       "count": 1,
@@ -392,13 +371,6 @@
       "name": "text",
       "path": "ui/src/pages/debug/debug-page.tsx",
       "text": "openclaw security audit --deep"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/devices/view-exec-approvals.tsx",
-      "text": "exec host=gateway/node"
     },
     {
       "count": 1,

@@ -184,7 +184,7 @@ describe("McpServerEditor", () => {
     expect(keys).not.toContain("url");
     expect(keys).not.toContain("transport");
     const add = [...container.querySelectorAll<HTMLButtonElement>(".cfg-map button")].find(
-      (button) => button.textContent?.includes("Add Entry"),
+      (button) => button.textContent?.trim() === "Add",
     )!;
     add.click();
     flush();

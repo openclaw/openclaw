@@ -58,7 +58,6 @@ const enMcp = {
     fieldOauth: "OAuth sign-in",
   },
   mcpPage: {
-    intro: "Connect and manage MCP servers that provide tools to OpenClaw.",
     servers: "Servers",
     settings: "Settings",
     apps: "MCP Apps",

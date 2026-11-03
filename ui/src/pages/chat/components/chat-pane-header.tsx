@@ -15,7 +15,6 @@ import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { HoverMarquee } from "../../../lib/solid/hover-marquee.tsx";
 import { PaneHeaderPresence, PaneSubagentStop } from "../chat-pane-header-view.tsx";
-import { usePanePresentation } from "../chat-pane-presentation.ts";
 import { ChatDetails } from "./chat-details.tsx";
 import {
   ChatPanelHeaderActions,
@@ -27,7 +26,6 @@ import { AgentCrumb, IdentityCrumbs, ProjectCrumb } from "./chat-pane-header-ide
 import type { ChatPaneHeaderPresentation, ChatPaneHeaderProps } from "./chat-pane-header.types.ts";
 import { ChatPaneMobileComposition } from "./chat-pane-mobile-composition.tsx";
 import { ChatPanePlacement } from "./chat-pane-placement.tsx";
-import { ChatPaneVersionsMenu } from "./chat-pane-versions-menu.tsx";
 import { ChatSessionPublicIndicator } from "./chat-session-sharing-shared.tsx";
 import {
   ChatSessionSharing,
@@ -176,7 +174,6 @@ function ChatPaneHeaderChrome(
     props.session.placement.runner.status === "offline";
   const hasSharingControl = () =>
     props.sharingControl !== undefined || (!props.narrow && props.sharingPlaceholder !== undefined);
-  const presented = usePanePresentation(() => props.presented);
   const incognito = () =>
     (props.incognito ?? props.session?.incognito) || isIncognitoSessionKey(props.session?.key);
 
@@ -232,24 +229,8 @@ function ChatPaneHeaderChrome(
             <IdentityCrumbs {...props} />
           </Show>
           <Show when={!props.mergedChrome}>
-            <div
-              class="chat-pane__identity-actions"
-              style={{
-                "--chat-pane-menu-count": (props.hasVersions ?? props.branches.length > 1) ? 2 : 1,
-              }}
-            >
+            <div class="chat-pane__identity-actions">
               {props.sessionMenu}
-              <Show when={presented()}>
-                <ChatPaneVersionsMenu
-                  menu={{
-                    catalog: props.catalog,
-                    hasVersions: props.hasVersions,
-                    branches: props.branches,
-                    branchSwitchDisabledReason: props.branchSwitchDisabledReason,
-                    onBranchSelect: props.onBranchSelect,
-                  }}
-                />
-              </Show>
               <Show when={!props.gatewayStatus?.kind && deviceOffline() && props.machineName}>
                 <span
                   ref={(element) => {
@@ -351,17 +332,6 @@ function ChatPaneHeaderChrome(
               <Icon name="messageSquare" />
               <span>{t("chat.sidePanel.conversation")}</span>
             </button>
-          </Show>
-          <Show when={props.mergedChrome && presented()}>
-            <ChatPaneVersionsMenu
-              menu={{
-                catalog: props.catalog,
-                hasVersions: props.hasVersions,
-                branches: props.branches,
-                branchSwitchDisabledReason: props.branchSwitchDisabledReason,
-                onBranchSelect: props.onBranchSelect,
-              }}
-            />
           </Show>
           <div class="chat-pane__actions">
             <Show when={!props.mergedChrome}>

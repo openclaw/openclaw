@@ -98,6 +98,13 @@ describe("install runtime enforcement", () => {
       encoding: "utf8",
     }).stdout.trim();
     expect(result.stderr).toContain(`detected Node ${nodeVersion}`);
+
+    // npx shows neither this output nor the failure, so its launcher reports the runtime.
+    const npxResult = spawnSync(testNodeExecPath, [scriptPath], {
+      encoding: "utf8",
+      env: { ...process.env, npm_command: "exec" },
+    });
+    expect(npxResult.status).toBe(0);
   });
 
   it.each([

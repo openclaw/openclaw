@@ -371,7 +371,20 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
   },
   connection: {
     ready: "openclaw-connection-page .settings-page",
-    action: disclosure("openclaw-connection-page details"),
+    action: {
+      label: "Reveal the Gateway secret field",
+      run: async (page) => {
+        const toggle = page.locator(
+          'openclaw-connection-page button[aria-label="Toggle secret visibility"]',
+        );
+        await toggle.click();
+        await page
+          .locator('openclaw-connection-page input[aria-label="Gateway secret"][type="text"]')
+          .waitFor({ state: "visible" });
+        await frames(page);
+        return { opened: true };
+      },
+    },
   },
   custodian: {
     ready: "openclaw-custodian-page .custodian-surface",

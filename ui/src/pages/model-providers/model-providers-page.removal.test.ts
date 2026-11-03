@@ -86,7 +86,7 @@ async function removalHarness(apiKey: unknown = "__OPENCLAW_REDACTED__", withAcc
   async function confirm() {
     row.querySelector<HTMLButtonElement>(".provider-row__remove")!.click();
     await waitForSolid(() =>
-      expect(document.body.querySelector(".exec-approval-actions button.danger")).not.toBeNull(),
+      expect(document.body.querySelector("openclaw-modal-actions button.danger")).not.toBeNull(),
     );
     const { modal } = await getRenderedModalDialog(document.body);
     const copy = modal.textContent ?? "";

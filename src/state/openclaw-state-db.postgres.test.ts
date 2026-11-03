@@ -4,9 +4,10 @@ import path from "node:path";
 import { getEnvironmentData, setEnvironmentData, type Worker } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import pg from "pg";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { quarantineAgentDeletionJournal } from "../commands/doctor-agent-deletion-journal-quarantine.js";
+import { backupDoctorPostgresMigration } from "../commands/doctor-postgres-migration.js";
 import { prepareDoctorDatabaseMigrations } from "../commands/doctor-schema-migrations.js";
 import {
   commitDaemonRuntimePin,
@@ -17,6 +18,7 @@ import {
 } from "../daemon/runtime-pin-state.js";
 import { withDaemonRuntimePinStore } from "../daemon/runtime-pin-store.js";
 import { createWorkerEnvironmentStore } from "../gateway/worker-environments/store.js";
+import { openClientCredentialCustody } from "../infra/client-credential-store.js";
 import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 import {
   conformanceWorkerResult,
@@ -28,6 +30,10 @@ import {
   postgresIndexOrderingMigration,
   withLegacyPostgresIndexOrdering,
 } from "../infra/database-engine/postgres-index-ordering.js";
+import {
+  generateStoredDeviceIdentity,
+  storedDeviceIdentityToRow,
+} from "../infra/device-identity-material.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
@@ -35,24 +41,21 @@ import {
   captureSqliteDatabaseAdmissions,
   retireSqliteDatabaseAdmissionForPath,
 } from "../infra/sqlite-database-admission.js";
+import * as readOnlyWorker from "../infra/sqlite-readonly-worker.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../infra/sqlite-worker-contract.js";
 import { migrateDaemonRuntimePins } from "../infra/state-migrations.daemon-runtime-pins.js";
-import { readMeetingTranscriptMigrationDetectionState } from "../infra/state-migrations.meeting-transcripts-detection.js";
+import { createUpdateDoctorDatabaseWriteCapture } from "../infra/update-doctor-result.js";
 import { createUpdateRunAsync, recordUpdateRunStepAsync } from "../infra/update-run-write.async.js";
-import { readActiveOpenClawAgentDatabaseLeasesReadOnly } from "./openclaw-agent-db-lease-inspection.js";
 import { repairOpenClawAgentDatabasePaths } from "./openclaw-agent-db-path-repair.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
-import { openDoctorStateSchemaReadAdmission } from "./openclaw-state-db-doctor-schema.js";
 import { stateEngineSchema } from "./openclaw-state-db-engine.js";
 import {
   executeExistingOpenClawStateRead,
-  withArtifactPreservingStateReads,
   withExistingOpenClawStateDatabaseReadOnly,
   withOpenClawStateDatabaseReadSnapshot,
 } from "./openclaw-state-db-readonly.js";
 import {
-  ensureAgentDatabaseLeaseSchema,
   ensureGitHubPublicationSchema,
   ensurePersonalGitHubPublicationSchema,
   ensureRepositoryGitHubPublicationSchema,
@@ -64,17 +67,15 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   closeOpenClawStateDatabaseByPathAsync,
-  detectOpenClawStateDatabaseSchemaMigrations,
   openOpenClawStateDatabase,
-  prepareOpenClawStateDatabaseSchema,
   repairOpenClawStateDatabaseIndexesForDoctor,
-  repairOpenClawStateDatabaseReadabilityForDoctor,
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import {
   cleanupPostgresStateFixture,
   installPostgresStateFixture,
+  readPostgresStateFixtureArtifacts as readStateArtifacts,
 } from "./openclaw-state-db.postgres-fixture.test-support.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import { executeOpenClawStateWorker } from "./openclaw-state-worker-store.js";
@@ -85,16 +86,6 @@ const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.
 const connection = typeof configured === "string" ? configured : undefined;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 type Result = { namespace: string; admissionId: string; catalogReads: number; threadId: number };
-function readStateArtifacts(directory: string, pathname: string) {
-  const credentialPath = path.join(directory, "client", "credentials.sqlite");
-  expect([
-    fs.readdirSync(directory).toSorted(),
-    fs.readdirSync(path.dirname(pathname)).toSorted(),
-    fs.readdirSync(path.dirname(credentialPath)).toSorted(),
-  ]).toEqual([["client", "state"], ["openclaw.sqlite"], ["credentials.sqlite"]]);
-  return [fs.readFileSync(pathname), fs.readFileSync(credentialPath)];
-}
-
 const legacyIndexOrderingSql = withLegacyPostgresIndexOrdering(
   postgresIndexOrderingMigration(
     [statePostgresRuntime.eagerSql, ...statePostgresRuntime.fragments.map(({ sql }) => sql)].join(
@@ -520,95 +511,15 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
     }
   });
 
-  it("reads warm and cold discovery state without copying or changing the PostgreSQL anchor", async () => {
-    const directory = tempDirs.make("state-discovery-postgres-");
-    const env = { ...process.env, OPENCLAW_STATE_DIR: directory };
-    const pathname = resolveOpenClawStateSqlitePath(env);
-    const options = { path: pathname, env };
-    const client = new pg.Client({ connectionString: connection });
-    await client.connect();
-    installPostgresStateFixture(connection!, "state_discovery_conformance");
-    let namespace: string | undefined;
-    const stateKey = "discovery.fixture";
-    const valueJson = JSON.stringify({ source: "PostgreSQL" });
-    try {
-      namespace = withEngineStoreAdmission(() =>
-        runOpenClawStateWriteTransaction(({ db }) => {
-          ensureAgentDatabaseLeaseSchema(db);
-          db.exec(`INSERT INTO migration_runs (id, started_at, status, report_json)
-            VALUES ('meeting-import', 1, 'imported', '{}');
-            INSERT INTO migration_sources
-            (source_key, migration_kind, source_path, target_table, last_run_id, status, imported_at, report_json)
-            VALUES ('meeting-import', 'meeting-transcripts-files-v1', 'synthetic', 'meeting_transcript_sessions', 'meeting-import', 'imported', 1, '{}');`);
-          db.prepare(
-            "INSERT INTO agent_database_leases (lease_id, agent_id, path, owner_pid, owner_start_time, opened_at) VALUES (?, ?, ?, ?, NULL, ?)",
-          ).run("diagnostic-lease", "main", path.join(directory, "agent.sqlite"), process.pid, 1);
-          db.prepare(
-            "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
-          ).run(stateKey, valueJson, 1);
-          return expectDefined(getPostgresPhysicalFacts(db), "PostgreSQL fixture").namespace;
-        }, options),
-      );
-      const artifacts = readStateArtifacts(directory, pathname);
-      let prepared: Promise<{ changes: string[]; warnings: string[] }> | undefined;
-      withEngineStoreAdmission(() => {
-        prepared = prepareOpenClawStateDatabaseSchema(options, "doctor-preparation");
-        for (const repair of [
-          repairOpenClawStateDatabaseIndexesForDoctor,
-          repairOpenClawStateDatabaseReadabilityForDoctor,
-        ]) {
-          expect(repair(options)).toEqual({ changes: [], warnings: [] });
-        }
-      });
-      expect(await prepared).toEqual({ changes: [], warnings: [] });
-      for (const source of ["warm", "cold"]) {
-        if (source === "cold") {
-          await closeOpenClawStateDatabaseAsync();
-        }
-        withEngineStoreAdmission(() => {
-          expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([]);
-        });
-        for (const artifactPreservingReadOnly of [false, true]) {
-          expect(
-            (
-              await readMeetingTranscriptMigrationDetectionState({
-                env,
-                artifactPreservingReadOnly,
-              })
-            ).pendingImportCount,
-          ).toBe(1);
-        }
-        expect(
-          (
-            await readActiveOpenClawAgentDatabaseLeasesReadOnly(
-              options,
-              openDoctorStateSchemaReadAdmission,
-            )
-          ).map((row) => row.lease_id),
-        ).toEqual(["diagnostic-lease"]);
-        const reply = await withArtifactPreservingStateReads(() =>
-          withOpenClawStateDatabaseReadSnapshot(
-            () =>
-              executeExistingOpenClawStateRead(options, { type: "tui.lastSession.read", stateKey }),
-            options,
-          ),
-        );
-        expect(reply?.row).toEqual({ value_json: valueJson, updated_at_ms: 1 });
-        expect(readStateArtifacts(directory, pathname)).toEqual(artifacts);
-      }
-      using anchor = openNodeSqliteDatabase(pathname, { readOnly: true });
-      expect(
-        anchor.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all(),
-      ).toEqual([{ name: "openclaw_engine_anchor" }]);
-    } finally {
-      await closeOpenClawStateDatabaseAsync();
-      await cleanupPostgresStateFixture(client, pathname, namespace);
-    }
-  });
-
-  it.each([25, 26, 27, 28])(
-    "migrates version %i while preserving heads, leases, lazy fragments and publication intent",
-    async (previousVersion) => {
+  it.each([
+    { previousVersion: 25, mode: "declared migration" },
+    { previousVersion: 26, mode: "declared migration" },
+    { previousVersion: 27, mode: "declared migration" },
+    { previousVersion: 28, mode: "declared migration" },
+    { previousVersion: 28, mode: "cold Doctor" },
+  ])(
+    "migrates version $previousVersion through $mode while preserving heads, leases, lazy fragments and publication intent",
+    async ({ previousVersion, mode }) => {
       const directory = tempDirs.make("state-layout-postgres-");
       const pathname = path.join(directory, "state", "openclaw.sqlite");
       const env = {
@@ -682,6 +593,26 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
         const retainedPublication = await client.query(
           `SELECT * FROM "${namespace}".github_publication_requests WHERE request_id = 'retained-publication'`,
         );
+        const credential =
+          mode === "cold Doctor"
+            ? storedDeviceIdentityToRow("primary", generateStoredDeviceIdentity(12), 19)
+            : undefined;
+        const credentialPath = path.join(directory, "client", "credentials.sqlite");
+        if (credential) {
+          await client.query(
+            `INSERT INTO "${namespace}".device_identities VALUES ($1,$2,$3,$4,$5,$6)`,
+            [
+              credential.identity_key,
+              credential.device_id,
+              credential.public_key_pem,
+              credential.private_key_pem,
+              credential.created_at_ms,
+              credential.updated_at_ms,
+            ],
+          );
+          fs.renameSync(credentialPath, `${credentialPath}.before-cutover`);
+          expect(fs.existsSync(credentialPath)).toBe(false);
+        }
         const lock = await acquireGatewayLock({
           env,
           allowInTests: true,
@@ -689,9 +620,38 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
           timeoutMs: 0,
         });
         expect(lock).not.toBeNull();
+        const synchronous = vi.spyOn(readOnlyWorker, "runSqliteReadOnlyWorkerSync");
         try {
-          const migration = await lock!.run(() =>
-            prepareDoctorDatabaseMigrations({
+          const migration = await lock!.run(async () => {
+            if (mode === "cold Doctor") {
+              const backup = await backupDoctorPostgresMigration(
+                pathname,
+                { connection: connection!, schemaPrefix: "state_layout_conformance" },
+                { assertAdmission: () => lock!.assertCurrent() },
+              );
+              const capture = expectDefined(
+                createUpdateDoctorDatabaseWriteCapture(
+                  {
+                    [pathname]: expectDefined(backup.generation, "Preserved PostgreSQL generation"),
+                  },
+                  {
+                    env,
+                    signal: new AbortController().signal,
+                    assertCurrent: () => lock!.assertCurrent(),
+                    warn: vi.fn(),
+                  },
+                ),
+                "Cold Doctor migration capture",
+              );
+              await capture.admit();
+              const result = await capture.run(() =>
+                repairOpenClawStateDatabaseIndexesForDoctor(options),
+              );
+              await capture.settle();
+              expect(capture.receipt?.unchanged).toBe(true);
+              return result;
+            }
+            return prepareDoctorDatabaseMigrations({
               env,
               databasePaths: [pathname],
               pendingDatabasePaths: [pathname],
@@ -703,10 +663,25 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
                   supportedVersion: OPENCLAW_STATE_SCHEMA_VERSION,
                 },
               ],
-            }),
-          );
+            });
+          });
           expect(migration.warnings).toEqual([]);
+          expect(synchronous).not.toHaveBeenCalled();
+          if (credential) {
+            using local = openClientCredentialCustody(env, { migration: true });
+            expect(local?.database.prepare("SELECT * FROM device_identities").all()).toEqual([
+              credential,
+            ]);
+            expect(
+              (
+                await client.query("SELECT to_regclass($1) AS present", [
+                  `${namespace}.device_identities`,
+                ])
+              ).rows,
+            ).toEqual([{ present: null }]);
+          }
         } finally {
+          synchronous.mockRestore();
           await lock!.release();
         }
         withEngineStoreAdmission(() => {

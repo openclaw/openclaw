@@ -613,6 +613,37 @@ it("states each server's condition from the session's tools and shows them on de
   const panel = card.querySelector('[data-mcp-name="broken"] .mcp-server-row__note');
   expect(panel?.textContent).toBe("spawn ENOENT");
 });
+it("clears session tools on selection changes and ignores an earlier session's response", async () => {
+  const result = (name: string) => ({
+    agentId: "main",
+    profile: "full",
+    groups: [{ id: "mcp", label: "MCP", source: "mcp", tools: [mcpTool("docs", name)] }],
+  });
+  const { card, context, connection, request } = await mountStatusCard(result("initial"), {
+    docs: docsServer,
+  });
+  openRow(card, "docs");
+  expect(card.querySelector(".mcp-server-tools")?.textContent).toContain("initial");
+
+  const pending = deferred<unknown>();
+  request.mockReturnValueOnce(pending.promise);
+  connection.publish({ ...context.gateway.snapshot, sessionKey: "second" });
+  flush();
+  expect(card.querySelector(".mcp-server-tools")).toBeNull();
+  expect(rowStatus(card, "docs")).toBe("");
+  expect(request).toHaveBeenLastCalledWith("tools.effective", { sessionKey: "second" });
+
+  request.mockResolvedValueOnce(result("current"));
+  connection.publish({ ...context.gateway.snapshot, sessionKey: "third" });
+  await waitForFast(() =>
+    expect(card.querySelector(".mcp-server-tools")?.textContent).toContain("current"),
+  );
+  pending.resolve(result("stale"));
+  await flushPromises();
+  expect(card.querySelector(".mcp-server-tools code")?.textContent).toBe("current");
+  expect(request).toHaveBeenCalledTimes(3);
+});
+
 it("does not call an unused server failing before a session has connected it", async () => {
   const { card, request } = await mountStatusCard(
     {
