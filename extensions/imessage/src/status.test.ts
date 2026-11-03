@@ -283,11 +283,11 @@ describe("probeIMessage", () => {
     expect(create).not.toHaveBeenCalled();
   });
 
-  it("drops cached rpc support when the current clock is not a valid date timestamp", async () => {
-    vi.spyOn(Date, "now")
-      .mockReturnValueOnce(1_700_000_000_000)
-      .mockReturnValueOnce(Number.NaN)
-      .mockReturnValue(1_700_000_000_000);
+  it("keeps cached rpc support trusted when the wall clock is not a valid date timestamp", async () => {
+    // A wall-clock anomaly (Date.now is NaN here) must not evict the rpc-support
+    // cache: the cache window is anchored to the monotonic clock, so only elapsed
+    // time moves it. On the old wall-clock window this step re-ran `rpc --help`.
+    vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
     const runCommand = mockCommandSequence(
       { stderr: 'unknown command "rpc" for "imsg"', code: 1 },
       { stdout: "rpc help" },
@@ -305,7 +305,11 @@ describe("probeIMessage", () => {
     });
 
     expect(runCommand).toHaveBeenNthCalledWith(1, ["imsg-clock", "rpc", "--help"], timeout);
-    expect(runCommand).toHaveBeenNthCalledWith(2, ["imsg-clock", "rpc", "--help"], timeout);
+    // The second probe hits the monotonic rpc-support cache instead of re-running
+    // `rpc --help` under an invalid wall clock.
+    expect(
+      runCommand.mock.calls.filter(([cmd]) => cmd[1] === "rpc" && cmd[2] === "--help"),
+    ).toHaveLength(1);
   });
 
   it("propagates imsg's status message when advanced features are unavailable", async () => {
