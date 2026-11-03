@@ -620,7 +620,7 @@ describe("openclaw-board-view", () => {
       expectText(testId(view, "board-widget-action-error"), "approval service unavailable");
       expectText(
         toastHost.querySelector(".app-toast__message"),
-        "Could not reject widget access. Try again.",
+        "Couldn’t reject widget access. Try again.",
       );
     });
     expect([allow?.disabled, reject?.disabled]).toEqual([false, false]);
@@ -650,7 +650,7 @@ describe("openclaw-board-view", () => {
     });
 
     expect(view.querySelector("iframe")).toBeNull();
-    expectText(testId(view, "board-widget-error"), "Widget sandbox host is unavailable.");
+    expectText(testId(view, "board-widget-error"), "The widget sandbox is unavailable.");
   });
 
   it("keeps cell focus order stable and exposes move, resize, and menu labels", async () => {

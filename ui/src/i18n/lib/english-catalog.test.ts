@@ -60,7 +60,7 @@ it.each([
     activeKey: "websiteOpen",
     activeText: "Webseite öffnen",
     fallbackKey: "websiteEmbedHint",
-    fallbackText: "If this site does not load here, open it in a new tab.",
+    fallbackText: "If this site doesn’t load here, open it in a new tab.",
   },
   {
     register: registerBoardEnglish,
