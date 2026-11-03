@@ -189,6 +189,36 @@ describe("prompt cache request observer", () => {
     },
   );
 
+  it.each([
+    ["max_tokens", {}, "prefix-match"],
+    ["max_completion_tokens", {}, "prefix-match"],
+    ["max_output_tokens", {}, "prefix-match"],
+    ["max_completion_tokens", { temperature: 0.2 }, "parameters:temperature"],
+    ["max_completion_tokens", { instructions: "provider rewritten system" }, "system"],
+  ] as const)(
+    "does not attribute a drop to a re-clamped %s output cap (with %j: %s)",
+    async (cap, replacement, expected) => {
+      const observer = createObserver(scopedKey(`output-cap-${cap}-${expected}`));
+      const payload = {
+        instructions: "original system",
+        tools: [{ type: "function", name: "read" }],
+        input: [{ role: "user", content: "first" }],
+        temperature: 1,
+      };
+      await measure(observer, { ...payload, [cap]: 32_000 }, 22_560);
+      const observation = await measure(observer, { ...payload, ...replacement, [cap]: 31_304 }, 0);
+      expect(observation).toMatchObject({
+        broke: true,
+        changes: null,
+        providerPrefix: expected,
+        dropCause:
+          expected === "prefix-match"
+            ? "provider-cache-reuse-lost:unchanged-prefix"
+            : `provider-input-change:${expected}`,
+      });
+    },
+  );
+
   it("observes a miss and subsequent hits with per-turn request indices", async () => {
     const turns = [[10_000], [0, 10_000, 10_000]];
     const sessionId = scopedKey("request-usage");

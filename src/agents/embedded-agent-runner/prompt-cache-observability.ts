@@ -236,6 +236,9 @@ function describeHistoryChange(
 
 const MIN_CACHE_BREAK_TOKEN_DROP = 1_000;
 const MAX_STABLE_CACHE_READ_RATIO = 0.95;
+// Output caps bound the completion, not the prompt that provider prefix caches key on.
+// Completions routes re-clamp the cap from the remaining context budget on most requests.
+const OUTPUT_CAP_PARAMETERS = new Set(["max_tokens", "max_completion_tokens", "max_output_tokens"]);
 
 function buildTrackerKey(params: PromptCacheIdentity): string {
   // Background reviews share provider affinity, but never diagnostic request ownership.
@@ -261,6 +264,24 @@ function describeProviderFields(
     : Object.keys(beforeFields).length || Object.keys(afterFields).length
       ? "order"
       : "value";
+}
+
+function withoutOutputCaps(fields: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(fields).filter(([key]) => !OUTPUT_CAP_PARAMETERS.has(key)),
+  );
+}
+
+function describeProviderParameters(
+  beforeFields: Record<string, string>,
+  afterFields: Record<string, string>,
+): string | undefined {
+  const before = withoutOutputCaps(beforeFields);
+  const after = withoutOutputCaps(afterFields);
+  const capOnly =
+    [...OUTPUT_CAP_PARAMETERS].some((key) => beforeFields[key] !== afterFields[key]) &&
+    Object.keys({ ...before, ...after }).every((key) => before[key] === after[key]);
+  return capOnly ? undefined : `parameters:${describeProviderFields(before, after)}`;
 }
 
 function describeProviderPrefix(
@@ -305,7 +326,7 @@ function describeProviderPrefix(
   }
   const parameters =
     before.parameters.digest !== after.parameters.digest
-      ? `parameters:${describeProviderFields(before.parameters.fields, after.parameters.fields)}`
+      ? describeProviderParameters(before.parameters.fields, after.parameters.fields)
       : undefined;
   const format = before.messageField !== after.messageField ? "input-format" : undefined;
   const details = [
