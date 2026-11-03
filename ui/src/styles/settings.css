@@ -971,7 +971,12 @@ openclaw-appearance-background .settings-background-preview .session-background_
    shrinks via flex because .settings-input/.settings-secret set min-width: 0. */
 .settings-row:not(.settings-row--stacked) .settings-row__control > .settings-input,
 .settings-row:not(.settings-row--stacked) .settings-row__control > .settings-secret,
-.settings-row:not(.settings-row--stacked) .settings-row__control > /* Short values line up with the selects in the same column. */
+.settings-row:not(.settings-row--stacked) .settings-row__control > .settings-phone-presentation,
+.settings-row:not(.settings-row--stacked) .settings-row__control > .settings-input-with-hint {
+  width: 340px;
+}
+
+/* Short values line up with the selects in the same column. */
 .settings-row:not(.settings-row--stacked)
   .settings-row__control
   > :is([data-settings-chat-message-width], [data-settings-terminal-font]) {
@@ -998,11 +1003,6 @@ openclaw-appearance-background .settings-background-preview .session-background_
 
 .settings-row__desc-action:hover {
   color: var(--text-strong);
-}
-
-.settings-phone-presentation,
-.settings-row:not(.settings-row--stacked) .settings-row__control > .settings-input-with-hint {
-  width: 340px;
 }
 
 .settings-phone-presentation,
