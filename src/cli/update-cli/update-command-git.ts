@@ -59,6 +59,7 @@ import {
   resolveGlobalManager,
   runUpdateStep,
 } from "./shared.js";
+import type { GitInstallRelocation } from "./update-command-git.types.js";
 import { readPackageUpdateIdentity } from "./update-command-package-identity.js";
 import { prepareGitPackageExposure, runPackageUpdateDoctor } from "./update-command-package.js";
 import { readOriginalUpdateRecovery } from "./update-command-recovery.js";
@@ -355,12 +356,6 @@ export async function inspectGitDryRunTargetSchemaVersions(params: {
           : {}),
       };
 }
-
-export type GitInstallRelocation = {
-  directory: string;
-  installTarget: ResolvedGlobalInstallTarget;
-  assertCurrent: () => Promise<void>;
-};
 
 export async function updateGitInstall(params: {
   root: string;

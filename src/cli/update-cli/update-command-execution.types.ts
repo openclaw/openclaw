@@ -13,7 +13,7 @@ import type { UpdateRunWriteOptions } from "../../infra/update-run-write.async.j
 import type { UpdateStepProgress } from "../../infra/update-runner-types.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import type { UpdateCommandOptions } from "./shared.js";
-import type { GitInstallRelocation } from "./update-command-git.js";
+import type { GitInstallRelocation } from "./update-command-git.types.js";
 import type { StagedPackageInstallUpdate } from "./update-command-package.js";
 import type { ManagedServiceRootRedirect } from "./update-command-service-context-types.js";
 import type { UpdateCommandRecoveryState } from "./update-command-service.js";

@@ -12,7 +12,7 @@ import { resolveGlobalInstallTarget } from "../../infra/update-global.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { VERSION } from "../../version.js";
 import { normalizeTag, resolveGitInstallDir, UpdatePreMutationError } from "./shared.js";
-import type { GitInstallRelocation } from "./update-command-git.js";
+import type { GitInstallRelocation } from "./update-command-git.types.js";
 import type { RefuseUpdate } from "./update-command-result.js";
 import type { prepareUpdateCommand } from "./update-command-run.js";
 
