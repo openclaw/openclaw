@@ -4,6 +4,7 @@ import {
   readErrorCauses,
   readErrorName,
 } from "@openclaw/normalization-core/error-coercion";
+import { asNullableRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
 import { redactToolDetail } from "./browser-redact.ts";
 
 /** The message is complete UI text; the cause remains available to diagnostics. */
@@ -33,7 +34,7 @@ function isProgrammingError(value: unknown): value is Error {
   return (
     (value instanceof Error || Object.prototype.toString.call(value) === "[object Error]") &&
     PROGRAMMING_ERROR_NAMES.has(readErrorName(value)) &&
-    !BROWSER_NETWORK_FAILURE.test((value as Error).message)
+    !BROWSER_NETWORK_FAILURE.test(readStringField(asNullableRecord(value), "message") ?? "")
   );
 }
 
@@ -54,7 +55,9 @@ export function formatUiError(error: unknown, fallback = ""): string {
     isProgrammingError,
   );
   if (programmingErrors.length > 0) {
-    reportProgrammingError(error as object);
+    if (typeof error === "object" && error !== null) {
+      reportProgrammingError(error);
+    }
     if (programmingErrors[0] === error) {
       return fallback || GENERIC_FAILURE_MESSAGE;
     }
