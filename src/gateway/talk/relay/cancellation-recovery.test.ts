@@ -333,7 +333,7 @@ describe("talk realtime relay cancellation recovery", () => {
     },
   );
 
-  it("tells the voice model once that a provider-cancelled consult produced no result", async () => {
+  it("tells the voice model once that a provider-cancelled consult has an unknown outcome", async () => {
     const sendUserMessage = vi.fn();
     const f = await createFixture({ sendUserMessage });
     await f.consult();
@@ -342,7 +342,7 @@ describe("talk realtime relay cancellation recovery", () => {
     f.cancelConsult();
 
     expect(sendUserMessage).toHaveBeenCalledExactlyOnceWith(
-      expect.stringContaining("cancelled before it finished"),
+      expect.stringContaining("interrupted before it reported back"),
     );
   });
 
