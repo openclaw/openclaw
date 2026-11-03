@@ -44,6 +44,22 @@ export function readSessionArchiveContentSync(filePath: string, expectedBytes?: 
   }
 }
 
+/** Resolve the reader identity from source metadata without expanding archive bytes. */
+export function resolveSessionArchiveReadPath(
+  filePath: string,
+  sourceStat: Pick<fs.Stats, "size" | "mtimeMs">,
+  cacheDir?: string,
+): string {
+  if (!filePath.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX)) {
+    return filePath;
+  }
+  const pathKey = createHash("sha256").update(filePath).digest("hex").slice(0, 32);
+  return path.join(
+    cacheDir ?? path.join(resolvePreferredOpenClawTmpDir(), "session-archive-read-cache"),
+    `${pathKey}-${sourceStat.size}-${Math.trunc(sourceStat.mtimeMs)}.jsonl`,
+  );
+}
+
 /**
  * Materializes a compressed archive as a plain JSONL cache file and returns
  * the readable path; plain archives pass through untouched. Source identity
@@ -64,10 +80,7 @@ export function materializeSessionArchiveForRead(filePath: string): string {
     removeMaterializedArchiveCacheEntries(cacheDir, pathKey);
     throw error;
   }
-  const cachePath = path.join(
-    cacheDir,
-    `${pathKey}-${sourceStat.size}-${Math.trunc(sourceStat.mtimeMs)}.jsonl`,
-  );
+  const cachePath = resolveSessionArchiveReadPath(filePath, sourceStat, cacheDir);
   sweepMaterializedArchiveCache(cacheDir);
   if (fs.existsSync(cachePath)) {
     return cachePath;

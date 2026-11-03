@@ -12,12 +12,12 @@ import {
 } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { isNativeEmbedHost } from "../../app/native-web-chrome.ts";
-import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { highlightJsonHtml } from "../../components/markdown-code-blocks.ts";
 import { KeyboardShortcut, ShortcutText } from "../../components/solid/kbd.tsx";
 import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import {
   SettingsPage,
+  SettingsPageHeader,
   SettingsRow as Row,
   SettingsSection as Section,
   SettingsStatus as Status,
@@ -525,13 +525,7 @@ export function DebugPage() {
 
   return (
     <openclaw-debug-page>
-      <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
-        <section class="content-header">
-          <div>
-            <h1 class="page-title">{t("tabs.debug")}</h1>
-          </div>
-        </section>
-      </ShellLayoutBoundary>
+      <SettingsPageHeader title={t("tabs.debug")} />
       <SettingsWorkspace>
         <DebugPageView />
       </SettingsWorkspace>

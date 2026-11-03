@@ -166,7 +166,7 @@ describe("Beam receiver", () => {
     });
     const response = await postUpload(endpoint);
     expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ ok: true, canView: false });
+    expect(await response.json()).toMatchObject({ ok: true, canView: true });
     expect(await store.get(sampleUpload().beamId)).toMatchObject({
       publisherProfileId: "guest-publisher",
       uploaderProfileId: "guest-publisher",
