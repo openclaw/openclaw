@@ -348,7 +348,6 @@ export const SETTINGS_SEARCH_TARGETS = {
     labelKey: "configView.appearance.tabIcon.title",
     searchKeys: [
       "configView.appearance.tabIcon.agent",
-      "configView.appearance.tabIcon.shape",
       "configView.appearance.tabIcon.square",
       "configView.appearance.tabIcon.rounded",
       "configView.appearance.tabIcon.circle",
