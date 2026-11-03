@@ -58,11 +58,11 @@ struct TailscaleServeGatewayDiscoveryTests {
 
     @Test func `discovers only this machine serve endpoint from self status`() async throws {
         let statusJson = #"{"Self":{"DNSName":"thehive-mac-mini.tailnet-example.ts.net.","HostName":"TheHive-Mac-Mini","Online":true},"Peer":{"peer":{"DNSName":"other.tailnet-example.ts.net","HostName":"other","Online":true}}}"#
-        var probed: [(String, TimeInterval)] = []
+        let probed = LockIsolated<[(String, TimeInterval)]>([])
         let context = TailscaleServeGatewayDiscovery.DiscoveryContext(
             tailscaleStatus: { statusJson },
             probeHost: { host, timeout in
-                probed.append((host, timeout))
+                probed.withValue { $0.append((host, timeout)) }
                 return host == "thehive-mac-mini.tailnet-example.ts.net"
             })
 
@@ -70,7 +70,7 @@ struct TailscaleServeGatewayDiscoveryTests {
 
         #expect(beacon?.tailnetDns == "thehive-mac-mini.tailnet-example.ts.net")
         #expect(beacon?.port == 443)
-        #expect(probed.map(\.0) == ["thehive-mac-mini.tailnet-example.ts.net"])
+        #expect(probed.value.map(\.0) == ["thehive-mac-mini.tailnet-example.ts.net"])
     }
 
     @Test func `does not infer self serve endpoint when its challenge is absent`() async {
