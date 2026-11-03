@@ -35,7 +35,7 @@ async function followUpSettings(page: import("playwright").Page, mode: string, s
   await page.goto(`${suite.server.baseUrl}settings/appearance`);
   await page.locator("[data-settings-follow-up-mode]").selectOption(mode);
   if (shortcut) {
-    await page.locator("[data-settings-send-shortcut]").selectOption(shortcut);
+    await page.locator(`[data-test-id="send-shortcut-${shortcut}"]`).click();
   }
 }
 
@@ -264,9 +264,9 @@ suite.define(() => {
     const configPatchesBefore = (await gateway.getRequests("config.patch")).length;
     await page.locator("[data-settings-follow-up-mode]").selectOption("queue");
     await waitForRequests(gateway, "config.patch", configPatchesBefore + 1);
-    const shortcut = page.locator("[data-settings-send-shortcut]");
-    await shortcut.selectOption("enter");
-    expect(await shortcut.inputValue()).toBe("enter");
+    const shortcut = page.locator('[data-test-id="send-shortcut-enter"]');
+    await shortcut.click();
+    expect(await shortcut.locator("input").isChecked()).toBe(true);
     await page.goto(`${suite.server.baseUrl}chat`);
 
     const composer = chatComposer(page);
