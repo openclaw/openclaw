@@ -570,73 +570,29 @@ describe("observed browser dialogs", () => {
     second.cleanup();
   });
 
-  it("uses the default arm-next-dialog timeout for non-finite timeoutMs", async () => {
-    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
-    vi.setSystemTime(0);
-    const { arm, observe, emitAll: emit, dialogs } = observedPage();
-    const dialog = createDialog({ type: "alert", message: "Still armed" });
-    const observed = observe();
-
-    arm({ accept: false, timeoutMs: Number.NaN });
-    await vi.advanceTimersByTimeAsync(119_999);
-    emit("dialog", dialog);
-    await Promise.resolve();
-
-    expect(observed.signal.aborted).toBe(false);
-    expect(dialog.dismiss).toHaveBeenCalledOnce();
-    expect(dialogs()).toMatchObject({
-      pending: [],
-      recent: [{ id: "d1", type: "alert", closedBy: "armed" }],
-    });
-    observed.cleanup();
-  });
-
-  it("answers the armed prompt when wall time jumps before the elapsed deadline", async () => {
+  it.each([Number.NaN, 1000])("expires arms by elapsed time (%s)", async (timeoutMs) => {
+    const durationMs = Number.isNaN(timeoutMs) ? 120_000 : timeoutMs;
     vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     vi.setSystemTime(0);
     const { arm, observe, emitAll: emit, dialogs } = observedPage();
     const observed = observe();
-    const dialog = createDialog({ type: "prompt" });
-    arm({ accept: true, promptText: "synthetic answer", timeoutMs: 1000 });
-    await vi.advanceTimersByTimeAsync(999);
-    vi.setSystemTime(60_000);
-    emit("dialog", dialog);
-    await Promise.resolve();
-
-    expect(dialog.accept).toHaveBeenCalledWith("synthetic answer");
-    expect(observed.signal.aborted).toBe(false);
-    expect(dialogs()).toMatchObject({
-      pending: [],
-      recent: [{ id: "d1", type: "prompt", closedBy: "armed" }],
-    });
-    observed.cleanup();
-  });
-
-  it("expires armed responses by elapsed time even at Date bounds", async () => {
-    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    const first = createDialog({ type: "prompt" });
+    arm({ accept: true, promptText: "synthetic answer", timeoutMs });
+    await vi.advanceTimersByTimeAsync(durationMs - 1);
     vi.spyOn(Date, "now").mockReturnValue(MAX_DATE_TIMESTAMP_MS);
-    const { arm, observe, emitAll: emit, dialogs } = observedPage();
-    const first = createDialog({ type: "alert", message: "Still armed" });
-    arm({ accept: false, timeoutMs: 1000 });
-    await vi.advanceTimersByTimeAsync(999);
     emit("dialog", first);
     await Promise.resolve();
-    expect(first.dismiss).toHaveBeenCalledOnce();
-    expect(dialogs()).toMatchObject({
-      pending: [],
-      recent: [{ id: "d1", closedBy: "armed" }],
-    });
+    expect(first.accept).toHaveBeenCalledWith("synthetic answer");
+    expect(observed.signal.aborted).toBe(false);
+    expect(dialogs()).toMatchObject({ pending: [], recent: [{ id: "d1", closedBy: "armed" }] });
 
-    const observed = observe();
-    const expired = createDialog({ type: "alert", message: "Still pending" });
-    arm({ accept: false, timeoutMs: 1000 });
-    await vi.advanceTimersByTimeAsync(1000);
+    const expired = createDialog({ message: "Still pending" });
+    arm({ accept: false, timeoutMs });
+    await vi.advanceTimersByTimeAsync(durationMs);
     emit("dialog", expired);
     expect(expired.dismiss).not.toHaveBeenCalled();
     expect(observed.signal.aborted).toBe(true);
-    expect(dialogs().pending).toMatchObject([
-      { id: "d2", type: "alert", message: "Still pending" },
-    ]);
+    expect(dialogs().pending).toMatchObject([{ id: "d2", message: "Still pending" }]);
     observed.cleanup();
   });
 
