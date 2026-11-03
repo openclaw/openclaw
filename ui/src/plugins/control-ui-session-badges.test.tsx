@@ -197,7 +197,7 @@ it("shares passive live/cache facts and retires observers with the current regis
     ),
   );
   pending = true;
-  descriptors = descriptors.map((descriptor) => ({ ...descriptor, revision: "two" }));
+  descriptors = descriptors.map((descriptor) => Object.assign({}, descriptor, { revision: "two" }));
   await runtime.refresh();
   expect(readSessionBadges(runtime, target, cached, capture)).toEqual([]);
   pending = false;
