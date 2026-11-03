@@ -1,0 +1,2 @@
+# Keep the real utility-fallback timeout composition, independent-candidate budget, and configuration-aware degradation regression without raising the shared test-line ceiling.
+99

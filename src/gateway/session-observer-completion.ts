@@ -38,7 +38,6 @@ export function reportSessionObserverDegradation(
   const modelLabel = selection ? ` "${selection.provider}/${selection.modelId}"` : "";
   const utility = readUtilityModelSetting(cfg, state.agentId);
   const hasFallbacks = utility.kind !== "disabled" && utility.fallbacks.length > 0;
-  const failureScope = hasFallbacks ? " and its configured fallbacks" : "";
   const recovery = hasFallbacks
     ? "choose capable utility models"
     : "choose a capable utility model or add capable utilityModel.fallbacks";
@@ -49,7 +48,7 @@ export function reportSessionObserverDegradation(
     stream: "notice",
     data: {
       phase: "warning",
-      message: `Session observer assessments stopped for this run after utility model${modelLabel}${failureScope} failed repeatedly. To restore assessments, ${recovery}.`,
+      message: `Session observer assessments stopped for this run after repeated failures with utility model${modelLabel}. To restore assessments, ${recovery}.`,
     },
   };
   const owner = getAgentRunContextOwnership(state.runId)?.exclusiveClaimId;

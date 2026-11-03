@@ -197,7 +197,7 @@ it("publishes a digest from a utility model that answers after 15s", async () =>
   expectBroadcast(harness, { headline: "Working", health: "on-track" });
 });
 
-it("reports exhaustion of an existing fallback chain without telling the user to add one", () => {
+it("reports assessment failure without claiming the configured fallbacks ran", () => {
   const notices: AgentEventPayload[] = [];
   const unsubscribe = onAgentEvent((evt) => {
     if (evt.stream === "notice") {
@@ -220,7 +220,9 @@ it("reports exhaustion of an existing fallback chain without telling the user to
       },
     );
     expect(notices).toHaveLength(1);
-    expect(notices[0]?.data.message).toContain("and its configured fallbacks failed repeatedly");
+    expect(notices[0]?.data.message).toContain("repeated failures with utility model");
+    expect(notices[0]?.data.message).toContain("choose capable utility models");
+    expect(notices[0]?.data.message).not.toContain("and its configured fallbacks failed");
     expect(notices[0]?.data.message).not.toContain("add capable utilityModel.fallbacks");
   } finally {
     unsubscribe();
@@ -241,7 +243,7 @@ it("gives a configured fallback its own model budget after the primary times out
         "abort",
         () => {
           clearTimeout(timer);
-          reject(params.abortSignal?.reason ?? new Error("aborted"));
+          reject(new Error("aborted", { cause: params.abortSignal?.reason }));
         },
         { once: true },
       );
