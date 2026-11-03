@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { constants } from "node:fs";
+import { constants, existsSync } from "node:fs";
 import { cp, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -181,6 +181,17 @@ export async function measureRestartLaneFlood(options: {
   let lanes: Lane[] = [];
   const wait = <T>(value: Promise<T>) =>
     withinTest(Promise.race([value, failure.promise]), options.signal);
+  const captureProfile = async () => {
+    if (!options.profileDir) {
+      return;
+    }
+    const pid = instance.child?.pid;
+    assert(pid);
+    process.kill(pid, "SIGWINCH");
+    while (!existsSync(path.join(options.profileDir, `${pid}.json`))) {
+      await delay(10, undefined, { signal: options.signal });
+    }
+  };
   try {
     if (options.fixture) {
       await mkdir(instance.state.agentDir(), { recursive: true });
@@ -251,6 +262,7 @@ export async function measureRestartLaneFlood(options: {
     options.onProgress?.("forty model requests interrupted");
     const child = instance.child;
     assert(child);
+    await captureProfile();
     const closed = once(child, "close");
     assert(child.kill("SIGTERM"));
     assert.deepEqual(await wait(closed), [0, null]);
@@ -354,6 +366,7 @@ export async function measureRestartLaneFlood(options: {
       Array.from({ length: 12 }, (_, id) => id),
     );
     const first = Math.min(...resumeCalls.map((call) => call.at));
+    await captureProfile();
     const result = {
       count,
       serviceMs,

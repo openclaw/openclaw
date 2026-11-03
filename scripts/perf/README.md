@@ -958,7 +958,8 @@ controls and counterbalanced A/B pairs, and keep host load comparable. Output
 separates restart startup, resume dispatch from first resume, and new cron
 request-to-model latency. `--profile` adds per-process queue-owner wait samples,
 process CPU (including workers), main-thread CPU and sampled allocations including
-collected objects. Profiles cover startup through graceful shutdown; match the
+collected objects. On POSIX hosts, the harness captures profiles through an explicit
+`SIGWINCH` checkpoint before shutdown, after all recovery turns settle; match the
 second process in each pair for recovery. Main-isolate allocation samples do not
 include worker heaps. Report filesystem and profiling overhead explicitly.
 

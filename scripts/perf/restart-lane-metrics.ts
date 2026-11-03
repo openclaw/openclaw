@@ -50,7 +50,7 @@ if (isMainThread) {
       JSON.stringify({
         pid: process.pid,
         scope:
-          "Gateway startup through graceful shutdown; process CPU includes workers; allocation sampling and CPU profile cover main isolate only",
+          "Gateway startup through workload checkpoint; process CPU includes workers; allocation sampling and CPU profile cover main isolate only",
         wallMs,
         processCpuMs: (usedProcess.user + usedProcess.system) / 1000,
         threadCpuMs: (usedThread.user + usedThread.system) / 1000,
@@ -61,11 +61,18 @@ if (isMainThread) {
       }),
     );
   };
-  // Natural shutdown is part of the proof. An abrupt exit intentionally produces no sample.
-  process.once("beforeExit", () => {
+  let capturing = false;
+  const capture = () => {
+    if (capturing) {
+      return;
+    }
+    capturing = true;
     void writeMetrics().catch((error: unknown) => {
       console.error(error);
       process.exitCode = 1;
     });
-  });
+  };
+  // This headless fixture owns SIGWINCH; Gateway restart signals retain their owners.
+  process.once("SIGWINCH", capture);
+  process.once("beforeExit", capture);
 }
