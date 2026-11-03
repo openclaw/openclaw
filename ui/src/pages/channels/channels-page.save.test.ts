@@ -179,7 +179,7 @@ describe("ChannelsPage save against a file changed elsewhere", () => {
     const { page, source, patches, changeElsewhere } = await openTelegram();
     // Another page's failure never shows in this channel's dialog.
     source.runtimeConfig.state.lastError = "Another page failed";
-    await choose(page, "DM policy", "pairing");
+    await choose(page, "DM policy", "Pairing");
     edit(source, "allowFrom", ["111"]);
     edit(source, "groups", {
       "-1001": { requireMention: true },
@@ -212,7 +212,7 @@ describe("ChannelsPage save against a file changed elsewhere", () => {
 
   it("writes the edits over the newer values only on Overwrite", async () => {
     const { page, source, patches, changeElsewhere } = await openTelegram();
-    await choose(page, "DM policy", "pairing");
+    await choose(page, "DM policy", "Pairing");
     edit(source, "allowFrom", ["111"]);
     await changeElsewhere(
       telegram({ ...before.channels.telegram, allowFrom: ["111", "222", "333"] }),
@@ -239,7 +239,7 @@ describe("ChannelsPage save against a file changed elsewhere", () => {
 
   it("still saves next to a change elsewhere that the edits don't touch", async () => {
     const { page, source, patches, changeElsewhere } = await openTelegram();
-    await choose(page, "DM policy", "pairing");
+    await choose(page, "DM policy", "Pairing");
     const elsewhere = telegram({
       allowFrom: ["111", "222", "333"],
       dmPolicy: "allowlist",
@@ -277,7 +277,7 @@ describe("ChannelsPage save against a file changed elsewhere", () => {
       const { page, gateway, patches, setFile } = await openTelegram({
         patch: () => held.promise,
       });
-      await choose(page, "DM policy", "pairing");
+      await choose(page, "DM policy", "Pairing");
       findButton(page, ".channels-detail .btn.primary").click();
       await waitForSolid(() => expect(patches()).toHaveLength(1));
 
