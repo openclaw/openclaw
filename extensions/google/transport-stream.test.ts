@@ -10,7 +10,6 @@ import type { Model, ProviderContext } from "openclaw/plugin-sdk/llm";
 import { onLlmRequestActivity } from "openclaw/plugin-sdk/provider-stream-shared";
 import { withProviderAcceptanceObserver } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { makeTextToolResult } from "../../test/helpers/text-tool-result.js";
 import { listenOnLoopback } from "../test-support/hanging-loopback-server.js";
 import { resetGoogleVertexAdcState } from "./google-oauth.test-support.js";
 
@@ -701,7 +700,17 @@ describe("google transport stream", () => {
       ]);
       expect(
         buildGoogleGenerativeAiParams(model, {
-          messages: [output, makeTextToolResult("call_kw", "lookup", "ok", false, 0)],
+          messages: [
+            output,
+            {
+              role: "toolResult",
+              toolCallId: "call_kw",
+              toolName: "lookup",
+              content: [{ type: "text", text: "ok" }],
+              isError: false,
+              timestamp: 0,
+            },
+          ],
           tools,
         }).contents,
       ).toEqual([

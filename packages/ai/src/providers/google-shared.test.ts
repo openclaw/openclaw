@@ -441,21 +441,29 @@ const keywordTool = {
 
 it("sends keyword parameters under distinct Python-safe names without changing the tool", () => {
   const original = JSON.stringify(keywordTool);
-  const parameters = getFirstToolParameters(
-    buildParams(model, { messages: [], tools: [keywordTool] }).config?.tools ?? [],
-  );
-  expect(parameters).toEqual({
-    type: "object",
-    properties: {
-      from___: { type: "string" },
-      from_: { type: "string" },
-      from__: { type: "string" },
-      class_: { type: "string" },
-      lambda_: { type: "string" },
-      data: { type: "object" },
+  const params = buildParams(model, { messages: [], tools: [keywordTool] });
+  expect(params.config?.tools).toEqual([
+    {
+      functionDeclarations: [
+        {
+          name: "lookup",
+          description: "Look up a value",
+          parametersJsonSchema: {
+            type: "object",
+            properties: {
+              from___: { type: "string" },
+              from_: { type: "string" },
+              from__: { type: "string" },
+              class_: { type: "string" },
+              lambda_: { type: "string" },
+              data: { type: "object" },
+            },
+            required: ["from___", "class_", "lambda_"],
+          },
+        },
+      ],
     },
-    required: ["from___", "class_", "lambda_"],
-  });
+  ]);
   expect(JSON.stringify(keywordTool)).toBe(original);
 });
 
