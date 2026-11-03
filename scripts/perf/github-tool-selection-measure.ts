@@ -8,7 +8,7 @@ import { loadavg } from "node:os";
 import { resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
-import type { PreparedGitHubPublicationIdentity } from "../../src/agents/github-tool-identity.types.ts";
+import type { PreparedGitHubPublicationIdentity } from "../../extensions/github-repositories/tool-identity-api.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.ts";
 import { freezeTrustedJsonSnapshot } from "../../src/shared/immutable-data.ts";
 
@@ -16,8 +16,9 @@ const iterations = Number(process.argv[2] ?? 100_000);
 assert(Number.isSafeInteger(iterations) && iterations > 0);
 const {
   matchesPreparedGitHubPublicationIdentity,
-}: typeof import("../../src/agents/github-tool-identity.js") = await import(
-  pathToFileURL(resolve(process.argv[3] ?? "src/agents/github-tool-identity.ts")).href
+}: typeof import("../../extensions/github-repositories/tool-identity-api.js") = await import(
+  pathToFileURL(resolve(process.argv[3] ?? "extensions/github-repositories/tool-identity-api.ts"))
+    .href
 );
 const profileId = `ghp_${"1".repeat(32)}`;
 const identity: PreparedGitHubPublicationIdentity = {
@@ -28,13 +29,21 @@ const identity: PreparedGitHubPublicationIdentity = {
   env: {},
 };
 const config: OpenClawConfig = {
-  tools: { github: { profileId } },
+  plugins: {
+    entries: {
+      "github-repositories": {
+        config: {
+          system: { profileId },
+          agents: Object.fromEntries(
+            Array.from({ length: 20 }, (_, index) => [`agent-${index * 2 + 1}`, { profileId }]),
+          ),
+        },
+      },
+    },
+  },
   agents: {
     entries: Object.fromEntries(
-      Array.from({ length: 40 }, (_, index) => [
-        `agent-${index}`,
-        { name: `Synthetic ${index}`, tools: index % 2 ? { github: { profileId } } : {} },
-      ]),
+      Array.from({ length: 40 }, (_, index) => [`agent-${index}`, { name: `Synthetic ${index}` }]),
     ),
   },
 };

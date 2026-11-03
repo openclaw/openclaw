@@ -43,7 +43,6 @@ export type {
   ControlUiSessionPullRequestCheck,
   ControlUiSessionPullRequestCheckStep,
   ControlUiSessionPullRequestCheckDetails,
-  ControlUiSessionTaskPullRequest,
   ControlUiSessionPullRequests,
   ControlUiSessionPullRequestSnapshot,
   ControlUiSessionPullRequestsChanged,

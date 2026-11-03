@@ -3,7 +3,7 @@ import { assertDirectoryIdentitySync, readDirectoryIdentity } from "@openclaw/fs
 import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { root as fsRoot, type Root } from "@openclaw/fs-safe/root";
 import { listAgentIds } from "openclaw/plugin-sdk/agent-scope-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   listGitHubOAuthRecords,
   isManagedGitHubProfileId,

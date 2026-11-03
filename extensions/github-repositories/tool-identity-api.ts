@@ -7,7 +7,7 @@ import { readSecretFile } from "@openclaw/fs-safe/secret";
 import type { GitHubIdentityFacts, ToolsGitHubStatusResult } from "@openclaw/gateway-protocol";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-scope-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { inspectGitHubOAuthRecord } from "openclaw/plugin-sdk/native-github-account-host";
 import { isBundledPluginEnabled } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { hasErrnoCode } from "openclaw/plugin-sdk/process-runtime";

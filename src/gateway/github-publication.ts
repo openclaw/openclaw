@@ -29,7 +29,6 @@ import {
 } from "./github-publication-recovery.js";
 import { isGitHubPublicationRequesterV2 } from "./github-publication-requester-capability.js";
 import type { GitHubPublicationRequesterV2 } from "./github-publication-requester.js";
-import { loadGatewaySessionEntryReadOnlyInWorker } from "./github-publication-runtime-deps.js";
 import type {
   GitHubPublicationClaimRequest,
   GitHubPublicationClaimRequestV2,
@@ -155,7 +154,7 @@ export function createGitHubPublicationCoordinator(params: {
       input: Parameters<RepositoryPublicationProvider["inspectPullRequest"]>[0],
     ) => provider.inspectPullRequest(input),
     async preparePullRequest(
-      input: import("./github-pr-workspace-preparation.js").PullRequestPreparationInput,
+      input: import("./repository-publication-contract.js").PullRequestPreparationInput,
     ) {
       assertAvailable();
       assertCurrent();
@@ -317,7 +316,9 @@ export function createGitHubPublicationCoordinator(params: {
       if (!input.sessionKey) {
         throw new Error("GitHub publication requires an authoritative session.");
       }
-      const loaded = await loadGatewaySessionEntryReadOnlyInWorker({
+      const loaded = await (
+        await import("./session-utils-store-worker.js")
+      ).loadGatewaySessionEntryReadOnlyInWorker({
         cfg: params.getCommittedRuntimeConfig(),
         key: input.sessionKey,
         agentId: input.agentId,

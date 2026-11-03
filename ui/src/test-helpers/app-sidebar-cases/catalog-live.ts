@@ -37,9 +37,11 @@ function storedSession(
   };
 }
 
-function expectPullRequest(row: Element | null | undefined, content: string) {
-  const badge = row?.querySelector<HTMLElement>(".session-row-badge--pull-request");
-  expect(badge?.title).toBe(content);
+async function expectPullRequest(row: Element | null | undefined, content: string) {
+  await vi.waitFor(() => {
+    const badge = row?.querySelector<HTMLElement>(".session-row-badge--pull-request");
+    expect(badge?.getAttribute("aria-label")).toBe(content);
+  });
 }
 
 function catalogHost(
@@ -147,7 +149,7 @@ describe("AppSidebar session catalog pagination", () => {
     expect(local?.querySelector(".sidebar-session-catalog-host__head")).toBeNull();
     expect(local?.textContent).not.toContain("Gateway Mac");
     expect(local?.textContent).toContain("Local plan");
-    expectPullRequest(local, "2 pull requests · #111751, #111772 · Merged");
+    await expectPullRequest(local, "2 pull requests · #111751, #111772 · Merged");
     expect(local?.textContent).not.toContain("Remote review");
     expect(remote?.textContent).toContain("Build Node");
     expect(remote?.textContent).toContain("Remote review");
@@ -205,7 +207,7 @@ describe("AppSidebar session catalog pagination", () => {
     const catalogSection = dom.query('[data-session-section="catalog:claude"]');
     const linkedRow = catalogSection?.querySelector<HTMLElement>(rowSelector);
     expect(linkedRow?.getAttribute("draggable")).toBe("true");
-    expectPullRequest(linkedRow, "#107302 · Draft");
+    await expectPullRequest(linkedRow, "#107302 · Draft");
     expect(linkedRow?.querySelector('[data-sidebar-session-pin="true"]')).not.toBeNull();
     expect(linkedRow?.querySelector("[data-sidebar-session-archive]")).not.toBeNull();
     linkedRow?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));

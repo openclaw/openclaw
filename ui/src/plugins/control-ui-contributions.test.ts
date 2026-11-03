@@ -259,6 +259,7 @@ async function mountActions(
   provider.append(element);
   document.body.append(provider);
   await element.updateComplete;
+  await vi.waitFor(() => expect(element.querySelector("button")).not.toBeNull());
   return {
     element,
     sessions,
@@ -398,6 +399,9 @@ describe("native plugin session actions", () => {
       throw new Error("Expected the pane's plugin action to run");
     }
     expect(invocation.session).toMatchObject({ key: "global", agentId: "main" });
+    expect("scopeView" in invocation.host).toBe(false);
+    expect("invokeAction" in invocation.host).toBe(false);
+    expect("projectTextReferences" in invocation.host).toBe(false);
     await invocation.host.request("fixture.current-owner");
 
     element.agentId = "writer";
@@ -530,6 +534,8 @@ describe("native plugin session actions", () => {
     expect(invocation.signal.aborted).toBe(true);
 
     element.remove();
+    // The bridge preserves same-turn reparenting; publish after its committed disconnect.
+    await element.updateComplete;
     sessions.patchRowLocal(sessionKey, { label: "Detached", hasActiveRun: true });
     await element.updateComplete;
     expect(retained.textContent?.trim()).toBe("Review Resumed");
@@ -602,9 +608,11 @@ it("mounts new accessory slots and fences retained navigation and facts after th
     },
   };
   const listeners = new Set<() => void>();
+  let registered = true;
   const plugins = {
+    selectedReplacement: () => undefined,
     registrations: (kind: string) =>
-      kind === "accessories"
+      registered && kind === "accessories"
         ? [
             {
               key: "fixture/review",
@@ -652,9 +660,9 @@ it("mounts new accessory slots and fences retained navigation and facts after th
   slot.registerControls = registerControls;
   provider.append(slot);
   document.body.append(provider);
-  await vi.waitFor(() =>
-    expect(slot.querySelector("button")?.textContent).toBe("Review contribution"),
-  );
+  await vi.waitFor(() => {
+    expect(slot.querySelector("button")?.textContent, slot.outerHTML).toBe("Review contribution");
+  });
   const first = contexts[0]!;
   first.props.onOpenDetailsPage?.({ id: "review", title: "Review" });
   expect(open).toHaveBeenCalledWith("fixture", { id: "review", title: "Review" }, undefined);
@@ -669,6 +677,13 @@ it("mounts new accessory slots and fences retained navigation and facts after th
   expect(() => first.props.facts?.readCurrent?.()).toThrow("view has ended");
   await slot.updateComplete;
   expect(stopControls).toHaveBeenCalledOnce();
+  const absence = vi.fn();
+  slot.onPresenceChange = absence;
+  registered = false;
+  abort.abort();
+  listeners.forEach((notify) => notify());
+  await vi.waitFor(() => expect(absence).toHaveBeenLastCalledWith(false));
+  expect(slot.querySelector("button")).toBeNull();
   provider.remove();
   abort.abort();
 });

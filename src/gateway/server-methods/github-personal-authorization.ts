@@ -5,12 +5,14 @@ import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import { prepareUserProfileRolePolicyAuthority } from "../../state/user-channel-identity-operations.js";
 import { captureResidentUserProfileAccess } from "../../state/user-profile-list.js";
-import type { PersonalGitHubSessionActionV2 } from "../github-personal-publication.js";
 import { prepareGitHubPublicationSession } from "../github-publication-availability.js";
 import { RepositoryPublicationSessionChangedError } from "../github-publication-errors.js";
 import { prepareGitHubPublicationRequesterV2 } from "../github-publication-requester.js";
 import { operatorSessionCap } from "../operator-role-policy.js";
-import type { RepositoryPublicationPersonalAction as PersonalGitHubAction } from "../repository-publication-contract.js";
+import type {
+  RepositoryPublicationPreparePersonalSessionAction,
+  RepositoryPublicationPersonalAction as PersonalGitHubAction,
+} from "../repository-publication-contract.js";
 import type { SessionMutationTarget } from "../session-mutation-authorization-error.js";
 import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
 import { prepareSessionSharingRead } from "../session-sharing-target-read.js";
@@ -356,9 +358,9 @@ async function bindPersonalGitHubSessionAction(
 
 /** Retain the authenticated policy owner for worker commits as well as immediate effects. */
 export async function preparePersonalGitHubSessionActionV2(
-  options: Request & Parameters<typeof prepareGitHubPublicationRequesterV2>[0],
+  options: Parameters<RepositoryPublicationPreparePersonalSessionAction>[0],
   target: SessionMutationTarget,
-): Promise<{ action: PersonalGitHubSessionActionV2; release: () => void }> {
+): ReturnType<RepositoryPublicationPreparePersonalSessionAction> {
   const personal = await preparePersonalProfileAction(options, "operator.write");
   const bound = await bindPersonalGitHubSessionAction(options, personal, target);
   const { action } = bound;

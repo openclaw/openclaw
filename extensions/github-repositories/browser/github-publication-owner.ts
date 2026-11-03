@@ -23,7 +23,7 @@ type GitHubPublicationPresentation = {
   isPresented: () => boolean;
   isCurrent: () => boolean;
 };
-export type PublicationOwner = {
+type PublicationOwner = {
   formatError: (error: unknown) => string;
   artifactKey: string;
   client: ControlUiSessionOperationOwner["client"];

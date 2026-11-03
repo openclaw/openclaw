@@ -7,7 +7,9 @@ import type {
 } from "openclaw/plugin-sdk/control-ui";
 import { createSignal, createEffect, Show } from "solid-js";
 import { PullRequestDetails } from "./hovercard-read.tsx";
+import { SessionGitDiff } from "./native-components.tsx";
 import { NativeContext } from "./native-context.tsx";
+import { Icon } from "./presentation-components.tsx";
 import { PresentationContext } from "./presentation-context.ts";
 import { pullRequestEnglish } from "./pull-request-english.ts";
 import { mountPluginContent } from "./render-owned.ts";
@@ -71,7 +73,6 @@ export function createHovercardAccessoryMount(
         value &&
         (value.pullRequests.length ||
           (value.taskPullRequests?.length ?? 0) ||
-          value.branch ||
           value.status !== "ready"),
       );
     };
@@ -88,6 +89,26 @@ export function createHovercardAccessoryMount(
       return (
         <PresentationContext value={locale}>
           <NativeContext value={native}>
+            <Show when={snapshot()?.branch}>
+              {(branch) => (
+                <section class="session-hovercard__section session-hovercard__section--metadata">
+                  <div class="session-hovercard__context">
+                    <div class="session-hovercard__context-row" aria-label={branch().branch}>
+                      <span class="session-hovercard__context-icon" aria-hidden="true">
+                        <Icon name="gitBranch" />
+                      </span>
+                      <span class="session-hovercard__context-value session-hovercard__context-text">
+                        {branch().repo} <span class="session-hovercard__context-separator">/</span>{" "}
+                        {branch().branch}
+                      </span>
+                      <Show when={!snapshot()?.pullRequests.length}>
+                        <SessionGitDiff classPrefix="session-hovercard" item={branch()} />
+                      </Show>
+                    </div>
+                  </div>
+                </section>
+              )}
+            </Show>
             <Show when={hasRequests()}>
               <section class="session-hovercard__section session-hovercard__section--prs">
                 <PullRequestDetails

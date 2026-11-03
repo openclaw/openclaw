@@ -193,7 +193,6 @@ export function createHovercard({
     }),
   });
   provider.lookupSidebarRow = sidebar.findSidebarHovercardRowByKey;
-  sidebar.hidden = browser; // A registered real sidebar must not render in the browser fixture.
   const row = Object.assign(document.createElement("div"), {
     className: triggerKind === "markdown" ? "chat-thread" : "sidebar-recent-session",
   });
@@ -208,7 +207,10 @@ export function createHovercard({
   });
   (triggerKind === "markdown" ? trigger : row).dataset.sessionKey = sessionKey;
   row.append(trigger);
-  provider.append(sidebar);
+  // Browser triggers are scoped and use lookupSidebarRow; avoid mounting an unrelated native sidebar.
+  if (!browser) {
+    provider.append(sidebar);
+  }
   (browser || triggerKind === "markdown" ? provider : sidebar).append(row);
   const reads = (method: string) =>
     request.mock.calls.filter(([called]) => called === method).length;

@@ -1,8 +1,6 @@
-import type { ControlUiSessionPullRequest } from "@openclaw/gateway-protocol";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ChatPullRequestsProps } from "./chat-pull-request-shared.tsx";
 import type { GitHubPublicationView } from "./github-publication-owner.ts";
-import { chatPullRequestId, publicationPullRequestCoordinates } from "./pull-request-ids.ts";
 export { chatPullRequestId, chatBranchId } from "./pull-request-ids.ts";
 
 const DISMISSED_STORAGE_KEY = "openclaw.chat.dismissedPullRequests";
@@ -25,27 +23,6 @@ export function retainedPublication(publication: GitHubPublicationView | undefin
     publication?.locked ||
     (publication?.error && !publication.optionsUnavailable)
   );
-}
-
-/** The pull request a published receipt names. */
-export function publicationPullRequestTarget(publication: GitHubPublicationView | undefined) {
-  const result = publication?.result;
-  const url = result?.status === "published" ? URL.parse(result.url) : null;
-  const target = url ? publicationPullRequestCoordinates(url) : null;
-  return target?.kind === "pull" ? target : undefined;
-}
-
-/**
- * The listed PR that now carries a publication's lifecycle. A failed verification
- * is still the publication's own recovery state, so it never folds into the PR.
- */
-export function publicationPullRequest(
-  publication: GitHubPublicationView | undefined,
-  pullRequests: readonly ControlUiSessionPullRequest[],
-): ControlUiSessionPullRequest | undefined {
-  const target = publication?.error ? undefined : publicationPullRequestTarget(publication);
-  const id = target && chatPullRequestId(target);
-  return id ? pullRequests.find((pr) => chatPullRequestId(pr) === id) : undefined;
 }
 
 export function showWorkRow(props: ChatPullRequestsProps): boolean {

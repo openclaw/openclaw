@@ -116,7 +116,10 @@ export function ChatDetailsEnvironmentBody(props: Props) {
       </Show>
       <Show when={!props.branchName && !props.accessoryPresent && props.changes}>
         <div class="chat-details__row chat-environment__row">
-          <EnvironmentAction presented={props.presented} onOpen={props.onOpenUncommitted}>
+          <EnvironmentAction
+            presented={props.presented}
+            onOpen={props.onOpenUncommitted ?? props.details.onOpenSessionDiff}
+          >
             {() => (
               <>
                 <Icon name="diff" />

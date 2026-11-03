@@ -242,7 +242,20 @@ describe("AppSidebar catalog row lifecycle", () => {
       class {
         constructor(private readonly notify: ResizeObserverCallback) {}
         observe(target: Element) {
-          resizeCallbacks.set(target, () => this.notify([], this));
+          resizeCallbacks.set(target, () =>
+            this.notify(
+              [
+                {
+                  target,
+                  contentRect: target.getBoundingClientRect(),
+                  borderBoxSize: [],
+                  contentBoxSize: [],
+                  devicePixelContentBoxSize: [],
+                },
+              ],
+              this,
+            ),
+          );
         }
         unobserve(target: Element) {
           resizeCallbacks.delete(target);

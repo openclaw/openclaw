@@ -8,8 +8,3 @@ export class ProjectCloneError extends Error {
     this.name = "ProjectCloneError";
   }
 }
-
-export type {
-  ManagedProjectOptions as ManagedProjectGitOptions,
-  ManagedProjectSourceV1,
-} from "./managed-project-source.js";

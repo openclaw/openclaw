@@ -1,12 +1,9 @@
 import { createHash } from "node:crypto";
 import { GITHUB_ACTIONS_GRANT_PREFIX } from "../../extensions/github-repositories/board-capabilities-api.js";
 import type {
-  BoardMcpAppDescriptor,
   BoardOp,
   BoardSnapshot,
   BoardWidgetMaterializedPutParams,
-  BoardWidgetDeclared,
-  BoardWidgetGeneratedIdentity,
   BoardWidgetPutResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import { WIDGET_HTML_MAX_UTF8_BYTES } from "../../packages/gateway-protocol/src/schema/canvas.js";
@@ -21,30 +18,12 @@ import {
 } from "./board-layout.js";
 import { BOARD_REPORT_WIDGET_KIND, parseBoardReport } from "./board-report.js";
 import { BOARD_WEBSITE_WIDGET_KIND, parseBoardWebsite } from "./board-website.js";
-
-type BoardWidgetHtmlDocument = {
-  html: string;
-  revision: number;
-  sha256: string;
-  viewGeneration: string;
-  grantState: "none" | "pending" | "granted" | "rejected";
-  declared?: BoardWidgetDeclared;
-  resourceOrigins?: string[];
-};
-export type BoardWidgetHtmlViewMetadata = Omit<BoardWidgetHtmlDocument, "html">;
-export type BoardWidgetMcpAppDocument = {
-  descriptor: BoardMcpAppDescriptor;
-  revision: number;
-  instanceId: string;
-  grantState: "none" | "pending" | "granted" | "rejected";
-  declaredTools: string[];
-  interactive: boolean;
-};
-export type BoardWidgetDocument = BoardWidgetHtmlDocument | BoardWidgetMcpAppDocument;
-export type BoardSnapshotWithHtmlViewMetadata = {
-  snapshot: BoardSnapshot;
-  htmlViewMetadata: ReadonlyMap<string, BoardWidgetHtmlViewMetadata>;
-};
+import type {
+  BoardSnapshotWithHtmlViewMetadata,
+  BoardWidgetDocument,
+  BoardWidgetMcpAppDocument,
+  BoardWidgetNameIdentityMarker,
+} from "./session-actor-board-contract.js";
 
 export type BoardSessionTarget = { sessionKey: string; agentId?: string };
 
@@ -98,13 +77,6 @@ export interface BoardStore {
 }
 
 const BOARD_MAX_WIDGETS = 48;
-type BoardWidgetGeneratedIdentityMarker = Pick<BoardWidgetGeneratedIdentity, "source" | "key"> & {
-  kind: "generated";
-};
-export type BoardWidgetNameIdentityMarker =
-  | { kind: "explicit" }
-  | BoardWidgetGeneratedIdentityMarker
-  | { kind: "invalid" };
 
 function cloneBoardSnapshot(snapshot: BoardSnapshot): BoardSnapshot {
   return structuredClone(snapshot);

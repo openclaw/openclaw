@@ -53,12 +53,12 @@ import {
   createControlUiMockGatewayInitScript,
   controlUiSessionUrl,
   controlUiBundledSettingsStorageKey,
-  prepareControlUiMockGatewayScenario,
   resolvePlaywrightChromiumExecutablePath,
   startProductionControlUiE2eServer,
   startBuiltControlUiE2eServer,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../ui/src/test-helpers/control-ui-navigation.ts";
+import { prepareControlUiMockGatewayScenario } from "../ui/src/test-helpers/control-ui-plugin-fixture.ts";
 import { createControlUiSandboxFixtureServer } from "../ui/src/test-helpers/control-ui-sandbox-fixture-server.ts";
 import { createTeamScaleSidebarListOwner } from "../ui/src/test-helpers/control-ui-sidebar-list-fixture.ts";
 import { sidebarPresentationProbe } from "../ui/src/test-helpers/control-ui-sidebar-presentation-probe.test-support.ts";

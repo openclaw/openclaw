@@ -246,9 +246,9 @@ suite.define(() => {
         await popup.close();
         await reader.getByRole("button", { name: "Close link reader", exact: true }).click();
 
-        const originalProvider = await row(keys.frontend)
-          .locator("openclaw-link-reader-hovercard-provider")
-          .elementHandle();
+        const originalProvider = await openPr.evaluateHandle((element) =>
+          element.closest("openclaw-link-reader-hovercard-provider"),
+        );
         const originalLink = await openPr.elementHandle();
         await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
           sessions: {
@@ -261,7 +261,7 @@ suite.define(() => {
         const updatedPr = git(keys.frontend, 'pr[data-state="merged"]');
         await expectText(updatedPr.locator(".activity-feed__additions")).toBe("+192");
         expect(await updatedPr.locator(".activity-feed__deletions").textContent()).toBe("−30");
-        expect(await originalProvider?.evaluate((element) => element.isConnected)).toBe(true);
+        expect(await originalProvider.evaluate((element) => element?.isConnected)).toBe(true);
         expect(
           await originalLink?.evaluate(
             (element) => element.isConnected && element.getAttribute("data-state") === "merged",

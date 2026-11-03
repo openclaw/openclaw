@@ -6,7 +6,10 @@ import {
 } from "openclaw/plugin-sdk/native-github-publication-host";
 import { createNativeGitHubSessionReads as createRepositorySessionReads } from "openclaw/plugin-sdk/native-github-session-read";
 import type { OpenClawPluginServiceV2 } from "openclaw/plugin-sdk/plugin-entry";
-import { installRepositoryServices } from "../account-runtime-api.js";
+import {
+  installRepositoryServices,
+  installLegacyRepositoryOAuthLookup,
+} from "../account-runtime-api.js";
 import { createGitHubOAuthLifecycle } from "../oauth-lifecycle-api.js";
 import { createGitHubPublicationProvider } from "../publication-provider-api.js";
 import { startGitHubSessionPresentation } from "../session-presentation-service-api.js";
@@ -47,12 +50,14 @@ export function createRepositoryAccountService(
       assertCurrent();
       let oauth: ReturnType<typeof createGitHubOAuthLifecycle> | undefined = undefined;
       let uninstall: (() => void) | undefined = undefined;
+      let uninstallLegacy: (() => void) | undefined = undefined;
       let presentation: ReturnType<typeof startGitHubSessionPresentation> | undefined = undefined;
       let publication: RepositoryPublicationApi | undefined;
       let uninstallPublication: (() => void) | undefined;
       // Failed startup retains custody before a constructor can acquire subscriptions.
       stop = async () => {
         uninstallPublication?.();
+        uninstallLegacy?.();
         uninstall?.();
         await Promise.all([oauth?.stop(), presentation?.stop()]);
       };
@@ -89,6 +94,8 @@ export function createRepositoryAccountService(
         getConfig: host.getConfig,
       });
       uninstall = installRepositoryServices(host.identity, { oauth, publication }, signal);
+      uninstallLegacy = await installLegacyRepositoryOAuthLookup(host.identity);
+      assertCurrent();
       oauth.start();
     },
     async stop() {

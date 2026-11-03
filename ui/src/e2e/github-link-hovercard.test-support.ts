@@ -71,7 +71,7 @@ export async function expectModifiedNavigation(
   ).toEqual({ href, shift: true, prevented: false });
 }
 
-export const GITHUB_REFERENCE_READER: ControlUiLinkReaderDescriptor = {
+const GITHUB_REFERENCE_READER: ControlUiLinkReaderDescriptor = {
   pluginId: "github",
   id: "github",
   label: "GitHub",
@@ -84,7 +84,6 @@ export const GITHUB_REFERENCE_READER: ControlUiLinkReaderDescriptor = {
     progressive: true,
   },
 };
-export { GITHUB_REPOSITORY_PLUGIN as GITHUB_REFERENCE_PLUGIN } from "../test-helpers/repository-plugin.ts";
 
 export async function expectText(locator: Locator, ...texts: string[]): Promise<void> {
   for (const text of texts) {

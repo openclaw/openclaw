@@ -102,6 +102,11 @@ async function fixture() {
   sidebar.activePluginTabId = "briefing/daily";
   await selectSidebarView(sidebar, "pages");
   await vi.waitFor(() => expect(pageRow(sidebar, "route:usage")).not.toBeNull());
+  await vi.waitFor(() =>
+    [dailyKey, fleetKey].forEach((key) =>
+      expect(pageRow(sidebar, key)?.querySelector("a")).not.toBeNull(),
+    ),
+  );
   return {
     sidebar,
     provider,

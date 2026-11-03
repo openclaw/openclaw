@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
 import type { MarkdownRenderOptions } from "./markdown-render-options.ts";
+import {
+  prepareMarkdownTextReferenceSnapshot,
+  prepareMarkdownTextReferences,
+} from "./markdown-text-references.ts";
 import { htmlFragment, withControlUiBasePath } from "./markdown.test-support.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 
@@ -26,12 +30,20 @@ describe("toSanitizedMarkdownHtml", () => {
       key: "same",
       resolve: () => [{ start: 0, end: 5, url: `https://github.com/acme/${repo}/pull/1` }],
     });
-    expect(render("PR #1", { textReferences: [snapshot("first")] }).querySelector("a")?.href).toBe(
-      "https://github.com/acme/first/pull/1",
-    );
-    expect(render("PR #1", { textReferences: [snapshot("second")] }).querySelector("a")?.href).toBe(
-      "https://github.com/acme/second/pull/1",
-    );
+    expect(
+      render("PR #1", {
+        textReferences: prepareMarkdownTextReferences([
+          prepareMarkdownTextReferenceSnapshot(snapshot("first")),
+        ]),
+      }).querySelector("a")?.href,
+    ).toBe("https://github.com/acme/first/pull/1");
+    expect(
+      render("PR #1", {
+        textReferences: prepareMarkdownTextReferences([
+          prepareMarkdownTextReferenceSnapshot(snapshot("second")),
+        ]),
+      }).querySelector("a")?.href,
+    ).toBe("https://github.com/acme/second/pull/1");
   });
 
   it("keeps code and authored links outside provider prose and enforces UTF-16 spans", () => {
@@ -43,7 +55,9 @@ describe("toSanitizedMarkdownHtml", () => {
       },
     ]);
     const fragment = render("😀 PR #1, `PR #1`, [PR #1](https://example.com).", {
-      textReferences: [{ key: "utf16", resolve }],
+      textReferences: prepareMarkdownTextReferences([
+        prepareMarkdownTextReferenceSnapshot({ key: "utf16", resolve }),
+      ]),
     });
     expect(fragment.textContent).toContain("😀");
     expect(fragment.querySelectorAll("a")).toHaveLength(2);
@@ -54,8 +68,8 @@ describe("toSanitizedMarkdownHtml", () => {
 
   it("rejects overlapping, out-of-bounds and split-surrogate provider spans", () => {
     const fragment = render("😀 PR #1", {
-      textReferences: [
-        {
+      textReferences: prepareMarkdownTextReferences([
+        prepareMarkdownTextReferenceSnapshot({
           key: "invalid",
           resolve: () => [
             { start: 1, end: 2, url: "https://example.com/split" },
@@ -64,8 +78,8 @@ describe("toSanitizedMarkdownHtml", () => {
             { start: 3, end: 8, url: "https://example.com/one" },
             { start: 4, end: 8, url: "https://example.com/two" },
           ],
-        },
-      ],
+        }),
+      ]),
     });
     expect(fragment.querySelector("a")).toBeNull();
     expect(fragment.textContent).toContain("😀 PR #1");

@@ -155,7 +155,12 @@ export function scopeControlUiHost(
     },
   });
   return {
-    ...host,
+    // Project the public contract explicitly; activation-only preparation must not escape a view.
+    apiVersion: host.apiVersion,
+    capabilitiesVersion: host.capabilitiesVersion,
+    pluginId: host.pluginId,
+    basePath: host.basePath,
+    redact: host.redact,
     signal,
     get connection() {
       check();

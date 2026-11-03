@@ -124,6 +124,19 @@ try {
     createWorkerSessionPlacementStore({ database, now: () => 1000 }),
   );
   const context = captureOpenClawStateWorkerContext();
+  const {
+    createGitHubPublicationProvider,
+    requestCurrentGitHubOAuthRefresh,
+    requestCurrentPersonalGitHubRefresh,
+  } = await import("../../extensions/github-repositories/runtime-api.js");
+  const signal = new AbortController().signal;
+  const provider = createGitHubPublicationProvider({
+    refreshIdentity: requestCurrentGitHubOAuthRefresh,
+    refreshPersonal: requestCurrentPersonalGitHubRefresh,
+    signal,
+    getConfig: () => ({}),
+    assertCurrent: () => context.admission.assertCurrent(),
+  });
   let pendingReads = 0;
   const readPending = placements.listPendingWorkspaceResultsAsync.bind(placements);
   placements.listPendingWorkspaceResultsAsync = (...args) => {
@@ -137,11 +150,12 @@ try {
   let active = 0;
   let maxActive = 0;
   const coordinator = createGitHubPublicationCoordinatorMethods({
+    provider,
     placements,
     assertCurrent: () => context.admission.assertCurrent(),
     requestForClaimV2: unexpected,
     getCommittedRuntimeConfig: () => ({}),
-    signal: new AbortController().signal,
+    signal,
     sameWorktree: unexpected,
     processRow: async (row) => {
       processed++;
@@ -276,7 +290,7 @@ async function seedPublicationRequests(database: OpenClawStateDatabase, count: n
             identity: {
               source: "system-configured",
               profileId: "synthetic",
-              account: { accountId: 1, login: "synthetic", avatarUrl: null },
+              account: { accountId: 1, login: "synthetic" },
             },
             assertCurrent() {},
           });

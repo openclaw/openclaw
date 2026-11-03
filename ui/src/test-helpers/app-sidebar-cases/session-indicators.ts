@@ -574,8 +574,8 @@ describe("AppSidebar session indicators", () => {
     });
 
     await waitForFast(() => {
-      expect(sidebar.querySelector('[data-pull-request-state="open"]')).not.toBeNull();
-      expect(sidebar.querySelector('[data-pull-request-state="merged"]')).not.toBeNull();
+      expect(sidebar.querySelector('[data-pull-request-state="open"] svg')).not.toBeNull();
+      expect(sidebar.querySelector('[data-pull-request-state="merged"] svg')).not.toBeNull();
     });
     // Opening chat hydrates its detailed summary from the same last-known snapshot.
     // It must not add a second PR icon beside the sidebar's existing indicator.
@@ -626,10 +626,10 @@ describe("AppSidebar session indicators", () => {
     expect(runningUnread?.querySelector(".sr-only")?.textContent).toBe("Unread");
 
     const openPullRequestIcon = sidebar.querySelector(
-      `[data-session-key="${keys.openPullRequest}"] [data-pull-request-state="open"] .session-css-icon`,
+      `[data-session-key="${keys.openPullRequest}"] [data-pull-request-state="open"] svg`,
     );
     const mergedPullRequestIcon = sidebar.querySelector(
-      `[data-session-key="${keys.mergedPullRequest}"] [data-pull-request-state="merged"] .session-css-icon`,
+      `[data-session-key="${keys.mergedPullRequest}"] [data-pull-request-state="merged"] svg`,
     );
     expect(openPullRequestIcon).not.toBeNull();
     expect(mergedPullRequestIcon).not.toBeNull();
@@ -638,9 +638,11 @@ describe("AppSidebar session indicators", () => {
     for (const key of [keys.openPullRequest, keys.mergedPullRequest]) {
       const row = sidebar.querySelector(`[data-session-key="${key}"]`);
       expectEmptyLead(row);
-      expect(row?.querySelector(".session-row-badges [data-pull-request-state]")).not.toBeNull();
+      expect(
+        row?.querySelector(".sidebar-recent-session__details-endcap [data-pull-request-state]"),
+      ).not.toBeNull();
       expect(row?.querySelector("a")?.hasAttribute("title")).toBe(false);
-      expect(row?.querySelector("[data-pull-request-state]")?.getAttribute("title")).toContain(
+      expect(row?.querySelector("[data-pull-request-state]")?.getAttribute("aria-label")).toContain(
         "#1",
       );
     }

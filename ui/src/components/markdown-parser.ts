@@ -24,7 +24,6 @@ import { hasMarkdownLinkBoundaries } from "./markdown-link-boundary.ts";
 import type { MarkdownRenderEnv } from "./markdown-render-options.ts";
 import { installMarkdownSessionLinks } from "./markdown-session-links.ts";
 import { installMarkdownTables } from "./markdown-tables.ts";
-import { installMarkdownTextReferences } from "./markdown-text-references.ts";
 import {
   markdownInlineChildren,
   replaceMarkdownTextMatches,
@@ -565,7 +564,12 @@ export function createMarkdownParser(): MarkdownItParser {
     }
   });
 
-  installMarkdownTextReferences(markdownParser);
+  markdownParser.core.ruler.before("web-link-classes", "plugin-text-references", (state) => {
+    // SAFETY: markdown.ts supplies normalized options to markdown-it's untyped env.
+    const env = state.env as Partial<MarkdownRenderEnv> | undefined;
+    const references = env?.textReferences;
+    references?.snapshots[0]?.render(state, references.snapshots);
+  });
 
   markdownParser.core.ruler.after("inline", "task-lists", (state) => {
     for (const [index, inline] of state.tokens.entries()) {

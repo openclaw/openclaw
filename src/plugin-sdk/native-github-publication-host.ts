@@ -36,7 +36,7 @@ export {
   RepositoryPublicationRequesterUnavailableError as NativeGitHubPublicationRequesterUnavailableError,
 } from "../gateway/github-publication-errors.js";
 export type { RepositoryPublicationObjectPlan as NativeGitHubPublicationObjectPlan } from "../gateway/repository-publication-contract.js";
-export type { RepositoryPublicationApi as NativeGitHubPublicationApi } from "../gateway/workspace-publication-provider.js";
+export type { RepositoryPublicationApi as NativeGitHubPublicationApi } from "../gateway/repository-publication-contract.js";
 
 export type { RepositoryWorkerIdentity as NativeGitHubWorkerIdentity } from "../gateway/repository-publication-contract.js";
 export { performRepositoryWorkerIdentity as performNativeGitHubWorkerIdentity } from "../gateway/repository-worker-identity-transfer.js";

@@ -37,9 +37,9 @@ import {
   createControlUiMockBootstrapConfig,
   createControlUiMockGatewayInitScript,
   createControlUiMockSameOriginGatewayScript,
-  prepareControlUiMockGatewayScenario,
   type ControlUiMockGatewayScenario,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
+import { prepareControlUiMockGatewayScenario } from "../ui/src/test-helpers/control-ui-plugin-fixture.ts";
 import {
   createControlUiChatHistoryMessage as chatHistoryMessage,
   createControlUiMockSessionRow as sessionRow,

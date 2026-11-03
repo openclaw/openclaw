@@ -5,7 +5,10 @@ import type {
   BoardWidgetPutResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { SessionRowChange } from "../sessions/session-row-changes.js";
-import type { BoardSnapshotWithHtmlViewMetadata, BoardWidgetDocument } from "./board-store.js";
+import type {
+  BoardSnapshotWithHtmlViewMetadata,
+  BoardWidgetDocument,
+} from "./session-actor-board-contract.js";
 
 export type BoardWriteOutcome<T> = { value: T; changes: SessionRowChange[] };
 

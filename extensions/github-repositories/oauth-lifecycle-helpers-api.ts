@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { withAgentRosterFactsBatch, listAgentIds } from "openclaw/plugin-sdk/agent-scope-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   matchesAgentLifecycleBinding,
   matchesAgentLifecycleBindingAsync,

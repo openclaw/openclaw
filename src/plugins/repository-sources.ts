@@ -3,7 +3,6 @@ import type { PluginRegistry } from "./registry-types.js";
 import { normalizePluginRepositoryUrl } from "./repository-source-url.js";
 import { getActivePluginRegistry } from "./runtime.js";
 import { getPluginRegistryForContext } from "./runtime/gateway-request-scope.js";
-export { normalizePluginRepositoryUrl } from "./repository-source-url.js";
 
 const SourceId = /^[a-z0-9][a-z0-9._-]{0,127}\/[a-z0-9][a-z0-9._-]{0,127}$/u;
 

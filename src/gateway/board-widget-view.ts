@@ -1,5 +1,6 @@
 import { BoardValidationError } from "../boards/board-layout.js";
-import type { BoardSessionTarget, BoardStore, BoardWidgetDocument } from "../boards/board-store.js";
+import type { BoardSessionTarget, BoardStore } from "../boards/board-store.js";
+import type { BoardWidgetDocument } from "../boards/session-actor-board-contract.js";
 import { requireBoardViewTicketAuthority, verifyBoardViewTicket } from "./board-view-ticket.js";
 import { prepareRemoteIngressSessionRead } from "./remote-ingress-session-read.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";

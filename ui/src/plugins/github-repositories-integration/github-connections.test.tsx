@@ -1,9 +1,10 @@
 /* @vitest-environment jsdom */
+
+import type { ToolsGitHubStatusResult } from "@openclaw/gateway-protocol";
 import { expect, it, vi } from "vitest";
 import { settingsViews } from "../../../../extensions/github-repositories/browser/index.tsx";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ToolsGitHubStatusResult } from "../../api/types.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { disconnectedGitHub } from "../../pages/profile/profile-rpc.test-support.ts";
@@ -440,9 +441,9 @@ it("disables connection controls while a PAT save is pending", async () => {
 it.each([false, true])(
   "settles a queued PAT save through the Settings facade (revoked: %s)",
   async (revoked) => {
-    const queued = createDeferredCore<void>();
-    const release = createDeferredCore<void>();
-    const settled = createDeferredCore<void>();
+    const queued = createDeferredCore();
+    const release = createDeferredCore();
+    const settled = createDeferredCore();
     const savedIdentity = { ...system, account: { login: "saved-account" } };
     let saved = false;
     const request = vi.fn(async (method: string) => {

@@ -2,24 +2,15 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { pluginInstanceInvocation } from "../plugins/plugin-instance-invocation.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
-import {
-  prepareFactoryGitHubIdentity,
-  type FactoryGitHubIdentityPreparation,
-} from "./factory-github-proof.js";
-import type { PreparedRepositorySessionRead } from "./repository-session-read.types.js";
-
-export type RepositoryReadCredentialPreparation<T extends { revoke?: () => Promise<void> }> =
-  FactoryGitHubIdentityPreparation<T>;
+import { prepareFactoryGitHubIdentity } from "./factory-github-proof.js";
+import type {
+  PreparedRepositorySessionRead,
+  RepositoryReadCredentialPreparation,
+} from "./repository-session-read.types.js";
 
 /** Request-only source custody; callers cannot supply a client, profile or session incarnation. */
 export function captureRepositorySessionRequestRead() {
   return createRepositorySessionRequestRead(getPluginRuntimeGatewayRequestScope());
-}
-
-export function prepareNativeRepositorySessionRequestRead(
-  options: import("./server-methods/types.js").GatewayRequestHandlerOptions,
-) {
-  return createRepositorySessionRequestRead(options);
 }
 
 function createRepositorySessionRequestRead(

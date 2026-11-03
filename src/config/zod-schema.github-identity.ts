@@ -41,9 +41,3 @@ const credentialSchemas = [
   }),
 ] as const;
 export const GitHubToolIdentitySchema = z.discriminatedUnion("kind", credentialSchemas).optional();
-export const AgentGitHubToolIdentitySchema = z
-  .discriminatedUnion("kind", [
-    credentialSchemas[0].extend({ allowInSandbox: z.boolean().optional() }),
-    credentialSchemas[1].extend({ allowInSandbox: z.boolean().optional() }),
-  ])
-  .optional();

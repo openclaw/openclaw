@@ -20,6 +20,7 @@ import {
   githubPublicationPushArgs,
   githubPublicationUpdateRefArgs,
   requireGitHubPublicationCommit,
+  requirePublicationCommand,
   runPublicationCommand,
 } from "./github-publication-git-transport.js";
 import { performRepositoryPublicationGit } from "./repository-publication-git-transfer.js";
@@ -307,7 +308,7 @@ describe("GitHub publication index update", () => {
     const hooks = await makeDirectory("hooks");
     const marker = path.join(hooks, "invoked");
     const hookEnv = { ...process.env, OPENCLAW_PUBLICATION_HOOK_MARKER: marker };
-    const run = (argv: string[]) => f.run(argv, { env: hookEnv });
+    const run = (argv: string[]) => requirePublicationCommand(argv, { cwd: f.cwd, env: hookEnv });
     await git(remote, ["init", "--bare"]);
     for (const hook of ["pre-push", "post-index-change", "reference-transaction"]) {
       await fs.writeFile(

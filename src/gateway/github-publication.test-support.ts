@@ -5,8 +5,10 @@ import path from "node:path";
 import { StatementSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeEach, expect, onTestFinished, vi } from "vitest";
-import { currentGitHubPublicationConfig } from "../../extensions/github-repositories/runtime-api.js";
-import { createGitHubPublicationProvider } from "../../extensions/github-repositories/runtime-api.js";
+import {
+  currentGitHubPublicationConfig,
+  createGitHubPublicationProvider,
+} from "../../extensions/github-repositories/runtime-api.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -253,7 +255,7 @@ type PublicationFixtureOptions<T> = Omit<
   getCommittedRuntimeConfig?: () => OpenClawConfig;
 };
 
-export function createTestPublicationProvider(
+function createTestPublicationProvider(
   getConfig = currentGitHubPublicationConfig,
   controller = new AbortController(),
 ) {

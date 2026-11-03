@@ -22,7 +22,7 @@ import type {
   RepositoryPublicationPersonalSessionAction,
 } from "./repository-publication-contract.js";
 export type NativeReceiptPublisher = ReturnType<typeof storagePublisher>;
-export function storagePublisher(lease: RepositoryPublicationPublisher) {
+function storagePublisher(lease: RepositoryPublicationPublisher) {
   lease.assertCurrent();
   assertNativePublisherProvenance(lease.provenance);
   return { ...lease.provenance, lease };

@@ -16,7 +16,7 @@ import { connectedElementRef, elementRef } from "../../lib/reactive/element-ref.
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { projectPresentation } from "../../lib/reactive/presentation.ts";
 import { PluginContributions } from "../../plugins/control-ui-contributions.solid.tsx";
-import { PluginSurface } from "../../plugins/control-ui-view.solid.tsx";
+import { PluginSurface } from "../../plugins/control-ui-surfaces.solid.tsx";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { hasTerminalRunStatus, isChatRunWorking } from "./chat-run-working.ts";
 import { forwardChatWheelToTranscript } from "./chat-scroll-input.ts";

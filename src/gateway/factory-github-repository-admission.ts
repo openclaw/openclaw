@@ -2,7 +2,19 @@ import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import type { GitHubRepositoryAdmissionRequest } from "../agents/github-credential-reader.js";
 import { readResponseWithLimit } from "../infra/http-response-body.js";
-import type { FactoryGitHubProofClaim } from "./factory-github-proof.js";
+type SessionBinding = {
+  kind: "session";
+  agentId: string;
+  sessionKey: string;
+  sessionId: string;
+  lifecycleRevision: string | null;
+  requestDigest: string;
+};
+export type FactoryGitHubProofClaim = {
+  purpose: "session-item-read";
+  binding: SessionBinding;
+};
+
 const id = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
 const receiptSchema = z.strictObject({
   version: z.literal(1),

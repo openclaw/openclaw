@@ -7,9 +7,11 @@ import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { freezeTrustedJsonSnapshot } from "../shared/immutable-data.js";
 import { stripMarkdown } from "../shared/text/strip-markdown.js";
 import type { ControlUiSessionPullRequestSnapshot } from "./control-ui-contract.js";
-import type { RepositorySessionPresentation } from "./control-ui-session-pr-runtime.js";
 import { observeProjectedRepositorySession } from "./control-ui-session-pr-source.js";
-import type { RepositorySessionObservation } from "./repository-session-read.types.js";
+import type {
+  RepositorySessionPresentation,
+  RepositorySessionObservation,
+} from "./repository-session-read.types.js";
 import { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
 import type { ResolvedInProcessGatewayDispatch } from "./server-plugin-in-process-dispatch.types.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";

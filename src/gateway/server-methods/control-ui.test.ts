@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { readGitHubConfig } from "../../../extensions/github-repositories/config-api.js";
 import * as checkDetails from "../../../extensions/github-repositories/control-ui-session-pr-check-details-api.js";
 import {
@@ -30,10 +30,12 @@ import {
   startTestRepositorySessionPresentation,
   createTestRepositorySessionPresentation,
 } from "../github-account-service.test-support.js";
-import { createContext } from "../server-plugin-in-process-dispatch.test-support.js";
 import {
   createControlUiRequestOptions,
   controlUiGitHubConfig as configuredGitHub,
+  expectControlUiReply as expectReply,
+  expectControlUiError as expectError,
+  expectControlUiUnavailable as expectUnavailable,
 } from "./control-ui-request.test-support.js";
 import { controlUiHandlers as coreControlUiHandlers } from "./control-ui.js";
 import { identifiedClient, soloClient } from "./sessions-sharing.test-support.js";
@@ -100,18 +102,6 @@ function githubTarget(number: number, repo = "openclaw", owner = "openclaw") {
 const json = (value: unknown) => new Response(JSON.stringify(value));
 const previewUnavailable =
   "The configured Control UI GitHub credential is unavailable. Check plugins.entries.github-repositories.config.service.token and its host binding, then retry.";
-
-function expectReply(respond: RespondFn, payload: unknown) {
-  expect(respond).toHaveBeenCalledWith(true, payload, undefined);
-}
-
-function expectError(respond: RespondFn, error: unknown) {
-  expect(respond).toHaveBeenCalledWith(false, undefined, error);
-}
-
-function expectUnavailable(respond: RespondFn) {
-  expectError(respond, expect.objectContaining({ code: "UNAVAILABLE" }));
-}
 
 function issueFields(title: string, extra: Record<string, unknown> = {}) {
   return {
@@ -596,9 +586,7 @@ describe("controlUi.sessionPullRequests.subscribe", () => {
       load,
     });
     const client = { ...soloClient(), connId: "conn-control-ui" };
-    const context = createContext();
     const service = await createTestRepositorySessionPresentation(
-      context,
       scheduler,
       client,
       subscriptions.replace,
@@ -608,7 +596,7 @@ describe("controlUi.sessionPullRequests.subscribe", () => {
       { sessionKeys: ["agent:main:main"], refreshSessionKeys: ["agent:main:main"] },
       {
         client,
-        context,
+        context: service.context,
       },
     );
     try {
@@ -625,7 +613,7 @@ describe("controlUi.sessionPullRequests.subscribe", () => {
         { sessionKeys: ["agent:main:main"], passiveSessionKeys: ["agent:main:sidebar"] },
         {
           client,
-          context,
+          context: service.context,
         },
       );
       expect(respond).toHaveBeenCalledTimes(2);
@@ -672,21 +660,26 @@ describe("controlUi.sessionPullRequests.subscribe", () => {
         throw new Error("session reader unavailable");
       },
     });
+    const client = { ...soloClient(), connId: "conn-control-ui" };
+    const service = await createTestRepositorySessionPresentation(
+      scheduler,
+      client,
+      subscriptions.replace,
+    );
+    service.context.logGateway.warn = warn;
     try {
       const { respond, send } = fixture("sessionPullRequests.subscribe");
       await send(
         { sessionKeys: ["agent:main:main"] },
         {
-          client: { connId: "conn-control-ui" },
-          context: {
-            repositorySessions: { presentation: subscriptions },
-            logGateway: { warn },
-          },
+          client,
+          context: service.context,
         },
       );
       expectReply(respond, { subscribed: true });
     } finally {
       await subscriptions.stop();
+      await service.stop();
       await scheduler.stop();
     }
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("session reader unavailable"));
@@ -706,26 +699,27 @@ describe("controlUi.sessionPullRequests.subscribe", () => {
     async ({ sessionKeys, expected, subscribed, valid }) => {
       const { promise: hydration, resolve: finishHydration } = createDeferred();
       const admitted = createDeferred();
-      const replace = valid
-        ? vi.fn(
-            (
-              _connId: string,
-              _sessionKeys: readonly string[],
-              _refreshSessionKeys: ReadonlySet<string> | undefined,
-              onAdmitted: (() => void) | undefined,
-            ) => {
-              onAdmitted?.();
-              admitted.resolve();
-              return hydration;
-            },
-          )
-        : vi.fn();
+      const replace = vi.fn<Parameters<typeof createTestRepositorySessionPresentation>[2]>(
+        async (_connId, _keys, _refresh, onAdmitted) => {
+          onAdmitted?.();
+          admitted.resolve();
+          await hydration;
+        },
+      );
+      const scheduler = createTestGatewayScheduler();
+      const client = { ...soloClient(), connId: "conn-control-ui" };
+      const service = await createTestRepositorySessionPresentation(scheduler, client, replace);
+      onTestFinished(async () => {
+        finishHydration();
+        await service.stop();
+        await scheduler.stop();
+      });
       const { respond, send } = fixture("sessionPullRequests.subscribe");
       const request = send(
         { sessionKeys },
         {
-          client: { connId: "conn-control-ui" },
-          context: { repositorySessions: { presentation: { replace } } },
+          client,
+          context: service.context,
         },
       );
       if (!valid) {
@@ -737,12 +731,11 @@ describe("controlUi.sessionPullRequests.subscribe", () => {
         });
         return;
       }
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         admitted.promise,
-        request.then(() => {
-          throw new Error("Subscription request completed without admission");
-        }),
-      ]);
+        request,
+        "Subscription request completed without admission",
+      );
       expect(replace).toHaveBeenCalledWith(
         "conn-control-ui",
         expected,

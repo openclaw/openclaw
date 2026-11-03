@@ -1,8 +1,5 @@
 import { createRoot, createSignal } from "solid-js";
-import {
-  createGitHubIdentityView,
-  type GitHubIdentityView,
-} from "../../../../extensions/github-repositories/browser/github-identity-view.tsx";
+import { createGitHubIdentityView } from "../../../../extensions/github-repositories/browser/github-identity-view.tsx";
 import {
   createGitHubIdentity,
   type GitHubIdentity,
@@ -72,7 +69,7 @@ type IdentityState = ReturnType<GitHubIdentity["read"]>;
 
 export function githubIdentityViewFixture(
   overrides: Partial<IdentityState> = {},
-): GitHubIdentityView {
+): ReturnType<typeof createGitHubIdentityView> {
   const state: IdentityState = {
     status: null,
     personal: null,

@@ -45,7 +45,6 @@ import {
 } from "./tool-identity-api.js";
 type PersonalAccountHost = ReturnType<typeof createRepositoryPersonalAccountHostV1>;
 type ProfileLease = Parameters<Parameters<PersonalAccountHost["withProfile"]>[1]>[0];
-export type PersonalGitHubActionV2 = PersonalGitHubAction & { signal: AbortSignal };
 export type { PersonalGitHubAction } from "./personal-status-api.js";
 const profileDir = (profileId: string) =>
   resolveManagedGitHubProfileDir({ agentId: "", scope: "personal", profileId });

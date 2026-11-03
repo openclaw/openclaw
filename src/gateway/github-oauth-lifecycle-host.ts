@@ -28,9 +28,9 @@ import {
   registerOpenClawStateDatabaseLifecycleListener,
 } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-export type GitHubOAuthInventory = Awaited<ReturnType<typeof listGitHubAuthorizationRecords>>;
+type GitHubOAuthInventory = Awaited<ReturnType<typeof listGitHubAuthorizationRecords>>;
 
-export function createGitHubOAuthInventoryReader(onChange: () => void, signal?: AbortSignal) {
+function createGitHubOAuthInventoryReader(onChange: () => void, signal?: AbortSignal) {
   let dirty = true;
   let databasePath: string | undefined;
   let snapshot: GitHubOAuthInventory | undefined;

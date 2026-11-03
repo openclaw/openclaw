@@ -18,7 +18,7 @@ export type {
   RepositorySessionReads as NativeGitHubSessionReads,
   RepositorySessionReadChange as NativeGitHubSessionReadChange,
   RepositorySessionPresentation as NativeGitHubSessionPresentation,
-} from "../gateway/control-ui-session-pr-runtime.js";
+} from "../gateway/repository-session-read.types.js";
 
 /** Create once in an admitted service; request and scheduler calls borrow this actual owner. */
 export function createNativeGitHubSessionReads() {
@@ -50,7 +50,7 @@ export function createNativeGitHubSessionReads() {
   return Object.freeze({
     ...reads,
     installPresentation: (
-      provider: import("../gateway/control-ui-session-pr-runtime.js").RepositorySessionPresentation,
+      provider: import("../gateway/repository-session-read.types.js").RepositorySessionPresentation,
     ) => host.installPresentation(wrapCurrentPluginInstance(provider)),
   });
 }
@@ -79,4 +79,4 @@ export async function captureNativeGitHubSessionRequestRead() {
   return runtime.captureRepositorySessionRequestRead();
 }
 
-export type { RepositoryReadCredentialPreparation as NativeGitHubReadCredentialPreparation } from "../gateway/control-ui-session-pr-request-read.js";
+export type { RepositoryReadCredentialPreparation as NativeGitHubReadCredentialPreparation } from "../gateway/repository-session-read.types.js";

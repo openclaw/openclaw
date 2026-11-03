@@ -7,8 +7,8 @@ import type { GuestWelcomeHandle } from "../../app/guest-welcome-handle.ts";
 import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { loadChatPendingInputs } from "./chat-pending-inputs.ts";
+import type { ChatPendingInputView } from "./chat-pending-inputs.types.ts";
 import type { ChatProviderReviewOwner } from "./chat-provider-review-controller.tsx";
-import type { ChatProps, ChatViewFrame } from "./chat-view-frame.ts";
 import { renderGuestWelcomeStatus } from "./components/chat-guest-welcome-status.tsx";
 import { ChatLazyBoundary } from "./components/chat-lazy-boundary.tsx";
 import type { ChatRunError } from "./run-lifecycle.ts";
@@ -110,8 +110,8 @@ export function renderChatComposerNotices(props: ChatComposerNoticesProps) {
 }
 
 export function ChatSavedInputNavigation(input: {
-  pendingInputs: ChatViewFrame["pendingInputs"];
-  historyState: ChatProps["historyState"];
+  pendingInputs: ChatPendingInputView | undefined;
+  historyState: Parameters<typeof loadChatPendingInputs>[0] | undefined;
 }) {
   const pendingInputs = () => input.pendingInputs;
   const pendingButton = (page: "earlier" | "latest") => (

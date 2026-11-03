@@ -1,5 +1,4 @@
 import { beforeEach, afterEach, describe, expect, it } from "vitest";
-import { githubTextReferenceSnapshot } from "../../../../../extensions/github-repositories/browser/text-reference-api.ts";
 import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
 import { githubReferenceOptions } from "../../../test-helpers/github-text-references.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
@@ -90,10 +89,10 @@ describe("GitHub transcript reference snapshots", () => {
     const chip = () => container.querySelector<HTMLAnchorElement>("a.markdown-github-item");
     rerender();
     expect(chip()).toBeNull();
-    props.textReferences = [githubTextReferenceSnapshot()];
+    props.textReferences = githubReferenceOptions().textReferences;
     rerender();
     expect(chip()?.href).toBe("https://github.com/openclaw/clawsweeper/pull/1576");
-    props.textReferences = [];
+    props.textReferences = undefined;
     rerender();
     expect(chip()).toBeNull();
   });

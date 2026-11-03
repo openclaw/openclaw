@@ -2,6 +2,7 @@ import {
   getGatewayServiceLifetime,
   type GatewayRequestContext,
 } from "openclaw/plugin-sdk/gateway-runtime";
+import { installNativeGitHubLegacyOAuthLookup } from "openclaw/plugin-sdk/native-github-account-host";
 import type { NativeGitHubPublicationApi as RepositoryPublicationApi } from "openclaw/plugin-sdk/native-github-publication-host";
 import { captureNativeGitHubServiceHost as captureRepositoryServiceHost } from "openclaw/plugin-sdk/native-github-publication-host";
 import type { createGitHubOAuthLifecycle } from "./oauth-lifecycle-api.js";
@@ -56,4 +57,17 @@ export async function requestCurrentPersonalGitHubRefresh(owner: string): Promis
     throw new Error("My GitHub lifecycle is unavailable; retry after Gateway startup.");
   }
   await current.oauth.personal.refresh(owner);
+}
+
+/** The compatibility reader captures this exact canonical record, never its replacement. */
+export async function installLegacyRepositoryOAuthLookup(owner: AbortSignal): Promise<() => void> {
+  const record = services.get(owner);
+  if (!record || record.signal.aborted) {
+    throw new Error("GitHub repository services are unavailable for legacy lookup.");
+  }
+  return await installNativeGitHubLegacyOAuthLookup(
+    () =>
+      services.get(owner) === record && !record.signal.aborted ? record.services.oauth : undefined,
+    record.signal,
+  );
 }

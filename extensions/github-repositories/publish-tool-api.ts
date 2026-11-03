@@ -19,7 +19,7 @@ import {
 } from "@openclaw/gateway-protocol";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { stringEnum } from "openclaw/plugin-sdk/core";
+import { stringEnum } from "openclaw/plugin-sdk/channel-actions";
 import type { AnyAgentTool, OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { jsonResult } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";

@@ -17,7 +17,7 @@ import { projectOwner } from "../../lib/reactive/projection.ts";
 import { registerControlUiEnglish } from "../control-ui-english.ts";
 import { createControlUiSettingsComponents } from "../control-ui-settings-components.solid.tsx";
 registerControlUiEnglish(english);
-export function settingsTestContext(
+function settingsTestContext(
   overrides: Partial<ControlUiSettingsContextV2> = {},
 ): ControlUiSettingsContextV2 {
   const signal = new AbortController().signal;

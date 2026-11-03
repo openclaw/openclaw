@@ -17,9 +17,11 @@ import {
   createBoardGrantSnapshot,
   createBoardWidgetPutSnapshot,
   normalizeBoardWidgetPutParams,
-  type BoardWidgetHtmlViewMetadata,
-  type BoardSnapshotWithHtmlViewMetadata,
 } from "./board-store.js";
+import type {
+  BoardWidgetHtmlViewMetadata,
+  BoardSnapshotWithHtmlViewMetadata,
+} from "./session-actor-board-contract.js";
 import {
   createBoardWidgetContentFields,
   parseDescriptor,

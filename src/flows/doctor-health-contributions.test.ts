@@ -23,6 +23,7 @@ import {
   createDoctorLintContext,
   createDoctorPrompterFixture,
   createGatewayWriterFixture,
+  requireDoctorContribution,
   resolveDoctorHealthContributions,
   runDoctorHealthContributionList,
 } from "./doctor-health-contributions.test-support.js";
@@ -617,14 +618,6 @@ vi.mock("../utils.js", async (importOriginal) => {
 vi.mock("../cli/command-format.js", () => ({
   formatCliCommand: mocks.formatCliCommand,
 }));
-
-function requireDoctorContribution(id: string) {
-  const contribution = resolveDoctorHealthContributions().find((entry) => entry.id === id);
-  if (!contribution) {
-    throw new Error(`expected doctor contribution ${id}`);
-  }
-  return contribution;
-}
 
 async function requireDoctorHealthCheck(id: string) {
   const check = (await resolveDoctorContributionHealthChecks()).find((entry) => entry.id === id);

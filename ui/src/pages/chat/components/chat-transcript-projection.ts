@@ -1,6 +1,5 @@
 import type { JSX } from "@solidjs/web";
 import { currentThemeBranding } from "../../../app/theme-branding.ts";
-import { markdownTextReferenceSignature } from "../../../components/markdown-render-options.ts";
 import { i18n } from "../../../i18n/index.ts";
 import { channelSenderAvatarMemoKey } from "../../../lib/chat/channel-sender-avatar.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
@@ -505,7 +504,7 @@ export function projectChatTranscript(
     props.allowExternalEmbedUrls ?? false,
     Boolean(props.fetchLinkFavicon),
     props.pluginToolIcons,
-    markdownTextReferenceSignature(props.textReferences),
+    props.textReferences?.key ?? "",
     threadContextWindow,
     Boolean(props.onSetReply),
     props.messageReactions,

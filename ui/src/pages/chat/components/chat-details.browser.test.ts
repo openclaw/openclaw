@@ -563,10 +563,12 @@ describe("chat Details presentation", () => {
     expect(sessionSection.querySelector(":scope > summary")).toBeNull();
     expect(progressSection.open).toBe(true);
     expect(
-      session.querySelector(
-        '[data-details-group="pull-requests"], [data-details-group="automations"], [data-details-group="subagents"], [data-details-group="processes"]',
-      ),
-    ).toBeNull();
+      [
+        ...session.querySelectorAll<HTMLElement>(
+          '[data-details-group="pull-requests"], [data-details-group="automations"], [data-details-group="subagents"], [data-details-group="processes"]',
+        ),
+      ].filter((group) => group.checkVisibility()),
+    ).toEqual([]);
     await toggle(progressSection);
     expect(progressSection.open).toBe(false);
     expect(

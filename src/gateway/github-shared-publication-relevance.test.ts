@@ -34,8 +34,8 @@ it("stops discovering a superseded failure without rewriting its receipt or exac
   expect(covered).toHaveBeenCalledOnce();
   expect(covered).toHaveBeenCalledWith(
     expect.objectContaining({
-      source_head_commit: row.source_head_commit,
-      workspace_tree: row.workspace_tree,
+      sourceHeadCommit: row.source_head_commit,
+      workspaceTree: row.workspace_tree,
     }),
   );
   expect(
@@ -78,8 +78,8 @@ it("retires covered repository-only failures with the same read-only contract", 
   expect(covered).toHaveBeenCalledWith({
     repository: row.repository,
     branch: row.branch,
-    source_head_commit: row.source_head_commit,
-    workspace_tree: row.workspace_tree,
+    sourceHeadCommit: row.source_head_commit,
+    workspaceTree: row.workspace_tree,
   });
   expect(
     (await coordinator.sharedStatus(sharedPublicationSession, row.request_id))?.result.status,

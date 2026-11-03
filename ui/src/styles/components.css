@@ -3126,6 +3126,7 @@ select.data-table-pagination__size {
   .activity-pill__spinner,
   .chat-details-processes__spinner,
   .chat-details-subagents__spinner,
+  .chat-processes__spinner::before,
   .subagents-desktop__spinner::before,
   .session-worker-stop__spinner,
   .approval-page__spinner,
@@ -3147,7 +3148,8 @@ select.data-table-pagination__size {
 
   .settings-status__dot,
   .cron-table__state-dot,
-  .activity-pulse__running {
+  .activity-pulse__running,
+  .activity-feed__presence-dot {
     forced-color-adjust: none;
     background: CanvasText !important;
   }

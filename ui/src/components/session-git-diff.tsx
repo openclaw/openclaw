@@ -9,7 +9,7 @@ type GitDiffValuesProps = {
 };
 
 /** Absent Git facts are not zero-line changes. Callers retain their layout and locale. */
-export function GitDiffValues(props: GitDiffValuesProps) {
+function GitDiffValues(props: GitDiffValuesProps) {
   return (
     <>
       <Show when={props.item.additions !== undefined}>

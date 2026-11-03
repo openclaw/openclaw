@@ -139,6 +139,12 @@ it("renders identity before Usage statistics and opens the usage page", async ()
     email: profile.emails[0],
     name: profile.displayName ?? undefined,
   });
+  harness.emitHello(
+    gatewayHelloForMethods(
+      ["tools.github.status", "users.github.status", "users.listModelAccounts"],
+      ["operator.read", "operator.write"],
+    ),
+  );
   const page = mountProfilePage(harness.context);
   await waitForFast(() => expect(page.querySelector("#settings-profile-identity")).not.toBeNull());
   await waitForFast(() =>

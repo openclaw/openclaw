@@ -9,7 +9,7 @@
  *   sampled allocation separately. Results include stable display-fact digests.
  * --shared-options: the same display workload across 40 agents with a shared OAuth
  *   profile and real synthetic OAuth-record worker reads; publication expiry is unused.
- * --service-preview --api-owner=src/gateway/<frozen-base>.ts: alternate five
+ * --service-preview --api-owner=extensions/github-repositories/<frozen-base>.ts: alternate five
  *   base/candidate samples through the host facade and real preview cache, with
  *   64 concurrent synthetic clients sharing 200 links over 10k session references.
  *   Warm reads must issue zero HTTP requests and preserve the response digest;
@@ -17,7 +17,7 @@
  * Cold p95 with five samples is context only. Mock delays honor the real preview
  * 2s deadline, so failures at 800ms/hop are reported rather than excluded.
  * Run base/candidate AB/BA. The optional owner is a frozen source file adjacent to
- * github-tool-identity.ts so its relative imports retain the same dependency graph.
+ * tool-identity-api.ts so its relative imports retain the same dependency graph.
  * Acceptance: byte-identical previews and unchanged upstream/auth counts, lower
  * CPU/allocation per warm read. Timing and allocation passes remain separate.
  * Default mode: 10k synthetic session references share 200 issue/PR links across eight repos and
@@ -34,11 +34,13 @@ import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
-import { loadControlUiGitHubPreview } from "../../extensions/github/api.js";
-import type { ControlUiGitHubPreviewIdentity } from "../../extensions/github/src/preview-contract.js";
-import type { ControlUiGitHubPreviewTarget } from "../../extensions/github/src/preview.js";
+import { clearGitHubCredentialVerificationCache } from "../../extensions/github-repositories/oauth-api.js";
+import {
+  loadControlUiGitHubPreview,
+  type ControlUiGitHubPreviewIdentity,
+  type ControlUiGitHubPreviewTarget,
+} from "../../extensions/github/api.js";
 import { githubPreviewView } from "../../extensions/github/src/view-model.js";
-import { clearGitHubCredentialVerificationCache } from "../../src/agents/github-oauth-client.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -48,9 +50,10 @@ import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 const iterations = Number(process.argv[2] ?? 3000);
 assert(Number.isSafeInteger(iterations) && iterations > 0);
 const owner = process.argv[3]?.startsWith("--") ? undefined : process.argv[3];
-const identityApi: typeof import("../../src/agents/github-tool-identity.js") = await import(
-  pathToFileURL(path.resolve(owner ?? "src/agents/github-tool-identity.ts")).href
-);
+const identityApi: typeof import("../../extensions/github-repositories/tool-identity-api.js") =
+  await import(
+    pathToFileURL(path.resolve(owner ?? "extensions/github-repositories/tool-identity-api.ts")).href
+  );
 const allocations = process.argv.includes("--allocations");
 const sharedOptions = process.argv.includes("--shared-options");
 if (
@@ -291,7 +294,9 @@ if (
       };
       const profileId = `ghp_${"1".repeat(32)}`;
       const config: OpenClawConfig = {
-        tools: { github: { profileId, kind: "oauth" } },
+        plugins: {
+          entries: { "github-repositories": { config: { system: { profileId, kind: "oauth" } } } },
+        },
         agents: {
           entries: Object.fromEntries(
             Array.from({ length: 40 }, (_, index) => [`agent-${index}`, {}]),
@@ -408,7 +413,7 @@ if (
       console.log(
         JSON.stringify({
           workload: sharedOptions ? "shared-options-warm" : "personal-display-warm",
-          owner: owner ?? "src/agents/github-tool-identity.ts",
+          owner: owner ?? "extensions/github-repositories/tool-identity-api.ts",
           cpuKind: "main-thread",
           iterations,
           allocations,
@@ -441,10 +446,10 @@ if (
     assert(baseline, "--service-preview requires --api-owner=<frozen-base.ts>");
     const apis: Array<{
       arm: string;
-      api: typeof import("../../src/gateway/github-public-api.js");
+      api: typeof import("../../extensions/github-repositories/public-api.js");
     }> = [
       { arm: "base", api: await import(pathToFileURL(path.resolve(baseline)).href) },
-      { arm: "candidate", api: await import("../../src/gateway/github-public-api.js") },
+      { arm: "candidate", api: await import("../../extensions/github-repositories/public-api.js") },
     ];
     const sessions = Array.from(
       { length: 10_000 },
@@ -470,7 +475,11 @@ if (
       },
     });
     setRuntimeConfigSnapshot({
-      gateway: { controlUi: { github: { token: "synthetic-service-preview" } } },
+      plugins: {
+        entries: {
+          "github-repositories": { config: { service: { token: "synthetic-service-preview" } } },
+        },
+      },
     });
     try {
       if (allocations) {
@@ -569,14 +578,20 @@ if (
   };
   const profileId = `ghp_${"1".repeat(32)}`;
   const config: OpenClawConfig = {
-    tools: { github: { profileId } },
+    plugins: {
+      entries: {
+        "github-repositories": {
+          config: {
+            system: { profileId },
+            agents: Object.fromEntries(
+              Array.from({ length: 20 }, (_, index) => [`agent-${index * 2 + 1}`, { profileId }]),
+            ),
+          },
+        },
+      },
+    },
     agents: {
-      entries: Object.fromEntries(
-        Array.from({ length: 40 }, (_, i) => [
-          `agent-${i}`,
-          { tools: i % 2 ? { github: { profileId } } : {} },
-        ]),
-      ),
+      entries: Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`agent-${i}`, {}])),
     },
   };
   const stamp = "2026-01-01T00:00:00Z";

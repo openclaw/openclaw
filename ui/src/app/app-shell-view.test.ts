@@ -870,6 +870,7 @@ it("restores the delegated shell after a pending update and can select another w
     expectShell();
   };
   const delegatedWorkspace = async () => {
+    await vi.waitFor(() => expect(query("openclaw-plugin-view")).not.toBeNull());
     const plugin = query<HTMLElementTagNameMap["openclaw-plugin-view"]>("openclaw-plugin-view");
     expect(plugin).not.toBeNull();
     await settleLitElement(plugin!);

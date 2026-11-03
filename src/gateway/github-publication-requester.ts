@@ -16,7 +16,14 @@ import { prepareUserProfileIdentity } from "../state/user-profile-list.js";
 import type { UserProfileAccessFacts } from "../state/user-profiles.types.js";
 import { RepositoryPublicationRequesterUnavailableError } from "./github-publication-errors.js";
 import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-index.js";
-import { registerGitHubPublicationRequesterV2 } from "./github-publication-requester-capability.js";
+import {
+  type GitHubPublicationRequesterPreparation,
+  registerGitHubPublicationRequesterV2,
+  type GitHubPublicationRequesterPolicy,
+  type GitHubPublicationRequester,
+  type GitHubPublicationRequesterPolicyV2,
+  type GitHubPublicationRequesterV2,
+} from "./github-publication-requester-capability.js";
 import {
   prepareGitHubPublicationSource,
   type GitHubPublicationSourceCapability,
@@ -30,7 +37,6 @@ import {
   resolveOperatorRolePolicyForAssignment,
 } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
-import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import { prepareSessionCreatorProfile } from "./session-creator.js";
 import {
@@ -39,7 +45,7 @@ import {
 } from "./session-sharing-policy.js";
 import { prepareSessionMutationFacts } from "./session-sharing-preparation.js";
 
-type PublicationSession = { sessionKey: string; agentId: string };
+type PublicationSession = Parameters<GitHubPublicationRequesterPreparation>[1];
 type PreparedProfileIdentity = Awaited<ReturnType<typeof prepareUserProfileIdentity>>;
 type PreparedPublicationSession = Awaited<ReturnType<typeof prepareSessionMutationFacts>>;
 
@@ -71,30 +77,12 @@ async function preparePublicationSession(
   }
 }
 
-/** @deprecated Use GitHubPublicationRequesterPolicyV2; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
-export type GitHubPublicationRequesterPolicy = Readonly<{
-  snapshot: GitHubPublicationRequesterSnapshot;
-  assertCurrent: () => void;
-}>;
-
-/** @deprecated Use GitHubPublicationRequesterV2; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
-export type GitHubPublicationRequester = GitHubPublicationRequesterPolicy &
-  Readonly<{
-    /** An accepted row keeps its own policy while the current invocation retains its fences. */
-    assertInvocationCurrent: () => void;
-  }>;
-
-/** Prepared host policy and a required live source capability for worker-owned writes. */
-export type GitHubPublicationRequesterPolicyV2 = GitHubPublicationRequesterPolicy &
-  Readonly<{
-    version: 2;
-    signal: AbortSignal;
-    prepareSource(
-      selector: GitHubPublicationSourceSelector,
-    ): Promise<GitHubPublicationSourceCapability>;
-  }>;
-export type GitHubPublicationRequesterV2 = GitHubPublicationRequesterPolicyV2 &
-  Pick<GitHubPublicationRequester, "assertInvocationCurrent">;
+export type {
+  GitHubPublicationRequesterPolicy,
+  GitHubPublicationRequester,
+  GitHubPublicationRequesterPolicyV2,
+  GitHubPublicationRequesterV2,
+};
 
 /** A System-backed tool bridge cannot widen the selected person's action capability. */
 export function captureGitHubPublicationActionAuthority(
@@ -278,10 +266,9 @@ function prepareRequesterSource(
 
 /** Capture from the admitted caller, never request arguments, publisher, or session attribution. */
 export async function prepareGitHubPublicationRequesterV2(
-  options: Parameters<typeof captureGatewayOperatorRunAuthority>[0] &
-    Pick<GatewayRequestHandlerOptions, "signal" | "sessionMutationAuthorization">,
+  options: Parameters<GitHubPublicationRequesterPreparation>[0],
   session: PublicationSession,
-): Promise<{ requester: GitHubPublicationRequesterV2; release: () => void }> {
+): ReturnType<GitHubPublicationRequesterPreparation> {
   options.signal?.throwIfAborted();
   options.sessionMutationAuthorization?.assertCurrent();
   const source = await captureGatewayOperatorRunAuthority(options);

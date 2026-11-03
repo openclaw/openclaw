@@ -6,7 +6,6 @@ import {
   rejectGitHubPublicationSelection,
   type GitHubPublicationPreparation,
 } from "./publication-failure-api.js";
-import { parseGitHubRemoteUrl } from "./remote-api.js";
 import {
   matchesPreparedGitHubPublicationIdentity,
   prepareGitHubPublicationIdentity,
@@ -86,11 +85,4 @@ export function matchesCurrentGitHubPublicationIdentity(params: {
     config: currentGitHubPublicationConfig(),
     ...params,
   });
-}
-
-export function isSupportedGitHubOrigin(originUrl: string): boolean {
-  const remote = parseGitHubRemoteUrl(originUrl);
-  return Boolean(
-    remote && /^[A-Za-z0-9_.-]+$/u.test(remote.owner) && /^[A-Za-z0-9_.-]+$/u.test(remote.repo),
-  );
 }

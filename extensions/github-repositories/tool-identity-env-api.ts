@@ -1,5 +1,5 @@
 import { prepareExecutionEnvironmentExclusions } from "openclaw/plugin-sdk/channel-secret-owner-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { GitHubToolIdentityConfig } from "./config-api.js";
 import { GITHUB_PUBLIC_HOST } from "./host-api.js";
 import { CLEARED_GITHUB_CREDENTIALS } from "./host-runtime-api.js";

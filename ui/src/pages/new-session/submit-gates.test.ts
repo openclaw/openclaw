@@ -229,7 +229,7 @@ describe("DraftSubmissionFlow submit gates", () => {
   it("waits for the configured default repository before admitting the first session", async () => {
     const discovery = createDeferred<ProjectsListResult>();
     const { place, flow, context } = withMessage({
-      methods: ["sessions.create", "projects.list"],
+      methods: ["sessions.create", "projects.list", "fixture.repositories.search"],
       request: (method) => (method === "projects.list" ? discovery.promise : Promise.resolve({})),
     });
     const read = place.browser.refreshProjects();

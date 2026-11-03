@@ -32,7 +32,7 @@ function hasMarkdownLinkBoundaries(value: string, start: number, end: number): b
 }
 
 /** References need an explicit owner/repository; conversation context never invents a destination. */
-export function githubTextReferenceResolver() {
+function githubTextReferenceResolver() {
   return ({ text }: ControlUiTextReferenceInput): readonly ControlUiTextReference[] => {
     const references: ControlUiTextReference[] = [];
     let scannedTo = 0;

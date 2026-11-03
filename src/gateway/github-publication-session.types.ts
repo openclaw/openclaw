@@ -5,7 +5,7 @@ import type {
 import type {
   GitHubPublicationRequester,
   GitHubPublicationRequesterV2,
-} from "./github-publication-requester.js";
+} from "./github-publication-requester-capability.js";
 import type { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 import type { WorkerSessionTurnClaim } from "./worker-environments/placement-store.js";
 

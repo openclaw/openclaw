@@ -1,5 +1,5 @@
 import type { NativeGitHubRepositoryAdmissionRequest as GitHubRepositoryAdmissionRequest } from "openclaw/plugin-sdk/native-github-account-host";
-import type { GitHubToolIdentityConfig } from "./tool-identity.types-api.js";
+import type { GitHubToolIdentityConfig } from "./config-api.js";
 
 export type GitHubAppSelection = Extract<GitHubToolIdentityConfig, { kind: "app-installation" }>;
 

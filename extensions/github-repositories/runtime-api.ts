@@ -39,3 +39,10 @@ export { parseGitHubRemoteUrl } from "./remote-api.js";
 export { resolveManagedGitHubProfileDir } from "./tool-identity-api.js";
 export { createGitHubRepositorySource } from "./repository-source-api.js";
 export { clearGitHubCredentialVerificationCache } from "./oauth-api.js";
+
+export { startGitHubSessionPresentation } from "./session-presentation-service-api.js";
+export type { ControlUiSessionPrRead } from "./control-ui-session-pr-read-api.js";
+export {
+  requestCurrentGitHubOAuthRefresh,
+  requestCurrentPersonalGitHubRefresh,
+} from "./account-runtime-api.js";

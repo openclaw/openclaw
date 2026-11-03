@@ -26,9 +26,21 @@ const allocations = process.argv.includes("--allocations");
 const iterations = slowDetails ? 260 : Number(requestedIterations ?? 5000);
 assert(Number.isSafeInteger(iterations) && iterations > 0);
 const { loadControlUiSessionPullRequests } = await import(pathToFileURL(resolve(prsPath)).href);
-const { isGitHubPublicationSuperseded } = await import(pathToFileURL(resolve(relevancePath)).href);
+const {
+  isGitHubPublicationSuperseded,
+}: typeof import("../../extensions/github-repositories/publication-relevance-api.js") =
+  await import(pathToFileURL(resolve(relevancePath)).href);
 setRuntimeConfigSnapshot({
-  gateway: { controlUi: { github: { host: "github.com", token: "synthetic-publication-bench" } } },
+  plugins: {
+    entries: {
+      "github-repositories": {
+        config: {
+          host: "github.com",
+          service: { host: "github.com", token: "synthetic-publication-bench" },
+        },
+      },
+    },
+  },
 });
 const tree = "b".repeat(40);
 const source = "c".repeat(40);
@@ -128,8 +140,8 @@ async function read(index: number) {
       {
         repository: "synthetic/project",
         branch,
-        source_head_commit: source,
-        workspace_tree: tree,
+        sourceHeadCommit: source,
+        workspaceTree: tree,
       },
       async () => ({ pullRequests: result.pullRequests, assertCurrent }),
     ),

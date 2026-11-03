@@ -4,19 +4,13 @@ import { controlUiPluginAssetPrefix } from "../../../src/gateway/control-ui-plug
 import { readPluginControlUiAssets } from "../../../src/plugins/control-ui-assets.js";
 import type { PluginManifestControlUi } from "../../../src/plugins/manifest-types.js";
 import { loadPluginManifest } from "../../../src/plugins/manifest.js";
+import type { NativeControlUiPluginFixture } from "./control-ui-e2e-contract.ts";
 import { defaultControlUiFeatureMethods } from "./control-ui-e2e-defaults.ts";
 import {
   getSharedControlUiE2ePreview,
   type PreparedNativeControlUiPluginBuild,
 } from "./control-ui-e2e-shared-preview.ts";
-import type { ControlUiMockGatewayScenario } from "./control-ui-e2e.ts";
-
-export type NativeControlUiPluginFixture = {
-  pluginId: string;
-  rootDir: string;
-  source: string;
-  inlineViews?: readonly { id: string; label: string; version: number }[];
-};
+import type { ControlUiMockGatewayScenario } from "./control-ui-mock-scenario.ts";
 
 const builds = new Map<string, Promise<PluginManifestControlUi>>();
 

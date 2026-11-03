@@ -97,7 +97,7 @@ describe("plugin chat freshness emission receipts", () => {
     owner.final(key, undefined, message);
     expect(refresh).toHaveBeenCalledTimes(5);
   });
-  it("bounds retained receipts without truncating large content identities", () => {
+  it("bounds receipts and deduplicates complete large-content identities", () => {
     const { refresh, owner } = fixture();
     for (let index = 0; index < 1000; index += 1) {
       owner.final(key, `run-${index}`, message);
@@ -105,14 +105,16 @@ describe("plugin chat freshness emission receipts", () => {
     owner.final(key, "run-999", message);
     expect(refresh).toHaveBeenCalledTimes(1000);
     owner.final(key, "run-0", message);
+    expect(refresh).toHaveBeenCalledTimes(1001);
     const large = { ...message, content: [{ type: "text", text: text + " " + "x".repeat(50000) }] };
     owner.final(key, "large", large);
     owner.final(key, "large", large);
+    expect(refresh).toHaveBeenCalledTimes(1002);
     owner.final(key, "large", {
       ...large,
       content: [{ type: "text", text: text + " " + "x".repeat(50000) + "different" }],
     });
-    expect(refresh).toHaveBeenCalledTimes(1004);
+    expect(refresh).toHaveBeenCalledTimes(1003);
   });
   it.each([
     "https://github.com/owner/repo/issues/1",

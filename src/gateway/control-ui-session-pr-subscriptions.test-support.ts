@@ -13,15 +13,13 @@ import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { createPluginServiceScheduler } from "../plugins/service-scheduler.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "./control-ui-contract.js";
-import {
-  createRepositorySessionReadHost,
-  type RepositorySessionReads,
-} from "./control-ui-session-pr-runtime.js";
+import { createRepositorySessionReadHost } from "./control-ui-session-pr-runtime.js";
 import {
   guardRepositorySessionRead,
   prepareSelectedRepositorySessionRead,
 } from "./control-ui-session-pr-source.js";
 import type {
+  RepositorySessionReads,
   PreparedRepositorySessionRead,
   RepositorySessionObservation,
 } from "./repository-session-read.types.js";
@@ -186,7 +184,7 @@ export function createTestControlUiSessionPrSubscriptions(options: Options) {
       return await selected.withSource(run);
     },
     invalidate() {},
-    subscribeChanges: readChanges.subscribeChanges,
+    subscribeChanges: (listener) => readChanges.subscribeChanges(listener),
     installPresentation: () => () => {},
   };
   const serviceScheduler = createPluginServiceScheduler(scheduler).scheduler;

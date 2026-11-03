@@ -92,6 +92,7 @@ describe("session progress hovercard ownership", () => {
       await vi.advanceTimersByTimeAsync(0);
       const portal = getPortal();
       expect(portal?.textContent).toContain("research progress");
+      await waitForSolid(() => expect(harness.getPullRequestReads()).toBeGreaterThan(0));
       harness.emitPullRequestStatus("ready");
       flush();
       expect(portal?.querySelector('.session-hovercard__more[role="status"]')).toBeNull();

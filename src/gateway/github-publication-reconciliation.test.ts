@@ -143,6 +143,16 @@ it("recovers independent worktrees while preserving each worktree's publication 
   const pullRequests = new Map<string, Parameters<typeof publicationPullRequestResponse>[0]>();
   mocks.runCommand.mockImplementation(
     async (argv: string[], options?: { cwd?: string; input?: string }) => {
+      const matchingRef = argv.find((arg) =>
+        arg.startsWith("repos/openclaw/openclaw/git/matching-refs/heads/"),
+      );
+      if (matchingRef) {
+        const requestedBranch = decodeURIComponent(matchingRef.split("/heads/")[1]!);
+        const sha = remoteHeads.get(requestedBranch);
+        return commandResult(
+          JSON.stringify(sha ? [{ ref: `refs/heads/${requestedBranch}`, object: { sha } }] : []),
+        );
+      }
       const observed = argv.map((arg) => pullRequests.get(arg)).find(Boolean);
       if (argv.includes("GET") && observed) {
         return commandResult(JSON.stringify(publicationPullRequestResponse(observed)));
@@ -307,8 +317,13 @@ it.each([
     const hostScans = vi.spyOn(sqliteQueries, "iterateSqliteQuerySync");
     let recoveryScanStart = 0;
     mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
-      if (branchDeleted && argv.includes("ls-remote")) {
-        return commandResult("");
+      if (branchDeleted) {
+        if (argv.includes("ls-remote")) {
+          return commandResult("");
+        }
+        if (argv.some((arg) => arg.includes("/git/matching-refs/heads/"))) {
+          return commandResult("[]");
+        }
       }
       if (backend === "local") {
         const baseRef = argv.find((arg) =>

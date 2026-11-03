@@ -1,5 +1,4 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { GitMergedPullHead } from "../infra/git-read-operations.js";
 import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import {
@@ -12,8 +11,8 @@ import { registerOpenClawStateDatabaseLifecycleListener } from "../state/opencla
 import {
   CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
   type ControlUiSessionPullRequestsChanged,
-  type ControlUiSessionPullRequestSnapshot,
 } from "./control-ui-contract.js";
+import { invalidatePrReader } from "./control-ui-session-pr-delivery.js";
 import {
   withRepositoryInternalSessionRead,
   createRepositoryViewerRead,
@@ -24,6 +23,8 @@ import type {
   PreparedRepositorySessionRead,
   RepositorySessionObservation,
   RepositorySessionSourceScope,
+  RepositorySessionReadChange,
+  RepositorySessionPresentation,
 } from "./repository-session-read.types.js";
 import { createScheduledGatewayRunner } from "./scheduled-run-gateway-context.js";
 import type {
@@ -42,45 +43,6 @@ type RequestAdmission = Pick<
 >;
 
 type Query = { sessionKey: string; agentId: string };
-export type RepositorySessionReadChange =
-  | { kind: "reset" | "config" | "publications" }
-  | {
-      kind: "session";
-      sessionKey: string;
-      agentId?: string;
-      removed: boolean;
-      lineageChanged: boolean;
-    };
-
-/** The existing public review facts stay a wire contract, independent of the vendor service. */
-export type RepositorySessionPresentation = {
-  checks: (
-    read: PreparedRepositorySessionRead,
-    params: { owner: string; repo: string; number: number; headSha: string },
-    assertCurrent: () => void,
-  ) => Promise<import("./control-ui-contract.js").ControlUiSessionPullRequestCheckDetails>;
-  readPrepared: (
-    observation: RepositorySessionObservation,
-    admitLoad?: () => boolean,
-  ) => ControlUiSessionPullRequestSnapshot | undefined;
-  read: (
-    read: PreparedRepositorySessionRead,
-    assertCurrent: () => void,
-    projection?: "publication",
-  ) => Promise<ControlUiSessionPullRequestSnapshot>;
-  replace: (
-    connId: string,
-    sessionKeys: readonly string[],
-    refresh?: ReadonlySet<string>,
-    admitted?: () => void,
-    passive?: ReadonlySet<string>,
-  ) => Promise<void>;
-  unsubscribe: (connId: string) => void;
-  knownMergedHeads: (read: RepositorySessionObservation) => Promise<readonly GitMergedPullHead[]>;
-  pollNow: () => Promise<void>;
-  stop: () => Promise<void>;
-};
-
 /** Core retains prepared source/access owners; the installed plugin retains review data and transport. */
 export function createRepositorySessionReadHost(deps: {
   signal: AbortSignal;
@@ -234,11 +196,7 @@ export function createRepositorySessionReadHost(deps: {
         prepareServiceRead,
         invalidateViewer(connId: string) {
           assertCurrent();
-          deps.broadcastToConnIds(
-            "sessions.changed",
-            { reason: "profile-identity" },
-            new Set([connId]),
-          );
+          invalidatePrReader(connId, deps.broadcastToConnIds);
         },
         createViewerRead(
           connId: string,
@@ -374,7 +332,3 @@ export function createRepositorySessionReadHost(deps: {
   };
 }
 export type RepositorySessionReadHost = ReturnType<typeof createRepositorySessionReadHost>;
-export type RepositorySessionReads = Omit<
-  ReturnType<RepositorySessionReadHost["bindService"]>,
-  "withRequestRead"
->;

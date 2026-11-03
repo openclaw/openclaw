@@ -11,7 +11,6 @@ import {
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { CapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
 import type { SessionEntrySnapshotField } from "../config/sessions/session-entry-snapshot-values.js";
-import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createStaleWhileRevalidateCache } from "../infra/stale-while-revalidate-cache.js";
 import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
@@ -49,14 +48,6 @@ const repositoryOrigins = createStaleWhileRevalidateCache<string>({
   ttlMs: 15_000,
 });
 
-/** Only publication/session identity facts cross the host boundary. */
-export type RepositoryPublicationEntry = InternalSessionEntry;
-export type RepositoryPublicationSessionRead = {
-  agentId: string;
-  canonicalKey: string;
-  storePath: string;
-  entry: RepositoryPublicationEntry | undefined;
-};
 export type RepositoryPublicationSessionTarget = {
   agentId?: string;
   sessionKey?: string;
@@ -390,24 +381,6 @@ export async function hasGitHubPublicationRepositoryWorkspace(params: Publicatio
   using _ = { [Symbol.dispose]: () => prepared.release() };
 
   return prepared.initial.kind === "repository";
-}
-
-export function sameGitHubPublicationWorkspace(
-  first: Awaited<ReturnType<typeof prepareGitHubPublicationWorkspaceOwner>>["initial"],
-  current: Awaited<ReturnType<typeof prepareGitHubPublicationWorkspaceOwner>>["initial"],
-): boolean {
-  if (first.loaded.entry?.lifecycleRevision !== current.loaded.entry?.lifecycleRevision) {
-    return false;
-  }
-  return first.kind === "repository"
-    ? current.kind === "repository" &&
-        current.workspace.workspaceId === first.workspace.workspaceId &&
-        current.workspace.url === first.workspace.url &&
-        current.workspace.branch === first.workspace.branch
-    : current.kind === "worktree" &&
-        current.worktree.id === first.worktree.id &&
-        current.worktree.repoFingerprint === first.worktree.repoFingerprint &&
-        current.worktree.branch === first.worktree.branch;
 }
 
 async function localGitHubPublicationSessionIdentity(row: {

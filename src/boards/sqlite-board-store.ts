@@ -40,10 +40,12 @@ import type {
   BoardStore,
   BoardWriteOptions,
   BoardWidgetWriteOptions,
+} from "./board-store.js";
+import type {
   BoardWidgetDocument,
   BoardSnapshotWithHtmlViewMetadata,
   BoardWidgetMcpAppDocument,
-} from "./board-store.js";
+} from "./session-actor-board-contract.js";
 import { createSessionActorBoardStore } from "./session-actor-board-store.js";
 import { reportBoardCleanupFailure } from "./sqlite-board-authority.js";
 import type { BoardWriteOperations, BoardWriteOutcome } from "./sqlite-board-operations.js";

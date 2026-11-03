@@ -67,7 +67,7 @@ export function createGitHubIdentityView(
   });
   return { ...owner, read: projection.read, saving, dispose };
 }
-export type GitHubIdentityView = ReturnType<typeof createGitHubIdentityView>;
+type GitHubIdentityView = ReturnType<typeof createGitHubIdentityView>;
 
 type GitHubIdentityModel = GitHubIdentityView;
 

@@ -306,7 +306,7 @@ suite.define(() => {
       await sidebar.locator('[data-online-user-id="team-person-120"]').waitFor();
       const details = await openChatDetails(page);
       const sectionSelector = '[data-details-group], [data-progress-card-placement="details"]';
-      const sections = details.locator(sectionSelector);
+      const sections = details.locator(`:is(${sectionSelector}):visible`);
       const sectionOrder = () =>
         sections.evaluateAll((rows) =>
           rows.map((row) => row.getAttribute("data-details-group") ?? "progress"),

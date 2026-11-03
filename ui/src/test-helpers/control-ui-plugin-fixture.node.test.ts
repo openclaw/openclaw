@@ -24,6 +24,10 @@ it("reuses the invocation's matching build while reading each caller's assets an
   for (const directory of [rootDir, privateRoot]) {
     await mkdir(path.dirname(path.join(directory, entry)), { recursive: true });
     await writeFile(path.join(directory, entry), "export const current = 1;");
+    await writeFile(
+      path.join(directory, "openclaw.plugin.json"),
+      JSON.stringify({ id: "shared", configSchema: { type: "object" } }),
+    );
   }
   const fixture = { rootDir, source: "browser/index.ts", pluginId: "shared" };
   setSharedControlUiE2eServerBaseUrl("http://fixture.invalid/", null, [

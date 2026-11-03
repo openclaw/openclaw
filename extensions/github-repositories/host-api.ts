@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { readGitHubConfig } from "./config-api.js";
 
 export { GITHUB_PLUGIN_ID } from "./config-api.js";

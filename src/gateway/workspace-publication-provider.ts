@@ -10,30 +10,15 @@ import {
 } from "./github-publication-errors.js";
 import type { RepositoryPublicationTranscriptRuntime } from "./github-publication-transcript.js";
 import type { GitHubPublicationCoordinator } from "./github-publication.js";
-import type { RepositoryPublicationProvider } from "./repository-publication-contract.js";
+import type {
+  RepositoryPublicationProvider,
+  RepositoryPublicationApi,
+} from "./repository-publication-contract.js";
 import type {
   WorkerSessionPlacementStore,
   WorkerSessionTurnClaim,
 } from "./worker-environments/placement-store.js";
 
-export type RepositoryPublicationApi = Pick<
-  GitHubPublicationCoordinator,
-  | "preparePullRequest"
-  | "refreshBase"
-  | "requestForSessionV2"
-  | "requestPersonalForSessionV2"
-  | "confirmPersonalV2"
-  | "preparePersonalStatus"
-  | "personalStatusAsync"
-  | "personalPending"
-  | "sharedStatus"
-  | "latestShared"
-  | "latestPublishedShared"
-> &
-  Pick<
-    RepositoryPublicationProvider,
-    "supportsOrigin" | "inspectPullRequest" | "performPullRequestAction"
-  >;
 /** The Gateway retains accepted transaction custody independently from the current vendor service. */
 export function createWorkspacePublicationHost(params: {
   placements: WorkerSessionPlacementStore;

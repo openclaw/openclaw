@@ -14,11 +14,27 @@ import type {
   ControlUiWidgetV2 as ControlUiWidget,
 } from "../../../src/plugin-sdk/control-ui.js";
 
+export type ControlUiActionInvocation = Omit<Parameters<ControlUiAction["run"]>[0], "host"> & {
+  isCurrent?: () => boolean;
+};
+
+/** Activation prepares the view-scoping operation; consumers retain no scoping runtime import. */
+export type PreparedControlUiHost = ControlUiHost & {
+  projectTextReferences: typeof import("./control-ui-text-references.solid.ts").createTextReferenceProjection;
+  scopeView(signal: AbortSignal, isCurrent?: () => boolean): ControlUiHost;
+  invokeAction(
+    action: ControlUiAction,
+    registrationSignal: AbortSignal,
+    params: ControlUiActionInvocation,
+    retry: string,
+  ): Promise<void>;
+};
+
 export type ControlUiRegistration<T> = {
   key: `${string}/${string}`;
   pluginId: string;
   value: T;
-  host: ControlUiHost;
+  host: PreparedControlUiHost;
   signal: AbortSignal;
 };
 

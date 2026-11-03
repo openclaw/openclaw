@@ -1,5 +1,5 @@
 import { getActiveSecretsRuntimeConfigSnapshot } from "openclaw/plugin-sdk/channel-secret-owner-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   performNativeGitHubWorkerIdentity as performRepositoryWorkerIdentity,
   type NativeGitHubWorkerIdentity as RepositoryWorkerIdentity,

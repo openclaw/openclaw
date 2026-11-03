@@ -1,5 +1,5 @@
 import type { AsyncWorkScope } from "openclaw/plugin-sdk/concurrency-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   NativeGitHubSessionReads as RepositorySessionReads,
   RepositorySessionSourceScope,
@@ -19,12 +19,6 @@ import {
 import type { ControlUiSessionPullRequestsParams } from "./control-ui-session-prs-api.js";
 const receiptsOnlyTargetIdentity = (identity: string) =>
   JSON.stringify([identity, "receipts-only"]);
-
-export type LoadSessionPullRequests = (
-  params: ControlUiSessionPullRequestsParams,
-  cacheSignal: AbortSignal | undefined,
-  read: ControlUiSessionPrReadContext,
-) => Promise<ControlUiSessionPullRequests>;
 
 export async function loadSessionPullRequests(
   params: ControlUiSessionPullRequestsParams,
@@ -196,7 +190,7 @@ export function addControlUiSessionPrMembership(
 }
 
 /** Retire the unused cell through the same owner that retains its prepared readers. */
-export function retireControlUiSessionPrState<
+function retireControlUiSessionPrState<
   State extends PreparedSessionPrState & { cancelRefresh?: () => void },
 >(state: State | undefined, keyStates: Map<string, State>): void {
   if (!state || state.prepared || state.connIds.size > 0) {

@@ -7,14 +7,10 @@ import type {
   ControlUiViewContext,
 } from "../../../../src/plugin-sdk/control-ui.js";
 import { prepareChatMessageRender } from "../../lib/chat/message-display.ts";
-import { createControlUiPluginHost } from "../../plugins/control-ui-host.ts";
-import {
-  ControlUiPluginRuntime,
-  type ControlUiPluginOwner,
-} from "../../plugins/control-ui-runtime.ts";
 import { disposeSidebarContextLifecycles } from "../../test-helpers/app-sidebar-context-lifecycle.ts";
 import { createContext, createGateway, createSessions } from "../../test-helpers/app-sidebar.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import { createTestControlUiPluginHost } from "../../test-helpers/control-ui-plugin-host.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
@@ -32,33 +28,7 @@ it("passes the pane's raw global owner to transcript and tool replacements", asy
   const lifetime = new AbortController();
   const client = createTestGatewayClient(async () => ({}));
   const context = createContext(createGateway(client), createSessions("main", []));
-  const runtime = new ControlUiPluginRuntime(() => context);
-  runtime.start();
-  const owner: Omit<ControlUiPluginOwner, "host"> = {
-    descriptor: {
-      pluginId: "identity",
-      name: "Identity",
-      revision: "1",
-      entryUrl: "/identity.js",
-      styles: [],
-    },
-    client,
-    abort: lifetime,
-    disposers: new Set(),
-    selections: new Map(),
-    contributions: {
-      pages: new Map(),
-      navigation: new Map(),
-      panels: new Map(),
-      actions: new Map(),
-      accessories: new Map(),
-      widgets: new Map(),
-      replacements: new Map(),
-      textReferences: new Map(),
-      inlineViews: new Map(),
-    },
-  };
-  const host = createControlUiPluginHost(() => context, runtime, owner);
+  const host = createTestControlUiPluginHost(context, "identity", lifetime);
   const replacements = new Map(
     (["transcript", "tool-result"] as const).map((surface) => [
       surface,
@@ -132,10 +102,6 @@ it("passes the pane's raw global owner to transcript and tool replacements", asy
   onTestFinished(() => {
     view.unmount();
     lifetime.abort();
-    for (const dispose of owner.disposers) {
-      dispose();
-    }
-    runtime.dispose();
     disposeSidebarContextLifecycles();
     container.remove();
   });

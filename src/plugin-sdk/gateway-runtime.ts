@@ -1,5 +1,5 @@
-import type { prepareGitHubPublicationRequesterV2 as PrepareGitHubPublicationRequester } from "../gateway/github-publication-requester.js";
-import type { preparePersonalGitHubSessionActionV2 as PreparePersonalGitHubSessionAction } from "../gateway/server-methods/github-personal-authorization.js";
+import type { GitHubPublicationRequesterPreparation as PrepareGitHubPublicationRequester } from "../gateway/github-publication-requester-capability.js";
+import type { RepositoryPublicationPreparePersonalSessionAction as PreparePersonalGitHubSessionAction } from "../gateway/repository-publication-contract.js";
 
 export { addGatewayClientOptions, callGatewayFromCli } from "../cli/gateway-rpc.js";
 export type { GatewayRpcOpts } from "../cli/gateway-rpc.js";
@@ -51,25 +51,25 @@ export { isImplicitLocalGatewayTargetFromCli } from "../cli/gateway-rpc.js";
 export type {
   GitHubPublicationRequesterPolicyV2,
   GitHubPublicationRequesterV2,
-} from "../gateway/github-publication-requester.js";
+} from "../gateway/github-publication-requester-capability.js";
 export type {
   GitHubPublicationClaimRequestV2,
   GitHubPublicationSessionRequestV2,
 } from "../gateway/github-publication-session.types.js";
-export type { PersonalGitHubSessionActionV2 } from "../gateway/github-personal-publication.js";
+export type { RepositoryPublicationPersonalSessionAction as PersonalGitHubSessionActionV2 } from "../gateway/repository-publication-contract.js";
 
 /** Prepare a host-owned requester from this handler's admitted Gateway authority. */
 export async function prepareGitHubPublicationRequesterV2(
-  ...args: Parameters<typeof PrepareGitHubPublicationRequester>
-): ReturnType<typeof PrepareGitHubPublicationRequester> {
+  ...args: Parameters<PrepareGitHubPublicationRequester>
+): ReturnType<PrepareGitHubPublicationRequester> {
   const runtime = await import("../gateway/github-publication-requester.js");
   return runtime.prepareGitHubPublicationRequesterV2(...args);
 }
 
 /** Prepare personal publication authority and release it when the handler settles. */
 export async function preparePersonalGitHubSessionActionV2(
-  ...args: Parameters<typeof PreparePersonalGitHubSessionAction>
-): ReturnType<typeof PreparePersonalGitHubSessionAction> {
+  ...args: Parameters<PreparePersonalGitHubSessionAction>
+): ReturnType<PreparePersonalGitHubSessionAction> {
   const runtime = await import("../gateway/server-methods/github-personal-authorization.js");
   return runtime.preparePersonalGitHubSessionActionV2(...args);
 }

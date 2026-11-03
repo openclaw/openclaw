@@ -8,10 +8,10 @@ import {
   createBoardWidgetPutSnapshot,
   normalizeBoardWidgetPutParams,
   resolveBoardWidgetPutParams,
-  type BoardWidgetDocument,
-  type BoardWidgetHtmlViewMetadata,
 } from "./board-store.js";
 import type {
+  BoardWidgetDocument,
+  BoardWidgetHtmlViewMetadata,
   SessionActorBoardCommand,
   SessionActorBoardQuery,
   SessionActorMemoryBoard,

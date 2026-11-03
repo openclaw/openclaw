@@ -1,8 +1,9 @@
 // Owner microbenchmark, not a whole-Gateway load test. Run separate CPU and allocation passes:
 // node --expose-gc --import ./scripts/tsx.mjs scripts/perf/session-pr-currency-measure.ts
 //   --output .local/currency.json [--allocations] [--base-owner-suffix base]
-// --base-owner-suffix compares control-ui-session-pr-{read,source,subscriptions}.<suffix>.ts.
-// Subscription snapshots must expose the current four-argument replace API.
+// --base-owner-suffix compares host read/source/runtime and plugin presentation/subscriptions snapshots.
+// Plugin runtime-api.<suffix>.ts must reexport the matching presentation snapshot.
+// Snapshots must expose the current admitted read/presentation API and redirect their owner imports.
 // --base-projection-suffix compares session-row-projection.<suffix>.ts (redirect its
 // materialize import to the matching baseline snapshot). --captures isolates row capture.
 // --unrelated-churn updates an unrelated archived session between batches of 64 validations;
@@ -30,18 +31,18 @@ import path from "node:path";
 import { PerformanceObserver } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { parseArgs } from "node:util";
+import type { ControlUiSessionPrRead } from "../../extensions/github-repositories/runtime-api.js";
+import { createControlUiSessionPrRead } from "../../extensions/github-repositories/runtime-api.js";
 import type { SessionEntry } from "../../src/config/sessions/types.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
-import type {
-  ControlUiSessionPrRead,
-  ControlUiSessionPrTarget,
-} from "../../src/gateway/control-ui-session-pr-read.js";
+import type { PreparedRepositorySessionRead } from "../../src/gateway/repository-session-read.types.js";
 import type { GatewayClient } from "../../src/gateway/server-methods/client-types.js";
 import { createControlUiRequestOptions } from "../../src/gateway/server-methods/control-ui-request.test-support.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandlerOptions,
 } from "../../src/gateway/server-methods/types.js";
+import { createPluginServiceScheduler } from "../../src/plugins/service-scheduler.js";
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
@@ -101,12 +102,20 @@ const sources = [
     `../../src/gateway/control-ui-session-pr-read${ownerSuffix}.ts`,
     import.meta.url,
   );
+  const runtimeUrl = new URL(
+    `../../src/gateway/control-ui-session-pr-runtime${ownerSuffix}.ts`,
+    import.meta.url,
+  );
+  const presentationUrl = new URL(
+    `../../extensions/github-repositories/session-presentation-service-api${ownerSuffix}.ts`,
+    import.meta.url,
+  );
   const sourceUrl = new URL(
     `../../src/gateway/control-ui-session-pr-source${ownerSuffix}.ts`,
     import.meta.url,
   );
   const subscriptionsUrl = new URL(
-    `../../src/gateway/control-ui-session-pr-subscriptions${ownerSuffix}.ts`,
+    `../../extensions/github-repositories/control-ui-session-pr-subscriptions-api${ownerSuffix}.ts`,
     import.meta.url,
   );
   const handlerUrl = new URL(
@@ -114,11 +123,19 @@ const sources = [
     import.meta.url,
   );
   const taskUrl = new URL(
-    `../../src/gateway/control-ui-session-task-prs${values["unrelated-churn"] ? ownerSuffix : ""}.ts`,
+    `../../src/gateway/control-ui-session-task-prs${ownerSuffix}.ts`,
     import.meta.url,
   );
   return {
     name,
+    runtimeUrl,
+    runtimeSha256: createHash("sha256").update(readFileSync(runtimeUrl)).digest("hex"),
+    presentationModuleUrl: new URL(
+      `../../extensions/github-repositories/runtime-api${ownerSuffix}.ts`,
+      import.meta.url,
+    ),
+    presentationUrl,
+    presentationSha256: createHash("sha256").update(readFileSync(presentationUrl)).digest("hex"),
     taskUrl,
     taskSha256: createHash("sha256").update(readFileSync(taskUrl)).digest("hex"),
     projectionUrl,
@@ -204,26 +221,35 @@ const owners = await Promise.all(
       source.projectionUrl.href
     );
     const {
-      createControlUiSessionPrRead,
+      createRepositoryViewerRead,
     }: typeof import("../../src/gateway/control-ui-session-pr-read.js") = await import(
       source.url.href
     );
     const {
-      withControlUiSessionPrSource,
-    }: typeof import("../../src/gateway/control-ui-session-pr-source.js") = await import(
-      source.sourceUrl.href
+      createRepositorySessionReadHost,
+    }: typeof import("../../src/gateway/control-ui-session-pr-runtime.js") = await import(
+      source.runtimeUrl.href
     );
-    const subscriptions:
-      | typeof import("../../src/gateway/control-ui-session-pr-subscriptions.js")
-      | undefined = watchSubscriptions ? await import(source.subscriptionsUrl.href) : undefined;
+    const {
+      startGitHubSessionPresentation,
+    }: typeof import("../../extensions/github-repositories/runtime-api.js") = await import(
+      source.presentationModuleUrl.href
+    );
+    const {
+      createRepositoryTaskPublicationReader,
+    }: typeof import("../../src/gateway/control-ui-session-task-prs.js") = await import(
+      source.taskUrl.href
+    );
     const handlers: typeof import("../../src/gateway/server-methods/control-ui.js") | undefined =
       values.subscribe ? await import(source.handlerUrl.href) : undefined;
     return {
       ...source,
       createSessionRowProjection,
-      createControlUiSessionPrRead,
-      withControlUiSessionPrSource,
-      subscriptions,
+      createRepositoryViewerRead,
+      createRepositorySessionReadHost,
+      startGitHubSessionPresentation,
+      createRepositoryTaskPublicationReader,
+      watchSubscriptions,
       handler: handlers?.controlUiHandlers["controlUi.sessionPullRequests.subscribe"],
     };
   }),
@@ -278,6 +304,19 @@ try {
     const access = new AbortController();
     const reads: ControlUiSessionPrRead[] = [];
     const clients: GatewayClient[] = [];
+    let publications = 0;
+    const host = owner.createRepositorySessionReadHost({
+      signal: access.signal,
+      getRuntimeConfig: () => cfg,
+      getSessionRowProjection: () => projection,
+      getClient: (connId) => clients[Number(connId)],
+      resolveGatewayContext: () => undefined,
+      broadcastToConnIds: () => publications++,
+    });
+    const serviceReads = host.bindService(access.signal, () => access.signal.throwIfAborted());
+    const taskReader = owner.createRepositoryTaskPublicationReader(access.signal);
+    stopSubscriptions.push(async () => access.abort());
+
     for (let index = 0; index < readerCount; index++) {
       const client: GatewayClient = {
         connId: String(index),
@@ -308,29 +347,49 @@ try {
       };
       prepareGatewayRecipientProfile(client);
       clients.push(client);
-      const read = owner.createControlUiSessionPrRead({
-        taskReceiptsOnly: watchSubscriptions,
-        client,
-        sessionKey: keyFor(index),
-        getRuntimeConfig: () => cfg,
-        getSessionRowProjection: () => projection,
-        isCurrentClient: () => true,
-      });
+      const read = createControlUiSessionPrRead(
+        owner.createRepositoryViewerRead({
+          client,
+          sessionKey: keyFor(index),
+          getRuntimeConfig: () => cfg,
+          getSessionRowProjection: () => projection,
+          isCurrentClient: () => clients[index] === client,
+          lifetime: access.signal,
+          runSource: (run) => run(),
+          readTaskReceipts: async (input, assertCurrent, signal) => {
+            assert.equal(input.sessions.length, childrenPerRoot + 1);
+            return await taskReader(input, assertCurrent, signal);
+          },
+        }),
+        () => cfg,
+      );
       assert(read);
       reads.push(read);
     }
     const targets = await Promise.all(reads.map((read) => read()));
     for (const target of targets) {
       assert(target?.assertCurrent);
-      assert.equal(target.taskReceipts?.sessions.length, childrenPerRoot + 1);
+      assert(target.read?.includesTaskPublications);
+      await target.read.readTaskPublications({});
     }
-    const source = targets[0]!.readSource;
-    assert(targets.every((target) => target?.readSource.path === source.path));
+    const store = projection.capture({
+      key: targets[0]!.params.sessionKey,
+      agentId: "main",
+    })?.storeTarget;
+    assert(store);
+    const source = { agentId: store.agentId, path: store.storePath };
+    assert(
+      targets.every(
+        (target) =>
+          projection.capture({ key: target!.params.sessionKey, agentId: "main" })?.storeTarget
+            .storePath === source.path,
+      ),
+    );
     let watcherChecks = 0;
     let prepare = async () => {};
     let cleanup = async () => {};
     let run = (count: number) =>
-      owner.withControlUiSessionPrSource(source, async (assertSourceCurrent) => {
+      targets[0]!.read!.withSource(async (sourceScope) => {
         for (let index = 0; index < count; index++) {
           if (values["unrelated-churn"] && index % readerCount === 0) {
             await upsertSessionEntryCore(
@@ -346,7 +405,7 @@ try {
             values["unrelated-churn"] ? target?.identity : target,
             values["unrelated-churn"] ? targets[slot]?.identity : targets[slot],
           );
-          assertSourceCurrent();
+          sourceScope.assertCurrent();
           target!.assertCurrent!();
         }
       });
@@ -354,7 +413,7 @@ try {
       const queries = targets.map((target) => ({
         agentId: target!.params.agentId,
         key: target!.params.sessionKey,
-        storePath: target!.readSource.path,
+        storePath: source.path,
       }));
       const rows = queries.map((query) => projection.capture(query));
       run = async (count) => {
@@ -364,44 +423,75 @@ try {
         }
       };
     }
-    if (values.notifications && owner.subscriptions) {
-      const subscriptionOwner = owner.subscriptions;
-      const wrapped = new WeakMap<ControlUiSessionPrTarget, ControlUiSessionPrTarget>();
-      const countedReads = reads.map((read): ControlUiSessionPrRead => async () => {
-        const target = await read();
-        if (!target) {
-          return undefined;
-        }
-        let counted = wrapped.get(target);
-        if (!counted) {
-          counted = {
-            ...target,
-            assertCurrent: () => {
-              watcherChecks++;
-              target.assertCurrent!();
-            },
-          };
-          wrapped.set(target, counted);
-        }
-        return counted;
+    const replacements: Promise<void>[] = [];
+    const wrapped = new WeakMap<PreparedRepositorySessionRead, PreparedRepositorySessionRead>();
+    const startSubscriptions = (scheduler: InstanceType<typeof GatewayScheduler>) => {
+      const schedulerOwner = createPluginServiceScheduler(scheduler);
+      const service = owner.startGitHubSessionPresentation({
+        scheduler: schedulerOwner.scheduler,
+        getConfig: () => cfg,
+        reads: {
+          ...serviceReads,
+          createViewerRead(...args) {
+            const read = serviceReads.createViewerRead(...args);
+            return !values.notifications || !read
+              ? read
+              : async () => {
+                  const selected = await read();
+                  if (!selected) {
+                    return undefined;
+                  }
+                  let counted = wrapped.get(selected);
+                  if (!counted) {
+                    counted = {
+                      ...selected,
+                      assertCurrent: () => {
+                        watcherChecks++;
+                        selected.assertCurrent();
+                      },
+                    };
+                    wrapped.set(selected, counted);
+                  }
+                  return counted;
+                };
+          },
+          installPresentation(provider) {
+            return serviceReads.installPresentation({
+              ...provider,
+              replace(...args) {
+                const pending = provider.replace(...args);
+                replacements.push(pending);
+                return pending;
+              },
+            });
+          },
+        },
       });
+      assert(host.presentation);
+      return {
+        subscriptions: host.presentation,
+        stop: async () => {
+          await service.stop();
+          await schedulerOwner.close();
+          await scheduler.stop();
+        },
+      };
+    };
+    if (values.notifications && owner.watchSubscriptions) {
       prepare = async () => {
         assert(!stopNotificationArm, "Only one notification arm may subscribe");
         const scheduler = new GatewayScheduler();
-        let publications = 0;
-        const subscriptions = subscriptionOwner.createControlUiSessionPullRequestSubscriptions({
-          scheduler,
-          getSessionRowProjection: () => projection,
-          broadcastToConnIds: () => publications++,
-          isConnectionActive: () => true,
-          prepareRead: async (connId) => countedReads[Number(connId)],
-        });
-        stopNotificationArm = async () => {
-          await subscriptions.stop();
-          await scheduler.stop();
-        };
+        publications = 0;
+        const { subscriptions, stop } = startSubscriptions(scheduler);
+        stopNotificationArm = stop;
         for (let index = 0; index < readerCount; index++) {
-          await subscriptions.replace(String(index), [], new Set(), new Set([keyFor(index)]));
+          await subscriptions.replace(
+            String(index),
+            [],
+            new Set(),
+            undefined,
+            new Set([keyFor(index)]),
+          );
         }
         assert.equal(publications, readerCount, "Each real subscription must publish its snapshot");
         watcherChecks = 0;
@@ -425,33 +515,12 @@ try {
           await nextTurn();
         }
       };
-    } else if (owner.subscriptions) {
+    } else if (owner.watchSubscriptions) {
       const scheduler = new GatewayScheduler();
       schedulers.push(scheduler);
-      let publications = 0;
-      const subscriptions = owner.subscriptions.createControlUiSessionPullRequestSubscriptions({
-        scheduler,
-        getSessionRowProjection: () => projection,
-        broadcastToConnIds: () => {
-          publications++;
-        },
-        isConnectionActive: () => true,
-        prepareRead: async (connId) => {
-          const read = reads[Number(connId)];
-          assert(read, "Every request must have a real reader");
-          return read;
-        },
-      });
-      stopSubscriptions.push(subscriptions.stop);
-      const replacements: Promise<void>[] = [];
-      const requestSubscriptions = {
-        ...subscriptions,
-        replace: (...args: Parameters<typeof subscriptions.replace>) => {
-          const pending = subscriptions.replace(...args);
-          replacements.push(pending);
-          return pending;
-        },
-      };
+      publications = 0;
+      const { subscriptions, stop } = startSubscriptions(scheduler);
+      stopSubscriptions.push(stop);
       const settleReplacements = async () => {
         await Promise.all(replacements.splice(0));
       };
@@ -461,13 +530,21 @@ try {
             const params = { sessionKeys: [], passiveSessionKeys: [keyFor(index)] };
             // This owner benchmark supplies only the context consumed by the subscribe RPC.
             const context = {
-              controlUiSessionPullRequests: requestSubscriptions,
+              repositorySessions: host,
+              getClientConnIds: (predicate) =>
+                new Set(
+                  clients.flatMap((candidate) =>
+                    candidate.connId && (!predicate || predicate(candidate))
+                      ? [candidate.connId]
+                      : [],
+                  ),
+                ),
               logGateway: {
                 warn: (message: string) => {
                   throw new Error(message);
                 },
               },
-            } satisfies Pick<GatewayRequestContext, "controlUiSessionPullRequests"> & {
+            } satisfies Pick<GatewayRequestContext, "repositorySessions" | "getClientConnIds"> & {
               logGateway: Pick<GatewayRequestContext["logGateway"], "warn">;
             };
             const respond = (ok: boolean, payload: unknown) => {
@@ -492,7 +569,13 @@ try {
         await settleReplacements();
       } else {
         for (let index = 0; index < readerCount; index++) {
-          await subscriptions.replace(String(index), [], new Set(), new Set([keyFor(index)]));
+          await subscriptions.replace(
+            String(index),
+            [],
+            new Set(),
+            undefined,
+            new Set([keyFor(index)]),
+          );
         }
       }
       assert.equal(publications, readerCount, "Each real subscription must publish its snapshot");
@@ -507,6 +590,7 @@ try {
               agentId: "main",
               sessionKey: keyFor(index % readerCount),
               scope: "runtime",
+              factsInvalidated: true,
             });
             await subscriptions.pollNow();
           }
@@ -602,6 +686,16 @@ try {
     }
   }
   for (const source of sources) {
+    for (const [url, hash] of [
+      [source.runtimeUrl, source.runtimeSha256],
+      [source.presentationUrl, source.presentationSha256],
+    ] as const) {
+      assert.equal(
+        createHash("sha256").update(readFileSync(url)).digest("hex"),
+        hash,
+        "Read/presentation owner changed during measurement",
+      );
+    }
     assert.equal(
       createHash("sha256").update(readFileSync(source.taskUrl)).digest("hex"),
       source.taskSha256,
@@ -650,6 +744,10 @@ try {
     owners: sources.map(
       ({
         name,
+        runtimeUrl,
+        runtimeSha256,
+        presentationUrl,
+        presentationSha256,
         url,
         sha256,
         sourceUrl,
@@ -663,6 +761,10 @@ try {
         materializeSha256,
       }) => ({
         name,
+        runtimePath: runtimeUrl.pathname,
+        runtimeSha256,
+        presentationPath: presentationUrl.pathname,
+        presentationSha256,
         path: url.pathname,
         sha256,
         sourcePath: sourceUrl.pathname,

@@ -6,7 +6,7 @@ import {
   GitHubPublicationTitleSchema,
   SessionGitHubPublishParamsSchema,
 } from "@openclaw/gateway-protocol";
-import { stringEnum } from "openclaw/plugin-sdk/core";
+import { stringEnum } from "openclaw/plugin-sdk/channel-actions";
 import { Type } from "typebox";
 
 export const publicationOperatorActions = GitHubPublicationActionSchema.properties.action.anyOf.map(

@@ -15,10 +15,7 @@ import {
   preparePersonalRepositoryPublicationStatus as preparePersonalStatus,
   createRepositoryPersonalPublicationStatus,
 } from "./github-personal-publication-status.js";
-import type {
-  PersonalGitHubSessionActionV2,
-  PreparedRepositoryPublicationStatus,
-} from "./github-personal-publication.js";
+import type { PersonalGitHubSessionActionV2 } from "./github-personal-publication.js";
 import { prepareGitHubPublicationSession } from "./github-publication-availability.js";
 import { exactClaimForPlacement } from "./github-publication-coordinator-methods.js";
 import {
@@ -60,6 +57,7 @@ import {
 } from "./github-repository-publication-workspace.js";
 import { matchesRepositoryGitHubPublicationClaim } from "./github-repository-publication.kernel.js";
 import type {
+  PreparedRepositoryPublicationStatus,
   RepositoryPublicationProvider,
   RepositoryPublicationPersonalAction as PersonalGitHubAction,
 } from "./repository-publication-contract.js";

@@ -190,7 +190,7 @@ if (values.mode === "prepare-backlog") {
   }
   if (!nativeMidx && values.policy === "candidate") {
     const { configureProjectCheckoutMaintenance } =
-      await import("../../src/projects/project-clone-runtime.js");
+      await import("../../src/projects/project-checkout-maintenance.js");
     await configureProjectCheckoutMaintenance(repo, { env: process.env });
   }
   const objects: string[] = [];

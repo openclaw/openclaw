@@ -1,3 +1,4 @@
+import { expect } from "vitest";
 import type { OpenClawConfig } from "../../config/types.js";
 import type { RespondFn } from "./types.js";
 
@@ -36,4 +37,16 @@ export function controlUiGitHubConfig(token: string): OpenClawConfig {
       },
     },
   };
+}
+
+export function expectControlUiReply(respond: RespondFn, payload: unknown) {
+  expect(respond).toHaveBeenCalledWith(true, payload, undefined);
+}
+
+export function expectControlUiError(respond: RespondFn, error: unknown) {
+  expect(respond).toHaveBeenCalledWith(false, undefined, error);
+}
+
+export function expectControlUiUnavailable(respond: RespondFn) {
+  expectControlUiError(respond, expect.objectContaining({ code: "UNAVAILABLE" }));
 }

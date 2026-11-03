@@ -165,7 +165,7 @@ describe("remote project search slot", () => {
       },
     });
     context.gateway.snapshot.hello!.features!.methods = [
-      "projects.searchRemote",
+      "fixture.repositories.search",
       "forge.repositories.search",
     ];
     const native = createDeferred<ProjectsSearchRemoteResult>();

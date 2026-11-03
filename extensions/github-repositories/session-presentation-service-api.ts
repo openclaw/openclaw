@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   NativeGitHubSessionPresentation as RepositorySessionPresentation,
   NativeGitHubSessionReads as RepositorySessionReads,

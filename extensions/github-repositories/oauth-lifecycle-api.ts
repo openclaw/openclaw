@@ -4,7 +4,7 @@ import type {
   ToolsGitHubAuthorizePollResult,
   ToolsGitHubAuthorizeStartResult,
 } from "@openclaw/gateway-protocol";
-import type { OpenClawConfig, PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { getOrCreatePromise } from "openclaw/plugin-sdk/lazy-runtime";
 import { warnPluginSdkDeprecation } from "openclaw/plugin-sdk/logging-core";
@@ -14,6 +14,7 @@ import {
   type NativeGitHubIdentityScope as GitHubIdentityScope,
   type NativeGitHubOAuthRecord as GitHubOAuthRecord,
 } from "openclaw/plugin-sdk/native-github-account-host";
+import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import { isRecoverableOAuthRefreshFailure } from "openclaw/plugin-sdk/provider-oauth-runtime";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { assertGitHubCliAvailable } from "./cli-preflight-api.js";

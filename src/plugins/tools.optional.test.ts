@@ -19,18 +19,17 @@ import { createDedupeCache } from "../infra/dedupe.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { AsyncWorkScope, getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
-import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import type { PluginLoadOptions } from "./loader-types.js";
 import { adoptProcessPluginCache, createPluginCache } from "./plugin-cache.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
-import { makeEmptyPluginMetadataOwners } from "./plugin-metadata-empty.test-support.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { markPluginRegistryRetired } from "./registry-lifecycle.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { createPluginRecord } from "./status.test-helpers.js";
-import { appendRuntimePluginToolGrant } from "./tool-grant-allowlist.js";
 import {
   createNamedToolEntry,
+  createOptionalToolResolveParams as createResolveToolsParams,
+  installOptionalToolManifestSnapshots,
   createOptionalToolManifest as createToolManifest,
   createOptionalToolContext as createContext,
   createConfiguredFeishuToolContext,
@@ -113,33 +112,6 @@ let clearPluginMetadataLifecycleCaches: typeof import("./plugin-metadata-lifecyc
 let setCurrentPluginMetadataSnapshot: typeof import("./current-plugin-metadata.test-support.js").setCurrentPluginMetadataSnapshot;
 let getPluginRuntimeGatewayRequestScope: typeof import("./runtime/gateway-request-scope.js").getPluginRuntimeGatewayRequestScope;
 let withPluginRuntimeGatewayRequestScope: typeof import("./runtime/gateway-request-scope.js").withPluginRuntimeGatewayRequestScope;
-
-function createResolveToolsParams(params?: {
-  context?: ReturnType<typeof createContext> & Record<string, unknown>;
-  clientCaps?: string[];
-  toolAllowlist?: readonly string[];
-  toolDenylist?: readonly string[];
-  existingToolNames?: Set<string>;
-  env?: NodeJS.ProcessEnv;
-  suppressNameConflicts?: boolean;
-  allowGatewaySubagentBinding?: boolean;
-  runtimePluginToolGrant?: { pluginId: string; toolNames: readonly string[] };
-}) {
-  const toolAllowlist = appendRuntimePluginToolGrant(
-    [...(params?.toolAllowlist ?? [])],
-    params?.runtimePluginToolGrant,
-  );
-  return {
-    context: (params?.context ?? createContext()) as never,
-    ...(params?.clientCaps ? { clientCaps: params.clientCaps } : {}),
-    ...(toolAllowlist.length > 0 ? { toolAllowlist } : {}),
-    ...(params?.toolDenylist ? { toolDenylist: [...params.toolDenylist] } : {}),
-    ...(params?.existingToolNames ? { existingToolNames: params.existingToolNames } : {}),
-    ...(params?.env ? { env: params.env } : {}),
-    ...(params?.suppressNameConflicts ? { suppressNameConflicts: true } : {}),
-    ...(params?.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
-  };
-}
 
 function setRegistry(
   entries: MockRegistryToolEntry[],
@@ -249,65 +221,10 @@ function installToolManifestSnapshot(params: {
   });
 }
 
-function installToolManifestSnapshots(params: {
-  config: ReturnType<typeof createContext>["config"];
-  compatibleConfigs?: ReturnType<typeof createContext>["config"][];
-  env?: NodeJS.ProcessEnv;
-  plugins: Record<string, unknown>[];
-}) {
-  const plugins = params.plugins.map((plugin): Record<string, unknown> => ({
-    rootDir: "/tmp",
-    source: `/tmp/${String(plugin.id)}.js`,
-    ...plugin,
-  }));
-  const snapshot = {
-    policyHash: resolveInstalledPluginIndexPolicyHash(params.config),
-    workspaceDir: "/tmp",
-    index: {
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash: "test",
-      generatedAtMs: 0,
-      installRecords: {},
-      plugins: plugins.map((plugin) => ({
-        pluginId: String(plugin.id),
-        origin: plugin.origin,
-        enabled: true,
-        enabledByDefault: plugin.enabledByDefault,
-        startup: {
-          sidecar: false,
-          memory: false,
-          agentHarnesses: [],
-        },
-        compat: [],
-      })),
-      diagnostics: [],
-    },
-    registryDiagnostics: [],
-    manifestRegistry: { plugins, diagnostics: [] },
-    plugins,
-    diagnostics: [],
-    byPluginId: new Map(plugins.map((plugin) => [String(plugin.id), plugin])),
-    normalizePluginId: (id: string) => id,
-    owners: makeEmptyPluginMetadataOwners(),
-    metrics: {
-      registrySnapshotMs: 0,
-      manifestRegistryMs: 0,
-      ownerMapsMs: 0,
-      totalMs: 0,
-      indexPluginCount: plugins.length,
-      manifestPluginCount: plugins.length,
-    },
-  };
-  setCurrentPluginMetadataSnapshot(snapshot as never, {
-    config: params.config,
-    compatibleConfigs: params.compatibleConfigs,
-    env: params.env ?? process.env,
-    workspaceDir: "/tmp",
-  });
-  return snapshot;
+function installToolManifestSnapshots(
+  params: Parameters<typeof installOptionalToolManifestSnapshots>[0],
+) {
+  return installOptionalToolManifestSnapshots(params, setCurrentPluginMetadataSnapshot);
 }
 
 function expectResolvedToolNames(

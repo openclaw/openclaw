@@ -195,8 +195,8 @@ it("retires inactive session body work across roster and chip mode changes", asy
   };
   await settleRoster(sidebar);
   await waitForSolid(expectRows);
-  // Each group has owner bookkeeping.
-  await update("ten-roster-updates-with-pins", 40);
+  // Native PR discovery moved to the plugin, removing one group read per shell update.
+  await update("ten-roster-updates-with-pins", 30);
   for (const [index, mode] of (["chip", "roster", "chip", "roster"] as const).entries()) {
     groups.mockClear();
     sidebar.sidebarAgentsMode = mode;
@@ -205,7 +205,7 @@ it("retires inactive session body work across roster and chip mode changes", asy
     expect(sidebar.querySelector(".sidebar-shell__body")).toBe(body);
     expect(Boolean(sidebar.querySelector("openclaw-sidebar-agent-roster"))).toBe(mode === "roster");
     record(`switch-${index}-${mode}`);
-    await update(`ten-${index}-${mode}-updates-with-pins`, mode === "roster" ? 40 : 50);
+    await update(`ten-${index}-${mode}-updates-with-pins`, mode === "roster" ? 30 : 40);
   }
   expect(initialRoster?.isConnected).toBe(false);
 });

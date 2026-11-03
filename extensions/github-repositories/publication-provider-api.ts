@@ -1,5 +1,5 @@
 import { getActiveSecretsRuntimeConfigSnapshot } from "openclaw/plugin-sdk/channel-secret-owner-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { NativeGitHubPublicationFailureError as RepositoryPublicationFailureError } from "openclaw/plugin-sdk/native-github-publication-host";
 import type { NativeGitHubPublicationProvider as RepositoryPublicationProvider } from "openclaw/plugin-sdk/native-github-publication-host";
 import { isRecord, readNonBlankString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -21,7 +21,7 @@ import {
 import {
   runGitHubPublicationCommand,
   requireGitHubPublicationCommand,
-  createGitHubPublicationCommandRunner,
+  createGitHubPublicationApiRunner,
   githubPublicationApiArgs,
   readGitHubPublicationBaseSha,
 } from "./publication-git-transport-api.js";
@@ -306,7 +306,7 @@ export function createGitHubPublicationProvider(owner: {
     async readBase(input) {
       const identity = readGitHubPublisher(input.publisher);
       return await readGitHubPublicationBaseSha(
-        createGitHubPublicationCommandRunner(input.assertCurrent).run,
+        createGitHubPublicationApiRunner(input.assertCurrent).run,
         input.target.repository,
         input.target.baseBranch,
         identity.host ?? resolveGitHubHost(),

@@ -1,6 +1,6 @@
 import path from "node:path";
+import type { NativeControlUiPluginFixture } from "./control-ui-e2e-contract.ts";
 import type { ControlUiMockGatewayScenario } from "./control-ui-e2e.ts";
-import type { NativeControlUiPluginFixture } from "./control-ui-plugin-fixture.ts";
 
 const workboardNativePlugins: NativeControlUiPluginFixture[] = [
   {

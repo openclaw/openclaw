@@ -12,11 +12,11 @@ import {
 } from "./github-repository-publication-workspace.js";
 import type { RepositoryGitHubPublicationStatusRow } from "./github-repository-publication.kernel.js";
 import type {
+  PreparedRepositoryPublicationStatus,
   RepositoryPublicationProvider,
   RepositoryPublicationPersonalAction as PersonalGitHubAction,
 } from "./repository-publication-contract.js";
 
-export type PreparedRepositoryPublicationStatus = { release: () => void };
 const statusPreparations = new WeakMap<
   PreparedRepositoryPublicationStatus,
   {

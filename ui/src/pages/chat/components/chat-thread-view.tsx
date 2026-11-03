@@ -26,7 +26,7 @@ import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { createParkedProjection } from "../../../lib/reactive/parked-projection.ts";
 import { projectOwner, projectSource } from "../../../lib/reactive/projection.ts";
-import { createTextReferenceProjection } from "../../../plugins/control-ui-text-references.solid.ts";
+import { createTextReferenceProjection } from "../../../plugins/control-ui-text-reference-projection.ts";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
 import {
   getExpandedToolCards,

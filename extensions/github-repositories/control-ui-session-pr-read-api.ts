@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   NativeGitHubPullRequestBinding as SessionGitHubPullRequestBinding,
   PreparedNativeGitHubSessionRead as PreparedRepositorySessionRead,
@@ -7,8 +7,8 @@ import type {
   RepositorySessionSourceScope,
   ControlUiSessionPullRequests,
 } from "openclaw/plugin-sdk/native-github-session-read";
+import type { GitHubCheckoutContext } from "./control-ui-session-pr-checkout.js";
 import type { SessionPullRequestReadCredential } from "./control-ui-session-pr-request-api.js";
-import type { GitHubCheckoutContext } from "./control-ui-session-prs-api.js";
 import { resolveConfiguredGitHubHost } from "./host-api.js";
 import { parseGitHubRemoteUrl } from "./remote-api.js";
 

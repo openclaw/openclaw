@@ -1,7 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   ControlUiDisposer,
-  ControlUiHostV2 as ControlUiHost,
   ControlUiPageNavigationOptions,
   ControlUiPageTarget,
 } from "../../../src/plugin-sdk/control-ui.js";
@@ -27,17 +26,21 @@ import {
   scopedSessionArtifactKey,
   uiSessionEventMatches,
 } from "../lib/sessions/session-key.ts";
+import { invokeControlUiAction } from "./control-ui-action-invocation.ts";
+import type { PreparedControlUiHost } from "./control-ui-capability.ts";
 import { createControlUiComponents } from "./control-ui-components.ts";
 import { createControlUiNativeHost } from "./control-ui-native-host.tsx";
 import { createControlUiPresentationHost } from "./control-ui-presentation-host.tsx";
 import { createControlUiRequests } from "./control-ui-requests.ts";
 import type { ControlUiPluginOwner, ControlUiPluginRuntime } from "./control-ui-runtime.ts";
+import { scopeControlUiHost } from "./control-ui-scope.ts";
+import { createTextReferenceProjection } from "./control-ui-text-references.solid.ts";
 
 export function createControlUiPluginHost(
   getContext: () => ApplicationContext,
   runtime: ControlUiPluginRuntime,
   owner: Omit<ControlUiPluginOwner, "host">,
-): ControlUiHost {
+): PreparedControlUiHost {
   const current = () => {
     if (!runtime.isCurrent(owner)) {
       throw new Error("This plugin UI activation has ended. Use the current activation.");
@@ -98,7 +101,13 @@ export function createControlUiPluginHost(
   const dock = getContext().assistantDock;
   // Only an activation that actually docked a conversation owns a close-on-dispose.
   let dockCloseRetained = false;
-  return {
+  const host: PreparedControlUiHost = {
+    projectTextReferences: createTextReferenceProjection,
+    scopeView: (signal, isCurrent) => scopeControlUiHost(host, signal, isCurrent),
+    invokeAction: (action, registrationSignal, params, retry) => {
+      current();
+      return invokeControlUiAction(host, action, registrationSignal, params, retry);
+    },
     apiVersion: 1,
     capabilitiesVersion: 2,
     pluginId: owner.descriptor.pluginId,
@@ -427,4 +436,5 @@ export function createControlUiPluginHost(
       },
     },
   };
+  return host;
 }

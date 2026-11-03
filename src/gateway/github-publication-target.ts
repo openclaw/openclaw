@@ -88,6 +88,10 @@ export async function prepareRepositoryPublicationWorkspaceTarget(params: {
     publisher: params.publisher,
     assertCurrent: params.assertCurrent,
   });
+  // An explicitly prepared PR retains its requester/author admission ahead of receipt fallback.
+  if (params.pullRequest) {
+    return initial;
+  }
   return await preparePublishedPullRequestTarget(params, initial);
 }
 

@@ -1,7 +1,7 @@
 /**
  * Fork-discovery owner measurement with a recording loopback GitHub server.
  * node --import ./scripts/tsx.mjs scripts/perf/github-fork-discovery-measure.ts <owner-module.ts> [1000] [--etag] [--allocations]
- * Baseline module copies must be adjacent to control-ui-session-prs.ts.
+ * Baseline module copies must be adjacent to control-ui-session-prs-api.ts.
  * Add --compare=<candidate-module.ts> for A/A controls then five serial AB/BA pairs.
  * Timing and allocation passes stay separate.
  * Acceptance: identical PR facts, two identical list requests become one, lower CPU/allocation.
@@ -34,7 +34,16 @@ const owners = await Promise.all(
 );
 let selectedOwner = owners[0]!;
 setRuntimeConfigSnapshot({
-  gateway: { controlUi: { github: { host: "github.com", token: "synthetic-fork-measure" } } },
+  plugins: {
+    entries: {
+      "github-repositories": {
+        config: {
+          host: "github.com",
+          service: { host: "github.com", token: "synthetic-fork-measure" },
+        },
+      },
+    },
+  },
 });
 const payload = JSON.stringify(
   Array.from({ length: 5 }, (_, index) => ({

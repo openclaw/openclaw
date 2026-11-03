@@ -18,13 +18,12 @@ import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gate
 import { getGatewayServiceLifetime } from "../plugins/runtime/gateway-service-owner.js";
 import { startPluginServices } from "../plugins/services.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
-import {
-  createRepositorySessionReadHost,
-  type RepositorySessionPresentation,
-} from "./control-ui-session-pr-runtime.js";
+import { createRepositorySessionReadHost } from "./control-ui-session-pr-runtime.js";
+import type { RepositorySessionPresentation } from "./repository-session-read.types.js";
 import { createRepositorySources } from "./repository-sources.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
+import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 
 /** Synthetic HTTP transport still uses the real Gateway-owned account service lookup. */
@@ -297,17 +296,18 @@ export async function startTestRegisteredPublicationProvider() {
 }
 
 export async function createTestRepositorySessionPresentation(
-  context: GatewayRequestContext,
   scheduler: GatewayScheduler,
   client: GatewayClient & { connId: string },
   replace: RepositorySessionPresentation["replace"],
+  context: GatewayRequestContext = createContext(),
 ) {
-  context.getClientConnIds = (filter) => new Set(!filter || filter(client) ? [client.connId] : []);
+  context.getClientConnIds = (filter) =>
+    new Set(!client.invalidated && (!filter || filter(client)) ? [client.connId] : []);
   const host = createRepositorySessionReadHost({
     signal: scheduler.signal,
     getRuntimeConfig: context.getRuntimeConfig,
     getSessionRowProjection: () => getSessionRowProjection(context),
-    getClient: (connId) => (client.connId === connId ? client : undefined),
+    getClient: (connId) => (client.connId === connId && !client.invalidated ? client : undefined),
     resolveGatewayContext: () => context,
     broadcastToConnIds: vi.fn(),
   });
@@ -322,6 +322,7 @@ export async function createTestRepositorySessionPresentation(
   });
   service.presentation.replace = replace;
   return {
+    context,
     stop: async () => {
       await service.stop();
       await serviceScheduler.stop();

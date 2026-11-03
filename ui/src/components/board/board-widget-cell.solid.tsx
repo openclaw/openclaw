@@ -5,6 +5,7 @@ import {
   createMemo,
   createSignal,
   Errored,
+  lazy,
   onCleanup,
   Show,
   Switch,
@@ -31,7 +32,6 @@ import { sharedPluginsProjection } from "../../lib/reactive/shared-application-p
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { showToast } from "../../lib/toast.ts";
 import { CustomPluginUiDisabled } from "../../plugins/control-ui-disabled.solid.tsx";
-import { PluginContribution } from "../../plugins/control-ui-view.solid.tsx";
 import type { MenuHandle } from "../solid/menu.tsx";
 import { BoardMcpAppContent } from "./board-mcp-app-content.tsx";
 import { createBoardMcpAppLifecycle } from "./board-mcp-app-lifecycle.ts";
@@ -49,6 +49,10 @@ import { BoardWidgetError } from "./board-widget-error.tsx";
 import { createBoardWidgetFrame, BoardWidgetFrame } from "./board-widget-frame.tsx";
 import { BoardWidgetMenu } from "./board-widget-menu.tsx";
 import { CoreBoardWidget } from "./core-board-widget.tsx";
+
+const PluginContribution = lazy(() => import("../../plugins/control-ui-view.solid.tsx"), {
+  export: "PluginContribution",
+});
 
 registerEnglishCatalog(registerBoardDocumentEnglish);
 

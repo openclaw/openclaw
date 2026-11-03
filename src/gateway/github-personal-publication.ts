@@ -42,19 +42,17 @@ import type {
 } from "./repository-publication-contract.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 export type { RepositoryPublicationPersonalSessionAction as PersonalGitHubSessionActionV2 } from "./repository-publication-contract.js";
-export {
-  preparePersonalRepositoryPublicationStatus,
-  type PreparedRepositoryPublicationStatus,
-} from "./github-personal-publication-status.js";
 type PersonalPublicationWorkspace = {
   assertCurrent: () => void;
   assertCustody: () => void;
   worktree: Awaited<ReturnType<typeof readGitHubPublicationWorktreeOwner>>["worktree"];
 };
-export type PersonalGitHubSessionAction = Omit<
-  PersonalGitHubSessionActionV2,
-  "version" | "signal" | "prepareSource"
->;
+export type PersonalGitHubSessionAction = PersonalGitHubAction & {
+  sessionId: string;
+  sessionKey: string;
+  agentId: string;
+  lifecycleRevision: string | null;
+};
 export function createPersonalGitHubPublicationCoordinator(
   placements: WorkerSessionPlacementStore,
   assertRuntimeCurrent: () => void,

@@ -4,6 +4,13 @@ import type {
   ControlUiSessionFixture,
 } from "./control-ui-session-fixtures.ts";
 
+export type NativeControlUiPluginFixture = {
+  pluginId: string;
+  rootDir: string;
+  source: string;
+  inlineViews?: readonly { id: string; label: string; version: number }[];
+};
+
 export type ControlUiMockPresenceUser = AuthenticatedUser & {
   self?: boolean;
   deviceFamily?: string;

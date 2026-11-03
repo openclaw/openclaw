@@ -466,7 +466,9 @@ describe("chat sidebar region", () => {
 
     params.pluginPanels = [entry];
     await refresh();
-    expect(query(region, `[data-panel-slot="${slot}"] openclaw-plugin-view`)).not.toBeNull();
+    await waitForSolid(() =>
+      expect(query(region, `[data-panel-slot="${slot}"] openclaw-plugin-view`)).not.toBeNull(),
+    );
     expect(query(region, 'button[aria-label="Close Fixture notes"]')).not.toBeNull();
     expect(region.layout.columns[0]?.panels).toEqual(saved.columns[0]?.panels);
   });

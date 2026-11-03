@@ -14,13 +14,12 @@ import type {
 } from "../state/openclaw-agent-db.generated.js";
 import { normalizeBoardWidgetDeclared } from "./board-capabilities.js";
 import { BoardValidationError } from "./board-layout.js";
-import {
-  createBoardDeclaredSummary,
-  resolveBoardWidgetPutParams,
-  type BoardWidgetHtmlViewMetadata,
-  type BoardWidgetDocument,
-  type BoardWidgetNameIdentityMarker,
-} from "./board-store.js";
+import { createBoardDeclaredSummary, resolveBoardWidgetPutParams } from "./board-store.js";
+import type {
+  BoardWidgetHtmlViewMetadata,
+  BoardWidgetDocument,
+  BoardWidgetNameIdentityMarker,
+} from "./session-actor-board-contract.js";
 
 export type SelectedBoardTabRow = Selectable<BoardTabRow>;
 export type SelectedBoardWidgetRow = Selectable<BoardWidgetRow>;

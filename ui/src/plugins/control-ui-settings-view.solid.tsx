@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { onSettled, untrack } from "solid-js";
+import { onSettled } from "solid-js";
 import type {
   ControlUiSettingsContext,
   ControlUiSettingsContextV2,
@@ -195,8 +195,10 @@ export function ControlUiSettingsPresentation(props: {
             registerControlUiEnglish(catalog);
           },
           projectOwner(source) {
-            untrack(() => current());
-            const projection = projectOwner(source, (sourceOwner) => sourceOwner.read());
+            const projection = projectOwner(source, (sourceOwner) => {
+              current();
+              return sourceOwner.read();
+            });
             const stop = listen(lifetime, "abort", projection.dispose, { once: true });
             return {
               read: projection.read,

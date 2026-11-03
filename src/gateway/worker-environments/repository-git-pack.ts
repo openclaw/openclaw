@@ -9,7 +9,7 @@ import { prepareWorkerWorkspaceGitPack } from "./workspace-git-base.js";
 const FETCH_TIMEOUT_MS = 10 * 60_000;
 
 /** The caller retains scratch-directory custody until this operation settles. */
-export async function prepareRepositoryCheckoutPack(params: {
+export async function fetchRepositoryCheckoutPack(params: {
   url: string;
   baseCommit: string;
   httpAuthorization?: string;

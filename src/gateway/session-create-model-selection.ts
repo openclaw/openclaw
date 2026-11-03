@@ -108,6 +108,25 @@ export async function prepareSessionCreateRuntimeSelection(params: {
   }
 }
 
+/** Catalog creation fixes the model route and its plugin owner in one metadata projection. */
+export function projectSessionCreateCatalogModelSelection(params: {
+  model: ReturnType<typeof resolveSessionModelRef> | undefined;
+  agentRuntime: string | undefined;
+  pluginOwnerId: string | undefined;
+}): Partial<SessionEntry> {
+  return params.model && params.agentRuntime
+    ? {
+        providerOverride: params.model.provider,
+        modelOverride: params.model.model,
+        modelOverrideSource: "user",
+        modelOverrideRouteResolution: "resolved",
+        agentRuntimeOverride: params.agentRuntime,
+        modelSelectionLocked: true,
+        pluginOwnerId: params.pluginOwnerId,
+      }
+    : {};
+}
+
 /** Keep automatic selection provenance distinct from an explicit model pin. */
 export function projectSessionCreateSpawnModelSelection(params: {
   entry: SessionEntry;

@@ -1,6 +1,9 @@
 import type { OwnedRuntimeAuthProfileStoreSnapshotEntry } from "../agents/auth-profiles/runtime-snapshots.js";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { cloneConfigWithResolutionFacts } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.types.js";
+import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import type { DegradedSecretOwner, SecretOwnerRefState } from "./runtime-degraded-state.js";
 import type {
   SecretResolverWarning,
@@ -49,5 +52,33 @@ export function cloneSecretsRuntimeSnapshot(
           }),
         }
       : {}),
+  };
+}
+
+/** Context needed to refresh active secrets runtime snapshots without losing plugin origin data. */
+export type SecretsRuntimeRefreshContext = {
+  env: Record<string, string | undefined>;
+  explicitAgentDirs: string[] | null;
+  includeConfigRefs?: boolean;
+  includeAuthStoreRefs: boolean;
+  loadAuthStore?: (agentDir?: string) => AuthProfileStore | Promise<AuthProfileStore>;
+  loadablePluginOrigins: ReadonlyMap<string, PluginOrigin>;
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+};
+
+/**
+ * Clones refresh context while preserving callback identity and isolating mutable maps/config.
+ */
+export function cloneSecretsRuntimeRefreshContext(
+  context: SecretsRuntimeRefreshContext,
+): SecretsRuntimeRefreshContext {
+  return {
+    env: { ...context.env },
+    explicitAgentDirs: context.explicitAgentDirs ? [...context.explicitAgentDirs] : null,
+    includeConfigRefs: context.includeConfigRefs ?? true,
+    includeAuthStoreRefs: context.includeAuthStoreRefs,
+    loadablePluginOrigins: new Map(context.loadablePluginOrigins),
+    ...(context.manifestRegistry ? { manifestRegistry: context.manifestRegistry } : {}),
+    ...(context.loadAuthStore ? { loadAuthStore: context.loadAuthStore } : {}),
   };
 }

@@ -436,11 +436,12 @@ suite.define(() => {
                 await activate();
                 await expect.poll(() => snapshots.at(-1)?.taskPullRequestCount).toBe(3);
                 await expect
-                  .poll(() => snapshots.at(-1)?.taskPullRequests, {
+                  .poll(() => snapshots.at(-1), {
                     timeout: foregroundReadinessTimeoutMs,
                   })
-                  .toEqual(
-                    expect.arrayContaining(
+                  .toMatchObject({
+                    branch: { branch },
+                    taskPullRequests: expect.arrayContaining(
                       numbers.map((number, index) =>
                         expect.objectContaining({
                           number,
@@ -453,7 +454,7 @@ suite.define(() => {
                         }),
                       ),
                     ),
-                  );
+                  });
                 expect(snapshots.at(-1)?.pullRequests).toEqual([]);
                 expect(snapshots.at(-1)?.branch).toMatchObject({ branch });
                 await expect.poll(() => card.locator(".session-hovercard__pr-row").count()).toBe(3);

@@ -110,14 +110,16 @@ export function installRepositoryPresentation(
       }));
     },
     subscribe: (listener) => runtime.subscribe(listener),
+    selectedReplacement: (surface) => runtime.selectedReplacement(surface),
     reportError: (pluginId, error) => runtime.reportError(pluginId, error),
   };
   context = { ...source, plugins };
+  const activationHost = host.scopeView(owner.abort.signal);
   let activationCleanup: (() => void) | undefined;
   let live = true;
   const ready = repository
     ? Promise.resolve()
-    : Promise.resolve(githubPlugin.activate?.(host)).then((cleanup) => {
+    : Promise.resolve(githubPlugin.activate?.(activationHost)).then((cleanup) => {
         if (typeof cleanup !== "function") {
           return;
         }
@@ -141,18 +143,18 @@ export function installRepositoryPresentation(
     runtime.register(owner, "accessories", {
       id: "repository",
       placement: "session-context",
-      mount: createSessionAccessoryMount(host, repository),
+      mount: createSessionAccessoryMount(activationHost, repository),
     });
     runtime.register(owner, "accessories", {
       id: "repository-environment",
       placement: "session-environment",
-      mount: createSessionAccessoryMount(host, repository, true),
+      mount: createSessionAccessoryMount(activationHost, repository, true),
     });
     for (const placement of ["root", "page", "activity"] as const) {
       runtime.register(owner, "accessories", {
         id: `repository-mobile-${placement}`,
         placement: `session-mobile-${placement}`,
-        mount: createMobileSessionAccessoryMount(host, repository, placement),
+        mount: createMobileSessionAccessoryMount(activationHost, repository, placement),
       });
     }
   }
@@ -184,30 +186,4 @@ export function installRepositoryPresentation(
     },
     dispose,
   };
-}
-
-/** Deliver synthetic observed GitHub facts through the plugin's production event boundary. */
-export function publishRepositoryPullRequests(
-  gateway: { publishEvent: (event: string, payload: unknown) => void },
-  sessionKey: string,
-  numbers: readonly number[],
-  state: "open" | "draft" | "merged" | "closed" = "open",
-) {
-  gateway.publishEvent("controlUi.sessionPullRequests.changed", {
-    sessions: {
-      [sessionKey]: {
-        pullRequests: numbers.map((number) => ({
-          owner: "example",
-          repo: "repository",
-          number,
-          state,
-          branch: "fixture/branch",
-          title: `Synthetic PR ${number}`,
-          url: `https://github.com/example/repository/pull/${number}`,
-        })),
-        status: "ready",
-        rateLimited: false,
-      },
-    },
-  });
 }

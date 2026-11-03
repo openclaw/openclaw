@@ -267,7 +267,7 @@ export async function readPublicSessionShare(
     offset?: number;
     projection: SessionRowProjection;
     card?: boolean;
-    pullRequests?: import("./control-ui-session-pr-runtime.js").RepositorySessionPresentation;
+    pullRequests?: import("./repository-session-read.types.js").RepositorySessionPresentation;
   },
 ): Promise<PublicSessionShareReadResult | null> {
   const { projection } = options;

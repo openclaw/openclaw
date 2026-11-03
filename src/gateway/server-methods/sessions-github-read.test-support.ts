@@ -4,7 +4,7 @@ import {
   type PersonalGitHubAction,
 } from "../../../extensions/github-repositories/personal-oauth-api.js";
 import { personalGitHubStatusAsync as personalGitHubStatus } from "../../../extensions/github-repositories/personal-status-api.js";
-import * as publicationAvailability from "../../../extensions/github-repositories/publication-availability-api.js";
+import * as publicationIdentity from "../../../extensions/github-repositories/publication-availability-api.js";
 import { createGitHubPublicationProvider } from "../../../extensions/github-repositories/runtime-api.js";
 import type { SessionGitHubStatusResult } from "../../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
@@ -16,11 +16,9 @@ import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import {
-  createRepositorySessionReadHost,
-  type RepositorySessionPresentation,
-} from "../control-ui-session-pr-runtime.js";
+import { createRepositorySessionReadHost } from "../control-ui-session-pr-runtime.js";
 import { installGitHubAccountFixture } from "../github-account-service.test-support.js";
+import type { RepositorySessionPresentation } from "../repository-session-read.types.js";
 import { handleGatewayRequest, createRequestGatewayMethodRegistry } from "../server-methods.js";
 import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
@@ -36,10 +34,9 @@ export const publisherIdentity = () => ({
   account: { accountId: publisher.accountId, login: publisher.login, avatarUrl: null },
 });
 export function mockPublicationIdentity() {
-  vi.spyOn(
-    publicationAvailability,
-    "prepareCurrentGitHubPublicationOptionsIdentity",
-  ).mockResolvedValue(publisherIdentity());
+  vi.spyOn(publicationIdentity, "prepareCurrentGitHubPublicationOptionsIdentity").mockResolvedValue(
+    publisherIdentity(),
+  );
 }
 export const receipt = {
   result: {

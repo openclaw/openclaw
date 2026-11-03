@@ -8,7 +8,6 @@ import {
 } from "./github-publication-availability.js";
 import { RepositoryPublicationSessionChangedError } from "./github-publication-errors.js";
 import { projectGitHubPublicationResult } from "./github-publication-receipt.js";
-import { withSessionRepositoryCheckpoint } from "./github-publication-runtime-deps.js";
 import type { PublicationSessionIdentity } from "./github-publication-session.types.js";
 import { failRepositoryGitHubPublicationPreparationAsync } from "./github-publication-store-async.js";
 import type { GitHubPublicationTransitionAuthority } from "./github-publication-store-async.js";
@@ -186,7 +185,9 @@ export async function captureCheckpoint<T>(
     ...authority,
     assertAction: assertSelected,
   };
-  return await withSessionRepositoryCheckpoint(
+  return await (
+    await import("./worker-environments/session-repository-checkpoints.js")
+  ).withSessionRepositoryCheckpoint(
     {
       workspaceId: row.workspace_id,
       checkpointRef: checkpointRef ?? undefined,

@@ -55,3 +55,21 @@ export {
 } from "../state/user-github-connections.js";
 
 export { UserGitHubConnectionAuthorityChangedError } from "../state/user-github-connections.js";
+
+/** Deprecated shipped lookup; load instance machinery only for an admitted managed service start. */
+export async function installNativeGitHubLegacyOAuthLookup(
+  ...args: Parameters<
+    typeof import("../gateway/native-github-account-install.js").installRepositoryLegacyOAuthLookup
+  >
+): Promise<
+  ReturnType<
+    typeof import("../gateway/native-github-account-install.js").installRepositoryLegacyOAuthLookup
+  >
+> {
+  const runtime = await import("../gateway/native-github-account-install.js");
+  return runtime.installRepositoryLegacyOAuthLookup(...args);
+}
+export type {
+  LegacyGitHubOAuthService,
+  LegacyPersonalGitHubService,
+} from "../gateway/github-oauth-lifecycle-host.types.js";

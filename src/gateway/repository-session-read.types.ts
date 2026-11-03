@@ -1,3 +1,10 @@
+import type { GitMergedPullHead } from "../infra/git-read-operations.js";
+import type { RepositoryCredentialReader } from "../plugins/repository-integration.types.js";
+import type {
+  ControlUiSessionPullRequestsChanged,
+  ControlUiSessionPullRequestSnapshot,
+} from "./control-ui-contract.js";
+
 export type RepositorySessionIdentity = Readonly<{
   sessionId: string;
   sessionKey: string;
@@ -5,7 +12,7 @@ export type RepositorySessionIdentity = Readonly<{
   lifecycleRevision?: string | null;
 }>;
 
-export type RepositorySessionSource =
+type RepositorySessionSource =
   | Readonly<{ kind: "checkout"; root: string }>
   | Readonly<{ kind: "repository"; url: string; branch: string }>
   | null;
@@ -81,4 +88,79 @@ export type PreparedRepositorySessionRead = RepositorySessionObservation & {
     input: { branchUrls?: readonly string[] },
     signal?: AbortSignal,
   ) => Promise<RepositoryTaskPublications>;
+};
+
+export type RepositorySessionReadChange =
+  | { kind: "reset" | "config" | "publications" }
+  | {
+      kind: "session";
+      sessionKey: string;
+      agentId?: string;
+      removed: boolean;
+      lineageChanged: boolean;
+    };
+
+/** The existing public review facts stay a wire contract, independent of the vendor service. */
+export type RepositorySessionPresentation = {
+  checks: (
+    read: PreparedRepositorySessionRead,
+    params: { owner: string; repo: string; number: number; headSha: string },
+    assertCurrent: () => void,
+  ) => Promise<import("./control-ui-contract.js").ControlUiSessionPullRequestCheckDetails>;
+  readPrepared: (
+    observation: RepositorySessionObservation,
+    admitLoad?: () => boolean,
+  ) => ControlUiSessionPullRequestSnapshot | undefined;
+  read: (
+    read: PreparedRepositorySessionRead,
+    assertCurrent: () => void,
+    projection?: "publication",
+  ) => Promise<ControlUiSessionPullRequestSnapshot>;
+  replace: (
+    connId: string,
+    sessionKeys: readonly string[],
+    refresh?: ReadonlySet<string>,
+    admitted?: () => void,
+    passive?: ReadonlySet<string>,
+  ) => Promise<void>;
+  unsubscribe: (connId: string) => void;
+  knownMergedHeads: (read: RepositorySessionObservation) => Promise<readonly GitMergedPullHead[]>;
+  pollNow: () => Promise<void>;
+  stop: () => Promise<void>;
+};
+
+export type RepositoryIdentityPreparation<T> = (
+  env?: NodeJS.ProcessEnv,
+  readNativeCredential?: RepositoryCredentialReader,
+  assertCurrent?: () => void,
+) => Promise<T>;
+export type RepositoryReadCredentialPreparation<T extends { revoke?: () => Promise<void> }> =
+  RepositoryIdentityPreparation<T>;
+
+/** Service operations consumed by the review adapter; source custody remains at the host. */
+export type RepositorySessionReads = {
+  assertCurrent: () => void;
+  runDetached<T>(run: () => T): T;
+  isViewerConnected(connId: string): boolean;
+  publishReviewUpdates(
+    connIds: ReadonlySet<string>,
+    payload: ControlUiSessionPullRequestsChanged,
+    session: { sessionKey: string; agentId: string },
+  ): void;
+  prepareServiceRead: (query: {
+    sessionKey: string;
+    agentId: string;
+  }) => Promise<PreparedRepositorySessionRead | undefined>;
+  invalidateViewer(connId: string): void;
+  createViewerRead(
+    connId: string,
+    query: { sessionKey: string; agentId?: string; allowOwnImportedPullRequest?: boolean },
+  ): (() => Promise<PreparedRepositorySessionRead | undefined>) | undefined;
+  withSource<T>(
+    observation: RepositorySessionObservation,
+    operation: (scope: RepositorySessionSourceScope) => Promise<T>,
+  ): Promise<T>;
+  invalidate(query: { sessionKey: string; agentId: string }): void;
+  subscribeChanges(listener: (change: RepositorySessionReadChange) => void): () => void;
+  installPresentation(provider: RepositorySessionPresentation): () => void;
 };

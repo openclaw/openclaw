@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { getActiveSecretsRuntimeConfigSnapshot } from "openclaw/plugin-sdk/channel-secret-owner-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { MANAGED_GITHUB_PROFILE_ID_PATTERN } from "openclaw/plugin-sdk/native-github-account-host";
 import {
   performRepositoryCheckout,

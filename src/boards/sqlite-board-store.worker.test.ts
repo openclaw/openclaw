@@ -32,8 +32,8 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { BoardValidationError } from "./board-layout.js";
 import { boardFixture, htmlWidget, mcpContent } from "./board-store.fixtures.test-support.js";
-import type { BoardSnapshotWithHtmlViewMetadata } from "./board-store.js";
 import { closeBoardDatabases } from "./board-store.test-support.js";
+import type { BoardSnapshotWithHtmlViewMetadata } from "./session-actor-board-contract.js";
 import { SqliteBoardStore } from "./sqlite-board-store.js";
 import { readBoardSnapshotWithHtmlViewMetadata } from "./sqlite-board-store.kernel.js";
 

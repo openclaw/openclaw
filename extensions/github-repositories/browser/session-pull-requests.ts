@@ -19,10 +19,6 @@ import {
   primarySessionPullRequest,
 } from "./session-pull-request-presentation.ts";
 
-export type {
-  ControlUiSetSyncOptions as SessionPullRequestSyncOptions,
-  ControlUiSetSync as SessionPullRequestSetSync,
-} from "openclaw/plugin-sdk/control-ui";
 /** Bound transport and session identity operations; application state stays with the host. */
 export type SessionPullRequestSourceHostV1 = {
   hasClient: () => boolean;

@@ -70,7 +70,7 @@ it("preserves child connections and follows only the current provider through re
   const originalPortal = portal();
   await drainTurn(500);
   expect(portal()).toBe(originalPortal);
-  expect([h.getReads(), h.getPullRequestReads()]).toEqual([1, 1]);
+  await waitForSolid(() => expect([h.getReads(), h.getPullRequestReads()]).toEqual([1, 1]));
   h.provider.client = replacement.gateway.snapshot.client;
   await drainTurn();
   expect(portal()).toBe(originalPortal);

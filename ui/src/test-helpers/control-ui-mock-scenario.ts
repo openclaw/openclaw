@@ -7,7 +7,10 @@ import type {
   UpdateAvailable,
   UpdateScheduleState,
 } from "../api/types.ts";
-import type { MockGatewayRequestSelector } from "./control-ui-e2e-contract.ts";
+import type {
+  MockGatewayRequestSelector,
+  NativeControlUiPluginFixture,
+} from "./control-ui-e2e-contract.ts";
 import {
   defaultControlUiFeatureMethods,
   createControlUiDefaultResponses,
@@ -15,7 +18,6 @@ import {
 import { getSharedControlUiE2ePreview } from "./control-ui-e2e-shared-preview.ts";
 import { normalizeControlUiMockAuth, type ControlUiMockAuth } from "./control-ui-mock-auth.ts";
 import type { ControlUiMockPresenceScenario } from "./control-ui-mock-presence.ts";
-import type { NativeControlUiPluginFixture } from "./control-ui-plugin-fixture.ts";
 import type { ControlUiSessionFixture } from "./control-ui-session-fixtures.ts";
 
 export interface ControlUiMockGatewayScenario

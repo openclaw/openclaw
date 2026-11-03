@@ -18,8 +18,10 @@ import path from "node:path";
 import { monitorEventLoopDelay, performance, PerformanceObserver } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
-import { loadGitHubDetail } from "../../extensions/github/api.js";
-import type { ControlUiGitHubPreviewIdentity } from "../../extensions/github/src/preview-contract.js";
+import {
+  loadGitHubDetail,
+  type ControlUiGitHubPreviewIdentity,
+} from "../../extensions/github/api.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 
 const samples = Number(process.argv[2] ?? 1_000);
@@ -155,14 +157,14 @@ try {
   const identities: ControlUiGitHubPreviewIdentity[] = [];
   if (managed) {
     const { prepareGitHubReadIdentity, resolveManagedGitHubProfileDir } =
-      await import("../../src/agents/github-tool-identity.js");
+      await import("../../extensions/github-repositories/tool-identity-api.js");
     const fixtureRoot = path.resolve(".local");
     await fs.mkdir(fixtureRoot, { recursive: true });
     fixtureDir = await fs.mkdtemp(path.join(fixtureRoot, "github-reader-measure-"));
     const env = { OPENCLAW_STATE_DIR: fixtureDir };
     const profileId = `ghp_${"1".repeat(32)}`;
     const config: OpenClawConfig = {
-      tools: { github: { profileId } },
+      plugins: { entries: { "github-repositories": { config: { system: { profileId } } } } },
       agents: {
         entries: Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`agent-${i}`, {}])),
       },

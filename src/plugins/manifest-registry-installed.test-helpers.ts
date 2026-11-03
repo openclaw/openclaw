@@ -1,5 +1,4 @@
 import path from "node:path";
-import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import { createIndexFixture } from "./test-helpers/installed-plugin-index-fixture.js";
 
@@ -27,19 +26,4 @@ export function createIndex(rootDir: string): InstalledPluginIndex {
       },
     ],
   });
-}
-
-export function createMsteamsClawHubInstallRecord(
-  installPath: string,
-  overrides: Partial<PluginInstallRecord> = {},
-): PluginInstallRecord {
-  return {
-    source: "clawhub",
-    spec: "clawhub:@openclaw/msteams",
-    installPath,
-    clawhubUrl: "https://clawhub.ai",
-    clawhubPackage: "@openclaw/msteams",
-    clawhubChannel: "official",
-    ...overrides,
-  };
 }

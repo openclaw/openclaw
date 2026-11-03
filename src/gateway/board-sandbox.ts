@@ -1,5 +1,5 @@
 import { buildSandboxHostPath } from "../agents/sandbox-host.js";
-import type { BoardWidgetHtmlViewMetadata } from "../boards/board-store.js";
+import type { BoardWidgetHtmlViewMetadata } from "../boards/session-actor-board-contract.js";
 import { WIDGET_CDN_ORIGINS } from "../plugin-sdk/widget-html.js";
 import { WIDGET_MEDIA_SOURCES } from "../shared/widget-media.js";
 

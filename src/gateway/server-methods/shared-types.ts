@@ -25,6 +25,7 @@ import type {
   SystemAgentApprovalResolved,
 } from "../../infra/system-agent-approvals.js";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
+import type { RepositorySources } from "../../plugins/repository-source-types.js";
 import type { PluginRuntimeCore } from "../../plugins/runtime/types-core.js";
 import type { SystemAgentOperation } from "../../system-agent/operation-types.js";
 import type { WizardSession } from "../../wizard/session.js";
@@ -37,6 +38,7 @@ import type {
 import type { GatewayConfigRevisionProjector } from "../config-revision-token.js";
 import type { ScopeUpgradeCoordinator } from "../device-scope-upgrade.js";
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
+import type { LegacyGitHubOAuthService } from "../github-oauth-lifecycle-host.types.js";
 import type { HealthSummary } from "../health/types.js";
 import type { LiveTextProjectionText } from "../live-text-continuity.js";
 import type { MentionInbox } from "../mention-inbox.contracts.js";
@@ -428,7 +430,9 @@ type GatewayResidentBridgeContext = {
     typeof import("../worker-environments/repository-workspace-mutation.js").createRepositoryWorkspaceMutationService
   >;
   githubPublicationService?: import("../github-publication.js").GitHubPublicationCoordinator;
-  repositorySources?: import("../repository-sources.js").RepositorySources;
+  /** @deprecated Retained through 2026-12-31; new code uses caller-bound GitHub Gateway methods. */
+  githubOAuthService?: LegacyGitHubOAuthService;
+  repositorySources?: RepositorySources;
   modelAccountConnectService?: ReturnType<
     typeof import("../model-account-connect.js").createModelAccountConnectService
   >;

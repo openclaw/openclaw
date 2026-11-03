@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createStaleWhileRevalidateCache } from "openclaw/plugin-sdk/collection-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { registerSecretValueForRedaction } from "openclaw/plugin-sdk/logging-core";
 import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import {
@@ -29,7 +29,6 @@ const nativeTokens = createStaleWhileRevalidateCache<string | undefined>({
   cacheable: (token) => token !== undefined,
 });
 
-export const githubIdentityChanges: { onChange?: () => void } = {};
 const identityChangeListeners = new Set<() => void>();
 export function subscribeGitHubIdentityChanges(listener: () => void) {
   identityChangeListeners.add(listener);
@@ -46,11 +45,6 @@ export function clearNativeGitHubTokenCache(): void {
     } catch {
       /* Discovery does not block credential retirement. */
     }
-  }
-  try {
-    githubIdentityChanges.onChange?.();
-  } catch {
-    // Discovery is best effort; cache retirement must still succeed.
   }
 }
 

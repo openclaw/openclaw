@@ -13,7 +13,7 @@ import {
 } from "./control-ui-public-session-read.js";
 import { publicSessionTitle } from "./control-ui-public-session-render.js";
 import type { PublicSessionShareLocator } from "./control-ui-public-session-token.js";
-import type { RepositorySessionPresentation } from "./control-ui-session-pr-runtime.js";
+import type { RepositorySessionPresentation } from "./repository-session-read.types.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 

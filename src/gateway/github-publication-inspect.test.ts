@@ -74,6 +74,9 @@ async function fixture(
     },
   };
   setRuntimeConfigSnapshot(config);
+  Object.assign(f.guestSource.context, {
+    githubPublicationService: coordinator,
+  });
   if (options.linked !== false) {
     if (host === "github.com") {
       await syncCanonicalGitHubIdentity({

@@ -1,3 +1,4 @@
+import type { ControlUiSessionTaskPullRequest } from "@openclaw/gateway-protocol";
 import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import { createRetainedCache } from "openclaw/plugin-sdk/concurrency-runtime";
 import type {
@@ -19,10 +20,6 @@ import {
   sessionPullRequestRepositoryApiUrl,
 } from "./control-ui-session-prs-checks-api.js";
 import { gitHubPublicApi } from "./public-api.js";
-
-type ControlUiSessionTaskPullRequest = NonNullable<
-  ControlUiSessionPullRequests["taskPullRequests"]
->[number];
 
 type Read = ReturnType<typeof prepareSessionPullRequestGitHubRead>;
 type Entry = {

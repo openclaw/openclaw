@@ -11,7 +11,6 @@ import { createExecutionPublisher } from "./github-publication-policy.js";
 import { readRepositoryPublicationPullRequestUrls } from "./github-publication-reads.js";
 import { projectGitHubPublicationResult, requestFacts } from "./github-publication-receipt.js";
 import type { GitHubPublicationRecoveryBackoff } from "./github-publication-recovery.js";
-import { restoreGitHubPublicationRequester } from "./github-publication-runtime-deps.js";
 import {
   bindRepositoryGitHubPublicationCheckpointAsync,
   deferRepositoryGitHubPublicationClaimsAsync,
@@ -217,7 +216,9 @@ export function createRepositoryGitHubPublicationRecovery(params: {
       for (const row of selected) {
         try {
           await placements.prepareWorkspaceResultClaim(claim);
-          const requester = await restoreGitHubPublicationRequester(
+          const requester = await (
+            await import("./github-publication-requester.js")
+          ).restoreGitHubPublicationRequester(
             row.requester_authority_json,
             { sessionKey: row.session_key, agentId: row.agent_id },
             params.getCommittedRuntimeConfig,

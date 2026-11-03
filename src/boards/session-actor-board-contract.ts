@@ -1,14 +1,44 @@
 import type {
   BoardOp,
+  BoardMcpAppDescriptor,
+  BoardWidgetDeclared,
+  BoardWidgetGeneratedIdentity,
   BoardSnapshot,
   BoardWidgetMaterializedPutParams,
   BoardWidgetPutResult,
 } from "../../packages/gateway-protocol/src/index.js";
-import type {
-  BoardSnapshotWithHtmlViewMetadata,
-  BoardWidgetDocument,
-  BoardWidgetNameIdentityMarker,
-} from "./board-store.js";
+
+type BoardWidgetHtmlDocument = {
+  html: string;
+  revision: number;
+  sha256: string;
+  viewGeneration: string;
+  grantState: "none" | "pending" | "granted" | "rejected";
+  declared?: BoardWidgetDeclared;
+  resourceOrigins?: string[];
+};
+export type BoardWidgetHtmlViewMetadata = Omit<BoardWidgetHtmlDocument, "html">;
+export type BoardWidgetMcpAppDocument = {
+  descriptor: BoardMcpAppDescriptor;
+  revision: number;
+  instanceId: string;
+  grantState: "none" | "pending" | "granted" | "rejected";
+  declaredTools: string[];
+  interactive: boolean;
+};
+export type BoardWidgetDocument = BoardWidgetHtmlDocument | BoardWidgetMcpAppDocument;
+export type BoardSnapshotWithHtmlViewMetadata = {
+  snapshot: BoardSnapshot;
+  htmlViewMetadata: ReadonlyMap<string, BoardWidgetHtmlViewMetadata>;
+};
+
+type BoardWidgetGeneratedIdentityMarker = Pick<BoardWidgetGeneratedIdentity, "source" | "key"> & {
+  kind: "generated";
+};
+export type BoardWidgetNameIdentityMarker =
+  | { kind: "explicit" }
+  | BoardWidgetGeneratedIdentityMarker
+  | { kind: "invalid" };
 
 export type SessionActorMemoryBoard = {
   snapshot: BoardSnapshot;

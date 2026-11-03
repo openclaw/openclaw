@@ -66,7 +66,11 @@ no new GitHub-specific SDK subpath.
 | `read`                      | `await readAsync`                  |
 | `personalStatus`            | `await personalStatusAsync`        |
 
-The Gateway context also exposes managed OAuth methods through `githubOAuthService`.
+The deprecated Gateway context lookup `githubOAuthService` remains available through
+2026-12-31 as a lifetime-bound projection of the enabled GitHub plugin's managed
+account service. It does not start a native OAuth implementation or activate a disabled
+plugin. New integrations use caller-bound GitHub Gateway methods; retained callers keep
+the lookup and method contracts below during the existing deprecation window.
 Replace `cancelAuthorization(requestId)` with `await cancelAuthorizationAsync(requestId)`
 and `retireProfile(profileId)` with `await retireProfileAsync(profileId)`. The legacy
 methods retain synchronous results for the deprecation period and warn on use.

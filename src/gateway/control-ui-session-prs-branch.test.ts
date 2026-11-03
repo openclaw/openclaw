@@ -385,8 +385,7 @@ describe("session branch diff stats", () => {
       await git("tag", "feature");
       await git("tag", "origin/main");
       expect(await forkContext()).toMatchObject({
-        owner: "openclaw",
-        repo: "openclaw",
+        originUrl: "https://github.com/openclaw/openclaw.git",
         branch: "feature",
         defaultBranch: "main",
         forkHeadCandidates: [

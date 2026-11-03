@@ -37,9 +37,9 @@ import {
   createControlUiMockGatewayInitScript,
   resolvePlaywrightChromiumExecutablePath,
   defaultControlUiFeatureMethods,
-  prepareControlUiMockGatewayScenario,
   type ControlUiMockGatewayScenario,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
+import { prepareControlUiMockGatewayScenario } from "../ui/src/test-helpers/control-ui-plugin-fixture.ts";
 import { createControlUiSessionRow } from "../ui/src/test-helpers/control-ui-session-fixtures.ts";
 import { parityBaseScenario, parityWorkboardScenario } from "./control-ui-parity/fixtures.ts";
 import { startControlUiBenchGatewayServer } from "./lib/control-ui-bench-gateway-server.ts";

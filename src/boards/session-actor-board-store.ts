@@ -2,14 +2,12 @@ import { randomBytes } from "node:crypto";
 import type { SessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "../config/sessions/session-actor-storage-result.js";
 import { restoreBoardError } from "./board-store-errors.js";
+import type { BoardSessionTarget, BoardStore, BoardWriteOptions } from "./board-store.js";
 import type {
-  BoardSessionTarget,
-  BoardStore,
-  BoardWriteOptions,
   BoardWidgetDocument,
   BoardSnapshotWithHtmlViewMetadata,
-} from "./board-store.js";
-import type { SessionActorBoardWrites } from "./session-actor-board-contract.js";
+  SessionActorBoardWrites,
+} from "./session-actor-board-contract.js";
 
 /** The routing owner supplies the already-acquired actor; this store never acquires a backend. */
 export function createSessionActorBoardStore(

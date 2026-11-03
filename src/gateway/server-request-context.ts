@@ -5,12 +5,14 @@ import {
   type GatewayClientId,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { getRuntimeConfig } from "../config/io.js";
+import type { RepositorySources } from "../plugins/repository-source-types.js";
 import { getAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
 import { getResidentUserProfileDisplay } from "../state/user-profile-list.js";
 import { NODE_DESKTOP_SERVICE_CONTEXT } from "./desktop/node-source-context.js";
 import { invalidateGatewayDeviceRevocation } from "./device-revocation.js";
 import { ScopeUpgradeCoordinator } from "./device-scope-upgrade.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
+import { readLegacyGitHubOAuthService } from "./github-oauth-lifecycle-host.compat.js";
 import { publishOperatorRoleConfigChange } from "./operator-role-policy.js";
 import { WEBSOCKET_OPEN_READY_STATE } from "./server-constants.js";
 import type { startGatewayCoreRuntime } from "./server-core-runtime.js";
@@ -103,7 +105,7 @@ type GatewayRequestContextRuntime = Pick<
     | "getAttachedGatewayMethodRegistry"
     | "getReadiness"
   > & {
-    repositorySources?: import("./repository-sources.js").RepositorySources;
+    repositorySources?: RepositorySources;
     workspacePublicationHost?: WorkspacePublicationHost;
     sessionObserver: NonNullable<GatewayRequestContext["sessionObserver"]>;
     sessionActivitySummaries?: GatewayRequestContext["sessionActivitySummaries"];
@@ -530,6 +532,9 @@ export function createGatewayRequestContext(
       : {}),
     get githubPublicationService() {
       return runtime.workspacePublicationHost?.coordinator ?? runtime.githubPublicationService;
+    },
+    get githubOAuthService() {
+      return readLegacyGitHubOAuthService(context);
     },
     repositorySources: runtime.repositorySources,
     terminalSessions: runtime.terminalSessions,
