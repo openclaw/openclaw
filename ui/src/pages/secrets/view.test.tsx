@@ -42,6 +42,15 @@ function mount(
   )).container;
 }
 
+it("says why secrets are unavailable in the empty state, without a section or a count", () => {
+  const container = mount([], {}, []);
+  const state = container.querySelector(".settings-empty");
+  expect(state?.querySelector('[role="status"]')?.textContent).toBe(
+    "Update the Gateway to manage secrets here.",
+  );
+  expect(container.querySelector(".settings-section__heading")).toBeNull();
+});
+
 it("never renders a secret value even when hostile input carries one", () => {
   const env: SecretStoreEntry = {
     name: "SERVICE_URL",

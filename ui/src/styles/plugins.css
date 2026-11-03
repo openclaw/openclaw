@@ -220,11 +220,6 @@
   border-radius: max(var(--field-radius), var(--radius-md));
 }
 
-.plugin-catalog-results__empty {
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-}
-
 .plugin-catalog-chips {
   display: flex;
   flex-wrap: wrap;

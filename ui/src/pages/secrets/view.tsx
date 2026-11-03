@@ -11,6 +11,7 @@ import {
   SettingsPage,
   SettingsSection,
   SettingsStatus,
+  SettingsUnavailable,
 } from "../../components/solid/settings-ui.tsx";
 import { formatRelativeTimestamp } from "../../lib/reactive/format.ts";
 import { getLocale, t } from "../../lib/reactive/i18n.ts";
@@ -144,7 +145,7 @@ function SecretsTable(props: SecretsStoreViewProps) {
   return (
     <Show
       when={props.state.canCall("secrets.store.list")}
-      fallback={<SettingsEmpty message={t("secretsStore.unavail")} />}
+      fallback={<SettingsUnavailable message={props.state.unavailableMessage()} />}
     >
       <Loading on={props.scope} fallback={<SettingsLoadingSkeleton />}>
         <Show
