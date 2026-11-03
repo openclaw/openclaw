@@ -1,3 +1,4 @@
+// Proof-only methods. Require the separately sealed private fixture/consumer overlay.
     [Theory]
     [InlineData(ElementTheme.Light)]
     [InlineData(ElementTheme.Dark)]
@@ -6,22 +7,39 @@
         await WithPageAsync(async (page, transport, completed) =>
         {
             var picker = Find<ComboBox>(page, "ApiProviderPicker");
-            picker.IsDropDownOpen = true;
+            var scroller = Find<ScrollViewer>(page, "ChoicesScroller");
+            var scrollSettled = true;
+            void Scrolled(object? sender, ScrollViewerViewChangedEventArgs args) => scrollSettled = !args.IsIntermediate;
+            scroller.ViewChanged += Scrolled;
             try
             {
+                await InvokeCardAsync(Find<SetupActionCard>(page, "ApiKeysButton"));
+                await TestSupport.WaitForRenderedConditionAsync(
+                    () => Find<StackPanel>(page, "ApiKeyForm").Visibility == Visibility.Visible && picker.IsLoaded,
+                    "API Keys action reveals the provider form");
+                picker.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = false });
+                scroller.UpdateLayout();
+                await OnboardingNativeProof.NextCompositionAsync();
+                await TestSupport.WaitForRenderedConditionAsync(() => scrollSettled, "provider scroller settled");
+                OnboardingNativeProof.AssertFullyVisible(picker, scroller);
+                picker.IsDropDownOpen = true;
                 await TestSupport.WaitForRenderedConditionAsync(
                     () => picker.ContainerFromIndex(3) is ComboBoxItem { IsLoaded: true }, "original provider inventory mounted");
                 foreach (var index in Enumerable.Range(0, 4))
                     Assert.Empty(TestSupport.FindDescendants<ProviderArtwork>(
                         Assert.IsType<ComboBoxItem>(picker.ContainerFromIndex(index))));
-                using (await OnboardingNativeProof.CaptureAsync(ui.TestWindow, $"before-provider-inventory-{theme}", output,
-                    ["Llama app", "Ollama", "llama.cpp", "Unknown provider"], requiredContent: picker)) { }
+                await ProviderArtworkPrivatePresentation.CaptureRequiredAsync(_privateProofWindow!, $"before-provider-inventory-{theme}", output,
+                    ["Llama app", "Ollama", "llama.cpp", "Unknown provider"], requiredContent: picker);
                 Assert.Equal(-1, picker.SelectedIndex);
                 Assert.Equal(["openclaw.setup.detect"], transport.MethodCalls);
                 Assert.Equal(0, completed());
                 OnboardingNativeProof.AssertSourceUnchanged();
             }
-            finally { picker.IsDropDownOpen = false; }
+            finally
+            {
+                picker.IsDropDownOpen = false;
+                scroller.ViewChanged -= Scrolled;
+            }
         }, theme: theme, nativeProof: true, configure: transport => transport.DetectionOverride = new()
         {
             Candidates = [], Workspace = "/synthetic-workspace", SetupComplete = false,
@@ -51,8 +69,8 @@
                     () => dialog.CanSubmit && Equals(dialog.Title, "Provider " + type), $"original {brand} {type} prompt");
                 if (type == "text") Assert.IsType<TextBox>(dialog.FindName("TextInput")).Text = "synthetic-endpoint";
                 if (type == "confirm") Assert.IsType<CheckBox>(dialog.FindName("ConfirmInput")).IsChecked = true;
-                using (await OnboardingNativeProof.CaptureAsync(ui.TestWindow, $"before-provider-{brand}-{type}-{theme}", output,
-                    [label, "Provider " + type, "Cancel"], requiredContent: Assert.IsType<ScrollViewer>(dialog.Content))) { }
+                await ProviderArtworkPrivatePresentation.CaptureRequiredAsync(_privateProofWindow!, $"before-provider-{brand}-{type}-{theme}", output,
+                    [label, "Provider " + type, "Cancel"], requiredContent: Assert.IsType<ScrollViewer>(dialog.Content));
                 Invoke(DialogButton(dialog, "PrimaryButton"));
                 await TestSupport.WaitForRenderedConditionAsync(
                     () => transport.LastNext.ValueKind == JsonValueKind.Object &&

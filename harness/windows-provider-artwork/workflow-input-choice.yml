@@ -1,5 +1,5 @@
 # Merge only this new list item into the existing workflow_dispatch.inputs.platform.options.
 # Preserve mac/windows-w4/service/windows-ollama-fixtures/mac-copy/stock-shared and any newer parent choices.
 - windows-provider-artwork
-# Existing string input qualification must equal native-icons-w5-nativegit-one-6bdc3018-v4.
+# Existing string input qualification must equal native-icons-w5-private-mounted-v1.
 # Existing dispatch_id remains a unique correlation string, not release/merge authority.

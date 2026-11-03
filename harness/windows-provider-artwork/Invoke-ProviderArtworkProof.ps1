@@ -71,8 +71,8 @@ foreach ($file in $pin.packetFiles.PSObject.Properties) {
 if ($BuildOnly -and @(Git @('status','--porcelain')).Count -ne 0) { throw 'Use a new clean task-owned source checkout.' }
 if ($BuildOnly) { New-Item -ItemType Directory -Path $Artifacts | Out-Null }
 $head = (Git @('rev-parse','HEAD')).Trim()
-$ExpectedSourceTree = if ($Stage -ceq 'Before') { $pin.baselineCaptureTree } else { $AcceptedTree }
-$changedFiles = if ($Stage -ceq 'Before') { $pin.baselineChangedFiles } else { $pin.changedFiles }
+$ExpectedSourceTree = if ($Stage -ceq 'Before') { $pin.baselineCaptureTree } else { $pin.afterCaptureTree }
+$changedFiles = if ($Stage -ceq 'Before') { $pin.baselineChangedFiles } else { $pin.afterCaptureChangedFiles }
 if ($BuildOnly) {
 if ($Stage -ceq 'Before') {
     if ($head -cne $pin.baseCommit) { throw 'Before requires the exact clean W4 base; candidate production sources are not admitted.' }
@@ -84,6 +84,15 @@ if ($Stage -ceq 'Before') {
     Git @('apply','--whitespace=error',(Join-Path $PSScriptRoot 'candidate.patch')) | Out-Null
 } elseif ((Git @('rev-parse','HEAD^{tree}')).Trim() -cne $AcceptedTree) {
     throw 'Source is neither the exact W4 base nor a clean commit of the accepted tree.'
+}
+if ($Stage -ceq 'After') {
+    # Admit canonical product/test bytes BEFORE the separately sealed proof overlay.
+    $proofTree=$ExpectedSourceTree
+    $ExpectedSourceTree=$AcceptedTree
+    try { Assert-Tree } finally { $ExpectedSourceTree=$proofTree }
+    $overlay=Join-Path $PSScriptRoot 'after-private-capture.patch'
+    Git @('apply','--check','--whitespace=error',$overlay) | Out-Null
+    Git @('apply','--whitespace=error',$overlay) | Out-Null
 }
 }
 Assert-Tree
@@ -102,7 +111,7 @@ $minimumRuntime=[version]($runtimeVersion+'.0')
 $runtime = @(Get-AppxPackage -Name $runtimeFamily | Where-Object { $_.Name -ceq $runtimeFamily -and $_.Architecture.ToString() -ceq 'X64' -and $_.Status.ToString() -ceq 'Ok' -and $_.IsFramework -and [version]$_.Version -ge $minimumRuntime -and $_.Publisher -match 'CN=Microsoft Corporation' })
 if ($runtime.Count -eq 0) { throw "Source-declared $runtimeFamily x64 framework >= $minimumRuntime is not registered for this user. Runtime provisioning belongs to the reviewed CI initializer." }
 Json @{head=$head;candidateTree=$AcceptedTree;sdk=$sdk;sessionId=$session;runtime=@($runtime | Select-Object PackageFullName,Version,Architecture);state='prerequisites-observed'} (Join-Path $Artifacts 'prerequisites.json')
-$names = @('OPENCLAW_REPO_ROOT','OPENCLAW_TRAY_DATA_DIR','OPENCLAW_TRAY_APPDATA_DIR','OPENCLAW_TRAY_LOCALAPPDATA_DIR','OPENCLAW_UI_PROOF_DIR','OPENCLAW_UI_PROOF_FREEZE_DIR','OPENCLAW_UI_PROOF_MANIFEST_SHA256','GitVersion_NoNormalizeEnabled','GitVersion_NoFetchEnabled')
+$names = @('OPENCLAW_REPO_ROOT','OPENCLAW_TRAY_DATA_DIR','OPENCLAW_TRAY_APPDATA_DIR','OPENCLAW_TRAY_LOCALAPPDATA_DIR','OPENCLAW_UI_PROOF_DIR','OPENCLAW_UI_PROOF_FREEZE_DIR','OPENCLAW_UI_PROOF_MANIFEST_SHA256','GitVersion_NoNormalizeEnabled','GitVersion_NoFetchEnabled','OPENCLAW_PROVIDER_ARTWORK_PRIVATE_CAPTURE_JOB','OPENCLAW_MOUNTED_CONTROL_CAPTURE_DIR','OPENCLAW_MOUNTED_CONTROL_CAPTURE_HEAD')
 $old = @{}
 foreach ($name in $names) { $old[$name]=[Environment]::GetEnvironmentVariable($name) }
 Push-Location $Source
@@ -141,6 +150,9 @@ try {
     $env:OPENCLAW_TRAY_APPDATA_DIR=Join-Path $Artifacts 'isolated-roaming'
     $env:OPENCLAW_TRAY_LOCALAPPDATA_DIR=Join-Path $Artifacts 'isolated-local'
     $env:OPENCLAW_UI_PROOF_DIR=$frames
+    $env:OPENCLAW_MOUNTED_CONTROL_CAPTURE_DIR=$frames
+    $env:OPENCLAW_MOUNTED_CONTROL_CAPTURE_HEAD=$head
+    $env:OPENCLAW_PROVIDER_ARTWORK_PRIVATE_CAPTURE_JOB='private-mounted-v1'
     $env:OPENCLAW_UI_PROOF_FREEZE_DIR=$freeze
     $env:OPENCLAW_UI_PROOF_MANIFEST_SHA256=Hash (Join-Path $freeze 'manifest.json')
     $filter='FullyQualifiedName~OnboardingAiPageTests.ProviderPicker_ShowsAdvertisedBrandsAndHonestFallbacksWithoutStartingSetup|FullyQualifiedName~OnboardingAiPageTests.ProviderDialog_KeepsSelectedArtworkThroughTypedPromptsAndReleasesOnlyItsBorrow|FullyQualifiedName~OnboardingArtworkRenderingTests.ProviderArtwork_RebindingDetachesThePreviousSessionWithoutClosingTheBorrowedReplacement'
@@ -178,14 +190,42 @@ try {
     foreach ($brand in @('llama-app','ollama')) { foreach ($theme in @('Light','Dark')) { foreach ($step in @('note','text','confirm')) { $expectedFrames += "${framePrefix}provider-$brand-$step-$theme" } } }
     if (@(Get-ChildItem -LiteralPath $frames -Filter '*.png').Count -ne $expectedFrames.Count) { throw 'Incomplete or extra frame inventory.' }
     foreach ($name in $expectedFrames) {
-        $metadata=Get-Content -LiteralPath (Join-Path $frames ($name+'.json')) -Raw | ConvertFrom-Json
-        if ($metadata.head -cne $head -or $metadata.method -cne 'PrintWindow(PW_RENDERFULLCONTENT), no fallback' -or (Hash (Join-Path $frames ($name+'.png'))) -cne $metadata.sha256) { throw "Frame identity mismatch: $name" }
+        $image=Join-Path $frames ($name+'.png')
+        $receipt=Get-Content (Join-Path $frames ($name+'.json')) -Raw | ConvertFrom-Json
+        $required=Get-Content (Join-Path $frames ($name+'.required.json')) -Raw | ConvertFrom-Json
+        $assemblyHash=Hash (Join-Path $bin 'OpenClaw.Tray.UITests.dll')
+        if ($receipt.head -cne $head -or $receipt.method -cne 'PrintWindow(PW_RENDERFULLCONTENT); no fallback' -or
+            (Hash $image) -cne $receipt.imageSha256 -or $receipt.assemblySha256 -cne $assemblyHash -or
+            $receipt.qualification -cne 'Synthetic dependencies; private owned production window. Not native compositor, keyboard, installed-app, or live Gateway proof.') { throw "Private mounted image binding failed: $name" }
+        if ($required.schema -cne 'provider-artwork-private-mounted-required-v1' -or $required.state -cne $name -or
+            $required.head -cne $head -or $required.freezeManifestSha256 -cne $env:OPENCLAW_UI_PROOF_MANIFEST_SHA256 -or
+            $required.assemblySha256 -cne $assemblyHash -or $required.imageSha256 -cne (Hash $image) -or
+            $required.method -cne 'PrintWindow(PW_RENDERFULLCONTENT); no fallback') { throw 'Required private-frame/source/freeze/assembly binding differs.' }
+        if ($name -like '*-inventory-*') { $labels=@('Llama app','Ollama','llama.cpp','Unknown provider') }
+        else {
+            $match=[regex]::Match($name,'^(?:before-)?provider-(llama-app|ollama)-(note|text|confirm)-(Light|Dark)$')
+            if (!$match.Success) { throw 'Unknown private dialog frame.' }
+            $label=if($match.Groups[1].Value -ceq 'llama-app'){'Llama app'}else{'Ollama'}
+            $labels=@($label,('Provider '+$match.Groups[2].Value),'Cancel')
+        }
+        if (@(Compare-Object ($labels|Sort-Object) (@($required.requiredLabels)|Sort-Object)).Count -ne 0 -or
+            $required.nativeLabels.Count -ne $labels.Count -or $required.geometry.Hwnd -eq 0 -or
+            $required.geometry.Desktop -ieq 'Default' -or $required.requiredContentBounds.Width -le 0 -or
+            $required.requiredContentBounds.Height -le 0) { throw 'Required private content/label geometry differs.' }
+        foreach ($label in $labels) {
+            $node=@($required.nativeLabels|Where-Object {$_.Expected -ceq $label -and $_.ActualName -ceq $label})
+            if ($node.Count -ne 1 -or $node[0].Width -le 0 -or $node[0].Height -le 0 -or
+                $node[0].Left -lt $required.geometry.Left -or $node[0].Top -lt $required.geometry.Top -or
+                $node[0].Left+$node[0].Width -gt $required.geometry.Right -or
+                $node[0].Top+$node[0].Height -gt $required.geometry.Bottom) { throw 'Required owned-HWND label is missing or clipped.' }
+        }
+        if (@($required.ocr.MissingLabels).Count -ne 0) { throw 'A required icon-matrix OCR label is missing; no new exception is admitted.' }
     }
     if (@(Manifest).Count -ne $sourceFiles.Count) { throw 'Frozen source inventory changed.' }
     foreach ($file in $sourceFiles) { if ((Hash (Join-Path $Source $file.path)) -cne $file.sha256) { throw "Source drift: $($file.path)" } }
     foreach ($file in $binaryFiles) { if ((Hash (Join-Path $bin $file.path.Substring(15))) -cne $file.sha256) { throw "Binary drift: $($file.path)" } }
     Assert-Tree
-    Json @{state='focused-native-cases-passed-manual-pixel-review-required';head=$head;stage=$Stage;candidateTree=$AcceptedTree;sourceTree=$ExpectedSourceTree;executed=$expectedCases;passed=$expectedCases;skipped=0;frames=$expectedFrames;Shared='RED-unwaived';fullBuild='not executed by this narrow driver';priorW4='unchanged-contract evidence only; not current-tree aggregate proof';popup='Reject absent/cropped inventory pixels; no AX-only acceptance or unowned fallback'} (Join-Path $Artifacts 'result.json')
+    Json @{state='private-mounted-cases-passed-manual-pixel-review-required';foregroundProven=$false;keyboardProven=$false;compositorProven=$false;head=$head;stage=$Stage;candidateTree=$AcceptedTree;sourceTree=$ExpectedSourceTree;executed=$expectedCases;passed=$expectedCases;skipped=0;frames=$expectedFrames;Shared='RED-unwaived';fullBuild='not executed by this narrow driver';priorW4='unchanged-contract evidence only; not current-tree aggregate proof';popup='Reject absent/cropped inventory pixels; no AX-only acceptance or unowned fallback'} (Join-Path $Artifacts 'result.json')
 } catch {
     Json @{state='failed';error=($_ | Out-String);candidateTree=$AcceptedTree;Shared='RED-unwaived'} (Join-Path $Artifacts 'failure.json')
     throw

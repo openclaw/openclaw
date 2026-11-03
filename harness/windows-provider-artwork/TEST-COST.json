@@ -1,43 +1,39 @@
 {
-  "status": "UNMEASURED-native-execution-not-authorized-or-available",
+  "status": "UNMEASURED-new-source-and-proof-bytes-unrun",
+  "canonicalSourceDelta": "Only natural API Keys entry and event-observed scroller/render settlement in existing picker test; LF. Prior6bd/619 preserved.",
   "candidate": {
-    "methods": 3,
     "cases": 7,
-    "nativeFrames": 14,
-    "suiteBoots": 1,
+    "requiredFrames": 14,
+    "existingSuiteAppBoots": 1,
+    "taskOwnedWindows": 6,
     "wallSeconds": null,
     "ciSeconds": null
   },
-  "baselineVisuals": {
-    "methods": 2,
+  "baseline": {
     "cases": 6,
-    "nativeFrames": 14,
-    "suiteBoots": 2,
+    "requiredFrames": 14,
+    "existingSuiteAppBoots": 2,
+    "taskOwnedWindows": 6,
+    "order": "picker pair first; dialogs only on success",
     "wallSeconds": null,
-    "ciSeconds": null,
-    "order": "2 picker cases first; only then 4 dialog cases"
+    "ciSeconds": null
   },
-  "optionalNegativeControl": {
-    "cases": 7,
-    "expectedOmissionFailures": 6,
-    "expectedLifecyclePasses": 1,
-    "status": "not-run; build/bootstrap/schema/capture/timeouts-inconclusive"
+  "protectedBehavior": "same native decode/fallback, typed prepare and answers, no auth/activation, cancellation/reopen/close and independent rebind assertions; required private capture not skipped",
+  "qualifiedReuse": "same suite Application/thread, real production page and Gateway fixture, existing mounted Invoke, same maintained MountedControlCapture owner; no new process boot owner/timer/sleep/retry/fake inventory/visibility mutation",
+  "priorRun": {
+    "id": 41581126055,
+    "BeforeUiBuildSeconds": 73.26,
+    "BeforeCasesExecuted": 2,
+    "BeforeCasesFailed": 2,
+    "frames": 0,
+    "status": "foreground mode mismatch, not product verdict"
   },
-  "costReason": "Real mounted native ComboBox/DataTemplate, WinUI SVG Opened decode, ContentDialog names/typed inputs and control/session lifetime cannot be proven by a cheaper pure mock. Reuses existing suite window, wire fixture and event-driven render helper; no sleeps/new boot owner/ignore/poll loop.",
-  "measurementsToCollect": [
-    "driver per-command wallSeconds",
-    "fresh TRX per-test duration",
-    "build/native elapsed CI seconds separately"
+  "validationHeld": [
+    "canonical parent review",
+    "PowerShell AST/current smoke",
+    "current source/proof native compilation",
+    "Before6/After7 native counts",
+    "all28 real pixel inspections"
   ],
-  "localChecks": {
-    "gitDiffCheck": "passed",
-    "changedXamlXmlParse": "passed",
-    "candidatePrivateIndexApplyAndTree": "passed",
-    "completePostimageBytes": "passed",
-    "powershellAstAndCasingGate": "unrun: pwsh unavailable",
-    "csharpXamlCompilation": "unrun: dotnet/Windows unavailable",
-    "nativeTests": "unrun",
-    "runtimeFamilyProducer": "corrected to qualified family .2/source2.6.4.0; static only"
-  },
   "Shared": "RED-unwaived"
 }

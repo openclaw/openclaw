@@ -1,9 +1,9 @@
 {
   "v": 1,
-  "name": "windows-provider-artwork-nativegit-one",
+  "name": "windows-provider-artwork-private-mounted-v1",
   "baseCommit": "c550174d517b5e8830726cd5c32d4e132c144659",
-  "candidateTree": "6bdc3018768492e101bb12ea603a067b4e2414bd",
-  "baselineCaptureTree": "cf5d2abcd19544541f4f25de3023fd73804827b2",
+  "candidateTree": "d58d740ce7e5beb1b43889e6897ae96cf54370ba",
+  "baselineCaptureTree": "a1c05f702d256b3675ca787bdebf18f588f8db08",
   "sourceContracts": [
     {
       "path": "Directory.Build.props",
@@ -44,6 +44,10 @@
     {
       "path": "scripts/TestResultContract.ps1",
       "sha256": "726b0b464a8d7012ebe89d2f2279c1b2972431b85b8e0d823ea8d8e1455c4da1"
+    },
+    {
+      "path": "tests/OpenClaw.Tray.UITests/MountedControlCapture.cs",
+      "sha256": "04ba3c57ffc976063b42bbde41f5fc835912bf18a51fe1e6ac961c1a2d8fbd84"
     }
   ],
   "files": [
@@ -59,8 +63,8 @@
     },
     {
       "path": "CONTROLLER-STATIC.json",
-      "bytes": 1472,
-      "sha256": "816f4f1ab3852a1b4a7f0aca870f78e88c24488f5749df6bc66125f59819510f"
+      "bytes": 1482,
+      "sha256": "435a35dfa933d21f7ded36512f03a12420fea26c07d15cd6c3c68dbd67622124"
     },
     {
       "path": "Initialize-NativeRuntime.ps1",
@@ -69,18 +73,28 @@
     },
     {
       "path": "Invoke-ProviderArtworkCI.ps1",
-      "bytes": 7644,
-      "sha256": "effb19db5348ac0cebe6c92f4c5bcacacf934fc29e5876c54511f8f83364277d"
+      "bytes": 7716,
+      "sha256": "4e23318cbcba57380ee3fa5a35ec940f2ac47a1f3e54b053d31b6bfc55620015"
     },
     {
       "path": "Invoke-ProviderArtworkProof.ps1",
-      "bytes": 16158,
-      "sha256": "23f8417ff46087e64486084f24c8b471336edcb4bbdfee08dbf21abd4813aa19"
+      "bytes": 19575,
+      "sha256": "765fc62e57ac1664acf99dc0ccdc60389c1307a4393b0cf1fe63f9a07440975a"
+    },
+    {
+      "path": "PRIVATE-CUTOVER.md",
+      "bytes": 4687,
+      "sha256": "6b9c468986e1cb13a03c4d67098f38e02ef66041f6106bd05fbc50e776c839eb"
+    },
+    {
+      "path": "PROOF-OVERLAYS.json",
+      "bytes": 2440,
+      "sha256": "8b238a562ff81178b620044101206f12c8b8f9b44d653f6e45f64295b81032e0"
     },
     {
       "path": "PROOF-PLAN.md",
-      "bytes": 8329,
-      "sha256": "ab0aa4c842beea80466887df80d6ca8d07d2c73baa34387885efa3165b58644b"
+      "bytes": 4687,
+      "sha256": "6b9c468986e1cb13a03c4d67098f38e02ef66041f6106bd05fbc50e776c839eb"
     },
     {
       "path": "Program.cs",
@@ -94,13 +108,13 @@
     },
     {
       "path": "QUALIFIED-OWNERS.json",
-      "bytes": 2607,
-      "sha256": "d0a5a3fa38ed5952c8b0720c78ef1fe4c954a1879f2873dd8ffad9b3ae9149fa"
+      "bytes": 3296,
+      "sha256": "8633c2447acb427f557f5994e5f963a575edfdc62856e08a985df3b340887efb"
     },
     {
       "path": "README.md",
-      "bytes": 8751,
-      "sha256": "56c81079e1645a83b6e899cc0ed4d6cb4994cfd9d5097b755441d7e6e776d48c"
+      "bytes": 2556,
+      "sha256": "925b1c99b3b469147687495a2c08ea09d9f1ab0bb243aa904efa5e95bde65a4f"
     },
     {
       "path": "REVIEW-RUNTIME2.md",
@@ -114,8 +128,8 @@
     },
     {
       "path": "STATIC-PREPARATION.json",
-      "bytes": 1164,
-      "sha256": "3eee803702eac675d4cce850732b1c05c5cb12491d083b6b897b0088f6756da8"
+      "bytes": 1482,
+      "sha256": "435a35dfa933d21f7ded36512f03a12420fea26c07d15cd6c3c68dbd67622124"
     },
     {
       "path": "Save-CalculatedVersion.ps1",
@@ -124,8 +138,8 @@
     },
     {
       "path": "TEST-COST.json",
-      "bytes": 1558,
-      "sha256": "f60779d4a8f48f885bf5eb0d76843bf745e85181e2244095db65883493de51c1"
+      "bytes": 1517,
+      "sha256": "c3b19c26f5aff61726873d5cd569ca62c612bdbc5509f5cd98db27c1d6129292"
     },
     {
       "path": "Test-PacketSyntaxAndStage.ps1",
@@ -133,29 +147,34 @@
       "sha256": "9d39f26da301934b0d238bb1edf4d7376909c92f0c1f08700bc077aaf0574f5d"
     },
     {
+      "path": "after-private-capture.patch",
+      "bytes": 29764,
+      "sha256": "d176772f8a3886868def375ca494dbd2715abf72c7edae26e3723b0248f7507a"
+    },
+    {
       "path": "baseline-capture.patch",
-      "bytes": 6414,
-      "sha256": "0760c6a99289216f84b794961c5433d94c15f653584c785f866d4a90893f7727"
+      "bytes": 33543,
+      "sha256": "2045e786b8b4762f3bb0d7d3c640f7a0c12160379ad8511ab9ad2e6ca00f0891"
     },
     {
       "path": "baseline-captures.cs.append",
-      "bytes": 5710,
-      "sha256": "7071acc7e3ef1570743983f037936f597670e5459e3d394cb4382739b59b9c19"
+      "bytes": 6933,
+      "sha256": "7f26c17fe3c8c2d88a2b677703c167e441fb7f390987614aba6c5e6b65d60f03"
     },
     {
       "path": "baseline-postimages/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs",
-      "bytes": 161646,
-      "sha256": "eb4a48f2ec5e6eb732ea6d33eb150348cdd694a05dcad3a5e8c1680b89ae7fbc"
+      "bytes": 181425,
+      "sha256": "f2a19c39c2c479dcf72508382cd39a8081659ea54c4a0dc8f89804f2cdabfaf9"
     },
     {
       "path": "candidate-source.json",
-      "bytes": 352497,
-      "sha256": "6c82d3a82650e1ea149f3bf3d2600cc6e4492e1fb020f0ce7e9ade2a19dd6a57"
+      "bytes": 352821,
+      "sha256": "796084880fbaf2281d407519d5922ee20347214fbfd1c63c2a6cee48932274a1"
     },
     {
       "path": "candidate.patch",
-      "bytes": 21906,
-      "sha256": "6194060d067b8858d832ab17951c0f518bc0750f9f6b26e807b744947bd3dc7e"
+      "bytes": 23025,
+      "sha256": "50f96d4a30931a824286553cdc78e94c51ccc3067f958e66e470622395229eac"
     },
     {
       "path": "postimages/docs/PROVIDER_ARTWORK.md",
@@ -184,8 +203,8 @@
     },
     {
       "path": "postimages/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs",
-      "bytes": 165016,
-      "sha256": "4cbca7896e6195cd7e7d2282ef6e4d858db502551e6f87611a3fdb42894bf90e"
+      "bytes": 166118,
+      "sha256": "dfe194defb9a29440ea7b5ad3e7fa3f36ed2eb77f5d9bb8f35ae6c8e1c4385af"
     },
     {
       "path": "postimages/tests/OpenClaw.Tray.UITests/OnboardingArtworkRenderingTests.cs",
@@ -193,9 +212,25 @@
       "sha256": "eb50ede485aa22b8088269e3f3ccc5e516b867c29753bb628e29a583fbe4dada"
     },
     {
+      "path": "private-overlay/ProviderArtworkPrivatePresentation.cs",
+      "bytes": 17420,
+      "sha256": "be0653ecfb025cd5debd895a3fbe740b215bd513d003314d6d9ca3286ba6b892"
+    },
+    {
+      "path": "proof-postimages/After/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs",
+      "bytes": 184553,
+      "sha256": "a6ca3a5029c54751d9bea1c256d9cc63ff998743bba5fe2e8186c7ca71760dc3"
+    },
+    {
+      "path": "proof-postimages/Before/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs",
+      "bytes": 181425,
+      "sha256": "f2a19c39c2c479dcf72508382cd39a8081659ea54c4a0dc8f89804f2cdabfaf9"
+    },
+    {
       "path": "source-pins.json",
-      "bytes": 6749,
-      "sha256": "14488d27cfa6ff3909a26371acf9fbf02d7cbcb5c3167dad94a89d3d91ebfa60"
+      "bytes": 10605,
+      "sha256": "2f19bc175abb41c53e51e671e138365e21d5fb432ac5521256b5ae8fd8638ce5"
     }
-  ]
+  ],
+  "afterCaptureTree": "ba0180569e297f63934a27c540adf006d1834aad"
 }

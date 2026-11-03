@@ -133,7 +133,7 @@ index 4e7a01922f2e21664ec00d1822f7adbe766a1a87..f1843e3627bf60c2bcb90430b2756d86
                  {
                      var showing = _providerDialog.ShowOwnedAsync(XamlRoot, ActualTheme);
 diff --git a/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs b/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs
-index 84479dcc5b9c67f133a9edaa68f34997cf3c12ca..24e3318980e7407d0d28ee842588ebd97940660e 100644
+index 84479dcc5b9c67f133a9edaa68f34997cf3c12ca..1769e05066c4805458d7a5aca409e44c770c5ee3 100644
 --- a/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs
 +++ b/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs
 @@ -6,6 +6,7 @@ using Microsoft.UI.Xaml.Automation.Peers;
@@ -144,7 +144,7 @@ index 84479dcc5b9c67f133a9edaa68f34997cf3c12ca..24e3318980e7407d0d28ee842588ebd9
  using OpenClaw.SetupEngine;
  using OpenClaw.SetupEngine.UI;
  using OpenClaw.SetupEngine.UI.Pages;
-@@ -22,6 +23,144 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
+@@ -22,6 +23,161 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
  {
      private bool _nativeProof;
  
@@ -157,9 +157,22 @@ index 84479dcc5b9c67f133a9edaa68f34997cf3c12ca..24e3318980e7407d0d28ee842588ebd9
 +        {
 +            var picker = Find<ComboBox>(page, "ApiProviderPicker");
 +            Assert.Equal(-1, picker.SelectedIndex);
-+            picker.IsDropDownOpen = true;
++            var scroller = Find<ScrollViewer>(page, "ChoicesScroller");
++            var scrollSettled = true;
++            void Scrolled(object? sender, ScrollViewerViewChangedEventArgs args) => scrollSettled = !args.IsIntermediate;
++            scroller.ViewChanged += Scrolled;
 +            try
 +            {
++                await InvokeCardAsync(Find<SetupActionCard>(page, "ApiKeysButton"));
++                await TestSupport.WaitForRenderedConditionAsync(
++                    () => Find<StackPanel>(page, "ApiKeyForm").Visibility == Visibility.Visible && picker.IsLoaded,
++                    "API Keys action reveals the provider form");
++                picker.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = false });
++                scroller.UpdateLayout();
++                await OnboardingNativeProof.NextCompositionAsync();
++                await TestSupport.WaitForRenderedConditionAsync(() => scrollSettled, "provider scroller settled");
++                OnboardingNativeProof.AssertFullyVisible(picker, scroller);
++                picker.IsDropDownOpen = true;
 +                await TestSupport.WaitForRenderedConditionAsync(
 +                    () => picker.ContainerFromIndex(3) is ComboBoxItem { IsLoaded: true }, "provider inventory mounted");
 +                var marks = Enumerable.Range(0, 4).Select(index => Assert.Single(
@@ -180,7 +193,11 @@ index 84479dcc5b9c67f133a9edaa68f34997cf3c12ca..24e3318980e7407d0d28ee842588ebd9
 +                Assert.Equal(["openclaw.setup.detect"], transport.MethodCalls);
 +                Assert.Equal(0, completed());
 +            }
-+            finally { picker.IsDropDownOpen = false; }
++            finally
++            {
++                picker.IsDropDownOpen = false;
++                scroller.ViewChanged -= Scrolled;
++            }
 +        }, theme: theme, nativeProof: !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("OPENCLAW_UI_PROOF_DIR")),
 +            configure: transport => transport.DetectionOverride = new()
 +            {

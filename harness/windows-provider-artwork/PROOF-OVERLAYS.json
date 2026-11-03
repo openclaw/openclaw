@@ -1,0 +1,49 @@
+{
+  "canonicalBeforeTree": "eab5a16b2c6b57a741c7a1a22f830f737592d1ee",
+  "canonicalAfterTree": "d58d740ce7e5beb1b43889e6897ae96cf54370ba",
+  "priorCanonicalAfterTree": "6bdc3018768492e101bb12ea603a067b4e2414bd",
+  "before": {
+    "tree": "a1c05f702d256b3675ca787bdebf18f588f8db08",
+    "patch": "baseline-capture.patch",
+    "patchSha256": "2045e786b8b4762f3bb0d7d3c640f7a0c12160379ad8511ab9ad2e6ca00f0891",
+    "changes": [
+      {
+        "path": "tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs",
+        "beforeSha256": "f238918a76271fee64392bd3fbd3a93da912d24fedebad80b705a136628697e6",
+        "afterSha256": "f2a19c39c2c479dcf72508382cd39a8081659ea54c4a0dc8f89804f2cdabfaf9",
+        "bytes": 181425,
+        "afterBlob": "272881988835a6c3bbc9089f95586d86533259a2"
+      }
+    ]
+  },
+  "after": {
+    "tree": "ba0180569e297f63934a27c540adf006d1834aad",
+    "patch": "after-private-capture.patch",
+    "patchSha256": "d176772f8a3886868def375ca494dbd2715abf72c7edae26e3723b0248f7507a",
+    "changes": [
+      {
+        "path": "tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs",
+        "beforeSha256": "dfe194defb9a29440ea7b5ad3e7fa3f36ed2eb77f5d9bb8f35ae6c8e1c4385af",
+        "afterSha256": "a6ca3a5029c54751d9bea1c256d9cc63ff998743bba5fe2e8186c7ca71760dc3",
+        "bytes": 184553,
+        "afterBlob": "b900a016275ec28fd957e8b7b6e844c412ae07a6"
+      }
+    ]
+  },
+  "sourceOwner": "same suite Application/thread, task-owned Window, required consumer over unchanged c550 MountedControlCapture",
+  "foregroundHelpers": "unchanged",
+  "scope": "proof-only existing test compilation unit; no new capture implementation",
+  "canonicalSourceManifest": {
+    "path": "candidate-source.json",
+    "sha256": "796084880fbaf2281d407519d5922ee20347214fbfd1c63c2a6cee48932274a1",
+    "entries": 2090
+  },
+  "sourceProjectionContracts": {
+    "Before": "canonical source hash map; revert each canonical changed file to beforeSha256, then apply the sole Before proof postimage hash",
+    "After": "canonical source hash map; apply the sole After proof postimage hash"
+  },
+  "aliases": {
+    "baseline-postimages/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs": "proof-postimages/Before/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs"
+  },
+  "patchEncoding": "Git accepts empty unprefixed context lines. Normalized context-only single spaces to empty lines; exact tree/applicability verified, no source or guard change."
+}

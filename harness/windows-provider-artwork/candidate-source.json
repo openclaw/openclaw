@@ -1,7 +1,10 @@
 {
   "baseCommit": "c550174d517b5e8830726cd5c32d4e132c144659",
   "baseTree": "eab5a16b2c6b57a741c7a1a22f830f737592d1ee",
-  "candidateTree": "6bdc3018768492e101bb12ea603a067b4e2414bd",
+  "candidateTree": "d58d740ce7e5beb1b43889e6897ae96cf54370ba",
+  "priorCandidateTree": "6bdc3018768492e101bb12ea603a067b4e2414bd",
+  "priorCandidatePatchSha256": "6194060d067b8858d832ab17951c0f518bc0750f9f6b26e807b744947bd3dc7e",
+  "patchSha256": "50f96d4a30931a824286553cdc78e94c51ccc3067f958e66e470622395229eac",
   "changedFiles": [
     {
       "path": "docs/PROVIDER_ARTWORK.md",
@@ -41,9 +44,9 @@
     {
       "path": "tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs",
       "beforeSha256": "f238918a76271fee64392bd3fbd3a93da912d24fedebad80b705a136628697e6",
-      "afterSha256": "4cbca7896e6195cd7e7d2282ef6e4d858db502551e6f87611a3fdb42894bf90e",
-      "bytes": 165016,
-      "afterBlob": "24e3318980e7407d0d28ee842588ebd97940660e"
+      "afterSha256": "dfe194defb9a29440ea7b5ad3e7fa3f36ed2eb77f5d9bb8f35ae6c8e1c4385af",
+      "bytes": 166118,
+      "afterBlob": "1769e05066c4805458d7a5aca409e44c770c5ee3"
     },
     {
       "path": "tests/OpenClaw.Tray.UITests/OnboardingArtworkRenderingTests.cs",
@@ -8212,7 +8215,7 @@
     },
     {
       "path": "tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs",
-      "sha256": "4cbca7896e6195cd7e7d2282ef6e4d858db502551e6f87611a3fdb42894bf90e"
+      "sha256": "dfe194defb9a29440ea7b5ad3e7fa3f36ed2eb77f5d9bb8f35ae6c8e1c4385af"
     },
     {
       "path": "tests/OpenClaw.Tray.UITests/OnboardingArtworkRenderingTests.cs",
@@ -8416,10 +8419,8 @@
     }
   ],
   "count": 2090,
-  "patchSha256": "6194060d067b8858d832ab17951c0f518bc0750f9f6b26e807b744947bd3dc7e",
   "sourceCommit": "NOT_CREATED",
-  "state": "prepared-uncompiled-unexecuted",
-  "testCases": 7,
-  "expectedNativeFrames": 14,
-  "Shared": "RED-unwaived"
+  "canonicalChangeFromPrior": "Only real API Keys picker entry and scroll settlement in the existing test. Production4/docs/other tests unchanged.",
+  "AfterProofTree": "ba0180569e297f63934a27c540adf006d1834aad",
+  "BeforeProofTree": "a1c05f702d256b3675ca787bdebf18f588f8db08"
 }

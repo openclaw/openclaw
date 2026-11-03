@@ -1,3 +1,9 @@
+using Uia = System.Windows.Automation;
+using Windows.Graphics.Imaging;
+using System.Text;
+using System.Security.Cryptography;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Reflection;
 using Microsoft.UI.Xaml;
@@ -21,6 +27,8 @@ namespace OpenClaw.Tray.UITests;
 public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper output)
 {
     private bool _nativeProof;
+    private Window? _privateProofWindow;
+    private Grid? _privateProofRoot;
     [Theory]
     [InlineData(ElementTheme.Light)]
     [InlineData(ElementTheme.Dark)]
@@ -29,22 +37,39 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper 
         await WithPageAsync(async (page, transport, completed) =>
         {
             var picker = Find<ComboBox>(page, "ApiProviderPicker");
-            picker.IsDropDownOpen = true;
+            var scroller = Find<ScrollViewer>(page, "ChoicesScroller");
+            var scrollSettled = true;
+            void Scrolled(object? sender, ScrollViewerViewChangedEventArgs args) => scrollSettled = !args.IsIntermediate;
+            scroller.ViewChanged += Scrolled;
             try
             {
+                await InvokeCardAsync(Find<SetupActionCard>(page, "ApiKeysButton"));
+                await TestSupport.WaitForRenderedConditionAsync(
+                    () => Find<StackPanel>(page, "ApiKeyForm").Visibility == Visibility.Visible && picker.IsLoaded,
+                    "API Keys action reveals the provider form");
+                picker.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = false });
+                scroller.UpdateLayout();
+                await OnboardingNativeProof.NextCompositionAsync();
+                await TestSupport.WaitForRenderedConditionAsync(() => scrollSettled, "provider scroller settled");
+                OnboardingNativeProof.AssertFullyVisible(picker, scroller);
+                picker.IsDropDownOpen = true;
                 await TestSupport.WaitForRenderedConditionAsync(
                     () => picker.ContainerFromIndex(3) is ComboBoxItem { IsLoaded: true }, "original provider inventory mounted");
                 foreach (var index in Enumerable.Range(0, 4))
                     Assert.Empty(TestSupport.FindDescendants<ProviderArtwork>(
                         Assert.IsType<ComboBoxItem>(picker.ContainerFromIndex(index))));
-                using (await OnboardingNativeProof.CaptureAsync(ui.TestWindow, $"before-provider-inventory-{theme}", output,
-                    ["Llama app", "Ollama", "llama.cpp", "Unknown provider"], requiredContent: picker)) { }
+                await ProviderArtworkPrivatePresentation.CaptureRequiredAsync(_privateProofWindow!, $"before-provider-inventory-{theme}", output,
+                    ["Llama app", "Ollama", "llama.cpp", "Unknown provider"], requiredContent: picker);
                 Assert.Equal(-1, picker.SelectedIndex);
                 Assert.Equal(["openclaw.setup.detect"], transport.MethodCalls);
                 Assert.Equal(0, completed());
                 OnboardingNativeProof.AssertSourceUnchanged();
             }
-            finally { picker.IsDropDownOpen = false; }
+            finally
+            {
+                picker.IsDropDownOpen = false;
+                scroller.ViewChanged -= Scrolled;
+            }
         }, theme: theme, nativeProof: true, configure: transport => transport.DetectionOverride = new()
         {
             Candidates = [], Workspace = "/synthetic-workspace", SetupComplete = false,
@@ -74,8 +99,8 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper 
                     () => dialog.CanSubmit && Equals(dialog.Title, "Provider " + type), $"original {brand} {type} prompt");
                 if (type == "text") Assert.IsType<TextBox>(dialog.FindName("TextInput")).Text = "synthetic-endpoint";
                 if (type == "confirm") Assert.IsType<CheckBox>(dialog.FindName("ConfirmInput")).IsChecked = true;
-                using (await OnboardingNativeProof.CaptureAsync(ui.TestWindow, $"before-provider-{brand}-{type}-{theme}", output,
-                    [label, "Provider " + type, "Cancel"], requiredContent: Assert.IsType<ScrollViewer>(dialog.Content))) { }
+                await ProviderArtworkPrivatePresentation.CaptureRequiredAsync(_privateProofWindow!, $"before-provider-{brand}-{type}-{theme}", output,
+                    [label, "Provider " + type, "Cancel"], requiredContent: Assert.IsType<ScrollViewer>(dialog.Content));
                 Invoke(DialogButton(dialog, "PrimaryButton"));
                 await TestSupport.WaitForRenderedConditionAsync(
                     () => transport.LastNext.ValueKind == JsonValueKind.Object &&
@@ -2596,12 +2621,26 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper 
                 ? await GatewayAiPreparation.PrepareAsync(transport, preparationOwner, CancellationToken.None) : null;
             var completions = 0;
             var connects = 0;
-            var originalSize = ui.TestWindow.AppWindow.Size;
-            var originalPosition = ui.TestWindow.AppWindow.Position;
-            var originalPadding = ui.Container.Padding;
-            var originalStyle = ui.Container.Style;
-            var originalBackground = ui.Container.ReadLocalValue(Panel.BackgroundProperty);
-            var originalTheme = ui.Container.RequestedTheme;
+            var privateMounted = nativeProof && ProviderArtworkPrivatePresentation.IsRequested;
+            var window = ui.TestWindow;
+            var container = ui.Container;
+            if (privateMounted)
+            {
+                container = new Grid();
+                window = OnboardingNativeProof.CreateWindow(() => new Window
+                {
+                    Title = "OpenClaw provider artwork qualification",
+                    Content = container,
+                });
+                _privateProofWindow = window;
+                _privateProofRoot = container;
+            }
+            var originalSize = window.AppWindow.Size;
+            var originalPosition = window.AppWindow.Position;
+            var originalPadding = container.Padding;
+            var originalStyle = container.Style;
+            var originalBackground = container.ReadLocalValue(Panel.BackgroundProperty);
+            var originalTheme = container.RequestedTheme;
             Frame? frame = null;
             AiSetupPage? page = null;
             IDisposable? navigation = null;
@@ -2611,18 +2650,21 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper 
                 {
                     OnboardingNativeProof.AssertIsolatedRoots();
                     OnboardingNativeProof.RequireProofDirectory();
-                    var scale = ui.Container.XamlRoot.RasterizationScale;
-                    ui.TestWindow.AppWindow.Resize(new Windows.Graphics.SizeInt32(
+                    var scale = privateMounted ? ui.Container.XamlRoot.RasterizationScale : container.XamlRoot.RasterizationScale;
+                    window.AppWindow.Resize(new Windows.Graphics.SizeInt32(
                         NativeProofLayout.PhysicalPixels(720, scale), NativeProofLayout.PhysicalPixels(820, scale)));
-                    var work = Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(ui.TestWindow.AppWindow.Id,
+                    var work = Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(window.AppWindow.Id,
                         Microsoft.UI.Windowing.DisplayAreaFallback.Nearest).WorkArea;
-                    ui.TestWindow.AppWindow.Move(new Windows.Graphics.PointInt32(work.X + 32, work.Y + 32));
-                    ui.Container.Padding = new Thickness(0);
-                    OnboardingNativeProof.ActivateOwned(ui.TestWindow);
+                    window.AppWindow.Move(new Windows.Graphics.PointInt32(work.X + 32, work.Y + 32));
+                    container.Padding = new Thickness(0);
+                    if (privateMounted)
+                        await ProviderArtworkPrivatePresentation.PresentAsync(window);
+                    else
+                        OnboardingNativeProof.ActivateOwned(window);
                 }
                 else
-                    ui.TestWindow.AppWindow.Resize(new Windows.Graphics.SizeInt32(816, 944));
-                await OnboardingNativeProof.ApplyThemeSurfaceAsync(ui.Container, theme);
+                    window.AppWindow.Resize(new Windows.Graphics.SizeInt32(816, 944));
+                await OnboardingNativeProof.ApplyThemeSurfaceAsync(container, theme);
                 var data = Environment.GetEnvironmentVariable("OPENCLAW_TRAY_DATA_DIR")
                     ?? throw new InvalidOperationException("Set isolated tray data before onboarding UI tests.");
                 var args = new AiSetupPageArgs(new SetupConfig(), data, data,
@@ -2642,15 +2684,19 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper 
                     });
                 frame = nativeProof ? new Frame() : new Frame { Width = width, Height = 820 };
                 navigation = OnboardingNativeProof.TrackNavigation(frame);
-                ui.Container.Children.Add(frame);
-                frame.Navigate(typeof(AiSetupPage), args);
+                container.Children.Add(frame);
+                if (privateMounted)
+                    Assert.True(frame.Navigate(typeof(AiSetupPage), args,
+                        new Microsoft.UI.Xaml.Media.Animation.SuppressNavigationTransitionInfo()));
+                else
+                    frame.Navigate(typeof(AiSetupPage), args);
                 page = Assert.IsType<AiSetupPage>(frame.Content);
                 await WaitAsync(() => ready is not null ? ready() : expectedModelRef is not null || installAndUse is not null
                     ? completions > 0 || Find<InfoBar>(page, "ErrorBar").IsOpen
                     : focusedSupported ? Find<StackPanel>(page, "ChoicePanel").Visibility == Visibility.Visible ||
                         Find<InfoBar>(page, "ErrorBar").IsOpen
                     : Find<Button>(page, "LegacyButton").Visibility == Visibility.Visible);
-                ui.Container.UpdateLayout();
+                container.UpdateLayout();
                 await ui.YieldToRenderAsync();
                 await assertion(page, transport, () => completions);
             }
@@ -2664,15 +2710,24 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper 
                 }
                 finally
                 {
-                    ui.Container.Children.Clear();
+                    container.Children.Clear();
                     navigation?.Dispose();
-                    ui.Container.Padding = originalPadding;
-                    ui.Container.Style = originalStyle;
-                    ui.Container.RequestedTheme = originalTheme;
-                    if (originalBackground == DependencyProperty.UnsetValue) ui.Container.ClearValue(Panel.BackgroundProperty);
-                    else ui.Container.SetValue(Panel.BackgroundProperty, originalBackground);
-                    ui.TestWindow.AppWindow.Resize(originalSize);
-                    if (nativeProof) ui.TestWindow.AppWindow.Move(originalPosition);
+                    container.Padding = originalPadding;
+                    container.Style = originalStyle;
+                    container.RequestedTheme = originalTheme;
+                    if (originalBackground == DependencyProperty.UnsetValue) container.ClearValue(Panel.BackgroundProperty);
+                    else container.SetValue(Panel.BackgroundProperty, originalBackground);
+                    if (privateMounted)
+                    {
+                        window.Close();
+                        _privateProofWindow = null;
+                        _privateProofRoot = null;
+                    }
+                    else
+                    {
+                        window.AppWindow.Resize(originalSize);
+                        if (nativeProof) window.AppWindow.Move(originalPosition);
+                    }
                     _nativeProof = false;
                     await ui.YieldToRenderAsync();
                 }
@@ -2728,9 +2783,9 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper 
 
     private Task InvokeCardAsync(SettingsCard card)
     {
-        if (_nativeProof)
+        if (_nativeProof && !ProviderArtworkPrivatePresentation.IsRequested)
             return OnboardingNativeProof.InvokeSettingsCardAsync(ui.TestWindow, card);
-        var page = Assert.Single(TestSupport.FindDescendants<AiSetupPage>(ui.Container));
+        var page = Assert.Single(TestSupport.FindDescendants<AiSetupPage>(_privateProofRoot ?? ui.Container));
         var handler = card.Name switch
         {
             "ApiKeysButton" => "ApiKeys_Click",
@@ -2944,4 +2999,259 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper 
             throw new InvalidOperationException($"Unexpected proof request: {method}");
         }
     }
+}
+
+// Packet-only consumer of MountedControlCapture, not a second capture implementation.
+// This contract deliberately has no foreground, Z-order, compositor, pointer or keyboard claim.
+internal static class ProviderArtworkPrivatePresentation
+{
+    internal const string JobVariable = "OPENCLAW_PROVIDER_ARTWORK_PRIVATE_CAPTURE_JOB";
+    internal const string JobValue = "private-mounted-v1";
+    internal static bool IsRequested => Environment.GetEnvironmentVariable(JobVariable) == JobValue;
+
+    internal static async Task PresentAsync(Window window)
+    {
+        RequireJob();
+        OnboardingNativeProof.AssertSourceUnchanged();
+        AssertPrivateOwned(window);
+        var work = Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(window.AppWindow.Id,
+            Microsoft.UI.Windowing.DisplayAreaFallback.Nearest).WorkArea;
+        window.AppWindow.Move(new Windows.Graphics.PointInt32(work.X, work.Y));
+        // Existing supported non-activating AppWindow presentation, also used by WindowManager.
+        // Showing a real private HWND is not an attempt to make that desktop the input desktop.
+        window.AppWindow.Show(activateWindow: false);
+        var root = Assert.IsAssignableFrom<FrameworkElement>(window.Content);
+        await TestSupport.WaitForRenderedConditionAsync(() => root.IsLoaded && root.XamlRoot is not null,
+            "private owned window root Loaded");
+        root.UpdateLayout();
+        await OnboardingNativeProof.NextCompositionAsync();
+        _ = Measure(window);
+        OnboardingNativeProof.AssertSourceUnchanged();
+    }
+
+    internal static async Task CaptureRequiredAsync(Window window, string state, ITestOutputHelper output,
+        string[] requiredLabels, FrameworkElement requiredContent)
+    {
+        RequireJob();
+        var allowed = new[] { "", "before-" }.SelectMany(prefix =>
+            new[] { "Light", "Dark" }.SelectMany(theme =>
+                new[] { prefix + "provider-inventory-" + theme }.Concat(
+                    new[] { "llama-app", "ollama" }.SelectMany(brand =>
+                        new[] { "note", "text", "confirm" }.Select(step => prefix + "provider-" + brand + "-" + step + "-" + theme)))))
+            .ToArray();
+        Assert.Contains(state, allowed);
+        Assert.NotEmpty(requiredLabels);
+        OnboardingNativeProof.AssertSourceUnchanged();
+        var root = Assert.IsAssignableFrom<FrameworkElement>(window.Content);
+        root.UpdateLayout();
+        await OnboardingNativeProof.NextCompositionAsync();
+        OnboardingNativeProof.AssertFullyVisible(requiredContent, root);
+        var before = Measure(window);
+        var requiredContentBounds = requiredContent.TransformToVisual(root).TransformBounds(
+            new Windows.Foundation.Rect(0, 0, requiredContent.ActualWidth, requiredContent.ActualHeight));
+        var directory = OnboardingNativeProof.RequireProofDirectory();
+        var path = Path.Combine(directory, state + ".png");
+        Assert.False(File.Exists(path), "Never adopt or overwrite a previous required frame.");
+
+        // The existing owner performs DwmFlush, PW_RENDERFULLCONTENT, no fallback,
+        // private-desktop, PID, visibility, work-area and nonblank-frame admission.
+        await MountedControlCapture.OptionalAsync(window, state);
+        Assert.True(File.Exists(path), "The optional owner must actually produce this required frame.");
+        Assert.Equal(before, Measure(window));
+        OnboardingNativeProof.AssertFullyVisible(requiredContent, root);
+        using var attempt = JsonDocument.Parse(File.ReadAllText(Path.Combine(directory, state + ".attempt.json")));
+        var observed = attempt.RootElement;
+        Assert.Equal(before.Left, observed.GetProperty("left").GetInt32());
+        Assert.Equal(before.Top, observed.GetProperty("top").GetInt32());
+        Assert.Equal(before.Right, observed.GetProperty("right").GetInt32());
+        Assert.Equal(before.Bottom, observed.GetProperty("bottom").GetInt32());
+        Assert.Equal(before.Desktop, observed.GetProperty("desktop").GetString());
+        Assert.Equal(Environment.ProcessId, observed.GetProperty("ownerProcessId").GetInt32());
+        var imageSha256 = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path)));
+        using var receipt = JsonDocument.Parse(File.ReadAllText(Path.ChangeExtension(path, ".json")));
+        Assert.Equal(imageSha256, receipt.RootElement.GetProperty("imageSha256").GetString());
+        Assert.Equal(Environment.GetEnvironmentVariable("OPENCLAW_MOUNTED_CONTROL_CAPTURE_HEAD"),
+            receipt.RootElement.GetProperty("head").GetString());
+        Assert.Equal("PrintWindow(PW_RENDERFULLCONTENT); no fallback", receipt.RootElement.GetProperty("method").GetString());
+        Assert.Equal(Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(typeof(UIThreadFixture).Assembly.Location))),
+            receipt.RootElement.GetProperty("assemblySha256").GetString());
+        Assert.Equal(before.Right - before.Left, receipt.RootElement.GetProperty("width").GetInt32());
+        Assert.Equal(before.Bottom - before.Top, receipt.RootElement.GetProperty("height").GetInt32());
+
+        // Analyze the original complete PNG. Preserve the existing two-pass OCR policy,
+        // including its explicitly unverified title exceptions, plus exact HWND-scoped UIA.
+        var ocr = await ReadLabelsAsync(path, requiredLabels);
+        var labels = await Task.Run(() => ReadNativeLabels(before, requiredLabels))
+            .WaitAsync(OnboardingNativeProof.OcrPassTimeout);
+        Assert.Equal(before, Measure(window));
+        OnboardingNativeProof.AssertFullyVisible(requiredContent, root);
+        OnboardingNativeProof.AssertSourceUnchanged();
+        Assert.Equal(imageSha256, Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))));
+        var metadata = new
+        {
+            schema = "provider-artwork-private-mounted-required-v1", state,
+            qualification = "Private owned mounted production controls. Synthetic selected Gateway. Not foreground, native compositor, keyboard, installed-app, or live Gateway proof.",
+            method = "PrintWindow(PW_RENDERFULLCONTENT); no fallback",
+            head = Environment.GetEnvironmentVariable("OPENCLAW_MOUNTED_CONTROL_CAPTURE_HEAD"),
+            freezeManifestSha256 = Environment.GetEnvironmentVariable("OPENCLAW_UI_PROOF_MANIFEST_SHA256"),
+            assemblySha256 = receipt.RootElement.GetProperty("assemblySha256").GetString(),
+            imageSha256, geometry = before, requiredContentBounds, requiredLabels, ocr, nativeLabels = labels,
+            machineOcrPassed = ocr.MissingLabels.Length == 0,
+            reviewStatus = "original full-frame human inspection required",
+            capturedUtc = DateTimeOffset.UtcNow,
+        };
+        File.WriteAllText(Path.Combine(directory, state + ".required.json"),
+            JsonSerializer.Serialize(metadata, new JsonSerializerOptions { WriteIndented = true }));
+        output.WriteLine($"private-mounted-required={path}; sha256={imageSha256}; no foreground/input/compositor claim");
+    }
+
+    private static void RequireJob()
+    {
+        Assert.True(IsRequested, $"This overlay requires explicit {JobVariable}={JobValue}.");
+        OnboardingNativeProof.AssertIsolatedRoots();
+        var head = Environment.GetEnvironmentVariable("OPENCLAW_MOUNTED_CONTROL_CAPTURE_HEAD");
+        Assert.Matches("^[a-f0-9]{40}$", head ?? "");
+        var freeze = Environment.GetEnvironmentVariable("OPENCLAW_UI_PROOF_FREEZE_DIR")!;
+        using var manifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(freeze, "manifest.json")));
+        Assert.Equal(manifest.RootElement.GetProperty("head").GetString(), head);
+        var directory = OnboardingNativeProof.RequireProofDirectory();
+        var mounted = Environment.GetEnvironmentVariable("OPENCLAW_MOUNTED_CONTROL_CAPTURE_DIR");
+        Assert.False(string.IsNullOrWhiteSpace(mounted));
+        Assert.True(Path.IsPathFullyQualified(mounted!));
+        Assert.Equal(Path.GetFullPath(directory), Path.GetFullPath(mounted!));
+    }
+
+    private static string DesktopName(IntPtr desktop)
+    {
+        Assert.NotEqual(IntPtr.Zero, desktop);
+        var name = new StringBuilder(256);
+        Assert.True(GetUserObjectInformationW(desktop, 2, name, 512, out _));
+        Assert.False(string.IsNullOrWhiteSpace(name.ToString()));
+        Assert.False(string.Equals("Default", name.ToString(), StringComparison.OrdinalIgnoreCase));
+        return name.ToString();
+    }
+
+    private static string AssertPrivateOwned(Window window)
+    {
+        var handle = WinRT.Interop.WindowNative.GetWindowHandle(window);
+        Assert.NotEqual(IntPtr.Zero, handle);
+        Assert.True(IsWindow(handle));
+        var thread = GetWindowThreadProcessId(handle, out var owner);
+        Assert.Equal((uint)Environment.ProcessId, owner);
+        Assert.Equal(GetCurrentThreadId(), thread);
+        var desktop = DesktopName(GetThreadDesktop(GetCurrentThreadId()));
+        Assert.Equal(desktop, DesktopName(GetThreadDesktop(thread)));
+        OnboardingNativeProof.AssertProductDpi(window);
+        return desktop;
+    }
+
+    private static Geometry Measure(Window window)
+    {
+        var desktop = AssertPrivateOwned(window);
+        var handle = WinRT.Interop.WindowNative.GetWindowHandle(window);
+        Assert.True(window.AppWindow.IsVisible && IsWindowVisible(handle) && !IsIconic(handle));
+        Assert.True(GetWindowRect(handle, out var bounds));
+        Assert.True(bounds.Right > bounds.Left && bounds.Bottom > bounds.Top);
+        var work = Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(window.AppWindow.Id,
+            Microsoft.UI.Windowing.DisplayAreaFallback.Nearest).WorkArea;
+        Assert.True(bounds.Left >= work.X && bounds.Top >= work.Y &&
+            bounds.Right <= work.X + work.Width && bounds.Bottom <= work.Y + work.Height,
+            "The complete private HWND must fit without clipping. Never resize to manufacture a passing capture.");
+        Assert.True(GetClientRect(handle, out var client));
+        var origin = new Point();
+        Assert.True(ClientToScreen(handle, ref origin));
+        var root = Assert.IsAssignableFrom<FrameworkElement>(window.Content);
+        Assert.True(root.IsLoaded && root.Visibility == Visibility.Visible);
+        Assert.NotNull(root.XamlRoot);
+        Assert.Same(root, root.XamlRoot.Content);
+        Assert.IsType<Microsoft.UI.Windowing.OverlappedPresenter>(window.AppWindow.Presenter);
+        var inset = NativeProofLayout.ContentTopInset(window.ExtendsContentIntoTitleBar, IsZoomed(handle));
+        var scale = root.XamlRoot.RasterizationScale;
+        Assert.True(double.IsFinite(scale) && scale > 0);
+        Assert.Equal(client.Right - client.Left, NativeProofLayout.PhysicalPixels(root.XamlRoot.Size.Width, scale));
+        Assert.Equal(client.Bottom - client.Top - inset, NativeProofLayout.PhysicalPixels(root.XamlRoot.Size.Height, scale));
+        Assert.True(origin.X >= bounds.Left && origin.Y >= bounds.Top &&
+            origin.X + client.Right <= bounds.Right && origin.Y + client.Bottom <= bounds.Bottom);
+        return new(handle.ToInt64(), desktop, bounds.Left, bounds.Top, bounds.Right, bounds.Bottom,
+            origin.X, origin.Y, client.Right, client.Bottom, inset, scale,
+            root.XamlRoot.Size.Width, root.XamlRoot.Size.Height);
+    }
+
+    private static NativeLabel[] ReadNativeLabels(Geometry geometry, string[] requiredLabels)
+    {
+        Assert.Equal(ApartmentState.MTA, Thread.CurrentThread.GetApartmentState());
+        RuntimeHelpers.RunModuleConstructor(typeof(System.Windows.Media.Visual).Module.ModuleHandle);
+        var handle = new IntPtr(geometry.Hwnd);
+        Assert.True(IsWindow(handle));
+        Assert.NotEqual(0u, GetWindowThreadProcessId(handle, out var owner));
+        Assert.Equal((uint)Environment.ProcessId, owner);
+        var window = Uia.AutomationElement.FromHandle(handle);
+        Assert.Equal(Environment.ProcessId, window.Current.ProcessId);
+        return requiredLabels.Select(label =>
+        {
+            var nodes = window.FindAll(Uia.TreeScope.Descendants,
+                new Uia.PropertyCondition(Uia.AutomationElement.NameProperty, label)).Cast<Uia.AutomationElement>()
+                .Where(node => !node.Current.IsOffscreen && !node.Current.BoundingRectangle.IsEmpty).ToArray();
+            Assert.NotEmpty(nodes);
+            var node = nodes.First();
+            var rectangle = node.Current.BoundingRectangle;
+            Assert.Equal(label, node.Current.Name);
+            Assert.True(rectangle.Width > 0 && rectangle.Height > 0 &&
+                rectangle.Left >= geometry.Left && rectangle.Top >= geometry.Top &&
+                rectangle.Right <= geometry.Right && rectangle.Bottom <= geometry.Bottom);
+            return new NativeLabel(label, node.Current.Name, rectangle.Left, rectangle.Top,
+                rectangle.Width, rectangle.Height);
+        }).ToArray();
+    }
+
+    private static async Task<Labels> ReadLabelsAsync(string path, string[] requiredLabels)
+    {
+        var engine = Windows.Media.Ocr.OcrEngine.TryCreateFromLanguage(new Windows.Globalization.Language("en-US"))
+            ?? throw new InvalidOperationException("English Windows OCR is required for the original complete private frame.");
+        var file = await Windows.Storage.StorageFile.GetFileFromPathAsync(path);
+        using var stream = await file.OpenAsync(Windows.Storage.FileAccessMode.Read);
+        var decoder = await BitmapDecoder.CreateAsync(stream);
+        static string Normalize(string text) => string.Concat(text.Where(char.IsLetterOrDigit)).ToLowerInvariant();
+        static string[] Missing(string text, string[] labels) => labels.Where(label =>
+            !Normalize(text).Contains(Normalize(label), StringComparison.Ordinal)).ToArray();
+        using var original = await decoder.GetSoftwareBitmapAsync(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Ignore);
+        var first = await OnboardingNativeProof.RunOcrPassAsync(ct => engine.RecognizeAsync(original).AsTask(ct));
+        if (Missing(first.Text, requiredLabels).Length == 0)
+            return new(first.Text, first.Text, 1, []);
+        var factor = Math.Min(2d, (double)Windows.Media.Ocr.OcrEngine.MaxImageDimension /
+            Math.Max(decoder.PixelWidth, decoder.PixelHeight));
+        var transform = new BitmapTransform
+        {
+            ScaledWidth = (uint)Math.Max(1, Math.Round(decoder.PixelWidth * factor)),
+            ScaledHeight = (uint)Math.Max(1, Math.Round(decoder.PixelHeight * factor)),
+            InterpolationMode = BitmapInterpolationMode.Cubic,
+        };
+        using var scaled = await decoder.GetSoftwareBitmapAsync(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Ignore,
+            transform, ExifOrientationMode.IgnoreExifOrientation, ColorManagementMode.DoNotColorManage);
+        var second = await OnboardingNativeProof.RunOcrPassAsync(ct => engine.RecognizeAsync(scaled).AsTask(ct));
+        var missing = Missing(second.Text, requiredLabels);
+        OnboardingNativeProof.AssertManualLabelExceptions(missing, first.Text, second.Text);
+        return new(first.Text, second.Text, factor, missing);
+    }
+
+    private sealed record Labels(string OriginalText, string Text, double AnalysisScale, string[] MissingLabels);
+    private sealed record NativeLabel(string Expected, string ActualName, double Left, double Top, double Width, double Height);
+    private sealed record Geometry(long Hwnd, string Desktop, int Left, int Top, int Right, int Bottom,
+        int ClientLeft, int ClientTop, int ClientWidth, int ClientHeight, int ContentTopInset,
+        double RasterizationScale, double XamlWidth, double XamlHeight);
+    [StructLayout(LayoutKind.Sequential)] private struct Bounds { public int Left, Top, Right, Bottom; }
+    [StructLayout(LayoutKind.Sequential)] private struct Point { public int X, Y; }
+    [DllImport("user32.dll")] private static extern bool IsWindow(IntPtr window);
+    [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr window);
+    [DllImport("user32.dll")] private static extern bool IsIconic(IntPtr window);
+    [DllImport("user32.dll")] private static extern bool IsZoomed(IntPtr window);
+    [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr window, out Bounds bounds);
+    [DllImport("user32.dll")] private static extern bool GetClientRect(IntPtr window, out Bounds bounds);
+    [DllImport("user32.dll")] private static extern bool ClientToScreen(IntPtr window, ref Point point);
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr window, out uint process);
+    [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
+    [DllImport("user32.dll")] private static extern IntPtr GetThreadDesktop(uint thread);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern bool GetUserObjectInformationW(IntPtr handle, int index, StringBuilder value,
+        uint length, out uint needed);
 }

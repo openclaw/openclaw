@@ -32,9 +32,22 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper 
         {
             var picker = Find<ComboBox>(page, "ApiProviderPicker");
             Assert.Equal(-1, picker.SelectedIndex);
-            picker.IsDropDownOpen = true;
+            var scroller = Find<ScrollViewer>(page, "ChoicesScroller");
+            var scrollSettled = true;
+            void Scrolled(object? sender, ScrollViewerViewChangedEventArgs args) => scrollSettled = !args.IsIntermediate;
+            scroller.ViewChanged += Scrolled;
             try
             {
+                await InvokeCardAsync(Find<SetupActionCard>(page, "ApiKeysButton"));
+                await TestSupport.WaitForRenderedConditionAsync(
+                    () => Find<StackPanel>(page, "ApiKeyForm").Visibility == Visibility.Visible && picker.IsLoaded,
+                    "API Keys action reveals the provider form");
+                picker.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = false });
+                scroller.UpdateLayout();
+                await OnboardingNativeProof.NextCompositionAsync();
+                await TestSupport.WaitForRenderedConditionAsync(() => scrollSettled, "provider scroller settled");
+                OnboardingNativeProof.AssertFullyVisible(picker, scroller);
+                picker.IsDropDownOpen = true;
                 await TestSupport.WaitForRenderedConditionAsync(
                     () => picker.ContainerFromIndex(3) is ComboBoxItem { IsLoaded: true }, "provider inventory mounted");
                 var marks = Enumerable.Range(0, 4).Select(index => Assert.Single(
@@ -55,7 +68,11 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper 
                 Assert.Equal(["openclaw.setup.detect"], transport.MethodCalls);
                 Assert.Equal(0, completed());
             }
-            finally { picker.IsDropDownOpen = false; }
+            finally
+            {
+                picker.IsDropDownOpen = false;
+                scroller.ViewChanged -= Scrolled;
+            }
         }, theme: theme, nativeProof: !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("OPENCLAW_UI_PROOF_DIR")),
             configure: transport => transport.DetectionOverride = new()
             {

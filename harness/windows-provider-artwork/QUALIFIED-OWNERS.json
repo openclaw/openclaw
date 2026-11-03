@@ -41,5 +41,12 @@
   ],
   "buildLoggingProperty": "WriteVersionInfoToBuildLog=false; DisableGitVersionTask=false, GetVersion=true and UpdateVersionProperties=true must remain evaluated; computed SHA must bind HEAD",
   "privateDesktopOwner": "c550174d517b5e8830726cd5c32d4e132c144659:scripts/Invoke-PrivateDesktop.ps1; Default DACL/label copied, never switched or modified",
-  "sourcePolicyAdaptation": "SDK queries execute from source; isolated bootstrap gets an unchanged copy of source global.json. No source/operator config or version rewrite."
+  "sourcePolicyAdaptation": "SDK queries execute from source; isolated bootstrap gets an unchanged copy of source global.json. No source/operator config or version rewrite.",
+  "privateRequiredConsumer": {
+    "origin": "1e7eb928b4ac40e327d7c641659c22720e7172c2:harness/windows-ollama/OllamaPrivateMountedPresentation.cs",
+    "originSha256": "2e1f46e76e8303de77d4f73fb962924ff41cb15ee8642e617b5e5b648bdb2eda",
+    "adaptation": "class/job/schema names, exact28state allowlist, frozen HEAD rather than d38; compiled as append in existing proof-only test unit; delegates unchanged MountedControlCapture"
+  },
+  "privateFixtureOwner": "1e7eb928b4ac40e327d7c641659c22720e7172c2:harness/windows-ollama/OnboardingAiPageTests.private-postimage.txt:NativeOllamaComparison_IdenticalAdvertisedNoModel",
+  "foregroundAndInputGuards": "unchanged c550 OnboardingNativeProof"
 }
