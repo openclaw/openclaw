@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
+import { WORKER_LOCAL_MCP_PROTOCOL_FEATURE } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -307,7 +307,7 @@ it("keeps configured MCP tools on the Gateway route for the private app bridge",
     expect(readyMessage(messages)).toMatchObject({
       manifest: { commands: expect.arrayContaining([command]) },
     });
-    connect(1, { ...currentGateway, capabilities: [GATEWAY_SERVER_CAPS.WORKER_LOCAL_MCP] });
+    connect(1, { ...currentGateway, capabilities: [WORKER_LOCAL_MCP_PROTOCOL_FEATURE] });
     await vi.waitFor(() => expect(messages).toContainEqual(runnerPublication({ enabled: true })));
     const inventory = messages.find((message) => message.method === "node.runnerInventory.update");
     expect(inventory?.params).not.toHaveProperty("workerHost.localMcp");

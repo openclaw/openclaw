@@ -1,7 +1,10 @@
 /** Connection-scoped publication shared by the CLI and native app node transports. */
 import { isDeepStrictEqual } from "node:util";
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/schema/frames.js";
-import { WORKER_BUNDLE_PREWARM_VERSION } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  WORKER_BUNDLE_PREWARM_VERSION,
+  WORKER_LOCAL_MCP_PROTOCOL_FEATURE,
+} from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { CORE_WORKER_LAUNCH_TOOL_NAMES } from "../agents/tool-catalog.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
 import {
@@ -364,7 +367,7 @@ export function startNodeHostConnection({
                 ? { promptContext: NODE_WORKER_PROMPT_CONTEXT_VERSION }
                 : {}),
               ...(prepared.localMcpEnabled &&
-              gatewayCapabilities.has(GATEWAY_SERVER_CAPS.WORKER_LOCAL_MCP)
+              gatewayCapabilities.has(WORKER_LOCAL_MCP_PROTOCOL_FEATURE)
                 ? { localMcp: true as const }
                 : {}),
               ...(prepared.nativeInferenceEnabled &&

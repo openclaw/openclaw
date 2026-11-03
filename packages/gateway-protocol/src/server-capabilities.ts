@@ -33,7 +33,6 @@ export const GATEWAY_SERVER_CAPS = {
   NODE_WORKER_ENVIRONMENT_SESSION: "node-worker-environment-session-v1",
   NODE_WORKER_HOST_DIAGNOSTICS: "node-worker-host-diagnostics-v1",
   NODE_WORKER_IDLE_RETENTION: "node-worker-idle-retention-v1",
-  WORKER_LOCAL_MCP: "worker-local-mcp-v2",
   NODE_WORKER_LAUNCH_TOOL_NAMES: "node-worker-launch-tool-names-v1",
   NODE_WORKER_NATIVE_INFERENCE: "node-worker-native-inference-v1",
   NODE_WORKER_PORTAL_STREAM: "node-worker-portal-stream-v1",

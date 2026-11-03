@@ -5,6 +5,7 @@ import {
   ErrorCodes,
   PROTOCOL_VERSION,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { WORKER_LOCAL_MCP_PROTOCOL_FEATURE } from "../../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY } from "../../../../packages/gateway-protocol/src/system-run-execution-context.js";
 import { resolveControlUiLinkLocation } from "../../../config/control-ui-link-base.js";
 import { sha256Base64Url } from "../../../infra/crypto-digest.js";
@@ -242,7 +243,7 @@ export async function sendGatewayHello(
         GATEWAY_SERVER_CAPS.NODE_WORKER_IDLE_RETENTION,
         GATEWAY_SERVER_CAPS.NODE_WORKER_LAUNCH_TOOL_NAMES,
         GATEWAY_SERVER_CAPS.NODE_WORKER_NATIVE_INFERENCE,
-        GATEWAY_SERVER_CAPS.WORKER_LOCAL_MCP,
+        WORKER_LOCAL_MCP_PROTOCOL_FEATURE,
         GATEWAY_SERVER_CAPS.NODE_WORKER_PORTAL_STREAM,
         GATEWAY_SERVER_CAPS.NODE_WORKER_PROMPT_CONTEXT,
         GATEWAY_SERVER_CAPS.NODE_WORKER_STATUS_WAIT,
