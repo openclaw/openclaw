@@ -58,17 +58,7 @@ async function mount(props: Partial<OpenClawTerminalPanel> = {}) {
     }
     return (method === "terminal.list" ? { sessions: [] } : { ok: true }) as T;
   });
-  const panel = mountPanel(
-    tagName,
-    {
-      available: true,
-      embedded: true,
-      tabsInHeader: true,
-      client,
-      ...props,
-    },
-    false,
-  );
+  const panel = createPanel(client, { embedded: true, tabsInHeader: true, ...props });
   await waitForFast(() => expect(panel.hostedTabs[0]?.className).toBe("is-live"));
   await panel.updateComplete;
   return {
@@ -94,9 +84,8 @@ function mountActions(panel: OpenClawTerminalPanel) {
   return container;
 }
 
-function button(container: HTMLElement, label: string) {
-  return container.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)!;
-}
+const button = (container: HTMLElement, label: string) =>
+  panelButton(container, `[aria-label="${label}"]`)!;
 
 describe("Terminal panel hosted tabs", () => {
   beforeEach(() => {
@@ -334,8 +323,8 @@ describe("Terminal panel hosted tabs", () => {
   );
 });
 
-function createPanel(client: TerminalGatewayClient, embedded = false) {
-  return mountPanel(tagName, { client, available: true, embedded }, !embedded);
+function createPanel(client: TerminalGatewayClient, props: Partial<OpenClawTerminalPanel> = {}) {
+  return mountPanel(tagName, { client, available: true, ...props }, !props.embedded);
 }
 
 function createPickerClient(
@@ -398,7 +387,7 @@ describe("OpenClawTerminalPanel accessibility", () => {
   it("keeps tab and session-picker references inside each split terminal", async () => {
     const ids: string[] = [];
     for (let index = 0; index < 2; index += 1) {
-      const panel = createPanel(createPickerClient(true), true);
+      const panel = createPanel(createPickerClient(true), { embedded: true });
       await waitForFast(() =>
         expect(panel.querySelector('.tabstrip-tab[aria-selected="true"]')).not.toBeNull(),
       );
@@ -525,8 +514,7 @@ function terminalUploadFile(name: string, content: string): File {
 }
 
 async function mountReadyPanel(client: TerminalGatewayClient) {
-  const panel = mountPanel(tagName, { client, available: true }, false);
-  panel.toggle();
+  const panel = createPanel(client);
   await waitForFast(() => expect(panelButton(panel, ".tp-upload")?.disabled).toBe(false));
   return panel;
 }

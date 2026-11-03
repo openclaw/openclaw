@@ -386,7 +386,10 @@ export function createTerminalPanel(
       // Automatic tab navigation keeps focus in the tablist for the next key.
       const navigating =
         event instanceof KeyboardEvent &&
-        ["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key);
+        (event.key === "ArrowLeft" ||
+          event.key === "ArrowRight" ||
+          event.key === "Home" ||
+          event.key === "End");
       terminalSessions.switchTo(id, !navigating);
     },
     async closeHostedTab(id: string): Promise<void> {
