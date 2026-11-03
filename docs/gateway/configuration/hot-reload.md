@@ -178,6 +178,16 @@ matching config prefix determines the outcome. Rules supplied by a plugin apply
 only while that plugin is loaded; a path that matches no rule defaults to a
 Gateway restart.
 
+`env.vars.*` has no hot-reload rule, so changing it requires a Gateway restart.
+With the default `hybrid` mode, the Gateway handles that restart automatically;
+the new value is not guaranteed to reach consumers in the current process.
+For a Gateway `config.patch` or `config.apply` response,
+`sentinel.payload.stats.requiresRestart: true` reports this requirement, not a
+completed restart or an instruction to schedule another one. In `hybrid` mode
+the response can omit `restart` because the reload owner handles the restart
+after the write. Check the restart logs or a new connection's
+`hello-ok.server.bootId` to confirm the new Gateway generation.
+
 By default, changing `agents.defaults.mediaMaxMb` restarts channel runtimes so their inherited
 attachment limits take effect together. Automatic reloads preserve manually
 stopped accounts; use an explicit channel start to resume those accounts.
