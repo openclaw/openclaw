@@ -6,7 +6,9 @@ import {
   createAgentHarnessCompletionScope,
 } from "../agents/agent-harness-completion-scope.js";
 import { buildAnnounceIdempotencyKey } from "../agents/announce-idempotency.js";
+import { buildAgentInternalEventContext } from "../agents/internal-events.js";
 import type * as AnnounceRuntime from "../agents/subagents/announce/subagent-announce-delivery.runtime.js";
+import { SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION } from "../agents/subagents/completion/subagent-completion-instructions.js";
 
 const mocks = vi.hoisted(() => ({
   deliver: vi.fn(),
@@ -112,6 +114,74 @@ const direct = (phases?: Phases): AgentHarnessCompletionDelivery => ({
 const directPhase = (delivered: boolean): Phases => [
   { phase: "direct-primary", delivered, path: delivered ? "direct" : "none" },
 ];
+it.each([undefined, " Keep the review private; send any visible update with the message tool. "])(
+  "preserves outcome guidance alongside reply instruction %j at delivery",
+  async (replyInstruction) => {
+    const result = "Review failed: revise the implementation in this child session.";
+    await deliver({ replyInstruction, result });
+    const announcement = mocks.deliver.mock.calls[0]![0];
+    const [event] = announcement.internalEvents;
+    expect(event.replyInstruction).toContain(SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION);
+    expect(event.replyInstruction.split("This completion ends one child run")).toHaveLength(2);
+    expect(event.replyInstruction).toContain(
+      replyInstruction?.trim() ?? "send the visible response with the message tool",
+    );
+    expect(announcement.triggerMessage).toContain(SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION);
+    const fragments = buildAgentInternalEventContext(announcement.internalEvents);
+    const instructions = fragments.filter((part) => part.kind === "runtime-instruction");
+    expect(
+      instructions.some((part) => part.text.includes("fixable blockers require continued work")),
+    ).toBe(true);
+    expect(instructions.every((part) => !part.text.includes(result))).toBe(true);
+    expect(fragments.find((part) => part.kind === "conversation-data")?.text).toContain(result);
+  },
+);
+
+it("delivers a detached Codex parent's native review result with shared outcome guidance", async () => {
+  const { loadCodexNativeSubagentMonitorTestFixture } =
+    await import("../../extensions/codex/test-api.js");
+  const { createClient, createRuntime, CodexNativeSubagentMonitor, notifyChildStarted } =
+    await loadCodexNativeSubagentMonitorTestFixture();
+  const client = createClient();
+  const runtime = createRuntime();
+  runtime.deliverAgentHarnessCompletion.mockImplementation(deliverAgentHarnessCompletion);
+  mocks.deliver.mockResolvedValue({ delivered: true, path: "direct" });
+  const monitor = new CodexNativeSubagentMonitor(client.client, runtime);
+  const parent = await monitor.registerParent({
+    parentThreadId: "parent-thread",
+    requesterSessionKey: source.requesterSessionKey,
+    agentId: source.requesterAgentId,
+    completionScope: createAgentHarnessCompletionScope(source),
+  });
+  try {
+    parent.bindTurn("parent-turn");
+    await notifyChildStarted(client);
+    const result = "Review failed: revise in this child session.";
+    await client.completeTurn({
+      status: "completed",
+      turnId: "child-turn",
+      items: [{ type: "agentMessage", id: "review", phase: "final_answer", text: result }],
+    });
+    expect(mocks.deliver).not.toHaveBeenCalled();
+    await parent.unregister();
+    expect(mocks.deliver).toHaveBeenCalledOnce();
+    const announcement = mocks.deliver.mock.calls[0]![0];
+    expect(announcement.internalEvents[0]).toMatchObject({
+      result,
+      replyInstruction: expect.stringContaining(SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION),
+    });
+    expect(announcement.triggerMessage).toContain("Use the Codex native subagent result");
+    expect(announcement.triggerMessage).toContain(
+      "send the visible response with the message tool",
+    );
+    expect(announcement.triggerMessage).toContain("do not expose internal notification markup");
+  } finally {
+    await parent.unregister();
+    await monitor.dispose();
+    client.close();
+  }
+});
+
 it.each<[string, AgentHarnessCompletionDelivery, boolean]>([
   ["direct result without phases", direct(), true],
   ["direct result with no executed phase", direct([]), false],

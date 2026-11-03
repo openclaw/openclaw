@@ -27,6 +27,7 @@ import {
   resolveAnnounceOrigin,
   resolveSubagentCompletionOrigin,
 } from "../agents/subagents/announce/subagent-announce-origin.js";
+import { SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION } from "../agents/subagents/completion/subagent-completion-instructions.js";
 import {
   getGatewayContextResolver,
   withPluginRuntimeGatewayContextResolver,
@@ -169,9 +170,11 @@ async function deliverAgentHarnessCompletionBound(
         status: eventStatus,
         statusLabel,
         result: params.result,
-        replyInstruction:
+        replyInstruction: [
+          SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION,
           params.replyInstruction?.trim() ||
-          "Use the completed harness task result to continue or wrap up the parent task. If this is a channel session, send the visible response with the message tool instead of only writing a transcript final answer.",
+            "Use the completed harness task result to continue or wrap up the parent task. If this is a channel session, send the visible response with the message tool instead of only writing a transcript final answer.",
+        ].join(" "),
       },
     ];
     const prompt = formatAgentInternalEventsForPrompt(internalEvents);
