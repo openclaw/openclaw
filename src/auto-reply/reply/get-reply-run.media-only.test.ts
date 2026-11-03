@@ -41,6 +41,7 @@ import {
   loadSessionUpdatesRuntime,
 } from "./get-reply-run-helpers.js";
 import { runPreparedReply } from "./get-reply-run.js";
+import { registerQueuedCronAuthorityCases } from "./get-reply-run.queued-cron-authority.test-support.js";
 import { registerPendingRequesterAuthorityCases } from "./get-reply-run.requester-authority.test-support.js";
 import { registerSystemEventAdmissionCases } from "./get-reply-run.system-event-admission.test-support.js";
 import {
@@ -124,7 +125,8 @@ vi.mock("../../plugins/provider-thinking.js", () => ({
   resolveEffectiveThinkingProfile: () => undefined,
 }));
 
-vi.mock("../../agents/agent-tools.policy.js", () => ({
+vi.mock("../../agents/agent-tools.policy.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/agent-tools.policy.js")>()),
   resolveEffectiveToolPolicy: (params: {
     config: { tools?: { allow?: string[]; deny?: string[] } };
   }) => ({
@@ -233,7 +235,8 @@ vi.mock("../../config/sessions/group.js", () => ({
   resolveGroupSessionKey: vi.fn().mockReturnValue(undefined),
 }));
 
-vi.mock("../../config/sessions/paths.js", () => ({
+vi.mock("../../config/sessions/paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/paths.js")>()),
   resolveSessionFilePathCore: vi.fn().mockReturnValue("/tmp/session.jsonl"),
   resolveSessionFilePathOptions: vi.fn().mockReturnValue({}),
   resolveSessionStorePathCore: vi.fn().mockReturnValue("/tmp/session-store"),
@@ -273,7 +276,8 @@ vi.mock("../../gateway/session-sharing-preparation.js", async (importOriginal) =
 });
 const updateAmbientTranscriptWatermarkMock = vi.hoisted(() => vi.fn().mockResolvedValue(null));
 
-vi.mock("../../config/sessions/session-accessor.js", () => ({
+vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/session-accessor.js")>()),
   listSessionEntriesCore: vi.fn().mockReturnValue([]),
   loadSessionEntry: loadSessionEntryMock,
   loadSessionEntryReadOnly: loadSessionEntryMock,
@@ -381,7 +385,8 @@ vi.mock("./session-reset-prompt.js", () => ({
   }),
 }));
 
-vi.mock("./typing-mode.js", () => ({
+vi.mock("./typing-mode.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./typing-mode.js")>()),
   resolveTypingMode: vi.fn().mockReturnValue("off"),
 }));
 
@@ -464,6 +469,7 @@ function requireRunReplyAgentCall(index = 0) {
 
 describe("runPreparedReply media-only handling", () => {
   registerPendingRequesterAuthorityCases({ runPrepared, loadSessionEntryMock });
+  registerQueuedCronAuthorityCases({ runPrepared });
   it.each([
     "owner-alias",
     "non-owner",

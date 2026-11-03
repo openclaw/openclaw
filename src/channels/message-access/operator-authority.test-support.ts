@@ -116,66 +116,79 @@ async function createFixture(
   await activatePolicy({});
   let live = true;
   let gateway = createCommandOwnerTestGateway(cfg);
-  const owner = {
-    channelId,
-    isLive: () => live,
-    resolveGatewayContext: () => gateway,
-  };
-  const unregister = () => {
-    live = false;
-  };
-  const ingressRuntime = createHostChannelIngressRuntime(owner);
-  const key = `agent:main:${channelId}:channel:maintainers`;
-  const context = async (senderId: string, verified = true, accountId = "team") => {
-    const ingress = await ingressRuntime.resolveStable({
+  const createSource = () => {
+    let sourceLive = true;
+    const owner = {
       channelId,
-      accountId,
-      identity: { authentication: "verified" },
-      subject: {
-        stableId: senderId,
-        ...(verified ? {} : { authentication: { stableId: "asserted" as const } }),
+      isLive: () => live && sourceLive,
+      resolveGatewayContext: () => gateway,
+    };
+    const ingressRuntime = createHostChannelIngressRuntime(owner);
+    const key = `agent:main:${channelId}:channel:maintainers`;
+    const context = async (
+      senderId: string,
+      verified = true,
+      accountId = "team",
+      messageId = senderId,
+    ) => {
+      const ingress = await ingressRuntime.resolveStable({
+        channelId,
+        accountId,
+        identity: { authentication: "verified" },
+        subject: {
+          stableId: senderId,
+          ...(verified ? {} : { authentication: { stableId: "asserted" as const } }),
+        },
+        conversation: { kind: "direct", id: "conversation" },
+        contextBinding: {
+          agentId: "main",
+          sessionKey: key,
+          messageId,
+          inboundEventKind: "user_request",
+        },
+        dmPolicy: "open",
+        groupPolicy: "disabled",
+        allowFrom: ["*"],
+        useDefaultPairingStore: false,
+      });
+      return await createHostChannelInboundEventContextBuilder(
+        buildChannelInboundEventContext,
+        owner,
+      )({
+        channel: channelId,
+        accountId,
+        messageId,
+        from: `${channelId}:${senderId}`,
+        sender: { id: senderId },
+        conversation: { kind: "direct", id: "conversation" },
+        route: { agentId: "main", routeSessionKey: key },
+        reply: { to: `${channelId}:${senderId}` },
+        message: { rawBody: "Assign this session to the requester" },
+        channelIngress: ingress,
+      });
+    };
+    return {
+      context,
+      retire: () => {
+        sourceLive = false;
       },
-      conversation: { kind: "direct", id: "conversation" },
-      contextBinding: {
-        agentId: "main",
-        sessionKey: key,
-        messageId: senderId,
-        inboundEventKind: "user_request",
-      },
-      dmPolicy: "open",
-      groupPolicy: "disabled",
-      allowFrom: ["*"],
-      useDefaultPairingStore: false,
-    });
-    return await createHostChannelInboundEventContextBuilder(
-      buildChannelInboundEventContext,
-      owner,
-    )({
-      channel: channelId,
-      accountId,
-      messageId: senderId,
-      from: `${channelId}:${senderId}`,
-      sender: { id: senderId },
-      conversation: { kind: "direct", id: "conversation" },
-      route: { agentId: "main", routeSessionKey: key },
-      reply: { to: `${channelId}:${senderId}` },
-      message: { rawBody: "Assign this session to the requester" },
-      channelIngress: ingress,
-    });
+    };
   };
+  const source = createSource();
   return {
     cfg,
     activatePolicy,
     state,
     admins,
     gateway,
-    context,
+    context: source.context,
+    forkSource: createSource,
     replaceGatewayContext: (replacement?: GatewayRequestContext) => {
       gateway = replacement ?? createCommandOwnerTestGateway(cfg);
     },
-    unregister,
-    retire: () => {
+    unregister: () => {
       live = false;
     },
+    retire: source.retire,
   };
 }

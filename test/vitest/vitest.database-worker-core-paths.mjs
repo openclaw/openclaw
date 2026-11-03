@@ -15,6 +15,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/system-agent/transcript-store.test.ts",
   "src/infra/restart-sentinel.update-result.test.ts",
   "src/auto-reply/reply/conversation-turn-capture.test.ts",
+  "src/auto-reply/reply/get-reply-run.media-only.test.ts",
   "src/auto-reply/reply/agent-runner-result-accounting.persistence.test.ts",
   "src/auto-reply/reply/dispatch-from-config.pending-final.test.ts",
   "src/auto-reply/reply/queue.pending-inputs.test.ts",

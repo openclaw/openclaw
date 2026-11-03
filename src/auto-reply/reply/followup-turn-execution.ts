@@ -1,8 +1,13 @@
+import {
+  isFreshChannelCronAuthorityTurn,
+  runWithCronCreatorAuthorityCapability,
+} from "../../agents/cron-creator-authority-context.js";
 import { settleProgressVisibilityCallbackResult } from "../../channels/progress-visibility.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import { sessionPersonalProfileId } from "../../config/sessions/session-entry-provenance.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { getCommandOwnerAuthority } from "../command-owner-authority.js";
 import { isFastModeAutoProgressPayload } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
@@ -69,6 +74,29 @@ function buildFollowupTemplateContext(turn: AdmittedFollowupTurn): TemplateConte
     InboundEventKind: queued.currentInboundEventKind,
     media: queued.media,
   };
+}
+
+function createFollowupCronCreatorAuthority(turn: AdmittedFollowupTurn) {
+  const queued = turn.queued;
+  const run = queued.run;
+  const owner = getCommandOwnerAuthority(run);
+  if (
+    !run.senderIsOwner ||
+    !run.messageProvider ||
+    !owner?.isCurrent() ||
+    !isFreshChannelCronAuthorityTurn({
+      messageProvider: run.messageProvider,
+      senderId: run.senderId,
+      isHeartbeat: false,
+      isRoomEvent: queued.currentInboundEventKind === "room_event",
+      inputProvenance: run.inputProvenance,
+      spawnedBy: run.spawnedBy,
+      suppressNextUserMessagePersistence: run.suppressNextUserMessagePersistence,
+    })
+  ) {
+    return undefined;
+  }
+  return queued.createChannelCronAuthority?.(turn.runId, owner.isCurrent);
 }
 
 /** Adapts an admitted queued turn to the canonical agent execution owner. */
@@ -220,6 +248,7 @@ export async function executeFollowupTurn(params: {
     // Queue callbacks are refreshed per session, but authority belongs to the
     // queued turn. Never let a later callback widen or narrow an older item.
     operatorAuthority: turn.queued.operatorAuthority,
+    cronCreatorAuthorityCapability: undefined,
     toolsAllow: turn.queued.toolsAllow,
     disableTools: turn.queued.disableTools,
     commentaryPayloadsEnabled,
@@ -412,9 +441,18 @@ export async function executeFollowupTurn(params: {
         replyRunRegistry.bindSourceTurnId(turn.operation, sourceTurnId);
         setChannelSourceTurnId(sessionCtx, sourceTurnId);
       }
-      execution = await (recorder?.withPendingInput
-        ? recorder.withPendingInput(execute)
-        : execute());
+      // Only this original ingress may recreate authority for the new queued run.
+      const capability = createFollowupCronCreatorAuthority(turn);
+      progressOpts.cronCreatorAuthorityCapability = capability;
+      const runWithInput = () =>
+        recorder?.withPendingInput ? recorder.withPendingInput(execute) : execute();
+      execution = capability
+        ? await runWithCronCreatorAuthorityCapability(
+            capability,
+            runWithInput,
+            turn.operation.abortSignal,
+          )
+        : await runWithInput();
     } catch (error) {
       await drainPendingWork();
       if (!hasReplyOperationExecutionStarted(turn.operation)) {
