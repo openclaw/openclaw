@@ -249,6 +249,34 @@ describe("canonical model-reference migration", () => {
     expect(warnings).toEqual([expect.stringMatching(/^Kept legacy claude-cli\/\* model refs: /)]);
   });
 
+  it.each(["defaults", "entries", "heartbeat", "subagents"])(
+    "preserves selected API and CLI routes without runtime pins in %s",
+    (scope) => {
+      const model = selection("anthropic/claude-opus-4-7", "claude-cli/claude-opus-4-7");
+      const config =
+        scope === "defaults"
+          ? defaults({ model })
+          : scope === "entries"
+            ? { agents: { entries: { main: { model } } } }
+            : defaults({ [scope]: { model } });
+      const changes: string[] = [];
+      const warnings: string[] = [];
+
+      expect(normalizeRefs(config, changes, warnings)).toEqual(config);
+      expect(changes).toEqual([]);
+      expect(warnings).toEqual([
+        expect.stringContaining("both canonical and legacy CLI references"),
+      ]);
+    },
+  );
+
+  it("preserves a CLI primary with the API route as its fallback", () => {
+    const config = defaults({
+      model: selection("claude-cli/claude-opus-4-7", "anthropic/claude-opus-4-7"),
+    });
+    expect(normalizeRefs(config, [], [])).toEqual(config);
+  });
+
   it("migrates Claude CLI refs when no pin routes Anthropic models elsewhere", () => {
     const config = defaults({
       model: "claude-cli/claude-opus-5",
@@ -282,6 +310,15 @@ describe("canonical model-reference migration", () => {
       "google/gemini-pro": { agentRuntime: { id: "google-gemini-cli" } },
     });
     expect(warnings).toHaveLength(1);
+  });
+
+  it("keeps both selected routes through the complete Doctor normalization pass", () => {
+    const model = selection("anthropic/claude-opus-4-7", "claude-cli/claude-opus-4-7");
+    const raw = defaults({ model });
+    const seeded = applyLegacyDoctorMigrations(raw, { sourceConfigBeforeMigrations: raw });
+    const result = normalizeCompatibilityConfigValues(seeded.next ?? raw);
+    expect(result.config.agents?.defaults?.model).toEqual(model);
+    expect(runtime(result.config, "anthropic", "claude-opus-4-7")?.id).not.toBe("claude-cli");
   });
 
   it("canonicalizes a seeded legacy Claude CLI allowlist in one doctor pass", () => {
