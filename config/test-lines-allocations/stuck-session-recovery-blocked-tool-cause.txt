@@ -1,0 +1,4 @@
+143
+# Stuck-session recovery classification (#138528): controller-to-cron regression
+# coverage for the blocked_tool_call watchdog cause carried into run history and
+# the chat failure alert, plus the thrown-failure attribution path.

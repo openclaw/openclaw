@@ -77,6 +77,26 @@ describe("stuck-session recovery preserves the classification cause (#138528)", 
     expect(op.recoveryClassification).toBeUndefined();
   });
 
+  it("commits the precise classification before cancellation even when the watchdog returns blocked", async () => {
+    const op = stubOperation();
+    // The watchdog decides "blocked" before any post-tick assignment would run;
+    // the precise cause must already be on the operation so it survives the
+    // blocked decision path instead of falling back to semantic_stall.
+    vi.spyOn(op.watchdog, "tick").mockResolvedValue({
+      action: "blocked",
+      reason: "exception",
+    });
+    const outcome = await recoverStuckDiagnosticSession({
+      sessionId: "s",
+      sessionKey: "k",
+      ageMs: 0,
+      operation: op,
+      classification: blockedToolCall,
+    });
+    expect(outcome.status).toBe("failed");
+    expect(op.recoveryClassification).toBe("blocked_tool_call");
+  });
+
   it("prints the cause for the aborted branch instead of a cause-free literal", () => {
     const outcome: StuckSessionRecoveryOutcome = {
       status: "aborted",

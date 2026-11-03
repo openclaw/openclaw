@@ -39,9 +39,23 @@ export async function recoverStuckDiagnosticSession(
     }
     return { ...base, status: "skipped", action: "observe_only", reason: "missing_session_ref" };
   }
+  // Precise semantic cause the recovery acts on (e.g. blocked_tool_call). Commit it
+  // on the controller-owned operation BEFORE the watchdog tick so the controller's
+  // authoritative stall-stop path records it instead of only its mechanical
+  // effect.reason fallback. The controller keeps this value (it writes the fallback
+  // only when the field is still undefined), so the precise cause survives even when
+  // the watchdog returns "blocked" before the post-tick assignment would run.
+  const preciseCause = params.classification?.classification;
   try {
+    if (preciseCause !== undefined) {
+      operation.recoveryClassification = preciseCause;
+    }
     const decision = await operation.watchdog.tick();
     if (decision.action === "observe" && decision.reason === "model_recovery") {
+      // No abort happened; do not leave the precise cause lingering on the operation.
+      if (preciseCause !== undefined) {
+        operation.recoveryClassification = undefined;
+      }
       return reportOutcome({
         ...base,
         status: "skipped",
@@ -86,6 +100,11 @@ export async function recoverStuckDiagnosticSession(
                     ? "stale_session_state"
                     : "active_reply_work",
             };
+    // The skipped branch (no abort) must not surface the precise cause; clear it so a
+    // later finalization does not mistake an uninterrupted run for a stalled one.
+    if (outcome.status === "skipped" && preciseCause !== undefined) {
+      operation.recoveryClassification = undefined;
+    }
     if (outcome.status === "aborted" && recoveryReason) {
       // Surface the semantic cause on the controller-owned operation so cron run
       // finalization can include it in both the run history and the chat alert,

@@ -51,7 +51,7 @@ import {
   resolveCronAbortReasonText,
 } from "../service/execution-errors.js";
 import { isCronOneShotContinuationJob } from "../service/one-shot-schedule.js";
-import type { CronAgentExecutionPhaseUpdate } from "../types.js";
+import type { CronAgentExecutionPhaseUpdate, CronFailureNotificationDetail } from "../types.js";
 import type { CronRunExecutionParams } from "./run-execution.types.js";
 import { finalizeCronRun } from "./run-finalize.js";
 import type { RunCronAgentTurnParams } from "./run-prepare-runtime.js";
@@ -542,6 +542,22 @@ async function runCronIsolatedAgentTurnInTrace(
               return prepared.context.withRunSession({
                 status: "error",
                 error,
+                // Project the controller-owned watchdog classification into this thrown
+                // outcome so a watchdog-cancelled CLI run (which throws instead of
+                // reaching finalizeCronRun) still records blocked_tool_call in the run
+                // history and chat alert. Restart precedence is preserved: when the
+                // failure was an interrupted restart, errorClassification already wins
+                // and we omit the stall detail.
+                ...(ownReplyOperation?.recoveryClassification &&
+                ownReplyOperation.recoveryClassification.trim().length > 0 &&
+                !interruptedByRestart
+                  ? {
+                      failureNotificationDetail: {
+                        kind: "agent-stall",
+                        classification: ownReplyOperation.recoveryClassification,
+                      } satisfies CronFailureNotificationDetail,
+                    }
+                  : {}),
                 ...(!isCronLaneTimeout &&
                 !interruptedByRestart &&
                 executionStarted &&
