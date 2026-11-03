@@ -8,7 +8,12 @@ import type { PluginPackageChannel } from "../plugins/manifest.js";
 import { listPotentialAgentIdsForRoute } from "../routing/resolve-route.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 
-type OpenInboundPolicy = { path: string; channel: string; accountIds: string[] };
+type OpenInboundPolicy = {
+  path: string;
+  channel: string;
+  accountIds: string[];
+  hasChannelAgentOverride?: boolean;
+};
 
 /** Resolve configured open scopes once, using the selected channel metadata's DM precedence. */
 export function listConfiguredOpenInboundPolicies(
@@ -25,6 +30,7 @@ export function listConfiguredOpenInboundPolicies(
     }
   }
   const policies: OpenInboundPolicy[] = [];
+  const agentOverrideChannels = new Set<string>();
   const visit = (
     value: unknown,
     scope: string,
@@ -35,6 +41,9 @@ export function listConfiguredOpenInboundPolicies(
     const record = asNullableRecord(value);
     if (!record) {
       return;
+    }
+    if (typeof record.agentId === "string" && record.agentId.trim()) {
+      agentOverrideChannels.add(channel);
     }
     if (record.groupPolicy === "open") {
       policies.push({ path: `${scope}.groupPolicy`, channel, accountIds });
@@ -71,6 +80,9 @@ export function listConfiguredOpenInboundPolicies(
       visit(channel, `channels.${id}`, modes.get(id) ?? "topOnly", id, accountIds);
     }
   }
+  for (const policy of policies) {
+    policy.hasChannelAgentOverride = agentOverrideChannels.has(policy.channel);
+  }
   return policies;
 }
 
@@ -90,6 +102,10 @@ export function resolveOpenInboundAgentIds(
 ): Set<string> | undefined {
   const agentIds = new Set<string>();
   for (const policy of policies) {
+    // Core bindings cannot exhaust channel-owned routes such as Telegram topic overrides.
+    if (policy.hasChannelAgentOverride) {
+      return undefined;
+    }
     for (const accountId of policy.accountIds) {
       const owners = listPotentialAgentIdsForRoute({ cfg, channel: policy.channel, accountId });
       if (!owners) {

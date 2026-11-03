@@ -77,24 +77,43 @@ describe("security audit exec surface findings", () => {
     });
   });
 
-  it("does not attribute a private agent's exec permissions to an open messaging-only route", async () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        ownership: "explicit",
-        entries: {
-          main: { tools: { exec: { mode: "full" } } },
-          mailroom: { tools: { allow: ["message"] } },
+  it.each([false, true])(
+    "audits open route exposure with a topic override: %s",
+    async (topicOverride) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          ownership: "explicit",
+          entries: {
+            main: { tools: { exec: { mode: "full" } } },
+            mailroom: { tools: { allow: ["message"], elevated: { enabled: false } } },
+          },
         },
-      },
-      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
-      bindings: [{ agentId: "mailroom", match: { channel: "telegram", accountId: "default" } }],
-    };
-    const findings = await collectSecurityAuditFindings(cfg);
-    expect(findings).not.toContainEqual(
-      expect.objectContaining({ checkId: "security.exposure.open_channels_with_exec" }),
-    );
-    requireFinding(findings, "tools.exec.security_full_configured", { severity: "warn" });
-  });
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            allowFrom: ["*"],
+            groupPolicy: "open",
+            groups: topicOverride
+              ? { "-1001234567890": { topics: { "42": { agentId: "main" } } } }
+              : undefined,
+          },
+        },
+        bindings: [{ agentId: "mailroom", match: { channel: "telegram", accountId: "default" } }],
+      };
+      const findings = await collectSecurityAuditFindings(cfg);
+      for (const checkId of [
+        "security.exposure.open_channels_with_exec",
+        "security.exposure.open_groups_with_elevated",
+        "security.exposure.open_groups_with_runtime_or_fs",
+        "security.exposure.open_groups_with_control_plane_tools",
+      ]) {
+        expect(findings.some((finding) => finding.checkId === checkId)).toBe(topicOverride);
+      }
+      requireFinding(findings, "tools.exec.security_full_configured", {
+        severity: topicOverride ? "critical" : "warn",
+      });
+    },
+  );
 
   it.each([
     ["global default", {}, false],

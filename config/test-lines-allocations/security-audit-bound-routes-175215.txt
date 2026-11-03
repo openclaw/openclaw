@@ -1,2 +1,2 @@
 # Regression coverage for channel/account isolation and privileged route overrides.
-70
+89
