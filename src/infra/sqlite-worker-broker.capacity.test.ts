@@ -126,12 +126,14 @@ it.each(["queued", "reused"] as const)("bounds and drains pending %s opens", asy
     return "opened";
   };
   const pending = [
-    admission.open(0, open, undefined, kind === "reused" ? open : undefined),
-    admission.open(0, async () => {}),
+    admission.open(0, databasePath(), open, undefined, kind === "reused" ? open : undefined),
+    admission.open(0, databasePath(), async () => {}),
   ];
   const joined = admission.joinOpens().then(() => finished);
   try {
-    await expect(admission.open(0, async () => {})).rejects.toMatchObject({ code: "overloaded" });
+    await expect(admission.open(0, databasePath(), async () => {})).rejects.toMatchObject({
+      code: "overloaded",
+    });
     if (kind === "reused") {
       await pending[1];
     }
@@ -140,7 +142,7 @@ it.each(["queued", "reused"] as const)("bounds and drains pending %s opens", asy
     await Promise.all(pending);
   }
   expect(await joined).toBe(true);
-  await expect(admission.open(0, async () => "admitted")).resolves.toBe("admitted");
+  await expect(admission.open(0, databasePath(), async () => "admitted")).resolves.toBe("admitted");
   expect(admission.retainedBytes).toBe(0);
 });
 
@@ -151,12 +153,14 @@ it.each(["shared-state", "agent"] as const)(
     const finishOrdinary = createDeferredCore();
     const isolatedGate = createEnteredGate();
     const openIsolated = <T>(bytes: number, run: () => Promise<T>) =>
-      admission.open(bytes, run, undefined, undefined, carrierClass);
-    const ordinary = admission.open(512, () => finishOrdinary.promise);
+      admission.open(bytes, databasePath(), run, undefined, undefined, carrierClass);
+    const ordinary = admission.open(512, databasePath(), () => finishOrdinary.promise);
     const isolated = openIsolated(512, isolatedGate.wait);
     try {
       await isolatedGate.entered;
-      await expect(admission.open(1, async () => {})).rejects.toMatchObject({ code: "overloaded" });
+      await expect(admission.open(1, databasePath(), async () => {})).rejects.toMatchObject({
+        code: "overloaded",
+      });
       isolatedGate.release();
       await isolated;
       expect(admission.retainedBytes).toBe(512);
