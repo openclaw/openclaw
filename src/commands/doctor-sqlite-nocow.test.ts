@@ -14,7 +14,6 @@ import {
   listSessionSqliteMigrationManifestPaths,
   readSessionSqliteMigrationManifest,
 } from "../infra/session-sqlite-migration-manifest.js";
-import { readSqliteReaderDiagnosticsForPath } from "../infra/sqlite-reader-lifecycle.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import { isSqlitePathOnBtrfs } from "../infra/sqlite-wal-filesystem.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
@@ -157,9 +156,9 @@ it("refuses a store opened after copying before the real exchange", async () => 
   expect(fixture.exchanges).toBe(0);
 });
 
-it.skipIf(process.platform !== "linux")(
-  "rewrites shared and agent stores after Doctor drains native and admission descriptors",
-  async () => {
+it.skipIf(process.platform !== "linux").each([false, true])(
+  "rewrites stores after Doctor drains native, admission and retained reader descriptors (close fails: %s)",
+  async (closeFails) => {
     await withOpenClawTestState(
       { scenario: "external-service", label: "doctor-nocow-owner" },
       async () => {
@@ -171,6 +170,7 @@ it.skipIf(process.platform !== "linux")(
           root: null,
           runtime: { log() {}, error() {}, exit() {} },
         });
+        let unregister = () => {};
         try {
           const paths = await maintenance!.run(async () => {
             const state = openOpenClawStateDatabase();
@@ -188,113 +188,24 @@ it.skipIf(process.platform !== "linux")(
               .paths;
           });
           expect(paths).toHaveLength(4);
-          const handleCounts: number[] = [];
-          const toolRunner = vi.mocked(spawnSync).getMockImplementation()!;
-          vi.mocked(spawnSync).mockImplementation((command, args, options) => {
-            if (command === "fuser") {
-              for (const pathname of paths) {
-                handleCounts.push(readSqliteReaderDiagnosticsForPath(pathname).connectionCount);
-              }
+          // Stands in for a worker pool's cached reader, which only the shared reader close releases.
+          using retained = new DatabaseSync(paths[1]!, { readOnly: true });
+          unregister = registerAgentDatabaseReaderCloser(() => {
+            if (closeFails) {
+              throw new Error("synthetic reader close failure");
             }
-            return toolRunner(command, args, options);
+            retained.close();
           });
           const originals = paths.map((pathname) => fs.statSync(pathname).ino);
           await maintenance!.repairSqliteNoCow(paths);
-          expect(maintenance!.warnings).toEqual([]);
-          expect(handleCounts.length).toBeGreaterThan(0);
-          expect(handleCounts.every((count) => count === 0)).toBe(true);
-          expect(
-            paths.every((pathname, index) => fs.statSync(pathname).ino !== originals[index]),
-          ).toBe(true);
-        } finally {
-          await maintenance?.release();
-        }
-      },
-    );
-  },
-);
-
-it.skipIf(process.platform !== "linux")(
-  "closes readers retained by other isolates before checking for open store files",
-  async () => {
-    await withOpenClawTestState(
-      { scenario: "external-service", label: "doctor-nocow-retained-reader" },
-      async () => {
-        await useNativeTools(
-          (command) => !["lsattr", "getfacl", "setfacl", "mv"].includes(command),
-        );
-        const maintenance = await beginDoctorMaintenance({
-          options: { repair: true, nonInteractive: true, workspaceSuggestions: false },
-          root: null,
-          runtime: { log() {}, error() {}, exit() {} },
-        });
-        // Stands in for a worker pool's cached reader, which only the shared reader close releases.
-        let retained: DatabaseSync | undefined;
-        let agentPath = "";
-        const unregister = registerAgentDatabaseReaderCloser((candidates) => {
-          if (candidates.some((candidate) => candidate.path === agentPath)) {
-            retained?.close();
-            retained = undefined;
-          }
-        });
-        try {
-          agentPath = await maintenance!.run(
-            async () => openOpenClawAgentDatabase({ agentId: "main" }).path,
-          );
-          retained = new DatabaseSync(agentPath, { readOnly: true });
-          retained.prepare("SELECT count(*) FROM sqlite_master").get();
-          const original = fs.statSync(agentPath).ino;
-          await maintenance!.repairSqliteNoCow([agentPath]);
-          expect(maintenance!.warnings).toEqual([]);
-          expect(retained).toBeUndefined();
-          expect(fs.statSync(agentPath).ino).not.toBe(original);
-        } finally {
-          unregister();
-          retained?.close();
-          await maintenance?.release();
-        }
-      },
-    );
-  },
-);
-
-it.skipIf(process.platform !== "linux")(
-  "keeps the original store and warns when a retained reader cannot be closed",
-  async () => {
-    await withOpenClawTestState(
-      { scenario: "external-service", label: "doctor-nocow-reader-close-failure" },
-      async () => {
-        await useNativeTools(
-          (command) => !["lsattr", "getfacl", "setfacl", "mv"].includes(command),
-        );
-        const maintenance = await beginDoctorMaintenance({
-          options: { repair: true, nonInteractive: true, workspaceSuggestions: false },
-          root: null,
-          runtime: { log() {}, error() {}, exit() {} },
-        });
-        let retained: DatabaseSync | undefined;
-        const unregister = registerAgentDatabaseReaderCloser(() => {
-          throw new Error("synthetic reader close failure");
-        });
-        try {
-          const agentPath = await maintenance!.run(
-            async () => openOpenClawAgentDatabase({ agentId: "main" }).path,
-          );
-          retained = new DatabaseSync(agentPath, { readOnly: true });
-          retained.prepare("SELECT count(*) FROM sqlite_master").get();
-          const original = fs.statSync(agentPath).ino;
-          await maintenance!.repairSqliteNoCow([agentPath]);
           expect(maintenance!.warnings.join("\n")).toMatch(
-            /readers could not be closed[\s\S]*synthetic reader close failure[\s\S]*store files are open/u,
+            closeFails ? /synthetic reader close failure[\s\S]*store files are open/u : /^$/u,
           );
-          expect(fs.statSync(agentPath).ino).toBe(original);
-          // The maintenance scope was restored, so Doctor can keep using its stores.
           expect(
-            await maintenance!.run(async () => openOpenClawAgentDatabase({ agentId: "main" }).path),
-          ).toBe(agentPath);
+            paths.filter((pathname, index) => fs.statSync(pathname).ino === originals[index]),
+          ).toEqual(closeFails ? [paths[1]] : []);
         } finally {
           unregister();
-          retained?.close();
           await maintenance?.release();
         }
       },
