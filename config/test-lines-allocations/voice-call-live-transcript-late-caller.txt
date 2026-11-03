@@ -1,0 +1,2 @@
+# Live transcript batches through real call events when a caller final lands before a queued reply.
+13

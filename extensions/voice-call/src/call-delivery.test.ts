@@ -88,11 +88,12 @@ describe("requester call delivery", () => {
     speaker: "bot" | "user",
     text: string,
     id = text,
+    timestamp = Date.now(),
   ) {
     await manager.processEvent({
       id,
       callId: call.callId,
-      timestamp: Date.now(),
+      timestamp,
       transcript: text,
       ...(speaker === "bot"
         ? { type: "call.assistant-speech" as const }
@@ -198,6 +199,18 @@ describe("requester call delivery", () => {
       false,
     ]);
     expect(messages[1]?.text).toContain("Friday at 09:00");
+  });
+
+  it("batches a late-finalized caller line once, ahead of its queued reply", async () => {
+    const { manager, call, delivery, messages } = await setupLive();
+    const startedAt = Date.now();
+    await speech(manager, call, "bot", "Friday at nine works.", "reply", startedAt + 20);
+    await speech(manager, call, "user", "Is Friday free?", "late-caller", startedAt + 10);
+    await finish(manager, call, delivery);
+    expect(messages[0]?.text.split("\n").slice(1)).toEqual([
+      "Callee: Is Friday free?",
+      "Assistant: Friday at nine works.",
+    ]);
   });
 
   it("reports inbound calls only to their configured session", async () => {

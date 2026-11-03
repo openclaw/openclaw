@@ -26,7 +26,9 @@ type CallDeliveryMessage = {
 type LiveCallDelivery = {
   call: CallRecord;
   cursor: number;
-  lines: TranscriptEntry[];
+  // Entries handed to a batch. A late caller final is sorted in before replies already
+  // delivered, so a transcript index cannot tell which entries are new.
+  sent: WeakSet<TranscriptEntry>;
   start: number;
   timer?: ReturnType<typeof setTimeout>;
   work: Promise<void>;
@@ -51,6 +53,10 @@ function persistedLiveCursor(call: CallRecord): number {
   return typeof cursor === "number" && Number.isInteger(cursor) && cursor >= 0
     ? Math.min(cursor, call.transcript.length)
     : 0;
+}
+
+function unsentLines(state: LiveCallDelivery): TranscriptEntry[] {
+  return state.call.transcript.filter((entry) => entry.isFinal && !state.sent.has(entry));
 }
 
 function formatCallTranscript(entries: readonly TranscriptEntry[]): string {
@@ -289,10 +295,13 @@ export function createCallDeliveryRuntime(params: {
       clearTimeout(state.timer);
       state.timer = undefined;
     }
-    if (state.lines.length === 0) {
+    const entries = unsentLines(state);
+    if (entries.length === 0) {
       return state.work;
     }
-    const entries = state.lines.splice(0);
+    for (const entry of entries) {
+      state.sent.add(entry);
+    }
     const range = `${state.start}-${state.cursor}`;
     const cursor = state.cursor;
     state.start = state.cursor;
@@ -383,13 +392,18 @@ export function createCallDeliveryRuntime(params: {
     if (params.config.live.transcript && sessionKey) {
       if (!state) {
         const cursor = persistedLiveCursor(snapshot);
-        state = { call: snapshot, cursor, start: cursor, lines: [], work: Promise.resolve() };
+        state = {
+          call: snapshot,
+          cursor,
+          sent: new WeakSet(snapshot.transcript.slice(0, cursor)),
+          start: cursor,
+          work: Promise.resolve(),
+        };
         live.set(call.callId, state);
       }
       state.call = snapshot;
-      state.lines.push(...snapshot.transcript.slice(state.cursor).filter((entry) => entry.isFinal));
       state.cursor = snapshot.transcript.length;
-      if (state.lines.length > 0 && !state.timer && !TerminalStates.has(snapshot.state)) {
+      if (!state.timer && !TerminalStates.has(snapshot.state) && unsentLines(state).length > 0) {
         const current = state;
         state.timer = setTimeout(() => {
           void flush(current, sessionKey);
