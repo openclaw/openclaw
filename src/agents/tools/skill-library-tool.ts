@@ -1,4 +1,3 @@
-import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { SkillLibraryWorkshopSchema } from "../../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
 import type { SkillLibraryAuthoringCapability } from "../../skills/library/authoring.js";
@@ -6,32 +5,19 @@ import { decodeSkillLibraryFile, validateSkillLibraryPath } from "../../skills/l
 import { ToolInputError, type AnyAgentTool } from "./common.js";
 import { jsonResult } from "./tool-results.js";
 
-const personalActions = SkillLibraryWorkshopSchema.properties.action.enum.join(" | ");
-const personalArguments = `Personal actions: ${personalActions}. List takes only action and target; read uses skill_id from list, not name. Update uses skill_id and expected_revision from read.`;
+const libraryActions = SkillLibraryWorkshopSchema.properties.action.enum.join(" | ");
+const libraryArguments = `Actions: ${libraryActions}. List takes only action; read uses skill_id from list, not name. Update uses skill_id and expected_revision from read.`;
 
-export function createLibrarySkillWorkshopTool(
-  capability: SkillLibraryAuthoringCapability,
-  workspace?: AnyAgentTool,
-  run: { sandboxed?: boolean } = {},
-): AnyAgentTool {
-  const schema = workspace
-    ? Type.Object(
-        { ...SkillLibraryWorkshopSchema.properties, target: Type.Literal("personal") },
-        { additionalProperties: false },
-      )
-    : SkillLibraryWorkshopSchema;
-  const multipleProfiles = capability.multipleProfiles;
+/** Personal-library authoring, present only while the run owner granted a library capability. */
+export function createSkillLibraryTool(capability: SkillLibraryAuthoringCapability): AnyAgentTool {
+  const schema = SkillLibraryWorkshopSchema;
   return {
-    name: "skill_workshop",
-    label: "Skill Workshop",
-    displaySummary: "Author reusable skills",
-    description: `${workspace ? `Omit target for your learned (Workshop) skills. Set target=personal only for personal library operations. ${workspace.description} ` : "Author skills in the requesting person's personal library. "}${personalArguments} Workshop-only actions and fields such as view, patch, write_file, old_text, and file_path are not accepted by the personal library. Personal create/update publishes a revision only when the user requests the change; personal drafts are unsupported. Describe unsolicited improvements without publishing. Read before updating; name is the slug, not the command identity. Read artifact_path for a whole text support file. On update omit name/proposal_content to preserve them; files upserts named support files, delete_files removes explicit paths. Unmentioned files and omitted executable flags are preserved. Binary or oversized reads require My skills or the CLI. Ownership is bound by the Gateway. Publication affects new sessions; activate explicitly for the next turn in this session. Sharing or transfer requires explicit user intent and current permissions.${multipleProfiles ? " This shared Gateway has personal and team libraries; sharing preserves authorship and ownership, while transfer makes a skill team managed." : ""}`,
-    parameters: workspace ? Type.Union([workspace.parameters, schema]) : schema,
-    execute: async (id, raw) => {
-      if (workspace && (!raw || typeof raw !== "object" || !("target" in raw))) {
-        capability.assertWorkspaceCurrent?.({ sandboxed: run.sandboxed });
-        return workspace.execute(id, raw);
-      }
+    name: "skill_library",
+    label: "Skill Library",
+    displaySummary: "Author skills in the personal library",
+    description: `Author skills in the requesting person's personal library. ${libraryArguments} Personal create/update publishes a revision only when the user requests the change; personal drafts are unsupported. Describe unsolicited improvements without publishing. Read before updating; name is the slug, not the command identity. Read artifact_path for a whole text support file. On update omit name/proposal_content to preserve them; files upserts named support files, delete_files removes explicit paths. Unmentioned files and omitted executable flags are preserved. Binary or oversized reads require My skills or the CLI. Ownership is bound by the Gateway. Publication affects new sessions; activate explicitly for the next turn in this session. Sharing or transfer requires explicit user intent and current permissions.${capability.multipleProfiles ? " This shared Gateway has personal and team libraries; sharing preserves authorship and ownership, while transfer makes a skill team managed." : ""}`,
+    parameters: schema,
+    execute: async (_id, raw) => {
       if (!Value.Check(schema, raw)) {
         const issues = Value.Errors(schema, raw)
           .slice(0, 3)
@@ -47,7 +33,7 @@ export function createLibrarySkillWorkshopTool(
             return `${path}: ${error.message}`;
           });
         throw new ToolInputError(
-          `Invalid personal Skill Workshop arguments: ${issues.join("; ")}. ${personalArguments}${workspace ? " Omit target for Workshop actions." : ""}`,
+          `Invalid skill_library arguments: ${issues.join("; ")}. ${libraryArguments}`,
         );
       }
       const result = await capability.invoke({
