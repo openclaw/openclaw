@@ -22,7 +22,9 @@ import {
   configSnapshot,
   waitRequest,
   change,
+  commit,
   makeWorker,
+  openProfile,
   preparedInventory,
   machineProfile,
 } from "./cloud-workers.test-support.ts";
@@ -53,32 +55,30 @@ describe("Cloud environments", () => {
         response: (method) => (method === "config.patch" && hold ? pending.promise : undefined),
       });
       await waitForSolid(() => expect(input(page, "Pool cap").disabled).toBe(false));
-      change(input(page, "Pool cap"), "6");
-      click(page, "Save pool");
+      commit(input(page, "Pool cap"), "6");
       await configPatch(request);
-      await waitForSolid(() => expect(button(page, "Save pool").disabled).toBe(true));
+      const patches = () => request.mock.calls.filter(([method]) => method === "config.patch");
+      // A write in flight leaves the field usable.
+      expect(input(page, "Pool cap").disabled).toBe(false);
       expect(input(page, "Pool cap").value).toBe("6");
+      hold = false;
       if (mode === "reconnect") {
         harness.publish(false, client, null);
         harness.publish(true, client, gatewayHelloForMethods(methods));
-        await waitForSolid(() => expect(button(page, "Save pool").disabled).toBe(false));
+        // The interrupted write may not have landed, so the draft goes out again.
+        await waitForSolid(() => expect(patches()).toHaveLength(2));
         pending.reject(new Error("Synthetic save failure"));
         await pending.promise.catch(() => {});
       } else {
-        hold = false;
         pending.reject(new Error("Synthetic save failure"));
         await waitText(() => page, "Synthetic save failure");
-        await waitForSolid(() => expect(button(page, "Save pool").disabled).toBe(false));
         expect(input(page, "Pool cap").value).toBe("6");
-        click(page, "Save pool");
-        await waitForSolid(() =>
-          expect(request.mock.calls.filter(([method]) => method === "config.patch")).toHaveLength(
-            2,
-          ),
-        );
+        expect(input(page, "Pool cap").getAttribute("aria-invalid")).toBe("true");
+        // Leaving the field tries again without an edit.
+        input(page, "Pool cap").dispatchEvent(new FocusEvent("blur"));
+        await waitForSolid(() => expect(patches()).toHaveLength(2));
       }
-      await waitForSolid(() => expect(button(page, "Save pool").disabled).toBe(false));
-      expect(page.textContent).not.toContain("Synthetic save failure");
+      await waitForSolid(() => expect(page.textContent).not.toContain("Synthetic save failure"));
     },
   );
 
@@ -99,7 +99,7 @@ describe("Cloud environments", () => {
     try {
       await waitText(() => page, "Loading");
       inventory.resolve({ environments: [buildEnvironmentFixture("failed")], profiles: [] });
-      await waitText(() => sheet(page), "github.com/acme/app");
+      await waitText(() => page, "github.com/acme/app");
       expect(button(sheet(page), "Rebuild").disabled).toBe(true);
       images.resolve(result);
       await waitForSolid(() => expect(button(sheet(page), "Rebuild").disabled).toBe(false));
@@ -173,7 +173,10 @@ describe("Cloud environments", () => {
   });
 
   it("retains loaded environments and pool/policy drafts through a blip, but retires them for another client", async () => {
-    const { page, request, harness, client } = mountTestPage(methods);
+    const pending = createDeferred<unknown>();
+    const { page, request, harness, client } = mountTestPage(methods, {
+      response: (method) => (method === "config.patch" ? pending.promise : undefined),
+    });
     await waitForSolid(() => expect(input(page, "Refresh after").disabled).toBe(false));
     await waitText(() => page, "github.com/acme/app");
     change(input(page, "Pool cap"), "7");
@@ -184,22 +187,24 @@ describe("Cloud environments", () => {
     expect(input(page, "Pool cap").value).toBe("7");
     expect(input(page, "Refresh after").value).toBe("6h");
     expect(page.textContent).toContain("github.com/acme/app");
-    expect(button(page, "Save pool").disabled).toBe(true);
-    expect(button(page, "Save retention policy").disabled).toBe(true);
+    expect(input(page, "Pool cap").disabled).toBe(true);
+    expect(input(page, "Refresh after").disabled).toBe(true);
     harness.publish(true, client, hello);
-    await waitForSolid(() => expect(button(page, "Save pool").disabled).toBe(false));
+    await waitForSolid(() => expect(input(page, "Pool cap").disabled).toBe(false));
     expect(input(page, "Pool cap").value).toBe("7");
     expect(input(page, "Refresh after").value).toBe("6h");
     harness.publish(true, { request } as unknown as GatewayBrowserClient, hello);
     flush();
     expect(input(page, "Pool cap").value).not.toBe("7");
     expect(input(page, "Refresh after").value).toBe("24h");
+    pending.resolve({ ok: true, config: {}, hash: "retired" });
   });
 
   it("combines repository defaults, images and workers into one minimal row and shows only the selected details", async () => {
     const result = localSnapshot();
     result.images.push({
       ...expectDefined(snapshotListFixture().images[2], "Uncertain snapshot"),
+      profileId: "paused-build",
       projectLabel: "github.com/acme/paused",
     });
     result.images.push({
@@ -248,16 +253,27 @@ describe("Cloud environments", () => {
         row.getAttribute("aria-label"),
       ),
     ).toEqual(["linux-build", "arm-build"]);
-    expect(details.querySelector(".cloud-environments__machine > span")?.textContent).toBe(
-      "aws · standard · linux",
-    );
+    // Each snapshot names its profile, so the default row has nothing to add.
+    expect(details.textContent).not.toContain("Last prepared");
     expect(details.textContent).not.toContain("Paused: uncertain");
-    expect(page.querySelector("details")?.open).toBe(false);
-    (rows[2] as HTMLButtonElement).click();
-    flush();
-    await waitText(() => sheet(page), "Paused: uncertain");
-    expect(button(sheet(page), "Rebuild").disabled).toBe(true);
-    expect(sheet(page).textContent).not.toContain("01234567");
+    // Only the repository that needs attention opens by itself.
+    expect(
+      [...page.querySelectorAll<HTMLDetailsElement>(".cloud-environments__repository")].map(
+        (repository) => repository.open,
+      ),
+    ).toEqual([false, false, true, false]);
+    const paused = expectDefined(
+      page.querySelectorAll(".cloud-environments__sheet")[2],
+      "Paused repository",
+    );
+    expect(paused.textContent).toContain("Paused: uncertain");
+    // Without a default no machine is in effect, whatever prepared the last snapshot.
+    expect(
+      expectDefined(paused.querySelector<HTMLSelectElement>("select"), "Default profile").value,
+    ).toBe("");
+    expect(paused.textContent).toContain("Last prepared with paused-build");
+    expect(button(paused, "Rebuild").disabled).toBe(true);
+    expect(paused.textContent).not.toContain("01234567");
   });
 
   it.each([false, true])(
@@ -346,13 +362,16 @@ describe("Cloud environments", () => {
           },
         },
       });
-      await waitForSolid(() => expect(button(sheet(page), "Change").disabled).toBe(false));
-      click(sheet(page), "Change");
-      const select = expectDefined(
-        sheet(page).querySelector<HTMLSelectElement>('select[aria-label="Default profile"]'),
-        "Default profile selector",
-      );
+      const select = await waitForSolid(() => {
+        const found = expectDefined(
+          sheet(page).querySelector<HTMLSelectElement>('select[aria-label="Default profile"]'),
+          "Default profile selector",
+        );
+        expect(found.disabled).toBe(false);
+        return found;
+      });
       expect(select.value).toBe(current ?? "");
+      expect(select.selectedOptions[0]?.textContent).toBe(current ?? "Choose a profile");
       change(select, next);
       const patch = await configPatch(request);
       expect(JSON.parse(String(patch?.raw))).toEqual({
@@ -368,32 +387,32 @@ describe("Cloud environments", () => {
     expect(
       page.querySelector('.cloud-environments__sheet input[aria-label="Refresh after"]'),
     ).toBeNull();
-    change(input(page, "Refresh after"), "30m");
-    click(page, "Save retention policy");
+    const retention = () =>
+      request.mock.calls
+        .filter(([method]) => method === "config.patch")
+        .map(
+          ([, params]) =>
+            JSON.parse(String(params?.raw)).plugins.entries.crabbox.config.warmImages as unknown,
+        );
+    commit(input(page, "Refresh after"), "30m");
     await waitText(() => page, "Enter a duration of at least 1h");
-    expect(request.mock.calls.some(([method]) => method === "config.patch")).toBe(false);
-    change(input(page, "Refresh after"), "2h");
-    change(input(page, "Retain unused"), "3d");
+    expect(retention()).toEqual([]);
+    commit(input(page, "Refresh after"), "2h");
+    await waitForSolid(() => expect(retention()).toEqual([{ refreshAfter: "2h" }]));
+    expect(page.textContent).not.toContain("Enter a duration of at least 1h");
+    commit(input(page, "Retain unused"), "3d");
+    await waitForSolid(() => expect(retention()).toHaveLength(2));
+    expect(retention()[1]).toEqual({ retainUnused: "3d" });
     const select = expectDefined(
       page.querySelector<HTMLSelectElement>('select[aria-label="Previous generations"]'),
       "Previous generations",
     );
-    expect(select.value).toBe("0");
     change(select, String(keepPrevious));
-    click(page, "Save retention policy");
-    const patch = await configPatch(request);
-    expect(JSON.parse(String(patch?.raw))).toEqual({
-      plugins: {
-        entries: {
-          crabbox: {
-            config: { warmImages: { refreshAfter: "2h", retainUnused: "3d", keepPrevious } },
-          },
-        },
-      },
-    });
+    await waitForSolid(() => expect(retention()).toHaveLength(3));
+    expect(retention()[2]).toEqual({ keepPrevious });
   });
 
-  it("counts only usable pool workers and keeps capacity editable in Advanced", async () => {
+  it("counts only usable pool workers and saves the cap when it is committed", async () => {
     const inventory = [
       makeWorker("ready"),
       ...(["unavailable", "error", "stopping"] as const).map((status) =>
@@ -409,9 +428,8 @@ describe("Cloud environments", () => {
       response: preparedInventory(inventory),
     });
     await waitForSolid(() => expect(input(page, "Pool cap").disabled).toBe(false));
-    await waitText(() => page, "1 ready workers · Pool cap");
-    change(input(page, "Pool cap"), "6");
-    click(page, "Save pool");
+    await waitText(() => page, "1 ready");
+    commit(input(page, "Pool cap"), "6");
     const patch = await configPatch(request);
     expect(JSON.parse(String(patch?.raw))).toEqual({
       cloudWorkers: { preparedPool: { maxTotal: 6 } },
@@ -518,8 +536,10 @@ it("refreshes rebuild eligibility after a machine save and shows capacity failur
   });
   await waitText(() => sheet(page), "01234567");
   expect(rebuildButton(page).disabled).toBe(true);
-  await waitForSolid(() => expect(button(page, "Edit").disabled).toBe(false));
-  click(page, "Edit");
+  await waitForSolid(() => {
+    openProfile(page, "linux-build");
+    expect(page.querySelector('select[aria-label="Warm images"]')).not.toBeNull();
+  });
   change(
     expectDefined(
       page.querySelector<HTMLSelectElement>('select[aria-label="Warm images"]'),
@@ -584,9 +604,7 @@ it.each([
         return preparedInventory([worker])(method, params);
       },
     });
-    const surface = labeled
-      ? await waitForSolid(() => sheet(page))
-      : expectDefined(page.querySelector(".cloud-environments__advanced"), "Advanced");
+    const surface = labeled ? await waitForSolid(() => sheet(page)) : page;
     await waitForSolid(() => expect(button(surface, action).disabled).toBe(false));
     if (state !== "provisioning") {
       expect(surface.textContent).toContain("Worker cleanup failed");

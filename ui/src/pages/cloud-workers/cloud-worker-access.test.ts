@@ -5,7 +5,6 @@ import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { button } from "./cloud-worker-snapshots-dom.test-support.ts";
 import {
   buildEnvironmentFixture,
   snapshotListFixture,
@@ -70,9 +69,11 @@ it("retires machine-profile drafts and a pending catalog after admin access is r
         ? pending.promise
         : undefined,
   });
-  await waitForSolid(() => expect(button(page, "Edit").disabled).toBe(false));
-  button(page, "Edit").click();
-  flush();
+  await waitForSolid(() => expect(workers.profileRow(page, "linux")).toBeTruthy());
+  await waitForSolid(() => {
+    workers.openProfile(page, "linux");
+    expect(page.querySelector('[aria-label="Setup command"]')).not.toBeNull();
+  });
   for (const label of ["Setup command", "Setup environment names"]) {
     workers.change(
       expectDefined(
@@ -89,6 +90,6 @@ it("retires machine-profile drafts and a pending catalog after admin access is r
   pending.resolve({ environments: [], profiles: [{ id: "linux" }] });
   await Promise.all(request.mock.results.map((result) => result.value));
   flush();
-  expect(page.textContent).not.toContain("Advertised");
+  expect(page.textContent).not.toContain("Available");
   expect(page.textContent).not.toContain("Unsaved private setup");
 });

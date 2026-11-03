@@ -150,6 +150,27 @@ export function change(
   flush();
 }
 
+/** Types a value and leaves the field, which is what saves it. */
+export function commit(element: HTMLInputElement, value: string) {
+  change(element, value);
+  element.dispatchEvent(new Event("change", { bubbles: true }));
+  flush();
+}
+
+export function profileRow(page: Element, id: string) {
+  return expectDefined(
+    [...page.querySelectorAll<HTMLElement>(".settings-row")].find(
+      (row) => row.querySelector(".settings-row__title")?.textContent === id,
+    ),
+    id,
+  );
+}
+
+export function openProfile(page: Element, id: string) {
+  profileRow(page, id).click();
+  flush();
+}
+
 export function click(page: Element, label: string) {
   button(page, label).click();
   flush();

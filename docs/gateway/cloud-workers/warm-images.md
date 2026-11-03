@@ -55,7 +55,7 @@ A direct extension can commit a longer provider deadline but fail to refresh the
 ### Retention policy
 
 Set the plugin-wide policy under `plugins.entries.crabbox.config.warmImages`, or
-use **Advanced → Snapshot retention** under **Cloud environments**. These controls
+use **Pool and retention** under **Cloud environments**. These controls
 apply to all repositories. Saving reloads the Crabbox plugin without restarting
 the Gateway. Worker lease lifetimes and the 128-profile capacity limit stay
 unchanged. Unused, unpinned images expire after `retainUnused`; images held by allocations wait for those workers to stop. Replaced snapshots retire after allocations release them unless retained as a previous generation or pinned. Failed deletion stays pending and retries during the Gateway's periodic maintenance (every 60 seconds by default). Pending retirements run before capture reconciliation so a slow capture cannot block their retries. Each failed deletion attempt logs the provider error in the Gateway log; successful deletion clears the pending retirement. Maintenance checks allocation leases that hold a pending retirement and releases their holds only after confirming the lease is gone. Live dispatches keep their holds even before the provider creates the lease. Live or unconfirmed holding leases remain protected and are named in the Gateway log and Doctor finding.
@@ -118,7 +118,7 @@ An already-admitted capture can finish after reserve-demand expiry within its se
 
 ### Inspect snapshots in the Control UI
 
-Open **Settings → Connections → Cloud environments**. Each repository has one row showing **Ready**, **Building**, **Cold only**, or **Needs attention**. Select it to inspect its snapshots, recorded setup source, step timings, and failures. **Machine → Change** sets the repository's default profile. Inventory refreshes while builds, captures, or ready workers are present, and after deferred plugin activation.
+Open **Settings → Connections → Cloud environments**. Each repository has one row showing **Ready**, **Building**, **Cold only**, or **Needs attention**. Open it to inspect its snapshots, recorded setup source, step timings, and failures; a repository that needs attention opens by itself. Its **Default profile** selector sets the repository's default profile. Inventory refreshes while builds, captures, or ready workers are present, and after deferred plugin activation.
 
 **Rebuild** prepares the recorded local project's committed `HEAD` without a session. It requires administrator access, a local project root, an eligible profile, and pool capacity. Repository-only sources cannot use this action. Rebuild follows normal refresh policy and may reuse a matching build or reserve; it does not force snapshot replacement. Active builds offer **Cancel**; failed builds offer **Dismiss**, which hides the row until reload while the terminal record remains retained. Orphaned builds still awaiting cleanup cannot be dismissed.
 
@@ -126,7 +126,7 @@ Snapshot overflow actions offer **Pin**, **Unpin**, **Delete**, and, when a prev
 
 Rollback restores the previous checkpoint as current. The demoted current image is retained when pinned or when `keepPrevious: 1`; otherwise it retires after allocations release it. A retained previous checkpoint can still be rolled back after lowering `keepPrevious` to `0`. If both generations are pinned, unpin one before publishing another replacement.
 
-The collapsed **Advanced** section contains **Machines**, **Pool**, **Snapshot retention**, and **Machine images**. Machines manages profiles; Pool shows reserve counts and limits; Snapshot retention applies to all repositories. Machine images holds snapshots and builds without repository metadata, including uncertain captures. Saving machine settings refreshes eligibility without leaving the page.
+The page also has **Profiles**, **Pool and retention**, and, when needed, **Machine images**. Pool and retention shows ready workers, sets the pool cap, and sets retention for all repositories, saving each field as you change it. Machine images holds snapshots and builds without repository metadata, including uncertain captures. Saving machine settings refreshes eligibility without leaving the page.
 
 Snapshot inspection and actions require `operator.admin` and the enabled Crabbox provider. Actions appear only when their methods are advertised. API clients use `crabbox.images.list` for local snapshot state and `includePreparedDetails: true` on `environments.list` or `environments.status` for pool details. Listing snapshots does not contact the provider or expose setup commands or secret values.
 
