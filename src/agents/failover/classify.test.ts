@@ -171,9 +171,16 @@ describe("failover classification", () => {
   it("classifies a local Codex relay refusal as run authority instead of credential auth", () => {
     // The private relay answers these itself, so the native flattened prose must not
     // be read as the shared credential failing for every agent that reuses it.
+    // This is the form Codex actually surfaces: the JSON body is reduced to `error.message`.
     expect(
       classifyFailoverReason(
-        'unexpected status 403 Forbidden: {"type":"error","status":403,"error":{"type":"invalid_request_error","code":"model_permission_denied","message":"Codex cannot verify the owner of this model request. Start a fresh request before retrying."}} url: http://127.0.0.1:20128/backend-api/codex/responses',
+        "unexpected status 403 Forbidden: Codex cannot verify the owner of this model request. Start a fresh request before retrying., url: http://127.0.0.1:20128/backend-api/codex/responses",
+        noPlugin,
+      ),
+    ).toBe("session_authority");
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","status":403,"error":{"type":"invalid_request_error","code":"model_permission_denied","message":"Codex cannot verify the owner of this model request. Start a fresh request before retrying."}}',
         noPlugin,
       ),
     ).toBe("session_authority");

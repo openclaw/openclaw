@@ -39,11 +39,11 @@ function permanentAuthFailure(): Error {
 }
 
 function localOwnerRefusal(): Error {
-  // The in-process Codex inference proxy refuses the run locally and the native
-  // transport flattens that refusal into status-bearing prose, so the shared
-  // profile must not be judged by the HTTP status alone.
+  // Codex's transport keeps only `error.message` from the relay body and renders it as
+  // `unexpected status {status}: {message}, url: {url}`, so the runner never sees the
+  // `model_permission_denied` code. The shared profile must not be judged by status alone.
   return new Error(
-    'unexpected status 403 Forbidden: {"type":"error","status":403,"error":{"type":"invalid_request_error","code":"model_permission_denied","message":"Codex cannot verify the owner of this model request. Start a fresh request before retrying."}} url: http://127.0.0.1:20128/backend-api/codex/responses',
+    "unexpected status 403 Forbidden: Codex cannot verify the owner of this model request. Start a fresh request before retrying., url: http://127.0.0.1:20128/backend-api/codex/responses",
   );
 }
 
