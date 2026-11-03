@@ -1,0 +1,2 @@
+# karmaterminal/openclaw#1271 (continuation refused outcome), measured against j12 352f56029d at head 8ed3c8b1bb: refused-return fossils (base lane, cbd9973f6a..263375d2fe) +376; failed-receipt lane (f552470136..92c888de06) +149; dead-letter health controls for the refused receipt (this lane, 29d87a1d94..8ed3c8b1bb) +48. 🌊-approved (Discord 1567144091026853920, 1567181008355463170).
+573
