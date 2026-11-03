@@ -73,6 +73,7 @@ import {
 } from "./session-cold-storage.test-support.js";
 import { loadSessionTranscriptEvents as loadTranscriptEvents } from "./session-transcript-events.js";
 import { prepareSessionTranscriptHydration } from "./session-transcript-hydration.js";
+import { findTranscriptEvent } from "./session-transcript-match.js";
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { prepareTranscriptPayload, transcriptEventJsonSql } from "./transcript-payload.js";
 
@@ -835,6 +836,9 @@ describe("cold transcript storage workers", () => {
         } else {
           await fs.writeFile(archived.archivePath, Buffer.alloc(archived.bytes.length));
         }
+        await expect(
+          findTranscriptEvent(fixture.scope, { kind: "idempotency", key: "absent-key" }),
+        ).rejects.toThrow(storage === "missing" ? /missing or unreadable/ : /failed verification/);
         await expect(restoreSessionColdTranscript(fixture.scope)).rejects.toThrow(
           storage === "missing" ? /missing or unreadable/ : /failed verification/,
         );

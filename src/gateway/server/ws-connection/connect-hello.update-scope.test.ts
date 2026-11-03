@@ -96,6 +96,8 @@ vi.mock("./connect-auth-security.js", () => ({
 vi.mock("../../../version.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../version.js")>()),
   resolveRuntimeServiceBuildId: () => "build-a",
+  resolveRuntimeServiceCommit: () => "abcdef0",
+  resolveRuntimeServiceBuiltAt: () => "2026-10-21T11:55:00.000Z",
 }));
 
 const tailscaleClaim = vi.hoisted(() => vi.fn());
@@ -195,6 +197,15 @@ describe("sendGatewayHello update detail scope", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(getHealthCache).mockReturnValue(null);
+  });
+
+  it("advertises input custody without changing negotiated scopes", async () => {
+    const context = makeContext("operator", ["operator.read"]);
+
+    await sendGatewayHello(context as never, makeState("operator", ["operator.read"]) as never, {});
+
+    expect(helloPayload(context)?.features.capabilities).toContain("chat-input-custody-v1");
+    expect(helloPayload(context)?.auth.scopes).toEqual(["operator.read"]);
   });
 
   it.each([
@@ -571,6 +582,11 @@ describe("sendGatewayHello update detail scope", () => {
   );
 
   it.each([
+    {
+      label: "member",
+      role: "operator" as const,
+      scopes: ["operator.sessions.read", "operator.sessions.write"],
+    },
     { label: "pairing-only operator", role: "operator" as const, scopes: ["operator.pairing"] },
     { label: "node", role: "node" as const, scopes: ["operator.read"] },
   ])("omits update details for a $label", async ({ role, scopes }) => {
@@ -583,6 +599,10 @@ describe("sendGatewayHello update detail scope", () => {
       includeUpdateDetails: false,
     });
     expectRedactedHelloSnapshot(context);
+    expect(helloPayload(context)?.server).toMatchObject({
+      commit: "abcdef0",
+      builtAt: "2026-10-21T11:55:00.000Z",
+    });
     expect(helloPayload(context)?.features.capabilities).toContain("node-permission-errors");
     expect(helloPayload(context)?.features.capabilities).toContain("agent-session-id-create-v1");
   });

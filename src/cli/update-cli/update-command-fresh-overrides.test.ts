@@ -10,6 +10,7 @@ import {
 import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
 import * as updateGlobal from "../../infra/update-global.js";
 import { finishUpdateRun } from "../../infra/update-run-ledger.js";
+import { packToArchive } from "../../plugins/test-helpers/archive-fixtures.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import * as shared from "./shared.js";
 import * as execution from "./update-command-execution.js";
@@ -51,9 +52,10 @@ it.each([false, true])(
       openclaw: { schemaVersions: { state: OPENCLAW_STATE_SCHEMA_VERSION, agent: 20 } },
     });
     await writePackageDistInventory(candidate);
-    const artifact = path.join(base, "candidate.tgz");
-    execFileSync("tar", ["-czf", artifact, "-C", base, "package"], {
-      env: { ...process.env, COPYFILE_DISABLE: "1" },
+    const artifact = await packToArchive({
+      pkgDir: candidate,
+      outDir: base,
+      outName: "candidate.tgz",
     });
     vi.mocked(shared.resolveTargetVersion).mockResolvedValue({ version: null });
     vi.mocked(updateGlobal.resolveGlobalInstallTarget).mockResolvedValue(target);

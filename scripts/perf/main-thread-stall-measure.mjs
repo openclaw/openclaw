@@ -19,9 +19,100 @@ import {
   getMainThreadTaskName,
   runWithMainThreadTask,
 } from "../../src/infra/main-thread-stall.ts";
-import { createStallFlightRecorder } from "../../src/logging/diagnostic-stall-flight-recorder.ts";
+import { createStallFlightRecorder as createDefaultStallRecorder } from "../../src/logging/diagnostic-stall-flight-recorder.ts";
 
-const [mode = "phase", countText = "21", iterationsText = "200000"] = process.argv.slice(2);
+const [mode = "phase", countText = "21", iterationsText = "200000", recorderModule] =
+  process.argv.slice(2);
+// An explicit baseline snapshot avoids switching a checkout used by another proof.
+const createStallFlightRecorder = recorderModule
+  ? (await import(recorderModule)).createStallFlightRecorder
+  : createDefaultStallRecorder;
+// Linux: kernel 5 3600 (blocked) or kernel 5 0 (idle A/A control).
+// Compare pinned base/candidate builds in ABBA order; no operator data is needed.
+if (mode === "kernel") {
+  const workers = [];
+  const track = (worker) => workers.push(worker);
+  process.on("worker", track);
+  const sessions = Array.from({ length: 10_800 }, (_, id) => ({
+    id,
+    history: `synthetic-${id}`.repeat(100),
+  }));
+  const inventory = Array.from({ length: 62_000 }, (_, id) => `workspace/synthetic/file-${id}.ts`);
+  const warnings = [];
+  const startup = performance.now();
+  const recorder = createStallFlightRecorder((message) => warnings.push(message));
+  const startupMs = performance.now() - startup;
+  const pause = (ms) =>
+    new Promise((resolve) => {
+      setTimeout(resolve, ms);
+    });
+  const workerAllocation = async () => {
+    const heaps = await Promise.all(
+      workers.map(async (worker) => {
+        worker.ref();
+        try {
+          return await worker.getHeapStatistics();
+        } finally {
+          worker.unref();
+        }
+      }),
+    );
+    return {
+      allocated: heaps.reduce((sum, heap) => sum + heap.total_allocated_bytes, 0),
+      heapUsed: heaps.reduce((sum, heap) => sum + heap.used_heap_size, 0),
+    };
+  };
+  try {
+    await pause(500);
+    for (let sample = 0; sample < Number(countText); sample++) {
+      const workerBefore = await workerAllocation();
+      const allocated = getHeapStatistics().total_allocated_bytes;
+      const cpu = process.cpuUsage();
+      const mainCpu = process.threadCpuUsage();
+      const startedAt = performance.now();
+      if (Number(iterationsText)) {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(iterationsText));
+      } else {
+        await pause(3600);
+      }
+      const endedAt = performance.now();
+      const reportAt = performance.now();
+      const report = recorder.sample(Number(iterationsText) ? { startedAt, endedAt } : undefined);
+      const reportMs = performance.now() - reportAt;
+      const usedMain = process.threadCpuUsage(mainCpu);
+      const used = process.cpuUsage(cpu);
+      const mainAllocated = getHeapStatistics().total_allocated_bytes - allocated;
+      const workerAfter = await workerAllocation();
+      const workerAllocated = workerAfter.allocated - workerBefore.allocated;
+      console.log(
+        JSON.stringify({
+          sample,
+          startupMs,
+          elapsedMs: endedAt - startedAt,
+          reportMs,
+          cpuMs: (used.user + used.system) / 1000,
+          mainCpuMs: (usedMain.user + usedMain.system) / 1000,
+          mainAllocated,
+          workerAllocated,
+          workerHeapUsed: workerAfter.heapUsed,
+          mainHeapUsed: process.memoryUsage().heapUsed,
+          workers: workers.length,
+          sessions: sessions.length,
+          files: inventory.length,
+          rss: process.memoryUsage().rss,
+          load: loadavg(),
+          warnings,
+          report,
+        }),
+      );
+      await pause(300);
+    }
+  } finally {
+    recorder.stop();
+    process.off("worker", track);
+  }
+  process.exit(0);
+}
 if (mode === "native-spawn") {
   const count = Number(countText);
   const iterations = Number(iterationsText);

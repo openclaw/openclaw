@@ -182,11 +182,8 @@ export type {
 } from "@openclaw/model-catalog-core/model-catalog-types";
 export { isCloudModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 export { parseModelRef } from "../agents/model-selection-normalize.js";
-export type {
-  BedrockDiscoveryConfig,
-  ModelCompatConfig,
-  ModelDefinitionConfig,
-} from "../config/types.models.js";
+export type { BedrockDiscoveryConfig, ModelDefinitionConfig } from "../config/types.models.js";
+export type { ModelCompatConfig } from "../config/zod-schema.model-compat.js";
 export type {
   ProviderEndpointClass,
   ProviderEndpointResolution,

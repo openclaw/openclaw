@@ -222,16 +222,20 @@ function buildBody(req: VideoGenerationRequest, model: string): Record<string, u
   };
 }
 
-function readTask(payload: Record<string, unknown>): Record<string, unknown> {
+function isTaskComplete(payload: Record<string, unknown>): boolean {
   if (!isRecord(payload.task)) {
     throw new Error("Novita video status response missing task.");
   }
   switch (payload.task.status) {
     case "TASK_STATUS_QUEUED":
     case "TASK_STATUS_PROCESSING":
+      return false;
     case "TASK_STATUS_SUCCEED":
+      return true;
     case "TASK_STATUS_FAILED":
-      return payload.task;
+      throw new Error(
+        `Novita video generation failed: ${normalizeOptionalString(payload.task.reason) ?? "task failed"}`,
+      );
     default:
       throw new Error("Novita video status response returned an unknown task status.");
   }
@@ -309,13 +313,7 @@ export function buildNovitaVideoGenerationProvider(): VideoGenerationProvider {
         pollIntervalMs: 5_000,
         requestFailedMessage: "Novita video status request failed",
         timeoutMessage: `Novita video generation task ${taskId} did not finish in time`,
-        isComplete: (payload) => readTask(payload).status === "TASK_STATUS_SUCCEED",
-        getFailureMessage: (payload) => {
-          const task = readTask(payload);
-          return task.status === "TASK_STATUS_FAILED"
-            ? `Novita video generation failed: ${normalizeOptionalString(task.reason) ?? "task failed"}`
-            : undefined;
-        },
+        isComplete: isTaskComplete,
       });
       const output = Array.isArray(completed.videos) ? completed.videos[0] : undefined;
       const videoUrl = isRecord(output) ? normalizeOptionalString(output.video_url) : undefined;

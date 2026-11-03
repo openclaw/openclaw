@@ -381,7 +381,10 @@ their ancestors to each preflight. Each preflight still inspects the target
 filesystem again before mutation or acceptance; it does not reuse local node state.
 Independent workspaces can progress while the main thread serves requests. The
 host owns session authority, workspace mutations, Git subprocesses, and durable
-acceptance; cancellation joins outstanding work before cleanup.
+acceptance; cancellation joins outstanding work before cleanup. Raw snapshot imports
+return their tree ID directly, and empty-entry reconciliation reuses the base tree
+instead of importing and diffing it again. Result staging carries repository
+identity into the shared ref-mutation queue instead of repeating discovery.
 
 Node capture reuses this pool and its compiled manifest program rather than
 starting a process per verification. Each capture has a private workspace, hash

@@ -27,7 +27,7 @@ import { syncWorkspaceSkills } from "./workspace-skill-sync.runtime.js";
 
 // These tests publish resource revisions explicitly; passive scans would race reuse assertions.
 const isolatedConfig = {
-  plugins: { enabled: false },
+  plugins: { allow: ["skill-workshop"] },
   skills: { load: { watch: false } },
 } satisfies OpenClawConfig;
 
@@ -232,31 +232,44 @@ describe("syncWorkspaceSkills", () => {
     expect(await exists(skillPath(target, "demo-skill", "node_modules"))).toBe(false);
   });
 
-  it("copies rebuildable skills without blocking fsync (#181928)", async () => {
+  it("copies rebuildable skills with mutation-owned custody and without blocking fsync", async () => {
     const { source, target } = await setupSkills(["alpha"]);
+    await writeFiles(
+      skillPath(source, "alpha"),
+      Object.fromEntries(
+        Array.from({ length: 16 }, (_, index) => [`file-${index}.txt`, "content"]),
+      ),
+    );
     const skillsSnapshot = await buildSnapshot(source);
+    const assertCurrent = vi.fn();
     const fsync = vi.spyOn(fsSync, "fsyncSync");
     try {
-      await sync(source, target, { skillsSnapshot });
+      await sync(source, target, { skillsSnapshot, assertCurrent });
       expect(fsync).not.toHaveBeenCalled();
+      // Includes setup and publication; read-only traversal must not double the mutation budget.
+      if (process.platform !== "win32") {
+        expect(assertCurrent.mock.calls.length).toBeLessThan(120);
+      }
+      expect(await readText(skillPath(target, "alpha", "file-15.txt"))).toBe("content");
     } finally {
       fsync.mockRestore();
     }
   });
 
-  it("skips discovery and copying when the synced snapshot still matches", async () => {
+  it.each([true, false])("reuses synced skills with discovery prepared=%s", async (prepared) => {
     const { source, target } = await setupSkills();
     await writeSkill(skillPath(source, "alpha"), "alpha", "Alpha skill");
     await writeSkill(skillPath(source, "hidden"), "hidden", "Prompt-hidden skill", {
       frontmatterExtra: "disable-model-invocation: true",
     });
-    const skillsSnapshot = await buildSnapshot(source);
+    const skillsSnapshot = prepared ? await buildSnapshot(source) : undefined;
     const params = {
       ...syncOptions(source, target),
       skillsSnapshot,
     };
 
     const first = await syncWorkspaceSkills(params);
+    params.skillsSnapshot ??= await buildSnapshot(source);
     const ignorePath = skillPath(target, ".gitignore");
     await fs.utimes(ignorePath, 1, 1);
     await fs.rm(path.join(source, "skills"), { recursive: true, force: true });
@@ -339,7 +352,7 @@ describe("syncWorkspaceSkills", () => {
       const target = await newDir("target");
       const skillName = "shared-skill";
       const config = {
-        plugins: { enabled: false },
+        plugins: { allow: ["skill-workshop"] },
         agents: {
           entries: {
             alpha: { agentDir: path.join(firstWorkspace, "agent"), workspace: agentWorkspace },
@@ -675,6 +688,33 @@ describe("syncWorkspaceSkills", () => {
     expect(await exists(skillPath(target, "safe-traversal-skill", "SKILL.md"))).toBe(true);
     expect(await exists(escapedDest)).toBe(false);
   });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects a destination symlink escape after awaiting source metadata",
+    async () => {
+      const { source, target } = await setupSkills(["alpha"]);
+      const outside = await newDir("outside-copy");
+      const skillsSnapshot = await buildSnapshot(source);
+      const lstat = fs.lstat.bind(fs);
+      let replaced = false;
+      const read = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+        const stat = await lstat(...args);
+        if (!replaced && nodeFilePath(args[0]) === skillPath(source, "alpha", "SKILL.md")) {
+          replaced = true;
+          await fs.rename(skillPath(target, "alpha"), path.join(target, "parked"));
+          await fs.symlink(outside, skillPath(target, "alpha"), "dir");
+        }
+        return stat;
+      });
+      try {
+        expect(await sync(source, target, { skillsSnapshot, assertCurrent: () => {} })).toEqual([]);
+        expect(replaced).toBe(true);
+        expect(await fs.readdir(outside)).toEqual([]);
+      } finally {
+        read.mockRestore();
+      }
+    },
+  );
 
   it("syncs managed symlinked skills as real directories in the target workspace", async () => {
     const { source, target } = await setupSkills();

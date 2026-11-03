@@ -105,10 +105,13 @@ export function ConfigObject(props: CollectionProps): JSX.Element {
   const initiallyOpen = createMemo(() => props.params.path.length <= 2);
   // Keep editors after first opening so closing a disclosure preserves drafts and focus targets.
   const [hasOpened, setHasOpened] = createSignal(false);
-  const meta = createMemo(() => {
-    getLocale();
-    return resolveFieldMeta(props.params.path, props.params.schema, props.params.hints);
-  });
+  const meta = createMemo(
+    () => {
+      getLocale();
+      return resolveFieldMeta(props.params.path, props.params.schema, props.params.hints);
+    },
+    { lazy: true },
+  );
   const fields = () => (
     <>
       <For each={object().fields} keyed={(field) => String(field.path.at(-1))}>

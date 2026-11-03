@@ -1,7 +1,7 @@
 import { matchesGlob } from "node:path";
 import { runInNewContext } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
-import { readCiWorkflow, readWorkflow } from "./ci-workflow.test-support.js";
+import { acceptsWorkflowPaths, readCiWorkflow, readWorkflow } from "./ci-workflow.test-support.js";
 
 const before = "a".repeat(40);
 const head = "b".repeat(40);
@@ -14,24 +14,38 @@ const context = {
 const action = readWorkflow(".github/actions/detect-scheduled-changes/action.yml");
 const script = action.runs.steps[0].with.script;
 
-function acceptsPaths(patterns: string[], files: readonly string[]) {
-  return files.some((file) =>
-    patterns.reduce(
-      (selected, pattern) =>
-        pattern.startsWith("!")
-          ? selected && !matchesGlob(file, pattern.slice(1))
-          : selected || matchesGlob(file, pattern),
-      false,
-    ),
-  );
-}
-
 describe("Darwin tooling event scope", () => {
   it.each([
     [["scripts/lib/ci-node-test-plan.mts"], false],
     [["scripts/lib/ci-extension-test-shards.mts"], false],
     [["scripts/lib/ci-native-generated-scope.mjs"], false],
     [["test/scripts/pr-ci-sweeper.test.ts"], false],
+    [["test/scripts/pr-ci-sweeper.test-support.ts"], false],
+    [["test/scripts/pr-prepare-gates.test.ts"], false],
+    [["test/scripts/pr-review-artifact-validation.test.ts"], false],
+    [["test/scripts/pr-main-refresh.test.ts"], false],
+    [["test/scripts/pr-future.test.ts"], false],
+    [["test/helpers/fixture-receipts.test.ts"], false],
+    [["test/helpers/temp-dir.test.ts"], false],
+    [["test/helpers/future/nested.test.ts"], false],
+    [["test/helpers/temp-dir.ts"], true],
+    [["test/helpers/run-node-script.ts"], true],
+    [["test/helpers/future/nested.ts"], true],
+    [["test/helpers/fixture-receipts.test.ts", "test/helpers/temp-dir.ts"], true],
+    [["test/helpers/temp-dir.test.ts", "test/scripts/pr-wrappers.test.ts"], true],
+    [["test/helpers/fixture-receipts.test.ts", "test/helpers/temp-dir.test.ts"], false],
+    [["test/scripts/pr-dependency-cache.test.ts"], true],
+    [["test/scripts/pr-wrappers.test.ts"], true],
+    [["test/scripts/pr-materialized-anchor.test.ts"], true],
+    [["test/scripts/pr-operation-lock.test.ts"], true],
+    [["test/scripts/pr-git-invocation.test.ts"], true],
+    [["test/scripts/pr-wrapper.test-support.ts"], true],
+    [["test/scripts/pr-main-refresh.test-support.ts"], true],
+    [["test/scripts/pr-darwin-process-identity.test.py"], true],
+    [["test/scripts/pr-future-input.json"], true],
+    [["test/scripts/pr-future.test.ts", "test/scripts/pr-wrappers.test.ts"], true],
+    [["test/scripts/pr-future.test.ts", "scripts/pr-lib/materialized-anchor.mjs"], true],
+    [["test/scripts/pr-future.test.ts", "test/scripts/pr-ci-sweeper.test-support.ts"], false],
     [["scripts/lib/ci-test-timings.mts"], true],
     [["scripts/lib/ci-test-timings-schema.mts"], true],
     [["scripts/lib/ci-test-timings-refit.mts"], true],
@@ -42,7 +56,7 @@ describe("Darwin tooling event scope", () => {
     [[".github/workflows/pr-tooling-darwin.yml"], true],
   ] as const)("routes %j", (files, expected) => {
     const workflow = readWorkflow(".github/workflows/pr-tooling-darwin.yml");
-    expect(acceptsPaths(workflow.on.pull_request.paths, files)).toBe(expected);
+    expect(acceptsWorkflowPaths(workflow.on.pull_request.paths, files)).toBe(expected);
   });
 });
 
@@ -59,7 +73,7 @@ describe("native locale refresh event scope", () => {
     [[".github/workflows/native-app-locale-refresh.yml"], true],
   ] as const)("routes %j", (files, expected) => {
     const workflow = readWorkflow(".github/workflows/native-app-locale-refresh.yml");
-    expect(acceptsPaths(workflow.on.push.paths, files)).toBe(expected);
+    expect(acceptsWorkflowPaths(workflow.on.push.paths, files)).toBe(expected);
     expect(workflow.on.workflow_dispatch).toBeDefined();
   });
 });
@@ -75,7 +89,7 @@ describe("plugin scaffold event scope", () => {
     const workflow = readWorkflow(".github/workflows/plugin-init-scaffold-validation.yml");
     expect(workflow.on.push.paths).toEqual(workflow.on.pull_request.paths);
     for (const event of ["push", "pull_request"]) {
-      expect(acceptsPaths(workflow.on[event].paths, files)).toBe(expected);
+      expect(acceptsWorkflowPaths(workflow.on[event].paths, files)).toBe(expected);
     }
     expect(workflow.on.workflow_dispatch).toBeDefined();
     expect(workflow.on.schedule).toBeDefined();
@@ -94,6 +108,12 @@ async function scheduledScope(
     identical?: boolean;
     proofJobs?: string;
     completedJobs?: string[];
+    codeqlConfig?: string;
+    profile?: Record<string, unknown>;
+    gitFiles?: string[];
+    gitFailure?: "fetch" | "diff";
+    gitOutput?: string;
+    gitHead?: string;
   } = {},
 ) {
   const proof = {
@@ -135,10 +155,31 @@ async function scheduledScope(
       env: {
         SCHEDULED_PATHS: options.paths ?? "src/contracts/**\n.github/actions/**",
         SCHEDULED_PROOF_JOBS: options.proofJobs ?? "Proof",
+        SCHEDULED_CODEQL_CONFIG: options.codeqlConfig,
+        SCHEDULED_GIT_DIFF: options.gitFiles ? "true" : "false",
         SCHEDULED_WORKFLOW_REF: "openclaw/openclaw/.github/workflows/example.yml@refs/heads/main",
       },
     },
     core: { setOutput: output, notice, warning: vi.fn() },
+    exec: {
+      getExecOutput: async (command: string, args: string[]) => {
+        if (command === "yq") {
+          return { stdout: JSON.stringify(options.profile ?? readWorkflow(args[2]!)) };
+        }
+        if (options.gitFailure && args.includes(options.gitFailure)) {
+          throw new Error("Git unavailable");
+        }
+        return {
+          stdout:
+            args[0] === "rev-parse"
+              ? `${options.gitHead ?? head}\n`
+              : args[0] === "diff"
+                ? (options.gitOutput ??
+                  (options.gitFiles ?? []).map((file) => `${file}\0`).join(""))
+                : "",
+        };
+      },
+    },
     github: {
       paginate,
       rest: {
@@ -238,6 +279,107 @@ describe("bounded scheduled proof reuse", () => {
   );
 });
 
+describe("scheduled CodeQL input reuse", () => {
+  const workflow = readWorkflow(".github/workflows/codeql.yml");
+  const scopes = workflow.jobs.scope.steps.filter(
+    (step: { uses?: string }) => step.uses === "./.github/actions/detect-scheduled-changes",
+  );
+  const categories = [
+    "core-auth-secrets",
+    "channel-runtime-boundary",
+    "network-ssrf-boundary",
+    "mcp-process-tool-boundary",
+    "process-exec-boundary",
+    "plugin-trust-boundary",
+    "actions",
+  ];
+  const completedJobs = categories.map((category) => `Security High (${category})`);
+
+  async function selected(files: string[], options: Parameters<typeof scheduledScope>[0] = {}) {
+    const result: string[] = [];
+    for (const scope of scopes) {
+      const { output } = await scheduledScope({
+        completedJobs,
+        files: files.map((filename) => ({ filename })),
+        ...options,
+        paths: scope.with.paths,
+        proofJobs: scope.with["proof-jobs"],
+        codeqlConfig: scope.with["codeql-config"],
+      });
+      if (output.mock.calls[0]![1]) {
+        result.push(scope.with["proof-jobs"].slice(15, -1));
+      }
+    }
+    return result;
+  }
+
+  it.each([
+    ["docs/intro.md", []],
+    [".github/workflows/docs.yml", ["actions"]],
+    ["src/process/exec.ts", ["mcp-process-tool-boundary", "process-exec-boundary"]],
+    ["src/infra/net/request.ts", ["network-ssrf-boundary"]],
+    ["src/channels/.runtime.ts", ["channel-runtime-boundary"]],
+    ["src/agents/nested/deep/auth-provider.ts", ["core-auth-secrets"]],
+    ["src/plugins/runtime/package.json", ["plugin-trust-boundary"]],
+    ["src/plugins/runtime/tsconfig.json", ["plugin-trust-boundary"]],
+    ["ui/src/views/channels.ts", []],
+    ["package.json", []],
+    [".github/codeql/codeql-actions-critical-security.yml", categories],
+    [".github/actions/detect-scheduled-changes/action.yml", categories],
+    [".github/workflows/codeql.yml", categories],
+  ])("selects extraction profiles after %s changes", async (filename, expected) => {
+    expect(await selected([filename as string])).toEqual(expected);
+  });
+
+  it("reuses each category's last actual proof, ignoring newer skipped jobs", async () => {
+    expect(
+      await selected(["docs/intro.md"], {
+        completedJobs: completedJobs.filter(
+          (name) => name !== "Security High (network-ssrf-boundary)",
+        ),
+        skipFirst: true,
+      }),
+    ).toEqual(["network-ssrf-boundary"]);
+  });
+
+  it("requires a complete diff before skipping a category beyond the API cap", async () => {
+    const docs = Array.from({ length: 300 }, (_, index) => `docs/${index}.md`);
+    expect(await selected(docs)).toEqual(categories);
+    expect(await selected(docs, { gitFiles: [...docs, "src/infra/net/request.ts"] })).toEqual([
+      "network-ssrf-boundary",
+    ]);
+    for (const failure of [
+      { gitFailure: "fetch" as const },
+      { gitFailure: "diff" as const },
+      { gitHead: before },
+      { gitOutput: "docs/incomplete" },
+    ]) {
+      expect(await selected(docs, { gitFiles: docs, ...failure })).toEqual(categories);
+    }
+  });
+
+  it("includes a rename's old extraction path", async () => {
+    expect(
+      await selected([], {
+        files: [{ filename: "retired.ts", previous_filename: "src/infra/net/request.ts" }],
+      }),
+    ).toEqual(["network-ssrf-boundary"]);
+  });
+
+  it("runs every profile when its input contract is unsupported", async () => {
+    for (const profile of [
+      { paths: [], queries: [{ uses: "security-extended" }] },
+      ...["src/[a-z]", "src/", "./src", "."].map((path) => ({
+        paths: [path],
+        queries: [{ uses: "security-extended" }],
+      })),
+      { paths: ["src"], queries: [{ uses: "./custom-query.ql" }] },
+    ]) {
+      expect(await selected(["docs/intro.md"], { profile })).toEqual(categories);
+    }
+  });
+});
+
 describe("independent scheduled node runtime proofs", () => {
   const workflow = readWorkflow(".github/workflows/node-runtime-conformance.yml");
   const detectors = workflow.jobs.scope.steps.filter(
@@ -331,7 +473,7 @@ describe("node runtime event scope", () => {
   ] as const)("routes %j", (files, expected) => {
     const workflow = readWorkflow(".github/workflows/node-runtime-conformance.yml");
     for (const event of ["push", "pull_request"]) {
-      expect(acceptsPaths(workflow.on[event].paths, files)).toBe(expected);
+      expect(acceptsWorkflowPaths(workflow.on[event].paths, files)).toBe(expected);
     }
     expect(workflow.on.workflow_dispatch).toBeDefined();
     expect(workflow.on.schedule).toBeDefined();
@@ -343,7 +485,8 @@ describe("workflow cost admission", () => {
     "keeps %s scoped to its hydration inputs",
     (name) => {
       const workflow = readWorkflow(`.github/workflows/${name}.yml`);
-      const accepts = (file: string) => acceptsPaths(workflow.on.pull_request.paths, [file]);
+      const accepts = (file: string) =>
+        acceptsWorkflowPaths(workflow.on.pull_request.paths, [file]);
       expect(accepts(".github/workflows/docs.yml")).toBe(false);
       for (const path of ["scripts/README.md", "scripts/AGENTS.md", "patches/README.md"]) {
         expect(accepts(path), path).toBe(false);

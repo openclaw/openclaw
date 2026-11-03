@@ -20,7 +20,7 @@ afterEach(async () => {
 
 const readText = (...parts: string[]) => fs.readFile(path.join(...parts), "utf8");
 const at = (...parts: string[]) => path.join(root, ...parts);
-const revision = "03ddfbeb5328d7bb5e6f1563118bf420ace8d09d7a33e241bbb59e95233ccc36";
+const revision = "090b805b36a98a3aaaba33328b9e0219d830d2e7f40a70a034994ecb26392bd1";
 const viteOptions = {
   configFile: false as const,
   publicDir: false as const,
@@ -53,7 +53,7 @@ async function fixture() {
     ["chunk-1.js", "export const message = 'Deferred Workboard';"],
     ["index.css", ".workboard { color: green; }"],
     ["index.js", "export default { id: 'workboard', load: () => import('./chunk-1.js') };"],
-    ["large.js", `export const message = "${"Large workboard asset ".repeat(200)}";`],
+    ["large.js", `export const message = "${"Large workboard asset ".repeat(800)}";`],
     ["small.css", ".workboard { color: green; }\n".repeat(8)],
   ] as const;
   const hash = createHash("sha256");
@@ -107,8 +107,9 @@ it("publishes the complete immutable generation with only useful eligible sideca
   for (const [name, body] of files) {
     const target = path.join(output, revisions[0]!, name);
     expect(await readText(target)).toBe(body);
-    const compressed = name === "large.js" || name === "small.css";
     for (const extension of ["br", "gz"]) {
+      const compressed =
+        name === "large.js" || name === "small.css" || (name === "index.js" && extension === "br");
       const sidecar = `${target}.${extension}`;
       if (!compressed) {
         await expect(fs.stat(sidecar)).rejects.toMatchObject({ code: "ENOENT" });

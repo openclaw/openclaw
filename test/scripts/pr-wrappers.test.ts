@@ -47,6 +47,7 @@ import {
 } from "./pr-review-artifact-fixture.js";
 import {
   copyPrWrapperSources,
+  copyPrRoutingWrapperSources,
   createSettledPrCacheEntry,
   prCacheEntries,
   readPrCacheState,
@@ -220,7 +221,7 @@ function unanchoredWrapperFixture(prefix: string) {
   const dir = tempDirs.make(prefix);
   const repo = join(dir, "repo");
   const linked = join(dir, "linked");
-  copyPrWrapperSources(repo);
+  copyPrRoutingWrapperSources(repo);
   const env = isolatedWrapperEnv(dir);
   mkdirSync(join(dir, "bin"));
   for (const [command, code] of [
@@ -271,27 +272,7 @@ function createMismatchedWrapperTemplate({
   const canonical = realpathSync(canonicalPath);
   const origin = realpathSync(originPath);
   if (toolingOnly) {
-    // Dependency sourcing needs the real wrapper and package policy, but no
-    // application imports. The existing closure tests retain the full inventory.
-    const components = [
-      "package.json",
-      "scripts/lib/plain-gh.sh",
-      "scripts/lib/plain-gh.mjs",
-      "scripts/lib/direct-run.mjs",
-      "scripts/lib/managed-child-process.mts",
-      "scripts/lib/managed-cleanup-handoff.mts",
-      "scripts/windows-cmd-helpers.mjs",
-      "scripts/lib/vitest-resource-ownership.mts",
-      "scripts/lib/windows-taskkill.mjs",
-    ];
-    mkdirSync(join(canonical, "scripts/lib"), { recursive: true });
-    for (const component of ["scripts/pr", "scripts/pr-lib", ...components]) {
-      cpSync(component, join(canonical, component), { recursive: true });
-    }
-    writeFileSync(
-      join(canonical, "scripts/pr-lib/wrapper-components.txt"),
-      `${components.join("\n")}\n`,
-    );
+    copyPrRoutingWrapperSources(canonical);
   } else {
     copyPrWrapperSources(canonical);
   }
@@ -3154,6 +3135,7 @@ node "$script_parent_dir/verify-pr-hosted-gates.mjs" --anchor-proof;`,
 
   it("refuses to substitute a different canonical wrapper implementation", () => {
     const { repo, linked, git, run } = unanchoredWrapperFixture("openclaw-pr-wrapper-revision-");
+    expect(existsSync(join(repo, "src"))).toBe(false);
     expect(git(repo, ["worktree", "add", "-b", "feature", linked]).status).toBe(0);
 
     for (const component of ["scripts/pr-lib/merge.sh", "scripts/lib/local-check-runtime.mts"]) {

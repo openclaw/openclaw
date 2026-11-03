@@ -5,11 +5,19 @@
  * The baseline module must export prepareChatHistoryResponsePage with its own budget owner.
  * Use an unchanged source snapshot with relative imports resolved to its checkout.
  * Run timing and allocation separately; --reverse counterbalances the initial arm.
+ * An unchanged source is an A/A control only without --fullness, which compares
+ * two different operations even when both modules come from the same revision.
  * Pages contain text, tool calls/results, images, activity, and transcript positions.
  * Before timing, compare full JSON responses for fit/tail/anchor/oversized cases.
  * Add --encode to include worker response encoding; --messages 300 --text-repeats 512
  * models repeated large-tool-result pages. Allocation is sampled separately from CPU.
  * Use --response-bytes 524288 for the transport page cap (default: 6 MiB).
+ * Use --fullness to compare the discarded full-response budget check with the
+ * candidate selection-only predicate. This measures the owner check, not RPC latency.
+ * Example: --fullness --messages 600 --text-repeats 120 --response-bytes 524288
+ *   --iterations 500 --pairs 2 (repeat with --allocation for sampled allocation).
+ * Accept only equivalent responses/fullness decisions with lower CPU or allocation;
+ * report absolute GC deltas separately and use matched controls before alleging harm.
  */
 import assert from "node:assert/strict";
 import { Session } from "node:inspector/promises";
@@ -29,20 +37,28 @@ const { values } = parseArgs({
     allocation: { type: "boolean", default: false },
     reverse: { type: "boolean", default: false },
     encode: { type: "boolean", default: false },
+    fullness: { type: "boolean", default: false },
     messages: { type: "string" },
     "text-repeats": { type: "string", default: "64" },
     "response-bytes": { type: "string", default: String(6 * 1024 * 1024) },
   },
 });
 assert(global.gc, "Run with --expose-gc");
-assert(values["base-source"], "Provide --base-source (use the current source for A/A)");
+assert(values["base-source"], "Provide --base-source");
 const iterations = Number(values.iterations);
 const pairs = Number(values.pairs);
 assert(Number.isSafeInteger(iterations) && iterations > 0);
 assert(Number.isSafeInteger(pairs) && pairs > 0);
+assert(!(values.encode && values.fullness), "Choose either --encode or --fullness");
 const method = values.encode ? "encodeChatHistoryResponsePage" : "prepareChatHistoryResponsePage";
 const base = await import(pathToFileURL(resolve(values["base-source"])).href);
-const arms = { base: base[method], candidate: candidate[method] };
+const arms = values.fullness
+  ? {
+      base: (page, options) =>
+        base.prepareChatHistoryResponsePage(page, options).omission?.byteLimited === true,
+      candidate: candidate.isChatHistoryResponsePageByteLimited,
+    }
+  : { base: base[method], candidate: candidate[method] };
 const params = {
   entry: undefined,
   maxHistoryBytes: 6 * 1024 * 1024,
@@ -68,7 +84,19 @@ const fixtures = (values.messages ? [Number(values.messages)] : [200, 2000]).map
     __openclaw: {
       id: `message-${index}`,
       seq: index + 1,
-      transcriptPosition: { source: "synthetic", rawSeq: index + 1 },
+      transcriptPosition: {
+        source: "synthetic",
+        rawSeq: index + 1,
+        ...(values.fullness && index % 3 === 2
+          ? {
+              activity: {
+                afterRawSeq: index - 1,
+                scopeId: `scope-${Math.floor(index / 30)}`,
+                startOrder: index % 30,
+              },
+            }
+          : {}),
+      },
     },
   }));
   return {
@@ -92,9 +120,14 @@ for (const fixture of fixtures) {
       for (const messageId of [undefined, "message-1"]) {
         const options = { ...params, responseHistoryBytes, messageId };
         assert.equal(
-          JSON.stringify(arms.candidate(page, options)),
-          JSON.stringify(arms.base(page, options)),
+          JSON.stringify(candidate[method](page, options)),
+          JSON.stringify(base[method](page, options)),
         );
+        if (values.fullness) {
+          const full = arms.candidate(page, options);
+          assert.equal(typeof full, "boolean");
+          assert.equal(full, arms.base(page, options));
+        }
         assert.equal(JSON.stringify(page), inputBytes);
         byteComparisons++;
       }
@@ -138,9 +171,16 @@ for (const fixture of fixtures) {
       const cpuStart = process.threadCpuUsage();
       const start = performance.now();
       let bytes = 0;
+      let fullPages = 0;
       for (let index = 0; index < iterations; index++) {
         const result = arms[arm](fixture, params);
-        bytes += values.encode ? result.encodedResponse.messages.byteLength : result.messagesBytes;
+        if (values.fullness) {
+          fullPages += Number(result);
+        } else {
+          bytes += values.encode
+            ? result.encodedResponse.messages.byteLength
+            : result.messagesBytes;
+        }
       }
       const elapsedMs = performance.now() - start;
       const cpu = process.threadCpuUsage(cpuStart);
@@ -160,7 +200,7 @@ for (const fixture of fixtures) {
         arm,
         iterations,
         hostLoad,
-        bytes,
+        ...(values.fullness ? { fullPages } : { bytes }),
         ...(values.allocation
           ? { allocatedBytes }
           : {
@@ -178,6 +218,7 @@ console.log(
       node: process.version,
       responseHistoryBytes: params.responseHistoryBytes,
       mode: values.allocation ? "allocation" : "timing",
+      operation: values.fullness ? "fullness" : method,
       byteComparisons,
       rows,
     },

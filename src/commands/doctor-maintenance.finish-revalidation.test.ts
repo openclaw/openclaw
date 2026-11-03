@@ -3,6 +3,7 @@ import { hostname } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { expectFamilyEqual, expectFilesEqual } from "../../test/helpers/file-snapshots.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as restartHealthProbe from "../cli/daemon-cli/restart-health-probe.js";
 import { waitForGatewayHealthyRestart } from "../cli/daemon-cli/restart-health.js";
@@ -265,12 +266,7 @@ async function runDoctorFinishForStoppedUnit(
         }
         // Publish damaged bytes only after seeding the serving lease in the valid catalog.
         createDanglingSkillWorkshopReviewIndex(pathname);
-        const readArtifacts = () =>
-          snapshotSourceFamily(pathname).files.map(({ pathname: file, bytes, mtimeNs }) => ({
-            file,
-            bytes,
-            mtimeNs,
-          }));
+        const readArtifacts = () => snapshotSourceFamily(pathname).files;
         const beforeArtifacts = readArtifacts();
         let beforeCatalog = fs.readFileSync(pathname);
         if (scenario === "gateway-lifecycle-contended") {
@@ -290,7 +286,7 @@ async function runDoctorFinishForStoppedUnit(
         }
         assertCatalogUnchanged = () =>
           expect(fs.readFileSync(pathname).equals(beforeCatalog)).toBe(true);
-        assertPreStopArtifactsUnchanged = () => expect(readArtifacts()).toEqual(beforeArtifacts);
+        assertPreStopArtifactsUnchanged = () => expectFilesEqual(readArtifacts(), beforeArtifacts);
         expect(() => listUpdateRuns()).toThrow(/legacy-workshop-review-index.*doctor --fix/);
         assertPreStopArtifactsUnchanged();
         if (lateRun) {
@@ -667,7 +663,7 @@ it.each(process.platform === "win32" ? ["0600"] : ["0600", "0444"])(
     await expect(admission).rejects.toThrow("newer schema version");
     await expect(admission).rejects.toThrow(/restore.*backup/);
     await expect(admission).rejects.not.toThrow(/doctor --fix/);
-    expect(snapshotSourceFamily(databasePath)).toEqual(before);
+    expectFamilyEqual(snapshotSourceFamily(databasePath), before);
     expect(fs.statSync(databasePath).mode).toBe(beforeMode);
     expect(mocks.stops).toBe(0);
   },

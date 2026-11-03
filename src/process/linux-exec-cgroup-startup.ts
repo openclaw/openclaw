@@ -20,13 +20,7 @@ function readOptional(file: string): string {
   }
 }
 
-function ioBudget(root: string, device: string, bytesPerSecond: number): IoBudget {
-  const budget = {
-    rbps: bytesPerSecond,
-    wbps: bytesPerSecond,
-    riops: Math.max(1, Math.floor(bytesPerSecond / 4096)),
-    wiops: Math.max(1, Math.floor(bytesPerSecond / 4096)),
-  };
+function ioBudget(root: string, device: string, budget: IoBudget): IoBudget {
   for (let ancestor = root; ancestor !== cgroupMount; ancestor = path.dirname(ancestor)) {
     const line = readOptional(path.join(ancestor, "io.max"))
       .split("\n")
@@ -89,11 +83,20 @@ export async function initializeGatewayExecCgroup(stateDir: string): Promise<str
     fs.writeFileSync(path.join(directory, "cpu.weight"), "10");
     const limits = devices.map((device) => {
       // Use the logical queue's media class, including md/dm, without double-charging slaves.
-      const bytesPerSecond =
-        readOptional(`/sys/dev/block/${device}/queue/rotational`) === "0"
-          ? 160 * 1024 ** 2
-          : Math.max(1, Math.floor(memoryHigh / 600 / devices.length));
-      const budget = ioBudget(root, device, bytesPerSecond);
+      const nonRotational = readOptional(`/sys/dev/block/${device}/queue/rotational`) === "0";
+      // Btrfs measurements (2026-10-31): 250 MiB/s at 40,960 IOPS eased agent IO pressure
+      // without >=5s Gateway WAL commits; 400 MiB/s caused stalls. Tune this throughput/
+      // WAL-latency tradeoff, not device utilization; higher IOPS remain untested.
+      const bytesPerSecond = nonRotational
+        ? 250 * 1024 ** 2
+        : Math.max(1, Math.floor(memoryHigh / 600 / devices.length));
+      const iops = nonRotational ? 40_960 : Math.max(1, Math.floor(bytesPerSecond / 4096));
+      const budget = ioBudget(root, device, {
+        rbps: bytesPerSecond,
+        wbps: bytesPerSecond,
+        riops: iops,
+        wiops: iops,
+      });
       const line = `${device} ${budgetKeys.map((key) => `${key}=${budget[key]}`).join(" ")}`;
       fs.writeFileSync(path.join(directory!, "io.max"), line);
       return line;

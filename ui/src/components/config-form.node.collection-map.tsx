@@ -65,14 +65,16 @@ function ConfigMapRow(
   const errorId = createMemo(() => configFieldId(valuePath(), "key-error"));
   const [renameError, setRenameError] = createSignal("");
   const keyValue = liveValue<HTMLInputElement>(() => key());
-  const sensitiveState = createMemo(() =>
-    getSensitiveRenderState({
-      path: valuePath(),
-      value: entryValue(),
-      hints: props.params.hints,
-      revealSensitive: props.params.revealSensitive ?? false,
-      isSensitivePathRevealed: props.params.isSensitivePathRevealed,
-    }),
+  const sensitiveState = createMemo(
+    () =>
+      getSensitiveRenderState({
+        path: valuePath(),
+        value: entryValue(),
+        hints: props.params.hints,
+        revealSensitive: props.params.revealSensitive ?? false,
+        isSensitivePathRevealed: props.params.isSensitivePathRevealed,
+      }),
+    { lazy: true },
   );
   const node = createMemo(
     () =>
@@ -88,6 +90,7 @@ function ConfigMapRow(
         showLabel: false,
         onPatch: props.params.onPatch,
       }) satisfies ConfigNodeRenderParams,
+    { lazy: true },
   );
   return (
     <>

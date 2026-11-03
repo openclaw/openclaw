@@ -56,6 +56,7 @@ backup and its matching build, not just reinstalling the older package.
 | 37      | Ordered cold transcript archive chunks with a 64 MiB uncompressed bound per file                                                                                                                                                                       | `Unreleased` |
 | 38      | PostgreSQL full-text search splits punctuation-joined tokens like SQLite FTS5 ([#183547](https://github.com/openclaw/openclaw/pull/183547)); metadata-only SQLite advance                                                                              | `Unreleased` |
 | 39      | Retained cold transcript navigation for bounded history reads without restoration                                                                                                                                                                      | `Unreleased` |
+| 40      | Durable session creation receipts bound to the original session incarnation                                                                                                                                                                            | `Unreleased` |
 
 Schema 1 first appeared in `v2026.5.30-beta.1` and was also written by the
 extended-stable `v2026.7.35`. Versions 2, 4, 5–6, and 7 were development-only
@@ -75,6 +76,35 @@ including shared agent registration. Run `openclaw doctor --fix` with OpenClaw
 be verified, follow the explicit agent-restoration instructions it reports, then
 rerun Doctor before upgrading the copy. Schema-8 and later session migrations
 remain supported.
+
+### Session deletion indexes (same-version additive index, lead-approved 2026-10-31)
+
+Agent schema 39 adds nonunique indexes on
+`session_input_completions(session_key)` and
+`conversation_deliveries(source_session_key, operation_id)`. Node deletion uses
+the first index for its cascading foreign key instead of scanning unrelated
+completion history. Delivery cleanup uses the second for both progress-cache
+selection and delivery deletion. Stored rows, constraints, retention, and
+transaction ownership are unchanged; neither schema marker advances.
+
+Fresh databases declare both indexes in the canonical schema. Existing SQLite
+stores install or repair them through the writable admission owner's canonical
+index repair. The optional completion table's first-use owner also declares its
+index and uses idempotent `CREATE INDEX IF NOT EXISTS`; it skips DDL when published
+schema facts already contain the table and index. Delivery storage is eager, so
+its existing database-admission owner installs the index before request access.
+Read-only admission accepts the preceding missing-index shape until that writable
+owner runs. Existing completion tables are not backfilled or rewritten, and absent
+optional tables remain absent until first use.
+
+Older same-version SQLite readers and writers accept the extra indexes, and
+SQLite maintains them transparently during older writes. Downgrade leaves them
+intact. Index construction scans only its owning table and retains one derived
+entry per row; admission retains its integrity checks and transactional rollback.
+PostgreSQL schema 39 keeps its exact preceding generated catalog: these two
+SQLite-only additions are recorded as omissions in the portability report.
+PostgreSQL adoption belongs to the next natural agent migration, including its
+historical catalog and upgrade proof; no existing PostgreSQL seal changes here.
 
 ### Agent schema 39
 
@@ -372,6 +402,11 @@ node, window, and main-key session-validation triggers. The session
 writer validates its serialized row before persisting it and writes the final
 validity value directly. Ordinary writes leave no pending validation marker and
 need no post-write row reread or validity update.
+
+Placement retirement and Doctor identity probes consume the recorded validity,
+session key, and current session ID without decoding entry payloads or participant
+projections. Invalid or ambiguous identities remain indeterminate; offline repairs
+still cross canonical admission before their identity facts can be consumed.
 
 `session_canonical_validation_pending` remains a derived admission queue.
 Offline imports, Doctor repairs, and main-key policy changes explicitly queue

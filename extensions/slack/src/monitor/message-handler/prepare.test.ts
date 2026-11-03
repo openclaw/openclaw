@@ -1415,7 +1415,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       } else {
         expect(prepared.ctxPayload.IsFirstThreadTurn).toBeUndefined();
         expect(prepared.ctxPayload.ThreadHistoryBody).toBeUndefined();
-        expect(prepared.ctxPayload.ThreadStarterBody).toBeUndefined();
+        expect(prepared.ctxPayload.ThreadStarterBody).toBe("starter");
         expect(prepared.ctxPayload.ThreadLabel).toContain("Slack thread");
         expect(prepared.sessionDisplayName).toBe("Renamed in Slack");
         expect(replies).toHaveBeenCalledTimes(1);
