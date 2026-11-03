@@ -1640,6 +1640,8 @@ const enSettings = {
       triggerWordsUnavailable: "Voice wake trigger editing is not enabled on this Gateway.",
       triggerWordsError: "Could not save trigger words: {error}",
       triggerWordsLoadError: "Could not load trigger words: {error}",
+      triggerWordsSaveFailed: "Could not save trigger words.",
+      triggerWordsLoadFailed: "Could not load trigger words.",
       triggerWordsDisconnected:
         "Trigger words have not been saved. Your edits are retained. Reconnect to this Gateway, then retry.",
       saved: "Saved",
