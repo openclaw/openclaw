@@ -50,8 +50,8 @@ describe("splitMediaFromOutput", () => {
     expectParsedMediaOutputCase(input, { mediaUrls: undefined });
   }
 
-  function expectUnrecognizedMediaTextCase(input: string) {
-    expectParsedMediaOutputCase(input, { mediaUrls: undefined, text: input });
+  function expectUnrecognizedMediaTextCase(input: string, options?: SplitMediaFromOutputOptions) {
+    expectParsedMediaOutputCase(input, { mediaUrls: undefined, text: input }, options);
   }
 
   function expectPolicyRejectedMediaUrlCase(input: string) {
@@ -729,10 +729,7 @@ describe("splitMediaFromOutput", () => {
 
   it("keeps markdown image urls as text by default", () => {
     const input = "Caption\n\n![chart](https://example.com/chart.png)";
-    expectParsedMediaOutputCase(input, {
-      text: input,
-      mediaUrls: undefined,
-    });
+    expectUnrecognizedMediaTextCase(input);
   });
 
   it.each([
@@ -842,11 +839,7 @@ describe("splitMediaFromOutput", () => {
   it("keeps nested labels within reference images literal", () => {
     const input =
       "![![nested](https://example.com/nested.png)][outer]\n\n[outer]: https://example.com/outer.png";
-    expectParsedMediaOutputCase(
-      input,
-      { text: input, mediaUrls: undefined },
-      extractMarkdownImages,
-    );
+    expectUnrecognizedMediaTextCase(input, extractMarkdownImages);
   });
 
   it.each(["\n", "\r\n", "\r"])(
@@ -902,11 +895,7 @@ describe("splitMediaFromOutput", () => {
     ["indented code", "    ![chart](https://example.com/chart.png)"],
     ["multiline inline code", "``example\n![chart](https://example.com/chart.png)\n``"],
   ])("keeps Markdown image syntax literal in %s", (_name, input) => {
-    expectParsedMediaOutputCase(
-      input,
-      { text: input, mediaUrls: undefined },
-      extractMarkdownImages,
-    );
+    expectUnrecognizedMediaTextCase(input, extractMarkdownImages);
   });
 
   it.each(["\n", "\r\n", "\r"])("keeps image offsets across %j line endings", (newline) => {
@@ -997,40 +986,19 @@ describe("splitMediaFromOutput", () => {
     "![x](http://example.com/a.png)",
     "![x](https://127.0.0.1/a.png)",
   ] as const)("does not lift local markdown image target: %s", (input) => {
-    expectParsedMediaOutputCase(
-      input,
-      {
-        text: input,
-        mediaUrls: undefined,
-      },
-      extractMarkdownImages,
-    );
+    expectUnrecognizedMediaTextCase(input, extractMarkdownImages);
   });
 
   it("does not lift markdown image urls that fail media validation", () => {
     const longUrl = `![x](https://example.com/${"a".repeat(4097)}.png)`;
 
-    expectParsedMediaOutputCase(
-      longUrl,
-      {
-        text: longUrl,
-        mediaUrls: undefined,
-      },
-      extractMarkdownImages,
-    );
+    expectUnrecognizedMediaTextCase(longUrl, extractMarkdownImages);
   });
 
   it("leaves very long markdown-image candidate lines as text", () => {
     const input = `${"prefix ".repeat(3000)}![x](https://example.com/image.png)`;
 
-    expectParsedMediaOutputCase(
-      input,
-      {
-        text: input,
-        mediaUrls: undefined,
-      },
-      extractMarkdownImages,
-    );
+    expectUnrecognizedMediaTextCase(input, extractMarkdownImages);
   });
 
   it.each(["a* ", "] "])(

@@ -50,6 +50,7 @@ const repositoryScriptEntries = [
   "scripts/perf/backup-verify-fixture.mjs!",
   "scripts/perf/backup-verify-measure.mjs!",
   "scripts/perf/board-read-admission-measure.ts!",
+  "scripts/perf/podman-exec-measure.ts!",
   "scripts/perf/responses-policy-fingerprint-measure.ts!",
   "scripts/perf/cron-own-receipts-measure.mjs!",
   "scripts/perf/spawn-broker-shutdown-measure.ts!",
@@ -85,6 +86,9 @@ const repositoryScriptEntries = [
   "scripts/annotate-proof-image.mts!",
   "scripts/render-proof-video.mts!",
   "scripts/ci-shard-timings-refresh.mts!",
+  "scripts/ci-test-observations.mjs!",
+  "scripts/ci-adaptive-select.mjs!",
+  "scripts/ci-adaptive-costs.mjs!",
   // The scheduled-run execution context design invokes this development replay by path.
   "scripts/dev/cron-context-replay.mts!",
   // #183131 invokes this fresh-process cron flake workload by path.
@@ -194,6 +198,7 @@ const repositoryScriptEntries = [
   "scripts/perf/mcp-http-dispatcher-measure.ts!",
   "scripts/perf/prepared-gateway-startup-measure.mjs!",
   "scripts/perf/sandbox-paths-measure.ts!",
+  "scripts/perf/github-publication-snapshot-measure.ts!",
   // Maintained source headers invoke these standalone commands and external preload by exact path.
   "scripts/bench-control-ui-talk.ts!",
   // Maintained source headers invoke these standalone analysis commands by exact path.

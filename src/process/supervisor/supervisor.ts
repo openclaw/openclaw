@@ -389,6 +389,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
       outputDeadline.reset();
       const construction = {
         executionIntent: input.executionIntent,
+        executionScopeKey: input.executionScopeKey ?? scopeKey,
         assertCurrent: input.assertCurrent,
         beforeSpawn: input.beforeSpawn,
         initiateSpawn: input.initiateSpawn,

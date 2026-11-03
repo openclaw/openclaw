@@ -30,6 +30,14 @@ const testSuites = new Set([
 ]);
 const reviewed = new Map([
   [
+    "src/config/sessions/session-creation-receipts.ts",
+    {
+      tier: "T3",
+      evidence:
+        "Read only through session-entry-read.worker.ts. Commits run in session-reset.kernel.ts, replacement-state, and projection-state under their existing execution workers; native creation requires off-thread or schema/agent-maintenance custody (session-accessor.sqlite-creation.ts and openclaw-agent-execution-scope.ts). Memory creation returns before these kernels.",
+    },
+  ],
+  [
     "src/infra/client-credential-store.ts",
     {
       tier: "T3",
@@ -3265,6 +3273,17 @@ const reviewedOperations = new Map([
     ],
   ],
   [
+    "src/state/session-repository-workspaces.kernel.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["restoreSessionRepositoryWorkspaceDiskInDatabase"],
+        evidence:
+          "Only retained-owner-recovery.ts invokes this operation from the offline database restore command; ordinary workspace operations remain worker-owned",
+      },
+    ],
+  ],
+  [
     "src/state/openclaw-agent-db-path-repair.ts",
     [
       {
@@ -3667,6 +3686,10 @@ const exceptionModules = new Set([
   "src/infra/sqlite-staging-token.ts", // acquireSqliteStagingToken holds the private snapshot admission/retirement lock through native transactions.
 ]);
 const cliModules = new Map([
+  [
+    "src/gateway/worker-environments/retained-owner-recovery.ts",
+    "Only database-restore-session-dependencies.ts invokes this offline repair under exclusive local-state custody and its synchronous shared-state transaction",
+  ],
   [
     "src/skills/library/recovery.ts",
     "Only database-restore-session-dependencies.ts invokes this repair under exclusive offline CLI custody; runtime skill mutations keep the library worker owner",

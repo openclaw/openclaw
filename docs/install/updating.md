@@ -61,6 +61,17 @@ conflict refusals; preparation does not seed a runtime or start a service. Retry
 also reconciles intent when credential cutover already completed. The candidate
 must contain this fix; older installed updaters are unchanged.
 
+After draining database readers and writers, candidate Doctor inspects SQLite
+reclamation mode without copying databases whose WAL is empty or absent and whose
+rollback journal is absent. Immutable reads preserve source artifacts; databases
+with recovery content retain the private snapshot path. Conversion still uses the
+existing maintenance, space, and integrity checks. This requires the candidate
+Doctor; the installed updater needs no new protocol.
+
+Synchronous integrity workers preserve the migration owner's selected schema-only
+check, matching the asynchronous worker path. Explicit full verification keeps
+its full coverage; the candidate must contain this transport fix.
+
 Candidate Doctor prepares its read-only SQLite inspection snapshots asynchronously,
 including lease and auth inspection and captured session repair planning. Cancellation
 joins the snapshot child and its cleanup. Snapshot allocation checks the destination's

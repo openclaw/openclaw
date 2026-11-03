@@ -9,7 +9,6 @@ import {
   createConfigRuntimeEnvBase,
   prepareConfigRuntimeEnvLoad,
 } from "./config-env-vars.js";
-import { resolveManagedUnsetPathsForWrite } from "./config-path-mutation.js";
 import { assertConfigWriteAllowedInCurrentMode } from "./config-write-guard.js";
 import { getDeferredPluginMigrationConfigFacts } from "./deferred-plugin-migration-config.js";
 import { resolveWriteEnvSnapshotForPath } from "./env-preserve.js";
@@ -501,7 +500,6 @@ export async function writeConfigFile(
           expectedConfigPath: options.expectedConfigPath,
           envSnapshotForRestore: options.envSnapshotForRestore,
         }),
-        unsetPaths: resolveManagedUnsetPathsForWrite(options.unsetPaths),
         explicitSetValueSource: options.explicitSetPaths
           ? (options.explicitSetValueSource ?? cfg)
           : undefined,

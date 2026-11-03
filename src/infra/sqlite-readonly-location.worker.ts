@@ -78,6 +78,7 @@ async function inspect(
       mode !== "staged-async" &&
       mode !== "metadata" &&
       mode !== "consolidated" &&
+      mode !== "task-delivery-recovery" &&
       !isSqliteSnapshotStagingMode(mode)) ||
     !pathname
   ) {
@@ -87,6 +88,25 @@ async function inspect(
     };
   }
   try {
+    if (mode === "task-delivery-recovery") {
+      const recoveryDirectory = args[2];
+      const sourcePath = args[3];
+      if (args.length !== 4 || !recoveryDirectory || !sourcePath) {
+        throw new Error(
+          "Task delivery recovery requires its private snapshot, recovery directory, and source path",
+        );
+      }
+      const { preserveOrphanTaskDeliveryRecoveryInProcess } =
+        await import("../state/openclaw-state-db-task-delivery-recovery-preservation.js");
+      return {
+        ok: true,
+        taskDeliveryRecovery: preserveOrphanTaskDeliveryRecoveryInProcess(
+          pathname,
+          sourcePath,
+          recoveryDirectory,
+        ),
+      };
+    }
     if (
       args.length > 4 ||
       (args[3] !== undefined &&

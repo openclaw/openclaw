@@ -298,7 +298,12 @@ export async function preparePostgresClientCredentials(
   runtime: RuntimeEnv,
   rebindMissing = false,
 ) {
-  const [preflight, { prepareDoctorDatabaseMigrations }, state, credentials] = await Promise.all([
+  const [
+    preflight,
+    { prepareDoctorDatabaseMigrations },
+    state,
+    { prepareClientCredentialRecoveryCustody, recoverClientCredentialStore },
+  ] = await Promise.all([
     import("../state/openclaw-database-preflight.js"),
     import("./doctor-schema-migrations.js"),
     import("../state/openclaw-state-db.js"),
@@ -327,17 +332,35 @@ export async function preparePostgresClientCredentials(
       runtime.error(warning);
     }
   }
-  withEngineStoreAdmission(() => {
-    const source = state.openOpenClawStateDatabase({ env });
-    const result = credentials.recoverClientCredentialStore(source.db, {
-      env,
-      path: source.path,
-      rebindMissing,
-    });
+  const source = withEngineStoreAdmission(() => state.openOpenClawStateDatabase({ env }));
+  const prepared = await prepareClientCredentialRecoveryCustody({
+    env,
+    path: source.path,
+    rebindMissing,
+  });
+  try {
+    const recover = () =>
+      withEngineStoreAdmission(() =>
+        recoverClientCredentialStore(source.db, {
+          env,
+          path: source.path,
+          rebindMissing,
+          recovery: prepared,
+        }),
+      );
+    const result = prepared
+      ? await (
+          await import("../infra/update-doctor-migration-attribution.js")
+        ).runUpdateSqliteMigrationAsync(prepared.custody.database, prepared.custody.path, recover, {
+          retainExclusive: true,
+        })
+      : recover();
     if (result === "rebound") {
       runtime.error(
         "Local client credentials were missing and have been re-created for the existing PostgreSQL state store. Clients on this host have new identities and must pair again; paired remote devices that kept their credentials stay paired.",
       );
     }
-  });
+  } finally {
+    prepared?.custody.close();
+  }
 }
