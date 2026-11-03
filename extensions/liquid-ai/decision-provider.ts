@@ -1,12 +1,15 @@
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { DecisionProviderV2, DecisionProviderContextV2 } from "openclaw/plugin-sdk/decisions";
 import {
+  encodeLiquidDecisionRequest,
+  supportsLiquidDecisionBatch,
+  executeLiquidDecision,
+} from "openclaw/plugin-sdk/decisions-systemone-runtime";
+import {
   resolveProviderHttpRequestConfig,
   resolveProviderTransportSsrFPolicy,
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
-import { encodeLiquidDecisionRequest, supportsLiquidDecisionBatch } from "./decision-codec.js";
-import { executeLiquidDecision } from "./decision-execution.js";
 
 const BASE_URL = "https://api.liquid.ai/decisions/v1";
 

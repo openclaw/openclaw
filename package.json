@@ -1670,6 +1670,10 @@
       "types": "./dist/plugin-sdk/decisions-openai-runtime.d.ts",
       "default": "./dist/plugin-sdk/decisions-openai-runtime.js"
     },
+    "./plugin-sdk/decisions-systemone-runtime": {
+      "types": "./dist/plugin-sdk/decisions-systemone-runtime.d.ts",
+      "default": "./dist/plugin-sdk/decisions-systemone-runtime.js"
+    },
     "./plugin-sdk/secret-ref-readonly": {
       "types": "./dist/plugin-sdk/secret-ref-readonly.d.ts",
       "default": "./dist/plugin-sdk/secret-ref-readonly.js"

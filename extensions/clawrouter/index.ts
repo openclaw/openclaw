@@ -41,6 +41,7 @@ import {
 import { containsAsciiControlCharacter } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { clawrouterMediaUnderstandingProvider } from "./audio-transcription.js";
 import { normalizeClawRouterApiBaseUrl, normalizeClawRouterRootUrl } from "./base-url.js";
+import { listClawRouterDecisionModels } from "./decision-offers.js";
 import { buildClawRouterDecisionProvider } from "./decision-provider.js";
 import { clawrouterEmbeddingProvider } from "./embedding-provider.js";
 import { buildClawRouterImageGenerationProvider } from "./image-generation-provider.js";
@@ -461,7 +462,11 @@ export default defineSingleProviderPluginEntry({
     api.registerEmbeddingProvider(clawrouterEmbeddingProvider);
     api.registerWebSearchProvider(createClawRouterWebSearchProvider());
     api.registerMediaUnderstandingProvider(clawrouterMediaUnderstandingProvider);
-    api.registerDecisionProvider(buildClawRouterDecisionProvider());
+    api.registerDecisionProvider(
+      buildClawRouterDecisionProvider({
+        getImageMetadata: (buffer) => api.runtime.media.getImageMetadata(buffer),
+      }),
+    );
     api.registerImageGenerationProvider(buildClawRouterImageGenerationProvider());
     api.registerModelCatalogProvider({
       provider: "clawrouter",
@@ -615,8 +620,8 @@ export default defineSingleProviderPluginEntry({
       },
       // This is protocol support, not a key grant. The decision executor checks the
       // selected credential's catalog before using its native route.
-      augmentModelCatalog: ({ entries }) =>
-        entries.map((entry) =>
+      augmentModelCatalog: async (context) => [
+        ...context.entries.map((entry) =>
           entry.provider === PROVIDER_ID &&
           entry.id === "openai/gpt-6-luna" &&
           entry.api === "openai-responses"
@@ -626,6 +631,8 @@ export default defineSingleProviderPluginEntry({
               }
             : entry,
         ),
+        ...(await listClawRouterDecisionModels(context)),
+      ],
       // Live catalog routing also applies to explicitly configured model rows.
       preferRuntimeResolvedModel: () => true,
       prepareDynamicModel: async (ctx) => {

@@ -3,7 +3,13 @@ import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 
 const loadRuntime = createLazyRuntimeModule(() => import("./decision-provider.runtime.js"));
 
-export function buildClawRouterDecisionProvider(): DecisionProviderV2 {
+export type ClawRouterDecisionDependencies = {
+  getImageMetadata: (buffer: Buffer) => Promise<{ width: number; height: number } | null>;
+};
+
+export function buildClawRouterDecisionProvider(
+  deps?: ClawRouterDecisionDependencies,
+): DecisionProviderV2 {
   return {
     id: "clawrouter",
     contractVersion: 2,
@@ -11,7 +17,7 @@ export function buildClawRouterDecisionProvider(): DecisionProviderV2 {
       context.signal.throwIfAborted();
       const { evaluateClawRouterDecision } = await loadRuntime();
       context.signal.throwIfAborted();
-      return evaluateClawRouterDecision(batch, context);
+      return evaluateClawRouterDecision(batch, context, deps);
     },
   };
 }

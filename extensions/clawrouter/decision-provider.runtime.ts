@@ -22,6 +22,8 @@ import {
 import { parseRetryAfterHeaderSeconds } from "openclaw/plugin-sdk/retry-runtime";
 import { normalizeClawRouterRootUrl } from "./base-url.js";
 import { grantsLuna } from "./decision-catalog.js";
+import type { ClawRouterDecisionDependencies } from "./decision-provider.js";
+import { evaluateClawRouterLiquidDecision } from "./decision-systemone.runtime.js";
 
 type ClawRouterDecisionCatalogOutcome =
   | { status: "ready"; root: string }
@@ -41,7 +43,11 @@ type ClawRouterDecisionCatalogExecution = Pick<
 export async function evaluateClawRouterDecision(
   batch: DecisionBatchV2,
   context: DecisionProviderContextV2,
+  deps?: ClawRouterDecisionDependencies,
 ): Promise<ProviderDecisionOutcomeV2> {
+  if (context.model.provider === "clawrouter" && context.model.id.startsWith("liquid-ai/")) {
+    return evaluateClawRouterLiquidDecision(batch, context, deps);
+  }
   context.signal.throwIfAborted();
   if (
     context.model.provider !== "clawrouter" ||
