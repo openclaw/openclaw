@@ -11,6 +11,7 @@ import { stopChildProcess } from "../../../test/helpers/stop-child-process.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createConfigIO } from "../../config/config.js";
 import { hashConfigRaw } from "../../config/io.read-helpers.js";
+import { resolveGatewayLockDir } from "../../config/paths.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { FILE_LOCK_TIMEOUT_ERROR_CODE, withFileLock } from "../../infra/file-lock.js";
 import { runPackagePostInstallVerification } from "../../infra/package-update-verification-step.js";
@@ -571,6 +572,7 @@ it.for([
       });
     }
     if (change === "readonly-config") {
+      fs.mkdirSync(resolveGatewayLockDir(stateDir), { recursive: true, mode: 0o700 });
       fs.chmodSync(stateDir, 0o500);
     }
     let outcome: Awaited<ReturnType<typeof rollbackFailedUpdate>>;
