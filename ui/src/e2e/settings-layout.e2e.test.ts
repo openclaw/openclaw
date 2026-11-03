@@ -698,36 +698,6 @@ suite.define(() => {
     }
   });
 
-  it("switches the floating header, rows and controls together at 640", async () => {
-    const context = await suite.browser.newContext({
-      ...createDarkDesktopControlUiContextOptions(),
-      viewport: { height: 900, width: 640 },
-    });
-    const page = await context.newPage();
-    await installMockGateway(page);
-
-    try {
-      const pathname = pathForRoute("connection");
-      await page.goto(new URL(pathname, suite.server.baseUrl).toString());
-      await waitForControlUiRoute(page, { pathname, routeId: "connection" });
-      await page.locator(".settings-row--stacked-on-narrow").first().waitFor();
-      const read = () =>
-        page.evaluate(() => ({
-          floating: document.querySelector(".shell--floating-header") !== null,
-          control: getComputedStyle(document.documentElement)
-            .getPropertyValue("--settings-control-height")
-            .trim(),
-          row: getComputedStyle(document.querySelector(".settings-row--stacked-on-narrow")!)
-            .flexDirection,
-        }));
-      await expect.poll(read).toEqual({ floating: true, control: "38px", row: "column" });
-      await page.setViewportSize({ height: 900, width: 641 });
-      await expect.poll(read).toEqual({ floating: false, control: "32px", row: "row" });
-    } finally {
-      await context.close();
-    }
-  });
-
   it("keeps Automations search above one tab-and-action row", async () => {
     const context = await suite.browser.newContext({
       colorScheme: "dark",

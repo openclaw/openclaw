@@ -14,7 +14,6 @@ import {
   ContextNewSessionAction,
   renderNewSessionLink as NewSessionLink,
 } from "../components/solid/new-session-link.tsx";
-import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../lib/keyboard-shortcut-contract.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
@@ -34,7 +33,7 @@ import { beginNativeWindowDrag, beginNativeWindowDragFromTopInset } from "./nati
 import { FloatingUpdateCard } from "./navigation-surface-view.tsx";
 import { floatingSidebarAttentionVisible } from "./navigation-surface.ts";
 import { RouterOutlet } from "./router-outlet.tsx";
-import { NAV_WIDTH_MAX, NAV_WIDTH_MIN, patchSettings } from "./settings.ts";
+import { NAV_WIDTH_MAX, NAV_WIDTH_MIN } from "./settings.ts";
 import { CollapsedHomeToggle } from "./shell-assistant-toggles.tsx";
 import { ShellLayoutProvider } from "./shell-layout-traits-solid.tsx";
 
@@ -356,52 +355,6 @@ export function ApplicationShell(props: {
               props.host.resizeNavigation(event.detail.splitRatio)
             }
           />
-        </Show>
-        <Show
-          when={
-            view().runtime.readOnlyConfig &&
-            view().uiSettings.dismissedReadOnlyConfigNotice !==
-              JSON.stringify(view().runtime.readOnlyConfig)
-              ? view().runtime.readOnlyConfig
-              : undefined
-          }
-          keyed
-        >
-          {(notice) => (
-            <p
-              class="shell-config-read-only callout info callout--dismissible"
-              inert={view().mobileNavLayout && view().navDrawerOpen}
-            >
-              <span class="callout__content">
-                <strong>{t("nav.gateway.configReadOnly")}</strong>{" "}
-                {notice.message || t("nav.gateway.configReadOnlyHint")}
-                <Show when={notice.docsUrl}>
-                  {" "}
-                  <a
-                    href={notice.docsUrl}
-                    target={EXTERNAL_LINK_TARGET}
-                    rel={buildExternalLinkRel()}
-                    data-link-reader-external
-                  >
-                    {t("common.learnMore")}
-                  </a>
-                </Show>
-              </span>
-              <button
-                class="callout__dismiss"
-                type="button"
-                aria-label={t("common.dismiss")}
-                onClick={() =>
-                  patchSettings({
-                    gatewayUrl: view().context.gateway.connection.gatewayUrl,
-                    dismissedReadOnlyConfigNotice: JSON.stringify(notice),
-                  })
-                }
-              >
-                <Icon name="x" />
-              </button>
-            </p>
-          )}
         </Show>
         <main
           id="control-ui-main"

@@ -24,7 +24,6 @@ import { bootstrapApplication } from "./bootstrap.ts";
 import { createSolidControlUiReadiness } from "./control-ui-readiness-solid.ts";
 import { NATIVE_HISTORY_STATE_EVENT } from "./native-web-chrome.ts";
 import { registerRouteElement } from "./route-elements.ts";
-import { loadSettings } from "./settings.ts";
 
 const sidebarImport = vi.hoisted(() => Promise.withResolvers<void>());
 vi.mock("../components/app-sidebar.tsx", async (importOriginal) => {
@@ -164,59 +163,33 @@ it("publishes readiness when the retained sidebar's delayed module commits", asy
   }
 });
 
-it("shows the read-only banner only for the serving Gateway while its configuration is read-only", async () => {
-  const { runtime, query, refresh, route } = await mountShell();
-  const { config, gateway } = runtime.context;
+it("does not show a global notice for read-only Gateway configuration", async () => {
+  const { runtime, query, route, refresh } = await mountShell();
+  const { config } = runtime.context;
   const fetch = vi.spyOn(globalThis, "fetch");
-  const loadConfig = async (configReadOnly: boolean, configReadOnlyNotice?: string) => {
-    fetch.mockResolvedValueOnce(Response.json({ configReadOnly, configReadOnlyNotice }));
+  const notice =
+    "OpenClaw Enterprise manages this Gateway's configuration. https://docs.example.org/gateway";
+  for (const configReadOnly of [true, false, true]) {
+    fetch.mockResolvedValueOnce(
+      new Response(JSON.stringify({ configReadOnly, configReadOnlyNotice: notice })),
+    );
     await config.refresh();
-    refresh();
-  };
-  const getBanner = () => query(".shell-config-read-only");
-  await loadConfig(true);
-  const banner = getBanner();
-  expect(banner?.textContent?.trim()).toBe(
-    "Gateway configuration is read-only. To make changes, update the configuration file or deployment settings for this Gateway.",
-  );
-  expect(banner?.querySelector("a")).toBeNull();
-  route("settings");
-  expect(getBanner()).toBe(banner);
-
-  banner?.querySelector<HTMLButtonElement>('button[aria-label="Dismiss"]')?.click();
-  refresh();
-  expect(getBanner()).toBeNull();
-  expect(runtime.readOnlyConfig).toBeDefined();
-  route("chat");
-  await loadConfig(true);
-  expect(getBanner()).toBeNull();
-  // The browser remembers this notice for this Gateway, without hiding a sibling's notice.
-  const saved = loadSettings(gateway.connection.gatewayUrl);
-  expect(saved.dismissedReadOnlyConfigNotice).toBeDefined();
-  expect(
-    loadSettings("ws://another-gateway.example").dismissedReadOnlyConfigNotice,
-  ).toBeUndefined();
-
-  const docsUrl = "https://docs.example.org/gateway";
-  const notice = `Use the <admin> console. ${docsUrl}`;
-  await loadConfig(true, notice);
-  const custom = getBanner();
-  expect(custom?.textContent?.trim()).toBe(
-    "Gateway configuration is read-only. Use the <admin> console. Learn more",
-  );
-  expect(custom?.querySelector("a")?.href).toBe(docsUrl);
-
-  const serving = gateway.connection;
-  const connection = vi.spyOn(gateway, "connection", "get");
-  connection.mockReturnValue({ ...serving, gatewayUrl: serving.gatewayUrl + "/another-gateway" });
-  refresh();
-  expect(getBanner()).toBeNull();
-  connection.mockRestore();
-  refresh();
-  expect(getBanner()).not.toBeNull();
-
-  await loadConfig(false, notice);
-  expect(getBanner()).toBeNull();
+    for (const routeId of ["chat", "config"] as const) {
+      route(routeId);
+      refresh();
+      expect(query(".shell-config-read-only")).toBeNull();
+      expect(query(".shell")?.textContent).not.toContain("Gateway configuration is read-only.");
+      expect(query(".shell")?.textContent).not.toContain("OpenClaw Enterprise manages");
+    }
+    expect(runtime.readOnlyConfig).toEqual(
+      configReadOnly
+        ? {
+            message: "OpenClaw Enterprise manages this Gateway's configuration.",
+            docsUrl: "https://docs.example.org/gateway",
+          }
+        : undefined,
+    );
+  }
 });
 
 it("exposes the Templates navigation entry only while its Labs toggle is enabled", async () => {
