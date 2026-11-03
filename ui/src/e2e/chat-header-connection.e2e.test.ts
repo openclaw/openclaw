@@ -103,7 +103,7 @@ suite.define(() => {
         const geometry = () =>
           header
             .locator(
-              ".chat-pane__header-trailing, .chat-pane__identity-actions, openclaw-chat-pane-versions-menu, .chat-pane__crumbs, .chat-pane__session-title-text",
+              ".chat-pane__header-trailing, .chat-pane__identity-actions, .chat-pane__crumbs, .chat-pane__session-title-text",
             )
             .evaluateAll((elements) =>
               elements.map((element) => {
@@ -120,7 +120,7 @@ suite.define(() => {
           });
         await header.locator(".chat-pane__workspace-chip").waitFor();
         await header.locator(".session-color-dot").waitFor();
-        await header.locator("openclaw-chat-pane-versions-menu").waitFor();
+        await header.locator(".chat-header-session-menu__trigger").waitFor();
         const settled = await geometry();
         const settledFooter = await footerGeometry();
         const boundary = page.locator(".chat-history-boundary__action").first();
@@ -165,7 +165,6 @@ suite.define(() => {
         await gateway.waitForRequest("sessions.branches.list");
         expect.soft(await geometry()).toEqual(before);
         await gateway.resolveDeferred("sessions.branches.list");
-        await header.locator("openclaw-chat-pane-versions-menu").waitFor();
         expect.soft(await footerGeometry()).toEqual(settledFooter);
         expect.soft(await geometry()).toEqual(before);
         await capture("connected");
@@ -184,7 +183,6 @@ suite.define(() => {
         for (const region of [
           "headerTrailing",
           "headerIdentity",
-          "versions",
           "identity",
           "sessionTitle",
           "ownFooter",

@@ -4,7 +4,6 @@ import path from "node:path";
 import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { githubRepositoryUrl } from "../agents/github-host.js";
 import type { WorktreeGitPolicy } from "../agents/worktrees/checkout-git-config.js";
-import { splitNullBuffer } from "../agents/worktrees/git-path-inventory.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { gitNullConfigPath, gitReadOnlyEnvironment } from "../infra/git-exec.js";
 import { appendGitConfig, gitMaintenanceEnvironment } from "../infra/git-maintenance-env.js";
@@ -611,17 +610,25 @@ export async function captureSettledGitHubPublicationWorkspaceSnapshot(
       const staged = await step(() =>
         readGitHubPublicationTree(params.cwd, workspaceTree, runPublicationCommand),
       );
-      const admitted = new Set(
-        [...admittedPaths].map((entry) => Buffer.from(entry).toString("hex")),
-      );
-      const excluded = splitNullBuffer(staged)
-        .map((record) => record.subarray(record.indexOf(9) + 1))
-        .filter((entry) => !admitted.has(entry.toString("hex")));
+      const excluded: Buffer[] = [];
+      let start = 0;
+      for (let end = staged.indexOf(0); end !== -1; end = staged.indexOf(0, start)) {
+        const pathStart = staged.indexOf(9, start) + 1;
+        const entry = staged.toString("utf8", pathStart, end);
+        // Invalid UTF-8 must not alias an admitted literal replacement character.
+        if (
+          !admittedPaths.has(entry) ||
+          (entry.includes("\uFFFD") && !Buffer.from(entry).equals(staged.subarray(pathStart, end)))
+        ) {
+          excluded.push(staged.subarray(pathStart, end + 1));
+        }
+        start = end + 1;
+      }
       if (excluded.length) {
         await git(
           ["update-index", "--force-remove", "-z", "--stdin"],
           env,
-          Buffer.concat(excluded.flatMap((entry) => [entry, Buffer.from([0])])),
+          Buffer.concat(excluded),
         );
         workspaceTree = await git(["write-tree"], env);
       }

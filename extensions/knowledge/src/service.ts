@@ -11,7 +11,7 @@ import { attachWorkspaceFile } from "./attachment-file.js";
 import { SinceInput, LastSeenInput } from "./chronicle-contract.js";
 import { emptyChronicle } from "./chronicle.js";
 import { contract } from "./contract.js";
-import { buildKnowledgeLearnGuidance, KNOWLEDGE_LEARN_TOOL_NAMES } from "./learn-guidance.js";
+import { knowledgeLearnContribution } from "./learn-guidance.js";
 import {
   RECORD_MAX_BYTES,
   BODY_INPUT_MAX_CHARS,
@@ -128,14 +128,11 @@ export function createKnowledgeService(
       // write-disabled installs suppress Memory Core's append-only file plan with an explicit null.
       providerFlushPlanResolver: () =>
         policy.writesEnabled ? buildKnowledgeMemoryFlushPlan() : null,
-      // Write-disabled installs contribute no /learn guidance; Skill Workshop still can.
-      ...(policy.writesEnabled
-        ? {
-            learnToolNames: KNOWLEDGE_LEARN_TOOL_NAMES,
-            learnGuidanceBuilder: buildKnowledgeLearnGuidance,
-          }
-        : {}),
     });
+  }
+  // Write-disabled installs contribute no /learn guidance; Skill Workshop still can.
+  if (policy.writesEnabled && typeof api.registerLearnContribution === "function") {
+    api.registerLearnContribution(knowledgeLearnContribution);
   }
   if (typeof api.on === "function") {
     registerMemoryIndexHook(api, stores);

@@ -496,6 +496,21 @@ function assertConfigSurvived() {
     }
   }
 
+  if (coverage && acceptsIntent(coverage, "skill-library-split")) {
+    const baseline = process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE === "baseline";
+    assert(
+      JSON.stringify(config.tools?.allow) ===
+        JSON.stringify(
+          baseline ? ["read", "skill_workshop"] : ["read", "skill_workshop", "skill_library"],
+        ),
+      "Pre-split skill_workshop allowlist did not keep covering skill_library exactly once",
+    );
+    assert(
+      baseline || config.meta?.migrations?.skillLibraryToolSplit === true,
+      "Skill library split migration marker was not recorded",
+    );
+  }
+
   if (coverage && acceptsIntent(coverage, "silent-reply-internal-retirement")) {
     const baseline = process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE === "baseline";
     assertStrict.deepEqual(

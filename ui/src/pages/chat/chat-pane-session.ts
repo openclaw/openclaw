@@ -107,6 +107,21 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       void this.loadCatalogSession(key, false);
     }
   }
+
+  protected handleCatalogGatewayEvent(event: string): void {
+    if (
+      event !== "terminal.exit" ||
+      this.history.catalogSession?.canContinue !== false ||
+      this.catalogReadPending
+    ) {
+      return;
+    }
+    const key = parseCatalogSessionKey(this.state?.sessionKey);
+    if (key) {
+      // Recheck provider eligibility without discarding the retained transcript or older pages.
+      void this.loadCatalogSession(key, false, !this.history.catalogLoading);
+    }
+  }
   /** Hidden-run acknowledgements in flight or sent, keyed by run and activity revision. */
   private readonly hiddenRunReadRequests = new Map<
     string,
@@ -610,7 +625,11 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     return [...uniqueMessages, ...this.history.catalogMessages];
   }
 
-  protected async loadCatalogSession(key: CatalogSessionKey, older: boolean): Promise<boolean> {
+  protected async loadCatalogSession(
+    key: CatalogSessionKey,
+    older: boolean,
+    metadataOnly = false,
+  ): Promise<boolean> {
     const scope = this.captureConnectionScope();
     if (!scope) {
       return false;
@@ -631,7 +650,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       this.isConnectionScopeCurrent(scope) &&
       this.sessionKey === requestedSessionKey &&
       resolveChatAgentId(state) === agentId;
-    if (!older) {
+    if (!older && !metadataOnly) {
       this.history.catalogLoading = true;
       this.history.catalogCursor = undefined;
       this.olderCursorsSeen.clear();
@@ -655,6 +674,9 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
         }
         this.history.catalogHost = lookup.host;
         this.history.catalogSession = lookup.session;
+        if (metadataOnly) {
+          return true;
+        }
       }
       const requestedOlderCursor = older ? this.history.catalogCursor : undefined;
       const page = await client.request<SessionsCatalogReadResult>(
