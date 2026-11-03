@@ -106,7 +106,7 @@ function commentEditor(page: Page) {
 }
 async function addComment(page: Page, comment: string, passage = selectedText) {
   await selectText(selectedSource(page, passage));
-  await button(page.getByRole("toolbar", { name: "Selection actions" }), "Add to chat").click();
+  await button(page.getByRole("toolbar", { name: "Selection actions" }), "Add to message").click();
   await commentEditor(page).getByRole("textbox").fill(comment);
   await commentEditor(page).getByRole("textbox").press("Enter");
 }
@@ -253,7 +253,7 @@ suite.define(() => {
         const source = selectedSource(page);
         await source.waitFor({ state: "visible" });
         await selectText(source);
-        await button(page, "Add to chat").tap();
+        await button(page, "Add to message").tap();
         await comment.fill("Check the rollback steps. 🦞");
         await button(editor, "Save comment").tap();
         await pendingChip.tap();
@@ -276,7 +276,7 @@ suite.define(() => {
         await composer.tap();
         await expect.poll(() => fullQuote.isVisible()).toBe(false);
         await selectText(source);
-        await button(page, "Add to chat").tap();
+        await button(page, "Add to message").tap();
         await comment.fill("Remove only this pending comment.");
         await button(editor, "Save comment").tap();
         await button(pendingChip, "Remove all comments").tap();
@@ -310,7 +310,7 @@ suite.define(() => {
           page.getByRole("button", { name: `Edit comment ${number}`, exact: true });
         const open = async () => {
           await selectText(text);
-          await button(toolbar, "Add to chat").click();
+          await button(toolbar, "Add to message").click();
           await editor.waitFor({ state: "visible" });
         };
         const bounded = async (locator: Locator) => {
@@ -416,7 +416,7 @@ suite.define(() => {
       await page.mouse.wheel(0, -32);
       await waitForChatScrollIdle(page);
       await selectText(text.locator("strong"));
-      await button(page, "Add to chat").click();
+      await button(page, "Add to message").click();
       await submitComment(comment, "Keep this pin on its original passage.");
       const pin = button(page, "Edit comment 1");
       const aligned = async () => {
@@ -546,7 +546,10 @@ suite.define(() => {
       const sourceText = await page.locator(".chat-bubble").textContent();
       const selectedDomText = await paragraph.textContent();
       await selectText(paragraph);
-      await button(page.getByRole("toolbar", { name: "Selection actions" }), "Add to chat").click();
+      await button(
+        page.getByRole("toolbar", { name: "Selection actions" }),
+        "Add to message",
+      ).click();
       await button(commentEditor(page), "Save comment").click();
       await button(page, "Send message").click();
       const params = await sentMessage(gateway);

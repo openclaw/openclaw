@@ -314,6 +314,11 @@ augmentation.
 - `ctx.toolNames`: the OpenClaw tools the model could call this turn, after
   policy. Runtime-native tools, such as the Codex shell, are not listed. It is
   absent for runtimes that cannot report it, such as CLI backends.
+- `ctx.completedTurn`: `{ sessionId, entryId }` of the transcript entry that
+  ended the turn. Pass it as `through` to `api.runtime.subagent.runForkedTurn`
+  to review the finished turn in the background. It is absent when the runtime
+  recorded no final entry, such as CLI backends or a turn superseded before it
+  finished.
 
 `agent_end` is an observation hook. Channel-backed paths generally run
 it fire-and-forget after the turn, while local one-shot paths can wait

@@ -12,11 +12,8 @@ import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.typ
 import { currentAttachments } from "./chat-attachment-draft.ts";
 import { dataImageClipboardFile } from "./chat-attachment-image.ts";
 import { ChatAttachmentReadLifecycle, readChatAttachmentFile } from "./chat-attachment-reads.ts";
-import { encodeTextAsDataUrl } from "./chat-attachment-text.ts";
 
 registerChatComposerEnglish();
-
-const LARGE_PASTE_TEXT_THRESHOLD = 1000;
 
 function isFileDrag(dataTransfer: DataTransfer | null): boolean {
   return Array.from(dataTransfer?.types ?? []).includes("Files");
@@ -62,14 +59,10 @@ export function stagedAttachmentBytes(
   );
 }
 
-function chatAttachmentFromFile(
-  file: File,
-  dataUrl: string,
-  origin: ChatAttachment["origin"] = "file",
-): ChatAttachment {
-  const attachment = {
+function chatAttachmentFromFile(file: File, dataUrl: string): ChatAttachment {
+  const attachment: ChatAttachment = {
     id: generateAttachmentId(),
-    origin,
+    origin: "file",
     mimeType: file.type || "application/octet-stream",
     fileName: file.name || undefined,
     sizeBytes: file.size,
@@ -142,11 +135,7 @@ export function appendChatAttachmentFiles(
   return files.length;
 }
 
-export function handleChatAttachmentPaste(
-  e: ClipboardEvent,
-  props: ChatAttachmentControlsProps,
-  options: { imagesOnly?: boolean } = {},
-) {
+export function handleChatAttachmentPaste(e: ClipboardEvent, props: ChatAttachmentControlsProps) {
   if (!e.clipboardData || !props.onAttachmentsChange) {
     return;
   }
@@ -172,23 +161,8 @@ export function handleChatAttachmentPaste(
     imageFiles.push(pasted.file);
   }
   if (imageFiles.length === 0) {
-    if (
-      options.imagesOnly ||
-      !text ||
-      text.length <= LARGE_PASTE_TEXT_THRESHOLD ||
-      !(props.getDraft?.() ?? props.draft ?? "")
-    ) {
-      return;
-    }
-    e.preventDefault();
-    const file = new File([text], `pasted-text-${Date.now()}.txt`, { type: "text/plain" });
-    const stagedBytes = stagedAttachmentBytes(props);
-    if (admitAttachmentFiles([file], props.attachmentLimits, stagedBytes).length === 0) {
-      // The rejection toast named the file; the clipboard still holds the text.
-      return;
-    }
-    const attachment = chatAttachmentFromFile(file, encodeTextAsDataUrl(text), "paste");
-    props.onAttachmentsChange([...currentAttachments(props), attachment]);
+    // Clipboard text is user input regardless of length; file conversion would
+    // route it through document extraction's untrusted external-content boundary.
     return;
   }
   e.preventDefault();

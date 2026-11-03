@@ -43,6 +43,7 @@ import {
   type GoogleInteractionsRequestBody,
 } from "./google-interactions-request.js";
 import { buildGoogleInteractionsSimpleThinking, type GoogleApiType } from "./google-shared.js";
+import { mapGoogleToolArguments } from "./google-tool-parameters.js";
 import {
   GOOGLE_VIDEO_SLOT_OMISSION,
   materializeGoogleVideoSlots,
@@ -232,6 +233,12 @@ export const streamGoogleInteractions: StreamFunction<
           if (currentBlock.partialJson?.trim()) {
             currentBlock.arguments = parseTerminalToolCallArguments(currentBlock.partialJson);
           }
+          currentBlock.arguments = mapGoogleToolArguments(
+            providerContext.tools,
+            currentBlock.name,
+            currentBlock.arguments,
+            "decode",
+          );
           delete currentBlock.partialJson;
           stream.push({
             type: "toolcall_end",
