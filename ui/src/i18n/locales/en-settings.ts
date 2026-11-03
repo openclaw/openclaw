@@ -863,23 +863,23 @@ const enSettings = {
     },
     snapshots: {
       retirementHint:
-        "Checkpoint {checkpoint} is awaiting deletion. Cleanup retries during the next warm-image capture or worker teardown. Inspect openclaw crabbox warm-images --json and resolve provider deletion errors if it remains pending.",
+        "Snapshot {checkpoint} is awaiting deletion. Cleanup retries during the next snapshot capture or cloud device cleanup. If it stays pending, check the provider’s deletion errors.",
       uncertain: "Paused: uncertain",
       lastUsed: "Last used {age}",
       pin: "Pin",
       unpin: "Unpin",
       delete: "Delete",
-      deleteTitle: "Delete snapshot",
+      deleteTitle: "Delete this snapshot?",
       deleteMessage:
-        "Delete this checkpoint from the provider? This cannot be undone. Failed deletion remains recorded and retries during maintenance.",
+        "Delete this snapshot from the provider. This can’t be undone. If deletion fails, it stays pending and retries during maintenance.",
       deletePinned: "Unpin this snapshot before deleting it.",
-      deleteHeld: "Outstanding allocations still hold this snapshot.",
+      deleteHeld: "This snapshot is still allocated and can’t be deleted yet.",
       deleteCapturing: "Wait for the active capture to finish before deleting this snapshot.",
       deletionRetiring: "Snapshot deletion is pending. Maintenance will retry provider cleanup.",
       rollback: "Roll back",
-      rollbackTitle: "Roll back snapshot",
+      rollbackTitle: "Roll back this snapshot?",
       rollbackMessage:
-        "Restore this previous checkpoint as the current image. The current image becomes the previous generation, or is retired when the retention policy keeps no previous generation unless it is pinned. Existing allocations keep their recorded checkpoint.",
+        "Use this previous snapshot as the current image. The current image becomes the previous generation, or is scheduled for deletion if retention keeps no previous generation and it isn’t pinned. Existing cloud devices keep their recorded snapshot.",
       refreshAfter: "Refresh after",
       refreshAfterHelp: "Default: 24h. Use whole minutes, hours, or days; minimum 1h.",
       refreshAfterInvalid:
@@ -892,26 +892,27 @@ const enSettings = {
       keepNone: "None (default)",
       keepOne: "Keep one",
       savePolicy: "Save retention policy",
-      policySaved: "Retention policy saved.",
-      policySaveFailed: "Could not save retention policy. Refresh the config and try again.",
+      policySaved: "Retention policy saved",
+      policySaveFailed: "Couldn’t save the retention policy. Refresh the settings and try again.",
       rebuild: "Rebuild",
       selectBuildInputs: "Choose an enabled profile and a local repository.",
       buildStarted: "Build started",
       buildReused: "Reusing the build already in progress",
       capacity:
-        "The prepared worker pool is full. Raise the prepared pool cap or destroy an unused worker, then try again.",
+        "No cloud devices are available. Raise the pool limit or remove an unused cloud device, then try again.",
       invalidProject:
-        "The repository must be an accessible local Git checkout root with a HEAD commit. Select another repository or fix the checkout, then try again.",
+        "Couldn’t build the snapshot. Select an accessible local Git repository with a HEAD commit, or fix the checkout and try again.",
       invalidProfile:
-        "This machine is unavailable or does not support project preparation. Choose another machine or check its configuration, then rebuild.",
+        "Couldn’t build the snapshot on this cloud device. Choose an available device that supports project preparation, or check its settings and try again.",
       cancelBuild: "Cancel build",
+      cancelBuildTitle: "Cancel this snapshot build?",
       cancelBuildMessage:
-        "Stop this snapshot build and destroy its worker? OpenClaw waits for provider work and cleanup to finish.",
+        "The build stops and its cloud device is removed. OpenClaw waits for provider work and cleanup to finish.",
       buildCancelled: "Build canceled",
       dismiss: "Dismiss",
-      dismissBuild: "Dismiss failed build",
+      dismissBuild: "Dismiss this failed build?",
       dismissBuildMessage:
-        "Request cleanup for this failed build and hide it from this view. The Gateway keeps the failed record until its retention window ends, so it can reappear after a reload.",
+        "Request cleanup for this failed build and hide it from this view. The failed record stays until its retention window ends, so it can reappear after a reload.",
       buildDismissed: "Failed build dismissed",
       buildStates: {
         requested: "Requested",
@@ -927,13 +928,13 @@ const enSettings = {
         orphaned: "Orphaned",
       },
       recover: "Recover",
-      recoverTitle: "Recover paused capture",
+      recoverTitle: "Recover this paused snapshot?",
       recoverMessage:
-        "Clear this capture reservation after manual provider cleanup. Recovery preserves recorded images and allocation choices. It does not stop workers or delete provider artifacts.",
-      acknowledgement: "I stopped the owning capture and worker and reconciled provider artifacts",
-      recovered: "Capture reservation cleared. The next eligible worker can capture again.",
-      recoveryChanged:
-        "The Gateway connection changed. Select the repository and try recovery again.",
+        "Clear this capture reservation after manual provider cleanup. Recorded snapshots and allocation choices stay. This won’t stop cloud devices or delete provider resources.",
+      acknowledgement:
+        "I stopped the active capture and cloud device and resolved any remaining provider resources",
+      recovered: "Capture reservation cleared",
+      recoveryChanged: "The connection changed. Select the repository and try recovery again.",
     },
     empty: "No cloud worker profiles are configured.",
     addProfile: "Add profile",

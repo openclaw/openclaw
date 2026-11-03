@@ -345,7 +345,7 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
       return;
     }
     const confirmed = await confirm({
-      title: i18n.t(`cloudWorkersPage.snapshots.${dismiss ? "dismissBuild" : "cancelBuild"}`),
+      title: i18n.t(`cloudWorkersPage.snapshots.${dismiss ? "dismissBuild" : "cancelBuildTitle"}`),
       message: i18n.t(
         `cloudWorkersPage.snapshots.${dismiss ? "dismissBuildMessage" : "cancelBuildMessage"}`,
       ),
