@@ -66,7 +66,6 @@ import {
 import type { SidebarContent } from "../chat/components/chat-sidebar-content-types.ts";
 import type { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 import {
-  NewSessionDraftVisibility,
   NewSessionPlusMenu,
   NewSessionSelectionStatus,
   StartControl,
@@ -645,14 +644,6 @@ export function NewSessionComposer(props: {
               />
             </Show>
             {options().permissionControl}
-            <Show
-              when={
-                !options().nativeTerminal &&
-                (options().draftAvailable || options().visibility === "draft")
-              }
-            >
-              <NewSessionDraftVisibility options={options()} />
-            </Show>
             <Show when={!options().nativeTerminal}>
               <NewSessionSelectionStatus options={options()} />
             </Show>

@@ -14,6 +14,7 @@ import { startDebugProxyServer } from "../proxy-capture/proxy-server.js";
 import type { CaptureQueryPreset } from "../proxy-capture/types.js";
 import { defaultRuntime, writeRuntimeJson } from "../runtime.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import { throwExpectedCliError } from "./expected-cli-error.js";
 import { withProxyCaptureOwner } from "./proxy-capture-owner.js";
 import { resolveSubprocessExitCode } from "./subprocess-exit-code.js";
 
@@ -93,7 +94,7 @@ export async function runDebugProxyRunCommand(opts: {
 }) {
   // Each proxied child command gets its own capture session id for later query/filtering.
   if (opts.commandArgs.length === 0) {
-    throw new Error("proxy run requires a command after --");
+    throwExpectedCliError("proxy run requires a command after --");
   }
   let releaseSignals: (() => void) | undefined;
   try {
@@ -317,7 +318,7 @@ export async function readDebugProxyBlobCommand(opts: { blobId: string }) {
   await withProxyCaptureOwner(async (store) => {
     const content = await store.readBlob(opts.blobId);
     if (content == null) {
-      throw new Error(`Unknown blob: ${opts.blobId}`);
+      throwExpectedCliError(`Unknown blob: ${opts.blobId}`);
     }
     process.stdout.write(content);
   });

@@ -107,6 +107,7 @@ export async function reloadGatewayPlugins(
   let previousStopStarted = false;
   let previousHooksStopped = false;
   let previousCleanupFailed = false;
+  let runtimeRestorationFailed = false;
   let overlap = false;
   let candidateServices: PluginServicesHandle | undefined;
   let loaded: Awaited<ReturnType<typeof PluginBootstrap.prepareGatewayPluginLoad>> | undefined;
@@ -693,6 +694,7 @@ export async function reloadGatewayPlugins(
             try {
               await rollbackConfigEffects?.();
             } catch (rollbackError) {
+              runtimeRestorationFailed = true;
               facts.restored = false;
               onCleanupFailure("Plugin runtime rollback could not republish the model runtime")(
                 rollbackError,
@@ -712,6 +714,7 @@ export async function reloadGatewayPlugins(
             pluginIds: [...changedPluginIds].toSorted(),
             phase: facts.phase,
             committed: facts.committed,
+            ...(runtimeRestorationFailed ? { runtimeRestorationFailed: true } : {}),
           },
           { cause: failure },
         );

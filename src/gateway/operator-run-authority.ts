@@ -292,7 +292,11 @@ export async function captureGatewayOperatorRunAuthority(input: {
     release?: () => void;
   }> | null;
   /** Additional request lifetime; never replaces the authenticated access grant. */
-  invocationAuthority?: Readonly<{ assertCurrent: () => void; signal?: AbortSignal }>;
+  invocationAuthority?: Readonly<{
+    assertCurrent: () => void;
+    signal?: AbortSignal;
+    release?: () => void;
+  }>;
 }): Promise<{ authority: AdmittedRunOperatorAuthority; release: () => void } | undefined> {
   const params = { ...input };
   const inherited = params.client?.internal?.operatorRunAuthority;
@@ -472,8 +476,15 @@ export async function captureGatewayOperatorRunAuthority(input: {
             unsubscribe?.();
           }
           preparedProfile?.release();
-          params.sourceAuthority?.release?.();
-          releaseDevice?.();
+          try {
+            params.sourceAuthority?.release?.();
+          } finally {
+            try {
+              params.invocationAuthority?.release?.();
+            } finally {
+              releaseDevice?.();
+            }
+          }
         }
       }
     };

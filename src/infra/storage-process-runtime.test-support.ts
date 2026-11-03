@@ -17,6 +17,7 @@ export const storageProcessTestEntrypoints = {
   updateDoctorResult: entrypoint("update-doctor-result"),
   updateModelRetirement: entrypoint("update-deferred-model-retirement"),
   sqliteReadOnlyLocation: entrypoint("sqlite-readonly-location"),
+  sqliteSnapshotSource: entrypoint("sqlite-snapshot-source"),
   sqliteReadRetention: entrypoint("sqlite-readonly-worker.retention.test-support"),
   sqliteSchemaRetention: entrypoint("sqlite-schema-facts.retention.test-support"),
   sqliteLifecycleCreationRetention: entrypoint("sqlite-lifecycle-creation.retention.test-support"),

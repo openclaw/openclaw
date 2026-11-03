@@ -6,9 +6,9 @@ import type {
   WorkerEnvironmentStartStatus,
 } from "../../packages/gateway-protocol/src/schema/environments.js";
 import type { SecretRef } from "../config/types.secrets.js";
-import type { ImageGenerationProvider } from "../image-generation/types.js";
+import type { ImageGenerationProvider } from "../image-generation/provider-types.js";
 import type { MediaUnderstandingProvider } from "../media-understanding/types.js";
-import type { MusicGenerationProvider } from "../music-generation/types.js";
+import type { MusicGenerationProvider } from "../music-generation/provider-types.js";
 import type { SpawnResult } from "../process/exec.js";
 import type {
   RealtimeTranscriptionProviderConfig,
@@ -32,27 +32,27 @@ import type {
 import type { TranscriptSourceProvider as TranscriptsSourceProviderCapability } from "../transcripts/provider-types.js";
 import type {
   SpeechDirectiveTokenParseContext,
-  SpeechDirectiveTokenParseResult,
   SpeechProviderConfiguredContext,
-  SpeechProviderConfig,
   SpeechProviderResolveConfigContext,
   SpeechProviderResolveTalkConfigContext,
   SpeechProviderResolveTalkOverridesContext,
   SpeechListVoicesRequest,
   SpeechProviderPrepareSynthesisContext,
-  SpeechProviderPreparedSynthesis,
-  SpeechProviderId,
   SpeechSynthesisRequest,
   SpeechSynthesisStreamRequest,
   SpeechTelephonySynthesisRequest,
-  SpeechVoiceOption,
 } from "../tts/provider-types.js";
 import type {
+  SpeechDirectiveTokenParseResult,
+  SpeechProviderConfig,
+  SpeechProviderPreparedSynthesis,
+  SpeechProviderId,
+  SpeechVoiceOption,
   SpeechSynthesisResult,
   SpeechSynthesisStreamResult,
   SpeechTelephonySynthesisResult,
 } from "../tts/tts-runtime-types.js";
-import type { VideoGenerationProvider } from "../video-generation/types.js";
+import type { VideoGenerationProvider } from "../video-generation/provider-types.js";
 import type { PluginJsonValue } from "./host-hook-json.js";
 import type {
   WorkerRetentionObservation,

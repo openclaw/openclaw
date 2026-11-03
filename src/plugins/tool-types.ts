@@ -76,6 +76,12 @@ type OpenClawPluginToolContextBase = {
    * policy; it never grants owner identity.
    */
   inputProvenance?: InputProvenance;
+  /**
+   * Present when this tool runs inside a hidden background fork of another session.
+   * `ownerPluginId` names the plugin that started the fork with
+   * `api.runtime.subagent.runForkedTurn`; it is absent for core-owned forks. Host-stamped.
+   */
+  backgroundRun?: { sourceSessionKey: string; ownerPluginId?: string };
   /** Out-of-band plugin-owned bindings attached by the current run initiator. */
   toolBindings?: Readonly<Record<string, unknown>>;
   /** Host-prepared repository identities for project-aware tool behavior. */

@@ -308,7 +308,7 @@ suite.define(() => {
         const composer = page.locator(".agent-chat__input textarea");
         const sendButton = page.getByRole("button", { name: "Send message" });
         const alert = page.getByRole("alert").filter({ hasText: renderedDiagnostic });
-        const stop = page.getByRole("button", { name: "Stop generating" });
+        const stop = page.getByRole("button", { name: "Stop", exact: true });
         const details = alert.getByLabel("Error details", { exact: true });
         await composer.fill("Try again");
         expect(await sendButton.isEnabled()).toBe(true);

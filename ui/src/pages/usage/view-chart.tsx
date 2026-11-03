@@ -3,6 +3,7 @@ import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-u
 import { providerDisplayLabel } from "../../components/provider-icon-data.ts";
 import { SettingsSegmented } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
+import { createMediaQuery } from "../../lib/reactive/platform.ts";
 import "../../components/tooltip.ts";
 import {
   formatAnalysisCost,
@@ -176,7 +177,9 @@ export function DailyChartCompact(props: {
   const selected = createMemo(() => new Set(props.selectedDays));
   // An object, not the index alone: index 0 must still read as hovering.
   const [hover, setHover] = createSignal<{ index: number } | null>(null);
-  const labelEvery = createMemo(() => Math.max(1, Math.ceil(dates().length / 7)));
+  // The narrowest phones have room for five date labels, not seven.
+  const narrow = createMediaQuery("(max-width: 360px)");
+  const labelEvery = createMemo(() => Math.max(1, Math.ceil(dates().length / (narrow() ? 5 : 7))));
   const dimmed = (index: number) => {
     const active = hover();
     return active
@@ -210,8 +213,7 @@ export function DailyChartCompact(props: {
         </div>
         <SettingsSegmented
           mode="buttons"
-          variant="accent"
-          class="small sessions-toggle"
+          class="sessions-toggle"
           value={props.dailyChartMode}
           onChange={(mode) => props.onDailyChartModeChange(mode)}
           onReselect={(mode) => props.onDailyChartModeChange(mode)}

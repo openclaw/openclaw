@@ -267,6 +267,21 @@ activation. CPU collection also starts before intent. Each destination still
 starts from a separately settled chat boot, so this measures first route visits,
 not direct cold route loads or retained return visits.
 
+Route captures also retain `navigation.startedMs` and
+`navigation.cpuMilliseconds`, beginning before destination revelation (for
+example, opening Pages) and ending at the same post-ready idle CPU snapshot as
+`cpuMilliseconds`. The existing activation/intent readiness and CPU fields keep
+their boundaries. Per-route CPU profiles and traces now include that destination
+revelation, marked by `critical-path:<route>:navigation`.
+
+`navigation.documentRpcs` retains the complete current-document RPC census,
+including boot and requests that finish before activation.
+`navigation.documentRpcsCapturedMs` records its separate, post-CPU snapshot time.
+Use the raw request/response times to count work overlapping the navigation or
+legacy interval; the census itself is not a filtered navigation count. A request
+may occur after the CPU interval and before that census. Older captures have no
+`navigation` record and cannot recover these wider totals from legacy RPCs.
+
 Each destination's `criticalPath[].presentation` records layout shifts from
 intent (or activation without intent) through a separate snapshot taken after
 an additional 500 ms settle. Readiness, RPC/resource capture, and CPU measurement
@@ -503,6 +518,15 @@ click-occlusion proof, or send admission. Sampling ends at the existing shell an
 route completion boundary; the value remains null if no eligible editor was
 observed during that window. Older captures have no such fields: preserve them
 as absent, without relabeling or retrofitting the legacy metric.
+
+`warmReload.milestones.inputReady` observes an enabled, writable hydrated chat
+textarea in the active pane. It excludes the static boot composer and unrelated
+textareas; it does not check visibility, inertness, key delivery, paint, or send
+admission. Captures from before this selector correction accepted any enabled,
+writable textarea in the active pane, including the static fallback. Preserve
+those historical values with their original definition; do not compare them as
+hydrated-composer readiness. `firstUsableComposerMs` and its kind remain the
+separate observation that includes static editing.
 
 Warm reloads also record `warmReload.milestones.firstLiveTranscript` on the first
 sample with both visible transcript rows and the pane's `transcriptReady` state.

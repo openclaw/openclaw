@@ -604,7 +604,9 @@ describe("subagent composer", () => {
       expect(state.handleSendChat).not.toHaveBeenCalled();
       expect(container.querySelector("textarea, input[type=file]")).toBeNull();
       expect(container.querySelector(".agent-chat__composer-footer")).toBeNull();
-      expect(container.querySelector('[aria-label="Stop generating"]')).toBeNull();
+      expect(
+        container.querySelector('[aria-label="Stop"], [aria-label="Stop generating"]'),
+      ).toBeNull();
       const banner = container.querySelector(".agent-chat__disabled-banner");
       expect(banner?.textContent).toContain("View-only subagent");
       const navigate = banner?.querySelector<HTMLButtonElement>("button");

@@ -334,7 +334,6 @@ suite.define(() => {
           await expect.poll(() => start.isEnabled()).toBe(true);
           expect(await palette.locator(".agent-chat__composer-shell").count()).toBe(0);
           expect(await palette.locator(".chat-composer-model-control").count()).toBe(0);
-          expect(await palette.locator(".new-session-page__visibility").count()).toBe(0);
           const bounds = (await palette.locator(".cmd-palette").boundingBox())!;
           expect(bounds.x).toBeGreaterThanOrEqual(0);
           expect(bounds.x + bounds.width).toBeLessThanOrEqual(width);

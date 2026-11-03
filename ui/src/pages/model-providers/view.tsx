@@ -1,6 +1,6 @@
 import { createMemo, createSignal, For, Show } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
-import { Icon } from "../../components/solid/icon.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
   LearnMoreLink,
   SettingsEmpty,
@@ -266,14 +266,16 @@ function ProviderAccess(props: ModelProvidersViewProps) {
               </SettingsGroup>
             </Show>
             <Show when={unconnected().length > 0}>
-              <h3 class="provider-list__title">{t("modelProviders.row.notConnected")}</h3>
-              <SettingsGroup carapace>
-                <ul class="provider-list provider-list--quiet">
-                  <For each={unconnected()} keyed={(card) => card.id}>
-                    {(card) => <UnconnectedProviderRow {...props} card={card()} />}
-                  </For>
-                </ul>
-              </SettingsGroup>
+              <section class="settings-section provider-list__section">
+                <h3 class="settings-section__heading">{t("modelProviders.row.notConnected")}</h3>
+                <SettingsGroup carapace>
+                  <ul class="provider-list provider-list--quiet">
+                    <For each={unconnected()} keyed={(card) => card.id}>
+                      {(card) => <UnconnectedProviderRow {...props} card={card()} />}
+                    </For>
+                  </ul>
+                </SettingsGroup>
+              </section>
             </Show>
           </>
         )}
@@ -296,17 +298,13 @@ function ProviderAccess(props: ModelProvidersViewProps) {
             {t("modelProviders.viewUsage")}
           </button>
           {props.providerScope}
-          <openclaw-tooltip prop:content={refreshTooltip()}>
-            <button
-              type="button"
-              class="btn btn--icon btn--ghost btn--xs model-providers__refresh-button"
-              aria-label={refreshLabel()}
-              disabled={props.refreshing}
-              onClick={() => props.onRefresh()}
-            >
-              <Icon name="refresh" />
-            </button>
-          </openclaw-tooltip>
+          <RefreshButton
+            class="model-providers__refresh-button"
+            label={refreshLabel()}
+            tooltip={refreshTooltip()}
+            busy={props.refreshing}
+            onClick={() => props.onRefresh()}
+          />
         </>
       }
     >

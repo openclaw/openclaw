@@ -1,0 +1,2 @@
+60
+# Fake carrier regression: preserve opening audio through caller/provider interruption and restore later barge-in.

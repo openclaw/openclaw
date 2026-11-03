@@ -50,7 +50,9 @@ function buttons(root: ParentNode) {
 }
 
 function findButton(root: ParentNode, label: string) {
-  return buttons(root).find((node) => normalizeText(node) === label);
+  return buttons(root).find(
+    (node) => normalizeText(node) === label || node.getAttribute("aria-label") === label,
+  );
 }
 
 function githubDetail(skill: Partial<ClawHubSkillDetail["skill"]> = {}): ClawHubSkillDetail {
@@ -328,6 +330,30 @@ describe("renderSkills", () => {
     expect(onMutation).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { phone: false, focused: true },
+    { phone: true, focused: false },
+  ])(
+    "focuses discovery search on arrival unless at phone width: %o",
+    async ({ phone, focused }) => {
+      vi.stubGlobal("matchMedia", () => ({
+        matches: phone,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+      }));
+      try {
+        const { container, render } = createView();
+        render({ surface: "discovery" });
+        await Promise.resolve();
+        const search = container.querySelector<HTMLInputElement>('input[name="skills-search"]')!;
+        expect(search.hasAttribute("autofocus")).toBe(focused);
+        expect(document.activeElement === search).toBe(focused);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    },
+  );
+
   it("keeps status and detail targets after a Unicode-filtered row is enabled", async () => {
     const { container, query, render } = createView();
 
@@ -401,7 +427,7 @@ describe("renderSkills", () => {
     render({
       surface: "discovery",
       clawhubSearchError: "rate limited",
-      clawhubInstallMessage: { kind: "success", text: "Installed github" },
+      clawhubInstallMessage: { ref: "other", kind: "success", text: "Installed other" },
       clawhubDetailRef: "github",
       clawhubDetail: githubDetail({ icon }),
       clawhubIconUrls: { [icon]: "blob:clawhub-detail-icon" },
@@ -410,7 +436,7 @@ describe("renderSkills", () => {
     await getRenderedModalDialog(container);
     expect([...container.querySelectorAll(".callout")].map(normalizeText)).toEqual([
       "rate limited Retry",
-      "Installed github",
+      "Installed other",
     ]);
     expect(container.querySelector<HTMLImageElement>(".clawhub-skill-icon--detail")?.src).toBe(
       "blob:clawhub-detail-icon",
@@ -646,16 +672,16 @@ describe("renderSkills", () => {
     expect(query(".plugins-item")).toBe(row);
     expect(query('input[name="skills-filter"]')).toBe(search);
     expect(document.activeElement).toBe(search);
-    const refresh = () => findButton(container, "Loading…") ?? findButton(container, "Refresh")!;
+    const refresh = () => findButton(container, "Refresh")!;
     expect(refresh().disabled).toBe(true);
-    expect(refresh().textContent).toContain("Loading");
+    expect(refresh().getAttribute("aria-busy")).toBe("true");
     const updated = skillReport([createSkill({ description: "Updated description" })]);
     pending.resolve({ value: updated, error: null });
     render({ report: updated, skillsRead: pendingRead });
     await waitForFast(() => expect(row?.textContent).toContain("Updated description"));
     expect(query(".plugins-item")).toBe(row);
     expect(refresh().disabled).toBe(false);
-    expect(refresh().textContent).toContain("Refresh");
+    expect(refresh().getAttribute("aria-busy")).toBeNull();
   });
 
   it("renders card read errors and retries inside the existing detail dialog", async () => {

@@ -226,8 +226,13 @@ depending on the per-kind AST shape.
 `set` writes one concrete target:
 
 - Markdown frontmatter values and `- key: value` item fields are string
-  leaves. Values are literal, including `$1`, `$&`, and `$$`. Markdown
-  insertions append sections, frontmatter keys, or section items. Edits replace
+  leaves. Item field replacements must contain non-whitespace text; blank
+  replacements are rejected without writing. Frontmatter values may be empty.
+  Values are literal, including `$1`, `$&`, and `$$`. Markdown
+  insertions append sections, frontmatter keys, or section items. New frontmatter
+  keys must start with an ASCII letter or underscore and contain only ASCII
+  letters, digits, underscores, or hyphens; unsupported keys are rejected before
+  writing. Edits replace
   only the selected source range: body edits preserve the original frontmatter,
   and frontmatter edits preserve the body, including comments, quoting, blank
   lines, CRLF, and a missing final newline. Frontmatter uses `---` delimiters;
