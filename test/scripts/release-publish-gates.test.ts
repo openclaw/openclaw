@@ -37,10 +37,10 @@ it.each([
 it("warns when the stable rollback drill will expire before the release window", () => {
   expect(
     evaluateStableRollbackDrill({
-      now: new Date("2026-08-18T00:00:00.000Z"),
+      nowMs: Date.parse("2026-08-18T00:00:00.000Z"),
       rollbackDrillDate: "2026-06-01",
       rollbackDrillId: "rollback-drill-2026-q2",
-    }),
+    }).find((gate) => gate.id === "stable-closeout.rollback-drill-date"),
   ).toEqual({
     id: "stable-closeout.rollback-drill-date",
     status: "WARN",
@@ -54,15 +54,16 @@ it("warns when the stable rollback drill will expire before the release window",
 it("passes when the stable rollback drill covers the release window", () => {
   expect(
     evaluateStableRollbackDrill({
-      now: new Date("2026-08-16T00:00:00.000Z"),
+      nowMs: Date.parse("2026-08-16T00:00:00.000Z"),
       rollbackDrillDate: "2026-06-01",
       rollbackDrillId: "rollback-drill-2026-q2",
-    }),
+    }).find((gate) => gate.id === "stable-closeout.rollback-drill-date"),
   ).toEqual({
     id: "stable-closeout.rollback-drill-date",
     status: "PASS",
-    message: "Rollback drill rollback-drill-2026-q2 is fresh through 2026-08-30.",
-    remediation: null,
+    message: "Rollback drill date satisfies the stable closeout freshness requirement.",
+    remediation:
+      "Run the private rollback drill and record its UTC date in RELEASE_ROLLBACK_DRILL_DATE or supply rollback_drill_date to stable closeout.",
   });
 });
 
