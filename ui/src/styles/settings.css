@@ -1117,6 +1117,38 @@ openclaw-appearance-background .settings-background-preview .session-background_
   width: 340px;
 }
 
+/* Generated settings line up down a group: every field control fills one column at
+   the row's end, so text, selects and segmented options share both edges. */
+@media not all and (max-width: 640px) {
+  .settings-row--field:not(.settings-row--stacked) {
+    --settings-field-width: 280px;
+
+    > .settings-row__control {
+      flex: 0 0 var(--settings-field-width);
+      max-width: none;
+
+      > :is(.settings-input, .settings-select, .settings-secret, .settings-phone-presentation) {
+        width: 100%;
+        min-width: 0;
+      }
+
+      > .settings-segmented {
+        display: flex;
+        flex: 1 1 auto;
+        flex-wrap: nowrap;
+        min-width: 0;
+      }
+
+      > .settings-segmented > .settings-segmented__btn {
+        flex: 1 1 0;
+        min-width: 0;
+        padding-inline: var(--space-2);
+      }
+    }
+  }
+}
+
+/* A stepper is short at any width, so it stays beside its label on phones too. */
 /* Short values line up with the selects in the same column. */
 .settings-row:not(.settings-row--stacked)
   .settings-row__control
