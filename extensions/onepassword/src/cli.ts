@@ -5,7 +5,7 @@ import type { AuditRow } from "./broker.js";
 import type { OnePasswordConfig } from "./config.js";
 import type { OpClient } from "./op-client.js";
 
-type CommandLike = {
+export type CommandLike = {
   command(name: string): CommandLike;
   description(value: string): CommandLike;
   option(flags: string, description: string, defaultValue?: string): CommandLike;

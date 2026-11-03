@@ -10,17 +10,22 @@ title: "1Password plugin"
 
 # 1Password
 
-The bundled `onepassword` plugin has two independent, opt-in surfaces:
+The bundled `onepassword` plugin has three independent, opt-in surfaces:
 
 - a managed exec provider that resolves configured [SecretRefs](/gateway/secrets)
   during Gateway startup, reload, audit, and apply preflight
 - a policy-controlled agent tool that reads a curated set of 1Password fields
+- an [Agentic Autofill preview](#agentic-autofill-preview) for browser sign-in
+  without returning login values to the model
 
-Both use the official `op` CLI and the same service-account token file. Enabling
-the plugin alone does not expose the agent tool: that surface also requires a
-configured item registry.
+The first two use the official `op` CLI and the same service-account token file.
+Enabling the plugin alone does not expose either agent tool: curated-secret
+access requires an item registry, and Agentic Autofill has a separate opt-in.
 
 ## Security model
+
+The service-account surfaces have the following security properties. Agentic
+Autofill has a [separate security model](#privacy-storage-and-disconnection).
 
 - Service-account authentication only. The token stays in a local credentials
   file and is never accepted in `openclaw.json`.
@@ -344,3 +349,156 @@ Policy and validation errors:
 - [Secrets management](/gateway/secrets)
 - [1Password](/gateway/1password) — the built-in `op://` secret source, and how the plugin, skill, and MCP options compare
 - [`openclaw secrets`](/cli/secrets) — store, reload, audit, configure, and apply SecretRefs from the CLI
+
+## Agentic Autofill preview
+
+Agentic Autofill is a separate opt-in for signing in with **your own logins**,
+without returning their values to OpenClaw or the model. It does not use `op` or
+change the existing SecretRef and curated-secret features above.
+
+**Integration status:** the relay client, connection owner, commands, and agent
+workflow are implemented. Browser ExtensionBridge and sensitive approval-link
+transport adapters are not wired yet. Requesting a login currently returns a
+clear `extensionAdapterUnavailable` error; enabling this preview alone does not
+provide working browser sign-in. Normal chat delivery is deliberately not used
+for approval links because it can mirror them into model-visible history.
+
+### Setup and consent
+
+Enable the plugin and its preview in your existing configuration:
+
+```json5
+{
+  plugins: {
+    entries: {
+      onepassword: {
+        enabled: true,
+        config: { agenticAutofill: { enabled: true } },
+      },
+    },
+  },
+}
+```
+
+The only new config key is `agenticAutofill.enabled` (default `false`). The tool
+is optional; allow `onepassword_autofill` in your agent's tool policy when needed.
+Restart the Gateway after enabling the feature. No OAuth client secret goes in
+OpenClaw configuration.
+
+With that Gateway running:
+
+```bash
+openclaw onepassword connect
+openclaw onepassword autofill-status
+openclaw onepassword disconnect
+```
+
+`connect` prints an HTTPS connect URL and confirmation code, then waits up to ten
+minutes for consent. Open the URL on your own device, verify that the code
+matches, and continue to 1Password. These two public fields can also be returned
+by the `onepassword_autofill` tool's `connect` action; its subsequent `connect`
+call with the returned session ID picks up the result. Pending sessions are
+memory-only: if the Gateway restarts, start consent again.
+
+This preview is Gateway-owner-only in chat; CLI operations require Gateway admin
+access. It does not derive a human identity from an agent ID or a channel sender
+string. Only one 1Password connection is selected per Gateway, and each browser
+must belong to that one person. Disconnect the old connection before connecting
+a different account. Multi-user personal connections are not supported yet.
+
+### Request, approve, fill
+
+Once both adapters are installed, request a task's logins together (one to five
+entries). Each entry has an HTTPS website, a short reason (100 characters), and
+optional keywords (up to five, each 50 characters). The task goal is limited to
+140 characters. Keep secrets, personal messages, and account identifiers out of
+all request text.
+
+The extension returns a sensitive `onepassword://` approval link. Plugin code
+hands it only to a private, authenticated delivery adapter, never to the model,
+transcript, or ordinary message sender. A channel that cannot deliver and open
+that scheme reports `approvalDelivery: unsupported`; do not ask the model to
+copy or reconstruct the link. A dedicated sensitive-link transport is required.
+
+Chat cannot observe when a person opens a link. Automatic status checks therefore
+start only after the person explicitly confirms opening it. There are no checks
+for five seconds; checks then run every two seconds to 30 seconds, every five
+seconds to one minute, and every ten seconds to two minutes, then stop. Rate
+limits impose at least a 60-second connection-wide backoff. After the window,
+tell the agent when you have approved: it can check once more. A still-pending
+request needs a new approval prompt, not an indefinite polling loop. Final and
+unknown states are saved and never polled again.
+
+Grants are matched by entry ID, not array order. Unrequested grants are not
+exposed for filling. OpenClaw restricts fill to the conversation and request
+that created the grant. The browser adapter must enable Agentic Mode and lock
+the tab against screenshots, DOM reads, and other browser commands until fill
+and submit finish. `fill_submitted` means the form was submitted, **not** that
+the website accepted the sign-in; check the page afterward.
+
+### Requirements and limits
+
+The current 1Password partner preview requires:
+
+- a US (`1password.com`) Individual or Family account; ordinary Business user
+  consent is not supported by the upstream preview
+- logins in your own vault (Personal or Private), not shared vaults
+- a Nightly 1Password desktop app on the device where you approve
+- a Chromium browser that supports extensions, with 1Password Nightly
+  8.12.46.6 or later; unpacked extension loading needs Chromium or Chrome for
+  Testing, not branded Google Chrome
+- browser access to `api.1password.com`, `my.1password.com`, and
+  `crl.1passwordservices.com`
+
+Mobile standalone approval links and general browser-popup approval are still
+in development upstream. Multi-page sign-in can fill the same granted entry on
+each page. Social-sign-in method pickers are not supported.
+
+### Privacy, storage, and disconnection
+
+OpenClaw and the model do not handle login values. The browser extension does
+handle values briefly between fill and submit, so browser isolation matters.
+The Gateway holds OAuth tokens, the integration key, and granted opaque
+references in its private SQLite plugin state, keyed by the integration key's
+exact client/account/user path. This has the same local file-protection class as
+OpenClaw OAuth credentials (private database and directory); it is **not** an
+encrypted-at-rest vault. Protect the Gateway account and its backups accordingly.
+Only current access tokens and the integration key enter browser memory; refresh
+tokens never do.
+
+`https://connect.openclaw.ai` performs OAuth exchange and refresh. The relay sees
+OAuth tokens, but the integration key is sealed in the user's callback page to
+a per-attempt Gateway key using ECDH P-256, HKDF-SHA256, and AES-256-GCM. It does
+not receive the integration key in plaintext. Connect URL/code are public;
+pickup tokens, keys, approval links, and references never enter tool results.
+
+Access tokens refresh one minute before expiry and rotated tokens replace the
+whole credential row atomically. An `invalid_grant` ends the connection and
+removes its grants; reconnect to continue. A missing integration key on repeated
+consent never erases the saved key. If the returned user identity cannot uniquely
+match a saved key, OpenClaw revokes the new consent and asks you to reconnect.
+
+`disconnect` revokes directly with 1Password and deletes local credentials and
+references only after successful revocation. Failure preserves them so you can
+retry. Revocation ends **all** grants for the connection; upstream grants
+otherwise last 30 days at launch and can be filled repeatedly for their approved
+task. A crash after upstream refresh but before local persistence can require
+reconnection; the plugin never blindly retries a one-use refresh token after a
+known successful rotation.
+
+### Troubleshooting
+
+- `extensionAdapterUnavailable`: the browser ExtensionBridge adapter is not
+  installed. No login was requested or filled.
+- `approvalDelivery: unsupported`: your channel lacks a private, non-transcript
+  link transport. Do not put the approval link in a normal message.
+- `gatewayOwnerRequired`: use an authenticated owner conversation; an agent ID
+  or arbitrary channel sender is not a personal credential identity.
+- `integrationKeyMissingReconnect`: new consent did not issue a key and no
+  uniquely matched saved key exists. Revocation has completed; connect again.
+- `reconnectRequired`: 1Password ended the connection; connect and approve again.
+- `rateLimitExceeded`: wait at least a minute before asking for another check.
+- `autosubmitFailed`: 1Password clears its filled values. Use another sign-in
+  method and report the website to 1Password.
+- Gateway method unavailable: enable the preview in the running Gateway and
+  restart it; CLI processes never create a second credential-state writer.

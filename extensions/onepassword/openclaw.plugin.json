@@ -2,7 +2,7 @@
   "id": "onepassword",
   "categories": ["security"],
   "name": "1Password",
-  "description": "1Password SecretRef resolver and curated agent broker with approval policy and SQLite audit history.",
+  "description": "1Password SecretRefs, audited secret access, and an opt-in Agentic Autofill preview.",
   "cliCommands": [
     {
       "name": "onepassword",
@@ -22,7 +22,7 @@
     }
   ],
   "contracts": {
-    "tools": ["onepassword"]
+    "tools": ["onepassword", "onepassword_autofill"]
   },
   "secretProviderIntegrations": {
     "onepassword": {
@@ -94,6 +94,14 @@
       }
     ],
     "properties": {
+      "agenticAutofill": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["enabled"],
+        "properties": {
+          "enabled": { "type": "boolean", "default": false }
+        }
+      },
       "vault": {
         "type": "string",
         "minLength": 1,
