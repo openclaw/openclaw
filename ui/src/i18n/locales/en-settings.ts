@@ -2101,22 +2101,20 @@ const enSettings = {
     engine: {
       title: "Engine",
       description:
-        "Exactly one memory plugin owns the memory slot. Selecting an engine enables it and disables the others.",
+        "Choose the plugin that stores and searches agent memory. Choosing another turns off the current one.",
       rowTitle: "Memory engine",
       openClawMemory: "OpenClaw Memory",
       off: "Off",
       unavailable: "Unavailable",
-      catalogUnavailable: "Connect to the gateway to change the memory engine.",
-      changeFailed: "Could not change the memory engine",
+      catalogUnavailable: "Reconnect to change the memory engine.",
+      changeFailed: "Couldn’t change the memory engine. Try again.",
       disabledTitle: "This engine is disabled",
-      disabledHint:
-        "The memory slot points at this plugin, but the plugin itself is disabled, so memory is not running.",
+      disabledHint: "This memory engine is selected but turned off. Turn it on to use memory.",
       enable: "Enable",
     },
     addons: {
       title: "Add-ons",
-      description:
-        "These plugins layer on top of the engine instead of competing for the slot, so any combination can run at once.",
+      description: "These plugins add features to your memory engine. You can use more than one.",
       activeMemory: {
         title: activeMemoryPresentation.memoryAddon.label,
       },
@@ -2124,7 +2122,7 @@ const enSettings = {
         title: memoryWikiPresentation.memoryAddon.label,
       },
       toggleAriaLabel: "Enable or disable {plugin}",
-      changeFailed: "Could not update {plugin}",
+      changeFailed: "Couldn’t update {plugin}. Try again.",
       stateUnknown: "Unknown",
       manage: "All plugins",
     },
@@ -2134,10 +2132,10 @@ const enSettings = {
     dreaming: {
       title: "Dreaming",
       intro:
-        "Dreaming runs as one managed automation across every agent workspace, so these settings are global. They are owned by the {plugin} plugin.",
+        "Dreaming uses one automation for all agents. These settings apply to every agent and are managed by the {plugin} plugin.",
       frequency: {
-        label: "Dreaming frequency",
-        help: "Cron cadence for the full dreaming sweep (light, REM, then deep). Leave empty for the plugin default.",
+        label: "Schedule (cron)",
+        help: "Schedule for the full dreaming sweep (light, REM, then deep). Leave empty for the plugin default.",
         placeholder: "0 3 * * *",
       },
       timezone: {

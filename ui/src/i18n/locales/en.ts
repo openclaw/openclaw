@@ -1069,7 +1069,7 @@ const startupEnglish = {
     about: "About",
     aiAgents: "Agent defaults",
     modelSetup: "Model Setup",
-    memoryImport: "Import Memory",
+    memoryImport: "Import memory",
     security: "Privacy & Security",
     secrets: "Secrets",
     debug: "Debug",
@@ -1134,7 +1134,7 @@ const startupEnglish = {
   memoryImport: {},
   onboarding: {
     memoryImport: {
-      title: "Bring your assistant memory with you",
+      title: "Bring your agent memory",
     },
   },
   assistantPanel: {

@@ -16,6 +16,7 @@ import { createPageRequest } from "../../lib/page-request.ts";
 import { projectAgentSelection, projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectAgents } from "../../lib/reactive/domain-capabilities.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 import { projectMutableSource } from "../../lib/reactive/projection.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import type { MemoryImportClient, MemoryImportState } from "./memory-import-state.ts";
@@ -107,7 +108,7 @@ export function MemoryImportPage() {
       );
     },
     onError: (error) => {
-      planError = formatUiError(error, "request failed");
+      planError = formatUiError(error, t("memoryImport.errorDetailsUnavailable"));
     },
   });
   async function loadPlan() {
@@ -379,7 +380,7 @@ export function MemoryImportPage() {
       await refresh();
     } catch (error) {
       if (epoch === applyEpoch) {
-        state.applyError = formatUiError(error, "request failed");
+        state.applyError = formatUiError(error, t("memoryImport.errorDetailsUnavailable"));
       }
     } finally {
       if (epoch === applyEpoch) {
@@ -485,12 +486,10 @@ export function MemoryImportPage() {
             return;
           }
           if (chunk.candidates > 0 && chunk.cursor?.advanced !== true) {
-            throw new Error("Session backfill stopped because the server cursor did not advance.");
+            throw new Error(t("memoryImport.backfillNotAdvancing"));
           }
           if (chunk.candidates === 0 && chunk.cursor?.exhausted !== true) {
-            throw new Error(
-              "Session backfill stopped because the server cursor was not exhausted.",
-            );
+            throw new Error(t("memoryImport.backfillIncomplete"));
           }
           for (const day of chunk.perDay) {
             processedDays.add(day.day);
@@ -512,7 +511,7 @@ export function MemoryImportPage() {
       }
     } catch (error) {
       if (isCurrent()) {
-        state.backfillError = formatUiError(error, "request failed");
+        state.backfillError = formatUiError(error, t("memoryImport.errorDetailsUnavailable"));
       }
     } finally {
       if (isCurrent()) {
@@ -640,6 +639,7 @@ export function MemoryImportPage() {
         <MemoryImport
           connected={gateway.read().snapshot.phase === "connected"}
           canAdmin={canAdmin()}
+          actorAuth={gateway.read().snapshot.hello?.auth ?? null}
           agents={listSelectableAgents(agents.read().agentsList?.agents ?? [])}
           selectedAgentId={currentAgentId()}
           plan={plan()}

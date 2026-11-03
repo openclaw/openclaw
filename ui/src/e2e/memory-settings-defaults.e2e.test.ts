@@ -136,7 +136,7 @@ suite.define(() => {
       expect(response?.status()).toBe(200);
 
       const engineRow = settingsRow(page, "Memory engine");
-      const frequencyRow = settingsRow(page, "Dreaming frequency");
+      const frequencyRow = settingsRow(page, "Schedule (cron)");
       await expect.poll(() => engineRow.textContent()).toContain("Default: OpenClaw Memory");
       await expect.poll(() => frequencyRow.textContent()).toContain("Default: 0 3 * * *");
       await expect.poll(() => frequencyRow.getByRole("textbox").inputValue()).toBe("0 6 * * *");
