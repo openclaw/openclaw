@@ -22,6 +22,7 @@ import {
   clearSubagentPendingDelivery,
   loadPendingFinalDeliveryPayload,
   markRequesterSettleWakePending,
+  recordPrivateConsumption,
 } from "../registry/subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
 import {
@@ -356,6 +357,7 @@ function mutateRequesterBatch(
             announcedAt: deliveredAt,
             lastDropReason: undefined,
           });
+          recordPrivateConsumption(subagent, params.outcome.requesterVisibleFinalDelivered);
           clearSubagentPendingDelivery(subagent);
         } else {
           const blocked = prepareBlockedSubagentCompletion(

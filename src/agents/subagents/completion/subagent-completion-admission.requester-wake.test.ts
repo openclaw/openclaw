@@ -8,6 +8,7 @@ import {
 import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { loadPendingFinalDeliveryPayload } from "../registry/subagent-delivery-state.js";
+import { resolveSubagentDeliveryStatus } from "../registry/subagent-list.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { restoreSubagentRunsFromDisk } from "../registry/subagent-registry-persistence.js";
 import { subscribeSubagentRunChanges } from "../registry/subagent-registry-publication.js";
@@ -223,6 +224,23 @@ describe("persisted subagent requester wakes", () => {
         );
         expect(notices).toHaveLength(delivered ? 0 : wave);
       }
+    },
+  );
+
+  it.each([true, false])(
+    "keeps a private batch delivered only with a confirmed visible final (visible=%s)",
+    async (visible) => {
+      const input = armRequesterWake(records());
+      input.subagent.completionTarget = "parent";
+      persistOwner(input);
+      await settleOne(input, {
+        delivered: true,
+        path: "direct",
+        ...(visible ? { requesterVisibleFinalDelivered: true as const } : {}),
+      });
+      expect(resolveSubagentDeliveryStatus(stored(input)!)).toBe(
+        visible ? "delivered" : "consumed_privately",
+      );
     },
   );
 

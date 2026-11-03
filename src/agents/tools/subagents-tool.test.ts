@@ -169,9 +169,8 @@ describe("subagents native run contract", () => {
     expect(entry.delivery.status).toBe("pending");
   });
   it("reports private parent consumption without claiming user delivery", async () => {
-    entry.completionTarget = "parent";
     entry.execution = { status: "terminal", endedAt: 100, outcome: { status: "ok" } };
-    entry.delivery = { status: "delivered" };
+    entry.delivery = { status: "delivered", consumedPrivately: true };
     expect((await wait(0)).details).toMatchObject({
       runs: [{ runId: entry.runId, deliveryStatus: "consumed_privately" }],
     });
