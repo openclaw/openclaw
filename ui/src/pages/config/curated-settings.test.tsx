@@ -189,6 +189,24 @@ it("rejects invalid numbers, accepts valid edits, and clears emptied values", ()
   expect(onPatch).toHaveBeenNthCalledWith(3, ["phases", "light", "lookbackDays"], undefined);
 });
 
+it("restores the admitted value when bad-input text is blurred", () => {
+  const onPatch = vi.fn();
+  const container = renderInto({ enabled: true, phases: { light: { lookbackDays: 7 } } }, onPatch);
+  const input = numberInput(container, "Lookback days");
+
+  // Simulate HTML number-input sanitization: invalid text yields an empty value
+  // with badInput set, which must not be mistaken for a deliberate clear.
+  Object.defineProperty(input, "validity", {
+    value: { badInput: true },
+    configurable: true,
+  });
+  input.value = "";
+  input.dispatchEvent(new Event("change", { bubbles: true }));
+
+  expect(onPatch).not.toHaveBeenCalled();
+  expect(input.value).toBe("7");
+});
+
 it("submits edited values and removals through the shared config owner without materializing display defaults", async () => {
   vi.useFakeTimers();
   let config: Record<string, unknown> = persistedConfig({

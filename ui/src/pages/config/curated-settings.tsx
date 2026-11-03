@@ -195,6 +195,11 @@ function CuratedField(props: { settings: CuratedSettingsProps; spec: CuratedSett
               placeholder={defaultValue()}
               onChange={(event) => {
                 const input = event.currentTarget;
+                if (input.validity.badInput) {
+                  // Type-invalid text in a number field; restore the admitted value.
+                  input.value = text();
+                  return;
+                }
                 const next = input.value.trim();
                 if (!next) {
                   props.settings.onPatch(props.spec.path, undefined);
