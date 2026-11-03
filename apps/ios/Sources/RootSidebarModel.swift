@@ -267,7 +267,8 @@ final class RootSidebarModel {
             !$0.isArchived && !$0.isSnoozed(at: now) && (isSearching || $0.key == selectedSessionKey ||
                 !OpenClawChatSessionListVisibility.isAutomationSession($0))
         }
-        return ChatSessionSidebarModel.sections(
+        // Subagent runs fold into their parent row instead of filling the drawer as separate chats.
+        return ChatSessionSidebarModel.foldingSubagentRuns(ChatSessionSidebarModel.sections(
             sessions: browsingSessions,
             // Keep missing-selection placeholders only until the active roster is complete.
             currentSessionKey: selectedIsHidden ? "" : currentSessionKey,
@@ -276,7 +277,7 @@ final class RootSidebarModel {
             groups: groups,
             excludesMainSession: true,
             query: query,
-            sessionRoutingContract: sessionRoutingContract)
+            sessionRoutingContract: sessionRoutingContract))
     }
 
     func setSnoozeWakeUpdatesActive(_ active: Bool) {

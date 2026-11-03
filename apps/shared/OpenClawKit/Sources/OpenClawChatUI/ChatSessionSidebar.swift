@@ -1,12 +1,6 @@
 #if os(macOS)
 import SwiftUI
 
-extension ChatSessionSidebarModel.Node {
-    var previewSessions: [OpenClawChatSessionEntry] {
-        [self.session] + self.foldedSessions + self.children.flatMap(\.previewSessions)
-    }
-}
-
 @MainActor
 struct ChatSessionSidebar: View {
     struct RowContext {
