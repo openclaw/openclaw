@@ -130,6 +130,10 @@ suite.define(() => {
             const reads = (await gateway.getRequests("config.get")).length;
             await gateway.deferNext("config.get");
             await recover.click();
+            await page
+              .getByRole("dialog")
+              .getByRole("button", { name: "Discard changes", exact: true })
+              .click();
             await gateway.waitForRequest("config.get", { after: reads });
             await gateway.resolveDeferred("config.get", candidate);
             await expect.poll(() => prefix.inputValue()).toBe("later draft");
@@ -140,6 +144,10 @@ suite.define(() => {
           await expect.poll(() => prefix.inputValue()).toBe("initial");
           await gateway.setMethodResponse("config.get", { ...snapshot, hash: "recovered" });
           await recover.click();
+          await page
+            .getByRole("dialog")
+            .getByRole("button", { name: "Discard changes", exact: true })
+            .click();
           await expect.poll(() => indicator.textContent()).not.toContain("Your draft is kept");
           await gateway.deferNext("config.set");
           await edit(prefix, finalDraft);

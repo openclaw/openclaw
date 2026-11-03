@@ -13,7 +13,10 @@ import {
   type SettingsSaveIndicatorProps,
 } from "./settings-save-indicator.tsx";
 
-vi.mock("./confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn(async () => true) }));
+vi.mock("./confirm-dialog.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./confirm-dialog.ts")>()),
+  showConfirmDialog: vi.fn(async () => true),
+}));
 
 let indicator: HTMLElement;
 let view: ReturnType<typeof mountSolid>;
