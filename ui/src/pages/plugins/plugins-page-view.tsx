@@ -307,11 +307,7 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
                   page().context.basePath,
                 )
           }
-          backLabel={
-            page().surface === "discovery" || settingsParentRoute() === "plugins"
-              ? t("tabs.plugins")
-              : t("nav.settings")
-          }
+          backLabel={t("tabs.plugins")}
           tab={page().state.installedDetailTab}
           onBack={() => {
             if (settings()) {
