@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import type { HumanMention } from "@openclaw/gateway-protocol";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { MediaImageLayout } from "../../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../../agents/harness/hook-helpers.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions.js";
@@ -27,25 +26,25 @@ import { extractTextFromChatContent } from "../../../shared/chat-content.js";
 import { resolveGlobalMap } from "../../../shared/global-singleton.js";
 import { AgentDatabaseExecutionAdmissionClosedError } from "../../../state/agent-database-admission-error.js";
 import {
-  buildCollectPrompt,
   beginQueueDrain,
+  buildCollectPrompt,
   drainCollectQueueStep,
   drainNextQueueItem,
   hasCrossChannelItems,
-  removeQueuedItemsByRef,
   previewQueueSummaryPrompt,
+  removeQueuedItemsByRef,
   waitForQueueDebounce,
 } from "../../../utils/queue-helpers.js";
 import { isRoutableChannel } from "../route-reply.js";
+import { collectQueuedPromptMedia } from "./collect-media.js";
 import { resolveCollectedRun } from "./collected-run.js";
 import {
   assertSingleAdmissionOwner,
-  collectRuntimeMetadata,
   collectCurrentInboundContext,
+  collectRuntimeMetadata,
   createOverflowSummaryRetrySource,
   getFollowupOriginRouting,
   hasExclusiveTurnAdmission,
-  hasPreparedCurrentTurnImages,
   prepareNextDeliveryGroup,
   resolveFollowupReplyAnchor,
   resolveOverflowSummaryInboundEventKind,
@@ -67,13 +66,6 @@ import {
 } from "./state.js";
 import { consumeQueueSummaryDelivery } from "./summary-consumption.js";
 import { FollowupRunDeferredError, isFollowupRunAborted, type FollowupRun } from "./types.js";
-
-type InternalFollowupRun = FollowupRun & {
-  /** Keep admission state out of the public plugin-facing FollowupRun contract. */
-  currentTurnImagesPrepared?: true;
-  /** Admission-owned layout; fact indexes are relative to this run's media array. */
-  mediaImageLayout?: MediaImageLayout;
-};
 
 // Persists the most recent runFollowup callback per queue key so that
 // enqueueFollowupRun can restart a drain that finished and deleted the queue.
@@ -225,52 +217,6 @@ function buildCollectItemPrefix(item: FollowupRun, idx: number): string {
 
 function renderCollectItemPrompt(item: FollowupRun, idx: number, prompt: string): string {
   return `${buildCollectItemPrefix(item, idx)}${prompt}`.trim();
-}
-
-function collectQueuedPromptMedia(
-  items: FollowupRun[],
-): Pick<FollowupRun, "images" | "imageOrder" | "media"> &
-  Pick<InternalFollowupRun, "currentTurnImagesPrepared" | "mediaImageLayout"> {
-  const images: NonNullable<FollowupRun["images"]> = [];
-  const imageOrder: NonNullable<FollowupRun["imageOrder"]> = [];
-  const media: NonNullable<FollowupRun["media"]> = [];
-  const mediaImageSlots: MediaImageLayout["slots"] = [];
-  const suppressedFactIndexes: number[] = [];
-  const currentTurnImagesPrepared = items.every(hasPreparedCurrentTurnImages);
-  for (const item of items) {
-    const mediaOffset = media.length;
-    const internalItem = item as InternalFollowupRun;
-    images.push(...(item.images ?? []));
-    imageOrder.push(...(item.imageOrder ?? []));
-    if (currentTurnImagesPrepared) {
-      const itemSlots: MediaImageLayout["slots"] =
-        internalItem.mediaImageLayout?.slots ?? item.imageOrder?.map((kind) => ({ kind })) ?? [];
-      mediaImageSlots.push(
-        ...itemSlots.map((slot) =>
-          slot.factIndex === undefined
-            ? { kind: slot.kind }
-            : { kind: slot.kind, factIndex: slot.factIndex + mediaOffset },
-        ),
-      );
-      suppressedFactIndexes.push(
-        ...(internalItem.mediaImageLayout?.suppressedFactIndexes ?? []).map(
-          (factIndex) => factIndex + mediaOffset,
-        ),
-      );
-    }
-    media.push(...(item.media ?? []));
-  }
-  const mediaImageLayout =
-    mediaImageSlots.length > 0 || suppressedFactIndexes.length > 0
-      ? { slots: mediaImageSlots, suppressedFactIndexes }
-      : undefined;
-  return {
-    ...(currentTurnImagesPrepared ? { currentTurnImagesPrepared: true as const } : {}),
-    ...(currentTurnImagesPrepared || images.length > 0 ? { images } : {}),
-    ...(currentTurnImagesPrepared || imageOrder.length > 0 ? { imageOrder } : {}),
-    ...(mediaImageLayout ? { mediaImageLayout } : {}),
-    ...(media.length > 0 ? { media } : {}),
-  };
 }
 
 function buildCollectTranscriptInput(

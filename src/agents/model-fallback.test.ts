@@ -4,11 +4,7 @@ import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest"
 import { TranscriptNotContinuableError } from "../../packages/agent-core/src/errors.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
-import {
-  onTrustedInternalDiagnosticEvent,
-  resetDiagnosticEventsForTest,
-  type DiagnosticEventPayload,
-} from "../infra/diagnostic-events.js";
+import { resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import { GatewayDrainingError } from "../process/gateway-work-admission.js";
@@ -50,6 +46,7 @@ import type { AgentHarness } from "./harness/types.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import { isFallbackSummaryError } from "./model-fallback-attempt.js";
 import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
+import { registerFallbackFailureBoundaryCases } from "./model-fallback-failure-boundary.test-harness.js";
 import { runWithImageModelFallback } from "./model-fallback-image.js";
 import { runWithModelFallback as runWithModelFallbackBase } from "./model-fallback-runner.js";
 import {
@@ -57,8 +54,8 @@ import {
   resolveAgentRunErrorLifecycleFields,
 } from "./run-termination.js";
 import {
-  makeModelFallbackCfg,
   createModelFallbackConfig,
+  makeModelFallbackCfg,
 } from "./test-helpers/model-fallback-config-fixture.js";
 
 const emptyManifestPlugins = [] as const;
@@ -357,107 +354,12 @@ async function expectSkippedUnavailableProvider(params: {
 const INSUFFICIENT_QUOTA_PAYLOAD =
   '{"type":"error","error":{"type":"insufficient_quota","message":"Your account has insufficient quota balance to run this request."}}';
 
-type ModelFailoverDiagnostic = Extract<DiagnosticEventPayload, { type: "model.failover" }>;
-
-function captureModelFailoverDiagnostics(): {
-  events: ModelFailoverDiagnostic[];
-  stop: () => void;
-} {
-  const events: ModelFailoverDiagnostic[] = [];
-  const stop = onTrustedInternalDiagnosticEvent((event) => {
-    if (event.type === "model.failover") {
-      events.push(event);
-    }
-  });
-  return { events, stop };
-}
-
 function makeDiagnosticFallbackConfig(fallbacks: string[]): OpenClawConfig {
   return createModelFallbackConfig("openai/gpt-5.5", fallbacks);
 }
 
 describe("runWithModelFallback", () => {
-  it("does not replay a thrown attempt after the caller reports a committed side effect", async () => {
-    const failure = new FailoverError("primary failed after tool start", {
-      provider: "openai",
-      model: "gpt-5.4",
-      reason: "overloaded",
-    });
-    const run = vi.fn().mockRejectedValue(failure);
-    const canFallbackAfterError = vi.fn().mockReturnValue(false);
-
-    await expect(
-      runWithModelFallback({
-        cfg: makeDiagnosticFallbackConfig(["anthropic/claude-opus-4-7"]),
-        model: "gpt-5.4",
-        run,
-        canFallbackAfterError,
-      }),
-    ).rejects.toBe(failure);
-
-    expect(run).toHaveBeenCalledTimes(1);
-    expect(canFallbackAfterError).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "openai",
-        model: "gpt-5.4",
-        error: failure,
-      }),
-    );
-  });
-
-  it("keeps TLS-failed providers excluded across interleaved fallbacks", async () => {
-    const diagnostics = captureModelFailoverDiagnostics();
-    const run = vi
-      .fn()
-      .mockRejectedValueOnce(
-        new FailoverError("Hostname/IP does not match certificate's altnames", {
-          provider: "openai",
-          model: "gpt-5.5",
-          reason: "tls_certificate",
-          code: "ERR_TLS_CERT_ALTNAME_INVALID",
-        }),
-      )
-      .mockRejectedValueOnce(
-        new FailoverError("overloaded", {
-          provider: "anthropic",
-          model: "claude-opus-4-6",
-          reason: "overloaded",
-        }),
-      )
-      .mockResolvedValueOnce("must not run");
-    let thrown: unknown;
-
-    try {
-      await runWithModelFallback({
-        cfg: makeDiagnosticFallbackConfig(["anthropic/claude-opus-4-6", "openai/gpt-5.5-mini"]),
-        model: "gpt-5.5",
-        sessionId: "session:tls-provider-exclusion",
-        sessionKey: "agent:test:tls-provider-exclusion",
-        lane: "main",
-        run,
-      });
-    } catch (error) {
-      thrown = error;
-    } finally {
-      diagnostics.stop();
-    }
-
-    expect(isFallbackSummaryError(thrown)).toBe(true);
-    expect(run.mock.calls).toMatchObject([
-      ["openai", "gpt-5.5", { isFinalFallbackAttempt: false }],
-      ["anthropic", "claude-opus-4-6", { isFinalFallbackAttempt: true }],
-    ]);
-    expect(diagnostics.events).toHaveLength(1);
-    expect(diagnostics.events).toMatchObject([
-      {
-        fromProvider: "openai",
-        fromModel: "gpt-5.5",
-        toProvider: "anthropic",
-        toModel: "claude-opus-4-6",
-        reason: "tls_certificate",
-      },
-    ]);
-  });
+  registerFallbackFailureBoundaryCases(runWithModelFallback);
 
   it.each([401])(
     "preserves local profile absence through model fallback without provider reauthentication (status=%s)",

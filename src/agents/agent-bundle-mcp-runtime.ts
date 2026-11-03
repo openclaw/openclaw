@@ -1,5 +1,4 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import {
   ListToolsResultSchema,
   type CallToolResult,
@@ -10,10 +9,9 @@ import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/r
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import { logWarn } from "../logger.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
-  projectBundleMcpCatalogTools,
   projectBundleMcpCatalogFailure,
+  projectBundleMcpCatalogTools,
 } from "./agent-bundle-mcp-catalog-projection.js";
 import {
   createCombinedSessionMcpRuntime,
@@ -30,6 +28,11 @@ import {
 import { loadSessionMcpConfig } from "./agent-bundle-mcp-runtime-config.js";
 import { sessionMcpRuntimeOwners } from "./agent-bundle-mcp-runtime-owner.js";
 import type { CreateSessionMcpRuntime } from "./agent-bundle-mcp-runtime-shared.js";
+import {
+  disposeBundleMcpSession,
+  setBundleMcpDisposeTimeoutMsForTest,
+  type BundleMcpSession,
+} from "./agent-bundle-mcp-session.js";
 import type {
   McpRequestOptions,
   McpServerCatalog,
@@ -43,7 +46,6 @@ import { bindMcpClientElicitation, MCP_ELICITATION_TIMEOUT_MS } from "./mcp-clie
 import {
   connectMcpClient,
   createMcpRequestLifecycle,
-  disposeMcpClient,
   isMcpHttpSessionExpired,
   McpClientConnectTimeoutError,
 } from "./mcp-client-lifecycle.js";
@@ -63,26 +65,10 @@ import {
   resetMcpStartupBackoff,
 } from "./mcp-startup-backoff.js";
 import { isMcpToolAllowed, normalizeMcpToolFilter } from "./mcp-tool-filter.js";
-import { normalizeMcpToolCatalog, type McpToolCatalogMetadata } from "./mcp-tool-metadata.js";
+import { normalizeMcpToolCatalog } from "./mcp-tool-metadata.js";
 import { resolveMcpTransport } from "./mcp-transport.js";
 import { recordModelFallbackStop } from "./model-fallback-stop.js";
 import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
-
-type BundleMcpSession = {
-  serverName: string;
-  client: Client;
-  transport: Transport;
-  transportType: "stdio" | "sse" | "streamable-http";
-  requestTimeoutMs: number;
-  connected: boolean;
-  disconnectReason?: string;
-  retiring: boolean;
-  connectPromise?: Promise<void>;
-  disposePromise?: Promise<void>;
-  detachStderr?: () => void;
-  toolMetadata?: McpToolCatalogMetadata;
-  withElicitation?: ReturnType<typeof bindMcpClientElicitation>;
-};
 
 const BUNDLE_MCP_FAILURE_THRESHOLD = 3;
 const BUNDLE_MCP_FAILURE_COOLDOWN_MS = 60_000;
@@ -91,14 +77,6 @@ const BUNDLE_MCP_CATALOG_FAILURE_RETRY_MS = 5_000;
 // explicit request timeout, with room for a cold remote (OAuth, HTTP) listing.
 const BUNDLE_MCP_CATALOG_LIST_TIMEOUT_MS = 10_000;
 let bundleMcpCatalogListTimeoutMs: number | undefined;
-const BUNDLE_MCP_DISPOSE_TIMEOUT_MS = 5_000;
-const BUNDLE_MCP_TEST_STATE_KEY = Symbol.for("openclaw.bundleMcpTestState");
-type BundleMcpTestState = { disposeTimeoutMs?: number };
-
-function getBundleMcpTestState(): BundleMcpTestState {
-  return resolveGlobalSingleton(BUNDLE_MCP_TEST_STATE_KEY, () => ({}));
-}
-
 type McpServerBackoffState = {
   session: BundleMcpSession;
   failures: number;
@@ -123,22 +101,6 @@ function setBundleMcpCatalogListTimeoutMsForTest(timeoutMs?: number): void {
     typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
       ? Math.floor(timeoutMs)
       : undefined;
-}
-
-function setBundleMcpDisposeTimeoutMsForTest(timeoutMs?: number): void {
-  // Non-isolated test workers can reload this module while a facade still
-  // references an older copy. Share the override across those copies.
-  getBundleMcpTestState().disposeTimeoutMs =
-    typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
-      ? Math.floor(timeoutMs)
-      : undefined;
-}
-
-function disposeBundleMcpSession(session: BundleMcpSession): Promise<"closed" | "uncertain"> {
-  return disposeMcpClient(
-    session,
-    getBundleMcpTestState().disposeTimeoutMs ?? BUNDLE_MCP_DISPOSE_TIMEOUT_MS,
-  );
 }
 
 function createDisposedError(sessionId: string): Error {

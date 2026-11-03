@@ -17,8 +17,8 @@ import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
-import * as configSessions from "../../config/sessions.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
+import * as configSessions from "../../config/sessions.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import {
   loadSessionEntry,
@@ -65,8 +65,8 @@ import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
   runWithGatewayIndependentRootWorkAdmission,
-  tryBeginGatewaySuspendAdmission,
   tryBeginGatewayRootWorkAdmission,
+  tryBeginGatewaySuspendAdmission,
 } from "../../process/gateway-work-admission.js";
 import {
   beginSessionWorkAdmission,
@@ -109,12 +109,13 @@ import {
   createSessionEntry,
   createSessionStore,
   createSubagentRunRecord,
-  type SessionEntryFixture,
   expectRecord,
   mockCallArg,
   waitForFast,
+  type SessionEntryFixture,
 } from "../subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../subagents/registry/subagent-registry-memory.js";
+import { registerActiveProcessRecoveryCases } from "./main-session-active-process.test-harness.js";
 import { registerHarnessCompletionRecoveryCases } from "./main-session-harness-completion.test-harness.js";
 import { registerParentRestartRecoveryCases } from "./main-session-parent-recovery.test-harness.js";
 import * as recoveryOwnerRelease from "./main-session-recovery-owner-release.js";
@@ -2531,72 +2532,12 @@ describe("main-session-restart-recovery", () => {
     expect(gatewayParams()).not.toHaveProperty("forceRestartSafeTools");
   });
 
-  it("skips restart-aborted sessions that a current process owns", async () => {
-    const sessionsDir = await makeSessionsDir();
-    await writeStore(sessionsDir, {
-      "agent:main:active-key": {
-        ...runningSessionEntry("active-key-session", { status: "interrupted" }),
-        abortedLastRun: true,
-      },
-      "agent:main:active-id": {
-        ...runningSessionEntry("active-id-session", { status: "interrupted" }),
-        abortedLastRun: true,
-      },
-      "agent:main:recoverable": {
-        ...runningSessionEntry("recoverable-session", { status: "interrupted" }),
-        abortedLastRun: true,
-      },
-    });
-    await writeTranscript(sessionsDir, "active-key-session", [
-      { role: "user", content: "new run owns this key" },
-      { role: "toolResult", content: "done" },
-    ]);
-    await writeTranscript(sessionsDir, "active-id-session", [
-      { role: "user", content: "new run owns this id" },
-      { role: "toolResult", content: "done" },
-    ]);
-    await writeTranscript(sessionsDir, "recoverable-session", [
-      { role: "user", content: "recover this one" },
-      { role: "toolResult", content: "done" },
-    ]);
-
-    const result = await recoverRestartAbortedMainSessions({
-      stateDir: tmpDir,
-      activeSessionKeys: ["agent:main:active-key"],
-      activeSessionIds: ["active-key-session", "active-id-session"],
-    });
-
-    expect(result).toEqual({ started: 1, settled: 0, failed: 0, skipped: 2 });
-    expect(callGateway).toHaveBeenCalledOnce();
-    const store = readStore(path.join(sessionsDir, "sessions.json"));
-    expect(store["agent:main:active-key"]?.abortedLastRun).toBe(true);
-    expect(store["agent:main:active-id"]?.abortedLastRun).toBe(true);
-    expect(store["agent:main:recoverable"]?.abortedLastRun).toBe(false);
-  });
-
-  it("recovers duplicate-key restart-aborted rows when the active run owns a different session id", async () => {
-    const sessionsDir = await makeSessionsDir();
-    await writeStore(sessionsDir, {
-      "agent:main:main": {
-        ...runningSessionEntry("stale-session", { status: "interrupted" }),
-        abortedLastRun: true,
-      },
-    });
-    await writeTranscript(sessionsDir, "stale-session", [
-      { role: "user", content: "recover the stale duplicate" },
-      { role: "toolResult", content: "done" },
-    ]);
-
-    const result = await recoverRestartAbortedMainSessions({
-      stateDir: tmpDir,
-      activeSessionKeys: ["agent:main:main"],
-      activeSessionIds: ["new-current-session"],
-    });
-
-    expect(result).toEqual({ started: 1, settled: 0, failed: 0, skipped: 0 });
-    expect(callGateway).toHaveBeenCalledOnce();
-    const store = readStore(path.join(sessionsDir, "sessions.json"));
-    expect(store["agent:main:main"]?.abortedLastRun).toBe(false);
+  registerActiveProcessRecoveryCases({
+    getStateDir: () => tmpDir,
+    makeSessionsDir,
+    writeStore,
+    writeTranscript,
+    recoverRestartAbortedMainSessions,
   });
 
   it("does not create empty agent databases while scanning startup recovery", async () => {

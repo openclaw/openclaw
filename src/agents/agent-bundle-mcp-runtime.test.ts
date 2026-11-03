@@ -1,9 +1,9 @@
-/** Tests session-scoped MCP runtime catalog, transport, validation, and lifecycle behavior. */
 import fs from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+/** Tests session-scoped MCP runtime catalog, transport, validation, and lifecycle behavior. */
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { materializeRequesterScopedMcpToolsForHarnessRun } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -28,6 +28,7 @@ import {
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import { startCatalogRecoveryMcpServer } from "./agent-bundle-mcp-catalog-recovery.test-support.js";
 import { createCombinedSessionMcpRuntime } from "./agent-bundle-mcp-combined.js";
+import { registerMcpDisposalTimeoutCase } from "./agent-bundle-mcp-disposal.test-harness.js";
 import { createConnectionInvalidationMcpFixture } from "./agent-bundle-mcp-invalidation.test-support.js";
 import { completeDeferredSessionMcpRuntimeRetirement } from "./agent-bundle-mcp-manager-cleanup.js";
 import {
@@ -2821,39 +2822,7 @@ describe("requester-scoped MCP connection resolution", () => {
 });
 
 describe("disposeSession timeout", () => {
-  it(
-    "completes disposal even when the MCP server process ignores shutdown",
-    { timeout: 15_000 },
-    async () => {
-      testing.setBundleMcpDisposeTimeoutMsForTest(50);
-      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-dispose-timeout-"));
-      const serverPath = path.join(tempDir, "hanging-close.mjs");
-      const logPath = path.join(tempDir, "server.log");
-
-      await writeListToolsMcpServer({
-        filePath: serverPath,
-        logPath,
-        ignoreShutdown: true,
-      });
-
-      const runtime = await makeStdioRuntime("session-dispose-timeout", "hangingClose", serverPath);
-
-      const catalog = await runtime.getCatalog();
-      expect(catalog.tools).toHaveLength(1);
-
-      const start = Date.now();
-      await runtime.dispose();
-      const elapsed = Date.now() - start;
-
-      expect(elapsed).toBeLessThan(1_000);
-
-      await retireSessionMcpRuntime({
-        sessionId: "session-dispose-timeout",
-        reason: "test cleanup",
-      });
-      await fs.rm(tempDir, { recursive: true, force: true });
-    },
-  );
+  registerMcpDisposalTimeoutCase({ writeListToolsMcpServer, makeStdioRuntime });
 
   it(
     "does not recycle a stateless streamable-http server on HTTP 404",
