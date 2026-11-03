@@ -152,7 +152,7 @@ it("fails an incognito session's continue_work election visibly and elects nothi
       // The session's next turn, bound as the first, drains the notice into its prompt; the
       // capture's refusal is its cause.
       const drained = await runWithSessionActorStorage(binding, () => nextTurnEvents(sessionKey));
-      expect(drained).toMatch(SCHEDULING_FAILED);
+      expect(drained).toEqual(expect.stringMatching(SCHEDULING_FAILED));
       expect(runtimeLog).toHaveBeenCalledWith(
         expect.stringMatching(
           /continue_work scheduling failed after durable reservation .*Incognito collaboration command requires its dedicated owner/u,
