@@ -60,3 +60,44 @@ interpreted as passing or irrelevant tests.
 
 Keep rollout in shadow mode until representative full-run audits establish
 failure recall, graph completeness, and net savings including collection cost.
+
+## Plan in shadow mode
+
+The selector consumes an observation export and an explicit current inventory.
+It writes a candidate plan; `scheduledFiles` always contains the full inventory.
+Nothing in CI consumes the candidate as permission to skip tests.
+
+```bash
+node scripts/ci-adaptive-select.mjs \
+  --observations observations.json \
+  --request selection-request.json \
+  --output shadow-plan.json
+```
+
+The request is a version-1 JSON object:
+
+| Field                              | Meaning                                                                             |
+| ---------------------------------- | ----------------------------------------------------------------------------------- |
+| `context`                          | Current source and configuration, with the same fields as the export context.       |
+| `baselineRevision`, `baselineTree` | Exact source used as the base of `changedFiles`; must match the observation export. |
+| `files`                            | Complete current inventory of `{file, project, pool}` objects. Include new tests.   |
+| `changedFiles`                     | Repository-relative changed paths, including deletions and both sides of renames.   |
+| `audit`                            | Required boolean. `true` selects the full inventory for an audit.                   |
+| `alwaysRun`                        | Optional array of mandatory test file paths.                                        |
+
+Configuration mismatch, a wrong diff base, global test infrastructure changes,
+and unmapped changed paths select everything. New tests, incomplete evidence,
+previous failures, and missing dependencies keep the affected test selected.
+Every candidate carries its reasons. File counts are not runtime savings.
+
+An optional `--recommendations recommendations.json` accepts
+`{version: 1, context, selectedFiles: [{file, project, pool}]}`. Its context must
+match the current source and configuration. Recommendations only add tests;
+an empty or negative model recommendation cannot remove graph-selected tests.
+This allows a local tree model or hosted decision model to share the same
+experiment interface without making model predictions authoritative.
+
+The caller owns inventory completeness, diff construction, provenance, and any
+external model invocation. The command does not call a model or send source to a
+service. Historical graphs cannot prove dynamic filesystem or generated-input
+coverage; full-run comparison remains necessary before enabling actual skips.
