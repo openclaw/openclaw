@@ -705,59 +705,10 @@
   }
 }
 
-.settings-text-scale,
 .cfg-collection-draft__controls {
   display: grid;
   gap: 8px;
   width: 100%;
-}
-
-.settings-text-scale__options {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
-  gap: 8px;
-}
-
-.settings-text-scale__btn {
-  display: grid;
-  border: 1px solid var(--border);
-  color: var(--text);
-  text-align: left;
-  transition:
-    border-color var(--duration-fast) ease,
-    background var(--duration-fast) ease;
-  gap: 4px;
-  justify-items: start;
-  min-height: 58px;
-  padding: 10px 12px;
-  border-radius: var(--radius-md);
-  background: var(--card);
-}
-
-.settings-text-scale__btn:hover {
-  border-color: var(--border-strong);
-  background: var(--bg-elevated);
-}
-
-.settings-text-scale__btn.active {
-  border-color: var(--accent);
-  background: var(--accent-subtle);
-}
-
-.settings-text-scale__sample {
-  font-weight: 650;
-  font-size: 13px;
-  line-height: 1.2;
-}
-
-.settings-text-scale__label {
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.2;
-}
-
-.settings-text-scale__btn.active .settings-text-scale__label {
-  color: var(--accent);
 }
 
 .config-raw-field textarea {

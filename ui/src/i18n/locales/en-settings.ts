@@ -1862,10 +1862,10 @@ const enSettings = {
         private: "Only your view · saved to your profile.",
       },
       fonts: {
-        ui: "Interface",
-        chat: "Chat prose",
+        ui: "Interface font",
+        chat: "Chat font",
         terminal: "Terminal font",
-        terminalDefault: "JetBrains Mono + Nerd Font symbols",
+        terminalDefault: "JetBrains Mono",
         terminalHint:
           "To override, enter a monospace font installed on this computer. Missing fonts use the default.",
         terminalLigatures: "Programming ligatures are not supported.",
