@@ -15,6 +15,13 @@ eligible unified HTTP offer for that exact model and endpoint. Its `/v1` base is
 not a native proxy prefix. Playground, denied, and unrelated offers cannot enable
 the route. The service still checks current policy and compound budgets at dispatch.
 
+Cohere chat discovery requires a key-scoped native offer whose declared request
+and response format is `openai.chat_completions`. It uses that offer's exact
+compatibility route, with the upstream model ID. Native and routed clients share
+the Cohere instruction-role, tool-choice, and compatible wire-field policy.
+Reasoning efforts remain owned by the router catalog. A native-v2-only catalog does not enable this
+client transport; v2 routing and billed usage remain owned by the router.
+
 Capability discovery joins eligible HTTP offers from the selected key's catalog
 to the provider's declared endpoint formats. Native and manifest routes stay on
 the configured router origin; model-less offers are valid for operations such as
