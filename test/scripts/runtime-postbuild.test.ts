@@ -1350,7 +1350,8 @@ describe("previous release update compatibility", () => {
         "  fs.createReadStream(archive).pipe(response);",
         "});",
         'instance.listen(0, "127.0.0.1", () => {',
-        "  fs.writeFileSync(portFile, String(instance.address().port));",
+        "  fs.writeFileSync(`${portFile}.tmp`, String(instance.address().port));",
+        "  fs.renameSync(`${portFile}.tmp`, portFile);",
         "});",
       ].join("\n"),
     );
