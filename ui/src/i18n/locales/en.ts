@@ -390,6 +390,7 @@ const startupEnglish = {
     connected: "Connected",
     refresh: "Refresh",
     retry: "Retry",
+    helpFor: "Help for {section}",
     staleData: "Showing stale data.",
     reload: "Reload",
     reset: "Reset",
@@ -452,7 +453,6 @@ const startupEnglish = {
     publicKey: "Public Key",
     probeOk: "Connection check passed",
     probeFailed: "Connection check failed",
-    reloadConfig: "Reload config",
     multiSelect: {
       addCustom: "Add “{value}”",
       noMatches: "No matches",
@@ -823,7 +823,6 @@ const startupEnglish = {
     overview: {
       selectedSkills: "{count} selected",
       allSkills: "All skills",
-      unsavedConfig: {},
       modelSelection: {},
       primaryModel: {},
       primaryModelDefault: {},
@@ -1317,6 +1316,7 @@ const startupEnglish = {
       chooseAvatar: "Choose image",
       displayName: "Display name",
       linkedEmails: "Linked emails",
+      attribution: "Attribution",
     },
     modelAccounts: {},
   },

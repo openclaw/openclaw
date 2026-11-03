@@ -30,9 +30,10 @@ import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { showToast } from "../../lib/toast.ts";
 import {
   buildChannelConfigPatch,
-  channelConfigEditBase,
   dropConflictingChannelConfigEdits,
+  editChannelField,
   findChannelConfigConflicts,
+  keptChannelEdits,
   rebaseChannelConfigEdits,
 } from "./channel-config-draft.ts";
 import { createChannelPluginPresentation } from "./plugin-presentation-loader.ts";
@@ -309,7 +310,8 @@ export function ChannelsPage() {
         const built = buildChannelConfigPatch({
           base: resolveChannelConfigValue(snapshot, channelId),
           channelId,
-          edits,
+          // A reference that arrived while editing is never written over, nor a secret emptied.
+          edits: keptChannelEdits(config, channelId, snapshot, edits),
           schema: config.configSchema,
         });
         return {
@@ -390,7 +392,7 @@ export function ChannelsPage() {
       buildChannelConfigPatch({
         base: resolveChannelConfigValue(saved, channelId),
         channelId,
-        edits,
+        edits: keptChannelEdits(config, channelId, saved, edits),
         schema: config.configSchema,
       }) === null;
     setSaveFeedback(landed ? null : { channelId, kind: "notSaved" });
@@ -686,12 +688,10 @@ export function ChannelsPage() {
       onShowAdvancedSettings: setShowAdvancedSettings,
       onConfigPatch: (channelId, path, value) => {
         setSavedChannel(null);
-        const saved = resolveEditableSnapshotConfig(context.runtimeConfig.state.configSnapshot);
-        channelCapability.editConfig(
-          channelId,
-          { path, value },
-          saved ? channelConfigEditBase(saved, path) : undefined,
-        );
+        editChannelField(channelCapability, context.runtimeConfig.state, channelId, {
+          path,
+          value,
+        });
       },
       onConfigSave: (channelId) => void runMutation("config", saveChannelConfig(channelId)),
       onConfigDiscard: (channelId) => void discardChannelConfig(channelId),

@@ -647,6 +647,14 @@ export function createChannelCapability(gateway: {
       state.configEditBases = edits.length > 0 ? { ...otherBases, [channelId]: bases } : otherBases;
       publish();
     },
+    /** Drops the edits to one field, leaving what's saved in place. */
+    restoreConfigField(channelId: string, path: ChannelConfigEdit["path"]) {
+      const key = JSON.stringify(path);
+      const { [channelId]: edits = [], ...others } = state.configEdits;
+      const remaining = edits.filter((edit) => JSON.stringify(edit.path) !== key);
+      state.configEdits = remaining.length > 0 ? { ...others, [channelId]: remaining } : others;
+      publish();
+    },
     discardConfigEdits(channelId: string) {
       const { [channelId]: _discarded, ...remaining } = state.configEdits;
       const { [channelId]: _bases, ...remainingBases } = state.configEditBases;
