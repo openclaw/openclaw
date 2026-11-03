@@ -3,16 +3,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { contextBudgetStatusFixture } from "../../../src/config/sessions/context-budget.test-support.js";
 import type { CronJob } from "../api/types.ts";
 import { i18n } from "../i18n/index.ts";
-import { registerCronEnglish } from "../i18n/locales/en-cron.ts";
+import { formatCronPayload, formatCronState } from "./cron/presenter.ts";
 import { formatMs } from "./format.ts";
-import {
-  formatCronPayload,
-  formatCronSchedule,
-  formatCronState,
-  formatSessionTokens,
-} from "./presenter.ts";
-
-registerCronEnglish();
+import { formatCronSchedule, formatSessionTokens } from "./presenter.ts";
 
 it("routes cron state and payload labels through whole catalog templates", async () => {
   await i18n.setLocale("fr");

@@ -20,18 +20,13 @@ import {
   SettingsStatus,
   SettingsValue,
 } from "../../components/solid/settings-ui.tsx";
-import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import type { AgentContext } from "../../lib/agents/display.ts";
 import type { AgentsPanel } from "../../lib/agents/index.ts";
+import { formatCronPayload, formatCronState } from "../../lib/cron/presenter.ts";
 import type { CronState } from "../../lib/cron/types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import {
-  formatCronPayload,
-  formatCronSchedule,
-  formatCronState,
-  formatNextRun,
-} from "../../lib/presenter.ts";
+import { formatCronSchedule, formatNextRun } from "../../lib/presenter.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import type { AgentCronRead } from "./agent-cron-presenter.ts";
 import type { AgentsPageView } from "./agents-page-state.ts";
@@ -39,7 +34,6 @@ import { AgentPanelAction } from "./panel-ui.tsx";
 import { renderAgentContextSection } from "./panels-overview.tsx";
 
 registerEnglishCatalog(registerSettingsEnglish);
-registerEnglishCatalog(registerCronEnglish);
 
 /** Only transient notices and controls live here; cached rows keep their DOM lifetime. */
 function CronReadBoundary(props: {
