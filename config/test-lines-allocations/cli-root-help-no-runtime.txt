@@ -1,0 +1,2 @@
+# Real root-help/version entrypoints count optional registry/runtime loads and preserve manifest commands.
+80
