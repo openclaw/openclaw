@@ -1,6 +1,7 @@
 import { localEditorFilePath } from "../../../app/native-editor-locality.runtime.ts";
 import type { MarkdownFileLinkTarget } from "../../../components/markdown-file-links.ts";
 import { type EditorId, openEditor } from "../../../lib/editor-links.ts";
+import { isSvgImageMediaPath } from "../../../lib/media-file-extension.ts";
 import type { createAttachmentDownload } from "./chat-attachment-download.ts";
 import type { createFileCopy } from "./chat-file-copy.ts";
 import type { FileReadingMode, FileViewControls } from "./chat-file-reader-controls.ts";
@@ -261,7 +262,7 @@ export function createFilePresentationActions(context: {
           !context.htmlPreview.file &&
           !/\.(?:md|markdown|mkd)$/i.test(content.name) &&
           content.mimeType !== "text/markdown" &&
-          content.mimeType !== "image/svg+xml";
+          !isSvgImageMediaPath(content.name, content.mimeType);
     presentation.fileWrapBeforeEdit = null;
     presentation.fileReadingMode =
       content?.kind === "file" &&
@@ -269,7 +270,8 @@ export function createFilePresentationActions(context: {
       content.line == null &&
       (/\.(?:md|markdown|mkd)$/i.test(content.name) ||
         content.mimeType === "text/markdown" ||
-        (context.props.filePresentation !== "mobile" && content.mimeType === "image/svg+xml"))
+        (context.props.filePresentation !== "mobile" &&
+          isSvgImageMediaPath(content.name, content.mimeType)))
         ? "preview"
         : "highlighted";
     presentation.fileReadingModeBeforeEdit = null;
@@ -448,7 +450,7 @@ export function renderFilePanelPresentation(context: {
       imagePreview:
         context.props.filePresentation !== "mobile" &&
         content?.kind === "file" &&
-        content.mimeType === "image/svg+xml"
+        isSvgImageMediaPath(content.name, content.mimeType)
           ? { content: state.fileSavedContent }
           : undefined,
       markdown:
@@ -524,6 +526,7 @@ export function renderFilePanelPresentation(context: {
     fileBack: context.props.fileBack ?? undefined,
     onClose: context.actions.close,
     onOpenImage: context.props.onOpenImage ?? undefined,
+    onBrowseFiles: context.props.onBrowseFiles ?? undefined,
     onViewRawText: context.actions.showRawText,
     onClick: context.actions.handlePanelClick,
     onKeydown: context.actions.handlePanelKeyDown,
@@ -553,6 +556,7 @@ export const chatDetailPanelProperties = {
   allowExternalEmbedUrls: { default: false },
   embedded: { default: false },
   onOpenWorkspaceFile: { default: null, attribute: false },
+  onBrowseFiles: { default: null, attribute: false },
   onOpenSessionLink: { default: null, attribute: false },
   onRevealInWorkspace: { default: null, attribute: false },
   onOpenImage: { default: null, attribute: false },

@@ -19,7 +19,6 @@ import { ThemeBrandIcon } from "../../components/theme-brand-icon.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import { themeBrandingProjection } from "../../lib/reactive/theme-branding.ts";
 import { APPEARANCE_SETTINGS_TARGET_IDS } from "./route-data.ts";
-import { SettingsSectionHeader } from "./settings-section-header.tsx";
 
 export type TabIconViewProps = {
   tabIcon: TabIconPreference | undefined;
@@ -95,7 +94,7 @@ function LobsterPreview(props: { palette: LobsterPetPalette }) {
   );
 }
 
-export function TabIconSection(props: TabIconViewProps) {
+export function TabIconRow(props: TabIconViewProps) {
   const defaultSource = createMemo(
     () => controlUiFaviconBaseSvg() ?? inferControlUiPublicAssetPath("favicon.svg"),
   );
@@ -152,11 +151,10 @@ export function TabIconSection(props: TabIconViewProps) {
     ),
   };
   return (
-    <section id={APPEARANCE_SETTINGS_TARGET_IDS.tabIcon} class="settings-section settings-tab-icon">
-      <SettingsSectionHeader title={t("configView.appearance.tabIcon.title")} />
-      <div class="settings-group">
+    <div id={APPEARANCE_SETTINGS_TARGET_IDS.tabIcon} class="settings-tab-icon">
+      <div>
         <SettingsRow
-          title={t("configView.appearance.tabIcon.source")}
+          title={t("configView.appearance.tabIcon.title")}
           stackedOnNarrow
           description={
             lobsterdexEnabled() && lobsters().length === 0 && !lobsterMode()
@@ -247,6 +245,6 @@ export function TabIconSection(props: TabIconViewProps) {
           />
         </Show>
       </div>
-    </section>
+    </div>
   );
 }

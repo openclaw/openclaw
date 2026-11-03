@@ -454,6 +454,7 @@ describe("worker provisioning cancellation ownership", () => {
       expect(destroy).toHaveBeenCalledExactlyOnceWith({
         leaseId: "lease-replayed",
         profile: { region: "test" },
+        assertCurrent: expect.any(Function),
         signal: expect.any(AbortSignal),
       });
       expect(support.testState.store.list()[0]).toMatchObject({

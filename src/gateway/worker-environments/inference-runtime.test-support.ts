@@ -308,6 +308,7 @@ export function setup(
         pluginMetadataSnapshot: leased.metadataSnapshot,
         pluginRegistry: leased.pluginRegistry,
       },
+      run: <T>(run: () => T): T => run(),
       [Symbol.asyncDispose]: releaseRuntime,
     };
   });

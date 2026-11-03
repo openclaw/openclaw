@@ -284,7 +284,7 @@ it("bounds the remote memo to the largest files and reports truncation", async (
     memoTruncatedCount: 1,
   });
 });
-it("keeps a placement memo under the byte cap and clears one that exceeds it", () => {
+it("keeps the newest placement hashes when pruning to the byte cap", () => {
   const retained: WorkspaceHashMemo = new Map([
     ["worker:1:2:3:4:5", "a".repeat(64)],
     ["gateway:1:2:3:4:5", "b".repeat(64)],
@@ -300,6 +300,12 @@ it("keeps a placement memo under the byte cap and clears one that exceeds it", (
     oversized.set(identity, digest);
     bytes += identity.length + digest.length;
   }
+  const newest = [...oversized.keys()].at(-1)!;
   pruneWorkspaceHashMemo(oversized);
-  expect(oversized.size).toBe(0);
+  expect(oversized.size).toBeGreaterThan(0);
+  expect(oversized.has("gateway:0:0:0:0:0")).toBe(false);
+  expect(oversized.get(newest)).toBe(digest);
+  expect(
+    [...oversized].reduce((size, [identity, hash]) => size + identity.length + hash.length, 0),
+  ).toBeLessThanOrEqual(MAX_WORKSPACE_HASH_MEMO_BYTES);
 });

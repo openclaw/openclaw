@@ -228,12 +228,37 @@ describe("effort selection", () => {
     expect(standardOnly.onFastModeSelect).not.toHaveBeenCalled();
     expect(standardOnly.input.disabled).toBe(false);
     expect(host!.querySelector(".chat-controls__effort-zap")).toBeNull();
+    await speedFixture(speedState(true, undefined, false, true));
+    expect(summary().getAttribute("data-chat-fast-mode")).toBe("false");
+    expect(host!.querySelector(".chat-controls__effort-zap")).toBeNull();
+    expect(host!.querySelector(".chat-controls__effort-fast-badge")).toBeNull();
+    expect(host!.querySelector(".chat-controls__effort-gauge-needle")).not.toBeNull();
+    expect(summary().title).toBe("High");
     await speedFixture(speedState("ultrafast"));
     expect(speed("ultrafast").disabled).toBe(true);
     expect(summary().getAttribute("aria-label")).toContain("Ultrafast");
     expect(speed("ultrafast").getAttribute("aria-checked")).toBe("true");
     expect(speed("off").getAttribute("tabindex")).toBe("0");
     expect(speed("ultrafast").getAttribute("tabindex")).toBe("-1");
+  });
+
+  it("shows the effective level and marks the default level in the menu", async () => {
+    const badge = (selector: string) =>
+      host!.querySelector<HTMLElement>(`${selector} .chat-controls__permission-default-badge`);
+    await fixture(["low", "medium", "high"], "high", true);
+    expect(summary().textContent?.trim()).toBe("High");
+    expect(summary().getAttribute("aria-label")).toBe("Effort: Default (High)");
+    expect(badge("[data-chat-thinking-preview-committed]")?.textContent).toBe("Default");
+    expect(badge("[data-chat-thinking-preview-committed]")?.checkVisibility()).toBe(true);
+
+    const { input } = await fixture(["low", "medium", "high"], "medium");
+    expect(summary().getAttribute("aria-label")).toBe("Effort: Medium");
+    expect(badge("[data-chat-thinking-preview-committed]")).toBeNull();
+    input.value = "0";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    flush();
+    expect(badge('[data-chat-thinking-preview-index="0"]')?.checkVisibility()).toBe(true);
+    expect(badge('[data-chat-thinking-preview-index="1"]')).toBeNull();
   });
 
   it("previews effort without committing and restores the committed level on cancel or blur", async () => {

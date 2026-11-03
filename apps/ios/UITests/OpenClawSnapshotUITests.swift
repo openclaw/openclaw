@@ -135,8 +135,14 @@ final class OpenClawSnapshotUITests: XCTestCase {
             self.clearTextField(input)
             XCTAssertEqual(input.value as? String, "")
             // Dismiss through the transcript gutter, not a diagram that opens its preview on tap.
-            app.scrollViews["chat-transcript"]
-                .coordinate(withNormalizedOffset: CGVector(dx: 0.99, dy: 0.05)).tap()
+            let gutterPoint = app.scrollViews["chat-transcript"]
+                .coordinate(withNormalizedOffset: CGVector(dx: 0.99, dy: 0.05)).screenPoint
+            // The layout stays stationary until this tap. Avoid resolving the transcript during synthesis.
+            let origin = app.coordinate(withNormalizedOffset: .zero)
+            let originPoint = origin.screenPoint
+            origin.withOffset(CGVector(
+                dx: gutterPoint.x - originPoint.x,
+                dy: gutterPoint.y - originPoint.y)).tap()
             if keyboard.exists {
                 XCTAssertTrue(keyboard.waitForNonExistence(timeout: 3))
             }
@@ -249,6 +255,21 @@ final class OpenClawSnapshotUITests: XCTestCase {
             app.swipeUp()
         }
         XCTAssertTrue(resetOnboarding.isHittable)
+
+        self.launchApp(for: Self.settingsFallbackTarget)
+        guard let espApp = self.app else { return }
+        XCTAssertTrue(espApp.descendants(matching: .any)["SettingsHub.Fallback"].waitForExistence(timeout: 8))
+        let espSetup = espApp.buttons["settings-esp-setup-row"]
+        for _ in 0..<12 where !espSetup.isHittable {
+            espApp.swipeUp()
+        }
+        XCTAssertTrue(espSetup.isHittable)
+        self.attachScreenshot(named: "settings-esp-entry")
+        espSetup.tap()
+        XCTAssertTrue(espApp.textFields["ESPSetup.ServiceName"].waitForExistence(timeout: 8))
+        XCTAssertTrue(espApp.secureTextFields["ESPSetup.Proof"].exists)
+        XCTAssertTrue(espApp.buttons["ESPSetup.Connect"].exists)
+        self.attachScreenshot(named: "esp-setup-form")
     }
 
     func testWatchMessageDeliveryIsReachableFromSettings() throws {
@@ -1376,6 +1397,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
             "Ready when you are. I can check a project, coordinate an agent, or prepare the next step.",
         ]
         XCTAssertTrue(assistant.waitForExistence(timeout: 8))
+        XCTAssertFalse(app.buttons["chat-message-actions"].exists)
         assistant.press(forDuration: 0.8)
         XCTAssertTrue(assistant.exists)
         XCTAssertTrue(app.otherElements["chat-composer-surface"].exists)
@@ -2165,7 +2187,7 @@ extension OpenClawSnapshotUITests {
     }
 
     private func agentIdentity(in app: XCUIApplication) -> XCUIElement {
-        app.otherElements.matching(identifier: "chat-agent-identity").firstMatch
+        app.buttons.matching(identifier: "chat-agent-identity").firstMatch
     }
 
     private func readinessMarker(in app: XCUIApplication) -> XCUIElement {

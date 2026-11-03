@@ -203,9 +203,7 @@ suite.define(() => {
       .poll(() => draft.evaluate((element) => getComputedStyle(element).opacity))
       .toBe("1");
     expect(
-      await incognito.evaluate(
-        (element) => element.closest(".new-session-page__incognito-rail") != null,
-      ),
+      await incognito.evaluate((element) => element.closest(".mobile-header__capsule") != null),
     ).toBe(true);
     const [footerBox, attachBox, modelBox] = await Promise.all([
       bounds(footer),

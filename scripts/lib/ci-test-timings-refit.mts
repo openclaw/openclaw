@@ -3,6 +3,7 @@ import { decodeNodeTestGroups } from "./ci-node-test-groups-codec.mts";
 import type { NodeTestShardGroup } from "./ci-node-test-plan.mts";
 import {
   NATIVE_SOLO_TIMING_PROFILE,
+  ciTimingRunnerProfile,
   createNativeSoloTimingKey,
   isRuntimePlacementTiming,
   isRuntimePlacementIncludePatterns,
@@ -475,8 +476,7 @@ function readPackedReleaseLog(text: string, labels: string[], samples: Samples) 
   const descriptors = readRuntimeTimingGroups(text);
   const jobWorkers = readJobWorkerCeiling(text);
   if (
-    !labels.includes("ubuntu-24.04") ||
-    labels.some((label) => label === "self-hosted" || /^(?:blacksmith-|runson)/u.test(label)) ||
+    ciTimingRunnerProfile(labels) !== "github" ||
     readLogEnv(text, "OPENCLAW_CI_TEST_RUNTIME_POLICY") !== "dual-all" ||
     resources?.requestedPlans !== 1 ||
     resources.admittedPlans !== 1 ||
@@ -580,13 +580,13 @@ function readPackedReleaseLog(text: string, labels: string[], samples: Samples) 
 function readCompactLog(
   text: string,
   labels: string[],
+  profile: "blacksmith" | "github",
   samples: { blacksmith: Samples; github: Samples },
   runtimeSamples: { blacksmith: Samples; github: Samples },
   runtimeDescriptors: Map<string, RuntimePlacementTiming>,
   workerCeilings: { blacksmith: WorkerCeilings; github: WorkerCeilings },
   exactInventoryOnly: boolean,
 ) {
-  const profile = labels.some((label) => label.startsWith("blacksmith-")) ? "blacksmith" : "github";
   const starts = new Map<string, number>();
   const ambiguousStarts = new Set<string>();
   const descriptors = readRuntimeTimingGroups(text);
@@ -1170,10 +1170,11 @@ export function refitTestTimings(
       if (log.kind === "release-packed") {
         readPackedReleaseLog(text, log.labels, current.github);
       } else if (log.kind === "compact" || log.kind === "tooling") {
+        const profile = ciTimingRunnerProfile(log.labels);
+        if (!profile) {
+          continue;
+        }
         for (const runtimeLog of splitRuntimeTimingLogs(text)) {
-          const profile = log.labels.some((label) => label.startsWith("blacksmith-"))
-            ? "blacksmith"
-            : "github";
           const compact = {
             blacksmith: new Map<string, number[]>(),
             github: new Map<string, number[]>(),
@@ -1191,6 +1192,7 @@ export function refitTestTimings(
             readCompactLog(
               runtimeLog.text,
               log.labels,
+              profile,
               compact,
               runtime,
               descriptors,
@@ -1295,7 +1297,14 @@ export function refitTestTimings(
   const pruningRunCount = (profile: keyof typeof contributingRuns) => {
     const counts = new Map<string, number>();
     for (const run of acceptedRuns) {
-      if (!run.completeInventory || run.logs.some((log) => log.kind === "release-packed")) {
+      if (
+        !run.completeInventory ||
+        run.logs.some(
+          (log) =>
+            log.kind === "release-packed" ||
+            (log.kind === "compact" && !ciTimingRunnerProfile(log.labels)),
+        )
+      ) {
         continue;
       }
       const namespaces = pruningNamespaces[profile].get(run.id);

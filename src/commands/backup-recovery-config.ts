@@ -1,6 +1,6 @@
 import path from "node:path";
+import { buildBackupArchivePath } from "../infra/backup-archive-path-policy.js";
 import type { BackupSymbolicLink } from "../infra/backup-archive-path-policy.js";
-import { buildBackupArchivePath } from "./backup-shared.js";
 import {
   type BackupManifest,
   type NormalizedArchiveEntry,

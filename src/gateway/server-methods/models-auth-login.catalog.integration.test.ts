@@ -1,6 +1,5 @@
 import { createServer, type ServerResponse } from "node:http";
 import { performance } from "node:perf_hooks";
-import { setTimeout as delay } from "node:timers/promises";
 import { expect, it } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import type { WizardNextResult } from "../../../packages/gateway-protocol/src/schema/wizard.js";
@@ -28,7 +27,6 @@ it.for([false, true])(
     const provider = "login-discovery-fixture";
     const catalogWork = observeCatalogWorkerTasks();
     const requests: string[] = [];
-    let responseDelay = 7_000;
     let listingStatus = 200;
     let heldCatalogResponse:
       | { start: (response: ServerResponse) => void; release: Promise<void> }
@@ -59,7 +57,7 @@ it.for([false, true])(
           responseReady = held.release;
           held.start(response);
         } else {
-          responseReady = delay(responseDelay).then(() => releaseEarlyResponse.promise);
+          responseReady = releaseEarlyResponse.promise;
         }
         void responseReady.then(() =>
           response
@@ -219,7 +217,6 @@ it.for([false, true])(
           workersCreated: 1,
           pendingTasks: 0,
         });
-        responseDelay = 0;
         const manualRefresh = await list(true);
         const session = await client.request<{ key: string }>("sessions.create", {
           agentId: "main",

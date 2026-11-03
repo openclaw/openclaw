@@ -28,6 +28,7 @@ export function applySessionEntryWritePolicy(
     normalizedEntry.incognito
   ) {
     delete normalizedEntry.resumeAfterRestart;
+    delete normalizedEntry.mainRestartRecovery;
   } else if (!Object.hasOwn(normalizedEntry, "resumeAfterRestart")) {
     // Public projections omit the shutdown marker; same-incarnation bookkeeping retains it.
     normalizedEntry = {

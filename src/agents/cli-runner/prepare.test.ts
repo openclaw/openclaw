@@ -198,10 +198,9 @@ vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: vi.fn(() => null),
 }));
 
-vi.mock("../../tts/tts-settings.js", () => ({
-  buildTtsSystemPromptHint: vi.fn(() => undefined),
-  resolveModelOverridePolicy: vi.fn(),
-  setTtsMachinePrefsPathResolver: vi.fn(),
+vi.mock("../../tts/tts-settings.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../tts/tts-settings.js")>()),
+  buildTtsSystemPromptHintAsync: vi.fn(async () => undefined),
 }));
 
 vi.mock("../media-generation-task-status.js", () => ({
@@ -2142,6 +2141,26 @@ describe("prepareCliRunContext", () => {
     },
   );
 
+  it("uses the recorded worktree bootstrap instead of the configured checkout", async () => {
+    setCliRunnerPrepareTestDeps({ resolveBootstrapContextForRun: loadBootstrapContext });
+    const { dir, sessionTarget } = fixture.session;
+    const task = path.join(dir, "task");
+    fs.mkdirSync(task);
+    fs.writeFileSync(path.join(dir, "AGENTS.md"), "SHARED-RULE-MUST-NOT-LEAK");
+    fs.writeFileSync(path.join(dir, "SOUL.md"), "SHARED-SOUL-MUST-NOT-LEAK");
+    fs.writeFileSync(path.join(task, "AGENTS.md"), "BRANCH-RULE");
+    fs.writeFileSync(path.join(task, "SOUL.md"), "BRANCH-SOUL");
+    const context = await fixture.prepare({
+      config: { agents: { entries: { main: { workspace: dir } } } },
+      workspaceDir: dir,
+      cwd: task,
+      sessionEntry: { sessionId: sessionTarget.sessionId, updatedAt: 1, sessionRoot: task },
+    });
+    expect(context.systemPrompt).toContain("BRANCH-RULE");
+    expect(context.systemPrompt).toContain("BRANCH-SOUL");
+    expect(context.systemPrompt).not.toContain("MUST-NOT-LEAK");
+  });
+
   it("uses canonical repository skills for a managed worktree", async () => {
     const { dir } = fixture.session;
     const taskDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-task-"));
@@ -2517,7 +2536,7 @@ describe("prepareCliRunContext", () => {
     expect(mintMcpLoopbackClientGrant).toHaveBeenLastCalledWith(
       expect.objectContaining({ skillLibraryAuthoring }),
     );
-    expect(grantContext).not.toHaveProperty("skillWorkshop.libraryAuthoring");
+    expect(grantContext).not.toHaveProperty("skillLibraryAuthoring");
     expect(projectedContext).toMatchObject({
       sessionKey: "agent:worker:main",
       sessionId: expect.any(String),
@@ -3167,7 +3186,7 @@ describe("prepareCliRunContext", () => {
     expect(cleanup).toHaveBeenCalledOnce();
   });
 
-  it("projects only the personal Workshop for node-placed Claude", async () => {
+  it("projects only the personal skill library for node-placed Claude", async () => {
     const skillLibraryAuthoring: SkillLibraryAuthoringCapability = {
       target: "personal",
       defaultTarget: "workspace",
@@ -3177,7 +3196,7 @@ describe("prepareCliRunContext", () => {
     };
     const resolveMcpLoopbackScopedTools = vi.fn(() => ({
       agentId: "main",
-      tools: [createCliMcpTool("skill_workshop", "Skill Workshop", "Manage skills")],
+      tools: [createCliMcpTool("skill_library", "Skill Library", "Manage personal skills")],
     }));
     setCliRunnerPrepareTestDeps({ resolveMcpLoopbackScopedTools });
     const prepareExecution = vi.fn(async () => ({ toolAvailabilityEnforced: true as const }));
@@ -3194,18 +3213,18 @@ describe("prepareCliRunContext", () => {
     const context = await fixture.prepare({
       provider: "claude-cli",
       sessionEntry: { execHost: "node", execNode: "node-a" } as never,
-      cliToolAvailability: { native: ["Read"], openClaw: ["message", "skill_workshop"] },
+      cliToolAvailability: { native: ["Read"], openClaw: ["skill_workshop", "skill_library"] },
       skillLibraryAuthoring,
     });
 
     expect(prepareExecution).toHaveBeenCalledWith(
       expect.objectContaining({
-        toolAvailability: { native: ["Read"], openClaw: ["skill_workshop"] },
+        toolAvailability: { native: ["Read"], openClaw: ["skill_library"] },
       }),
     );
     expect(context.params.cliToolAvailability).toEqual({
       native: ["Read"],
-      openClaw: ["skill_workshop"],
+      openClaw: ["skill_library"],
     });
 
     expect(resolveMcpLoopbackScopedTools).toHaveBeenCalledWith(
@@ -3213,9 +3232,9 @@ describe("prepareCliRunContext", () => {
         skillLibraryAuthoring: { ...skillLibraryAuthoring, defaultTarget: "personal" },
       }),
     );
-    expect(context.nodeSkillWorkshop?.name).toBe("skill_workshop");
+    expect(context.nodeSkillWorkshop?.name).toBe("skill_library");
     expect(context.systemPromptReport.tools.entries.map((tool) => tool.name)).toContain(
-      "skill_workshop",
+      "skill_library",
     );
 
     await context.preparedBackend.cleanup?.();

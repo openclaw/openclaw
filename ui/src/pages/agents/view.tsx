@@ -14,8 +14,11 @@ import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { ConfigError } from "../../components/config-error.tsx";
 import { handleCopyButton } from "../../components/copy-button-state.ts";
+import { FloatingHeaderActions } from "../../components/solid/floating-header-actions.tsx";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
+  RetryAction,
   SettingsEmpty,
   SettingsSection,
   SettingsNavRow,
@@ -32,6 +35,7 @@ import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { ReasonedDisabledControl } from "../plugins/reasoned-disabled-control.tsx";
+import { AgentsPageMenu } from "./agents-page-menu.tsx";
 import type { AgentsPageView } from "./agents-page-state.ts";
 import { AgentFiles } from "./panels-files.tsx";
 import { AgentOverview } from "./panels-overview.tsx";
@@ -62,11 +66,11 @@ export type AgentsProps = Omit<
     | "configLoading"
     | "configSaving"
     | "configFormDirty"
+    | "configAutoSaveStatus"
     | "lastError"
   >;
   overview: Omit<AgentsPageView["overview"], "modelSelectionPolicy" | "modelCatalogRetired"> &
     Partial<Pick<AgentsPageView["overview"], "modelSelectionPolicy" | "modelCatalogRetired">>;
-  identitySavePending?: boolean;
   onOpenMemoryImport?: AgentsPageView["onOpenMemoryImport"];
   onOpenMemorySettings?: AgentsPageView["onOpenMemorySettings"];
 };
@@ -123,9 +127,6 @@ export function Agents(props: AgentsProps) {
     configSaving: props.config.configSaving,
     configDirty: props.config.configFormDirty,
     canUpdateConfig: props.access.canUpdateConfig,
-    presentationRetired: props.presentationRetired(),
-    onConfigReload: props.onConfigReload,
-    onConfigSave: props.onConfigSave,
   });
   const context = () =>
     buildAgentContext(
@@ -146,6 +147,41 @@ export function Agents(props: AgentsProps) {
       : null,
     cron: props.selectedAgentId ? props.readData().cron.cronJobsTotal || null : null,
   });
+  const pageMenu = () => (
+    <AgentsPageMenu
+      agentId={selectedAgent()?.id ?? null}
+      defaultLabel={
+        settingDefault()
+          ? t("common.saving")
+          : selectedAgent()?.id === defaultId()
+            ? t("agents.default")
+            : t("agents.setDefault")
+      }
+      defaultDisabled={
+        !props.access.canUpdateConfig || settingDefault() || selectedAgent()?.id === defaultId()
+      }
+      pinLabel={t(
+        props.pinnedAgentIds.includes(selectedAgent()?.id ?? "")
+          ? "agents.unpinFromSwitcher"
+          : "agents.pinToSwitcher",
+      )}
+      refreshLabel={t(rosterPending() ? "common.loading" : "common.refresh")}
+      refreshDisabled={rosterPending()}
+      onSetDefault={setDefault}
+      onTogglePinned={props.onTogglePinnedAgent}
+      onRefresh={props.onRefresh}
+    />
+  );
+  // Defaults apply to every agent, so this row stays out of the per-agent tab bar.
+  const agentDefaultsRow = () => (
+    <div class="settings-group">
+      <SettingsNavRow
+        title={t("agents.defaults.title")}
+        description={t("agents.defaults.description")}
+        onClick={props.onOpenAgentDefaults}
+      />
+    </div>
+  );
   return (
     <div class="agents-layout">
       <section class="agents-toolbar">
@@ -174,7 +210,7 @@ export function Agents(props: AgentsProps) {
                         <>
                           <button
                             type="button"
-                            class="btn btn--sm btn--ghost"
+                            class="btn btn--sm btn--ghost agents-toolbar-secondary"
                             onClick={(event) =>
                               void handleCopyButton(event, id, t("agents.copyId"), {
                                 label,
@@ -197,7 +233,7 @@ export function Agents(props: AgentsProps) {
                   </Show>
                   <button
                     type="button"
-                    class="btn btn--sm btn--ghost"
+                    class="btn btn--sm btn--ghost agents-toolbar-secondary"
                     disabled={
                       !props.access.canUpdateConfig ||
                       settingDefault() ||
@@ -213,7 +249,7 @@ export function Agents(props: AgentsProps) {
                   </button>
                   <button
                     type="button"
-                    class="btn btn--sm btn--ghost"
+                    class="btn btn--sm btn--ghost agents-toolbar-secondary"
                     onClick={() => props.onTogglePinnedAgent(agent().id)}
                   >
                     {t(
@@ -225,31 +261,27 @@ export function Agents(props: AgentsProps) {
                 </>
               )}
             </Show>
-            <button
-              class="btn btn--sm agents-refresh-btn"
-              disabled={rosterPending()}
+            <RefreshButton
+              class="agents-refresh-btn"
+              label={t("common.refresh")}
+              busy={rosterPending()}
               onClick={() => props.onRefresh()}
-            >
-              {t(rosterPending() ? "common.loading" : "common.refresh")}
-            </button>
+            />
+            <FloatingHeaderActions fallback={pageMenu()}>{pageMenu()}</FloatingHeaderActions>
           </div>
         </div>
         <AgentReadNotice request={props.listRead} style={{ "margin-top": "8px" }} />
       </section>
       <section class="agents-main">
-        <div class="settings-group">
-          <SettingsNavRow
-            title={t("agents.defaults.title")}
-            description={t("agents.defaults.description")}
-            onClick={props.onOpenAgentDefaults}
-          />
-        </div>
         <Show
           when={selectedAgent()}
           fallback={
-            <SettingsSection title={t("agents.selectTitle")}>
-              <SettingsEmpty message={t("agents.selectSubtitle")} />
-            </SettingsSection>
+            <>
+              <SettingsSection title={t("agents.selectTitle")}>
+                <SettingsEmpty message={t("agents.selectSubtitle")} />
+              </SettingsSection>
+              {agentDefaultsRow()}
+            </>
           }
         >
           {(agent) => (
@@ -280,11 +312,23 @@ export function Agents(props: AgentsProps) {
                 role="tabpanel"
                 aria-labelledby={`agents-tab-${props.readData().agentsPanel}`}
               >
-                <Show when={!props.config.configSaving}>
+                {/* A failed write is reported by the save status, without moving this page. */}
+                <Show
+                  when={
+                    !props.config.configSaving &&
+                    !["error", "rejected", "conflict"].includes(props.config.configAutoSaveStatus)
+                  }
+                >
                   <ConfigError message={props.config.lastError}>
                     {(message) => (
-                      <div class="callout danger" role="alert">
+                      <div class="callout danger agent-config-error" role="alert">
                         {message}
+                        <Show when={!props.config.configSnapshot}>
+                          <RetryAction
+                            disabled={props.config.configLoading}
+                            onRetry={props.onConfigRetry}
+                          />
+                        </Show>
                       </div>
                     )}
                   </ConfigError>
@@ -306,7 +350,6 @@ export function Agents(props: AgentsProps) {
                           {(agentId) => (
                             <AgentOverview
                               {...props.overview}
-                              identitySavePending={props.identitySavePending ?? false}
                               readData={props.readData}
                               {...configActions()}
                               agent={agent()}
@@ -318,6 +361,7 @@ export function Agents(props: AgentsProps) {
                             />
                           )}
                         </Show>
+                        {agentDefaultsRow()}
                       </Match>
                       <Match when={props.readData().agentsPanel === "files"}>
                         <AgentFiles

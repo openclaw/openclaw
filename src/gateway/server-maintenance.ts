@@ -30,7 +30,7 @@ import {
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
 import { listRpcSourceEntries } from "../sessions/session-controller.rpc-sources.js";
-import { registerSkillUsageTracking } from "../skills/workshop/skill-usage.js";
+import { registerSkillUsageTracking } from "../skills/runtime/skill-usage.js";
 import { pruneExpiredArtifactDownloads } from "./artifact-download-grants.js";
 import {
   captureThawRestartTargets,

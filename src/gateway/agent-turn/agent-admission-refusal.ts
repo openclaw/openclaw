@@ -1,7 +1,7 @@
 import type { ErrorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { readPreparedRuntimeSelfHold } from "../../agents/prepared-model-runtime-admission.js";
 
-export type AgentAdmissionStage =
+type AgentAdmissionStage =
   | "runtime-preparation"
   | "subagent-preparation"
   | "input-preparation"
@@ -23,7 +23,7 @@ type AgentPreacceptRefusal = {
 };
 
 /** Admission alone stamps the original guard cause after joining its cleanup. */
-export function recordAgentAdmissionRefusal(
+function recordAgentAdmissionRefusal(
   error: unknown,
   stage: AgentAdmissionStage,
   released: boolean,

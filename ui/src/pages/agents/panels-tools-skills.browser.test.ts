@@ -352,12 +352,19 @@ describe("agents tools panel (browser)", () => {
       assert(section, "Missing GitHub identity section");
       expect(section.textContent).toContain(inherited ? "@system-user" : "@octocat");
       expect(content(section, ".settings-status")).toBe("Verified");
-      const authorRow = Array.from(section.querySelectorAll(".settings-row")).find((row) =>
-        row.querySelector(".settings-row__title")?.textContent?.includes("Git Author"),
+      const details = section.querySelector<HTMLButtonElement>(
+        'button[aria-label="Connection details"]',
       );
-      expect(authorRow?.querySelector(".settings-row__value")?.textContent?.trim()).toBe(
-        inherited ? "System Author · system@example.com" : "Not set",
-      );
+      assert(details, "Missing connection details button");
+      details.click();
+      await waitForSolid(() => {
+        const authorRow = Array.from(section.querySelectorAll(".settings-row")).find((row) =>
+          row.querySelector(".settings-row__title")?.textContent?.includes("Git Author"),
+        );
+        expect(authorRow?.querySelector(".settings-row__value")?.textContent?.trim()).toBe(
+          inherited ? "System Author · system@example.com" : "Not set",
+        );
+      });
       if (inherited) {
         expect(section.textContent).toContain("Managed GitHub authorization");
         expect(section.textContent).toContain("repo, workflow");
@@ -435,7 +442,7 @@ describe("agents tools panel (browser)", () => {
     await Promise.resolve();
 
     expect(container.textContent).toContain(
-      "Full selects tools; it does not grant Full Access execution permissions.",
+      "Full selects tools; it does not grant Full access execution permissions.",
     );
     const toggle = toolSwitch(container, "openclaw");
     expect(toggle.checked).toBe(false);

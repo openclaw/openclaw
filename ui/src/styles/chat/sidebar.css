@@ -412,9 +412,6 @@
     color: transparent;
     background: var(--skeleton-base, var(--bg-muted));
   }
-  .skeleton::after {
-    opacity: 0.35;
-  }
 }
 
 .chat-video-skeleton__controls {

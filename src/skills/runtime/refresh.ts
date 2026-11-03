@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -118,7 +117,6 @@ function pool() {
       new WorkerTaskPool({
         workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.skillsDiscovery),
         workerClass: "singleton",
-        idleTimeoutMs: 0,
       }),
   ));
 }
@@ -140,9 +138,9 @@ function observeSource(source: Source) {
       // One recursive workspace handle still reports edits in each selected subtree.
       const watchRoot =
         process.platform === "win32"
-          ? ([source.workspaceDir, source.selection.request.executionWorkspaceDir]
+          ? [source.workspaceDir, source.selection.request.executionWorkspaceDir]
               .filter((root): root is string => Boolean(root && isPathInside(root, directory)))
-              .toSorted((a, b) => a.length - b.length)[0] ?? path.dirname(directory))
+              .toSorted((a, b) => a.length - b.length)[0]
           : undefined;
       source.observations.set(
         directory,

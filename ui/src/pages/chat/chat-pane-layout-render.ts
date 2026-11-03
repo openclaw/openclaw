@@ -337,8 +337,9 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
       ...this.sessionCompanionThreads.view(companionSessionKey, currentAgentId),
     };
     const companionPresented = slotPresentation("companion");
-    // Capture the opening before the lazy rail can yield to newer input intent.
-    this.syncSessionCompanionPresentation(companionPresented.isPresented());
+    // Capture the opening before the lazy rail can yield to newer input intent. A sheet
+    // sliding out only keeps painting its content, so reopening it is a new opening.
+    this.syncSessionCompanionPresentation(companionPresented.isPresented() && !mobileHost?.exiting);
     // Another pane can own keyboard focus while this desktop remains visible.
     const desktopPresented = slotPresentation("desktop");
     const discoveredDesktopSource = this.activeSessionResources.desktopSource(

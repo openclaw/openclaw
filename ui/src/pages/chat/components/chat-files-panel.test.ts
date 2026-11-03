@@ -381,7 +381,6 @@ describe("workspace file tabs", () => {
     "validates a document link before reusing a dirty target (%s)",
     async (scope) => {
       const toast = document.body.appendChild(document.createElement("openclaw-toast-host"));
-      await toast.updateComplete;
       const { state, response, getFile, workspace } = fileFixture(
         "reports/evidence.md",
         "Disk evidence",
@@ -463,6 +462,7 @@ describe("workspace file tabs", () => {
       await openSessionWorkspaceFile(state, { path: "evidence.md", relativeTo: source }, "preview");
       expect(workspace.activePreviewId).toBe(sourcePreview.id);
       expect(workspace.error).toContain(scope === "denied" ? "Access denied" : "workspace changed");
+      await vi.dynamicImportSettled();
       await waitForSolid(() => expect(toast.textContent).toContain(workspace.error));
       expect(retained.content).toBe(original);
       expect(readFileDraft(original)?.content).toBe("Unsaved evidence");
@@ -476,7 +476,6 @@ describe("workspace file tabs", () => {
     "keeps rootless document target $link explicit and native-authorized",
     async ({ path, link, request }) => {
       const toast = document.body.appendChild(document.createElement("openclaw-toast-host"));
-      await toast.updateComplete;
       const { state, response, getFile, workspace } = fileFixture(path, "# Report", true);
       response.root = undefined;
       const preview = await openSessionWorkspaceFile(state, { path });
@@ -496,6 +495,7 @@ describe("workspace file tabs", () => {
       expect(state.sessions.listFiles).not.toHaveBeenCalled();
       expect(workspace.activePreviewId).toBe(preview.id);
       expect(workspace.previews).toEqual([preview]);
+      await vi.dynamicImportSettled();
       await waitForSolid(() => expect(toast.textContent).toContain("session file not found"));
     },
   );
@@ -743,7 +743,7 @@ describe("workspace file tabs", () => {
     expect(readFileDraft(content)?.content).toBe("UNSAVED");
   });
 
-  it("shows a held preview and recovers an unavailable file without duplicating its tab", async () => {
+  it("browses from an unavailable preview and retries without duplicating its tab", async () => {
     const state = createSessionWorkspaceHost();
     const first = createDeferred<SessionWorkspaceGetResult>();
     const retry = createDeferred<SessionWorkspaceGetResult>();
@@ -751,6 +751,7 @@ describe("workspace file tabs", () => {
     state.sessions.getFile = getFile;
     const panel = mountWorkspacePanel(state);
     panel.presentation = "desktop";
+    panel.onSelect = (id) => selectSessionWorkspacePreview(state, id);
     panel.renderDetail = () =>
       Object.assign(document.createElement("div"), { textContent: "Ready" });
     void openSessionWorkspaceFile(state, { path: "retry.txt" });
@@ -761,6 +762,15 @@ describe("workspace file tabs", () => {
     const preview = getSessionWorkspace(state).previews[0]!;
     first.reject(new Error("temporary failure"));
     await waitForSolid(() => expect(panel.textContent).toContain("temporary failure"));
+    const browse = panel.querySelector<HTMLButtonElement>("openclaw-panel-empty-state button");
+    expect(browse?.textContent).toBe("Browse files");
+    browse!.focus();
+    browse!.click();
+    const catalog = panel.querySelector<HTMLElement>(".chat-files-panel__catalog");
+    await waitForSolid(() => expect(document.activeElement).toBe(catalog));
+    expect(catalog?.hidden).toBe(false);
+    expect(getSessionWorkspace(state).activePreviewId).toBeNull();
+    expect(getSessionWorkspace(state).previews).toEqual([preview]);
     const paths = [...panel.querySelectorAll<HTMLElement>(".sidebar-file-view__path")];
     expect(paths).toHaveLength(2);
     panel.previews = [{ ...preview, label: "renamed.txt" }];
@@ -924,6 +934,11 @@ describe("workspace file tabs", () => {
 
   it("opens the file browser from its action hosted outside the panel", async () => {
     const panel = mountPanel();
+    panel.renderDetail = ({ onBrowseFiles }) =>
+      Object.assign(document.createElement("button"), {
+        textContent: "Browse linked file",
+        onclick: onBrowseFiles,
+      });
     panel.tabsInHeader = true;
     panel.workspace = {
       ...createSessionWorkspaceProps(createSessionWorkspaceHost(), { presentation: "desktop" }),
@@ -947,6 +962,15 @@ describe("workspace file tabs", () => {
     const browser = panel.querySelector<HTMLElement>(".chat-files-panel__page");
     expect(browser?.hidden).toBe(false);
     expect(browser?.textContent).toContain("reports");
+    const readerAction = [...panel.querySelectorAll("button")].find(
+      (button) => button.textContent === "Browse linked file",
+    )!;
+    await updatePanel(panel, { activeId: "file:same.ts" });
+    readerAction.focus();
+    readerAction.click();
+    await waitForSolid(() => expect(document.activeElement).toBe(browser));
+    expect(browser?.hidden).toBe(false);
+    expect(readerAction.isConnected).toBe(true);
   });
 
   it("announces hosted-tab changes without invalidating the header for file content updates", async () => {

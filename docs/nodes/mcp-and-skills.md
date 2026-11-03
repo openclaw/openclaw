@@ -96,6 +96,10 @@ than the Gateway machine. The publishing node must have approved `system.run`,
 and the agent's exec policy must allow `host=node`; otherwise the skill stays
 out of that agent's snapshot.
 
+Native Claude CLI turns receive selected node-hosted instructions through the
+session-scoped skills plugin, including the existing node execution guidance.
+Referenced scripts and binaries stay on the publishing node.
+
 Set `nodeHost.skills.enabled: false` on the node to stop publication. Gateway
 operators can ignore skills from every paired node with
 `gateway.nodes.allowSkills: false`.

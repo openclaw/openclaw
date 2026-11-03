@@ -228,7 +228,7 @@ export class NewSessionDraft {
     };
     this.place.modelControl.onDraftSelectionChange = () => {
       if (this.place.modelControl.modelDefaultsPolicy === "configured") {
-        this.submission.draftPersistence.noteModelSelectionMutation();
+        this.submission.draftPersistence.noteSelectionMutation("model");
       }
     };
   }
@@ -326,7 +326,7 @@ export class NewSessionDraft {
       !this.submission.submitting &&
       this.place.modelControl.draftSelection(this.place.agentId)
     ) {
-      this.submission.draftPersistence.noteModelSelectionMutation();
+      this.submission.draftPersistence.noteSelectionMutation("model");
     }
     this.modelDefaultsPolicy = this.place.modelControl.modelDefaultsPolicy;
     this.place.restorePreferenceSelections();

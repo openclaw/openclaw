@@ -172,7 +172,10 @@ native tool surface is disabled, OpenClaw supplies `view_image` with its
 advertised for the active run.
 
 When OpenClaw restores conversation history into a Codex thread, saved images
-stay beside their original messages inside the quoted history. The current
+stay beside their original messages inside the quoted history. This includes
+managed images saved with assistant answers when the selected model accepts
+image input. Restoration verifies the owning agent, physical session, and
+assistant source before reading the saved original. The current
 request and its attachments follow that history, so a later text or voice turn
 does not present old screenshots as newly attached images. If context limits
 remove an image's original message, its image input is omitted too; the saved
@@ -228,12 +231,24 @@ final content. Raw provider copies cannot restore text that Codex removed. Messa
 marked for asynchronous delivery remain separate from the final reply when
 Codex repeats them in the turn-completion summary.
 
+Reasoning streams to the Control UI as separate native items while a turn runs.
+Completed items retain their place among commentary and tools in saved history;
+OpenClaw does not combine the turn's reasoning into one message. The existing
+`/reasoning on|off|stream` and **View → Reasoning** controls select visibility.
+These are the reasoning summaries exposed by Codex, separate from assistant
+commentary. Previously saved aggregate summaries remain in their original form.
+
 ## Cyber safety notices
 
 The Control UI shows a notice above the composer when Codex reports cyber
 safety buffering, a cyber-policy refusal, or a provider model reroute for
 high-risk cyber activity. These notices use structured app-server events;
 OpenClaw does not infer classifier activity from the assistant's wording.
+
+Terminal failure notices retain the provider refusal category when available and
+ask you to revise the request. Precaution stops ask you to review the findings in
+chat before continuing. Raw provider diagnostics and warnings stay out of these
+notices.
 
 Buffering means the provider is still processing the request. Its notice clears
 when assistant output starts or the turn ends. A blocked notice remains until
@@ -388,7 +403,9 @@ The Codex harness changes the low-level embedded agent executor only.
   those tools, so OpenClaw remains in the execution path.
 - Codex-native shell, patch, MCP, and native app tools are owned by Codex.
   OpenClaw can observe or block selected native events through the
-  supported relay, but it does not rewrite native tool arguments.
+  supported relay. A `before_tool_call` rewrite reaches Codex only for the
+  `command` of native shell and `apply_patch` calls and for MCP arguments;
+  any other rewrite blocks the call.
 - `gateway_exec` and `gateway_process` are OpenClaw-owned dynamic tools. They
   deliberately re-enter Gateway exec preparation for agent-readable Secret
   Store environment and protected egress; those values never flow into Codex

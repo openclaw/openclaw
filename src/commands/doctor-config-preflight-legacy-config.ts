@@ -61,14 +61,15 @@ const transformDoctorRecoveryCandidate: ConfigRecoveryCandidateTransform = (para
 export async function migrateLegacyDoctorConfig(params: {
   enabled: boolean;
   measure: ConfigSnapshotReadMeasure;
-}): Promise<void> {
+}): Promise<boolean> {
   if (!params.enabled || resolveIsConfigReadOnly(process.env)) {
-    return;
+    return false;
   }
   const changes = await params.measure("legacy-config-migration", maybeMigrateLegacyConfig);
   if (changes.length > 0) {
     note(changes.map((entry) => `- ${entry}`).join("\n"), "Doctor changes");
   }
+  return changes.length > 0;
 }
 
 /** Repair active legacy bytes before considering an older backup. */
