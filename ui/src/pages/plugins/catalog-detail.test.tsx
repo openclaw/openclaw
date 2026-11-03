@@ -75,9 +75,10 @@ it("renders complete catalog content in capability order", () => {
     iconUrls: { [imageUrl]: "blob:package-icon" },
   });
   expect(query(".plugin-catalog-detail__icon .plugins-tile--white")).not.toBeNull();
-  expect(query(".plugin-capabilities button")).toBeNull();
+  expect(query(".plugin-capabilities button, .plugin-capabilities h2 svg")).toBeNull();
   expect([...all(".plugin-capabilities h2")].map((heading) => heading.textContent)).toEqual([
     "Capabilities",
+    "Extensions",
     "Skills",
     "Tools",
     "MCP Server",
