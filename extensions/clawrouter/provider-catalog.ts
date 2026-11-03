@@ -133,9 +133,28 @@ function parseCatalogProvider(value: unknown): CatalogProvider | undefined {
   const row = asOptionalRecord(value);
   const id = normalizeOptionalString(row?.id);
   const nativeBaseUrl = normalizeOptionalString(row?.nativeBaseUrl);
-  if (!id || !nativeBaseUrl || !nativeBaseUrl.startsWith("/v1/native/")) {
+  const isFusion = id === "clawrouter" && nativeBaseUrl === "/v1" && row?.openaiCompatible === true;
+  if (!id || !nativeBaseUrl || (!nativeBaseUrl.startsWith("/v1/native/") && !isFusion)) {
     return undefined;
   }
+  const models = Array.isArray(row?.models) ? row.models : [];
+  // Fusion has no native proxy. Only its credential-scoped unified offer is executable.
+  const fusionGranted =
+    isFusion &&
+    row?.allowed === true &&
+    row.executable === true &&
+    Array.isArray(row.offers) &&
+    row.offers.some((value) => {
+      const offer = asOptionalRecord(value);
+      return (
+        offer?.modelId === "clawrouter/fusion" &&
+        offer.endpoint === "chat_completions" &&
+        offer.transport === "http" &&
+        offer.routeKind === "unified" &&
+        offer.route === "/v1/chat/completions" &&
+        offer.eligible === true
+      );
+    });
   return {
     id,
     displayName: normalizeOptionalString(row?.displayName) ?? id,
@@ -144,7 +163,19 @@ function parseCatalogProvider(value: unknown): CatalogProvider | undefined {
     routes: Array.isArray(row?.routes)
       ? row.routes.map(parseCatalogRoute).filter((route): route is CatalogRoute => Boolean(route))
       : [],
-    models: Array.isArray(row?.models) ? row.models : [],
+    models: isFusion
+      ? models.filter((value) => {
+          const model = asOptionalRecord(value);
+          return (
+            fusionGranted &&
+            model?.id === "clawrouter/fusion" &&
+            model.upstream === "clawrouter/fusion" &&
+            Array.isArray(model.capabilities) &&
+            model.capabilities.length === 1 &&
+            model.capabilities[0] === "llm.chat"
+          );
+        })
+      : models,
     hostedWebSearchModels: new Set(
       (Array.isArray(row?.offers) ? row.offers : []).flatMap((offerValue) => {
         const offer = asOptionalRecord(offerValue);
