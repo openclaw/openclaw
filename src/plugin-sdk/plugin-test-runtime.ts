@@ -9,7 +9,7 @@ import type {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import type { PluginRegistryParams } from "../plugins/registry-types.js";
-import { createPluginRegistry as createRegistry } from "../plugins/registry.js";
+import { createPluginRegistry } from "../plugins/registry.js";
 import { createHostChannelInboundRuntime } from "../plugins/runtime/runtime-channel-admission.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { ReplyOperation } from "../sessions/session-controller.contracts.js";
@@ -245,10 +245,10 @@ export { setDefaultChannelPluginRegistryForTests } from "../commands/channel-tes
 export { createEmptyPluginRegistry, type PluginRecord } from "../plugins/registry.js";
 
 /** Test hosts supply admission without requiring callers to know private loader bindings. */
-export function createPluginRegistry(
+export function createPluginTestRegistry(
   params: Omit<PluginRegistryParams, "createHostChannelInboundRuntime">,
 ) {
-  return createRegistry({ ...params, createHostChannelInboundRuntime });
+  return createPluginRegistry({ ...params, createHostChannelInboundRuntime });
 }
 export {
   getPluginRegistrationContracts,

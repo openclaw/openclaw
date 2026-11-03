@@ -30,7 +30,7 @@ import {
 } from "../../plugin-sdk/conversation-binding-runtime.js";
 import {
   createPluginRecord,
-  createPluginRegistry,
+  createPluginTestRegistry,
   createPluginRuntimeMock,
   disposePluginRegistryInstances,
   initializeGlobalHookRunner,
@@ -342,7 +342,7 @@ it.each(["acp", "ordinary"] as const)("resets the explicit %s target", async (ta
         plugins: { enabled: true, allow: ["acpx"], entries: { acpx: { enabled: true } } },
       });
       await state.writeConfig(cfg);
-      const registryBuilder = createPluginRegistry({
+      const registryBuilder = createPluginTestRegistry({
         logger: { info() {}, warn() {}, error() {}, debug() {} },
         runtime: createPluginRuntimeMock(),
         activateGlobalSideEffects: false,

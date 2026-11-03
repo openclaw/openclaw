@@ -11,7 +11,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-api";
 import {
   createPluginRecord,
-  createPluginRegistry,
+  createPluginTestRegistry,
   createPluginRuntimeMock,
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -221,7 +221,7 @@ function readStored(id: string) {
 async function registerHooks() {
   const config: OpenClawConfig = { agents: { ownership: "explicit", entries: { main: {} } } };
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
-  const builder = createPluginRegistry({
+  const builder = createPluginTestRegistry({
     logger,
     runtime: createPluginRuntimeMock({ config: { current: () => config } }),
     activateGlobalSideEffects: false,

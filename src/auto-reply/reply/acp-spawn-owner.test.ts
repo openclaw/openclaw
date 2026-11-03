@@ -24,7 +24,7 @@ import { buildChannelInboundEventContext } from "../../plugin-sdk/channel-inboun
 import { inspectRuntimeConversationBindingRoute } from "../../plugin-sdk/conversation-binding-runtime.js";
 import {
   createPluginRecord,
-  createPluginRegistry,
+  createPluginTestRegistry,
   createPluginRuntimeMock,
   disposePluginRegistryInstances,
   initializeGlobalHookRunner,
@@ -63,7 +63,7 @@ it.each(["spawned", "legacy", "configured", "removed", "reassigned", "reopened"]
           plugins: { enabled: true, allow: ["acpx"], entries: { acpx: { enabled: true } } },
         });
         await state.writeConfig(cfg);
-        const registry = createPluginRegistry({
+        const registry = createPluginTestRegistry({
           logger: { info() {}, warn() {}, error() {}, debug() {} },
           runtime: createPluginRuntimeMock(),
           activateGlobalSideEffects: false,

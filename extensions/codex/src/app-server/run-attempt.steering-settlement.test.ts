@@ -4,7 +4,7 @@ import { resolveActiveEmbeddedRunSessionId } from "openclaw/plugin-sdk/agent-har
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   createPluginRecord,
-  createPluginRegistry,
+  createPluginTestRegistry,
   createPluginRuntimeMock,
   disposePluginRegistryInstances,
   setActivePluginRegistry,
@@ -94,7 +94,7 @@ async function createFixture() {
       prefixCompleted.resolve();
     }
   };
-  const registration = createPluginRegistry({
+  const registration = createPluginTestRegistry({
     runtime: createPluginRuntimeMock({ config: { current: () => params.config ?? {} } }),
     logger: { info() {}, warn() {}, error() {}, debug() {} },
     activateGlobalSideEffects: false,

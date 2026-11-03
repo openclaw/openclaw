@@ -5,7 +5,7 @@ import * as agentHarnessRuntime from "openclaw/plugin-sdk/agent-harness-runtime"
 import { withPluginRuntimeRegistryScope } from "openclaw/plugin-sdk/channel-test-helpers";
 import {
   createPluginRecord,
-  createPluginRegistry,
+  createPluginTestRegistry,
   createPluginRuntimeMock,
   disposePluginRegistryInstances,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -76,7 +76,7 @@ describe("Codex workspace instruction snapshots", () => {
     params.disableTools = false;
     params.runtimePlan = createCodexRuntimePlanFixture();
     setCodexTestModelSupportsTools(params, true);
-    const registration = createPluginRegistry({
+    const registration = createPluginTestRegistry({
       runtime: createPluginRuntimeMock(),
       logger: { info() {}, warn() {}, error() {}, debug() {} },
       activateGlobalSideEffects: false,

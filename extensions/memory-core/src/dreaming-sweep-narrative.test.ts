@@ -12,7 +12,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-api";
 import {
   createPluginRecord,
-  createPluginRegistry,
+  createPluginTestRegistry,
   createPluginRuntimeMock,
   disposePluginRegistryInstances,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -35,7 +35,7 @@ import {
 vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-core", { spy: true });
 
 const { createTempWorkspace } = createMemoryCoreTestHarness();
-const backgroundOwners = new Set<ReturnType<typeof createPluginRegistry>>();
+const backgroundOwners = new Set<ReturnType<typeof createPluginTestRegistry>>();
 const NOW_MS = Date.parse("2026-04-05T10:00:00.000Z");
 const DAY = "2026-04-05";
 const FRAGMENT = "Move archive backups to encrypted cold storage.";
@@ -165,7 +165,7 @@ async function createSweep(
     vi.fn<Parameters<typeof registerShortTermPromotionDreaming>[0]["registerService"]>();
   const baseApi = createTestPluginApi({ config, logger, pluginConfig: {} });
   if (options.managedBackground) {
-    const owner = createPluginRegistry({
+    const owner = createPluginTestRegistry({
       logger,
       runtime: createPluginRuntimeMock(),
       activateGlobalSideEffects: false,

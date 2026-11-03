@@ -4,7 +4,7 @@ import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-tes
 import {
   createHookRunner,
   createPluginRecord,
-  createPluginRegistry,
+  createPluginTestRegistry,
   createPluginRuntimeMock,
   disposePluginRegistryInstances,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -55,7 +55,7 @@ async function createStartedPlugin(
     },
   };
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
-  const builder = createPluginRegistry({
+  const builder = createPluginTestRegistry({
     logger,
     runtime: createPluginRuntimeMock({ config: { current: () => config } }),
     activateGlobalSideEffects: false,

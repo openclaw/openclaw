@@ -16,7 +16,7 @@ import {
   resolveChannelMessageIngress,
   resolveStableChannelMessageIngress,
 } from "../plugin-sdk/channel-ingress-runtime.js";
-import { createPluginRegistry as createSdkPluginRegistry } from "../plugin-sdk/plugin-test-runtime.js";
+import { createPluginTestRegistry } from "../plugin-sdk/plugin-test-runtime.js";
 import { recordAcceptedSessionParticipantInput } from "../sessions/session-participant-input-recording.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
@@ -318,7 +318,7 @@ describe("bundled channel ingress runtime ownership", () => {
     const runtime = createPluginRuntime();
     const gateway = createGateway(createAudit());
     bindGatewayContextResolver(runtime.subagent, () => gateway);
-    const builder = createSdkPluginRegistry({
+    const builder = createPluginTestRegistry({
       logger: console,
       runtime,
       activateGlobalSideEffects: false,
