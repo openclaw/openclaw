@@ -298,6 +298,8 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
       "Security2AdvertisementTests",
       "ESPSetupWireTests",
       "ESPSetupSessionTests",
+      "ESPSetupGatewayPreviewTests",
+      "QRScannerResultHandoffTests",
     ]);
     expect(tests[0]?.args).toEqual(expect.arrayContaining(lifecycleSelectors));
     expect(commands.filter((command) => command.tool === "python3")).toHaveLength(1);
@@ -406,6 +408,8 @@ it.skipIf(process.platform === "win32").each([
   { owner: "apps/ios/ThirdParty/ESPProvision/ESPProvision/ESPDevice.swift", groups: ["lifecycle"] },
   { owner: "apps/ios/Tests/ESPSetupWireTests.swift", groups: ["lifecycle"] },
   { owner: "apps/ios/Tests/ESPSetupSessionTests.swift", groups: ["lifecycle"] },
+  { owner: "apps/ios/Tests/ESPSetupGatewayPreviewTests.swift", groups: ["lifecycle"] },
+  { owner: "apps/ios/Tests/QRScannerResultHandoffTests.swift", groups: ["lifecycle"] },
   {
     owner: "apps/shared/OpenClawKit/Tests/OpenClawKitTests/ChatComposerTextViewIOSTests.swift",
     groups: ["lifecycle"],
