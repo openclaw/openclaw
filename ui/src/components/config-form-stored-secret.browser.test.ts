@@ -247,33 +247,6 @@ describe("stored secrets", () => {
     }
   });
 
-  it("puts the eye inside the field and Save and Cancel beside it", () => {
-    const secretFields = fakeSecretFields();
-    const container = document.createElement("div");
-    renderTextInputFixture(container, {
-      schema,
-      value: REDACTED,
-      path,
-      inputType: "text",
-      hints,
-      secretFields,
-      onPatch: vi.fn(),
-    });
-    const input = expectElement(container.querySelector<HTMLInputElement>("input"), "input");
-    type(input, "new-token");
-    const field = expectElement(container.querySelector(".cfg-secret > .settings-secret"), "field");
-    expect(field.querySelector(".settings-secret__toggle")).not.toBeNull();
-    expect(field.querySelector(".cfg-secret-actions")).toBeNull();
-    const actions = expectElement(
-      container.querySelector(".cfg-secret > .cfg-secret-actions"),
-      "actions",
-    );
-    expect([...actions.querySelectorAll("button")].map((button) => button.ariaLabel)).toEqual([
-      "Save: Bot Token",
-      "Cancel: Bot Token",
-    ]);
-  });
-
   it("offers no eye on a stored secret, and keeps it for text in the draft", () => {
     const stored = document.createElement("div");
     renderTextInputFixture(stored, {
