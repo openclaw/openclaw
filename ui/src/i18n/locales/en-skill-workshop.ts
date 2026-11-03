@@ -3,7 +3,7 @@ import { en } from "./en.ts";
 
 const enSkillWorkshop = {
   skillWorkshop: {
-    loadError: "Could not load the Workshop.",
+    loadError: "Couldn’t load the Workshop. Try again.",
     retry: "Retry",
     mode: {
       label: "Learning",
@@ -16,7 +16,7 @@ const enSkillWorkshop = {
         "The agent saves skill changes it would make as drafts. Review them together with /learn drafts.",
       autoTitle:
         "The agent saves and improves skills as it works, announces each change, and every change can be undone.",
-      updateError: "Could not update the learning mode.",
+      updateError: "Couldn’t update the learning mode. Try again.",
     },
     skills: {
       title: "Learned skills",

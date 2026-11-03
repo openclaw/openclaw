@@ -5,12 +5,12 @@ import { en } from "./en.ts";
 // Editor copy stays with the lazy Skills surface; sessions load only their subset.
 const enSkillLibrary = {
   skillGroups: {
-    workspace: "Workspace Skills",
-    learned: "Learned Skills",
-    builtIn: "Built-in Skills",
-    installed: "Installed Skills",
-    extra: "Extra Skills",
-    other: "Other Skills",
+    workspace: "Workspace skills",
+    learned: "Learned skills",
+    builtIn: "Built-in skills",
+    installed: "Installed skills",
+    extra: "Extra skills",
+    other: "Other skills",
   },
   skillStatus: {
     bundled: "bundled",
@@ -44,7 +44,7 @@ const enSkillLibrary = {
     fileExists: "That file already exists. Select it to edit its contents.",
     binary: "Binary attachment. Its original bytes are preserved when you save.",
     binaryRead: registerSessionSkillLibraryEnglish.catalog.skillLibrary.binaryRead,
-    readOnly: "You can read this skill. Only its owner or an authorized administrator can edit it.",
+    readOnly: "You can view this skill, but only its owner or an authorized admin can edit it.",
     personalTarget:
       "My skills. Save to your personal library; existing session selections change only when you explicitly attach or refresh.",
     technicalDetails: registerSessionSkillLibraryEnglish.catalog.skillLibrary.technicalDetails,
