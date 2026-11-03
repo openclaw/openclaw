@@ -1,0 +1,2 @@
+# Publish complete registry fixture readiness before the existing download/integrity regression consumes its port.
+2
