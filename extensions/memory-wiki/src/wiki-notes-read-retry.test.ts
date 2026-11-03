@@ -28,7 +28,7 @@ vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
       const vault = await actual.root(...args);
       return new Proxy(vault, {
         get(target, prop, receiver) {
-          if (prop !== "readText") {
+          if (prop !== "readText" && prop !== "readBytes") {
             return Reflect.get(target, prop, receiver);
           }
           return async (relativePath: string) => {
@@ -43,7 +43,7 @@ vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
               securityRuntimeMock.readTextFailureInjected = true;
               throw securityRuntimeMock.readTextOnceError;
             }
-            return target.readText(relativePath);
+            return target[prop](relativePath);
           };
         },
       });

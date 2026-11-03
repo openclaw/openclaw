@@ -60,7 +60,7 @@ function mockStringMessages(mock: { mock: { calls: unknown[][] } }): string[] {
 
 const clientModule = await import("./client.js");
 const gatewayRuntimeModule = await import("./gateway-runtime.js");
-const mockSendMessage = vi.spyOn(clientModule, "sendMessage").mockResolvedValue(true);
+const mockSendMessage = vi.spyOn(clientModule, "sendMessage").mockResolvedValue({ messageIds: [] });
 const mockSendHostedFileUrl = vi
   .spyOn(clientModule, "sendHostedFileUrl")
   .mockResolvedValue({ status: "accepted" });
@@ -109,7 +109,7 @@ describe("createSynologyChatPlugin", () => {
     mockSendHostedFileUrl.mockClear();
     prepareSynologyHostedMediaMock.mockReset();
     registerSynologyWebhookRouteMock.mockClear();
-    mockSendMessage.mockResolvedValue(true);
+    mockSendMessage.mockResolvedValue({ messageIds: [] });
     mockSendHostedFileUrl.mockResolvedValue({ status: "accepted" });
     prepareSynologyHostedMediaMock.mockImplementation(async ({ account }) => {
       if (!account.webhookUrl) {

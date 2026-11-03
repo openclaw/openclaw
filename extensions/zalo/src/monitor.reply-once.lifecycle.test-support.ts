@@ -69,65 +69,119 @@ describe("Zalo reply-once lifecycle", () => {
     return recordArgs;
   }
 
-  it("routes one accepted webhook event to one visible reply across duplicate replay", async () => {
-    dispatchReplyWithBufferedBlockDispatcherMock.mockImplementation(
-      async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions.turnAdoptionLifecycle?.onAdopted();
-        await dispatcherOptions.deliver({ text: "zalo reply once" });
+  async function replayWebhook(
+    monitor: Awaited<ReturnType<typeof startWebhookLifecycleMonitor>>,
+    payload: Record<string, unknown>,
+    waitBeforeReplay = false,
+  ) {
+    await withServer(
+      (req, res) => {
+        void monitor.route.handler(req, res);
+      },
+      async (baseUrl) => {
+        const { first, replay } = await postWebhookReplay({
+          baseUrl,
+          path: "/hooks/zalo",
+          secret: "supersecret",
+          payload,
+          ...(waitBeforeReplay ? { beforeReplay: monitor.waitForIdle } : {}),
+        });
+        expect(first.status).toBe(200);
+        expect(replay.status).toBe(200);
+        await monitor.waitForIdle();
       },
     );
+  }
 
-    const monitor = await startWebhookLifecycleMonitor({
-      ...createReplyOnceMonitorSetup(),
-      cacheKey: "zalo-reply-once-lifecycle",
+  function createUrlTextUpdate(messageId: string) {
+    return createTextUpdate({
+      messageId,
+      userId: "user-1",
+      userName: "User One",
+      chatId: "dm-chat-1",
+      text: "check https://example.com",
     });
+  }
 
-    try {
-      await withServer(
-        (req, res) => {
-          void monitor.route.handler(req, res);
-        },
-        async (baseUrl) => {
-          const { first, replay } = await postWebhookReplay({
-            baseUrl,
-            path: "/hooks/zalo",
-            secret: "supersecret",
-            payload: createTextUpdate({
-              messageId: `zalo-replay-${Date.now()}`,
-              userId: "user-1",
-              userName: "User One",
-              chatId: "dm-chat-1",
-            }),
-          });
-
-          expect(first.status).toBe(200);
-          expect(replay.status).toBe(200);
-          await monitor.waitForIdle();
+  it.each(["message.text.received", "message.unsupported.received"])(
+    "routes %s text to one visible reply across duplicate replay",
+    async (eventName) => {
+      dispatchReplyWithBufferedBlockDispatcherMock.mockImplementation(
+        async ({ dispatcherOptions, replyOptions }) => {
+          await replyOptions.turnAdoptionLifecycle?.onAdopted();
+          await dispatcherOptions.deliver({ text: "zalo reply once" });
         },
       );
 
-      expect(recordInboundSessionMock).toHaveBeenCalledTimes(1);
-      const recordArgs = requireRecordInboundSessionArgs();
-      expect(recordArgs?.sessionKey).toBe("agent:main:zalo:direct:dm-chat-1");
-      expect(recordArgs?.ctx?.AccountId).toBe("acct-zalo-lifecycle");
-      expect(recordArgs?.ctx?.SessionKey).toBe("agent:main:zalo:direct:dm-chat-1");
-      expect(recordArgs?.ctx?.From).toBe("zalo:user-1");
-      expect(recordArgs?.ctx?.To).toBe("zalo:dm-chat-1");
-      expect(recordArgs?.ctx?.MessageSid).toContain("zalo-replay-");
-      expect(sendMessageMock).toHaveBeenCalledTimes(1);
-      const [sendToken, sendPayload, sendOptions] = sendMessageMock.mock.calls[0] as [
-        string,
-        { chat_id?: string; text?: string },
-        unknown,
-      ];
-      expect(sendToken).toBe("zalo-token");
-      expect(sendPayload.chat_id).toBe("dm-chat-1");
-      expect(sendPayload.text).toBe("zalo reply once");
-      expect(sendOptions).toBeUndefined();
-    } finally {
-      await monitor.stop();
-    }
-  });
+      const monitor = await startWebhookLifecycleMonitor({
+        ...createReplyOnceMonitorSetup(),
+        cacheKey: "zalo-reply-once-lifecycle",
+      });
+
+      try {
+        await replayWebhook(monitor, {
+          ...createUrlTextUpdate(`zalo-replay-${eventName}-${Date.now()}`),
+          event_name: eventName,
+        });
+
+        expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
+        expect(
+          dispatchReplyWithBufferedBlockDispatcherMock.mock.calls[0]?.[0].ctx.BodyForAgent,
+        ).toBe("check https://example.com");
+        expect(recordInboundSessionMock).toHaveBeenCalledTimes(1);
+        const recordArgs = requireRecordInboundSessionArgs();
+        expect(recordArgs?.sessionKey).toBe("agent:main:zalo:direct:dm-chat-1");
+        expect(recordArgs?.ctx?.AccountId).toBe("acct-zalo-lifecycle");
+        expect(recordArgs?.ctx?.SessionKey).toBe("agent:main:zalo:direct:dm-chat-1");
+        expect(recordArgs?.ctx?.From).toBe("zalo:user-1");
+        expect(recordArgs?.ctx?.To).toBe("zalo:dm-chat-1");
+        expect(recordArgs?.ctx?.MessageSid).toContain("zalo-replay-");
+        expect(sendMessageMock).toHaveBeenCalledTimes(1);
+        const [sendToken, sendPayload, sendOptions] = sendMessageMock.mock.calls[0] as [
+          string,
+          { chat_id?: string; text?: string },
+          unknown,
+        ];
+        expect(sendToken).toBe("zalo-token");
+        expect(sendPayload.chat_id).toBe("dm-chat-1");
+        expect(sendPayload.text).toBe("zalo reply once");
+        expect(sendOptions).toBeUndefined();
+      } finally {
+        await monitor.stop();
+      }
+    },
+  );
+
+  it.each([undefined, " \t "])(
+    "logs unsupported events with no usable text (%j) without sending a reply",
+    async (text) => {
+      const monitor = await startWebhookLifecycleMonitor({
+        ...createReplyOnceMonitorSetup(),
+        cacheKey: "zalo-reply-once-lifecycle",
+      });
+      try {
+        const update = createUrlTextUpdate(`zalo-textless-${Date.now()}`);
+        await replayWebhook(
+          monitor,
+          {
+            ...update,
+            event_name: "message.unsupported.received",
+            message: { ...update.message, text },
+          },
+          true,
+        );
+
+        expect(monitor.runtime.log).toHaveBeenCalledWith(
+          expect.stringContaining("Zalo unsupported message has no recoverable text"),
+        );
+        expect(dispatchReplyWithBufferedBlockDispatcherMock).not.toHaveBeenCalled();
+        expect(recordInboundSessionMock).not.toHaveBeenCalled();
+        expect(sendMessageMock).not.toHaveBeenCalled();
+      } finally {
+        await monitor.stop();
+      }
+    },
+  );
 
   it("does not emit a second visible reply when replay arrives after a post-send failure", async () => {
     let dispatchAttempts = 0;

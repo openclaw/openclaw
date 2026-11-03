@@ -4,8 +4,63 @@ import {
   resolveNonNegativeIntegerOption,
 } from "@openclaw/normalization-core/number-coercion";
 import type { ChannelAccountSnapshot, ChannelId } from "../channels/plugins/types.public.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeOptionalAccountId } from "../routing/account-id.js";
+import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
+import { normalizeAccountId } from "../routing/session-key.js";
 
 type ChannelHealthSnapshot = Omit<ChannelAccountSnapshot, "accountId">;
+
+type HealthMonitorConfig = {
+  healthMonitor?: {
+    enabled?: boolean;
+  };
+};
+
+type ChannelHealthMonitorConfig = HealthMonitorConfig & {
+  accounts?: Record<string, HealthMonitorConfig>;
+};
+
+function resolveAccountHealthMonitorOverride(
+  channelConfig: ChannelHealthMonitorConfig | undefined,
+  channelId: ChannelId,
+  accountId: string,
+): boolean | undefined {
+  if (!channelConfig?.accounts) {
+    return undefined;
+  }
+  const direct = resolveChannelAccountEntry(channelConfig.accounts, accountId, channelId);
+  if (typeof direct?.healthMonitor?.enabled === "boolean") {
+    return direct.healthMonitor.enabled;
+  }
+  const normalizedAccountId = normalizeOptionalAccountId(accountId);
+  if (!normalizedAccountId) {
+    return undefined;
+  }
+  const match = resolveChannelAccountEntry(
+    channelConfig.accounts,
+    normalizedAccountId,
+    channelId,
+    normalizeAccountId,
+  );
+  if (typeof match?.healthMonitor?.enabled !== "boolean") {
+    return undefined;
+  }
+  return match.healthMonitor.enabled;
+}
+
+export function resolveChannelHealthMonitorEnabled(
+  cfg: OpenClawConfig,
+  channelId: ChannelId,
+  accountId: string,
+): boolean {
+  // SAFETY: Open-world plugin fields are optional; enabled values are checked as booleans.
+  const channelConfig = cfg.channels?.[channelId] as ChannelHealthMonitorConfig | undefined;
+  const accountOverride = resolveAccountHealthMonitorOverride(channelConfig, channelId, accountId);
+  const channelOverride = channelConfig?.healthMonitor?.enabled;
+
+  return accountOverride ?? (typeof channelOverride === "boolean" ? channelOverride : true);
+}
 
 type ChannelHealthEvaluationReason =
   | "healthy"

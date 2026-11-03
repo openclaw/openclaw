@@ -80,7 +80,8 @@ async function restoreArchivedDispatchSession(params: {
     hasPluginOwnedBinding ||
     ctx.InboundAccessAuthorized !== true ||
     ctx.InboundEventKind === "room_event" ||
-    isNativeCommandTurn(ctx.CommandTurn) ||
+    // Authorized native controls restore their own archived source in place.
+    (isNativeCommandTurn(ctx.CommandTurn) && ctx.CommandTurn?.authorized !== true) ||
     classifySessionStateActor({ inputProvenance: ctx.InputProvenance }).actorType !== "human"
   ) {
     return entry;

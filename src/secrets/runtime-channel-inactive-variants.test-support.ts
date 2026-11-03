@@ -6,12 +6,14 @@ import { loadChannelSecretContractApi } from "./channel-contract-api.js";
 const googleChatSecrets = loadChannelSecretContractApi({ channelId: "googlechat", config: {} });
 const xSecrets = loadChannelSecretContractApi({ channelId: "x", config: {} });
 const ircSecrets = loadChannelSecretContractApi({ channelId: "irc", config: {} });
+const mattermostSecrets = loadChannelSecretContractApi({ channelId: "mattermost", config: {} });
 const slackSecrets = loadChannelSecretContractApi({ channelId: "slack", config: {} });
 
 if (
   !googleChatSecrets?.collectRuntimeConfigAssignments ||
   !xSecrets?.collectRuntimeConfigAssignments ||
   !ircSecrets?.collectRuntimeConfigAssignments ||
+  !mattermostSecrets?.collectRuntimeConfigAssignments ||
   !slackSecrets?.collectRuntimeConfigAssignments
 ) {
   throw new Error("Missing channel secret contract api");
@@ -20,6 +22,7 @@ if (
 const googleChatAssignments = googleChatSecrets.collectRuntimeConfigAssignments;
 const xAssignments = xSecrets.collectRuntimeConfigAssignments;
 const ircAssignments = ircSecrets.collectRuntimeConfigAssignments;
+const mattermostAssignments = mattermostSecrets.collectRuntimeConfigAssignments;
 const slackAssignments = slackSecrets.collectRuntimeConfigAssignments;
 
 function resolveAssignments(id: string) {
@@ -28,6 +31,9 @@ function resolveAssignments(id: string) {
   }
   if (id === "irc") {
     return ircAssignments;
+  }
+  if (id === "mattermost") {
+    return mattermostAssignments;
   }
   if (id === "slack") {
     return slackAssignments;

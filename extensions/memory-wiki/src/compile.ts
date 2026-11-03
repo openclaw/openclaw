@@ -48,6 +48,7 @@ import {
   resolveMemoryWikiVaultSourceGeneration,
 } from "./log.js";
 import {
+  decodeWikiPageUtf8,
   formatWikiLink,
   isUnmanagedRawSourceSummary,
   parseWikiMarkdown,
@@ -65,6 +66,7 @@ import {
 import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
 import { isPersonLikePage } from "./person-page.js";
 import { readMemoryWikiSourceSyncState } from "./source-sync-state.js";
+import { readExistingWikiPageUtf8 } from "./vault-page-write.js";
 import { activateExistingMemoryWikiVault, initializeMemoryWikiVault } from "./vault.js";
 import { buildMemoryWikiOverview, projectMemoryWikiOverviewItem } from "./wiki-overview.js";
 
@@ -732,7 +734,9 @@ async function refreshPageRelatedBlocks(params: {
     if (page.kind === "report") {
       continue;
     }
-    const original = await root.readText(page.relativePath);
+    // Strict admission: the Related-block refresh re-emits the whole page, so
+    // replacement-decodable bytes would be persisted over human content.
+    const original = decodeWikiPageUtf8(await root.readBytes(page.relativePath), page.relativePath);
     params.signal?.throwIfAborted();
     if (original.trim().length === 0) {
       continue;
@@ -767,7 +771,11 @@ async function writeManagedMarkdownFile(params: {
 }): Promise<boolean> {
   params.signal?.throwIfAborted();
   const root = await fsRoot(params.rootDir);
-  const original = await root.readText(params.relativePath).catch(() => `# ${params.title}\n`);
+  const original = await readExistingWikiPageUtf8(
+    root,
+    params.relativePath,
+    () => `# ${params.title}\n`,
+  );
   params.signal?.throwIfAborted();
   // Generated indexes bypass page discovery. Parse existing content here so
   // managed-block updates cannot rewrite malformed frontmatter.
@@ -803,7 +811,7 @@ async function refreshDashboardPages(params: {
     params.signal?.throwIfAborted();
     const relativePath = `reports/${name}.md`;
     const root = await fsRoot(params.config.vault.path);
-    const original = await root.readText(relativePath).catch(() =>
+    const original = await readExistingWikiPageUtf8(root, relativePath, () =>
       renderWikiMarkdown({
         frontmatter: {
           pageType: "report",

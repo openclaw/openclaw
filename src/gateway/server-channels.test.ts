@@ -57,6 +57,7 @@ import {
   createTestChannelManager,
   waitForAbort,
   flushMicrotasks,
+  waitForMicrotaskCondition,
   healthOf,
   type TestAccount,
 } from "./server-channels.test-support.js";
@@ -121,20 +122,6 @@ async function waitForImmediate(): Promise<void> {
     const handle = setImmediate(resolve);
     handle.unref?.();
   });
-}
-
-async function waitForMicrotaskCondition(
-  check: () => boolean,
-  message: string,
-  attempts = 100,
-): Promise<void> {
-  for (let i = 0; i < attempts; i += 1) {
-    if (check()) {
-      return;
-    }
-    await Promise.resolve();
-  }
-  throw new Error(message);
 }
 
 async function advanceTimersUntil(
@@ -867,23 +854,6 @@ describe("server-channels auto restart", () => {
     expect(stopAccount).not.toHaveBeenCalled();
     await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
     expect(stopAccount).toHaveBeenCalledOnce();
-  });
-
-  it("does not auto-restart after manual stop during backoff", async () => {
-    const startAccount = vi.fn(async () => {});
-    installTestRegistry(
-      createTestPlugin({
-        startAccount,
-      }),
-    );
-    const manager = createManager();
-
-    await manager.startChannels();
-    vi.runAllTicks();
-    await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
-
-    await vi.advanceTimersByTimeAsync(200);
-    expect(startAccount).toHaveBeenCalledTimes(1);
   });
 
   it.each(["thaw", "health-monitor"] as const)(

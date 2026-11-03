@@ -299,7 +299,7 @@ describe("ensureBrowserControlAuth", () => {
     });
   });
 
-  it("still auto-generates in trusted-proxy mode when only token SecretRef is set", async () => {
+  it("keeps a trusted-proxy browser password in this process instead of gateway.auth", async () => {
     const cfg: OpenClawConfig = {
       gateway: {
         auth: {
@@ -312,11 +312,18 @@ describe("ensureBrowserControlAuth", () => {
         enabled: true,
       },
     };
-    await expectGeneratedBrowserAuthPersistence({
-      cfg,
-      mode: "trusted-proxy",
-      generatedAuthField: "password",
-    });
+    mocks.getRuntimeConfig.mockReturnValue(cfg);
+
+    const first = await ensureBrowserControlAuth({ cfg, env: {} as NodeJS.ProcessEnv });
+    const second = await ensureBrowserControlAuth({ cfg, env: {} as NodeJS.ProcessEnv });
+
+    expect(first.auth.password).toMatch(/^[a-f0-9]{48}$/);
+    expect(first.auth.token).toBeUndefined();
+    // Every listener in this process shares one credential, so cached bridges stay reusable.
+    expect(second).toEqual({ auth: first.auth });
+    expect(mocks.mutateConfigFile).not.toHaveBeenCalled();
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+    expect(mocks.ensureGatewayStartupAuth).not.toHaveBeenCalled();
   });
 
   it("does not persist over unresolved password SecretRef in trusted-proxy mode", async () => {
@@ -363,7 +370,6 @@ describe("ensureBrowserControlAuth", () => {
     { mode: "none", afterWrite: "generated" },
     { mode: "none", afterWrite: "replacement" },
     { mode: "none", afterWrite: "other-mode" },
-    { mode: "trusted-proxy", afterWrite: "generated" },
   ] as const)(
     "rereads $afterWrite auth after generating for $mode",
     async ({ mode, afterWrite }) => {

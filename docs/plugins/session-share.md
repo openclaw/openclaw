@@ -134,6 +134,8 @@ Enable `session-share` on the source, set a non-empty `share.groups`, restart th
 
 Enable the plugin on the receiver and confirm that it applied. In `openclaw nodes list`, the source must declare both session commands and be approved for them.
 
+If node discovery fails, the catalog reports the error instead of an empty listing. Check the receiver's node connection and retry the catalog; other session catalogs remain available.
+
 **The host appears but a session is missing**
 
 Check its group on the source, the exact `share.groups` spelling, and whether it is a subagent, incognito, a draft, or adopted from another catalog. Subagent keys and recorded spawn lineage stay excluded even if the session was previously visible. Verify that the source node uses the same user and state directory as the source Gateway. On a role-restricted receiver, check the viewer's profile and permission to view others' sessions.

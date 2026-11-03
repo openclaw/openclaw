@@ -1,5 +1,7 @@
 // Command turns through the real dispatcher and reply resolver: a refused command stays silent.
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   captureActivePluginRegistrySnapshot,
@@ -115,6 +117,9 @@ async function send(params: { sender: string; body: string; native: boolean }) {
         BotUsername: "bot",
         CommandSource: params.native ? "native" : "text",
         CommandAuthorized: true,
+        InboundAccessAuthorized: true,
+        InboundEventKind: "user_request",
+        InputProvenance: { kind: "external_user", sourceChannel: channel },
       },
       cfg,
       dispatcher,
@@ -165,4 +170,21 @@ it.each([
 
   expect(texts).toHaveLength(1);
   expect(texts[0]).toMatch(expected);
+});
+
+it("restores an archived source session in place for an authorized native command", async () => {
+  const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
+  const source = { storePath, sessionKey: `agent:main:${channel}:group:room` };
+  await replaceSessionEntry(source, {
+    sessionId: "archived-command-source",
+    updatedAt: 1,
+    archivedAt: 2,
+  });
+
+  const { texts } = await send({ sender: "owner", body: "/status", native: true });
+
+  expect(texts).toHaveLength(1);
+  expect(texts[0]).toMatch(/OpenClaw/u);
+  expect(loadSessionEntry(source)).toMatchObject({ sessionId: "archived-command-source" });
+  expect(loadSessionEntry(source)?.archivedAt).toBeUndefined();
 });

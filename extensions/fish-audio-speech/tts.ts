@@ -86,7 +86,9 @@ export async function fishAudioTts(params: FishAudioTtsRequest): Promise<Buffer>
     await import("openclaw/plugin-sdk/provider-http");
   const { response, release } = await requestFishAudioTts(params);
   try {
-    await assertOkOrThrowProviderError(response, "Fish Audio TTS API error");
+    await assertOkOrThrowProviderError(response, "Fish Audio TTS API error", {
+      requestHeaders: { Authorization: `Bearer ${params.apiKey}` },
+    });
     return await readProviderBinaryResponse(response, "Fish Audio TTS API error", "audio", {
       maxBytes: params.maxBytes,
     });
@@ -106,7 +108,9 @@ export async function fishAudioTtsStream(params: FishAudioTtsRequest): Promise<{
   const { response, release } = await requestFishAudioTts(params);
   let handedOff = false;
   try {
-    await assertOkOrThrowProviderError(response, "Fish Audio TTS API error");
+    await assertOkOrThrowProviderError(response, "Fish Audio TTS API error", {
+      requestHeaders: { Authorization: `Bearer ${params.apiKey}` },
+    });
     assertProviderBinaryResponseContent(response, "Fish Audio TTS API error", "audio");
     if (!response.body) {
       throw new Error("Fish Audio TTS API response missing audio stream");
@@ -170,17 +174,21 @@ async function requestVoicePage(params: {
     await import("openclaw/plugin-sdk/provider-http");
   const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
     await import("openclaw/plugin-sdk/ssrf-runtime");
+  const requestHeaders = { Authorization: `Bearer ${params.apiKey}` };
   const { response, release } = await fetchWithSsrFGuard({
     url: url.toString(),
-    init: { headers: { Authorization: `Bearer ${params.apiKey}` } },
+    init: { headers: requestHeaders },
     timeoutMs: params.timeoutMs,
     policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(params.baseUrl),
     auditContext: "fish-audio.voices",
   });
   try {
-    await assertOkOrThrowProviderError(response, "Fish Audio voices API error");
+    await assertOkOrThrowProviderError(response, "Fish Audio voices API error", {
+      requestHeaders,
+    });
     return await readProviderJsonResponse<FishAudioVoicePayload>(response, "Fish Audio voices", {
       maxBytes: FISH_AUDIO_VOICES_MAX_BYTES,
+      requestHeaders,
     });
   } finally {
     await release();

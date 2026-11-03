@@ -105,6 +105,20 @@ export async function flushMicrotasks(times = 8): Promise<void> {
   }
 }
 
+export async function waitForMicrotaskCondition(
+  check: () => boolean,
+  message: string,
+  attempts = 100,
+): Promise<void> {
+  for (let i = 0; i < attempts; i += 1) {
+    if (check()) {
+      return;
+    }
+    await Promise.resolve();
+  }
+  throw new Error(message);
+}
+
 export function createTestChannelRegistry(
   ...plugins: Array<
     | ChannelPlugin<TestAccount, unknown, unknown, 1 | 2>

@@ -1,10 +1,12 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createGatewayStartupOperations } from "../cli/gateway-cli/run-loop-startup.js";
 import { captureEnv } from "../test-utils/env.js";
 import { startGatewayTailscaleExposure } from "./server-tailscale.js";
+import { getTailscalePublishedOrigin } from "./tailscale-published-origin.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -146,4 +148,79 @@ describe("managed Tailscale upgrade", () => {
       env.restore();
     }
   });
+
+  it.each(["serve", "funnel"] as const)(
+    "reclaims %s after the foreground process exits without restarting its Gateway owner",
+    async (mode) => {
+      const env = captureEnv([
+        "OPENCLAW_TEST_TAILSCALE_BINARY",
+        "OPENCLAW_TEST_TAILSCALE_FIXTURE_MARKER",
+        "OPENCLAW_TEST_TAILSCALE_FIXTURE_MODE",
+        "OPENCLAW_TEST_TAILSCALE_FIXTURE_CLAIMS",
+        "VITEST",
+        "PATH",
+      ]);
+      let cleanup: (() => Promise<void>) | null = null;
+      try {
+        const marker = await installFixture({}, mode);
+        await symlink(
+          process.env.OPENCLAW_TEST_TAILSCALE_BINARY!,
+          path.join(path.dirname(marker), "tailscale"),
+        );
+        process.env.PATH = `${path.dirname(marker)}${path.delimiter}${process.env.PATH ?? ""}`;
+        const claimsPath = path.join(path.dirname(marker), "claims.jsonl");
+        process.env.OPENCLAW_TEST_TAILSCALE_FIXTURE_CLAIMS = claimsPath;
+        const readClaims = async () =>
+          (await readFile(claimsPath, "utf8"))
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line) as { pid: number; target: string });
+        const gatewayPid = process.pid;
+        const startup = createGatewayStartupOperations();
+        await startup.run(
+          async (signal) =>
+            (cleanup = await startGatewayTailscaleExposure({
+              tailscaleMode: mode,
+              port: 18789,
+              backend: { host: "127.0.0.1", port: 19000 },
+              logTailscale: { info: vi.fn(), warn: () => undefined },
+              signal,
+            })),
+        );
+        startup.close();
+        const originalClaims = await readClaims();
+        expect(originalClaims).toHaveLength(1);
+        const original = originalClaims[0]!;
+        const previousOrigin = getTailscalePublishedOrigin();
+        expect(previousOrigin?.origin).toBe("https://fixture.tailnet.ts.net");
+        process.kill(original.pid, "SIGTERM");
+
+        // Observe a real worker/CLI exit and replacement, including the recovery backoff.
+        await vi.waitFor(async () => expect(await readClaims()).toHaveLength(2), {
+          timeout: 5_000,
+        });
+        await vi.waitFor(() => {
+          expect(getTailscalePublishedOrigin()?.signal).not.toBe(previousOrigin?.signal);
+          expect(getTailscalePublishedOrigin()).toMatchObject({
+            origin: "https://fixture.tailnet.ts.net",
+            mode,
+          });
+        });
+        const replacement = (await readClaims())[1]!;
+        expect(replacement.pid).not.toBe(original.pid);
+        expect(replacement.target).toBe(original.target);
+        expect(replacement.target).toBe("19000");
+        expect(process.pid).toBe(gatewayPid);
+        expect(previousOrigin?.signal.aborted).toBe(true);
+        const release = cleanup as (() => Promise<void>) | null;
+        cleanup = null;
+        await release?.();
+        expect(() => process.kill(replacement.pid, 0)).toThrow();
+        expect(getTailscalePublishedOrigin()).toBeUndefined();
+      } finally {
+        await (cleanup as (() => Promise<void>) | null)?.();
+        env.restore();
+      }
+    },
+  );
 });

@@ -1,7 +1,13 @@
-import { createServer, type Server } from "node:http";
+import fs from "node:fs/promises";
+import { createServer, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import os from "node:os";
 import { join } from "node:path";
 import { setImmediate } from "node:timers/promises";
+import {
+  closeOpenClawStateDatabaseForTest,
+  createChannelIngressQueueForTests,
+} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
@@ -10,6 +16,7 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TLON_PENDING_APPROVAL_LIMIT, type PendingApproval } from "../settings.js";
 import { useTlonMonitorFixture } from "./monitor.test-harness.js";
+import { startFakeUrbitSseServer } from "./urbit-sse-server.test-support.js";
 
 const {
   monitorTlonProvider,
@@ -852,5 +859,199 @@ describe("monitorTlonProvider shutdown", () => {
       expect(ingressMock.stop).toHaveBeenCalledOnce();
     }
     expect(outcome).toBe("settled");
+  });
+
+  it("streams deeply nested poison and capped messages over real HTTP SSE through production handlers and recovers on the next messages", async () => {
+    const createdDir = await fs.mkdtemp(join(os.tmpdir(), "tlon-live-stream-"));
+    const stateDir = await fs.realpath(createdDir);
+    const controller = new AbortController();
+    let stream: ServerResponse | undefined;
+    const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() } satisfies RuntimeEnv;
+    const { server, ackedEventIds, subscriptionsByApp, streamOpened } =
+      await startFakeUrbitSseServer();
+    runningServers.push(server);
+    const address = server.address() as AddressInfo;
+    const queue = createChannelIngressQueueForTests<{
+      version: 1;
+      receivedAt: number;
+      source: "channels" | "chat";
+      rawEvent: string;
+    }>({
+      channelId: "tlon",
+      accountId: "default",
+      stateDir,
+    });
+    realUrbitFixture.url = `http://127.0.0.1:${address.port}`;
+    realUrbitFixture.enabled = true;
+    realUrbitFixture.useRealIngress = true;
+    realUrbitFixture.openChannelIngressQueue = () => queue;
+    realUrbitFixture.config = {
+      channels: {
+        tlon: {
+          code: "code",
+          ship: "~zod",
+          url: realUrbitFixture.url,
+          network: { dangerouslyAllowPrivateNetwork: true },
+          ownerShip: "~nec",
+          groupChannels: ["chat/~zod/general"],
+          dmAllowlist: ["~bus"],
+        },
+      },
+    };
+    const actualAuth = await vi.importActual<typeof import("../urbit/auth.js")>("../urbit/auth.js");
+    const actualRuntimeEnv = await vi.importActual<
+      typeof import("openclaw/plugin-sdk/runtime-env")
+    >("openclaw/plugin-sdk/runtime-env");
+    authenticateMock.mockImplementation(actualAuth.authenticate);
+    sleepWithAbortMock.mockImplementation(actualRuntimeEnv.sleepWithAbort);
+    inboundRuntimeMock.dispatch.mockImplementation(
+      async (params: { replyOptions?: { onReplyStart?: () => Promise<void> | void } }) => {
+        await params.replyOptions?.onReplyStart?.();
+      },
+    );
+
+    const scheduler = createTestPluginServiceScheduler();
+    const monitor = monitorTlonProvider({
+      scheduler,
+      abortSignal: controller.signal,
+      runtime,
+    });
+
+    try {
+      stream = await streamOpened.promise;
+      await vi.waitFor(() => {
+        expect(subscriptionsByApp.get("channels")).toBeTypeOf("number");
+        expect(subscriptionsByApp.get("chat")).toBeTypeOf("number");
+      });
+      const channelsSubId = subscriptionsByApp.get("channels")!;
+      const chatSubId = subscriptionsByApp.get("chat")!;
+
+      const buildNestedInlineJson = (depth: number, leafText: string, tailText?: string) => {
+        const nested =
+          depth > 0
+            ? `${'{"bold":['.repeat(depth)}${JSON.stringify(leafText)}${"]}".repeat(depth)}`
+            : JSON.stringify(leafText);
+        return tailText
+          ? `[{"inline":[${nested}]},{"inline":[${JSON.stringify(tailText)}]}]`
+          : `[{"inline":[${nested}]}]`;
+      };
+
+      // 1) Event 25: 100,000-level channel message (parses over SSE, overflows JSON.stringify in durable ingress).
+      const unserializableGroupJson = `{"nest":"chat/~zod/general","response":{"post":{"id":"msg-poison-100k","r-post":{"set":{"essay":{"author":"~nec","content":${buildNestedInlineJson(100_000, "x")},"sent":1700000000001}}}}}}`;
+      // Node 24 overflows JSON.stringify at this depth; Node 26 serializes it. Assert the
+      // drop path only where the runtime actually overflows, and the ack either way.
+      const stringifyOverflows = (() => {
+        try {
+          JSON.stringify(JSON.parse(unserializableGroupJson));
+          return false;
+        } catch (error) {
+          return error instanceof RangeError;
+        }
+      })();
+      stream.write(`id: 25\ndata: {"id":${channelsSubId},"json":${unserializableGroupJson}}\n\n`);
+      await vi.waitFor(() => expect(ackedEventIds).toContain(25), { timeout: 2_000 });
+
+      // 2) Event 26: 2,000-level channel message mentioning ~zod (serializes durably, exercises bounded extractor in handleChannelsFirehose).
+      const deepGroupJson = `{"nest":"chat/~zod/general","response":{"post":{"id":"msg-deep-group-2k","r-post":{"set":{"essay":{"author":"~nec","content":${buildNestedInlineJson(2_000, "deep", "~zod group after deep")},"sent":1700000000002}}}}}}`;
+      stream.write(`id: 26\ndata: {"id":${channelsSubId},"json":${deepGroupJson}}\n\n`);
+
+      // 3) Event 27: ordinary group message after the deep messages.
+      const normalGroupJson = JSON.stringify({
+        nest: "chat/~zod/general",
+        response: {
+          post: {
+            id: "msg-normal-group",
+            "r-post": {
+              set: {
+                essay: {
+                  author: "~nec",
+                  content: [{ inline: ["~zod hello group"] }],
+                  sent: 1700000000003,
+                },
+              },
+            },
+          },
+        },
+      });
+      stream.write(`id: 27\ndata: {"id":${channelsSubId},"json":${normalGroupJson}}\n\n`);
+
+      // 4) Event 46: 2,000-level DM followed by visible text (exercises bounded extractor in handleChatFirehose + triggers second SSE ack threshold).
+      const deepDmJson = `{"whom":"~bus","id":"dm-deep-2k","response":{"add":{"essay":{"author":"~bus","content":${buildNestedInlineJson(2_000, "deep", "dm after deep")},"sent":1700000000004}}}}`;
+      stream.write(`id: 46\ndata: {"id":${chatSubId},"json":${deepDmJson}}\n\n`);
+
+      // 5) Event 67: ordinary DM after the deep DM (triggers third SSE ack threshold).
+      const normalDmJson = JSON.stringify({
+        whom: "~bus",
+        id: "dm-normal",
+        response: {
+          add: {
+            essay: {
+              author: "~bus",
+              content: [{ inline: ["hello dm"] }],
+              sent: 1700000000005,
+            },
+          },
+        },
+      });
+      stream.write(`id: 67\ndata: {"id":${chatSubId},"json":${normalDmJson}}\n\n`);
+
+      await vi.waitFor(
+        () => {
+          expect(ackedEventIds).toEqual([25, 46, 67]);
+          expect(inboundRuntimeMock.buildContext).toHaveBeenCalledTimes(4);
+          expect(inboundRuntimeMock.dispatch).toHaveBeenCalledTimes(4);
+        },
+        { timeout: 5_000 },
+      );
+
+      await realUrbitFixture.ingress?.waitForIdle();
+      expect(await queue.listPending({ limit: "all" })).toEqual([]);
+
+      const builtMessages = inboundRuntimeMock.buildContext.mock.calls.map((call) => {
+        const [arg] = call as [
+          { messageId: string; message: { rawBody: string; commandBody: string } },
+        ];
+        return {
+          messageId: arg.messageId,
+          rawBody: arg.message.rawBody,
+          commandBody: arg.message.commandBody,
+        };
+      });
+      expect(builtMessages).toEqual([
+        {
+          messageId: "msg-deep-group-2k",
+          rawBody: `${"**".repeat(200)}\n~zod group after deep`,
+          commandBody: `${"**".repeat(200)}\n group after deep`,
+        },
+        {
+          messageId: "msg-normal-group",
+          rawBody: "~zod hello group",
+          commandBody: "hello group",
+        },
+        {
+          messageId: "dm-deep-2k",
+          rawBody: `${"**".repeat(200)}\ndm after deep`,
+          commandBody: `${"**".repeat(200)}\ndm after deep`,
+        },
+        {
+          messageId: "dm-normal",
+          rawBody: "hello dm",
+          commandBody: "hello dm",
+        },
+      ]);
+      const dropLogged = runtime.log.mock.calls.some(
+        ([line]) =>
+          line ===
+          "tlon dropped channels event: Tlon firehose event is too deeply nested to store.",
+      );
+      expect(dropLogged).toBe(stringifyOverflows);
+    } finally {
+      controller.abort();
+      stream?.end();
+      await monitor.catch(() => undefined);
+      await scheduler.stop();
+      closeOpenClawStateDatabaseForTest();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
   });
 });

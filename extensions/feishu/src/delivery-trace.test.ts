@@ -362,6 +362,17 @@ function makeTraceAccount(scenario: DeliveryTraceScenarioName): ResolvedFeishuAc
   };
 }
 
+function createTraceDispatcher(replyToMessageId?: string, runtime = {}) {
+  return createFeishuReplyDispatcher({
+    cfg: {} as never,
+    agentId: "agent",
+    runtime: runtime as never,
+    chatId: "oc-trace-chat",
+    sendTarget: "oc-trace-chat",
+    ...(replyToMessageId ? { replyToMessageId } : {}),
+  });
+}
+
 function setupFeishuTrace(recorder: WireRecorder, scenario: DeliveryTraceScenarioName) {
   traceState.recordWireCall = recorder.recordWireCall;
   traceState.messageCount = 0;
@@ -372,15 +383,9 @@ function setupFeishuTrace(recorder: WireRecorder, scenario: DeliveryTraceScenari
   traceState.larkClient = createRecordingLarkClient();
   traceState.cardKitFetch = createRecordingCardKitFetch();
 
-  const created = createFeishuReplyDispatcher({
-    cfg: {} as never,
-    agentId: "agent",
-    runtime: { log: () => {}, error: () => {} } as never,
-    chatId: "oc-trace-chat",
-    sendTarget: "oc-trace-chat",
-    replyToMessageId: "om-inbound",
-  });
+  const created = createTraceDispatcher("om-inbound", { log: () => {}, error: () => {} });
   const options = created.dispatcherOptions;
+  let completedText = "";
 
   return async (step: DeliveryTraceInStep) => {
     switch (step.kind) {
@@ -388,10 +393,13 @@ function setupFeishuTrace(recorder: WireRecorder, scenario: DeliveryTraceScenari
         await options.onReplyStart?.();
         break;
       case "partial":
-        created.replyOptions.onPartialReply?.({ text: step.text });
+        // Shared traces express block-local partials. The channel callback receives
+        // cumulative text until onAssistantMessageStart opens a new logical scope.
+        created.replyOptions.onPartialReply?.({ text: `${completedText}${step.text}` });
         break;
       case "block-final":
         await created.delivery.deliver({ text: step.text }, { kind: "block" });
+        completedText += step.text;
         break;
       case "tool-progress":
         created.replyOptions.onItemEvent?.({
@@ -439,6 +447,93 @@ const FEISHU_TRACE_SCENARIOS: readonly DeliveryTraceScenarioName[] = [
 ];
 
 describe("feishu delivery trace goldens", () => {
+  it.each([
+    { preFinal: true, withPartials: false },
+    { preFinal: true, withPartials: true },
+    { preFinal: false, withPartials: true },
+  ])(
+    "retains pre-tool prose in CardKit updates and close with preFinal=$preFinal, partials=$withPartials",
+    async ({ preFinal, withPartials }) => {
+      const expected = "I will check.\n\nFound the answer.";
+      const events = await runDeliveryTraceScenario({
+        scenario: { name: "feishu-pre-tool-text", steps: [{ kind: "final" }] },
+        setup: (recorder) => {
+          setupFeishuTrace(recorder, "final-only");
+          const created = createTraceDispatcher(undefined, { log: () => {}, error: () => {} });
+          return async () => {
+            await created.dispatcherOptions.onReplyStart?.();
+            created.replyOptions.onAssistantMessageStart?.();
+            created.replyOptions.onPartialReply?.({ text: "I will check." });
+            if (preFinal) {
+              await created.delivery.deliver({ text: "I will check." }, { kind: "final" });
+            }
+            created.replyOptions.onItemEvent?.({
+              itemId: "tool:lookup",
+              kind: "tool",
+              name: "web_search",
+              phase: "end",
+              status: "completed",
+            });
+            created.replyOptions.onAssistantMessageStart?.();
+            if (withPartials) {
+              created.replyOptions.onPartialReply?.({ text: "Found" });
+              created.replyOptions.onPartialReply?.({ text: "Found the answer." });
+            }
+            await created.delivery.deliver({ text: "Found the answer." }, { kind: "final" });
+            await created.dispatcherOptions.onIdle?.();
+            created.dispatcherOptions.onCleanup?.();
+          };
+        },
+      });
+      const close = events.find((event) => event.kind.endsWith("/settings"));
+      expect(close).toMatchObject({
+        data: {
+          payload: {
+            settings: {
+              config: {
+                streaming_mode: false,
+                summary: { content: "I will check.  Found the answer." },
+              },
+            },
+          },
+        },
+      });
+      const lastWrite = events.findLast((event) =>
+        /\/elements\/content(?:\/content)?$/.test(event.kind),
+      );
+      expect(lastWrite).toMatchObject({
+        data: {
+          payload: lastWrite?.kind.endsWith("/content/content")
+            ? { content: expected }
+            : { element: { content: expected } },
+        },
+      });
+      expect(events.filter((event) => event.kind === "im.message.create")).toHaveLength(1);
+    },
+  );
+
+  it("replaces cumulative finals within the same streaming card", async () => {
+    const text = "First paragraph. Second paragraph.";
+    const events = await runDeliveryTraceScenario({
+      scenario: {
+        name: "feishu-cumulative-finals",
+        steps: [
+          { kind: "reply-start" },
+          { kind: "final", text: "First paragraph." },
+          { kind: "final", text },
+          { kind: "idle" },
+        ],
+      },
+      setup: (recorder) => setupFeishuTrace(recorder, "final-only"),
+    });
+    expect(events.find((event) => event.kind.endsWith("/settings"))).toMatchObject({
+      data: {
+        payload: { settings: { config: { streaming_mode: false, summary: { content: text } } } },
+      },
+    });
+    expect(events.filter((event) => event.kind === "im.message.reply")).toHaveLength(1);
+  });
+
   it("updates the accepted card without a duplicate send when its message receipt is absent", async () => {
     const events = await runDeliveryTraceScenario({
       scenario: deliveryTraceScenarios["final-only"],
