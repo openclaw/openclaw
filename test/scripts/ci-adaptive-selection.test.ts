@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { describe, expect, it } from "vitest";
 import { planAdaptiveSelection } from "../../scripts/lib/ci-adaptive-selection.mjs";
 
@@ -81,18 +82,22 @@ describe("adaptive shadow selection", () => {
     "retains tests with %s evidence",
     (reason) => {
       const { observations, request } = inputs();
-      const rows = observations.invocations[0].files;
+      const invocation = observations.invocations[0];
+      assert(invocation);
+      const rows = invocation.files;
+      const second = rows[1];
+      assert(second);
       if (reason === "missing") {
         rows.pop();
       }
       if (reason === "failed") {
-        rows[1].outcome = "failed";
+        second.outcome = "failed";
       }
       if (reason === "partial") {
-        observations.invocations[0].complete = false;
+        invocation.complete = false;
       }
       if (reason === "dependencies") {
-        rows[1].dependencies = null;
+        second.dependencies = null;
       }
       expect(planAdaptiveSelection(observations, request).candidateCount).toBe(2);
     },

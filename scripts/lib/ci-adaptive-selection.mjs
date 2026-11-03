@@ -13,7 +13,10 @@ const globalChange = (file) =>
     file,
   );
 
-/** Produce an experiment plan only. scheduledFiles always contains the full input inventory. */
+/**
+ * Produce an experiment plan only. scheduledFiles always contains the full input inventory.
+ * @param {unknown} [recommendations]
+ */
 export function planAdaptiveSelection(observations, request, recommendations = null) {
   assert(request?.version === 1 && observations?.version === 1, "Unsupported selection input");
   const current = observationContext(request.context);
