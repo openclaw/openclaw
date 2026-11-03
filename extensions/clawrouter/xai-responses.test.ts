@@ -41,7 +41,7 @@ function response(first: boolean) {
           ],
         },
       ];
-  const events: Array<Record<string, unknown>> = first
+  const events: Array<Record<string, unknown> & { type: string }> = first
     ? [
         {
           type: "response.output_item.added",
