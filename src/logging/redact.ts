@@ -13,6 +13,7 @@ import {
   composeRedactionEdits,
   type RedactionEdit,
 } from "./redact-edit-composition.js";
+import { createEncodedUrlQueryAssignmentPattern } from "./redact-encoded-url.js";
 import {
   redactJsonRecord,
   type RedactionMessage,
@@ -107,16 +108,6 @@ const ENCODED_FORM_PAIR_RE = new RegExp(
 );
 const FORM_BODY_CONTEXT_SINGLE_PAIR_RE = new RegExp(
   String.raw`(\b(?:body|form(?:[-_\s]?body)?)\s*[:=]\s*(["'\x60]?))(${FORM_BODY_KEY})=(${FORM_BODY_VALUE})(["'\x60]?)`,
-  "giu",
-);
-// A nested URL carried inside a query value arrives percent-encoded, so its
-// separators are `%3F`/`%26` and its `=` is `%3D`. None of the assignment
-// grammars above match that, and net-policy's URL redactor -- which does decode
-// nested URLs -- is not on this path, so a credential in a `redirect_uri=`
-// callback reached the log in full. Stop the value at the next encoded
-// separator; the lookahead is checked per character, so the scan stays linear.
-const ENCODED_URL_QUERY_PAIR_RE = new RegExp(
-  String.raw`(%3F|%26|[?&])((?:(?!%3D|%26)[A-Za-z0-9_.%~-]){1,128})%3D((?:(?!%26)[^&\s"'<>])*)`,
   "giu",
 );
 // Bound nested query scanning the way net-policy bounds nested decoding, so a
@@ -618,6 +609,9 @@ export function redactText(
     let next = redactFormBody(
       redactAssignmentValues(redactStructuredAuthHeaders(text, "***"), "url"),
     );
+    next = replaceRedactPattern(next, ENCODED_URL_QUERY_ASSIGNMENT_PATTERN, (match) =>
+      redactMatch(match, ENCODED_URL_QUERY_ASSIGNMENT_PATTERN),
+    );
     let pattern: ResolvedRedactPattern;
     const replace = (match: RedactMatch) => redactMatch(match, pattern);
     const replaceRegex = (...args: unknown[]) => replace(readRedactMatch(args));
@@ -1024,6 +1018,11 @@ function* redactionEditMatches(input: string, edits: RedactionEdit[]): Iterable<
   }
 }
 
+const ENCODED_URL_QUERY_ASSIGNMENT_PATTERN = createEncodedUrlQueryAssignmentPattern(
+  isSensitiveBodyKey,
+  MAX_NESTED_URL_QUERY_DEPTH,
+);
+
 const preparationPatterns: ResolvedRedactPattern[] = [
   {
     source: "registered secret values",
@@ -1058,41 +1057,7 @@ const preparationPatterns: ResolvedRedactPattern[] = [
       yield* redactionEditMatches(input, edits);
     },
   },
-  {
-    source: "encoded URL query assignments",
-    *exec(input) {
-      if (!/%3d/iu.test(input)) {
-        return;
-      }
-      // Private synchronous sink; release the regex state on errors too.
-      ENCODED_URL_QUERY_PAIR_RE.lastIndex = 0;
-      try {
-        for (
-          let match = ENCODED_URL_QUERY_PAIR_RE.exec(input);
-          match;
-          match = ENCODED_URL_QUERY_PAIR_RE.exec(input)
-        ) {
-          const prefix = match[1] ?? "";
-          const name = match[2] ?? "";
-          const value = match[3] ?? "";
-          if (!value || !isSensitiveBodyKey(name)) {
-            continue;
-          }
-          // `%3D` is three characters; the value starts after it.
-          const offset = match.index + prefix.length + name.length + 3;
-          yield {
-            match: value,
-            groups: [],
-            input,
-            offset,
-            replacement: "***",
-          };
-        }
-      } finally {
-        ENCODED_URL_QUERY_PAIR_RE.lastIndex = 0;
-      }
-    },
-  },
+  ENCODED_URL_QUERY_ASSIGNMENT_PATTERN,
   {
     source: "form bodies",
     *exec(input) {

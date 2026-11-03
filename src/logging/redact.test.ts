@@ -44,6 +44,28 @@ function expectTextRedactions(cases: TextRedactionCase[]) {
 }
 
 const defaults = getDefaultRedactPatterns();
+it("redacts encoded nested URL credentials through whole-text entry points", () => {
+  const secret = "nested-sentinel-0123456789abcdefghij";
+  for (const key of ["access_token", "%61%63%63%65%73%73%5F%74%6F%6B%65%6E"]) {
+    for (const callback of ["", "next%3Dhttps%3A%2F%2Finner.test%2Fcb%3F"]) {
+      const text = `https://x.test/?next=https%3A%2F%2Fy.test%2Fcb%3F${callback}${key}%3D${secret}%26page%3D2`;
+      const expected = text.replace(secret, "***");
+      expect(redactSensitiveText(text, { mode: "tools" })).toBe(expected);
+      expect(redactSensitiveText(text, { mode: "tools", patterns: defaults })).toBe(expected);
+      expect(redactToolPayloadTextWithConfig(text, {})).toBe(expected);
+      expect(redactSensitiveLines([text], resolveRedactOptions({ mode: "tools" }))).toEqual([
+        expected,
+      ]);
+      expect(redactLogRecordForTransport({ message: text, level: "info" })).toEqual({
+        message: expected,
+        level: "info",
+      });
+      expect(redactSensitiveText(text, { mode: "off" })).toBe(text);
+    }
+  }
+  const safe = "https://x.test/?next=https%3A%2F%2Fy.test%2Fcb%3Fpage%3D2";
+  expect(redactSensitiveText(safe, { mode: "tools" })).toBe(safe);
+});
 let tempDirs: string[] = [];
 
 function writeConfig(source: string): string {
