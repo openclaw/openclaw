@@ -243,7 +243,7 @@ suite.define(() => {
             expect.stringContaining("Plugins"),
           ]),
         );
-      const clearOverrides = dropdown.getByRole("menuitem", { name: /4 changes in this chat/ });
+      const clearOverrides = dropdown.getByRole("menuitem", { name: /4 changes in this session/ });
       await expect.poll(() => clearOverrides.isVisible()).toBe(true);
       await expect.poll(() => webSearchItem(dropdown).isVisible()).toBe(true);
       const skillsRoot = dropdown.getByRole("menuitem", { name: /^Skills/ });
