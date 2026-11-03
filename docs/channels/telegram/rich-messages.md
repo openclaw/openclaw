@@ -33,7 +33,7 @@ Rich Telegram surfaces: formatted messages, inline keyboards, agent message acti
 
     Ordinary rich body text, including list items, quotes, and disclosure bodies, preserves parsed Markdown spaces and newlines. Entities decode once: `&amp;` displays `&`, while `\&amp;` and `&amp;amp;` display literal `&amp;`. Escaped tags such as `&lt;b&gt;` stay visible text, and image alternatives stay plain text; neither becomes an HTML island. Unsupported HTML stays visible without suppressing Markdown formatting inside it. HTML attributes and recognized inline comments retain their literal source during Markdown parsing; supported attributes are then decoded by the HTML mapper. HTML-island summaries and figure captions keep their separate HTML normalization.
 
-    This keeps model text away from Telegram's rich-Markdown sigils, so currency like `$400-600K` is not parsed as math. Long rich text splits automatically across Telegram's limits. Tables over the 20-column limit fall back to a code block.
+    This keeps model text away from Telegram's rich-Markdown sigils, so currency like `$400-600K` is not parsed as math. Long rich text splits automatically across Telegram's limits. Tables over the 20-column limit fall back to a code block. An HTML `<table compact>` asks Telegram for smaller cell padding; it does not collapse the table, and Markdown tables and `<table>` without the attribute keep the default spacing.
 
     A table followed by a quote, list, heading, code block, or paragraph stays a separate block. Tables authored inside a quote or list stay inside that container, including when they are its final content.
 
