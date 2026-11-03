@@ -1,0 +1,2 @@
+# Preserve pointer focus and native Tab assertions after the lazy panel mounts on each opening.
+4
