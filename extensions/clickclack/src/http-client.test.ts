@@ -116,40 +116,18 @@ function createOversizedJsonServer(): { server: Server; closed: Promise<number> 
 }
 
 function streamedErrorResponse(body: string, limit: number) {
-  const encoded = new TextEncoder().encode(body);
-  let readCount = 0;
-  const cancel = vi.fn(async () => undefined);
-  const releaseLock = vi.fn();
-  const text = vi.fn(async () => {
-    throw new Error("raw response.text() should not be used");
-  });
-
-  const response = {
-    ok: false,
-    status: 502,
-    text,
-    body: {
-      getReader: () => ({
-        read: async () => {
-          if (readCount > 0) {
-            return { done: true, value: undefined };
-          }
-          readCount += 1;
-          return { done: false, value: encoded };
-        },
-        cancel,
-        releaseLock,
-      }),
-    },
-  } as unknown as Response;
-
-  return {
-    response,
-    cancel,
-    releaseLock,
-    text,
-    expectedDetail: body.slice(0, limit),
-  };
+  const cancel = vi.fn();
+  const response = new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(body));
+      },
+      cancel,
+    }),
+    { status: 502 },
+  );
+  const text = vi.spyOn(response, "text");
+  return { response, cancel, text, expectedDetail: body.slice(0, limit) };
 }
 
 describe("ClickClack HTTP client", () => {
@@ -520,7 +498,6 @@ describe("ClickClack HTTP client", () => {
 
     expect(streamed.text).not.toHaveBeenCalled();
     expect(streamed.cancel).toHaveBeenCalledTimes(1);
-    expect(streamed.releaseLock).toHaveBeenCalledTimes(1);
   });
 
   it("redacts non-2xx response details with built-in patterns", async () => {

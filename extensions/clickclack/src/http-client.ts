@@ -5,6 +5,10 @@ import {
   readProviderJsonResponse,
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
+import {
+  fetchWithSsrFGuard,
+  ssrfPolicyFromHttpBaseUrlAllowedOrigin,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import type {
   ClickClackBotCommand,
   ClickClackChannel,
@@ -150,7 +154,7 @@ export function normalizeClickClackCorrelationId(value: unknown): string | undef
 
 export function createClickClackClient(options: ClientOptions) {
   const baseUrl = options.baseUrl.replace(/\/$/, "");
-  const fetcher = options.fetch ?? fetch;
+  const ssrfPolicy = ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl);
   const correlationId = normalizeClickClackCorrelationId(options.correlationId);
   const headers = {
     Authorization: `Bearer ${options.token}`,
@@ -178,35 +182,45 @@ export function createClickClackClient(options: ClientOptions) {
       ? setTimeout(() => controller.abort(), requestOptions.timeoutMs)
       : undefined;
     try {
-      const response = await captureEffectAuthority().initiate(() => {
-        options.beforeRequest?.();
-        return fetcher(`${baseUrl}${path}`, {
-          ...init,
-          ...(controller ? { signal: controller.signal } : {}),
-          headers: requestHeaders,
-        });
-      });
-      if (!response.ok) {
-        const detail = await readResponseTextLimited(response, CLICKCLACK_ERROR_BODY_LIMIT_BYTES);
-        // Remote error bodies are untrusted output; redact them even when the
-        // operator disables log redaction or overrides log-only patterns.
-        throw new ClickClackHttpError(
-          response.status,
-          redactToolPayloadText(detail),
-          new Headers(response.headers),
-        );
-      }
-      if (requestOptions.responseMode === "none") {
-        try {
-          await response.body?.cancel();
-        } catch {
-          // A successful write does not depend on an optional response body.
+      const { response, release } = await captureEffectAuthority().initiate(() =>
+        fetchWithSsrFGuard({
+          url: `${baseUrl}${path}`,
+          fetchImpl: options.fetch,
+          beforeRequest: options.beforeRequest,
+          init: {
+            ...init,
+            ...(controller ? { signal: controller.signal } : {}),
+            headers: requestHeaders,
+          },
+          policy: ssrfPolicy,
+          auditContext: "clickclack-api",
+        }),
+      );
+      try {
+        if (!response.ok) {
+          const detail = await readResponseTextLimited(response, CLICKCLACK_ERROR_BODY_LIMIT_BYTES);
+          // Remote error bodies are untrusted output; redact them even when the
+          // operator disables log redaction or overrides log-only patterns.
+          throw new ClickClackHttpError(
+            response.status,
+            redactToolPayloadText(detail),
+            new Headers(response.headers),
+          );
         }
-        return undefined as T;
+        if (requestOptions.responseMode === "none") {
+          try {
+            await response.body?.cancel();
+          } catch {
+            // A successful write does not depend on an optional response body.
+          }
+          return undefined as T;
+        }
+        return await readProviderJsonResponse<T>(response, "ClickClack response", {
+          maxBytes: CLICKCLACK_INBOUND_JSON_LIMIT_BYTES,
+        });
+      } finally {
+        await release();
       }
-      return await readProviderJsonResponse<T>(response, "ClickClack response", {
-        maxBytes: CLICKCLACK_INBOUND_JSON_LIMIT_BYTES,
-      });
     } finally {
       if (timeout) {
         clearTimeout(timeout);
