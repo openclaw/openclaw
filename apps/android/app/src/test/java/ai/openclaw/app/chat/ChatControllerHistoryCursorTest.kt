@@ -176,6 +176,78 @@ class ChatControllerHistoryCursorTest {
     }
 
   @Test
+  fun deltaRunReconciliationPreservesConfirmedThinkingLevel() =
+    runTest {
+      for ((thinkingMetadata, reconciledLevel) in listOf("high" to "high", null to "high", "medium" to "medium")) {
+        val thinkingField = thinkingMetadata?.let { ",\"thinkingLevel\":\"$it\"" }.orEmpty()
+        val cursors = mutableListOf<String?>()
+        val sentThinkingLevels = mutableListOf<String>()
+        var sentMessage: JsonObject? = null
+        val controller =
+          backgroundScope.createChatController { method, params ->
+            when (method) {
+              "sessions.patch" -> {
+                val patch = chatControllerTestJson.parseToJsonElement(requireNotNull(params)).jsonObject
+                assertEquals("high", patch["thinkingLevel"]?.jsonPrimitive?.content)
+                """{"resolved":{"thinkingLevel":"high"}}"""
+              }
+
+              "chat.send" -> {
+                val message = chatControllerTestJson.parseToJsonElement(requireNotNull(params)).jsonObject
+                sentMessage = message
+                sentThinkingLevels += message.getValue("thinking").jsonPrimitive.content
+                """{"runId":${message["idempotencyKey"]},"status":"ok"}"""
+              }
+
+              "chat.history" -> {
+                val cursor =
+                  chatControllerTestJson
+                    .parseToJsonElement(requireNotNull(params))
+                    .jsonObject["cursor"]
+                    ?.jsonPrimitive
+                    ?.content
+                cursors += cursor
+                if (cursor == null) {
+                  page(row("initial"), """, "thinkingLevel":"off", "deltaCursor":"d1"""")
+                } else {
+                  val message = checkNotNull(sentMessage)
+                  val id = message.getValue("idempotencyKey").jsonPrimitive.content
+                  val entry = "turn-${sentThinkingLevels.size}"
+                  val persisted = """{"role":"user","content":${message["message"]},"idempotencyKey":"$id:user","__openclaw":{"id":"$entry"}}"""
+                  """{"kind":"delta","messages":[${event(persisted)}],"deltaCursor":"d${cursors.size}","sessionInfo":{"sessionId":"physical","activeLeafEntryId":"$entry"$thinkingField}}"""
+                }
+              }
+
+              else -> {
+                emptyChatGatewayResponse(method)
+              }
+            }
+          }
+        controller.load(key)
+        runCurrent()
+        assertEquals("off", controller.thinkingLevel.value)
+        controller.setThinkingLevel("high")
+        runCurrent()
+        assertEquals("high", controller.thinkingLevel.value)
+        assertTrue(controller.pendingSessionSettingsKeys.value.isEmpty())
+
+        repeat(2) { turn ->
+          assertTrue(controller.sendMessageAwaitAcceptance("turn $turn", controller.thinkingLevel.value, emptyList()))
+          runCurrent()
+          assertEquals("delta metadata: $thinkingMetadata", reconciledLevel, controller.thinkingLevel.value)
+          assertEquals(
+            reconciledLevel,
+            controller.sessions.value
+              .single { it.key == key }
+              .thinkingLevel,
+          )
+        }
+        assertEquals(listOf(null, "d1", "d2"), cursors)
+        assertEquals(listOf("high", reconciledLevel), sentThinkingLevels)
+      }
+    }
+
+  @Test
   fun olderHiddenPagesPrependWithoutLosingLiveTailAndRetryKeepsBoundary() =
     runTest {
       val requests = mutableListOf<String?>()

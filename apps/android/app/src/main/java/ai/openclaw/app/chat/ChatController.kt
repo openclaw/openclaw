@@ -7740,7 +7740,8 @@ class ChatController internal constructor(
     return ChatHistory(
       sessionKey = sessionKey,
       sessionId = sid,
-      thinkingLevel = root["thinkingLevel"].asStringOrNull() ?: previousHistory?.thinkingLevel.takeIf { delta },
+      // A cursor window can predate confirmed settings changes; only use current response metadata.
+      thinkingLevel = root["thinkingLevel"].asStringOrNull() ?: sessionInfo?.thinkingLevel,
       messages = reconcileMessageIds(previousMessages, messages).distinctBy { it.id },
       sessionInfo = sessionInfo,
       inFlightRun = parseInFlightRun(root),
