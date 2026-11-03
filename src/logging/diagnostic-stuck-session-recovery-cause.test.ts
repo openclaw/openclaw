@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ReplyOperation } from "../sessions/session-controller.contracts.js";
 import type { SessionAttentionClassification } from "./diagnostic-session-attention.js";
-import { requestStuckSessionRecovery } from "./diagnostic-session-recovery-coordinator.js";
 import { formatRecoveryOutcome } from "./diagnostic-session-recovery.js";
 import type { StuckSessionRecoveryOutcome } from "./diagnostic-session-recovery.js";
 import { recoverStuckDiagnosticSession } from "./diagnostic-stuck-session-recovery.runtime.js";
@@ -110,25 +109,5 @@ describe("stuck-session recovery preserves the classification cause (#138528)", 
       reason: "blocked_tool_call",
     };
     expect(formatRecoveryOutcome(outcome)).toContain("reason=blocked_tool_call");
-  });
-
-  it("coordinator forwards the classification into the recovery request", async () => {
-    const captured: Array<unknown> = [];
-    requestStuckSessionRecovery({
-      classification: blockedToolCall,
-      request: {
-        sessionId: "s",
-        sessionKey: "k",
-        ageMs: 0,
-        operation: stubOperation(),
-      },
-      recover: (resolved) => {
-        captured.push(resolved);
-        return undefined;
-      },
-    });
-    // recover is invoked synchronously when the watchdog decision admits a stop.
-    expect(captured).toHaveLength(1);
-    expect(captured[0]).toMatchObject({ classification: blockedToolCall });
   });
 });

@@ -53,7 +53,7 @@ import {
 import { isCronOneShotContinuationJob } from "../service/one-shot-schedule.js";
 import type { CronAgentExecutionPhaseUpdate, CronFailureNotificationDetail } from "../types.js";
 import type { CronRunExecutionParams } from "./run-execution.types.js";
-import { finalizeCronRun } from "./run-finalize.js";
+import { finalizeCronRun, resolveCronRecoveryClassification } from "./run-finalize.js";
 import type { RunCronAgentTurnParams } from "./run-prepare-runtime.js";
 import { prepareCronRunContext, type PreparedCronRunContext } from "./run-prepare.js";
 import type { MutableCronSession } from "./run-session-state.js";
@@ -204,6 +204,8 @@ async function runCronIsolatedAgentTurnInTrace(
               executionStarted ? undefined : { executionStarted: false, providerStarted: false };
             let admissionDeferredReason: "busy" | "active-hours" | undefined;
             const ownReplyOperation = getCurrentSessionControllerOwner();
+            const resolveRecoveryClassification = () =>
+              resolveCronRecoveryClassification(ownReplyOperation);
             const resolveStartDeferral = (): "busy" | "active-hours" | undefined => {
               const cfg = selectLiveRuntimeConfig(params.cfg);
               if (
@@ -477,7 +479,7 @@ async function runCronIsolatedAgentTurnInTrace(
                 automationResult,
                 prepared: prepared.context,
                 execution,
-                recoveryClassification: ownReplyOperation?.recoveryClassification,
+                recoveryClassification: resolveRecoveryClassification(),
                 abortReason,
                 isAborted,
                 settleUsage,
@@ -518,8 +520,9 @@ async function runCronIsolatedAgentTurnInTrace(
               // recovery cause (e.g. blocked_tool_call) on the persisted error so the run
               // history (result.error -> job.state.lastError) and the chat/webhook alert
               // (params.error) record it instead of a cause-free literal. Restart
-              // precedence is preserved: an interrupted restart keeps its own error.
-              const recoveryClassification = ownReplyOperation?.recoveryClassification;
+              // precedence is preserved, and a rate-limited stop keeps its own recovery
+              // text instead of the mechanical watchdog reason.
+              const recoveryClassification = resolveRecoveryClassification();
               const error =
                 recoveryClassification &&
                 recoveryClassification.trim().length > 0 &&
@@ -561,13 +564,13 @@ async function runCronIsolatedAgentTurnInTrace(
                 // history and chat alert. Restart precedence is preserved: when the
                 // failure was an interrupted restart, errorClassification already wins
                 // and we omit the stall detail.
-                ...(ownReplyOperation?.recoveryClassification &&
-                ownReplyOperation.recoveryClassification.trim().length > 0 &&
-                !interruptedByRestart
+                ...(!interruptedByRestart &&
+                recoveryClassification &&
+                recoveryClassification.trim().length > 0
                   ? {
                       failureNotificationDetail: {
                         kind: "agent-stall",
-                        classification: ownReplyOperation.recoveryClassification,
+                        classification: recoveryClassification,
                       } satisfies CronFailureNotificationDetail,
                     }
                   : {}),

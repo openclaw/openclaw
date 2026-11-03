@@ -14,6 +14,7 @@ import {
 } from "../../config/sessions/context-token-provenance.js";
 import type { AutomationResult } from "../../infra/agent-run-registry.types.js";
 import { resolveSourceDeliveryOutcome } from "../../infra/outbound/source-delivery-plan.js";
+import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { hasPendingAutomationContinuation } from "../automation-result.js";
 import {
@@ -46,6 +47,19 @@ import type { CronExecutionResult, RunCronAgentTurnResult } from "./run.types.js
 import { cleanupCronRunSessionAfterRun } from "./session-cleanup.js";
 
 const cronContextRuntimeLoader = createLazyImportLoader(() => import("./run-context.runtime.js"));
+
+/**
+ * Resolves the semantic stall cause worth projecting into cron history and alerts.
+ * A stop during provider rate-limit backoff keeps the rate-limit recovery text that
+ * `describeStop()` produced, so the mechanical watchdog reason must not replace it.
+ */
+export function resolveCronRecoveryClassification(
+  operation?: Pick<ReplyOperation, "staleExpiryReason" | "recoveryClassification">,
+): string | undefined {
+  return operation?.staleExpiryReason === "rate_limited"
+    ? undefined
+    : operation?.recoveryClassification;
+}
 
 export async function finalizeCronRun(params: {
   prepared: PreparedCronRunContext;
