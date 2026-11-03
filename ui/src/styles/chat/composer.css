@@ -4368,3 +4368,15 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
     font-size: 16px;
   }
 }
+
+.chat-controls__model-cooldown {
+  flex: 0 0 auto;
+  margin-inline-start: 6px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--muted) 8%, transparent);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 500;
+  white-space: nowrap;
+}

@@ -2,10 +2,12 @@ import { createMemo, Show, useContext } from "solid-js";
 import { providerDisplayLabel } from "../../../components/provider-icon-data.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { ProviderBrandIcon } from "../../../components/solid/provider-icon.tsx";
+import { formatDurationHuman } from "../../../lib/format-duration.ts";
 import { formatModelRuntimeLabel } from "../../../lib/model-runtime-label.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import "../../../components/tooltip.ts";
 import { keyboardHintsVisible } from "../../../lib/reactive/keyboard-hints.ts";
+import "../../../components/tooltip.ts";
+import { readVisibleTime } from "../../../lib/reactive/visible-clock.ts";
 import {
   formatModelContextMeta,
   formatModelLabel,
@@ -16,6 +18,25 @@ import {
 } from "./chat-model-picker-options.ts";
 import { handleModelOptionMouseEnter } from "./chat-model-picker-search-view.ts";
 import { ChatModelSearchContext, type ChatModelSearchRow } from "./chat-model-picker-search.ts";
+
+function ModelCooldown(props: { until: number }) {
+  const search = useContext(ChatModelSearchContext);
+  const label = createMemo(() => {
+    const remaining =
+      props.until - (search?.open() !== false ? readVisibleTime(30_000) : Date.now());
+    // The Gateway still owns availability after the deadline; only retire the countdown.
+    return remaining > 0
+      ? t("chat.modelControls.cooldown", {
+          time: formatDurationHuman(Math.ceil(remaining / 60_000) * 60_000),
+        })
+      : undefined;
+  });
+  return (
+    <Show when={label()}>
+      {(text) => <span class="chat-controls__model-cooldown">{text()}</span>}
+    </Show>
+  );
+}
 
 function ModelShortcut(props: { rowKey: string }) {
   const search = useContext(ChatModelSearchContext);
@@ -188,6 +209,15 @@ function ModelOptionButton(
             <span class="chat-controls__model-state-label chat-controls__model-state-label--default">
               {defaultLabel()}
             </span>
+          </Show>
+          <Show
+            when={
+              props.entry.unavailableReason === "cooldown"
+                ? props.entry.unavailableUntil
+                : undefined
+            }
+          >
+            {(until) => <ModelCooldown until={until()} />}
           </Show>
           <Show when={props.presentation.modelMeta}>
             <span class="chat-controls__model-option-meta">{props.presentation.modelMeta}</span>
