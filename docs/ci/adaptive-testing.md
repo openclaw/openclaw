@@ -71,6 +71,22 @@ claim that every possible environment input is covered. Missing exports and
 missing dependencies remain data gaps. Export/upload failures do not replace the
 test result, and raw test logs and assertion text are not uploaded by this pilot.
 
+At Vitest's run-start callback, before global setup and test execution, the
+capture writes an incomplete export to the same `observations.json` path. Its
+`preExecution` field contains `recordedAt` and a sanitized observation snapshot:
+the checkout/configuration identity and invocation inventory, with unknown
+outcomes and no dependencies. Completion replaces the export atomically with
+final outcomes and dependencies, retaining the original `preExecution` snapshot
+and context. Changes to configuration or include files during execution cannot
+rewrite that frozen identity. A missing or invalid terminal receipt leaves the
+incomplete snapshot available if the artifact upload runs.
+
+This snapshot follows configuration evaluation and native test selection. It
+does not contain a prior graph, source diff, model ranking or selection decision.
+Global setup can still change worker settings after capture. The local recording
+timestamp is not artifact availability: a later consumer must also retain the
+publication/download time before using an earlier run as predictive evidence.
+
 The first readout compares usable-data coverage, native-Bun gaps, observed
 failures, fallback causes, and paired total job costs. Learned selection and
 automatic omission require a separate evaluation and rollout decision.

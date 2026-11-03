@@ -9,6 +9,34 @@ and JSON input declarations do not enable those transports in chat. The router's
 pricing output cap still bounds the requested output; older catalogs without
 endpoint facts retain the existing fallback behavior.
 
+Fusion is a virtual chat provider. Discovery accepts `clawrouter/fusion` at
+`/v1/chat/completions` only when the selected key's catalog reports an executable,
+eligible unified HTTP offer for that exact model and endpoint. Its `/v1` base is
+not a native proxy prefix. Playground, denied, and unrelated offers cannot enable
+the route. The service still checks current policy and compound budgets at dispatch.
+
+Cohere chat discovery requires a key-scoped native offer whose declared request
+and response format is `openai.chat_completions`. It uses that offer's exact
+compatibility route, with the upstream model ID. Native and routed clients share
+the Cohere instruction-role, tool-choice, and compatible wire-field policy.
+Reasoning efforts remain owned by the router catalog. A native-v2-only catalog does not enable this
+client transport; v2 routing and billed usage remain owned by the router.
+
+Capability discovery joins eligible HTTP offers from the selected key's catalog
+to the provider's declared endpoint formats. Native and manifest routes stay on
+the configured router origin; model-less offers are valid for operations such as
+search. A missing format, unsupported transport, playground offer, or unlisted
+model is not executable. Consumers still implement only their known wire formats.
+Discovery refreshes for each operation, shares its resolved credential with
+dispatch, and uses a bounded, cancellable guarded request without upstream-key
+fallback. Image generation uses this resolver; other consumers migrate separately.
+
+Mistral chat routes share the native Mistral strict9 tool-call replay policy and
+transport fields. Replayed tool calls use nine alphanumeric characters with paired
+tool results; chat output uses `max_tokens` and does not send `store`. Reasoning
+efforts remain owned by the router catalog. These rules apply to the Mistral
+route, not another provider serving a similarly named model.
+
 When `models.providers.clawrouter` is configured, the bundled plugin adds
 **ClawRouter** to the Control UI sidebar. Its read-only pool dashboard shows
 subscription quota windows, account and plan details, model eligibility,
@@ -102,3 +130,51 @@ can return `pricing_required` before upstream dispatch. This adapter never chang
 a policy to soft, fixed-price, or unmetered mode to make a request pass. Streaming,
 diarization, other response formats/models, and realtime transcription remain
 outside this adapter.
+
+## Memory embeddings
+
+Choose `clawrouter` as the memory embedding provider and select a catalog model
+such as `openai/text-embedding-3-small`. Each request resolves the router credential
+and refreshes the catalog, then uses the eligible declared `openai.embeddings`
+native, manifest or unified route. Native/manifest requests use the upstream model
+ID; unified requests use the catalog ID. The existing memory transport validates
+and orders vectors and reports usage.
+
+The initial adapter supports default text embeddings at declared `/embeddings`
+endpoints. Custom dimensions, task-specific input types and multimodal inputs fail
+explicitly. Remote destination overrides retain the memory transport's separate
+credential requirement; upstream OpenAI keys are never a fallback. A router
+deployment that declares endpoint formats for the offered route is required.
+
+## Web search
+
+Set `tools.web.search.provider` to `clawrouter` to use the configured ClawRouter
+credential. Each search resolves that credential and refreshes its catalog before
+dispatch. Supported formats are `tavily.search`, `brave.search`, `exa.search`,
+`parallel.search` and `searxng.search`, through eligible native or manifest offers
+with matching declared methods and request/response formats. Brave and SearXNG
+use GET query parameters; Exa, Parallel and Tavily use their native JSON bodies.
+Brave, Exa, Parallel and SearXNG share their request/result codecs with the native
+OpenClaw plugins.
+Model-less offers are supported. The adapter does not infer `/v1/search`, use
+upstream provider credentials, or execute undeclared formats. A router deployment
+that includes endpoint format declarations for the selected offer is required.
+
+Queries accept `query` and `count` (1–10). Catalog and search responses are bounded,
+cancellation is propagated, and result text is marked as untrusted web content.
+
+Parallel queries are limited to 200 characters. Native provider-specific advanced
+filters are not exposed by this adapter. Request counters alone do not establish
+USD prices or budget eligibility; catalog affordability and runtime admission
+remain authoritative. Other declared search formats fail closed until a consumer
+adapter and its transport fixtures are qualified.
+
+## xAI Responses replay
+
+Catalog-qualified xAI Responses models share the native tool-schema/argument
+policy and encrypted reasoning include. Effort choices remain catalog-owned.
+The real Responses transport captures and replays opaque reasoning within its
+provider, model, origin, session and authentication-profile boundary. Grok CLI
+OAuth identity headers are not applied to the router endpoint. Worker-side
+upstream credential affinity and end-to-end replay remain separate requirements;
+the client does not advertise an unlanded Responses route.
