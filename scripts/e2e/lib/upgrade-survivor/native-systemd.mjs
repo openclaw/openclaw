@@ -33,6 +33,10 @@ fs.mkdirSync(artifacts, { recursive: true });
 const harness = path.dirname(import.meta.filename);
 const runtime = fs.mkdtempSync("/tmp/openclaw-survivor-systemd-");
 fs.chmodSync(runtime, 0o755);
+// CI may install Node below a private runner directory that fixture users cannot traverse.
+const runtimeNode = path.join(runtime, "node");
+fs.copyFileSync(process.execPath, runtimeNode);
+fs.chmodSync(runtimeNode, 0o755);
 const candidateFile = path.join(runtime, "candidate.tgz");
 fs.copyFileSync(path.resolve(candidateArg), candidateFile);
 fs.chmodSync(candidateFile, 0o644);
@@ -98,7 +102,7 @@ try {
       HOME: home,
       USER: user,
       LOGNAME: user,
-      PATH: `${prefix}/bin:${path.dirname(process.execPath)}:${process.env.PATH}`,
+      PATH: `${prefix}/bin:${runtime}:${process.env.PATH}`,
       XDG_RUNTIME_DIR: `/run/user/${uid}`,
       DBUS_SESSION_BUS_ADDRESS: `unix:path=/run/user/${uid}/bus`,
       OPENCLAW_STATE_DIR: state,
