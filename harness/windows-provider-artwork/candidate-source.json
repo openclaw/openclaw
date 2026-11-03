@@ -1,10 +1,10 @@
 {
   "baseCommit": "c550174d517b5e8830726cd5c32d4e132c144659",
   "baseTree": "eab5a16b2c6b57a741c7a1a22f830f737592d1ee",
-  "candidateTree": "746f015b26b6144f0743a488334d4dfe5ff3e52a",
-  "priorCandidateTree": "d58d740ce7e5beb1b43889e6897ae96cf54370ba",
+  "candidateTree": "d9b8fb0cad24ee525219ba9aeb9b56d14427b0fd",
+  "priorCandidateTree": "746f015b26b6144f0743a488334d4dfe5ff3e52a",
   "priorCandidatePatchSha256": "6194060d067b8858d832ab17951c0f518bc0750f9f6b26e807b744947bd3dc7e",
-  "patchSha256": "26b1aa601e77ab6e4b7d7a38fb13af9464c090d77bb5e89a11ed8d7bdca115e4",
+  "patchSha256": "909f270b5b786ea5c5f8b089865bb39c871eefb1e5d8179802ec57864f49a9ed",
   "changedFiles": [
     {
       "path": "docs/PROVIDER_ARTWORK.md",
@@ -58,9 +58,9 @@
     {
       "path": "tests/OpenClaw.Tray.UITests/MountedControlCapture.cs",
       "beforeSha256": "04ba3c57ffc976063b42bbde41f5fc835912bf18a51fe1e6ac961c1a2d8fbd84",
-      "afterSha256": "4e34fed061695eb0d7cf2e2e5a7fbda26af509f2bd24d7c5b60d4851aaa263da",
-      "bytes": 16760,
-      "afterBlob": "838c62b7ce3d0c8088320b7c36c11e43663a48d7"
+      "afterSha256": "110350013890cf70155b9826284fb61d12160cd286f2a6a8fe0904c3356b3efd",
+      "bytes": 16753,
+      "afterBlob": "6052a7ef89c422f13b80366a252d93903be4269e"
     }
   ],
   "sourceFiles": [
@@ -8198,7 +8198,7 @@
     },
     {
       "path": "tests/OpenClaw.Tray.UITests/MountedControlCapture.cs",
-      "sha256": "4e34fed061695eb0d7cf2e2e5a7fbda26af509f2bd24d7c5b60d4851aaa263da"
+      "sha256": "110350013890cf70155b9826284fb61d12160cd286f2a6a8fe0904c3356b3efd"
     },
     {
       "path": "tests/OpenClaw.Tray.UITests/MountedReactorChatDisposalProofTests.cs",
@@ -8428,6 +8428,6 @@
   "count": 2090,
   "sourceCommit": "NOT_CREATED",
   "canonicalChangeFromPrior": "Only eighth file: existing test capture owner admits one exact active owned ComboBox popup through its shared PrintWindow primitive; original seven postimages unchanged.",
-  "AfterProofTree": "c271b3b704538214ea8999eab808c0c7278a7702",
-  "BeforeProofTree": "7afcb904c7e89201124644e022e792471234c36f"
+  "AfterProofTree": "d7fc11b355417fa268430fd98fa2ab01a1d7c9c6",
+  "BeforeProofTree": "50de4508d71a67ed2fb44ad9d1cdf56781d4d4a2"
 }

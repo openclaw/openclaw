@@ -1,11 +1,11 @@
 {
   "canonicalBeforeTree": "eab5a16b2c6b57a741c7a1a22f830f737592d1ee",
-  "canonicalAfterTree": "746f015b26b6144f0743a488334d4dfe5ff3e52a",
-  "priorCanonicalAfterTree": "d58d740ce7e5beb1b43889e6897ae96cf54370ba",
+  "canonicalAfterTree": "d9b8fb0cad24ee525219ba9aeb9b56d14427b0fd",
+  "priorCanonicalAfterTree": "746f015b26b6144f0743a488334d4dfe5ff3e52a",
   "before": {
-    "tree": "7afcb904c7e89201124644e022e792471234c36f",
+    "tree": "50de4508d71a67ed2fb44ad9d1cdf56781d4d4a2",
     "patch": "baseline-capture.patch",
-    "patchSha256": "e38e5c3c4a3dc7015489bbd37400e2b87f219b899a2a8be7e53a612035ac213e",
+    "patchSha256": "d2396ed9ebba4944f4e49a5c38a3c2f0e52f1abf063294de1fbea7652800eae1",
     "changes": [
       {
         "path": "tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs",
@@ -17,14 +17,14 @@
       {
         "path": "tests/OpenClaw.Tray.UITests/MountedControlCapture.cs",
         "beforeSha256": "04ba3c57ffc976063b42bbde41f5fc835912bf18a51fe1e6ac961c1a2d8fbd84",
-        "afterSha256": "4e34fed061695eb0d7cf2e2e5a7fbda26af509f2bd24d7c5b60d4851aaa263da",
-        "bytes": 16760,
-        "afterBlob": "838c62b7ce3d0c8088320b7c36c11e43663a48d7"
+        "afterSha256": "110350013890cf70155b9826284fb61d12160cd286f2a6a8fe0904c3356b3efd",
+        "bytes": 16753,
+        "afterBlob": "6052a7ef89c422f13b80366a252d93903be4269e"
       }
     ]
   },
   "after": {
-    "tree": "c271b3b704538214ea8999eab808c0c7278a7702",
+    "tree": "d7fc11b355417fa268430fd98fa2ab01a1d7c9c6",
     "patch": "after-private-capture.patch",
     "patchSha256": "e6c194687d87e6f7ca79f6cf038a625c6c960b9303ff8026f23a10294a3bc2af",
     "changes": [
@@ -42,7 +42,7 @@
   "scope": "canonical eighth test-owner capability, prior seven postimages unchanged; Before same owner plus test-only existing compilation-unit overlay; After only existing test compilation-unit overlay",
   "canonicalSourceManifest": {
     "path": "candidate-source.json",
-    "sha256": "f30417939fce96f15e26822de621c8d05eef5a6ecd483a641361e1e9fa85b2d4",
+    "sha256": "b3a4a3c7bfc2108804ae033a9755a7dda16ff15a53e1ab152af1725f071cb5f2",
     "entries": 2090
   },
   "sourceProjectionContracts": {

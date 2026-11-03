@@ -63,7 +63,7 @@ windows-provider-artwork:
           -AfterSource "$env:GITHUB_WORKSPACE/source-after" `
           -Artifacts "$env:GITHUB_WORKSPACE/.artifacts/native-icons-w5" `
           -AstReceipt "$env:GITHUB_WORKSPACE/packet-preflight.json" `
-          -ExpectedPayloadSha256 'c8fe3e2abaa3dbc2b20221a2414166274b67092bc08c95cb50a2efe2811a8150' `
+          -ExpectedPayloadSha256 '172b25eb3e48e6ace7499b0b0f6fcf647173cc071aa1076fe2ce4bf6487f782b' `
           -Qualification 'native-icons-w5-owned-popup-v1' -ExecutionAuthorized
     - name: Retain complete evidence or the real first blocking leaf
       if: always()

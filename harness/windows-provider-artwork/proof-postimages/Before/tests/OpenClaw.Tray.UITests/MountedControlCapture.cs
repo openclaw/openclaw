@@ -102,8 +102,8 @@ internal static class MountedControlCapture
                 if (ReferenceEquals(current, child)) return true;
             return false;
         }
-        var popup = Assert.Single(VisualTreeHelper.GetOpenPopupsForXamlRoot(root.XamlRoot)
-            .Where(candidate => candidate.IsOpen && candidate.Child is DependencyObject child && rows.All(row => Contains(child, row))));
+        var popup = Assert.Single(VisualTreeHelper.GetOpenPopupsForXamlRoot(root.XamlRoot),
+            candidate => candidate.IsOpen && candidate.Child is DependencyObject child && rows.All(row => Contains(child, row)));
         var popupChild = Assert.IsAssignableFrom<FrameworkElement>(popup.Child);
         Assert.True(popupChild.IsLoaded && popupChild.Visibility == Visibility.Visible);
         Assert.Same(root.XamlRoot, popupChild.XamlRoot);
