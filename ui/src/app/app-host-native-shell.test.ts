@@ -200,6 +200,23 @@ it.each(["none", "keyboardShortcuts", "approvalOverlay"] as const)(
   },
 );
 
+it.each([
+  ["ai-agents", "/settings/ai-agents", "agents", "/settings/agents"],
+  ["lobsterdex", "/settings/lobsterdex", "appearance", "/settings/appearance"],
+  ["plugin-settings", "/settings/plugins/fixture", "plugin-settings", "/settings/plugins"],
+] as const)("goes up one level when Escape is pressed on %s", (routeId, pathname, parent, path) => {
+  const shell = settingsShell();
+  shell.routeState = { routeId, location: { pathname, search: "", hash: "" } };
+
+  document.dispatchEvent(keydown({ key: "Escape" }));
+
+  expect(navigate).toHaveBeenCalledExactlyOnceWith(parent, {
+    pathname: path,
+    search: "",
+    hash: "",
+  });
+});
+
 it("keeps the raw config editor unchanged when Escape is pressed", () => {
   settingsShell();
   const rawField = append(document.createElement("label"));

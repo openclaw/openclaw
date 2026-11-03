@@ -230,6 +230,8 @@ openclaw-select-picker {
 .picker-select__chevron,
 .picker-select__check {
   display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex: 0 0 16px;
   width: 16px;
   margin-inline-start: auto;
@@ -239,6 +241,12 @@ openclaw-select-picker {
 .picker-select__check svg {
   width: 16px;
   height: 16px;
+}
+
+.picker-select__chevron svg {
+  width: var(--chrome-icon-size);
+  height: var(--chrome-icon-size);
+  stroke-width: var(--chrome-icon-stroke);
 }
 
 .picker-select__menu.oc-overlay {

@@ -25,6 +25,7 @@ import { PanelRefreshStatus } from "../../components/solid/panel-refresh-status.
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
   SettingsEmpty,
+  SettingsPage,
   SettingsPageHeader,
   SettingsStatus,
   SettingsToggle,
@@ -556,99 +557,101 @@ export function LogsView(props: LogsProps) {
         }
       />
       <SettingsWorkspace fillHeight>
-        <Show when={props.completion} keyed fallback={refreshStatus()}>
-          {(completion) => (
-            <Errored fallback={refreshStatus()}>
-              <Loading on={completion} fallback={refreshStatus()}>
-                {readStatus()}
-                {refreshStatus()}
-              </Loading>
-            </Errored>
-          )}
-        </Show>
-        <div class="logs-layout">
-          <Toolbar />
-          <div class="settings-group logs-card">
-            <div
-              ref={(element) => {
-                stream = element;
-                props.onStreamRef?.(element, () =>
-                  scheduleLayout(scrollRequest, () => () => virtualizer.scrollToEnd()),
-                );
-              }}
-              class="log-stream log-stream--windowed"
-              style={{ "--log-time-width": logTimeColumnWidth(timeFormatter()) }}
-              role="region"
-              aria-label={t("gatewayLogs.title")}
-              tabindex={0}
-              onScroll={(event) => followReader(event.currentTarget)}
-              onWheel={beginReaderScroll}
-              onTouchStart={beginReaderScroll}
-              // Scrollbar and selection drags scroll with no wheel or touch to announce them.
-              onPointerDown={holdPointer}
-              onKeyDown={(event) => {
-                if (["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home"].includes(event.key)) {
-                  beginReaderScroll();
-                }
-                if (
-                  event.key === "End" &&
-                  !event.altKey &&
-                  !event.ctrlKey &&
-                  !event.metaKey &&
-                  !event.shiftKey
-                ) {
-                  // Native End stops at the old height while wrapped rows are measured.
-                  event.preventDefault();
-                  virtualizer.scrollToEnd();
-                  if (!props.autoFollow) {
-                    props.onToggleAutoFollow(true);
+        <SettingsPage wide>
+          <Show when={props.completion} keyed fallback={refreshStatus()}>
+            {(completion) => (
+              <Errored fallback={refreshStatus()}>
+                <Loading on={completion} fallback={refreshStatus()}>
+                  {readStatus()}
+                  {refreshStatus()}
+                </Loading>
+              </Errored>
+            )}
+          </Show>
+          <div class="logs-layout">
+            <Toolbar />
+            <div class="settings-group logs-card">
+              <div
+                ref={(element) => {
+                  stream = element;
+                  props.onStreamRef?.(element, () =>
+                    scheduleLayout(scrollRequest, () => () => virtualizer.scrollToEnd()),
+                  );
+                }}
+                class="log-stream log-stream--windowed"
+                style={{ "--log-time-width": logTimeColumnWidth(timeFormatter()) }}
+                role="region"
+                aria-label={t("gatewayLogs.title")}
+                tabindex={0}
+                onScroll={(event) => followReader(event.currentTarget)}
+                onWheel={beginReaderScroll}
+                onTouchStart={beginReaderScroll}
+                // Scrollbar and selection drags scroll with no wheel or touch to announce them.
+                onPointerDown={holdPointer}
+                onKeyDown={(event) => {
+                  if (["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home"].includes(event.key)) {
+                    beginReaderScroll();
                   }
-                }
-              }}
-            >
-              <Show
-                when={props.status.hasLoaded}
-                fallback={
-                  <Loading fallback={<LoadingState />}>
-                    {loading() ? <LoadingState /> : null}
-                  </Loading>
-                }
-              >
-                {/* Rows must not extend the native scroll range before their spacer commits. */}
-                <div
-                  role="list"
-                  style={{
-                    position: "relative",
-                    height: `${windowHeight()}px`,
-                    overflow: rows().length > 0 ? "clip" : undefined,
-                  }}
-                >
-                  <For
-                    each={rendered()}
-                    keyed={(item) => item.row.id}
-                    fallback={
-                      <Show when={rows().length === 0}>
-                        <SettingsEmpty message={t("gatewayLogs.empty")} />
-                      </Show>
+                  if (
+                    event.key === "End" &&
+                    !event.altKey &&
+                    !event.ctrlKey &&
+                    !event.metaKey &&
+                    !event.shiftKey
+                  ) {
+                    // Native End stops at the old height while wrapped rows are measured.
+                    event.preventDefault();
+                    virtualizer.scrollToEnd();
+                    if (!props.autoFollow) {
+                      props.onToggleAutoFollow(true);
                     }
+                  }
+                }}
+              >
+                <Show
+                  when={props.status.hasLoaded}
+                  fallback={
+                    <Loading fallback={<LoadingState />}>
+                      {loading() ? <LoadingState /> : null}
+                    </Loading>
+                  }
+                >
+                  {/* Rows must not extend the native scroll range before their spacer commits. */}
+                  <div
+                    role="list"
+                    style={{
+                      position: "relative",
+                      height: `${windowHeight()}px`,
+                      overflow: rows().length > 0 ? "clip" : undefined,
+                    }}
                   >
-                    {(item) => <Row item={item()} />}
-                  </For>
-                </div>
+                    <For
+                      each={rendered()}
+                      keyed={(item) => item.row.id}
+                      fallback={
+                        <Show when={rows().length === 0}>
+                          <SettingsEmpty message={t("gatewayLogs.empty")} />
+                        </Show>
+                      }
+                    >
+                      {(item) => <Row item={item()} />}
+                    </For>
+                  </div>
+                </Show>
+              </div>
+            </div>
+            <div class="logs-footer">
+              <Show when={props.file}>
+                {(file) => (
+                  <span class="logs-footer__file">{t("gatewayLogs.file", { file: file() })}</span>
+                )}
+              </Show>
+              <Show when={props.truncated}>
+                <SettingsStatus kind="warn" label={t("gatewayLogs.truncated")} />
               </Show>
             </div>
           </div>
-          <div class="logs-footer">
-            <Show when={props.file}>
-              {(file) => (
-                <span class="logs-footer__file">{t("gatewayLogs.file", { file: file() })}</span>
-              )}
-            </Show>
-            <Show when={props.truncated}>
-              <SettingsStatus kind="warn" label={t("gatewayLogs.truncated")} />
-            </Show>
-          </div>
-        </div>
+        </SettingsPage>
       </SettingsWorkspace>
     </>
   );

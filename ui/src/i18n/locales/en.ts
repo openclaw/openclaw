@@ -1533,7 +1533,7 @@ const startupEnglish = {
       automationEnabled: "Enabled",
     },
     agentDatabaseWarming: "This agent is still starting. Retry in a moment.",
-    historyRequestTimedOut: "Chat history request timed out. Retry to load the conversation.",
+    historyRequestTimedOut: "Couldn’t load the conversation in time. Try again.",
     clawhub: {},
     modelAccounts: {
       section: "Account",
@@ -1551,7 +1551,7 @@ const startupEnglish = {
       retrying: "Retrying…",
       retryingIn: "Retrying in {seconds}s",
       tryingFallback: "Trying fallback model…",
-      failedTitle: "Unable to finish this reply",
+      failedTitle: "Couldn’t finish this reply",
       failedRepeatCount: "{count} times",
       failedHelp: "Automatic recovery has stopped. Check any completed work before trying again.",
       tryAgain: "Try again",
@@ -1582,9 +1582,9 @@ const startupEnglish = {
     sessionsPaused: "{count} paused",
     sessionPausedNote: "{name} is paused",
     sessionsPausedNote: "{count} sessions are paused",
-    handoffResumed: "Resumed · {duration} Later",
-    handoffSessionsOne: "1 Session",
-    handoffSessions: "{count} Sessions",
+    handoffResumed: "Resumed · {duration} later",
+    handoffSessionsOne: "1 session",
+    handoffSessions: "{count} sessions",
     handoffSessionStatus: {
       attention: "Needs your input",
       paused: "Paused",
@@ -1746,7 +1746,6 @@ const startupEnglish = {
     skillLearned: {},
     progressLabels: {},
     turnRecap: {
-      doneIn: "Done in {duration}",
       tokens: "{count} output tokens",
       tokensOne: "1 output token",
     },
@@ -1757,9 +1756,8 @@ const startupEnglish = {
       loading: "Loading skills…",
     },
     splitView: {
-      chooseConversation: "Choose a conversation",
-      missingOwner:
-        "Select this pane, then choose Home or a conversation in the sidebar to restore it.",
+      chooseConversation: "Choose a session",
+      missingOwner: "Select this pane, then choose Home or a session in the sidebar to restore it.",
       open: "Open split view",
       splitRight: "Split right",
       splitDown: "Split down",
@@ -1808,7 +1806,7 @@ const startupEnglish = {
     runControls: {
       newSession: "New session",
       newSessionWorktree: "New session in worktree",
-      exportChat: "Export chat",
+      exportChat: "Export conversation",
       queue: "Queue",
       queueMessage: "Queue message",
       stop: "Stop",
@@ -1838,6 +1836,7 @@ const startupEnglish = {
       unattributedSender: "Message",
       toolSender: "Tool",
       errorSender: "Error",
+      agentName: "Agent",
     },
     mediaPlayer: {},
     youtube: {},

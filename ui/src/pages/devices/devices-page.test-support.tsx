@@ -48,6 +48,7 @@ export function gatewaySnapshot(
   connected = true,
   methods: string[] = [],
   scopes = ["operator.read", "operator.pairing"],
+  roleAllowsAdmin?: boolean,
 ): ApplicationGatewaySnapshot {
   return createApplicationGatewaySnapshot({
     client,
@@ -56,7 +57,7 @@ export function gatewaySnapshot(
     hello: {
       type: "hello-ok",
       protocol: 1,
-      auth: { role: "operator", scopes },
+      auth: { role: "operator", scopes, roleAllowsAdmin },
       features: { methods },
       snapshot: { presence: [gatewayPresence] },
     },
@@ -296,7 +297,7 @@ export function setupDevicesPageFixtures() {
   beforeEach(() => {
     dialogs = createModalDialogTestFixture((modal) => {
       const acknowledge = modal.querySelector<HTMLButtonElement>(
-        ".exec-approval-actions button[autofocus]",
+        "openclaw-modal-actions button[autofocus]",
       );
       if (acknowledge) {
         acknowledge.click();

@@ -102,7 +102,7 @@ suite.define(() => {
         },
       });
       await page.goto(`${suite.server.baseUrl}settings/infrastructure?section=nodeHost&advanced=1`);
-      const control = page.locator('select[aria-label="Node Automatic Updates Enabled"]');
+      const control = page.locator('select[aria-label="Node automatic updates enabled"]');
 
       await revealControl(control);
       expect((await control.locator("option:checked").textContent())?.trim()).toBe(
@@ -199,8 +199,8 @@ suite.define(() => {
       expect(response?.status()).toBe(200);
 
       const panel = page.locator("#config-section-panel");
-      const enabledRow = settingsRow(page, "Enabled");
-      const modeRow = settingsRow(page, "Mode");
+      const enabledRow = settingsRow(page, "Enabled").first();
+      const modeRow = settingsRow(page, "Mode").first();
       const payloadRow = settingsRow(page, "Payload");
       const retriesRow = settingsRow(page, "Retries");
       const tagsBlock = panel.locator(".cfg-array").filter({ hasText: "Tags" });

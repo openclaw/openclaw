@@ -36,9 +36,9 @@ suite.define(() =>
         });
         await page.goto(`${suite.server.baseUrl}settings/devices`);
         const section = page.locator(".settings-section").filter({
-          has: page.getByRole("heading", { name: "Exec node binding", exact: true }),
+          has: page.getByRole("heading", { name: "Device binding", exact: true }),
         });
-        const binding = section.getByRole("combobox", { name: "Node", exact: true });
+        const binding = section.getByRole("combobox", { name: "Device", exact: true });
         const agentBinding = section.getByRole("combobox", { name: "Binding", exact: true });
         const expectEditor = async (node: string, disabled: boolean) => {
           await expect.poll(() => binding.isDisabled()).toBe(disabled);

@@ -450,7 +450,7 @@ describe("renderModelProviders", () => {
     expect(
       [
         ...(addForm?.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>(
-          "select, input, button",
+          "select, input, button:not(.oc-dialog__close)",
         ) ?? []),
       ].map((control) => control.disabled),
     ).toEqual([true, false, true]);
@@ -480,7 +480,7 @@ describe("renderModelProviders", () => {
     const addForm = container.querySelector("[data-models-key-dialog]");
     const controls = [
       ...(addForm?.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>(
-        "select, input, button",
+        "select, input, button:not(.oc-dialog__close)",
       ) ?? []),
     ];
 
@@ -728,7 +728,8 @@ describe("renderModelProviders", () => {
       }),
     );
 
-    const probe = container.querySelector(".model-providers__probe--warning");
+    const probe = container.querySelector(".model-providers__probe");
+    expect(probe?.querySelector(".settings-status--warn")).not.toBeNull();
     expect(text(probe)).toContain("Connected with warnings");
     expect(text(probe)).toContain("Configured credential · openai/gpt-5.6-sol");
     expect(text(probe)).toContain("Profile Default · openai/gpt-5.6-sol");

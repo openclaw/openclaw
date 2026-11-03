@@ -3,7 +3,7 @@ import { createSignal, Show } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
 import { withPromiseModalHost } from "./promise-modal-host.ts";
 import { CopyButton } from "./solid/copy-button.tsx";
-import { Icon } from "./solid/icon.tsx";
+import { DialogHeader } from "./solid/dialog-header.tsx";
 
 /** Keep one-time secrets visible until acknowledged, announcing refused dismissal. */
 export function showSecretRevealDialog(options: {
@@ -13,7 +13,6 @@ export function showSecretRevealDialog(options: {
   secret?: string;
   acknowledgeLabel: string;
   dismissHint?: string;
-  status?: "success";
   callout?: string;
   note?: string;
 }): Promise<void> {
@@ -37,44 +36,40 @@ export function showSecretRevealDialog(options: {
           description={options.message}
           onModal-cancel={cancel}
         >
-          <div class="exec-approval-card">
-            <div class="secret-reveal__header">
-              <Show when={options.status === "success"}>
-                <span class="secret-reveal__status" aria-hidden="true">
-                  <Icon name="check" />
-                </span>
+          <div class="oc-dialog secret-reveal">
+            <DialogHeader
+              title={options.title}
+              description={<p>{options.message}</p>}
+              onClose={options.secret ? undefined : acknowledge}
+            />
+            <div class="oc-dialog__body">
+              <Show when={options.callout}>
+                <div class="callout info secret-reveal__callout">{options.callout}</div>
               </Show>
-              <div class="exec-approval-title">{options.title}</div>
+              <Show when={options.secret}>
+                {(secret) => (
+                  <div class="secret-reveal__value">
+                    <code class="secret-reveal__code">{secret()}</code>
+                    <CopyButton text={secret()} idleLabel={t("common.copy")} />
+                  </div>
+                )}
+              </Show>
+              <Show when={dismissRefused()}>
+                <p class="secret-reveal__hint" role="status">
+                  {options.dismissHint}
+                </p>
+              </Show>
+              <Show when={options.note}>
+                <p class="secret-reveal__note">{options.note}</p>
+              </Show>
             </div>
-            <div class="secret-reveal__body">
-              <p>{options.message}</p>
-            </div>
-            <Show when={options.callout}>
-              <div class="callout info secret-reveal__callout">{options.callout}</div>
-            </Show>
-            <Show when={options.secret}>
-              {(secret) => (
-                <div class="secret-reveal__value">
-                  <code class="secret-reveal__code">{secret()}</code>
-                  <CopyButton text={secret()} idleLabel={t("common.copy")} />
-                </div>
-              )}
-            </Show>
-            <Show when={dismissRefused()}>
-              <p class="secret-reveal__hint" role="status">
-                {options.dismissHint}
-              </p>
-            </Show>
-            <Show when={options.note}>
-              <p class="secret-reveal__note">{options.note}</p>
-            </Show>
-            <openclaw-modal-actions class="exec-approval-actions">
+            <openclaw-modal-actions class="oc-dialog__footer">
               <button
                 ref={(element) => {
                   acknowledgeButton = element;
                 }}
                 type="button"
-                class={options.secret ? "btn primary" : "btn secret-reveal__dismiss"}
+                class={options.secret ? "btn primary" : "btn"}
                 autofocus
                 onClick={acknowledge}
               >

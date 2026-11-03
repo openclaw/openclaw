@@ -107,7 +107,7 @@ describe("config form map integrity", () => {
         });
       const getSelect = () =>
         expectElement(
-          container.querySelector<HTMLSelectElement>('select[aria-label="Code Mode"]'),
+          container.querySelector<HTMLSelectElement>('select[aria-label="Code mode"]'),
           "model Code Mode selector",
         );
 
