@@ -425,6 +425,48 @@
       }
     },
     {
+      "name": "@openclaw/keenable-plugin",
+      "description": "OpenClaw Keenable plugin.",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "keenable",
+          "label": "Keenable"
+        },
+        "contracts": {
+          "webSearchProviders": [
+            "keenable"
+          ]
+        },
+        "webSearchProviders": [
+          {
+            "id": "keenable",
+            "label": "Keenable Search",
+            "hint": "Fast web search with rich snippets and date or site filters",
+            "onboardingScopes": [
+              "text-inference"
+            ],
+            "credentialLabel": "Keenable API key",
+            "envVars": [
+              "KEENABLE_API_KEY"
+            ],
+            "placeholder": "keen_...",
+            "signupUrl": "https://keenable.ai/",
+            "docsUrl": "https://docs.openclaw.ai/tools/keenable-search",
+            "credentialPath": "plugins.entries.keenable.config.webSearch.apiKey",
+            "autoDetectOrder": 66
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/keenable-plugin",
+          "npmSpec": "@openclaw/keenable-plugin",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.6.8"
+        }
+      }
+    },
+    {
       "name": "@openclaw/fish-audio-speech",
       "description": "OpenClaw Fish Audio speech plugin.",
       "source": "official",

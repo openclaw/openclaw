@@ -934,6 +934,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/firecrawl/**"
+"extensions: keenable":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/keenable/**"
+          - "docs/plugins/reference/keenable.md"
 "extensions: fireworks":
   - changed-files:
       - any-glob-to-any-file:

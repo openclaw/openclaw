@@ -1,0 +1,35 @@
+{
+  "name": "@openclaw/keenable-plugin",
+  "version": "2026.10.10",
+  "description": "OpenClaw Keenable plugin.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "install": {
+      "clawhubSpec": "clawhub:@openclaw/keenable-plugin",
+      "npmSpec": "@openclaw/keenable-plugin",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.6.8"
+    },
+    "compat": {
+      "pluginApi": ">=2026.10.10"
+    },
+    "build": {
+      "openclawVersion": "2026.10.10",
+      "bundledDist": false
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
+    }
+  }
+}
