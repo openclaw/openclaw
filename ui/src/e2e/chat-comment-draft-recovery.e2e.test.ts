@@ -105,7 +105,7 @@ suite.define(() => {
         await source.dispatchEvent("pointerup", { button: 0, pointerType: "mouse" });
         await page
           .getByRole("toolbar", { name: "Selection actions" })
-          .getByRole("button", { name: "Add to chat", exact: true })
+          .getByRole("button", { name: "Add to message", exact: true })
           .click();
         const editor = page.getByRole("dialog", { name: "Comment", exact: true });
         const comment = "Keep this main-chat inline comment.";

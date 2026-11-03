@@ -64,6 +64,7 @@ function laboratoryConfig(endpoint: string, retryBudget = 2) {
 }
 
 async function installConfig(page: Page, config: Record<string, unknown>, hash: string) {
+  await page.clock.install();
   return installMockGateway(page, {
     methodResponses: {
       "config.get": configResponse(config, hash),
@@ -89,7 +90,13 @@ function mutationParams(request: MockGatewayRequest): MutationParams {
 const button = (page: Page, name: string) => page.getByRole("button", { name, exact: true });
 const expectSaveStatus = (page: Page, status: string) =>
   expect
-    .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
+    .poll(async () => {
+      // Let each real config.get settle before advancing the next polling window.
+      if (status === "Apply changes") {
+        await page.clock.runFor(1_000);
+      }
+      return page.locator("openclaw-settings-save-indicator").textContent();
+    })
     .toContain(status);
 const requestCount = async (gateway: Awaited<ReturnType<typeof installConfig>>, method: string) =>
   (await gateway.getRequests(method)).length;
@@ -203,6 +210,9 @@ suite.define(() => {
       }
       await page.setViewportSize({ width: 1440, height: 1000 });
       // Let the resize settle so the comparison below only sees save feedback.
+      await page.locator(".shell").evaluate(async (element) => {
+        await Promise.all(element.getAnimations().map((animation) => animation.finished));
+      });
       let fieldBefore = await endpoint.boundingBox();
       await expect
         .poll(
@@ -244,10 +254,17 @@ suite.define(() => {
       });
       await expectSaveStatus(page, "Save failed");
       expect(await endpoint.inputValue()).toBe("kept-after-failure");
-      await indicator.getByText("Show reason").click();
-      expect(await indicator.textContent()).toContain("Synthetic config file is read-only");
+      expect(await indicator.locator(".settings-save-indicator__reason").textContent()).toBe(
+        "Synthetic config file is read-only",
+      );
 
-      await button(page, "Discard draft and reload").click();
+      // Discard asks first; cancelling keeps the edit.
+      await button(page, "Discard changes").click();
+      const confirm = page.getByRole("dialog");
+      await confirm.getByRole("button", { name: "Cancel", exact: true }).click();
+      expect(await endpoint.inputValue()).toBe("kept-after-failure");
+      await button(page, "Discard changes").click();
+      await confirm.getByRole("button", { name: "Discard changes", exact: true }).click();
       await expect.poll(() => endpoint.inputValue()).toBe("before-failure");
       await expect.poll(() => indicator.textContent()).not.toContain("Save failed");
     });
@@ -544,6 +561,11 @@ suite.define(() => {
       );
       const configGetsBeforeReload = (await gateway.getRequests("config.get")).length;
       await saveIndicator.getByRole("button", { name: "Reload" }).click();
+      // Reload drops the unsaved edit, so it asks first.
+      await page
+        .getByRole("dialog")
+        .getByRole("button", { name: "Discard changes", exact: true })
+        .click();
       await expect
         .poll(async () => (await gateway.getRequests("config.get")).length)
         .toBeGreaterThan(configGetsBeforeReload);
