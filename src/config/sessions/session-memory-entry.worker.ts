@@ -3,9 +3,12 @@ import {
   buildSessionEntryInProcess,
   readSessionEntryResetRecallCutoff,
 } from "../../../packages/memory-host-sdk/src/host/session-files.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
-import { readTranscriptExportSnapshotFromDatabase } from "./session-accessor.sqlite-read.js";
+import {
+  readTranscriptExportSnapshotFromDatabase,
+  readTranscriptExportSnapshotReadOnlySync,
+} from "./session-accessor.sqlite-read.js";
 import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
@@ -36,6 +39,13 @@ export async function prepareSessionMemoryEntries(
   entries: SessionEntriesWorkerInput["entries"],
 ): Promise<SessionTranscriptWorkerValues["session-entries"]["entries"]> {
   const prepared: (Snapshot | null | "cold")[] = entries.map(() => null);
+  const sliced = new Map<
+    number,
+    {
+      options: Parameters<typeof readTranscriptExportSnapshotFromDatabase>[3];
+      batchHead: Snapshot;
+    }
+  >();
   const groups = new Map<
     string,
     { index: number; resolved: ReturnType<typeof resolveSqliteTranscriptReadScope> }[]
@@ -50,26 +60,38 @@ export async function prepareSessionMemoryEntries(
   for (const group of groups.values()) {
     withOpenClawAgentDatabaseReadOnly(
       (database) =>
-        runSqliteDeferredTransactionSync(
+        runSqliteReadSnapshotSync(
           database.db,
           () => {
             for (const { index, resolved } of group) {
               const request = entries[index]!;
               const previous = snapshots.get(snapshotKey(request));
               try {
-                prepared[index] = runWithSessionTranscriptReadFence(request.admission, () =>
-                  readTranscriptExportSnapshotFromDatabase(database, resolved, request.options, {
-                    projectEvent: projectSessionEntryRecord,
-                    previous:
-                      previous?.generation != null && previous.throughSeq !== undefined
-                        ? {
-                            events: previous.events,
-                            generation: previous.generation,
-                            throughSeq: previous.throughSeq,
-                          }
-                        : null,
-                  }),
+                const options = {
+                  projectEvent: projectSessionEntryRecord,
+                  previous:
+                    previous?.generation != null && previous.throughSeq !== undefined
+                      ? {
+                          events: previous.events,
+                          generation: previous.generation,
+                          throughSeq: previous.throughSeq,
+                        }
+                      : null,
+                };
+                const snapshot = runWithSessionTranscriptReadFence(request.admission, () =>
+                  readTranscriptExportSnapshotFromDatabase(
+                    database,
+                    resolved,
+                    request.options,
+                    options,
+                    { deferAboveBytes: MAX_SNAPSHOT_BYTES },
+                  ),
                 );
+                if (snapshot.deferred) {
+                  sliced.set(index, { options, batchHead: snapshot });
+                } else {
+                  prepared[index] = snapshot;
+                }
               } catch (error) {
                 if (!(error instanceof SessionTranscriptColdError)) {
                   throw error;
@@ -82,6 +104,21 @@ export async function prepareSessionMemoryEntries(
         ),
       toDatabaseOptions(group[0]!.resolved),
     );
+  }
+  // Large transcripts are never retained by the cache; decode them after the batch releases.
+  for (const [index, { options, batchHead }] of sliced) {
+    const request = entries[index]!;
+    try {
+      prepared[index] = runWithSessionTranscriptReadFence(
+        request.admission,
+        () => readTranscriptExportSnapshotReadOnlySync(request.options, options, batchHead) ?? null,
+      );
+    } catch (error) {
+      if (!(error instanceof SessionTranscriptColdError)) {
+        throw error;
+      }
+      prepared[index] = "cold";
+    }
   }
   return Promise.all(
     entries.map(async (request, index) => {

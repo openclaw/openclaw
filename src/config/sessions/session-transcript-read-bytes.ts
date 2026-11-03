@@ -11,3 +11,6 @@ export function transcriptEventReadBytesSql(
     );
   return /* kysely-allow-raw: recorded uncompressed bytes or native identity column metadata preserve existing byte budgets. */ sql<number>`coalesce(${transcriptEventUtf8BytesSql(alias)}, octet_length(${identity}))`;
 }
+
+/** Bound transient decoded payloads retained by one SQLite export slice. */
+export const TRANSCRIPT_PAYLOAD_SLICE_BYTES = 2 * 1024 * 1024;

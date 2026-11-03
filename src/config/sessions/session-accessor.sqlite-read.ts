@@ -6,12 +6,14 @@ import {
   iterateSqliteQuerySync,
   prepareSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { assertSqliteJsonlReadBudget } from "../../infra/sqlite-jsonl-budget.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import { runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
 import {
   assertTransactionUsable,
   runSqliteDeferredTransactionSync,
+  runSqliteReadSnapshotSync,
 } from "../../infra/sqlite-transaction.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
@@ -29,6 +31,7 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import { readSessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.js";
 import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
+import { readTranscriptExportInSlices } from "./session-accessor.sqlite-export-slices.js";
 import {
   getSessionKysely,
   resolveSqliteTranscriptReadScope,
@@ -57,6 +60,7 @@ import { readHotSessionTranscriptSnapshot } from "./session-cold-storage-read.js
 import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import type { SessionTranscriptReadSnapshot } from "./session-history-read.types.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
+import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import { SessionTranscriptStorageUnavailableError } from "./session-transcript-projection-error.js";
 import {
   captureSessionTranscriptQuestionAnswers,
@@ -165,22 +169,37 @@ type TranscriptExportOptions = {
   } | null;
 };
 
-/** Snapshot export payloads and their identity without opening the writable lifecycle. */
+type TranscriptExportSnapshot = {
+  events: TranscriptEvent[];
+  stats: SessionTranscriptStats;
+  sessionKey: string | undefined;
+  generation?: string | null;
+  throughSeq?: number;
+  deferred?: { afterSeq?: number; throughSeq: number; version: SessionTranscriptContextVersion };
+};
+
+/** Decode bounded SQLite payload slices after releasing each read transaction. */
 export function readTranscriptExportSnapshotReadOnlySync(
   scope: SessionTranscriptReadScope,
   options: TranscriptExportOptions = {},
+  batchHead?: TranscriptExportSnapshot,
 ) {
   const resolved = resolveSqliteTranscriptReadScope(scope);
-  const result = withOpenClawAgentDatabaseReadOnly(
-    (database) =>
-      runSqliteDeferredTransactionSync(
-        database.db,
-        () => readTranscriptExportSnapshotFromDatabase(database, resolved, scope, options),
-        { operationLabel: "session transcript export snapshot" },
+  return readTranscriptExportInSlices({
+    ...options,
+    sessionId: resolved.sessionId,
+    batchHead,
+    transaction: (read) =>
+      withOpenClawAgentDatabaseReadOnly(
+        (database) =>
+          runSqliteReadSnapshotSync(database.db, () => read(database), {
+            operationLabel: "session transcript export snapshot",
+          }),
+        toDatabaseOptions(resolved),
       ),
-    toDatabaseOptions(resolved),
-  );
-  return result.found ? result.value : undefined;
+    readHead: (database, slicing) =>
+      readTranscriptExportSnapshotFromDatabase(database, resolved, scope, options, slicing),
+  });
 }
 
 /** The memory worker shares one read transaction across its bounded source batch. */
@@ -189,7 +208,8 @@ export function readTranscriptExportSnapshotFromDatabase(
   resolved: ResolvedTranscriptReadScope,
   scope: SessionTranscriptReadScope,
   options: TranscriptExportOptions,
-) {
+  { deferAboveBytes = Number.POSITIVE_INFINITY }: { deferAboveBytes?: number } = {},
+): TranscriptExportSnapshot {
   const fence = resolveSqliteSessionTranscriptReadFence({ database, ...resolved });
   const { stats, generation, cold } =
     options.previous !== undefined
@@ -223,10 +243,22 @@ export function readTranscriptExportSnapshotFromDatabase(
         .where("session_id", "=", resolved.sessionId)
         .limit(1),
     )?.session_key;
+  const deferred =
+    previous?.throughSeq !== throughSeq &&
+    options.projection !== "reset-boundary" &&
+    stats.sizeBytes > deferAboveBytes &&
+    !isPostgresSqlConnection(database.db);
+  if (deferred) {
+    // Preserve the same whole-transcript budget before deferring its payload rows.
+    prepareTranscriptEventReadQuery(database, resolved.sessionId, {
+      beforeEventSeq: fence?.beforeRawSeq,
+      maxEventBytes: scope.maxEventBytes,
+    });
+  }
   return {
     events: [
       ...(previous?.events ?? []),
-      ...(previous?.throughSeq === throughSeq
+      ...(previous?.throughSeq === throughSeq || deferred
         ? []
         : loadTranscriptEventsFromDatabase(database, resolved.sessionId, {
             ...options,
@@ -238,6 +270,15 @@ export function readTranscriptExportSnapshotFromDatabase(
     stats,
     sessionKey,
     ...(options.previous !== undefined ? { generation, throughSeq } : {}),
+    ...(deferred
+      ? {
+          deferred: {
+            afterSeq: previous?.throughSeq,
+            throughSeq,
+            version: readTranscriptContextVersionInTransaction(database, resolved.sessionId),
+          },
+        }
+      : {}),
   };
 }
 
