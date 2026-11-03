@@ -5,6 +5,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { create as createArchive } from "tar";
 import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { hasErrnoCode } from "../infra/errors.js";
 import { root } from "../infra/fs-safe.js";
 import { readPluginControlUiAssets } from "../plugins/control-ui-assets.js";
 import { safePluginInstallFileName } from "../plugins/install-paths.js";
@@ -17,6 +18,7 @@ import {
 } from "../plugins/package-entry-resolution.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { defaultRuntime } from "../runtime.js";
+import { throwExpectedCliError } from "./expected-cli-error.js";
 import { collectPluginsValidationResult } from "./plugins-authoring-command.js";
 import { buildPluginBundle } from "./plugins-build-bundle.js";
 
@@ -24,19 +26,25 @@ export type PluginsPackOptions = { root?: string; out?: string; json?: boolean }
 
 /** Produce one reviewable import: bundled code, immutable UI assets, no install scripts. */
 async function packFeaturePlugin(opts: PluginsPackOptions) {
-  const rootDir = await fs.realpath(path.resolve(opts.root ?? process.cwd()));
+  const requestedRoot = path.resolve(opts.root ?? process.cwd());
+  const rootDir = await fs.realpath(requestedRoot).catch((error: unknown) => {
+    if (hasErrnoCode(error, "ENOENT") || hasErrnoCode(error, "ENOTDIR")) {
+      throwExpectedCliError(`Plugin root not found: ${requestedRoot}`);
+    }
+    throw error;
+  });
   const validation = await collectPluginsValidationResult({ root: rootDir });
   if (!validation.valid) {
-    throw new Error(validation.errors.join("\n"));
+    throwExpectedCliError(validation.errors.join("\n"));
   }
   const source = await root(rootDir, { symlinks: "reject", hardlinks: "reject" });
   const packageManifest = await source.readJson("package.json");
   if (!isRecord(packageManifest) || !isRecord(packageManifest.openclaw)) {
-    throw new Error("Plugin package metadata is missing. Run openclaw plugins build.");
+    throwExpectedCliError("Plugin package metadata is missing. Run openclaw plugins build.");
   }
   const extensions = resolvePackageExtensionEntries(packageManifest);
   if (extensions.status !== "ok" || extensions.entries.length !== 1) {
-    throw new Error("Plugin artifacts require exactly one backend entrypoint.");
+    throwExpectedCliError("Plugin artifacts require exactly one backend entrypoint.");
   }
   const entriesValid = await validatePackageExtensionEntriesForInstall({
     packageDir: rootDir,
@@ -45,7 +53,7 @@ async function packFeaturePlugin(opts: PluginsPackOptions) {
     allowSourceTypeScriptEntries: true,
   });
   if (!entriesValid.ok) {
-    throw new Error(entriesValid.error);
+    throwExpectedCliError(entriesValid.error);
   }
   const diagnostics: PluginDiagnostic[] = [];
   const resolution = {
@@ -62,18 +70,18 @@ async function packFeaturePlugin(opts: PluginsPackOptions) {
   });
   const setupEntry = resolvePackageSetupSource(resolution);
   if (!entry || diagnostics.length > 0) {
-    throw new Error(diagnostics.map((diagnostic) => diagnostic.message).join("\n"));
+    throwExpectedCliError(diagnostics.map((diagnostic) => diagnostic.message).join("\n"));
   }
   const loaded = withPluginCache(createPluginCache(), () => loadPluginManifest(rootDir, false));
   if (!loaded.ok) {
-    throw new Error(loaded.error);
+    throwExpectedCliError(loaded.error);
   }
   const pluginId = loaded.manifest.id;
   const outputPath = path.resolve(
     opts.out ?? path.join(rootDir, `${safePluginInstallFileName(pluginId)}.tgz`),
   );
   if (!/\.(?:tgz|tar\.gz)$/u.test(outputPath)) {
-    throw new Error("Plugin artifact output must end in .tgz or .tar.gz.");
+    throwExpectedCliError("Plugin artifact output must end in .tgz or .tar.gz.");
   }
   const staging = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-pack-"));
   try {
@@ -153,10 +161,17 @@ async function packFeaturePlugin(opts: PluginsPackOptions) {
     );
     const bytes = await fs.readFile(archive);
     if (bytes.length > 32 * 1024 * 1024) {
-      throw new Error("Plugin artifacts must be at most 32 MiB.");
+      throwExpectedCliError("Plugin artifacts must be at most 32 MiB.");
     }
     // Exclusive creation preserves existing artifacts and their approval digests.
-    await fs.writeFile(outputPath, bytes, { flag: "wx", mode: 0o600 });
+    await fs.writeFile(outputPath, bytes, { flag: "wx", mode: 0o600 }).catch((error: unknown) => {
+      if (hasErrnoCode(error, "EEXIST")) {
+        throwExpectedCliError(
+          `Refusing to overwrite existing plugin artifact: ${outputPath}. Pass a new --out path.`,
+        );
+      }
+      throw error;
+    });
     const sha256 = createHash("sha256").update(bytes).digest("hex");
     return {
       path: outputPath,
