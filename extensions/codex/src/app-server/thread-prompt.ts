@@ -1,5 +1,6 @@
 import {
   buildAgentHarnessBasePrompt,
+  buildAgentRuntimePlan,
   buildCredentialSafetyPrompt,
   buildDelegationGuidanceSection,
   buildUiPresentationPrompt,
@@ -42,7 +43,8 @@ export type CodexThreadPromptContext = Pick<
   | "extraSystemPromptTurnContext"
   | "gitCoauthorPrompt"
   | "runtimePlan"
->;
+> &
+  Partial<Pick<EmbeddedRunAttemptParams, "workspaceDir">>;
 
 // Obligations of Codex's model prompt that outlive it: its channels, steering, compaction,
 // and native tools still exist when OpenClaw's base prompt replaces that text.
@@ -88,6 +90,7 @@ export function buildCodexBaseInstructions(
   options: {
     dynamicTools?: readonly CodexDynamicToolSpec[];
     nativeCodeModeEnabled?: boolean;
+    nativeModelProvider?: string;
   } = {},
 ): string {
   const nativeToolsEnabled = options.nativeCodeModeEnabled !== false;
@@ -96,14 +99,26 @@ export function buildCodexBaseInstructions(
     ...listDynamicToolNames(options.dynamicTools),
     ...(nativeToolsEnabled ? ["exec"] : []),
   ];
+  // Supervision strips the outer plan because auth and routing stay native. Only this prompt
+  // resolver is used here, so the thread's provider owns its guidance as a regular run's does.
+  const promptPlan =
+    params.runtimePlan ??
+    (options.nativeModelProvider
+      ? buildAgentRuntimePlan({
+          config: params.config,
+          workspaceDir: params.workspaceDir,
+          provider: options.nativeModelProvider,
+          modelId: params.modelId,
+        })
+      : undefined);
   return joinPresentSections(
     buildAgentHarnessBasePrompt({
       config: params.config,
       toolNames,
       promptMode,
-      promptContribution: params.runtimePlan?.prompt.resolveSystemPromptContribution({
+      promptContribution: promptPlan?.prompt.resolveSystemPromptContribution({
         config: params.config,
-        provider: params.runtimePlan.prompt.provider,
+        provider: promptPlan.prompt.provider,
         modelId: params.modelId,
         promptMode,
         agentId: params.agentId,

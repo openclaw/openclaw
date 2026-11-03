@@ -26,6 +26,8 @@ export type CodexThreadConfigurationOptions = {
   environmentSelection?: CodexTurnEnvironmentParams[];
   model?: string | null;
   modelProvider?: string | null;
+  /** Supervised threads have no outer runtime plan; this provider owns their prompt guidance. */
+  nativeModelProvider?: string;
   hostSystemAgentActive?: boolean;
   restrictedToolSurfaceInheritedMcpServerNames?: readonly string[];
   shellEnvironment?: Readonly<Record<string, string>>;

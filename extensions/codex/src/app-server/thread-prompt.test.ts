@@ -97,6 +97,28 @@ describe("buildDeveloperInstructions deferred tool discovery", () => {
     );
   });
 
+  it("resolves supervised guidance from the native provider without an outer plan", () => {
+    const supervised = {
+      agentId: "main",
+      config: { plugins: { entries: { openai: { config: { personality: "off" } } } } },
+      modelId: "gpt-5.5",
+    };
+    const openai = buildCodexBaseInstructions(supervised, { nativeModelProvider: "openai" });
+    expect(openai).toContain("<execution_policy>");
+    expect(openai).not.toContain("## Interaction Style");
+    // Only OpenAI-family threads read the OpenAI plugin's personality, as on the regular engine.
+    expect(
+      buildCodexBaseInstructions(supervised, { nativeModelProvider: "custom-native" }),
+    ).toContain("## Interaction Style");
+    expect(
+      buildCodexBaseInstructions(
+        { ...supervised, modelId: "other-model" },
+        { nativeModelProvider: "openai" },
+      ),
+    ).not.toContain("<execution_policy>");
+    expect(buildCodexBaseInstructions(supervised)).not.toContain("<execution_policy>");
+  });
+
   it("keeps policy in the developer carrier for ring-zero threads, which have no base", () => {
     const instructions = render(
       { toolsAllow: ["openclaw"] },

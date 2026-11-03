@@ -21,7 +21,9 @@ facts keep their existing carriers below. A changed base prompt reaches an
 existing thread on its next cold resume; restricted threads rotate instead, and
 incognito threads reject the change like any other generic policy change.
 Ring-zero threads keep empty base instructions, and app-server tool declarations
-are unchanged.
+are unchanged. Supervised threads, including canonical forks, have no outer
+OpenClaw runtime plan, so their provider guidance resolves from the thread's
+native provider and model. Their authentication and routing stay native.
 
 The full generic developer policy, including a `before_prompt_build.systemPrompt`
 replacement, remains native session configuration for compaction and native-child

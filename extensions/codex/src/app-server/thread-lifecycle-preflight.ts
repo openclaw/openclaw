@@ -281,6 +281,8 @@ export async function prepareCodexThreadRequestContext(
         model: startModelSelection.model,
         modelProvider: startModelProvider,
         preserveNativeModel: binding.preserveNativeModel === true,
+        nativeModelProvider:
+          binding.connectionScope === "supervision" ? binding.modelProvider : undefined,
         config,
         hostSystemAgentActive: options.preflight.hostSystemAgentActive,
         restrictedToolSurfaceInheritedMcpServerNames:
