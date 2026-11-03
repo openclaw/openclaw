@@ -459,9 +459,6 @@ export function DefaultModels(props: DefaultModelsViewProps) {
       actions={catalogProgress}
     >
       <div class="model-providers__defaults">
-        {!props.loading && props.models.length === 0 ? (
-          <div class="callout warning">{t("modelProviders.defaults.noModels")}</div>
-        ) : undefined}
         <SettingsRow
           title={t("modelProviders.defaults.primary")}
           control={

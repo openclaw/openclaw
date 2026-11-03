@@ -204,6 +204,8 @@ export function ApplicationShell(props: {
                   !view().mergedChatChrome &&
                   // New Session is already the destination of this action.
                   view().activeRoute !== "new-session" &&
+                  // Settings starts no session; the phone pill keeps its shape on every page.
+                  (view().floatingHeader || !view().settingsTakeover) &&
                   // The floating pill keeps its shape behind the drawer's backdrop.
                   (view().floatingHeader || !view().navDrawerOpen) &&
                   !view().onboarding &&
