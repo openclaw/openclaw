@@ -26,7 +26,7 @@ const liveProvider = LIVE
 
 export type NativeFixture = Awaited<ReturnType<typeof createNativeFixture>>;
 export type Cleanup = () => Promise<void>;
-type NativePhase = "probe" | "action" | "side" | "hold" | "summary" | "health";
+type NativePhase = "probe" | "action" | "side" | "hold" | "overload" | "summary" | "health";
 
 async function createNativeFixture(
   requestedRoot: string,
@@ -82,6 +82,26 @@ async function createNativeFixture(
         }
         if (parsed.model !== NATIVE_MODEL && parsed.model !== HOST_MODEL) {
           response.writeHead(400).end();
+          return;
+        }
+        if (phase === "overload") {
+          const id = "response-" + requests.length;
+          const event = (type: string, fields: JsonObject) =>
+            "event: " + type + "\ndata: " + JSON.stringify({ type, ...fields }) + "\n\n";
+          response.writeHead(200, { "Content-Type": "text/event-stream" });
+          response.end(
+            event("response.created", { response: { id } }) +
+              event("response.failed", {
+                response: {
+                  id,
+                  status: "failed",
+                  error: {
+                    code: "server_is_overloaded",
+                    message: "Synthetic provider overload.",
+                  },
+                },
+              }),
+          );
           return;
         }
         if (phase === "hold") {

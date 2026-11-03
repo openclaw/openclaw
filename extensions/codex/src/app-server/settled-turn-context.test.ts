@@ -87,6 +87,7 @@ async function captureContext(params: {
   modelProvider?: string;
   authProfileId?: string;
   promptSuppressed?: boolean;
+  promptIdentity?: string;
 }) {
   mocks.readHistory.mockImplementation(
     (_target, read: (messages: Iterable<AgentMessage>) => unknown) => read(params.historyMessages),
@@ -101,6 +102,7 @@ async function captureContext(params: {
     modelProvider: params.modelProvider,
     authProfileId: params.authProfileId,
     promptSuppressed: params.promptSuppressed,
+    promptIdentity: params.promptIdentity,
   });
 }
 
@@ -163,6 +165,27 @@ describe("captureCodexSettledTurnFinalizationContext", () => {
       }
     },
   );
+
+  it("uses the original recorder prompt for a continued native turn", async () => {
+    const prompt = message({ role: "user", content: "Send it." }, "turn-1:prompt");
+    const messages = [prompt, ...settledTurn().slice(1)];
+    const context = await captureContext({
+      historyMessages: messages,
+      mirroredMessages: messages,
+      settledMessages: messages,
+      promptIdentity: "turn-1:prompt",
+    });
+    expect(context?.source).toBe("harness");
+    expect(JSON.stringify(context)).toContain("Send it.");
+    await expect(
+      captureContext({
+        historyMessages: messages,
+        mirroredMessages: messages,
+        settledMessages: messages,
+        promptIdentity: "turn-other:prompt",
+      }),
+    ).resolves.toBeUndefined();
+  });
 
   it.each(["openai"])(
     "freezes source selection and the exact settled branch (provider: %s)",

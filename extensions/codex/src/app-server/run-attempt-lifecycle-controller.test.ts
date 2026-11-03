@@ -18,6 +18,7 @@ function createTerminalReleaseHarness() {
   const order: string[] = [];
   const notificationHandlers = new Set<(notification: unknown) => void>();
   const cancel = vi.fn(() => order.push("cancel"));
+  const sealAdmission = vi.fn();
   const request = vi.fn(async (method: string) => {
     order.push(method);
     return {};
@@ -73,7 +74,13 @@ function createTerminalReleaseHarness() {
     noteProgress: vi.fn(),
     activeTurnItemIds,
     pendingOpenClawDynamicToolCompletionIds,
-    steeringQueueRef: { current: { cancel } },
+    steeringQueueRef: {
+      current: {
+        cancel,
+        sealAdmission,
+        drainBeforeCancel: () => void cancel(),
+      },
+    },
     interruptTurn: (turnId: string) =>
       interruptCodexTurnAndWaitBestEffort(client as never, {
         threadId: "thread-1",
@@ -112,6 +119,7 @@ function createTerminalReleaseHarness() {
   };
   return {
     activeTurnItemIds,
+    sealAdmission,
     cancel,
     sourceReplies,
     completeTurn,
@@ -280,7 +288,11 @@ describe("Codex terminal dynamic-tool release", () => {
       startupTimeoutMs: 1_000,
     };
     const runtime = createCodexAttemptTurnState(resources as never);
-    runtime.steeringQueueRef.current = { cancel: vi.fn() } as never;
+    runtime.steeringQueueRef.current = {
+      cancel: vi.fn(),
+      sealAdmission: vi.fn(),
+      drainBeforeCancel: () => undefined,
+    } as never;
     const interrupt = vi.spyOn(runtime, "interruptTurn");
     const controller = createCodexAttemptLifecycleController(resources as never, runtime);
     try {
@@ -379,9 +391,8 @@ describe("Codex terminal dynamic-tool release", () => {
         await vi.runOnlyPendingTimersAsync();
         expect(harness.request).not.toHaveBeenCalled();
         expect(harness.state.completed).toBe(false);
-        // Native activity delays interruption, but the accepted terminal response
-        // already fenced steering once its own response and siblings settled.
-        expect(harness.cancel).toHaveBeenCalledTimes(pending === "native-item" ? 1 : 0);
+        expect(harness.sealAdmission).toHaveBeenCalledTimes(pending === "native-item" ? 1 : 0);
+        expect(harness.cancel).not.toHaveBeenCalled();
 
         harness.state.activeAppServerTurnRequests = 0;
         harness.activeTurnItemIds.clear();

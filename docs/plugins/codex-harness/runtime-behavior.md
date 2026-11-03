@@ -364,3 +364,6 @@ The Codex harness changes the low-level embedded agent executor only.
 For hook layers, supported V1 surfaces, native permission handling, queue
 steering, Codex feedback upload mechanics, and compaction details, see
 [Codex harness runtime](/plugins/codex-harness-runtime).
+
+Temporary native capability, hook, and tool-catalog probes close and await their isolated
+app-server processes. Shared-client probes release only their borrowed lease.

@@ -50,7 +50,7 @@ import {
   captureScheduledCodexAppAuthority,
   resolveScheduledCodexAppCreatorCaptureDecision,
 } from "./scheduled-app-authority.js";
-import { releaseLeasedSharedCodexAppServerClient } from "./shared-client.js";
+import { releaseCodexProbeClient } from "./shared-client.js";
 
 export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
   const {
@@ -284,9 +284,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         config: params.config,
         timeoutMs: connection.appServer.requestTimeoutMs,
       }),
-    releaseClient: (client) => {
-      releaseLeasedSharedCodexAppServerClient(client);
-    },
+    releaseClient: (client) => releaseCodexProbeClient(client, connection.attemptClientFactory),
     assertCurrent: () => {
       runAbortController.signal.throwIfAborted();
       connection.assertCurrent();

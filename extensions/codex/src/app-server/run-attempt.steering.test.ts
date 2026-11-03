@@ -1,6 +1,9 @@
 // Codex tests cover run attempt.steering plugin behavior.
 import path from "node:path";
+import { setImmediate as yieldImmediate } from "node:timers/promises";
+import type { setActiveEmbeddedRun } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   appendSessionTranscriptMessageByIdentity,
@@ -9,9 +12,14 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import type { CodexSteeringQueueOptions } from "./attempt-steering.js";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
+import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import type { JsonObject } from "./protocol.js";
+import { itemNotification, turnCompleted } from "./protocol.test-helpers.js";
 import { seedRunSessionOwnerForTest } from "./run-attempt-session-owners.test-support.js";
 import {
+  createCodexRuntimePlanFixture,
+  createRuntimeDynamicTool,
+  setCodexTestModelSupportsTools,
   createStartedThreadHarness,
   fastWait,
   queueActiveRunMessageForTest,
@@ -35,7 +43,184 @@ setupRunAttemptTestHooks();
 const PNG_1X1 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
 
+type RegisteredRun = Parameters<typeof setActiveEmbeddedRun>[1];
+function registeredRun(sessionId: string) {
+  return activeRunRegistrationMocks.setActiveEmbeddedRun.mock.calls.findLast(
+    (call) => call[0] === sessionId,
+  )?.[1] as RegisteredRun | undefined;
+}
+
+function steerClientId(request: { params?: unknown } | undefined) {
+  const id = (request?.params as { clientUserMessageId?: string } | undefined)?.clientUserMessageId;
+  if (!id) {
+    throw new Error("turn/steer clientUserMessageId missing");
+  }
+  return id;
+}
+
+const consumedUser = (clientId: string, id = "steered-user-message") =>
+  itemNotification("item/completed", { id, type: "userMessage", clientId });
+
 describe("runCodexAppServerAttempt steering", () => {
+  it.each(["consumed", "unconfirmed"] as const)(
+    "settles submitted steering before terminal tool interruption (%s)",
+    async (outcome) => {
+      const harness = createStartedThreadHarness(undefined, { persistedThreads: [] });
+      const params = createSteeringParams();
+      params.runtimePlan = createCodexRuntimePlanFixture();
+      setCodexTestModelSupportsTools(params, true);
+      const tool = createRuntimeDynamicTool("terminal_tool");
+      tool.execute = vi.fn(async () => ({
+        content: [{ type: "text" as const, text: "Waiting for follow-up" }],
+        details: { status: "yielded" },
+      }));
+      setCodexTestToolFactory(params, () => [tool]);
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      const run = runCodexAppServerAttempt(params);
+      try {
+        await run.waitForTurnAccepted();
+        const handle = registeredRun(params.sessionId)!;
+        const accepted = vi.fn();
+        const settled = vi.fn();
+        const delivery = handle.queueMessage("Keep this follow-up", {
+          debounceMs: 0,
+          waitForTranscriptCommit: true,
+          onQueueAccepted: accepted,
+          onQueueSettled: settled,
+        });
+        await harness.waitForMethod("turn/steer");
+        await vi.advanceTimersByTimeAsync(0);
+        expect(accepted).toHaveBeenCalledExactlyOnceWith(true);
+        const clientId = steerClientId(
+          harness.requests.find(({ method }) => method === "turn/steer"),
+        );
+
+        await expect(
+          harness.handleServerRequest({
+            id: "terminal-tool",
+            method: "item/tool/call",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+              callId: "terminal-tool",
+              namespace: null,
+              tool: "terminal_tool",
+              arguments: {},
+            },
+          }),
+        ).resolves.toMatchObject({ success: true });
+        await yieldImmediate();
+        expect(harness.requests.some(({ method }) => method === "turn/interrupt")).toBe(false);
+        expect(settled).not.toHaveBeenCalled();
+
+        if (outcome === "consumed") {
+          await vi.advanceTimersByTimeAsync(10);
+          await harness.notify(consumedUser(clientId));
+          await expect(delivery).resolves.toBeUndefined();
+        } else {
+          await vi.advanceTimersByTimeAsync(1_000);
+          await expect(delivery).resolves.toMatchObject({ transcriptCommit: "unconfirmed" });
+        }
+        await harness.waitForMethod("turn/interrupt");
+        await harness.notify(turnCompleted({ id: "turn-1", status: "interrupted" }));
+        await run;
+        expect(settled).toHaveBeenCalledOnce();
+        expect(harness.requests.filter(({ method }) => method === "turn/interrupt")).toHaveLength(
+          1,
+        );
+        expect(harness.requests.filter(({ method }) => method === "turn/steer")).toHaveLength(1);
+      } finally {
+        harness.close();
+        await run;
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each(["host tool", "local projection"] as const)(
+    "keeps native execution ownership during %s after a long turn",
+    async (work) => {
+      const started = createDeferred<void>();
+      const finish = createDeferred<void>();
+      const harness = createStartedThreadHarness();
+      const params = createSteeringParams();
+      params.timeoutMs = MAX_TIMER_TIMEOUT_MS;
+      params.runtimePlan = createCodexRuntimePlanFixture();
+      setCodexTestModelSupportsTools(params, true);
+      const tool = createRuntimeDynamicTool("autoreview");
+      tool.execute = vi.fn(async () => {
+        started.resolve();
+        await finish.promise;
+        return { content: [{ type: "text" as const, text: "Review complete" }], details: {} };
+      });
+      setCodexTestToolFactory(params, () => [tool]);
+      if (work === "local projection") {
+        params.verboseLevel = "full";
+        params.onToolResult = async () => {
+          started.resolve();
+          await finish.promise;
+        };
+      }
+      vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+      const run = runCodexAppServerAttempt(params);
+      let pending: Promise<unknown> | undefined;
+      try {
+        await run.waitForTurnAccepted();
+        const handle = registeredRun(params.sessionId);
+        await vi.waitFor(() => expect(handle?.ownsLiveness?.()).toBe(true), fastWait);
+        await vi.advanceTimersByTimeAsync(40 * 60_000);
+        pending =
+          work === "host tool"
+            ? harness.handleServerRequest({
+                id: "review-request",
+                method: "item/tool/call",
+                params: {
+                  threadId: "thread-1",
+                  turnId: "turn-1",
+                  callId: "review-call",
+                  namespace: null,
+                  tool: "autoreview",
+                  arguments: {},
+                },
+              })
+            : harness.notify(
+                itemNotification("item/started", {
+                  type: "commandExecution",
+                  id: "native-command",
+                  command: "true",
+                  cwd: params.workspaceDir,
+                  status: "inProgress",
+                }),
+              );
+        await started.promise;
+        expect(handle?.ownsLiveness?.()).toBe(true);
+        finish.resolve();
+        await pending;
+        if (work === "local projection") {
+          await harness.notify(
+            itemNotification("item/completed", {
+              type: "commandExecution",
+              id: "native-command",
+              command: "true",
+              cwd: params.workspaceDir,
+              status: "completed",
+              exitCode: 0,
+              aggregatedOutput: "",
+            }),
+          );
+        }
+        await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+        expect(readAttemptTerminal(await run)).toMatchObject({ aborted: false, timedOut: false });
+        expect(handle?.ownsLiveness?.()).toBe(false);
+      } finally {
+        finish.resolve();
+        await pending;
+        harness.close();
+        await run;
+      }
+    },
+  );
+
   it.each([
     { incognito: true, interruptFails: false, terminationFails: false },
     { incognito: false, interruptFails: true, terminationFails: false },

@@ -686,6 +686,14 @@ describe.skipIf(process.platform === "win32")(
         priorCount: 0,
         hidden: true,
       },
+      {
+        label: "same-run continuation after a transient provider overload",
+        homeScope: "agent" as const,
+        preserveNativeModel: false,
+        prepared: true,
+        priorCount: 0,
+        continuation: true,
+      },
       ...(LIVE
         ? [
             {
@@ -705,6 +713,7 @@ describe.skipIf(process.platform === "win32")(
       async (scenario) => {
         const live = "live" in scenario && scenario.live;
         const hidden = "hidden" in scenario && scenario.hidden;
+        const continuation = "continuation" in scenario && scenario.continuation;
         await withNativeFixture(
           tempDir,
           async (fixture, cleanups) => {
@@ -771,7 +780,7 @@ describe.skipIf(process.platform === "win32")(
             }
             fixture.setPhase("action");
             params.runId = "run-settled-action";
-            if (hidden) {
+            if (hidden || continuation) {
               params.prompt =
                 "Background task completed. Use exec_command exactly once to run " +
                 "`printf 'completed-once\\n' >> completed-actions.txt; cat completed-actions.txt`, " +
@@ -780,18 +789,44 @@ describe.skipIf(process.platform === "win32")(
               params.userTurnTranscriptRecorder = createRecorder({
                 input: {
                   text: params.prompt,
-                  display: false,
-                  provenance: {
-                    kind: "inter_session",
-                    sourceChannel: "internal",
-                    sourceTool: "agent_harness_task",
-                  },
-                  idempotencyKey: "announce:completed-action:user",
+                  ...(hidden
+                    ? {
+                        display: false,
+                        provenance: {
+                          kind: "inter_session" as const,
+                          sourceChannel: "internal",
+                          sourceTool: "agent_harness_task",
+                        },
+                      }
+                    : {}),
+                  idempotencyKey: hidden
+                    ? "announce:completed-action:user"
+                    : params.runId + ":user",
                 },
                 target: { ...transcriptTarget(params), sessionEntry: undefined },
                 beforeMessageWrite: ({ message }) => message,
               });
               await params.userTurnTranscriptRecorder.persistApproved();
+            }
+            if (continuation) {
+              fixture.setPhase("overload");
+              const closeFirstHost = await bindProductionHarnessHostCapabilitiesForTest(params);
+              cleanups.push(async () => closeFirstHost());
+              const overloaded = await runCodexAppServerAttempt(params, runOptions);
+              closeFirstHost();
+              expect(overloaded.terminal).toMatchObject({
+                kind: "failed",
+                error: { status: 503, code: "OVERLOADED" },
+              });
+              expect(overloaded.replayMetadata).toEqual({
+                hadPotentialSideEffects: false,
+                replaySafe: true,
+              });
+              expect(params.userTurnTranscriptRecorder?.getPersistedMessage?.()).toMatchObject({
+                __openclaw: { mirrorIdentity: expect.stringMatching(/:prompt$/) },
+              });
+              fixture.setPhase("action");
+              params.suppressNextUserMessagePersistence = true;
             }
             const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
             cleanups.push(async () => closeHost());
@@ -802,7 +837,7 @@ describe.skipIf(process.platform === "win32")(
               throw new Error("Native turn lost its settled-tool evidence");
             }
             expect(Object.isFrozen(context)).toBe(true);
-            if (hidden) {
+            if (hidden || continuation) {
               expect(context.data).toEqual(
                 expect.arrayContaining([
                   expect.objectContaining({
@@ -816,7 +851,7 @@ describe.skipIf(process.platform === "win32")(
                 ]),
               );
               expect(params.userTurnTranscriptRecorder?.getPersistedMessage?.()).toMatchObject({
-                display: false,
+                ...(hidden ? { display: false } : {}),
                 __openclaw: { mirrorIdentity: expect.any(String) },
               });
             }
@@ -841,7 +876,7 @@ describe.skipIf(process.platform === "win32")(
             const transcriptBefore = await readVisibleSessionTranscriptMessageEntries(
               transcriptTarget(params),
             );
-            if (hidden) {
+            if (hidden || continuation) {
               expect(
                 transcriptBefore.filter(
                   (entry) =>
@@ -850,8 +885,10 @@ describe.skipIf(process.platform === "win32")(
               ).toEqual([
                 expect.objectContaining({
                   message: expect.objectContaining({
-                    display: false,
-                    idempotencyKey: "announce:completed-action:user",
+                    ...(hidden ? { display: false } : {}),
+                    idempotencyKey: hidden
+                      ? "announce:completed-action:user"
+                      : "run-settled-action:user",
                     __openclaw: expect.objectContaining({
                       mirrorIdentity: expect.any(String),
                       runId: params.runId,
