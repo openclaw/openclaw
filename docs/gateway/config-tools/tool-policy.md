@@ -213,6 +213,12 @@ still match other tools and adds `view_image` when the pattern no longer covers
 inspection. Patterns that already cover both names, such as `*` or `*image*`,
 remain unchanged.
 
+Personal-library authoring uses its own `skill_library` tool, separate from
+`skill_workshop`. If a policy names `skill_workshop` in an allow, `alsoAllow`,
+or deny list, `openclaw doctor --fix` adds `skill_library` beside it so the
+policy keeps covering personal authoring. Patterns that already cover both
+names remain unchanged.
+
 ## `tools.gatewayPolicy`
 
 Deployment owners can require a concrete tool and action allowlist for model-directed work. OpenClaw applies this limit after ordinary tool and plugin grants, including owner-started conversations. Without this setting, existing tool policies behave as before.

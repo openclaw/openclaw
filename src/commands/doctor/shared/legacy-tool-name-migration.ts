@@ -6,6 +6,8 @@ import { isToolPolicyPath } from "./legacy-tool-policy-scopes.js";
 type LegacyToolNameMigration = {
   legacyName: string;
   canonicalName: string;
+  /** The legacy tool still exists: add the canonical name beside it instead of renaming. */
+  keepLegacy?: boolean;
 };
 
 export const TASK_SUGGESTION_TOOL_NAME_MIGRATION = {
@@ -18,6 +20,13 @@ export const IMAGE_INSPECTION_TOOL_NAME_MIGRATION = {
   canonicalName: "view_image",
 } as const satisfies LegacyToolNameMigration;
 
+/** Personal-library authoring left `skill_workshop` for its own `skill_library` tool. */
+export const SKILL_LIBRARY_TOOL_SPLIT_MIGRATION = {
+  legacyName: "skill_workshop",
+  canonicalName: "skill_library",
+  keepLegacy: true,
+} as const satisfies LegacyToolNameMigration;
+
 function inspectLegacyToolNameList(value: unknown, migration: LegacyToolNameMigration) {
   if (!Array.isArray(value)) {
     return null;
@@ -25,7 +34,9 @@ function inspectLegacyToolNameList(value: unknown, migration: LegacyToolNameMigr
   const entries = value.filter((entry): entry is string => typeof entry === "string");
   const legacyName = normalizeToolPolicyName(migration.legacyName);
   const patterns = compileGlobPatterns({ raw: entries, normalize: normalizeToolPolicyName });
-  const exactLegacy = entries.some((entry) => normalizeToolPolicyName(entry) === legacyName);
+  const exactLegacy =
+    migration.keepLegacy !== true &&
+    entries.some((entry) => normalizeToolPolicyName(entry) === legacyName);
   return {
     exactLegacy,
     appendCanonical:

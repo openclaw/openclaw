@@ -3,6 +3,7 @@ import {
   findLegacyToolNamePaths,
   IMAGE_INSPECTION_TOOL_NAME_MIGRATION,
   migrateLegacyToolNamePolicies,
+  SKILL_LIBRARY_TOOL_SPLIT_MIGRATION,
   TASK_SUGGESTION_TOOL_NAME_MIGRATION,
 } from "./legacy-tool-name-migration.js";
 import { TOOL_POLICY_ROOTS } from "./legacy-tool-policy-scopes.js";
@@ -15,6 +16,10 @@ const TOOL_NAME_MIGRATIONS = [
   {
     id: "tools.view-image-name",
     migration: IMAGE_INSPECTION_TOOL_NAME_MIGRATION,
+  },
+  {
+    id: "tools.skill-library-split",
+    migration: SKILL_LIBRARY_TOOL_SPLIT_MIGRATION,
   },
 ] as const;
 
