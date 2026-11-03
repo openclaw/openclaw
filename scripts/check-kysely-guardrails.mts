@@ -556,9 +556,15 @@ async function collectKyselyGuardrails() {
         path.relative(repoRoot, filePath).split(path.sep).join("/"),
       ),
   });
-  return [...kyselyViolations, ...sourceBoundaryViolations, ...additionalBoundaryViolations].map(
-    (violation) => ({ ...violation, path: violation.path.split(path.sep).join("/") }),
-  );
+  const violations = [
+    ...kyselyViolations,
+    ...sourceBoundaryViolations,
+    ...additionalBoundaryViolations,
+  ];
+  for (const violation of violations) {
+    violation.path = violation.path.split(path.sep).join("/");
+  }
+  return violations;
 }
 
 async function main() {
