@@ -125,9 +125,8 @@ it.each([
         expect(retained.size).toBeGreaterThan(0);
         for (const retainedPath of retained) {
           expect((await fs.lstat(retainedPath)).isDirectory()).toBe(true);
-          if (codec) {
-            expect(diagnostics).toContain(retainedPath);
-          }
+          // Workspace warnings name the parent that holds the retained directory.
+          expect(diagnostics).toContain(codec ? retainedPath : path.dirname(retainedPath));
         }
         if (codec) {
           if (failure) {
