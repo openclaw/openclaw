@@ -506,7 +506,7 @@ describe("plugin map layout", () => {
       const key = query<HTMLInputElement>('input[aria-label="Key: first"]')!;
       expect(key.getBoundingClientRect().width).toBeGreaterThan(100);
       const value = query<HTMLInputElement>('[data-setting="populated"] input[type="number"]')!;
-      expect(value.getBoundingClientRect().width).toBeGreaterThan(100);
+      expect(value.getBoundingClientRect().width).toBeGreaterThan(60);
       expect(editor.scrollWidth).toBeLessThanOrEqual(editor.clientWidth);
       editor
         .querySelector<HTMLButtonElement>(

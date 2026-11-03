@@ -408,7 +408,7 @@ function ScalarInput(props: {
       {!props.params.compact && (
         <button
           type="button"
-          class="btn btn--sm btn--icon"
+          class="cfg-stepper__button"
           aria-label={`${state().field.label}: ${direction < 0 ? "-" : "+"}${state().numericStep}`}
           disabled={props.params.disabled}
           onClick={() => step(direction)}
@@ -607,11 +607,11 @@ function ScalarInput(props: {
       }
       control={
         props.stepped ? (
-          <>
+          <span class="cfg-stepper">
             {stepButton(-1)}
             {control}
             {stepButton(1)}
-          </>
+          </span>
         ) : (
           presentedInput
         )
