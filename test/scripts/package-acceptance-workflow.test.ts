@@ -14951,7 +14951,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     const finalize = workflowJob(RELEASE_PUBLISH_WORKFLOW, "finalize_github_release");
     const windows = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish_windows");
     const dispatch = workflowStep(windows, "Dispatch detached Windows promotion");
-    const child = workflowJob(WINDOWS_NODE_RELEASE_WORKFLOW, "promote_signed_windows_installers");
+    const child = workflowJob(WINDOWS_NODE_RELEASE_WORKFLOW, "record_outcome");
 
     for (const input of ["windows_node_tag", "windows_node_installer_digests"]) {
       expect(workflow.on?.workflow_dispatch?.inputs?.[input]).toMatchObject({ required: false });
@@ -14984,6 +14984,13 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     { scenario: "omitted", selected: false, hasDigests: false, dispatchFailure: false, exit: 0 },
     { scenario: "selected", selected: true, hasDigests: true, dispatchFailure: false, exit: 0 },
     {
+      scenario: "missing approval",
+      selected: true,
+      hasDigests: true,
+      dispatchFailure: false,
+      exit: 1,
+    },
+    {
       scenario: "dispatch failure",
       selected: true,
       hasDigests: true,
@@ -15007,7 +15014,8 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
   ])(
     "dispatches optional Windows promotion without waiting: $scenario",
     ({ scenario, selected, hasDigests, dispatchFailure, exit }) => {
-      const shouldDispatch = selected && hasDigests && scenario !== "extended-stable";
+      const shouldDispatch =
+        selected && hasDigests && scenario !== "extended-stable" && scenario !== "missing approval";
       const source = readFileSync("scripts/lib/release-publish-children.sh", "utf8");
       const root = tempDirs.make("windows-detached-publish-");
       const dispatchPath = join(root, "dispatch");
@@ -15027,6 +15035,7 @@ dispatch_workflow_at_ref() {
   ${dispatchFailure ? "return 1" : "echo 456"}
 }
 wait_for_run() { echo unexpected-windows-wait >&2; return 99; }
+gh_read() { printf '%s\\n' "$APPROVAL_INVENTORY"; }
 ${shellFunctionSource(source, "is_stable_release")}
 ${shellFunctionSource(source, "dispatch_workflow")}
 ${shellFunctionSource(source, "promote_windows_release_assets")}
@@ -15043,6 +15052,28 @@ promote_windows_release_assets
             RELEASE_NPM_DIST_TAG: scenario === "extended-stable" ? "extended-stable" : "latest",
             CHILD_WORKFLOW_REF: workflowRef,
             PARENT_WORKFLOW_SHA: workflowSha,
+            PARENT_WORKFLOW_BRANCH: workflowRef,
+            PARENT_WORKFLOW_FULL_REF: "refs/tags/" + workflowRef,
+            RELEASE_PUBLISH_RUN_ID: "123",
+            RELEASE_PUBLISH_RUN_ATTEMPT: "1",
+            TARGET_SHA: "a".repeat(40),
+            APPROVAL_INVENTORY: JSON.stringify(
+              scenario === "missing approval"
+                ? {
+                    total_count: 0,
+                    artifacts: [],
+                  }
+                : {
+                    total_count: 1,
+                    artifacts: [
+                      {
+                        name: "windows-release-approval-123-1",
+                        expired: false,
+                        workflow_run: { head_sha: workflowSha },
+                      },
+                    ],
+                  },
+            ),
             WINDOWS_NODE_TAG: selected ? "v0.6.3" : "",
             WINDOWS_NODE_INSTALLER_DIGESTS: hasDigests ? digests : "",
           },
@@ -15056,6 +15087,18 @@ promote_windows_release_assets
           workflowRef,
           workflowSha,
           "windows-node-release.yml",
+          "-f",
+          "release_publish_run_id=123",
+          "-f",
+          "release_publish_run_attempt=1",
+          "-f",
+          "release_tooling_ref=" + workflowRef,
+          "-f",
+          "release_tooling_full_ref=refs/tags/" + workflowRef,
+          "-f",
+          "release_tooling_sha=" + workflowSha,
+          "-f",
+          "release_target_sha=" + "a".repeat(40),
           "-f",
           "tag=v2026.9.1",
           "-f",
@@ -15212,7 +15255,9 @@ promote_windows_release_assets
     const rejectUnexpectedTargetAssetsIndex = windowsWorkflow.indexOf(
       "Target OpenClaw release contains unexpected OpenClawCompanion assets before upload",
     );
-    const uploadAssetsIndex = windowsWorkflow.indexOf("gh release upload $env:RELEASE_TAG");
+    const uploadAssetsIndex = windowsWorkflow.indexOf(
+      "node scripts/windows-release-promotion.mjs publish",
+    );
 
     expect(classifyStableReleaseIndex).toBeGreaterThan(-1);
     expect(rejectPrereleaseSourceIndex).toBeGreaterThan(classifyStableReleaseIndex);
