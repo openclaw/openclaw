@@ -73,7 +73,8 @@ vi.mock("../../../talk/provider-registry.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../talk/provider-registry.js")>()),
   listRealtimeVoiceProviders: () => [],
 }));
-vi.mock("../../../talk/agent-consult-runtime.js", () => ({
+vi.mock("../../../talk/agent-consult-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../talk/agent-consult-runtime.js")>()),
   consultRealtimeVoiceAgentWithAnswerMedia: voiceMocks.consultRealtimeVoiceAgent,
 }));
 vi.mock("../../../plugins/runtime/index.js", async () => {
