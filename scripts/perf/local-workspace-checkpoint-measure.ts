@@ -65,11 +65,15 @@
  * revision before passing --fixture-source; never import a live operator workspace.
  * First creation has cold owner/template state, not an evicted OS page cache.
  * --fake-builder-removal-ms 36000 substitutes a process-backed Podman fixture:
- * creation, termination and removal have persistent engine state; only rm sleeps.
+ * creation, termination and removal have persistent engine state. The builder
+ * ignores SIGTERM: stop waits its default ten-second grace (or --time), while
+ * kill terminates immediately. Calls record argv and start/completion timestamps.
  * Use with --acceleration --sandbox-backend podman --serial-turns --fresh-only.
  * Installation takes the real source-only fallback. Registry/housekeeping and
  * filesystem preparation remain real; this does not qualify Podman or btrfs.
  * Run separate fresh processes in A/A then ABAB order, at least five per arm.
+ * Retirement is nested inside template.build; never add those durations together.
+ * --owner-switch checks that another session at the same commit reuses the template.
  * --crash-builder interrupts the fixture's outstanding rm after the first prepare,
  * then exits without finalizers. Reopen that same --output with --recover-builder
  * --fake-builder-removal-ms 36000 to prove startup cleanup from persisted state.

@@ -37,11 +37,7 @@ export function createSessionOwnerMenu(presented: () => boolean = () => true) {
         type: "human",
         id: profile.id,
         identity: { type: "profile", id: profile.id },
-        label:
-          profile.displayName?.trim() ||
-          profile.githubIdentity?.login ||
-          profile.emails[0] ||
-          profile.id,
+        label: profile.displayName?.trim() || profile.githubIdentity?.login || profile.id,
         avatarUrl: profileAvatarUrl(profile),
       }));
     const identityOwner = identities?.read();

@@ -107,7 +107,8 @@ suite.define(() => {
             exact: true,
           })
           .click();
-        const defaultAction = page.getByRole("button", {
+        await page.locator(".agents-page-menu__trigger").click();
+        const defaultAction = page.getByRole("menuitem", {
           name: selectionRequired ? "Set Default" : "Default",
           exact: true,
         });

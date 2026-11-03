@@ -122,6 +122,20 @@ describe("browser server-context existing-session profile", () => {
     expect(chromeMcp.ensureChromeMcpAvailable).not.toHaveBeenCalled();
   });
 
+  it("refuses strict-policy network tabs because Chrome MCP cannot fence redirect hops", async () => {
+    const { live } = setup((state) => {
+      state.resolved.ssrfPolicy = { dangerouslyAllowPrivateNetwork: false };
+    });
+
+    await expect(live.openTab("http://93.184.216.34/redirect")).rejects.toThrow(
+      /requires redirect-hop inspection.*existing-session/,
+    );
+    expect(chromeMcp.openChromeMcpTab).not.toHaveBeenCalled();
+
+    await expect(live.openTab("about:blank")).resolves.toMatchObject({ targetId: "8" });
+    expect(chromeMcp.openChromeMcpTab).toHaveBeenCalledTimes(1);
+  });
+
   it("reports endpoint cdpUrl for existing-session profiles", async () => {
     const { ctx } = setup((state) => {
       state.resolved.ssrfPolicy = undefined;

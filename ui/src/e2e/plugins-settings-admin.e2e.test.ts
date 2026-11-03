@@ -6,6 +6,7 @@ import { beforeEach, expect, it } from "vitest";
 import { loadPluginManifest, PLUGIN_MANIFEST_FILENAME } from "../../../src/plugins/manifest.ts";
 import { resolveBundledPluginPublicModulePath } from "../../../src/test-utils/bundled-plugin-public-surface.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createSettingsPageOptions } from "./config-composer-fixtures.test-support.ts";
@@ -40,6 +41,7 @@ beforeEach(() => {
 
 const pluginMethods = [
   "config.get",
+  "config.patch",
   "config.schema",
   "config.set",
   "plugins.inspect",
@@ -63,7 +65,7 @@ async function openWorkboard(page: Parameters<typeof waitForControlUiRoute>[0], 
   await search.waitFor();
   const inventoryGeometry = await page.evaluate(() => {
     const surface = document.querySelector<HTMLElement>(".settings-page.oc-app-surface");
-    const title = surface?.querySelector<HTMLElement>(".content-header--settings h1.page-title");
+    const title = document.querySelector<HTMLElement>(".content-header--settings h1.page-title");
     const tabs = surface?.querySelector<HTMLElement>(".plugins-settings-tabs.oc-segmented");
     const searchField = surface?.querySelector<HTMLElement>(".plugins-settings-search");
     const section = surface?.querySelector<HTMLElement>("#plugin-settings-panel .settings-group");
@@ -280,8 +282,8 @@ suite.define(() => {
       pluginId: "brave",
       name: "Brave",
       section: "webSearch",
-      label: "Brave Search API Key",
-      referenceLabel: "Brave Search Base URL",
+      label: "Brave search API key",
+      referenceLabel: "Brave search base URL",
       readOnly,
       pluginConfig: {
         webSearch: {
@@ -294,8 +296,8 @@ suite.define(() => {
       pluginId: "firecrawl",
       name: "Firecrawl",
       section: "webFetch",
-      label: "Firecrawl Fetch API Key",
-      referenceLabel: "Firecrawl Search API Key",
+      label: "Firecrawl fetch API key",
+      referenceLabel: "Firecrawl search API key",
       readOnly: false,
       pluginConfig: {
         webSearch: { apiKey: { source: "env", provider: "default", id: "FIRECRAWL_API_KEY" } },
@@ -417,14 +419,25 @@ suite.define(() => {
         if (readOnly) {
           expect(await reference.isDisabled()).toBe(true);
           expect(await gateway.getRequests("config.set")).toHaveLength(0);
+          expect(await gateway.getRequests("config.patch")).toHaveLength(0);
           return;
         }
         await apiKey.pressSequentially("synthetic-credential", { delay: 30 });
         expect(await apiKey.inputValue()).toBe("synthetic-credential");
         expect(await apiKey.getAttribute("type")).toBe("password");
-        await apiKey.press("Tab");
-        const save = await gateway.waitForRequest("config.set");
+        expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+        await gateway.deferNext("config.patch");
+        await page.getByRole("button", { name: new RegExp(`^Save: .*${label}$`, "u") }).click();
+        const save = await gateway.waitForRequest("config.patch");
+        expect(asRecord(save.params).baseHash).toBe(configMocks["config.get"].hash);
         expect(JSON.parse(String(asRecord(save.params).raw))).toEqual({
+          plugins: {
+            entries: {
+              [manifest.id]: { config: { [section]: { apiKey: "synthetic-credential" } } },
+            },
+          },
+        });
+        const savedConfig = {
           ...credentialConfig,
           plugins: {
             ...credentialConfig.plugins,
@@ -439,10 +452,24 @@ suite.define(() => {
               },
             },
           },
+        };
+        const hash = "credential-saved";
+        await gateway.setMethodResponse("config.get", {
+          ...configMocks["config.get"],
+          config: savedConfig,
+          raw: JSON.stringify(savedConfig),
+          hash,
+          appliedConfigHash: hash,
         });
-        await page.getByRole("button", { name: "Apply changes", exact: true }).waitFor();
+        await gateway.resolveDeferred("config.patch", { ok: true, hash, config: savedConfig });
+        await page.getByRole("status").getByText("Saved", { exact: true }).waitFor();
         await page.reload();
         await gateway.waitForRequest("config.get");
+        await expect
+          .poll(() =>
+            evaluateControlUiContext(page, (app) => app.runtimeConfig.state.configSnapshot?.config),
+          )
+          .toEqual(savedConfig);
         await expect.poll(() => apiKey.inputValue()).toBe("synthetic-credential");
         expect(await reference.inputValue()).toBe("");
         expect(await reference.getAttribute("readonly")).not.toBeNull();
@@ -764,7 +791,7 @@ suite.define(() => {
       await page.getByRole("button", { name: /(?:Remove|Uninstall) Workboard/iu }).click();
       await page.getByRole("dialog").waitFor();
       await page
-        .locator(".exec-approval-actions")
+        .locator("openclaw-modal-actions")
         .getByRole("button", { name: "Remove", exact: true })
         .click();
       await gateway.waitForRequest("plugins.uninstall", { after: uninstallCount });
@@ -836,6 +863,9 @@ suite.define(() => {
       await advancedTitles.getByText("Plugin system enabled", { exact: true }).waitFor();
       await advancedTitles.getByText("Allowed plugin IDs", { exact: true }).waitFor();
       await advancedTitles.getByText("Blocked plugin IDs", { exact: true }).waitFor();
+      for (const closed of await page.locator("details.cfg-object:not([open]) > summary").all()) {
+        await closed.click();
+      }
       await advancedTitles.getByText("Additional plugin load paths", { exact: true }).waitFor();
       await expect
         .poll(() =>

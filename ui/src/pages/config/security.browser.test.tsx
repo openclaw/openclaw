@@ -17,6 +17,7 @@ it.each([
       <Security
         security={{
           gatewayAuth: "token",
+          gatewayAuthReported: false,
           networkAccess: { kind: "loopback" },
           execPolicy: "allowlist",
           browserEnabled: true,

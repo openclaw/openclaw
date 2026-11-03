@@ -453,7 +453,7 @@ export function projectUserProfileDisplay(
   const avatarMime = normalizeUserProfileAvatarMime(profile.avatar_mime);
   return {
     id: profile.id,
-    displayName: profile.display_name,
+    displayName: profile.display_name?.trim() || profile.githubLogin || null,
     avatarRevision:
       profile.avatar_sha256 && avatarMime
         ? `${profile.avatar_sha256}-${avatarMime.slice("image/".length)}`
