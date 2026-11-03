@@ -2,10 +2,11 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { appContainerSpawnCheck, nativeStatusCheck } from "./doctor-native-status-check.js";
 import type { HealthCheckContext } from "./health-checks.js";
 
-const { fsStatus, procStatus, guard } = vi.hoisted(() => ({
+const { fsStatus, procStatus, guard, reaperSupported } = vi.hoisted(() => ({
   fsStatus: vi.fn(),
   procStatus: vi.fn(),
   guard: vi.fn(),
+  reaperSupported: vi.fn(),
 }));
 vi.mock("@openclaw/fs-safe", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@openclaw/fs-safe")>()),
@@ -14,6 +15,10 @@ vi.mock("@openclaw/fs-safe", async (importOriginal) => ({
 vi.mock("@openclaw/proc-safe", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@openclaw/proc-safe")>()),
   getProcSafeNativeStatus: procStatus,
+}));
+vi.mock("@openclaw/proc-safe/reaper", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/proc-safe/reaper")>()),
+  isSupported: reaperSupported,
 }));
 vi.mock("../infra/windows-appcontainer-spawn.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/windows-appcontainer-spawn.js")>()),
@@ -28,6 +33,7 @@ const context: HealthCheckContext = {
 beforeEach(() => {
   fsStatus.mockReset().mockResolvedValue({ mode: "auto", loaded: true, reason: "loaded" });
   procStatus.mockReset().mockReturnValue({ mode: "auto", loaded: true, reason: "loaded" });
+  reaperSupported.mockReset().mockReturnValue(true);
   guard.mockReset();
 });
 afterEach(() => vi.restoreAllMocks());
@@ -66,6 +72,47 @@ it.each([
     fixHint: linuxFailure
       ? expect.stringMatching(/^Library.*\/proc\/.*driver exits.*openclaw update repair/)
       : "Library guidance.",
+  });
+});
+it("surfaces the POSIX process-group fallback when Linux native child reaping is unavailable", async () => {
+  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+  vi.spyOn(process.report, "getReport").mockReturnValue({
+    header: { glibcVersionRuntime: "2.28" },
+  });
+  procStatus.mockReturnValue({
+    mode: "auto",
+    loaded: false,
+    reason: "load-failed",
+    guidance: "Library guidance.",
+  });
+  reaperSupported.mockReturnValue(false);
+  expect(await nativeStatusCheck.detect(context)).toContainEqual({
+    checkId: "core/doctor/native-status",
+    severity: "warning",
+    message:
+      "proc-safe: load-failed (glibc 2.28); service-child supervision falls back to POSIX process groups because native child reaping is unavailable",
+    fixHint: expect.stringContaining(
+      "Service children still spawn: supervision automatically falls back to POSIX process groups",
+    ),
+  });
+});
+it("keeps the standard message when Linux native child reaping is available", async () => {
+  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+  vi.spyOn(process.report, "getReport").mockReturnValue({
+    header: { glibcVersionRuntime: "2.28" },
+  });
+  procStatus.mockReturnValue({
+    mode: "auto",
+    loaded: false,
+    reason: "load-failed",
+    guidance: "Library guidance.",
+  });
+  reaperSupported.mockReturnValue(true);
+  expect(await nativeStatusCheck.detect(context)).toContainEqual({
+    checkId: "core/doctor/native-status",
+    severity: "warning",
+    message: "proc-safe: load-failed (glibc 2.28)",
+    fixHint: expect.stringMatching(/^Library.*\/proc\/.*driver exits.*openclaw update repair/),
   });
 });
 it("reports the named AppContainer failure and its remedy", async () => {
