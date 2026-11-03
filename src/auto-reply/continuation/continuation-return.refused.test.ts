@@ -1,0 +1,264 @@
+// A return whose recipient authority advanced is refused at every boundary that sees it: never
+// queued, woken, adopted or acknowledged, and reported with its reason. Real: the agent database
+// and its authority epochs, the producer, the durable session-delivery queue, restart recovery and
+// prompt adoption. Observed only: wake requests (process-external) and log lines.
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import * as accessor from "../../config/sessions/session-accessor.js";
+import type { SessionRecipientAuthority } from "../../config/sessions/session-recipient-authority-types.js";
+import {
+  addSessionMember,
+  removeSessionMember,
+} from "../../config/sessions/session-sharing-store.js";
+import { recoverPendingProducedSessionDeliveries } from "../../gateway/server-restart-sentinel.js";
+import { inspectDeliveryQueueReceipt } from "../../infra/delivery-queue-sqlite.js";
+import { captureDeliveryQueueStateContext } from "../../infra/delivery-queue-state-context.js";
+import { enqueueSessionDelivery } from "../../infra/session-delivery-queue-storage.js";
+import {
+  enqueueSystemEventRaw,
+  peekSystemEventEntries,
+  resetSystemEventsForTest,
+} from "../../infra/system-events.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  resolveFinalSystemEventAdoption,
+  settleManagedSystemEventsAfterTurnAdoption,
+} from "../reply/session-system-event-adoption.js";
+import { prepareFormattedSystemEvents } from "../reply/session-system-events.js";
+import { requestContinuationWake } from "./continuation-wake.js";
+import { captureContinuationQueueContext } from "./queue-context.js";
+import { enqueueContinuationReturnDeliveries } from "./targeting.js";
+
+// mock-isolation: Continuation wakes are recorded without running the session-event handoff.
+vi.mock("./continuation-wake.js", () => ({ requestContinuationWake: vi.fn() }));
+const logLines = vi.hoisted(() => [] as string[]);
+vi.mock("../../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => {
+      const logger = actual.createSubsystemLogger(subsystem);
+      const record =
+        (level: "info" | "warn") => (message: string, meta?: Record<string, unknown>) => {
+          logLines.push(message);
+          logger[level](message, meta);
+        };
+      return { ...logger, info: record("info"), warn: record("warn") };
+    },
+  };
+});
+
+const ownerA = { type: "human" as const, source: "unknown" as const, id: "owner-a" };
+const ownerB = { type: "human" as const, id: "owner-b" };
+type Scope = { agentId: string; env: NodeJS.ProcessEnv; sessionKey: string };
+
+const transitions: Record<string, (scope: Scope) => Promise<unknown>> = {
+  "delete and recreate": async (scope) => {
+    await accessor.deleteSessionEntryLifecycle({
+      agentId: scope.agentId,
+      archiveTranscript: false,
+      storePath: resolveOpenClawAgentSqlitePath(scope),
+      target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
+    });
+    await accessor.upsertSessionEntryCore(scope, { sessionId: "recreated", updatedAt: 3 });
+  },
+  "owner change": async (scope) =>
+    accessor.assignSessionOwner(scope, { owner: ownerB, assignedBy: ownerA, assignedAt: 3 }),
+  "visibility narrowing": (scope) =>
+    accessor.patchSessionEntryCore(scope, () => ({ visibility: "draft" })),
+  "member removal": (scope) => removeSessionMember(scope, "member-a"),
+  // Epochs never come back: reassigning the original owner keeps the old binding stale.
+  "reassignment back to the original owner": async (scope) => {
+    accessor.assignSessionOwner(scope, { owner: ownerB, assignedBy: ownerA, assignedAt: 3 });
+    accessor.assignSessionOwner(scope, { owner: ownerA, assignedBy: ownerB, assignedAt: 4 });
+  },
+};
+const stages = {
+  enqueue: "enqueue",
+  "enqueue, after its row is written": "enqueue",
+  "restart replay": "replay",
+  "prompt drain": "prompt-drain",
+  "final adoption": "prompt-drain",
+} as const;
+type Stage = keyof typeof stages;
+
+afterEach(() => {
+  logLines.length = 0;
+  vi.mocked(requestContinuationWake).mockClear();
+  resetSystemEventsForTest();
+  closeOpenClawAgentDatabasesForTest();
+  vi.unstubAllEnvs();
+});
+
+async function withRecipient(
+  run: (scope: Scope, authority: SessionRecipientAuthority, workspaceDir: string) => Promise<void>,
+) {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", state.env.OPENCLAW_STATE_DIR);
+    setRuntimeConfigSnapshot({});
+    await state.writeConfig({});
+    await captureRuntimeConfigAsyncReader()();
+    const scope = { agentId: "main", env: state.env, sessionKey: "agent:main:recipient" };
+    await accessor.upsertSessionEntryCore(scope, {
+      sessionId: "recipient",
+      updatedAt: 1,
+      createdActor: ownerA,
+      visibility: "shared",
+    });
+    await addSessionMember(scope, { identityId: "member-a", addedBy: ownerA.id, addedAt: 2 });
+    await run(scope, await accessor.captureSessionRecipientAuthority(scope), state.workspaceDir);
+  });
+}
+
+/** The real producer; `afterWrite` runs once the durable row exists, before the event is queued. */
+async function produce(
+  scope: Scope,
+  authority: SessionRecipientAuthority,
+  afterWrite?: () => unknown,
+) {
+  const written: string[] = [];
+  const outcome = await enqueueContinuationReturnDeliveries(
+    {
+      targetSessionKeys: [scope.sessionKey],
+      text: "delegate result",
+      idempotencyKeyBase: "continuation-return:refused",
+      recipientAuthorities: new Map([[scope.sessionKey, authority]]),
+      wakeRecipients: true,
+      ownerAgentId: "main",
+      stateDir: scope.env.OPENCLAW_STATE_DIR,
+    },
+    {
+      enqueueSessionDelivery: async (...args) => {
+        written.push(await enqueueSessionDelivery(...args));
+        await afterWrite?.();
+        return written.at(-1)!;
+      },
+      enqueueSystemEvent: enqueueSystemEventRaw,
+      requestContinuationWake,
+    },
+  );
+  return { outcome, id: written[0] };
+}
+
+/** A restart: the in-memory event and wake are gone, then recovery replays the durable row. */
+async function restartAndReplay(scope: Scope, beforeReplay?: () => unknown) {
+  resetSystemEventsForTest();
+  vi.mocked(requestContinuationWake).mockClear();
+  await beforeReplay?.();
+  const recovery = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  await recoverPendingProducedSessionDeliveries({
+    deps: {},
+    queueContext: captureContinuationQueueContext(scope.env.OPENCLAW_STATE_DIR),
+    log: recovery,
+  });
+  return recovery;
+}
+
+/** The recipient's next turn adopts and acknowledges what it may; returns its prompt. */
+async function nextTurn(scope: Scope, beforeAdoption?: () => unknown) {
+  const prepared = await prepareFormattedSystemEvents({
+    cfg: {},
+    agentId: scope.agentId,
+    sessionKey: scope.sessionKey,
+    isMainSession: false,
+    isNewSession: false,
+  });
+  await beforeAdoption?.();
+  let adoption = await resolveFinalSystemEventAdoption({ prepared: [prepared] });
+  while (adoption.kind === "settle-stale") {
+    await adoption.settle();
+    adoption = await resolveFinalSystemEventAdoption({ prepared: [prepared] });
+  }
+  const ackIds = [...adoption.managedDeliveries.keys()];
+  await settleManagedSystemEventsAfterTurnAdoption({
+    deliveries: adoption.managedDeliveries.values(),
+    persistedMessage: { __openclaw: { sessionDeliveryAckIds: ackIds } },
+  });
+  return adoption.blocks.map((block) => block.text).join("\n");
+}
+
+async function receiptStatus(scope: Scope, id: string) {
+  const context = captureDeliveryQueueStateContext(scope.env.OPENCLAW_STATE_DIR);
+  return (await inspectDeliveryQueueReceipt("session", id, false, context)).status;
+}
+
+const refusalLines = () =>
+  logLines.filter((line) => line.startsWith("[continuation:return-refused]"));
+
+describe("a continuation return whose recipient authority advanced", () => {
+  const cases = Object.keys(transitions).flatMap((transition) =>
+    (Object.keys(stages) as Stage[]).map((stage) => [transition, stage] as const),
+  );
+  it.each(cases)("is refused after %s, at %s", async (transition, stage) => {
+    await withRecipient(async (scope, authority) => {
+      const advance = () => transitions[transition]!(scope);
+      let id: string | undefined;
+      if (stage === "enqueue" || stage === "enqueue, after its row is written") {
+        const beforeWrite = stage === "enqueue";
+        if (beforeWrite) {
+          await advance();
+        }
+        const produced = await produce(scope, authority, beforeWrite ? undefined : advance);
+        id = produced.id;
+        expect(produced.outcome).toMatchObject({
+          deliveryIds: [],
+          deliveredSessionKeys: [],
+          refusedSessionKeys: [scope.sessionKey],
+        });
+      } else {
+        id = (await produce(scope, authority)).id;
+        vi.mocked(requestContinuationWake).mockClear();
+        if (stage === "restart replay") {
+          const recovery = await restartAndReplay(scope, advance);
+          expect(recovery.info).not.toHaveBeenCalledWith(`Recovered session delivery ${id}`);
+        } else if (stage === "prompt drain") {
+          await advance();
+        }
+      }
+
+      // No final effect: no wake, no queued event, no adoption and no acknowledgement.
+      expect(await nextTurn(scope, stage === "final adoption" ? advance : undefined)).not.toContain(
+        "delegate result",
+      );
+      expect(requestContinuationWake).not.toHaveBeenCalled();
+      expect(peekSystemEventEntries(scope.sessionKey)).toEqual([]);
+      if (id) {
+        expect([undefined, "failed"]).toContain(await receiptStatus(scope, id));
+      }
+      expect(refusalLines()).toEqual([
+        `[continuation:return-refused] stage=${stages[stage]} reason=recipient-authority-changed session=${scope.sessionKey}${id ? ` deliveryId=${id}` : ""}`,
+      ]);
+    });
+  });
+
+  it.each(["no authority change", "a session reset"])(
+    "is replayed and adopted as before after %s",
+    async (control) => {
+      await withRecipient(async (scope, authority, workspaceDir) => {
+        const { id } = await produce(scope, authority);
+        // A reset replaces the head, not the recipient: it never advances the epoch.
+        await restartAndReplay(scope, () =>
+          control === "no authority change"
+            ? undefined
+            : accessor.resetSessionEntryLifecycle({
+                agentId: scope.agentId,
+                storePath: resolveOpenClawAgentSqlitePath(scope),
+                target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
+                resetBoundary: { context: "clear", reason: "reset", cwd: workspaceDir },
+                buildNextEntry: () => ({ sessionId: "after-reset", updatedAt: 3 }),
+              }),
+        );
+
+        expect(requestContinuationWake).toHaveBeenCalledWith(
+          expect.objectContaining({ sessionKey: scope.sessionKey, deliveryIds: [id] }),
+        );
+        expect(await nextTurn(scope)).toContain("delegate result");
+        expect(await receiptStatus(scope, id!)).toBe("completed");
+        expect(refusalLines()).toEqual([]);
+      });
+    },
+  );
+});

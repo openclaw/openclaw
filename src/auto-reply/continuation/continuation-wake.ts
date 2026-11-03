@@ -214,6 +214,10 @@ async function handOffContinuationWake(wake: PendingWake): Promise<void> {
                 drainedContinuationCount: occurrences.filter((event) =>
                   event.text.startsWith("[continuation:"),
                 ).length,
+                // Refused in this same authority decision; each is also logged with its row.
+                ...(stale.length > 0
+                  ? { refusedCount: stale.length, refusalReason: "recipient-authority-changed" }
+                  : {}),
                 traceparent: occurrences.find((event) => event.traceparent)?.traceparent,
                 log: (message) => log.warn(message),
               });
@@ -230,7 +234,7 @@ async function handOffContinuationWake(wake: PendingWake): Promise<void> {
     for (const event of stale) {
       try {
         // The recipient no longer owns the session: retire the row, never deliver it.
-        await settleStaleSystemEventAuthority({ event, sessionKey: queueKey });
+        await settleStaleSystemEventAuthority({ event, sessionKey: queueKey, stage: "wake" });
       } catch (error) {
         // An unsettled stale row replays later; the current claims below must settle now.
         settlementFailure ??= { error };

@@ -174,6 +174,17 @@ export type ContinuationSpanAttrs = {
    * Always `≤ queue.drained_count`. Integer ≥ 0.
    */
   readonly "queue.drained_continuation_count"?: number;
+  /**
+   * Only set on `continuation.queue.drain` spans that refused a continuation return because its
+   * recipient authority advanced. Refused entries are not counted as drained. Integer > 0.
+   */
+  readonly "queue.refused_count"?: number;
+  /**
+   * Stable reason code of the refusals counted on this span, for example
+   * `recipient-authority-changed`. Set only alongside `queue.refused_count` or
+   * `fanout.refused_count`.
+   */
+  readonly "refusal.reason"?: string;
   /** Only set on aggregate fan-out return spans. */
   readonly "fanout.mode"?: string;
   /** Only set on aggregate fan-out return spans. */
@@ -182,8 +193,13 @@ export type ContinuationSpanAttrs = {
   readonly "fanout.delivered_count"?: number;
   /** Only set on aggregate fan-out return spans. Sha256-12 hashes of recipient session keys; raw keys are not exported to telemetry. */
   readonly "fanout.recipient.session_key_hashes"?: readonly string[];
-  /** Only set on aggregate fan-out return spans. */
+  /**
+   * Only set on aggregate fan-out return spans. One {@link ContinuationFanoutRecipientOutcome}
+   * per recipient, in recipient order.
+   */
   readonly "fanout.recipient.outcomes"?: readonly string[];
+  /** Only set on aggregate fan-out return spans that refused a recipient. Integer > 0. */
+  readonly "fanout.refused_count"?: number;
   /**
    * Only set on `continuation.compaction.released` spans.
    * Aggregate count of staged post-compaction delegates a single compaction
@@ -923,6 +939,10 @@ export function emitContinuationWorkFireSpan(args: {
 export function emitContinuationQueueDrainSpan(args: {
   drainedCount: number;
   drainedContinuationCount: number;
+  /** Returns this drain refused because their recipient authority advanced. */
+  refusedCount?: number;
+  /** Stable reason code of those refusals. */
+  refusalReason?: string;
   traceparent?: string | undefined;
   log?: (message: string) => void;
 }): void {
@@ -936,9 +956,12 @@ export function emitContinuationQueueDrainSpan(args: {
       drainedCount,
       Math.max(0, Math.floor(args.drainedContinuationCount)),
     );
+    const refusedCount = Math.max(0, Math.floor(args.refusedCount ?? 0));
     const attrs: ContinuationSpanAttrs = {
       "queue.drained_count": drainedCount,
       "queue.drained_continuation_count": drainedContinuationCount,
+      ...(refusedCount > 0 ? { "queue.refused_count": refusedCount } : {}),
+      ...(refusedCount > 0 && args.refusalReason ? { "refusal.reason": args.refusalReason } : {}),
     };
     const span = getContinuationTracer().startSpan("continuation.queue.drain", {
       attributes: attrs,
@@ -951,17 +974,26 @@ export function emitContinuationQueueDrainSpan(args: {
   }
 }
 
+/** `queued` covers a return held for retry or for a pending reset: written, not yet delivered. */
+export type ContinuationFanoutRecipientOutcome = "delivered" | "queued" | "refused";
+
 export function emitContinuationFanoutSpan(args: {
   fanoutMode?: string | undefined;
   targetSessionKeys: readonly string[];
-  deliveredCount: number;
+  /** One outcome per target, in target order. */
+  recipientOutcomes: readonly ContinuationFanoutRecipientOutcome[];
+  /** Stable reason code of the `refused` outcomes. */
+  refusalReason?: string;
   chainStepRemaining?: number | undefined;
   traceparent?: string | undefined;
   log?: (message: string) => void;
 }): void {
   try {
     const recipientCount = Math.max(0, Math.floor(args.targetSessionKeys.length));
-    const deliveredCount = Math.min(recipientCount, Math.max(0, Math.floor(args.deliveredCount)));
+    const deliveredCount = args.recipientOutcomes.filter(
+      (outcome) => outcome === "delivered",
+    ).length;
+    const refusedCount = args.recipientOutcomes.filter((outcome) => outcome === "refused").length;
     // Session keys can include channel/account/conversation identifiers, and
     // diagnostics-otel may export spans outside the local process. Hash before
     // emitting so downstream collectors get a stable correlation handle without
@@ -973,9 +1005,9 @@ export function emitContinuationFanoutSpan(args: {
       "fanout.recipient_count": recipientCount,
       "fanout.delivered_count": deliveredCount,
       "fanout.recipient.session_key_hashes": recipientHashes,
-      "fanout.recipient.outcomes": args.targetSessionKeys.map((_, index) =>
-        index < deliveredCount ? "delivered" : "queued",
-      ),
+      "fanout.recipient.outcomes": args.recipientOutcomes,
+      ...(refusedCount > 0 ? { "fanout.refused_count": refusedCount } : {}),
+      ...(refusedCount > 0 && args.refusalReason ? { "refusal.reason": args.refusalReason } : {}),
       ...(args.fanoutMode !== undefined ? { "fanout.mode": args.fanoutMode } : {}),
       ...(args.chainStepRemaining !== undefined
         ? { "chain.step.remaining": Math.max(0, args.chainStepRemaining) }

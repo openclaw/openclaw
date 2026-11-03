@@ -150,7 +150,7 @@ export async function prepareFormattedSystemEvents(params: {
     sessionKey: params.sessionKey,
     storePath,
   };
-  // Stale-authority entries are settled (acked + removed) rather than formatted.
+  // Stale-authority entries are refused (retired unacked + removed) rather than formatted.
   // Authority-bound entries always carry a queue identity (id or ack id), which
   // survives the clone consumption hands back.
   const settledStaleAuthorityKeys = new Set<string>();
@@ -198,6 +198,7 @@ export async function prepareFormattedSystemEvents(params: {
       await settleStaleSystemEventAuthority({
         event,
         sessionKey: queueKey,
+        stage: "prompt-drain",
       });
       const key = event.id ?? event.sessionDeliveryAckId;
       if (key) {
@@ -319,6 +320,12 @@ export async function prepareFormattedSystemEvents(params: {
   emitContinuationQueueDrainSpan({
     drainedCount: promptEvents.length,
     drainedContinuationCount,
+    ...(settledStaleAuthorityKeys.size > 0
+      ? {
+          refusedCount: settledStaleAuthorityKeys.size,
+          refusalReason: "recipient-authority-changed",
+        }
+      : {}),
     ...(traceparent ? { traceparent } : {}),
     log: (message) => defaultRuntime.log(message),
   });

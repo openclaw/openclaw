@@ -1,11 +1,11 @@
 import { withCurrentSessionRecipientAuthority } from "../../config/sessions/session-recipient-authority-current.js";
 import type { SessionRecipientAuthority } from "../../config/sessions/session-recipient-authority-types.js";
-import { emitContinuationFanoutSpan } from "../../infra/continuation-tracer.js";
-import type { scheduleSessionDelivery } from "../../infra/session-delivery-queue-runtime.js";
 import {
-  ackSessionDelivery,
-  enqueueSessionDelivery,
-} from "../../infra/session-delivery-queue-storage.js";
+  type ContinuationFanoutRecipientOutcome,
+  emitContinuationFanoutSpan,
+} from "../../infra/continuation-tracer.js";
+import type { scheduleSessionDelivery } from "../../infra/session-delivery-queue-runtime.js";
+import { enqueueSessionDelivery } from "../../infra/session-delivery-queue-storage.js";
 import type {
   ContinuationReturnWake,
   QueuedSessionDeliveryPayload,
@@ -20,6 +20,10 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { requestContinuationWake } from "./continuation-wake.js";
 import { captureContinuationQueueContext } from "./queue-context.js";
+import {
+  refuseContinuationReturnDelivery,
+  reportRefusedContinuationReturn,
+} from "./return-refusal.js";
 import { withContinuationOwner } from "./system-event-ownership.js";
 import {
   CONTINUATION_DELEGATE_FANOUT_MODES,
@@ -71,8 +75,8 @@ export function resolveContinuationReturnTargetSessionKeys(
 
 type ContinuationReturnDeliveryDeps = {
   enqueueSessionDelivery: typeof enqueueSessionDelivery;
-  /** Test seam proving queued durable delivery is not acknowledged before prompt adoption. */
-  ackSessionDelivery?: typeof import("../../infra/session-delivery-queue-storage.js").ackSessionDelivery;
+  /** Retires a written row whose recipient authority advanced; enqueue never acks a row. */
+  refuseSessionDelivery?: typeof refuseContinuationReturnDelivery;
   enqueueSystemEvent: typeof enqueueSystemEvent;
   requestContinuationWake: typeof requestContinuationWake;
   /** Decides synchronously under the recipient's authority read (writer admission). */
@@ -212,6 +216,8 @@ export async function enqueueContinuationReturnDeliveries(
   heldSessionKeys: string[];
   /** Recipients whose head a pending reset is replacing; the reset's resolution releases them. */
   resetHeldSessionKeys: string[];
+  /** Recipients refused because their recipient authority advanced; nothing was delivered. */
+  refusedSessionKeys: string[];
 }> {
   if (!params.ownerAgentId) {
     throw new Error("Continuation return source owner is unavailable.");
@@ -227,6 +233,8 @@ export async function enqueueContinuationReturnDeliveries(
   const deliveredSessionKeys: string[] = [];
   const heldSessionKeys: string[] = [];
   const resetHeldSessionKeys: string[] = [];
+  const refusedSessionKeys: string[] = [];
+  const recipientOutcomes: ContinuationFanoutRecipientOutcome[] = [];
   let delivered = 0;
   const returnWake: ContinuationReturnWake =
     params.returnWake ??
@@ -249,7 +257,24 @@ export async function enqueueContinuationReturnDeliveries(
             decide,
           )
         : Promise.resolve(decide(true));
+    const refuseStaleRecipient = async (deliveryId?: string) => {
+      if (deliveryId) {
+        await (deps.refuseSessionDelivery ?? refuseContinuationReturnDelivery)(
+          deliveryId,
+          captureContinuationQueueContext(params.stateDir),
+        );
+      }
+      refusedSessionKeys.push(sessionKey);
+      recipientOutcomes.push("refused");
+      reportRefusedContinuationReturn({
+        stage: "enqueue",
+        reason: "recipient-authority-changed",
+        sessionKey,
+        ...(deliveryId ? { deliveryId } : {}),
+      });
+    };
     if (!(await withAuthority((current) => current))) {
+      await refuseStaleRecipient();
       continue;
     }
     const commonPayload = {
@@ -311,15 +336,13 @@ export async function enqueueContinuationReturnDeliveries(
     });
     if (enqueued.kind === "stale") {
       // Stale authority can never adopt this row; retire it now rather than leave it until replay.
-      await (deps.ackSessionDelivery ?? ackSessionDelivery)(
-        deliveryId,
-        captureContinuationQueueContext(params.stateDir),
-      );
+      await refuseStaleRecipient(deliveryId);
       continue;
     }
     if (enqueued.kind === "reset-held") {
       deliveryIds.push(deliveryId);
       resetHeldSessionKeys.push(sessionKey);
+      recipientOutcomes.push("queued");
       log.info(
         `[continuation:return-held] session reset pending; deliveryId=${deliveryId} session=${sessionKey} waits for the reset to resolve`,
       );
@@ -338,10 +361,7 @@ export async function enqueueContinuationReturnDeliveries(
       return current;
     });
     if (!stillCurrent) {
-      await (deps.ackSessionDelivery ?? ackSessionDelivery)(
-        deliveryId,
-        captureContinuationQueueContext(params.stateDir),
-      );
+      await refuseStaleRecipient(deliveryId);
       continue;
     }
     deliveryIds.push(deliveryId);
@@ -350,6 +370,7 @@ export async function enqueueContinuationReturnDeliveries(
       // return. The scheduler retries the row (deferred while the queue stays
       // full) and the replay that admits it wakes the recipient.
       heldSessionKeys.push(sessionKey);
+      recipientOutcomes.push("queued");
       const armed = await (deps.scheduleSessionDelivery ?? scheduleRefusedReturnDelivery)(
         deliveryId,
         captureContinuationQueueContext(params.stateDir),
@@ -378,6 +399,7 @@ export async function enqueueContinuationReturnDeliveries(
     // to replay this file.
     delivered += 1;
     deliveredSessionKeys.push(sessionKey);
+    recipientOutcomes.push("delivered");
   }
 
   if (
@@ -386,7 +408,8 @@ export async function enqueueContinuationReturnDeliveries(
   ) {
     emitContinuationFanoutSpan({
       targetSessionKeys,
-      deliveredCount: delivered,
+      recipientOutcomes,
+      ...(refusedSessionKeys.length > 0 ? { refusalReason: "recipient-authority-changed" } : {}),
       ...(params.fanoutMode ? { fanoutMode: params.fanoutMode } : {}),
       ...(params.chainStepRemaining !== undefined
         ? { chainStepRemaining: params.chainStepRemaining }
@@ -402,5 +425,6 @@ export async function enqueueContinuationReturnDeliveries(
     deliveredSessionKeys,
     heldSessionKeys,
     resetHeldSessionKeys,
+    refusedSessionKeys,
   };
 }

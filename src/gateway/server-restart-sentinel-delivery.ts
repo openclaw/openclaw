@@ -3,6 +3,7 @@ import {
   findContinuationResetHold,
 } from "../agents/subagents/registry/subagent-continuation-reset-retention.js";
 import { requestContinuationWake } from "../auto-reply/continuation/continuation-wake.js";
+import { reportRefusedContinuationReturn } from "../auto-reply/continuation/return-refusal.js";
 import { deliverQueuedPostCompactionDelegate } from "../auto-reply/reply/post-compaction-delegate-delivery.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -34,9 +35,25 @@ const log = createSubsystemLogger("gateway/restart-sentinel");
  *   already rides a queued copy).
  * - `refused`: the queue is full and nothing was queued. The caller must keep
  *   the durable row pending for a retry and must not report success.
- * - `stale-authority`: recipient authority changed; the event was withdrawn.
+ * - `stale-authority`: recipient authority changed; nothing was queued.
  */
 type RestartSentinelWakeOutcome = "queued" | "refused" | "stale-authority";
+
+/**
+ * A replayed return whose recipient authority advanced is refused: never queued or woken, and its
+ * row settles as failed rather than as recovered, so replay never reports it delivered.
+ */
+function refuseStaleAuthorityReplay(params: { sessionKey: string; queueId: string }): never {
+  reportRefusedContinuationReturn({
+    stage: "replay",
+    reason: "recipient-authority-changed",
+    sessionKey: params.sessionKey,
+    deliveryId: params.queueId,
+  });
+  throw new SessionDeliveryDeadLetteredError(
+    "continuation return refused: recipient-authority-changed",
+  );
+}
 
 /**
  * The row stays pending and the delivery scheduler retries it without charging
@@ -235,11 +252,7 @@ export async function deliverQueuedSessionDeliveryCore(params: {
     recipientAuthority &&
     !(await isSessionRecipientAuthorityCurrentInWorker(authorityScope, recipientAuthority))
   ) {
-    log.warn("session event delivery skipped: recipient authority changed", {
-      sessionKey: canonicalKey,
-      queueId: params.entry.id,
-    });
-    return;
+    refuseStaleAuthorityReplay({ sessionKey: canonicalKey, queueId: params.entry.id });
   }
   if (!entry && isSubagentSessionKey(canonicalKey)) {
     // A missing subagent session cannot adopt the row: the wake's handoff refuses an absent
@@ -282,11 +295,7 @@ export async function deliverQueuedSessionDeliveryCore(params: {
     });
   }
   if (replayed === "stale-authority") {
-    log.warn("session event delivery wake skipped: recipient authority changed", {
-      sessionKey: canonicalKey,
-      queueId: params.entry.id,
-    });
-    return;
+    refuseStaleAuthorityReplay({ sessionKey: canonicalKey, queueId: params.entry.id });
   }
   // The in-memory queue is not durable, so completing the row here would
   // drop the notice if the process

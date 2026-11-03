@@ -187,14 +187,16 @@ export async function routeSubagentContinuationReturn(params: {
           })
         : undefined;
     // Report custody as it is: a return the full queue refused is held by its
-    // durable row for retry, not delivered.
-    const deliveredSessionKeys = outcome?.deliveredSessionKeys ?? [];
-    const heldSessionKeys = outcome?.heldSessionKeys ?? [];
-    const resetHeldSessionKeys = outcome?.resetHeldSessionKeys ?? [];
-    if (
-      deliveredSessionKeys.length > 0 ||
-      (heldSessionKeys.length === 0 && resetHeldSessionKeys.length === 0)
-    ) {
+    // durable row for retry, not delivered, and a recipient refused for stale
+    // authority was reported with its reason by the enqueue.
+    if (!outcome) {
+      continuationLog.info(
+        `[continuation:targeted-return] No current recipient for the return from ${params.childSessionKey}`,
+      );
+      return { handled: true };
+    }
+    const { deliveredSessionKeys, heldSessionKeys, resetHeldSessionKeys } = outcome;
+    if (deliveredSessionKeys.length > 0) {
       defaultRuntime.log(
         `[continuation:targeted-return] Delivered to ${deliveredSessionKeys.join(",")} from ${params.childSessionKey}`,
       );

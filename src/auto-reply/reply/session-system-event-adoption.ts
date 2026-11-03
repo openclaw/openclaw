@@ -3,7 +3,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { withCurrentSessionRecipientAuthority } from "../../config/sessions/session-recipient-authority-current.js";
 import type { SessionRecipientAuthority } from "../../config/sessions/session-recipient-authority-types.js";
 import { toErrorObject } from "../../infra/errors.js";
-import { ackSessionDelivery } from "../../infra/session-delivery-queue-storage.js";
 import {
   releaseSystemEventDeliveryAdoption,
   type DeliveryAdoptionTurnHold,
@@ -11,6 +10,11 @@ import {
 import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
 import { consumeSelectedSystemEventEntries, type SystemEvent } from "../../infra/system-events.js";
 import { captureContinuationQueueContext } from "../continuation/queue-context.js";
+import {
+  type ContinuationReturnRefusalStage,
+  refuseContinuationReturnDelivery,
+  reportRefusedContinuationReturn,
+} from "../continuation/return-refusal.js";
 
 type PreparedAuthorityScope = { agentId: string; sessionKey: string; storePath: string };
 type PreparedAuthorityBinding = {
@@ -110,15 +114,18 @@ export async function settleManagedSystemEventsAfterTurnAdoption(params: {
   await acknowledgePersistedManagedSystemEvents(params);
 }
 
+/** Refuses an event whose recipient authority advanced: its row is retired unadopted, never acked. */
 export async function settleStaleSystemEventAuthority(params: {
   event: SystemEvent;
   sessionKey: string;
   /** Owner that selected this event; omitted when sessionKey is already a queue key. */
   ownerAgentId?: string;
+  stage: Extract<ContinuationReturnRefusalStage, "wake" | "prompt-drain">;
 }): Promise<void> {
-  if (params.event.sessionDeliveryAckId) {
-    await ackSessionDelivery(
-      params.event.sessionDeliveryAckId,
+  const deliveryId = params.event.sessionDeliveryAckId;
+  if (deliveryId) {
+    await refuseContinuationReturnDelivery(
+      deliveryId,
       captureContinuationQueueContext(params.event.sessionDeliveryAckStateDir),
     );
     // Retired, not adopted: no replay may queue it again in this process.
@@ -131,6 +138,12 @@ export async function settleStaleSystemEventAuthority(params: {
     resolveSystemEventQueueKey(params.sessionKey, params.ownerAgentId),
     [params.event],
   );
+  reportRefusedContinuationReturn({
+    stage: params.stage,
+    reason: "recipient-authority-changed",
+    sessionKey: params.sessionKey,
+    ...(deliveryId ? { deliveryId } : {}),
+  });
 }
 
 export function readPreparedSystemEventAuthorityKey(event: SystemEvent): string | undefined {
@@ -190,6 +203,7 @@ function decideFinalSystemEventAdoption(
             event: entry.binding.event,
             sessionKey: entry.owner.scope.sessionKey,
             ownerAgentId: entry.owner.scope.agentId,
+            stage: "prompt-drain",
           });
           entry.owner.pending.delete(entry.authorityKey);
         }
