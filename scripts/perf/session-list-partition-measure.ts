@@ -72,7 +72,6 @@ for (const id of ["ada", "bob"]) {
     profileId: id,
     label: id,
     avatarUrl: "/synthetic/avatar",
-    hasUploadedAvatar: false,
   });
 }
 const cases: Array<[string, SessionsListParams]> = [
