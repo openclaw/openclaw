@@ -58,6 +58,7 @@ import {
   type ClientVoiceSessionWriter,
 } from "./client-voice-session-write.js";
 import type { VoiceSessionMutation } from "./client-voice-session-write.kernel.js";
+import { speechActivityPatch } from "./voice-speech-activity.js";
 import {
   buildPersistedVoiceMessage,
   VoiceTranscriptOperationRegistry,
@@ -335,6 +336,7 @@ function appendVoiceTranscript(
             };
             const failureKey = sha256Hex(normalized.entryId);
             const timestamp = normalized.timestamp ?? Date.now();
+            const activityPatch = await speechActivityPatch(normalized, sessionTarget);
             const reservation = {
               agentId: normalized.agentId,
               sessionKey: normalized.sessionKey,
@@ -379,8 +381,7 @@ function appendVoiceTranscript(
                     selectedLifecycleRevision: entry.lifecycleRevision,
                     sessionFile: normalized.sessionTarget.sessionKey,
                     assertCurrent: assertFresh,
-                    sessionLifecyclePatch:
-                      normalized.role === "user" ? { lastInteractionAt: Date.now() } : undefined,
+                    sessionLifecyclePatch: activityPatch,
                     messages: [messageOptions],
                     voiceTranscript: {
                       agentId: normalized.agentId,
