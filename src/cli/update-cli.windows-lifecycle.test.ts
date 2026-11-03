@@ -731,7 +731,6 @@ describe("update-cli", () => {
       } else {
         serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
       }
-
       const updatePromise = updateCommand({
         yes: true,
         restart: phase === "service pre-stop inspection",
@@ -760,7 +759,6 @@ describe("update-cli", () => {
         expect(resumeScheduledTaskAutoStartAfterUpdate).not.toHaveBeenCalled();
         expect(gitMutation).not.toHaveBeenCalled();
         gate.resolve();
-
         await updatePromise;
         await expect(waitForCliSignalExit()).resolves.toBe(130);
         expect(resumeScheduledTaskAutoStartAfterUpdate).toHaveBeenCalledOnce();
@@ -776,7 +774,9 @@ describe("update-cli", () => {
         expect(processExitSpy).not.toHaveBeenCalled();
       } finally {
         gate.resolve();
-        await updatePromise.finally(waitForCliSignalExit);
+        await updatePromise.finally(async () => {
+          await waitForCliSignalExit();
+        });
       }
     },
   );
