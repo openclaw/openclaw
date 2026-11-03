@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { showToast } from "../toast.ts";
 import { configSecretFields } from "./config-secret-fields.ts";
 
@@ -124,6 +125,30 @@ describe("configSecretFields", () => {
     await expect(fields.save(path, "abc")).resolves.toEqual({ ok: true });
     expect(context.runtimeConfig.refresh).toHaveBeenCalledTimes(1);
     expect(runExternalMutation).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry a secret on another Gateway after a held conflict refresh", async () => {
+    const { context, fields, gateway, request, runExternalMutation } = fixture();
+    const refreshing = createDeferred();
+    const resume = createDeferred();
+    fields.hold(path, "secret-for-a", "Token");
+    runExternalMutation.mockResolvedValueOnce({
+      ok: false,
+      reason: "conflict",
+      error: "Config changed",
+    } as never);
+    context.runtimeConfig.refresh.mockImplementationOnce(async () => {
+      refreshing.resolve();
+      await resume.promise;
+    });
+    const save = fields.save(path, "secret-for-a");
+    await refreshing.promise;
+    gateway.connectionRevision = 2;
+    fields.hold(path, "secret-for-b", "Token");
+    resume.resolve();
+    await expect(save).resolves.toEqual({ ok: false, error: "" });
+    expect(request).not.toHaveBeenCalled();
+    expect(fields.read(path)).toBe("secret-for-b");
   });
 
   it("reports a refusal without touching the held edit", async () => {

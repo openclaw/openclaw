@@ -172,7 +172,7 @@ function createConfigSecretFields(context: SecretFieldsContext): ConfigSecretFie
       }
     });
   };
-  const write = (path: ConfigPath, value: unknown) =>
+  const write = (path: ConfigPath, value: unknown, saveScope: number) =>
     runtime.runExternalMutation<ConfigPatchAck>(
       (client) => {
         const snapshot = runtime.state.configSnapshot;
@@ -197,9 +197,7 @@ function createConfigSecretFields(context: SecretFieldsContext): ConfigSecretFie
       {
         // Checked against the snapshot the patch is built from, right before it goes out.
         canDispatch: () =>
-          (scope === undefined || scope === currentScope()) &&
-          writable(path) !== false &&
-          rowsMatch(path),
+          saveScope === currentScope() && writable(path) !== false && rowsMatch(path),
         configWriteAck: (ack) => ack,
       },
     );
@@ -241,17 +239,24 @@ function createConfigSecretFields(context: SecretFieldsContext): ConfigSecretFie
     },
     async save(path, value) {
       syncScope();
+      const saveScope = currentScope();
       if (writable(path) === false) {
         return refuse(path);
       }
       if (!rowsMatch(path)) {
         return { ok: false, error: t("configForm.draftRejected") };
       }
-      let result = await write(path, value);
-      if (!result.ok && result.reason === "conflict") {
+      let result = await write(path, value, saveScope);
+      if (!result.ok && result.reason === "conflict" && saveScope === currentScope()) {
         // Only this field goes out, so the latest saved config can safely take it.
         await runtime.refresh({ background: true });
-        result = writable(path) === false ? result : await write(path, value);
+        if (saveScope !== currentScope()) {
+          return { ok: false, error: "" };
+        }
+        result = writable(path) === false ? result : await write(path, value, saveScope);
+      }
+      if (saveScope !== currentScope()) {
+        return { ok: false, error: "" };
       }
       if (!result.ok && writable(path) === false) {
         return refuse(path);
