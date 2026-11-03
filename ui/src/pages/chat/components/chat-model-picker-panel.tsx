@@ -461,11 +461,13 @@ export function ChatModelPickerPanel(panel: {
           <div class="chat-controls__provider-heading" data-chat-model-provider={props.provider}>
             <span class="chat-controls__provider-label">{providerLabel()}</span>
             {showAuth() ? (
-              <span class="chat-controls__auth-meta" data-auth-kind={authKind()}>
-                <span class="chat-controls__auth-meta-label">
-                  {authKind() === "api" ? t("modelProviders.status.apiKey") : authLabel()}
+              <openclaw-tooltip prop:content={auth()?.detail ?? ""}>
+                <span class="chat-controls__auth-meta" data-auth-kind={authKind()}>
+                  <span class="chat-controls__auth-meta-label">
+                    {authKind() === "api" ? t("modelProviders.status.apiKey") : authLabel()}
+                  </span>
                 </span>
-              </span>
+              </openclaw-tooltip>
             ) : undefined}
             {panel.params.onProviderSettings ? (
               <button

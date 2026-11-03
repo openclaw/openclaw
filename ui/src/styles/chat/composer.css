@@ -4236,7 +4236,9 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   border: 0;
   border-radius: 17px;
   background: var(--card);
-  box-shadow: 0 8px 24px rgb(0 0 0 / 12%);
+  box-shadow:
+    0 0 0 0.5px var(--border),
+    0 8px 16px -4px rgb(0 0 0 / 12%);
 }
 
 .chat-controls__account-popover [data-chat-account-option="manage"] {
