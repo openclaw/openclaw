@@ -44,7 +44,8 @@ suite.define(() => {
         });
         await search.fill("Workboard");
         await page.locator('a[href="/settings/plugins/workboard"]').click();
-        await page.getByRole("button", { name: "Plugin settings", exact: true }).click();
+        const actions = page.locator(".plugin-catalog-detail__actions");
+        await actions.getByRole("link", { name: "Settings", exact: true }).click();
         await page.locator(".plugin-editor").waitFor();
         expect(await page.locator(".plugins-settings-breadcrumb").isVisible()).toBe(true);
         await leave();

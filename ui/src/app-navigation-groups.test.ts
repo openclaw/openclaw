@@ -140,16 +140,13 @@ it.each([
   ["plugin-settings", pluginPath, "?from=plugins", "", "plugins", "/plugins"],
   ["plugin-settings", prefixed, "?view=settings&from=plugins", "/ui", "plugin-settings", prefixed],
 ] as const)("resolves the parent of %s at %s%s", (route, pathname, search, base, parent, path) => {
-  expect(settingsParentTarget(route, { pathname, search }, base)).toEqual(
-    parent
-      ? {
-          routeId: parent,
-          pathname: path,
-          search: search.includes("view=settings") ? "?from=plugins" : "",
-          hash: "",
-        }
-      : null,
-  );
+  const expected = parent && {
+    routeId: parent,
+    pathname: path,
+    search: search.includes("view=settings") ? "?from=plugins" : "",
+    hash: "",
+  };
+  expect(settingsParentTarget(route, { pathname, search }, base)).toEqual(expected);
 });
 
 const opaqueIds = ["plugin:reports/daily/team:summary", "plugin:reports/日报 summary"];
