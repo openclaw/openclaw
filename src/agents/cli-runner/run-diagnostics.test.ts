@@ -379,49 +379,72 @@ describe("Claude CLI run diagnostics", () => {
       error: new Error("CLI exceeded timeout (30s) and was terminated"),
       harnessOutcome: "timed_out" as const,
     },
-  ])("completes the harness once for a thrown $label", async ({ error, harnessOutcome }) => {
-    const runId = `run-claude-hierarchy-${harnessOutcome}`;
-    const diagnostics = captureLifecycle(runId);
-    try {
-      await expect(
-        runClaudeCliAgentTurnWithDiagnostics(
-          {
-            runId,
-            sessionId: "session-termination",
-            modelProvider: "anthropic",
-            model: "claude-opus-4-7",
-          },
-          async (lifecycle) => {
-            lifecycle.setPhase("send");
-            throw error;
-          },
-        ),
-      ).rejects.toThrow(error.message);
-      await flushDiagnosticEvents();
-    } finally {
-      diagnostics.unsubscribe();
-    }
+    {
+      label: "caller abort reason",
+      error: new Error("caller stopped this turn"),
+      harnessOutcome: "aborted" as const,
+      aborted: true,
+    },
+    {
+      label: "caller timeout reason",
+      error: new DOMException("caller deadline elapsed", "TimeoutError"),
+      harnessOutcome: "timed_out" as const,
+      aborted: true,
+    },
+  ])(
+    "completes the harness once for a thrown $label",
+    async ({ error, harnessOutcome, aborted }) => {
+      const runId = `run-claude-hierarchy-${harnessOutcome}`;
+      const diagnostics = captureLifecycle(runId);
+      const stop = new AbortController();
+      if (aborted) {
+        stop.abort(error);
+      }
+      try {
+        await expect(
+          runClaudeCliAgentTurnWithDiagnostics(
+            {
+              runId,
+              sessionId: "session-termination",
+              abortSignal: stop.signal,
+              modelProvider: "anthropic",
+              model: "claude-opus-4-7",
+            },
+            async (lifecycle) => {
+              lifecycle.setPhase("send");
+              throw error;
+            },
+          ),
+        ).rejects.toThrow(error.message);
+        await flushDiagnosticEvents();
+      } finally {
+        diagnostics.unsubscribe();
+      }
 
-    expect(diagnostics.events).toHaveLength(4);
-    expect(
-      diagnostics.events.find(({ event }) => event.type === "run.completed")?.event,
-    ).toMatchObject({
-      type: "run.completed",
-      outcome: "aborted",
-    });
-    expect(
-      diagnostics.events.filter(
-        ({ event }) => event.type === "harness.run.completed" || event.type === "harness.run.error",
-      ),
-    ).toHaveLength(1);
-    expect(
-      diagnostics.events.find(({ event }) => event.type === "harness.run.completed")?.event,
-    ).toMatchObject({
-      type: "harness.run.completed",
-      outcome: harnessOutcome,
-    });
-    expect(diagnostics.events.some(({ event }) => event.type === "harness.run.error")).toBe(false);
-  });
+      expect(diagnostics.events).toHaveLength(4);
+      expect(
+        diagnostics.events.find(({ event }) => event.type === "run.completed")?.event,
+      ).toMatchObject({
+        type: "run.completed",
+        outcome: "aborted",
+      });
+      expect(
+        diagnostics.events.filter(
+          ({ event }) =>
+            event.type === "harness.run.completed" || event.type === "harness.run.error",
+        ),
+      ).toHaveLength(1);
+      expect(
+        diagnostics.events.find(({ event }) => event.type === "harness.run.completed")?.event,
+      ).toMatchObject({
+        type: "harness.run.completed",
+        outcome: harnessOutcome,
+      });
+      expect(diagnostics.events.some(({ event }) => event.type === "harness.run.error")).toBe(
+        false,
+      );
+    },
+  );
 
   it("keeps the captured prompt on terminal events when the turn fails", async () => {
     setRuntimeConfigSnapshot({ diagnostics: { otel: { enabled: true, captureContent: true } } });

@@ -2,8 +2,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CliSessionBinding } from "../config/sessions.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
-import { runPreparedCliAgent } from "./cli-runner.js";
+import { runCliAgent, runPreparedCliAgent } from "./cli-runner.js";
 import { buildPreparedCliRunContext } from "./cli-runner.test-helpers.js";
+import * as cliPreparation from "./cli-runner/prepare.runtime.js";
 import * as cliTranscript from "./command/attempt-execution.helpers.js";
 import {
   createAgentRunDirectAbortError,
@@ -115,8 +116,36 @@ describe("runPreparedCliAgent directly stopped first turn", () => {
     );
   });
 
-  afterEach(() => {
-    vi.mocked(cliTranscript.claudeCliSessionTranscriptHasContent).mockRestore();
+  afterEach(() => vi.restoreAllMocks());
+
+  it("keeps a stopped first conversation without operator model authority", async () => {
+    const context = buildPreparedCliRunContext();
+    const stop = new AbortController();
+    const reason = createAgentRunDirectAbortError();
+    const persist = vi.fn(async (_binding: CliSessionBinding) => {});
+    context.params.abortSignal = stop.signal;
+    context.params.assertCurrent = undefined;
+    context.params.persistStoppedFirstCliSession = persist;
+    vi.spyOn(cliPreparation, "prepareCliRunContext").mockImplementation(async (params) => ({
+      ...context,
+      params: { ...params, admittedRunContext: context.params.admittedRunContext },
+    }));
+    executePreparedCliRunMock.mockImplementation(async () => {
+      stop.abort(reason);
+      return {
+        text: "partial answer",
+        rawText: "partial answer",
+        sessionId: "stopped-first-session",
+        terminalInterruption: { reason: "aborted" },
+      };
+    });
+    await expect(runCliAgent(context.params)).rejects.toBe(reason);
+    expect(transcriptProbe).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: "stopped-first-session" }),
+    );
+    expect(persist).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ sessionId: "stopped-first-session" }),
+    );
   });
 
   function stoppedRun(params: {
