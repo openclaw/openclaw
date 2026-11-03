@@ -324,7 +324,7 @@ export abstract class MemorySearchOrchestration extends MemorySearchRetrieval {
       // inline rebuild; serve the published keyword generation immediately and
       // let maintenance catch the corpus up in the background.
       const deferFormatUpgradeRepair =
-        Boolean(shouldRepairIdentity) && formatUpgradePendingKeywordOnly(indexIdentity);
+        shouldRepairIdentity && formatUpgradePendingKeywordOnly(indexIdentity);
       if (shouldRepairIdentity || shouldUpgradeProviderKey) {
         await releaseReadGeneration();
         if (shouldRepairIdentity) {
