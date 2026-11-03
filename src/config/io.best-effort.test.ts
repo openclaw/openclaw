@@ -1,6 +1,8 @@
 // Covers best-effort config IO reads and warning behavior.
 import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resetLogger } from "../logging/logger.js";
+import { redactToolDetail } from "../logging/redact.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
@@ -9,6 +11,7 @@ import {
   readConfigFileSnapshot,
   readSourceConfigBestEffort,
 } from "./config.js";
+import { readCurrentConfigForResolution } from "./io.runtime.js";
 import { resetConfigOverrides, setConfigOverride } from "./runtime-overrides.js";
 import { withTempHome, writeOpenClawConfig } from "./test-helpers.js";
 
@@ -22,6 +25,36 @@ describe("readBestEffortConfig", () => {
     closeOpenClawStateDatabaseForTest();
     resetConfigOverrides();
   });
+
+  it.each([1, null])(
+    "keeps directory-resolution warnings usable with malformed redaction %j",
+    async (entry) => {
+      await withTempHome(async (home) => {
+        const configPath = await writeOpenClawConfig(home, {
+          logging: { redactPatterns: [entry] },
+          gateway: { port: "invalid" },
+        });
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        try {
+          resetLogger();
+          expect(readCurrentConfigForResolution({ configPath }).config).toEqual({});
+          // Stable directory warnings are raw until egress; tool-detail masking consumes
+          // the same rejected on-disk logging config through the diagnostic reader.
+          expect(redactToolDetail("password=synthetic-pass-value")).not.toContain(
+            "synthetic-pass-value",
+          );
+          const output = warn.mock.calls.map(([line]) => String(line)).join("\n");
+          expect(output).toContain("Config warnings:");
+          expect(output).toContain(
+            "Config unavailable; using environment and default agent directory settings.",
+          );
+        } finally {
+          resetLogger();
+          warn.mockRestore();
+        }
+      });
+    },
+  );
 
   it("records why an unparseable config was ignored by best-effort reads", async () => {
     await withTempHome(async (home) => {
