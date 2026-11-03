@@ -25,6 +25,7 @@ import { EMPTY_VIEWER_IDENTITIES } from "./solid/viewer-facepile.tsx";
 import "./tooltip.ts";
 /** Catalog-only rows use the same native and contributed trailing indicator order. */
 export function CatalogSessionIndicators(props: {
+  plugins: NonNullable<SessionListHost["sessionDataContext"]>["plugins"] | undefined;
   sessionKey: string;
   agentId?: string;
   artifact: unknown;
@@ -35,6 +36,7 @@ export function CatalogSessionIndicators(props: {
     <span class="sidebar-recent-session__details-endcap">
       {props.nativeBadges ? <SessionRowBadges {...props.nativeBadges} /> : undefined}
       <SessionAccessoryBadges
+        plugins={props.plugins}
         sessionKey={props.sessionKey}
         agentId={props.agentId}
         artifact={props.artifact}
@@ -275,6 +277,7 @@ export function renderSidebarSessionIndicators(
             hasApproval={badges().hasApproval}
           />
           <SessionAccessoryBadges
+            plugins={host().sessionDataContext?.plugins}
             sessionKey={readSession().key}
             agentId={readSession().agentId}
             worktreeId={readSession().worktreeId}

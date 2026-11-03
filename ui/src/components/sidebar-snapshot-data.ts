@@ -40,7 +40,8 @@ const badgeFields = {
   tone: json.optional(json.enumeration(["muted", "positive", "negative", "accent", "violet"])),
   state: json.optional(badgeText),
 };
-export const cachedSessionBadgeSchema = json.object({
+export const sessionBadgeSchema = json.object(badgeFields);
+const cachedSessionBadgeSchema = json.object({
   pluginId: badgeText,
   id: json.refine(badgeText, (value) => /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(value)),
   ...badgeFields,

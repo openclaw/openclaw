@@ -45,7 +45,7 @@ export interface SessionListHost {
   readonly sidebarAgentsMode?: "chip" | "roster";
   readonly basePath: string;
   readonly sessionDataContext:
-    | Pick<ApplicationContext, "gateway" | "agentSelection" | "agents" | "sessions">
+    | Pick<ApplicationContext, "gateway" | "agentSelection" | "agents" | "sessions" | "plugins">
     | undefined;
   readonly sidebarLiveActivity: boolean;
   readonly sessionsShowCron: boolean;

@@ -314,7 +314,9 @@ export type ControlUiSessionBadgeAccessory = {
   placement: "session-row";
   presentation: "badge";
   /** The same synchronous projection supplies native live rendering and the sidebar snapshot. */
-  resolve: (target: ControlUiSessionBadgeTarget) => ControlUiSessionBadge | undefined;
+  resolve: (
+    target: ControlUiSessionBadgeTarget,
+  ) => { status: "pending" } | { status: "ready"; badge?: ControlUiSessionBadge };
   observe?: (
     target: ControlUiSessionBadgeTarget & { signal: AbortSignal },
     changed: () => void,

@@ -5,7 +5,11 @@ import { loadSettings } from "../app/settings.ts";
 import type { AuthenticatedUser } from "../app/user-profile.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
 import { presenceViewerLastActivity, profilePresenceViewer } from "../lib/presence-users.ts";
-import { readSessionBadges } from "../plugins/control-ui-session-badges.ts";
+import { scopedSessionArtifactKey } from "../lib/sessions/session-key.ts";
+import {
+  readSessionBadges,
+  type SessionBadgeCaptureContext,
+} from "../plugins/control-ui-session-badges.ts";
 import { readSidebarBrandPresentation, type AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import type { SidebarVisibleSections } from "./app-sidebar-session-projection.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
@@ -13,12 +17,14 @@ import { hasSidebarListFilter } from "./session-data-events.ts";
 import { sidebarSessionBadgeFacts } from "./session-row-badge-presentation.ts";
 import { resolveSidebarSessionRowSubtitle } from "./session-row-subtitle.ts";
 import { resolveSidebarOnline, sidebarOnlineOrder } from "./sidebar-online-state.ts";
+import type { SidebarSnapshotSessionBadge } from "./sidebar-snapshot-data.ts";
 import {
   parseSidebarSnapshot,
   snapshotSections,
   snapshotSessions,
   snapshotIssuesCount,
   type SidebarSnapshotModel,
+  type SidebarSnapshotSession,
 } from "./sidebar-snapshot-model.ts";
 
 function displayUser(user: AuthenticatedUser | null | undefined) {
@@ -105,6 +111,8 @@ export function captureSidebarSnapshotModel(
   context: ApplicationContext,
   rows: SidebarRecentSession[],
   sections: SidebarVisibleSections["sections"],
+  previous?: SidebarSnapshotModel,
+  badges?: SessionBadgeCaptureContext,
 ): SidebarSnapshotModel | null {
   const bootRoster = context.sessions.captureBootRoster();
   const agents = context.agents.state.agentsList;
@@ -136,6 +144,22 @@ export function captureSidebarSnapshotModel(
   for (const { key, pluginId, value } of host.pluginNavigation()) {
     plugins.push({ key, pluginId, id: value.page.id, label: value.label, icon: value.icon });
   }
+  const previousBadges = new Map<string, readonly SidebarSnapshotSessionBadge[]>();
+  function remember(items: readonly SidebarSnapshotSession[]) {
+    for (const row of items) {
+      if (row.state?.badges) {
+        previousBadges.set(scopedSessionArtifactKey(row.key, row.agentId), row.state.badges);
+      }
+      remember(row.children);
+    }
+  }
+  if (previous) {
+    remember([
+      ...previous.pages,
+      ...previous.pinnedSessions,
+      ...previous.sections.flatMap((section) => section.rows),
+    ]);
+  }
   const presentation = (row: SidebarRecentSession) => ({
     childrenDisplayMode: host.sessionProjection.children.capture(row.key),
     snapshotSubtitle: row.snapshot
@@ -143,12 +167,17 @@ export function captureSidebarSnapshotModel(
       : resolveSidebarSessionRowSubtitle(host, row),
     state: {
       ...sidebarSessionBadgeFacts(host.sessionPullRequests, row),
-      badges: readSessionBadges(context.plugins, {
-        sessionKey: row.key,
-        agentId: row.agentId,
-        worktreeId: row.worktreeId,
-        artifact: row.pullRequest,
-      }),
+      badges: readSessionBadges(
+        context.plugins,
+        {
+          sessionKey: row.key,
+          agentId: row.agentId,
+          worktreeId: row.worktreeId,
+          artifact: row.pullRequest,
+        },
+        previousBadges.get(scopedSessionArtifactKey(row.key, row.agentId)),
+        badges,
+      ),
     },
   });
   return parseSidebarSnapshot({

@@ -61,8 +61,9 @@ export function projectSource<S, T>(
   contract: SourceContract<S, T>,
 ): SourceProjection<S, T> {
   let source = initialSource;
-  // Reactive primitive: untrack keeps sampled owner reads outside revision tracking.
-  const readSnapshot = () => untrack(() => contract.read(source));
+  // Sampling external owner reads and subscription setup must not add Solid dependencies.
+  const sampleOwner = <Value>(operation: () => Value): Value => untrack(operation);
+  const readSnapshot = () => sampleOwner(() => contract.read(source));
   let value = readSnapshot();
   let lastRead = value;
   let disposed = false;
@@ -94,15 +95,17 @@ export function projectSource<S, T>(
     }
     connected = true;
     // Owners remove their listeners synchronously; detached callbacks are not replayed.
-    disconnect = contract.subscribe(source, () => {
-      const next = readSnapshot();
-      const changed = contract.equality === "revision" || !contract.equality(value, next);
-      value = next;
-      lastRead = next;
-      if (changed) {
-        publish();
-      }
-    });
+    disconnect = sampleOwner(() =>
+      contract.subscribe(source, () => {
+        const next = readSnapshot();
+        const changed = contract.equality === "revision" || !contract.equality(value, next);
+        value = next;
+        lastRead = next;
+        if (changed) {
+          publish();
+        }
+      }),
+    );
     value = readSnapshot();
     lastRead = value;
   };

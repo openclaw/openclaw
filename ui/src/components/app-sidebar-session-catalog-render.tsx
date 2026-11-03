@@ -245,6 +245,7 @@ function renderCatalogHostGroup(
               <span class="sidebar-recent-session__title-row"> {marqueeLabel} </span>
               <span class="sidebar-recent-session__details">
                 <CatalogSessionIndicators
+                  plugins={params.host.sessionDataContext?.plugins}
                   sessionKey={key()}
                   agentId={params.snapshot.newSessionAgentId}
                   artifact={readSession().pullRequest}
