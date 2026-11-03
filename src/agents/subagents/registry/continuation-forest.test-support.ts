@@ -17,6 +17,7 @@
 // clock (Date, setTimeout, performance), and the world outside the Gateway: the crane bits and the
 // append-only attempt log, which survive a Gateway restart as the outside world would.
 import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, vi } from "vitest";
@@ -40,9 +41,14 @@ import {
 import { resolveContinuationResetRetentions } from "../../../auto-reply/continuation/session-reset-retention-resolve.js";
 import { cancelOwnedContinuationRecords } from "../../../auto-reply/continuation/session-reset.js";
 import {
+  clearContinuationWorkDispatch,
   resetContinuationWorkDispatchForTests,
   scheduleContinuationWork,
 } from "../../../auto-reply/continuation/work-dispatch.js";
+import {
+  consumePendingWork,
+  markPendingWorkDelivered,
+} from "../../../auto-reply/continuation/work-store.js";
 import { finalizeInboundContext } from "../../../auto-reply/reply/inbound-context.js";
 import {
   resolveFinalSystemEventAdoption,
@@ -261,9 +267,14 @@ export class ContinuationForest {
   readonly adoptedBlocks: Array<{ sessionKey: string; text: string; at: number }> = [];
   readonly wakes: WakeRequest[] = [];
   readonly spawns: Array<{ electionId: string; childRunId?: string; at: number }> = [];
-  readonly deliveredLines: Array<{ keys: string[]; at: number }> = [];
+  /** `Delivered to` lines: the rooms named, and the child whose return it was. */
+  readonly deliveredLines: Array<{ keys: string[]; from: string; at: number }> = [];
   readonly logLines: Array<{ subsystem: string; message: string; at: number }> = [];
   readonly handovers: Handover[] = [];
+  /** When the Gateway was down: from the restart until its boot finished. */
+  readonly downtimes: Array<{ from: number; to: number }> = [];
+  /** How often each row's queued copy was dropped by a reset or a restart. */
+  readonly drops = new Map<string, number>();
   /** Return rows by source run and recipient. */
   readonly rows = new Map<string, string>();
   readonly cancelReceipts: Array<Awaited<ReturnType<typeof cancelOwnedContinuationRecords>>> = [];
@@ -441,14 +452,19 @@ export class ContinuationForest {
           : await bindingFor(
               routing.kind === "out-of-tree" ? [requester, routing.target.sessionKey] : [requester],
             );
+      // Every identity the registration minted is the clone's own: run, child session, controller.
       const row: SubagentRunRecord = {
         ...structuredClone(template),
         runId: node.runId!,
+        taskRunId: node.runId!,
         childSessionKey: node.sessionKey,
+        childSessionIdentity: { sessionId: `${node.id}-head-1` },
+        controllerSessionKey: requester,
         requesterSessionKey: requester,
         requesterDisplayKey: requester,
         task: node.name,
         label: node.name,
+        execution: { ...template.execution, lifecycleGeneration: randomUUID() },
         continuationRecipientAuthorityBinding: binding,
       };
       delete row.continuationTargetSessionKeys;
@@ -766,7 +782,7 @@ export class ContinuationForest {
       if (payload.kind === "systemEvent" && payload.continuationSourceRunId) {
         this.rows.set(`${payload.continuationSourceRunId}\u0000${payload.sessionKey}`, id);
       }
-      await this.gate(`row:${payload.sessionKey}`);
+      await this.gate(`row:${payload.continuationSourceRunId ?? "none"}>${payload.sessionKey}`);
     };
     continuationForestSeams.logLine = (subsystem, message) => {
       if (message.startsWith("[continuation:")) {
@@ -776,7 +792,7 @@ export class ContinuationForest {
     vi.spyOn(defaultRuntime, "log").mockImplementation((...args: unknown[]) => {
       const match = DELIVERED_TO.exec(String(args[0]));
       if (match) {
-        this.deliveredLines.push({ keys: match[1]!.split(","), at: Date.now() });
+        this.deliveredLines.push({ keys: match[1]!.split(","), from: match[2]!, at: Date.now() });
       }
     });
   }
@@ -822,8 +838,9 @@ export class ContinuationForest {
   // Barriers and the clock
 
   /**
-   * Holds the next actor that reaches `point` (`before-flip:<election>`, `after-flip:<election>`,
-   * `wake:<election>`, `row:<sessionKey>`) until released.
+   * Holds the next actor that reaches `point` until released: `before-flip:<election>` and
+   * `after-flip:<election>` (a fold; the latter is the replay barrier), `report:<election>` (a
+   * relay about to report), `wake:<election>` (an attic turn) or the row barrier from rowPoint().
    */
   hold(point: string) {
     const gate: Gate = {
@@ -834,6 +851,7 @@ export class ContinuationForest {
     };
     this.gates.push(gate);
     return {
+      point,
       reached: gate.reached.promise,
       release: async () => {
         gate.released.resolve();
@@ -908,20 +926,52 @@ export class ContinuationForest {
     throw new Error("the annex never settled");
   }
 
-  /** Advances the clock in steps, settling the forest at every step. */
-  async advance(ms: number): Promise<void> {
-    if (ms % ANNEX_STEP_MS !== 0) {
-      throw new Error(`advance(${ms}) is not a multiple of ${ANNEX_STEP_MS}ms`);
+  /**
+   * The barrier inside a return's producer: its durable row for `sessionKey` is written, its
+   * event not yet queued, its recipient authority not yet checked again.
+   */
+  rowPoint(election: AnnexElection, sessionKey: string): string {
+    const runId = election.node?.runId ?? this.branchRunId(election.id);
+    return `row:${runId}>${sessionKey}`;
+  }
+
+  /**
+   * Advances the clock in steps, settling the forest at every step. Longer steps are only for
+   * stretches with no election due: an action a timer starts finishes at the end of its step.
+   */
+  async advance(ms: number, stepMs = ANNEX_STEP_MS): Promise<void> {
+    if (ms % ANNEX_STEP_MS !== 0 || stepMs % ANNEX_STEP_MS !== 0) {
+      throw new Error(`advance(${ms}, ${stepMs}) is not in whole ${ANNEX_STEP_MS}ms steps`);
     }
-    for (let elapsed = 0; elapsed < ms; elapsed += ANNEX_STEP_MS) {
-      await vi.advanceTimersByTimeAsync(ANNEX_STEP_MS);
+    for (let elapsed = 0; elapsed < ms;) {
+      const step = Math.min(stepMs, ms - elapsed);
+      await vi.advanceTimersByTimeAsync(step);
+      elapsed += step;
       await this.settle();
     }
   }
 
   /** Advances to `t0 + atMs`. */
-  async advanceTo(atMs: number): Promise<void> {
-    await this.advance(this.t0 + atMs - Date.now());
+  async advanceTo(atMs: number, stepMs = ANNEX_STEP_MS): Promise<void> {
+    await this.advance(this.t0 + atMs - Date.now(), stepMs);
+  }
+
+  /** Advances step by step until `barrier` is reached; fails the story if it is not by `t0 + byMs`. */
+  async until(barrier: { point: string; reached: Promise<void> }, byMs: number): Promise<void> {
+    let reached = false;
+    void barrier.reached.then(() => {
+      reached = true;
+    });
+    while (!reached) {
+      await this.settle();
+      if (reached) {
+        return;
+      }
+      if (Date.now() - this.t0 >= byMs) {
+        throw new Error(`nobody reached the barrier ${barrier.point} by ${byMs}ms`);
+      }
+      await this.advance(ANNEX_STEP_MS);
+    }
   }
 
   /** Until released, `sessionKey`'s head takes no turns: its queued returns wait. */
@@ -1067,6 +1117,7 @@ export class ContinuationForest {
 
   /** The prince changes 🎽🩲: a chat /new on the prince's room. */
   async changesClothes(prince: AnnexNode): Promise<void> {
+    this.recordDrops([prince.sessionKey]);
     const result = await initSessionState({
       ctx: finalizeInboundContext({
         Body: "/new",
@@ -1086,6 +1137,7 @@ export class ContinuationForest {
 
   /** A same-owner Gateway reset (`sessions.reset`) of any room. */
   async reset(node: AnnexNode, reason: "new" | "reset" = "reset"): Promise<void> {
+    this.recordDrops([node.sessionKey]);
     const result = await performGatewaySessionReset({
       key: node.sessionKey,
       agentId: AGENT_ID,
@@ -1124,31 +1176,108 @@ export class ContinuationForest {
   }
 
   /**
-   * A Gateway restart: every in-memory queue, timer and claim of the old process is gone; the new
-   * process recovers in the production boot order (server-runtime-services.ts): the delivery
-   * runtime and produced-delivery recovery, then custody boot and pending reset-retention marks.
+   * A Gateway restart: every in-memory queue, timer and claim of the old process is gone (each
+   * queued copy of a durable row is dropped). The new process boots as server-runtime-services.ts
+   * schedules it, while the clock runs: 1.25 s in, the delivery runtime starts and replays produced
+   * deliveries (spaced 250 ms apart), then arms every pending row; 1.4 s in, custody boot and the
+   * pending reset-retention marks. A due time that falls before the boot fires at the boot.
    */
   async restart(): Promise<void> {
     await this.stopDeliveryRuntime?.();
+    this.stopDeliveryRuntime = undefined;
+    this.recordDrops(this.sessionKeys);
     resetSystemEventsForTest();
     resetContinuationWorkDispatchForTests();
     resetDelegateDispatchHedgesForTests();
     resetContinuationCustodyProjection();
     this.generation += 1;
-    const armedAt = Date.now();
-    this.startDeliveryRuntime();
-    const queueContext = captureOpenClawStateWorkerContext();
+    const startedAt = Date.now();
+    const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
     const log = { info: () => {}, warn: () => {}, error: () => {} };
-    await recoverPendingProducedSessionDeliveries({
-      deps: {} as never,
-      queueContext,
-      log,
-      maxEnqueuedAt: armedAt,
-    });
-    await schedulePendingSessionDeliveries();
-    await runContinuationCustodyBoot({ armedAt, whenSubagentRegistryActivated: async () => {} });
-    await resolveContinuationResetRetentions({ cfg: getRuntimeConfig(), markedBefore: armedAt });
-    await this.settle();
+    const delivery = (async () => {
+      await sleep(1_250);
+      this.startDeliveryRuntime();
+      try {
+        await recoverPendingProducedSessionDeliveries({
+          deps: {} as never,
+          queueContext: captureOpenClawStateWorkerContext(),
+          log,
+          maxEnqueuedAt: startedAt,
+        });
+      } finally {
+        await schedulePendingSessionDeliveries();
+      }
+    })();
+    const custody = (async () => {
+      await sleep(1_400);
+      await runContinuationCustodyBoot({
+        armedAt: startedAt,
+        whenSubagentRegistryActivated: async () => {},
+      });
+      await resolveContinuationResetRetentions({
+        cfg: getRuntimeConfig(),
+        markedBefore: startedAt,
+      });
+    })();
+    await this.whileTimePasses(Promise.all([delivery, custody]), "the Gateway's boot");
+    this.downtimes.push({ from: startedAt, to: Date.now() });
+  }
+
+  /** Advances the clock step by step until `work` settles; fails the story after `maxMs`. */
+  private async whileTimePasses<T>(work: Promise<T>, what: string, maxMs = 120_000): Promise<T> {
+    let done = false;
+    void work.then(
+      () => (done = true),
+      () => (done = true),
+    );
+    const deadline = Date.now() + maxMs;
+    while (!done) {
+      await this.advance(ANNEX_STEP_MS);
+      if (!done && Date.now() >= deadline) {
+        throw new Error(`${what} never finished within ${maxMs}ms`);
+      }
+    }
+    return await work;
+  }
+
+  /** Queued copies of durable rows a reset or restart drops; their sweep or replay wakes again. */
+  private recordDrops(sessionKeys: Iterable<string>): void {
+    for (const sessionKey of sessionKeys) {
+      for (const event of peekSystemEventEntries(
+        resolveSystemEventQueueKey(sessionKey, AGENT_ID),
+      )) {
+        if (event.sessionDeliveryAckId) {
+          this.drops.set(
+            event.sessionDeliveryAckId,
+            (this.drops.get(event.sessionDeliveryAckId) ?? 0) + 1,
+          );
+        }
+      }
+    }
+  }
+
+  /**
+   * The Gateway dies inside the attic wake's turn: the dispatcher claimed the due wake and the turn
+   * checked the attic (the effect), and the process died before the turn's completion was recorded,
+   * or after its durable delivered mark and before the finish. Composed with the claim and mark
+   * owners in the dispatcher's order; nothing after the crash runs. Then the Gateway restarts.
+   */
+  async crashMidWake(attic: AnnexElection, after: "effect" | "delivered mark"): Promise<void> {
+    const due = attic.dueAt!;
+    // The dying process's timer for this room never fires; the wake is claimed at its due time.
+    clearContinuationWorkDispatch(attic.ownerSessionKey);
+    await this.advance(due - Date.now());
+    const [claimed] = (await consumePendingWork(attic.ownerSessionKey)).filter(
+      (work) => work.flowId === attic.id,
+    );
+    expect(claimed, `${attic.name} was not claimed at its due time`).toBeDefined();
+    this.logAttempt(attic.id, "attempt");
+    this.bits.set(attic.id, 1);
+    this.logAttempt(attic.id, "effect");
+    if (after === "delivered mark") {
+      expect((await markPendingWorkDelivered(claimed!)).applied).toBe(true);
+    }
+    await this.restart();
   }
 
   /** The owner's explicit `/continuations cancel <id...>`. */
@@ -1183,6 +1312,25 @@ export class ContinuationForest {
 
   cellarRunner(tree: number): AnnexElection {
     return this.election((election) => election.name === `the cellar runner of tree ${tree}`);
+  }
+
+  /** The election a relay or crane runs. */
+  electionOf(node: AnnexNode): AnnexElection {
+    return this.elections.get(node.runId!)!;
+  }
+
+  /** The room tree `tree`'s across relay reports to besides its prince. */
+  acrossTarget(tree: number): AnnexNode {
+    const routing = this.princes[tree]!.children[1]?.routing;
+    if (routing?.kind !== "out-of-tree") {
+      throw new Error(`tree ${tree} has no report across`);
+    }
+    return routing.target;
+  }
+
+  /** The election's custody record, for branches and attics. */
+  async record(election: AnnexElection) {
+    return (await listContinuationRecords({ recordIds: [election.id] }))[0];
   }
 
   node(id: string): AnnexNode {
@@ -1249,13 +1397,21 @@ export class ContinuationForest {
         );
       }
       const record = records.get(election.id);
+      if (election.kind === "branch" && expected.outcome === "cancelled") {
+        if (record?.status !== "cancelled") {
+          stories.push(`${election.name} was not cancelled (status ${record?.status})`);
+        }
+        if (this.spawns.some((spawn) => spawn.electionId === election.id)) {
+          stories.push(`${election.name} spawned although it was cancelled`);
+        }
+      }
       if (election.kind === "branch" && expected.outcome === "executed") {
         const spawns = this.spawns.filter((spawn) => spawn.electionId === election.id);
         if (spawns.length !== 1) {
           stories.push(`${election.name} spawned ${spawns.length} times`);
         } else if (
           election.dueAt !== undefined &&
-          (spawns[0]!.at < election.dueAt || spawns[0]!.at >= election.dueAt + ANNEX_STEP_MS)
+          !this.firesOnTime(election.dueAt, spawns[0]!.at)
         ) {
           stories.push(
             `${election.name} spawned at ${at(spawns[0]!.at)}, not at its due time ${at(election.dueAt)}`,
@@ -1267,9 +1423,7 @@ export class ContinuationForest {
           const releasedAt = custodyStateForTest(record).releasedAt as number | undefined;
           if (
             election.dueAt !== undefined &&
-            (releasedAt === undefined ||
-              releasedAt < election.dueAt ||
-              releasedAt >= election.dueAt + ANNEX_STEP_MS)
+            (releasedAt === undefined || !this.firesOnTime(election.dueAt, releasedAt))
           ) {
             stories.push(
               `${election.name} woke at ${releasedAt === undefined ? "no time" : at(releasedAt)}, not at its due time ${at(election.dueAt)}`,
@@ -1323,14 +1477,13 @@ export class ContinuationForest {
           if (rowId && (await this.receipt(rowId)) !== "failed") {
             stories.push(`${report.name}'s refused row for ${sessionKey} is not a failed receipt`);
           }
-          const handedOverAt = this.handovers.find((h) => h.sessionKey === sessionKey)?.at;
+          const child = subagentRuns.get(report.runId)?.childSessionKey;
           if (
-            handedOverAt !== undefined &&
             this.deliveredLines.some(
-              (line) => line.at >= handedOverAt && line.keys.includes(sessionKey),
+              (line) => line.from === child && line.keys.includes(sessionKey),
             )
           ) {
-            stories.push(`"Delivered to" named ${sessionKey} after its handover`);
+            stories.push(`"Delivered to" named ${sessionKey} for ${report.name}'s refused report`);
           }
           continue;
         }
@@ -1350,23 +1503,29 @@ export class ContinuationForest {
         }
       }
     }
-    // A wake names each row once per process lifetime.
+    // A row is woken once per queued copy: again only after a reset or restart dropped its copy.
     const wakeCounts = new Map<string, number>();
     for (const wake of this.wakes) {
       for (const id of wake.deliveryIds) {
-        const key = `${wake.generation}\u0000${id}`;
-        wakeCounts.set(key, (wakeCounts.get(key) ?? 0) + 1);
+        wakeCounts.set(id, (wakeCounts.get(id) ?? 0) + 1);
       }
     }
-    for (const [key, count] of wakeCounts) {
-      if (count > 1) {
-        const [generation, id] = key.split("\u0000");
+    for (const [id, count] of wakeCounts) {
+      const allowed = 1 + (this.drops.get(id) ?? 0);
+      if (count > allowed) {
         stories.push(
-          `delivery ${id} woke its recipient ${count} times in process generation ${generation}`,
+          `delivery ${id} woke its recipient ${count} times (its queued copy was dropped ${allowed - 1} times)`,
         );
       }
     }
     return stories;
+  }
+
+  /** At its due time, or, when the Gateway was down then, when the new process booted. */
+  private firesOnTime(dueAt: number, firedAt: number): boolean {
+    const down = this.downtimes.find((window) => dueAt >= window.from && dueAt < window.to);
+    const expected = down ? down.to : dueAt;
+    return firedAt >= dueAt && firedAt < expected + ANNEX_STEP_MS;
   }
 
   private describeRoom(sessionKey: string): string {
