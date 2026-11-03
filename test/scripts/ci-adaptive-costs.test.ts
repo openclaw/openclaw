@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -54,7 +55,9 @@ describe("adaptive CI cost model", () => {
 
   it("rounds full-audit and selected executions before averaging", () => {
     const input = scenario();
-    Object.assign(input.jobs[0], {
+    const [job] = input.jobs;
+    assert(job);
+    Object.assign(job, {
       baselineSeconds: 121,
       selectableSeconds: 120,
       retainedFraction: 0.5,
@@ -77,16 +80,20 @@ describe("adaptive CI cost model", () => {
 
   it("retains fixed setup unless empty-job elimination is explicit", () => {
     const input = scenario();
-    Object.assign(input.jobs[0], { retainedFraction: 0, auditRate: 0, overheadSeconds: 0 });
+    const [job] = input.jobs;
+    assert(job);
+    Object.assign(job, { retainedFraction: 0, auditRate: 0, overheadSeconds: 0 });
     expect(estimateAdaptiveCosts(input).runnerSeconds.candidate).toBe(20);
-    input.jobs[0].dropEmptyJob = true;
+    job.dropEmptyJob = true;
     expect(estimateAdaptiveCosts(input).runnerSeconds.candidate).toBe(0);
   });
 
   it("keeps unknown price and CPU allocation out of zero-valued totals", () => {
     const input = scenario();
-    input.jobs[0].usdPerMinute = null;
-    input.jobs[0].allocatedVcpus = null;
+    const [job] = input.jobs;
+    assert(job);
+    job.usdPerMinute = null;
+    job.allocatedVcpus = null;
     const report = estimateAdaptiveCosts(input);
     expect(report.runnerListUsd.saved).toBeNull();
     expect(report.allocatedVcpuMinutes.saved).toBeNull();
@@ -96,10 +103,12 @@ describe("adaptive CI cost model", () => {
 
   it("rejects impossible or double-counted job observations", () => {
     const input = scenario();
-    input.jobs.push(input.jobs[0]);
+    const [job] = input.jobs;
+    assert(job);
+    input.jobs.push(job);
     expect(() => estimateAdaptiveCosts(input)).toThrow("duplicate job");
     input.jobs.pop();
-    input.jobs[0].selectableSeconds = 101;
+    job.selectableSeconds = 101;
     expect(() => estimateAdaptiveCosts(input)).toThrow("exceeds job");
   });
 
