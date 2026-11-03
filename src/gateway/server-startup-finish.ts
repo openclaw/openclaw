@@ -368,6 +368,10 @@ export async function finishGatewayStartup(params: {
       ),
     ),
   );
+  // The post-attach span ends inside startupTrace.measure(), but its timeline
+  // event is batched. Flush it before markSidecarsReady() can make /readyz green;
+  // performance collectors stop their startup interval at that response.
+  flushDiagnosticsTimeline();
   postAttachSpanSettled = true;
   if (postAttachSidecarsReady && sidecarStartup !== "defer") {
     kernel.markSidecarsReady();
