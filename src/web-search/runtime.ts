@@ -188,12 +188,13 @@ type WebSearchRequestContext = {
   config?: OpenClawConfig;
   search?: WebSearchConfig;
   runtimeWebSearch?: RuntimeWebSearchMetadata;
+  sandboxed?: boolean;
 };
 
 function resolveWebSearchRequestContext(
   options?: Pick<
     ResolveWebSearchDefinitionParams,
-    "config" | "preferInputConfig" | "runtimeWebSearch"
+    "config" | "preferInputConfig" | "runtimeWebSearch" | "sandboxed"
   >,
 ): WebSearchRequestContext {
   const config = resolveWebSearchRuntimeConfig({
@@ -205,6 +206,7 @@ function resolveWebSearchRequestContext(
     search: resolveSearchConfig(config),
     runtimeWebSearch:
       options?.runtimeWebSearch ?? getActiveRuntimeWebToolsMetadataFromState()?.search,
+    sandboxed: options?.sandboxed,
   };
 }
 
@@ -237,6 +239,7 @@ function loadSortedWebSearchProviders(
   return sortPluginEntriesForAutoDetect(
     resolveProviders({
       config: params.config,
+      sandboxed: params.sandboxed,
       ...(pluginId ? { onlyPluginIds: [pluginId] } : {}),
     }),
   );
@@ -246,16 +249,14 @@ async function resolveWebSearchCandidates(
   options?: ResolveWebSearchDefinitionParams,
   context = resolveWebSearchRequestContext(options),
 ): Promise<PluginWebSearchProviderEntry[]> {
-  const { config, search, runtimeWebSearch } = context;
+  const { config, search } = context;
   if (search?.enabled === false) {
     return [];
   }
 
   await prepareBundledDiscoveryMode();
   const providers = loadSortedWebSearchProviders({
-    config,
-    search,
-    runtimeWebSearch,
+    ...context,
     providerId: options?.providerId,
     preferRuntimeProviders: options?.preferRuntimeProviders,
   });
