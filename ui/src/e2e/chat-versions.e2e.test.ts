@@ -8,7 +8,7 @@ const key = "agent:main:release-notes";
 const previousKey = "agent:main:planning";
 
 suite.define(() => {
-  it("aligns version labels and retires cached overlays on browser Back", () =>
+  it("aligns version labels in the session menu and retires it on browser Back", () =>
     suite.withPage(
       { viewport: { width: 1200, height: 800 }, colorScheme: "dark" },
       async ({ page }) => {
@@ -44,16 +44,16 @@ suite.define(() => {
         await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(key));
         const pane = page.locator(`openclaw-chat-pane[data-mcp-app-owner-key*="${key}"]`);
         await pane.getByText(draft, { exact: false }).waitFor();
-        const trigger = pane.getByRole("button", { name: "Versions", exact: true });
-        await trigger.press("Enter");
-        const menu = pane.locator(".chat-pane__branches-menu");
-        const menuSurface = menu.locator(".oc-menu");
-        const info = menu.getByRole("button", { name: "About versions" });
-        const help = page.getByRole("dialog", { name: "About versions" });
-        const helpSurface = menu.locator(".chat-pane__versions-help");
-        const current = menu.locator('.chat-pane__branch-item[data-active="true"]');
+        await pane.locator(".chat-header-session-menu__trigger").click();
+        const versions = pane.locator('button[data-value="submenu:versions"]');
+        await versions.hover();
+        const menuSurface = pane
+          .locator(".oc-menu")
+          .filter({ has: page.locator(".chat-pane__branch-item") })
+          .last();
+        const current = menuSurface.locator('.chat-pane__branch-item[data-active="true"]');
         await waitForControlUiProofSurface(menuSurface, [
-          info,
+          menuSurface.getByRole("note"),
           current.locator(".chat-pane__branch-copy"),
           current.locator(".chat-pane__branch-active svg"),
         ]);
@@ -74,25 +74,18 @@ suite.define(() => {
             }
             return { x, y, width, height };
           };
-          const infoBox = measure(".chat-pane__versions-info svg");
-          const heading = measure(".chat-pane__versions-heading > span");
           const text = measure(`${active} .chat-pane__branch-copy`);
           const badge = measure(`${active} .chat-pane__branch-active`);
           measure(`${active} .chat-pane__branch-active svg`);
-          const centerY = (box: typeof infoBox) => box.y + box.height / 2;
+          const centerY = (box: typeof text) => box.y + box.height / 2;
           return {
-            headingGap: infoBox.x - heading.x - heading.width,
             textGap: badge.x - text.x - text.width,
             verticalOffset: Math.abs(centerY(badge) - centerY(text)),
           };
         });
-        expect(geometry.headingGap).toBeGreaterThanOrEqual(0);
-        expect(geometry.headingGap).toBeLessThanOrEqual(8);
         expect(geometry.textGap).toBeGreaterThanOrEqual(0);
         expect(geometry.verticalOffset).toBeLessThanOrEqual(1);
 
-        await info.press("Enter");
-        await help.waitFor();
         // Browser Back changes presentation without an outside pointer dismissal.
         expect(await gateway.getRequests("sessions.branches.switch")).toHaveLength(0);
         await page.goBack();
@@ -103,8 +96,7 @@ suite.define(() => {
         const composer = activePane.locator(".agent-chat__composer-combobox textarea");
         await composer.waitFor();
         expect(await pane.getAttribute("inert")).not.toBeNull();
-        await expect.poll(() => menuSurface.isVisible()).toBe(false);
-        await expect.poll(() => helpSurface.isVisible()).toBe(false);
+        await expect.poll(() => current.isVisible()).toBe(false);
         await composer.fill("Continue planning after browser Back");
         expect(await composer.inputValue()).toBe("Continue planning after browser Back");
         expect(await gateway.getRequests("sessions.branches.switch")).toHaveLength(0);
