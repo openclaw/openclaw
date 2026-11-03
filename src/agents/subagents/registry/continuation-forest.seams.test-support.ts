@@ -17,6 +17,7 @@ import type {
   QueuedSessionDeliveryPayload,
 } from "../../../infra/session-delivery-queue-storage.js";
 import type { createSubsystemLogger } from "../../../logging/subsystem.js";
+import type { sleep } from "../../../utils/sleep.js";
 import type { spawnSubagentDirect } from "../spawn/subagent-spawn.js";
 
 type ResetKillParams = Parameters<typeof stopSessionResetSubagents>[0];
@@ -35,6 +36,8 @@ export type ContinuationForestSeams = {
   afterDeliveryRowWritten?: (payload: QueuedSessionDeliveryPayload, id: string) => Promise<void>;
   /** Every subsystem log line at info level or above. */
   logLine?: (subsystem: string, message: string) => void;
+  /** A wait on the clock begins; the returned callback runs when it ends. */
+  clockWait?: () => () => void;
 };
 
 export const continuationForestSeams: ContinuationForestSeams = {};
@@ -107,6 +110,20 @@ export function withForestLogLines<
           logger[level](message, meta);
         };
       return { ...logger, info: record("info"), warn: record("warn"), error: record("error") };
+    },
+  };
+}
+
+export function withForestSleep<M extends { sleep: typeof sleep }>(actual: M): M {
+  return {
+    ...actual,
+    sleep: async (...args: Parameters<typeof sleep>) => {
+      const ended = continuationForestSeams.clockWait?.();
+      try {
+        return await actual.sleep(...args);
+      } finally {
+        ended?.();
+      }
     },
   };
 }

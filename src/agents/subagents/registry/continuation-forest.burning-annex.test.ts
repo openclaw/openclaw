@@ -47,6 +47,11 @@ vi.mock("../../../logging/subsystem.js", async (importOriginal) =>
     await importOriginal(),
   ),
 );
+vi.mock("../../../utils/sleep.js", async (importOriginal) =>
+  (await import("./continuation-forest.seams.test-support.js")).withForestSleep(
+    await importOriginal(),
+  ),
+);
 
 const fixture = useSubagentControlFixture();
 const annex = useContinuationForest(() => fixture.stateDir);

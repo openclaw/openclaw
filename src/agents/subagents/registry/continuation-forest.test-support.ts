@@ -784,6 +784,7 @@ export class ContinuationForest {
       }
       await this.gate(`row:${payload.continuationSourceRunId ?? "none"}>${payload.sessionKey}`);
     };
+    continuationForestSeams.clockWait = () => this.clockWait();
     continuationForestSeams.logLine = (subsystem, message) => {
       if (message.startsWith("[continuation:")) {
         this.logLines.push({ subsystem, message, at: Date.now() });
@@ -1192,10 +1193,9 @@ export class ContinuationForest {
     resetContinuationCustodyProjection();
     this.generation += 1;
     const startedAt = Date.now();
-    const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
     const log = { info: () => {}, warn: () => {}, error: () => {} };
-    const delivery = (async () => {
-      await sleep(1_250);
+    const delivery = this.run(async () => {
+      await this.sleep(1_250);
       this.startDeliveryRuntime();
       try {
         await recoverPendingProducedSessionDeliveries({
@@ -1207,9 +1207,9 @@ export class ContinuationForest {
       } finally {
         await schedulePendingSessionDeliveries();
       }
-    })();
-    const custody = (async () => {
-      await sleep(1_400);
+    });
+    const custody = this.run(async () => {
+      await this.sleep(1_400);
       await runContinuationCustodyBoot({
         armedAt: startedAt,
         whenSubagentRegistryActivated: async () => {},
@@ -1218,12 +1218,16 @@ export class ContinuationForest {
         cfg: getRuntimeConfig(),
         markedBefore: startedAt,
       });
-    })();
+    });
     await this.whileTimePasses(Promise.all([delivery, custody]), "the Gateway's boot");
     this.downtimes.push({ from: startedAt, to: Date.now() });
   }
 
-  /** Advances the clock step by step until `work` settles; fails the story after `maxMs`. */
+  /**
+   * Advances the clock step by step until `work` (world operations) settles; fails the story after
+   * `maxMs`. settle() returns only once every operation still running waits on the clock, so the
+   * clock never runs ahead of real work.
+   */
   private async whileTimePasses<T>(work: Promise<T>, what: string, maxMs = 120_000): Promise<T> {
     let done = false;
     void work.then(
@@ -1231,13 +1235,37 @@ export class ContinuationForest {
       () => (done = true),
     );
     const deadline = Date.now() + maxMs;
+    await this.settle();
     while (!done) {
-      await this.advance(ANNEX_STEP_MS);
-      if (!done && Date.now() >= deadline) {
+      if (Date.now() >= deadline) {
         throw new Error(`${what} never finished within ${maxMs}ms`);
       }
+      await this.advance(ANNEX_STEP_MS);
     }
     return await work;
+  }
+
+  /** A world operation's wait on the clock: settle() does not wait for it. */
+  private async sleep(ms: number): Promise<void> {
+    const ended = this.clockWait();
+    try {
+      await new Promise<void>((resolve) => setTimeout(resolve, ms));
+    } finally {
+      ended();
+    }
+  }
+
+  /** Marks the current world operation as waiting on the clock until the returned callback runs. */
+  private clockWait(): () => void {
+    const op = opContext.getStore();
+    if (!op) {
+      return () => {};
+    }
+    op.parked = true;
+    this.parkSignal.resolve();
+    return () => {
+      op.parked = false;
+    };
   }
 
   /** Queued copies of durable rows a reset or restart drops; their sweep or replay wakes again. */
