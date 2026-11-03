@@ -67,6 +67,7 @@ Notes:
 
 - `screen.record` availability depends on node platform.
 - The `nodes` agent tool caps requested `durationMs` at 300000 (5 minutes); the node may enforce a tighter limit to bound the returned payload.
+- On macOS, recordings that would not fit the Gateway's 25 MiB result frame (about 18.75 MiB of MP4) fail with `UNAVAILABLE: screen.record payload too large; reduce durationMs or fps` and the node stays connected.
 - `--no-audio` disables microphone capture on supported platforms.
 - Use `--screen <index>` to select a display when multiple screens are available (0 = primary).
 

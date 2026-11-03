@@ -4,6 +4,32 @@ import type { WorkerWorkspaceCommand } from "./tunnel-contract.js";
 import { createWorkerWorkspaceQuiescence } from "./workspace-quiescence.js";
 
 describe("worker workspace quiescence", () => {
+  it("uses a bounded acquire command for legacy Windows workspaces", async () => {
+    const owner = new AbortController();
+    const nonce = "a".repeat(32);
+    const runWorkspaceCommand = vi.fn(async (_command: WorkerWorkspaceCommand) => ({
+      stdout: `quiesced ${nonce}\n`,
+      stderr: "",
+      code: 0,
+      signal: null,
+      killed: false,
+      termination: "exit" as const,
+    }));
+    const lease = await createWorkerWorkspaceQuiescence({
+      ownerSignal: owner.signal,
+      sharedHost: true,
+      runWorkspaceCommand,
+    })(String.raw`C:\workspace`);
+
+    owner.abort();
+    await lease.resume();
+
+    expect(runWorkspaceCommand).toHaveBeenCalledOnce();
+    const [command] = runWorkspaceCommand.mock.calls[0]!;
+    expect(command).toMatchObject({ legacyQuiescence: true, transportRetry: "never" });
+    expect(command.argv.join(" ").length).toBeLessThan(32_767);
+  });
+
   it.each(["transport", "acknowledgement", "cleanup", "owner-closed", "legacy"] as const)(
     "recovers only an owned native nonce after failed acquisition (%s)",
     async (failure) => {

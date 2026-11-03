@@ -8,7 +8,7 @@ import type {
   RealtimeVoiceCloseDisposition,
   RealtimeVoiceCloseOptions,
 } from "openclaw/plugin-sdk/realtime-voice";
-import WebSocket from "ws";
+import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
 import {
   assertOpenAIQuicksilverPcmOutput,

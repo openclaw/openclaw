@@ -170,6 +170,7 @@ describe("meeting native continuous voice", () => {
     try {
       fixture.callbacks.onAudio(Buffer.alloc(48_000, 1));
       await vi.advanceTimersByTimeAsync(0);
+      vi.setSystemTime(Date.now() + 5_000);
       fixture.callbacks.onAudio(Buffer.alloc(48_000, 2));
       fixture.callbacks.onAudio(Buffer.alloc(960, 3));
       await vi.advanceTimersByTimeAsync(0);
@@ -181,6 +182,30 @@ describe("meeting native continuous voice", () => {
       expect(fixture.writeOutput).toHaveBeenCalledTimes(2);
       expect(fixture.writeOutput).toHaveBeenLastCalledWith(fresh);
       expect(fixture.handleBargeIn).not.toHaveBeenCalled();
+    } finally {
+      pending.resolve();
+      await fixture.handle.stop();
+    }
+  });
+
+  it("recovers stuck playback after the provider has finished sending", async () => {
+    vi.useFakeTimers();
+    const fixture = await createLiveFixture();
+    const pending = createDeferredCore();
+    fixture.writeOutput.mockImplementationOnce(() => pending.promise);
+    try {
+      for (let index = 1; index <= 3; index += 1) {
+        fixture.callbacks.onAudio(Buffer.alloc(48_000, index));
+      }
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(fixture.clearOutput).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(fixture.clearOutput).toHaveBeenCalledOnce();
+      const fresh = Buffer.alloc(960, 4);
+      fixture.callbacks.onAudio(fresh);
+      pending.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fixture.writeOutput).toHaveBeenLastCalledWith(fresh);
     } finally {
       pending.resolve();
       await fixture.handle.stop();

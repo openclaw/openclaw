@@ -101,6 +101,11 @@ registry. Unavailable replacements remain nonblocking: the app's recovery
 diagnostics include the remaining version or peer-link warning and the exact
 repair command. Retry Gateway setup in the app to repeat this owned repair.
 
+On macOS, reinstall and uninstall reconcile the launchd registration by service
+label even if its plist was deleted. Reinstall warns when the previous definition
+is missing; an existing plist and its private environment files remain backed up
+for rollback if activation fails.
+
 ## Retired tenant-container management
 
 The experimental `openclaw fleet` command has been removed. Updating the host

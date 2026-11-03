@@ -6,6 +6,7 @@ import {
   type NodeWorkerWorkspaceQuiescenceInput,
 } from "../../worker/node-workspace-protocol.js";
 import type { WorkerWorkspaceCommand, WorkerWorkspaceQuiescence } from "./tunnel-contract.js";
+import { legacyWindowsWorkspaceQuiescenceAcquireArgv } from "./workspace-quiescence-lease-scripts.js";
 import { workspaceQuiescenceArgv } from "./workspace-quiescence-scripts.js";
 import {
   waitForQuiescenceRenewal,
@@ -25,10 +26,11 @@ export function createWorkerWorkspaceQuiescence(params: {
   return async (remoteWorkspaceDir) => {
     const posixAbsolute = path.posix.isAbsolute(remoteWorkspaceDir);
     const windowsAbsolute = path.win32.isAbsolute(remoteWorkspaceDir);
+    const windowsOnlyAbsolute = !posixAbsolute && windowsAbsolute;
     if (!posixAbsolute && !windowsAbsolute) {
       throw new Error("Worker workspace quiescence path must be absolute");
     }
-    if (!posixAbsolute && windowsAbsolute && !params.sharedHost) {
+    if (windowsOnlyAbsolute && !params.sharedHost) {
       throw new Error("Windows worker workspace quiescence requires a shared host");
     }
     const hostMode = params.sharedHost ? "shared-host" : "dedicated";
@@ -41,7 +43,9 @@ export function createWorkerWorkspaceQuiescence(params: {
         transportRetry: "never",
         argv: nativeWatchdog
           ? [NODE_WORKSPACE_QUIESCENCE_COMMAND, remoteWorkspaceDir]
-          : workspaceQuiescenceArgv(remoteWorkspaceDir, operation, hostMode),
+          : windowsOnlyAbsolute && operation.action === "acquire"
+            ? legacyWindowsWorkspaceQuiescenceAcquireArgv(remoteWorkspaceDir, operation, hostMode)
+            : workspaceQuiescenceArgv(remoteWorkspaceDir, operation, hostMode),
         ...(nativeWatchdog ? { quiescence: operation } : { legacyQuiescence: true }),
       });
       if (!workerWorkspaceCommandSucceeded(result)) {

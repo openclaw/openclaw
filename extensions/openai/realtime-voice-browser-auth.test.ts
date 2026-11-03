@@ -22,8 +22,9 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 
-vi.mock("ws", () => ({
-  default: mocks.FakeWebSocket,
+vi.mock("openclaw/plugin-sdk/websocket-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/websocket-runtime")>()),
+  WebSocket: mocks.FakeWebSocket,
 }));
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({

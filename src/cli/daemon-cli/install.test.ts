@@ -477,6 +477,22 @@ describe("runDaemonInstall reinstall", () => {
     );
   });
 
+  it("refreshes a loaded service when its definition is missing", async () => {
+    service.isLoaded.mockResolvedValue(true);
+    service.readCommand.mockResolvedValue(null);
+
+    await runDaemonInstall({ json: true });
+
+    expect(service.readCommand).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ requireEffective: true, allowMissingDefinition: true }),
+    );
+    expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
+    expect(actionState.warnings).toContain(
+      "Gateway service definition is missing; refreshing the install.",
+    );
+  });
+
   it("returns already-installed when the embedded gateway token matches the install plan", async () => {
     service.isLoaded.mockResolvedValue(true);
     service.readCommand.mockResolvedValue({

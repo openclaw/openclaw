@@ -46,6 +46,26 @@ function registerProvider(
 }
 
 describe("Computer Use wire contract", () => {
+  it("accepts optional cursor coordinates from older paired nodes", () => {
+    for (const receipt of [
+      { ok: true },
+      { ok: true, cursorX: -12.5 },
+      { ok: true, cursorY: 4.25 },
+      { ok: true, cursorX: -12.5, cursorY: 4.25 },
+    ]) {
+      expect(parseComputerActResult(receipt)).toEqual(receipt);
+    }
+  });
+
+  it.each([{ cursorX: "12" }, { cursorY: null }, { unexpected: true }])(
+    "rejects invalid receipt fields: %j",
+    (fields) => {
+      expect(() => parseComputerActResult({ ok: true, ...fields })).toThrow(
+        "COMPUTER_CONTRACT_MISMATCH",
+      );
+    },
+  );
+
   it("projects the canonical screen.snapshot result", () => {
     expect(
       parseScreenSnapshotResult({

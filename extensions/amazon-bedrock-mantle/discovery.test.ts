@@ -574,6 +574,38 @@ describe("bedrock mantle discovery", () => {
     expect(provider).toBeNull();
   });
 
+  it.each([
+    { region: "ap-northeast-1", env: { AWS_REGION: "ap-northeast-1" }, modelId: "openai.gpt-5.5" },
+    { region: "us-east-1", env: {}, modelId: "openai.gpt-5.6-luna" },
+  ])(
+    "routes discovered GPT models through Responses in $region",
+    async ({ region, env, modelId }) => {
+      const mockFetch = vi.fn<typeof fetch>().mockResolvedValue(
+        modelDiscoveryResponse({
+          data: [
+            { id: modelId, object: "model" },
+            { id: "openai.gpt-oss-120b", object: "model" },
+          ],
+        }),
+      );
+
+      const provider = await resolveImplicitWithDependencies({
+        env: { ...env, AWS_BEARER_TOKEN_BEDROCK: "responses-" + testRegion },
+        fetchFn: mockFetch,
+      });
+
+      expect(provider?.baseUrl).toBe(`https://bedrock-mantle.${region}.api.aws/v1`);
+      expect(provider?.api).toBe("openai-completions");
+      expect(provider?.models?.find((model) => model.id === modelId)).toMatchObject({
+        api: "openai-responses",
+        baseUrl: `https://bedrock-mantle.${region}.api.aws/openai/v1`,
+      });
+      const oss = provider?.models?.find((model) => model.id === "openai.gpt-oss-120b");
+      expect(oss?.api ?? provider?.api).toBe("openai-completions");
+      expect(oss).not.toHaveProperty("baseUrl");
+    },
+  );
+
   it("defaults to us-east-1 when no region is set", async () => {
     const mockFetch = vi
       .fn<typeof fetch>()

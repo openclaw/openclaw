@@ -587,7 +587,10 @@ describe("createVoiceCallRuntime lifecycle", () => {
     await createVoiceCallRuntime({
       scheduler: createTestPluginServiceScheduler(),
       config,
-      coreConfig: {} as OpenClawConfig,
+      // The configured model differs from the runtime default so the consult proves inheritance.
+      coreConfig: {
+        agents: { defaults: { model: { primary: "anthropic/claude-opus-5-5" } } },
+      } as OpenClawConfig,
       agentRuntime: agentRuntime as never,
     });
 
@@ -622,8 +625,8 @@ describe("createVoiceCallRuntime lifecycle", () => {
     expect(consultParams.spawnedBy).toBe("agent:main:discord:channel:general");
     expect(consultParams.messageProvider).toBe("voice");
     expect(consultParams.lane).toBe("voice");
-    expect(consultParams.provider).toBe("openai");
-    expect(consultParams.model).toBe("gpt-5.4");
+    expect(consultParams.provider).toBe("anthropic");
+    expect(consultParams.model).toBe("claude-opus-5-5");
     expect(consultParams.toolsAllow).toEqual([
       "read",
       "web_search",

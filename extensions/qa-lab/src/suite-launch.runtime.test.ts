@@ -29,14 +29,12 @@ import {
 } from "./test-file-scenario-runner.test-support.js";
 
 const {
-  crablineRuntimeLoads,
   prepareDockerE2eEnvironment,
   replaceFileAtomicMock,
   runPluginCommandWithTimeout,
   runQaFlowSuite,
   runQaTestFileScenarios,
 } = vi.hoisted(() => ({
-  crablineRuntimeLoads: vi.fn(),
   prepareDockerE2eEnvironment: vi.fn(),
   replaceFileAtomicMock: vi.fn(),
   runPluginCommandWithTimeout: vi.fn(),
@@ -44,11 +42,6 @@ const {
   runQaTestFileScenarios:
     vi.fn<typeof import("./test-file-scenario-runner.js").runQaTestFileScenarios>(),
 }));
-
-vi.mock("@openclaw/crabline", async (importOriginal) => {
-  crablineRuntimeLoads();
-  return await importOriginal<typeof import("@openclaw/crabline")>();
-});
 
 vi.mock("./suite.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./suite.js")>()),
@@ -1813,17 +1806,12 @@ describe("qa suite runtime launcher", () => {
         result: { status: "blocked" },
       });
       expect(blocked?.execution?.channel?.driver).toBeUndefined();
+      expect(result.observedCells).not.toContainEqual({
+        scenarioId,
+        executionKind: "flow",
+        channel: "whatsapp",
+      });
     }
-    expect(result.observedCells).not.toEqual(
-      expect.arrayContaining([
-        { scenarioId: "whatsapp-status-command", executionKind: "flow", channel: "whatsapp" },
-        {
-          scenarioId: "whatsapp-access-control-dm-open",
-          executionKind: "flow",
-          channel: "whatsapp",
-        },
-      ]),
-    );
   });
 
   it("isolates flow scenarios that mutate shared runtime state", async () => {

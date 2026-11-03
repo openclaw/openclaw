@@ -168,6 +168,45 @@ describeLaunchdIntegration("launchd integration", () => {
   let homeDir = "";
   const stdout = new PassThrough();
 
+  it("recovers registered services after their plists are deleted", async () => {
+    const testId = randomUUID().slice(0, 8);
+    const fixtureHome = await fs.mkdtemp(
+      path.join(os.tmpdir(), `openclaw-launchd-missing-plist-${testId}-`),
+    );
+    const fixtureEnv: GatewayServiceEnv = {
+      HOME: fixtureHome,
+      OPENCLAW_LAUNCHD_LABEL: `ai.openclaw.launchd-int-missing-plist-${testId}`,
+      OPENCLAW_LOG_PREFIX: `gateway-launchd-int-missing-plist-${testId}`,
+    };
+    const args = {
+      env: fixtureEnv,
+      stdout,
+      programArguments: [process.execPath, "-e", "setInterval(() => {}, 1000);"],
+    };
+    const plist = resolveLaunchAgentPlistPath(fixtureEnv);
+    try {
+      await installLaunchAgent(args);
+      await waitForRunningRuntime({ env: fixtureEnv });
+      await fs.unlink(plist);
+
+      await uninstallLaunchAgent({ env: fixtureEnv, stdout });
+      await waitForNotRunningRuntime({ env: fixtureEnv });
+
+      await installLaunchAgent(args);
+      const previous = await waitForRunningRuntime({ env: fixtureEnv });
+      await fs.unlink(plist);
+      const warnings: string[] = [];
+
+      await installLaunchAgent({ ...args, warn: (message) => warnings.push(message) });
+
+      await expectRuntimePidReplaced({ env: fixtureEnv, previousPid: previous.pid });
+      expect(warnings.some((message) => message.includes("plist is missing"))).toBe(true);
+    } finally {
+      await uninstallLaunchAgent({ env: fixtureEnv, stdout }).catch(() => {});
+      await fs.rm(fixtureHome, { recursive: true, force: true });
+    }
+  }, 90_000);
+
   it("real launchctl: node-host LaunchAgent stop/restart survives a co-located busy Gateway port (#124296)", async () => {
     // Real-world proof for https://github.com/openclaw/openclaw/issues/124296:
     // this drives actual `launchctl` LaunchAgents (no mocked port-inspection

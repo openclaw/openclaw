@@ -199,7 +199,7 @@ it.each([
       expect(await fs.readFile(plist, "utf8")).toContain("/candidate/openclaw/dist/index.js");
       expect(loaded).toBe(true);
       expect(activations).toEqual(
-        boundary === "bootstrap" ? ["bootout", "unload", "enable", "bootstrap"] : [],
+        boundary === "bootstrap" ? ["bootout", "enable", "bootstrap"] : [],
       );
       return;
     }
@@ -217,7 +217,7 @@ it.each([
       expect(activations).toEqual(
         boundary === "bootout"
           ? ["bootout", "enable", "bootstrap"]
-          : ["bootout", "unload", "enable", "bootstrap", "bootout", "enable", "bootstrap"],
+          : ["bootout", "enable", "bootstrap", "bootout", "enable", "bootstrap"],
       );
     } else {
       expect(activations).toEqual([]);
