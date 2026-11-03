@@ -47,7 +47,8 @@ vi.mock("../../plugins/plugin-metadata-snapshot.js", async (importOriginal) => (
   resolvePluginMetadataSnapshot: () => modelPluginMetadataSnapshot,
 }));
 
-vi.mock("../../plugins/provider-thinking.js", () => ({
+vi.mock("../../plugins/provider-thinking.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/provider-thinking.js")>()),
   resolveEffectiveThinkingProfile: (params: { provider: string; context: { modelId: string } }) => {
     if (params.provider !== "claude-cli") {
       return undefined;

@@ -19,7 +19,10 @@ const assertNoSystemOwnership = vi.hoisted(() =>
 
 const busctl = vi.hoisted(() => vi.fn<typeof import("./systemd-exec.js").execBusctlUser>());
 
-vi.mock("./exec-file.js", () => ({ execFileUtf8: vi.fn() }));
+vi.mock("./exec-file.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./exec-file.js")>()),
+  execFileUtf8: vi.fn(),
+}));
 
 vi.mock("./systemd-system.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./systemd-system.js")>()),

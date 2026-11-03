@@ -222,19 +222,23 @@ vi.mock("../config/paths.js", async () => {
 
 export const DOCTOR_GATEWAY_HEALTH_ID = "doctor:gateway-health";
 
+// mock-isolation: Keep plugin installation and release stamping behind the fixture; these flow tests must not install packages.
 vi.mock("../commands/doctor/shared/release-configured-plugin-installs.js", () => ({
   maybeRunConfiguredPluginInstallReleaseStep: mocks.maybeRunConfiguredPluginInstallReleaseStep,
 }));
 
+// mock-isolation: Supply stale-link findings without scanning or repairing host plugin-runtime links.
 vi.mock("../commands/doctor/shared/plugin-runtime-symlinks.js", () => ({
   collectStalePluginRuntimeSymlinkHealthFindings:
     mocks.collectStalePluginRuntimeSymlinkHealthFindings,
 }));
 
+// mock-isolation: Each case controls the health registry; do not register the real bundled checks over that fixture.
 vi.mock("./bundled-health-checks.js", () => ({
   registerBundledHealthChecks: mocks.registerBundledHealthChecks,
 }));
 
+// mock-isolation: Capture repair dispatch without running the nested repair pipeline or its state writes.
 vi.mock("./doctor-repair-flow.js", () => ({
   runDoctorHealthRepairs: mocks.runDoctorHealthRepairs,
 }));
@@ -247,24 +251,29 @@ vi.mock("../config/types.secrets.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../gateway/auth.js", () => ({
+vi.mock("../gateway/auth.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../gateway/auth.js")>()),
   resolveGatewayAuth: mocks.resolveGatewayAuth,
 }));
 
-vi.mock("../gateway/auth-token-resolution.js", () => ({
+vi.mock("../gateway/auth-token-resolution.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../gateway/auth-token-resolution.js")>()),
   resolveGatewayAuthToken: mocks.resolveGatewayAuthToken,
 }));
 
-vi.mock("../secrets/exec-resolution-policy.js", () => ({
+vi.mock("../secrets/exec-resolution-policy.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../secrets/exec-resolution-policy.js")>()),
   getSkippedExecRefStaticError: mocks.getSkippedExecRefStaticError,
 }));
 
+// mock-isolation: Model service repairs and conflicts without discovering or mutating host service definitions.
 vi.mock("../commands/doctor-gateway-services.js", () => ({
   maybeRepairGatewayServiceConfig: mocks.maybeRepairGatewayServiceConfig,
   maybeScanExtraGatewayServices: mocks.maybeScanExtraGatewayServices,
   maybeResolveDuelingSystemdGatewayScopes: mocks.maybeResolveDuelingSystemdGatewayScopes,
 }));
 
+// mock-isolation: Supply profile migration receipts without rewriting authentication stores or deleting legacy files.
 vi.mock("../commands/doctor-auth-flat-profiles.js", () => ({
   maybeRepairLegacyAuthProfileStores: ({
     profileIdMap,
@@ -280,19 +289,23 @@ vi.mock("../commands/doctor-auth-flat-profiles.js", () => ({
   maybeRepairOpenAICodexAuthConfig: mocks.maybeRepairOpenAICodexAuthConfig,
 }));
 
+// mock-isolation: Supply catalog migration results without migrating installed plugin data.
 vi.mock("../commands/doctor-plugin-model-catalog.js", () => ({
   maybeMigrateLegacyPluginModelCatalogs: mocks.maybeMigrateLegacyPluginModelCatalogs,
 }));
 
+// mock-isolation: Supply credential migration results without reading or rewriting credential stores.
 vi.mock("../commands/doctor-model-catalog-credentials.js", () => ({
   maybeMigrateModelCatalogCredentials: mocks.maybeMigrateModelCatalogCredentials,
 }));
 
+// mock-isolation: Capture daemon repair requests without installing, stopping, or restarting a host service.
 vi.mock("../commands/doctor-gateway-daemon-flow.js", () => ({
   maybeRepairGatewayDaemon: mocks.maybeRepairGatewayDaemon,
 }));
 
-vi.mock("../infra/container-environment.js", () => ({
+vi.mock("../infra/container-environment.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/container-environment.js")>()),
   isContainerEnvironment: mocks.isContainerEnvironment,
 }));
 
@@ -325,19 +338,23 @@ vi.mock("../daemon/systemd.js", async (importOriginal) => {
   };
 });
 
+// mock-isolation: Control retired OAuth cleanup plans without inspecting or changing real profile stores.
 vi.mock("../commands/doctor-auth-legacy-oauth.js", () => ({
   maybeRepairLegacyOAuthProfileIds: mocks.maybeRepairLegacyOAuthProfileIds,
 }));
 
+// mock-isolation: Control legacy migration detection and results without migrating host state.
 vi.mock("../infra/state-migrations.doctor.js", () => ({
   detectLegacyStateMigrations: mocks.detectLegacyStateMigrations,
   runLegacyStateMigrations: mocks.runLegacyStateMigrations,
 }));
 
+// mock-isolation: Keep generated-approval repair in the fixture rather than modifying an approvals store.
 vi.mock("../infra/exec-approvals-generated-migration.js", () => ({
   repairObsoleteGeneratedExecApprovals: mocks.repairObsoleteGeneratedExecApprovals,
 }));
 
+// mock-isolation: Control manifest migration findings and receipts without rewriting plugin manifests.
 vi.mock("../commands/doctor-plugin-manifests.js", () => ({
   collectLegacyPluginManifestContractMigrations:
     mocks.collectLegacyPluginManifestContractMigrations,
@@ -351,6 +368,7 @@ vi.mock("../agents/auth-profiles.js", async (importOriginal) => ({
   removeAuthProfilesAcrossOwnerStores: mocks.removeAuthProfilesAcrossOwnerStores,
 }));
 
+// mock-isolation: Use synthetic auth health findings instead of probing ambient credentials or external auth providers.
 vi.mock("../commands/doctor-auth.js", () => ({
   collectAuthProfileHealthFindings: mocks.collectAuthProfileHealthFindings,
   noteAuthProfileHealth: mocks.noteAuthProfileHealth,
@@ -359,20 +377,24 @@ vi.mock("../commands/doctor-auth.js", () => ({
   noteSharedAuthStoreStatus: mocks.noteSharedAuthStoreStatus,
 }));
 
+// mock-isolation: Exclude memory provider probes and repairs from these Doctor orchestration tests.
 vi.mock("../commands/doctor-memory-recall.js", () => ({
   maybeRepairMemoryRecallHealth: vi.fn().mockResolvedValue(undefined),
   noteMemoryRecallHealth: vi.fn().mockResolvedValue(undefined),
 }));
 
+// mock-isolation: Use fixture memory-search findings without contacting or initializing a memory provider.
 vi.mock("../commands/doctor-memory-search.js", () => ({
   noteMemorySearchHealth: mocks.noteMemorySearchHealth,
   collectMemorySearchHealthFindings: mocks.collectMemorySearchHealthFindings,
 }));
 
+// mock-isolation: Record diagnostic ordering without probing a network proxy.
 vi.mock("../commands/doctor-web-fetch-proxy.js", () => ({
   noteWebFetchProxyDiagnostic: mocks.noteWebFetchProxyDiagnostic,
 }));
 
+// mock-isolation: Supply Gateway connection and RPC outcomes without opening a live Gateway connection.
 vi.mock("../gateway/call.js", () => ({
   buildGatewayConnectionDetails: mocks.buildGatewayConnectionDetails,
   callGateway: mocks.callGateway,
@@ -384,6 +406,7 @@ vi.mock("../commands/doctor-platform-notes.js", async (importOriginal) => ({
   noteMacDisabledGatewayLaunchAgent: mocks.noteMacDisabledGatewayLaunchAgent,
 }));
 
+// mock-isolation: Do not scan the host launchd domain while exercising synthetic platform diagnostics.
 vi.mock("../commands/doctor-foreign-launchd-jobs.js", () => ({
   noteMacForeignLaunchdJobs: vi.fn().mockResolvedValue(undefined),
 }));
@@ -414,17 +437,20 @@ vi.mock("../gateway/secret-input-paths.js", async (importOriginal) => {
   };
 });
 
+// mock-isolation: Supply Gateway and memory health outcomes without probing live services.
 vi.mock("../commands/doctor-gateway-health.js", () => ({
   checkGatewayHealth: mocks.checkGatewayHealth,
   probeGatewayMemoryStatus: mocks.probeGatewayMemoryStatus,
 }));
 
+// mock-isolation: Supply browser readiness and repair results without inspecting or changing native-host registrations.
 vi.mock("../commands/doctor-browser.js", () => ({
   noteChromeMcpBrowserReadiness: mocks.noteChromeMcpBrowserReadiness,
   maybeRepairOwnedChromeExtensionNativeHosts: mocks.maybeRepairOwnedChromeExtensionNativeHosts,
 }));
 
-vi.mock("../agents/agent-scope.js", () => ({
+vi.mock("../agents/agent-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/agent-scope.js")>()),
   listAgentIds: mocks.listAgentIds,
   listAgentEntries: mocks.listAgentEntries,
   tryResolveSoleAgentId: mocks.tryResolveSoleAgentId,
@@ -435,20 +461,24 @@ vi.mock("../agents/agent-scope.js", () => ({
   resolveAgentContextLimits: mocks.resolveAgentContextLimits,
 }));
 
-vi.mock("../../packages/terminal-core/src/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../packages/terminal-core/src/note.js")>()),
   note: mocks.note,
 }));
 
-vi.mock("../agents/model-catalog.js", () => ({
+vi.mock("../agents/model-catalog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/model-catalog.js")>()),
   findModelCatalogEntry: mocks.findModelCatalogEntry,
 }));
 
-vi.mock("../agents/prepared-model-catalog.js", () => ({
+vi.mock("../agents/prepared-model-catalog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/prepared-model-catalog.js")>()),
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   readPreparedModelCatalog: mocks.loadModelCatalog,
 }));
 
-vi.mock("../agents/model-selection.js", () => ({
+vi.mock("../agents/model-selection.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/model-selection.js")>()),
   getModelRefStatus: mocks.getModelRefStatus,
   resolveConfiguredModelRef: mocks.resolveConfiguredModelRef,
   resolveDefaultModelForAgent: mocks.resolveDefaultModelForAgent,
@@ -463,7 +493,8 @@ vi.mock("../version.js", async () => ({
   resolveIsNixMode: vi.fn(() => false),
 }));
 
-vi.mock("../commands/doctor/shared/config-flow-steps.js", () => ({
+vi.mock("../commands/doctor/shared/config-flow-steps.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/doctor/shared/config-flow-steps.js")>()),
   restoreDoctorConfigEnvRefs: (cfg: OpenClawConfig) => cfg,
 }));
 
@@ -489,60 +520,72 @@ vi.mock("../config/config.js", async (importOriginal) => ({
   readConfigFileSnapshot: mocks.readConfigFileSnapshot,
 }));
 
+// mock-isolation: Keep package-target lookups synthetic; these health tests must not query the npm registry.
 vi.mock("../infra/update-check-package-target.js", () => ({
   fetchNpmPackageTargetStatus: vi.fn(),
 }));
 
+// mock-isolation: Supply daemon status without probing host processes or service managers.
 vi.mock("../cli/daemon-cli/status.gather.js", () => ({
   gatherDaemonStatus: mocks.gatherDaemonStatus,
 }));
 
+// mock-isolation: Supply workspace findings without inspecting the operator workspace.
 vi.mock("../commands/doctor-workspace-status.js", () => ({
   noteWorkspaceStatus: mocks.noteWorkspaceStatus,
   collectWorkspaceStatusHealthFindings: mocks.collectWorkspaceStatusHealthFindings,
 }));
 
+// mock-isolation: Use fixture workspace suggestions instead of reading host workspace contents.
 vi.mock("../commands/doctor-workspace.js", () => ({
   collectWorkspaceBackupTip: mocks.collectWorkspaceBackupTip,
   MEMORY_SYSTEM_PROMPT: "Enable memory system for better recall.",
   shouldSuggestMemorySystem: mocks.shouldSuggestMemorySystem,
 }));
 
+// mock-isolation: Supply disk-space findings independent of the test host filesystem capacity.
 vi.mock("../commands/doctor-disk-space.js", () => ({
   noteDiskSpace: vi.fn(),
   collectDiskSpaceHealthFindings: mocks.collectDiskSpaceHealthFindings,
 }));
 
+// mock-isolation: Control cadence migration findings and writes without modifying a real cron store.
 vi.mock("../commands/doctor-heartbeat-cadence-migration.js", () => ({
   collectHeartbeatCadenceMigrationFindings: mocks.collectHeartbeatCadenceMigrationFindings,
   maybeMigrateHeartbeatCadenceToCron: mocks.maybeMigrateHeartbeatCadenceToCron,
 }));
 
+// mock-isolation: Control scratch migration results without moving heartbeat workspace files.
 vi.mock("../commands/doctor-heartbeat-scratch-migration.js", () => ({
   collectHeartbeatScratchMigrationFindings: mocks.collectHeartbeatScratchMigrationFindings,
   maybeMigrateHeartbeatFilesToScratch: mocks.maybeMigrateHeartbeatFilesToScratch,
 }));
 
+// mock-isolation: Control tools migration results without rewriting workspace documents.
 vi.mock("../commands/doctor-tools-md-migration.js", () => ({
   collectToolsMdMigrationFindings: mocks.collectToolsMdMigrationFindings,
   maybeMigrateToolsMd: mocks.maybeMigrateToolsMd,
 }));
 
+// mock-isolation: Control heartbeat task migration without creating jobs in a real cron store.
 vi.mock("../commands/doctor-heartbeat-task-migration.js", () => ({
   collectHeartbeatTaskMigrationFindings: mocks.collectHeartbeatTaskMigrationFindings,
   maybeMigrateHeartbeatTasksToCron: mocks.maybeMigrateHeartbeatTasksToCron,
 }));
 
+// mock-isolation: Supply synthetic responsiveness findings without discovering host TUI processes.
 vi.mock("../commands/doctor-whatsapp-responsiveness.js", () => ({
   collectWhatsappResponsivenessHealthFindings: mocks.collectWhatsappResponsivenessHealthFindings,
   noteWhatsappResponsivenessHealth: mocks.noteWhatsappResponsivenessHealth,
 }));
 
+// mock-isolation: Supply pairing findings without reading or changing real device authorization state.
 vi.mock("../commands/doctor-device-pairing.js", () => ({
   collectDevicePairingHealthFindings: mocks.collectDevicePairingHealthFindings,
   noteDevicePairingHealth: vi.fn().mockResolvedValue(undefined),
 }));
 
+// mock-isolation: Supply legacy cron findings and repair results without loading or migrating host cron state.
 vi.mock("../commands/doctor/cron/index.js", () => ({
   collectLegacyCronStoreHealthFindings: mocks.collectLegacyCronStoreHealthFindings,
   collectLegacyWhatsAppCrontabHealthWarning: mocks.collectLegacyWhatsAppCrontabHealthWarning,
@@ -550,10 +593,12 @@ vi.mock("../commands/doctor/cron/index.js", () => ({
   noteLegacyWhatsAppCrontabHealthCheck: mocks.noteLegacyWhatsAppCrontabHealthCheck,
 }));
 
+// mock-isolation: Capture post-write cron repair without rewriting a real job store.
 vi.mock("../commands/doctor/cron/legacy-repair.js", () => ({
   repairCronCodexModelRefsAfterConfigWrite: mocks.repairCronCodexModelRefsAfterConfigWrite,
 }));
 
+// mock-isolation: Supply channel blocker findings without loading configured channel plugins.
 vi.mock("../commands/doctor/shared/channel-plugin-blockers.js", () => ({
   scanConfiguredChannelPluginBlockers: mocks.scanConfiguredChannelPluginBlockers,
   channelPluginBlockerHitToHealthFinding: mocks.channelPluginBlockerHitToHealthFinding,
@@ -573,12 +618,14 @@ vi.mock("./doctor-startup-channel-maintenance.js", async (importOriginal) => {
   };
 });
 
+// mock-isolation: Keep token generation deterministic and wizard metadata mutation under the fixture.
 vi.mock("../commands/onboard-helpers.js", () => ({
   applyWizardMetadata: mocks.applyWizardMetadata,
   randomToken: vi.fn(() => "generated-gateway-token"),
 }));
 
-vi.mock("../config/logging.js", () => ({
+vi.mock("../config/logging.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/logging.js")>()),
   logConfigUpdated: mocks.logConfigUpdated,
 }));
 
@@ -593,7 +640,8 @@ vi.mock("../utils.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../cli/command-format.js", () => ({
+vi.mock("../cli/command-format.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../cli/command-format.js")>()),
   formatCliCommand: mocks.formatCliCommand,
 }));
 
