@@ -1,7 +1,10 @@
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
-import { SessionContinuationResetError } from "../continuation/session-reset.js";
+import {
+  rearmKeptContinuations,
+  SessionContinuationResetError,
+} from "../continuation/session-reset.js";
 import {
   clearSessionResetRuntimeState,
   SessionResetCleanupError,
@@ -26,6 +29,13 @@ export async function clearReplacedSessionRuntimeState(params: {
 }): Promise<void> {
   const { sessionKey, storePath, agentId, previousSessionEntry, previousSessionEndReason, signal } =
     params;
+  const reason =
+    previousSessionEndReason === "new" ||
+    previousSessionEndReason === "reset" ||
+    previousSessionEndReason === "idle" ||
+    previousSessionEndReason === "daily"
+      ? previousSessionEndReason
+      : "reset";
   try {
     await clearSessionResetRuntimeState([sessionKey, previousSessionEntry.sessionId], {
       activeReplySessionId: previousSessionEntry.sessionId,
@@ -38,18 +48,18 @@ export async function clearReplacedSessionRuntimeState(params: {
       agentId,
       sessionKey,
       assertCurrent: () => signal?.throwIfAborted(),
-      reason:
-        previousSessionEndReason === "new" ||
-        previousSessionEndReason === "reset" ||
-        previousSessionEndReason === "idle" ||
-        previousSessionEndReason === "daily"
-          ? previousSessionEndReason
-          : "reset",
+      reason,
     });
   } catch (error) {
     if (error instanceof SessionContinuationResetError) {
       throw new SessionResetCleanupError(error.message, { cause: error });
     }
     log.warn(`failed to clear reset runtime state for session ${sessionKey}: ${String(error)}`);
+  }
+  // A head swap cleared the timers of the elections it kept (idle and daily clear none).
+  if (reason === "new" || reason === "reset") {
+    await rearmKeptContinuations({ sessionKey, storePath }).catch((error: unknown) =>
+      log.warn(`failed to re-arm kept continuations for session ${sessionKey}: ${String(error)}`),
+    );
   }
 }

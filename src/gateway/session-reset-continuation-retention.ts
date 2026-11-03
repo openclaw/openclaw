@@ -1,9 +1,13 @@
 // Continuation (karmaterminal): the Gateway reset's hooks for its retention of the session's
 // continuation-elected delegate tree (../auto-reply/continuation/session-reset-retention.ts).
 import { prepareContinuationResetRetention } from "../auto-reply/continuation/session-reset-retention.js";
+import { rearmKeptContinuations } from "../auto-reply/continuation/session-reset.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { ensureSessionRuntimeCleanup } from "./session-reset-runtime-cleanup.js";
+
+const log = createSubsystemLogger("continuation/reset-retention");
 
 export function prepareGatewayResetRetention(resetTarget: {
   cfg: OpenClawConfig;
@@ -38,12 +42,23 @@ export function prepareGatewayResetRetention(resetTarget: {
           sessionLifecycleRevision: entry?.lifecycleRevision,
         }),
       ),
-    /** Settles the marks after the mutation's own finalize, still inside the lifecycle mutation. */
+    /**
+     * Settles the marks after the mutation's own finalize, still inside the lifecycle mutation,
+     * then re-arms the elections the reset kept: its runtime cleanup cleared their timers.
+     */
     finalizing: (finalize: () => Promise<void>) => async () => {
       try {
         await finalize();
       } finally {
         await retention.resolve();
+        await rearmKeptContinuations({
+          sessionKey: resetTarget.target.canonicalKey,
+          storePath: resetTarget.storePath,
+        }).catch((error: unknown) =>
+          log.warn(
+            `[continuation:reset-retention] could not re-arm kept continuations for ${resetTarget.target.canonicalKey}: ${String(error)}`,
+          ),
+        );
       }
     },
   };

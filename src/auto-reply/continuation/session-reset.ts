@@ -2,6 +2,7 @@
 // "Reset at any boundary"): /new and /reset replace the conversational head and keep the
 // elections it has not driven yet; delete ends the session and terminalizes all of its custody;
 // the owner's explicit cancel ends exactly the records it names.
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { abortContinuationDispatchClaim } from "./continuation-dispatch-claims.js";
 import { listContinuationRecords, updateContinuationRecords } from "./custody/custody-store.js";
 import type { ContinuationRecord, ContinuationRecordPatch } from "./custody/custody-store.types.js";
@@ -53,7 +54,8 @@ type SessionContinuationBoundary = "head" | "session";
  * delegate queued or claimed. A claimed delegate's spawn still resolves at most once (requeued
  * before dispatch, handed off, or interrupted). A wake already driving a turn belongs to the
  * replaced head, and a post-compaction shard needs a rebind rule before it may outlive the
- * context that staged it.
+ * context that staged it. Accepted edge: a wake claimed between this read and the reset's claim
+ * abort stays `running` and is re-driven by running-recovery a minute later.
  */
 function survivesHeadSwap(record: ContinuationRecord): boolean {
   return record.kind === "delegate" || (record.kind === "work" && record.status === "queued");
@@ -122,6 +124,31 @@ export async function retireReplacedHeadContinuations(
   assertCurrent: () => void,
 ): Promise<void> {
   await terminalizeAtBoundary(sessionKey, assertCurrent, "head");
+}
+
+/**
+ * After a committed /new or /reset: the head-local timers and hedge closures went with the
+ * replaced head, so re-arm the elections it kept from custody alone. Arming only schedules
+ * detached work: no wake or spawn runs inside the caller's lifecycle mutation.
+ */
+export async function rearmKeptContinuations(params: {
+  sessionKey: string;
+  storePath: string;
+}): Promise<void> {
+  const entry = loadSessionEntry({
+    hydrateSkillPromptRefs: false,
+    readConsistency: "latest",
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+  });
+  // A missing row is a deletion (or an incognito reset), which cancelled the custody.
+  if (!entry) {
+    return;
+  }
+  const [{ rearmContinuationWorkDispatch }, { rearmPendingContinuationDelegates }] =
+    await Promise.all([import("./work-dispatch.js"), import("./delegate-dispatch-recovery.js")]);
+  await rearmContinuationWorkDispatch(params.sessionKey);
+  await rearmPendingContinuationDelegates({ ...params, entry });
 }
 
 async function terminalizeAtBoundary(
@@ -211,7 +238,7 @@ async function terminalizeRecord(
 
 /** What an explicit cancel did to one named record. */
 export type ContinuationCancelOutcome =
-  /** A live election ended; its wake or spawn will not run. */
+  /** A live election ended: its pending wake or spawn will not run, and one in flight is aborted. */
   | "cancelled"
   /** A post-compaction delegate handed to the session queue will not spawn. */
   | "fenced"

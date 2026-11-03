@@ -27,6 +27,7 @@ import {
 import { resetContinuationWorkDispatchForTests } from "../../../auto-reply/continuation/work-dispatch.js";
 import { enqueuePendingWork } from "../../../auto-reply/continuation/work-store.test-support.js";
 import { finalizeInboundContext } from "../../../auto-reply/reply/inbound-context.js";
+import { clearReplacedSessionRuntimeState } from "../../../auto-reply/reply/session-init-reset-cleanup.js";
 import { initSessionState } from "../../../auto-reply/reply/session.js";
 import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../../config/config.js";
 import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
@@ -260,6 +261,25 @@ it("two head swaps before the due time still wake once, not postponed", async ()
   expect(claimedAt).toBeLessThan(work.dueAt + 1_000);
   await delay(400);
   expect(wakesFor("one wake across two swaps")).toHaveLength(1);
+});
+
+it("an automatic reset with no retention scope re-arms the kept wake in its post-commit cleanup", async () => {
+  await writeSession(parentKey, "before-rollover", "before-reset");
+  const work = await electWork("wake after an automatic rollover", 600);
+  // The rollover committed the successor; agent-command then runs the post-commit cleanup.
+  const storePath = await writeSession(parentKey, "after-rollover", "after-reset");
+  await clearReplacedSessionRuntimeState({
+    sessionKey: parentKey,
+    storePath,
+    agentId: "main",
+    previousSessionEntry: { sessionId: "before-rollover" },
+    previousSessionEndReason: "reset",
+  });
+
+  await vi.waitFor(() => expect(wakesFor("wake after an automatic rollover")).toHaveLength(1), {
+    timeout: SETTLE_MS,
+  });
+  expect(await releasedAt(work.recordId)).toBeGreaterThanOrEqual(work.dueAt);
 });
 
 it("a delegate claimed before the reset spawns once after it, never twice", async () => {

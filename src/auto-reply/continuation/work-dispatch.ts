@@ -156,11 +156,19 @@ export function clearContinuationWorkDispatch(sessionKey: string): void {
 }
 
 /**
- * A /new or /reset cleared the timers and idle waiters of the head it replaced. The hedge re-reads
- * custody when it fires, so a kept wake keeps its due time, and arming again replaces the timer
- * instead of adding a second wake.
+ * A /new or /reset cleared the timers and idle waiters of the head it replaced. Drive the kept
+ * wakes from custody now: anchors the reset ended finalize, due wakes fire, and the hedge re-arms
+ * for the soonest, so a kept wake keeps its due time and arming again never adds a second wake.
  */
-export function rearmContinuationWorkDispatch(sessionKey: string): void {
+export async function rearmContinuationWorkDispatch(sessionKey: string): Promise<void> {
+  // Disabled continuation leaves the kept rows durable for a re-enable, as recovery does; with
+  // nothing queued there is nothing to re-drive.
+  if (
+    !resolveContinuationRuntimeConfig().enabled ||
+    (await peekSoonestQueuedWorkDueAt(sessionKey)) === undefined
+  ) {
+    return;
+  }
   armWorkTimer(sessionKey, Date.now(), { includeIdleRetry: true });
 }
 

@@ -385,6 +385,7 @@ import {
   computeBusySkipBackoffMs,
   dispatchPendingContinuationWork,
   partitionSupersededWork,
+  rearmContinuationWorkDispatch,
   recoverPendingContinuationWork,
   resetContinuationWorkDispatchForTests,
   scheduleContinuationWork,
@@ -715,6 +716,31 @@ describe("durable continuation_work dispatch", () => {
     expect(turnGrants).toStrictEqual([]);
     expect((await firstWorkRecord())?.status).toBe("cancelled");
     expect(await consumePendingWork(sessionKey, { includeRunning: true })).toStrictEqual([]);
+  });
+
+  // #1271: a reset re-arms the wakes it kept, and only those; a disabled feature or an empty
+  // queue must not start a recheck loop for the session.
+  it("a reset re-arm arms nothing when continuation is disabled or no wake is queued", async () => {
+    const sessionKey = "agent:main:rearm-after-reset";
+    const before = await dispatchTimerCount();
+    await rearmContinuationWorkDispatch(sessionKey);
+    expect(await dispatchTimerCount()).toBe(before);
+
+    await enqueuePendingWork({
+      sessionKey,
+      hop: 1,
+      delayMs: 60_000,
+      electedAt: Date.now(),
+      dueAt: Date.now() + 60_000,
+      maxChainLength: 8,
+    });
+    continuationEnabledForTest = false;
+    await rearmContinuationWorkDispatch(sessionKey);
+    expect(await dispatchTimerCount()).toBe(before);
+
+    continuationEnabledForTest = true;
+    await rearmContinuationWorkDispatch(sessionKey);
+    expect(await dispatchTimerCount()).toBe(before + 1);
   });
 
   it("requeues claimed work when an implicit rollover changes lifecycle before admission", async () => {
