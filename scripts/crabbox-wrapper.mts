@@ -3697,6 +3697,8 @@ async function applyRunTransforms(
   },
 ) {
   const testboxWorkspace = canonicalProviderName(options.provider) === "blacksmith-testbox";
+  const boatSource =
+    canonicalProviderName(options.provider) === "ascii-box" ? options.capsule : null;
   const sourceBootstrap = options.capsule
     ? remoteSourceBootstrap(options.capsule, options.changedGateAlias, testboxWorkspace)
     : "";
@@ -3730,7 +3732,12 @@ async function applyRunTransforms(
         sourceScriptCleanup = () => rmSync(scriptRoot, { recursive: true, force: true });
         writeFileSync(
           scriptPath,
-          wrapRemoteScript(script, `${sourceBootstrap} || exit $?\nexport CI=true`),
+          boatSource
+            ? remoteSourceBootstrap(boatSource, options.changedGateAlias, false, {
+                script,
+                delimiter: uniqueHereDocDelimiter(script),
+              })
+            : wrapRemoteScript(script, `${sourceBootstrap} || exit $?\nexport CI=true`),
         );
         chmodSync(scriptPath, 0o700);
         transformedArgs = replaceRunScript(invocation, scriptPath);
@@ -3741,7 +3748,11 @@ async function applyRunTransforms(
       ) {
         transformedArgs = replaceRunCommandWithShell(
           invocation,
-          `${sourceBootstrap} || exit $?; ${renderRunShellCommand(invocation)}`,
+          boatSource
+            ? remoteSourceBootstrap(boatSource, options.changedGateAlias, false, {
+                command: renderRunShellCommand(invocation),
+              })
+            : `${sourceBootstrap} || exit $?; ${renderRunShellCommand(invocation)}`,
         );
       }
     }

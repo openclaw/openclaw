@@ -4591,6 +4591,7 @@ process.on("exit", () => {
     ["aws", false, "transport"],
     ["aws", false, "arbitrary"],
     ["boat", false, "arbitrary"],
+    ["boat", false, "native-git-lifetime"],
     ["aws", false, "unchanged"],
     ["blacksmith-testbox", true, "transport"],
     ["blacksmith-testbox", false, "transport"],
@@ -4841,7 +4842,7 @@ require('node:module').syncBuiltinESMExports();`,
                     `${process.env.NODE_OPTIONS ?? ""} --require ${JSON.stringify(completionProbe)}`.trim(),
                 }
               : env,
-            input: mode === "stdin" ? scriptBody : undefined,
+            input: mode === "stdin" ? readFileSync(scriptInput, "utf8") : undefined,
             timeout: 10_000,
           },
         );
@@ -4880,18 +4881,24 @@ require('node:module').syncBuiltinESMExports();`,
       };
       const receive = (
         name: string,
-        { remoteCommand, bundle }: { remoteCommand: string; bundle?: Buffer },
+        {
+          remoteCommand,
+          bundle,
+          sourceFlags = [],
+        }: { remoteCommand: string; bundle?: Buffer; sourceFlags?: string[] },
         {
           source = origin,
           extraEnv = {},
           nativeSeed = true,
           remoteArgs = [],
+          interrupt = false,
           prepareReceiver,
         }: {
           source?: string;
           extraEnv?: NodeJS.ProcessEnv;
           nativeSeed?: boolean;
           remoteArgs?: string[];
+          interrupt?: boolean;
           prepareReceiver?: (receiver: string) => void;
         } = {},
       ) => {
@@ -4955,19 +4962,36 @@ require('node:module').syncBuiltinESMExports();`,
         if (bundle) {
           writeFileSync(path.join(transport, ".openclaw-crabbox-changed-gate.bundle"), bundle);
         }
-        const result = runCommand("bash", ["-c", remoteCommand, "receiver-script", ...remoteArgs], {
-          cwd: transport,
-          timeout: 10_000,
-          env: {
-            ...env,
-            GIT_CONFIG_COUNT: "2",
-            GIT_CONFIG_KEY_0: `url.file://${source}.insteadOf`,
-            GIT_CONFIG_VALUE_0: "https://github.com/openclaw/openclaw.git",
-            GIT_CONFIG_KEY_1: "protocol.file.allow",
-            GIT_CONFIG_VALUE_1: "always",
-            ...extraEnv,
+        const scriptFile = path.join(root, name + "-command.sh");
+        if (sourceFlags.length) {
+          writeFileSync(scriptFile, remoteCommand);
+        }
+        const receiverArgs = sourceFlags.length
+          ? [scriptFile, ...remoteArgs]
+          : ["-c", remoteCommand, "receiver-script", ...remoteArgs];
+        const terminator = [
+          'const {spawn}=require("node:child_process");',
+          'const child=spawn("bash",process.argv.slice(1),{stdio:["inherit","pipe","inherit"]});',
+          'let output="",sent=false; child.stdout.on("data",chunk=>{process.stdout.write(chunk);output+=chunk;if(!sent&&output.includes("payload-ready\\n")){sent=true;child.kill("SIGTERM");}});',
+          'child.on("close",(code)=>process.exit(code??1));',
+        ].join("");
+        const result = runCommand(
+          interrupt ? process.execPath : "bash",
+          interrupt ? ["-e", terminator, "--", ...receiverArgs] : receiverArgs,
+          {
+            cwd: transport,
+            timeout: 10_000,
+            env: {
+              ...env,
+              GIT_CONFIG_COUNT: "2",
+              GIT_CONFIG_KEY_0: `url.file://${source}.insteadOf`,
+              GIT_CONFIG_VALUE_0: "https://github.com/openclaw/openclaw.git",
+              GIT_CONFIG_KEY_1: "protocol.file.allow",
+              GIT_CONFIG_VALUE_1: "always",
+              ...extraEnv,
+            },
           },
-        });
+        );
         expect(result.error, failureDetail(result)).toBeUndefined();
         if (transport !== receiver && result.status === 0) {
           expect(readlinkSync(path.join(transport, ".git", "crabbox-artifact-root"))).toBe(
@@ -5008,6 +5032,169 @@ require('node:module').syncBuiltinESMExports();`,
         expect(git(imported.receiver, ["rev-parse", "HEAD^"])).toBe(base);
         expect(git(producer, ["rev-parse", "origin/main"])).toBe(sharedBase);
         expect(git(producer, ["diff", "--name-only", sharedBase, "HEAD"])).toContain("mode.sh");
+        return;
+      }
+      if (scenario === "native-git-lifetime") {
+        const receiver = path.join(root, "native-reused");
+        git(root, ["clone", "-q", `file://${origin}`, receiver]);
+        const nativeGit = path.join(receiver, ".git");
+        mkdirSync(path.join(nativeGit, "crabbox"));
+        writeFileSync(path.join(nativeGit, "crabbox", "manifest"), "native sync receipt\n");
+        const nativeStat = lstatSync(nativeGit);
+        const nativeHead = git(receiver, ["rev-parse", "HEAD"]);
+        const nativeIndex = readFileSync(path.join(nativeGit, "index"));
+        const payload = [
+          'const {execFileSync}=require("node:child_process");',
+          'const fs=require("node:fs");',
+          'const git=(args)=>execFileSync("git",args,{encoding:"utf8"}).trim();',
+          'console.log(JSON.stringify({head:git(["rev-parse","HEAD"]),parent:git(["rev-parse","HEAD^"]),owner:fs.readFileSync("owner.txt","utf8"),args:process.argv.slice(1)}));',
+        ].join("");
+        for (const mode of ["direct", "shell", "script", "stdin"] as const) {
+          writeFileSync(path.join(producer, "owner.txt"), mode + " source\n");
+          chmodSync(path.join(producer, "mode.sh"), mode === "direct" ? 0o755 : 0o644);
+          if (mode === "shell") {
+            rmSync(path.join(producer, "deleted.txt"));
+          }
+          if (mode === "script" || mode === "stdin") {
+            writeFileSync(
+              scriptInput,
+              "#!/usr/bin/env bash\n#" + "x".repeat(140_000) + '\nexec "$@"\n',
+            );
+          }
+          const command = ["node", "-e", payload, special];
+          const args =
+            mode === "direct"
+              ? ["--", ...command]
+              : mode === "shell"
+                ? ["--shell", "--", command.map(shellQuote).join(" ")]
+                : mode === "script"
+                  ? ["--script", scriptInput, "--", ...command]
+                  : ["--script-stdin", "--", ...command];
+          const sent = runSender(mode, ["run", "--provider", provider, ...args]);
+          if (mode === "script" || mode === "stdin") {
+            expect(sent.remoteArgs).toEqual(command);
+          }
+          const imported = receive("native-reused", sent, { remoteArgs: sent.remoteArgs });
+          expect(imported.result.status, failureDetail(imported.result)).toBe(0);
+          expect(imported.result.stdout, mode + "\n" + failureDetail(imported.result)).toMatch(
+            /^\{/u,
+          );
+          const observed = JSON.parse(imported.result.stdout);
+          expect(observed).toMatchObject({
+            parent: base,
+            owner: mode + " source\n",
+            args: [special],
+          });
+          expect(observed.head).not.toBe(nativeHead);
+          expect(lstatSync(path.join(receiver, "mode.sh")).mode & 0o100).toBe(
+            mode === "direct" ? 0o100 : 0,
+          );
+          expect(existsSync(path.join(receiver, "deleted.txt"))).toBe(mode === "direct");
+          expect(lstatSync(nativeGit).ino).toBe(nativeStat.ino);
+          expect(git(receiver, ["rev-parse", "HEAD"])).toBe(nativeHead);
+          expect(readFileSync(path.join(nativeGit, "index"))).toEqual(nativeIndex);
+          expectFileText(nativeGit, "crabbox/manifest", "native sync receipt\n");
+          expect(
+            readdirSync(receiver).filter((name) => name.startsWith(".openclaw-source-")),
+          ).toEqual([]);
+        }
+        const exactBytes =
+          '#!/usr/bin/env node\nprocess.stdout.write(require("node:fs").readFileSync(__filename));';
+        writeFileSync(scriptInput, exactBytes);
+        const noFinalNewline = runSender("script", [
+          "run",
+          "--provider",
+          provider,
+          "--script",
+          scriptInput,
+        ]);
+        const exactScript = receive("native-reused", noFinalNewline);
+        expect(exactScript.result.status, failureDetail(exactScript.result)).toBe(0);
+        expect(exactScript.result.stdout).toBe(exactBytes);
+        expect(lstatSync(nativeGit).ino).toBe(nativeStat.ino);
+        const failing = runSender("shell", [
+          "run",
+          "--provider",
+          provider,
+          "--shell",
+          "--",
+          "exec node -e " + shellQuote(payload + "process.exit(37);"),
+        ]);
+        const failed = receive("native-reused", failing);
+        expect(failed.result.status, failureDetail(failed.result)).toBe(37);
+        expect(JSON.parse(failed.result.stdout).parent).toBe(base);
+        expect(lstatSync(nativeGit).ino).toBe(nativeStat.ino);
+        expect(readFileSync(path.join(nativeGit, "index"))).toEqual(nativeIndex);
+        expectFileText(nativeGit, "crabbox/manifest", "native sync receipt\n");
+        const background = runSender("shell", [
+          "run",
+          "--provider",
+          provider,
+          "--shell",
+          "--",
+          "exec node -e " +
+            shellQuote(
+              [
+                'const {spawn}=require("node:child_process");',
+                'const child=spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{stdio:"ignore"});',
+                "console.log(child.pid);process.exit(0);",
+              ].join(""),
+            ),
+        ]);
+        const backgroundResult = receive("native-reused", background);
+        expect(backgroundResult.result.status, failureDetail(backgroundResult.result)).toBe(0);
+        expect(isProcessAlive(Number(backgroundResult.result.stdout.trim()))).toBe(false);
+        expect(lstatSync(nativeGit).ino).toBe(nativeStat.ino);
+        const terminated = runSender("shell", [
+          "run",
+          "--provider",
+          provider,
+          "--shell",
+          "--",
+          "exec node -e " +
+            shellQuote(
+              [
+                'process.on("SIGTERM",()=>setTimeout(()=>{console.log("payload-closed");process.exit(0);},50));',
+                'console.log("payload-ready");setInterval(()=>{},1000);',
+              ].join(""),
+            ),
+        ]);
+        const stopped = receive("native-reused", terminated, { interrupt: true });
+        expect(stopped.result.status, failureDetail(stopped.result)).toBe(143);
+        expect(stopped.result.stdout).toBe("payload-ready\npayload-closed\n");
+        expect(lstatSync(nativeGit).ino).toBe(nativeStat.ino);
+        expect(readFileSync(path.join(nativeGit, "index"))).toEqual(nativeIndex);
+        expectFileText(nativeGit, "crabbox/manifest", "native sync receipt\n");
+        const ignoring = runSender("shell", [
+          "run",
+          "--provider",
+          provider,
+          "--shell",
+          "--",
+          "exec node -e " +
+            shellQuote(
+              'process.on("SIGTERM",()=>{});console.log("payload-ready");setInterval(()=>{},1000);',
+            ),
+        ]);
+        const killed = receive("native-reused", ignoring, { interrupt: true });
+        expect(killed.result.status, failureDetail(killed.result)).toBe(143);
+        expect(lstatSync(nativeGit).ino).toBe(nativeStat.ino);
+        expect(readFileSync(path.join(nativeGit, "index"))).toEqual(nativeIndex);
+        expectFileText(nativeGit, "crabbox/manifest", "native sync receipt\n");
+        const installer = ".github/actions/setup-node-env/install-dependencies.sh";
+        mkdirSync(path.dirname(path.join(producer, installer)), { recursive: true });
+        writeFileSync(
+          path.join(producer, installer),
+          "#!/bin/bash\nprintf 'installer drift\\n' > owner.txt\n",
+        );
+        git(producer, ["add", "-f", "pnpm-lock.yaml"]);
+        const rejected = receive("native-reused", runSender());
+        expect(rejected.result.status, failureDetail(rejected.result)).toBe(2);
+        expect(rejected.result.stdout).toBe("");
+        expect(rejected.result.stderr).toContain("source bytes mismatch: owner.txt");
+        expect(lstatSync(nativeGit).ino).toBe(nativeStat.ino);
+        expect(readFileSync(path.join(nativeGit, "index"))).toEqual(nativeIndex);
+        expectFileText(nativeGit, "crabbox/manifest", "native sync receipt\n");
         return;
       }
       if (scenario === "unchanged") {
@@ -5354,10 +5541,14 @@ require('node:module').syncBuiltinESMExports();`,
           expect(accepted.result.stdout).toBe("transport fixture reached\n");
           expect(readJson(argvPath)).toEqual([special]);
           expect(existsSync(path.join(accepted.receiver, "injected"))).toBe(false);
-          expect(git(accepted.receiver, ["rev-parse", "HEAD^{tree}"])).toBe(
-            git(producer, ["rev-parse", "HEAD^{tree}"]),
-          );
-          expect(git(accepted.receiver, ["status", "--porcelain=v1"])).toBe("");
+          if (provider === "boat") {
+            expect(existsSync(path.join(accepted.receiver, ".git"))).toBe(false);
+          } else {
+            expect(git(accepted.receiver, ["rev-parse", "HEAD^{tree}"])).toBe(
+              git(producer, ["rev-parse", "HEAD^{tree}"]),
+            );
+            expect(git(accepted.receiver, ["status", "--porcelain=v1"])).toBe("");
+          }
           const rejected = receive(
             `${name}-missing`,
             { ...sent, bundle: undefined },
