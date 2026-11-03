@@ -132,7 +132,7 @@ describe("renderModelProviders", () => {
       onFastModeChange,
     });
     const container = mount(viewProps);
-    const speed = settingsRow(container, "Fast Mode");
+    const speed = settingsRow(container, "Speed");
     expect(selectedSegment(speed)).toBe("ultrafast");
     expect(speed.querySelector<HTMLInputElement>('[value="ultrafast"]')?.disabled).toBe(true);
     expect(speed.querySelector('[value="on"]')).toBeNull();
@@ -177,8 +177,8 @@ describe("renderModelProviders", () => {
       onFastModeChange,
     });
     const container = mount(viewProps);
-    const thinking = settingsRow(container, "Thinking");
-    const fast = settingsRow(container, "Fast Mode");
+    const thinking = settingsRow(container, "Effort");
+    const fast = settingsRow(container, "Speed");
     expect(selectedSegment(fast)).toBe("ultrafast");
     expect(text(thinking)).toContain("Ultra");
     selectSegment(thinking, "adaptive");
@@ -267,8 +267,8 @@ describe("renderModelProviders", () => {
       }),
     );
     const behavior = container.querySelector("#settings-model-behavior")!;
-    const thinkingRow = settingsRow(behavior, "Thinking");
-    const fastRow = settingsRow(behavior, "Fast Mode");
+    const thinkingRow = settingsRow(behavior, "Effort");
+    const fastRow = settingsRow(behavior, "Speed");
 
     expect(selectedSegment(thinkingRow)).toBe("adaptive");
     expect(text(thinkingRow)).toContain("Adaptive");
@@ -306,8 +306,8 @@ describe("renderModelProviders", () => {
       container,
     );
     const inheritedBehavior = container.querySelector("#settings-model-behavior")!;
-    const inheritedThinking = settingsRow(inheritedBehavior, "Thinking");
-    const inheritedFast = settingsRow(inheritedBehavior, "Fast Mode");
+    const inheritedThinking = settingsRow(inheritedBehavior, "Effort");
+    const inheritedFast = settingsRow(inheritedBehavior, "Speed");
     expect(selectedSegment(inheritedThinking)).toBe("");
     expect(selectedSegment(inheritedFast)).toBe("");
     expect(
@@ -350,8 +350,8 @@ describe("renderModelProviders", () => {
       }),
     );
     const behavior = container.querySelector("#settings-model-behavior")!;
-    const thinking = settingsRow(behavior, "Thinking");
-    const fast = settingsRow(behavior, "Fast Mode");
+    const thinking = settingsRow(behavior, "Effort");
+    const fast = settingsRow(behavior, "Speed");
 
     selectSegment(thinking, "");
     selectSegment(fast, "");
@@ -366,8 +366,8 @@ describe("renderModelProviders", () => {
     });
     const container = mount(viewProps);
     const behavior = container.querySelector("#settings-model-behavior")!;
-    const thinking = settingsRow(behavior, "Thinking");
-    const fastMode = settingsRow(behavior, "Fast Mode");
+    const thinking = settingsRow(behavior, "Effort");
+    const fastMode = settingsRow(behavior, "Speed");
 
     selectSegment(thinking, "");
     selectSegment(fastMode, "");
@@ -551,8 +551,8 @@ describe("renderModelProviders", () => {
     const behavior = container.querySelector("#settings-model-behavior");
 
     expect(behavior).not.toBeNull();
-    expect(selectedSegment(settingsRow(behavior!, "Thinking"))).toBe("high");
-    expect(selectedSegment(settingsRow(behavior!, "Fast Mode"))).toBe("on");
+    expect(selectedSegment(settingsRow(behavior!, "Effort"))).toBe("high");
+    expect(selectedSegment(settingsRow(behavior!, "Speed"))).toBe("on");
     expect(text(container)).not.toContain("Configure a provider before selecting default models.");
     expect(container.querySelector('[aria-busy="true"]')).not.toBeNull();
     expect(container.querySelector('[data-provider-id="openai"]')).toBeNull();
