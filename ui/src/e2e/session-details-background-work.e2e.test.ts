@@ -285,8 +285,19 @@ suite.define(() => {
             await heading.click();
             await summary.waitFor();
           }
-          // The whole summary remains a hit target, including its leading inset.
           await checkThemes(async () => {
+            await capture(`subagents-summary-${colorScheme}-${width}`, details, [summary]);
+            if (width !== 390) {
+              // Desktop Details keeps each stacked subagent's identity tint.
+              const tints = await summary
+                .locator(".chat-details-subagents__avatar")
+                .evaluateAll((avatars) =>
+                  avatars.map((avatar) => getComputedStyle(avatar).backgroundColor),
+                );
+              expect(tints.length).toBeGreaterThan(1);
+              expect(new Set(tints).size).toBe(tints.length);
+            }
+            // The whole summary remains a hit target, including its leading inset.
             await summary.hover({ position: { x: 2, y: 10 } });
             expect(
               await summary.evaluate((row) => {
