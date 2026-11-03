@@ -226,7 +226,7 @@ describe("PostgreSQL conformance selection", () => {
     [["scripts/test-database-conformance.mjs"], true],
     [[".github/actions/postgres-conformance/action.yml"], true],
     [["scripts/test-database-conformance-preload.mjs"], true],
-    [["scripts/lib/weighted-test-shards.mts"], true],
+    [["scripts/lib/postgres-conformance-shards.mts"], true],
     [["config/postgres-conformance-timings.json"], true],
     [["src/infra/unrelated.ts"], false],
     [["docs/help/testing/suites.md"], false],
