@@ -13,6 +13,7 @@ import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
 import { getPreparedReplyDispatchRuntime } from "../auto-reply/reply/prepared-reply-dispatch-context.js";
 import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
+import * as configPluginMetadata from "../config/io.plugin-metadata.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -35,6 +36,7 @@ import { createGatewayReloadHandlers } from "../gateway/server-reload-hot.js";
 import { PluginRuntimeApplicationError } from "../plugins/lifecycle.js";
 import { PluginInstance } from "../plugins/plugin-instance.js";
 import { withPluginLifecycleLeaseAsync } from "../plugins/plugin-lifecycle-lease.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -808,6 +810,12 @@ it.for(["config write", "plugins.reload"] as const)(
     const initialConfig: OpenClawConfig = {
       plugins: { allow: ["first", "sibling"], entries: { first: { config: { revision: 0 } } } },
     };
+    const metadataSnapshot = createPluginMetadataSnapshotFixture({
+      plugins: [{ id: "first" }, { id: "sibling" }],
+    });
+    using _metadata = vi
+      .spyOn(configPluginMetadata, "resolveConfigWidePluginMetadataSnapshotAsync")
+      .mockResolvedValue(metadataSnapshot);
     let diskConfig = initialConfig;
     let reloadParams: Parameters<PluginReload>[0] | undefined;
     let failure: unknown;
@@ -816,6 +824,7 @@ it.for(["config write", "plugins.reload"] as const)(
       { cleanups, logMocks: logger },
       {
         config: initialConfig,
+        pluginMetadataSnapshot: metadataSnapshot,
         env: process.env,
         abortOnCandidateStart: false,
         initialStop: async () => {
