@@ -2,6 +2,7 @@ import path from "node:path";
 import {
   buildChannelInboundEventContext,
   runChannelInboundEvent,
+  type ChannelInboundEventRunnerParams,
   type ChannelInboundTurnPlan,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
@@ -42,13 +43,13 @@ const dispatchReplyFromConfig = vi.fn<
   NonNullable<ChannelInboundTurnPlan["dispatchReplyFromConfig"]>
 >(async () => ({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } }));
 const stateDirs = new Map<string, string>();
-const sessionTasks = new Set<Promise<void>>();
+const sessionTasks = new Set<Promise<unknown>>();
 let ownsRuntimeConfigSnapshot = false;
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     // Session stores own agent handles under the fixture root, but their leases
     // use the captured ambient shared state DB. Join both before removing roots.
-    const reporting = await Promise.allSettled([...sessionTasks]);
+    const reporting = await Promise.allSettled(sessionTasks);
     const cleanupResults = await Promise.allSettled(
       [...stateDirs].map(([rootPath, stateDir]) =>
         cleanupSessionStateForTest({ rootPath, stateDir }),
@@ -112,8 +113,10 @@ export function installMSTeamsTestRuntime({
   const rootPath = tempDirs.make("msteams-sessions-", testHome);
   stateDirs.set(rootPath, stateDir);
   const storePath = path.join(rootPath, "agents", "{agentId}", "sessions", "sessions.json");
-  const run: Channel["inbound"]["run"] = (params) =>
-    runChannelInboundEvent({
+  const run = <TRaw, TDispatchResult>(
+    params: ChannelInboundEventRunnerParams<TRaw, TDispatchResult>,
+  ) =>
+    runChannelInboundEvent<TRaw, TDispatchResult>({
       ...params,
       adapter: {
         ...params.adapter,

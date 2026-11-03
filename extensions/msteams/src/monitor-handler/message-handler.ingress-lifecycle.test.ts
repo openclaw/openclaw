@@ -174,7 +174,7 @@ describe("Microsoft Teams drain claim ownership", () => {
       },
     );
     let primary: { error: unknown } | undefined;
-    let joined: PromiseSettledResult<unknown>[] = [];
+    let joined: PromiseSettledResult<unknown>[];
     try {
       await withinTest(
         awaitGateBeforeSettlement(
@@ -197,10 +197,16 @@ describe("Microsoft Teams drain claim ownership", () => {
     }
     const errors = new Set(primary ? [primary.error] : []);
     for (const item of joined) {
-      if (item.status === "rejected") errors.add(item.reason);
+      if (item.status === "rejected") {
+        errors.add(item.reason);
+      }
     }
-    if (errors.size === 1) throw [...errors][0];
-    if (errors.size > 1) throw new AggregateError([...errors], "Teams finalization test failed");
+    if (errors.size === 1) {
+      throw [...errors][0];
+    }
+    if (errors.size > 1) {
+      throw new AggregateError([...errors], "Teams finalization test failed");
+    }
     expect(await outcome).toEqual({ status: "fulfilled", value: { kind: "deferred" } });
     expectAdopted(lifecycle);
   });
@@ -229,7 +235,9 @@ describe("Microsoft Teams drain claim ownership", () => {
     const now = Date.UTC(2026, 0, 2);
     vi.setSystemTime(now);
     const testHome = process.env.OPENCLAW_TEST_HOME;
-    if (!testHome) throw new Error("Teams ingress fixture requires the isolated test home");
+    if (!testHome) {
+      throw new Error("Teams ingress fixture requires the isolated test home");
+    }
     const created = await fs.mkdtemp(path.join(testHome, "openclaw-msteams-abandon-"));
     const stateDir = await fs.realpath(created);
     type Queue = NonNullable<Parameters<typeof createMSTeamsIngress>[0]["queue"]>;
@@ -362,8 +370,11 @@ describe("Microsoft Teams drain claim ownership", () => {
         }
       }
     }
-    if (errors.size === 1) throw [...errors][0];
-    if (errors.size > 1)
+    if (errors.size === 1) {
+      throw [...errors][0];
+    }
+    if (errors.size > 1) {
       throw new AggregateError([...errors], "Teams ingress retry fixture failed");
+    }
   });
 });
