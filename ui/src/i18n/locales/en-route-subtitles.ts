@@ -48,7 +48,7 @@ const enRouteSubtitles = {
     modelProviders: "Global model defaults and provider access for your agents.",
     memoryImport: "Bring Codex and Claude Code memory into an agent workspace.",
     notifications: "Browser push notifications from your gateway.",
-    security: "Gateway auth, exec policy, tool profile, and approvals.",
+    security: "Command permissions, tool profiles, and access.",
     advanced: "Every remaining config section, plus the raw file editor.",
     debug: "Snapshots, events, RPC.",
     logs: "Live gateway logs.",

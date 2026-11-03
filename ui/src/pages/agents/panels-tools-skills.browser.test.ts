@@ -228,8 +228,8 @@ describe("agents tools panel (browser)", () => {
 
     const included = container.querySelector("#agent-tool-read");
     const absent = container.querySelector("#agent-tool-exec");
-    expect(toolFact(included, "Tool preview")).toBe("Listed in preview via Built-In.");
-    expect(included?.textContent).toContain("Listed in preview via Built-In.");
+    expect(toolFact(included, "Tool preview")).toBe("Listed in preview via Built-in.");
+    expect(included?.textContent).toContain("Listed in preview via Built-in.");
     expect(toolFact(absent, "Tool preview")).toBe("Not listed");
     expect(absent?.querySelector<HTMLInputElement>("input.settings-toggle__input")?.checked).toBe(
       true,
@@ -246,7 +246,7 @@ describe("agents tools panel (browser)", () => {
       },
     });
     expect(container.querySelectorAll(".settings-kv dd")[3]?.textContent?.trim()).toBe("0");
-    expect(container.textContent).toContain("No tools are listed in this preview.");
+    expect(container.textContent).toContain("No tools in this preview.");
     expect(container.querySelector(".agent-tools-runtime-chip")).toBeNull();
   });
 
@@ -292,8 +292,8 @@ describe("agents tools panel (browser)", () => {
     expect(container.textContent).toContain(
       "Based on saved session settings and discovered tools.",
     );
-    expect(container.textContent).toContain("additional tools may become available");
-    expect(container.textContent).toContain("unsaved edits are not included");
+    expect(container.textContent).toContain("more tools may become available");
+    expect(container.textContent).toContain("unsaved edits aren’t included");
     expect(texts(container, ".agent-tools-runtime-chip .mono")).toEqual([
       "Message Actions",
       "Probe Tool",
@@ -305,7 +305,7 @@ describe("agents tools panel (browser)", () => {
     expect(texts(container, ".agent-tools-group__title > .settings-row__value")).toEqual([
       "Plugin: voice-call",
     ]);
-    expect(toolFact(container.querySelector("#agent-tool-tts"), "Source")).toBe("Built-In");
+    expect(toolFact(container.querySelector("#agent-tool-tts"), "Source")).toBe("Built-in");
     expect(toolFact(container.querySelector("#agent-tool-voice_call"), "Source")).toBe(
       "Plugin: voice-call · Optional",
     );
@@ -439,7 +439,7 @@ describe("agents tools panel (browser)", () => {
     await Promise.resolve();
 
     expect(container.textContent).toContain(
-      "Full selects tools; it does not grant Full access execution permissions.",
+      "“Full” includes all tools, but doesn’t grant command permissions.",
     );
     const toggle = toolSwitch(container, "openclaw");
     expect(toggle.checked).toBe(false);
