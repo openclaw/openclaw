@@ -25,7 +25,7 @@ export type ClawDescriptor = {
   root_pub: Ed25519PublicKey;
   /** Root rotations, oldest first. */
   rotations: SignedStatement<"RootRotation">[];
-  /** Current ServerBinding with its certificate chain. */
+  /** Current ServerBinding, signed by R. */
   binding: SignedStatement<"ServerBinding">;
   published_at: UnixSeconds;
 };

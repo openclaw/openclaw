@@ -2,16 +2,20 @@
 import { describe, expect, it } from "vitest";
 import fixture from "../../fixtures/v1-draft/statements.json" with { type: "json" };
 import {
-  activeOwnerCerts,
   registerInvite,
   repinRoot,
   submitRedemption,
   submitStatement,
 } from "../authority/apply.js";
-import { isAdmitted, snapshotBody, type AuthorityState } from "../authority/state.js";
+import {
+  activeOwnerDevices,
+  isAdmitted,
+  snapshotBody,
+  type AuthorityState,
+} from "../authority/state.js";
 import { fingerprint, formatEd25519PublicKey, type IrohEndpointKey } from "../keys.js";
 import { decodeKit, deriveRootSigner, encodeKit } from "../kit.js";
-import { certificateChain, signStatement } from "../statements/envelope.js";
+import { signStatement } from "../statements/envelope.js";
 import type { SignedStatement } from "../statements/types.js";
 import { verifyOwnerStatement } from "../statements/verify.js";
 import { acceptanceTitle } from "../testing/acceptance.js";
@@ -30,22 +34,17 @@ const tunnel = { channel: "tunnel" as const, now: WORLD_NOW };
 const mailbox = { channel: "mailbox" as const, now: WORLD_NOW };
 
 async function admitted(state: AuthorityState, peer: IrohEndpointKey): Promise<boolean> {
-  return isAdmitted(state, peer, await fingerprint(peer), WORLD_NOW);
+  return isAdmitted(state, peer, WORLD_NOW);
 }
 
 async function addBob(world: Awaited<ReturnType<typeof buildWorld>>) {
-  const change = await signChange(
-    world.state,
-    world.device1.signer,
-    certificateChain(world.cert1),
-    {
-      op: "add",
-      account_id: "acct_bob",
-      role: "operator",
-      peer_keys: [world.invitee.peer],
-      invite_id: null,
-    },
-  );
+  const change = await signChange(world.state, world.device1.signer, {
+    op: "add",
+    account_id: "acct_bob",
+    role: "operator",
+    peer_keys: [world.invitee.peer],
+    invite_id: null,
+  });
   const result = await submitStatement(world.state, change, tunnel);
   expect(result.ok).toBe(true);
   return result.state;
@@ -61,27 +60,19 @@ describe(acceptanceTitle(3), () => {
       peer_keys: [world.mallory.peer],
       invite_id: null,
     };
-    const unsigned = await signChange(world.state, world.mallory.signer, [], target);
+    const unsigned = await signChange(world.state, world.mallory.signer, target);
     await expect(submitStatement(world.state, unsigned, mailbox)).resolves.toMatchObject({
       ok: false,
-      code: "wrong_signer",
+      code: "not_an_owner",
     });
-    const selfCert = await signStatement(
-      "OwnerDeviceCert",
-      certBody(world.mallory),
-      world.mallory.signer,
-    );
-    const fakeChain = await signChange(world.state, world.mallory.signer, [selfCert], target);
-    await expect(submitStatement(world.state, fakeChain, mailbox)).resolves.toMatchObject({
+    await expect(submitStatement(world.state, unsigned, tunnel)).resolves.toMatchObject({
       ok: false,
-      code: "chain_broken",
+      code: "not_an_owner",
     });
-    const tampered = await signChange(
-      world.state,
-      world.device1.signer,
-      certificateChain(world.cert1),
-      { ...target, peer_keys: [world.invitee.peer] },
-    );
+    const tampered = await signChange(world.state, world.device1.signer, {
+      ...target,
+      peer_keys: [world.invitee.peer],
+    });
     const swapped = { ...tampered, body: { ...tampered.body, target } };
     await expect(submitStatement(world.state, swapped, tunnel)).resolves.toMatchObject({
       ok: false,
@@ -91,18 +82,13 @@ describe(acceptanceTitle(3), () => {
 
   it("refuses a genuine device-signed change delivered through Discovery, and a replay", async () => {
     const world = await buildWorld();
-    const change = await signChange(
-      world.state,
-      world.device1.signer,
-      certificateChain(world.cert1),
-      {
-        op: "add",
-        account_id: "acct_bob",
-        role: "viewer",
-        peer_keys: [world.invitee.peer],
-        invite_id: null,
-      },
-    );
+    const change = await signChange(world.state, world.device1.signer, {
+      op: "add",
+      account_id: "acct_bob",
+      role: "viewer",
+      peer_keys: [world.invitee.peer],
+      invite_id: null,
+    });
     await expect(submitStatement(world.state, change, mailbox)).resolves.toMatchObject({
       ok: false,
       code: "not_direct",
@@ -123,7 +109,7 @@ describe(acceptanceTitle(3), () => {
     );
     await expect(registerInvite(world.state, forged, proofKey, tunnel)).resolves.toMatchObject({
       ok: false,
-      code: "wrong_signer",
+      code: "not_an_owner",
     });
     await expect(registerInvite(world.state, cap, proofKey, mailbox)).resolves.toMatchObject({
       ok: false,
@@ -131,15 +117,18 @@ describe(acceptanceTitle(3), () => {
     });
   });
 
-  it("refuses chains deeper than four (shared vector)", async () => {
+  it("refuses an invite signed by a removed owner device (shared vector)", async () => {
     const vectors = fixture as unknown as StatementVectors;
-    const deep = vectors.invalid.find((entry) => entry.name === "chain deeper than 4")!;
+    const removed = vectors.invalid.find(
+      (entry) => entry.name === "invite signed by a removed owner device",
+    )!;
+    const owners = new Map(vectors.owners.map((owner) => [owner.device_pub, owner.caps]));
     const result = await verifyOwnerStatement(
-      deep.statement as SignedStatement<"InviteCap">,
+      removed.statement as SignedStatement<"InviteCap">,
       vectors.anchor,
-      { now: vectors.now },
+      { now: vectors.now, owners: (key) => owners.get(key) },
     );
-    expect(result).toMatchObject({ ok: false, code: "chain_too_long" });
+    expect(result).toMatchObject({ ok: false, code: "not_an_owner" });
   });
 });
 
@@ -148,7 +137,7 @@ describe(acceptanceTitle(4), () => {
     const world = await buildWorld();
     const withBob = await addBob(world);
     const staleSnapshot = snapshotBody(withBob, 1, WORLD_NOW);
-    const remove = await signChange(withBob, world.device1.signer, certificateChain(world.cert1), {
+    const remove = await signChange(withBob, world.device1.signer, {
       op: "remove",
       account_id: "acct_bob",
     });
@@ -161,7 +150,7 @@ describe(acceptanceTitle(4), () => {
     expect(await admitted(removed.state, world.invitee.peer)).toBe(false);
   });
 
-  it("revoking an owner device also removes devices it certified", async () => {
+  it("revoking an owner device also removes the devices it approved", async () => {
     const world = await buildWorld();
     const revocation = await signStatement(
       "Revocation",
@@ -182,31 +171,15 @@ describe(acceptanceTitle(4), () => {
 });
 
 describe(acceptanceTitle(8), () => {
-  it("kit enrollment adds the new device, notifies owners, and leaves every chain at depth 0", async () => {
+  it("kit enrollment adds the new device as approved by the root and notifies owners", async () => {
     const world = await buildWorld();
-    expect(
-      activeOwnerCerts(world.state, WORLD_NOW)
-        .map((cert) => cert.chain.length)
-        .toSorted((a, b) => a - b),
-    ).toEqual([0, 1]);
     const root = await deriveRootSigner(await decodeKit(await encodeKit(WORLD_KIT_SECRET)));
     expect(formatEd25519PublicKey(root.publicKey)).toBe(world.rootPub);
     const phone = await worldKey("kit-phone");
-    let state = world.state;
-    for (const cert of activeOwnerCerts(state, WORLD_NOW)) {
-      const recert = await signStatement(
-        "OwnerDeviceCert",
-        { ...cert.body, issued_at: WORLD_NOW - 1 },
-        root,
-      );
-      const result = await submitStatement(state, recert, mailbox);
-      expect(result.ok).toBe(true);
-      state = result.state;
-    }
     const phoneCert = await signStatement("OwnerDeviceCert", certBody(phone), root);
     const added = await submitStatement(
-      state,
-      await signChange(state, root, [], { op: "add_owner_device", cert: phoneCert }),
+      world.state,
+      await signChange(world.state, root, { op: "add_owner_device", cert: phoneCert }),
       mailbox,
     );
     expect(added.ok && added.events).toContainEqual({
@@ -214,9 +187,9 @@ describe(acceptanceTitle(8), () => {
       event: "kit_used",
       ref: await fingerprint(phone.pub),
     });
-    expect(activeOwnerCerts(added.state, WORLD_NOW).map((cert) => cert.chain.length)).toEqual([
-      0, 0, 0,
-    ]);
+    const fp = await fingerprint(phone.pub);
+    expect(added.state.owner_devices[fp]?.approved_by).toBe("root");
+    expect(activeOwnerDevices(added.state, WORLD_NOW)).toHaveLength(3);
     expect(await admitted(added.state, phone.peer)).toBe(true);
   });
 });
@@ -260,7 +233,7 @@ describe(acceptanceTitle(9), () => {
     const recert = await signStatement("OwnerDeviceCert", certBody(world.device1, 2), rootA.signer);
     const blocked = await submitStatement(
       conflict.state,
-      await signChange(conflict.state, rootA.signer, [], { op: "add_owner_device", cert: recert }),
+      await signChange(conflict.state, rootA.signer, { op: "add_owner_device", cert: recert }),
       mailbox,
     );
     expect(blocked).toMatchObject({ ok: false, code: "frozen" });
@@ -281,18 +254,13 @@ describe(acceptanceTitle(11), () => {
     const pending = await submitRedemption(state, redemption, identity, WORLD_NOW);
     expect(pending).toMatchObject({ ok: true, status: "pending" });
     expect(await admitted(pending.state, world.invitee.peer)).toBe(false);
-    const approve = await signChange(
-      pending.state,
-      world.device1.signer,
-      certificateChain(world.cert1),
-      {
-        op: "add",
-        account_id: "acct_bob",
-        role: "operator",
-        peer_keys: [world.invitee.peer],
-        invite_id: FIXTURE_INVITE_ID,
-      },
-    );
+    const approve = await signChange(pending.state, world.device1.signer, {
+      op: "add",
+      account_id: "acct_bob",
+      role: "operator",
+      peer_keys: [world.invitee.peer],
+      invite_id: FIXTURE_INVITE_ID,
+    });
     await expect(submitStatement(pending.state, approve, mailbox)).resolves.toMatchObject({
       ok: false,
       code: "not_direct",
@@ -312,28 +280,21 @@ describe(acceptanceTitle(11), () => {
       code: "audience_mismatch",
     });
     const pending = await submitRedemption(state, redemption, identity, WORLD_NOW);
-    const wrongKey = await signChange(
-      pending.state,
-      world.device1.signer,
-      certificateChain(world.cert1),
-      {
-        op: "add",
-        account_id: "acct_bob",
-        role: "operator",
-        peer_keys: [world.mallory.peer],
-        invite_id: FIXTURE_INVITE_ID,
-      },
-    );
+    const wrongKey = await signChange(pending.state, world.device1.signer, {
+      op: "add",
+      account_id: "acct_bob",
+      role: "operator",
+      peer_keys: [world.mallory.peer],
+      invite_id: FIXTURE_INVITE_ID,
+    });
     await expect(submitStatement(pending.state, wrongKey, tunnel)).resolves.toMatchObject({
       ok: false,
       code: "target_mismatch",
     });
-    const deny = await signChange(
-      pending.state,
-      world.device1.signer,
-      certificateChain(world.cert1),
-      { op: "deny_invite", invite_id: FIXTURE_INVITE_ID },
-    );
+    const deny = await signChange(pending.state, world.device1.signer, {
+      op: "deny_invite",
+      invite_id: FIXTURE_INVITE_ID,
+    });
     const denied = await submitStatement(pending.state, deny, tunnel);
     expect(denied.state.invites[FIXTURE_INVITE_ID]?.status).toBe("consumed");
     // A denial bumps seq like any change, so the published snapshot must follow it.
@@ -346,7 +307,7 @@ describe(acceptanceTitle(12), () => {
   it("removing a member emits cancel_runs for that account", async () => {
     const world = await buildWorld();
     const withBob = await addBob(world);
-    const remove = await signChange(withBob, world.device1.signer, certificateChain(world.cert1), {
+    const remove = await signChange(withBob, world.device1.signer, {
       op: "remove",
       account_id: "acct_bob",
     });

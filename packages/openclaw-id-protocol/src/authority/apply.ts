@@ -4,6 +4,10 @@ import { inviteSecretHash, verifyInviteRedemption, type AssertedIdentity } from 
 import { fingerprint, type IrohEndpointKey, type KeyFingerprint } from "../keys.js";
 import { hasValidSignature } from "../statements/envelope.js";
 import {
+  MAX_MEMBER_PEER_KEYS,
+  MAX_MEMBERS,
+  MAX_OWNER_DEVICE_PEER_KEYS,
+  MAX_OWNER_DEVICES,
   MEMBER_ROLES,
   type MemberRole,
   type SignedStatement,
@@ -16,11 +20,12 @@ import {
   type Authority,
   type VerifyOptions,
 } from "../statements/verify.js";
+import { approvalDescendants, withoutMemberPeerKeys, withoutOwnerDevices } from "./allowlist.js";
 import {
   certificateWindowError,
-  isOwnerDeviceActive,
   nextRootEpoch,
   ownerDevicePeerKeys,
+  ownerLookup,
   proofKeyHex,
   refuse,
   refuseWithTransition,
@@ -28,6 +33,7 @@ import {
   type AuthorityResult,
   type AuthorityState,
   type Channel,
+  type MemberRecord,
   type OwnerDeviceRecord,
 } from "./state.js";
 
@@ -39,7 +45,7 @@ function applied(state: AuthorityState, events: AuthorityEvent[] = []): Authorit
 }
 
 function verifyOptions(state: AuthorityState, now: UnixSeconds): VerifyOptions {
-  return { now, isRevoked: (fp) => state.revoked.includes(fp) };
+  return { now, owners: ownerLookup(state, now) };
 }
 
 function roleRank(role: MemberRole): number {
@@ -52,17 +58,9 @@ function mailboxAllows(statement: SignedStatement, authority: Authority): boolea
   return statement.type === "Revocation" || authority.kind === "root";
 }
 
-async function chainFingerprints(
-  cert: SignedStatement<"OwnerDeviceCert">,
-): Promise<KeyFingerprint[]> {
-  const keys = [cert.body.device_pub, ...cert.chain.map((link) => link.body.device_pub)];
-  return Promise.all(keys.map((key) => fingerprint(key)));
-}
-
 /**
- * Applies a signed statement (MembershipChange, Revocation, RootRotation, or a root-signed
- * OwnerDeviceCert re-certifying a known device). InviteCaps use `registerInvite` and
- * redemptions use `submitRedemption`.
+ * Applies a signed statement (MembershipChange, Revocation or RootRotation). InviteCaps use
+ * `registerInvite` and redemptions use `submitRedemption`.
  */
 export async function submitStatement(
   state: AuthorityState,
@@ -80,11 +78,10 @@ export async function submitStatement(
       return applyRootRotation(state, statement as SignedStatement<"RootRotation">, context);
     case "MembershipChange":
     case "Revocation":
-    case "OwnerDeviceCert":
       return applyOwnerStatement(
         state,
         // SAFETY: parseStatement validated the body against the schema for `statement.type`.
-        statement as SignedStatement<"MembershipChange" | "Revocation" | "OwnerDeviceCert">,
+        statement as SignedStatement<"MembershipChange" | "Revocation">,
         context,
       );
     default:
@@ -99,7 +96,7 @@ export async function submitStatement(
 // Shared gate for owner-signed writes: verify, then channel and freeze rules, then dispatch.
 async function applyOwnerStatement(
   state: AuthorityState,
-  statement: SignedStatement<"MembershipChange" | "Revocation" | "OwnerDeviceCert">,
+  statement: SignedStatement<"MembershipChange" | "Revocation">,
   context: WriteContext,
 ): Promise<AuthorityResult> {
   const verified = await verifyOwnerStatement(
@@ -128,82 +125,65 @@ async function applyOwnerStatement(
     // SAFETY: SignedStatement is not a discriminated union; `type` fixes the validated body.
     return applyRevocation(state, statement as SignedStatement<"Revocation">);
   }
-  if (statement.type === "OwnerDeviceCert") {
-    return applyRecertification(
-      state,
-      // SAFETY: SignedStatement is not a discriminated union; `type` fixes the validated body.
-      statement as SignedStatement<"OwnerDeviceCert">,
-      verified.authority,
-      context,
-    );
-  }
   return applyMembershipChange(
     state,
-    // SAFETY: the two branches above handled the other members of the type union.
+    // SAFETY: the branch above handled the only other member of the type union.
     statement as SignedStatement<"MembershipChange">,
     verified.authority,
     context,
   );
 }
 
-// A root-signed certificate for a device the Gateway already knows (chain compaction after kit use).
-async function applyRecertification(
-  state: AuthorityState,
-  cert: SignedStatement<"OwnerDeviceCert">,
-  authority: Authority,
-  context: WriteContext,
-): Promise<AuthorityResult> {
-  const fp = await fingerprint(cert.body.device_pub);
-  if (authority.kind !== "root" || !state.owner_devices[fp]) {
-    return refuse(
-      state,
-      "unsupported",
-      "only R re-certifies known owner devices; add devices with add_owner_device",
-    );
-  }
-  const window = certificateWindowError(cert.body, context.now);
-  if (window) {
-    return refuse(state, window.code, window.detail);
-  }
-  const record: OwnerDeviceRecord = { cert, chain_fps: [fp] };
-  return applied({ ...state, owner_devices: { ...state.owner_devices, [fp]: record } }, [
-    { type: "publish_snapshot" },
-  ]);
-}
-
+// Removes the revoked key now. An owner device goes with every device it approved
+// (computed from approved_by); a peer key leaves its member, or takes its owner device
+// (and that device's approvals) with it. An unknown target changes nothing.
 async function applyRevocation(
   state: AuthorityState,
   revocation: SignedStatement<"Revocation">,
 ): Promise<AuthorityResult> {
   const target = revocation.body.target_fp;
-  if (state.revoked.includes(target)) {
+  const devices =
+    revocation.body.target_kind === "owner_device"
+      ? approvalDescendants(state, target)
+      : await ownerDevicesWithPeer(state, target);
+  const owners = withoutOwnerDevices(state, devices);
+  const memberPeers =
+    revocation.body.target_kind === "peer_key" ? await memberPeersWithFp(state, target) : [];
+  const removed = [...new Set([...owners.peers, ...memberPeers])];
+  if (devices.length === 0 && memberPeers.length === 0) {
     return applied(state);
   }
-  const removedPeers: IrohEndpointKey[] = [];
-  for (const [fp, record] of Object.entries(state.owner_devices)) {
-    if (fp === target || record.chain_fps.includes(target)) {
-      removedPeers.push(...record.cert.body.peer_keys);
-    }
-  }
-  const memberPeers = Object.values(state.members).flatMap((member) => member.peer_keys);
-  const peerFps = new Map(
-    await Promise.all(memberPeers.map(async (peer) => [peer, await fingerprint(peer)] as const)),
-  );
-  const members = Object.fromEntries(
-    Object.entries(state.members).map(([account, member]) => {
-      removedPeers.push(...member.peer_keys.filter((peer) => peerFps.get(peer) === target));
-      return [
-        account,
-        { ...member, peer_keys: member.peer_keys.filter((peer) => peerFps.get(peer) !== target) },
-      ];
-    }),
-  );
-  const next = { ...state, members, revoked: [...state.revoked, target] };
-  return applied(next, [
-    { type: "disconnect", peer_keys: removedPeers },
-    { type: "invalidate_tokens", peer_keys: removedPeers },
+  return applied(withoutMemberPeerKeys(owners.state, memberPeers), [
+    { type: "disconnect", peer_keys: removed },
+    { type: "invalidate_tokens", peer_keys: removed },
     { type: "publish_snapshot" },
   ]);
+}
+
+// Every owner device (with the devices it approved) that holds a peer key with this fingerprint.
+async function ownerDevicesWithPeer(
+  state: AuthorityState,
+  target: KeyFingerprint,
+): Promise<KeyFingerprint[]> {
+  const found = new Set<KeyFingerprint>();
+  for (const [fp, record] of Object.entries(state.owner_devices)) {
+    const peerFps = await Promise.all(record.cert.body.peer_keys.map((key) => fingerprint(key)));
+    if (peerFps.includes(target)) {
+      // SAFETY: owner_devices is keyed by KeyFingerprint; Object.entries widens keys to string.
+      approvalDescendants(state, fp as KeyFingerprint).forEach((each) => found.add(each));
+    }
+  }
+  return [...found];
+}
+
+// Member peer keys whose fingerprint is `target`.
+async function memberPeersWithFp(
+  state: AuthorityState,
+  target: KeyFingerprint,
+): Promise<IrohEndpointKey[]> {
+  const keys = Object.values(state.members).flatMap((member) => member.peer_keys);
+  const matches = await Promise.all(keys.map(async (key) => (await fingerprint(key)) === target));
+  return keys.filter((_, index) => matches[index]);
 }
 
 async function applyMembershipChange(
@@ -232,7 +212,7 @@ async function applyTarget(
 ): Promise<AuthorityResult> {
   switch (target.op) {
     case "add":
-      return addMember(state, target);
+      return addMember(state, target, context.now);
     case "remove": {
       const member = state.members[target.account_id];
       if (!member) {
@@ -261,10 +241,8 @@ async function applyTarget(
         [{ type: "publish_snapshot" }],
       );
     }
-    case "revoke_device": {
-      const fp = await fingerprint(target.peer_key);
-      return applyRevocationOfPeer(state, target.peer_key, fp);
-    }
+    case "revoke_device":
+      return applyRemovalOfPeer(state, target.peer_key);
     case "add_owner_device":
       return addOwnerDevice(state, target.cert, authority, context);
     case "deny_invite": {
@@ -292,41 +270,39 @@ async function applyTarget(
   }
 }
 
-function applyRevocationOfPeer(
-  state: AuthorityState,
-  peer: IrohEndpointKey,
-  fp: KeyFingerprint,
-): AuthorityResult {
-  const members = Object.fromEntries(
-    Object.entries(state.members).map(([account, member]) => [
-      account,
-      { ...member, peer_keys: member.peer_keys.filter((key) => key !== peer) },
-    ]),
-  );
-  return applied(
-    {
-      ...state,
-      members,
-      revoked: state.revoked.includes(fp) ? state.revoked : [...state.revoked, fp],
-    },
-    [
-      { type: "disconnect", peer_keys: [peer] },
-      { type: "invalidate_tokens", peer_keys: [peer] },
-      { type: "publish_snapshot" },
-    ],
-  );
+// Removes one member browser (peer key); the member stays listed.
+function applyRemovalOfPeer(state: AuthorityState, peer: IrohEndpointKey): AuthorityResult {
+  return applied(withoutMemberPeerKeys(state, [peer]), [
+    { type: "disconnect", peer_keys: [peer] },
+    { type: "invalidate_tokens", peer_keys: [peer] },
+    { type: "publish_snapshot" },
+  ]);
 }
 
 // Adds a member directly, or approves a pending redemption when `invite_id` is set.
+// The caps hold: at most MAX_MEMBERS members and MAX_MEMBER_PEER_KEYS browsers each.
 function addMember(
   state: AuthorityState,
   target: Extract<SignedStatement<"MembershipChange">["body"]["target"], { op: "add" }>,
+  now: UnixSeconds,
 ): AuthorityResult {
   const existing = state.members[target.account_id];
-  const member = {
-    role: target.role,
-    peer_keys: [...new Set([...(existing?.peer_keys ?? []), ...target.peer_keys])],
-  };
+  if (!existing && Object.keys(state.members).length >= MAX_MEMBERS) {
+    return refuse(state, "limit_reached", `a claw has at most ${MAX_MEMBERS} members`);
+  }
+  const peerKeys = [...new Set([...(existing?.peer_keys ?? []), ...target.peer_keys])];
+  if (peerKeys.length > MAX_MEMBER_PEER_KEYS) {
+    return refuse(
+      state,
+      "limit_reached",
+      `a member has at most ${MAX_MEMBER_PEER_KEYS} devices at a claw`,
+    );
+  }
+  const lastSeen = { ...existing?.last_seen };
+  for (const key of target.peer_keys) {
+    lastSeen[key] ??= now;
+  }
+  const member: MemberRecord = { role: target.role, peer_keys: peerKeys, last_seen: lastSeen };
   if (target.invite_id === null) {
     return applied({ ...state, members: { ...state.members, [target.account_id]: member } }, [
       { type: "publish_snapshot" },
@@ -359,6 +335,8 @@ function addMember(
   );
 }
 
+// The certificate's signer must be R or a current owner device with approve_device; the
+// Gateway records it as approved_by. At most MAX_OWNER_DEVICES devices are listed.
 async function addOwnerDevice(
   state: AuthorityState,
   cert: SignedStatement<"OwnerDeviceCert">,
@@ -373,13 +351,31 @@ async function addOwnerDevice(
   if (!verified.ok) {
     return refuse(state, verified.code, `certificate: ${verified.detail}`);
   }
-  // Chain verification checks the issuers; the new certificate's own window is checked here.
   const window = certificateWindowError(cert.body, context.now);
   if (window) {
     return refuse(state, window.code, `certificate: ${window.detail}`);
   }
+  if (cert.body.peer_keys.length > MAX_OWNER_DEVICE_PEER_KEYS) {
+    return refuse(
+      state,
+      "limit_reached",
+      `an owner device has at most ${MAX_OWNER_DEVICE_PEER_KEYS} peer keys`,
+    );
+  }
   const fp = await fingerprint(cert.body.device_pub);
-  const record: OwnerDeviceRecord = { cert, chain_fps: await chainFingerprints(cert) };
+  const existing = state.owner_devices[fp];
+  if (!existing && Object.keys(state.owner_devices).length >= MAX_OWNER_DEVICES) {
+    return refuse(
+      state,
+      "limit_reached",
+      `a claw has at most ${MAX_OWNER_DEVICES} owner devices; remove one to add another`,
+    );
+  }
+  const record: OwnerDeviceRecord = {
+    cert,
+    approved_by: verified.authority.kind === "root" ? "root" : await fingerprint(cert.signer),
+    last_seen: context.now,
+  };
   const events: AuthorityEvent[] = [{ type: "publish_snapshot" }];
   if (authority.kind === "root" && context.channel === "mailbox") {
     events.push({ type: "notify_owners", event: "kit_used", ref: fp });
@@ -493,6 +489,9 @@ export async function registerInvite(
   if (!verified.ok) {
     return refuse(state, verified.code, verified.detail);
   }
+  if (state.frozen && verified.authority.kind === "root" && context.channel !== "local_operator") {
+    return refuse(state, "frozen", "remote root changes are frozen");
+  }
   const cap = parsed.statement.body;
   if (cap.claw_id !== state.claw_id) {
     return refuse(state, "wrong_claw", "invite is for another claw");
@@ -560,14 +559,4 @@ export async function submitRedemption(
     state: { ...state, invites: { ...state.invites, [body.invite_id]: record } },
     events: [{ type: "notify_owners", event: "redemption_pending", ref: body.invite_id }],
   };
-}
-
-/** Owner devices whose certificates are active at `now` (used by kit enrollment to compact chains). */
-export function activeOwnerCerts(
-  state: AuthorityState,
-  now: UnixSeconds,
-): SignedStatement<"OwnerDeviceCert">[] {
-  return Object.values(state.owner_devices)
-    .filter((record) => isOwnerDeviceActive(state, record, now))
-    .map((record) => record.cert);
 }

@@ -82,7 +82,14 @@ export async function verifyDiscoveryRequest(
     return { ok: false, code: "unauthorized", detail: "stale or invalid signature" };
   }
   const input = await discoveryRequestSigningInput({ ...parts, ts });
-  if (!(await verifyEd25519(rawPublicKey(keyid), input, base64urlToBytes(sigText)))) {
+  // The signature is untrusted: a noncanonical encoding fails here, inside the refusal.
+  let verified: boolean;
+  try {
+    verified = await verifyEd25519(rawPublicKey(keyid), input, base64urlToBytes(sigText));
+  } catch {
+    verified = false;
+  }
+  if (!verified) {
     return { ok: false, code: "unauthorized", detail: "signature does not verify" };
   }
   return { ok: true, keyid };

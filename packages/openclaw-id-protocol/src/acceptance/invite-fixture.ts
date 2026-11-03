@@ -6,7 +6,7 @@ import {
   inviteSecretHash,
   type AssertedIdentity,
 } from "../invites.js";
-import { certificateChain, signStatement } from "../statements/envelope.js";
+import { signStatement } from "../statements/envelope.js";
 import { buildWorld, WORLD_NOW } from "../testing/world.js";
 
 /** Invite id used by the fixture. */
@@ -31,7 +31,6 @@ export async function inviteFixture() {
       secret_hash: await inviteSecretHash(proofKey),
     },
     world.device1.signer,
-    certificateChain(world.cert1),
   );
   const registered = await registerInvite(world.state, cap, proofKey, {
     channel: "tunnel",

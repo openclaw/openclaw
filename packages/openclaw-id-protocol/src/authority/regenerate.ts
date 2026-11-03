@@ -16,7 +16,7 @@ export type OwnerKeyRegenerationInput = {
 /**
  * Regenerates the owner key: pins R' in a new epoch, clears a freeze, forgets every
  * owner device of earlier epochs and enrolls the regenerating device as the first
- * owner device under R'. Members, invites and revocations are kept. The events end
+ * owner device under R'. Members and invites are kept. The events end
  * the old owner devices' sessions and tokens and republish. Direct loopback only.
  */
 export async function regenerateOwnerKey(

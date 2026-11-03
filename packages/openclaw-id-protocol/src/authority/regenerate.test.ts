@@ -10,13 +10,13 @@ import { verifyOwnerStatement } from "../statements/verify.js";
 import { buildWorld, signChange, worldKey, WORLD_HOST, WORLD_NOW } from "../testing/world.js";
 import { submitStatement } from "./apply.js";
 import { regenerateOwnerKey } from "./regenerate.js";
-import { isAdmitted, isOwnerDeviceActive, type AuthorityState } from "./state.js";
+import { isAdmitted, isOwnerDeviceActive, ownerLookup, type AuthorityState } from "./state.js";
 
 const local = { channel: "local_operator" as const, now: WORLD_NOW };
 const REMOTE = ["tunnel", "mailbox"] as const;
 
 async function admitted(state: AuthorityState, peer: IrohEndpointKey, now = WORLD_NOW) {
-  return isAdmitted(state, peer, await fingerprint(peer), now);
+  return isAdmitted(state, peer, now);
 }
 
 // A rotation out of the world's epoch 1, signed by the current root R.
@@ -131,14 +131,17 @@ describe("owner-key regeneration", () => {
       { type: "publish_snapshot" },
     ]);
     // A statement an old owner device signs no longer verifies.
-    const stale = await signChange(state, world.device1.signer, [world.cert1], {
+    const stale = await signChange(state, world.device1.signer, {
       op: "set_role",
       account_id: "acct_bob",
       role: "viewer",
     });
     expect(
-      await verifyOwnerStatement(stale, state.anchor, { now: WORLD_NOW, isRevoked: () => false }),
-    ).toMatchObject({ ok: false, code: "chain_broken" });
+      await verifyOwnerStatement(stale, state.anchor, {
+        now: WORLD_NOW,
+        owners: ownerLookup(state, WORLD_NOW),
+      }),
+    ).toMatchObject({ ok: false, code: "not_an_owner" });
   });
 
   it("unfreezes a claw frozen by conflicting rotations", async () => {

@@ -1,7 +1,7 @@
 import { submitStatement } from "../authority/apply.js";
 import { linkClaw, type AuthorityState, type Channel } from "../authority/state.js";
 // A small deterministic claw for authority and acceptance tests: kit-derived root, two owner
-// devices (device-2 certified by device-1), a Gateway key and a server key.
+// devices (device-2 approved by device-1), a Gateway key and a server key.
 import { utf8 } from "../bytes.js";
 import { ed25519SignerFromSeed, sha256, type StatementSigner } from "../crypto.js";
 import {
@@ -11,7 +11,7 @@ import {
   type IrohEndpointKey,
 } from "../keys.js";
 import { deriveRootSigner } from "../kit.js";
-import { certificateChain, signStatement } from "../statements/envelope.js";
+import { signStatement } from "../statements/envelope.js";
 import {
   OWNER_CAPABILITIES,
   type MembershipTarget,
@@ -27,18 +27,22 @@ export const WORLD_HOST = "studio-k7x2q.crabd.me";
 /** Kit secret of the world's owner. */
 export const WORLD_KIT_SECRET = new Uint8Array(16).fill(7);
 
-/** A named key usable as both signer (D, K_gw) and iroh peer key. */
+/**
+ * A named device: a signing key D (also used as K_gw or K_srv where a test needs one) and a
+ * separate iroh peer key W, as real browsers have, so tests notice keys mixed up.
+ */
 export type WorldKey = { signer: StatementSigner; pub: Ed25519PublicKey; peer: IrohEndpointKey };
 
-/** Deterministic key for a name. */
+/** Deterministic key pair for a name (D and W from different seeds). */
 export async function worldKey(name: string): Promise<WorldKey> {
-  const signer = await ed25519SignerFromSeed(
-    await sha256(utf8(`openclaw-id-protocol/v1-draft/world/${name}`)),
-  );
+  const seed = (suffix: string) =>
+    sha256(utf8(`openclaw-id-protocol/v1-draft/world/${name}${suffix}`));
+  const signer = await ed25519SignerFromSeed(await seed(""));
+  const peer = await ed25519SignerFromSeed(await seed("/peer"));
   return {
     signer,
     pub: formatEd25519PublicKey(signer.publicKey),
-    peer: formatIrohEndpointKey(signer.publicKey),
+    peer: formatIrohEndpointKey(peer.publicKey),
   };
 }
 
@@ -64,7 +68,6 @@ export function certBody(
 export async function signChange(
   state: AuthorityState,
   signer: StatementSigner,
-  chain: SignedStatement<"OwnerDeviceCert">[],
   target: MembershipTarget,
   seq = state.seq + 1,
 ): Promise<SignedStatement<"MembershipChange">> {
@@ -72,7 +75,6 @@ export async function signChange(
     "MembershipChange",
     { claw_id: state.claw_id, seq, target, issued_at: WORLD_NOW - 10 },
     signer,
-    chain,
   );
 }
 
@@ -105,21 +107,13 @@ export async function buildWorld() {
   const cert1 = await signStatement("OwnerDeviceCert", certBody(device1!), root);
   let state = await mustApply(
     linked.state,
-    await signChange(linked.state, root, [], { op: "add_owner_device", cert: cert1 }),
+    await signChange(linked.state, root, { op: "add_owner_device", cert: cert1 }),
     "local_operator",
   );
-  const cert2 = await signStatement(
-    "OwnerDeviceCert",
-    certBody(device2!),
-    device1!.signer,
-    certificateChain(cert1),
-  );
+  const cert2 = await signStatement("OwnerDeviceCert", certBody(device2!), device1!.signer);
   state = await mustApply(
     state,
-    await signChange(state, device1!.signer, certificateChain(cert1), {
-      op: "add_owner_device",
-      cert: cert2,
-    }),
+    await signChange(state, device1!.signer, { op: "add_owner_device", cert: cert2 }),
     "tunnel",
   );
   const binding = await signStatement(

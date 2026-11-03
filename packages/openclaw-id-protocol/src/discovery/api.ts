@@ -24,8 +24,6 @@ export const DISCOVERY_ENDPOINTS = {
   getDescriptor: { method: "GET", path: "/v1/claws/{claw_id}/descriptor", auth: "user" },
   publishSnapshot: { method: "PUT", path: "/v1/claws/{claw_id}/snapshot", auth: "gateway" },
   getSnapshot: { method: "GET", path: "/v1/claws/{claw_id}/snapshot", auth: "user" },
-  publishRevocations: { method: "PUT", path: "/v1/claws/{claw_id}/revocations", auth: "gateway" },
-  getRevocations: { method: "GET", path: "/v1/claws/{claw_id}/revocations", auth: "user" },
   bindDevice: { method: "POST", path: "/v1/devices", auth: "device" },
   listDevices: { method: "GET", path: "/v1/devices", auth: "user" },
   unbindDevice: { method: "DELETE", path: "/v1/devices/{device_fp}", auth: "user" },
@@ -118,17 +116,6 @@ export type PublishSnapshotRequest = { snapshot: SignedStatement<"MembershipSnap
 /** Response of GET /v1/claws/{claw_id}/snapshot. Readers verify against the verified binding's K_gw. */
 export type GetSnapshotResponse = { snapshot: SignedStatement<"MembershipSnapshot"> };
 
-/**
- * PUT /v1/claws/{claw_id}/revocations (gateway): owner-signed Revocations the Gateway accepted.
- * Append-only; Discovery checks shape only and ignores statements it already has. Clients verify
- * each under their pinned anchor; Discovery can withhold them but never forge one.
- */
-export type PublishRevocationsRequest = { revocations: SignedStatement<"Revocation">[] };
-/** Response of GET /v1/claws/{claw_id}/revocations (readable like the descriptor). */
-export type GetRevocationsResponse = { revocations: SignedStatement<"Revocation">[] };
-/** Most revocations accepted in one PUT. */
-export const PUBLISH_REVOCATIONS_MAX = 64;
-
 /** POST /v1/devices: binds D (request signer) and W (proof) to the signed-in account. */
 export type BindDeviceRequest = {
   device_pub: Ed25519PublicKey;
@@ -166,8 +153,8 @@ export type AckMailRequest = { cursor: string };
 /**
  * POST /iroh/admit (iroh-relay `access.http`). Request header `X-Iroh-Endpoint-Id: <64 hex>`,
  * `Authorization: Bearer <relay token>`. Response body is exactly `true` or `false`.
- * Admits: K_srv of each claw's latest descriptor, and owner/member peer keys of each claw's
- * latest snapshot that are not in its `revoked` list. Malformed ids -> `false`. Missing or
+ * Admits: K_srv of each claw's latest descriptor, and the owner and member peer keys listed in
+ * each claw's latest snapshot (current state only; a removed key is absent). Malformed ids -> `false`. Missing or
  * wrong bearer -> 401 (the relay fails closed).
  */
 export type IrohAdmitResponse = "true" | "false";

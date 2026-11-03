@@ -79,14 +79,15 @@ async function followRotations(
 
 /**
  * Verifies Discovery-served binding evidence against a pin before any socket opens:
- * the binding chains to the pinned R (through verified rotations), root_epoch and
- * binding_seq do not go backwards, the hostname is this origin's host, the claw id
- * matches, and K_srv is not revoked. Returns the pin to store afterwards.
+ * the binding is signed by the pinned R (through verified rotations), root_epoch and
+ * binding_seq do not go backwards, the hostname is this origin's host and the claw id
+ * matches. A replaced server key is retired by a higher binding_seq. Returns the pin to
+ * store afterwards.
  */
 export async function verifyBindingForPin(
   evidence: BindingEvidence,
   pin: ClawPin,
-  context: VerifyOptions & { host: string },
+  context: Omit<VerifyOptions, "owners"> & { host: string },
 ): Promise<BindingCheck> {
   const walked = await followRotations(pin, evidence.rotations);
   if (!walked.ok) {
@@ -113,9 +114,6 @@ export async function verifyBindingForPin(
   }
   if (binding.binding_seq < pin.binding_seq) {
     return failure("rollback", `binding_seq ${binding.binding_seq} < pinned ${pin.binding_seq}`);
-  }
-  if (context.isRevoked?.(await fingerprint(binding.k_srv))) {
-    return failure("server_key_revoked", "K_srv is revoked");
   }
   return {
     ok: true,

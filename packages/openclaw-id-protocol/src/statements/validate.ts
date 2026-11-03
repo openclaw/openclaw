@@ -41,13 +41,18 @@ function predicate(test: (value: unknown) => boolean, message: string): Check {
   };
 }
 
-const text: Check = predicate(
-  (v) => typeof v === "string" && v.length <= MAX_TEXT,
-  "expected string",
-);
+// A UTF-16 surrogate without its pair: JCS (and UTF-8) cannot encode it.
+const LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+// True for a string of well-formed Unicode text no longer than MAX_TEXT.
+function isText(v: unknown): v is string {
+  return typeof v === "string" && v.length <= MAX_TEXT && !LONE_SURROGATE_RE.test(v);
+}
+
+const text: Check = predicate(isText, "expected well-formed string");
 const nonEmptyText: Check = predicate(
-  (v) => typeof v === "string" && v.length > 0 && v.length <= MAX_TEXT,
-  "expected non-empty string",
+  (v) => isText(v) && v.length > 0,
+  "expected non-empty well-formed string",
 );
 const bool: Check = predicate((v) => typeof v === "boolean", "expected boolean");
 const seconds: Check = predicate(
@@ -148,28 +153,19 @@ const ownerDeviceCertBody = object({
   root_epoch: positive,
 });
 
-// Envelope check for one statement type; chain entries must be OwnerDeviceCerts with empty chains.
+// Envelope check for one statement type.
 function envelope(type: StatementType, body: Check): Check {
   return object({
     v: predicate((v) => v === 1, "expected 1"),
     type: oneOf([type]),
     body,
     signer: ed25519Key,
-    chain: list(chainLink),
     alg: oneOf(["ed25519"]),
     sig: predicate(
       (v) => typeof v === "string" && BASE64URL_SIG_RE.test(v),
       "expected 64-byte base64url signature",
     ),
   });
-}
-
-function chainLink(value: unknown, path: string): void {
-  envelope("OwnerDeviceCert", ownerDeviceCertBody)(value, path);
-  // SAFETY: the envelope check above throws unless `chain` is an array.
-  if ((value as { chain: unknown[] }).chain.length !== 0) {
-    fail(`${path}.chain`, "chain links must not carry nested chains");
-  }
 }
 
 const BODIES: Record<StatementType, Check> = {
@@ -236,9 +232,9 @@ const BODIES: Record<StatementType, Check> = {
     claw_id: clawId,
     seq: nonNegative,
     binding_seq: positive,
+    owner_device_keys: list(ed25519Key),
     owner_peer_keys: list(irohKey),
     members: list(object({ account_id: nonEmptyText, role, peer_keys: list(irohKey) })),
-    revoked: list(keyFp),
     issued_at: seconds,
   }),
   InviteRedemption: object({

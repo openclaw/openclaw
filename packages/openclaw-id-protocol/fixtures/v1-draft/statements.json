@@ -138,6 +138,33 @@
     "root_pub": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
     "root_epoch": 1
   },
+  "owners": [
+    {
+      "device_pub": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
+      "caps": [
+        "approve_device",
+        "bind",
+        "invite",
+        "manage_members"
+      ]
+    },
+    {
+      "device_pub": "ed25519:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b",
+      "caps": [
+        "approve_device",
+        "bind",
+        "invite",
+        "manage_members"
+      ]
+    },
+    {
+      "device_pub": "ed25519:980b1cf12dae1e237ea453bd3a40ce1317e8b5d35c1269bb314aabc8b59ab6c7",
+      "caps": [
+        "approve_device",
+        "bind"
+      ]
+    }
+  ],
   "valid": [
     {
       "name": "root certifies device-1",
@@ -163,14 +190,13 @@
           "root_epoch": 1
         },
         "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
-        "chain": [],
         "alg": "ed25519",
         "sig": "GSB0wiyQ-eAkEAjtiRR6GZnUcIuRR1v56lU5qFpJ7gifAYh08yo7Qv70SewZZXhJ7bW2b_aoift5sFtBDkNjAw"
       },
       "signing_input_hex": "6f70656e636c61772f4f776e6572446576696365436572742f7631007b2263617073223a5b22617070726f76655f646576696365222c2262696e64222c22696e76697465222c226d616e6167655f6d656d62657273225d2c226465766963655f707562223a22656432353531393a64656536636137616336313730376161366230623265663866323064323538656230623163646432623733623963346366326136623263386639666466643565222c22657870697265735f6174223a6e756c6c2c226973737565645f6174223a313739333331343830302c226c6162656c223a226465766963652d31222c22706565725f6b657973223a5b2269726f683a64656536636137616336313730376161366230623265663866323064323538656230623163646432623733623963346366326136623263386639666466643565225d2c22726f6f745f65706f6368223a312c2273636f7065223a226f776e6572227d"
     },
     {
-      "name": "device-1 certifies device-2 (depth 1)",
+      "name": "owner device-1 certifies device-2",
       "verifier": "owner",
       "statement": {
         "v": 1,
@@ -193,143 +219,10 @@
           "root_epoch": 1
         },
         "signer": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
-        "chain": [
-          {
-            "v": 1,
-            "type": "OwnerDeviceCert",
-            "body": {
-              "device_pub": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
-              "peer_keys": [
-                "iroh:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e"
-              ],
-              "label": "device-1",
-              "scope": "owner",
-              "caps": [
-                "approve_device",
-                "bind",
-                "invite",
-                "manage_members"
-              ],
-              "issued_at": 1793314800,
-              "expires_at": null,
-              "root_epoch": 1
-            },
-            "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
-            "chain": [],
-            "alg": "ed25519",
-            "sig": "GSB0wiyQ-eAkEAjtiRR6GZnUcIuRR1v56lU5qFpJ7gifAYh08yo7Qv70SewZZXhJ7bW2b_aoift5sFtBDkNjAw"
-          }
-        ],
         "alg": "ed25519",
         "sig": "swA4P5L1VMhFVX3YwNTaAYA4GKiZqXS6QLfbS9WUOVjr8GuR5LcSJDTLK_sxmooWH_QWOREKhP0Zsb5nkVo0CQ"
       },
       "signing_input_hex": "6f70656e636c61772f4f776e6572446576696365436572742f7631007b2263617073223a5b22617070726f76655f646576696365222c2262696e64222c22696e76697465222c226d616e6167655f6d656d62657273225d2c226465766963655f707562223a22656432353531393a38373832653262373862313063386235306437313062663438643965356530356230383531313038393639313433363038356534383534373465303039653062222c22657870697265735f6174223a6e756c6c2c226973737565645f6174223a313739333331343830302c226c6162656c223a226465766963652d32222c22706565725f6b657973223a5b2269726f683a38373832653262373862313063386235306437313062663438643965356530356230383531313038393639313433363038356534383534373465303039653062225d2c22726f6f745f65706f6368223a312c2273636f7065223a226f776e6572227d"
-    },
-    {
-      "name": "device-3 certifies device-4 (depth 3, the deepest certificate allowed)",
-      "verifier": "owner",
-      "statement": {
-        "v": 1,
-        "type": "OwnerDeviceCert",
-        "body": {
-          "device_pub": "ed25519:8d4d1f70c596a8391ed752d621605c156bd580dcb75f56036c244b5d7559a14e",
-          "peer_keys": [
-            "iroh:8d4d1f70c596a8391ed752d621605c156bd580dcb75f56036c244b5d7559a14e"
-          ],
-          "label": "device-4",
-          "scope": "owner",
-          "caps": [
-            "approve_device",
-            "bind",
-            "invite",
-            "manage_members"
-          ],
-          "issued_at": 1793314800,
-          "expires_at": null,
-          "root_epoch": 1
-        },
-        "signer": "ed25519:980b1cf12dae1e237ea453bd3a40ce1317e8b5d35c1269bb314aabc8b59ab6c7",
-        "chain": [
-          {
-            "v": 1,
-            "type": "OwnerDeviceCert",
-            "body": {
-              "device_pub": "ed25519:980b1cf12dae1e237ea453bd3a40ce1317e8b5d35c1269bb314aabc8b59ab6c7",
-              "peer_keys": [
-                "iroh:980b1cf12dae1e237ea453bd3a40ce1317e8b5d35c1269bb314aabc8b59ab6c7"
-              ],
-              "label": "device-3",
-              "scope": "owner",
-              "caps": [
-                "approve_device",
-                "bind",
-                "invite",
-                "manage_members"
-              ],
-              "issued_at": 1793314800,
-              "expires_at": null,
-              "root_epoch": 1
-            },
-            "signer": "ed25519:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b",
-            "chain": [],
-            "alg": "ed25519",
-            "sig": "C8YQkeU5bh9uYpBUXNcgxzMT05YdUbrwdqdOxVH3DbwR7EcqnpEThhBFl-bCLUS6UeZUj3j-klP-MtOjnQUpAw"
-          },
-          {
-            "v": 1,
-            "type": "OwnerDeviceCert",
-            "body": {
-              "device_pub": "ed25519:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b",
-              "peer_keys": [
-                "iroh:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b"
-              ],
-              "label": "device-2",
-              "scope": "owner",
-              "caps": [
-                "approve_device",
-                "bind",
-                "invite",
-                "manage_members"
-              ],
-              "issued_at": 1793314800,
-              "expires_at": null,
-              "root_epoch": 1
-            },
-            "signer": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
-            "chain": [],
-            "alg": "ed25519",
-            "sig": "swA4P5L1VMhFVX3YwNTaAYA4GKiZqXS6QLfbS9WUOVjr8GuR5LcSJDTLK_sxmooWH_QWOREKhP0Zsb5nkVo0CQ"
-          },
-          {
-            "v": 1,
-            "type": "OwnerDeviceCert",
-            "body": {
-              "device_pub": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
-              "peer_keys": [
-                "iroh:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e"
-              ],
-              "label": "device-1",
-              "scope": "owner",
-              "caps": [
-                "approve_device",
-                "bind",
-                "invite",
-                "manage_members"
-              ],
-              "issued_at": 1793314800,
-              "expires_at": null,
-              "root_epoch": 1
-            },
-            "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
-            "chain": [],
-            "alg": "ed25519",
-            "sig": "GSB0wiyQ-eAkEAjtiRR6GZnUcIuRR1v56lU5qFpJ7gifAYh08yo7Qv70SewZZXhJ7bW2b_aoift5sFtBDkNjAw"
-          }
-        ],
-        "alg": "ed25519",
-        "sig": "l9io3HeUkHzbpdTPjotGGwqvdT-zTCFUibdueYsyqXMJKANerQoUvDGUzGC3r7vClWTjnC6WGw074C7fBbCMDA"
-      },
-      "signing_input_hex": "6f70656e636c61772f4f776e6572446576696365436572742f7631007b2263617073223a5b22617070726f76655f646576696365222c2262696e64222c22696e76697465222c226d616e6167655f6d656d62657273225d2c226465766963655f707562223a22656432353531393a38643464316637306335393661383339316564373532643632313630356331353662643538306463623735663536303336633234346235643735353961313465222c22657870697265735f6174223a6e756c6c2c226973737565645f6174223a313739333331343830302c226c6162656c223a226465766963652d34222c22706565725f6b657973223a5b2269726f683a38643464316637306335393661383339316564373532643632313630356331353662643538306463623735663536303336633234346235643735353961313465225d2c22726f6f745f65706f6368223a312c2273636f7065223a226f776e6572227d"
     },
     {
       "name": "root signs server binding seq 1",
@@ -347,14 +240,13 @@
           "issued_at": 1793314800
         },
         "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
-        "chain": [],
         "alg": "ed25519",
         "sig": "PIJT44De25ZH9qTqqGAstKUvfSgEBJAWVPGdl-6YCf9SAMtV95e9l-BfHZ7UV01xMAFy6HI3_tJ3vvuJk8mTAg"
       },
       "signing_input_hex": "6f70656e636c61772f53657276657242696e64696e672f7631007b2262696e64696e675f736571223a312c22636c61775f6964223a223031323334353637383961626364656630313233343536373839616263646566222c22686f73746e616d65223a2273747564696f2d6b377832712e63726162642e6d65222c226973737565645f6174223a313739333331343830302c226b5f6777223a22656432353531393a33653161663831383732653633396363653065323966616366383063346131663938376231653038313636396366663665666639303236386433376439616236222c226b5f737276223a2269726f683a37303232646163303937613531326133353462313331343139306639333764353737613261653435386338643366616533623264663566323362656435396134222c22726f6f745f65706f6368223a317d"
     },
     {
-      "name": "device-1 (bind cap) signs server binding seq 2",
+      "name": "root signs server binding seq 2 (new server key)",
       "verifier": "owner",
       "statement": {
         "v": 1,
@@ -368,41 +260,14 @@
           "root_epoch": 1,
           "issued_at": 1793314800
         },
-        "signer": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
-        "chain": [
-          {
-            "v": 1,
-            "type": "OwnerDeviceCert",
-            "body": {
-              "device_pub": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
-              "peer_keys": [
-                "iroh:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e"
-              ],
-              "label": "device-1",
-              "scope": "owner",
-              "caps": [
-                "approve_device",
-                "bind",
-                "invite",
-                "manage_members"
-              ],
-              "issued_at": 1793314800,
-              "expires_at": null,
-              "root_epoch": 1
-            },
-            "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
-            "chain": [],
-            "alg": "ed25519",
-            "sig": "GSB0wiyQ-eAkEAjtiRR6GZnUcIuRR1v56lU5qFpJ7gifAYh08yo7Qv70SewZZXhJ7bW2b_aoift5sFtBDkNjAw"
-          }
-        ],
+        "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
         "alg": "ed25519",
-        "sig": "GqEF4Rru34zR4_8bM3cMGd0Mm3zi0js0uTBafvVcctFJSeDgu1478YHBpqh9UGmLLFvAYbAm4RLXyhMTlXRhBw"
+        "sig": "QaXvZ1rIgj-6xBGQ38xuebkWhGAfjcbUcNy1pkImb3J8bEkxnXCoof8dh9ReTiQfnczsIC2T2V01Tz6wwCn1CQ"
       },
       "signing_input_hex": "6f70656e636c61772f53657276657242696e64696e672f7631007b2262696e64696e675f736571223a322c22636c61775f6964223a223031323334353637383961626364656630313233343536373839616263646566222c22686f73746e616d65223a2273747564696f2d6b377832712e63726162642e6d65222c226973737565645f6174223a313739333331343830302c226b5f6777223a22656432353531393a33653161663831383732653633396363653065323966616366383063346131663938376231653038313636396366663665666639303236386433376439616236222c226b5f737276223a2269726f683a31363038353831356233666436306137313432623631663031346630346630656164313031666162366564643663633531633734326165333765373033366362222c22726f6f745f65706f6368223a317d"
     },
     {
-      "name": "device-2 signs invite",
+      "name": "owner device-2 signs invite",
       "verifier": "owner",
       "statement": {
         "v": 1,
@@ -422,65 +287,13 @@
           "secret_hash": "bdd5b2c8428ed23bd4b38295690dacf2180128d97f38797bdb9990ddef8d5037"
         },
         "signer": "ed25519:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b",
-        "chain": [
-          {
-            "v": 1,
-            "type": "OwnerDeviceCert",
-            "body": {
-              "device_pub": "ed25519:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b",
-              "peer_keys": [
-                "iroh:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b"
-              ],
-              "label": "device-2",
-              "scope": "owner",
-              "caps": [
-                "approve_device",
-                "bind",
-                "invite",
-                "manage_members"
-              ],
-              "issued_at": 1793314800,
-              "expires_at": null,
-              "root_epoch": 1
-            },
-            "signer": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
-            "chain": [],
-            "alg": "ed25519",
-            "sig": "swA4P5L1VMhFVX3YwNTaAYA4GKiZqXS6QLfbS9WUOVjr8GuR5LcSJDTLK_sxmooWH_QWOREKhP0Zsb5nkVo0CQ"
-          },
-          {
-            "v": 1,
-            "type": "OwnerDeviceCert",
-            "body": {
-              "device_pub": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
-              "peer_keys": [
-                "iroh:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e"
-              ],
-              "label": "device-1",
-              "scope": "owner",
-              "caps": [
-                "approve_device",
-                "bind",
-                "invite",
-                "manage_members"
-              ],
-              "issued_at": 1793314800,
-              "expires_at": null,
-              "root_epoch": 1
-            },
-            "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
-            "chain": [],
-            "alg": "ed25519",
-            "sig": "GSB0wiyQ-eAkEAjtiRR6GZnUcIuRR1v56lU5qFpJ7gifAYh08yo7Qv70SewZZXhJ7bW2b_aoift5sFtBDkNjAw"
-          }
-        ],
         "alg": "ed25519",
         "sig": "XZUW2V17g7zF94vV1QppE04mmZhpqdySAXPeEfz87lPE_8t7dXcnoeC1Arpr9gBHDwh3vo7Xomthagu5S1vBCQ"
       },
       "signing_input_hex": "6f70656e636c61772f496e766974654361702f7631007b2261756469656e6365223a7b226b696e64223a22656d61696c222c2276616c7565223a22626f62406578616d706c652e636f6d227d2c22636c61775f6964223a223031323334353637383961626364656630313233343536373839616263646566222c22637265617465645f6174223a313739333331343830302c22657870697265735f6174223a313739333932333230302c22696e766974655f6964223a223030313132323333343435353636373738383939616162626363646465656666222c226c6162656c223a22426f62222c22726f6c65223a226f70657261746f72222c227365637265745f68617368223a2262646435623263383432386564323362643462333832393536393064616366323138303132386439376633383739376264623939393064646566386435303337222c2273696e676c655f757365223a747275657d"
     },
     {
-      "name": "device-1 adds member",
+      "name": "owner device-1 adds member",
       "verifier": "owner",
       "statement": {
         "v": 1,
@@ -500,40 +313,13 @@
           "issued_at": 1793314800
         },
         "signer": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
-        "chain": [
-          {
-            "v": 1,
-            "type": "OwnerDeviceCert",
-            "body": {
-              "device_pub": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
-              "peer_keys": [
-                "iroh:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e"
-              ],
-              "label": "device-1",
-              "scope": "owner",
-              "caps": [
-                "approve_device",
-                "bind",
-                "invite",
-                "manage_members"
-              ],
-              "issued_at": 1793314800,
-              "expires_at": null,
-              "root_epoch": 1
-            },
-            "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
-            "chain": [],
-            "alg": "ed25519",
-            "sig": "GSB0wiyQ-eAkEAjtiRR6GZnUcIuRR1v56lU5qFpJ7gifAYh08yo7Qv70SewZZXhJ7bW2b_aoift5sFtBDkNjAw"
-          }
-        ],
         "alg": "ed25519",
         "sig": "4SpFc69dhccq0rr0gwLS_8rTkQsm0DO22srlkZIDvSOfEWw1Vfajw4HFxhTIRKcPkYYZBYkCCc7rF2NRv_CMBw"
       },
       "signing_input_hex": "6f70656e636c61772f4d656d626572736869704368616e67652f7631007b22636c61775f6964223a223031323334353637383961626364656630313233343536373839616263646566222c226973737565645f6174223a313739333331343830302c22736571223a322c22746172676574223a7b226163636f756e745f6964223a22616363745f626f62222c22696e766974655f6964223a6e756c6c2c226f70223a22616464222c22706565725f6b657973223a5b2269726f683a37373637633564336564343163306166303466626336363864336334333864366464343664613166316164333331376562623032363635663032383263343832225d2c22726f6c65223a226f70657261746f72227d7d"
     },
     {
-      "name": "device-2 revokes device-3",
+      "name": "owner device-2 revokes device-3",
       "verifier": "owner",
       "statement": {
         "v": 1,
@@ -546,58 +332,6 @@
           "issued_at": 1793314800
         },
         "signer": "ed25519:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b",
-        "chain": [
-          {
-            "v": 1,
-            "type": "OwnerDeviceCert",
-            "body": {
-              "device_pub": "ed25519:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b",
-              "peer_keys": [
-                "iroh:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b"
-              ],
-              "label": "device-2",
-              "scope": "owner",
-              "caps": [
-                "approve_device",
-                "bind",
-                "invite",
-                "manage_members"
-              ],
-              "issued_at": 1793314800,
-              "expires_at": null,
-              "root_epoch": 1
-            },
-            "signer": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
-            "chain": [],
-            "alg": "ed25519",
-            "sig": "swA4P5L1VMhFVX3YwNTaAYA4GKiZqXS6QLfbS9WUOVjr8GuR5LcSJDTLK_sxmooWH_QWOREKhP0Zsb5nkVo0CQ"
-          },
-          {
-            "v": 1,
-            "type": "OwnerDeviceCert",
-            "body": {
-              "device_pub": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
-              "peer_keys": [
-                "iroh:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e"
-              ],
-              "label": "device-1",
-              "scope": "owner",
-              "caps": [
-                "approve_device",
-                "bind",
-                "invite",
-                "manage_members"
-              ],
-              "issued_at": 1793314800,
-              "expires_at": null,
-              "root_epoch": 1
-            },
-            "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
-            "chain": [],
-            "alg": "ed25519",
-            "sig": "GSB0wiyQ-eAkEAjtiRR6GZnUcIuRR1v56lU5qFpJ7gifAYh08yo7Qv70SewZZXhJ7bW2b_aoift5sFtBDkNjAw"
-          }
-        ],
         "alg": "ed25519",
         "sig": "wVQCEBBBnc7GHVSGPBOPv1FTr1K83LjZrNFbCynHUkXnRFX-3V1ejkGy2eP3qftQcEnfioVMXTVSE29Z5k_FCg"
       },
@@ -616,7 +350,6 @@
           "issued_at": 1793314800
         },
         "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
-        "chain": [],
         "alg": "ed25519",
         "sig": "brRk61Yvyqofx_nDMDRhr7lDLP1NYxw0fvTxkHY1znsP-ubogBLlfTLkT8rloe1SdVjHcWyaZ99TfrrV0hvnCg"
       },
@@ -632,6 +365,10 @@
           "claw_id": "0123456789abcdef0123456789abcdef",
           "seq": 2,
           "binding_seq": 1,
+          "owner_device_keys": [
+            "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
+            "ed25519:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b"
+          ],
           "owner_peer_keys": [
             "iroh:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
             "iroh:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b"
@@ -645,15 +382,13 @@
               ]
             }
           ],
-          "revoked": [],
           "issued_at": 1793314800
         },
         "signer": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
-        "chain": [],
         "alg": "ed25519",
-        "sig": "f5HGx2bH50uDwM4BCGQq3TWLIsbm9dJh3iHS1uv-wtwAE5ubwulCDpyoFH9r2sLEDlgg9mGDCBYCPVgmwaCzDQ"
+        "sig": "3TMJlvZFM8Ye7v_QC3Q4RVW8Ksoe4jeQ5BS14LWzWqnqFXb2OpFSfV5eJSxYpBu9tCcgjMLBcSnvOiBY8XjQDw"
       },
-      "signing_input_hex": "6f70656e636c61772f4d656d62657273686970536e617073686f742f7631007b2262696e64696e675f736571223a312c22636c61775f6964223a223031323334353637383961626364656630313233343536373839616263646566222c226973737565645f6174223a313739333331343830302c226d656d62657273223a5b7b226163636f756e745f6964223a22616363745f626f62222c22706565725f6b657973223a5b2269726f683a37373637633564336564343163306166303466626336363864336334333864366464343664613166316164333331376562623032363635663032383263343832225d2c22726f6c65223a226f70657261746f72227d5d2c226f776e65725f706565725f6b657973223a5b2269726f683a64656536636137616336313730376161366230623265663866323064323538656230623163646432623733623963346366326136623263386639666466643565222c2269726f683a38373832653262373862313063386235306437313062663438643965356530356230383531313038393639313433363038356534383534373465303039653062225d2c227265766f6b6564223a5b5d2c22736571223a327d"
+      "signing_input_hex": "6f70656e636c61772f4d656d62657273686970536e617073686f742f7631007b2262696e64696e675f736571223a312c22636c61775f6964223a223031323334353637383961626364656630313233343536373839616263646566222c226973737565645f6174223a313739333331343830302c226d656d62657273223a5b7b226163636f756e745f6964223a22616363745f626f62222c22706565725f6b657973223a5b2269726f683a37373637633564336564343163306166303466626336363864336334333864366464343664613166316164333331376562623032363635663032383263343832225d2c22726f6c65223a226f70657261746f72227d5d2c226f776e65725f6465766963655f6b657973223a5b22656432353531393a64656536636137616336313730376161366230623265663866323064323538656230623163646432623733623963346366326136623263386639666466643565222c22656432353531393a38373832653262373862313063386235306437313062663438643965356530356230383531313038393639313433363038356534383534373465303039653062225d2c226f776e65725f706565725f6b657973223a5b2269726f683a64656536636137616336313730376161366230623265663866323064323538656230623163646432623733623963346366326136623263386639666466643565222c2269726f683a38373832653262373862313063386235306437313062663438643965356530356230383531313038393639313433363038356534383534373465303039653062225d2c22736571223a327d"
     },
     {
       "name": "invitee signs redemption request",
@@ -671,7 +406,6 @@
           "requested_at": 1793314800
         },
         "signer": "ed25519:7767c5d3ed41c0af04fbc668d3c438d6dd46da1f1ad3317ebb02665f0282c482",
-        "chain": [],
         "alg": "ed25519",
         "sig": "87lno6odyhgan2oIX0VmH_A06EhYoQhGLeAoHP0zZ6llfUWctwAqwrEJls6M8P0cQUAA0iFlcEniGfK7d6ZdCQ"
       },
@@ -695,14 +429,13 @@
           "issued_at": 1793314800
         },
         "signer": "ed25519:c5bd8266faa60225b50e024b6651b576ae5d7c93bbcc0cb48bbd048bbdb9ee21",
-        "chain": [],
         "alg": "ed25519",
         "sig": "UNZoKVLi3DtDBRUjSUjLUKEL0EqxsGLEG5mkq6pdS6UMzTS1m8W9VKAucoftQSpx2Mka8JqGJCC1TmHbSvhGBw"
       },
       "expected_error": "wrong_signer"
     },
     {
-      "name": "binding with a self-signed certificate chain",
+      "name": "binding signed by an owner device instead of R",
       "verifier": "owner",
       "statement": {
         "v": 1,
@@ -710,44 +443,17 @@
         "body": {
           "claw_id": "0123456789abcdef0123456789abcdef",
           "hostname": "studio-k7x2q.crabd.me",
-          "k_srv": "iroh:c5bd8266faa60225b50e024b6651b576ae5d7c93bbcc0cb48bbd048bbdb9ee21",
+          "k_srv": "iroh:16085815b3fd60a7142b61f014f04f0ead101fab6edd6cc51c742ae37e7036cb",
           "k_gw": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
           "binding_seq": 9,
           "root_epoch": 1,
           "issued_at": 1793314800
         },
-        "signer": "ed25519:c5bd8266faa60225b50e024b6651b576ae5d7c93bbcc0cb48bbd048bbdb9ee21",
-        "chain": [
-          {
-            "v": 1,
-            "type": "OwnerDeviceCert",
-            "body": {
-              "device_pub": "ed25519:c5bd8266faa60225b50e024b6651b576ae5d7c93bbcc0cb48bbd048bbdb9ee21",
-              "peer_keys": [
-                "iroh:c5bd8266faa60225b50e024b6651b576ae5d7c93bbcc0cb48bbd048bbdb9ee21"
-              ],
-              "label": "mallory",
-              "scope": "owner",
-              "caps": [
-                "approve_device",
-                "bind",
-                "invite",
-                "manage_members"
-              ],
-              "issued_at": 1793314800,
-              "expires_at": null,
-              "root_epoch": 1
-            },
-            "signer": "ed25519:c5bd8266faa60225b50e024b6651b576ae5d7c93bbcc0cb48bbd048bbdb9ee21",
-            "chain": [],
-            "alg": "ed25519",
-            "sig": "aZeKlYKdO-gGqxX4wkOnvS0lJKenZyZzkP93fQiYk71IT9-00F29t8Q83r0qVPoA0coM-F8qzOpvWvZ-BZCqDg"
-          }
-        ],
+        "signer": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
         "alg": "ed25519",
-        "sig": "UNZoKVLi3DtDBRUjSUjLUKEL0EqxsGLEG5mkq6pdS6UMzTS1m8W9VKAucoftQSpx2Mka8JqGJCC1TmHbSvhGBw"
+        "sig": "gIEI2Ym6lZt6ERuGpGGCol_lwRzsgGAv0n_nP8y9-WMq8ZKXvPg4mGVkDOb-zO-ZyIupBkb2rCxe82EfrouwBQ"
       },
-      "expected_error": "chain_broken"
+      "expected_error": "wrong_signer"
     },
     {
       "name": "binding body changed after signing",
@@ -765,7 +471,6 @@
           "issued_at": 1793314800
         },
         "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
-        "chain": [],
         "alg": "ed25519",
         "sig": "PIJT44De25ZH9qTqqGAstKUvfSgEBJAWVPGdl-6YCf9SAMtV95e9l-BfHZ7UV01xMAFy6HI3_tJ3vvuJk8mTAg"
       },
@@ -792,40 +497,13 @@
           "issued_at": 1793314800
         },
         "signer": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
-        "chain": [
-          {
-            "v": 1,
-            "type": "OwnerDeviceCert",
-            "body": {
-              "device_pub": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
-              "peer_keys": [
-                "iroh:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e"
-              ],
-              "label": "device-1",
-              "scope": "owner",
-              "caps": [
-                "approve_device",
-                "bind",
-                "invite",
-                "manage_members"
-              ],
-              "issued_at": 1793314800,
-              "expires_at": null,
-              "root_epoch": 1
-            },
-            "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
-            "chain": [],
-            "alg": "ed25519",
-            "sig": "GSB0wiyQ-eAkEAjtiRR6GZnUcIuRR1v56lU5qFpJ7gifAYh08yo7Qv70SewZZXhJ7bW2b_aoift5sFtBDkNjAw"
-          }
-        ],
         "alg": "ed25519",
         "sig": "wSc_ztYTfg0KZMnuSJvm01ERyfjur6mHiZ5a9HFtvXECoVC-wYmESRw4LmEGnOONDHt7MyAh7WWlGK5uA-cDBw"
       },
       "expected_error": "bad_signature"
     },
     {
-      "name": "chain deeper than 4",
+      "name": "invite signed by a removed owner device",
       "verifier": "owner",
       "statement": {
         "v": 1,
@@ -844,141 +522,14 @@
           "single_use": true,
           "secret_hash": "bdd5b2c8428ed23bd4b38295690dacf2180128d97f38797bdb9990ddef8d5037"
         },
-        "signer": "ed25519:8b2fcc7de63bd2fbc08ece9b5306859d9d4e2f8814f8e5be823bcd3dc4fa4c5e",
-        "chain": [
-          {
-            "v": 1,
-            "type": "OwnerDeviceCert",
-            "body": {
-              "device_pub": "ed25519:8b2fcc7de63bd2fbc08ece9b5306859d9d4e2f8814f8e5be823bcd3dc4fa4c5e",
-              "peer_keys": [
-                "iroh:8b2fcc7de63bd2fbc08ece9b5306859d9d4e2f8814f8e5be823bcd3dc4fa4c5e"
-              ],
-              "label": "device-5",
-              "scope": "owner",
-              "caps": [
-                "approve_device",
-                "bind",
-                "invite",
-                "manage_members"
-              ],
-              "issued_at": 1793314800,
-              "expires_at": null,
-              "root_epoch": 1
-            },
-            "signer": "ed25519:8d4d1f70c596a8391ed752d621605c156bd580dcb75f56036c244b5d7559a14e",
-            "chain": [],
-            "alg": "ed25519",
-            "sig": "-me_gLPN2OPKzlXuR_yeqDDjMitYNLZE1B-A0LxjZaJELOrQmzLRQ2UkP6_M9vzH31ArcuoY_FVVw8vl6GFnAA"
-          },
-          {
-            "v": 1,
-            "type": "OwnerDeviceCert",
-            "body": {
-              "device_pub": "ed25519:8d4d1f70c596a8391ed752d621605c156bd580dcb75f56036c244b5d7559a14e",
-              "peer_keys": [
-                "iroh:8d4d1f70c596a8391ed752d621605c156bd580dcb75f56036c244b5d7559a14e"
-              ],
-              "label": "device-4",
-              "scope": "owner",
-              "caps": [
-                "approve_device",
-                "bind",
-                "invite",
-                "manage_members"
-              ],
-              "issued_at": 1793314800,
-              "expires_at": null,
-              "root_epoch": 1
-            },
-            "signer": "ed25519:980b1cf12dae1e237ea453bd3a40ce1317e8b5d35c1269bb314aabc8b59ab6c7",
-            "chain": [],
-            "alg": "ed25519",
-            "sig": "l9io3HeUkHzbpdTPjotGGwqvdT-zTCFUibdueYsyqXMJKANerQoUvDGUzGC3r7vClWTjnC6WGw074C7fBbCMDA"
-          },
-          {
-            "v": 1,
-            "type": "OwnerDeviceCert",
-            "body": {
-              "device_pub": "ed25519:980b1cf12dae1e237ea453bd3a40ce1317e8b5d35c1269bb314aabc8b59ab6c7",
-              "peer_keys": [
-                "iroh:980b1cf12dae1e237ea453bd3a40ce1317e8b5d35c1269bb314aabc8b59ab6c7"
-              ],
-              "label": "device-3",
-              "scope": "owner",
-              "caps": [
-                "approve_device",
-                "bind",
-                "invite",
-                "manage_members"
-              ],
-              "issued_at": 1793314800,
-              "expires_at": null,
-              "root_epoch": 1
-            },
-            "signer": "ed25519:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b",
-            "chain": [],
-            "alg": "ed25519",
-            "sig": "C8YQkeU5bh9uYpBUXNcgxzMT05YdUbrwdqdOxVH3DbwR7EcqnpEThhBFl-bCLUS6UeZUj3j-klP-MtOjnQUpAw"
-          },
-          {
-            "v": 1,
-            "type": "OwnerDeviceCert",
-            "body": {
-              "device_pub": "ed25519:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b",
-              "peer_keys": [
-                "iroh:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b"
-              ],
-              "label": "device-2",
-              "scope": "owner",
-              "caps": [
-                "approve_device",
-                "bind",
-                "invite",
-                "manage_members"
-              ],
-              "issued_at": 1793314800,
-              "expires_at": null,
-              "root_epoch": 1
-            },
-            "signer": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
-            "chain": [],
-            "alg": "ed25519",
-            "sig": "swA4P5L1VMhFVX3YwNTaAYA4GKiZqXS6QLfbS9WUOVjr8GuR5LcSJDTLK_sxmooWH_QWOREKhP0Zsb5nkVo0CQ"
-          },
-          {
-            "v": 1,
-            "type": "OwnerDeviceCert",
-            "body": {
-              "device_pub": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
-              "peer_keys": [
-                "iroh:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e"
-              ],
-              "label": "device-1",
-              "scope": "owner",
-              "caps": [
-                "approve_device",
-                "bind",
-                "invite",
-                "manage_members"
-              ],
-              "issued_at": 1793314800,
-              "expires_at": null,
-              "root_epoch": 1
-            },
-            "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
-            "chain": [],
-            "alg": "ed25519",
-            "sig": "GSB0wiyQ-eAkEAjtiRR6GZnUcIuRR1v56lU5qFpJ7gifAYh08yo7Qv70SewZZXhJ7bW2b_aoift5sFtBDkNjAw"
-          }
-        ],
+        "signer": "ed25519:8d4d1f70c596a8391ed752d621605c156bd580dcb75f56036c244b5d7559a14e",
         "alg": "ed25519",
-        "sig": "adwzBSiuUtxilIYdldMFvgZ1-cNRS7BHRWIc8Rr5XiURmT5rO4jfAhfKdkomsL0dp7VSzKyBNm6w8RO7HGDVAw"
+        "sig": "qVNwUBt7Heb3TO09MewpYlOPfFwJ0uRmvY8JJfOHygWlOyC0-Ppx5RIwJ3swwpFmkherzxJWsVsH4vCBXx07Bw"
       },
-      "expected_error": "chain_too_long"
+      "expected_error": "not_an_owner"
     },
     {
-      "name": "device-5 certificate (would make depth 5)",
+      "name": "device approved by a removed owner device",
       "verifier": "owner",
       "statement": {
         "v": 1,
@@ -1001,112 +552,39 @@
           "root_epoch": 1
         },
         "signer": "ed25519:8d4d1f70c596a8391ed752d621605c156bd580dcb75f56036c244b5d7559a14e",
-        "chain": [
-          {
-            "v": 1,
-            "type": "OwnerDeviceCert",
-            "body": {
-              "device_pub": "ed25519:8d4d1f70c596a8391ed752d621605c156bd580dcb75f56036c244b5d7559a14e",
-              "peer_keys": [
-                "iroh:8d4d1f70c596a8391ed752d621605c156bd580dcb75f56036c244b5d7559a14e"
-              ],
-              "label": "device-4",
-              "scope": "owner",
-              "caps": [
-                "approve_device",
-                "bind",
-                "invite",
-                "manage_members"
-              ],
-              "issued_at": 1793314800,
-              "expires_at": null,
-              "root_epoch": 1
-            },
-            "signer": "ed25519:980b1cf12dae1e237ea453bd3a40ce1317e8b5d35c1269bb314aabc8b59ab6c7",
-            "chain": [],
-            "alg": "ed25519",
-            "sig": "l9io3HeUkHzbpdTPjotGGwqvdT-zTCFUibdueYsyqXMJKANerQoUvDGUzGC3r7vClWTjnC6WGw074C7fBbCMDA"
-          },
-          {
-            "v": 1,
-            "type": "OwnerDeviceCert",
-            "body": {
-              "device_pub": "ed25519:980b1cf12dae1e237ea453bd3a40ce1317e8b5d35c1269bb314aabc8b59ab6c7",
-              "peer_keys": [
-                "iroh:980b1cf12dae1e237ea453bd3a40ce1317e8b5d35c1269bb314aabc8b59ab6c7"
-              ],
-              "label": "device-3",
-              "scope": "owner",
-              "caps": [
-                "approve_device",
-                "bind",
-                "invite",
-                "manage_members"
-              ],
-              "issued_at": 1793314800,
-              "expires_at": null,
-              "root_epoch": 1
-            },
-            "signer": "ed25519:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b",
-            "chain": [],
-            "alg": "ed25519",
-            "sig": "C8YQkeU5bh9uYpBUXNcgxzMT05YdUbrwdqdOxVH3DbwR7EcqnpEThhBFl-bCLUS6UeZUj3j-klP-MtOjnQUpAw"
-          },
-          {
-            "v": 1,
-            "type": "OwnerDeviceCert",
-            "body": {
-              "device_pub": "ed25519:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b",
-              "peer_keys": [
-                "iroh:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b"
-              ],
-              "label": "device-2",
-              "scope": "owner",
-              "caps": [
-                "approve_device",
-                "bind",
-                "invite",
-                "manage_members"
-              ],
-              "issued_at": 1793314800,
-              "expires_at": null,
-              "root_epoch": 1
-            },
-            "signer": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
-            "chain": [],
-            "alg": "ed25519",
-            "sig": "swA4P5L1VMhFVX3YwNTaAYA4GKiZqXS6QLfbS9WUOVjr8GuR5LcSJDTLK_sxmooWH_QWOREKhP0Zsb5nkVo0CQ"
-          },
-          {
-            "v": 1,
-            "type": "OwnerDeviceCert",
-            "body": {
-              "device_pub": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
-              "peer_keys": [
-                "iroh:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e"
-              ],
-              "label": "device-1",
-              "scope": "owner",
-              "caps": [
-                "approve_device",
-                "bind",
-                "invite",
-                "manage_members"
-              ],
-              "issued_at": 1793314800,
-              "expires_at": null,
-              "root_epoch": 1
-            },
-            "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
-            "chain": [],
-            "alg": "ed25519",
-            "sig": "GSB0wiyQ-eAkEAjtiRR6GZnUcIuRR1v56lU5qFpJ7gifAYh08yo7Qv70SewZZXhJ7bW2b_aoift5sFtBDkNjAw"
-          }
-        ],
         "alg": "ed25519",
         "sig": "-me_gLPN2OPKzlXuR_yeqDDjMitYNLZE1B-A0LxjZaJELOrQmzLRQ2UkP6_M9vzH31ArcuoY_FVVw8vl6GFnAA"
       },
-      "expected_error": "chain_too_long"
+      "expected_error": "not_an_owner"
+    },
+    {
+      "name": "self-signed device certificate",
+      "verifier": "owner",
+      "statement": {
+        "v": 1,
+        "type": "OwnerDeviceCert",
+        "body": {
+          "device_pub": "ed25519:c5bd8266faa60225b50e024b6651b576ae5d7c93bbcc0cb48bbd048bbdb9ee21",
+          "peer_keys": [
+            "iroh:c5bd8266faa60225b50e024b6651b576ae5d7c93bbcc0cb48bbd048bbdb9ee21"
+          ],
+          "label": "mallory",
+          "scope": "owner",
+          "caps": [
+            "approve_device",
+            "bind",
+            "invite",
+            "manage_members"
+          ],
+          "issued_at": 1793314800,
+          "expires_at": null,
+          "root_epoch": 1
+        },
+        "signer": "ed25519:c5bd8266faa60225b50e024b6651b576ae5d7c93bbcc0cb48bbd048bbdb9ee21",
+        "alg": "ed25519",
+        "sig": "aZeKlYKdO-gGqxX4wkOnvS0lJKenZyZzkP93fQiYk71IT9-00F29t8Q83r0qVPoA0coM-F8qzOpvWvZ-BZCqDg"
+      },
+      "expected_error": "not_an_owner"
     },
     {
       "name": "invite signed by a device without the invite cap",
@@ -1128,138 +606,11 @@
           "single_use": true,
           "secret_hash": "bdd5b2c8428ed23bd4b38295690dacf2180128d97f38797bdb9990ddef8d5037"
         },
-        "signer": "ed25519:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b",
-        "chain": [
-          {
-            "v": 1,
-            "type": "OwnerDeviceCert",
-            "body": {
-              "device_pub": "ed25519:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b",
-              "peer_keys": [
-                "iroh:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b"
-              ],
-              "label": "device-2",
-              "scope": "owner",
-              "caps": [
-                "bind"
-              ],
-              "issued_at": 1793314800,
-              "expires_at": null,
-              "root_epoch": 1
-            },
-            "signer": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
-            "chain": [],
-            "alg": "ed25519",
-            "sig": "YLEHga47Qf0CTRExPeozi3Zn6TH6Hhm0EHR8k_B0DbMy0x_FQcgr_81coy2AMTIK01H34EihrlZCW8yyivnqCg"
-          },
-          {
-            "v": 1,
-            "type": "OwnerDeviceCert",
-            "body": {
-              "device_pub": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
-              "peer_keys": [
-                "iroh:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e"
-              ],
-              "label": "device-1",
-              "scope": "owner",
-              "caps": [
-                "approve_device",
-                "bind",
-                "invite",
-                "manage_members"
-              ],
-              "issued_at": 1793314800,
-              "expires_at": null,
-              "root_epoch": 1
-            },
-            "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
-            "chain": [],
-            "alg": "ed25519",
-            "sig": "GSB0wiyQ-eAkEAjtiRR6GZnUcIuRR1v56lU5qFpJ7gifAYh08yo7Qv70SewZZXhJ7bW2b_aoift5sFtBDkNjAw"
-          }
-        ],
+        "signer": "ed25519:980b1cf12dae1e237ea453bd3a40ce1317e8b5d35c1269bb314aabc8b59ab6c7",
         "alg": "ed25519",
-        "sig": "XZUW2V17g7zF94vV1QppE04mmZhpqdySAXPeEfz87lPE_8t7dXcnoeC1Arpr9gBHDwh3vo7Xomthagu5S1vBCQ"
+        "sig": "70KdBMAW4Jl2TRBaRf0m5n4O7DlPkQHeqUbaYX0AeyJag93UbMplXPTXpGIQe1hCYoa64ESnFKpdRqkaW6RTDA"
       },
       "expected_error": "missing_capability"
-    },
-    {
-      "name": "chain link expired",
-      "verifier": "owner",
-      "statement": {
-        "v": 1,
-        "type": "InviteCap",
-        "body": {
-          "claw_id": "0123456789abcdef0123456789abcdef",
-          "invite_id": "00112233445566778899aabbccddeeff",
-          "role": "operator",
-          "audience": {
-            "kind": "email",
-            "value": "bob@example.com"
-          },
-          "label": "Bob",
-          "created_at": 1793314800,
-          "expires_at": 1793923200,
-          "single_use": true,
-          "secret_hash": "bdd5b2c8428ed23bd4b38295690dacf2180128d97f38797bdb9990ddef8d5037"
-        },
-        "signer": "ed25519:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b",
-        "chain": [
-          {
-            "v": 1,
-            "type": "OwnerDeviceCert",
-            "body": {
-              "device_pub": "ed25519:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b",
-              "peer_keys": [
-                "iroh:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b"
-              ],
-              "label": "device-2",
-              "scope": "owner",
-              "caps": [
-                "approve_device",
-                "bind",
-                "invite",
-                "manage_members"
-              ],
-              "issued_at": 1793314800,
-              "expires_at": 1793318399,
-              "root_epoch": 1
-            },
-            "signer": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
-            "chain": [],
-            "alg": "ed25519",
-            "sig": "xirKz2Kx1yFT0qoO4J2NEvEFeyJUsmrl7ZisG3ug5y7HB-wis0OOpnWW3bQhJlWcRTLoxzkPyGVN6RTwdrZsDA"
-          },
-          {
-            "v": 1,
-            "type": "OwnerDeviceCert",
-            "body": {
-              "device_pub": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
-              "peer_keys": [
-                "iroh:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e"
-              ],
-              "label": "device-1",
-              "scope": "owner",
-              "caps": [
-                "approve_device",
-                "bind",
-                "invite",
-                "manage_members"
-              ],
-              "issued_at": 1793314800,
-              "expires_at": null,
-              "root_epoch": 1
-            },
-            "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
-            "chain": [],
-            "alg": "ed25519",
-            "sig": "GSB0wiyQ-eAkEAjtiRR6GZnUcIuRR1v56lU5qFpJ7gifAYh08yo7Qv70SewZZXhJ7bW2b_aoift5sFtBDkNjAw"
-          }
-        ],
-        "alg": "ed25519",
-        "sig": "XZUW2V17g7zF94vV1QppE04mmZhpqdySAXPeEfz87lPE_8t7dXcnoeC1Arpr9gBHDwh3vo7Xomthagu5S1vBCQ"
-      },
-      "expected_error": "chain_expired"
     },
     {
       "name": "certificate grants caps its signer lacks",
@@ -1268,11 +619,11 @@
         "v": 1,
         "type": "OwnerDeviceCert",
         "body": {
-          "device_pub": "ed25519:980b1cf12dae1e237ea453bd3a40ce1317e8b5d35c1269bb314aabc8b59ab6c7",
+          "device_pub": "ed25519:8b2fcc7de63bd2fbc08ece9b5306859d9d4e2f8814f8e5be823bcd3dc4fa4c5e",
           "peer_keys": [
-            "iroh:980b1cf12dae1e237ea453bd3a40ce1317e8b5d35c1269bb314aabc8b59ab6c7"
+            "iroh:8b2fcc7de63bd2fbc08ece9b5306859d9d4e2f8814f8e5be823bcd3dc4fa4c5e"
           ],
-          "label": "device-3",
+          "label": "device-5",
           "scope": "owner",
           "caps": [
             "approve_device",
@@ -1284,58 +635,9 @@
           "expires_at": null,
           "root_epoch": 1
         },
-        "signer": "ed25519:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b",
-        "chain": [
-          {
-            "v": 1,
-            "type": "OwnerDeviceCert",
-            "body": {
-              "device_pub": "ed25519:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b",
-              "peer_keys": [
-                "iroh:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b"
-              ],
-              "label": "device-2",
-              "scope": "owner",
-              "caps": [
-                "bind"
-              ],
-              "issued_at": 1793314800,
-              "expires_at": null,
-              "root_epoch": 1
-            },
-            "signer": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
-            "chain": [],
-            "alg": "ed25519",
-            "sig": "YLEHga47Qf0CTRExPeozi3Zn6TH6Hhm0EHR8k_B0DbMy0x_FQcgr_81coy2AMTIK01H34EihrlZCW8yyivnqCg"
-          },
-          {
-            "v": 1,
-            "type": "OwnerDeviceCert",
-            "body": {
-              "device_pub": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
-              "peer_keys": [
-                "iroh:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e"
-              ],
-              "label": "device-1",
-              "scope": "owner",
-              "caps": [
-                "approve_device",
-                "bind",
-                "invite",
-                "manage_members"
-              ],
-              "issued_at": 1793314800,
-              "expires_at": null,
-              "root_epoch": 1
-            },
-            "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
-            "chain": [],
-            "alg": "ed25519",
-            "sig": "GSB0wiyQ-eAkEAjtiRR6GZnUcIuRR1v56lU5qFpJ7gifAYh08yo7Qv70SewZZXhJ7bW2b_aoift5sFtBDkNjAw"
-          }
-        ],
+        "signer": "ed25519:980b1cf12dae1e237ea453bd3a40ce1317e8b5d35c1269bb314aabc8b59ab6c7",
         "alg": "ed25519",
-        "sig": "C8YQkeU5bh9uYpBUXNcgxzMT05YdUbrwdqdOxVH3DbwR7EcqnpEThhBFl-bCLUS6UeZUj3j-klP-MtOjnQUpAw"
+        "sig": "ShblE8lmuOtEWzQR7_GzgQoloHc7020rKwodE6N5KQt2sYiXOFb2KHaa1fAD416q79PAiCHzvWW-4Hk_WyYaAg"
       },
       "expected_error": "missing_capability"
     },
@@ -1349,6 +651,10 @@
           "claw_id": "0123456789abcdef0123456789abcdef",
           "seq": 2,
           "binding_seq": 1,
+          "owner_device_keys": [
+            "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
+            "ed25519:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b"
+          ],
           "owner_peer_keys": [
             "iroh:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
             "iroh:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b"
@@ -1362,13 +668,11 @@
               ]
             }
           ],
-          "revoked": [],
           "issued_at": 1793314800
         },
         "signer": "ed25519:c5bd8266faa60225b50e024b6651b576ae5d7c93bbcc0cb48bbd048bbdb9ee21",
-        "chain": [],
         "alg": "ed25519",
-        "sig": "-wK6uy7F19pu4md3hnqicrp228RlKOob1suTv3kisyJNibB-ZQpIkAV2PkL1KPBRzL-kEpetZ-_E8ir6JumnBQ"
+        "sig": "F-n0n1IJwQjwEJxXS3pU-TonR3FPMT4Xqqqe50yQVMI3J0CAjwSp7ekaEcCV5gSynl_MPb1XTy245G2L1NiiBg"
       },
       "expected_error": "wrong_signer"
     },
@@ -1388,7 +692,6 @@
           "requested_at": 1793314800
         },
         "signer": "ed25519:c5bd8266faa60225b50e024b6651b576ae5d7c93bbcc0cb48bbd048bbdb9ee21",
-        "chain": [],
         "alg": "ed25519",
         "sig": "umGEFlEbNSr753tR-vy76JSogqyD86-yRm3yZB_ooV3rjFTweI_M4lo9C3xDlnljDU68XRhMhJ7pFpk-uaTfDw"
       },
@@ -1407,7 +710,6 @@
           "issued_at": 1793314800
         },
         "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
-        "chain": [],
         "alg": "ed25519",
         "sig": "qakbkdk0gK-_SHp7coTg9FJiPYCLoageTcVg9KIXwAqQb7u_N8afudSs_7fRliCNBZS5cq5AGcCh5ArSbdmTAw"
       },
@@ -1418,61 +720,27 @@
       "expected_error": "wrong_signer"
     },
     {
-      "name": "chain from the old root after rotation",
+      "name": "revocation from the old root epoch after rotation",
       "verifier": "owner",
       "statement": {
         "v": 1,
-        "type": "InviteCap",
+        "type": "Revocation",
         "body": {
-          "claw_id": "0123456789abcdef0123456789abcdef",
-          "invite_id": "00112233445566778899aabbccddeeff",
-          "role": "operator",
-          "audience": {
-            "kind": "email",
-            "value": "bob@example.com"
-          },
-          "label": "Bob",
-          "created_at": 1793314800,
-          "expires_at": 1793923200,
-          "single_use": true,
-          "secret_hash": "bdd5b2c8428ed23bd4b38295690dacf2180128d97f38797bdb9990ddef8d5037"
+          "target_fp": "fp:6fbec950dc6ff246776d5cfad063c33f08e55a9347e4375e2ddf217dd3b05660",
+          "target_kind": "owner_device",
+          "reason": "lost",
+          "root_epoch": 1,
+          "issued_at": 1793314800
         },
-        "signer": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
-        "chain": [
-          {
-            "v": 1,
-            "type": "OwnerDeviceCert",
-            "body": {
-              "device_pub": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
-              "peer_keys": [
-                "iroh:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e"
-              ],
-              "label": "device-1",
-              "scope": "owner",
-              "caps": [
-                "approve_device",
-                "bind",
-                "invite",
-                "manage_members"
-              ],
-              "issued_at": 1793314800,
-              "expires_at": null,
-              "root_epoch": 1
-            },
-            "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
-            "chain": [],
-            "alg": "ed25519",
-            "sig": "GSB0wiyQ-eAkEAjtiRR6GZnUcIuRR1v56lU5qFpJ7gifAYh08yo7Qv70SewZZXhJ7bW2b_aoift5sFtBDkNjAw"
-          }
-        ],
+        "signer": "ed25519:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b",
         "alg": "ed25519",
-        "sig": "bhdutZ7M9MTznhyA_JK_qD2tlOtht7ngsQPh_6kCBFf3_xpzgSbSmuyQhnhywjQKNhotLYjq3tVfDK8_C2uDCA"
+        "sig": "wVQCEBBBnc7GHVSGPBOPv1FTr1K83LjZrNFbCynHUkXnRFX-3V1ejkGy2eP3qftQcEnfioVMXTVSE29Z5k_FCg"
       },
       "anchor": {
         "root_pub": "ed25519:02447e03f7b33984b1cdb296a64e536e14f593416057cc82661899d67972ef0a",
         "root_epoch": 2
       },
-      "expected_error": "chain_broken"
+      "expected_error": "wrong_epoch"
     }
   ],
   "pins": [
@@ -1501,7 +769,6 @@
             "issued_at": 1793314800
           },
           "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
-          "chain": [],
           "alg": "ed25519",
           "sig": "PIJT44De25ZH9qTqqGAstKUvfSgEBJAWVPGdl-6YCf9SAMtV95e9l-BfHZ7UV01xMAFy6HI3_tJ3vvuJk8mTAg"
         }
@@ -1540,36 +807,9 @@
             "root_epoch": 1,
             "issued_at": 1793314800
           },
-          "signer": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
-          "chain": [
-            {
-              "v": 1,
-              "type": "OwnerDeviceCert",
-              "body": {
-                "device_pub": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
-                "peer_keys": [
-                  "iroh:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e"
-                ],
-                "label": "device-1",
-                "scope": "owner",
-                "caps": [
-                  "approve_device",
-                  "bind",
-                  "invite",
-                  "manage_members"
-                ],
-                "issued_at": 1793314800,
-                "expires_at": null,
-                "root_epoch": 1
-              },
-              "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
-              "chain": [],
-              "alg": "ed25519",
-              "sig": "GSB0wiyQ-eAkEAjtiRR6GZnUcIuRR1v56lU5qFpJ7gifAYh08yo7Qv70SewZZXhJ7bW2b_aoift5sFtBDkNjAw"
-            }
-          ],
+          "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
           "alg": "ed25519",
-          "sig": "GqEF4Rru34zR4_8bM3cMGd0Mm3zi0js0uTBafvVcctFJSeDgu1478YHBpqh9UGmLLFvAYbAm4RLXyhMTlXRhBw"
+          "sig": "QaXvZ1rIgj-6xBGQ38xuebkWhGAfjcbUcNy1pkImb3J8bEkxnXCoof8dh9ReTiQfnczsIC2T2V01Tz6wwCn1CQ"
         }
       },
       "expected": {
@@ -1607,7 +847,6 @@
             "issued_at": 1793314800
           },
           "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
-          "chain": [],
           "alg": "ed25519",
           "sig": "PIJT44De25ZH9qTqqGAstKUvfSgEBJAWVPGdl-6YCf9SAMtV95e9l-BfHZ7UV01xMAFy6HI3_tJ3vvuJk8mTAg"
         }
@@ -1642,7 +881,6 @@
             "issued_at": 1793314800
           },
           "signer": "ed25519:c5bd8266faa60225b50e024b6651b576ae5d7c93bbcc0cb48bbd048bbdb9ee21",
-          "chain": [],
           "alg": "ed25519",
           "sig": "UNZoKVLi3DtDBRUjSUjLUKEL0EqxsGLEG5mkq6pdS6UMzTS1m8W9VKAucoftQSpx2Mka8JqGJCC1TmHbSvhGBw"
         }
@@ -1677,7 +915,6 @@
             "issued_at": 1793314800
           },
           "signer": "ed25519:c5bd8266faa60225b50e024b6651b576ae5d7c93bbcc0cb48bbd048bbdb9ee21",
-          "chain": [],
           "alg": "ed25519",
           "sig": "UNZoKVLi3DtDBRUjSUjLUKEL0EqxsGLEG5mkq6pdS6UMzTS1m8W9VKAucoftQSpx2Mka8JqGJCC1TmHbSvhGBw"
         }
@@ -1711,36 +948,9 @@
             "root_epoch": 1,
             "issued_at": 1793314800
           },
-          "signer": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
-          "chain": [
-            {
-              "v": 1,
-              "type": "OwnerDeviceCert",
-              "body": {
-                "device_pub": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
-                "peer_keys": [
-                  "iroh:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e"
-                ],
-                "label": "device-1",
-                "scope": "owner",
-                "caps": [
-                  "approve_device",
-                  "bind",
-                  "invite",
-                  "manage_members"
-                ],
-                "issued_at": 1793314800,
-                "expires_at": null,
-                "root_epoch": 1
-              },
-              "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
-              "chain": [],
-              "alg": "ed25519",
-              "sig": "GSB0wiyQ-eAkEAjtiRR6GZnUcIuRR1v56lU5qFpJ7gifAYh08yo7Qv70SewZZXhJ7bW2b_aoift5sFtBDkNjAw"
-            }
-          ],
+          "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
           "alg": "ed25519",
-          "sig": "GqEF4Rru34zR4_8bM3cMGd0Mm3zi0js0uTBafvVcctFJSeDgu1478YHBpqh9UGmLLFvAYbAm4RLXyhMTlXRhBw"
+          "sig": "QaXvZ1rIgj-6xBGQ38xuebkWhGAfjcbUcNy1pkImb3J8bEkxnXCoof8dh9ReTiQfnczsIC2T2V01Tz6wwCn1CQ"
         }
       },
       "expected": {
@@ -1770,7 +980,6 @@
               "issued_at": 1793314800
             },
             "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
-            "chain": [],
             "alg": "ed25519",
             "sig": "brRk61Yvyqofx_nDMDRhr7lDLP1NYxw0fvTxkHY1znsP-ubogBLlfTLkT8rloe1SdVjHcWyaZ99TfrrV0hvnCg"
           }
@@ -1788,7 +997,6 @@
             "issued_at": 1793314800
           },
           "signer": "ed25519:02447e03f7b33984b1cdb296a64e536e14f593416057cc82661899d67972ef0a",
-          "chain": [],
           "alg": "ed25519",
           "sig": "WwZyFRWmqccorxLdEMlmIw1reDWTUuLu47mWmF95ybtNeVPdEjt2YrAb2LvgTv3u5vaGQRrAuWoJc0H3fEcQBw"
         }
@@ -1827,36 +1035,9 @@
             "root_epoch": 1,
             "issued_at": 1793314800
           },
-          "signer": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
-          "chain": [
-            {
-              "v": 1,
-              "type": "OwnerDeviceCert",
-              "body": {
-                "device_pub": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
-                "peer_keys": [
-                  "iroh:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e"
-                ],
-                "label": "device-1",
-                "scope": "owner",
-                "caps": [
-                  "approve_device",
-                  "bind",
-                  "invite",
-                  "manage_members"
-                ],
-                "issued_at": 1793314800,
-                "expires_at": null,
-                "root_epoch": 1
-              },
-              "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
-              "chain": [],
-              "alg": "ed25519",
-              "sig": "GSB0wiyQ-eAkEAjtiRR6GZnUcIuRR1v56lU5qFpJ7gifAYh08yo7Qv70SewZZXhJ7bW2b_aoift5sFtBDkNjAw"
-            }
-          ],
+          "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
           "alg": "ed25519",
-          "sig": "GqEF4Rru34zR4_8bM3cMGd0Mm3zi0js0uTBafvVcctFJSeDgu1478YHBpqh9UGmLLFvAYbAm4RLXyhMTlXRhBw"
+          "sig": "QaXvZ1rIgj-6xBGQ38xuebkWhGAfjcbUcNy1pkImb3J8bEkxnXCoof8dh9ReTiQfnczsIC2T2V01Tz6wwCn1CQ"
         }
       },
       "expected": {
@@ -1886,7 +1067,6 @@
               "issued_at": 1793314800
             },
             "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
-            "chain": [],
             "alg": "ed25519",
             "sig": "brRk61Yvyqofx_nDMDRhr7lDLP1NYxw0fvTxkHY1znsP-ubogBLlfTLkT8rloe1SdVjHcWyaZ99TfrrV0hvnCg"
           },
@@ -1900,7 +1080,6 @@
               "issued_at": 1793314800
             },
             "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
-            "chain": [],
             "alg": "ed25519",
             "sig": "qakbkdk0gK-_SHp7coTg9FJiPYCLoageTcVg9KIXwAqQb7u_N8afudSs_7fRliCNBZS5cq5AGcCh5ArSbdmTAw"
           }
@@ -1918,7 +1097,6 @@
             "issued_at": 1793314800
           },
           "signer": "ed25519:02447e03f7b33984b1cdb296a64e536e14f593416057cc82661899d67972ef0a",
-          "chain": [],
           "alg": "ed25519",
           "sig": "WwZyFRWmqccorxLdEMlmIw1reDWTUuLu47mWmF95ybtNeVPdEjt2YrAb2LvgTv3u5vaGQRrAuWoJc0H3fEcQBw"
         }

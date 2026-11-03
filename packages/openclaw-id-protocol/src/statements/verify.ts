@@ -1,25 +1,29 @@
-// Signature, chain and authority verification for signed statements.
-import { fingerprint, type Ed25519PublicKey, type KeyFingerprint } from "../keys.js";
+// Signature and authority verification for signed statements.
+import { fingerprint, type Ed25519PublicKey } from "../keys.js";
 import { hasValidSignature } from "./envelope.js";
-import {
-  MAX_CHAIN_DEPTH,
-  OWNER_CAPABILITIES,
-  type OwnerCapability,
-  type ServerBindingBody,
-  type SignedStatement,
-  type StatementType,
-  type UnixSeconds,
+import type {
+  OwnerCapability,
+  ServerBindingBody,
+  SignedStatement,
+  StatementType,
+  UnixSeconds,
 } from "./types.js";
 
 /** The pinned owner root a verifier trusts: R's public key and the current root epoch. */
 export type TrustAnchor = { root_pub: Ed25519PublicKey; root_epoch: number };
 
+/**
+ * The claw's current owner devices, as only its Gateway knows them: the capabilities of
+ * `devicePub` while it is an active owner device there, otherwise undefined.
+ */
+export type OwnerDeviceLookup = (devicePub: Ed25519PublicKey) => OwnerCapability[] | undefined;
+
 /** Verifier inputs that are not part of the statement. */
 export type VerifyOptions = {
   /** Current time, unix seconds. */
   now: UnixSeconds;
-  /** Revocations the verifier knows about (by key fingerprint). */
-  isRevoked?: (fp: KeyFingerprint) => boolean;
+  /** The claw's current owner devices. Without it, only R's signatures verify. */
+  owners?: OwnerDeviceLookup;
   /** Tolerated clock skew for `issued_at` in seconds. Default 300. */
   clockSkew?: number;
 };
@@ -27,7 +31,7 @@ export type VerifyOptions = {
 /** Who authorized a verified statement. Root supremacy: `root` overrides any `owner_device`. */
 export type Authority =
   | { kind: "root" }
-  | { kind: "owner_device"; device_pub: Ed25519PublicKey; caps: OwnerCapability[]; depth: number }
+  | { kind: "owner_device"; device_pub: Ed25519PublicKey; caps: OwnerCapability[] }
   | { kind: "gateway" }
   | { kind: "self" };
 
@@ -36,10 +40,7 @@ export type VerifyErrorCode =
   | "malformed"
   | "bad_signature"
   | "wrong_signer"
-  | "chain_too_long"
-  | "chain_broken"
-  | "chain_expired"
-  | "chain_revoked"
+  | "not_an_owner"
   | "wrong_epoch"
   | "missing_capability"
   | "not_yet_valid"
@@ -48,7 +49,6 @@ export type VerifyErrorCode =
   | "wrong_claw"
   | "host_mismatch"
   | "rollback"
-  | "server_key_revoked"
   | "bad_proof"
   | "expired"
   | "audience_mismatch";
@@ -74,16 +74,21 @@ export type OwnerSignedType =
   | "MembershipChange"
   | "Revocation";
 
-// Capability an owner device needs to sign each statement type (R needs none).
-const REQUIRED_CAPABILITY: Record<OwnerSignedType, OwnerCapability | null> = {
+// Capability an owner device needs to sign each statement type (R needs none). A
+// ServerBinding is R's alone: clients that pin only fp(R) must be able to check it.
+const REQUIRED_CAPABILITY: Record<
+  Exclude<OwnerSignedType, "ServerBinding">,
+  OwnerCapability | null
+> = {
   OwnerDeviceCert: "approve_device",
-  ServerBinding: "bind",
   InviteCap: "invite",
   MembershipChange: "manage_members",
   Revocation: null,
 };
 
-function requiredCapability(statement: SignedStatement<OwnerSignedType>): OwnerCapability | null {
+function requiredCapability(
+  statement: SignedStatement<Exclude<OwnerSignedType, "ServerBinding">>,
+): OwnerCapability | null {
   if (
     statement.type === "MembershipChange" &&
     // SAFETY: SignedStatement is not a discriminated union; `type` fixes the body.
@@ -101,69 +106,10 @@ function statementEpoch(statement: SignedStatement<OwnerSignedType>): number | n
 }
 
 /**
- * Walks an OwnerDeviceCert chain from R down to the statement's signer.
- *
- * chain[0] certifies the signer; chain[i] is signed by the key chain[i+1] certifies;
- * the last link is signed by R. Every link must verify, be in the anchor's epoch,
- * be unexpired and unrevoked; an issuing device needs `approve_device`, and a
- * link's caps never exceed its issuer's.
- */
-async function resolveChain(
-  statement: SignedStatement,
-  anchor: TrustAnchor,
-  options: VerifyOptions,
-): Promise<Authority | VerifyFailure> {
-  const { chain } = statement;
-  if (chain.length === 0) {
-    return failure("wrong_signer", "signer is not R and carries no certificate chain");
-  }
-  if (chain.length > MAX_CHAIN_DEPTH) {
-    return failure("chain_too_long", `chain depth ${chain.length} > ${MAX_CHAIN_DEPTH}`);
-  }
-  const skew = options.clockSkew ?? 300;
-  let issuer: Ed25519PublicKey = anchor.root_pub;
-  let issuerCaps: readonly OwnerCapability[] = OWNER_CAPABILITIES;
-  let issuerIsRoot = true;
-  for (let index = chain.length - 1; index >= 0; index -= 1) {
-    const link = chain[index];
-    if (!link || link.type !== "OwnerDeviceCert" || link.chain.length !== 0) {
-      return failure("chain_broken", `chain[${index}] is not a flat OwnerDeviceCert`);
-    }
-    if (link.signer !== issuer || !(await hasValidSignature(link))) {
-      return failure("chain_broken", `chain[${index}] is not signed by its issuer`);
-    }
-    if (link.body.root_epoch !== anchor.root_epoch) {
-      return failure("wrong_epoch", `chain[${index}] is from root epoch ${link.body.root_epoch}`);
-    }
-    if (link.body.issued_at > options.now + skew) {
-      return failure("not_yet_valid", `chain[${index}] is issued in the future`);
-    }
-    if (link.body.expires_at !== null && link.body.expires_at <= options.now) {
-      return failure("chain_expired", `chain[${index}] expired`);
-    }
-    if (options.isRevoked?.(await fingerprint(link.body.device_pub))) {
-      return failure("chain_revoked", `chain[${index}] certifies a revoked device`);
-    }
-    if (!issuerIsRoot && !issuerCaps.includes("approve_device")) {
-      return failure("missing_capability", `chain[${index}] issuer lacks approve_device`);
-    }
-    if (!link.body.caps.every((cap) => issuerCaps.includes(cap))) {
-      return failure("missing_capability", `chain[${index}] grants more than its issuer holds`);
-    }
-    issuer = link.body.device_pub;
-    issuerCaps = link.body.caps;
-    issuerIsRoot = false;
-  }
-  if (issuer !== statement.signer) {
-    return failure("chain_broken", "chain[0] does not certify the signer");
-  }
-  return { kind: "owner_device", device_pub: issuer, caps: [...issuerCaps], depth: chain.length };
-}
-
-/**
- * Verifies a statement that R or an owner device signs: signature, epoch, chain, and
- * the capability the statement type needs. An OwnerDeviceCert additionally may not
- * grant caps its signer lacks.
+ * Verifies a statement that R or an owner device signs: signature, epoch, and authority.
+ * R may sign anything. An owner device must be one of the claw's current owner devices
+ * (`options.owners`) holding the capability the statement type needs; an OwnerDeviceCert it
+ * signs may not grant caps it lacks. A ServerBinding verifies only when R signed it.
  */
 export async function verifyOwnerStatement<T extends OwnerSignedType>(
   statement: SignedStatement<T>,
@@ -181,33 +127,33 @@ export async function verifyOwnerStatement<T extends OwnerSignedType>(
     );
   }
   if (statement.signer === anchor.root_pub) {
-    if (statement.chain.length !== 0) {
-      return failure("malformed", "a root-signed statement carries no chain");
-    }
     return { ok: true, statement, authority: { kind: "root" } };
   }
-  const authority = await resolveChain(statement, anchor, options);
-  if ("ok" in authority) {
-    return authority;
+  if (statement.type === "ServerBinding") {
+    return failure("wrong_signer", "a server binding must be signed by R");
   }
-  if (authority.kind !== "owner_device") {
-    return failure("wrong_signer", "unexpected authority");
+  const caps = options.owners?.(statement.signer);
+  if (!caps) {
+    return failure("not_an_owner", "signer is neither R nor a current owner device of this claw");
   }
-  const needed = requiredCapability(statement);
-  if (needed !== null && !authority.caps.includes(needed)) {
+  // SAFETY: the ServerBinding member of the union returned above.
+  const owned = statement as SignedStatement<Exclude<OwnerSignedType, "ServerBinding">>;
+  const needed = requiredCapability(owned);
+  if (needed !== null && !caps.includes(needed)) {
     return failure("missing_capability", `signer lacks ${needed}`);
   }
   if (statement.type === "OwnerDeviceCert") {
     // SAFETY: SignedStatement is not a discriminated union; `type` fixes the body.
-    const caps = (statement as SignedStatement<"OwnerDeviceCert">).body.caps;
-    if (!caps.every((cap) => authority.caps.includes(cap))) {
+    const granted = (statement as SignedStatement<"OwnerDeviceCert">).body.caps;
+    if (!granted.every((cap) => caps.includes(cap))) {
       return failure("missing_capability", "certificate grants more than its signer holds");
     }
-    if (authority.depth >= MAX_CHAIN_DEPTH) {
-      return failure("chain_too_long", "certificate would exceed the maximum chain depth");
-    }
   }
-  return { ok: true, statement, authority };
+  return {
+    ok: true,
+    statement,
+    authority: { kind: "owner_device", device_pub: statement.signer, caps: [...caps] },
+  };
 }
 
 /** Verifies a RootRotation against the current anchor and returns the next anchor. */
@@ -215,7 +161,7 @@ export async function verifyRootRotation(
   statement: SignedStatement<"RootRotation">,
   anchor: TrustAnchor,
 ): Promise<{ ok: true; anchor: TrustAnchor } | VerifyFailure> {
-  if (statement.signer !== anchor.root_pub || statement.chain.length !== 0) {
+  if (statement.signer !== anchor.root_pub) {
     return failure("wrong_signer", "a root rotation must be signed by the current R alone");
   }
   if (!(await hasValidSignature(statement))) {
@@ -238,7 +184,7 @@ export async function verifyMembershipSnapshot(
   statement: SignedStatement<"MembershipSnapshot">,
   binding: ServerBindingBody,
 ): Promise<VerifyResult<"MembershipSnapshot">> {
-  if (statement.signer !== binding.k_gw || statement.chain.length !== 0) {
+  if (statement.signer !== binding.k_gw) {
     return failure("wrong_signer", "snapshot is not signed by the binding's K_gw");
   }
   if (!(await hasValidSignature(statement))) {
@@ -254,7 +200,7 @@ export async function verifyMembershipSnapshot(
 export async function verifyInviteRedemptionSignature(
   statement: SignedStatement<"InviteRedemption">,
 ): Promise<VerifyResult<"InviteRedemption">> {
-  if (statement.signer !== statement.body.device_pub || statement.chain.length !== 0) {
+  if (statement.signer !== statement.body.device_pub) {
     return failure("wrong_signer", "redemption must be signed by its own device key");
   }
   if (!(await hasValidSignature(statement))) {

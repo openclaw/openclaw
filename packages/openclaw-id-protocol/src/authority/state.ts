@@ -11,7 +11,7 @@ import type {
   SignedStatement,
   UnixSeconds,
 } from "../statements/types.js";
-import type { TrustAnchor, VerifyErrorCode } from "../statements/verify.js";
+import type { OwnerDeviceLookup, TrustAnchor, VerifyErrorCode } from "../statements/verify.js";
 
 /**
  * How a write reached the Gateway.
@@ -21,11 +21,24 @@ import type { TrustAnchor, VerifyErrorCode } from "../statements/verify.js";
  */
 export type Channel = "tunnel" | "local_operator" | "mailbox";
 
-/** An owner device the Gateway knows, with the fingerprints of its certificate chain. */
+/** Who approved an owner device: R (the recovery kit), or the fingerprint of an owner device. */
+export type OwnerApprover = "root" | KeyFingerprint;
+
+/** An owner device on this claw's allowlist. */
 export type OwnerDeviceRecord = {
   cert: SignedStatement<"OwnerDeviceCert">;
-  /** fp of the device and of every device in its chain (for revocation checks). */
-  chain_fps: KeyFingerprint[];
+  /** Who signed its certificate: R, or an owner device listed here at the time. */
+  approved_by: OwnerApprover;
+  /** Last tunnel admission of any of its peer keys (or when it was added), unix seconds. */
+  last_seen: UnixSeconds;
+};
+
+/** A member and the browsers (peer keys) they use at this claw. */
+export type MemberRecord = {
+  role: MemberRole;
+  peer_keys: IrohEndpointKey[];
+  /** Last tunnel admission per peer key (or when it was added), unix seconds. */
+  last_seen: Partial<Record<IrohEndpointKey, UnixSeconds>>;
 };
 
 /** A registered invite. `proof_key` is hex and never leaves the Gateway. */
@@ -53,10 +66,10 @@ export type AuthorityState = {
   frozen: boolean;
   /** Monotonic membership seq; a MembershipChange must carry seq + 1. */
   seq: number;
+  /** The owner allowlist, by fingerprint of the device key D. */
   owner_devices: Record<KeyFingerprint, OwnerDeviceRecord>;
-  members: Record<string, { role: MemberRole; peer_keys: IrohEndpointKey[] }>;
+  members: Record<string, MemberRecord>;
   invites: Record<string, InviteRecord>;
-  revoked: KeyFingerprint[];
 };
 
 /** Side effects the Gateway must perform after a write. */
@@ -83,6 +96,7 @@ export type AuthorityErrorCode =
   | "invite_used"
   | "invite_not_pending"
   | "target_mismatch"
+  | "limit_reached"
   | "unsupported";
 
 /**
@@ -167,7 +181,6 @@ export function linkClaw(
       owner_devices: {},
       members: {},
       invites: {},
-      revoked: [],
     },
   };
 }
@@ -188,9 +201,8 @@ export function ownerDevicePeerKeys(state: AuthorityState): IrohEndpointKey[] {
 }
 
 /**
- * True when an owner device's certificate is in the current epoch, nothing in its
- * chain is revoked, and at `now` the certificate and every ancestor in its chain
- * are within their validity windows.
+ * True when an owner device's certificate is in the current epoch and, at `now`, within
+ * its validity window. Listed devices are the allowlist; nothing else is consulted.
  */
 export function isOwnerDeviceActive(
   state: AuthorityState,
@@ -199,29 +211,39 @@ export function isOwnerDeviceActive(
 ): boolean {
   return (
     record.cert.body.root_epoch === state.anchor.root_epoch &&
-    record.chain_fps.every((fp) => !state.revoked.includes(fp)) &&
-    [record.cert, ...record.cert.chain].every(
-      (cert) => certificateWindowError(cert.body, now) === null,
-    )
+    certificateWindowError(record.cert.body, now) === null
   );
 }
 
+/** Owner devices active at `now`. */
+export function activeOwnerDevices(state: AuthorityState, now: UnixSeconds): OwnerDeviceRecord[] {
+  return Object.values(state.owner_devices).filter((record) =>
+    isOwnerDeviceActive(state, record, now),
+  );
+}
+
+/** The current owner set as a verifier lookup: an active device's capabilities, by key. */
+export function ownerLookup(state: AuthorityState, now: UnixSeconds): OwnerDeviceLookup {
+  const caps = new Map(
+    activeOwnerDevices(state, now).map((record) => [
+      record.cert.body.device_pub,
+      record.cert.body.caps,
+    ]),
+  );
+  return (devicePub) => caps.get(devicePub);
+}
+
 /**
- * The earliest moment after `now` at which a currently active owner device stops
- * being active because its certificate or an ancestor expires, or null if none
- * expires. The Gateway closes such a device's sessions at that boundary.
+ * The earliest moment after `now` at which a currently active owner device stops being
+ * active because its certificate expires, or null if none expires. The Gateway closes
+ * such a device's sessions at that boundary.
  */
 export function nextOwnerExpiry(state: AuthorityState, now: UnixSeconds): UnixSeconds | null {
   let next: UnixSeconds | null = null;
-  for (const record of Object.values(state.owner_devices)) {
-    if (!isOwnerDeviceActive(state, record, now)) {
-      continue;
-    }
-    for (const cert of [record.cert, ...record.cert.chain]) {
-      const expiresAt = cert.body.expires_at;
-      if (expiresAt !== null && (next === null || expiresAt < next)) {
-        next = expiresAt;
-      }
+  for (const record of activeOwnerDevices(state, now)) {
+    const expiresAt = record.cert.body.expires_at;
+    if (expiresAt !== null && (next === null || expiresAt < next)) {
+      next = expiresAt;
     }
   }
   return next;
@@ -229,41 +251,37 @@ export function nextOwnerExpiry(state: AuthorityState, now: UnixSeconds): UnixSe
 
 /**
  * Tunnel admission (the tunnel child asks this for every connection): the peer key
- * belongs to an owner device active at `now` or a member and is not revoked. Discovery
- * is not consulted, so a withheld or delayed snapshot cannot keep a removed key admitted.
+ * belongs to a member or to an owner device active at `now`. Discovery is not consulted,
+ * so a withheld or delayed snapshot cannot keep a removed key admitted.
  */
 export function isAdmitted(
   state: AuthorityState,
   peerKey: IrohEndpointKey,
-  peerKeyFp: KeyFingerprint,
   now: UnixSeconds,
 ): boolean {
-  if (state.revoked.includes(peerKeyFp)) {
-    return false;
-  }
   if (Object.values(state.members).some((member) => member.peer_keys.includes(peerKey))) {
     return true;
   }
-  return Object.values(state.owner_devices).some(
-    (record) =>
-      isOwnerDeviceActive(state, record, now) && record.cert.body.peer_keys.includes(peerKey),
+  return activeOwnerDevices(state, now).some((record) =>
+    record.cert.body.peer_keys.includes(peerKey),
   );
 }
 
-/** The snapshot body the Gateway signs with K_gw and publishes to Discovery. */
+/** The snapshot body the Gateway signs with K_gw and publishes to Discovery: current state only. */
 export function snapshotBody(
   state: AuthorityState,
   bindingSeq: number,
   now: UnixSeconds,
 ): MembershipSnapshotBody {
-  const ownerPeerKeys = Object.values(state.owner_devices)
-    .filter((record) => isOwnerDeviceActive(state, record, now))
-    .flatMap((record) => record.cert.body.peer_keys);
+  const active = activeOwnerDevices(state, now);
   return {
     claw_id: state.claw_id,
     seq: state.seq,
     binding_seq: bindingSeq,
-    owner_peer_keys: [...new Set(ownerPeerKeys)].toSorted(),
+    owner_device_keys: [...new Set(active.map((record) => record.cert.body.device_pub))].toSorted(),
+    owner_peer_keys: [
+      ...new Set(active.flatMap((record) => record.cert.body.peer_keys)),
+    ].toSorted(),
     members: Object.entries(state.members)
       .map(([account_id, member]) => ({
         account_id,
@@ -271,7 +289,6 @@ export function snapshotBody(
         peer_keys: member.peer_keys,
       }))
       .toSorted((a, b) => a.account_id.localeCompare(b.account_id)),
-    revoked: [...state.revoked].toSorted(),
     issued_at: now,
   };
 }

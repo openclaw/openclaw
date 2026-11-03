@@ -1,12 +1,12 @@
-// Owner device certificate validity windows (OCF-278): a certificate, or any ancestor in
-// its chain, that is expired or issued in the future grants no admission and no owner
-// authority, and cannot be enrolled.
+// Owner device certificate validity windows (OCF-278): a certificate that is expired or
+// issued in the future grants no admission and no owner authority, and cannot be enrolled.
 import { describe, expect, it } from "vitest";
 import { fingerprint } from "../keys.js";
-import { certificateChain, signStatement } from "../statements/envelope.js";
+import { signStatement } from "../statements/envelope.js";
 import { buildWorld, certBody, signChange, WORLD_NOW } from "../testing/world.js";
-import { activeOwnerCerts, submitStatement, type WriteContext } from "./apply.js";
+import { submitStatement } from "./apply.js";
 import {
+  activeOwnerDevices,
   isAdmitted,
   linkClaw,
   nextOwnerExpiry,
@@ -30,7 +30,7 @@ async function apply(state: AuthorityState, statement: unknown, context: WriteCo
 }
 
 // A claw whose owner device-1 is root-certified with `window`, plus device-2
-// certified by device-1 without expiry.
+// approved by device-1 without expiry.
 async function clawWith(window: { issued_at?: number; expires_at: number | null }) {
   const world = await buildWorld();
   const linked = linkClaw(
@@ -47,27 +47,23 @@ async function clawWith(window: { issued_at?: number; expires_at: number | null 
   );
   let state = await apply(
     linked.state,
-    await signChange(linked.state, world.root, [], { op: "add_owner_device", cert: cert1 }),
+    await signChange(linked.state, world.root, { op: "add_owner_device", cert: cert1 }),
   );
   const cert2 = await signStatement(
     "OwnerDeviceCert",
     certBody(world.device2),
     world.device1.signer,
-    certificateChain(cert1),
   );
   state = await apply(
     state,
-    await signChange(state, world.device1.signer, certificateChain(cert1), {
-      op: "add_owner_device",
-      cert: cert2,
-    }),
+    await signChange(state, world.device1.signer, { op: "add_owner_device", cert: cert2 }),
     tunnel,
   );
   return { world, state };
 }
 
 async function admittedAt(state: AuthorityState, key: World["device1"], now: number) {
-  return isAdmitted(state, key.peer, await fingerprint(key.peer), now);
+  return isAdmitted(state, key.peer, now);
 }
 
 describe("owner certificate validity windows", () => {
@@ -78,13 +74,13 @@ describe("owner certificate validity windows", () => {
     expect(snapshotBody(state, 1, WORLD_NOW + 100).owner_peer_keys).not.toContain(
       world.device1.peer,
     );
-    expect(activeOwnerCerts(state, WORLD_NOW + 100)).toHaveLength(0);
+    expect(activeOwnerDevices(state, WORLD_NOW + 100)).toHaveLength(1);
   });
 
-  it("stops admitting a device whose parent certificate expired", async () => {
+  it("keeps admitting a device whose approver's certificate expired", async () => {
     const { world, state } = await clawWith({ expires_at: WORLD_NOW + 100 });
     expect(await admittedAt(state, world.device2, WORLD_NOW)).toBe(true);
-    expect(await admittedAt(state, world.device2, WORLD_NOW + 101)).toBe(false);
+    expect(await admittedAt(state, world.device2, WORLD_NOW + 101)).toBe(true);
   });
 
   it("does not admit a stored certificate issued in the future", async () => {
@@ -95,7 +91,7 @@ describe("owner certificate validity windows", () => {
       world.root,
     );
     const fp = await fingerprint(world.mallory.pub);
-    const record: OwnerDeviceRecord = { cert: future, chain_fps: [fp] };
+    const record: OwnerDeviceRecord = { cert: future, approved_by: "root", last_seen: WORLD_NOW };
     const state = { ...world.state, owner_devices: { ...world.state.owner_devices, [fp]: record } };
     expect(await admittedAt(state, world.mallory, WORLD_NOW)).toBe(false);
     expect(await admittedAt(state, world.mallory, WORLD_NOW + 3600)).toBe(true);
@@ -110,35 +106,16 @@ describe("owner certificate validity windows", () => {
       "OwnerDeviceCert",
       { ...certBody(world.mallory), ...window },
       world.device1.signer,
-      certificateChain(world.cert1),
     );
-    const change = await signChange(
-      world.state,
-      world.device1.signer,
-      certificateChain(world.cert1),
-      {
-        op: "add_owner_device",
-        cert,
-      },
-    );
+    const change = await signChange(world.state, world.device1.signer, {
+      op: "add_owner_device",
+      cert,
+    });
     const result = await submitStatement(world.state, change, tunnel);
     expect(result).toMatchObject({ ok: false, code, state: world.state });
   });
 
-  it("refuses a root re-certification that is already expired", async () => {
-    const world = await buildWorld();
-    const recert = await signStatement(
-      "OwnerDeviceCert",
-      { ...certBody(world.device2), expires_at: WORLD_NOW - 1 },
-      world.root,
-    );
-    expect(await submitStatement(world.state, recert, local)).toMatchObject({
-      ok: false,
-      code: "expired",
-    });
-  });
-
-  it("reports the earliest expiry among active owner devices and their ancestors", async () => {
+  it("reports the earliest expiry among active owner devices", async () => {
     const { state } = await clawWith({ expires_at: WORLD_NOW + 100 });
     expect(nextOwnerExpiry(state, WORLD_NOW)).toBe(WORLD_NOW + 100);
     expect(nextOwnerExpiry(state, WORLD_NOW + 100)).toBeNull();

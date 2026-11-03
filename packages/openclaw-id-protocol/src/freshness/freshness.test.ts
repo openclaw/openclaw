@@ -14,12 +14,11 @@ import type { SignedStatement } from "../statements/types.js";
 import {
   assessFreshness,
   isOlderSnapshot,
-  knownRevocations,
   SNAPSHOT_MAX_AGE_SECONDS,
   SNAPSHOT_REPUBLISH_SECONDS,
   type FreshnessEvidence,
   type FreshnessPolicy,
-  type RevocationState,
+  type FreshnessState,
 } from "./freshness.js";
 
 const HOST = "studio-k7x2q.example.test";
@@ -44,7 +43,7 @@ async function world() {
   const snapshot = (
     seq: number,
     binding_seq: number,
-    opts: { revoked?: string[]; issued_at?: number; signer?: StatementSigner } = {},
+    opts: { issued_at?: number; signer?: StatementSigner } = {},
   ) =>
     signStatement(
       "MembershipSnapshot",
@@ -52,24 +51,12 @@ async function world() {
         claw_id,
         seq,
         binding_seq,
+        owner_device_keys: [],
         owner_peer_keys: [],
         members: [],
-        revoked: (opts.revoked ?? []) as never,
         issued_at: opts.issued_at ?? now - 60,
       },
       opts.signer ?? kgw,
-    );
-  const revocation = async (target: string, signer: StatementSigner = root) =>
-    signStatement(
-      "Revocation",
-      {
-        target_fp: await fingerprint(target as IrohEndpointKey),
-        target_kind: "server_key",
-        reason: "retired",
-        root_epoch: 1,
-        issued_at: now - 30,
-      },
-      signer,
     );
   const pin: ClawPin = {
     claw_id,
@@ -77,11 +64,11 @@ async function world() {
     root_epoch: 1,
     binding_seq: 4,
   };
-  return { root_pub, claw_id, oldSrv, newSrv, binding, snapshot, revocation, pin };
+  return { root_pub, claw_id, oldSrv, newSrv, binding, snapshot, pin };
 }
 type World = Awaited<ReturnType<typeof world>>;
 
-// The client sequence: pin check, then freshness, then the re-check with the merged set.
+// The client sequence: pin check, then freshness.
 async function gate(
   w: World,
   binding: SignedStatement<"ServerBinding">,
@@ -89,36 +76,14 @@ async function gate(
   {
     stored = null,
     policy = "enforce",
-  }: { stored?: RevocationState | null; policy?: FreshnessPolicy } = {},
+  }: { stored?: FreshnessState | null; policy?: FreshnessPolicy } = {},
 ) {
-  const known = knownRevocations(stored, w.claw_id);
   const pinEvidence = { root_pub: w.root_pub, rotations: [], binding };
-  const first = await verifyBindingForPin(pinEvidence, w.pin, {
-    host: HOST,
-    now,
-    isRevoked: (fp) => known.has(fp),
-  });
+  const first = await verifyBindingForPin(pinEvidence, w.pin, { host: HOST, now });
   if (!first.ok) {
     return { ok: false, code: first.code, state: stored };
   }
-  const a = await assessFreshness(evidence, {
-    binding: first.binding,
-    anchor: first.anchor,
-    stored,
-    now,
-    policy,
-  });
-  if (a.learned.length > 0) {
-    const merged = new Set(a.state.revoked);
-    const again = await verifyBindingForPin(pinEvidence, w.pin, {
-      host: HOST,
-      now,
-      isRevoked: (fp) => merged.has(fp),
-    });
-    if (!again.ok) {
-      return { ok: false, code: again.code, state: a.state };
-    }
-  }
+  const a = await assessFreshness(evidence, { binding: first.binding, stored, now, policy });
   return a.verdict.ok
     ? {
         ok: true,
@@ -133,7 +98,7 @@ describe("assessFreshness", () => {
   it("refuses a year-old binding at the pinned seq once the Gateway signed a newer one", async () => {
     const w = await world();
     const old = await w.binding(4, w.oldSrv, now - YEAR);
-    const r = await gate(w, old, { snapshot: await w.snapshot(9, 5), revocations: null });
+    const r = await gate(w, old, { snapshot: await w.snapshot(9, 5) });
     expect([r.ok, r.code]).toEqual([false, "stale_binding"]);
   });
 
@@ -141,7 +106,6 @@ describe("assessFreshness", () => {
     const w = await world();
     const r = await gate(w, await w.binding(5, w.newSrv), {
       snapshot: await w.snapshot(9, 5),
-      revocations: [],
     });
     expect(r).toMatchObject({ ok: true, fresh: true });
     expect(r.state?.snapshot).toEqual({ seq: 9, issued_at: now - 60, binding_seq: 5 });
@@ -151,27 +115,22 @@ describe("assessFreshness", () => {
     const w = await world();
     const b = await w.binding(4, w.oldSrv);
     const cases: [FreshnessEvidence, string][] = [
-      [{ snapshot: null, revocations: null }, "snapshot_missing"],
+      [{ snapshot: null }, "snapshot_missing"],
       [
         {
           snapshot: await w.snapshot(9, 4, { issued_at: now - SNAPSHOT_MAX_AGE_SECONDS - 1 }),
-          revocations: null,
         },
         "snapshot_stale",
       ],
-      [
-        { snapshot: await w.snapshot(9, 4, { issued_at: now + 3600 }), revocations: null },
-        "snapshot_future",
-      ],
+      [{ snapshot: await w.snapshot(9, 4, { issued_at: now + 3600 }) }, "snapshot_future"],
       [
         {
           snapshot: await w.snapshot(9, 4, { signer: await generateEd25519Signer() }),
-          revocations: null,
         },
         "snapshot_invalid",
       ],
-      [{ snapshot: { type: "MembershipSnapshot" }, revocations: null }, "snapshot_invalid"],
-      [{ snapshot: await w.snapshot(9, 3), revocations: null }, "snapshot_lagging"],
+      [{ snapshot: { type: "MembershipSnapshot" } }, "snapshot_invalid"],
+      [{ snapshot: await w.snapshot(9, 3) }, "snapshot_lagging"],
     ];
     for (const [evidence, gap] of cases) {
       const enforced = await gate(w, b, evidence);
@@ -186,12 +145,11 @@ describe("assessFreshness", () => {
     const b = await w.binding(4, w.oldSrv);
     const first = await gate(w, b, {
       snapshot: await w.snapshot(9, 4, { issued_at: now - SNAPSHOT_REPUBLISH_SECONDS }),
-      revocations: null,
     });
     const resigned = await gate(
       w,
       b,
-      { snapshot: await w.snapshot(9, 4, { issued_at: now - 5 }), revocations: null },
+      { snapshot: await w.snapshot(9, 4, { issued_at: now - 5 }) },
       { stored: first.state },
     );
     expect(resigned).toMatchObject({ ok: true, fresh: true });
@@ -201,72 +159,23 @@ describe("assessFreshness", () => {
       b,
       {
         snapshot: await w.snapshot(9, 4, { issued_at: now - SNAPSHOT_REPUBLISH_SECONDS }),
-        revocations: null,
       },
       { stored: resigned.state, policy: "report" },
     );
     expect(replay.gap).toBe("snapshot_replayed");
   });
 
-  it("enforces revocations from the snapshot or owner-signed under either policy, and keeps them", async () => {
-    const w = await world();
-    const b = await w.binding(4, w.oldSrv);
-    const fromSnapshot = await gate(
-      w,
-      b,
-      {
-        snapshot: await w.snapshot(9, 4, { revoked: [await fingerprint(w.oldSrv)] }),
-        revocations: null,
-      },
-      { policy: "report" },
-    );
-    expect([fromSnapshot.ok, fromSnapshot.code]).toEqual([false, "server_key_revoked"]);
-    const fromOwner = await gate(
-      w,
-      b,
-      { snapshot: null, revocations: [await w.revocation(w.oldSrv)] },
-      { policy: "report" },
-    );
-    expect([fromOwner.ok, fromOwner.code]).toEqual([false, "server_key_revoked"]);
-    const later = await gate(
-      w,
-      b,
-      { snapshot: null, revocations: null },
-      { stored: fromOwner.state, policy: "report" },
-    );
-    expect([later.ok, later.code]).toEqual([false, "server_key_revoked"]);
-  });
-
-  it("ignores revocations not signed under the pinned anchor", async () => {
-    const w = await world();
-    const stranger = await deriveRootSigner(generateKitSecret());
-    const r = await gate(w, await w.binding(5, w.newSrv), {
-      snapshot: await w.snapshot(9, 5),
-      revocations: [await w.revocation(w.newSrv, stranger), { junk: true }],
-    });
-    expect(r.ok).toBe(true);
-    expect(r.state?.revoked).toEqual([]);
-  });
-
-  it("refuses a revoked K_gw, and a stored marker keeps refusing an older binding", async () => {
+  it("a stored marker keeps refusing an older binding", async () => {
     const w = await world();
     const b5 = await w.binding(5, w.newSrv);
-    const first = await gate(w, b5, { snapshot: await w.snapshot(9, 5), revocations: null });
+    const first = await gate(w, b5, { snapshot: await w.snapshot(9, 5) });
     const replay = await gate(
       w,
       await w.binding(4, w.oldSrv),
-      { snapshot: null, revocations: null },
+      { snapshot: null },
       { stored: first.state, policy: "report" },
     );
     expect([replay.ok, replay.code]).toEqual([false, "stale_binding"]);
-    const kgwRevoked = { ...first.state!, revoked: [await fingerprint(b5.body.k_gw)] };
-    const r = await gate(
-      w,
-      b5,
-      { snapshot: await w.snapshot(10, 5), revocations: null },
-      { stored: kgwRevoked },
-    );
-    expect([r.ok, r.code]).toEqual([false, "server_key_revoked"]);
   });
 
   it("never stores a snapshot from the future", async () => {
@@ -275,17 +184,12 @@ describe("assessFreshness", () => {
     const future = await gate(
       w,
       b,
-      { snapshot: await w.snapshot(99, 4, { issued_at: now + 30 * 86400 }), revocations: null },
+      { snapshot: await w.snapshot(99, 4, { issued_at: now + 30 * 86400 }) },
       { policy: "report" },
     );
     expect(future.gap).toBe("snapshot_future");
     expect(future.state?.snapshot).toBeNull();
-    const honest = await gate(
-      w,
-      b,
-      { snapshot: await w.snapshot(9, 4), revocations: null },
-      { stored: future.state },
-    );
+    const honest = await gate(w, b, { snapshot: await w.snapshot(9, 4) }, { stored: future.state });
     expect(honest.ok).toBe(true);
   });
 
@@ -294,11 +198,10 @@ describe("assessFreshness", () => {
     const r = await gate(
       w,
       await w.binding(5, w.newSrv),
-      { snapshot: await w.snapshot(9, 5), revocations: null },
+      { snapshot: await w.snapshot(9, 5) },
       {
         stored: {
           claw_id: "f".repeat(32),
-          revoked: [await fingerprint(w.newSrv)],
           snapshot: { seq: 99, issued_at: now, binding_seq: 99 },
         },
       },

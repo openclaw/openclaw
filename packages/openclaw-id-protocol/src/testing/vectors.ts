@@ -14,9 +14,14 @@ import {
   type KeyFingerprint,
 } from "../keys.js";
 import { deriveRootSeed, encodeKit } from "../kit.js";
-import { certificateChain, signingInput, signStatement } from "../statements/envelope.js";
+import { signingInput, signStatement } from "../statements/envelope.js";
 import type { ClawPin } from "../statements/pin.js";
-import type { SignedStatement, StatementBodies, StatementType } from "../statements/types.js";
+import type {
+  OwnerCapability,
+  SignedStatement,
+  StatementBodies,
+  StatementType,
+} from "../statements/types.js";
 import type { TrustAnchor, VerifyErrorCode } from "../statements/verify.js";
 
 /** Fixed clock for every vector, unix seconds (2026-10-30T00:00:00Z). */
@@ -38,6 +43,9 @@ export type StatementVector = {
   statement: SignedStatement;
   signing_input_hex: string;
 };
+
+/** A current owner device of the vector claw: verifiers check device signatures against these. */
+export type OwnerVector = { device_pub: Ed25519PublicKey; caps: OwnerCapability[] };
 
 /** One statement that must fail verification with `expected_error`. */
 export type InvalidStatementVector = {
@@ -81,6 +89,8 @@ export type StatementVectors = {
   >;
   jcs: { input: JsonValue; canonical: string }[];
   anchor: TrustAnchor;
+  /** The claw's current owner devices (its allowlist); every other device key is not an owner. */
+  owners: OwnerVector[];
   valid: StatementVector[];
   invalid: InvalidStatementVector[];
   pins: PinVector[];
@@ -175,32 +185,16 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
     root_epoch: epoch,
   });
 
-  // Owner device chain: R -> device-1 -> device-2 -> device-3 -> device-4 (depth 4), device-5 one deeper.
+  // The claw's owner allowlist: device-1 (approved by R), device-2 (approved by device-1) and
+  // device-3, which may approve devices and bind but not invite. device-4 was removed.
   const cert1 = await signStatement("OwnerDeviceCert", certBody("device-1"), root);
-  const cert2 = await signStatement(
-    "OwnerDeviceCert",
-    certBody("device-2"),
-    signers["device-1"],
-    certificateChain(cert1),
-  );
-  const cert3 = await signStatement(
-    "OwnerDeviceCert",
-    certBody("device-3"),
-    signers["device-2"],
-    certificateChain(cert2),
-  );
-  const cert4 = await signStatement(
-    "OwnerDeviceCert",
-    certBody("device-4"),
-    signers["device-3"],
-    certificateChain(cert3),
-  );
-  const cert5 = await signStatement(
-    "OwnerDeviceCert",
-    certBody("device-5"),
-    signers["device-4"],
-    certificateChain(cert4),
-  );
+  const cert2 = await signStatement("OwnerDeviceCert", certBody("device-2"), signers["device-1"]);
+  const limitedCaps: StatementBodies["OwnerDeviceCert"]["caps"] = ["approve_device", "bind"];
+  const owners: OwnerVector[] = [
+    { device_pub: pub("device-1"), caps: allCaps },
+    { device_pub: pub("device-2"), caps: allCaps },
+    { device_pub: pub("device-3"), caps: limitedCaps },
+  ];
 
   const bindingBody = (seq: number, server: KeyName = "server", host = VECTOR_HOST, epoch = 1) => ({
     claw_id: VECTOR_CLAW_ID,
@@ -212,12 +206,7 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
     issued_at: VECTOR_ISSUED_AT,
   });
   const binding1 = await signStatement("ServerBinding", bindingBody(1), root);
-  const binding2 = await signStatement(
-    "ServerBinding",
-    bindingBody(2, "server-2"),
-    signers["device-1"],
-    [cert1],
-  );
+  const binding2 = await signStatement("ServerBinding", bindingBody(2, "server-2"), root);
 
   const invite = await signStatement(
     "InviteCap",
@@ -233,7 +222,6 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
       secret_hash: bytesToHex(await sha256(utf8("vector invite proof key"))),
     },
     signers["device-2"],
-    certificateChain(cert2),
   );
   const change = await signStatement(
     "MembershipChange",
@@ -250,7 +238,6 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
       issued_at: VECTOR_ISSUED_AT,
     },
     signers["device-1"],
-    [cert1],
   );
   const revocation = await signStatement(
     "Revocation",
@@ -262,7 +249,6 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
       issued_at: VECTOR_ISSUED_AT,
     },
     signers["device-2"],
-    certificateChain(cert2),
   );
   const rotation = await signStatement(
     "RootRotation",
@@ -290,9 +276,9 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
       claw_id: VECTOR_CLAW_ID,
       seq: 2,
       binding_seq: 1,
+      owner_device_keys: [pub("device-1"), pub("device-2")],
       owner_peer_keys: [iroh("device-1"), iroh("device-2")],
       members: [{ account_id: "acct_bob", role: "operator", peer_keys: [iroh("invitee")] }],
-      revoked: [],
       issued_at: VECTOR_ISSUED_AT,
     },
     signers.gateway,
@@ -317,67 +303,35 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
     bindingBody(9, "mallory"),
     signers.mallory,
   );
-  const malloryCert = await signStatement("OwnerDeviceCert", certBody("mallory"), signers.mallory);
-  const forgedChainBinding = await signStatement(
+  const deviceBinding = await signStatement(
     "ServerBinding",
-    bindingBody(9, "mallory"),
-    signers.mallory,
-    [malloryCert],
-  );
-  const tooDeep = await signStatement(
-    "InviteCap",
-    { ...invite.body },
-    signers["device-5"],
-    certificateChain(cert5),
+    bindingBody(9, "server-2"),
+    signers["device-1"],
   );
   const tampered = { ...binding1, body: { ...binding1.body, k_srv: iroh("mallory") } };
   // Signature over the same body under another type's domain must not verify (domain separation).
   const crossType = {
     ...change,
     // SAFETY: deliberately signs a MembershipChange body under the Revocation domain.
-    sig: (await signStatement("Revocation", change.body as never, signers["device-1"], [cert1]))
-      .sig,
+    sig: (await signStatement("Revocation", change.body as never, signers["device-1"])).sig,
   };
-  const bindOnlyCert = await signStatement(
+  const removedInvite = await signStatement("InviteCap", { ...invite.body }, signers["device-4"]);
+  const removedApproval = await signStatement(
     "OwnerDeviceCert",
-    certBody("device-2", ["bind"]),
-    signers["device-1"],
-    [cert1],
+    certBody("device-5"),
+    signers["device-4"],
   );
-  const noInviteCap = await signStatement(
-    "InviteCap",
-    { ...invite.body },
-    signers["device-2"],
-    certificateChain(bindOnlyCert),
-  );
-  const expiredCert = await signStatement(
-    "OwnerDeviceCert",
-    certBody("device-2", allCaps, 1, VECTOR_NOW - 1),
-    signers["device-1"],
-    [cert1],
-  );
-  const viaExpired = await signStatement(
-    "InviteCap",
-    { ...invite.body },
-    signers["device-2"],
-    certificateChain(expiredCert),
-  );
-  const oldEpochCert = await signStatement(
-    "OwnerDeviceCert",
-    certBody("device-1", allCaps, 1),
-    root,
-  );
-  const staleEpochInvite = await signStatement(
-    "InviteCap",
-    { ...invite.body },
-    signers["device-1"],
-    [oldEpochCert],
-  );
+  const selfApproved = await signStatement("OwnerDeviceCert", certBody("mallory"), signers.mallory);
+  const noInviteCap = await signStatement("InviteCap", { ...invite.body }, signers["device-3"]);
   const escalation = await signStatement(
     "OwnerDeviceCert",
-    certBody("device-3"),
+    certBody("device-5"),
+    signers["device-3"],
+  );
+  const oldEpochRevocation = await signStatement(
+    "Revocation",
+    { ...revocation.body },
     signers["device-2"],
-    certificateChain(bindOnlyCert),
   );
   const forgedSnapshot = await signStatement(
     "MembershipSnapshot",
@@ -425,19 +379,15 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
     keys,
     jcs: JCS_CASES.map((input) => ({ input, canonical: canonicalize(input) })),
     anchor,
+    owners,
     valid: [
       vector("root certifies device-1", "owner", cert1),
-      vector("device-1 certifies device-2 (depth 1)", "owner", cert2),
-      vector(
-        "device-3 certifies device-4 (depth 3, the deepest certificate allowed)",
-        "owner",
-        cert4,
-      ),
+      vector("owner device-1 certifies device-2", "owner", cert2),
       vector("root signs server binding seq 1", "owner", binding1),
-      vector("device-1 (bind cap) signs server binding seq 2", "owner", binding2),
-      vector("device-2 signs invite", "owner", invite),
-      vector("device-1 adds member", "owner", change),
-      vector("device-2 revokes device-3", "owner", revocation),
+      vector("root signs server binding seq 2 (new server key)", "owner", binding2),
+      vector("owner device-2 signs invite", "owner", invite),
+      vector("owner device-1 adds member", "owner", change),
+      vector("owner device-2 revokes device-3", "owner", revocation),
       vector("root rotates to root-2 (epoch 2)", "rotation", rotation),
       vector("gateway signs membership snapshot", "snapshot", snapshot),
       vector("invitee signs redemption request", "redemption", redemption),
@@ -450,10 +400,10 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
         expected_error: "wrong_signer",
       },
       {
-        name: "binding with a self-signed certificate chain",
+        name: "binding signed by an owner device instead of R",
         verifier: "owner",
-        statement: forgedChainBinding,
-        expected_error: "chain_broken",
+        statement: deviceBinding,
+        expected_error: "wrong_signer",
       },
       {
         name: "binding body changed after signing",
@@ -468,28 +418,28 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
         expected_error: "bad_signature",
       },
       {
-        name: "chain deeper than 4",
+        name: "invite signed by a removed owner device",
         verifier: "owner",
-        statement: tooDeep,
-        expected_error: "chain_too_long",
+        statement: removedInvite,
+        expected_error: "not_an_owner",
       },
       {
-        name: "device-5 certificate (would make depth 5)",
+        name: "device approved by a removed owner device",
         verifier: "owner",
-        statement: cert5,
-        expected_error: "chain_too_long",
+        statement: removedApproval,
+        expected_error: "not_an_owner",
+      },
+      {
+        name: "self-signed device certificate",
+        verifier: "owner",
+        statement: selfApproved,
+        expected_error: "not_an_owner",
       },
       {
         name: "invite signed by a device without the invite cap",
         verifier: "owner",
         statement: noInviteCap,
         expected_error: "missing_capability",
-      },
-      {
-        name: "chain link expired",
-        verifier: "owner",
-        statement: viaExpired,
-        expected_error: "chain_expired",
       },
       {
         name: "certificate grants caps its signer lacks",
@@ -517,11 +467,11 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
         expected_error: "wrong_signer",
       },
       {
-        name: "chain from the old root after rotation",
+        name: "revocation from the old root epoch after rotation",
         verifier: "owner",
-        statement: staleEpochInvite,
+        statement: oldEpochRevocation,
         anchor: epoch2Anchor,
-        expected_error: "chain_broken",
+        expected_error: "wrong_epoch",
       },
     ],
     pins: [
