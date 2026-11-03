@@ -717,7 +717,7 @@ describe("devices inventory rendering", () => {
     const row = getSettingsRow(section, "Mixed-role Windows");
 
     expect(row.querySelector(".capacity-meter-pips")?.getAttribute("aria-label")).toBe(
-      "Slot utilization unavailable",
+      "Couldn’t load device capacity. Try again.",
     );
     expect(row.querySelectorAll(".device-resource .session-context-meter--stale")).toHaveLength(3);
     // Stale numbers say so once, and never count as live pressure on the closed row.

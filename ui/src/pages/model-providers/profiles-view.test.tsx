@@ -16,6 +16,7 @@ import {
   ProviderProfiles,
   type ProviderProfilesViewProps,
 } from "./profiles-view.tsx";
+import { ProviderRow } from "./provider-row.tsx";
 import { card as viewCard, props } from "./view.test-support.tsx";
 function card(overrides: Partial<ModelProviderCard> = {}) {
   return viewCard({ apiKey: undefined, ...overrides });
@@ -226,10 +227,19 @@ it.each<[string, ModelProviderCard, string?, number?]>([
   ],
 ])("shows %s and blocks reordering", (message, providerCard, excluded, count = 0) => {
   const onProfileOrderChange = vi.fn();
-  const { container } = mount(providerCard, props({ onProfileOrderChange }));
+  const { container } = providerCard.apiKey
+    ? mountSolid(() => <ProviderRow {...props({ onProfileOrderChange })} card={providerCard} />)
+    : mount(providerCard, props({ onProfileOrderChange }));
+  if (providerCard.apiKey) {
+    container.querySelector<HTMLButtonElement>(".provider-row__summary")!.click();
+    flush();
+  }
   const grips = [...container.querySelectorAll<HTMLButtonElement>(gripSelector)];
   expect(grips).toHaveLength(count);
-  expectContent(container, [message]);
+  expectContent(
+    container,
+    providerCard.apiKey ? ["API key", "From environment (OPENAI_API_KEY)"] : [message],
+  );
   if (excluded) {
     expectContent(container, [], [excluded]);
   }
@@ -410,6 +420,7 @@ it.each([undefined, "auth-rejected"] as const)(
       ...expired,
       profileId: "example:external",
       externallyManaged: true,
+      source: "external",
     });
     const staticToken = makeProfile("example:static", {
       type: "token",
@@ -432,7 +443,11 @@ it.each([undefined, "auth-rejected"] as const)(
       expectContent(rowFor(root, expired.profileId), ["Access token expired"], ["Sign in again"]);
       expectContent(rowFor(root, fenced.profileId), ["Sign-in unavailable"], ["Sign in again"]);
       expectContent(rowFor(root, missing.profileId), ["Sign in again"]);
-      expectContent(rowFor(root, external.profileId), ["Managed externally"], ["Signed in"]);
+      expectContent(
+        rowFor(root, external.profileId),
+        [root === container ? "External CLI" : "Managed externally"],
+        ["Signed in"],
+      );
       expectContent(
         rowFor(root, staticToken.profileId),
         ["Expired"],

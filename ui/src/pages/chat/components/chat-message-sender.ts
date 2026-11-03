@@ -89,7 +89,7 @@ export function resolveMessageGroupSenderLabel(
         ? resolvedUserName
         : (userLabel ?? t("chat.messages.unattributedSender"))
     : normalizedRole === "assistant"
-      ? (userLabel ?? opts.assistantName ?? "Assistant")
+      ? (userLabel ?? opts.assistantName ?? t("chat.messages.agentName"))
       : normalizedRole === "tool"
         ? t("chat.messages.toolSender")
         : normalizedRole;
