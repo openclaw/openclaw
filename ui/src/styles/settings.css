@@ -18,58 +18,79 @@ openclaw-appearance-background {
 }
 
 .settings-background-artwork {
-  display: grid;
-  gap: var(--space-2);
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-3);
   width: 100%;
   min-width: 0;
+  /* Clears the selection ring from the description above. */
+  padding-block-start: var(--space-1);
 }
 
+/* Same tile as the theme picker: the sample is the control, the label sits under it,
+   and selection is a ring and check in the theme's strongest text color. */
 .settings-background-options {
+  --settings-background-tile: calc(96px * var(--control-ui-text-scale));
+
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--space-2);
-  width: 100%;
+  flex: 0 1 auto;
+  grid-template-columns: repeat(3, var(--settings-background-tile));
+  gap: var(--space-3);
+  min-width: 0;
 }
 
 .settings-background-option {
-  display: flex;
-  align-items: center;
-  min-width: 0;
+  display: grid;
   gap: var(--space-2);
-  padding: var(--space-2);
-  overflow: hidden;
-  color: var(--text);
-  background: transparent;
-  border: 1px solid var(--border);
+  min-width: 0;
+  padding: 0;
+  border: none;
   border-radius: var(--radius-lg);
+  background: none;
+  color: var(--muted-strong);
   text-align: start;
   cursor: var(--cursor-action);
 }
 
-.settings-background-option[aria-pressed="true"] {
-  border-color: var(--accent);
-  box-shadow: inset 0 0 0 1px var(--accent);
-}
-
 .settings-background-option:disabled {
   opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .settings-background-option:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: var(--space-1);
+  outline: none;
 }
 
 .settings-background-option__sample {
+  position: relative;
   display: grid;
   place-items: center;
-  flex: none;
-  width: 36px;
-  height: 36px;
+  height: calc(56px * var(--control-ui-text-scale));
   overflow: hidden;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-lg);
   color: var(--muted);
   background: var(--bg-content, var(--bg));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 14%, transparent);
+  transition: box-shadow var(--duration-fast) ease;
+}
+
+.settings-background-option:hover:not(:disabled) .settings-background-option__sample {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 40%, transparent);
+}
+
+.settings-background-option[aria-pressed="true"] .settings-background-option__sample,
+.settings-background-option[aria-pressed="true"]:hover:not(:disabled)
+  .settings-background-option__sample {
+  box-shadow:
+    0 0 0 2px var(--card),
+    0 0 0 4px var(--text-strong);
+}
+
+.settings-background-option:focus-visible .settings-background-option__sample {
+  box-shadow:
+    0 0 0 2px var(--card),
+    0 0 0 4px var(--ring);
 }
 
 .settings-background-option--theme .settings-background-option__sample {
@@ -79,70 +100,82 @@ openclaw-appearance-background {
 }
 
 .settings-background-option__sample img {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   object-fit: cover;
 }
 
-.settings-background-option__sample svg {
-  width: 24px;
-  height: 24px;
+.settings-background-option__sample > .icon,
+.settings-background-option__sample > svg,
+.settings-background-option__sample > span:not(.settings-background-option__check) svg {
+  width: 15px;
+  height: 15px;
+}
+
+.settings-background-option__check {
+  position: absolute;
+  inset-block-start: 6px;
+  inset-inline-end: 6px;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-full);
+  background: var(--text-strong);
+  color: var(--bg);
+}
+
+.settings-background-option__check svg {
+  width: 11px;
+  height: 11px;
+  stroke-width: 3px;
 }
 
 .settings-background-option__label {
-  display: flex;
-  align-items: center;
-  flex: 1;
-  justify-content: space-between;
-  gap: var(--space-1);
-  min-width: 0;
-  padding: 0;
+  overflow: hidden;
   font-size: var(--control-ui-text-sm);
   font-weight: 500;
-  overflow-wrap: anywhere;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.settings-background-option__label svg {
-  flex: none;
-  width: 14px;
-  height: 14px;
-  color: var(--accent);
-}
-
-.settings-background-actions,
-.settings-background-visibility {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
+.settings-background-option[aria-pressed="true"] .settings-background-option__label {
+  color: var(--text-strong);
 }
 
 .settings-background-actions {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
   justify-content: flex-end;
   gap: var(--space-2);
-}
-
-.settings-background-formats {
-  margin-inline-end: auto;
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  /* Sits level with the samples, not their labels. */
+  margin-block-end: calc(var(--control-ui-text-sm) * 1.35 + var(--space-2));
 }
 
 @media (max-width: 640px) {
-  .settings-background-option {
+  .settings-background-artwork {
     flex-direction: column;
+    align-items: stretch;
   }
 
-  .settings-background-option__label {
-    justify-content: center;
+  .settings-background-options {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
-  .settings-background-formats {
-    flex-basis: 100%;
+  .settings-background-actions {
+    justify-content: flex-start;
+    margin-block-end: 0;
   }
 }
 
 .settings-background-visibility {
-  flex-wrap: nowrap;
+  display: flex;
+  align-items: center;
   width: 100%;
   gap: var(--space-2);
   color: var(--muted);
@@ -150,10 +183,81 @@ openclaw-appearance-background {
 }
 
 .settings-background-visibility input {
+  --settings-range-direction: to right;
+
   width: clamp(120px, 20vw, 224px);
   flex: 1;
+  height: 16px;
   min-width: 0;
-  accent-color: var(--accent);
+  margin: 0;
+  appearance: none;
+  background: none;
+  cursor: var(--cursor-action);
+}
+
+.settings-background-visibility input:dir(rtl) {
+  --settings-range-direction: to left;
+}
+
+.settings-background-visibility input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.settings-background-visibility input::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: var(--radius-full);
+  background: linear-gradient(
+    var(--settings-range-direction),
+    var(--accent) var(--settings-range-fill),
+    var(--border-strong) var(--settings-range-fill)
+  );
+}
+
+.settings-background-visibility input::-moz-range-track {
+  height: 4px;
+  border-radius: var(--radius-full);
+  background: var(--border-strong);
+}
+
+.settings-background-visibility input::-moz-range-progress {
+  height: 4px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+}
+
+.settings-background-visibility input::-webkit-slider-thumb {
+  width: 16px;
+  height: 16px;
+  margin-top: -6px;
+  border: none;
+  border-radius: var(--radius-full);
+  appearance: none;
+  background: var(--text-strong);
+}
+
+.settings-background-visibility input::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border: none;
+  border-radius: var(--radius-full);
+  background: var(--text-strong);
+}
+
+.settings-background-visibility input:focus-visible {
+  outline: none;
+}
+
+.settings-background-visibility input:focus-visible::-webkit-slider-thumb {
+  box-shadow:
+    0 0 0 2px var(--card),
+    0 0 0 4px var(--ring);
+}
+
+.settings-background-visibility input:focus-visible::-moz-range-thumb {
+  box-shadow:
+    0 0 0 2px var(--card),
+    0 0 0 4px var(--ring);
 }
 
 .settings-background-visibility__value {
@@ -161,6 +265,23 @@ openclaw-appearance-background {
   color: var(--text);
   text-align: end;
   font-variant-numeric: tabular-nums;
+}
+
+/* The note's longest state and the status line keep their room, so switching
+   artwork or saving never moves the sections below. */
+.settings-background-note {
+  min-height: calc(2 * 1.5em);
+}
+
+.settings-background-status {
+  min-height: calc(var(--control-ui-text-sm) * 1.5);
+  margin-top: calc(-1 * var(--space-2));
+}
+
+@media (max-width: 640px) {
+  .settings-background-note {
+    min-height: calc(3 * 1.5em);
+  }
 }
 
 /* The preview stays in its local DOM and paints within the measured Settings
