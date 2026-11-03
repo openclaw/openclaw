@@ -28,6 +28,72 @@ function readRequestRecord(fixture: ReturnType<typeof createDispatchFixture>) {
 }
 
 describe("candidate-owned full release dispatch entry point", () => {
+  it("refuses publish qualification when the candidate changelog thanks an internal handle", () => {
+    const fixture = createDispatchFixture({
+      candidateOwned: true,
+      releaseNotes: "- Fixes: keep replies threaded. Thanks @steipete.",
+    });
+    try {
+      const result = fixture.run([
+        "--workflow-sha",
+        fixture.targetSha,
+        "-f",
+        "validation_purpose=publish",
+        "-f",
+        `publication_selection_json=${JSON.stringify({ route: "normal", npmDistTag: "beta", publishOpenclawNpm: true, pluginPublishScope: "all-publishable", plugins: [] })}`,
+      ]);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        "Forbidden changelog thanks attribution (pnpm check:changelog-attributions): CHANGELOG.md:3 uses Thanks @steipete. Use verified human GitHub credits",
+      );
+      expect(
+        fixture.readCalls(fixture.ghCallsPath).filter((args) => ghApiMethod(args) !== "GET"),
+      ).toEqual([]);
+      expect(dispatches(fixture)).toEqual([]);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("refuses publish qualification when a squash left the contribution record target unreachable", () => {
+    const fixture = createDispatchFixture({
+      candidateOwned: true,
+      unreachableContributionRecord: true,
+    });
+    try {
+      const result = fixture.run([
+        "--workflow-sha",
+        fixture.targetSha,
+        "-f",
+        "validation_purpose=publish",
+        "-f",
+        `publication_selection_json=${JSON.stringify({
+          route: "normal",
+          npmDistTag: "beta",
+          publishOpenclawNpm: true,
+          pluginPublishScope: "all-publishable",
+          plugins: [],
+        })}`,
+      ]);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        `Candidate ${fixture.targetSha} would fail the pnpm release:candidate changelog gates for v2026.8.1`,
+      );
+      expect(result.stderr).toMatch(
+        new RegExp(
+          `contribution record target [0-9a-f]{40} is not reachable from release tag ${fixture.targetSha}`,
+          "u",
+        ),
+      );
+      expect(
+        fixture.readCalls(fixture.ghCallsPath).filter((args) => ghApiMethod(args) !== "GET"),
+      ).toEqual([]);
+      expect(dispatches(fixture)).toEqual([]);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
   it("rejects an invalid candidate signature before publication dispatch", () => {
     const f = createDispatchFixture({
       candidateOwned: true,

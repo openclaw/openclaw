@@ -128,29 +128,13 @@ This example qualifies a final version for beta-first publication. Select
 for the prepared button. A beta prerelease uses the beta profile and soak policy.
 Keep that intended selection on later notes-only parents. This admits committed
 publication source, not registry eligibility or publication authority.
-This branch's direct SHA-pinned dispatcher does **not** automatically run the
-release-note and contribution-record validators; that automatic gate belongs to
-newer main tooling. For fresh regular-release qualification, use the existing
-candidate checklist **instead of** the direct dispatch above. From a clean
-checkout at Code SHA with frozen dependencies installed, run:
-
-```bash
-pnpm release:candidate -- \
-  --tag <tag> --target-sha <code-sha> \
-  --workflow-sha <publisher-sha> \
-  --npm-dist-tag <beta-or-latest> \
-  --release-profile <beta-stable-or-full> \
-  --publication-route <normal-or-prepared>
-```
-
-The checklist runs `validateCandidateReleaseNotes` and
-`validateCandidateChangelogProvenance` before `dispatchFullReleaseUsingHelper`;
-a failure prevents dispatch. Supply the reviewed SDK acknowledgement when
-required, and retain the protected tooling-tag authority requirements in
-[qualify publication bytes](#qualify-publication-bytes). Do not run both dispatch
-routes. For an existing qualification, use the retained-run consumption path
-below rather than launching another run. A record target lost to a squash merge
-needs a corrected record and a new Code SHA.
+Publish-purpose dispatches run the shared candidate release-notes,
+contribution-record provenance, and changelog-attribution gates at the Code SHA
+before dispatch. A failure prevents dispatch. A record target lost to a squash
+merge needs a corrected record and a new Code SHA. The candidate checklist uses
+the same validators; do not run both dispatch routes. For an existing
+qualification, use the retained-run consumption path below rather than launching
+another run.
 
 Record and reuse C/Q and independently trusted P. For the direct SHA-pinned
 dispatcher, `--workflow-sha`, if explicit, must equal C; its default is Q=C.
