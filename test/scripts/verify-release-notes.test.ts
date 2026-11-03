@@ -26,6 +26,7 @@ import {
   releaseProvenanceMarkers,
   recoverUnavailablePullRequests,
   renderedContributionRecordReferences,
+  resolveCanonicalReleaseBranch,
   resolvedReleasePullRequests,
   standardRevertedHash,
   subtractShippedPullRequests,
@@ -147,6 +148,22 @@ function runVerifier(
 }
 
 describe("release-note verification", () => {
+  it("prefers the pushed canonical release branch over a stale local branch", () => {
+    const resolved = new Map([
+      ["refs/remotes/origin/release/2026.7.1", "remote"],
+      ["release/2026.7.1", "local"],
+    ]);
+    const visited: string[] = [];
+
+    expect(
+      resolveCanonicalReleaseBranch("release/2026.7.1", (ref: string) => {
+        visited.push(ref);
+        return resolved.get(ref);
+      }),
+    ).toBe("refs/remotes/origin/release/2026.7.1");
+    expect(visited).toEqual(["refs/remotes/origin/release/2026.7.1"]);
+  });
+
   it("rejects an off-branch generation target before release-note discovery", () => {
     const cwd = tempDirs.make("openclaw-off-branch-notes-");
     git(cwd, ["init", "-q", "-b", "main"]);

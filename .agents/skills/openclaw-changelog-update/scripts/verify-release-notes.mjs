@@ -105,7 +105,8 @@ Options:
                         Ignore an existing exact-range snapshot and rebuild it.
   --main-ref <ref>      Canonical mainline used to replace backport PRs.
   --release-branch <ref>
-                        Ref whose history must contain the generation target.
+                        Canonical branch whose history must contain the generation target.
+                        Unqualified names prefer origin/<ref>, then fall back to a local ref.
   --seed-ref <ref>      Use an existing release section as editorial input.
   --shipped-ref <tag>   Exclude PRs already recorded by this shipped tag; repeatable.
   --release-provenance <sha -> #PR[, #PR]>
@@ -264,6 +265,20 @@ function gitCommit(ref, required = false) {
   return fail(
     `could not resolve canonical main ref ${ref}: ${result.stderr?.trim() || result.status}`,
   );
+}
+
+export function resolveCanonicalReleaseBranch(ref, resolveCommit = gitCommit) {
+  const explicitRef = ref.startsWith("refs/") || ref.startsWith("origin/");
+  if (!explicitRef) {
+    const remoteRef = `refs/remotes/origin/${ref}`;
+    if (resolveCommit(remoteRef)) {
+      return remoteRef;
+    }
+  }
+  if (resolveCommit(ref)) {
+    return ref;
+  }
+  return fail(`could not resolve canonical release branch ${ref}`);
 }
 
 function fetchGithubApi(args) {
@@ -2751,10 +2766,13 @@ function main() {
     options.base = git(["merge-base", options.base, options.target]);
   }
   const rootDir = process.cwd();
-  if (options.releaseBranch && !gitIsAncestor(options.target, options.releaseBranch)) {
-    fail(
-      `release notes target ${options.target} is not reachable from canonical release branch ${options.releaseBranch}; generate notes from that branch's frozen tip`,
-    );
+  if (options.releaseBranch) {
+    const canonicalReleaseBranch = resolveCanonicalReleaseBranch(options.releaseBranch);
+    if (!gitIsAncestor(options.target, canonicalReleaseBranch)) {
+      fail(
+        `release notes target ${options.target} is not reachable from canonical release branch ${options.releaseBranch}; generate notes from that branch's frozen tip`,
+      );
+    }
   }
   const releaseSource = loadOrInitializeReleaseChangelog(
     rootDir,
