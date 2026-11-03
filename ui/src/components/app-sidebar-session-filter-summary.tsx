@@ -96,9 +96,7 @@ function SidebarOwnerPicker(props: { host: SessionListHost }) {
   return (
     <Show
       when={owners().length > 0 || ownerId() !== null || props.host.sessionInvolvingMeFilterActive}
-      fallback={
-        <span class="sidebar-recent-sessions__label-text">{t("chat.sidebar.threads")}</span>
-      }
+      fallback={<span class="sidebar-panel-header__title">{t("chat.sidebar.threads")}</span>}
     >
       <Picker {...picker().params} />
     </Show>

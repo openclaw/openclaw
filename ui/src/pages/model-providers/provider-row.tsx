@@ -9,6 +9,7 @@ import {
   ProviderUsageChips,
   ProviderUsagePanel,
 } from "../../components/solid/provider-usage.tsx";
+import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { ModelProviderCard, ModelProviderRemovalTarget } from "./data.ts";
@@ -87,17 +88,19 @@ function renderProbeResult(result: ModelsProbeResult | undefined) {
   }
   const hasWarnings =
     result.status === "ok" && result.results.some((target) => target.status !== "ok");
-  const presentation = hasWarnings ? "warning" : result.status === "ok" ? "success" : "error";
+  const kind = hasWarnings ? "warn" : result.status === "ok" ? "ok" : "danger";
   return (
-    <div
-      class={["model-providers__probe", `model-providers__probe--${presentation}`]}
-      role="status"
-    >
+    <div class="model-providers__probe" role="status">
       <div class="model-providers__probe-summary">
         <strong>
-          {hasWarnings
-            ? t("modelProviders.probe.status.partial")
-            : t(`modelProviders.probe.status.${result.status}`)}
+          <SettingsStatus
+            kind={kind}
+            label={
+              hasWarnings
+                ? t("modelProviders.probe.status.partial")
+                : t(`modelProviders.probe.status.${result.status}`)
+            }
+          />
         </strong>
       </div>
       {result.error ? <div>{formatUiExternalText(result.error)}</div> : undefined}
@@ -124,6 +127,8 @@ export function ApiKeyInput(props: {
   disabled: boolean;
   onInput: (value: string) => void;
   replace?: boolean;
+  /** The label already names the field; a form with nothing else needs no second prompt. */
+  labelOnly?: boolean;
 }) {
   return (
     <label class="field">
@@ -131,11 +136,15 @@ export function ApiKeyInput(props: {
       <input
         type="password"
         autocomplete="off"
-        placeholder={t(
-          props.replace
-            ? "modelProviders.apiKey.replacePlaceholder"
-            : "modelProviders.apiKey.placeholder",
-        )}
+        placeholder={
+          props.labelOnly
+            ? undefined
+            : t(
+                props.replace
+                  ? "modelProviders.apiKey.replacePlaceholder"
+                  : "modelProviders.apiKey.placeholder",
+              )
+        }
         value={props.value}
         disabled={props.disabled}
         onInput={(event) => props.onInput(event.currentTarget.value)}

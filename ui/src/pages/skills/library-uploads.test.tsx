@@ -114,7 +114,7 @@ it.each([
     await waitForFast(() =>
       expect(mounted.container.querySelector(".settings-row")).not.toBeNull(),
     );
-    const dialog = mounted.container.querySelector(".skill-reader-dialog")!;
+    const dialog = mounted.container.querySelector(".skill-library-dialog")!;
     const { dialog: nativeDialog } = await getRenderedModalDialog(mounted.container);
     const row = mounted.container.querySelector(".settings-row")!;
     const button = (label: string) => buttonIn(dialog, label);
@@ -150,7 +150,7 @@ it.each([
         expect(draft.entry!.revision).toBe(receipt.entry.revision);
       });
     }
-    expect(mounted.container.querySelector(".skill-reader-dialog")).toBe(dialog);
+    expect(mounted.container.querySelector(".skill-library-dialog")).toBe(dialog);
     expect(mounted.container.querySelector(".settings-row")).toBe(row);
   },
 );
@@ -180,7 +180,7 @@ it.each(["files", "clawhub"])(
     }
     const mounted = mountLibrary(library);
     flush();
-    const dialog = mounted.container.querySelector(".skill-reader-dialog")!;
+    const dialog = mounted.container.querySelector(".skill-library-dialog")!;
     const submit = dialog.querySelector<HTMLButtonElement>('button[type="submit"]')!;
     const reading = createDeferred<ArrayBuffer>();
     const imported = createDeferred<SkillsLibraryReceipt>();
@@ -268,7 +268,7 @@ it.each(["detail", "list"] as const)(
     flush();
     expect(item()).toBeNull();
     if (detail) {
-      expect(view.container.querySelector(".skill-reader-dialog")).toBeNull();
+      expect(view.container.querySelector(".skill-library-dialog")).toBeNull();
       await run();
       expect(request).toHaveBeenCalledTimes(1);
     } else {

@@ -52,12 +52,12 @@ describe("Cloud environments", () => {
       const { page, request, harness, client } = mountTestPage(methods, {
         response: (method) => (method === "config.patch" && hold ? pending.promise : undefined),
       });
-      await waitForSolid(() => expect(input(page, "Pool cap").disabled).toBe(false));
-      change(input(page, "Pool cap"), "6");
+      await waitForSolid(() => expect(input(page, "Pool limit").disabled).toBe(false));
+      change(input(page, "Pool limit"), "6");
       click(page, "Save pool");
       await configPatch(request);
       await waitForSolid(() => expect(button(page, "Save pool").disabled).toBe(true));
-      expect(input(page, "Pool cap").value).toBe("6");
+      expect(input(page, "Pool limit").value).toBe("6");
       if (mode === "reconnect") {
         harness.publish(false, client, null);
         harness.publish(true, client, gatewayHelloForMethods(methods));
@@ -69,7 +69,7 @@ describe("Cloud environments", () => {
         pending.reject(new Error("Synthetic save failure"));
         await waitText(() => page, "Synthetic save failure");
         await waitForSolid(() => expect(button(page, "Save pool").disabled).toBe(false));
-        expect(input(page, "Pool cap").value).toBe("6");
+        expect(input(page, "Pool limit").value).toBe("6");
         click(page, "Save pool");
         await waitForSolid(() =>
           expect(request.mock.calls.filter(([method]) => method === "config.patch")).toHaveLength(
@@ -176,23 +176,23 @@ describe("Cloud environments", () => {
     const { page, request, harness, client } = mountTestPage(methods);
     await waitForSolid(() => expect(input(page, "Refresh after").disabled).toBe(false));
     await waitText(() => page, "github.com/acme/app");
-    change(input(page, "Pool cap"), "7");
+    change(input(page, "Pool limit"), "7");
     change(input(page, "Refresh after"), "6h");
     const hello = gatewayHelloForMethods(methods);
     harness.publish(false, client, null);
     flush();
-    expect(input(page, "Pool cap").value).toBe("7");
+    expect(input(page, "Pool limit").value).toBe("7");
     expect(input(page, "Refresh after").value).toBe("6h");
     expect(page.textContent).toContain("github.com/acme/app");
     expect(button(page, "Save pool").disabled).toBe(true);
     expect(button(page, "Save retention policy").disabled).toBe(true);
     harness.publish(true, client, hello);
     await waitForSolid(() => expect(button(page, "Save pool").disabled).toBe(false));
-    expect(input(page, "Pool cap").value).toBe("7");
+    expect(input(page, "Pool limit").value).toBe("7");
     expect(input(page, "Refresh after").value).toBe("6h");
     harness.publish(true, { request } as unknown as GatewayBrowserClient, hello);
     flush();
-    expect(input(page, "Pool cap").value).not.toBe("7");
+    expect(input(page, "Pool limit").value).not.toBe("7");
     expect(input(page, "Refresh after").value).toBe("24h");
   });
 
@@ -292,7 +292,7 @@ describe("Cloud environments", () => {
           : []),
       ];
       const { page } = mountTestPage(methods, { result });
-      await waitText(() => sheet(page), "Dev Container");
+      await waitText(() => sheet(page), "Dev container");
       const details = sheet(page);
       expect(page.querySelector(".cloud-environments__row")?.textContent).toBe(
         "github.com/acme/appNeeds attention",
@@ -408,9 +408,9 @@ describe("Cloud environments", () => {
     const { page, request } = mountTestPage(methods, {
       response: preparedInventory(inventory),
     });
-    await waitForSolid(() => expect(input(page, "Pool cap").disabled).toBe(false));
-    await waitText(() => page, "1 ready workers · Pool cap");
-    change(input(page, "Pool cap"), "6");
+    await waitForSolid(() => expect(input(page, "Pool limit").disabled).toBe(false));
+    await waitText(() => page, "1 ready cloud devices · Pool limit");
+    change(input(page, "Pool limit"), "6");
     click(page, "Save pool");
     const patch = await configPatch(request);
     expect(JSON.parse(String(patch?.raw))).toEqual({
@@ -586,7 +586,7 @@ it.each([
     });
     const surface = labeled
       ? await waitForSolid(() => sheet(page))
-      : expectDefined(page.querySelector(".cloud-environments__advanced"), "Advanced");
+      : expectDefined(page.querySelector(".settings-disclosure"), "Advanced");
     await waitForSolid(() => expect(button(surface, action).disabled).toBe(false));
     if (state !== "provisioning") {
       expect(surface.textContent).toContain("Worker cleanup failed");

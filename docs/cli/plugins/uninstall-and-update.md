@@ -233,6 +233,32 @@ a pending handoff; it never force-releases leases or rolls back a committed relo
 The handoff is process-local: if the Gateway exits before delivery, inspect the
 plugin state before retrying. Plain CLI reloads are not intercepted or deferred.
 
+### Development: reload edited bundled code
+
+When you work on bundled plugin code in a source checkout or a Node/Bun install,
+start the Gateway with `OPENCLAW_DEV_RELOAD_BUNDLED_PLUGINS=1`. Then
+`openclaw plugins reload <id>` loads the plugin's edited code from disk and returns
+`restartRequired: false` with a warning. The plugin's code includes its package
+directory and the compiled chunks used only by plugins, including chunks it shares
+with other plugins. Chunks that core or the SDK also use keep their loaded code.
+Rebuild first when
+the installation loads compiled output; reload doesn't run the build.
+
+This mode is for development only:
+
+- It applies only to plugins named in an explicit reload. Startup, config-driven
+  reloads, and setup keep using the Gateway's code. A later config-driven reload
+  of the same plugin returns it to the code the Gateway started with.
+- Host, SDK, and build chunks shared with core keep their loaded code. Changes to
+  them still require a restart.
+- JavaScript modules can't be unloaded, so each reload keeps the previous code in
+  memory until the Gateway restarts.
+- Standalone executables ignore the variable, and reload reports the usual
+  `restartRequired: true` with a warning.
+
+Set the variable before the Gateway starts. Without it, bundled reload behaves as
+described above.
+
 ### Inspect retained references
 
 To inspect live holders without requesting a reload, use an administrator Gateway
