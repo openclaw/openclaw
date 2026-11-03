@@ -891,7 +891,7 @@ console.log("relocated Bash parser works without native grammar package");
       const require = createRequire(import.meta.url);
       // Install only the entity decoder the highlighter keeps external.
       fs.cpSync(
-        path.dirname(require.resolve("entities/package.json")),
+        fs.realpathSync(path.resolve("node_modules/entities")),
         path.join(installed, "node_modules/entities"),
         { recursive: true },
       );

@@ -338,6 +338,7 @@ export const en = {
       laneQuickHint: "Find AI access, choose a connection to verify, then open the web dashboard.",
       laneCustomLabel: "Custom setup",
       laneCustomHint: "Walk through every setup option.",
+      quickstartKeepRunningQuestion: "Keep OpenClaw running in the background?",
       quickstartDashboard: "Dashboard: {url}",
       quickstartForeground: "Gateway is running in the foreground. Press Ctrl+C to stop.",
       quickstartBackground:

@@ -123,8 +123,8 @@ describe("config form integrity", () => {
     expect(endpointError.textContent).toBe("");
 
     const relayUrl = expectElement(
-      container.querySelector<HTMLInputElement>("input[aria-label='Relay Url']"),
-      "input[aria-label='Relay Url']",
+      container.querySelector<HTMLInputElement>("input[aria-label='Relay URL']"),
+      "input[aria-label='Relay URL']",
     );
     typeValue(relayUrl, "relay.example");
     expect(relayUrl.getAttribute("aria-invalid")).toBe("true");
@@ -134,8 +134,8 @@ describe("config form integrity", () => {
     expect(onPatch).toHaveBeenCalledWith(["laboratory", "relayUrl"], "https://relay.example/");
 
     const explicitEmpty = expectElement(
-      container.querySelector<HTMLInputElement>("input[aria-label='Explicit Empty']"),
-      "input[aria-label='Explicit Empty']",
+      container.querySelector<HTMLInputElement>("input[aria-label='Explicit empty']"),
+      "input[aria-label='Explicit empty']",
     );
     typeValue(explicitEmpty, "");
     expect(explicitEmpty.getAttribute("aria-invalid")).toBe("false");
@@ -204,8 +204,8 @@ describe("config form integrity", () => {
     );
 
     const retryBudget = expectElement(
-      container.querySelector<HTMLInputElement>("input[aria-label='Retry Budget']"),
-      "input[aria-label='Retry Budget']",
+      container.querySelector<HTMLInputElement>("input[aria-label='Retry budget']"),
+      "input[aria-label='Retry budget']",
     );
     expect(retryBudget.min).toBe("2");
     expect(retryBudget.max).toBe("8");
@@ -237,8 +237,8 @@ describe("config form integrity", () => {
     expect(onPatch).toHaveBeenCalledWith(["laboratory", "retryBudget"], 4);
 
     const increment = expectElement(
-      container.querySelector<HTMLButtonElement>("button[aria-label='Retry Budget: +2']"),
-      "button[aria-label='Retry Budget: +2']",
+      container.querySelector<HTMLButtonElement>("button[aria-label='Retry budget: +2']"),
+      "button[aria-label='Retry budget: +2']",
     );
     increment.click();
     expect(onPatch).toHaveBeenCalledWith(["laboratory", "retryBudget"], 8);
@@ -400,8 +400,8 @@ describe("config form integrity", () => {
 
     renderSensitive(true);
     const input = expectElement(
-      container.querySelector<HTMLInputElement>("input[aria-label='Api Key']"),
-      "input[aria-label='Api Key']",
+      container.querySelector<HTMLInputElement>("input[aria-label='API key']"),
+      "input[aria-label='API key']",
     );
     typeValue(input, "abc");
     expect(input.getAttribute("aria-invalid")).toBe("true");
@@ -410,8 +410,8 @@ describe("config form integrity", () => {
 
     renderSensitive(false);
     const hidden = expectElement(
-      container.querySelector<HTMLInputElement>("input[aria-label='Api Key']"),
-      "input[aria-label='Api Key']",
+      container.querySelector<HTMLInputElement>("input[aria-label='API key']"),
+      "input[aria-label='API key']",
     );
     expect(hidden).toBe(input);
     expect(hidden.readOnly).toBe(true);
@@ -422,8 +422,8 @@ describe("config form integrity", () => {
 
     renderSensitive(true);
     const revealed = expectElement(
-      container.querySelector<HTMLInputElement>("input[aria-label='Api Key']"),
-      "input[aria-label='Api Key']",
+      container.querySelector<HTMLInputElement>("input[aria-label='API key']"),
+      "input[aria-label='API key']",
     );
     expect(revealed).toBe(input);
     expect(revealed.value).toBe("123");

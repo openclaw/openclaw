@@ -9,6 +9,16 @@ import { flush } from "../test-helpers/solid-settle.ts";
 
 const errorSelector = ".cfg-structured-draft__error [role='alert']";
 
+function openDisclosure(root: ParentNode) {
+  const details = expectElement(
+    root.querySelector<HTMLDetailsElement>("details.cfg-object"),
+    "disclosure",
+  );
+  details.open = true;
+  details.dispatchEvent(new Event("toggle"));
+  flush();
+}
+
 function field(root: ParentNode, name: string) {
   return expectElement(root.querySelector<HTMLInputElement>(`input[aria-label='${name}']`), name);
 }
@@ -133,6 +143,7 @@ describe("config form rejection integrity", () => {
         "optional object draft",
       );
       flush();
+      openDisclosure(draft);
       edit(field(draft, "Host"), "gateway.local");
       flush();
       expect(onPatch).not.toHaveBeenCalled();

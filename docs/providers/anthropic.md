@@ -107,6 +107,20 @@ OpenClaw release:
         ```bash
         openclaw onboard --anthropic-api-key "$ANTHROPIC_API_KEY"
         ```
+
+        API-key setup asks for an optional **Anthropic workspace ID**. If your key
+        is not scoped to a workspace, enter its `wrkspc_...` ID from the Claude
+        Console. Leave it blank for a workspace-scoped key. Existing workspace
+        headers are preserved.
+
+        This is a provider account setting, separate from an agent's local
+        workspace directory. It applies to all requests through the configured
+        Anthropic provider. Use workspace-scoped keys or separate provider
+        configurations when accounts need different workspaces.
+
+        For non-interactive setup, configure
+        `models.providers.anthropic.headers["anthropic-workspace-id"]` beforehand.
+        See [Anthropic authentication](https://platform.claude.com/docs/en/manage-claude/authentication#select-a-workspace).
       </Step>
       <Step title="Verify the model is available">
         ```bash

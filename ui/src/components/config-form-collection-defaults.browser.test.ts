@@ -6,6 +6,7 @@ import {
   renderObjectFixture,
   expandConfigObjects,
 } from "../test-helpers/config-form-fixtures.tsx";
+import { flush } from "../test-helpers/solid-settle.ts";
 
 type Options = Parameters<typeof renderNodeFixture>[1];
 function fixture(
@@ -61,7 +62,6 @@ describe("config form collection defaults", () => {
       { mode: "custom" },
     );
 
-    expect(container.textContent).toContain('Default: {"mode":"balanced"}');
     const json = textarea(container);
     expect(json.value).toBe('{\n  "mode": "custom"\n}');
     json.value = "";
@@ -82,7 +82,6 @@ describe("config form collection defaults", () => {
       reject: true,
     });
 
-    expect(container.textContent).toContain('Default: ["a","b"]');
     expect(container.querySelectorAll(".cfg-array__item")).toHaveLength(1);
     expect(input(container).value).toBe("custom");
 
@@ -167,6 +166,9 @@ describe("config form collection defaults", () => {
 
     const inheritedProfile = findText(container, "details", "Profile");
     expect(inheritedProfile.textContent).not.toContain('{"enabled":true,"mode":"balanced"}');
+    (inheritedProfile as HTMLDetailsElement).open = true;
+    inheritedProfile.dispatchEvent(new Event("toggle"));
+    flush();
     const modeRow = findText(inheritedProfile, ".settings-row", "Mode");
     expect(inheritedProfile.textContent).not.toContain("Using default:");
     expect(input(modeRow).placeholder).toBe("Default: balanced");

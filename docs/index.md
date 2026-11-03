@@ -176,15 +176,15 @@ The Gateway is the single source of truth for sessions, routing, and channel con
   </Step>
   <Step title="Complete onboarding">
     Onboarding offers **Quick start** and **Custom setup**. Quick start reuses
-    detected AI access, verifies it with a real completion, and opens the web
-    dashboard with a Gateway in the foreground. Custom setup walks the full
+    detected AI access, verifies it with a real completion, offers to keep the
+    Gateway running in the background, and opens the web dashboard. Custom setup walks the full
     guided flow. `openclaw onboard --classic` opens the classic step-by-step
     wizard instead.
 
   </Step>
   <Step title="Install the Gateway service">
-    Quick start leaves the Gateway in the foreground. Press **Ctrl+C**, then
-    install the background service:
+    Skip this step if you accepted Quick start's background question. Otherwise,
+    press **Ctrl+C**, then install the background service:
 
     ```bash
     openclaw gateway install
