@@ -950,6 +950,10 @@ openclaw-plugins-page
   white-space: nowrap;
 }
 
+.plugins-settings-breadcrumb__parent {
+  flex: none;
+}
+
 .plugins-settings-breadcrumb__parent:hover {
   color: var(--text);
 }
@@ -967,8 +971,13 @@ openclaw-plugins-page
 .plugin-catalog-detail {
   container-type: inline-size;
   display: grid;
-  gap: 28px;
+  gap: var(--space-7);
   min-width: 0;
+}
+
+/* The breadcrumb belongs to the hero, so it sits closer to it than the hero sits to the body. */
+.plugin-catalog-detail > .plugins-settings-breadcrumb {
+  margin-bottom: calc(var(--space-4) - var(--space-7));
 }
 
 .plugin-catalog-detail__content {
@@ -1028,8 +1037,8 @@ openclaw-plugins-page
 .plugin-catalog-detail__actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 18px;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
 }
 .plugin-catalog-detail__actions .btn {
   min-height: 30px;
@@ -1064,7 +1073,7 @@ openclaw-plugins-page
 
 .plugin-catalog-detail__summary {
   max-width: 720px;
-  margin: var(--space-3) 0 0;
+  margin: var(--space-2) 0 0;
   color: var(--muted);
   font-size: var(--control-ui-text-lg);
   line-height: 1.5;
@@ -1074,8 +1083,8 @@ openclaw-plugins-page
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-3);
-  margin-top: var(--space-3);
+  gap: var(--space-2);
+  margin-top: var(--space-2);
   font-size: var(--control-ui-text-lg);
   line-height: 1.4;
 }
@@ -1103,40 +1112,57 @@ openclaw-plugins-page
   grid-area: sidebar;
   display: grid;
   align-content: start;
+  gap: var(--space-6);
   min-width: 0;
   font-size: var(--control-ui-text-sm);
 }
+/* Facts stay in view beside a long list of tools, when the window is tall enough to hold them. */
+@media (min-height: 640px) {
+  .plugin-catalog-detail__sidebar {
+    position: sticky;
+    top: var(--space-6);
+  }
+}
 .plugin-metadata__facts,
 .plugin-metadata__section,
+.plugin-metadata__links,
 .plugin-catalog-detail__security {
   margin: 0;
-  padding: 16px 0;
-  border: 0;
-  border-bottom: 1px solid var(--border);
-}
-.plugin-catalog-detail__sidebar > :first-child {
-  padding-top: 0;
-}
-.plugin-catalog-detail__sidebar > :last-child {
-  border-bottom: 0;
+  padding: 0;
 }
 .plugin-metadata__facts {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
+  gap: var(--space-2);
 }
-.plugin-metadata__facts dt,
+/* A value too long for its row, such as a prerelease version, moves under its label whole. */
+.plugin-metadata__facts > div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 var(--space-3);
+  min-width: 0;
+}
+/* Group labels use the shared section title, so the rail reads like the sections beside it. */
 .plugin-metadata__section h2,
 .plugin-catalog-detail__security h2 {
-  margin: 0 0 8px;
+  margin: 0;
+}
+.plugin-metadata__facts dt {
+  flex: none;
+  margin: 0;
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
-  font-weight: 600;
 }
 .plugin-metadata__facts dd {
-  margin: 0;
-  font-weight: 600;
+  min-width: 0;
+  margin: 0 0 0 auto;
+  color: var(--text-strong);
+  font-weight: 500;
+  text-align: end;
   overflow-wrap: anywhere;
+}
+.plugin-metadata__section h2 {
+  margin-bottom: var(--space-2);
 }
 .plugin-metadata__categories {
   display: flex;
@@ -1144,29 +1170,32 @@ openclaw-plugins-page
   gap: 6px;
   text-transform: capitalize;
 }
-.plugin-metadata__section a {
-  color: var(--text-strong);
-  text-decoration: none;
+.plugin-metadata__links {
+  display: grid;
+  gap: var(--space-2);
+  list-style: none;
 }
-.plugin-metadata__section a:hover {
+.plugin-metadata__links a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  color: var(--text-strong);
+  font-weight: 500;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+.plugin-metadata__links a:hover {
   text-decoration: underline;
 }
-.plugin-metadata__section a:focus-visible {
+.plugin-metadata__links a:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 3px;
 }
-.plugin-metadata__section svg {
-  width: 16px;
-  height: 16px;
-  flex: 0 0 16px;
-  vertical-align: middle;
-}
-.plugin-metadata__repository {
-  display: flex;
-  align-items: start;
-  gap: 7px;
-  font-weight: 600;
-  overflow-wrap: anywhere;
+.plugin-metadata__links svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
 }
 .plugin-catalog-detail__security {
   display: block;
@@ -1177,6 +1206,7 @@ openclaw-plugins-page
   display: flex;
   align-items: center;
   gap: 6px;
+  margin-bottom: var(--space-1);
 }
 .plugin-catalog-detail__security h2 > span {
   display: inline-flex;
@@ -1194,7 +1224,7 @@ openclaw-plugins-page
   align-items: center;
   gap: 6px;
   margin-inline: calc(-1 * var(--plugin-security-score-bleed));
-  padding: 8px var(--plugin-security-score-bleed);
+  padding: 6px var(--plugin-security-score-bleed);
   border-radius: var(--radius-md);
 }
 .plugin-catalog-detail__security-score strong {
@@ -1334,14 +1364,26 @@ openclaw-plugins-page
   line-height: 1.5;
 }
 @container (max-width: 768px) {
+  /* One column: facts come after what the plugin adds and before its README. */
   .plugin-catalog-detail__content {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-areas: "main" "sidebar";
-    gap: 24px;
+    grid-template-areas: none;
+    gap: var(--space-7);
+  }
+  .plugin-catalog-detail__content > .plugin-catalog-detail__main {
+    display: contents;
+  }
+  .plugin-catalog-detail__content > .plugin-catalog-detail__sidebar {
+    grid-area: auto;
+    position: static;
+    order: 1;
+  }
+  .plugin-catalog-detail__main > .plugin-catalog-detail__readme-section {
+    order: 2;
   }
   .plugin-catalog-detail__hero {
     grid-template-columns: 80px minmax(0, 1fr);
-    gap: 16px;
+    gap: var(--space-4);
   }
   .plugin-catalog-detail__icon,
   .plugin-catalog-detail__icon > span {
@@ -1349,9 +1391,39 @@ openclaw-plugins-page
     height: 80px;
   }
 }
-@container (max-width: 400px) {
+/* A phone keeps the art beside the name, and gives the summary and actions the full width. */
+@container (max-width: 480px) {
   .plugin-catalog-detail__hero {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: 64px minmax(0, 1fr);
+    align-items: center;
+    gap: 0 var(--space-3);
+  }
+  .plugin-catalog-detail__icon,
+  .plugin-catalog-detail__icon > span {
+    grid-row: 1;
+    width: 64px;
+    height: 64px;
+    border-radius: var(--radius-lg);
+  }
+  .plugin-catalog-detail__heading {
+    display: contents;
+  }
+  .plugin-catalog-detail__name {
+    grid-column: 2;
+    grid-row: 1;
+    min-width: 0;
+  }
+  .plugin-catalog-detail__publisher {
+    margin-top: var(--space-1);
+    font-size: var(--control-ui-text-md);
+  }
+  .plugin-catalog-detail__summary,
+  .plugin-catalog-detail__actions {
+    grid-column: 1 / -1;
+  }
+  .plugin-catalog-detail__summary {
+    margin-top: var(--space-4);
+    font-size: var(--control-ui-text-md);
   }
 }
 
@@ -1563,9 +1635,7 @@ openclaw-plugins-page
 }
 .plugin-metadata__loading {
   display: grid;
-  gap: 20px;
-  padding-bottom: 24px;
-  border-bottom: 1px solid var(--border);
+  gap: var(--space-3);
 }
 .plugin-metadata__loading > :last-child {
   width: 100%;

@@ -178,8 +178,8 @@ it("normalizes shorthand repositories and keeps documentation separate", () => {
   const { container, all, query, attr, text } = render(() => metadata(result));
   expect(attr(".plugin-metadata__repository", "href")).toBe(repository);
   expect(text(".plugin-metadata__repository")).toContain("Acme/plugin");
-  expect([...all("section")].map((section) => section.querySelector("h2")?.textContent)).toEqual([
-    "Repository",
+  expect([...all(".plugin-metadata__links a")].map((link) => link.textContent)).toEqual([
+    "Acme/plugin",
     "Documentation",
   ]);
   expect(container.textContent).not.toContain("View on ClawHub");

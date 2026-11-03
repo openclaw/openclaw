@@ -44,7 +44,7 @@ function renderPluginSecurityAudit(status: string, auditUrl: string | null | und
       target="_blank"
       rel="noopener noreferrer"
     >
-      <h2>
+      <h2 class="settings-section__heading oc-settings-section-title">
         {t("pluginsPage.detailSecurity")}
         <span title={t("pluginsPage.detailSecurityAudit")}>{<Icon name="info" />}</span>
       </h2>
@@ -181,16 +181,6 @@ export function renderPluginMetadata(
   const documentation = pluginWebUrl(local?.documentationUrl ?? detail?.documentationUrl);
   const values: Array<[string, string | undefined]> = [
     [
-      t("pluginsPage.catalogDownloadsColumn"),
-      catalog?.downloads === undefined ? undefined : formatCompactCount(catalog.downloads),
-    ],
-    [
-      t("pluginsPage.detailPublished"),
-      detail?.createdAt === undefined
-        ? undefined
-        : formatDateMs(detail.createdAt, { dateStyle: "medium" }),
-    ],
-    [
       t(installedVersion ? "pluginsPage.detailInstalledVersion" : "pluginsPage.version"),
       installedVersion ?? catalog?.latestVersion,
     ],
@@ -199,6 +189,16 @@ export function renderPluginMetadata(
       detail?.updatedAt === undefined
         ? undefined
         : formatDateMs(detail.updatedAt, { dateStyle: "medium" }),
+    ],
+    [
+      t("pluginsPage.detailPublished"),
+      detail?.createdAt === undefined
+        ? undefined
+        : formatDateMs(detail.createdAt, { dateStyle: "medium" }),
+    ],
+    [
+      t("pluginsPage.catalogDownloadsColumn"),
+      catalog?.downloads === undefined ? undefined : formatCompactCount(catalog.downloads),
     ],
   ];
   const categories = catalog?.categories ?? [];
@@ -234,33 +234,39 @@ export function renderPluginMetadata(
       ) : undefined}
       {categories.length ? (
         <section class="plugin-metadata__section">
-          <h2>{t("pluginsPage.detailCategories")}</h2>
+          <h2 class="settings-section__heading oc-settings-section-title">
+            {t("pluginsPage.detailCategories")}
+          </h2>
           <div class="plugin-metadata__categories">
             <For each={categories}>{(category) => <span class="chip">{category}</span>}</For>
           </div>
         </section>
       ) : undefined}
-      {repository ? (
-        <section class="plugin-metadata__section">
-          <h2>{t("pluginsPage.detailRepository")}</h2>
-          <a
-            class="plugin-metadata__repository"
-            href={repository.href}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            {repository.github ? <Icon name="github" /> : <Icon name="externalLink" />}
-            <span>{repository.name}</span>
-          </a>
-        </section>
-      ) : undefined}
-      {documentation ? (
-        <section class="plugin-metadata__section">
-          <h2>{t("pluginsPage.detailDocumentation")}</h2>
-          <a href={documentation.href} target="_blank" rel="noopener noreferrer">
-            {t("pluginsPage.detailDocumentation")} {<Icon name="arrowUpRight" />}
-          </a>
-        </section>
+      {repository || documentation ? (
+        <ul class="plugin-metadata__links">
+          {repository ? (
+            <li>
+              <a
+                class="plugin-metadata__repository"
+                href={repository.href}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={t("pluginsPage.detailRepository")}
+              >
+                {repository.github ? <Icon name="github" /> : <Icon name="externalLink" />}
+                <span>{repository.name}</span>
+              </a>
+            </li>
+          ) : undefined}
+          {documentation ? (
+            <li>
+              <a href={documentation.href} target="_blank" rel="noopener noreferrer">
+                <span>{t("pluginsPage.detailDocumentation")}</span>
+                <Icon name="arrowUpRight" />
+              </a>
+            </li>
+          ) : undefined}
+        </ul>
       ) : undefined}
     </>
   );

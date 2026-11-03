@@ -64,12 +64,14 @@ export function renderPluginDetailShell(props: {
           </div>
         ) : undefined}
         <div class="plugin-catalog-detail__heading">
-          <div class="plugin-catalog-detail__title-row">
-            <h1 id={titleId()} ref={(element) => (heading = element)}>
-              {props.name}
-            </h1>
+          <div class="plugin-catalog-detail__name">
+            <div class="plugin-catalog-detail__title-row">
+              <h1 id={titleId()} ref={(element) => (heading = element)}>
+                {props.name}
+              </h1>
+            </div>
+            {props.identity}
           </div>
-          {props.identity}
           {props.summary ? (
             <p class="plugin-catalog-detail__summary">{props.summary}</p>
           ) : undefined}
