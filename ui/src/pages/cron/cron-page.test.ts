@@ -263,7 +263,7 @@ it.each(["visible", "later page"])("opens linked history for a job on %s", async
       deliveryStatuses: undefined,
     }),
   );
-  getButtonByText(page, "Show all runs").click();
+  getButtonByText(page, "Show all activity").click();
   await waitFor(() => expect(page.querySelectorAll(".cron-run-entry")).toHaveLength(50));
   expect(page.querySelector(".cron-run-entry--highlighted")).toBeNull();
   updateCronRunsFilter(page.cron, previousFilters);

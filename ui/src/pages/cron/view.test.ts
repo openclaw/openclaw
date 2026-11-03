@@ -122,7 +122,7 @@ describe("cron view list pane", () => {
     const pendingStatus = getElement(pending, testId("cron-jobs-loading"), HTMLDivElement);
     expect(pendingStatus.getAttribute("role")).toBe("status");
     expect(pendingStatus.getAttribute("aria-live")).toBe("polite");
-    expect(pendingStatus.textContent).toContain("Loading...");
+    expect(pendingStatus.textContent).toContain("Loading automations…");
     expect(pending.textContent).not.toContain("No automations yet");
     expect(attribute(pending, ".cron-table", "aria-busy")).toBe("true");
     const states: Array<[Partial<CronProps>, string]> = [
@@ -130,7 +130,7 @@ describe("cron view list pane", () => {
       [{ loading: true }, "No automations yet"],
       [{ jobsQuery: "zzz" }, "No automations match the current filters."],
       [{ loading: true, jobs: [createJob("refresh-me")], jobsTotal: 1 }, "Daily ping"],
-      [{ error: "Run history unavailable." }, "No automations yet"],
+      [{ error: "Activity history unavailable." }, "No automations yet"],
     ];
     for (const [props, message] of states) {
       const container = await renderView(props);

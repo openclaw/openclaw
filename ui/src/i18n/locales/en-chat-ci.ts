@@ -29,7 +29,7 @@ const enChatCi = {
       automationSessionRequired:
         "Automations need a verified session identity. Reopen this session and try again.",
       automationReadRequired: "Connect with read access to view automations.",
-      automationAdminRequired: "Administrator access is required to change automations.",
+      automationAdminRequired: "You need admin access to change automations.",
       automationLoadFailed: "Couldn’t load automations. Try again.",
       automationSaveFailed:
         "Couldn’t confirm the change. Refresh to check the current state before trying again.",

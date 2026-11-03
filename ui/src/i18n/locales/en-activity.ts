@@ -58,7 +58,7 @@ const enActivity = {
       loading: "Loading active sessions…",
       empty: "No active sessions.",
       disconnected: "Connect to the Gateway to load active sessions.",
-      loadFailed: "Could not load active sessions.",
+      loadFailed: "Couldn’t load active sessions. Try again.",
       queued: "Queued",
       limit: "Showing {count} of {total} active sessions.",
     },
