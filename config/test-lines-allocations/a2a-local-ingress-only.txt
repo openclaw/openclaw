@@ -1,0 +1,2 @@
+# Cover direct loopback admission and forwarded-header rejection across discovery and task routes.
+137

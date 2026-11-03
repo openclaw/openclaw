@@ -1,5 +1,6 @@
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { isIP } from "node:net";
 import { listAgentIds, resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { ChannelStatusIssue } from "openclaw/plugin-sdk/channel-contract";
 import {
@@ -12,7 +13,11 @@ import {
   defineChannelMessageAdapter,
   waitUntilAbort,
 } from "openclaw/plugin-sdk/channel-outbound";
-import { channelReadyPatch, channelStoppedPatch } from "openclaw/plugin-sdk/gateway-runtime";
+import {
+  channelReadyPatch,
+  channelStoppedPatch,
+  isLoopbackHost,
+} from "openclaw/plugin-sdk/gateway-runtime";
 import { sendJsonNoStore as writeJsonResponse } from "openclaw/plugin-sdk/http-response-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import {
@@ -56,6 +61,13 @@ const MAX_BATCH_REQUESTS = 30;
 const DEFAULT_REPLY_TIMEOUT_MS = 120_000;
 const DEFAULT_RATE_LIMIT_PER_MINUTE = 30;
 const RATE_LIMIT_WINDOW_MS = 60_000;
+const A2A_FORWARDING_HEADERS = [
+  "forwarded",
+  "x-forwarded-for",
+  "x-forwarded-host",
+  "x-forwarded-proto",
+  "x-real-ip",
+];
 
 type A2aRpcIdentifier = string | number | null;
 
@@ -458,6 +470,21 @@ export const a2aChannelPlugin: ChannelPlugin<ResolvedA2aChannelAccount> = create
             request: IncomingMessage,
             response: ServerResponse,
           ): Promise<boolean> => {
+            if (a2aConfig.localIngressOnly === true) {
+              const remoteAddress = request.socket.remoteAddress;
+              if (!remoteAddress || isIP(remoteAddress) === 0 || !isLoopbackHost(remoteAddress)) {
+                writeJsonResponse(response, 403, {
+                  error: "A2A ingress is restricted to loopback",
+                });
+                return true;
+              }
+              if (A2A_FORWARDING_HEADERS.some((header) => request.headers[header] !== undefined)) {
+                writeJsonResponse(response, 403, {
+                  error: "A2A ingress is restricted to direct local traffic",
+                });
+                return true;
+              }
+            }
             const pathname = new URL(request.url ?? "/", "http://localhost").pathname;
             if (
               request.method === "GET" &&

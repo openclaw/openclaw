@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
-import type { ServerResponse } from "node:http";
+import type { IncomingHttpHeaders, ServerResponse } from "node:http";
 import path from "node:path";
 import { VERSION } from "openclaw/plugin-sdk/cli-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -138,6 +138,8 @@ async function startHttpHarness(options?: {
     endpoint: string;
     body?: string;
     token?: string | null;
+    remoteAddress?: string | null;
+    headers?: IncomingHttpHeaders;
   }) => {
     const request = createMockIncomingRequest(dispatch.body === undefined ? [] : [dispatch.body]);
     request.method = dispatch.method;
@@ -151,8 +153,11 @@ async function startHttpHarness(options?: {
             "content-length": String(Buffer.byteLength(dispatch.body)),
           }),
       ...(dispatch.token ? { authorization: `Bearer ${dispatch.token}` } : {}),
+      ...dispatch.headers,
     };
-    Object.defineProperty(request.socket, "remoteAddress", { value: "127.0.0.1" });
+    Object.defineProperty(request.socket, "remoteAddress", {
+      value: dispatch.remoteAddress === null ? undefined : (dispatch.remoteAddress ?? "127.0.0.1"),
+    });
 
     const response = createMockServerResponse();
     const events = new EventEmitter();
@@ -181,6 +186,7 @@ async function startHttpHarness(options?: {
     taskStore,
     handler,
     onDispatch,
+    request: dispatchRequest,
     get: (endpoint: string) => dispatchRequest({ method: "GET", endpoint }),
     post: (body: unknown, token: string | null = "alpha-secret") =>
       dispatchRequest({
@@ -259,6 +265,135 @@ describe("A2A message replay", () => {
     expect(otherPeer.result.task.id).not.toBe(first.result.task.id);
     expect(dispatch).toHaveBeenCalledTimes(2);
   });
+});
+
+describe("A2A local-only HTTP ingress", () => {
+  it("admits only literal loopback socket addresses before discovery or RPC", async () => {
+    const harness = await startHttpHarness({ a2aConfig: { localIngressOnly: true } });
+    for (const [remoteAddress, allowed] of [
+      ["127.0.0.1", true],
+      ["127.255.255.254", true],
+      ["::1", true],
+      ["0:0:0:0:0:0:0:1", true],
+      ["::ffff:127.0.0.1", true],
+      ["::ffff:7f00:1", true],
+      ["0:0:0:0:0:ffff:7fff:fffe", true],
+      ["198.51.100.7", false],
+      ["10.0.0.1", false],
+      ["::ffff:198.51.100.7", false],
+      ["2001:db8::1", false],
+      ["0.0.0.0", false],
+      ["::", false],
+      ["localhost", false],
+      ["127.999.0.1", false],
+      [null, false],
+    ] as const) {
+      for (const endpoint of [
+        "/.well-known/agent-card.json",
+        "/.well-known/agent.json",
+        "/a2a/v1",
+      ]) {
+        const response = await harness.request({
+          method: endpoint === "/a2a/v1" ? "POST" : "GET",
+          endpoint,
+          remoteAddress,
+          token: "alpha-secret",
+          body: JSON.stringify(taskRequest("missing")),
+        });
+        expect(response.status, `${remoteAddress} ${endpoint}`).toBe(allowed ? 200 : 403);
+        if (allowed && endpoint === "/a2a/v1") {
+          await expect(response.json()).resolves.toMatchObject(rpcError(-32001));
+        }
+      }
+    }
+  });
+
+  it("rejects forwarding headers on real HTTP requests before discovery or task creation", async () => {
+    const harness = await startHttpHarness({ a2aConfig: { localIngressOnly: true } });
+    const createTask = vi.spyOn(harness.taskStore, "create");
+    await withServer(
+      (req, res) => {
+        void harness.handler(req, res);
+      },
+      async (baseUrl) => {
+        for (const header of [
+          "Forwarded",
+          "X-Forwarded-For",
+          "X-Forwarded-Host",
+          "X-Forwarded-Proto",
+          "X-Real-IP",
+        ]) {
+          for (const value of ["127.0.0.1", ""]) {
+            for (const endpoint of [
+              "/.well-known/agent-card.json",
+              "/.well-known/agent.json",
+              "/a2a/v1",
+            ]) {
+              const response = await fetch(`${baseUrl}${endpoint}`, {
+                ...(endpoint === "/a2a/v1"
+                  ? { method: "POST", body: JSON.stringify(sendRequest()) }
+                  : {}),
+                headers: { ...wireHeaders, [header]: value },
+              });
+              await expectReply(
+                response,
+                { error: "A2A ingress is restricted to direct local traffic" },
+                403,
+              );
+            }
+          }
+        }
+        expect(createTask).not.toHaveBeenCalled();
+        expect(harness.onDispatch).not.toHaveBeenCalled();
+        await expectReply(fetch(`${baseUrl}/.well-known/agent-card.json`), {
+          supportedInterfaces: [{ protocolVersion: "1.0" }],
+        });
+        await expectReply(
+          fetch(`${baseUrl}/a2a/v1`, {
+            method: "POST",
+            headers: wireHeaders,
+            body: JSON.stringify(sendRequest()),
+          }),
+          taskResult({ status: { state: "TASK_STATE_COMPLETED" } }),
+        );
+        await expectReply(
+          fetch(`${baseUrl}/a2a/v1`, { method: "POST", body: JSON.stringify(sendRequest()) }),
+          { error: expect.stringContaining("Unauthorized") },
+          401,
+        );
+      },
+    );
+  });
+
+  it.each([undefined, false])(
+    "preserves remote ingress when localIngressOnly is %s",
+    async (localIngressOnly) => {
+      const harness = await startHttpHarness({ a2aConfig: { localIngressOnly } });
+      for (const endpoint of [
+        "/.well-known/agent-card.json",
+        "/.well-known/agent.json",
+        "/a2a/v1",
+      ]) {
+        const request = {
+          method: endpoint === "/a2a/v1" ? ("POST" as const) : ("GET" as const),
+          endpoint,
+          remoteAddress: "198.51.100.7",
+          headers: { "x-forwarded-for": "198.51.100.7" },
+          body: JSON.stringify(taskRequest("missing")),
+        };
+        const response = await harness.request({ ...request, token: "alpha-secret" });
+        expect(response.status).toBe(200);
+        if (endpoint === "/a2a/v1") {
+          await expect(response.json()).resolves.toMatchObject(rpcError(-32001));
+          await expectReply(
+            harness.request(request),
+            { error: expect.stringContaining("Unauthorized") },
+            401,
+          );
+        }
+      }
+    },
+  );
 });
 
 describe("A2A HTTP agent discovery", () => {

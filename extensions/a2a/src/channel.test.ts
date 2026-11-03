@@ -56,6 +56,7 @@ describe("A2A channel configuration", () => {
         replyTimeoutMs: 120_000,
         rateLimitPerMinute: 30,
         exposeAgents: ["assistant"],
+        localIngressOnly: true,
         peers: { "hermes.bot-1": peer },
       },
       true,
@@ -76,6 +77,7 @@ describe("A2A channel configuration", () => {
     ["reply timeout below minimum", { replyTimeoutMs: 4_999 }],
     ["reply timeout above maximum", { replyTimeoutMs: 600_001 }],
     ["negative rate limit", { rateLimitPerMinute: -1 }],
+    ["non-boolean local ingress", { localIngressOnly: "true" }],
     ["unsupported multiple accounts", { accounts: { work: {} } }],
   ])("rejects %s in every validation surface", (label, value) => {
     assertConfigAcceptance(value, false, label);
