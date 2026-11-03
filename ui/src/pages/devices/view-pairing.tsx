@@ -157,41 +157,34 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
         <section class="oc-dialog device-pair-setup">
           <header class="oc-dialog__header">
             <h2 class="oc-dialog__title">{t("devices.pairing.title")}</h2>
-            <button
-              class="oc-dialog__close device-pair-setup__close"
-              type="button"
-              aria-label={t("common.dismiss")}
-              onClick={() => props.onClose()}
-            >
-              <Icon name="x" />
-            </button>
-            <div class="oc-dialog__description">
-              {/* A finished state says its result once, in the body. */}
-              <Show when={!outcome()}>
-                <p>{description()}</p>
-              </Show>
-              <p class="device-pair-setup__links">
-                <Show when={props.lifecycle.phase !== "success" && !isNodeSetup()}>
-                  <span>
-                    {t("devices.pairing.noApp")}{" "}
-                    <button type="button" onClick={() => props.onGetApps()}>
-                      {t("devices.pairing.getApps")}
-                    </button>
-                  </span>
-                </Show>
+            <div class="oc-dialog__header-actions">
+              {/* Help is wanted at any step, so it sits beside close instead of under the title. */}
+              <openclaw-tooltip prop:content={t("devices.pairing.help")}>
                 <a
+                  class="oc-dialog__icon-button device-pair-setup__help"
                   href={isNodeSetup() ? NODE_PAIRING_DOCS_URL : MOBILE_PAIRING_DOCS_URL}
                   target={EXTERNAL_LINK_TARGET}
                   rel={buildExternalLinkRel()}
                   aria-label={t("devices.pairing.helpNewTab")}
                 >
-                  <span>{t("devices.pairing.help")}</span>
-                  <span class="device-pair-setup__external-icon" aria-hidden="true">
-                    <Icon name="externalLink" />
-                  </span>
+                  <Icon name="circleQuestionMark" />
                 </a>
-              </p>
+              </openclaw-tooltip>
+              <button
+                class="oc-dialog__close device-pair-setup__close"
+                type="button"
+                aria-label={t("common.dismiss")}
+                onClick={() => props.onClose()}
+              >
+                <Icon name="x" />
+              </button>
             </div>
+            {/* A finished state says its result once, in the body. */}
+            <Show when={!outcome()}>
+              <div class="oc-dialog__description">
+                <p>{description()}</p>
+              </div>
+            </Show>
           </header>
           <div class="oc-dialog__body device-pair-setup__body">
             <Show when={showAccessChoices()}>
@@ -300,9 +293,17 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
                     </Show>
                     <Show when={props.pendingCount === 0}>
                       <p class="device-pair-setup__waiting">
-                        {t(
-                          isNodeSetup() ? "devices.pairing.nodeWaiting" : "devices.pairing.waiting",
-                        )}
+                        <Show when={!isNodeSetup()} fallback={t("devices.pairing.nodeWaiting")}>
+                          {/* The app is needed to scan, so getting it sits with the scan step. */}
+                          {t("devices.pairing.waiting")}{" "}
+                          <button
+                            class="device-pair-setup__link"
+                            type="button"
+                            onClick={() => props.onGetApps()}
+                          >
+                            {t("devices.pairing.getApps")}
+                          </button>
+                        </Show>
                       </p>
                     </Show>
                     <div class="device-pair-setup__meta">

@@ -153,9 +153,29 @@ describe("device pairing dialog", () => {
       "Device capabilities plus complete Gateway controls, including settings and upgrades.",
     );
     expect(container.textContent).toContain("Connect a computer as a command and capability host.");
-    expect(container.querySelector<HTMLAnchorElement>(".device-pair-setup__links a")?.href).toBe(
-      href,
+    expect(container.querySelector<HTMLAnchorElement>(".device-pair-setup__help")?.href).toBe(href);
+  });
+
+  it("offers the apps beside the scan step", () => {
+    const selection = mountSolid(() => (
+      <Pairing lifecycle={{ phase: "selection", access: "full" }} />
+    ));
+    expect(selection.queryByRole("button", { name: "Get the apps" })).toBeNull();
+
+    const onGetApps = vi.fn();
+    const lifecycle = {
+      ...createWaitingNodePairSetup(),
+      access: "full",
+    } as unknown as DevicePairSetupLifecycle;
+    const waiting = mountSolid(() => (
+      <Pairing lifecycle={lifecycle} nowMs={10_000} onGetApps={onGetApps} />
+    ));
+    const getApps = waiting.getByRole("button", { name: "Get the apps" });
+    expect(getApps.closest(".device-pair-setup__waiting")?.textContent).toBe(
+      "Official OpenClaw mobile apps connect automatically after scanning. Get the apps",
     );
+    getApps.click();
+    expect(onGetApps).toHaveBeenCalledTimes(1);
   });
 
   it("renders node setup instructions and announces arriving device requests", () => {
@@ -180,7 +200,7 @@ describe("device pairing dialog", () => {
     expect(container.querySelector('[role="timer"]')?.textContent?.trim()).toBe(
       "This setup link expires in 1:00.",
     );
-    expect(container.querySelector<HTMLAnchorElement>(".device-pair-setup__links a")?.href).toBe(
+    expect(container.querySelector<HTMLAnchorElement>(".device-pair-setup__help")?.href).toBe(
       "https://docs.openclaw.ai/gateway/pairing#one-paste-node-pairing",
     );
     const waiting = "Run the command on the device, then review its pairing request here.";

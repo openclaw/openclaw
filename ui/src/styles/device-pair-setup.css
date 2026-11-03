@@ -1,32 +1,3 @@
-.device-pair-setup__links {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-1) var(--space-3);
-}
-
-.device-pair-setup__links a {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  border-radius: var(--radius-sm);
-  color: inherit;
-  text-underline-offset: 2px;
-}
-
-.device-pair-setup__links a:hover {
-  color: var(--text);
-}
-
-.device-pair-setup__links a:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-  color: var(--text);
-}
-
-.device-pair-setup__external-icon {
-  display: inline-flex;
-}
-
 .device-pair-setup__access {
   display: grid;
   width: 100%;

@@ -2822,7 +2822,7 @@ select.data-table-pagination__size {
   }
 }
 
-.device-pair-setup__links button,
+.device-pair-setup__link,
 .apps-pair-hint button {
   padding: 0;
   border: 0;
@@ -2834,12 +2834,12 @@ select.data-table-pagination__size {
   text-underline-offset: 2px;
 }
 
-.device-pair-setup__links button:hover,
+.device-pair-setup__link:hover,
 .apps-pair-hint button:hover {
   color: var(--text-strong);
 }
 
-.device-pair-setup__links button:focus-visible,
+.device-pair-setup__link:focus-visible,
 .apps-pair-hint button:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
@@ -2848,8 +2848,7 @@ select.data-table-pagination__size {
 
 .app-toast__dismiss svg,
 .data-table-bulk-bar .btn svg,
-.agent-select__option-check svg,
-.device-pair-setup__external-icon svg {
+.agent-select__option-check svg {
   width: 14px;
   height: 14px;
 }
