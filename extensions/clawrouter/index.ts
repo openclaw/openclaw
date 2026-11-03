@@ -609,12 +609,25 @@ export default defineSingleProviderPluginEntry({
           if (!apiKey || !discoveryApiKey) {
             return null;
           }
+          const decisionModels = await listClawRouterDecisionModels({
+            ...ctx,
+            entries: [],
+            resolveProviderApiKey: () => ({ apiKey, discoveryApiKey }),
+          });
           return {
             provider: await buildClawRouterProviderConfig({
               apiKey,
               discoveryApiKey,
               baseUrl: configuredBaseUrl(ctx.config),
             }),
+            outcomes: [
+              {
+                provider: PROVIDER_ID,
+                status: "ready",
+                ...(auth.profileId ? { profileId: auth.profileId } : {}),
+                listedModelIds: decisionModels.map((model) => model.id),
+              },
+            ],
           };
         },
       },

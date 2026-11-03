@@ -339,6 +339,34 @@ it("uses an explicitly ready live catalog order across entries and route variant
   expect(withoutOptIn.entries.map(({ id }) => id)).toEqual(["first", "second", "new"]);
 });
 
+it.each([
+  { status: "ready", provider: "demo", allowed: true },
+  { status: "auth-rejected", provider: "demo", allowed: false },
+  { status: "unavailable", provider: "demo", allowed: false },
+  { status: "ready", provider: "other", allowed: false },
+] as const)(
+  "admits decision-only augmentation only from the ready provider listing (%j)",
+  async ({ status, provider, allowed }) => {
+    const inference = {
+      chat: false,
+      decision: { protocol: "fixture", input: ["text" as const] },
+    };
+    mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValueOnce([
+      row("demo", "listed", { inference }),
+      row("demo", "unlisted", { inference }),
+      row("demo", "chat", { api: "openai-responses" }),
+    ]);
+    const snapshot = await build({
+      metadataSnapshot: providerManifestSnapshot("demo", "runtime", []),
+      providerOutcomes: [{ provider, status, listedModelIds: ["listed", "chat"] }],
+      readOnly: false,
+    });
+    expect(snapshot.entries.filter((entry) => entry.provider === "demo")).toEqual(
+      allowed ? [expect.objectContaining({ id: "listed", inference })] : [],
+    );
+  },
+);
+
 it("keeps manifest rank for configured runtime models absent from the registry", async () => {
   mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValueOnce([
     row("openai", "gpt-5.4", { name: "GPT-5.4" }),
