@@ -19,7 +19,7 @@ import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { PluginCredentialEditor } from "../plugins/credential-editor.tsx";
 import { pluginConfigSchema } from "../plugins/settings-model.ts";
-import { readConfigValue } from "./search-config.ts";
+import { isProviderReady, readConfigValue } from "./search-config.ts";
 
 type SearchProvider = WebSearchStatusResult["providers"][number];
 type SearchSettingsProps = {
@@ -33,27 +33,13 @@ type SearchConfigFieldProps = Pick<
   SearchSettingsProps,
   "state" | "canEdit" | "busy" | "secretFields"
 >;
-function providerStatus(provider: SearchProvider) {
-  return {
-    ready: provider.available && provider.configured,
-    label: t(
-      !provider.installed
-        ? "searchPage.pluginMissing"
-        : !provider.available
-          ? "searchPage.pluginUnavailable"
-          : provider.configured
-            ? "searchPage.configured"
-            : "searchPage.needsSetup",
-    ),
-  };
-}
-
 function SearchConfigField(
   props: SearchConfigFieldProps & {
     schema: JsonSchema;
     path: Array<string | number>;
     value: unknown;
     unsupported: Set<string>;
+    nested?: boolean;
     patch: (path: Array<string | number>, value: unknown) => Promise<boolean>;
   },
 ) {
@@ -64,6 +50,7 @@ function SearchConfigField(
       title={meta().label}
       description={meta().help}
       stackedOnNarrow
+      nested={props.nested}
       control={
         <ConfigNode
           params={{
@@ -123,10 +110,12 @@ export function SearchSetup(
   );
   return (
     <>
+      {/* The list row carries the status; a missing key shows as its empty field. */}
       <Show when={props.provider.credentialSource !== "missing" || !credential()}>
         <SettingsRow
           title={t("searchPage.configuration")}
           description={t(`searchPage.credentialSources.${props.provider.credentialSource}`)}
+          nested
         />
       </Show>
       <Show when={credential()}>
@@ -134,6 +123,7 @@ export function SearchSetup(
           <SettingsRow
             title={descriptor().label}
             stackedOnNarrow
+            nested
             control={
               <PluginCredentialEditor
                 field={{
@@ -166,6 +156,7 @@ export function SearchSetup(
             path={[...props.provider.configPath, field()[0]]}
             value={values()?.[field()[0]]}
             unsupported={unsupported()}
+            nested
             patch={props.commit}
             secretFields={props.secretFields}
             state={props.state}
@@ -175,6 +166,7 @@ export function SearchSetup(
         )}
       </For>
       <SettingsRow
+        nested
         title={t("searchPage.pluginSettings")}
         description={t("searchPage.pluginSettingsHint")}
         control={
@@ -188,29 +180,34 @@ export function SearchSetup(
       />
       <Show when={props.provider.docsUrl}>
         {(url) => (
-          <SettingsRow title={t("searchPage.docs")} control={<LearnMoreLink url={url()} />} />
+          <SettingsRow
+            nested
+            title={t("searchPage.docs")}
+            control={<LearnMoreLink url={url()} />}
+          />
         )}
       </Show>
     </>
   );
 }
 
-/** One provider in the setup list; its setup opens in place, one provider at a time. */
+/** One provider in the setup list: its status at a glance, its setup in place when opened. */
 export function SearchProviderRow(
   props: Parameters<typeof SearchSetup>[0] & {
     open: boolean;
+    /** Only a provider in use warns, so unused providers don't read as a wall of problems. */
     inUse: boolean;
-    onToggle: (open: boolean) => void;
+    onToggle: () => void;
   },
 ) {
-  const status = () => providerStatus(props.provider);
+  const ready = () => isProviderReady(props.provider);
   return (
     <>
       <button
         type="button"
         class="settings-row settings-row--nav search-provider"
         aria-expanded={props.open ? "true" : "false"}
-        onClick={() => props.onToggle(props.open)}
+        onClick={() => props.onToggle()}
       >
         <span class="settings-row__text">
           <span class="settings-row__title">{props.provider.label}</span>
@@ -220,8 +217,16 @@ export function SearchProviderRow(
         </span>
         <span class="settings-row__control">
           <SettingsStatus
-            kind={status().ready ? "ok" : props.inUse ? "warn" : "muted"}
-            label={status().label}
+            kind={ready() ? "ok" : props.inUse ? "warn" : "muted"}
+            label={t(
+              !props.provider.installed
+                ? "searchPage.pluginMissing"
+                : !props.provider.available
+                  ? "searchPage.pluginUnavailable"
+                  : props.provider.configured
+                    ? "searchPage.configured"
+                    : "searchPage.needsSetup",
+            )}
           />
           <span class="settings-row__chevron">
             <Icon name="chevronRight" />
@@ -229,20 +234,18 @@ export function SearchProviderRow(
         </span>
       </button>
       <Show when={props.open}>
-        <div class="search-provider__panel">
-          <SearchSetup
-            provider={props.provider}
-            state={props.state}
-            context={props.context}
-            gateway={props.gateway}
-            getPresentationLifetime={props.getPresentationLifetime}
-            canEdit={props.canEdit}
-            busy={props.busy}
-            commit={(path, value) =>
-              props.open ? props.commit(path, value) : Promise.resolve(false)
-            }
-          />
-        </div>
+        <SearchSetup
+          provider={props.provider}
+          state={props.state}
+          context={props.context}
+          gateway={props.gateway}
+          getPresentationLifetime={props.getPresentationLifetime}
+          canEdit={props.canEdit}
+          busy={props.busy}
+          commit={(path, value) =>
+            props.open ? props.commit(path, value) : Promise.resolve(false)
+          }
+        />
       </Show>
     </>
   );

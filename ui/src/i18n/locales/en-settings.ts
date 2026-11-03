@@ -737,8 +737,6 @@ const enSettings = {
     failure: "Search failed",
     duration: "{ms} ms",
     cached: "Cached result",
-    result: "Answer",
-    sources: "Sources",
     noResults: "The provider returned no results for this query.",
     pluginSettings: "All provider settings",
     pluginSettingsHint: "Open the plugin’s complete configuration and access controls.",

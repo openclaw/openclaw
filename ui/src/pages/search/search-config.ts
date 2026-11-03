@@ -36,20 +36,10 @@ export function isSearchConfigSettled(state: Readonly<RuntimeConfigState>): bool
   );
 }
 
-type SearchProviders = WebSearchStatusResult["providers"];
+type SearchProvider = WebSearchStatusResult["providers"][number];
 
-/** Ready providers lead; an unchanged set keeps its order so saving a key can't move the open row. */
-export function keepProviderOrder(order: string[], providers: SearchProviders): string[] {
-  const known = providers.length === order.length && providers.every((p) => order.includes(p.id));
-  return known
-    ? order
-    : providers
-        .toSorted(
-          (a, b) =>
-            Number(b.available && b.configured) - Number(a.available && a.configured) ||
-            a.label.localeCompare(b.label),
-        )
-        .map((provider) => provider.id);
+export function isProviderReady(provider: SearchProvider): boolean {
+  return provider.available && provider.configured;
 }
 
 /** Opens the provider the operator named, or the one in use that still needs setup. */
@@ -57,21 +47,15 @@ export function providerToOpen(status: WebSearchStatusResult): string {
   const preferred = status.providers.find(
     (provider) => provider.id === (status.provider ?? status.route.provider),
   );
-  return preferred && (status.provider || !preferred.available || !preferred.configured)
-    ? preferred.id
-    : "";
+  return preferred && (status.provider || !isProviderReady(preferred)) ? preferred.id : "";
 }
 
-export function routeStatusKind(status: WebSearchStatusResult, providers: SearchProviders) {
+export function routeStatusKind(status: WebSearchStatusResult): "ok" | "warn" | "muted" {
   const { kind, provider: routed } = status.route;
-  const provider = providers.find((entry) => entry.id === routed);
-  // A managed route without working credentials is not a healthy route yet.
-  if (kind === "managed" && provider && !(provider.available && provider.configured)) {
+  const provider = status.providers.find((entry) => entry.id === routed);
+  // A managed route whose provider still needs setup is not a working route yet.
+  if (kind === "unavailable" || (kind === "managed" && provider && !isProviderReady(provider))) {
     return "warn";
   }
-  return kind === "unavailable"
-    ? "warn"
-    : kind === "disabled" || kind === "external"
-      ? "muted"
-      : "ok";
+  return kind === "disabled" || kind === "external" ? "muted" : "ok";
 }
