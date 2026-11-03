@@ -206,9 +206,16 @@ describe("Terminal panel hosted tabs", () => {
       await panel.updateComplete;
       expect(changed.mock.calls.length).toBeGreaterThan(openingCount);
       const readyCount = changed.mock.calls.length;
-      panel.selectHostedTab(firstId);
+      const firstController = await createGhosttyTerminalMock.mock.results[0]!.value;
+      firstController.terminal.focus.mockClear();
+      firstController.terminal.renderer.render.mockClear();
+      panel.selectHostedTab(firstId, new KeyboardEvent("keydown", { key: "ArrowLeft" }));
       expect(panel.activeHostedTabId).toBe(firstId);
       await panel.updateComplete;
+      expect(firstController.terminal.focus).not.toHaveBeenCalled();
+      expect(firstController.terminal.renderer.render).toHaveBeenCalled();
+      panel.hostedTabs.find((tab) => tab.id === firstId)!.onActivate!();
+      await waitForFast(() => expect(firstController.terminal.focus).toHaveBeenCalledOnce());
       expect(changed.mock.calls.length).toBeGreaterThan(readyCount);
       const stableCount = changed.mock.calls.length;
       panel.themeMode = "light";

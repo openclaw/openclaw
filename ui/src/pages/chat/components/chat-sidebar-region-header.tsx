@@ -370,7 +370,14 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
           onActivate:
             canRestore && tab.id === hosted.element.activeHostedTabId
               ? () => props.callbacks?.togglePanelExpanded(panel.id)
-              : undefined,
+              : tab.onActivate
+                ? () => {
+                    if (column?.activePanelId !== panel.id) {
+                      props.callbacks?.activatePanel(panel.id);
+                    }
+                    tab.onActivate?.();
+                  }
+                : undefined,
         }));
       }
       const type = sidebarPanelType(props.panelDefinitions, panel.slot);
@@ -602,13 +609,13 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
           tabs={state().tabs}
           activeId={state().activeId}
           ariaControls={(tab) => tab.contentId}
-          onSelect={(id) => {
+          onSelect={(id, event) => {
             const hosted = state().resolveHostedTab(id);
             if (hosted) {
               if (state().column?.activePanelId !== hosted.panel.id) {
                 props.callbacks?.activatePanel(hosted.panel.id);
               }
-              hosted.element.selectHostedTab(hosted.tabId);
+              hosted.element.selectHostedTab(hosted.tabId, event);
             } else {
               props.callbacks?.activatePanel(id);
             }
