@@ -107,10 +107,15 @@ suite.define(() => {
           expect(await prefix.inputValue()).toBe("later draft");
           expect(await indicator.textContent()).toContain(configPath);
           expect(await indicator.textContent()).toContain(recoveryBackupPath);
-          const recover = indicator.getByRole("button", { name: "Discard draft and reload" });
+          const recover = indicator.getByRole("button", { name: "Discard changes" });
           await recover.waitFor();
+          expect(await indicator.getByRole("button", { name: "Retry" }).count()).toBe(0);
           await gateway.setOnline(false);
           await recover.click();
+          await page
+            .getByRole("dialog")
+            .getByRole("button", { name: "Discard changes", exact: true })
+            .click();
           await expect.poll(() => prefix.inputValue()).toBe("later draft");
           expect(await indicator.textContent()).toContain(recoveryBackupPath);
           expect(await gateway.getRequests("config.set")).toHaveLength(1);
@@ -172,8 +177,6 @@ suite.define(() => {
       expect(await diagnostics.textContent()).toContain("Expected number, received string");
       const indicator = page.locator("openclaw-settings-save-indicator");
       expect(await indicator.textContent()).not.toContain("restoration");
-      expect(
-        await indicator.getByRole("button", { name: "Discard draft and reload" }).count(),
-      ).toBe(0);
+      expect(await indicator.getByRole("button", { name: "Discard changes" }).count()).toBe(0);
     }));
 });
