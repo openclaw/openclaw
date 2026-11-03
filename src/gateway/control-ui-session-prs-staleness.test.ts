@@ -94,15 +94,14 @@ it.each(["list", "warm metadata", "cold metadata"])(
         const load = () =>
           loadControlUiSessionPullRequests(
             { sessionKey },
-            {
-              resolveGitContext: async () => ({ ...testGitContext, branch: "stale-preview" }),
-            },
+            { resolveGitContext: async () => ({ ...testGitContext, branch: "stale-preview" }) },
           );
         const fresh = failure === "cold metadata" ? undefined : await load();
         if (fresh) {
           expect(fresh.pullRequests[0]?.state).toBe(metadata ? "open" : "merged");
         }
         failed = true;
+        vi.setSystemTime(Date.now() - 60_000);
         vi.advanceTimersByTime(91_000);
         if (metadata) {
           // Task-PR reads can cache a failed detail request before the branch list succeeds.
@@ -337,43 +336,5 @@ it("discards pending PR work after same-file reopen even when persisted rows are
       await pending;
       gitRead.mockRestore();
     }
-  });
-});
-
-it("ages branch PR cache entries by elapsed time across a wall-clock correction", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    await captureRuntimeConfigAsyncReader()();
-    const sessionKey = "agent:main:clock-pr-snapshot";
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey },
-      { sessionId: "clock-pr-session", updatedAt: 1, spawnedCwd: state.workspaceDir },
-    );
-    const fetchImpl = routedFetch([
-      {
-        match: "/pulls?head=",
-        response: () => githubJson([pullListItem({ title: "Clocked", state: "open" })]),
-      },
-    ]);
-    vi.stubGlobal("fetch", fetchImpl);
-    const load = () =>
-      loadControlUiSessionPullRequests(
-        { sessionKey },
-        { resolveGitContext: async () => ({ ...testGitContext, branch: "clock-pr-snapshot" }) },
-      );
-    const fresh = await load();
-    expect(fresh.pullRequests[0]?.title).toBe("Clocked");
-    const initialCalls = fetchImpl.mock.calls.length;
-
-    // Correct the wall clock backward while elapsed time advances: the branch PR
-    // cache window is process-local elapsed time, so the step must not extend it.
-    vi.setSystemTime(Date.now() - 60_000);
-    vi.advanceTimersByTime(1_000);
-    expect((await load()).pullRequests[0]?.title).toBe("Clocked");
-    expect(fetchImpl.mock.calls).toHaveLength(initialCalls);
-
-    // Advance past the 90-second success TTL on the shared clock; the entry expires.
-    vi.advanceTimersByTime(91_000);
-    expect((await load()).pullRequests[0]?.title).toBe("Clocked");
-    expect(fetchImpl.mock.calls.length).toBeGreaterThan(initialCalls);
   });
 });

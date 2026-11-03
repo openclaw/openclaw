@@ -216,8 +216,6 @@ describe("watched session PR retention", () => {
     const callsAtBackoff = fetchImpl.mock.calls.length;
     expect(callsAtBackoff).toBeGreaterThan(101);
     expectSnapshots(true);
-    // Advance both the wall clock and the elapsed-time clock by 61s, keeping the
-    // 5-minute rate-limit backoff alive so the cached rate-limited entries persist.
     elapsedMs += 61_000;
     vi.setSystemTime(Date.now() + 61_000);
     await subscriptions.replace("watcher", keys, new Set(keys));
