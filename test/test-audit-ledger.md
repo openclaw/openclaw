@@ -167,15 +167,23 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
-Batch81, pinned main6daa81f3576e:
-qualify the account-usage worker revocation row whose setup assertions sit inside
-the handler catch that returns the expected UNAVAILABLE response. Move the actual
-revocation receipt checks outside that catch while preserving both table rows,
-all original assertions and the zero-host-SQL budget.
+[192039](https://github.com/openclaw/openclaw/pull/192039), pinned main6daa81f3576e:
+keep both account-usage worker rows and all original assertions, but check the
+actual revocation receipt outside the handler catch that maps errors to the
+expected UNAVAILABLE response. The receipt starts null so missing setup also
+fails. Name the same primary quota fixture to keep the test one line smaller;
+production, the shared scalar and allocation records are unchanged.
 
-This source-only checkpoint creates the native proof checkout. Untouched baseline,
-real updater null-receipt controls, candidate, siblings, focused checks, cost,
-fresh review and CI are pending; no runtime result is claimed. The related personal
+Untouched baseline and clean candidate pass both cases. Related usage unit6,
+diagnostics worker2 and personal-account integration2 pass. An actual updater
+null-receipt control passes the old selected row and fails the repaired row at
+its retained non-null assertion; each control skips one unselected row. The
+actual owner restores byte-for-byte after both controls. Final candidate file
+costs1.47s test time/40.81s measured command wall time, including28.24s worker
+compiler preparation. Published proof, fresh review and CI remain pending.
+
+This exercises isolated workers and real persisted auth with synthetic usage;
+no live Gateway or native Codex enforcement is claimed. The related personal
 account reconnect setup assertion remains a separate qualification follow-up.
 
 ## Completed source review
