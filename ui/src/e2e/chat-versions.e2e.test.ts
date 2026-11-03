@@ -29,7 +29,12 @@ suite.define(() => {
                   messageCount: 4,
                   active: true,
                 },
-                { leafEntryId: "earlier", headline: "Earlier", messageCount: 6, active: false },
+                ...Array.from({ length: 15 }, (_, index) => ({
+                  leafEntryId: index === 0 ? "earlier" : `earlier-${index}`,
+                  headline: index === 0 ? "Earlier" : `Earlier draft ${index}`,
+                  messageCount: 6 + index,
+                  active: false,
+                })),
               ],
             },
           },
@@ -85,6 +90,13 @@ suite.define(() => {
         });
         expect(geometry.textGap).toBeGreaterThanOrEqual(0);
         expect(geometry.verticalOffset).toBeLessThanOrEqual(1);
+        // Long histories scroll inside a bounded submenu instead of filling the viewport.
+        const bounds = await menuSurface.evaluate((surface) => ({
+          height: surface.getBoundingClientRect().height,
+          scrolls: surface.scrollHeight > surface.clientHeight,
+        }));
+        expect(bounds.height).toBeLessThanOrEqual(360);
+        expect(bounds.scrolls).toBe(true);
 
         // Browser Back changes presentation without an outside pointer dismissal.
         expect(await gateway.getRequests("sessions.branches.switch")).toHaveLength(0);

@@ -411,6 +411,11 @@
   height: 16px;
 }
 
+/* Long histories scroll inside a short submenu instead of covering the pane. */
+.oc-menu-item--submenu[data-value="submenu:versions"] + .oc-menu {
+  --oc-overlay-max-height: 360px;
+}
+
 .chat-pane__branch-item {
   --versions-icon-column: 28px;
 
