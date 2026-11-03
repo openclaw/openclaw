@@ -11,7 +11,6 @@ import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { pageFixture, runtimeFixture } from "./plugins-page.lifecycle-test-support.ts";
 import {
   clickPluginAction,
-  clickPluginSwitch,
   createDiscoveryDetail,
   createInspectResult,
   createPlugin,
@@ -39,6 +38,7 @@ function snapshot(config: Record<string, unknown>, hash: string) {
   };
 }
 
+const spinner = ".plugin-catalog-detail__actions .btn__spinner";
 const alert = '.plugins-row-message[role="alert"]';
 
 const available = createPlugin({
@@ -156,16 +156,18 @@ it("reconciles enablement with publication during the mutation refresh", async (
   const reconnect = vi.spyOn(harness.gateway, "connect");
   const { page, find } = await harness.mount("/settings/plugins/workboard#lifecycle", catalog);
   await runtimeConfig.ensureLoaded();
-  await clickPluginSwitch(page);
+  await clickPluginAction(page, "Enable Workboard");
   await waitForSolid(() =>
     expect(request).toHaveBeenCalledWith("plugins.setEnabled", {
       pluginId: "workboard",
       enabled: true,
     }),
   );
-  const busySwitch = find<HTMLInputElement>('[role="switch"]');
-  expect(busySwitch?.getAttribute("aria-disabled")).toBe("true");
-  busySwitch!.click();
+  const busyButton = find<HTMLButtonElement>('[aria-label="Enable Workboard"]');
+  expect(busyButton?.getAttribute("aria-busy")).toBe("true");
+  expect(busyButton?.querySelector(".btn__spinner")).not.toBeNull();
+  expect(page.querySelectorAll(spinner)).toHaveLength(1);
+  busyButton!.click();
   catalog = {
     ...catalog,
     generation: 7,
@@ -176,12 +178,12 @@ it("reconciles enablement with publication during the mutation refresh", async (
   await mutationConfigStarted.promise;
   harness.publishGeneration(7, ["plugins.setEnabled"]);
   await waitForSolid(() =>
-    expect(find(".page-subtitle")?.textContent).toBe("Published plugin inventory"),
+    expect(find(".plugin-catalog-detail__summary")?.textContent).toBe("Published plugin inventory"),
   );
   mutationConfig.resolve(enablementSnapshot);
   await waitForSolid(() => {
-    expect(find('[role="switch"]')?.getAttribute("aria-disabled")).toBeNull();
-    expect(find('[role="switch"]:checked')).not.toBeNull();
+    expect(find(spinner)).toBeNull();
+    expect(find('[aria-label="Disable Workboard"]')).not.toBeNull();
   });
   expect(find(".plugins-row-message")).toBeNull();
   expect(harness.calls("plugins.setEnabled")).toHaveLength(1);
@@ -239,10 +241,10 @@ it.each([
     );
     await runtimeConfig.ensureLoaded();
     const actionStart = request.mock.calls.length;
-    await clickPluginSwitch(page);
+    await clickPluginAction(page, action === "enable" ? "Enable Workboard" : "Disable Workboard");
     await waitForSolid(() => {
       expect(find(alert)?.textContent).toContain(error.message);
-      expect(find('[role="switch"]')?.getAttribute("aria-disabled")).toBeNull();
+      expect(find(spinner)).toBeNull();
     });
     expect(find(alert)?.textContent).toContain("Runtime phase: activate.");
     expect(page.textContent).not.toContain("Installation saved");
@@ -250,7 +252,9 @@ it.each([
     expect(calls.filter(([method]) => method === methodName)).toHaveLength(1);
     expect(calls.filter(([method]) => method === "plugins.list")).toHaveLength(applied ? 1 : 0);
     expect(calls.filter(([method]) => method === "config.get")).toHaveLength(applied ? 1 : 0);
-    expect(find<HTMLInputElement>('[role="switch"]')?.checked).toBe(applied && action === "enable");
+    expect(
+      find(`[aria-label="${applied && action === "enable" ? "Disable" : "Enable"} Workboard"]`),
+    ).not.toBeNull();
     expect(find(".plugins-install")).toBeNull();
   },
 );

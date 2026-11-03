@@ -103,6 +103,7 @@
 .plugin-card-title-row :is(h2, h3),
 .plugin-catalog-card__head > .installed-plugins-card__head,
 .plugins-consent__header > div,
+.plugin-catalog-detail__heading,
 .plugin-catalog-detail__readme-section,
 .plugin-catalog-detail__panel {
   min-width: 0;
@@ -711,6 +712,10 @@
   flex: 1 1 100%;
 }
 
+.plugin-catalog-detail__panel > .plugins-row-message {
+  margin-bottom: var(--space-4);
+}
+
 .plugins-row-message--info {
   display: block;
   padding: var(--space-2) 0;
@@ -891,6 +896,7 @@ openclaw-plugins-page
 }
 
 .plugins-settings-search > span[aria-hidden="true"] svg,
+.plugin-catalog-detail__back svg,
 .plugin-catalog-detail__actions svg {
   width: 16px;
   height: 16px;
@@ -917,179 +923,154 @@ openclaw-plugins-page
   text-decoration: none;
 }
 
+.plugins-settings-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.4;
+}
+
+.plugins-settings-breadcrumb__parent,
+.plugins-settings-breadcrumb__current {
+  min-width: 0;
+  overflow: hidden;
+  color: inherit;
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plugins-settings-breadcrumb__parent:hover {
+  color: var(--text);
+}
+
+.plugins-settings-breadcrumb__chevron {
+  display: inline-flex;
+  color: var(--muted);
+}
+
+.plugins-settings-breadcrumb__chevron svg {
+  width: 13px;
+  height: 13px;
+}
+
 .plugin-catalog-detail {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-8);
+  container-type: inline-size;
+  display: grid;
+  gap: 28px;
   min-width: 0;
 }
 
-/* The header binds to its first group; every later block keeps the section rhythm. */
-.plugin-catalog-detail > .content-header--settings + .plugin-catalog-detail__hero {
-  margin-top: calc(var(--space-5) - var(--space-8));
+.plugin-catalog-detail__content {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 196px;
+  grid-template-areas: "main sidebar";
+  align-items: start;
+  gap: 32px;
 }
 
-.plugin-catalog-detail > .plugin-catalog-detail__back + .content-header--settings {
-  margin-top: calc(var(--space-2) - var(--space-8));
-}
-
-.plugin-catalog-detail__panel,
-.plugin-catalog-detail__main {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-8);
-  min-width: 0;
-}
-
-.plugin-catalog-detail__panel:empty {
-  display: none;
-}
-
-/* The page's own inset already applies; the shared header would add the outer one. */
-.content .settings-page.oc-app-surface > .plugin-catalog-detail > .content-header--settings,
-.content .settings-page.oc-app-surface .plugin-editor__header > .content-header--settings {
-  width: 100%;
-  max-width: none;
-  margin-inline: 0;
-  padding-inline: 0;
-}
-
-.shell--mobile-nav .plugin-catalog-detail > .content-header--settings {
-  padding-block: 0;
-}
-
-.plugin-catalog-detail .content-header--settings {
-  align-items: flex-start;
-}
-
-.plugin-catalog-detail .content-header--settings .page-title {
-  overflow-wrap: anywhere;
+.plugin-catalog-detail--no-sidebar .plugin-catalog-detail__content {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "main";
 }
 
 .plugin-catalog-detail__back {
   display: inline-flex;
   width: max-content;
-  max-width: 100%;
   align-items: center;
-  gap: var(--space-1);
+  gap: var(--space-2);
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
   text-decoration: none;
-}
-
-.plugin-catalog-detail__back > span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .plugin-catalog-detail__back:hover {
   color: var(--text-strong);
 }
 
-/* The chevron's own side bearing would otherwise pull it right of the title's edge. */
-.plugin-catalog-detail__back svg {
-  flex: 0 0 auto;
-  width: 14px;
-  height: 14px;
-  margin-inline-start: -4px;
-}
-
-/* With the full Settings navigation the title keeps the height of every settings
-   page, so the way back sits in the space over it instead of pushing it down. */
-.shell--settings:not(.shell--mobile-nav)
-  .plugin-catalog-detail:has(> .plugin-catalog-detail__back) {
-  margin-top: calc(-1 * var(--space-3));
-}
-
-.shell--settings:not(.shell--mobile-nav) .plugin-catalog-detail > .plugin-catalog-detail__back {
-  position: absolute;
-  bottom: 100%;
-  left: 0;
-  margin-bottom: var(--space-1);
-}
-
-.shell--settings:not(.shell--mobile-nav)
-  .plugin-catalog-detail
-  > .plugin-catalog-detail__back
-  + .content-header--settings {
-  margin-top: 0;
-}
-
-/* The phone header's Back goes up a level on settings pages. The editor keeps its link:
-   nothing else there names the plugin. */
-.shell--settings.shell--floating-header .plugin-catalog-detail > .plugin-catalog-detail__back {
-  display: none;
-}
-
-.shell--settings.shell--floating-header
-  .plugin-catalog-detail
-  > .plugin-catalog-detail__back
-  + .content-header--settings {
-  margin-top: 0;
-}
-
-.plugin-editor__header > .plugin-catalog-detail__back {
-  margin-bottom: var(--space-2);
-}
-
-.shell--settings:not(.shell--mobile-nav) .plugin-editor__header {
-  position: relative;
-  margin-top: calc(-1 * var(--space-3));
-}
-
-.shell--settings:not(.shell--mobile-nav) .plugin-editor__header > .plugin-catalog-detail__back {
-  position: absolute;
-  bottom: 100%;
-  left: 0;
-  margin-bottom: var(--space-1);
-}
-
-/* These rows hold their control beside the identity at every width, so the row keeps
-   its height when Install becomes the wider Installing. */
-.plugin-catalog-detail__hero .settings-row {
-  flex-wrap: nowrap;
-}
-
-/* The card opens back from a button inset by the row, so it keeps a gutter on both sides. */
-.plugin-catalog-detail__hero .plugin-install-progress {
-  max-width: calc(100vw - 3 * var(--space-4));
+.plugin-catalog-detail__hero {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
 }
 
 .plugin-catalog-detail__icon {
   display: grid;
-  flex: 0 0 40px;
   place-items: center;
-  width: 40px;
-  height: 40px;
+  width: 112px;
+  height: 112px;
   overflow: hidden;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-xl);
   background: var(--bg-elevated);
   color: var(--accent);
 }
-
 .plugin-catalog-detail__icon > .plugins-tile {
   width: 100%;
   height: 100%;
   border-radius: inherit;
+  font-size: 36px;
+}
+.plugin-catalog-detail__icon svg {
+  width: 48px;
+  height: 48px;
+}
+.plugin-catalog-detail__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 18px;
+}
+.plugin-catalog-detail__actions .btn {
+  min-height: 30px;
+  padding: 4px 10px;
+  font-size: var(--control-ui-text-sm);
+}
+.settings-page.oc-app-surface .plugin-catalog-detail__actions .btn.oc-action {
+  height: var(--settings-control-height);
+}
+.settings-page.oc-app-surface .plugin-catalog-detail__actions .btn.oc-action-icon {
+  width: var(--settings-control-height);
+  min-width: var(--settings-control-height);
+  padding: 0;
+}
+.plugin-catalog-detail__title-row {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: nowrap;
+  justify-content: space-between;
+  gap: var(--space-4);
 }
 
-.plugin-catalog-detail__icon svg {
-  width: 20px;
-  height: 20px;
+.plugin-catalog-detail__title-row h1 {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  color: var(--text-strong);
+  font-size: clamp(24px, 3vw, 32px);
+  line-height: 1.05;
+  overflow-wrap: anywhere;
+}
+
+.plugin-catalog-detail__summary {
+  max-width: 720px;
+  margin: var(--space-3) 0 0;
+  color: var(--muted);
+  font-size: var(--control-ui-text-lg);
+  line-height: 1.5;
 }
 
 .plugin-catalog-detail__publisher {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0 var(--space-2);
-  min-width: 0;
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-  line-height: 1.45;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+  font-size: var(--control-ui-text-lg);
+  line-height: 1.4;
 }
 
 .plugin-catalog-detail__publisher-name {
@@ -1097,12 +1078,12 @@ openclaw-plugins-page
   align-items: center;
   max-width: 100%;
   gap: var(--space-1);
+  color: var(--text-strong);
 }
 
 .plugin-catalog-detail__publisher-name strong {
   min-width: 0;
   overflow: hidden;
-  font-weight: inherit;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1111,25 +1092,141 @@ openclaw-plugins-page
   font: inherit;
 }
 
-.plugin-lifecycle__reason {
-  display: block;
+.plugin-catalog-detail__sidebar {
+  grid-area: sidebar;
+  display: grid;
+  align-content: start;
+  min-width: 0;
+  font-size: var(--control-ui-text-sm);
 }
-
+.plugin-metadata__facts,
+.plugin-metadata__section,
+.plugin-catalog-detail__security {
+  margin: 0;
+  padding: 16px 0;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+}
+.plugin-catalog-detail__sidebar > :first-child {
+  padding-top: 0;
+}
+.plugin-catalog-detail__sidebar > :last-child {
+  border-bottom: 0;
+}
+.plugin-metadata__facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.plugin-metadata__facts dt,
+.plugin-metadata__section h2,
+.plugin-catalog-detail__security h2 {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 600;
+}
+.plugin-metadata__facts dd {
+  margin: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
 .plugin-metadata__categories {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
   text-transform: capitalize;
 }
-
-.plugin-catalog-detail__readme-section > h2 {
-  margin-bottom: var(--space-3);
+.plugin-metadata__section a {
+  color: var(--text-strong);
+  text-decoration: none;
 }
-.plugin-capabilities h2 {
+.plugin-metadata__section a:hover {
+  text-decoration: underline;
+}
+.plugin-metadata__section a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.plugin-metadata__section svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  vertical-align: middle;
+}
+.plugin-metadata__repository {
+  display: flex;
+  align-items: start;
+  gap: 7px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.plugin-catalog-detail__security {
+  display: block;
+  color: inherit;
+  text-decoration: none;
+}
+.plugin-catalog-detail__security h2 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.plugin-catalog-detail__security h2 > span {
+  display: inline-flex;
+}
+.plugin-catalog-detail__security h2 svg {
+  width: 1em;
+  height: 1em;
+}
+.plugin-catalog-detail__security-score {
+  /* The hover fill bleeds past the label and bars so neither sits flush with its edge. */
+  --plugin-security-score-bleed: 8px;
+
+  display: grid;
+  grid-template-columns: 1fr repeat(3, 26px);
+  align-items: center;
+  gap: 6px;
+  margin-inline: calc(-1 * var(--plugin-security-score-bleed));
+  padding: 8px var(--plugin-security-score-bleed);
+  border-radius: var(--radius-md);
+}
+.plugin-catalog-detail__security-score strong {
+  font-size: var(--control-ui-text-sm);
+  text-transform: capitalize;
+}
+.plugin-catalog-detail__security-score span {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--border);
+}
+.plugin-catalog-detail__security--pass .is-filled {
+  background: var(--ok);
+}
+.plugin-catalog-detail__security--warning .is-filled {
+  background: var(--warn);
+}
+.plugin-catalog-detail__security--danger .is-filled {
+  background: var(--danger);
+}
+.plugin-catalog-detail__security[href]:hover .plugin-catalog-detail__security-score {
+  background: var(--bg-elevated);
+}
+
+.plugin-capabilities {
+  margin-bottom: 28px;
+}
+.plugin-capabilities h2,
+.plugin-catalog-detail__readme-section > h2 {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: 0;
+  margin: 0 0 12px;
   padding-bottom: 12px;
   border-bottom: 1px solid var(--border);
   font-size: var(--control-ui-text-lg);
+}
+.plugin-capabilities h2 {
+  margin-bottom: 0;
 }
 .plugin-capabilities h2 > span {
   display: inline-grid;
@@ -1298,37 +1395,77 @@ openclaw-plugins-page
   color: var(--muted);
   line-height: 1.5;
 }
+@container (max-width: 768px) {
+  .plugin-catalog-detail__content {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "main" "sidebar";
+    gap: 24px;
+  }
+  .plugin-catalog-detail__hero {
+    grid-template-columns: 80px minmax(0, 1fr);
+    gap: 16px;
+  }
+  .plugin-catalog-detail__icon,
+  .plugin-catalog-detail__icon > span {
+    width: 80px;
+    height: 80px;
+  }
+}
+@container (max-width: 400px) {
+  .plugin-catalog-detail__hero {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .plugin-catalog-detail--loading .skeleton {
   border-radius: var(--radius-md);
   background: var(--bg-elevated);
 }
 
 .plugin-catalog-detail--loading .plugin-catalog-detail__back {
-  width: 88px;
+  width: 180px;
   height: 18px;
 }
 
 .plugin-catalog-detail__loading-title {
-  width: min(280px, 65%);
-  height: 30px;
+  width: min(420px, 65%);
+  height: 48px;
 }
 
 .plugin-catalog-detail__loading-summary {
-  width: min(520px, 90%);
-  height: 18px;
-  margin-top: var(--space-2);
+  width: min(680px, 90%);
+  height: 24px;
+  margin-top: var(--space-3);
 }
 
 .plugin-catalog-detail__loading-publisher {
-  width: 160px;
-  height: 18px;
+  width: 220px;
+  height: 48px;
+  margin-top: var(--space-3);
 }
 
 .plugin-catalog-detail__loading-card {
   height: 90px;
+  margin-bottom: 12px;
+}
+
+.plugin-catalog-detail__main {
+  grid-area: main;
+  display: grid;
+  gap: 28px;
+  min-width: 0;
+}
+
+.plugin-catalog-detail__panel:empty {
+  display: none;
+}
+
+.plugin-catalog-detail__panel > .plugin-capabilities:last-child {
+  margin-bottom: 0;
 }
 
 .plugin-catalog-detail__readme {
+  max-width: 820px;
   overflow-wrap: anywhere;
 }
 
@@ -1478,9 +1615,19 @@ openclaw-plugins-page
 
 .plugin-metadata__placeholder {
   display: block;
-  width: 72px;
+  width: 72%;
   height: 14px;
   border-radius: var(--radius-sm);
+}
+.plugin-metadata__loading {
+  display: grid;
+  gap: 20px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid var(--border);
+}
+.plugin-metadata__loading > :last-child {
+  width: 100%;
+  height: 20px;
 }
 
 .plugin-capability__trailing {

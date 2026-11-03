@@ -274,7 +274,9 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       expect(await detail.getByRole("heading", { name: "Automations" }).count()).toBe(0);
       await detail.getByText("Installed", { exact: true }).waitFor();
       expect(await detail.locator(".plugin-connection-status svg").count()).toBe(1);
-      const descriptionBounds = await detail.locator(".page-subtitle").boundingBox();
+      const descriptionBounds = await detail
+        .locator(".plugin-catalog-detail__summary")
+        .boundingBox();
       const actionBounds = await detail
         .locator("openclaw-plugin-install-action button")
         .boundingBox();

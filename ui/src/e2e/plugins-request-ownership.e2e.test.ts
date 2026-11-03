@@ -181,7 +181,10 @@ suite.define(() => {
       expect(JSON.parse(raw)).toHaveProperty("plugins.entries.workboard.config.greeting", "After");
       await gateway.waitForRequest("plugins.inspect", { after: 1 });
       await gateway.waitForRequest("plugins.catalog.get", { after: 1 });
-      await page.getByRole("link", { name: "Workboard", exact: true }).click();
+      await page
+        .locator(".plugins-settings-breadcrumb")
+        .getByRole("link", { name: "Workboard", exact: true })
+        .click();
       const rows = page.locator(".plugin-capability__copy > strong");
       await expect.poll(() => rows.allTextContents()).toEqual(["Current skill"]);
 

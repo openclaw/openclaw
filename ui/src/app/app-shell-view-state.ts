@@ -342,7 +342,7 @@ export function readShellView(host: ShellViewHost) {
       // The brand alone: "Ask OpenClaw" has no centered room beside History's three-button pill.
       return activeRoute === "custodian"
         ? currentThemeBranding().brandName
-        : (host.shellLayout.pageTitle() ?? titleForRoute(activeRoute));
+        : titleForRoute(activeRoute);
     },
     get navCollapsed() {
       return navCollapsed();

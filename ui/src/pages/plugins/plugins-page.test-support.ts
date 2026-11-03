@@ -487,18 +487,6 @@ export async function mountPage(
   return { page };
 }
 
-export async function clickPluginSwitch(page: HTMLElement): Promise<void> {
-  const toggle = await waitForSolid(() => {
-    const control = page.querySelector<HTMLInputElement>('[role="switch"]');
-    if (!control) {
-      throw new Error("No plugin switch");
-    }
-    return control;
-  });
-  toggle.click();
-  await settlePlugins();
-}
-
 export async function clickPluginAction(page: HTMLElement, label: string): Promise<void> {
   const button = await waitForSolid(() => {
     const control = [...page.querySelectorAll<HTMLButtonElement>("button")].find(

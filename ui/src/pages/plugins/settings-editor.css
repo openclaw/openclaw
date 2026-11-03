@@ -11,6 +11,13 @@ openclaw-plugin-settings-groups {
 .plugin-editor__header {
   margin-bottom: 24px;
 }
+.plugin-editor__header a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+}
+.plugin-editor__header a svg,
 .plugin-editor__search svg {
   width: 18px;
   height: 18px;

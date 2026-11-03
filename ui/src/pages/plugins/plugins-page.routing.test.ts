@@ -521,7 +521,7 @@ it.each(["disabled", "needs-setup"] as const)(
       ).toContain("board_create"),
     );
     expect(page.querySelector("h1")?.textContent).toContain("Workboard");
-    const enable = page.querySelector('[role="switch"]:not(:checked)');
+    const enable = page.querySelector('[aria-label="Enable Workboard"]');
     expect(enable).not.toBeNull();
     expect(enable?.getAttribute("aria-disabled")).toBe(state === "needs-setup" ? "true" : null);
     if (state === "needs-setup") {
@@ -530,14 +530,14 @@ it.each(["disabled", "needs-setup"] as const)(
       expect(page.querySelector(".plugin-catalog-detail__panel .oc-banner-warning")).toBeNull();
       expect(
         page.querySelector<HTMLAnchorElement>(
-          '.plugin-catalog-detail__hero a[href*="view=settings"]',
+          '.plugin-catalog-detail__actions a[aria-label="Settings"]',
         )?.href,
       ).toContain("view=settings");
     } else {
       expect(page.querySelector('[aria-label="Sign in to account"]')).not.toBeNull();
       expect(page.textContent).toContain("Credentials");
     }
-    expect(page.querySelector(".plugin-catalog-detail__hero")?.textContent).toContain("1.2.3");
+    expect(page.querySelector(".plugin-catalog-detail__sidebar")?.textContent).toContain("1.2.3");
     expect(page.querySelector(".plugin-metadata__loading[role=status]")).not.toBeNull();
     expect(request).toHaveBeenCalledWith(
       "plugins.catalog.get",
@@ -550,8 +550,8 @@ it.each(["disabled", "needs-setup"] as const)(
 
     catalogPending.resolve(catalog);
     await waitForSolid(() => expect(page.querySelector(".plugin-metadata__loading")).toBeNull());
-    expect(page.querySelector(".plugin-metadata__categories")?.textContent).toBe("tools");
-    expect(page.querySelector(".plugin-catalog-detail__hero")?.textContent).toContain("1.2.3");
+    expect(page.querySelector(".plugin-metadata__categories .chip")?.textContent).toBe("tools");
+    expect(page.querySelector(".plugin-catalog-detail__sidebar")?.textContent).toContain("1.2.3");
     tools.resolve({
       agentId: "main",
       profiles: [],
@@ -578,7 +578,9 @@ it.each(["disabled", "needs-setup"] as const)(
     await waitForSolid(() => expect(page.textContent).toContain("Full board search description"));
     expect(page.textContent).toContain("board_create");
     if (state === "disabled") {
-      const breadcrumb = page.querySelector<HTMLAnchorElement>(".plugin-catalog-detail__back");
+      const breadcrumb = page.querySelector<HTMLAnchorElement>(
+        ".plugins-settings-breadcrumb__parent",
+      );
       expect(breadcrumb?.textContent).toBe("Plugins");
       expect(breadcrumb?.getAttribute("href")).toBe("/plugins");
       breadcrumb?.click();
@@ -609,12 +611,12 @@ it("uses a late local inventory while catalog metadata is pending", async () => 
   await waitForSolid(() =>
     expect(request).toHaveBeenCalledWith("plugins.inspect", { pluginId: plugin.id }),
   );
-  expect(page.querySelector('[role="switch"]:not(:checked)')).not.toBeNull();
+  expect(page.querySelector('[aria-label="Enable Workboard"]')).not.toBeNull();
   expect(page.querySelector(".plugin-catalog-detail__install")).toBeNull();
   remote.resolve(discoveryDetail({ ...plugin, installed: false }));
   await remote.promise;
   await settlePage(page);
-  expect(page.querySelector('[role="switch"]:not(:checked)')).not.toBeNull();
+  expect(page.querySelector('[aria-label="Enable Workboard"]')).not.toBeNull();
   expect(page.querySelector(".plugin-catalog-detail__install")).toBeNull();
 });
 

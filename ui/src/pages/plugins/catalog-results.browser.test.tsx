@@ -527,7 +527,7 @@ it("fills the remaining viewport with card-sized placeholders across resizes", a
 });
 
 it.each([390, 768, 1366, 1440])(
-  "keeps the README close to expandable MCP servers at %ipx",
+  "keeps the README close to expandable MCP servers beside a tall sidebar at %ipx",
   async (width) => {
     await page.viewport(width, 900);
     render(() =>
@@ -551,6 +551,7 @@ it.each([390, 768, 1366, 1440])(
             },
           ],
         }),
+        sidebar: <div style={{ "min-height": "900px" }}>Release and security metadata</div>,
         readme: <p>Use the workspace integration to read your documents.</p>,
       }),
     );
@@ -559,7 +560,7 @@ it.each([390, 768, 1366, 1440])(
     const gap = () =>
       readme.getBoundingClientRect().top - capabilities.getBoundingClientRect().bottom;
     expect(gap()).toBeGreaterThanOrEqual(20);
-    expect(gap()).toBeLessThanOrEqual(40);
+    expect(gap()).toBeLessThanOrEqual(32);
     await expect
       .element(page.getByRole("heading", { name: /MCP Servers\s*2/, exact: true }))
       .toBeVisible();
@@ -567,7 +568,7 @@ it.each([390, 768, 1366, 1440])(
     await server.click();
     await expect.element(page.getByText("OAuth", { exact: true })).toBeVisible();
     await expect.element(page.getByText("Connect your workspace in OpenClaw.")).toBeVisible();
-    expect(gap()).toBeLessThanOrEqual(40);
+    expect(gap()).toBeLessThanOrEqual(32);
     const authLabel = [...container.querySelectorAll("dt")].find(
       (label) => label.textContent === "Authentication",
     )!;

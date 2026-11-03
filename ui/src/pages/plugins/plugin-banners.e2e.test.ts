@@ -76,9 +76,10 @@ describeControlUiE2e("Plugin pages without generic trust banners", () => {
       const action =
         scenario === "discovery"
           ? page.getByRole("searchbox", { name: "Search plugins", exact: true })
-          : scenario === "native-ui"
-            ? page.getByRole("switch", { name: "Calendar Plus", exact: true, checked: true })
-            : page.getByRole("button", { name: "Install", exact: true });
+          : page.getByRole("button", {
+              name: scenario === "native-ui" ? "Disable Calendar Plus" : "Install",
+              exact: true,
+            });
       await action.waitFor();
       expect(await action.isEnabled()).toBe(true);
       if (process.env.OPENCLAW_UPDATE_E2E_SCREENSHOTS === "1") {

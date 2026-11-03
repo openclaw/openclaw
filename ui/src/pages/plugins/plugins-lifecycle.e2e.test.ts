@@ -36,12 +36,15 @@ describeControlUiE2e("Control UI plugin lifecycle", () => {
     });
     try {
       await page.goto(`${server.baseUrl}settings/plugins/workboard`);
-      await page.getByRole("switch", { name: "Workboard", exact: true, checked: false }).waitFor();
+      await page.getByRole("button", { name: "Enable Workboard", exact: true }).waitFor();
       await gateway.waitForRequest("config.get");
       const connects = (await gateway.getRequests("connect")).length;
       for (const [index, enabled] of [true, false, true].entries()) {
         const plugin = enabled ? workboardEnabled : workboardDisabled;
-        const toggle = page.getByRole("switch", { name: "Workboard", exact: true });
+        const toggle = page.getByRole("button", {
+          name: `${enabled ? "Enable" : "Disable"} Workboard`,
+          exact: true,
+        });
         const writes = (await gateway.getRequests("plugins.setEnabled")).length;
         const configReads = (await gateway.getRequests("config.get")).length;
         await gateway.deferNext("plugins.setEnabled");
@@ -53,7 +56,9 @@ describeControlUiE2e("Control UI plugin lifecycle", () => {
           pluginId: "workboard",
           enabled,
         });
-        await expect.poll(() => toggle.getAttribute("aria-disabled")).toBe("true");
+        await expect.poll(() => toggle.getAttribute("aria-busy")).toBe("true");
+        expect(await toggle.locator(".btn__spinner").count()).toBe(1);
+        expect(await page.locator(".plugin-catalog-detail__actions .btn__spinner").count()).toBe(1);
         await captureScreenshot(page, `lifecycle-${enabled ? "enable" : "disable"}-pending.png`);
         const snapshot = inventory([plugin], index + 1);
         const descriptors = {
@@ -68,8 +73,9 @@ describeControlUiE2e("Control UI plugin lifecycle", () => {
         await gateway.emitGatewayEvent("plugins.changed", { generation: index + 1 });
         await gateway.waitForRequest("plugins.uiDescriptors", { after: reads });
         await gateway.waitForRequest("plugins.list", { after: inventoryReads });
-        expect(await toggle.getAttribute("aria-disabled")).toBe("true");
+        expect(await toggle.getAttribute("aria-busy")).toBe("true");
         expect(await toggle.isEnabled()).toBe(false);
+        expect(await toggle.locator(".btn__spinner").count()).toBe(1);
         expect(await gateway.getRequests("plugins.setEnabled")).toHaveLength(writes + 1);
         const listReads = (await gateway.getRequests("plugins.list")).length;
         await gateway.deferNext("config.get");
@@ -90,10 +96,10 @@ describeControlUiE2e("Control UI plugin lifecycle", () => {
         await gateway.setMethodResponse("plugins.list", snapshot);
         await gateway.resolveDeferred("plugins.list", snapshot);
         await page
-          .getByRole("switch", { name: "Workboard", exact: true, checked: enabled })
+          .getByRole("button", { name: `${enabled ? "Disable" : "Enable"} Workboard`, exact: true })
           .waitFor();
         expect(await page.locator(".plugins-row-message--success").count()).toBe(0);
-        await expect.poll(() => toggle.getAttribute("aria-disabled")).toBeNull();
+        expect(await page.locator(".plugin-catalog-detail__actions .btn__spinner").count()).toBe(0);
       }
       await page.locator(".settings-sidebar").getByRole("button", { name: "Back to app" }).click();
       const sidebar = page.locator("openclaw-app-sidebar");
@@ -148,9 +154,7 @@ describeControlUiE2e("Control UI plugin lifecycle", () => {
         plugin: installedCalendar,
         restartRequired: false,
       });
-      await page
-        .getByRole("switch", { name: "Calendar Plus", exact: true, checked: true })
-        .waitFor();
+      await page.getByRole("button", { name: "Disable Calendar Plus", exact: true }).waitFor();
       expect(await page.getByText("Installed Calendar Plus.", { exact: true }).count()).toBe(0);
       expect(await gateway.getRequests("plugins.install")).toHaveLength(1);
       expect(await page.locator("[data-plugin-consent]").count()).toBe(0);
@@ -160,19 +164,18 @@ describeControlUiE2e("Control UI plugin lifecycle", () => {
       await expect
         .poll(() => new URL(page.url()).pathname)
         .toBe(`/plugins/${calendarDiscoveryPlugin.id}`);
+      await page.getByRole("button", { name: "Disable Calendar Plus", exact: true }).waitFor();
       await page
-        .getByRole("switch", { name: "Calendar Plus", exact: true, checked: true })
-        .waitFor();
-      await page
-        .locator(".plugin-catalog-detail__hero")
+        .locator(".plugin-catalog-detail__actions")
         .getByRole("link", { name: "Settings", exact: true })
         .click();
       await page.getByRole("searchbox", { name: "Search settings", exact: true }).waitFor();
       expect(new URL(page.url()).searchParams.get("view")).toBe("settings");
-      await page.getByRole("link", { name: "Calendar Plus", exact: true }).click();
       await page
-        .getByRole("switch", { name: "Calendar Plus", exact: true, checked: true })
-        .waitFor();
+        .locator(".plugins-settings-breadcrumb")
+        .getByRole("link", { name: "Calendar Plus", exact: true })
+        .click();
+      await page.getByRole("button", { name: "Disable Calendar Plus", exact: true }).waitFor();
       const inspectionReads = (await gateway.getRequests("plugins.inspect")).length;
       await gateway.setMethodResponse("plugins.uiDescriptors", {
         ...enabledWorkboardCapabilities(),
@@ -213,7 +216,7 @@ describeControlUiE2e("Control UI plugin lifecycle", () => {
       const removing = page.getByRole("button", { name: "Uninstall Calendar Plus", exact: true });
       await expect.poll(() => removing.getAttribute("aria-busy")).toBe("true");
       expect(await removing.locator(".btn__spinner").count()).toBe(1);
-      expect(await page.locator(".plugin-catalog-detail__hero .btn__spinner").count()).toBe(1);
+      expect(await page.locator(".plugin-catalog-detail__actions .btn__spinner").count()).toBe(1);
       await captureScreenshot(page, "lifecycle-uninstall-pending.png");
       const missingPlugin = {
         code: "INVALID_REQUEST",
@@ -288,9 +291,7 @@ describeControlUiE2e("Control UI plugin lifecycle", () => {
         plugin: installedCalendar,
         restartRequired: false,
       });
-      await page
-        .getByRole("switch", { name: "Calendar Plus", exact: true, checked: true })
-        .waitFor();
+      await page.getByRole("button", { name: "Disable Calendar Plus", exact: true }).waitFor();
       expect(await page.getByText("Installed Calendar Plus.", { exact: true }).count()).toBe(0);
       expect(await gateway.getRequests("plugins.install")).toHaveLength(2);
       expect(await gateway.getRequests("connect")).toHaveLength(connects);
@@ -364,9 +365,7 @@ describeControlUiE2e("Control UI plugin lifecycle", () => {
           restartRequired: false,
         });
         await gateway.waitForRequest("plugins.inspect");
-        await page
-          .getByRole("switch", { name: "Calendar Plus", exact: true, checked: true })
-          .waitFor();
+        await page.getByRole("button", { name: "Disable Calendar Plus", exact: true }).waitFor();
         await captureScreenshot(
           page,
           `retained-catalog-${viewport.width}-inspection-pending.png`,
@@ -418,9 +417,7 @@ describeControlUiE2e("Control UI plugin lifecycle", () => {
           plugin: installedCalendar,
           restartRequired: false,
         });
-        await page
-          .getByRole("switch", { name: "Calendar Plus", exact: true, checked: true })
-          .waitFor();
+        await page.getByRole("button", { name: "Disable Calendar Plus", exact: true }).waitFor();
         if (surface === "settings") {
           await page.goto(`${server.baseUrl}settings/plugins/calendar-plus`);
         }
@@ -580,9 +577,7 @@ describeControlUiE2e("Control UI plugin lifecycle", () => {
       expect(await page.getByRole("button", { name: "Install", exact: true }).count()).toBe(0);
       await captureScreenshot(page, "saved-install-runtime-failure.png");
       await gateway.deferNext("plugins.setEnabled");
-      await page
-        .getByRole("switch", { name: "Calendar Plus", exact: true, checked: false })
-        .click();
+      await page.getByRole("button", { name: "Enable Calendar Plus", exact: true }).click();
       await gateway.waitForRequest("plugins.setEnabled");
       await gateway.rejectDeferred("plugins.setEnabled", {
         code: "UNAVAILABLE",
@@ -621,9 +616,7 @@ describeControlUiE2e("Control UI plugin lifecycle", () => {
         plugin: reinstalled,
         restartRequired: false,
       });
-      await page
-        .getByRole("switch", { name: "Calendar Plus", exact: true, checked: true })
-        .waitFor();
+      await page.getByRole("button", { name: "Disable Calendar Plus", exact: true }).waitFor();
       expect(await gateway.getRequests("plugins.install")).toHaveLength(2);
       expect(await gateway.getRequests("plugins.reload")).toHaveLength(0);
       expect(await gateway.getRequests("connect")).toHaveLength(connects);
@@ -700,9 +693,7 @@ describeControlUiE2e("Control UI plugin lifecycle", () => {
           });
         }
       }
-      await page
-        .getByRole("switch", { name: "Calendar Plus", exact: true, checked: true })
-        .waitFor();
+      await page.getByRole("button", { name: "Disable Calendar Plus", exact: true }).waitFor();
       expect(await warning.count()).toBe(0);
       expect(await gateway.getRequests("plugins.install")).toHaveLength(3);
       expect(await gateway.getRequests("gateway.restart.request")).toHaveLength(0);

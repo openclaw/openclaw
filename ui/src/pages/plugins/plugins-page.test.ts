@@ -18,7 +18,6 @@ import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { queryWithin, runtimeFixture } from "./plugins-page.lifecycle-test-support.ts";
 import {
   clickPluginAction,
-  clickPluginSwitch,
   createClient,
   createContext,
   createDiscoveryDetail,
@@ -174,7 +173,7 @@ it("flushes a pending config draft before enabling and refreshes afterward", asy
   fixture.request.mockClear();
   const order = () => fixture.request.mock.calls.map(([method]) => method);
   runtimeConfig.patchForm(["pending"], true);
-  await clickPluginSwitch(page);
+  await clickPluginAction(page, "Enable Workboard");
   await waitForSolid(() => expect(order()).toContain("plugins.list"));
   expect(order().slice(0, 4)).toEqual([
     "config.set",
@@ -245,19 +244,21 @@ it.each([false, true])(
       "plugins.list": () => createResult(plugin),
     });
     const { page, find } = await mountInventory(client, createResult(plugin));
-    await clickPluginSwitch(page);
-    const toggle = () => find<HTMLInputElement>('[role="switch"]')!;
+    const label = `${enabled ? "Disable" : "Enable"} Workboard`;
+    await clickPluginAction(page, label);
+    const action = () => find<HTMLButtonElement>(`[aria-label="${label}"]`)!;
     await waitForSolid(() => {
-      expect(toggle().getAttribute("aria-disabled")).toBe("true");
-      expect(toggle().checked).toBe(!enabled);
+      expect(action().disabled).toBe(true);
+      expect(action().getAttribute("aria-busy")).toBe("true");
+      expect(action().classList.contains("primary")).toBe(enabled);
     });
-    toggle().click();
+    action().click();
     expect(methodCalls(request, "plugins.setEnabled")).toHaveLength(1);
     pending.reject(unavailable("Change refused."));
     await waitForSolid(() => {
       expect(page.textContent).toContain("Change refused.");
-      expect(toggle().getAttribute("aria-disabled")).toBeNull();
-      expect(toggle().checked).toBe(enabled);
+      expect(action().disabled).toBe(false);
+      expect(action().classList.contains("primary")).toBe(!enabled);
     });
   },
 );
@@ -290,7 +291,7 @@ it("keeps newer notices when an older uninstall completes", async () => {
     createResult([createPlugin(), removablePlugin()]),
     "/settings/plugins/workboard",
   );
-  await clickPluginSwitch(page);
+  await clickPluginAction(page, "Enable Workboard");
   await waitForText(page, "Enable requires attention.");
 
   uninstallResult.resolve({
@@ -379,7 +380,7 @@ it.each(["close", "retry"] as const)("handles inspection failure then %s", async
     client,
     createResult(createPlugin({ origin: "global" })),
   );
-  await clickPluginSwitch(page);
+  await clickPluginAction(page, "Enable Workboard");
   const dialog = () => find(consentSelector);
   const loading = () => {
     expect(dialog()?.querySelector('[role="status"]')).not.toBeNull();
@@ -463,7 +464,7 @@ it("requires fresh inspection and acknowledgement when a reviewed capability sur
   });
   const { page, find } = await mountInventory(client, createResult(plugin));
 
-  await clickPluginSwitch(page);
+  await clickPluginAction(page, "Enable Workboard");
   await waitForSolid(() =>
     expect(request).toHaveBeenCalledWith("plugins.setEnabled", enableRequest),
   );
@@ -495,7 +496,7 @@ it("requires fresh inspection and acknowledgement when a reviewed capability sur
   await waitForSolid(() => expect(inspections).toBe(3));
   await page.updateComplete;
   expect(consentAction(page)?.disabled).toBe(true);
-  expect(find('[role="switch"]:checked')).toBeNull();
+  expect(find('[aria-label="Disable Workboard"]')).toBeNull();
   expect(methodCalls(request, "plugins.setEnabled")).toHaveLength(2);
 
   reinspection.resolve(changedInspection);
@@ -504,12 +505,12 @@ it("requires fresh inspection and acknowledgement when a reviewed capability sur
     expect(dialog?.textContent).toContain("workboard_manage");
     expect(consentAction(page)?.disabled).toBe(false);
   });
-  expect(find('[role="switch"]:checked')).toBeNull();
+  expect(find('[aria-label="Disable Workboard"]')).toBeNull();
   expect(methodCalls(request, "plugins.setEnabled")).toHaveLength(2);
 
   consentAction(page)?.click();
 
-  await waitForSolid(() => expect(find('[role="switch"]:checked')).not.toBeNull());
+  await waitForSolid(() => expect(find('[aria-label="Disable Workboard"]')).not.toBeNull());
   expect(methodCalls(request, "plugins.setEnabled").map(([, params]) => params)).toEqual([
     enableRequest,
     {
@@ -550,7 +551,7 @@ it("discards stale consent inspections after reconnect", async () => {
   });
   const { page, find, harness } = await mountInventory(client, createResult(plugin));
 
-  await clickPluginSwitch(page);
+  await clickPluginAction(page, "Enable Workboard");
   await waitForSolid(() =>
     expect(find("openclaw-modal-dialog .plugins-consent__hint")).not.toBeNull(),
   );
@@ -563,8 +564,8 @@ it("discards stale consent inspections after reconnect", async () => {
   expect(methodCalls(request, "plugins.setEnabled").map(([, params]) => params)).toEqual([
     enableRequest,
   ]);
-  await waitForSolid(() => expect(find('[role="switch"]:not(:checked)')).not.toBeNull());
-  await clickPluginSwitch(page);
+  await waitForSolid(() => expect(find('[aria-label="Enable Workboard"]')).not.toBeNull());
+  await clickPluginAction(page, "Enable Workboard");
   await waitForSolid(() => expect(consentAction(page)?.disabled).toBe(false));
   consentAction(page)?.click();
 

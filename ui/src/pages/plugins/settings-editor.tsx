@@ -1,5 +1,4 @@
 import { For, Show, createMemo, createSignal, onSettled } from "solid-js";
-import { ShellPageTitle } from "../../app/shell-page-title.tsx";
 import { resolveStructuredDraftInitialValue } from "../../components/config-form-structured-draft.ts";
 import { ConfigStructuredDraft } from "../../components/config-form-structured-draft.tsx";
 import { ConfigMapField } from "../../components/config-form.node.collection-map.tsx";
@@ -22,17 +21,14 @@ import {
 } from "../../components/config-form.shared.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
-import {
-  SettingsLoadingSkeleton,
-  SettingsPageHeader,
-} from "../../components/solid/settings-ui.tsx";
+import { SettingsLoadingSkeleton } from "../../components/solid/settings-ui.tsx";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import type { JSX as SolidJSX } from "../../types/solid-elements.d.ts";
 import { PluginCredentialEditor, type PluginCredentialEditorProps } from "./credential-editor.tsx";
 import "./custom-elements.ts";
-import { renderPluginDetailBack } from "./detail-shell.tsx";
+import { renderPluginDetailBreadcrumb } from "./detail-shell.tsx";
 import "./settings-editor.css";
 import { pluginEntryValue, type PluginSettingsEditorModel } from "./settings-model.ts";
 import { PluginSettingsReadStatus } from "./settings-read-status.tsx";
@@ -425,15 +421,14 @@ export function PluginSettingsEditor(props: PluginSettingsEditorProps) {
       {props.model ? (
         <section class="plugin-editor">
           <header class="plugin-editor__header">
-            <ShellPageTitle title={t("pluginsPage.detailSettings")} />
-            {renderPluginDetailBack({
+            {renderPluginDetailBreadcrumb({
+              name: t("pluginsPage.detailSettings"),
               backHref: props.model.backHref,
               backLabel:
                 props.model.result?.plugins.find((plugin) => plugin.id === props.model!.pluginId)
                   ?.name ?? props.model.pluginId,
               onBack: props.model.onBack,
             })}
-            <SettingsPageHeader stacked title={t("pluginsPage.detailSettings")} />
           </header>
           <label class="plugin-editor__search">
             <Icon name="search" />

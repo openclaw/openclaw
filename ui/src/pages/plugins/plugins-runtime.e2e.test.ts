@@ -23,14 +23,13 @@ fixtures.describeControlUiE2e("Control UI plugin runtime actions", () => {
     const row = page.locator(".plugin-catalog-detail");
     const button = (name: string, within = row) =>
       within.getByRole("button", { name, exact: true });
-    const toggle = row.getByRole("switch", { name: "Calendar Plus", exact: true });
     const setEnabled = "plugins.setEnabled";
     const enableParams = { pluginId: "calendar-plus", enabled: true };
     const runtime = { operationId: "enable-calendar", generation: 2, pluginIds: ["calendar-plus"] };
     await row.waitFor({ state: "visible" });
     const connects = (await gateway.getRequests("connect")).length;
     await gateway.deferNext(setEnabled);
-    await toggle.click();
+    await button("Enable Calendar Plus").click();
     expect((await gateway.waitForRequest(setEnabled)).params).toEqual(enableParams);
     await gateway.rejectDeferred(setEnabled, {
       code: "INVALID_REQUEST",
@@ -61,8 +60,7 @@ fixtures.describeControlUiE2e("Control UI plugin runtime actions", () => {
       restartRequired: false,
       runtime,
     });
-    await expect.poll(() => toggle.isEnabled()).toBe(true);
-    expect(await toggle.isChecked()).toBe(true);
+    await expect.poll(() => button("Disable Calendar Plus").isEnabled()).toBe(true);
     expect(await row.locator('.plugins-row-message[role="status"]').count()).toBe(0);
     const { mobileViewport } = fixtures;
     await page.setViewportSize(mobileViewport);
@@ -74,7 +72,8 @@ fixtures.describeControlUiE2e("Control UI plugin runtime actions", () => {
         ),
       )
       .toBeLessThanOrEqual(1);
-    for (const control of [toggle, button("Uninstall Calendar Plus")]) {
+    for (const action of ["Disable Calendar Plus", "Uninstall Calendar Plus"]) {
+      const control = button(action);
       await control.waitFor({ state: "visible" });
       // A resize can replace the control after a separate visibility check.
       await expect
@@ -86,7 +85,7 @@ fixtures.describeControlUiE2e("Control UI plugin runtime actions", () => {
     }
     const loadError = `SyntaxError in /synthetic/${"a".repeat(160)}/helper.ts:1:30\nGateway generation 2: replacement not applied.`;
     await gateway.deferNext(setEnabled);
-    await toggle.click();
+    await button("Disable Calendar Plus").click();
     await gateway.waitForRequest(setEnabled, { after: 2 });
     await gateway.rejectDeferred(setEnabled, {
       code: "UNAVAILABLE",
