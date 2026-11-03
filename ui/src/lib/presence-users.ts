@@ -21,7 +21,7 @@ export function profilePresenceViewer(profile: UserProfile): PresenceViewer {
   return {
     id: profile.id,
     identity: { type: "profile", id: profile.id },
-    name: profile.displayName ?? undefined,
+    name: profile.displayName?.trim() || profile.githubIdentity?.login || undefined,
     avatarUrl: profileAvatarUrl(profile),
     watchedSessions: [],
     entries: [],
@@ -48,7 +48,7 @@ export function projectPresencePayload(value: unknown) {
 
 export function presenceUserLabel(
   user: Pick<PresenceViewer, "id" | "name" | "email">,
-  fallbackName = user.id,
+  fallbackName = t("presence.card.person"),
 ) {
   const isSharedOwner = user.id === GATEWAY_OWNER_PROFILE_ID;
   const ownerName = isSharedOwner ? user.name?.trim() : undefined;
@@ -57,7 +57,7 @@ export function presenceUserLabel(
       ? ownerName
         ? t("presence.sharedOwner.named", { name: ownerName })
         : t("presence.sharedOwner.name")
-      : (user.name ?? user.email ?? fallbackName),
+      : (user.name ?? fallbackName),
     isSharedOwner,
   };
 }

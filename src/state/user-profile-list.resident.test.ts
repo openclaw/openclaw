@@ -130,6 +130,26 @@ async function replaceStore(options: Options, ...names: string[]) {
 }
 
 describe("resident profile display and reference catalog", () => {
+  it("uses verified handles for unnamed profiles and never an authentication email", async () => {
+    const options = fixture();
+    const github = syncAccount(options, "private-login@example.test", 301, "public-handle");
+    const emailOnly = ensureProfileForEmail("other-private-login@example.test", options);
+    setDisplayName(github.id, null, options);
+    setDisplayName(emailOnly.id, null, options);
+    await prepareCatalog(options);
+    const queries = spyOnQueries(options);
+
+    expect(options.display(github.id).displayName).toBe("public-handle");
+    expect(options.display(emailOnly.id).displayName).toBeNull();
+    expect(profiles.listResidentUserProfileDisplayFacts(options)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: github.id, label: "public-handle" }),
+        expect.objectContaining({ id: emailOnly.id, label: emailOnly.id }),
+      ]),
+    );
+    expect(queries).not.toHaveBeenCalled();
+  });
+
   it("does not join hydration from before a committed profile change", async () => {
     const options = fixture();
     const profile = ensureProfileForEmail("changing@example.test", options);

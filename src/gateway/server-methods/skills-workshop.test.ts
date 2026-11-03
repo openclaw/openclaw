@@ -29,8 +29,8 @@ vi.mock("../../skills/workshop/library.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../skills/workshop/library.js")>()),
   ...library,
 }));
-vi.mock("../../skills/workshop/skill-usage.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../skills/workshop/skill-usage.js")>()),
+vi.mock("../../skills/runtime/skill-usage.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../skills/runtime/skill-usage.js")>()),
   readSkillUsage,
 }));
 vi.mock("../../skills/workshop/review-undo.js", async (importOriginal) => ({

@@ -57,19 +57,14 @@ const learnMoreRoutes = [
   "talk",
 ] as const;
 
-const settingsGuidanceLinks: ReadonlyArray<{
-  route: string;
-  container: string;
-  section?: string;
-}> = [{ route: "mcp", section: "Configured servers", container: ".settings-section__desc" }];
+const settingsGuidanceLinks: ReadonlyArray<{ route: string; container: string; section?: string }> =
+  [{ route: "mcp", section: "Configured servers", container: ".settings-section__desc" }];
 
 const sectionAlignmentRoutes = [
   "appearance",
   "cloud-workers",
-  "labs",
   "mcp",
   "secrets",
-  "security",
   "talk",
   "updates",
 ] as const;
@@ -279,7 +274,7 @@ suite.define(() => {
           await ready.waitFor();
           if (isSettings) {
             expect(await page.locator(".model-providers__defaults").textContent()).toContain(
-              "Utility Model",
+              "Utility model",
             );
             await openModelSetup(page);
             await page.getByText(/Find existing connections or prepare a local model/).waitFor();
@@ -532,7 +527,172 @@ suite.define(() => {
       // The shared header transitions its padding after adopting the settings layout.
       await expect
         .poll(readDesktopInsets)
-        .toEqual({ configPadding: 22, headerPadding: 16, pagePadding: 16 });
+        .toEqual({ configPadding: 0, headerPadding: 16, pagePadding: 16 });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps config groups on the title's axis while the column narrows", async () => {
+    const context = await suite.browser.newContext(createDarkDesktopControlUiContextOptions());
+    const page = await context.newPage();
+    await installMockGateway(page);
+
+    try {
+      for (const route of ["appearance", "notifications"] as const) {
+        const pathname = pathForRoute(route);
+        await page.goto(new URL(pathname, suite.server.baseUrl).toString());
+        await waitForControlUiRoute(page, { pathname, routeId: route });
+        await page.locator(".settings-section .settings-group").first().waitFor();
+        for (const width of [1440, 1100, 820]) {
+          await page.setViewportSize({ height: 900, width });
+          await expect
+            .poll(
+              () =>
+                page.evaluate(() => {
+                  const title = document.querySelector<HTMLElement>(".content-header .page-title");
+                  const group = document.querySelector<HTMLElement>(
+                    ".settings-section .settings-group",
+                  );
+                  return title && group
+                    ? Math.round(
+                        group.getBoundingClientRect().left - title.getBoundingClientRect().left,
+                      )
+                    : null;
+                }),
+              { message: `${route} at ${width}` },
+            )
+            .toBe(0);
+        }
+        await page.setViewportSize({ height: 900, width: 1440 });
+      }
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps wide page bodies on the title's axis at every width", async () => {
+    const context = await suite.browser.newContext(createDarkDesktopControlUiContextOptions());
+    const page = await context.newPage();
+    await installMockGateway(page);
+
+    try {
+      for (const { route, surface } of [
+        { route: "agents", surface: ".agents-layout" },
+        { route: "logs", surface: ".logs-card" },
+        { route: "lobsterdex", surface: ".lobsterdex-page" },
+      ] as const) {
+        const pathname = pathForRoute(route);
+        await page.goto(new URL(pathname, suite.server.baseUrl).toString());
+        await waitForControlUiRoute(page, { pathname, routeId: route });
+        await page.locator(surface).first().waitFor();
+        for (const width of [1440, 1100, 820]) {
+          await page.setViewportSize({ height: 900, width });
+          await expect
+            .poll(
+              () =>
+                page.evaluate((selector) => {
+                  const title = document.querySelector<HTMLElement>(".content-header .page-title");
+                  const body = document.querySelector<HTMLElement>(selector);
+                  return title && body
+                    ? Math.round(
+                        body.getBoundingClientRect().left - title.getBoundingClientRect().left,
+                      )
+                    : null;
+                }, surface),
+              { message: `${route} at ${width}` },
+            )
+            .toBe(0);
+        }
+        await page.setViewportSize({ height: 900, width: 1440 });
+      }
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps Memory on one column across its tabs", async () => {
+    const context = await suite.browser.newContext(createDarkDesktopControlUiContextOptions());
+    const page = await context.newPage();
+    await installMockGateway(page);
+
+    try {
+      const pathname = pathForRoute("memory");
+      await page.goto(new URL(pathname, suite.server.baseUrl).toString());
+      await waitForControlUiRoute(page, { pathname, routeId: "memory" });
+      for (const tab of ["Overview", "Memories", "Dreams", "Settings"]) {
+        await page.locator(".memory-page").getByRole("tab", { name: tab, exact: true }).click();
+        for (const width of [1440, 820]) {
+          await page.setViewportSize({ height: 900, width });
+          await expect
+            .poll(
+              () =>
+                page.evaluate(() => {
+                  const title = document.querySelector<HTMLElement>(".content-header .page-title");
+                  const column = document.querySelector<HTMLElement>(
+                    ".memory-page__panel .settings-page",
+                  );
+                  if (!title || !column) {
+                    return null;
+                  }
+                  const box = column.getBoundingClientRect();
+                  return {
+                    offset: Math.round(
+                      box.left +
+                        Number.parseFloat(getComputedStyle(column).paddingLeft) -
+                        title.getBoundingClientRect().left,
+                    ),
+                    fitsColumn: box.width <= 760,
+                  };
+                }),
+              { message: `${tab} at ${width}` },
+            )
+            .toEqual({ offset: 0, fitsColumn: true });
+        }
+        await page.setViewportSize({ height: 900, width: 1440 });
+      }
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("gives Settings one gutter and no new session between phone and sidebar", async () => {
+    const context = await suite.browser.newContext({
+      ...createDarkDesktopControlUiContextOptions(),
+      viewport: { height: 900, width: 768 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, { methodResponses: emptyDeviceResponses });
+
+    try {
+      for (const route of ["appearance", "devices"] as const) {
+        const pathname = pathForRoute(route);
+        await page.goto(new URL(pathname, suite.server.baseUrl).toString());
+        await waitForControlUiRoute(page, { pathname, routeId: route });
+        await page.locator("main.content .page-title").waitFor();
+        for (const width of [641, 768, 900]) {
+          await page.setViewportSize({ height: 900, width });
+          await expect
+            .poll(
+              () =>
+                page.evaluate(() => {
+                  const title = document.querySelector<HTMLElement>("main.content .page-title");
+                  const rect = title?.getBoundingClientRect();
+                  return rect && [Math.round(rect.left), Math.round(rect.top)];
+                }),
+              { message: `${route} at ${width}` },
+            )
+            .toEqual([24, 86]);
+          expect(await page.locator(".topbar-search").count()).toBe(1);
+          expect(await page.locator(".header-new-session").count()).toBe(0);
+        }
+        await page.setViewportSize({ height: 900, width: 768 });
+      }
+
+      const pathname = pathForRoute("usage");
+      await page.goto(new URL(pathname, suite.server.baseUrl).toString());
+      await waitForControlUiRoute(page, { pathname, routeId: "usage" });
+      await page.locator(".header-new-session").waitFor();
     } finally {
       await context.close();
     }
@@ -839,7 +999,7 @@ suite.define(() => {
 
         if (route === "cloud-workers") {
           expect(await page.locator(".page-subtitle").count()).toBe(0);
-          await page.locator(".cloud-environments__advanced > summary").click();
+          await page.locator(".settings-disclosure > summary").click();
         }
 
         const titleDescriptionPairs = page.locator(
@@ -889,7 +1049,9 @@ suite.define(() => {
         }
 
         if ((sectionAlignmentRoutes as readonly string[]).includes(route)) {
-          const heading = page.locator(".settings-section__heading").first();
+          const heading = page
+            .locator(route === "secrets" ? ".page-title" : ".settings-section__heading")
+            .first();
           const group = page.locator(".settings-section .settings-group").first();
           await heading.waitFor();
           await group.waitFor();

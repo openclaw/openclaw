@@ -206,7 +206,7 @@ it("shows selected capabilities without a catalog", () => {
   const titles = [...container.querySelectorAll(".plugin-capabilities h2")].map(
     (heading) => heading.textContent,
   );
-  expect(titles).toEqual(["Capabilities2", "Tools1"]);
+  expect(titles).toEqual(["Capabilities", "Tools"]);
   expect(container.textContent).toContain("Text to speech");
   expect(container.textContent).toContain("Pages");
   expect(container.textContent).not.toMatch(/speechProviders:|sibling-|Video generation/);
