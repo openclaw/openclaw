@@ -42,7 +42,13 @@ type TelegramMessageProcessorTurnContext = {
 
 type ProcessTelegramMessageOptions = Pick<
   BuildTelegramMessageContextParams,
-  "allMedia" | "storeAllowFrom" | "options" | "replyMedia" | "replyChain" | "promptContext"
+  | "allMedia"
+  | "storeAllowFrom"
+  | "options"
+  | "replyMedia"
+  | "replyChain"
+  | "promptContext"
+  | "resolveSenderMedia"
 > & {
   ctx: TelegramContext;
   turnContext: TelegramMessageProcessorTurnContext;

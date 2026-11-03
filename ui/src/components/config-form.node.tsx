@@ -1,5 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Match, Show, Switch } from "solid-js";
+import { objectFormOfUnion } from "../lib/config-form-utils.ts";
 import { getLocale, t } from "../lib/reactive/i18n.ts";
 import { resolveStructuredDraftInitialValue } from "./config-form-structured-draft.ts";
 import { ConfigStructuredDraft } from "./config-form-structured-draft.tsx";
@@ -16,10 +17,12 @@ import {
   type ConfigNodeRenderer,
 } from "./config-form.node.shared.ts";
 import {
+  ConfigFieldHelp,
+  configRowCopy,
   FieldRow,
   JsonTextareaControl,
+  schemaDefaultValueText,
   SegmentedControl,
-  renderSchemaDefaultDescription,
 } from "./config-form.node.shared.tsx";
 import {
   hasConfigSearchCriteria,
@@ -28,6 +31,9 @@ import {
 } from "./config-form.search.ts";
 import { hintForPath, pathKey, schemaType, type JsonSchema } from "./config-form.shared.ts";
 import { SettingsToggle, SettingsToggleRow } from "./solid/settings-ui.tsx";
+
+const isConfigObjectValue = (value: unknown) =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
 
 function resolveNode(
   schema: JsonSchema,
@@ -38,6 +44,7 @@ function resolveNode(
   options?: unknown[];
   nullable?: boolean;
   inputType?: "text" | "number";
+  shorthandObject?: boolean;
 } {
   if (schema.anyOf || schema.oneOf) {
     const nonNull = (schema.anyOf ?? schema.oneOf ?? []).filter(
@@ -93,6 +100,19 @@ function resolveNode(
         };
       }
     }
+    const objectForm = objectFormOfUnion(schema);
+    if (
+      objectForm &&
+      (params.value === undefined ||
+        typeof params.value === "string" ||
+        isConfigObjectValue(params.value))
+    ) {
+      return {
+        schema: { ...schema, ...objectForm, anyOf: undefined, oneOf: undefined },
+        kind: "object",
+        shorthandObject: true,
+      };
+    }
     return { schema, kind: "json" };
   }
   if (schema.enum) {
@@ -118,7 +138,11 @@ function resolveNode(
 
 export function ConfigNode(props: { params: ConfigNodeRenderParams }): JSX.Element {
   const node = createMemo(() => resolveNode(props.params.schema, props.params));
-  const params = createMemo(() => ({ ...props.params, schema: node().schema }));
+  const params = createMemo(() => ({
+    ...props.params,
+    schema: node().schema,
+    shorthandObject: node().shorthandObject,
+  }));
   const meta = createMemo(
     () => {
       getLocale();
@@ -154,7 +178,8 @@ export function ConfigNode(props: { params: ConfigNodeRenderParams }): JSX.Eleme
           label={meta().label}
           showLabel
           control={undefined}
-          error={t("configForm.unsupportedNode")}
+          unsupported={t("configForm.unsupportedNode")}
+          onOpenRaw={params().onOpenRaw}
         />
       </Match>
       <Match when={matches()}>
@@ -196,7 +221,10 @@ function ResolvedNode(props: {
           label={field().label}
           showLabel
           control={undefined}
-          error={t("configForm.unsupportedType", { type: String(schemaType(props.params.schema)) })}
+          unsupported={t("configForm.unsupportedType", {
+            type: String(schemaType(props.params.schema)),
+          })}
+          onOpenRaw={props.params.onOpenRaw}
         />
       }
     >
@@ -206,10 +234,7 @@ function ResolvedNode(props: {
           fallback={
             <FieldRow
               {...field()}
-              defaultDescription={renderSchemaDefaultDescription(
-                props.params.schema,
-                props.params.value,
-              )}
+              defaultValue={schemaDefaultValueText(props.params.schema)}
               control={
                 <SegmentedControl
                   options={props.node.options ?? []}
@@ -262,10 +287,8 @@ function JsonTextarea(props: { params: ConfigNodeRenderParams }): JSX.Element {
   return (
     <FieldRow
       {...field()}
-      defaultDescription={
-        sensitiveState().isRedacted
-          ? undefined
-          : renderSchemaDefaultDescription(props.params.schema, props.params.value)
+      defaultValue={
+        sensitiveState().isRedacted ? undefined : schemaDefaultValueText(props.params.schema)
       }
       stacked
       control={
@@ -284,6 +307,8 @@ function JsonTextarea(props: { params: ConfigNodeRenderParams }): JSX.Element {
           isRequired={props.params.isRequired}
           showRequiredCue={false}
           onToggleSensitivePath={props.params.onToggleSensitivePath}
+          hints={props.params.hints}
+          secretFields={props.params.secretFields}
           onPatch={props.params.onPatch}
         />
       }
@@ -303,6 +328,15 @@ function BooleanNode(props: { params: ConfigNodeRenderParams }): JSX.Element {
         ? props.params.schema.default
         : false;
   const onChange = (value: boolean) => props.params.onPatch(props.params.path, value);
+  const defaultValue = createMemo(() => schemaDefaultValueText(props.params.schema));
+  const copy = createMemo(() =>
+    configRowCopy({
+      label: meta().label,
+      help: meta().help,
+      context: props.params.helpContext,
+      defaultValue: defaultValue(),
+    }),
+  );
   return (
     <Switch
       fallback={
@@ -333,7 +367,9 @@ function BooleanNode(props: { params: ConfigNodeRenderParams }): JSX.Element {
         <FieldRow
           label={meta().label}
           title={configLabelInContext(meta().label, props.params.contextLabel)}
+          path={props.params.path}
           help={meta().help}
+          helpContext={props.params.helpContext}
           showLabel={props.params.showLabel ?? true}
           control={
             <input
@@ -353,16 +389,23 @@ function BooleanNode(props: { params: ConfigNodeRenderParams }): JSX.Element {
       </Match>
       <Match when={props.params.showLabel !== false}>
         <SettingsToggleRow
-          title={configLabelInContext(meta().label, props.params.contextLabel)}
+          title={
+            <>
+              {configLabelInContext(meta().label, props.params.contextLabel)}
+              <Show when={copy().hasHelp}>
+                <ConfigFieldHelp
+                  path={props.params.path}
+                  label={meta().label}
+                  help={meta().help}
+                  context={props.params.helpContext}
+                  defaultValue={defaultValue()}
+                />
+              </Show>
+            </>
+          }
           ariaLabel={meta().label}
           description={
-            <>
-              {meta().help}
-              <Show when={meta().help && props.params.schema.default !== undefined}>
-                <br />{" "}
-              </Show>
-              {renderSchemaDefaultDescription(props.params.schema, props.params.value)}
-            </>
+            copy().summary ? <span class="config-field__summary">{copy().summary}</span> : undefined
           }
           checked={checked()}
           disabled={props.params.disabled}

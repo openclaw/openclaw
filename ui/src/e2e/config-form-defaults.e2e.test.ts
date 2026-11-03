@@ -1,5 +1,6 @@
 // Control UI tests cover schema defaults and restoring inherited config values.
 
+import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway, type MockGatewayRequest } from "../test-helpers/control-ui-e2e.ts";
 import {
@@ -201,25 +202,30 @@ suite.define(() => {
       const enabledRow = settingsRow(page, "Enabled").first();
       const modeRow = settingsRow(page, "Mode").first();
       const payloadRow = settingsRow(page, "Payload");
-      const profileBlock = panel.locator("details.cfg-object").filter({
-        has: page.locator(".cfg-object__summary .settings-row__title").getByText("Profile", {
-          exact: true,
-        }),
-      });
       const retriesRow = settingsRow(page, "Retries");
       const tagsBlock = panel.locator(".cfg-array").filter({ hasText: "Tags" });
 
+      const helpText = async (row: Locator, label: string) => {
+        await row.getByRole("button", { name: `Help for ${label}`, exact: true }).click();
+        const popover = page.locator(".config-field-help__popover:popover-open");
+        await popover.waitFor();
+        const text = await popover.textContent();
+        await page.keyboard.press("Escape");
+        await popover.waitFor({ state: "hidden" });
+        return text;
+      };
       await expect
         .poll(() => enabledRow.textContent().then((text) => text?.replace(/\s+/gu, " ").trim()))
-        .toContain("Controls runtime processing. Default: true");
-      await expect.poll(() => modeRow.textContent()).toContain("Default: balanced");
+        .toContain("Controls runtime processing.");
+      expect(await helpText(enabledRow, "Enabled")).toContain("Default: true");
+      expect(await helpText(modeRow, "Mode")).toMatch(/Default: balanced/iu);
       await expect.poll(() => modeRow.locator("select").inputValue()).not.toBe("__unset__");
-      await expect.poll(() => payloadRow.textContent()).toContain('Default: {"mode":"balanced"}');
+      expect(await helpText(payloadRow, "Payload")).toContain('Default: {"mode":"balanced"}');
       await expect
-        .poll(() => profileBlock.textContent())
+        .poll(() => panel.textContent())
         .not.toContain('{"enabled":true,"mode":"balanced"}');
       await expect.poll(() => retriesRow.getByRole("spinbutton").inputValue()).toBe("9");
-      await expect.poll(() => tagsBlock.textContent()).toContain('Default: ["stable","default"]');
+      expect(await helpText(tagsBlock, "Tags")).toContain('Default: ["stable","default"]');
 
       await capture(panel, "01-explicit-overrides.png");
 
@@ -240,7 +246,7 @@ suite.define(() => {
       });
       await expect
         .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
-        .toBe("");
+        .toBe("Saving…");
 
       await expect.poll(() => modeRow.locator("select").inputValue()).toBe("__unset__");
       await expect.poll(() => retriesRow.getByRole("spinbutton").inputValue()).toBe("");

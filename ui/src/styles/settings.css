@@ -268,16 +268,17 @@ openclaw-appearance-background .settings-background-preview .session-background_
 
 /* The page headline adopts the column of the page below it; without this the
    shell caps headers at 1120px while narrow pages use a 760px column, leaving
-   the title floating left of the content. */
-.shell--settings .content.content--settings-page .content-header,
-.content.content--settings-page .content-header--settings {
+   the title floating left of the content. A header nested in that column
+   belongs to its panel and is already inset. */
+.shell--settings .content.content--settings-page .content-header:where(:not(.settings-page *)),
+.content.content--settings-page .content-header--settings:where(:not(.settings-page *)) {
   max-width: 760px;
   margin-inline: auto;
   padding-inline: var(--space-4);
 }
 
-.shell--settings .content.content--settings-wide .content-header,
-.content.content--settings-wide .content-header--settings {
+.shell--settings .content.content--settings-wide .content-header:where(:not(.settings-page *)),
+.content.content--settings-wide .content-header--settings:where(:not(.settings-page *)) {
   max-width: 1120px;
 }
 
@@ -487,9 +488,91 @@ openclaw-appearance-background .settings-background-preview .session-background_
   color: var(--muted-strong);
 }
 
+.settings-section__help-panel strong {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
 .settings-section__help-panel a {
   width: fit-content;
   font-weight: 600;
+}
+
+/* Schema help runs to several sentences; it reads as a note, not a caption. */
+.config-field-help__popover {
+  --oc-overlay-max-width: 360px;
+
+  overflow-wrap: anywhere;
+}
+
+/* A phone gives the help the screen's width, whatever the row's "?" offset. Like everywhere,
+   it opens above the row so the setting's own text and control stay in view. */
+@media (max-width: 640px) {
+  .oc-overlay[data-placement].config-field-help__popover {
+    --oc-overlay-max-width: calc(100dvw - 32px);
+
+    width: var(--oc-overlay-max-width);
+    justify-self: center;
+    position-area: top span-all;
+    position-try-fallbacks: flip-block;
+  }
+}
+
+/* The row's own font and color stop at the help surface. */
+.config-field__raw-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.config-field__raw-link:hover {
+  color: var(--muted-strong);
+}
+
+.config-field-help {
+  display: inline-flex;
+  margin-inline-start: 6px;
+  vertical-align: -2px;
+  font-weight: 400;
+}
+
+/* The "?" stays beside the label's text when the text wraps, never alone on a line of its own. */
+.settings-row__title:has(> .config-field-help) {
+  display: flex;
+  align-items: baseline;
+
+  > .config-field-help {
+    flex: none;
+    position: relative;
+    top: 2px;
+  }
+
+  > .settings-row__desc {
+    flex: none;
+    white-space: pre;
+  }
+}
+
+.config-field-help .settings-section__help-button {
+  width: 14px;
+  height: 14px;
+}
+
+.config-field__summary {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+}
+
+@media (max-width: 640px) {
+  .config-field__summary {
+    -webkit-line-clamp: 2;
+  }
 }
 
 .settings-group {
@@ -510,23 +593,45 @@ openclaw-appearance-background .settings-background-preview .session-background_
   border-color: color-mix(in srgb, var(--danger) 35%, var(--border) 65%);
 }
 
-/* Lives here rather than config.css because every schema-driven surface
- * (config pages and the channel detail forms) renders the same split. */
-
-.config-advanced-disclosure {
-  margin-top: var(--space-5);
+.settings-disclosure__summary {
+  list-style: none;
 }
 
-.config-tier-groups > .config-advanced-disclosure:first-child {
-  margin-top: 0;
+.settings-disclosure__summary::-webkit-details-marker {
+  display: none;
 }
 
-.config-advanced-disclosure__summary {
-  cursor: var(--cursor-action);
+.settings-disclosure[open] > .settings-disclosure__summary .settings-disclosure__chevron {
+  transform: rotate(90deg);
 }
 
-.config-advanced-disclosure > .settings-group {
-  margin-top: var(--space-3);
+.settings-disclosure__sections {
+  margin-top: var(--space-8);
+}
+
+/* A row's own details chevron: the quiet disclosure's glyph, as a button after the row's action. */
+.btn.settings-details-toggle {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0;
+  color: var(--muted);
+}
+
+.btn.settings-details-toggle svg {
+  width: var(--list-row-icon-size);
+  height: var(--list-row-icon-size);
+}
+
+.settings-details-toggle[aria-expanded="true"] svg {
+  transform: rotate(90deg);
+}
+
+/* At the row's end, the glyph lines up with the other rows' chevrons, also when the control
+   wraps under the title on phones. The tooltip host is display: contents. */
+.settings-row__control > openclaw-tooltip:last-child > .btn.settings-details-toggle {
+  margin-inline: auto -6px;
 }
 
 .settings-row {
@@ -751,6 +856,12 @@ openclaw-appearance-background .settings-background-preview .session-background_
   transition: background var(--duration-fast) var(--ease-out);
 }
 
+/* A disclosure that opens whole sections is its own one-row group. */
+.settings-row--nav.settings-group {
+  border: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
+  background: var(--card);
+}
+
 .settings-row--nav:hover {
   background: var(--surface-hover);
 }
@@ -786,8 +897,45 @@ openclaw-appearance-background .settings-background-preview .session-background_
   transform: rotate(90deg);
 }
 
-.settings-subrows .settings-row {
+/* Status and a short note read together under a row's title. */
+.settings-row__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: var(--space-3);
+}
+
+/* These rows keep their control at the row's end on phones. */
+@media (max-width: 640px) {
+  :is(.shell--settings, .shell--embed-settings)
+    :is(
+      .settings-row:has(> .settings-row__text .settings-row__meta),
+      .settings-disclosure > .settings-row
+    ) {
+    flex-wrap: nowrap;
+
+    > .settings-row__control {
+      width: auto;
+      max-width: 50%;
+      justify-content: flex-end;
+    }
+  }
+}
+
+.settings-subrows:where(:not(.cfg-subrows)) .settings-row {
   padding-left: var(--space-7);
+}
+
+/* Generated nesting indents per level, and only from the start edge, so controls keep
+   their column at every depth. */
+.cfg-subrows {
+  padding-inline-start: var(--space-4);
+}
+
+@media (max-width: 640px) {
+  .cfg-subrows {
+    padding-inline-start: var(--space-3);
+  }
 }
 
 .settings-toggle {
@@ -869,6 +1017,98 @@ openclaw-appearance-background .settings-background-preview .session-background_
    wrapper must grow or the inner 100% resolves against fit-content. */
 .settings-row--stacked .settings-row__control > .settings-secret {
   flex: 1 1 auto;
+}
+
+/* A secret that holds its edit: the field, then Save and Cancel beside it. Together they keep the
+   lone-input width, so a held edit narrows the field instead of moving the row or its neighbours. */
+.cfg-secret {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.cfg-secret > .settings-secret {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.settings-row:not(.settings-row--stacked) .settings-row__control > .cfg-secret {
+  width: 340px;
+}
+
+.settings-row--stacked .settings-row__control > .cfg-secret {
+  flex: 1 1 auto;
+}
+
+.cfg-secret--multiline {
+  flex-direction: column;
+  align-items: stretch;
+  width: 100%;
+}
+
+.cfg-secret--multiline > .settings-secret {
+  flex: none;
+  width: 100%;
+}
+
+.cfg-secret--multiline > .cfg-secret-actions {
+  align-self: flex-end;
+}
+
+/* Saving and Saved keep the buttons' footprint, so the field changes width only when the edit
+   starts and when it ends. */
+.cfg-secret-actions {
+  display: grid;
+  flex: none;
+}
+
+.cfg-secret-actions > * {
+  grid-area: 1 / 1;
+}
+
+.cfg-secret-actions__buttons {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.cfg-secret-actions[data-saved] > .cfg-secret-actions__buttons {
+  visibility: hidden;
+}
+
+.cfg-secret-actions .btn {
+  display: inline-grid;
+  place-items: center;
+}
+
+.cfg-secret-actions__label {
+  grid-area: 1 / 1;
+}
+
+.cfg-secret-actions__label:not([data-shown]) {
+  visibility: hidden;
+}
+
+.cfg-secret-actions__saved {
+  align-self: center;
+  padding-inline: var(--space-2);
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+/* A refusal wraps under the field and its actions instead of squeezing them. */
+.settings-row:not(.settings-row--stacked) > .settings-row__control:has(> .cfg-secret) {
+  flex-wrap: wrap;
+  width: 340px;
+}
+
+.settings-row__control:has(> .cfg-secret) > .cfg-field__error {
+  flex-basis: 100%;
+}
+
+/* Without an eye there's nothing to clear, so the text keeps the field's own inset. */
+.settings-secret:not(:has(> openclaw-tooltip, > .settings-secret__toggle)) > :is(input, textarea) {
+  padding-right: var(--field-padding-inline);
 }
 
 /* Multiline secrets (JSON textareas) anchor the eye to the first line. */
@@ -1125,8 +1365,7 @@ textarea.settings-input {
 /* Identity composes existing row controls; these wrappers only keep the
    avatar/file action and name/save action aligned as one control cluster. */
 .identity-avatar-control,
-.identity-name-control,
-.settings-account {
+.identity-name-control {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
@@ -1139,13 +1378,6 @@ textarea.settings-input {
 
 .identity-error .settings-row__desc {
   color: var(--danger);
-}
-
-.settings-account__avatar {
-  width: 20px;
-  height: 20px;
-  border-radius: var(--radius-full);
-  flex: none;
 }
 
 .github-device-code {
@@ -1238,7 +1470,6 @@ textarea.settings-input {
   .shell--settings .content.content--settings-workspace .content-header,
   .shell--settings .settings-page,
   .content.content--hub-header .settings-page,
-  .shell--settings .config-content,
   .shell--settings .config-lead,
   .shell--settings .config-content-callout {
     padding-inline: 0;
@@ -1254,10 +1485,8 @@ textarea.settings-input {
     align-self: flex-end;
   }
 
-  /* A lone help button stays on the row of the description it explains. */
-  .settings-section__header:has(.settings-section__copy):has(
-      > .settings-section__actions > .settings-section__docs:only-child
-    ) {
+  /* A section with "?" keeps its small actions beside the copy instead of a line of their own. */
+  .settings-section__header:has(.settings-section__copy):has(.settings-section__docs) {
     align-items: flex-start;
     flex-direction: row;
 
@@ -1325,11 +1554,12 @@ textarea.settings-input {
       max-width: 100%;
     }
 
-    .settings-row:is(.settings-row--nav, .settings-row--toggle) {
+    .settings-row:is(.settings-row--nav, .settings-row--toggle, .cfg-object__summary) {
       flex-wrap: nowrap;
     }
 
-    .settings-row:is(.settings-row--nav, .settings-row--toggle) > .settings-row__control {
+    .settings-row:is(.settings-row--nav, .settings-row--toggle, .cfg-object__summary)
+      > .settings-row__control {
       width: auto;
       max-width: 50%;
       justify-content: flex-end;
@@ -1725,10 +1955,6 @@ textarea.settings-input {
   display: contents;
 }
 
-.settings-sidebar__connection {
-  min-height: 1lh;
-}
-
 openclaw-settings-save-indicator {
   min-width: 0;
 }
@@ -1744,21 +1970,129 @@ openclaw-settings-save-indicator:empty {
   min-width: 0;
 }
 
-.settings-save-indicator--recovery,
-.settings-save-indicator--rejected {
-  flex-direction: column;
-  align-items: flex-start;
-  white-space: pre-line;
+.settings-save-indicator__failure {
+  color: var(--danger);
+}
+
+/* A failed save reads top to bottom: what failed, why, then the way out. Only the
+   title carries danger; the reason stays plain text and is never behind a toggle. */
+.settings-save-indicator--failure {
+  display: grid;
+  justify-items: start;
+  gap: 2px;
+}
+
+.settings-save-indicator__title {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.settings-save-indicator__reason {
+  max-height: min(7lh, 30dvh);
+  margin: 0;
+  overflow-y: auto;
+  color: var(--text);
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
-.settings-save-indicator--danger {
-  color: var(--danger);
+/* A retry keeps the card's shape; only its title and emphasis change. */
+.settings-save-indicator--retrying .settings-save-indicator__title {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.settings-save-indicator--retrying .settings-save-indicator__reason {
+  color: var(--muted);
 }
 
 .settings-save-indicator svg {
   width: 15px;
   height: 15px;
+}
+
+.settings-save-indicator__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.settings-save-indicator--failure .settings-save-indicator__actions {
+  margin-block-start: 8px;
+}
+
+/* Shares the page's grid cell, so nothing in the page moves when it appears. It rests
+   in the bottom gutter and lets clicks through; only its own buttons take them. */
+.settings-save-status {
+  position: relative;
+  z-index: 1;
+  grid-area: content;
+  align-self: end;
+  justify-self: center;
+  max-width: calc(100% - 32px);
+  margin-block-end: calc(16px + var(--shell-safe-area-bottom, 0px));
+  pointer-events: none;
+}
+
+.settings-save-status .settings-save-indicator {
+  position: relative;
+  width: fit-content;
+  max-width: min(420px, 100%);
+  margin-inline: auto;
+  padding: 6px 12px;
+  border-radius: var(--menu-radius);
+  background: var(--menu-surface);
+  box-shadow: var(--menu-shadow);
+  backdrop-filter: var(--menu-backdrop);
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  transition: opacity 120ms ease-out;
+
+  @starting-style {
+    opacity: 0;
+  }
+}
+
+.settings-save-status .settings-save-indicator :is(button, a) {
+  pointer-events: auto;
+}
+
+/* The failure grows up from the same anchor as a fixed-width card, so a retry or a
+   longer reason never changes its width. It takes clicks so the reason can scroll. */
+.settings-save-status .settings-save-indicator--failure {
+  width: 360px;
+  max-width: 100%;
+  padding: 10px 12px 12px;
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.45;
+  pointer-events: auto;
+}
+
+/* Saving and Saved swap in place without changing the pill's width. */
+.settings-save-indicator--transient {
+  justify-content: center;
+  min-width: calc(8ch + 24px);
+}
+
+/* Runs for CONFIG_SAVED_NOTICE_MS: the notice is already gone when it unmounts. */
+.settings-save-indicator--saved {
+  animation: settings-save-saved 2s linear forwards;
+}
+
+@keyframes settings-save-saved {
+  85% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-save-indicator--saved {
+    animation: none;
+  }
 }
 
 .settings-sidebar__footer .sidebar-footer-build {

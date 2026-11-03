@@ -2,6 +2,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { INTERNAL_SESSION_PATH_PARAM } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { loadCatalogShareRouteFromLocation } from "./route-loader-catalog-share.ts";
 import { loadRoute, routeLocation } from "./route-loading.test-support.ts";
 
 const fullId = "0123456789abcdef0123456789abcdef";
@@ -54,6 +56,35 @@ const loadCatalog = (result: unknown, path = "/beam/0123456789ab") =>
   loadRoute(catalogContext(vi.fn(async () => result)), path);
 
 describe("catalog share route resolution", () => {
+  it("does not request a catalog after cancellation during deferred resolver loading", async () => {
+    const request = vi.fn(async () => beamCatalog([{ threadId: fullId, name: "Canceled Beam" }]));
+    const abort = new AbortController();
+    const pending = loadCatalogShareRouteFromLocation(
+      catalogContext(request),
+      routeLocation("/beam/0123456789ab"),
+      abort.signal,
+    );
+    abort.abort();
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    expect(request).not.toHaveBeenCalled();
+  });
+  it("resolves a Visitor owned Beam link without requesting the operator catalog", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method !== "beam.owned.list") {
+        throw new Error("missing scope: operator.read");
+      }
+      return beamCatalog([{ threadId: fullId, name: "Owned synthetic Beam" }]);
+    });
+    const context = catalogContext(request);
+    context.gateway.snapshot.hello = gatewayHelloForMethods(
+      ["beam.owned.list", "beam.owned.read"],
+      ["operator.sessions.write"],
+    );
+    await expect(loadRoute(context, "/beam/0123456789ab")).resolves.toMatchObject({
+      kind: "session",
+      sessionKey: `agent:research:catalog:beam:gateway:${fullId}`,
+    });
+  });
   it("resolves an external-style provider descriptor without catalog-specific UI policy", async () => {
     const result = beamCatalog([{ threadId: fullId, name: "External session" }]);
     const catalog = {
