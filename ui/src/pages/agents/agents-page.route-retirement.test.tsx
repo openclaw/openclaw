@@ -256,7 +256,7 @@ it.each(["save", "reload"] as const)(
         mounted.getByRole<HTMLButtonElement>("button", { name: "Save" }),
       );
       const reloadButton = mounted.getByRole<HTMLButtonElement>("button", {
-        name: "Reload Config",
+        name: "Reload config",
       });
       (operation === "save" ? saveButton : reloadButton).click();
       await waitForSolid(() => {
@@ -270,7 +270,7 @@ it.each(["save", "reload"] as const)(
       mounted.getByRole("button", { name: "Leave Agents" }).click();
       await waitForSolid(() => mounted.getByText("Config destination body", { exact: true }));
       expect(mounted.container.querySelector("openclaw-agents-page")).toBeNull();
-      expect(mounted.queryByRole("button", { name: "Reload Config" })).toBeNull();
+      expect(mounted.queryByRole("button", { name: "Reload config" })).toBeNull();
       expect(agents.refreshList).not.toHaveBeenCalled();
 
       if (operation === "save") {

@@ -160,9 +160,9 @@ describe("renderAgents", () => {
       container,
     );
 
-    expect(
-      container.querySelector<HTMLInputElement>(".agent-identity-editor__fields input")?.value,
-    ).toBe("Fetched Beta");
+    expect(container.querySelector<HTMLInputElement>(".agent-identity-editor__name")?.value).toBe(
+      "Fetched Beta",
+    );
     expect(
       container
         .querySelector(".agent-identity-editor__avatar .identity-avatar__text")
