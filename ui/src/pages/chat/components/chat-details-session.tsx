@@ -15,6 +15,7 @@ import { scopedSessionArtifactKey } from "../../../lib/sessions/session-key.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { PluginContributions } from "../../../plugins/control-ui-contributions.solid.tsx";
 import { ProcessesPanelData } from "../processes-panel-data.ts";
+import { getSessionCacheValue, setSessionCacheValue } from "../session-cache.ts";
 import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { ChatDetailsBackground } from "./chat-details-background.tsx";
 import { ChatDetailsDesktopBody } from "./chat-details-desktop-body.tsx";
@@ -48,6 +49,13 @@ const ChatDetailsPeople = lazy(() => import("./chat-details-people-list.tsx"), {
 const ChatOutputsDesktop = lazy(() => import("./chat-outputs.tsx"), {
   export: "ChatOutputsDesktop",
 });
+
+// Disclosure choices outlive keyed remounts (pane eviction, Gateway restarts) for this page
+// load only: a new session or a reload starts from the defaults, and nothing is persisted.
+const sectionChoicesBySession = new Map<
+  string,
+  Partial<Record<ChatDetailsDesktopSectionId, boolean>>
+>();
 
 type Props = {
   props?: ChatDetailsProps;
@@ -151,11 +159,11 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
     });
     return (
       <Show when={identity()} keyed>
-        {(_identity) => {
+        {(sessionIdentity) => {
           const [pullRequestsOpen, setPullRequestsOpen] = createSignal(true);
           const [sectionChoices, setSectionChoices] = createStore<
             Partial<Record<ChatDetailsDesktopSectionId, boolean>>
-          >({});
+          >({ ...getSessionCacheValue(sectionChoicesBySession, sessionIdentity) });
           const desktopPresentation = () =>
             props.desktop ? props.props?.desktopPresentation : undefined;
           const sectionExpanded = (section: ChatDetailsDesktopSectionId) =>
@@ -171,6 +179,10 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
             }
             setSectionChoices((choices) => {
               choices[section] = expanded;
+            });
+            setSessionCacheValue(sectionChoicesBySession, sessionIdentity, {
+              ...getSessionCacheValue(sectionChoicesBySession, sessionIdentity),
+              [section]: expanded,
             });
             props.props?.desktopDisclosures?.onExpandedChange(section, expanded);
           };

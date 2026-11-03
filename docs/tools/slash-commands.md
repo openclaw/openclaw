@@ -97,8 +97,8 @@ Links and mentions in copied excerpts do not notify people or expand previews.
 A busy source forks through its last completed turn, not an in-flight partial
 answer. A fork does not clone the workspace or undo file and external effects.
 
-In the Control UI, **Fork conversation** uses the same session-copy operation
-and selects the new session. Inherited messages already appear in
+In the Control UI, typed `/fork [title]` uses the same operation as **Fork
+conversation** and selects the new session. Inherited messages already appear in
 history, so the UI does not insert a duplicate recap. **Fork from here** remains
 the separate message-level action that cuts before the selected user message.
 

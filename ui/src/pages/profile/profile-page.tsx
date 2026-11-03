@@ -6,6 +6,7 @@ import {
   createOptimistic,
   createSignal,
   Errored,
+  For,
   isPending,
   latest,
   Loading,
@@ -16,8 +17,10 @@ import {
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../../packages/gateway-protocol/src/index.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { ScopeUpgradeOwner } from "../../app/device-scope-upgrade-owner.runtime.ts";
-import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { ScopeUpgradeActions, scopeUpgradeText } from "../../components/scope-upgrade-actions.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
+import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
+import { SettingsSectionHelp } from "../../components/solid/settings-section-help.tsx";
 import {
   LearnMoreLink,
   SettingsEmpty,
@@ -30,6 +33,7 @@ import {
   SettingsStatus,
   SettingsToggleRow,
   SettingsValue,
+  SettingsPageHeader,
 } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { GitHubConnections } from "../../features/github-connections/github-connections.tsx";
@@ -148,7 +152,12 @@ export function ProfilePage() {
       }
     } catch (error) {
       if (isCurrent()) {
-        state.identityError = formatUiError(error, t("profilePage.identity.profileUnavailable"));
+        const message = formatUiError(error, t("profilePage.identity.profileUnavailable"));
+        if (change.kind === "git-coauthor" || change.kind === "pr-attribution") {
+          state.attributionError = message;
+        } else {
+          state.identityError = message;
+        }
         state.publish();
       }
     }
@@ -260,14 +269,44 @@ export function ProfilePage() {
             <div id={PROFILE_SETTINGS_TARGET_IDS.identity}>
               <SettingsSection
                 title={t("profilePage.identity.title")}
-                description={t("profilePage.identity.description")}
+                actions={
+                  <SettingsSectionHelp
+                    id="settings-profile-identity-help"
+                    section={t("profilePage.identity.title")}
+                  >
+                    <p>
+                      <strong>{t("profilePage.identity.avatar")}</strong>{" "}
+                      {t("profilePage.identity.avatarDescription")}
+                    </p>
+                    <Show when={!isOwnerProfile()}>
+                      <p>
+                        <strong>{t("profilePage.identity.linkedEmails")}</strong>{" "}
+                        {t("profilePage.identity.linkedEmailsDescription")}
+                      </p>
+                      <p>
+                        <strong>{t("profilePage.discord.title")}</strong>{" "}
+                        {t("profilePage.discord.description")}
+                      </p>
+                    </Show>
+                    <p>
+                      <strong>{t("profilePage.identity.githubAccount")}</strong>{" "}
+                      {isOwnerProfile()
+                        ? t("profilePage.identity.ownerGithubDescription")
+                        : t("profilePage.identity.githubAccountDescription")}
+                      <Show when={!profile().githubIdentity}>
+                        {" "}
+                        {t("profilePage.identity.githubUnavailableDescription")}
+                      </Show>
+                    </p>
+                  </SettingsSectionHelp>
+                }
               >
                 <Show when={!canEditIdentity() && view().identityReady}>
                   <SettingsRow title={t("profilePage.identity.writeRequired")} />
                 </Show>
                 <SettingsRow
                   title={t("profilePage.identity.avatar")}
-                  description={t("profilePage.identity.avatarDescription")}
+                  description={t("profilePage.identity.avatarLimits")}
                   control={
                     <span class="identity-avatar-control">
                       <openclaw-viewer-avatar
@@ -361,10 +400,13 @@ export function ProfilePage() {
                 <Show when={!isOwnerProfile()}>
                   <SettingsRow
                     title={t("profilePage.identity.linkedEmails")}
-                    description={t("profilePage.identity.linkedEmailsDescription")}
-                    control={
+                    description={
                       profile().emails.length ? (
-                        <SettingsValue value={profile().emails.join(", ")} />
+                        <span class="identity-emails">
+                          <For each={profile().emails}>
+                            {(email) => <span class="identity-account">{email}</span>}
+                          </For>
+                        </span>
                       ) : undefined
                     }
                   />
@@ -375,83 +417,30 @@ export function ProfilePage() {
                 <SettingsRow
                   title={t("profilePage.identity.githubAccount")}
                   description={
-                    isOwnerProfile()
-                      ? t("profilePage.identity.ownerGithubDescription")
-                      : profile().githubIdentity
-                        ? t("profilePage.identity.githubAccountDescription")
-                        : t("profilePage.identity.githubUnavailableDescription")
-                  }
-                  control={
-                    <Show
-                      when={profile().githubIdentity}
-                      fallback={
-                        <SettingsStatus
-                          kind="muted"
-                          label={t("profilePage.identity.githubUnavailable")}
-                        />
-                      }
-                    >
-                      {(identity) => (
-                        <>
+                    <span class="settings-row__meta">
+                      <SettingsStatus
+                        kind={profile().githubIdentity ? "ok" : "muted"}
+                        label={t(
+                          profile().githubIdentity
+                            ? "profilePage.identity.githubVerified"
+                            : "profilePage.identity.githubUnavailable",
+                        )}
+                      />
+                      <Show when={profile().githubIdentity}>
+                        {(identity) => (
                           <a
-                            class="settings-account"
+                            class="identity-account identity-github-login"
                             href={identity().profileUrl}
                             target={EXTERNAL_LINK_TARGET}
                             rel={buildExternalLinkRel()}
+                            title={`@${identity().login}`}
                           >
-                            <img
-                              class="settings-account__avatar"
-                              src={identity().avatarUrl}
-                              alt=""
-                            />
-                            <span class="settings-row__value settings-row__value--mono">
-                              @{identity().login}
-                            </span>
+                            @{identity().login}
                           </a>
-                          <SettingsStatus
-                            kind="ok"
-                            label={t("profilePage.identity.githubVerified")}
-                          />
-                        </>
-                      )}
-                    </Show>
+                        )}
+                      </Show>
+                    </span>
                   }
-                />
-                <SettingsToggleRow
-                  title={t("profilePage.identity.gitCoauthor")}
-                  description={
-                    // Publication selects its host independently of the displayed primary account.
-                    isOwnerProfile()
-                      ? t("profilePage.identity.ownerGitCoauthorDescription")
-                      : t("profilePage.identity.gitCoauthorDescription")
-                  }
-                  checked={!isOwnerProfile() && presentation().gitCoauthorEnabled()}
-                  disabled={
-                    !canEditIdentity() ||
-                    (busy() !== null && busy() !== "git-coauthor") ||
-                    isOwnerProfile()
-                  }
-                  saving={busy() === "git-coauthor"}
-                  onChange={(enabled) => void saveIdentity({ kind: "git-coauthor", enabled })}
-                />
-                <SettingsToggleRow
-                  title={t("profilePage.identity.prAttribution")}
-                  description={
-                    <>
-                      {t("profilePage.identity.prAttributionDescription")}
-                      <br />
-                      <a
-                        href="https://openclaw.ai"
-                        target={EXTERNAL_LINK_TARGET}
-                        rel={buildExternalLinkRel()}
-                      >
-                        {t("profilePage.identity.prAttributionLink")}
-                      </a>
-                    </>
-                  }
-                  checked={presentation().prAttributionEnabled()}
-                  disabled={!canEditIdentity() || busy() !== null}
-                  onChange={(enabled) => void saveIdentity({ kind: "pr-attribution", enabled })}
                 />
                 <Show when={view().identityError}>
                   <div class="settings-row identity-error" role="alert">
@@ -467,31 +456,97 @@ export function ProfilePage() {
     </Show>
   );
 
+  const AttributionSection = () => {
+    const busy = () => identityBusy() ?? (view().identityLoading ? "loading" : null);
+    const canEdit = () => latest(canWrite);
+    const isOwnerProfile = () => view().ownProfile?.id === GATEWAY_OWNER_PROFILE_ID;
+    return (
+      <Show when={view().selfUser && view().ownProfile}>
+        <div id={PROFILE_SETTINGS_TARGET_IDS.attribution}>
+          <SettingsSection
+            title={t("profilePage.identity.attribution")}
+            actions={
+              <SettingsSectionHelp
+                id="settings-profile-attribution-help"
+                section={t("profilePage.identity.attribution")}
+              >
+                <p>
+                  <strong>{t("profilePage.identity.gitCoauthor")}</strong>{" "}
+                  {t("profilePage.identity.gitCoauthorDescription")}
+                </p>
+                <p>
+                  <strong>{t("profilePage.identity.prAttribution")}</strong>{" "}
+                  {t("profilePage.identity.prAttributionDescription")}
+                </p>
+              </SettingsSectionHelp>
+            }
+          >
+            <SettingsToggleRow
+              title={t("profilePage.identity.gitCoauthor")}
+              description={
+                // Publication selects its host independently of the displayed primary account.
+                isOwnerProfile()
+                  ? t("profilePage.identity.ownerGitCoauthorDescription")
+                  : t("profilePage.identity.gitCoauthorShort")
+              }
+              checked={!isOwnerProfile() && presentation().gitCoauthorEnabled()}
+              disabled={
+                !canEdit() || (busy() !== null && busy() !== "git-coauthor") || isOwnerProfile()
+              }
+              saving={busy() === "git-coauthor"}
+              onChange={(enabled) => void saveIdentity({ kind: "git-coauthor", enabled })}
+            />
+            <SettingsToggleRow
+              title={t("profilePage.identity.prAttribution")}
+              description={
+                <>
+                  {t("profilePage.identity.prAttributionShort")}{" "}
+                  <a
+                    class="identity-attribution-link"
+                    href="https://openclaw.ai"
+                    target={EXTERNAL_LINK_TARGET}
+                    rel={buildExternalLinkRel()}
+                  >
+                    {t("profilePage.identity.prAttributionLink")}
+                  </a>
+                </>
+              }
+              checked={presentation().prAttributionEnabled()}
+              disabled={!canEdit() || busy() !== null}
+              onChange={(enabled) => void saveIdentity({ kind: "pr-attribution", enabled })}
+            />
+            <Show when={view().attributionError}>
+              <div class="settings-row identity-error" role="alert">
+                <span class="settings-row__desc">{view().attributionError}</span>
+              </div>
+            </Show>
+          </SettingsSection>
+        </div>
+      </Show>
+    );
+  };
+
   return (
     <openclaw-profile-page>
-      <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
-        <section class="content-header">
-          <div>
-            <h1 class="page-title">{titleForRoute("profile")}</h1>
-            <div class="page-subtitle">
-              {subtitleForRoute("profile")} <LearnMoreLink url={PROFILE_DOCS_URL} />
-            </div>
-          </div>
+      <SettingsPageHeader
+        title={titleForRoute("profile")}
+        subtitle={
+          <>
+            {subtitleForRoute("profile")} <LearnMoreLink url={PROFILE_DOCS_URL} />
+          </>
+        }
+        actions={
           <Show when={view().connected}>
-            <button
-              class="btn profile-refresh"
-              data-refresh-label={t("common.refresh")}
-              data-refreshing-label={t("common.refreshing")}
-              disabled={!view().identityReady || view().identityLoading || identityBusy() !== null}
+            <RefreshButton
+              class="profile-refresh"
+              label={view().identityLoading ? t("common.refreshing") : t("common.refresh")}
+              busy={view().identityLoading}
+              disabled={!view().identityReady || identityBusy() !== null}
               onClick={() => state.refreshManually()}
-            >
-              <Show when={view().identityLoading} fallback={<span>{t("common.refresh")}</span>}>
-                <span>{t("common.refreshing")}</span>
-              </Show>
-            </button>
+            />
           </Show>
-        </section>
-      </ShellLayoutBoundary>
+        }
+      />
       <SettingsWorkspace>
         <SettingsPage>
           <Show
@@ -508,77 +563,13 @@ export function ProfilePage() {
               </SettingsGroup>
             }
           >
-            <ProfileHero
-              row={agent()}
-              user={view().selfUser}
-              identity={identities.read().get(agent().id)}
-            />
-            <div id="settings-profile-access">
-              <SettingsSection title={t("profilePage.access.title")}>
-                <SettingsRow
-                  title={t(`profilePage.access.${accessSummary(view().connectionScopes)}`)}
-                  description={t("profilePage.access.limits")}
-                />
-                <SettingsRow
-                  title={t("profilePage.access.help")}
-                  description={t("profilePage.access.nextStep")}
-                  stackedOnNarrow
-                  control={
-                    <button
-                      type="button"
-                      class="btn"
-                      disabled={identityBusy() !== null}
-                      onClick={() => context.gateway.connect()}
-                    >
-                      {t("profilePage.access.reconnect")}
-                    </button>
-                  }
-                />
-                <Show when={upgrade.read()}>
-                  {(current) => (
-                    <SettingsRow
-                      title={t("profilePage.access.adminRequest")}
-                      description={
-                        current().phase === "available"
-                          ? t("profilePage.access.adminRequestHint")
-                          : scopeUpgradeText(current())
-                      }
-                      stackedOnNarrow
-                      control={
-                        <ScopeUpgradeActions
-                          state={current()}
-                          onRequest={() => context.scopeUpgrade.request()}
-                          onRetry={() => context.scopeUpgrade.retry()}
-                          onCancel={() => context.scopeUpgrade.cancel()}
-                        />
-                      }
-                    />
-                  )}
-                </Show>
-                <details class="settings-row settings-row--stacked">
-                  <summary>{t("profilePage.access.details")}</summary>
-                  <SettingsRow
-                    title={t("profilePage.access.scopes")}
-                    description={t("profilePage.access.description")}
-                    stacked
-                    control={
-                      <SettingsValue
-                        mono={
-                          view().connectionScopes !== null && view().connectionScopes!.length > 0
-                        }
-                        value={
-                          view().connectionScopes === null
-                            ? t("profilePage.access.unknown")
-                            : view().connectionScopes!.length === 0
-                              ? t("profilePage.access.none")
-                              : view().connectionScopes!.join(", ")
-                        }
-                      />
-                    }
-                  />
-                </details>
-              </SettingsSection>
-            </div>
+            <Show when={view().selfUser || !initialIdentityPending()}>
+              <ProfileHero
+                row={agent()}
+                user={view().selfUser}
+                identity={identities.read().get(agent().id)}
+              />
+            </Show>
             <Show when={!initialIdentityPending()} fallback={<IdentityContent pending={true} />}>
               <Errored
                 fallback={(error, reset) => (
@@ -627,6 +618,76 @@ export function ProfilePage() {
             />
             <GitHubConnections />
             <ControlUiSettingsSlot placement={{ section: "profile", panel: "connections" }} />
+            <AttributionSection />
+          </Show>
+          <Show when={hasPresentation()}>
+            <div id="settings-profile-access">
+              <SettingsSection title={t("profilePage.access.title")}>
+                <SettingsRow
+                  title={t(`profilePage.access.${accessSummary(view().connectionScopes)}`)}
+                  description={t("profilePage.access.limits")}
+                />
+                <SettingsRow
+                  title={t("profilePage.access.help")}
+                  description={t("profilePage.access.nextStep")}
+                  stackedOnNarrow
+                  control={
+                    <button
+                      type="button"
+                      class="btn"
+                      disabled={identityBusy() !== null}
+                      onClick={() => context.gateway.connect()}
+                    >
+                      {t("profilePage.access.reconnect")}
+                    </button>
+                  }
+                />
+                <Show when={upgrade.read()}>
+                  {(current) => (
+                    <SettingsRow
+                      title={t("profilePage.access.adminRequest")}
+                      description={
+                        current().phase === "available"
+                          ? t("profilePage.access.adminRequestHint")
+                          : scopeUpgradeText(current())
+                      }
+                      stackedOnNarrow
+                      control={
+                        <ScopeUpgradeActions
+                          state={current()}
+                          onRequest={() => context.scopeUpgrade.request()}
+                          onRetry={() => context.scopeUpgrade.retry()}
+                          onCancel={() => context.scopeUpgrade.cancel()}
+                        />
+                      }
+                    />
+                  )}
+                </Show>
+                <SettingsDisclosure quiet title={t("profilePage.access.details")}>
+                  <SettingsRow
+                    title={t("profilePage.access.scopes")}
+                    description={t("profilePage.access.description")}
+                    stacked
+                    control={
+                      <SettingsValue
+                        mono={
+                          view().connectionScopes !== null && view().connectionScopes!.length > 0
+                        }
+                        value={
+                          view().connectionScopes === null
+                            ? t("profilePage.access.unknown")
+                            : view().connectionScopes!.length === 0
+                              ? t("profilePage.access.none")
+                              : view().connectionScopes!.join(", ")
+                        }
+                      />
+                    }
+                  />
+                </SettingsDisclosure>
+              </SettingsSection>
+            </div>
+          </Show>
+          <Show when={hasPresentation() && !initialIdentityPending()}>
             <SettingsGroup>
               <SettingsNavRow
                 title={t("profilePage.usageStatistics")}

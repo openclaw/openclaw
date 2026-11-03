@@ -31,6 +31,7 @@ import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promi
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { writeGatewayGcTraceMarker, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { recordGcCollections } from "../lib/perf-gc-collections.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
@@ -181,12 +182,7 @@ const observer = new PerformanceObserver((list) =>
 );
 const inspector = new Session();
 if (values.mode === "allocation") {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 16384,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 16384);
 }
 observer.observe({ entryTypes: ["gc"] });
 const loop = monitorEventLoopDelay({ resolution: 1 });

@@ -231,6 +231,13 @@ reloads. The warning names the plugin and service; plugin health includes its se
 failure. Once cleanup settles, retry `openclaw plugins reload <id>` to recover the
 affected plugin. A slow service cleanup does not schedule a Gateway restart.
 
+If a failed replacement also cannot restore model/reply publication, the Gateway
+requests its normal work-draining recovery restart, including for explicit
+`plugins.reload`. The replacement still reports failure. Failed model-owner
+recovery backs off while that restart prepares, preserving queued replies' retry
+budget. Previously dead-lettered messages require manual resubmission through
+[Channels](/cli/channels#inbound-dead-letters).
+
 Channel transport edits, such as `channels.slack.streaming.mode`, retain prepared
 session rows and model catalogs. Agent rosters, session policy, store topology,
 configured model references, and channel activation still invalidate their affected

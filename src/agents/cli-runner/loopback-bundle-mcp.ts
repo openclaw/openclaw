@@ -1,6 +1,8 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getPluginToolMeta } from "../../plugins/tool-metadata.js";
+import { materializeRequesterScopedMcpToolsForHarnessRunCore } from "../agent-bundle-mcp-harness.js";
 import { setBundleMcpToolServerInstructions } from "../agent-bundle-mcp-instructions.js";
+import { getAdvertisedScopedMcpCatalog } from "../agent-bundle-mcp-manager-api.js";
 import { TOOL_NAME_SEPARATOR } from "../agent-bundle-mcp-names.js";
 import { loadSessionMcpConfig } from "../agent-bundle-mcp-runtime-config.js";
 import {
@@ -86,6 +88,9 @@ export async function prepareCliLoopbackBundleMcp(params: {
     return undefined;
   }
   let materialized: BundleMcpToolRuntime;
+  let requesterScoped: Awaited<
+    ReturnType<typeof materializeRequesterScopedMcpToolsForHarnessRunCore>
+  >;
   try {
     const acquisition = await acquireSessionMcpRuntime({
       ...mcpConfig,
@@ -93,8 +98,7 @@ export async function prepareCliLoopbackBundleMcp(params: {
       sessionKey: run.sessionKey,
       agentId: params.agentId,
       agentDir: params.agentDir,
-      // The catalog must not depend on which turn asks for it. Requester-scoped
-      // servers need a verified sender, which completions and automations lack.
+      // Shared servers only; requester-scoped servers follow below.
       requesterSenderId: undefined,
       agentAccountId: run.agentAccountId,
       messageChannel: run.messageChannel ?? run.messageProvider,
@@ -103,10 +107,49 @@ export async function prepareCliLoopbackBundleMcp(params: {
       ...acquisition,
       agentId: params.agentId,
     });
+    try {
+      // The listed catalog must not depend on which turn asks for it, so
+      // requester-scoped tools come from the session's advertised catalog.
+      // Calls bind to this turn's verified sender; a senderless turn
+      // (completion, automation, child run) gets an explicit refusal.
+      requesterScoped = await materializeRequesterScopedMcpToolsForHarnessRunCore({
+        workspaceDir: params.workspaceDir,
+        cfg: params.config,
+        toolOverrides: run.toolOverrides,
+        sessionId: run.sessionId,
+        sessionKey: run.sessionKey,
+        agentId: params.agentId,
+        agentDir: params.agentDir,
+        requesterSenderId: run.senderId,
+        agentAccountId: run.agentAccountId,
+        messageChannel: run.messageChannel ?? run.messageProvider,
+        reservedToolNames: materialized.tools.map((tool) => tool.name),
+      });
+    } catch (error) {
+      await materialized.dispose();
+      throw error;
+    }
+    const refusedServers = run.senderId
+      ? []
+      : [
+          ...new Set(
+            (requesterScoped?.tools ?? []).flatMap(
+              (tool) => getPluginToolMeta(tool)?.mcp?.serverName ?? [],
+            ),
+          ),
+        ];
+    if (refusedServers.length > 0) {
+      cliBackendLog.info(
+        `requester-scoped MCP servers stay listed but refuse calls on this turn because it has no verified sender: ${refusedServers.toSorted().join(", ")}`,
+      );
+    }
     // Claude received server instructions over its native connection; keep
     // them with the bridged tools so the loopback can serve them.
-    const servers = acquisition.runtime.peekCatalog()?.servers ?? {};
-    for (const tool of materialized.tools) {
+    const servers = {
+      ...getAdvertisedScopedMcpCatalog(run.sessionId)?.servers,
+      ...acquisition.runtime.peekCatalog()?.servers,
+    };
+    for (const tool of [...materialized.tools, ...(requesterScoped?.tools ?? [])]) {
       const serverName = getPluginToolMeta(tool)?.mcp?.serverName;
       if (serverName && Object.hasOwn(servers, serverName)) {
         setBundleMcpToolServerInstructions(tool, serverName, servers[serverName]?.instructions);
@@ -133,9 +176,11 @@ export async function prepareCliLoopbackBundleMcp(params: {
     );
   }
   let owned = true;
-  const dispose = () => materialized.dispose();
+  const dispose = async () => {
+    await Promise.all([materialized.dispose(), requesterScoped?.dispose()]);
+  };
   return {
-    tools: materialized.tools,
+    tools: [...materialized.tools, ...(requesterScoped?.tools ?? [])],
     takeCleanup: () => {
       owned = false;
       return dispose;

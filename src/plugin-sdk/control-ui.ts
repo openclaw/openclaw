@@ -28,6 +28,7 @@ export type {
 } from "./control-ui-session-operation.js";
 export { createSessionHeaderLink } from "./control-ui-session-link.js";
 export { generateUUID } from "../../packages/normalization-core/src/uuid.js";
+export { translateControlUiMessage } from "./control-ui-translation.js";
 export type {
   ControlUiAgentPickerProps,
   ControlUiComponentHandle,
