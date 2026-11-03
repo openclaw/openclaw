@@ -48,7 +48,10 @@ export function registerCronRepairCases(
     const cliOutput = vi.spyOn(execution, "executePreparedCliRun");
     cliOutput.mockResolvedValue({ text: "NO_REPLY", rawText: "NO_REPLY" });
     const runCli = async (
-      run: Partial<Parameters<typeof runPreparedCliAgent>[0]["params"]>,
+      run: Pick<
+        Parameters<typeof runPreparedCliAgent>[0]["params"],
+        "sessionKey" | "runId" | "prompt" | "inputProvenance" | "terminalReplyExpectation"
+      >,
     ): Promise<{ result?: EmbeddedAgentRunResult; error?: unknown }> => {
       const context = buildPreparedCliRunContext({
         workspaceDir: caseDir,
@@ -108,17 +111,14 @@ export function registerCronRepairCases(
       expect(control.error).toMatchObject({ message: "CLI backend returned an empty response." });
 
       cronIsolatedRun.mockResolvedValue({ status: "error", error: "temporary upstream outage" });
-      const added = await request(
-        "cron.add",
-        makeCronJob("silent repair", {
-          sessionTarget: "isolated",
-          payload: { kind: "agentTurn", message: "Inspect the upstream service." },
-          owner: { agentId: "main", sessionKey: ownerSessionKey },
-          delivery: { mode: "none" },
-          failureAlert: { after: 2, mode: "announce" },
-        }),
-      );
-      const jobId = expectCronJobIdFromResponse(added);
+      const job = makeCronJob("silent repair", {
+        sessionTarget: "isolated",
+        payload: { kind: "agentTurn", message: "Inspect the upstream service." },
+        owner: { agentId: "main", sessionKey: ownerSessionKey },
+        delivery: { mode: "none" },
+        failureAlert: { after: 2, mode: "announce" },
+      });
+      const jobId = expectCronJobIdFromResponse(await request("cron.add", job));
       await run(jobId);
       await run(jobId);
       expect(await withinTest(repairOutcome.promise, signal)).toMatchObject({
