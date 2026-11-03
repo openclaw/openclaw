@@ -17,6 +17,7 @@ import {
   isSignalTimeoutReason,
   isTimeoutError,
   resolveFailoverReasonFromError,
+  resolveFailoverStatus,
   resolveModelFallbackError,
 } from "./failover-error.js";
 import { isLikelyContextOverflowError } from "./failover/classify.js";
@@ -622,6 +623,18 @@ describe("isNonProviderRuntimeCoordinationError", () => {
     });
     expect(isNonProviderRuntimeCoordinationError(provider)).toBe(false);
     expect(coerceToFailoverError(provider)).toBe(provider);
+  });
+
+  it("keeps a local Codex authority refusal out of the model fallback chain (#191473)", () => {
+    const refusal = new Error(
+      "unexpected status 403 Forbidden: Codex cannot verify the owner of this model request. Start a fresh request before retrying., url: http://127.0.0.1:20128/backend-api/codex/responses",
+    );
+    expect(describeFailoverError(refusal).reason).toBe("session_authority");
+    expect(resolveModelFallbackError(refusal)).toMatchObject({ kind: "coordination" });
+    expect(isNonProviderRuntimeCoordinationError(refusal)).toBe(true);
+    // API clients read a host authority refusal as a permission rejection, never as a
+    // retryable server failure.
+    expect(resolveFailoverStatus("session_authority")).toBe(403);
   });
 
   it("returns true for stale gateway lifecycle ownership loss", () => {
