@@ -6,6 +6,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/schema/migrations.js";
 import "../../components/agent-select-registration.ts";
 import "../../components/modal-dialog.tsx";
+import { DialogHeader } from "../../components/solid/dialog-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
@@ -367,33 +368,35 @@ function Confirmation(props: { view: MemoryImportViewProps; backfill?: boolean }
   return (
     <Show when={props.backfill ? props.view.backfillRollbackPending : provider()}>
       <openclaw-modal-dialog label={title()} description={description()} onModal-cancel={cancel}>
-        <div class="exec-approval-card memory-import__confirm">
-          <div class="exec-approval-header">
-            <div>
-              <div class="exec-approval-title">{title()}</div>
-              <div class="exec-approval-sub">{description()}</div>
+        <div class="oc-dialog memory-import__confirm">
+          <DialogHeader
+            title={title()}
+            description={<p>{description()}</p>}
+            closeDisabled={busy()}
+            onClose={cancel}
+          />
+          <div class="oc-dialog__body">
+            <div class={["callout", { warn: props.backfill || props.view.replaceExisting }]}>
+              {t(
+                props.backfill
+                  ? "memoryImport.backfill.rollbackWarning"
+                  : props.view.replaceExisting
+                    ? "memoryImport.confirmReplace"
+                    : "memoryImport.confirmBackup",
+              )}
             </div>
+            <Show when={!props.backfill && props.view.applyError}>
+              <div class="callout danger" role="alert">
+                {props.view.applyError}
+              </div>
+            </Show>
           </div>
-          <div class={["callout", { warn: props.backfill || props.view.replaceExisting }]}>
-            {t(
-              props.backfill
-                ? "memoryImport.backfill.rollbackWarning"
-                : props.view.replaceExisting
-                  ? "memoryImport.confirmReplace"
-                  : "memoryImport.confirmBackup",
-            )}
-          </div>
-          <Show when={!props.backfill && props.view.applyError}>
-            <div class="callout danger" role="alert">
-              {props.view.applyError}
-            </div>
-          </Show>
-          <openclaw-modal-actions class="exec-approval-actions">
+          <openclaw-modal-actions class="oc-dialog__footer">
             <button class="btn" disabled={busy()} onClick={cancel}>
               {t("common.cancel")}
             </button>
             <button
-              class={["btn", { danger: props.backfill, primary: !props.backfill }]}
+              class={["btn", props.backfill || props.view.replaceExisting ? "danger" : "primary"]}
               data-test-id={
                 props.backfill ? "memory-backfill-rollback-confirm" : "memory-import-confirm"
               }

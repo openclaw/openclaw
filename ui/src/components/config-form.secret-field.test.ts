@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isSecretConfigField } from "./config-form.secret-field.tsx";
+import { isSecretConfigField } from "../lib/config-form-utils.ts";
 
 describe("isSecretConfigField", () => {
   it("follows the schema's marking, not the field name", () => {

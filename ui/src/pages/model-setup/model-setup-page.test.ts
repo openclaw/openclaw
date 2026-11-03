@@ -286,7 +286,7 @@ describe("ModelSetupPage catalog icons", () => {
     await Promise.resolve();
     expect(order).not.toContain("competing-mutation");
 
-    pageButton(page, "openclaw-modal-dialog .btn")?.click();
+    pageButton(page, "openclaw-modal-dialog .oc-dialog__close")?.click();
     await page.updateComplete;
     await waitForText(page, "finishing");
     expect(page.querySelector(".wizard-step__progress")).not.toBeNull();
