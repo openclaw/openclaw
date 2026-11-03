@@ -71,6 +71,7 @@ const LAZY_RUNTIME_PROPERTIES = {
   webSearch: true,
   modelConfig: true,
   capabilities: true,
+  skills: true,
 } satisfies Record<keyof PluginRuntime, true>;
 
 export function runPluginRegisterSyncInRegistry(

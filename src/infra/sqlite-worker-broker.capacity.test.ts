@@ -144,7 +144,7 @@ it.each(["queued", "reused"] as const)("bounds and drains pending %s opens", asy
   expect(admission.retainedBytes).toBe(0);
 });
 
-it.each(["shared-state", "agent"] as const)(
+it.each(["shared-state", "agent", "external"] as const)(
   "admits cold %s beside ordinary opens within one input budget",
   async (carrierClass) => {
     const admission = inputAdmission();
@@ -175,7 +175,7 @@ it.each(["shared-state", "agent"] as const)(
 
 await initializeSqliteRuntimeCapabilities();
 const { databasePath } = useSqliteWorkerStoreFixture("sqlite-capacity-drain-");
-it.for(["shared-state", "agent"] as const)(
+it.for(["shared-state", "agent", "external"] as const)(
   "keeps one physical owner across %s and ordinary opens",
   async (carrierClass, { signal }) => {
     const pathname = databasePath();
