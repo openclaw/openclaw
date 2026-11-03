@@ -20,24 +20,8 @@ describe("annotateDirectImageAuthFailure", () => {
     expect(error.status).toBe(403);
   });
 
-  it("attributes overridden credentials to provider config without header values", () => {
-    const error = new ProviderHttpError("OpenAI image generation failed (HTTP 401)", {
-      status: 401,
-    });
-    annotateDirectImageAuthFailure(error, {
-      ...baseParams,
-      authMode: "oauth",
-      authSource: "profile:openai:chatgpt",
-      authOverridden: true,
-    });
-    expect(error.message).toContain("credential=configured-header source=models.providers.openai)");
-    expect(error.message).not.toContain("profile:openai:chatgpt");
-  });
-
-  it.each([
-    ["429 responses", new ProviderHttpError("rate limited", { status: 429 })],
-    ["errors without status", new Error("network down")],
-  ])("leaves %s unchanged", (_label, error) => {
+  it("leaves errors without status unchanged", () => {
+    const error = new Error("network down");
     const message = error.message;
     annotateDirectImageAuthFailure(error, { ...baseParams, explicitDirectRoute: true });
     expect(error.message).toBe(message);

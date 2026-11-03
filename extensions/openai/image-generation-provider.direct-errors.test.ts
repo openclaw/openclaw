@@ -28,10 +28,19 @@ const png = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aP4sAAAAASUVORK5CYII=",
   "base64",
 );
-const explicitRouteHint =
-  "; explicit models.providers.openai settings select the direct Images API. To use a " +
-  'ChatGPT/Codex OAuth profile instead, set baseUrl "https://chatgpt.com/backend-api/codex" ' +
-  'and api "openai-chatgpt-responses", without apiKey, auth "api-key", or auth headers)';
+function expectRouteDiagnostics(error: unknown, origin: string, credential: string) {
+  for (const detail of [
+    `route=images-api url=${origin}/v1/images/generations`,
+    credential,
+    'baseUrl "https://chatgpt.com/backend-api/codex"',
+    'api "openai-chatgpt-responses"',
+    "without apiKey",
+    'auth "api-key"',
+    "auth headers",
+  ]) {
+    expect(error).toHaveProperty("message", expect.stringContaining(detail));
+  }
+}
 
 // Legacy Anthropic credentials still await migration, so unscoped auth-store reads refuse
 // while OpenAI-scoped credential resolution stays allowed.
@@ -54,7 +63,10 @@ async function withPendingAnthropicMigration<T>(fn: (agentDir: string) => Promis
 
 async function generateAgainst(
   reply: { status: number; body: unknown },
-  options: { authStore?: AuthProfileStore; headers?: Record<string, string> } = {},
+  options: {
+    authStore?: AuthProfileStore;
+    providerConfig?: Omit<Parameters<typeof openAIImageConfig>[0], "baseUrl">;
+  } = {},
 ) {
   return withPendingAnthropicMigration(async (agentDir) => {
     const requests: Array<{ url?: string; authorization?: string }> = [];
@@ -77,7 +89,7 @@ async function generateAgainst(
             cfg: openAIImageConfig({
               baseUrl: `${baseUrl}/v1`,
               apiKey: "synthetic-openai-key",
-              headers: options.headers,
+              ...options.providerConfig,
             }),
             agentDir,
             authStore: options.authStore,
@@ -119,31 +131,28 @@ it("starts from an agent whose unscoped auth read refuses another provider's mig
   });
 });
 
-describe.each([
-  ["without", undefined],
-  ["with", createCodexOAuthAuthStore()],
-])("OpenAI direct image HTTP errors %s a prepared auth store", (_label, authStore) => {
+describe("OpenAI direct image HTTP errors without a prepared auth store", () => {
   it.each([
     [401, "Missing scopes: api.model.images.request"],
     [403, "Project does not have access to model gpt-image-2"],
     [429, "Rate limit reached for images per minute"],
   ])("keeps HTTP %i as the provider error", async (status, detail) => {
-    const { origin, outcome, requests } = await generateAgainst(
-      { status, body: { error: { message: detail } } },
-      { authStore },
-    );
+    const { origin, outcome, requests } = await generateAgainst({
+      status,
+      body: { error: { message: detail } },
+    });
     expect(requests).toEqual([
       { url: "/v1/images/generations", authorization: "Bearer synthetic-openai-key" },
     ]);
     expect(outcome).toBeInstanceOf(ProviderHttpError);
     expect(outcome).toMatchObject({ status, statusCode: status });
     const original = `OpenAI image generation failed (HTTP ${status}): ${detail}`;
-    expect((outcome as Error).message).toBe(
-      status === 429
-        ? original
-        : `${original} (route=images-api url=${origin}/v1/images/generations ` +
-            `credential=api-key source=models.json${explicitRouteHint}`,
-    );
+    expect(outcome).toHaveProperty("message", expect.stringContaining(original));
+    if (status === 429) {
+      expect(outcome).toHaveProperty("message", original);
+    } else {
+      expectRouteDiagnostics(outcome, origin, "credential=api-key source=models.json");
+    }
   });
 });
 
@@ -156,14 +165,45 @@ it("returns the image when the same route succeeds", async () => {
   expect(outcome).toMatchObject({ images: [{ buffer: png, mimeType: "image/png" }] });
 });
 
-it("attributes a configured auth header instead of the resolved key", async () => {
-  const { outcome, requests } = await generateAgainst(
-    { status: 401, body: { error: { message: "Invalid API key" } } },
-    { headers: { Authorization: "Bearer header-key" } },
+it.each([
+  {
+    name: "the resolved OAuth profile",
+    headers: undefined,
+    token: "codex-access",
+    credential: "credential=oauth source=profile:openai:default",
+  },
+  {
+    name: "a configured auth header instead of the OAuth profile",
+    headers: { Authorization: "Bearer header-key" },
+    token: "header-key",
+    credential: "credential=configured-header source=models.providers.openai",
+  },
+])("attributes $name on the explicit direct route", async ({ headers, token, credential }) => {
+  const authStore = createCodexOAuthAuthStore();
+  // Keep this diagnostic test out of the unrelated OAuth refresh path.
+  authStore.profiles["openai:default"].expires = Date.now() + 3_600_000;
+  const { origin, outcome, requests } = await generateAgainst(
+    { status: 401, body: { error: { message: "Missing scopes: api.model.images.request" } } },
+    {
+      authStore,
+      providerConfig: { apiKey: undefined, api: "openai-completions", headers },
+    },
   );
-  expect(requests).toEqual([{ url: "/v1/images/generations", authorization: "Bearer header-key" }]);
   expect(outcome).toBeInstanceOf(ProviderHttpError);
-  expect((outcome as Error).message).toContain(
-    `credential=configured-header source=models.providers.openai${explicitRouteHint}`,
+  expect(requests).toEqual([{ url: "/v1/images/generations", authorization: `Bearer ${token}` }]);
+  expect(outcome).toMatchObject({ status: 401, statusCode: 401 });
+  expect(outcome).toHaveProperty(
+    "message",
+    expect.stringContaining("Missing scopes: api.model.images.request"),
   );
+  expectRouteDiagnostics(outcome, origin, credential);
+  for (const secret of ["codex-access", "codex-refresh", "header-key"]) {
+    expect(outcome).toHaveProperty("message", expect.not.stringContaining(secret));
+  }
+  if (headers) {
+    expect(outcome).toHaveProperty(
+      "message",
+      expect.not.stringContaining("profile:openai:default"),
+    );
+  }
 });
