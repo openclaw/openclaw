@@ -27,18 +27,22 @@ export const WORLD_HOST = "studio-k7x2q.crabd.me";
 /** Kit secret of the world's owner. */
 export const WORLD_KIT_SECRET = new Uint8Array(16).fill(7);
 
-/** A named key usable as both signer (D, K_gw) and iroh peer key. */
+/**
+ * A named device: a signing key D (also used as K_gw or K_srv where a test needs one) and a
+ * separate iroh peer key W, as real browsers have, so tests notice keys mixed up.
+ */
 export type WorldKey = { signer: StatementSigner; pub: Ed25519PublicKey; peer: IrohEndpointKey };
 
-/** Deterministic key for a name. */
+/** Deterministic key pair for a name (D and W from different seeds). */
 export async function worldKey(name: string): Promise<WorldKey> {
-  const signer = await ed25519SignerFromSeed(
-    await sha256(utf8(`openclaw-id-protocol/v1-draft/world/${name}`)),
-  );
+  const seed = (suffix: string) =>
+    sha256(utf8(`openclaw-id-protocol/v1-draft/world/${name}${suffix}`));
+  const signer = await ed25519SignerFromSeed(await seed(""));
+  const peer = await ed25519SignerFromSeed(await seed("/peer"));
   return {
     signer,
     pub: formatEd25519PublicKey(signer.publicKey),
-    peer: formatIrohEndpointKey(signer.publicKey),
+    peer: formatIrohEndpointKey(peer.publicKey),
   };
 }
 

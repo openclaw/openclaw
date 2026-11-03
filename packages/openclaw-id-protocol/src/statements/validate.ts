@@ -41,13 +41,18 @@ function predicate(test: (value: unknown) => boolean, message: string): Check {
   };
 }
 
-const text: Check = predicate(
-  (v) => typeof v === "string" && v.length <= MAX_TEXT,
-  "expected string",
-);
+// A UTF-16 surrogate without its pair: JCS (and UTF-8) cannot encode it.
+const LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+// True for a string of well-formed Unicode text no longer than MAX_TEXT.
+function isText(v: unknown): v is string {
+  return typeof v === "string" && v.length <= MAX_TEXT && !LONE_SURROGATE_RE.test(v);
+}
+
+const text: Check = predicate(isText, "expected well-formed string");
 const nonEmptyText: Check = predicate(
-  (v) => typeof v === "string" && v.length > 0 && v.length <= MAX_TEXT,
-  "expected non-empty string",
+  (v) => isText(v) && v.length > 0,
+  "expected non-empty well-formed string",
 );
 const bool: Check = predicate((v) => typeof v === "boolean", "expected boolean");
 const seconds: Check = predicate(

@@ -484,6 +484,9 @@ export async function registerInvite(
   if (!verified.ok) {
     return refuse(state, verified.code, verified.detail);
   }
+  if (state.frozen && verified.authority.kind === "root" && context.channel !== "local_operator") {
+    return refuse(state, "frozen", "remote root changes are frozen");
+  }
   const cap = parsed.statement.body;
   if (cap.claw_id !== state.claw_id) {
     return refuse(state, "wrong_claw", "invite is for another claw");
