@@ -216,6 +216,37 @@
   color: var(--danger);
 }
 
+/* Avatar, name and emoji read as one identity: the portrait leads, the name takes the
+   room, and the single-glyph emoji keeps a compact field. */
+.settings-row:has(> .agent-identity-editor) {
+  padding: var(--space-4);
+}
+
+.agent-identity-editor {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  width: 100%;
+  min-width: 0;
+}
+
+.agent-identity-editor__fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 112px;
+  gap: var(--space-3);
+  flex: 1;
+  min-width: 0;
+}
+
+.agent-identity-editor__fields .field {
+  min-width: 0;
+}
+
+.agent-identity-editor__fields input {
+  width: 100%;
+  min-width: 0;
+}
+
 .oc-overlay.agent-identity-editor__popover {
   width: min(480px, calc(100dvw - 16px));
   max-width: min(480px, calc(100dvw - 16px));
@@ -239,8 +270,8 @@
 .agent-identity-editor__avatar {
   position: relative;
   flex: 0 0 auto;
-  width: 40px;
-  height: 40px;
+  width: 56px;
+  height: 56px;
   padding: 0;
   border-radius: 50%;
   overflow: hidden;
@@ -249,7 +280,7 @@
   justify-content: center;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
-  font-size: 20px;
+  font-size: 24px;
 }
 
 .agent-identity-editor__avatar-edit {
@@ -264,8 +295,8 @@
 }
 
 .agent-identity-editor__avatar-edit svg {
-  width: 15px;
-  height: 15px;
+  width: 20px;
+  height: 20px;
 }
 
 .agent-identity-editor__avatar:disabled .agent-identity-editor__avatar-edit {
@@ -280,15 +311,15 @@
 @media (hover: none) {
   .agent-identity-editor__avatar-edit {
     inset: auto 0 0 auto;
-    width: 18px;
-    height: 18px;
+    width: 25px;
+    height: 25px;
     border-radius: 50%;
     opacity: 1;
   }
 
   .agent-identity-editor__avatar-edit svg {
-    width: 12px;
-    height: 12px;
+    width: 15px;
+    height: 15px;
   }
 }
 
@@ -300,13 +331,12 @@
 
 .agent-identity-editor__emoji-control {
   position: relative;
-  width: 112px;
-  flex: 0 0 auto;
 }
 
-.agent-overview .agent-identity-editor__emoji-control > input.settings-input {
-  width: 100%;
+/* The glyph reads at emoji size, not at the text field's size. */
+.agent-identity-editor__emoji-control > input {
   padding-inline-end: 38px;
+  font-size: max(var(--field-font-size), 16px);
 }
 
 .agent-identity-editor__emoji-control > openclaw-agent-emoji-picker {
@@ -321,17 +351,23 @@
     width: 100%;
   }
 
-  /* The avatar, the single-glyph emoji field and the config actions all fit beside
-     their label; only the name field needs the full width. */
+  /* The name and emoji stack beside the avatar, so the name keeps its full width. */
+  .agent-identity-editor__fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* The picker is wider than the room right of the avatar; center it on the screen. */
+  .oc-overlay.agent-identity-editor__popover {
+    position-area: bottom span-all;
+    position-try-fallbacks: flip-block;
+    justify-self: center;
+  }
+
+  /* The config actions fit beside the row's empty label. */
   .agent-overview
-    .settings-row:has(
-      > .settings-row__control
-        > :is(
-          .agent-identity-editor__avatar,
-          .agent-identity-editor__emoji-control,
-          .agent-overview__config-actions
-        )
-    ):not(:has(.callout)) {
+    .settings-row:has(> .settings-row__control > .agent-overview__config-actions):not(
+      :has(.callout)
+    ) {
     flex-wrap: nowrap;
 
     > .settings-row__control {

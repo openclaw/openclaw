@@ -218,7 +218,7 @@ export function AgentOverview(
     avatarOverlay.bindTrigger(avatarTrigger);
     avatarOverlay.setParent(findOverlayParent(avatarTrigger));
     const anchor = createOverlayAnchor(avatarSurface, { sameRoot: true });
-    anchor.update(avatarTrigger, "bottom-end");
+    anchor.update(avatarTrigger, "bottom-start");
     // Retire the native overlay synchronously when upload authority is revoked.
     const unsubscribeConfig = applicationConfig?.subscribe((nextConfig) => {
       if (!nextConfig.uploadsEnabled) {
@@ -283,106 +283,100 @@ export function AgentOverview(
           </>
         }
       >
-        <SettingsRow
-          title={t("agents.identity.avatar")}
-          control={
-            <>
-              <button
-                ref={(element) => (avatarTrigger = element)}
-                type="button"
-                class="agent-identity-editor__avatar"
-                aria-label={t("agents.identity.chooseAvatar")}
-                aria-expanded={avatarPickerOpen() ? "true" : "false"}
-                aria-controls={avatarPickerId}
-                disabled={identityBusy() || !uploadsEnabled()}
-                onClick={() => avatarOverlay.request(!avatarOverlay.open)}
-              >
-                {renderIdentityAvatar()}
-                <span class="agent-identity-editor__avatar-edit" aria-hidden="true">
-                  <StrokeIcon>
-                    <path d="m16 5 3 3M4 20l4.5-1 10-10a2.1 2.1 0 0 0-3-3l-10 10L4 20Z" />
-                  </StrokeIcon>
-                </span>
-              </button>
-              <div
-                ref={(element) => (avatarSurface = element)}
-                id={avatarPickerId}
-                class="oc-overlay agent-identity-editor__popover"
-                popover="manual"
-                role="dialog"
-                aria-label={t("agents.identity.avatarPicker")}
-              >
-                <Show when={pickerContentVisible()}>
-                  <For each={[`${params.agent.id}:${params.readData().requestGeneration}`]}>
-                    {() => (
-                      <AvatarPicker
-                        agentId={params.agent.id}
-                        avatar={identityAvatarUrl()}
-                        disabled={identityBusy()}
-                        onSelect={(dataUrl) => {
-                          params.onIdentityAvatarSet(dataUrl);
-                          avatarOverlay.request(false, "return");
-                        }}
-                        onUpload={(file) => {
-                          params.onIdentityAvatarSelect(file);
-                          avatarOverlay.request(false, "return");
-                        }}
-                        onGenerate={(prompt) => params.onIdentityAvatarGenerate(prompt)}
-                      />
-                    )}
-                  </For>
-                </Show>
-              </div>
-            </>
-          }
-        />
-        <SettingsRow
-          title={t("agents.identity.name")}
-          control={
-            <input
-              class="settings-input agent-identity-editor__name"
-              type="text"
-              maxlength="64"
-              aria-label={t("agents.identity.name")}
-              value={identityName()}
-              placeholder={t("agents.identity.namePlaceholder")}
-              disabled={identityBusy()}
-              onInput={(event) => params.onIdentityFieldChange("name", event.currentTarget.value)}
-              onBlur={() => params.onIdentitySave()}
-            />
-          }
-        />
-        <SettingsRow
-          title={t("agents.identity.emoji")}
-          description={t("agents.identity.emojiDescription")}
-          control={
-            <div class="agent-identity-editor__emoji-control">
-              <input
-                class="settings-input"
-                type="text"
-                maxlength="64"
-                aria-label={t("agents.identity.emoji")}
-                value={identityEmoji()}
-                disabled={identityBusy()}
-                onInput={(event: Event) => {
-                  if (event.currentTarget instanceof HTMLInputElement) {
-                    const emoji = limitEmoji(event.currentTarget.value);
-                    event.currentTarget.value = emoji;
-                    params.onIdentityFieldChange("emoji", emoji);
+        <div class="settings-row settings-row--stacked">
+          <div class="agent-identity-editor">
+            <button
+              ref={(element) => (avatarTrigger = element)}
+              type="button"
+              class="agent-identity-editor__avatar"
+              aria-label={t("agents.identity.chooseAvatar")}
+              aria-expanded={avatarPickerOpen() ? "true" : "false"}
+              aria-controls={avatarPickerId}
+              disabled={identityBusy() || !uploadsEnabled()}
+              onClick={() => avatarOverlay.request(!avatarOverlay.open)}
+            >
+              {renderIdentityAvatar()}
+              <span class="agent-identity-editor__avatar-edit" aria-hidden="true">
+                <StrokeIcon>
+                  <path d="m16 5 3 3M4 20l4.5-1 10-10a2.1 2.1 0 0 0-3-3l-10 10L4 20Z" />
+                </StrokeIcon>
+              </span>
+            </button>
+            <div class="agent-identity-editor__fields">
+              <label class="field">
+                <span>{t("agents.identity.name")}</span>
+                <input
+                  class="agent-identity-editor__name"
+                  type="text"
+                  maxlength="64"
+                  value={identityName()}
+                  placeholder={t("agents.identity.namePlaceholder")}
+                  disabled={identityBusy()}
+                  onInput={(event) =>
+                    params.onIdentityFieldChange("name", event.currentTarget.value)
                   }
-                }}
-                onBlur={() => params.onIdentitySave()}
-              />
-              <AgentEmojiPicker
-                value={identityEmoji()}
-                disabled={identityBusy()}
-                onSelect={(emoji: string) =>
-                  params.onIdentityFieldChange("emoji", limitEmoji(emoji))
-                }
-              />
+                  onBlur={() => params.onIdentitySave()}
+                />
+              </label>
+              <div class="field agent-identity-editor__emoji">
+                <span>{t("agents.identity.emoji")}</span>
+                <div class="agent-identity-editor__emoji-control">
+                  <input
+                    type="text"
+                    maxlength="64"
+                    aria-label={t("agents.identity.emoji")}
+                    value={identityEmoji()}
+                    disabled={identityBusy()}
+                    onInput={(event: Event) => {
+                      if (event.currentTarget instanceof HTMLInputElement) {
+                        const emoji = limitEmoji(event.currentTarget.value);
+                        event.currentTarget.value = emoji;
+                        params.onIdentityFieldChange("emoji", emoji);
+                      }
+                    }}
+                    onBlur={() => params.onIdentitySave()}
+                  />
+                  <AgentEmojiPicker
+                    value={identityEmoji()}
+                    disabled={identityBusy()}
+                    onSelect={(emoji: string) =>
+                      params.onIdentityFieldChange("emoji", limitEmoji(emoji))
+                    }
+                  />
+                </div>
+              </div>
             </div>
-          }
-        />
+            <div
+              ref={(element) => (avatarSurface = element)}
+              id={avatarPickerId}
+              class="oc-overlay agent-identity-editor__popover"
+              popover="manual"
+              role="dialog"
+              aria-label={t("agents.identity.avatarPicker")}
+            >
+              <Show when={pickerContentVisible()}>
+                <For each={[`${params.agent.id}:${params.readData().requestGeneration}`]}>
+                  {() => (
+                    <AvatarPicker
+                      agentId={params.agent.id}
+                      avatar={identityAvatarUrl()}
+                      disabled={identityBusy()}
+                      onSelect={(dataUrl) => {
+                        params.onIdentityAvatarSet(dataUrl);
+                        avatarOverlay.request(false, "return");
+                      }}
+                      onUpload={(file) => {
+                        params.onIdentityAvatarSelect(file);
+                        avatarOverlay.request(false, "return");
+                      }}
+                      onGenerate={(prompt) => params.onIdentityAvatarGenerate(prompt)}
+                    />
+                  )}
+                </For>
+              </Show>
+            </div>
+          </div>
+        </div>
       </SettingsSection>
       <SettingsSection
         title={t("agents.overview.modelSelection")}

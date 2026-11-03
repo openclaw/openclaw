@@ -85,8 +85,6 @@ const enSettings = {
     },
     identity: {
       title: "Identity",
-      avatar: "Avatar",
-      emojiDescription: "Also the default message reaction.",
       name: "Display name",
       namePlaceholder: "Agent name",
       emoji: "Emoji",
