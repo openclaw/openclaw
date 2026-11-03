@@ -524,6 +524,7 @@ export async function requeuePendingWork(
     electedAt: work.electedAt,
     dueAt: work.dueAt,
     maxChainLength: work.maxChainLength,
+    ...(work.recipientAuthority ? { recipientAuthority: work.recipientAuthority } : {}),
   };
   const {
     idleRetry: _idleRetry,

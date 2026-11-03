@@ -8,7 +8,7 @@ import type { SessionMember, SessionParticipantRecord } from "./session-membersh
 import type { SessionParticipantIdentity } from "./session-participant-identity.js";
 import type {
   SessionRecipientAuthority,
-  SessionRecipientAuthorityEpochState,
+  SessionRecipientAuthorityRecordState,
 } from "./session-recipient-authority-types.js";
 import type { SessionEntry, SessionProfileInvolvement } from "./types.js";
 
@@ -129,10 +129,10 @@ export type SessionSharingWorkerOperations = {
   "category.prepare": { input: { scope: SessionAccessScope; from: string }; output: string[] };
   /** Continuation: insert-if-absent recipient authority; changes no session row. */
   "authority.capture": { input: { scope: SessionAccessScope }; output: SessionRecipientAuthority };
-  /** Continuation: the durable recipient-authority epoch, read without a write transaction. */
+  /** Continuation: the durable recipient-authority row, read without a write transaction. */
   "authority.read": {
     input: { scope: SessionAccessScope };
-    output: SessionRecipientAuthorityEpochState;
+    output: SessionRecipientAuthorityRecordState;
   };
   "category.apply": {
     input: { scope: SessionAccessScope; from: string; to?: string };

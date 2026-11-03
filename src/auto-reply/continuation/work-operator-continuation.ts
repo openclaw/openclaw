@@ -5,12 +5,13 @@ import { runOnCurrentPluginGeneration } from "./detached-generation.js";
 import type { ContinueWorkRequest } from "./types.js";
 import { executePendingContinuationWork } from "./work-dispatch-execution.js";
 import type { PendingContinuationWork } from "./work-flow-state.js";
+import { captureContinuationWorkRecipientAuthority } from "./work-recipient-authority.js";
 import { markPendingWorkFailed } from "./work-store.js";
 
 type OperatorContinuation = NonNullable<ContinueWorkRequest["operatorContinuation"]>;
 const retained = new Map<string, { sessionKey: string; custody: OperatorContinuation }>();
 
-export async function captureWorkOperatorContinuation(
+async function captureWorkOperatorContinuation(
   request: ContinueWorkRequest,
   sessionKey: string,
 ): Promise<OperatorContinuation | undefined> {
@@ -24,6 +25,30 @@ export async function captureWorkOperatorContinuation(
   }
   captured?.release();
   return undefined;
+}
+
+/**
+ * The authority an election carries to its wake: the session's recipient-authority epoch, then the
+ * operator custody. A failed epoch capture elects nothing and releases the request's custody.
+ */
+export async function captureWorkElectionAuthority(
+  request: ContinueWorkRequest,
+  sessionKey: string,
+): Promise<{
+  recipientAuthority: NonNullable<PendingContinuationWork["recipientAuthority"]>;
+  operatorContinuation: OperatorContinuation | undefined;
+}> {
+  let recipientAuthority: NonNullable<PendingContinuationWork["recipientAuthority"]>;
+  try {
+    recipientAuthority = await captureContinuationWorkRecipientAuthority(sessionKey);
+  } catch (error) {
+    request.operatorContinuation?.release();
+    throw error;
+  }
+  return {
+    recipientAuthority,
+    operatorContinuation: await captureWorkOperatorContinuation(request, sessionKey),
+  };
 }
 
 export function retainWorkOperatorContinuation(

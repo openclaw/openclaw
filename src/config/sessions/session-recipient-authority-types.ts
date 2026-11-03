@@ -63,6 +63,15 @@ export type SessionRecipientAuthorityEpochState =
   | { state: "missing" }
   | { state: "malformed" };
 
+/**
+ * The durable row: `updatedAt` is the last epoch write (every advance, and the insert that first
+ * creates the row), `createdAt` that first insert, so `updatedAt > createdAt` proves an advance.
+ */
+export type SessionRecipientAuthorityRecordState =
+  | { state: "present"; epoch: string; createdAt: number; updatedAt: number }
+  | { state: "missing" }
+  | { state: "malformed" };
+
 const SESSION_VISIBILITY_AUTHORITY_RANK = {
   draft: 0,
   "read-only": 1,

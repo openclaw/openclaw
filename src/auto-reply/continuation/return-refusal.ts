@@ -4,7 +4,8 @@
 // handoff or prompt drain. A refused return is never delivered, woken or acknowledged as
 // adopted; its durable row settles as a bounded `failed` receipt for its deterministic id, which
 // fences a duplicate announce of the same return while it lasts, and each refusal is reported
-// with a stable reason.
+// with a stable reason. A kept continue_work wake is refused the same way
+// (work-recipient-authority.ts) and reported on the same line shape.
 import {
   loadPendingSessionDelivery,
   moveSessionDeliveryToFailed,
@@ -14,8 +15,14 @@ import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-work
 
 type ContinuationReturnRefusalReason = "recipient-authority-changed";
 export type ContinuationReturnRefusalStage = "enqueue" | "replay" | "wake" | "prompt-drain";
+/** `unverifiable`: an unbound wake whose session's authority cannot be proven unchanged. */
+export type ContinuationWorkRefusalReason =
+  | "recipient-authority-changed"
+  | "recipient-authority-unverifiable";
+export type ContinuationWorkRefusalStage = "replay" | "wake" | "adoption";
 
 const log = createSubsystemLogger("continuation/return-refused");
+const workLog = createSubsystemLogger("continuation/work-refused");
 
 export function reportRefusedContinuationReturn(params: {
   stage: ContinuationReturnRefusalStage;
@@ -26,6 +33,16 @@ export function reportRefusedContinuationReturn(params: {
   const message = `[continuation:return-refused] stage=${params.stage} reason=${params.reason} session=${params.sessionKey}${params.deliveryId ? ` deliveryId=${params.deliveryId}` : ""}`;
   // The file log keeps the fields structured; the console line already spells them out.
   log.warn(message, { ...params, consoleMessage: message });
+}
+
+export function reportRefusedContinuationWork(params: {
+  stage: ContinuationWorkRefusalStage;
+  reason: ContinuationWorkRefusalReason;
+  sessionKey: string;
+  flowId: string;
+}): void {
+  const message = `[continuation:work-refused] stage=${params.stage} reason=${params.reason} session=${params.sessionKey} flowId=${params.flowId}`;
+  workLog.warn(message, { ...params, consoleMessage: message });
 }
 
 /**

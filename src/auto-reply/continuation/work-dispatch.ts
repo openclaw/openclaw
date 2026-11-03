@@ -42,12 +42,13 @@ import {
 } from "./work-dispatch-execution.js";
 import type { ContinuationWorkReasonCategory, PendingContinuationWork } from "./work-flow-state.js";
 import {
-  captureWorkOperatorContinuation,
+  captureWorkElectionAuthority,
   releaseWorkOperatorContinuation,
   resetWorkOperatorContinuationsForTests,
   retainWorkOperatorContinuation,
   executePendingWorkWithOperatorContinuation,
 } from "./work-operator-continuation.js";
+import { refuseStaleContinuationWork } from "./work-recipient-authority.js";
 import { scheduleContinuationWorkBatchWith } from "./work-scheduling-batch.js";
 import { enqueueContinuationWorkForSchedule } from "./work-scheduling-replacement.js";
 import {
@@ -576,7 +577,8 @@ export async function dispatchPendingContinuationWork(
   // on-time staggered elections drain one-per-poll and never co-arrive.
   const supersededGraceMs = runtimeConfig.maxDelayMs * SUPERSEDED_GRACE_MULTIPLIER;
   const { drive: worksToDrive, superseded } = partitionSupersededWork(
-    works,
+    // The handoff boundary: a wake whose recipient authority moved is refused, never driven.
+    await refuseStaleContinuationWork(works, "wake", releaseWorkOperatorContinuation),
     supersededGraceMs,
     Date.now(),
   );
@@ -711,7 +713,7 @@ export async function scheduleContinuationWork(
     params.request.operatorContinuation?.release();
     return { scheduled: false, capped: false, chainState: params.chainState };
   }
-  const operatorContinuation = await captureWorkOperatorContinuation(
+  const { operatorContinuation, recipientAuthority } = await captureWorkElectionAuthority(
     params.request,
     params.sessionKey,
   );
@@ -742,6 +744,7 @@ export async function scheduleContinuationWork(
     ...(params.originRunId ? { originRunId: params.originRunId } : {}),
     ...(params.originTurnId ? { originTurnId: params.originTurnId } : {}),
     ...(operatorContinuation?.operatorAuthority ? { operatorAuthorityRequired: true } : {}),
+    recipientAuthority,
     ...(electingTurnActive ? { anchorPending: true } : { anchorFinalizedAt: electedAt }),
     ...(idleRetry ? { idleRetry } : {}),
   };
@@ -776,11 +779,9 @@ export async function scheduleContinuationWork(
       `[continuation:work-parked-on-turn-end] session=${params.sessionKey} hop=${hop} reasonCategory=${idleRetry?.reasonCategory ?? "unknown"}`,
     );
     registerIdleRetry(params.sessionKey, { kind: "reply-run-ended" });
-    await armNextWorkTimer(params.sessionKey, enqueueResult.work.dueAt);
-  } else {
-    // Defer even zero-delay work until callers can persist advanced chain state.
-    await armNextWorkTimer(params.sessionKey, enqueueResult.work.dueAt);
   }
+  // Defer even zero-delay work until callers can persist advanced chain state.
+  await armNextWorkTimer(params.sessionKey, enqueueResult.work.dueAt);
   return {
     scheduled: true,
     capped: false,

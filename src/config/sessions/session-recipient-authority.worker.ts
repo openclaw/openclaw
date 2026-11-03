@@ -10,21 +10,27 @@ import {
 import {
   readSessionRecipientAuthorityEpoch,
   type SessionRecipientAuthority,
-  type SessionRecipientAuthorityEpochState,
+  type SessionRecipientAuthorityRecordState,
 } from "./session-recipient-authority-types.js";
 
 export function readSessionRecipientAuthorityEpochInDatabase(
   database: Pick<OpenClawAgentDatabase, "db">,
   sessionKey: string,
-): SessionRecipientAuthorityEpochState {
+): SessionRecipientAuthorityRecordState {
   const row = executeSqliteQueryTakeFirstSync(
     database.db,
     getSessionRecipientAuthorityKysely(database)
       .selectFrom("session_recipient_authority")
-      .select("epoch")
+      .select(["epoch", "created_at", "updated_at"])
       .where("session_key", "=", sessionKey),
   );
-  return readSessionRecipientAuthorityEpoch(row?.epoch);
+  if (!row) {
+    return { state: "missing" };
+  }
+  const epoch = readSessionRecipientAuthorityEpoch(row.epoch);
+  return epoch.state === "present"
+    ? { ...epoch, createdAt: row.created_at, updatedAt: row.updated_at }
+    : epoch;
 }
 
 /**

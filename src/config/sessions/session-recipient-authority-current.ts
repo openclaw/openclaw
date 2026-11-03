@@ -21,6 +21,7 @@ import { captureSessionEntryNativeMutationWitness } from "./session-entry-read-o
 import {
   sessionRecipientAuthorityMatches,
   type SessionRecipientAuthority,
+  type SessionRecipientAuthorityRecordState,
 } from "./session-recipient-authority-types.js";
 import type { SessionSharingWorkerOperations } from "./session-sharing-store.types.js";
 
@@ -28,6 +29,15 @@ export type SessionRecipientAuthorityCheck = {
   scope: SessionAccessScope;
   authority: SessionRecipientAuthority;
 };
+
+/**
+ * A session's recipient-authority row as the writer admission read it. `unowned`: an incognito
+ * actor's session, whose authority no durable row records. A database that does not exist holds no
+ * row (`missing`).
+ */
+export type AdmittedSessionRecipientAuthority =
+  | SessionRecipientAuthorityRecordState
+  | { state: "unowned" };
 
 /** A native writer racing every attempt is a live conflict; the caller then fails closed. */
 const ORDERED_READ_ATTEMPTS = 3;
@@ -37,20 +47,19 @@ type PreparedCheck = {
   database: { agentId: string; path: string; env: NodeJS.ProcessEnv };
   options: ReturnType<typeof toDatabaseOptions> & { env: NodeJS.ProcessEnv; path: string };
   commandScope: SessionAccessScope;
-  authority: SessionRecipientAuthority;
 };
 
 async function prepareCheck(
-  check: SessionRecipientAuthorityCheck,
+  scope: SessionAccessScope,
   index: number,
 ): Promise<PreparedCheck | undefined> {
   // An incognito actor's session has no durable authority row; it is never current.
-  if (captureSessionActorStorageOwner(check.scope, { assertCurrent() {}, authorize() {} })) {
+  if (captureSessionActorStorageOwner(scope, { assertCurrent() {}, authorize() {} })) {
     return undefined;
   }
-  const env = cloneEnvWithPlatformSemantics(check.scope.env ?? process.env);
+  const env = cloneEnvWithPlatformSemantics(scope.env ?? process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
-  const resolved = await prepareSqliteScope({ ...check.scope, env });
+  const resolved = await prepareSqliteScope({ ...scope, env });
   const resolvedOptions = toDatabaseOptions(resolved);
   const path = resolveOpenClawAgentSqlitePath({ ...resolvedOptions, env });
   return {
@@ -64,14 +73,13 @@ async function prepareCheck(
       storePath: path,
       env: { OPENCLAW_STATE_DIR: env.OPENCLAW_STATE_DIR },
     },
-    authority: check.authority,
   };
 }
 
-async function readCurrentUnderAdmission<T>(
+async function readUnderAdmission<T>(
   prepared: readonly PreparedCheck[],
-  current: boolean[],
-  decide: (current: readonly boolean[]) => T,
+  records: AdmittedSessionRecipientAuthority[],
+  decide: (records: readonly AdmittedSessionRecipientAuthority[]) => T,
 ): Promise<T> {
   const byPath = new Map<string, PreparedCheck[]>();
   for (const check of prepared) {
@@ -97,13 +105,11 @@ async function readCurrentUnderAdmission<T>(
           );
           try {
             for (const check of group) {
-              // A database that does not exist holds no authority row: the binding stays stale.
               const read = await worker.executeExisting(
                 { type: "authority.read", input: { scope: check.commandScope } },
                 () => execution.assertCurrent(),
               );
-              current[check.index] =
-                read !== undefined && sessionRecipientAuthorityMatches(check.authority, read.value);
+              records[check.index] = read?.value ?? { state: "missing" };
             }
           } finally {
             await worker.close();
@@ -113,7 +119,7 @@ async function readCurrentUnderAdmission<T>(
         }
       }
       assertNativeCurrent();
-      const value = decide(current);
+      const value = decide(records);
       if (isPromiseLike(value)) {
         void Promise.resolve(value).catch(() => {});
         throw new Error("Recipient authority decisions must remain synchronous");
@@ -124,27 +130,27 @@ async function readCurrentUnderAdmission<T>(
 }
 
 /**
- * Decides with each check's current recipient authority. `decide` runs synchronously under the
- * writer admission of every involved agent database, so an effect it performs (adopting,
- * enqueueing, settling a verdict) cannot be overtaken by a revocation that commits after the
- * read. A decision that needs the verdict after another await must call this again.
+ * Decides with each scope's recipient-authority row. `decide` runs synchronously under the writer
+ * admission of every involved agent database, so an effect it performs (adopting, enqueueing,
+ * settling a verdict) cannot be overtaken by a revocation that commits after the read. A decision
+ * that needs the verdict after another await must call this again.
  */
-export async function withCurrentSessionRecipientAuthority<T>(
-  checks: readonly SessionRecipientAuthorityCheck[],
-  decide: (current: readonly boolean[]) => T,
+export async function withSessionRecipientAuthorityRecords<T>(
+  scopes: readonly SessionAccessScope[],
+  decide: (records: readonly AdmittedSessionRecipientAuthority[]) => T,
 ): Promise<T> {
-  if (checks.length === 0) {
+  if (scopes.length === 0) {
     return decide([]);
   }
   for (let attempt = 1; ; attempt += 1) {
-    const current = checks.map(() => false);
-    const prepared = (await Promise.all(checks.map(prepareCheck))).filter(
+    const records: AdmittedSessionRecipientAuthority[] = scopes.map(() => ({ state: "unowned" }));
+    const prepared = (await Promise.all(scopes.map(prepareCheck))).filter(
       (check): check is PreparedCheck => check !== undefined,
     );
     try {
       return prepared.length === 0
-        ? decide(current)
-        : await readCurrentUnderAdmission(prepared, current, decide);
+        ? decide(records)
+        : await readUnderAdmission(prepared, records, decide);
     } catch (error) {
       if (
         !(error instanceof SessionEntryChangedDuringReadError) ||
@@ -154,6 +160,24 @@ export async function withCurrentSessionRecipientAuthority<T>(
       }
     }
   }
+}
+
+/** Decides with whether each check's captured epoch is still the session's current one. */
+export async function withCurrentSessionRecipientAuthority<T>(
+  checks: readonly SessionRecipientAuthorityCheck[],
+  decide: (current: readonly boolean[]) => T,
+): Promise<T> {
+  return await withSessionRecipientAuthorityRecords(
+    checks.map((check) => check.scope),
+    (records) =>
+      decide(
+        records.map(
+          (record, index) =>
+            record.state !== "unowned" &&
+            sessionRecipientAuthorityMatches(checks[index]!.authority, record),
+        ),
+      ),
+  );
 }
 
 /** One check, for callers whose effect is fenced again downstream (prompt adoption). */

@@ -11,6 +11,7 @@ import { enqueueSystemEventRaw as enqueueSystemEvent } from "../../infra/system-
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { evaluateNoOpRearmAdmission, type NoOpRearmDecision } from "../reply/no-op-rearm-guard.js";
 import type { ContinuationWorkReasonCategory, PendingContinuationWork } from "./work-flow-state.js";
+import { refuseStaleContinuationWork } from "./work-recipient-authority.js";
 import {
   markPendingWorkDelivered,
   markPendingWorkFailed,
@@ -38,6 +39,8 @@ const CONTINUATION_TURN_REPLY_RUN_FAILED_REASON = "reply-run-failed";
 const CONTINUATION_TURN_RESET_REASON = "session-reset";
 const CONTINUATION_TURN_LIFECYCLE_CHANGED_REASON = "session-lifecycle-changed";
 const CONTINUATION_TURN_STALE_CLAIM_REASON = "stale-claim";
+// Terminal: the record was already failed with its refusal reason; nothing reaches the session.
+const CONTINUATION_TURN_RECIPIENT_REFUSED_REASON = "recipient-refused";
 const GATEWAY_RESTARTING_REPLY_TEXT =
   "⚠️ Gateway is restarting. Please wait a few seconds and try again.";
 
@@ -104,6 +107,8 @@ type ContinuationWorkFoldCandidate = Readonly<{
 type ContinuationWorkFoldAttempt = Readonly<{
   now: number;
   retryDelayMs: number;
+  /** The candidates' works the adoption boundary kept; a refused work's record already failed. */
+  kept: ReadonlySet<PendingContinuationWork>;
   delivery: { delivered: true; deliveredAt: number } | { delivered: false; reason: string };
 }>;
 
@@ -344,6 +349,10 @@ async function driveContinuationTurn(
   if (signal.aborted) {
     return { status: "skipped", reason: CONTINUATION_TURN_RESET_REASON };
   }
+  // The adoption boundary, before the final fence: never run the turn for a moved recipient.
+  if ((await refuseStaleContinuationWork([work], "adoption")).length === 0) {
+    return { status: "skipped", reason: CONTINUATION_TURN_RECIPIENT_REFUSED_REASON };
+  }
   const workFence = await revalidatePendingWorkForTurn(work);
   // The fence read yielded; a reset in that window aborted this claim.
   if (signal.aborted) {
@@ -493,8 +502,20 @@ export async function prepareFoldedContinuationWork(
   candidates: readonly ContinuationWorkFoldCandidate[],
   policy: ContinuationWorkFoldPolicy,
 ): Promise<ContinuationWorkFoldAttempt> {
-  const works = candidates.map((candidate) => candidate.work);
+  // The adoption boundary: the active turn adopts the note, so a moved recipient never gets it.
+  const works = await refuseStaleContinuationWork(
+    candidates.map((candidate) => candidate.work),
+    "adoption",
+  );
+  const kept = new Set(works);
   const now = Date.now();
+  if (works.length === 0) {
+    const delivery = {
+      delivered: false,
+      reason: CONTINUATION_TURN_RECIPIENT_REFUSED_REASON,
+    } as const;
+    return { now, retryDelayMs: policy.retryDelayMs, kept, delivery };
+  }
   const note = buildFoldedProvenanceNote(works, now);
   let delivery: Awaited<ReturnType<typeof deliverFoldedProvenanceNoteToActiveTurn>>;
   try {
@@ -506,7 +527,7 @@ export async function prepareFoldedContinuationWork(
   } catch (err) {
     delivery = { delivered: false, reason: formatErrorMessage(err) };
   }
-  return { now, retryDelayMs: policy.retryDelayMs, delivery };
+  return { now, retryDelayMs: policy.retryDelayMs, kept, delivery };
 }
 
 export async function commitFoldedContinuationWork(
@@ -514,15 +535,19 @@ export async function commitFoldedContinuationWork(
   candidates: readonly ContinuationWorkFoldCandidate[],
   attempt: ContinuationWorkFoldAttempt,
 ): Promise<ContinuationWorkFoldExecutionResult> {
-  const works = candidates.map((candidate) => candidate.work);
+  const adopted = candidates.filter((candidate) => attempt.kept.has(candidate.work));
+  const works = adopted.map((candidate) => candidate.work);
   const { delivery, now } = attempt;
+  if (works.length === 0) {
+    return { folded: 0, requeues: [] };
+  }
   if (!delivery.delivered) {
     const retryDueAt = now + attempt.retryDelayMs;
     const retryAfterActiveRun =
       delivery.reason === "active-embedded-run-required-for-transcript-proof" ||
       delivery.reason.startsWith("queued-without-transcript-commit:");
     const requeues: Extract<ContinuationWorkExecutionDirective, { kind: "requeued" }>[] = [];
-    for (const candidate of candidates) {
+    for (const candidate of adopted) {
       const { work } = candidate;
       const retryTrigger = retryAfterActiveRun ? ({ kind: "reply-run-ended" } as const) : undefined;
       const requeued = await requeuePendingWork(work, {
@@ -622,6 +647,9 @@ export async function executePendingContinuationWork(
     }
     if (skippedReason === CONTINUATION_TURN_STALE_CLAIM_REASON) {
       return { kind: "unchanged" };
+    }
+    if (skippedReason === CONTINUATION_TURN_RECIPIENT_REFUSED_REASON) {
+      return { kind: "failed" };
     }
     if (skippedReason === CONTINUATION_TURN_NOOP_REARM_BLOCKED_REASON) {
       await markPendingWorkSuperseded(

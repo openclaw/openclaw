@@ -1,4 +1,8 @@
 import { z } from "zod";
+import {
+  SessionRecipientAuthoritySchema,
+  type SessionRecipientAuthority,
+} from "../../config/sessions/session-recipient-authority-types.js";
 import { normalizeDiagnosticTraceparent } from "../../infra/diagnostic-trace-context.js";
 import type { ContinuationRecord } from "./custody/custody-store.types.js";
 
@@ -21,6 +25,10 @@ const PendingWorkStateSchema = z.object({
   traceparent: z.string().optional(),
   traceparentProvenance: z.literal("internal").optional(),
   operatorAuthorityRequired: z.boolean().optional(),
+  // The session's recipient-authority epoch captured when the work was elected; every wake
+  // boundary refuses the work once it is stale. Absent on records elected before the binding
+  // existed (work-recipient-authority.ts). An older build strips it on its next write.
+  recipientAuthority: SessionRecipientAuthoritySchema.optional(),
   // Finalization anchor + provenance. Origin identity is audit-only and must
   // stay separate from parentRunId so same-session work never becomes orphan-
   // reap eligible through its electing run.
@@ -92,6 +100,7 @@ export type PendingContinuationWork = {
   originRunId?: string;
   originTurnId?: string;
   operatorAuthorityRequired?: boolean;
+  recipientAuthority?: SessionRecipientAuthority;
   deliveredAt?: number;
   foldedAt?: number;
   overdueByMs?: number;
@@ -169,6 +178,7 @@ export function encodeWorkState(work: PendingContinuationWork): PendingWorkState
     ...(work.originRunId ? { originRunId: work.originRunId } : {}),
     ...(work.originTurnId ? { originTurnId: work.originTurnId } : {}),
     ...(work.operatorAuthorityRequired ? { operatorAuthorityRequired: true } : {}),
+    ...(work.recipientAuthority ? { recipientAuthority: work.recipientAuthority } : {}),
     // a continue_work captured during an active turn parks on the
     // end-of-turn lifecycle event from the moment it is enqueued, so the marker
     // must survive the durable write (not just live on the runtime object).
@@ -196,6 +206,7 @@ export function buildFallbackWorkState(work: PendingContinuationWork): PendingWo
     ...(work.originRunId ? { originRunId: work.originRunId } : {}),
     ...(work.originTurnId ? { originTurnId: work.originTurnId } : {}),
     ...(work.operatorAuthorityRequired ? { operatorAuthorityRequired: true } : {}),
+    ...(work.recipientAuthority ? { recipientAuthority: work.recipientAuthority } : {}),
   };
 }
 
@@ -229,6 +240,7 @@ export function workToRuntime(
     ...(state.originRunId ? { originRunId: state.originRunId } : {}),
     ...(state.originTurnId ? { originTurnId: state.originTurnId } : {}),
     ...(state.operatorAuthorityRequired ? { operatorAuthorityRequired: true } : {}),
+    ...(state.recipientAuthority ? { recipientAuthority: state.recipientAuthority } : {}),
     ...(state.deliveredAt !== undefined ? { deliveredAt: state.deliveredAt } : {}),
     ...(state.foldedAt !== undefined ? { foldedAt: state.foldedAt } : {}),
     ...(state.overdueByMs !== undefined ? { overdueByMs: state.overdueByMs } : {}),

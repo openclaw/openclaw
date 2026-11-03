@@ -86,9 +86,10 @@ async function recoverContinuationCustody(
   armedAt: number,
 ): Promise<ContinuationCustodyBootSummary> {
   await whenContinuationCustodyReady();
-  const [delegateRecovery, workModule] = await Promise.all([
+  const [delegateRecovery, workModule, workAuthority] = await Promise.all([
     import("./delegate-dispatch-recovery.js"),
     import("./work-dispatch.js"),
+    import("./work-recipient-authority.js"),
   ]);
   // Delegate recovery runs before same-session work recovery to preserve the
   // normal post-turn order when both were queued in the same turn.
@@ -103,6 +104,14 @@ async function recoverContinuationCustody(
   const postCompaction = await delegateRecovery.recoverAndReleaseStagedPostCompactionDelegates({
     runningUpdatedAtOrBefore: armedAt,
   });
+  // The replay boundary: a kept wake whose recipient authority moved while the Gateway was down is
+  // refused before recovery can drive it. A failed sweep costs only its early refusal: the
+  // dispatcher's handoff checks each wake again before it runs.
+  try {
+    await workAuthority.refuseStaleContinuationWorkAtReplay();
+  } catch (err) {
+    log.warn(`[continuation:work-replay-refusal-failed] error=${formatErrorMessage(err)}`);
+  }
   const work = await workModule.recoverPendingContinuationWork();
   // Upkeep runs after recovery: the backlog recovery dispatches after an
   // outage is not orphaned. What is left (a missing owner, or a row nothing
