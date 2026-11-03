@@ -140,11 +140,14 @@ describe("resident profile display and reference catalog", () => {
     const queries = spyOnQueries(options);
 
     expect(options.display(github.id).displayName).toBe("public-handle");
-    expect(options.display(emailOnly.id).displayName).toBeNull();
+    expect(options.display(emailOnly.id).displayName).toBe(`Person ${emailOnly.id.slice(0, 8)}`);
     expect(profiles.listResidentUserProfileDisplayFacts(options)).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: github.id, label: "public-handle" }),
-        expect.objectContaining({ id: emailOnly.id, label: emailOnly.id }),
+        expect.objectContaining({
+          id: emailOnly.id,
+          label: `Person ${emailOnly.id.slice(0, 8)}`,
+        }),
       ]),
     );
     expect(queries).not.toHaveBeenCalled();
