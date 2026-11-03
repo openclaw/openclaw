@@ -19,16 +19,12 @@ vi.mock("node:child_process", async () => {
 });
 
 // mock-isolation: DNS setup uses only synthetic zone paths and never writes an operator zone.
-// Domain validation is pure, so it stays real.
-vi.mock("../infra/widearea-dns.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/widearea-dns.js")>();
-  return {
-    getWideAreaZonePath: () => testState.zonePath,
-    normalizeWideAreaDomain: actual.normalizeWideAreaDomain,
-    replaceWideAreaZoneFile: vi.fn(),
-    resolveWideAreaDiscoveryDomain: () => testState.resolvedDomain,
-  };
-});
+vi.mock("../infra/widearea-dns.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/widearea-dns.js")>()),
+  getWideAreaZonePath: () => testState.zonePath,
+  replaceWideAreaZoneFile: vi.fn(),
+  resolveWideAreaDiscoveryDomain: () => testState.resolvedDomain,
+}));
 
 // mock-isolation: Fixed Tailnet addresses keep setup independent of host network state.
 vi.mock("../infra/tailnet.js", () => ({
