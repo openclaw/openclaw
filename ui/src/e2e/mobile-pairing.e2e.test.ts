@@ -288,15 +288,21 @@ suite.define(() => {
             "device.pair.list": { paired: [], pending: [] },
             "device.pair.setupCode": setupResult("setup-full", "full"),
             "device.pair.setupStatus": {},
+            "environments.list": { environments: [] },
+            "exec.approvals.get": {
+              exists: false,
+              file: { agents: {}, defaults: {}, version: 1 },
+              hash: "e2e",
+              path: "/tmp/exec-approvals.json",
+            },
             "node.list": { nodes: [] },
+            "system-presence": [],
           },
         });
 
-        const response = await page.goto(`${suite.server.baseUrl}settings/security`);
+        const response = await page.goto(`${suite.server.baseUrl}settings/devices`);
         expect(response?.status()).toBe(200);
-        const pairFromSettings = page
-          .locator(".security-page")
-          .getByRole("button", { name: "Pair device" });
+        const pairFromSettings = page.getByRole("button", { name: "Pair device" });
         await expect.poll(async () => pairFromSettings.isEnabled()).toBe(true);
         await pairFromSettings.click();
 

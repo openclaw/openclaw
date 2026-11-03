@@ -44,6 +44,10 @@ export function resolveConfigObjectFields(params: ConfigNodeRenderParams) {
     if (leftOrder !== rightOrder) {
       return leftOrder - rightOrder;
     }
+    // A group opened on its own leads with the switch that decides whether the rest applies.
+    if (params.collapseObjects && (left[0] === "enabled" || right[0] === "enabled")) {
+      return left[0] === "enabled" ? -1 : 1;
+    }
     return left[0].localeCompare(right[0]);
   });
 

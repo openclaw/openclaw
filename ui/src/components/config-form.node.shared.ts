@@ -51,6 +51,10 @@ export type ConfigNodeRenderParams = {
   commitOnBlur?: boolean;
   /** Section shells own the title while collection rows still own help/default metadata. */
   showHeaderMeta?: boolean;
+  /** Keep every nested group of settings closed until it is opened. */
+  collapseObjects?: boolean;
+  /** State worth reading without opening a nested group, shown on its summary row. */
+  summarizeObject?: (path: Array<string | number>, value: unknown) => JSX.Element;
   searchCriteria?: ConfigSearchCriteria;
   revealSensitive?: boolean;
   maskSensitive?: boolean;
@@ -75,6 +79,8 @@ export function configChildRenderOptions(params: ConfigNodeRenderParams) {
     disabled: params.disabled,
     compact: params.compact,
     commitOnBlur: params.commitOnBlur,
+    collapseObjects: params.collapseObjects,
+    summarizeObject: params.summarizeObject,
     revealSensitive: params.revealSensitive,
     isSensitivePathRevealed: params.isSensitivePathRevealed,
     onToggleSensitivePath: params.onToggleSensitivePath,
