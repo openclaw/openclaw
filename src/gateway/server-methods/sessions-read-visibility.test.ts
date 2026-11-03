@@ -106,9 +106,10 @@ test("session-only roles cannot read another person's timeline through profile f
     }
     if (cap !== "none") {
       const ordinary = await read({});
-      expect(
-        ordinary.sessions.map((row) => row.sessionId).toSorted((a, b) => a.localeCompare(b)),
-      ).toEqual([viewer, foreign].toSorted((a, b) => a.localeCompare(b)));
+      expect(ordinary.sessions).toHaveLength(2);
+      expect(ordinary.sessions.map((row) => row.sessionId)).toEqual(
+        expect.arrayContaining([viewer, foreign]),
+      );
       expect(ordinary.people?.map((person) => person.identity.id)).toEqual([viewer]);
       expect(ordinary.ownerSessionCounts?.map((owner) => owner.profileId)).toEqual([viewer]);
       expect(ordinary).toMatchObject({
