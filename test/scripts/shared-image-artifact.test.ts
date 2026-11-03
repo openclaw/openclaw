@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
@@ -62,6 +62,7 @@ function verifyUploadedArtifact(
     artifactDigest?: string;
     artifactName?: string;
     env?: NodeJS.ProcessEnv;
+    json?: boolean;
     runAttempt?: string;
     runId?: string;
   } = {},
@@ -77,6 +78,7 @@ function verifyUploadedArtifact(
       params.artifactDigest ?? ARTIFACT_DIGEST,
       params.runId ?? ARTIFACT_RUN_ID,
       params.runAttempt ?? ARTIFACT_RUN_ATTEMPT,
+      ...(params.json ? ["--json"] : []),
     ],
     {
       encoding: "utf8",
@@ -199,7 +201,7 @@ printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
   exit 2
 }
 shift
-method=""
+method="GET"
 path=""
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
@@ -236,7 +238,7 @@ case "$path" in
       printf '%s\\n' "$FAKE_ARTIFACT_JSON"
       exit 0
     fi
-    printf '{"id":%s,"name":"%s","expired":%s,"digest":"sha256:%s","workflow_run":{"id":%s}}\\n' \
+    printf '{"id":%s,"name":"%s","expired":%s,"digest":"sha256:%s","workflow_run":{"id":%s},"expires_at":"2030-01-01T00:00:00Z"}\\n' \
       "$FAKE_ARTIFACT_ID" "$FAKE_ARTIFACT_NAME" "$FAKE_ARTIFACT_EXPIRED" \
       "$FAKE_ARTIFACT_DIGEST" "$FAKE_ARTIFACT_RUN_ID"
     ;;
@@ -305,10 +307,51 @@ function expectedArchiveEnv(fixture: ReturnType<typeof createFixture>): NodeJS.P
 }
 
 describe("shared Docker image artifacts", () => {
-  it("binds uploaded artifacts to the exact service tuple and producer attempt", () => {
+  it.each(["2", "3"])("propagates expiry verification for producer attempt %s", (attempt) => {
     const fixture = createFixture();
-    const verified = verifyUploadedArtifact(fixture);
+    const harnessScripts = join(fixture.root, ".release-harness/scripts/docker");
+    mkdirSync(harnessScripts, { recursive: true });
+    copyFileSync(HELPER, join(harnessScripts, "shared-image-artifact.sh"));
+    const workflow = readFileSync(
+      resolve(".github/workflows/openclaw-live-and-e2e-checks-reusable.yml"),
+      "utf8",
+    );
+    const expiry = expectDefined(
+      workflow.match(/ {10}artifact_expiry\(\) \{[\s\S]*?\n {10}\}/)?.[0],
+      "release artifact expiry function",
+    );
+    // The workflow captures this function's stdout; that disables Bash's implicit errexit.
+    const result = spawnSync(
+      "bash",
+      [
+        "-ec",
+        `${expiry}\nvalue="$(artifact_expiry "$@")"\nprintf '%s' "$value"`,
+        "expiry",
+        "Docker E2E image",
+        ARTIFACT_ID,
+        ARTIFACT_NAME,
+        ARTIFACT_DIGEST,
+        ARTIFACT_RUN_ID,
+        ARTIFACT_RUN_ATTEMPT,
+      ],
+      {
+        cwd: fixture.root,
+        encoding: "utf8",
+        env: { ...fixture.env, FAKE_ARTIFACT_RUN_ATTEMPT: attempt },
+      },
+    );
+    expect(result.status === 0, result.stderr).toBe(attempt === ARTIFACT_RUN_ATTEMPT);
+    expect(result.stdout).toBe(attempt === ARTIFACT_RUN_ATTEMPT ? "2030-01-01T00:00:00Z" : "");
+    expect(readFileSync(fixture.ghLog, "utf8").trim().split("\n")).toHaveLength(2);
+  });
+
+  it.each([false, true])("binds uploaded artifacts before returning metadata (json=%s)", (json) => {
+    const fixture = createFixture();
+    const verified = verifyUploadedArtifact(fixture, { json });
     expect(verified.status, `${verified.stdout}\n${verified.stderr}`).toBe(0);
+    expect(json ? JSON.parse(verified.stdout).expires_at : verified.stdout).toBe(
+      json ? "2030-01-01T00:00:00Z" : "",
+    );
     expect(readFileSync(fixture.ghLog, "utf8")).toContain(
       `api --method GET repos/openclaw/openclaw/actions/artifacts/${ARTIFACT_ID}`,
     );
@@ -318,9 +361,11 @@ describe("shared Docker image artifacts", () => {
 
     writeFileSync(fixture.ghLog, "");
     const digestMismatch = verifyUploadedArtifact(fixture, {
+      json,
       artifactDigest: "e".repeat(64),
     });
     expect(digestMismatch.status).not.toBe(0);
+    expect(digestMismatch.stdout).toBe("");
     expect(digestMismatch.stderr).toContain(
       "artifact identity does not match the immutable producer tuple",
     );
@@ -329,9 +374,11 @@ describe("shared Docker image artifacts", () => {
 
     writeFileSync(fixture.ghLog, "");
     const invalidJson = verifyUploadedArtifact(fixture, {
+      json,
       env: { FAKE_ARTIFACT_JSON: "not-json" },
     });
     expect(invalidJson.status).not.toBe(0);
+    expect(invalidJson.stdout).toBe("");
     expect(invalidJson.stderr).toContain(
       "artifact identity does not match the immutable producer tuple",
     );
@@ -340,9 +387,11 @@ describe("shared Docker image artifacts", () => {
 
     writeFileSync(fixture.ghLog, "");
     const attemptMismatch = verifyUploadedArtifact(fixture, {
+      json,
       env: { FAKE_ARTIFACT_RUN_ATTEMPT: "3" },
     });
     expect(attemptMismatch.status).not.toBe(0);
+    expect(attemptMismatch.stdout).toBe("");
     expect(attemptMismatch.stderr).toContain(
       "producer run attempt does not match the immutable tuple",
     );
