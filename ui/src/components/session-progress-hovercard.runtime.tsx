@@ -133,8 +133,15 @@ function createSessionProgressHovercard(
     if (!target || sessionHovercardMenuOpen(host)) {
       return;
     }
-    activate(target, target, delayed ? OPEN_DELAY_MS : SWEEP_OPEN_DELAY_MS, delayed);
-    hovercard.pointerInside = true;
+    const enter = () => {
+      activate(target, target, delayed ? OPEN_DELAY_MS : SWEEP_OPEN_DELAY_MS, delayed);
+      hovercard.pointerInside = true;
+    };
+    // Rows and links crossed on the way to the open card must not take it over.
+    if (target !== activeTarget && hovercard.deferPointerSwitch(event, target, enter)) {
+      return;
+    }
+    enter();
   };
 
   const handlePointerOut = (event: PointerEvent) => {
@@ -145,7 +152,7 @@ function createSessionProgressHovercard(
     if (event.relatedTarget instanceof Node && target.contains(event.relatedTarget)) {
       return;
     }
-    hovercard.schedulePointerExit();
+    hovercard.schedulePointerExit(event);
   };
 
   const handleFocusIn = (event: FocusEvent) => {
