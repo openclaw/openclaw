@@ -31,7 +31,7 @@ import {
   resolveMoonshotThinkingType,
   streamWithPayloadPatch,
 } from "./provider-stream-shared.js";
-import { asOptionalObjectRecord } from "./string-coerce-runtime.js";
+import { asOptionalObjectRecord, filterStringEntries } from "./string-coerce-runtime.js";
 export {
   applyAnthropicEphemeralCacheControlMarkers,
   composeProviderStreamWrappers,
@@ -45,6 +45,8 @@ export {
 
 /** Named stream-wrapper bundles that provider plugins can opt into without duplicating policy. */
 export type ProviderStreamFamily =
+  /** Requests opaque xAI reasoning while respecting the route's effort controls. */
+  | "xai-responses-reasoning"
   /** Applies the native Cohere Compatibility API instruction and tool-choice policy. */
   | "cohere-compatibility"
   /** Applies Google thinking-level payload normalization. */
@@ -125,6 +127,28 @@ export function buildProviderStreamFamilyHooks(
   family: ProviderStreamFamily,
 ): ProviderStreamFamilyHooks {
   switch (family) {
+    case "xai-responses-reasoning":
+      return {
+        wrapStreamFn: (ctx) =>
+          createPayloadPatchStreamWrapper(ctx.streamFn, ({ payload, model }) => {
+            if (
+              !model.reasoning ||
+              asOptionalObjectRecord(model.compat)?.supportsReasoningEffort === false
+            ) {
+              delete payload.reasoning;
+              delete payload.reasoningEffort;
+              delete payload.reasoning_effort;
+            }
+            if (model.api !== "openai-responses" || !model.reasoning) {
+              return;
+            }
+            const include = filterStringEntries(payload.include);
+            if (!include.includes("reasoning.encrypted_content")) {
+              include.push("reasoning.encrypted_content");
+            }
+            payload.include = include;
+          }),
+      };
     case "cohere-compatibility":
       return {
         wrapStreamFn: (ctx) =>

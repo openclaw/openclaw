@@ -168,3 +168,13 @@ filters are not exposed by this adapter. Request counters alone do not establish
 USD prices or budget eligibility; catalog affordability and runtime admission
 remain authoritative. Other declared search formats fail closed until a consumer
 adapter and its transport fixtures are qualified.
+
+## xAI Responses replay
+
+Catalog-qualified xAI Responses models share the native tool-schema/argument
+policy and encrypted reasoning include. Effort choices remain catalog-owned.
+The real Responses transport captures and replays opaque reasoning within its
+provider, model, origin, session and authentication-profile boundary. Grok CLI
+OAuth identity headers are not applied to the router endpoint. Worker-side
+upstream credential affinity and end-to-end replay remain separate requirements;
+the client does not advertise an unlanded Responses route.
