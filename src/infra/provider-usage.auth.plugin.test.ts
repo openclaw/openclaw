@@ -124,6 +124,50 @@ describe("provider usage auth boundary", () => {
     ]);
   });
 
+  it("resolves a saved profile binding written into provider config", async () => {
+    // The Models save flow writes the profile id, not the secret, into provider config.
+    const profileId = "deepseek:manual";
+    seed(
+      { [profileId]: { type: "api_key", provider: "deepseek", key: "saved-deepseek-secret" } },
+      { deepseek: [] },
+    );
+    resolveKey.mockResolvedValue({ apiKey: "saved-deepseek-secret", provider: "deepseek" });
+    let firstCandidate: string | undefined;
+    resolvePlugin.mockImplementationOnce(async ({ context }) => {
+      firstCandidate = (await context.resolveApiKeyCandidatesFromConfigAndStore?.({}))?.[0];
+      return firstCandidate ? { token: firstCandidate } : undefined;
+    });
+
+    const auths = await resolveProviderAuths({
+      providers: ["deepseek"],
+      env: {},
+      config: { models: { providers: { deepseek: { apiKey: profileId } } } },
+      agentDir: "/tmp/openclaw-agent",
+    });
+
+    expect(firstCandidate).toBe("saved-deepseek-secret");
+    expect(auths).toEqual([{ provider: "deepseek", token: "saved-deepseek-secret" }]);
+  });
+
+  it("keeps a literal config api key as the first usage candidate", async () => {
+    seed({}, { deepseek: [] });
+    let firstCandidate: string | undefined;
+    resolvePlugin.mockImplementationOnce(async ({ context }) => {
+      firstCandidate = (await context.resolveApiKeyCandidatesFromConfigAndStore?.({}))?.[0];
+      return firstCandidate ? { token: firstCandidate } : undefined;
+    });
+
+    const auths = await resolveProviderAuths({
+      providers: ["deepseek"],
+      env: {},
+      config: { models: { providers: { deepseek: { apiKey: "sk-literal-usage-key" } } } },
+      agentDir: "/tmp/openclaw-agent",
+    });
+
+    expect(firstCandidate).toBe("sk-literal-usage-key");
+    expect(auths).toEqual([{ provider: "deepseek", token: "sk-literal-usage-key" }]);
+  });
+
   it("keeps the supplied store when direct credentials admit a legacy usage hook", async () => {
     const profileId = "anthropic:scoped";
     const store: AuthProfileStore = {

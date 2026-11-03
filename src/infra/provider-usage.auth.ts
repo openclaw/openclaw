@@ -116,6 +116,20 @@ function prepareProviderApiKeyCandidates(params: ProviderApiKeyCandidatesParams)
   return { candidates, store, profileIds };
 }
 
+/**
+ * A saved credential writes its profile id into provider config (for example
+ * `deepseek:manual`); usage must resolve that binding to the stored secret instead of
+ * sending the id as a bearer token. Bare keys and non-matching values stay literal.
+ */
+function resolveConfigApiKeyBinding(candidates: string[], store: AuthProfileStore) {
+  const bindingId = candidates[0];
+  const profile = bindingId === undefined ? undefined : store.profiles[bindingId];
+  if (!profile || (profile.type !== "api_key" && profile.type !== "token")) {
+    return;
+  }
+  return { bindingId, profile };
+}
+
 function resolveLegacyProviderApiKeyCandidatesFromConfigAndStore(
   params: ProviderApiKeyCandidatesParams,
 ): string[] {
@@ -133,6 +147,17 @@ function resolveLegacyProviderApiKeyCandidatesFromConfigAndStore(
   const { candidates, store, profileIds } = prepareProviderApiKeyCandidates(params);
   if (!store) {
     return candidates;
+  }
+  const binding = resolveConfigApiKeyBinding(candidates, store);
+  if (binding) {
+    const value = normalizeSecretInput(
+      binding.profile.type === "api_key" ? binding.profile.key : binding.profile.token,
+    );
+    if (value && !isNonSecretApiKeyMarker(value)) {
+      candidates[0] = value;
+    } else {
+      candidates.shift();
+    }
   }
   const credentials = profileIds
     .map((id) => store.profiles[id])
@@ -157,6 +182,28 @@ async function resolveProviderApiKeyCandidatesFromConfigAndStore(
   const { candidates, store, profileIds } = prepareProviderApiKeyCandidates(params);
   if (!store) {
     return candidates;
+  }
+  const binding = resolveConfigApiKeyBinding(candidates, store);
+  if (binding) {
+    try {
+      const resolved = await resolveApiKeyForProfile({
+        cfg: params.state.cfg,
+        store,
+        profileId: binding.bindingId,
+        agentDir: params.state.agentDir,
+      });
+      params.state.signal?.throwIfAborted();
+      const value = normalizeSecretInput(resolved?.apiKey);
+      if (value && !isNonSecretApiKeyMarker(value)) {
+        candidates[0] = value;
+      } else {
+        candidates.shift();
+      }
+    } catch {
+      params.state.signal?.throwIfAborted();
+      // An unusable binding must not be sent as a bearer token.
+      candidates.shift();
+    }
   }
   for (const profileId of dedupeProfileIds(profileIds)) {
     const credential = store.profiles[profileId];
