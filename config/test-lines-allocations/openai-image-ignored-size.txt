@@ -1,0 +1,2 @@
+28
+# Runtime regression for Codex Responses image size mismatches and matching or omitted size hints.
