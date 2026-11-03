@@ -12,6 +12,7 @@ import { expectNoCalls, expectPartialCall } from "./lifecycle-assertions.test-su
 import type { DaemonInstallOptions } from "./types.js";
 
 const checkGatewayServiceReadinessMock = vi.hoisted(() => vi.fn());
+// mock-isolation: Its only export is scripted here; keep the restart-health polling it wraps out.
 vi.mock("./service-readiness.js", () => ({
   checkGatewayServiceReadiness: checkGatewayServiceReadinessMock,
 }));
