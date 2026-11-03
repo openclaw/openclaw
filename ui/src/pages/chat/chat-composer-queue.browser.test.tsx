@@ -1,8 +1,9 @@
-import { createSignal } from "solid-js";
+import { createSignal, type ComponentProps } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { buildPendingInputQueueItems } from "./chat-pending-inputs.ts";
 import { renderChatQueueSolid as ChatQueue } from "./components/chat-composer-queue.tsx";
 import baseStyles from "../../styles/base.css?inline";
 import queueContentStyles from "../../styles/chat/composer-queue-content.css?inline";
@@ -29,7 +30,10 @@ afterEach(() => {
   styles.remove();
 });
 
-function drawQueue(editingId: string | null = null) {
+function drawQueue(
+  editingId: string | null = null,
+  overrides: Partial<ComponentProps<typeof ChatQueue>> = {},
+) {
   const [editing, setEditing] = createSignal(editingId);
   const onEdit = vi.fn((id: string) => setEditing(id));
   mountSolid(
@@ -39,6 +43,7 @@ function drawQueue(editingId: string | null = null) {
           { id: "first", text: "First queued prompt", createdAt: 1, sendState: "waiting-idle" },
           { id: "second", text: "Second queued prompt", createdAt: 2, sendState: "waiting-idle" },
         ]}
+        {...overrides}
         queuedEdit={{ editingId: editing(), onEdit, onCancel: () => setEditing(null) }}
         onQueueRemove={vi.fn()}
       />
@@ -106,36 +111,37 @@ describe("queued message action menu", () => {
   });
 });
 
-it.each([1, 2])("shows an annotation count for %i local comments", (count) => {
-  mountSolid(
-    () => (
-      <ChatQueue
-        queue={[
-          {
-            id: "annotations",
-            text: "",
-            createdAt: 1,
-            attachments: Array.from({ length: count }, (_, id) => ({
-              id: String(id),
-              fileName: "selection-comment.txt",
-              mimeType: "text/plain",
-              selectionAnnotation: {
-                text: "Selected passage",
-                comment: "Clarify this",
-                sessionKey: "agent:main:main",
-                start: 0,
-                end: 16,
-              },
-            })),
-          },
-        ]}
-        onQueueRemove={vi.fn()}
-      />
-    ),
-    { container },
-  );
-  flush();
-  expect(container.querySelector(".chat-queue__text")?.textContent).toBe(
-    count === 1 ? "1 annotation" : "2 annotations",
-  );
+it.each([1, 2])("shows %i annotations before and after server admission", (count) => {
+  const attachments = Array.from({ length: count }, (_, id) => ({
+    id: String(id),
+    fileName: "selection-comment.txt",
+    mimeType: "text/plain",
+    selectionAnnotation: { text: "Selected passage", comment: "Clarify", start: 0, end: 16 },
+  }));
+  const message = {
+    role: "user",
+    content: " \n\t",
+    __openclaw: {
+      media: attachments.map(({ id, fileName, mimeType }) => ({
+        kind: "document",
+        fileName,
+        contentType: mimeType,
+        url: "/comment/" + id,
+      })),
+    },
+  };
+  const displayQueue = buildPendingInputQueueItems([
+    { id: "input", runId: "run", state: "queued", queued: true, acceptedAt: 1, message },
+  ]);
+  for (const overrides of [
+    { queue: [{ id: "annotations", text: "", createdAt: 1, attachments }] },
+    { queue: [], displayQueue },
+  ]) {
+    drawQueue(null, overrides);
+    expect(container.querySelector(".chat-queue__text")?.textContent).toBe(
+      count === 1 ? "1 annotation" : "2 annotations",
+    );
+    cleanupSolid();
+    container.replaceChildren();
+  }
 });
