@@ -1183,10 +1183,10 @@ final class OpenClawSnapshotUITests: XCTestCase {
         let work = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Worked")).firstMatch
         XCTAssertTrue(work.waitForExistence(timeout: 5))
         work.tap()
-        for (command, expectedStatus, showsUnknown) in [
-            ("printf ready", "No result", true),
-            ("printf missing", "No result", true),
-            ("printf complete", "Finished", false),
+        for (command, expectedStatus) in [
+            ("printf ready", "Outcome unknown"),
+            ("printf missing", "Outcome unknown"),
+            ("printf complete", "Finished"),
         ] {
             let row = app.descendants(matching: .any).matching(NSPredicate(
                 format: "label CONTAINS %@ AND value CONTAINS %@", "Exec", command)).firstMatch
@@ -1194,7 +1194,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
             XCTAssertTrue(
                 (row.value as? String)?.hasPrefix(expectedStatus) == true,
                 "The row must retain the prepared outcome for \(command)")
-            // Accessibility already announced unknown outcomes; pixels must preserve that cue too.
+            // Like web, the collapsed row shows identity without an unknown-outcome badge.
             let image = try XCTUnwrap(row.screenshot().image.cgImage)
             let recognition = VNRecognizeTextRequest()
             recognition.recognitionLevel = .accurate
@@ -1204,9 +1204,15 @@ final class OpenClawSnapshotUITests: XCTestCase {
                 .joined(separator: " ").lowercased()
             XCTAssertTrue(text.contains("exec"), "Rendered tool title was not recognized: \(text)")
             XCTAssertFalse(text.contains("outcome unknown"), "Step still uses the fallback title: \(text)")
-            XCTAssertEqual(
-                text.contains("no result"), showsUnknown,
-                "Visible unknown-outcome cue is wrong for \(command): \(text)")
+            XCTAssertFalse(text.contains("no result"), "Collapsed row has a status badge: \(text)")
+            XCTAssertFalse(text.contains("finished"), "Collapsed row has a status badge: \(text)")
+            if command == "printf ready" {
+                row.tap()
+                XCTAssertTrue(app.staticTexts["ready"].waitForExistence(timeout: 5))
+                XCTAssertTrue(app.staticTexts["Outcome unknown"].exists)
+                self.attachScreenshot(named: "step-output-and-outcome")
+                row.tap()
+            }
         }
         self.attachScreenshot(named: "step-labels-expanded")
         XCTAssertTrue(app.staticTexts["Local readiness checked."].exists)
