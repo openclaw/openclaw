@@ -155,9 +155,7 @@ export function createDownloadCaptureForPage(
     };
     onClose = () =>
       rejectCapture(
-        new Error(
-          "Page closed before download started. Reopen the page and retry the download wait.",
-        ),
+        new Error("Page closed before download started. Reopen it and retry the download wait."),
       );
     page.on("close", onClose);
     page.on("download", handler);
