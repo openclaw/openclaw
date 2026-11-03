@@ -1,8 +1,9 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { createCiTestObservationCapture } from "../../scripts/lib/ci-test-observation-capture.mts";
 import { collectTestObservations } from "../../scripts/lib/ci-test-observations.mjs";
 
 const context = {
@@ -57,6 +58,100 @@ const dependencies = {
 };
 
 describe("CI observation export", () => {
+  it.each([false, true])(
+    "captures native outcomes and dependencies without log contents (failed=%s)",
+    (failed) => {
+      const directory = mkdtempSync(path.join(tmpdir(), "ci-observation-capture-"));
+      try {
+        const cacheDirectory = path.join(directory, "vite");
+        mkdirSync(cacheDirectory);
+        writeFileSync(path.join(cacheDirectory, "dependencies.json"), JSON.stringify(dependencies));
+        const capture = createCiTestObservationCapture({
+          repositoryRoot: process.cwd(),
+          cacheDirectory,
+          configFiles: [path.resolve("test/vitest/vitest.unit-fast.config.ts")],
+          configuration: { pool: "forks", isolate: false },
+          env: {
+            GITHUB_REPOSITORY: "example/project",
+            GITHUB_RUN_ID: "100",
+            GITHUB_RUN_ATTEMPT: "2",
+            OPENCLAW_VITEST_OBSERVATION_DIR: directory,
+          },
+        });
+        expect(capture).toBeDefined();
+        for (const line of receipts({ failed })) {
+          const match = /\[vitest:(\w+)\] (.*)/u.exec(line)!;
+          capture!.record(match[1]!, JSON.parse(match[2]!));
+        }
+        const text = readFileSync(path.join(directory, "observations.json"), "utf8");
+        expect(text).not.toContain("must not be copied");
+        expect(text).not.toContain(directory);
+        expect(text).not.toContain(process.cwd());
+        expect(JSON.parse(text)).toMatchObject({
+          source: { runId: "100", runAttempt: "2" },
+          observations: {
+            context: {
+              repository: "example/project",
+              revision: expect.stringMatching(/^[a-f0-9]{40}$/u),
+            },
+            invocations: [
+              {
+                complete: true,
+                files: [
+                  {
+                    outcome: failed ? "failed" : "passed",
+                    dependencies: ["src/example.test.ts", "src/example.ts"],
+                  },
+                ],
+              },
+            ],
+          },
+        });
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("keeps interrupted observations incomplete when native dependencies are missing", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "ci-observation-capture-"));
+    try {
+      const capture = createCiTestObservationCapture({
+        repositoryRoot: process.cwd(),
+        cacheDirectory: directory,
+        configFiles: [],
+        configuration: {},
+        env: { OPENCLAW_VITEST_OBSERVATION_DIR: directory },
+      });
+      for (const line of receipts({ interrupted: true })) {
+        const match = /\[vitest:(\w+)\] (.*)/u.exec(line)!;
+        capture!.record(match[1]!, JSON.parse(match[2]!));
+      }
+      expect(
+        JSON.parse(readFileSync(path.join(directory, "observations.json"), "utf8")),
+      ).toMatchObject({
+        observations: {
+          invocations: [
+            {
+              complete: false,
+              files: [{ complete: false, outcome: "unknown", dependencies: null }],
+            },
+          ],
+        },
+      });
+      const unavailable = createCiTestObservationCapture({
+        repositoryRoot: path.join(directory, "missing"),
+        cacheDirectory: directory,
+        configFiles: [],
+        configuration: {},
+        env: { OPENCLAW_VITEST_OBSERVATION_DIR: directory },
+      });
+      expect(() => unavailable!.record("run", {})).not.toThrow();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("exports through the operator command", () => {
     const root = mkdtempSync(path.join(tmpdir(), "ci-observations-"));
     try {
