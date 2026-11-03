@@ -3,6 +3,7 @@ import {
   isSessionsHubRoute,
   isSettingsNavigationRoute,
   normalizeSidebarEntries,
+  pageTitleForRoute,
   visibleSettingsNavigationGroups,
 } from "./app-navigation.ts";
 import type { NativeDeviceSettingsCapability as Device } from "./app/native-device-settings.ts";
@@ -19,6 +20,15 @@ import {
   createNativeDeviceSettingsSnapshot,
   createTauriDeviceSettingsSnapshot,
 } from "./test-helpers/native-device-settings.ts";
+
+it("titles the device route after the actual device, as its page does", () => {
+  expect(pageTitleForRoute("device")).toBe("This device");
+  expect(pageTitleForRoute("device", createNativeDeviceSettingsSnapshot())).toBe("This Mac");
+  expect(pageTitleForRoute("device", createTauriDeviceSettingsSnapshot("windows"))).toBe(
+    "This computer",
+  );
+  expect(pageTitleForRoute("about")).toBe("About");
+});
 
 it.each([true, false])("shows device settings only with the capability, admin=%s", (canAdmin) => {
   const capability: Device = {

@@ -64,6 +64,7 @@ function laboratoryConfig(endpoint: string, retryBudget = 2) {
 }
 
 async function installConfig(page: Page, config: Record<string, unknown>, hash: string) {
+  await page.clock.install();
   return installMockGateway(page, {
     methodResponses: {
       "config.get": configResponse(config, hash),
@@ -89,7 +90,13 @@ function mutationParams(request: MockGatewayRequest): MutationParams {
 const button = (page: Page, name: string) => page.getByRole("button", { name, exact: true });
 const expectSaveStatus = (page: Page, status: string) =>
   expect
-    .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
+    .poll(async () => {
+      // Let each real config.get settle before advancing the next polling window.
+      if (status === "Apply changes") {
+        await page.clock.runFor(1_000);
+      }
+      return page.locator("openclaw-settings-save-indicator").textContent();
+    })
     .toContain(status);
 const requestCount = async (gateway: Awaited<ReturnType<typeof installConfig>>, method: string) =>
   (await gateway.getRequests(method)).length;
@@ -203,6 +210,9 @@ suite.define(() => {
       }
       await page.setViewportSize({ width: 1440, height: 1000 });
       // Let the resize settle so the comparison below only sees save feedback.
+      await page.locator(".shell").evaluate(async (element) => {
+        await Promise.all(element.getAnimations().map((animation) => animation.finished));
+      });
       let fieldBefore = await endpoint.boundingBox();
       await expect
         .poll(
@@ -517,7 +527,7 @@ suite.define(() => {
       await expect
         .poll(async () => (await gateway.getRequests("config.get")).length)
         .toBe(configGetsBeforePatch);
-      await expect.poll(() => codeModeRow.textContent()).toContain("Default: Disabled");
+      await expect.poll(() => codeModeSwitch.isChecked()).toBe(true);
       await expect.poll(() => labsLink.getAttribute("aria-current")).toBe("page");
       await capture(page, "00-labs-canonical-refresh.png", codeModeSwitch);
 

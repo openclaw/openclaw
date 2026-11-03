@@ -10,7 +10,7 @@ import type { PresenceViewer } from "../../lib/presence-users.ts";
 import { SESSION_NAVIGATION_KEY_PARAM } from "../../lib/sessions/route-navigation.ts";
 import { createContext, createGateway, createSessions } from "../../test-helpers/app-sidebar.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import { mountSolid as mountDashboards } from "../../test-helpers/mount-solid.ts";
+import { cleanupSolid, mountSolid as mountDashboards } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { DashboardsView } from "../dashboards/view.tsx";
@@ -74,12 +74,34 @@ beforeEach(() => {
   );
 });
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  cleanupSolid();
+  container.remove();
+  vi.unstubAllGlobals();
+});
 
 describe("session activity semantics", () => {
   afterEach(() => {
     setAvatarGatewayOrigin(null);
     vi.restoreAllMocks();
+  });
+
+  it("shows denied person activity without a misleading empty timeline", () => {
+    const filters = { personId: "online", query: "", time: "all" as const };
+    show({ filters, rows: [row("agent:main:private-timeline", { id: "online" }, 100)] });
+    expect(find('[data-activity-session="agent:main:private-timeline"]')).not.toBeNull();
+    const message =
+      "Other people's activity is private. You can still open sessions shared with you.";
+    show({
+      filters,
+      result: undefined,
+      error: message,
+    });
+    expect(text('[role="alert"]')).toBe(message);
+    expect(find("[data-activity-identity]")).toBeNull();
+    expect(find(".activity-pulse")).toBeNull();
+    expect(find("[data-activity-session]")).toBeNull();
+    expect(container.textContent).not.toContain("No sessions");
   });
 
   it.each([
