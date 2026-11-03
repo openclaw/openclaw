@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
-
-import { createBoundedReadTextPage } from "./read-page.js";
 import { resolveToolResultBudget } from "../../tool-result-limits.js";
+import { createBoundedReadTextPage } from "./read-page.js";
 
 const DEFAULT_MAX_BYTES = 50 * 1024;
 
@@ -24,7 +23,11 @@ describe("read page truncation cause", () => {
     // 16,000 CJK characters are 48,000 UTF-8 bytes: below the 50KB byte cap, but their
     // weighted estimate (64,000) exceeds the 32,000-unit budget of a 128k context.
     const cjk = "你".repeat(16_000);
-    const result = page({ content: cjk, totalLines: 1, modelBudget: resolveToolResultBudget(128_000) });
+    const result = page({
+      content: cjk,
+      totalLines: 1,
+      modelBudget: resolveToolResultBudget(128_000),
+    });
 
     expect(result.details.kind).toBe("truncated");
     if (result.details.kind !== "truncated") return;
