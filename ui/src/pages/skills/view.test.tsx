@@ -427,9 +427,26 @@ describe("renderSkills", () => {
 
     expect(query(".plugins-item .settings-status--warn")).not.toBeNull();
     expect(text()).toContain("Reason: blocked by agent filter");
-    expect(
-      Array.from(container.querySelectorAll(".chip")).map((chip) => normalizeText(chip)),
-    ).toContain("blocked");
+    expect(query(".skill-reader-dialog .settings-status--warn")).not.toBeNull();
+  });
+
+  it("gives one signal per meaning and says why the toggle is locked", async () => {
+    const { container, query, render } = createView(true);
+    render({
+      report: skillReport([createLinkedSkill()]),
+      detailKey: "agentreceipt",
+      canUpdate: false,
+    });
+    await Promise.resolve();
+    expect(query(".skill-reader-dialog .oc-dialog__title .statusDot")).toBeNull();
+    const dialog = expectDefined(query(".skill-reader-dialog"), "skill dialog");
+    const labels = Array.from(dialog.querySelectorAll(".oc-dialog__row-label")).map(normalizeText);
+    expect(labels).toEqual(expect.arrayContaining(["Package", "Security check", "Source"]));
+    expect(normalizeText(dialog)).toContain("Changing this skill needs operator.admin access.");
+    expect(container.querySelector(".skill-reader-dialog input[type=checkbox]")).toHaveProperty(
+      "disabled",
+      true,
+    );
   });
 
   it("closes installed details and installs ClawHub details with their cached icon", async () => {
@@ -451,7 +468,7 @@ describe("renderSkills", () => {
     render({
       surface: "discovery",
       clawhubSearchError: "rate limited",
-      clawhubInstallMessage: { kind: "success", text: "Installed github" },
+      clawhubInstallMessage: { ref: "other", kind: "success", text: "Installed other" },
       clawhubDetailRef: "github",
       clawhubDetail: githubDetail({ icon }),
       clawhubIconUrls: { [icon]: "blob:clawhub-detail-icon" },
@@ -460,7 +477,7 @@ describe("renderSkills", () => {
     await getRenderedModalDialog(container);
     expect([...container.querySelectorAll(".callout")].map(normalizeText)).toEqual([
       "rate limited Retry",
-      "Installed github",
+      "Installed other",
     ]);
     expect(container.querySelector<HTMLImageElement>(".clawhub-skill-icon--detail")?.src).toBe(
       "blob:clawhub-detail-icon",
@@ -782,10 +799,12 @@ describe("renderSkills", () => {
     });
     await Promise.resolve();
 
-    const chips = Array.from(container.querySelectorAll(".chip"));
-    const verdictChip = chips.find((chip) => normalizeText(chip) === "Unavailable");
-    expect(verdictChip).toBeDefined();
-    expect(chips.some((chip) => normalizeText(chip) === "Clean")).toBe(false);
-    expect(verdictChip?.classList.contains("chip-ok")).toBe(false);
+    const statuses = Array.from(
+      container.querySelectorAll(".skill-reader-dialog .settings-status"),
+    );
+    const verdictStatus = statuses.find((status) => normalizeText(status) === "Unavailable");
+    expect(verdictStatus).toBeDefined();
+    expect(statuses.some((status) => normalizeText(status) === "Clean")).toBe(false);
+    expect(verdictStatus?.classList.contains("settings-status--ok")).toBe(false);
   });
 });

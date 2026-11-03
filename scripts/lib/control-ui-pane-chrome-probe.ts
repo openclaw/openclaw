@@ -3,7 +3,6 @@ export function installPaneChromeProbe() {
   const selectors = {
     headerTrailing: ".chat-pane__header-trailing",
     headerIdentity: ".chat-pane__identity-actions",
-    versions: "openclaw-chat-pane-versions-menu button",
     historyBoundary: ".chat-history-boundary__action",
     identity: ".chat-pane__crumbs",
     sessionTitle: ".chat-pane__session-title-text",

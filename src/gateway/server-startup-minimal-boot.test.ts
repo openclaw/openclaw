@@ -1,5 +1,5 @@
 // Keep bundled plugins enabled: disabling them hid a startup stall from UI e2e proof.
-import fs from "node:fs/promises";
+import { promises as fs, readFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import {
@@ -10,6 +10,7 @@ import {
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { resetConfigRuntimeState } from "../config/runtime-snapshot.js";
 import { resolveConfigDir } from "../infra/config-dir.js";
+import { flushDiagnosticsTimeline } from "../infra/diagnostics-timeline.js";
 import { writeGatewayRestartHandoff } from "../infra/restart-handoff.js";
 import { readLoggingConfig } from "../logging/config.js";
 import { resetLogger } from "../logging/logger.js";
@@ -184,7 +185,8 @@ it(
           snapshotVersion,
         );
         snapshotVersion = nextVersion;
-        const startupEvents = (await fs.readFile(timelinePath, "utf8"))
+        flushDiagnosticsTimeline();
+        const startupEvents = readFileSync(timelinePath, "utf8")
           .trim()
           .split("\n")
           .map((line) => JSON.parse(line) as Record<string, unknown>);
