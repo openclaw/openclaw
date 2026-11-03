@@ -119,7 +119,7 @@ it.each(["maintenance", "confirmation", "config"] as const)(
         });
       } else {
         click(container, 'input[role="switch"]');
-        click(container, ".exec-approval-actions button:last-child");
+        click(container, "openclaw-modal-actions button:last-child");
         await waitForSolid(() => expect(container.textContent).toContain("Saving…"));
         await waitForSolid(() => expect(config.patch).toHaveBeenCalledOnce());
       }
@@ -127,7 +127,7 @@ it.each(["maintenance", "confirmation", "config"] as const)(
       await waitForSolid(() => {
         expectDestination();
         expect(oldHost.isConnected).toBe(false);
-        expect(container.querySelector(".exec-approval-actions")).toBeNull();
+        expect(container.querySelector("openclaw-modal-actions")).toBeNull();
       });
       pending.reject(new Error("Late Dreaming failure"));
       await Promise.allSettled([pending.promise, navigation]);
