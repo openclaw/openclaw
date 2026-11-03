@@ -1,0 +1,2 @@
+# Regression tests check plugins build and validate name a missing compiled entry and malformed package JSON instead of the generic failure.
+26
