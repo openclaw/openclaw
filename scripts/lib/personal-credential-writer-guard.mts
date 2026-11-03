@@ -1080,6 +1080,11 @@ export function inspectPersonalCredentialWriters(
     return found;
   };
   const handledImports = new Set<ts.CallExpression>();
+  const referenceAccess = (node: ts.Node) =>
+    (ts.isPropertyAccessExpression(node.parent) && node.parent.name === node) ||
+    (ts.isElementAccessExpression(node.parent) && node.parent.argumentExpression === node)
+      ? node.parent
+      : undefined;
   const accessSymbol = (expression: ts.Expression): Symbol | undefined => {
     if (ts.isAwaitExpression(expression) || ts.isParenthesizedExpression(expression)) {
       return accessSymbol(expression.expression);
@@ -1414,14 +1419,19 @@ export function inspectPersonalCredentialWriters(
         }
       }
     }
-    const symbols = references.length ? checker.getSymbolAtLocation(references) : [];
-    for (const [index, node] of references.entries()) {
+    // Shorthand and member references use specialized resolution below.
+    const symbolReferences = references.filter(
+      (node) => !ts.isShorthandPropertyAssignment(node.parent) && !referenceAccess(node),
+    );
+    const symbols = symbolReferences.length ? checker.getSymbolAtLocation(symbolReferences) : [];
+    let symbolIndex = 0;
+    for (const node of references) {
+      const access = referenceAccess(node);
       const symbol = ts.isShorthandPropertyAssignment(node.parent)
         ? checker.getShorthandAssignmentValueSymbol(node.parent)
-        : (ts.isPropertyAccessExpression(node.parent) && node.parent.name === node) ||
-            (ts.isElementAccessExpression(node.parent) && node.parent.argumentExpression === node)
-          ? accessSymbol(node.parent)
-          : symbols[index];
+        : access
+          ? accessSymbol(access)
+          : symbols[symbolIndex++];
       if (
         ts.isStringLiteral(node) &&
         ts.isCallExpression(node.parent) &&
@@ -1472,11 +1482,7 @@ export function inspectPersonalCredentialWriters(
       ) {
         continue;
       }
-      const expression =
-        (ts.isPropertyAccessExpression(node.parent) && node.parent.name === node) ||
-        (ts.isElementAccessExpression(node.parent) && node.parent.argumentExpression === node)
-          ? node.parent
-          : node;
+      const expression = access ?? node;
       const call =
         (ts.isCallExpression(expression.parent) || ts.isNewExpression(expression.parent)) &&
         expression.parent.expression === expression
