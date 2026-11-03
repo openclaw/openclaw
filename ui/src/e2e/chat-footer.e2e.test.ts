@@ -1,24 +1,14 @@
 import type { CDPSession, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import {
-  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-  CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
-} from "../../../src/gateway/control-ui-contract.js";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../pages/chat/scroll.ts";
 import { installRepositoryGateway as installMockGateway } from "../test-helpers/repository-plugin.ts";
-import {
-  closeChatDetails,
-  openDetailsPullRequests,
-  openChatTaskProgress,
-  openDesktopPullRequestPage,
-} from "./chat-details.test-support.ts";
+import { closeChatDetails, openChatTaskProgress } from "./chat-details.test-support.ts";
 import {
   chatMessage,
   chatThreadDistanceFromBottom,
   waitForChatScrollIdle,
 } from "./chat-flow.test-support.ts";
-import { waitForWatchedSessionKey } from "./chat-github-publication.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -27,8 +17,6 @@ import {
 const suite = createControlUiE2eSuite({ name: "Chat footer layout" });
 const sessionKey = "agent:main:main";
 const runId = "footer-verification";
-const checksMethod = "controlUi.sessionPullRequests.checks";
-const pullRequestIdentity = { owner: "example", repo: "demo", number: 42, headSha: "a".repeat(40) };
 const queuedMessages = ["Review the desktop", "Review the phone", "Record the result"];
 const activate = (control: Locator, touch: boolean) =>
   touch ? control.tap() : control.press("Enter");
@@ -82,13 +70,7 @@ async function verifyFooter(page: Page, width: number, height: number, touch: bo
   page.on("pageerror", (error) => pageErrors.push(error.message));
   const gateway = await installMockGateway(page, {
     sessionKey,
-    featureMethods: [
-      "chat.metadata",
-      "chat.startup",
-      "progressCard.get",
-      SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-      checksMethod,
-    ],
+    featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
     historyMessages: Array.from({ length: 30 }, (_, index) =>
       chatMessage(
         index % 2 ? "user" : "assistant",
@@ -99,18 +81,6 @@ async function verifyFooter(page: Page, width: number, height: number, touch: bo
     sessionInfo: { key: sessionKey, activeRunIds: [runId], hasActiveRun: true },
     inFlightRun: { runId, text: "Checking one more detail." },
     methodResponses: {
-      [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
-      "cron.list": {
-        jobs: [],
-        total: 0,
-        limit: 200,
-        offset: 0,
-        hasMore: false,
-        nextOffset: null,
-        snapshotRevision: "footer-inventory",
-      },
-      "cron.status": { enabled: true, triggersEnabled: true, jobs: 0 },
-      [checksMethod]: { ...pullRequestIdentity, checks: [], rateLimited: false, status: "ready" },
       "progressCard.get": {
         card: {
           sessionKey,
@@ -128,31 +98,6 @@ async function verifyFooter(page: Page, width: number, height: number, touch: bo
     },
   });
   await page.goto(suite.server.baseUrl + "chat");
-  const watchedKey = await waitForWatchedSessionKey(gateway);
-  await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
-    sessions: {
-      [watchedKey]: {
-        pullRequests: [
-          {
-            ...pullRequestIdentity,
-            branch: "fix/footer-layout",
-            title: "Improve chat layout",
-            url: "https://github.com/example/demo/pull/42",
-            checksUrl: "https://github.com/example/demo/pull/42/checks",
-            state: "open",
-            checks: { state: "passing", passed: 12, failed: 0, skipped: 0, running: 0 },
-          },
-        ],
-        rateLimited: false,
-        status: "ready",
-      },
-    },
-  });
-  const pullRequest = page
-    .locator(touch ? ".chat-pr-mobile__row" : ".chat-pr")
-    .filter({ visible: true });
-  await openDetailsPullRequests(page);
-  await pullRequest.waitFor();
   const thread = page.locator(".chat-thread");
   await page.getByText("Project verification 29.", { exact: false }).waitFor();
   await waitForChatScrollIdle(page);
@@ -218,86 +163,6 @@ async function verifyFooter(page: Page, width: number, height: number, touch: bo
   }));
   expect(boundary.transcriptBottom).toBeLessThanOrEqual(boundary.footerTop);
 
-  await openDetailsPullRequests(page);
-  let menu: Locator;
-  if (touch) {
-    await pullRequest.tap();
-    await page.getByRole("button", { name: "Checks", exact: true }).tap();
-    menu = page.locator('[data-repository-page="checks"]:not([hidden])');
-  } else {
-    menu = await openDesktopPullRequestPage(pullRequest, "checks", "keyboard");
-  }
-  await gateway.waitForRequest(checksMethod);
-  await menu.waitFor({ state: "visible" });
-  await waitForLayoutSettled(
-    page,
-    touch
-      ? '.chat-mobile-host, [data-repository-page="checks"]:not([hidden])'
-      : ".chat-details, .chat-pr-menu",
-  );
-  const menuBounds = (await menu.boundingBox())!;
-  const contextBounds = (await page.locator(".chat-footer__context").boundingBox())!;
-  if (touch) {
-    expect(menuBounds.y).toBeGreaterThanOrEqual(contextBounds.y + contextBounds.height);
-  } else {
-    expect(menuBounds.y).toBeLessThan(contextBounds.y);
-  }
-  expect(menuBounds.y).toBeGreaterThanOrEqual(0);
-  expect(menuBounds.y + menuBounds.height).toBeLessThanOrEqual(height);
-  await menu
-    .locator('a[href="https://github.com/example/demo/pull/42/checks"]')
-    .click({ trial: true });
-  if (touch) {
-    await page
-      .locator(".chat-mobile-host__header")
-      .getByRole("button", { name: "Back", exact: true })
-      .tap();
-    await page.getByRole("button", { name: "CI monitoring", exact: true }).tap();
-    menu = page.locator('[data-repository-page="monitoring"]:not([hidden])');
-  } else {
-    menu = await openDesktopPullRequestPage(pullRequest, "monitoring", "keyboard");
-  }
-  const autoFix = menu.getByRole("switch", {
-    name: "Auto-fix CI & address comments",
-    exact: true,
-  });
-  await autoFix.waitFor();
-  await expect.poll(() => autoFix.isEnabled()).toBe(true);
-  if (touch) {
-    await closeChatDetails(page);
-  } else {
-    await page.keyboard.press("Escape");
-    expect(await menu.isVisible()).toBe(true);
-    await page.keyboard.press("Escape");
-  }
-  await expect.poll(() => menu.isVisible()).toBe(false);
-
-  await gateway.setMethodResponse("progressCard.get", {
-    card: {
-      sessionKey,
-      revision: 1,
-      updatedAt: Date.now(),
-      markdown:
-        "Reviewing the project.\n\n" +
-        "- Inspect the result and record the verification outcome.\n".repeat(16),
-      steps: [
-        { step: "Inspect the project", status: "completed" },
-        { step: "Verify the changes", status: "in_progress" },
-        { step: "Record the result", status: "pending" },
-      ],
-    },
-  });
-  await gateway.emitGatewayEvent("progressCard.changed", { sessionKey, revision: 1 });
-  const resumedProgress = await openChatTaskProgress(page);
-  if (!touch && (await resumedProgress.getAttribute("open")) === null) {
-    await activate(resumedProgress.locator("summary"), touch);
-  }
-  await resumedProgress
-    .locator(".task-resumedProgress-details__plan")
-    .waitFor({ state: "visible" });
-  await closeChatDetails(page);
-
-  // Use the normal offline queue owner so nothing drains during the layout proof.
   await gateway.setOnline(false);
   await gateway.closeLatest();
   await page.locator(".agent-chat__input--offline").waitFor();

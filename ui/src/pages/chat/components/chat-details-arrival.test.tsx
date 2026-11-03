@@ -150,7 +150,9 @@ it("replaces cached progress after a failed child read settles", async () => {
 
 it("admits each real Environment content source without an empty section", async () => {
   const view = mountDetails();
-  expect(view.group("environment")).toBeNull();
+  expect(
+    view.container.querySelector<HTMLElement>(".chat-details-desktop-environment")?.hidden,
+  ).toBe(true);
   view.update({
     environment: {
       uncommitted: {
@@ -164,7 +166,9 @@ it("admits each real Environment content source without an empty section", async
   await waitForSolid(() => expect(view.group("environment")?.textContent).toContain("Changes"));
 
   view.update({ environment: undefined });
-  expect(view.group("environment")).toBeNull();
+  expect(
+    view.container.querySelector<HTMLElement>(".chat-details-desktop-environment")?.hidden,
+  ).toBe(true);
   view.update({ detailsWorkspace: { root: null, label: null, branch: "feature/arrival" } });
   expect(view.group("environment")?.textContent).toContain("feature/arrival");
   view.update({
@@ -176,7 +180,9 @@ it("admits each real Environment content source without an empty section", async
   });
   expect(view.group("environment")?.textContent).toContain("Worktree");
   view.update({ selectedSession: view.initial.selectedSession });
-  expect(view.group("environment")).toBeNull();
+  expect(
+    view.container.querySelector<HTMLElement>(".chat-details-desktop-environment")?.hidden,
+  ).toBe(true);
   view.update({
     selectedSession: {
       ...view.initial.selectedSession!,

@@ -273,7 +273,7 @@ it.each([
             }
             throw cloneFailure;
           });
-        const operation = prepareGatewayMove(cfg)({
+        const operation = prepareGatewayMove(config)({
           ...scope,
           sessionId,
           assertCurrent: () => {

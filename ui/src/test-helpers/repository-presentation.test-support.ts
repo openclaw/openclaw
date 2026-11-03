@@ -1,5 +1,5 @@
 import type { ControlUiSessionPullRequestSnapshot } from "@openclaw/gateway-protocol";
-import { onTestFinished, vi } from "vitest";
+import { onTestFinished } from "vitest";
 import {
   createSessionAccessoryMount,
   createMobileSessionAccessoryMount,
@@ -63,13 +63,11 @@ export function installRepositoryPresentation(
   };
   // Presentation fixtures install one local activation, as createTestControlUiPluginHost does.
   // Catalog loading is covered independently; connection retirement still revokes this host.
-  vi.spyOn(runtime, "isCurrent").mockImplementation(
-    (current) =>
-      current === owner &&
-      !owner.abort.signal.aborted &&
-      context.gateway.snapshot.phase === "connected" &&
-      context.gateway.snapshot.client === client,
-  );
+  runtime.isCurrent = (current) =>
+    current === owner &&
+    !owner.abort.signal.aborted &&
+    context.gateway.snapshot.phase === "connected" &&
+    context.gateway.snapshot.client === client;
   const base = createControlUiPluginHost(() => context, runtime, owner);
   const listeners = new Set<() => void>();
   const host = base;

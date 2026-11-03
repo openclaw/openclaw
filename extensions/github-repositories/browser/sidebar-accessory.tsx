@@ -110,7 +110,11 @@ export function createSidebarAccessoryMount(
       // Logical content presence drives the native row's existing coding fallback.
       createEffect(
         () => Boolean(badge()),
-        (present) => currentContext.props.onPresenceChange?.(present),
+        (present) => {
+          if (!currentContext.signal.aborted) {
+            currentContext.props.onPresenceChange?.(present);
+          }
+        },
       );
       return (
         <PresentationContext value={locale}>

@@ -561,7 +561,6 @@ function stubPullRequestPreparation(sessionKey: string, cfg: OpenClawConfig) {
     assertCurrent() {},
     assertSource() {},
     async verifyWriteAccess() {},
-    ownPublication: false,
   });
   vi.spyOn(provider, "preparePublisher").mockResolvedValue({
     provenance: { source: "system-detected", account: { accountId: 1, login: "fixture" } },
@@ -803,7 +802,12 @@ it("refuses another guest and lost access before binding, PR import and earlier 
         },
       };
       setRuntimeConfigSnapshot(cfg);
-      const guest = (await ensureCanonicalUserProfileForEmail("adoption-guest@example.test")).id;
+      const guest = (
+        await syncCanonicalGitHubIdentity({
+          identity: { accountId: 9, login: "guest" },
+          authenticationAlias: { kind: "email", email: "adoption-guest@example.test" },
+        })
+      ).id;
       const other = (await ensureCanonicalUserProfileForEmail("adoption-other@example.test")).id;
       const admin = (await ensureCanonicalUserProfileForEmail("adoption-admin@example.test")).id;
       await setCanonicalUserProfileRole(admin, "admin");
@@ -857,6 +861,13 @@ it("refuses another guest and lost access before binding, PR import and earlier 
           workspaceDir: state.workspaceDir,
           client,
         });
+      const expectRefused = async (client: GatewayClient, message: string) => {
+        expect(await prepare(client)).toHaveBeenCalledExactlyOnceWith(
+          false,
+          undefined,
+          expect.objectContaining({ message: expect.stringContaining(message) }),
+        );
+      };
       const unbound = () => {
         const entry = loadSessionEntryReadOnly(target);
         expect(entry?.worktree).toBeUndefined();
@@ -865,11 +876,18 @@ it("refuses another guest and lost access before binding, PR import and earlier 
       const allocateWorkspace = allocation.prepareSessionWorktree;
       const allocate = vi.spyOn(allocation, "prepareSessionWorktree");
       try {
-        // Another guest fails the publication requester; an admin passes it but is not the owner.
-        await expect(prepare(otherClient)).rejects.toThrow("no longer authorized");
-        await expect(prepare(adminClient)).rejects.toThrow(
-          "Only the person who started this conversation",
-        );
+        // Shared-session participation rejects another guest before publication preparation.
+        expect(await prepare(otherClient)).toHaveBeenCalledExactlyOnceWith(false, undefined, {
+          code: "INVALID_REQUEST",
+          message: "session is shared for this connection",
+          details: {
+            code: "SESSION_PARTICIPATION_REQUIRED",
+            sessionKey: target.sessionKey,
+            visibility: "shared",
+          },
+        });
+        // An admin passes participation but still cannot adopt another person's originals.
+        await expectRefused(adminClient, "Only the person who started this conversation");
         expect(allocate).not.toHaveBeenCalled();
         unbound();
 
@@ -879,7 +897,7 @@ it("refuses another guest and lost access before binding, PR import and earlier 
           await setGuestRole("revoked");
           return allocated;
         });
-        await expect(prepare(guestClient)).rejects.toThrow("no longer authorized");
+        await expectRefused(guestClient, "no longer authorized");
         expect(allocate).toHaveBeenCalledOnce();
         unbound();
         expect(
@@ -901,7 +919,7 @@ it("refuses another guest and lost access before binding, PR import and earlier 
             [Symbol.dispose]() {},
           } as never;
         });
-        await expect(prepare(guestClient)).rejects.toThrow("no longer authorized");
+        await expectRefused(guestClient, "no longer authorized");
         expect(integrate).not.toHaveBeenCalled();
         expect(loadSessionEntryReadOnly(target)?.worktree?.githubPullRequest).toBeUndefined();
         await setGuestRole("guest");

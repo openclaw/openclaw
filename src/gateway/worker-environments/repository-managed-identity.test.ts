@@ -223,6 +223,7 @@ for (const kind of ["pat", "oauth", "native"] as const) {
     }
     const sourceFixture = createRepositorySourceFixture(
       createGitHubRepositorySource(readRuntimeConfig, refresh),
+      builder,
     );
     const sources = createRepositorySources(new AbortController().signal, sourceFixture.registry);
     const performCheckout = checkoutTransfers.performRepositoryCheckout;

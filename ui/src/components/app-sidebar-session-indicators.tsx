@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo } from "solid-js";
+import { createMemo, deep } from "solid-js";
 import { resolveControlUiAvatarAuth } from "../app/control-ui-auth.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { formatDurationCompact } from "../lib/format-duration.ts";
@@ -32,7 +32,11 @@ export function renderSidebarSessionIndicators(
   const team = createMemo(() => host().sidebarAgentsMode === "roster");
   const childrenExpanded = createMemo(() => host().isSessionChildrenExpanded(readSession()));
   const badges = createMemo(() => sidebarSessionBadgeFacts(readSession()));
-  const artifact = createMemo(() => readSession().pullRequest ?? readDisplay?.()?.pullRequest);
+  // SDK artifacts are plain snapshots; the row projection itself remains reactive and host-owned.
+  const artifact = createMemo(() => {
+    const summary = readSession().pullRequest ?? readDisplay?.()?.pullRequest;
+    return summary ? deep(summary) : undefined;
+  });
   const ownerAttribution = createMemo(() => {
     const readSessionValue = readSession();
     return host().sessionsStatusFilter === "archived"

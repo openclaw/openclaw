@@ -5,8 +5,10 @@ import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import type { RepositorySourceV1 } from "./repository-source-types.js";
 import { withPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 
-export function createRepositorySourceFixture(source: RepositorySourceV1) {
-  const builder = createTestPluginRegistry();
+export function createRepositorySourceFixture(
+  source: RepositorySourceV1,
+  builder = createTestPluginRegistry(),
+) {
   const record = createPluginRecord({
     id: "repository-example",
     source: "/synthetic/repository-example.ts",

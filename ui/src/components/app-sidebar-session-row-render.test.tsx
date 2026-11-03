@@ -561,6 +561,7 @@ it("keeps a restored pin's badges after roster handoff until its own descriptor 
   await waitForSolid(() => {
     expect(dom.all(".session-row-badge--approval")).toHaveLength(1);
     expect(dom.all(".session-row-badge--pull-request")).toHaveLength(1);
+    expect(container.querySelector("[role=alert]")).toBeNull();
   });
   const badge = dom.query(".session-row-badge--pull-request");
   host.releaseSidebarSnapshot();

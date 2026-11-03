@@ -50,9 +50,16 @@ function page(jobs: CronJob[], overrides: Partial<CronJobsListResult> = {}): Cro
   };
 }
 
-const request = vi.fn<ControlUiSettingsClient["request"]>();
-const client: ControlUiSettingsClient = { request };
-beforeEach(() => request.mockReset());
+const client: ControlUiSettingsClient = {
+  async request() {
+    throw new Error("Configure the expected automation response.");
+  },
+};
+let request = vi.spyOn(client, "request");
+beforeEach(() => {
+  request = vi.spyOn(client, "request");
+  request.mockReset();
+});
 const load = (currentTarget = target) =>
   loadCiAutomationJobs(client, currentTarget, new AbortController().signal);
 const set = (

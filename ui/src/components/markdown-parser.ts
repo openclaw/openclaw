@@ -33,6 +33,7 @@ import {
 // formatAudioTranscriptForAgent stores this model-facing label in conversation history.
 const AUDIO_TRANSCRIPT_PREFIX = '[Audio transcript (machine-generated, untrusted)]: "';
 
+const ITEM_NUMBER_KEYWORD_RE = /(PR|pull request|pull|issue|fixes|closes|resolves)\s+$/i;
 const HEX_COLOR_RE = /#(?:[\da-f]{8}|[\da-f]{6}|[\da-f]{4}|[\da-f]{3})(?![\da-f])/gi;
 
 const DISALLOWED_LINK_SCHEME_RE = /^(?!(?:https?|mailto):)[a-z][a-z0-9+.-]*:/i;
@@ -648,24 +649,36 @@ export function createMarkdownParser(): MarkdownItParser {
       : code;
   };
   installMarkdownHumanMentions(markdownParser);
-  // Link owners run first; preserve reference metadata before text tokens are joined.
+  // Link owners run first; item-like prose stays literal even without a reference provider.
   markdownParser.core.ruler.before("text_join", "hex-colors", (state) => {
     if (state.env.mode !== "message") {
       return;
     }
-    for (const children of markdownInlineChildren(state.tokens)) {
+    let heading = false;
+    for (const block of state.tokens) {
+      if (block.type === "heading_open" || block.type === "heading_close") {
+        heading = block.type === "heading_open";
+      }
+      if (block.type !== "inline" || !block.children) {
+        continue;
+      }
+      const children = block.children;
       let linkDepth = 0;
+      let prose = "";
       for (let index = 0; index < children.length; index += 1) {
         const token = children[index]!;
         if (token.type === "link_open" || token.type === "link_close") {
           linkDepth += token.nesting;
         }
-        if (
-          token.type !== "text" ||
-          token.meta?.githubItemReference ||
-          linkDepth !== 0 ||
-          !token.content.includes("#")
-        ) {
+        if (token.type !== "text" || linkDepth !== 0) {
+          if (!/^(?:em|strong)_(?:open|close)$/.test(token.type)) {
+            prose = "";
+          }
+          continue;
+        }
+        const preceding = prose;
+        prose += token.content;
+        if (!token.content.includes("#")) {
           continue;
         }
         index = replaceMarkdownTextMatches(state, children, index, HEX_COLOR_RE, (match) => {
@@ -673,6 +686,18 @@ export function createMarkdownParser(): MarkdownItParser {
           if (
             !hasMarkdownLinkBoundaries(token.content, match.index, end) ||
             /^[.-]\w/u.test(token.content.slice(end))
+          ) {
+            return null;
+          }
+          // Emphasis is transparent prose; links, code and breaks reset its context.
+          const prefix = preceding + token.content.slice(0, match.index);
+          const keyword =
+            !heading && /^#[1-9]\d{0,9}$/.test(match[0])
+              ? prefix.match(ITEM_NUMBER_KEYWORD_RE)
+              : null;
+          if (
+            keyword &&
+            hasMarkdownLinkBoundaries(prefix, prefix.length - keyword[0].length, prefix.length)
           ) {
             return null;
           }

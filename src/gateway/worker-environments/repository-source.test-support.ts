@@ -2,6 +2,10 @@ import { onTestFinished } from "vitest";
 import { createGitHubRepositorySource } from "../../../extensions/github-repositories/repository-source-api.js";
 import { readRuntimeConfig } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  bindLegacyPluginSdkResourceHost,
+  LegacyPluginSdkResourceHost,
+} from "../../plugins/legacy-sdk-resource-host.js";
 import { performRepositoryCheckout } from "../../plugins/repository-checkout-transfer.js";
 import { createRepositorySourceFixture } from "../../plugins/repository-source.test-support.js";
 import { withPluginRuntimeGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
@@ -62,5 +66,8 @@ export function withRepositorySourceGatewayFixture<T>(
     repositorySources: sources,
   } as GatewayRequestContext;
   context.resolveGatewayContext = () => context;
+  const resources = new LegacyPluginSdkResourceHost();
+  bindLegacyPluginSdkResourceHost(context.resolveGatewayContext, resources);
+  onTestFinished(() => resources.close());
   return withPluginRuntimeGatewayContextResolver(context.resolveGatewayContext, () => run(sources));
 }

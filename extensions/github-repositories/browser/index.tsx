@@ -75,7 +75,7 @@ export default defineControlUiPluginV2({
     const publicationFactory = createPublicationFactory(host);
     host.presentation?.registerEnglish(publicationEnglish);
     const stopReferences = host.ui.registerTextReferenceProvider(
-      createGitHubTextReferenceProvider(host, runtime),
+      createGitHubTextReferenceProvider(),
     );
     host.presentation?.registerEnglish(metadataEnglish);
     host.presentation?.registerEnglish({ sessionsView: { openPullRequest: "Open PR" } });
@@ -183,6 +183,8 @@ export default defineControlUiPluginV2({
       ),
     });
     return () => {
+      // Retire the shared read owner before contribution cleanup releases its watches.
+      runtime.store.dispose();
       stopMobile.forEach((stop) => stop());
       stopSessionRead();
       stopOpenPullRequest();
@@ -193,7 +195,6 @@ export default defineControlUiPluginV2({
       stopActivity();
       stopSummary();
       stopReferences();
-      runtime.store.dispose();
     };
   },
 });

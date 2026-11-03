@@ -46,10 +46,8 @@ describe("Markdown hex colors", () => {
   it("keeps repository references as links and reader documents literal", () => {
     const fragment = htmlFragment(
       toSanitizedMarkdownHtml(
-        "PR #178969, color #aabbcc.",
-        githubReferenceOptions({
-          githubRepo: { owner: "openclaw", repo: "openclaw" },
-        }),
+        "PR openclaw/openclaw#178969, color #aabbcc.",
+        githubReferenceOptions(),
       ),
     );
     expect(fragment.querySelector("a")?.getAttribute("href")).toBe(
@@ -72,6 +70,24 @@ describe("Markdown hex colors", () => {
       expect(fragment.querySelector("a")).toBeNull();
       expect(swatches(fragment).map((image) => image.parentElement?.textContent)).toEqual(["#126"]);
       expect(fragment.textContent?.trim()).toBe(source.replaceAll("**", ""));
+    }
+  });
+
+  it("limits item-number disambiguation to prose across transparent emphasis", () => {
+    for (const [source, expected] of [
+      ["**PR** **#126**; issue *#1234*", []],
+      ["PR `code` #126; issue [link](https://example.com) #1234", ["#126", "#1234"]],
+      ["PR\n#126; PR #012; issue #abc; enterprisePR #126", ["#126", "#012", "#abc", "#126"]],
+      ["## PR #126", ["#126"]],
+    ] as const) {
+      for (const fragment of [
+        htmlFragment(toSanitizedMarkdownHtml(source)),
+        htmlFragment(toStreamingMarkdownParts(source).join("")),
+      ]) {
+        expect(swatches(fragment).map((image) => image.parentElement?.textContent)).toEqual(
+          expected,
+        );
+      }
     }
   });
 

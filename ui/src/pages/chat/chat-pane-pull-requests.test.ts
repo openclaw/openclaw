@@ -199,7 +199,7 @@ it.each(["global", "per-sender"] as const)(
 );
 
 it("retires hidden publication feedback while retaining the admitted write and its result", async () => {
-  const { pane, request, responses, publications, settled, present } = createPublicationPane();
+  const { request, responses, publications, settled, present } = createPublicationPane();
   const response = Promise.withResolvers<unknown>();
   responses.set("sessions.github.publish", response.promise);
   const ready = await settled();

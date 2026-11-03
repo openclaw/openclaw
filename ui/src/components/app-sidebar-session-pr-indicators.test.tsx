@@ -16,7 +16,6 @@ import {
 import {
   catalogPage,
   createContext,
-  createGatewayHarness,
   createSessionsHarness,
   mountSidebarContext,
 } from "../test-helpers/app-sidebar.ts";
@@ -42,8 +41,17 @@ async function mountRow(
   catalog?: "foreign" | "adopted",
   empty = false,
 ) {
-  const request = vi.fn(async (_method: string, _params?: unknown) => ({ subscribed: true }));
-  const gateway = createGatewayHarness(createTestGatewayClient(request));
+  const reader = createReadGateway();
+  const request = reader.request;
+  const gateway = {
+    gateway: reader.gateway,
+    publish(patch: Partial<typeof reader.gateway.snapshot>) {
+      reader.setSnapshot({ ...reader.gateway.snapshot, ...patch });
+    },
+    publishEvent(event: string, payload: unknown) {
+      reader.emit(payload, event);
+    },
+  };
   gateway.publish({
     hello: gatewayHelloForMethods([SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD], scopes),
   });

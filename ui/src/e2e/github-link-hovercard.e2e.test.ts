@@ -2,10 +2,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { BrowserContext, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import {
-  CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
-  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-} from "../../../src/gateway/control-ui-contract.js";
+import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../src/gateway/control-ui-contract.js";
 import type { ControlUiLinkReaderPreview } from "../../../src/shared/control-ui-link-reader.js";
 import { installControlUiE2eRendererStallProbe } from "../test-helpers/control-ui-e2e-renderer-stall.ts";
 import {
@@ -14,7 +11,6 @@ import {
   pauseVirtualClock,
 } from "../test-helpers/control-ui-e2e.ts";
 import { TEST_LINK_READER } from "../test-helpers/link-reader.ts";
-import { waitForWatchedSessionKey } from "./chat-github-publication.test-support.ts";
 import { createLightDesktopControlUiContextOptions } from "./control-ui-browser-options.test-support.ts";
 import {
   createControlUiE2eSuite,
@@ -28,6 +24,7 @@ import {
   assistantMessage,
   referencePreview,
   defineRepositoryReferenceTests,
+  installReferencePreview,
   expectModifiedNavigation,
   pullPreviewResponse,
   PULL_HREF,
@@ -282,13 +279,13 @@ suite.define(() => {
     const page = await context.newPage();
     const repository = { owner: "openclaw", repo: "openclaw" };
     const namedRepository = { owner: "openclaw", repo: "clawsweeper" };
-    const gateway = await installPreview(page, {
+    const gateway = await installReferencePreview(page, {
       featureMethods: [
         ...defaultControlUiFeatureMethods,
         SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
         "projects.list",
-        "forge.preview",
-        "forge.detail",
+        "github.preview",
+        "github.detail",
       ],
       historyMessages: [
         assistantMessage(
@@ -314,7 +311,7 @@ suite.define(() => {
             source: "registered",
           })),
         },
-        "forge.preview": {
+        "github.preview": {
           cases: [repository, namedRepository].flatMap((repo) =>
             [1558, 1576].map((number) =>
               referencePreview(
@@ -330,10 +327,6 @@ suite.define(() => {
       },
     });
     await page.goto(suite.server.baseUrl + "chat");
-    const key = await waitForWatchedSessionKey(gateway);
-    await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
-      sessions: { [key]: { repository, pullRequests: [], rateLimited: false, status: "ready" } },
-    });
     const followUpRow = page.locator(".chat-bubble p").filter({ hasText: "Follow-up PR" });
     const unqualified = page.locator(".chat-bubble p").filter({ hasText: "Unqualified:" });
     await unqualified.waitFor({ state: "visible" });
@@ -368,7 +361,8 @@ suite.define(() => {
           : "Synthetic OpenClaw pull request",
       );
     }
-    const requests = (await gateway.getRequests("forge.preview")).map(({ params }) => {
+    expect(await gateway.getRequests("projects.list")).toHaveLength(0);
+    const requests = (await gateway.getRequests("github.preview")).map(({ params }) => {
       if (!isRecord(params)) {
         throw new Error("Expected GitHub preview parameters");
       }
@@ -387,15 +381,14 @@ suite.define(() => {
   it("keeps formatted PR references and their hover targets consistent", async () => {
     const context = await newBrowserContext();
     const page = await context.newPage();
-    const repository = { owner: "synthetic", repo: "formatting-demo" };
     const href = "https://github.com/synthetic/formatting-demo/pull/1576";
     const otherHref = "https://github.com/synthetic/other-project/pull/1576#issuecomment-1";
-    const gateway = await installPreview(page, {
+    const gateway = await installReferencePreview(page, {
       featureMethods: [
         ...defaultControlUiFeatureMethods,
         SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-        "forge.preview",
-        "forge.detail",
+        "github.preview",
+        "github.detail",
       ],
       historyMessages: [
         assistantMessage(
@@ -410,7 +403,7 @@ suite.define(() => {
       ],
       methodResponses: {
         [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
-        "forge.preview": {
+        "github.preview": {
           cases: [
             referencePreview(
               href,
@@ -427,10 +420,6 @@ suite.define(() => {
       },
     });
     await page.goto(`${suite.server.baseUrl}chat`);
-    const key = await waitForWatchedSessionKey(gateway);
-    await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
-      sessions: { [key]: { repository, pullRequests: [], rateLimited: false, status: "ready" } },
-    });
     const formatted = page.locator("strong a.markdown-github-item");
     await formatted.waitFor({ state: "visible" });
     await formatted.focus();
@@ -448,7 +437,7 @@ suite.define(() => {
     await other.focus();
     await expectText(card, "Separate repository example");
     await expectAttr(part(card, "title"), "href", otherHref);
-    const requests = await gateway.getRequests("forge.preview");
+    const requests = await gateway.getRequests("github.preview");
     expect(requests.map((request) => request.params)).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ url: href }),
@@ -478,7 +467,7 @@ suite.define(() => {
       });
       await page.setViewportSize({ width: scenario.width, height: 800 });
       await pullLink.focus();
-      const request = await gateway.waitForRequest("forge.preview");
+      const request = await gateway.waitForRequest("github.preview");
       expect(request.params).toMatchObject({ agentId: "main" });
 
       await page.clock.runFor(1_000);
@@ -492,7 +481,7 @@ suite.define(() => {
 
       if (scenario.fails) {
         const error = "GitHub API rate limit exceeded (HTTP 403). Try again in 2 minutes.";
-        await gateway.rejectDeferred("forge.preview", { message: error });
+        await gateway.rejectDeferred("github.preview", { message: error });
         await expectText(card.getByRole("status"), error);
         await expectAttr(card, "aria-label", "Could not load preview");
         const externalLink = card.getByRole("link", { name: "Open on Forge" });
@@ -503,7 +492,7 @@ suite.define(() => {
         await expectAttr(pullLink, "aria-haspopup", "dialog");
         expect(await isFocused(pullLink)).toBe(true);
       } else {
-        await gateway.resolveDeferred("forge.preview");
+        await gateway.resolveDeferred("github.preview");
         await expectText(card, pullPreviewResponse.title);
       }
       expect(await page.locator("body").getAttribute("data-preview-mounts")).toBe("1");

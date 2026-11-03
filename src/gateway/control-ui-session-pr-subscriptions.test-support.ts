@@ -125,7 +125,6 @@ export function createTestControlUiSessionPrSubscriptions(options: Options) {
   const reads: RepositorySessionReads = {
     runDetached: (run) => run(),
     assertCurrent: () => scheduler.signal.throwIfAborted(),
-    runDetached: (run) => run(),
     isViewerConnected: (connId) => options.isConnectionActive?.(connId) ?? true,
     invalidateViewer: (connId) =>
       options.broadcastToConnIds(

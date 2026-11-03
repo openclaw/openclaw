@@ -9,7 +9,6 @@ import type {
   ControlUiLinkReaderDocument,
   ControlUiLinkReaderSection,
 } from "openclaw/plugin-sdk/control-ui-link-reader";
-import { createLazyFacadeObjectValue } from "openclaw/plugin-sdk/facade-loader";
 import { isBundledPluginEnabled } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { readGitHubConfig } from "./config-api.js";
@@ -261,138 +260,136 @@ type GitHubTransportApi = Omit<
 
 // Reader and native HTTP consumers share one library and cooldown owner.
 // Importing this public artifact never registers tools or activates the plugin.
-export const gitHubPublicApi = createLazyFacadeObjectValue<GitHubPublicApi>(() => {
-  const library: GitHubTransportApi = readerApi;
-  const resolveScope = (env: NodeJS.ProcessEnv = process.env, host?: string) => {
-    const config = getRuntimeConfigSnapshot();
-    const configuredHost = resolveConfiguredGitHubHost(config);
-    const selectedHost = host ?? configuredHost;
-    if (selectedHost !== configuredHost && selectedHost !== "github.com") {
-      throw new library.ControlUiGitHubError(
-        409,
-        "Repository GitHub host changed; restore its configuration and retry",
-      );
+const library: GitHubTransportApi = readerApi;
+const resolveScope = (env: NodeJS.ProcessEnv = process.env, host?: string) => {
+  const config = getRuntimeConfigSnapshot();
+  const configuredHost = resolveConfiguredGitHubHost(config);
+  const selectedHost = host ?? configuredHost;
+  if (selectedHost !== configuredHost && selectedHost !== "github.com") {
+    throw new library.ControlUiGitHubError(
+      409,
+      "Repository GitHub host changed; restore its configuration and retry",
+    );
+  }
+  const apiBaseUrl =
+    selectedHost === configuredHost
+      ? resolveConfiguredGitHubApiBaseUrl(config)
+      : "https://api.github.com";
+  const token = selectedHost === configuredHost ? githubApiToken(env, config) : undefined;
+  return {
+    token,
+    apiBaseUrl,
+    apiScope: `${selectedHost}:${apiBaseUrl}`,
+  };
+};
+const resolvePublicScope = () =>
+  resolveConfiguredGitHubHost(getRuntimeConfigSnapshot()) === "github.com"
+    ? resolveScope()
+    : { token: undefined, apiScope: "public" };
+const resolveReadIdentity = (
+  identity: ControlUiGitHubPreviewIdentity | undefined,
+): ControlUiGitHubPreviewIdentity => {
+  if (identity) {
+    return resolveConfiguredGitHubHost(getRuntimeConfigSnapshot()) === "github.com"
+      ? identity
+      : { ...identity, token: undefined, cacheScope: "public:anonymous" };
+  }
+  const selected = resolvePublicScope();
+  const assertSelected = () => {
+    const current = resolvePublicScope();
+    if (current.apiScope !== selected.apiScope || current.token !== selected.token) {
+      throw new library.ControlUiGitHubError(409, "GitHub credential changed; retry the request");
     }
-    const apiBaseUrl =
-      selectedHost === configuredHost
-        ? resolveConfiguredGitHubApiBaseUrl(config)
-        : "https://api.github.com";
-    const token = selectedHost === configuredHost ? githubApiToken(env, config) : undefined;
+  };
+  return {
+    token: selected.token,
+    cacheScope: `${selected.apiScope}:${library.githubApiCredentialCacheScope(selected.token)}`,
+    optionalAuth: true,
+    assertSelected,
+    revalidate: async () => assertSelected(),
+  };
+};
+const resolveReadRequestIdentity = (
+  identity: ControlUiGitHubPreviewIdentity | undefined,
+  request: GitHubReadRequest | undefined,
+): ControlUiGitHubPreviewIdentity => {
+  const selected = resolveReadIdentity(identity);
+  // Keep one transport/cooldown owner while each invocation owns its authority.
+  return request
+    ? {
+        ...selected,
+        signal: request.signal,
+        assertSelected() {
+          request.assertActive();
+          selected.assertSelected();
+        },
+        async revalidate() {
+          request.assertActive();
+          await selected.revalidate();
+          request.assertActive();
+        },
+      }
+    : selected;
+};
+export const gitHubPublicApi: GitHubPublicApi = {
+  ...library,
+  get GITHUB_API_BASE_URL() {
+    return resolveConfiguredGitHubApiBaseUrl(getRuntimeConfigSnapshot());
+  },
+  get GITHUB_GRAPHQL_URL() {
+    return library.resolveGitHubApiUrls(readGitHubConfig(getRuntimeConfigSnapshot()).apiBaseUrl)
+      .graphqlUrl;
+  },
+  fetchGitHubApi(...args) {
+    args[8] ??= resolveConfiguredGitHubApiBaseUrl(getRuntimeConfigSnapshot());
+    return library.fetchGitHubApi(...args);
+  },
+  fetchGitHubJsonPage(url, fetchImpl, token, options) {
+    return library.fetchGitHubJsonPage(url, fetchImpl, token, {
+      ...options,
+      apiBaseUrl:
+        options?.apiBaseUrl ?? resolveConfiguredGitHubApiBaseUrl(getRuntimeConfigSnapshot()),
+    });
+  },
+  fetchGitHubJson(...args) {
+    args[4] ??= resolveConfiguredGitHubApiBaseUrl(getRuntimeConfigSnapshot());
+    return library.fetchGitHubJson(...args);
+  },
+  resolveGitHubApiCredentialScope(env, host) {
+    const { token, apiBaseUrl, apiScope } = resolveScope(env, host);
     return {
       token,
       apiBaseUrl,
-      apiScope: `${selectedHost}:${apiBaseUrl}`,
+      cacheScope: `${apiScope}:${library.githubApiCredentialCacheScope(token)}`,
     };
-  };
-  const resolvePublicScope = () =>
-    resolveConfiguredGitHubHost(getRuntimeConfigSnapshot()) === "github.com"
-      ? resolveScope()
-      : { token: undefined, apiScope: "public" };
-  const resolveReadIdentity = (
-    identity: ControlUiGitHubPreviewIdentity | undefined,
-  ): ControlUiGitHubPreviewIdentity => {
-    if (identity) {
-      return resolveConfiguredGitHubHost(getRuntimeConfigSnapshot()) === "github.com"
-        ? identity
-        : { ...identity, token: undefined, cacheScope: "public:anonymous" };
-    }
-    const selected = resolvePublicScope();
-    const assertSelected = () => {
-      const current = resolvePublicScope();
-      if (current.apiScope !== selected.apiScope || current.token !== selected.token) {
-        throw new library.ControlUiGitHubError(409, "GitHub credential changed; retry the request");
-      }
-    };
-    return {
-      token: selected.token,
-      cacheScope: `${selected.apiScope}:${library.githubApiCredentialCacheScope(selected.token)}`,
-      optionalAuth: true,
-      assertSelected,
-      revalidate: async () => assertSelected(),
-    };
-  };
-  const resolveReadRequestIdentity = (
-    identity: ControlUiGitHubPreviewIdentity | undefined,
-    request: GitHubReadRequest | undefined,
-  ): ControlUiGitHubPreviewIdentity => {
-    const selected = resolveReadIdentity(identity);
-    // Keep one transport/cooldown owner while each invocation owns its authority.
-    return request
-      ? {
-          ...selected,
-          signal: request.signal,
-          assertSelected() {
-            request.assertActive();
-            selected.assertSelected();
-          },
-          async revalidate() {
-            request.assertActive();
-            await selected.revalidate();
-            request.assertActive();
-          },
-        }
-      : selected;
-  };
-  return {
-    ...library,
-    get GITHUB_API_BASE_URL() {
-      return resolveConfiguredGitHubApiBaseUrl(getRuntimeConfigSnapshot());
-    },
-    get GITHUB_GRAPHQL_URL() {
-      return library.resolveGitHubApiUrls(readGitHubConfig(getRuntimeConfigSnapshot()).apiBaseUrl)
-        .graphqlUrl;
-    },
-    fetchGitHubApi(...args) {
-      args[8] ??= resolveConfiguredGitHubApiBaseUrl(getRuntimeConfigSnapshot());
-      return library.fetchGitHubApi(...args);
-    },
-    fetchGitHubJsonPage(url, fetchImpl, token, options) {
-      return library.fetchGitHubJsonPage(url, fetchImpl, token, {
-        ...options,
-        apiBaseUrl:
-          options?.apiBaseUrl ?? resolveConfiguredGitHubApiBaseUrl(getRuntimeConfigSnapshot()),
-      });
-    },
-    fetchGitHubJson(...args) {
-      args[4] ??= resolveConfiguredGitHubApiBaseUrl(getRuntimeConfigSnapshot());
-      return library.fetchGitHubJson(...args);
-    },
-    resolveGitHubApiCredentialScope(env, host) {
-      const { token, apiBaseUrl, apiScope } = resolveScope(env, host);
-      return {
-        token,
-        apiBaseUrl,
-        cacheScope: `${apiScope}:${library.githubApiCredentialCacheScope(token)}`,
-      };
-    },
-    formatControlUiGitHubPreviewError(error) {
-      return isTrustedSecretSurfaceUnavailableError(error)
-        ? { message: CONTROL_UI_GITHUB_CREDENTIAL_UNAVAILABLE_MESSAGE, retryable: false }
-        : library.formatControlUiGitHubPreviewError(error);
-    },
-    loadControlUiGitHubPreview(target, identity, fetchImpl, refresh, request) {
-      return library.loadControlUiGitHubPreview(
-        target,
-        resolveReadRequestIdentity(identity, request),
-        fetchImpl,
-        refresh,
-      );
-    },
-    searchPublicGitHubItems(params, identity, fetchImpl, request) {
-      return library.searchPublicGitHubItems(
-        params,
-        resolveReadRequestIdentity(identity, request),
-        fetchImpl,
-      );
-    },
-    loadGitHubDetail(target, identity, fetchImpl, refresh, request, section) {
-      return library.loadGitHubDetail(
-        target,
-        resolveReadRequestIdentity(identity, request),
-        fetchImpl,
-        refresh,
-        section,
-      );
-    },
-  };
-});
+  },
+  formatControlUiGitHubPreviewError(error) {
+    return isTrustedSecretSurfaceUnavailableError(error)
+      ? { message: CONTROL_UI_GITHUB_CREDENTIAL_UNAVAILABLE_MESSAGE, retryable: false }
+      : library.formatControlUiGitHubPreviewError(error);
+  },
+  loadControlUiGitHubPreview(target, identity, fetchImpl, refresh, request) {
+    return library.loadControlUiGitHubPreview(
+      target,
+      resolveReadRequestIdentity(identity, request),
+      fetchImpl,
+      refresh,
+    );
+  },
+  searchPublicGitHubItems(params, identity, fetchImpl, request) {
+    return library.searchPublicGitHubItems(
+      params,
+      resolveReadRequestIdentity(identity, request),
+      fetchImpl,
+    );
+  },
+  loadGitHubDetail(target, identity, fetchImpl, refresh, request, section) {
+    return library.loadGitHubDetail(
+      target,
+      resolveReadRequestIdentity(identity, request),
+      fetchImpl,
+      refresh,
+      section,
+    );
+  },
+};
