@@ -243,6 +243,7 @@ function PendingSessionCreateContent(
       composer: {
         paneId: composerId,
         sessionKey: props.sessionKey,
+        incognito: isIncognitoSessionKey(props.sessionKey),
         currentAgentId: agentId,
         assistantName:
           displayName ?? agent?.identity?.name ?? agent?.name ?? t("agentChip.newAgent"),

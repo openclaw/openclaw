@@ -1,3 +1,4 @@
+import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { patchSettings } from "../../app/settings.ts";
@@ -529,6 +530,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       ...this.transcriptSessionProps(selectedSession),
       contextUsage: this.cachedSessionState()?.contextUsage,
       toolOverrides: selectedSession?.toolOverrides,
+      incognito: Boolean(selectedSession?.incognito) || isIncognitoSessionKey(state.sessionKey),
       capabilityMenu: catalogKey
         ? undefined
         : this.composerCapabilityMenu(state, selectedSession, currentAgentId),

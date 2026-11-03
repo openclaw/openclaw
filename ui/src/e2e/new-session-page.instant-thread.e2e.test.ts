@@ -95,6 +95,10 @@ suite.define(() => {
           await followUpComposer.fill("Still writing my next message");
           expect(await page.locator(".chat-queue__text").allTextContents()).toEqual(followers);
           expect(await page.locator(".chat-pane__incognito").count()).toBe(incognito ? 1 : 0);
+          // The dashed frame must hold while the session is still being created.
+          expect(await page.locator('.agent-chat__input[data-incognito="true"]').count()).toBe(
+            incognito ? 1 : 0,
+          );
           if (!incognito) {
             await navigationDrawerToggle(page).click();
             // The sliding drawer can hover a tooltip under the stationary pointer.
