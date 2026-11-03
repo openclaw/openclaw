@@ -126,20 +126,12 @@ describe("Markdown table interactions", () => {
     const canScroll = (side: string) =>
       shell.classList.contains(`markdown-table--can-scroll-${side}`);
     viewport.style.direction = direction;
-    const edges =
-      direction === "rtl"
-        ? ([
-            [0, true, false],
-            [-100, true, true],
-            [-200, false, true],
-          ] as const)
-        : ([
-            [0, false, true],
-            [100, true, true],
-            [200, true, false],
-          ] as const);
-    for (const [offset, left, right] of edges) {
-      viewport.scrollLeft = offset;
+    for (const [position, left, right] of [
+      [0, false, true],
+      [100, true, true],
+      [200, true, false],
+    ] as const) {
+      viewport.scrollLeft = direction === "rtl" ? position - 200 : position;
       viewport.dispatchEvent(new Event("scroll"));
       expect([canScroll("left"), canScroll("right")]).toEqual([left, right]);
     }

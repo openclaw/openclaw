@@ -1204,6 +1204,7 @@ and use extra space only as needed, without widening the surrounding prose or
 borrowing the space reserved for an open Details panel. Long
 cells wrap within the pane limit; genuinely dense tables still scroll horizontally.
 Short values such as byte counts stay intact beside long filenames or hashes, including on mobile.
+Faded edges indicate hidden columns on that physical side, including in right-to-left locales.
 Table controls appear below the table. Wide desktop tables use compact icon-only
 controls; mobile and phone-landscape views retain larger touch controls and a visible
 **Expand table** label.
