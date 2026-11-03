@@ -1,18 +1,20 @@
 import type { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
-import type { ChatPageHost } from "./chat-state-host.ts";
+import type {
+  ChatAttachment,
+  ChatGoalDraftMode,
+  ChatReplyTarget,
+  HumanMention,
+} from "../../lib/chat/chat-types.ts";
 
 export type FailedMessageEditSource = {
-  state: Readonly<
-    Pick<
-      ChatPageHost,
-      | "chatMessages"
-      | "chatMessage"
-      | "chatAttachments"
-      | "chatMentions"
-      | "chatReplyTarget"
-      | "chatGoalDraftMode"
-    >
-  >;
+  state: {
+    readonly chatMessages: readonly unknown[];
+    readonly chatMessage: string;
+    readonly chatAttachments: readonly ChatAttachment[];
+    readonly chatMentions?: readonly HumanMention[];
+    readonly chatReplyTarget?: ChatReplyTarget | null;
+    readonly chatGoalDraftMode?: ChatGoalDraftMode | null;
+  };
   runId: string;
   isCurrent: () => boolean;
   readIdentity: typeof readSessionMessageIdentity;
