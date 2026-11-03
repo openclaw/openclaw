@@ -150,6 +150,21 @@ describe("buildProviderReplayFamilyHooks", () => {
         reasoningMode: undefined,
       },
       {
+        family: "openai-compatible" as const,
+        ctx: {
+          provider: "xai",
+          modelApi: "openai-responses",
+          modelId: "grok-4.6",
+        },
+        match: {
+          sanitizeToolCallIds: true,
+          allowSyntheticToolResults: true,
+          appendOnlyRuntimeContext: true,
+        },
+        hasSanitizeReplayHistory: false,
+        reasoningMode: undefined,
+      },
+      {
         family: "anthropic-by-model" as const,
         ctx: {
           provider: "anthropic-vertex",
