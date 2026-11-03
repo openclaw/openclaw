@@ -214,7 +214,7 @@ async function handOffContinuationWake(wake: PendingWake): Promise<void> {
                 drainedContinuationCount: occurrences.filter((event) =>
                   event.text.startsWith("[continuation:"),
                 ).length,
-                // Refused in this same authority decision; each is also logged with its row.
+                // Refused in this same authority decision; their rows retire after the handoff.
                 ...(stale.length > 0
                   ? { refusedCount: stale.length, refusalReason: "recipient-authority-changed" }
                   : {}),

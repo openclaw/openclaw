@@ -175,8 +175,10 @@ export type ContinuationSpanAttrs = {
    */
   readonly "queue.drained_continuation_count"?: number;
   /**
-   * Only set on `continuation.queue.drain` spans that refused a continuation return because its
-   * recipient authority advanced. Refused entries are not counted as drained. Integer > 0.
+   * Only set on `continuation.queue.drain` spans whose drain refused a continuation return because
+   * its recipient authority advanced, counted where the drain was emitted; those entries are not
+   * in `queue.drained_count`. A return refused later, at a turn's final adoption, is logged and
+   * not counted here. Integer > 0.
    */
   readonly "queue.refused_count"?: number;
   /**

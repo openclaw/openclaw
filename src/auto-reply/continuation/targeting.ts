@@ -361,6 +361,8 @@ export async function enqueueContinuationReturnDeliveries(
       return current;
     });
     if (!stillCurrent) {
+      // Accepted edge: a turn that adopted the event inside this one read, before the revocation
+      // committed, finds its row retired and its ack fails visibly; the model saw the return.
       await refuseStaleRecipient(deliveryId);
       continue;
     }

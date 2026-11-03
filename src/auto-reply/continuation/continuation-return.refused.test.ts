@@ -11,9 +11,13 @@ import {
   addSessionMember,
   removeSessionMember,
 } from "../../config/sessions/session-sharing-store.js";
-import { recoverPendingProducedSessionDeliveries } from "../../gateway/server-restart-sentinel.js";
+import {
+  deliverQueuedSessionDelivery,
+  recoverPendingProducedSessionDeliveries,
+} from "../../gateway/server-restart-sentinel.js";
 import { inspectDeliveryQueueReceipt } from "../../infra/delivery-queue-sqlite.js";
 import { captureDeliveryQueueStateContext } from "../../infra/delivery-queue-state-context.js";
+import { drainPendingSessionDelivery } from "../../infra/session-delivery-queue-recovery.js";
 import { enqueueSessionDelivery } from "../../infra/session-delivery-queue-storage.js";
 import {
   enqueueSystemEventRaw,
@@ -158,7 +162,10 @@ async function restartAndReplay(scope: Scope, beforeReplay?: () => unknown) {
 }
 
 /** The recipient's next turn adopts and acknowledges what it may; returns its prompt. */
-async function nextTurn(scope: Scope, beforeAdoption?: () => unknown) {
+async function nextTurn(
+  scope: Scope,
+  hooks: { beforeAdoption?: () => unknown; afterAdoption?: () => unknown } = {},
+) {
   const prepared = await prepareFormattedSystemEvents({
     cfg: {},
     agentId: scope.agentId,
@@ -166,12 +173,13 @@ async function nextTurn(scope: Scope, beforeAdoption?: () => unknown) {
     isMainSession: false,
     isNewSession: false,
   });
-  await beforeAdoption?.();
+  await hooks.beforeAdoption?.();
   let adoption = await resolveFinalSystemEventAdoption({ prepared: [prepared] });
   while (adoption.kind === "settle-stale") {
     await adoption.settle();
     adoption = await resolveFinalSystemEventAdoption({ prepared: [prepared] });
   }
+  await hooks.afterAdoption?.();
   const ackIds = [...adoption.managedDeliveries.keys()];
   await settleManagedSystemEventsAfterTurnAdoption({
     deliveries: adoption.managedDeliveries.values(),
@@ -220,9 +228,8 @@ describe("a continuation return whose recipient authority advanced", () => {
       }
 
       // No final effect: no wake, no queued event, no adoption and no acknowledgement.
-      expect(await nextTurn(scope, stage === "final adoption" ? advance : undefined)).not.toContain(
-        "delegate result",
-      );
+      const beforeAdoption = stage === "final adoption" ? advance : undefined;
+      expect(await nextTurn(scope, { beforeAdoption })).not.toContain("delegate result");
       expect(requestContinuationWake).not.toHaveBeenCalled();
       expect(peekSystemEventEntries(scope.sessionKey)).toEqual([]);
       if (id) {
@@ -261,4 +268,28 @@ describe("a continuation return whose recipient authority advanced", () => {
       });
     },
   );
+
+  it("stays adopted when it changes after a turn adopted it and the sweep re-drives its row", async () => {
+    await withRecipient(async (scope, authority) => {
+      const { id } = await produce(scope, authority);
+      const queueContext = captureContinuationQueueContext(scope.env.OPENCLAW_STATE_DIR);
+      const afterAdoption = async () => {
+        await transitions["owner change"]!(scope);
+        // The in-process sweep keeps live adoption claims; only startup recovery drops them.
+        await drainPendingSessionDelivery({
+          id: id!,
+          queueContext,
+          bypassBackoff: true,
+          logLabel: "sweep",
+          log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+          deliver: (entry, context) =>
+            deliverQueuedSessionDelivery({ deps: {}, entry, ...context }),
+        });
+      };
+
+      expect(await nextTurn(scope, { afterAdoption })).toContain("delegate result");
+      expect(await receiptStatus(scope, id!)).toBe("completed");
+      expect(refusalLines()).toEqual([]);
+    });
+  });
 });

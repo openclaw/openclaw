@@ -41,9 +41,27 @@ type RestartSentinelWakeOutcome = "queued" | "refused" | "stale-authority";
 
 /**
  * A replayed return whose recipient authority advanced is refused: never queued or woken, and its
- * row settles as failed rather than as recovered, so replay never reports it delivered.
+ * row settles as failed rather than as recovered, so replay never reports it delivered. A row with
+ * a copy in memory, or a turn adopting one, belongs to that copy's owner: the turn adopts it (its
+ * decision ran while authority was current) or gives it back, and a copy is refused where it is
+ * next seen. Replay refuses only a row it alone holds.
  */
-function refuseStaleAuthorityReplay(params: { sessionKey: string; queueId: string }): never {
+function refuseStaleAuthorityReplay(params: {
+  sessionKey: string;
+  agentId: string;
+  queueId: string;
+  stateDir: string | undefined;
+}): never {
+  const identity = {
+    sessionKey: params.sessionKey,
+    sessionDeliveryAckId: params.queueId,
+    ...(params.stateDir ? { sessionDeliveryAckStateDir: params.stateDir } : {}),
+  };
+  if (hasQueuedSystemEventDelivery(withSystemEventOwner(identity, params.agentId))) {
+    throw new SessionDeliveryDeferredError("system event is awaiting durable prompt adoption", {
+      awaitingAdoptionInMemory: true,
+    });
+  }
   reportRefusedContinuationReturn({
     stage: "replay",
     reason: "recipient-authority-changed",
@@ -252,7 +270,12 @@ export async function deliverQueuedSessionDeliveryCore(params: {
     recipientAuthority &&
     !(await isSessionRecipientAuthorityCurrentInWorker(authorityScope, recipientAuthority))
   ) {
-    refuseStaleAuthorityReplay({ sessionKey: canonicalKey, queueId: params.entry.id });
+    refuseStaleAuthorityReplay({
+      sessionKey: canonicalKey,
+      agentId: params.entry.agentId ?? agentId,
+      queueId: params.entry.id,
+      stateDir,
+    });
   }
   if (!entry && isSubagentSessionKey(canonicalKey)) {
     // A missing subagent session cannot adopt the row: the wake's handoff refuses an absent
@@ -295,7 +318,12 @@ export async function deliverQueuedSessionDeliveryCore(params: {
     });
   }
   if (replayed === "stale-authority") {
-    refuseStaleAuthorityReplay({ sessionKey: canonicalKey, queueId: params.entry.id });
+    refuseStaleAuthorityReplay({
+      sessionKey: canonicalKey,
+      agentId: wake.agentId,
+      queueId: params.entry.id,
+      stateDir,
+    });
   }
   // The in-memory queue is not durable, so completing the row here would
   // drop the notice if the process
