@@ -1,0 +1,2 @@
+49
+# Models setup renderer regression: canonical local-provider masks load real assets without fallback; retains setup RPC and non-activation assertions.
