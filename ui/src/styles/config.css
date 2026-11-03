@@ -747,6 +747,44 @@
   width: auto;
 }
 
+/* A list of plain values is one row per value: the field, then its remove button. */
+.cfg-array__item--row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--list-row-padding);
+  padding-inline-start: var(--space-7);
+
+  > .cfg-array__value {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  > .cfg-array__value > .settings-row {
+    min-height: 0;
+    padding: 0;
+  }
+
+  /* A list value is required by being in the list. */
+  .settings-row__control > .settings-row__desc[aria-hidden="true"] {
+    display: none;
+  }
+}
+
+/* A collection's head and entry rows hold one small action, which stays beside its text. */
+@media (max-width: 640px) {
+  .cfg-collection-row {
+    flex-wrap: nowrap;
+
+    > .settings-row__control {
+      flex: 0 0 auto;
+      flex-wrap: nowrap;
+      width: auto;
+      max-width: none;
+    }
+  }
+}
+
 /* A number and its step buttons are one control, on the input's own surface. */
 .cfg-stepper {
   display: inline-flex;
@@ -902,10 +940,20 @@
   scrollbar-gutter: stable;
 }
 
-.memory-page__link {
-  color: var(--accent);
-  font-size: 12.5px;
-  white-space: nowrap;
+.memory-page__nav-row {
+  text-decoration: none;
+}
+
+.curated-settings__disclosure svg {
+  transition: transform 140ms ease;
+}
+
+.curated-settings__disclosure[aria-expanded="true"] svg {
+  transform: rotate(90deg);
+}
+
+.curated-settings__details {
+  padding-inline-start: var(--space-4);
 }
 
 .mcp-command-card__grid {
