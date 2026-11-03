@@ -21,37 +21,6 @@ type DiscordDeployErrorLike = {
   deployTimeoutMs?: unknown;
 };
 
-export function attachDiscordDeployRequestBody(err: unknown, body: unknown) {
-  if (!err || typeof err !== "object" || body === undefined) {
-    return;
-  }
-  const deployErr = err as DiscordDeployErrorLike;
-  if (deployErr.deployRequestBody === undefined) {
-    deployErr.deployRequestBody = body;
-  }
-}
-
-export function attachDiscordDeployRestContext(
-  err: unknown,
-  context: {
-    method: string;
-    path: string;
-    requestMs: number;
-    timeoutMs?: number;
-  },
-) {
-  if (!err || typeof err !== "object") {
-    return;
-  }
-  const deployErr = err as DiscordDeployErrorLike;
-  deployErr.deployRestMethod = context.method;
-  deployErr.deployRestPath = context.path;
-  deployErr.deployRequestMs = context.requestMs;
-  if (typeof context.timeoutMs === "number" && Number.isFinite(context.timeoutMs)) {
-    deployErr.deployTimeoutMs = context.timeoutMs;
-  }
-}
-
 function stringifyDiscordDeployField(value: unknown, depth = 2): string {
   try {
     return JSON.stringify(value);

@@ -4,19 +4,12 @@ import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canonicalModelAuthProviderId } from "../../lib/model-auth.ts";
 import { invalidateModelCatalogCache } from "../../lib/model-catalog-cache.ts";
-import { loadModelCatalog, modelCatalogRefreshError } from "../../lib/model-catalog-store.ts";
-import { loadModelProvidersData, type ModelProvidersData } from "./load.ts";
+import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
+import { catalogDiscoveryError, loadModelProvidersData, type ModelProvidersData } from "./load.ts";
 
 export type ModelProviderRefreshReason = "publication" | "replacement" | "forced";
 
-export type ModelProviderCoreReceipt = { promise: Promise<void> };
 export type ModelProviderCatalogReceipt = { promise: Promise<string | null> };
-
-type CoreLoadOptions = {
-  onStart: (reason: ModelProviderRefreshReason) => void;
-  onComplete: (result: { client: GatewayBrowserClient; data: ModelProvidersData }) => void;
-  onCatalogComplete: (result: ModelCatalogResult) => void;
-};
 
 async function loadConnectedProviderData(
   client: GatewayBrowserClient,
@@ -52,8 +45,6 @@ async function loadConnectedProviderData(
 
 export class ModelProviderCoreLoader {
   private active = false;
-  receipt: ModelProviderCoreReceipt | null = null;
-  private completion: ReturnType<typeof Promise.withResolvers<void>> | null = null;
   private catalogRequest: AbortController | null = null;
   catalogReceipt: ModelProviderCatalogReceipt | null = null;
   private catalogCompletion: ReturnType<typeof Promise.withResolvers<string | null>> | null = null;
@@ -64,18 +55,12 @@ export class ModelProviderCoreLoader {
 
   constructor(
     private readonly notify: () => void,
-    private readonly options: CoreLoadOptions,
+    private readonly options: {
+      onStart: (reason: ModelProviderRefreshReason) => void;
+      onComplete: (result: { client: GatewayBrowserClient; data: ModelProvidersData }) => void;
+      onCatalogComplete: (result: ModelCatalogResult) => void;
+    },
   ) {}
-
-  adopt(): void {
-    this.receipt = { promise: Promise.resolve() };
-  }
-
-  private retireCompletion(): void {
-    // A retired transport may ignore abort; release its presentation lifetime now.
-    this.completion?.resolve();
-    this.completion = null;
-  }
 
   get loading(): boolean {
     return this.active;
@@ -119,10 +104,7 @@ export class ModelProviderCoreLoader {
         signal: request.signal,
       });
       if (ownsResult()) {
-        this.catalogError = modelCatalogRefreshError(
-          result,
-          t("modelProviders.defaults.discoverFailed"),
-        );
+        this.catalogError = catalogDiscoveryError(result);
         this.options.onCatalogComplete(result);
       }
     } catch (failure) {
@@ -152,9 +134,6 @@ export class ModelProviderCoreLoader {
     }
     this.publicationPending = false;
     this.request?.abort();
-    this.retireCompletion();
-    this.completion = Promise.withResolvers<void>();
-    this.receipt = { promise: this.completion.promise };
     const request = new AbortController();
     this.request = request;
     this.active = true;
@@ -177,15 +156,12 @@ export class ModelProviderCoreLoader {
         this.active = false;
         this.retryProvider = target && data.error ? target.providerId : undefined;
         this.options.onComplete({ client, data });
-        this.completion?.resolve();
-        this.completion = null;
       }
     } catch {
       // Each source reports its own error; a retired request has no result to publish.
     } finally {
       if (this.request === request) {
         this.request = null;
-        this.retireCompletion();
         this.active = false;
         this.refreshPendingPublication(client, agentId);
         this.notify();
@@ -205,8 +181,6 @@ export class ModelProviderCoreLoader {
     this.publicationPending = false;
     this.resetCatalog();
     this.retryProvider = undefined;
-    this.retireCompletion();
-    this.receipt = null;
     this.active = false;
     this.request?.abort();
     this.request = null;

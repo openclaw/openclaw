@@ -13,9 +13,15 @@ import { formatUserProfileAvatarEtag, UserProfileNotFoundError } from "../state/
 import { parseControlUiUserAvatarPath } from "./control-ui-contract.js";
 import { setControlUiImageCorsHeaders } from "./control-ui-image-cors.js";
 import { authorizeControlUiReadRequestOrReply } from "./http-auth-utils.js";
-import { sendJson, sendMethodNotAllowed, watchClientDisconnect } from "./http-common.js";
+import {
+  sendJson,
+  sendMethodNotAllowed,
+  sendMissingScopeForbidden,
+  watchClientDisconnect,
+} from "./http-common.js";
 import { matchesHttpIfNoneMatch } from "./http-conditional.js";
 import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
+import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 
 const GRAVATAR_BASE_URL = "https://www.gravatar.com/avatar";
 const GRAVATAR_FETCH_TIMEOUT_MS = 5_000;
@@ -198,7 +204,7 @@ export async function handleUserProfileAvatarHttpRequest(
     cfg,
     trustedProxies: opts.trustedProxies ?? cfg.gateway?.trustedProxies,
     allowRealIpFallback: opts.allowRealIpFallback ?? cfg.gateway?.allowRealIpFallback,
-    requiredOperatorMethod: "users.list",
+    requiredOperatorMethod: "users.self",
   });
   if (!authResult) {
     return true;
@@ -207,6 +213,14 @@ export async function handleUserProfileAvatarHttpRequest(
   // Cached misses would hide a later uploaded image behind the unversioned route.
   res.setHeader("Cache-Control", "no-store");
   const profileId = parsed.value;
+  const directoryAccess = authorizeOperatorScopesForMethod("users.list", authResult.operatorScopes);
+  if (
+    !directoryAccess.allowed &&
+    (!profileId || profileId !== authResult.authenticatedUserProfile?.profileId)
+  ) {
+    sendMissingScopeForbidden(res, directoryAccess.missingScope);
+    return true;
+  }
   if (!profileId) {
     sendJson(res, 404, { ok: false, error: { type: "not_found" } });
     return true;

@@ -5,7 +5,7 @@ import type { SessionArchivedFilter } from "../../lib/sessions/index.ts";
 import type { buildSessionsListQuery } from "./list-query.ts";
 import type { SessionDeleteRow } from "./selection.ts";
 import type { SessionsPageMenuProps } from "./session-menu.tsx";
-import type { TranscriptSearchProps } from "./transcript-search-view.tsx";
+import type { TranscriptSearchState } from "./transcript-search.ts";
 
 export type SessionsPageListBinding = {
   sessions: ApplicationContext["sessions"];
@@ -14,7 +14,7 @@ export type SessionsPageListBinding = {
   transcriptKey: string;
 };
 
-export type SessionsPageState = {
+export type SessionsPageState = TranscriptSearchState & {
   sortColumn: "key" | "updated";
   sortDir: "asc" | "desc";
   groupBy: SessionsGroupBy;
@@ -31,9 +31,7 @@ export type SessionsPageState = {
   includeUnknown: boolean;
   statusFilter: SessionArchivedFilter;
   searchQuery: string;
-  transcriptSearchQuery: string;
   expandedSessionKey: string | null;
-  transcriptSearch: TranscriptSearchProps["transcriptSearch"];
   selectedSessions: Map<string, SessionDeleteRow>;
   sessionMenu: SessionsPageMenuProps["menu"] | null;
   sessionMenuWork: SessionsPageMenuProps["work"];

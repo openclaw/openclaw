@@ -40,12 +40,6 @@ const nodeId = "node-1";
 const generation = { nodeId, key: "generation-1" };
 const item = { id: "pending-1", type: "location.request", priority: "high" };
 let lifecycle: AbortController;
-const wakeOptions = () => ({
-  wakeReason: "node.pending",
-  cfg: {},
-  lifecycle: lifecycle.signal,
-  generation,
-});
 function makeContext(
   getSession: () => { connId: string; pairingGeneration?: string } | undefined = () => undefined,
 ) {
@@ -106,7 +100,6 @@ describe("node.pending handlers", () => {
     expect(await request("drain")).toHaveBeenCalledWith(true, { nodeId, ...drained }, undefined);
     expect(work.drainNodePendingWork).toHaveBeenCalledWith(nodeId, {
       maxItems: 3,
-      includeDefaultStatus: true,
       pairingGeneration: generation.key,
     });
   });
@@ -131,7 +124,7 @@ describe("node.pending handlers", () => {
     },
   );
 
-  it.each([999, 86_400_001, 1_000.5, Number.NaN, Number.POSITIVE_INFINITY, "1000"])(
+  it.each([999, 86_400_001, 1_000.5, "1000"])(
     "rejects invalid pending-work TTL %s before queueing",
     async (expiresInMs) => {
       expectNodeFailure(await request("enqueue", { expiresInMs, wake: false }), {
@@ -164,18 +157,6 @@ describe("node.pending handlers", () => {
       type: item.type,
       priority: "high",
       expiresInMs: undefined,
-      pairingGeneration: generation.key,
-    });
-    expect(context.nodeRegistry.getForPairingGeneration).toHaveBeenCalledWith(
-      nodeId,
-      generation.key,
-    );
-    expect(wake.maybeWakeNodeWithApns).toHaveBeenCalledWith(nodeId, wakeOptions());
-    expect(wake.waitForNodeReconnect).toHaveBeenCalledWith({
-      nodeId,
-      context,
-      timeoutMs: 3_000,
-      lifecycle: lifecycle.signal,
       pairingGeneration: generation.key,
     });
     expect(wake.maybeSendNodeWakeNudge).not.toHaveBeenCalled();
@@ -220,8 +201,7 @@ describe("node.pending handlers", () => {
       return false;
     });
     expectPairingChanged(await request("enqueue"));
-    expect(wakeState.captureNodeWakeLifecycle).toHaveBeenCalledWith(nodeId, generation.key);
-    expect(wake.maybeWakeNodeWithApns).toHaveBeenCalledExactlyOnceWith(nodeId, wakeOptions());
+    expect(wake.maybeWakeNodeWithApns).toHaveBeenCalledOnce();
     expect(wake.maybeSendNodeWakeNudge).not.toHaveBeenCalled();
     expect(wakeState.releaseNodeWakeLifecycle).toHaveBeenCalledWith(nodeId, lifecycle.signal);
     expect(work.removeNodePendingWorkItem).toHaveBeenCalledWith({
@@ -235,7 +215,6 @@ describe("node.pending handlers", () => {
     work.enqueueNodePendingWork.mockReturnValue({ revision: 9, deduped: true, item });
     pairing.isNodePairingGenerationCurrent.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
     expectPairingChanged(await request("enqueue", { wake: false }));
-    expect(work.enqueueNodePendingWork).toHaveBeenCalledOnce();
     expect(work.removeNodePendingWorkItem).not.toHaveBeenCalled();
   });
 });

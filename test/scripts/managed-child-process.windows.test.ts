@@ -6,13 +6,11 @@ import { afterEach, expect, it, vi } from "vitest";
 import { stopChild } from "../../scripts/lib/gateway-bench-child.ts";
 import {
   inspectManagedProcessGroup,
-  loadManagedChildSpawner,
   runManagedCommand,
   terminateManagedChild,
 } from "../../scripts/lib/managed-child-process.mts";
 import type { ManagedWindowsJob } from "../../scripts/lib/managed-windows-job.mts";
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
-import { testing } from "../helpers/openclaw-test-instance.js";
 import { waitForFile } from "../helpers/process-wait.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -58,34 +56,6 @@ it.runIf(process.platform === "win32")(
         terminateManagedChild(child, "SIGKILL");
       }
       await closed;
-    }
-  },
-);
-
-it.runIf(process.platform === "win32")(
-  "releases an already-exited Gateway's native Job",
-  async ({ signal }) => {
-    const spawn = await loadManagedChildSpawner();
-    const child = spawn(process.execPath, ["-e", "process.exit(0)"], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    const closed = once(child, "close", { signal });
-    child.stdout.resume();
-    child.stderr.resume();
-    const job = fault.job;
-    if (!job) {
-      throw new Error("Windows Job launcher was not created");
-    }
-    const close = vi.spyOn(job, "close");
-    try {
-      await closed;
-      await expect(
-        testing.stopWindowsGatewayProcess(child, Date.now() + 5_000, 2_000),
-      ).resolves.toBe(true);
-      expect(close).toHaveBeenCalledOnce();
-      expect(() => job.inspect()).toThrow("Windows command Job is closed");
-    } finally {
-      job.close();
     }
   },
 );
@@ -193,5 +163,6 @@ ${mode === "normal exit" ? 'process.stdin.once("data", () => process.exit(0));' 
       mode === "abort" ? expect.objectContaining({ code: "ABORT_ERR" }) : 0,
     );
     owner.assertReleased();
+    expect(() => fault.job?.inspect()).toThrow("Windows command Job is closed");
   },
 );

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { makeStallingStream } from "../infra/http-body.test-support.js";
 import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -170,7 +171,7 @@ describe("profile avatar HTTP endpoint", () => {
     getRuntimeConfig.mockReset();
     resolveHostAccountAvatar.mockReset().mockResolvedValue(null);
     authorizeControlUiReadRequestOrReply.mockImplementation(({ res }: { res: ServerResponse }) =>
-      bindHttpResponseAuthority({}, res, () => true),
+      bindHttpResponseAuthority({ operatorScopes: ["operator.read"] }, res, () => true),
     );
     getRuntimeConfig.mockReturnValue({
       gateway: { controlUi: { allowedOrigins: ["https://control.example"] } },
@@ -551,13 +552,7 @@ describe("profile avatar HTTP endpoint", () => {
         cancellationStarted.resolve();
         return cancellation.promise;
       });
-      const body = new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(new Uint8Array(600_000));
-          controller.enqueue(new Uint8Array(600_000));
-        },
-        cancel,
-      });
+      const body = makeStallingStream([new Uint8Array(600_000), new Uint8Array(600_000)], cancel);
       const fetchImpl = vi.fn().mockResolvedValue(image(body));
       const res = response();
       const handling = serveProfile(profileId, res, fetchImpl);

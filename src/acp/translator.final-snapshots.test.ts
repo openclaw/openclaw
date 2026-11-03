@@ -1,12 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { expectOversizedPromptRejected } from "./translator.bridge-test-helpers.js";
 import {
   createChatEvent,
   createPendingPromptHarness,
   DEFAULT_SESSION_KEY,
 } from "./translator.prompt-harness.test-support.js";
-
-vi.mock("./commands.js", () => ({ getAvailableCommands: () => [] }));
 
 describe("acp final chat snapshots", () => {
   it.each(["Hello", "A rewritten snapshot that is longer"])(

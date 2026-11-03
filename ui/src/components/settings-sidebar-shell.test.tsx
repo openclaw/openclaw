@@ -8,6 +8,7 @@ import { ShellOwner } from "../app/app-host.tsx";
 import { bootstrapApplication } from "../app/bootstrap.ts";
 import { mountRouterOutlet } from "../app/router-outlet.test-support.tsx";
 import { i18n } from "../i18n/index.ts";
+import { configSnapshot } from "../lib/config/config-snapshot.test-support.ts";
 import { createGatewayHarness } from "../lib/config/config-test-harness.ts";
 import { createRuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
 import {
@@ -31,7 +32,7 @@ async function setup() {
     if (method === "config.set") {
       return held.promise;
     }
-    return { config: { count: 1 }, raw: '{"count":1}', hash: "initial", valid: true, issues: [] };
+    return configSnapshot({ count: 1 }, "initial", '{"count":1}');
   });
   const client = createTestGatewayClient(request);
   const { gateway, publish } = createGatewayHarness(client);
@@ -83,7 +84,7 @@ async function setup() {
   view.getByText("Save").click();
   await waitForSolid(() => {
     expect(request).toHaveBeenCalledWith("config.set", expect.anything());
-    expect(view.queryByText("Saving…")).not.toBeNull();
+    expect(view.queryByText("Saving…")).toBeNull();
   });
   return {
     view,

@@ -8,6 +8,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { resolveCodexCyberAccessProgram } from "./access-program.js";
 import { codexSandboxPolicyForTurn, type CodexAppServerRuntimeOptions } from "./config.js";
 import {
   neutralizeCodexExplicitMentionSigils,
@@ -162,8 +163,10 @@ export async function buildTurnStartParams(
       value: params.permissionChange.notice,
     };
   }
+  const cyberAccessProgram = resolveCodexCyberAccessProgram(params);
   return {
     threadId: options.threadId,
+    ...(cyberAccessProgram !== undefined ? { cyberAccessProgram } : {}),
     ...(params.trigger ? { turnTrigger: params.trigger } : {}),
     // codex-rs/app-server-protocol/src/protocol/v2/turn.rs:292-324 at 91d6f48992ad defines
     // UserInput::Skill; skills/src/selection.rs:60-92 blocks those names from duplicate text

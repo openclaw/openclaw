@@ -6,11 +6,7 @@ import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { SessionOwnerChip } from "./session-owner-chip.tsx";
-import {
-  ViewerAvatarContent,
-  ViewerFacepileContent,
-  type ViewerAvatarProps,
-} from "./viewer-facepile.tsx";
+import { ViewerAvatar, ViewerFacepile, type ViewerAvatarProps } from "./viewer-facepile.tsx";
 
 const originalLocale = i18n.getLocale();
 afterEach(async () => {
@@ -25,8 +21,8 @@ it("refreshes shared-owner labels without changing identity initials on locale p
   const user = { id: "gateway-owner", name: "Saved owner name", watchedSessions: [] };
   const view = mountSolid(() => (
     <>
-      <ViewerAvatarContent user={user} />
-      <ViewerFacepileContent staticUsers={[user]} />
+      <ViewerAvatar user={user} />
+      <ViewerFacepile staticUsers={[user]} />
     </>
   ));
   const avatar = () => view.container.querySelector(".viewer-avatar")!;
@@ -50,26 +46,26 @@ it.each([false, true])(
   async (authenticated) => {
     if (authenticated) {
       setAvatarGatewayOrigin("https://gateway.example.test", ["avatar-token"]);
-      vi.spyOn(globalThis, "fetch").mockImplementation(
-        async () =>
-          new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "image/png" } }),
-      );
-      vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:solid-avatar");
+    } else {
+      setAvatarGatewayOrigin(location.origin);
     }
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "image/png" } }),
+    );
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:solid-avatar");
     const [user, setUser] = createSignal<ViewerAvatarProps["user"]>({
       id: "profile-ada",
       name: "Ada",
       avatarUrl: "/api/users/profile-ada/avatar?v=1",
       watchedSessions: [],
     });
-    const { container } = mountSolid(() => <ViewerAvatarContent user={user()} />);
+    const { container } = mountSolid(() => <ViewerAvatar user={user()} />);
     const avatar = () => container.querySelector<HTMLElement>(".viewer-avatar")!;
     const image = container.querySelector("img")!;
     expect(image).not.toBeNull();
     expect(avatar().classList.contains("is-pending")).toBe(true);
-    if (authenticated) {
-      await waitForSolid(() => expect(image.getAttribute("src")).toBe("blob:solid-avatar"));
-    }
+    await waitForSolid(() => expect(image.getAttribute("src")).toBe("blob:solid-avatar"));
     image.dispatchEvent(new Event("load"));
     flush();
     expect(avatar().dataset.avatarState).toBe("loaded");
@@ -108,7 +104,7 @@ it("updates Solid owner attribution and participant stacks from the current prop
 
 it("keeps the namespace when profile and agent participants share an id", () => {
   const { container } = mountSolid(() => (
-    <ViewerFacepileContent
+    <ViewerFacepile
       staticParticipants={[
         { identity: { type: "profile", id: "same" }, label: "Ada" },
         { identity: { type: "agent", id: "same" }, label: "Research" },

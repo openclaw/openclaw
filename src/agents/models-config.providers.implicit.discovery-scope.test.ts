@@ -2,7 +2,15 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest";
 import type { ModelProviderConfig } from "../config/types.models.js";
-import { fetchLiveProviderModelIds } from "../plugin-sdk/provider-catalog-live-runtime.js";
+import { readLiveModelCatalogId } from "../plugin-sdk/provider-catalog-live-normalize.internal.js";
+import {
+  fetchLiveProviderModelIds,
+  getCachedLiveProviderModelRows,
+} from "../plugin-sdk/provider-catalog-live-runtime.js";
+import {
+  clearLiveCatalogCacheForTests,
+  getCachedLiveCatalogValue,
+} from "../plugin-sdk/provider-catalog-shared.js";
 import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import {
@@ -499,13 +507,18 @@ it("reuses prepared results within provider scope", async () => {
 });
 
 it.each([
-  [0, false],
-  [5_000, false],
-  [180_000, true],
+  [0, undefined, false],
+  [0, 15, true],
+  [5_000, 15, false],
+  [180_000, undefined, true],
+  [180_000, 2, false],
+  [180_000, 15, true],
 ])(
-  "lets a six-second catalog complete only within its %ims acquisition",
-  async (timeoutMs, ready) => {
+  "bounds a six-second catalog by admission=%ims and provider=%ss",
+  async (timeoutMs, timeoutSeconds, ready) => {
+    const requested = createDeferredCore();
     const fetchGuard = vi.fn(async (request: { timeoutMs?: number; url: string }) => {
+      requested.resolve();
       const response = await new Promise<Response>((resolve, reject) => {
         const completion = setTimeout(() => {
           clearTimeout(deadline);
@@ -522,6 +535,8 @@ it.each([
       const modelIds = await fetchLiveProviderModelIds({
         providerId: "openai",
         endpoint: "https://catalog.example.test/v1/models",
+        // Plugins may supply a transport default; operator config takes precedence.
+        timeoutMs: timeoutSeconds === 15 ? 5_000 : undefined,
         fetchGuard,
       });
       return {
@@ -536,8 +551,17 @@ it.each([
 
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
     try {
-      const result = discover({ providerDiscoveryTimeoutMs: timeoutMs });
-      await vi.waitFor(() => expect(fetchGuard).toHaveBeenCalledOnce());
+      const result = discover({
+        providerDiscoveryTimeoutMs: timeoutMs,
+        config: {
+          models: {
+            providers: {
+              openai: { ...catalogConfig("https://catalog.example.test/v1"), timeoutSeconds },
+            },
+          },
+        },
+      });
+      await requested.promise;
       await vi.advanceTimersByTimeAsync(6_100);
       const providers = await result;
       expect(providers?.openai?.models.map((model) => model.id) ?? []).toEqual(
@@ -546,5 +570,70 @@ it.each([
     } finally {
       vi.useRealTimers();
     }
+  },
+);
+
+it.each(["rows", "generic"] as const)(
+  "keeps provider timeouts distinct through the %s pending cache",
+  async (cache) => {
+    clearLiveCatalogCacheForTests();
+    const first = createDeferredCore();
+    const second = createDeferredCore();
+    const started = createDeferredCore();
+    let catalogRuns = 0;
+    const fetchGuard = vi.fn(async (request: { timeoutMs?: number; url: string }) => {
+      const id = (request.timeoutMs ?? 0) > 5_000 ? "long" : "short";
+      await (id === "long" ? second.promise : first.promise);
+      return {
+        response: new Response(JSON.stringify({ data: [{ id }] })),
+        finalUrl: request.url,
+        release: async () => undefined,
+      };
+    });
+    mocks.runProviderCatalog.mockImplementation(async () => {
+      catalogRuns += 1;
+      if (catalogRuns === 2) {
+        started.resolve();
+      }
+      const params = { providerId: "sibling", endpoint: "https://cache.example.test", fetchGuard };
+      const ids =
+        cache === "rows"
+          ? (await getCachedLiveProviderModelRows(params)).flatMap(
+              (row) => readLiveModelCatalogId(row) ?? [],
+            )
+          : await getCachedLiveCatalogValue({
+              keyParts: ["provider-timeout-regression"],
+              load: () => fetchLiveProviderModelIds(params),
+            });
+      return {
+        provider: catalogConfig(
+          params.endpoint,
+          ids.map((id) => createTextModel(id, id)),
+        ),
+      };
+    });
+    const read = (seconds: number) =>
+      discover({
+        providerDiscoveryTimeoutMs: 180_000,
+        config: {
+          models: {
+            providers: {
+              openai: { ...catalogConfig("https://cache.example.test"), timeoutSeconds: 1 },
+              sibling: { ...catalogConfig("https://cache.example.test"), timeoutSeconds: seconds },
+            },
+          },
+        },
+      });
+    const short = read(2);
+    const long = read(15);
+    try {
+      await started.promise;
+      expect(fetchGuard).toHaveBeenCalledTimes(2);
+    } finally {
+      first.resolve();
+      second.resolve();
+    }
+    expect((await short)?.openai?.models.map(({ id }) => id)).toEqual(["short"]);
+    expect((await long)?.openai?.models.map(({ id }) => id)).toEqual(["long"]);
   },
 );

@@ -126,12 +126,12 @@ it.each(["operator.read", "operator.sessions.read", "operator.sessions.write"])(
     await waitForSolid(() => expect(page.textContent).toContain("ada@example.test"));
     expect(page.querySelector<HTMLInputElement>(".identity-name-control input")).toMatchObject({
       value: "Ada",
-      disabled: true,
+      disabled: false,
     });
     expect(page.querySelector<HTMLButtonElement>(".identity-name-control button")?.disabled).toBe(
       true,
     );
-    expect(page.querySelector('input[type="file"]')).toBeNull();
+    expect(page.querySelector('input[type="file"]')).not.toBeNull();
     await waitForSolid(() =>
       expect(page.querySelector<HTMLButtonElement>(".profile-refresh")?.disabled).toBe(false),
     );

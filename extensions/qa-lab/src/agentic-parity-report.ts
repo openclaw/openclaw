@@ -1,30 +1,35 @@
 import {
   aggregateRuntimeParityCacheUsage,
+  formatCacheMisses,
+  formatRuntimeCacheCount,
+  formatRuntimeCacheHitPercent,
   summarizeRuntimeParityCacheUsage,
+  type QaRuntimeParityCacheUsage,
 } from "./agentic-parity-cache-usage.js";
-import type {
-  QaRuntimeParityReport,
-  QaRuntimeParityScenarioReport,
-} from "./agentic-parity-runtime-report-contract.js";
 import {
   QA_AGENTIC_PARITY_SCENARIO_TITLES,
   QA_AGENTIC_PARITY_TOOL_BACKED_SCENARIO_TITLES,
 } from "./agentic-parity.js";
 import { pushQaReportListSection, type QaReportScenario } from "./report.js";
 import type { RuntimeId } from "./runtime-id.js";
+import type { RuntimeParityCacheDiagnostics } from "./runtime-parity-cache-diagnostics.js";
 import {
   compareRuntimeWallClockMs,
+  formatRuntimeSpeedComparison,
+  formatRuntimeWallClockMs,
   summarizeRuntimeParityTiming,
 } from "./runtime-parity-timing.js";
-import type { RuntimeParityDrift, RuntimeParityResult } from "./runtime-parity.js";
+import type {
+  RuntimeParityDrift,
+  RuntimeParityResult,
+  RuntimeParityUsagePolicy,
+} from "./runtime-parity.js";
 import {
   isRuntimeParityResultPass,
   normalizeRuntimePair,
   resolveRuntimeParityUsagePolicy,
   runtimeParityCellStatus,
 } from "./runtime-parity.js";
-
-export { renderQaRuntimeParityMarkdownReport } from "./agentic-parity-runtime-markdown.js";
 
 // Historical summaries may omit run provenance. Validate labels only when it is present.
 type QaParityRunBlock = {
@@ -50,15 +55,33 @@ type QaRuntimeParitySuiteScenario = QaReportScenario & {
   runtimeParity?: RuntimeParityResult;
 };
 
-type QaAgenticParityScenarioComparison = {
-  name: string;
-  candidateStatus: "pass" | "fail" | "skip" | "missing";
-  baselineStatus: "pass" | "fail" | "skip" | "missing";
-  candidateDetails?: string;
-  baselineDetails?: string;
-};
-
 type QaAgenticParityComparison = ReturnType<typeof buildQaAgenticParityComparison>;
+
+type QaRuntimeParityReport = ReturnType<typeof buildQaRuntimeParityReport>;
+
+type QaRuntimeParityScenarioReport = {
+  name: string;
+  status: "pass" | "fail";
+  runtimeParityUsage: RuntimeParityUsagePolicy;
+  drift: RuntimeParityDrift | "missing";
+  driftDetails?: string;
+  openclawStatus: "pass" | "fail" | "skip" | "missing";
+  codexStatus: "pass" | "fail" | "skip" | "missing";
+  openclawTokens: number;
+  codexTokens: number;
+  openclawUsage: QaRuntimeParityCacheUsage | null;
+  codexUsage: QaRuntimeParityCacheUsage | null;
+  openclawCacheDiagnostics?: RuntimeParityCacheDiagnostics;
+  codexCacheDiagnostics?: RuntimeParityCacheDiagnostics;
+  openclawToolCalls: number;
+  codexToolCalls: number;
+  openclawWallClockMs: number | null;
+  codexWallClockMs: number | null;
+  openclawBootstrapWallClockMs?: number;
+  codexBootstrapWallClockMs?: number;
+  fasterRuntime: RuntimeId | "tie" | null;
+  speedupPercent: number | null;
+};
 
 const UNINTENDED_STOP_PATTERNS = [
   /incomplete turn/i,
@@ -168,24 +191,6 @@ function requiredCoverageStatus(
   return scenario ? normalizeScenarioStatus(scenario.status) : "missing";
 }
 
-type StructuredQaParityLabel = {
-  provider: string;
-  model: string;
-};
-
-// Display labels are not provider/model provenance identifiers.
-function parseStructuredLabelRef(label: string): StructuredQaParityLabel | null {
-  const trimmed = label.trim();
-  const separatorMatch = /^([a-z0-9][a-z0-9-]*)[/:]([a-z0-9][a-z0-9._-]*)$/.exec(trimmed);
-  if (!separatorMatch) {
-    return null;
-  }
-  return {
-    provider: separatorMatch[1] ?? "",
-    model: separatorMatch[2] ?? "",
-  };
-}
-
 // Reject swapped candidate/baseline artifacts while accepting historical missing provenance.
 function verifySummaryLabelMatch(params: {
   summary: QaParitySuiteSummary;
@@ -198,10 +203,16 @@ function verifySummaryLabelMatch(params: {
   if (!runProvider || !runModel) {
     return;
   }
-  const labelRef = parseStructuredLabelRef(params.label);
-  if (!labelRef) {
+  // Display labels are not provider/model provenance identifiers.
+  const trimmed = params.label.trim();
+  const separatorMatch = /^([a-z0-9][a-z0-9-]*)[/:]([a-z0-9][a-z0-9._-]*)$/.exec(trimmed);
+  if (!separatorMatch) {
     return;
   }
+  const labelRef = {
+    provider: separatorMatch[1] ?? "",
+    model: separatorMatch[2] ?? "",
+  };
   const normalizedRunModel = runModel.toLowerCase();
   const normalizedRunModelName = runModelName?.toLowerCase();
   const normalizedLabelModel = labelRef.model;
@@ -233,7 +244,6 @@ export function buildQaAgenticParityComparison(params: {
   baselineLabel: string;
   candidateSummary: QaParitySuiteSummary;
   baselineSummary: QaParitySuiteSummary;
-  comparedAt?: string;
 }) {
   verifySummaryLabelMatch({
     summary: params.candidateSummary,
@@ -269,18 +279,11 @@ export function buildQaAgenticParityComparison(params: {
       const baseline = baselineByName.get(name);
       const candidateStatus = requiredCoverageStatus(candidate);
       const baselineStatus = requiredCoverageStatus(baseline);
-      const comparison: QaAgenticParityScenarioComparison = {
-        name,
-        candidateStatus,
-        baselineStatus,
-      };
-      if (candidate?.details) {
-        comparison.candidateDetails = candidate.details;
-      }
-      if (baseline?.details) {
-        comparison.baselineDetails = baseline.details;
-      }
-      return comparison;
+      return Object.assign(
+        { name, candidateStatus, baselineStatus },
+        candidate?.details ? { candidateDetails: candidate.details } : {},
+        baseline?.details ? { baselineDetails: baseline.details } : {},
+      );
     });
 
   const failures: string[] = [];
@@ -290,7 +293,7 @@ export function buildQaAgenticParityComparison(params: {
   const requiredScenarioStatuses = QA_AGENTIC_PARITY_SCENARIO_TITLES.map((name) =>
     comparisonByName.get(name)!,
   );
-  const hasCoverageGap = (scenario: QaAgenticParityScenarioComparison) =>
+  const hasCoverageGap = (scenario: (typeof scenarioComparisons)[number]) =>
     [scenario.candidateStatus, scenario.baselineStatus].some(
       (status) => status === "missing" || status === "skip",
     );
@@ -351,7 +354,7 @@ export function buildQaAgenticParityComparison(params: {
   return {
     candidateLabel: params.candidateLabel,
     baselineLabel: params.baselineLabel,
-    comparedAt: params.comparedAt ?? new Date().toISOString(),
+    comparedAt: new Date().toISOString(),
     candidateMetrics,
     baselineMetrics,
     scenarioComparisons,
@@ -407,10 +410,7 @@ export function renderQaAgenticParityMarkdownReport(comparison: QaAgenticParityC
   return lines.join("\n");
 }
 
-export function buildQaRuntimeParityReport(params: {
-  summary: QaParitySuiteSummary;
-  comparedAt?: string;
-}): QaRuntimeParityReport {
+export function buildQaRuntimeParityReport(params: { summary: QaParitySuiteSummary }) {
   const runtimePair = normalizeRuntimePair(params.summary.run?.runtimePair);
   const providerMode = params.summary.run?.providerMode;
   const requiresLiveUsage = providerMode?.startsWith("live-") === true;
@@ -509,7 +509,7 @@ export function buildQaRuntimeParityReport(params: {
   }
   return {
     runtimePair,
-    comparedAt: params.comparedAt ?? new Date().toISOString(),
+    comparedAt: new Date().toISOString(),
     providerMode,
     primaryModel: params.summary.run?.primaryModel,
     totalScenarios,
@@ -531,4 +531,112 @@ export function buildQaRuntimeParityReport(params: {
       "Wall-clock timings cover each complete QA runtime cell, including gateway, model, and tool execution; they are not provider-reported turn durations.",
     ],
   };
+}
+
+function formatRuntimeCacheMisses(diagnostics: RuntimeParityCacheDiagnostics | undefined): string {
+  if (!diagnostics) {
+    return "N/A";
+  }
+  return formatCacheMisses(
+    diagnostics.cacheTelemetryTurns === 0 ? null : diagnostics.cacheMisses,
+    diagnostics.unmeasuredPostWarmTurns,
+    "uncached input",
+  );
+}
+
+export function renderQaRuntimeParityMarkdownReport(report: QaRuntimeParityReport): string {
+  const lines = [
+    `# OpenClaw Runtime Parity Report — ${report.runtimePair[0]} vs ${report.runtimePair[1]}`,
+    "",
+    `- Compared at: ${report.comparedAt}`,
+    `- Provider mode: ${report.providerMode ?? "unknown"}`,
+    `- Primary model: ${report.primaryModel ?? "unknown"}`,
+    `- Verdict: ${report.pass ? "pass" : "fail"}`,
+    "",
+    "## Aggregate Metrics",
+    "",
+    "| Metric | Value |",
+    "| --- | ---: |",
+    `| Total scenarios | ${report.totalScenarios} |`,
+    `| Passed scenarios | ${report.passedScenarios} |`,
+    `| Failed scenarios | ${report.failedScenarios} |`,
+    `| No drift | ${report.driftCounts.none} |`,
+    `| Text-only drift | ${report.driftCounts["text-only"]} |`,
+    `| Tool-call-shape drift | ${report.driftCounts["tool-call-shape"]} |`,
+    `| Tool-result-shape drift | ${report.driftCounts["tool-result-shape"]} |`,
+    `| Structural drift | ${report.driftCounts.structural} |`,
+    `| Failure-mode drift | ${report.driftCounts["failure-mode"]} |`,
+    "",
+    "## Prompt Cache",
+    "",
+    "| Runtime | Gross input | Uncached input | Cached input | Cache writes | Output | Total tokens | Cache hit |",
+    "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    `| openclaw | ${formatRuntimeCacheCount(report.usage.openclaw?.grossInputTokens)} | ${formatRuntimeCacheCount(report.usage.openclaw?.uncachedInputTokens)} | ${formatRuntimeCacheCount(report.usage.openclaw?.cachedInputTokens)} | ${formatRuntimeCacheCount(report.usage.openclaw?.cacheWriteTokens)} | ${formatRuntimeCacheCount(report.usage.openclaw?.outputTokens)} | ${formatRuntimeCacheCount(report.usage.openclaw?.totalTokens)} | ${formatRuntimeCacheHitPercent(report.usage.openclaw?.cacheHitPercent)} |`,
+    `| codex | ${formatRuntimeCacheCount(report.usage.codex?.grossInputTokens)} | ${formatRuntimeCacheCount(report.usage.codex?.uncachedInputTokens)} | ${formatRuntimeCacheCount(report.usage.codex?.cachedInputTokens)} | ${formatRuntimeCacheCount(report.usage.codex?.cacheWriteTokens)} | ${formatRuntimeCacheCount(report.usage.codex?.outputTokens)} | ${formatRuntimeCacheCount(report.usage.codex?.totalTokens)} | ${formatRuntimeCacheHitPercent(report.usage.codex?.cacheHitPercent)} |`,
+    "",
+    "## Runtime Timing",
+    "",
+    "| Runtime | Total wall time | p50 per scenario | p90 per scenario |",
+    "| --- | ---: | ---: | ---: |",
+    `| openclaw | ${formatRuntimeWallClockMs(report.timing.openclaw.totalWallClockMs)} | ${formatRuntimeWallClockMs(report.timing.openclaw.p50WallClockMs)} | ${formatRuntimeWallClockMs(report.timing.openclaw.p90WallClockMs)} |`,
+    `| codex | ${formatRuntimeWallClockMs(report.timing.codex.totalWallClockMs)} | ${formatRuntimeWallClockMs(report.timing.codex.p50WallClockMs)} | ${formatRuntimeWallClockMs(report.timing.codex.p90WallClockMs)} |`,
+    "",
+    `- Faster runtime: ${formatRuntimeSpeedComparison(report.timing)}`,
+    "",
+  ];
+  if (report.timing.bootstrap) {
+    lines.push(
+      "## Gateway Bootstrap (Excluded From Runtime Timing)",
+      "",
+      "| Runtime | Total bootstrap | p50 per scenario | p90 per scenario |",
+      "| --- | ---: | ---: | ---: |",
+      `| openclaw | ${formatRuntimeWallClockMs(report.timing.bootstrap.openclaw.totalWallClockMs)} | ${formatRuntimeWallClockMs(report.timing.bootstrap.openclaw.p50WallClockMs)} | ${formatRuntimeWallClockMs(report.timing.bootstrap.openclaw.p90WallClockMs)} |`,
+      `| codex | ${formatRuntimeWallClockMs(report.timing.bootstrap.codex.totalWallClockMs)} | ${formatRuntimeWallClockMs(report.timing.bootstrap.codex.p50WallClockMs)} | ${formatRuntimeWallClockMs(report.timing.bootstrap.codex.p90WallClockMs)} |`,
+      "",
+    );
+  }
+  if (report.failures.length > 0) {
+    pushQaReportListSection(lines, "Gate Failures", report.failures);
+  }
+  lines.push("## Scenario Comparison", "");
+  for (const scenario of report.scenarios) {
+    const usageNotApplicable = scenario.runtimeParityUsage.expectation === "not-applicable";
+    const openclawTokens = usageNotApplicable ? "N/A" : String(scenario.openclawTokens);
+    const codexTokens = usageNotApplicable ? "N/A" : String(scenario.codexTokens);
+    lines.push(`### ${scenario.name}`, "");
+    lines.push(`- status: ${scenario.status}`);
+    lines.push(`- drift: ${scenario.drift}`);
+    lines.push(
+      `- openclaw: ${scenario.openclawStatus} (${scenario.openclawToolCalls} tool calls, ${openclawTokens} tokens)`,
+    );
+    lines.push(
+      `- codex: ${scenario.codexStatus} (${scenario.codexToolCalls} tool calls, ${codexTokens} tokens)`,
+    );
+    lines.push(
+      `- wall time: openclaw ${formatRuntimeWallClockMs(scenario.openclawWallClockMs)}; codex ${formatRuntimeWallClockMs(scenario.codexWallClockMs)}; ${formatRuntimeSpeedComparison(scenario)}`,
+    );
+    if (
+      scenario.openclawBootstrapWallClockMs !== undefined ||
+      scenario.codexBootstrapWallClockMs !== undefined
+    ) {
+      lines.push(
+        `- gateway bootstrap (excluded): openclaw ${formatRuntimeWallClockMs(scenario.openclawBootstrapWallClockMs ?? null)}; codex ${formatRuntimeWallClockMs(scenario.codexBootstrapWallClockMs ?? null)}`,
+      );
+    }
+    lines.push(
+      `- prompt cache: openclaw ${formatRuntimeCacheHitPercent(scenario.openclawUsage?.cacheHitPercent)} (${formatRuntimeCacheCount(scenario.openclawUsage?.cachedInputTokens)} cached, ${formatRuntimeCacheCount(scenario.openclawUsage?.uncachedInputTokens)} uncached input); codex ${formatRuntimeCacheHitPercent(scenario.codexUsage?.cacheHitPercent)} (${formatRuntimeCacheCount(scenario.codexUsage?.cachedInputTokens)} cached, ${formatRuntimeCacheCount(scenario.codexUsage?.uncachedInputTokens)} uncached input)`,
+    );
+    lines.push(
+      `- post-warm cache misses: openclaw ${formatRuntimeCacheMisses(scenario.openclawCacheDiagnostics)}; codex ${formatRuntimeCacheMisses(scenario.codexCacheDiagnostics)}`,
+    );
+    if (scenario.runtimeParityUsage.expectation === "not-applicable") {
+      lines.push(`- assistant-message usage: N/A (${scenario.runtimeParityUsage.reason})`);
+    }
+    if (scenario.driftDetails) {
+      lines.push(`- details: ${scenario.driftDetails}`);
+    }
+    lines.push("");
+  }
+  pushQaReportListSection(lines, "Notes", report.notes);
+  return lines.join("\n");
 }

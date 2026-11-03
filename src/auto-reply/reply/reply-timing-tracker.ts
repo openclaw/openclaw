@@ -6,23 +6,12 @@ import {
   type StageTiming,
 } from "../../shared/stage-timing.js";
 
-type ReplyTimingSummary = {
-  totalMs: number;
-  spans: StageTiming[];
-};
-
 type ReplyTimingLogParams = {
   message: string;
   outcome?: string;
   reason?: string;
   error?: string;
   details?: Record<string, unknown>;
-};
-
-type ReplyTimingTracker<TLogParams extends object = ReplyTimingLogParams> = {
-  measure: <T>(name: string, run: () => Promise<T> | T) => Promise<T>;
-  measureSync: <T>(name: string, run: () => T) => T;
-  logIfSlow: (params: TLogParams, options?: { repeat?: boolean }) => void;
 };
 
 export function isReplyProfilerEnabled(params?: { config?: OpenClawConfig }): boolean {
@@ -36,11 +25,18 @@ export function createReplyTimingTracker<TLogParams extends object = ReplyTiming
   enabled: boolean;
   formatMessage?: (
     params: TLogParams,
-    summary: ReplyTimingSummary,
+    summary: {
+      totalMs: number;
+      spans: StageTiming[];
+    },
     formattedSpans: string,
   ) => string;
   detailKeys?: (params: TLogParams) => readonly string[];
-}): ReplyTimingTracker<TLogParams> {
+}): {
+  measure: <T>(name: string, run: () => Promise<T> | T) => Promise<T>;
+  measureSync: <T>(name: string, run: () => T) => T;
+  logIfSlow: (params: TLogParams, options?: { repeat?: boolean }) => void;
+} {
   const timing = createStageTimingTracker();
   let didLog = false;
   const totalWarnMs = params.enabled ? 1_000 : 10_000;

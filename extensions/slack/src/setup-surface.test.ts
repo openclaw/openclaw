@@ -113,7 +113,7 @@ describe("slackSetupWizard.prepare", () => {
     expect(JSON.parse(manifest)).toEqual({
       display_information: {
         name: "OpenClaw",
-        description: "OpenClaw connector for OpenClaw",
+        description: "OpenClaw app for OpenClaw",
       },
       features: {
         bot_user: {

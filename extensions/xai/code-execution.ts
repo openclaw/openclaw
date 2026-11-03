@@ -10,7 +10,12 @@ import {
   readPluginCodeExecutionConfig,
   resolveCodeExecutionEnabled,
 } from "./src/code-execution-config.js";
-import { requestXaiCodeExecution } from "./src/code-execution-shared.js";
+import {
+  requestXaiResponsesTool,
+  resolveXaiToolDefaultReasoningEffort,
+  requireXaiResponseTextAndCitations,
+  XAI_RESPONSES_ENDPOINT,
+} from "./src/responses-tool-shared.js";
 import { resolveXaiToolApiKeyWithAuth, type XaiToolAuthContext } from "./src/tool-auth-shared.js";
 import {
   resolveNormalizedXaiToolModel,
@@ -60,13 +65,40 @@ export function createCodeExecutionTool(options?: {
           ? codeExecutionConfig.timeoutSeconds
           : 30;
       const startedAt = Date.now();
-      const result = await requestXaiCodeExecution({
-        apiKey,
-        model,
-        timeoutSeconds,
-        maxTurns,
-        task,
-      });
+      const result = await requestXaiResponsesTool(
+        {
+          apiKey,
+          model,
+          timeoutSeconds,
+          maxTurns,
+          endpoint: XAI_RESPONSES_ENDPOINT,
+          inputText: task,
+          tools: [{ type: "code_interpreter" }],
+          reasoningEffort: resolveXaiToolDefaultReasoningEffort(model, "low"),
+          errorLabel: "xAI code execution failed",
+        },
+        (data) => {
+          const { content, citations } = requireXaiResponseTextAndCitations(
+            data,
+            "xAI code execution failed",
+          );
+          const outputTypes = Array.isArray(data.output)
+            ? [
+                ...new Set(
+                  data.output
+                    .map((entry) => entry?.type)
+                    .filter((value): value is string => Boolean(value)),
+                ),
+              ]
+            : [];
+          return {
+            content,
+            citations,
+            usedCodeExecution: outputTypes.includes("code_interpreter_call"),
+            outputTypes,
+          };
+        },
+      );
       return jsonResult({
         task,
         provider: "xai",

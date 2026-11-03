@@ -57,7 +57,7 @@ export function buildGoogleChatApprovalActionParameters(
   ];
 }
 
-function collectEventParameters(event: GoogleChatEvent): Record<string, string> {
+export function readGoogleChatApprovalActionToken(event: GoogleChatEvent): string | null {
   const params: Record<string, string> = {};
   for (const source of [event.common?.parameters, event.commonEventObject?.parameters]) {
     for (const [key, value] of Object.entries(source ?? {})) {
@@ -71,11 +71,6 @@ function collectEventParameters(event: GoogleChatEvent): Record<string, string> 
       params[item.key] = item.value;
     }
   }
-  return params;
-}
-
-export function readGoogleChatApprovalActionToken(event: GoogleChatEvent): string | null {
-  const params = collectEventParameters(event);
   if (params[GOOGLECHAT_APPROVAL_ACTION_PARAM] !== GOOGLECHAT_APPROVAL_ACTION_VALUE) {
     return null;
   }

@@ -11,3 +11,7 @@ it("advertises command-scoped native subagents to installed plugins", () => {
 it("advertises scheduled command turns before plugins register commands that request them", () => {
   expect(createRuntimeBase().capabilities).toContain("command-scheduled-turns-v1");
 });
+
+it("advertises restart continuity so plugins do not re-enroll surviving schedules", () => {
+  expect(createRuntimeBase().capabilities).toContain("command-scheduled-turns-restart-v1");
+});

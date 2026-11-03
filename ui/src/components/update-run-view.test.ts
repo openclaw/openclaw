@@ -4,7 +4,7 @@ import { createComponent, createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import type { UpdateRunRecord as Run } from "../../../src/infra/update-run-record.ts";
 import { projectUpdateRun } from "../app/update-run-projection.ts";
-import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import { createUpdateRunFixture as run } from "../test-helpers/update-run.ts";
 import { UpdateRunView } from "./update-run-view.tsx";
@@ -43,91 +43,23 @@ function mount(initial: Partial<Run>) {
 }
 
 afterEach(() => {
-  cleanupSolid();
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
-it.each(["running", "skipped"] as const)("omits native progress for OCM %s", (status) => {
-  const view = project({
-    status,
-    phase: status === "running" ? "requested" : "finished",
-    target: { kind: "package", installationMethod: "ocm" },
-  });
+it("omits native progress for OCM-managed runs", () => {
+  const view = project({ target: { kind: "package", installationMethod: "ocm" } });
   expect(view).toMatchObject({ compactLabel: "", phases: [], oracles: [] });
-  if (status === "running") {
-    expect(view.headline).toContain("managed by OCM");
-  }
+  expect(view.headline).toContain("managed by OCM");
 });
 
-it("keeps recorded failure and skipped phases distinct when a run ends early", () => {
-  const failure = "Build failed before activation.";
+it("retains a recorded repair phase after the run has finished", () => {
   const view = project({
     phase: "finished",
     status: "failed",
-    reason: "build-failed",
-    steps: [
-      makeStep("requested"),
-      makeStep("notice:ack"),
-      makeStep("staging"),
-      makeStep("validating", "failed"),
-      makeStep("build", "failed", failure),
-    ],
+    steps: [makeStep("repairing", "failed")],
   });
-  expect(view.phases.map(({ step, status }) => [step, status])).toEqual([
-    ["requested", "completed"],
-    ["staging", "completed"],
-    ["validating", "failed"],
-    ["activating", "skipped"],
-    ["restarting", "skipped"],
-    ["verifying", "skipped"],
-    ["finished", "failed"],
-  ]);
-  expect(view.steps).toEqual([{ step: "build", status: "failed", detail: failure }]);
-  expect(view.details).toBe(failure);
-  expect(view.oracles.every((oracle) => oracle.state === "warn")).toBe(true);
-});
-
-it.each(["in_progress", "failed"] as const)("preserves %s repair after activation", (status) => {
-  const view = project({
-    phase: status === "in_progress" ? "repairing" : "finished",
-    status: status === "in_progress" ? "running" : "failed",
-    steps: [
-      makeStep("activating"),
-      makeStep("restarting"),
-      makeStep("verifying", "failed"),
-      { ...makeStep("repairing", status), startedAtMs: 10 },
-    ],
-  });
-  const phases = Object.fromEntries(view.phases.map(({ step, status: state }) => [step, state]));
-  expect(phases).toMatchObject({
-    repairing: status,
-    activating: "completed",
-    verifying: "failed",
-  });
-});
-
-it.each([
-  { step: "updater-runtime-retention", detail: undefined },
-  { step: "build", detail: undefined },
-  {
-    step: "install",
-    detail: Array.from({ length: 100 }, (_, index) => `line ${index}`).join("\n"),
-  },
-])("selects active $step details and bounds the tail", ({ step: activeStep, detail }) => {
-  const view = project({
-    phase: "validating",
-    steps: [
-      makeStep("snapshot-space-preflight"),
-      makeStep("diagnostic:snapshot-space-preflight:8", "completed", "Backup details."),
-      makeStep(activeStep, "in_progress", detail),
-      makeStep("validating", "in_progress", "Checking the update."),
-      makeStep("preflight", "completed", "Earlier preflight."),
-    ],
-  });
-  expect(view.detailStep).toBe(activeStep);
-  const tail = Array.from({ length: 80 }, (_, i) => `line ${i + 20}`).join("\n");
-  expect(view.details).toBe(detail ? tail : "");
+  expect(view.phases.find(({ step }) => step === "repairing")?.status).toBe("failed");
 });
 
 it("presents diagnostic receipts as readable details without inventing installation steps", () => {
@@ -150,7 +82,11 @@ it("presents diagnostic receipts as readable details without inventing installat
   expect(text('[data-step="warning:snapshot-space-preflight:2"]')).toContain("Warning:");
   setRecord((record) =>
     run({
-      steps: [...record.steps, makeStep("updater-runtime-retention", "in_progress")],
+      steps: [
+        ...record.steps,
+        makeStep("updater-runtime-retention", "in_progress"),
+        makeStep("validating", "in_progress", "Checking the update."),
+      ],
     }),
   );
   flush();
@@ -177,6 +113,15 @@ it("presents diagnostic receipts as readable details without inventing installat
     previousStep.querySelector("summary")!.click();
     expect(previousStep.open).toBe(false);
   }
+  const lines = Array.from({ length: 100 }, (_, i) => `line ${i}`);
+  setRecord((record) =>
+    run({
+      steps: [...record.steps, makeStep("install", "in_progress", lines.join("\n"))],
+    }),
+  );
+  flush();
+  expect(summary()).toContain("Installing");
+  expect(output()).toBe(lines.slice(-80).join("\n"));
 });
 
 it("follows run output on opening and updates, preserving scrollback until a new run", async () => {
@@ -187,6 +132,7 @@ it("follows run output on opening and updates, preserving scrollback until a new
   const disclosure = element.querySelector<HTMLDetailsElement>(".update-run-view__step-list")!;
   const list = find(".update-run-view__step-scroll")!;
   const streams = [list, find(".update-run-view__details")!];
+  expect(streams[1]!.textContent).toBe("No step details recorded yet.");
   const scrollTo = (expected: number, next: number) => {
     for (const stream of streams) {
       expect(stream.scrollTop).toBe(expected);
@@ -279,17 +225,38 @@ it("keeps the view mounted across a restart and replaces progress with a visible
   expect(element.querySelector('[data-step="repairing"]')).toBeNull();
 });
 
-it("shows failure details and report text without interpreting diagnostic markup", () => {
-  const { find, text, output } = mount({
+it("preserves early failure phases and renders diagnostic markup as text", () => {
+  const failure = '<img src=x onerror="alert(1)"> compilation failed';
+  const { element, find, text, output } = mount({
     status: "failed",
     phase: "finished",
     reason: "build-failed",
-    steps: [makeStep("build", "failed", '<img src=x onerror="alert(1)"> compilation failed')],
+    steps: [
+      makeStep("requested"),
+      makeStep("notice:ack"),
+      makeStep("staging"),
+      makeStep("validating", "failed"),
+      makeStep("build", "failed", failure),
+    ],
   });
   expect(text('[aria-label="Update report"]')).toContain(
     "Run openclaw triage to diagnose and repair the failed update.",
   );
-  expect(output()).toContain('<img src=x onerror="alert(1)">');
+  expect(output()).toBe(failure);
+  const phaseStates = Object.fromEntries(
+    [...element.querySelectorAll(".update-run-view__phases [data-status]")].map((phase) => [
+      phase.getAttribute("data-step"),
+      phase.getAttribute("data-status"),
+    ]),
+  );
+  expect(phaseStates).toMatchObject({
+    staging: "completed",
+    validating: "failed",
+    activating: "skipped",
+    finished: "failed",
+  });
+  expect(element.querySelectorAll(".update-run-view__step-scroll li")).toHaveLength(1);
+  expect(element.querySelectorAll('[data-oracle][data-state="warn"]')).toHaveLength(4);
   expect(find("img")).toBeNull();
   expect(find('[data-step="build"]')).toMatchObject({ ariaLabel: "Building OpenClaw: Failed" });
 });

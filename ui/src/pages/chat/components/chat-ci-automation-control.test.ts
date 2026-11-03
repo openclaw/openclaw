@@ -13,8 +13,8 @@ import {
   flushSync,
 } from "../../../lib/session-pull-requests.test-support.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import type { ChatCiAutomationElement } from "./chat-ci-automation-control.ts";
-import "./chat-ci-automation-control.ts";
+import type { ChatCiAutomationElement } from "./chat-ci-automation-control.tsx";
+import "./chat-ci-automation-control.tsx";
 
 const sessionKey = "agent:main:dashboard:ci-test";
 const cronStatus = { enabled: true, triggersEnabled: true, jobs: 0 };
@@ -180,8 +180,7 @@ describe("CI automation popup scope", () => {
     h.harness.emit({}, "cron");
     h.harness.emit({}, "cron");
     await h.settle();
-    expect(h.checkbox().checked).toBe(false);
-    expect(h.checkbox().disabled).toBe(true);
+    expect(h.checkbox()).toMatchObject({ checked: false, disabled: true });
     expect(h.checkbox("autoMerge").disabled).toBe(false);
     expect(h.calls("cron.list")).toHaveLength(2);
     const disabledFix = { ...fix, enabled: false, configRevision: "v2" };
@@ -208,13 +207,23 @@ describe("CI automation popup scope", () => {
     fixWrite.reject(new Error("Lost acknowledgement"));
     await h.settle();
     h.toggles(false, true);
+    expect(h.root.textContent).toContain("Lost acknowledgement");
+    expect(h.checkbox().closest("fieldset")?.disabled).toBe(true);
+    expect(h.root.querySelector<HTMLButtonElement>(".chat-ci__automation-retry")!.disabled).toBe(
+      true,
+    );
     h.jobs = [job("first"), job("first", "autoMerge")];
     h.writes = {};
     mergeWrite.resolve({ job: job("first", "autoMerge") });
     await h.settle();
     expect(h.root.textContent).toContain("Lost acknowledgement");
     h.toggles(true, true);
+    const retryRead = createDeferred<ReturnType<typeof inventory>>();
+    h.read = retryRead.promise;
     h.root.querySelector<HTMLButtonElement>(".chat-ci__automation-retry")!.click();
+    await h.settle();
+    expect(h.root.querySelector('[role="alert"]')).toBeNull();
+    retryRead.resolve(inventory(h.jobs));
     await h.settle();
     expect(h.root.querySelector('[role="alert"]')).toBeNull();
     expect(h.calls("cron.add")).toHaveLength(2);
@@ -230,10 +239,7 @@ describe("CI automation popup scope", () => {
       } else {
         h.snapshot({ hello: hello(["operator.sessions.read"]) });
       }
-      await h.element.updateComplete;
       await h.open(false);
-      await h.element.updateComplete;
-      expect(await h.element.updateComplete).toBe(true);
       expect(h.request).not.toHaveBeenCalled();
       expect(h.checkbox().closest("fieldset")?.disabled).toBe(true);
     },
@@ -244,7 +250,6 @@ describe("CI automation popup scope", () => {
     h.jobs = [job("first")];
     h.read = oldRead.promise;
     await h.open(false);
-    expect(h.request.mock.calls.some(([method]) => method === "cron.list")).toBe(true);
     const signal = h.calls("cron.list")[0]?.[2]?.signal;
     h.element.sessionId = "replacement";
     expect(signal?.aborted).toBe(true);
@@ -278,8 +283,7 @@ describe("CI automation popup scope", () => {
     await h.element.updateComplete;
     h.element.presented = false;
     await h.settle();
-    expect(h.checkbox().checked).toBe(true);
-    expect(h.checkbox().disabled).toBe(true);
+    expect(h.checkbox()).toMatchObject({ checked: true, disabled: true });
     h.element.presented = true;
     await h.settle();
     expect(h.checkbox().disabled).toBe(true);
@@ -290,8 +294,7 @@ describe("CI automation popup scope", () => {
     await h.settle();
     expect(h.calls("cron.add")).toHaveLength(1);
     expect(h.calls("cron.list")).toHaveLength(1);
-    expect(h.checkbox().checked).toBe(true);
-    expect(h.checkbox().disabled).toBe(false);
+    expect(h.checkbox()).toMatchObject({ checked: true, disabled: false });
     h.element.presented = true;
     await h.settle();
     expect(h.root.open).toBe(true);
@@ -316,6 +319,11 @@ describe("CI automation popup scope", () => {
         h.element.gateway = createGatewayHarness().gateway;
       }
       await h.settle();
+      // A retired scope must clear its pending checkbox before its RPC settles.
+      expect(h.checkbox()).toMatchObject({ checked: false, disabled: false });
+      if (change === "session") {
+        expect(h.checkbox().closest("fieldset")?.disabled).toBe(false);
+      }
       pending.reject(new Error("Old context failure"));
       await h.settle();
       expect(h.root.textContent).not.toContain("Old context failure");
@@ -339,6 +347,8 @@ describe("CI automation popup scope", () => {
     h.writes = {};
     h.snapshot({ phase: "connected" });
     await h.settle();
+    expect(h.checkbox()).toMatchObject({ checked: true, disabled: false });
+    expect(h.checkbox().closest("fieldset")?.disabled).toBe(false);
     pending.resolve({ ...job("first"), enabled: false });
     await h.settle();
     expect(h.checkbox().checked).toBe(true);

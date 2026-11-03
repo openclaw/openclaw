@@ -2,11 +2,11 @@ import type {
   SkillsWorkshopChangesResult,
   SkillsWorkshopListResult,
 } from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";
-import { sanitizeForLog, stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import {
   decorativeEmoji,
   decorativePrefix,
 } from "../../packages/terminal-core/src/decorative-emoji.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { formatConcreteConfigPath } from "../shared/dot-path.js";
@@ -16,11 +16,15 @@ import {
   type SkillStatusEntry,
   type SkillStatusReport,
 } from "../skills/discovery/status.js";
-import { shortenHomePath } from "../utils.js";
+import { displayPath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
 import { formatCliJsonFailure } from "./failure-output.js";
 import { quoteCliArg } from "./quote-cli-arg.js";
-import { formatCliRequirements, formatCliStatusTable } from "./skills-hooks-cli.format.js";
+import {
+  formatCliRequirements,
+  formatCliStatusTable,
+  sanitizeCliDescriptorText,
+} from "./skills-hooks-cli.format.js";
 
 type SkillsListOptions = {
   json?: boolean;
@@ -58,31 +62,16 @@ function formatSkillStatus(skill: SkillStatusEntry, detailed = false): string {
 
 function normalizeSkillEmoji(emoji?: string): string {
   if (emoji) {
-    return emoji.replaceAll("\uFE0E", "\uFE0F");
+    return terminalText`${emoji}`.replaceAll("\uFE0E", "\uFE0F");
   }
   return decorativeEmoji("📦");
-}
-
-const REMAINING_ESC_SEQUENCE_REGEX = new RegExp(
-  String.raw`\u001b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])`,
-  "g",
-);
-// JSON escapes tabs and line endings; preserve their meaning in descriptions and paths.
-const JSON_CONTROL_CHAR_REGEX = new RegExp(
-  String.raw`[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]`,
-  "g",
-);
-
-function sanitizeJsonString(value: string): string {
-  return stripAnsi(value)
-    .replace(REMAINING_ESC_SEQUENCE_REGEX, "")
-    .replace(JSON_CONTROL_CHAR_REGEX, "");
 }
 
 function formatSkillsJson(value: unknown): string {
   return JSON.stringify(
     value,
-    (_key, entry: unknown) => (typeof entry === "string" ? sanitizeJsonString(entry) : entry),
+    (_key, entry: unknown) =>
+      typeof entry === "string" ? sanitizeCliDescriptorText(entry) : entry,
     2,
   );
 }
@@ -96,7 +85,7 @@ const SKILL_REQUIREMENT_GROUPS = [
 
 function formatSkillMissingSummary(skill: SkillStatusEntry): string {
   return SKILL_REQUIREMENT_GROUPS.filter(([key]) => skill.missing[key].length > 0)
-    .map(([key]) => `${key}: ${skill.missing[key].join(", ")}`)
+    .map(([key]) => terminalText`${key}: ${skill.missing[key].join(", ")}`)
     .join("; ");
 }
 
@@ -112,8 +101,8 @@ function formatSkillCheckSection(
         theme.heading(title),
         ...skills.map((skill) => {
           const emoji = normalizeSkillEmoji(skill.emoji);
-          const suffix = reason ? ` ${theme.muted(`(${reason(skill)})`)}` : "";
-          return `  ${emoji ? `${emoji} ` : ""}${sanitizeForLog(skill.name)}${suffix}`;
+          const suffix = reason ? ` ${theme.muted(terminalText`(${reason(skill)})`)}` : "";
+          return `${terminalText`  ${emoji ? `${emoji} ` : ""}${skill.name}`}${suffix}`;
         }),
       ];
 }
@@ -162,14 +151,13 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
       sourceColumn: { key: "Source", header: "Source", minWidth: 10 },
       verbose: opts.verbose,
       rows: skills.map((skill) => {
-        const status = formatSkillStatus(skill);
         const emoji = normalizeSkillEmoji(skill.emoji);
-        const name = theme.command(sanitizeForLog(skill.name));
+        const name = theme.command(terminalText`${skill.name}`);
         return {
-          Status: status,
+          Status: formatSkillStatus(skill),
           Skill: emoji ? `${emoji} ${name}` : name,
-          Description: theme.muted(skill.description),
-          Source: skill.source,
+          Description: theme.muted(terminalText`${skill.description}`),
+          Source: terminalText`${skill.source}`,
           Missing: opts.verbose ? theme.warn(formatSkillMissingSummary(skill)) : "",
         };
       }),
@@ -192,9 +180,8 @@ export function formatSkillInfo(
         skill: requestedName,
       });
     }
-    const safeRequestedName = sanitizeJsonString(sanitizeForLog(requestedName));
     return appendClawHubHint(
-      `Skill "${safeRequestedName}" not found. Run \`${formatCliCommand("openclaw skills list")}\` to see available skills.`,
+      terminalText`Skill "${requestedName}" not found. Run \`${formatCliCommand("openclaw skills list")}\` to see available skills.`,
     );
   }
 
@@ -203,17 +190,16 @@ export function formatSkillInfo(
   }
 
   const emoji = normalizeSkillEmoji(skill.emoji);
-  const safeName = sanitizeForLog(skill.name);
-  const safeHomepage = skill.homepage ? sanitizeForLog(skill.homepage) : undefined;
-  const safeSkillKey = sanitizeForLog(skill.skillKey);
+  const safeName = terminalText`${skill.name}`;
+  const safeHomepage = skill.homepage ? terminalText`${skill.homepage}` : undefined;
   const lines = [
     `${emoji ? `${emoji} ` : ""}${theme.heading(safeName)} ${formatSkillStatus(skill, true)}`,
     "",
-    sanitizeForLog(skill.description),
+    terminalText`${skill.description}`,
     "",
     theme.heading("Details:"),
-    `${theme.muted("  Source:")} ${sanitizeForLog(skill.source)}`,
-    `${theme.muted("  Path:")} ${shortenHomePath(skill.filePath)}`,
+    `${theme.muted("  Source:")} ${terminalText`${skill.source}`}`,
+    `${theme.muted("  Path:")} ${displayPath(skill.filePath)}`,
   ];
   if (safeHomepage) {
     lines.push(`${theme.muted("  Homepage:")} ${safeHomepage}`);
@@ -228,7 +214,7 @@ export function formatSkillInfo(
     lines.push(`${theme.muted("  Agent allowlist:")} excludes this skill`);
   }
   if (skill.primaryEnv) {
-    lines.push(`${theme.muted("  Primary env:")} ${skill.primaryEnv}`);
+    lines.push(`${theme.muted("  Primary env:")} ${terminalText`${skill.primaryEnv}`}`);
   }
 
   lines.push(...formatCliRequirements(skill, SKILL_REQUIREMENT_GROUPS));
@@ -237,13 +223,13 @@ export function formatSkillInfo(
     lines.push("");
     lines.push(theme.heading("Install options:"));
     for (const inst of skill.install) {
-      lines.push(`  ${theme.warn("→")} ${inst.label}`);
+      lines.push(`  ${theme.warn("→")} ${terminalText`${inst.label}`}`);
     }
   }
 
   if (skill.primaryEnv && skill.missing.env.includes(skill.primaryEnv)) {
     const apiKeyPath = quoteCliArg(
-      formatConcreteConfigPath(["skills", "entries", safeSkillKey, "apiKey"]),
+      formatConcreteConfigPath(["skills", "entries", skill.skillKey, "apiKey"]),
     );
     lines.push("");
     lines.push(theme.heading("API key setup:"));
@@ -253,7 +239,9 @@ export function formatSkillInfo(
     lines.push(
       `  Save via UI: ${theme.muted("Control UI → Skills → ")}${safeName}${theme.muted(" → Save key")}`,
     );
-    lines.push(`  Save via CLI: ${formatCliCommand(`openclaw config set ${apiKeyPath} YOUR_KEY`)}`);
+    lines.push(
+      `  Save via CLI: ${formatCliCommand(terminalText`openclaw config set ${apiKeyPath} YOUR_KEY`)}`,
+    );
     lines.push(
       `  Stored in: ${theme.muted("$OPENCLAW_CONFIG_PATH")} ${theme.muted("(default: ~/.openclaw/openclaw.json)")}`,
     );
@@ -314,7 +302,7 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
   const lines: string[] = [];
   lines.push(theme.heading("Skills Status Check"));
   if (agentId) {
-    lines.push(`${theme.muted("Agent:")} ${sanitizeForLog(agentId)}`);
+    lines.push(`${theme.muted("Agent:")} ${terminalText`${agentId}`}`);
   }
   lines.push("");
   lines.push(`${theme.muted("Total:")} ${report.skills.length}`);
@@ -384,8 +372,8 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
 
 export function formatSkillsWorkshopList(result: SkillsWorkshopListResult): string {
   const lines = [
-    `${theme.muted("Agent:")} ${sanitizeForLog(result.agentId)}  ${theme.muted("Mode:")} ${result.mode}`,
-    `${theme.muted("Root:")} ${shortenHomePath(result.root)}`,
+    `${theme.muted("Agent:")} ${terminalText`${result.agentId}`}  ${theme.muted("Mode:")} ${terminalText`${result.mode}`}`,
+    `${theme.muted("Root:")} ${displayPath(result.root)}`,
     "",
   ];
   if (result.skills.length === 0) {
@@ -394,14 +382,21 @@ export function formatSkillsWorkshopList(result: SkillsWorkshopListResult): stri
   for (const skill of result.skills) {
     const uses = skill.useCount === undefined ? "" : `  uses=${skill.useCount}`;
     lines.push(
-      `${theme.command(sanitizeForLog(skill.name))}  updated ${formatTimeAgo(Math.max(0, Date.now() - skill.updatedAtMs))}${uses}  ${sanitizeForLog(skill.description)}`,
+      `${theme.command(terminalText`${skill.name}`)}${terminalText`  updated ${formatTimeAgo(Math.max(0, Date.now() - skill.updatedAtMs))}${uses}  ${skill.description}`}`,
     );
   }
   const archived = result.archived.filter((entry) => !entry.live);
   if (archived.length > 0) {
     lines.push("", theme.heading("Archived:"));
     for (const entry of archived) {
-      lines.push(`${sanitizeForLog(entry.name)}  versions=${entry.versions.length}`);
+      lines.push(terminalText`${entry.name}  versions=${entry.versions.length}`);
+    }
+  }
+  const drafts = result.drafts ?? [];
+  if (drafts.length > 0) {
+    lines.push("", theme.heading("Drafts (review with /learn drafts):"));
+    for (const draft of drafts) {
+      lines.push(terminalText`${draft.id}  for ${draft.skillName}  ${draft.summary}`);
     }
   }
   return `${lines.join("\n")}\n`;
@@ -414,7 +409,7 @@ export function formatSkillsWorkshopChanges(result: SkillsWorkshopChangesResult)
   return `${result.changes
     .map((change) => {
       const version = change.versionId ? `  version=${change.versionId}` : "";
-      return `${formatTimeAgo(Math.max(0, Date.now() - change.createdAtMs))}  ${change.actor}  ${change.action}  ${sanitizeForLog(change.skillName)}  ${sanitizeForLog(change.summary)}${version}`;
+      return terminalText`${formatTimeAgo(Math.max(0, Date.now() - change.createdAtMs))}  ${change.actor}  ${change.action}  ${change.skillName}  ${change.summary}${version}`;
     })
     .join("\n")}\n`;
 }

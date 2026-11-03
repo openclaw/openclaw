@@ -33,6 +33,14 @@ export function shouldHandleNavigationClick(event: MouseEvent): boolean {
   );
 }
 
+export function handleNavigationClick(event: MouseEvent, navigate: () => void): void {
+  if (!shouldHandleNavigationClick(event)) {
+    return;
+  }
+  event.preventDefault();
+  navigate();
+}
+
 /** Delegated clicks may originate in caller-owned light DOM or shadow-root islands. */
 export function anchorFromNavigationEvent(event: Event): HTMLAnchorElement | null {
   return (

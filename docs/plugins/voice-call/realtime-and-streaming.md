@@ -47,6 +47,14 @@ flight. Once an active-call helper accepts a hang-up, cancelling the consult
 does not interrupt that control action. The helper still checks that its bound
 call is active before acting.
 
+Caller transcripts during carrier playback and its 400 ms echo tail require
+detected caller speech or a provider barge-in. This prevents unconfirmed echo
+from becoming a new host caller turn. During opening-greeting playback, caller
+audio and transcripts are withheld and provider barge-in cannot clear the greeting.
+Normal interruption resumes after the greeting response ends and carrier playback
+drains. Before greeting audio starts and on later turns, audio reaches the realtime
+provider, which owns its own speech detection and responses.
+
 ### GPT-Live
 
 Voice Call uses the same Gateway-owned GPT-Live bridge as Discord and Talk.
@@ -104,7 +112,8 @@ too.
 
 Outbound `initiate_call`, `voicecall.initiate`, and the CLI accept an optional
 `brief`. It applies only to that call and reaches both the voice model and its
-agent consult. The opening `message` stays the first verbatim spoken line.
+agent consult. Supply `brief.task` for the ongoing errand; the opening `message`
+stays the first verbatim spoken line.
 
 Every brief field is optional:
 
@@ -119,6 +128,11 @@ Every brief field is optional:
 | `voicemailMessage`   | Exact message to leave when voicemail is detected.                                 |
 | `successCriteria`    | What counts as completing the task.                                                |
 | `maxDurationSeconds` | Positive integer override, capped by plugin `maxDurationSeconds`.                  |
+
+For realtime transcription, a recognized two-letter language code such as `cs`
+also supplies the input-language hint. Regional tags such as `cs-CZ` use their
+base language. Free-form descriptions remain voice instructions only; they are
+not sent as transcription language codes.
 
 The encoded brief is limited to 8,000 characters. See the plugin README for
 individual field limits and a plumber booking example. Treat both the brief
@@ -408,6 +422,7 @@ Runtime behavior:
 - Bundled realtime transcription providers: Deepgram (`deepgram`), ElevenLabs (`elevenlabs`), Mistral (`mistral`), OpenAI (`openai`), and xAI (`xai`), registered by their provider plugins.
 - Provider-owned raw config lives under `streaming.providers.<providerId>`.
 - After Twilio sends an accepted stream `start` message, Voice Call registers the stream immediately, queues inbound media through the transcription provider while the provider connects, and starts the initial greeting only after realtime transcription is ready.
+- Frames with non-string audio payloads, playback-mark names, or start identifiers and tokens are discarded before dispatch. Valid base64 and base64url audio continue normally on the same stream.
 - If `streaming.provider` points at an unregistered provider, or none is registered, Voice Call logs a warning and skips media streaming instead of failing the whole plugin.
 
 ### Streaming provider examples

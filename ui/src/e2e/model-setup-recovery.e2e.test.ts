@@ -1,20 +1,18 @@
 // Control UI tests cover local-provider recovery against a mocked Gateway.
 import { expect, it } from "vitest";
+import { sourceConfigSnapshot } from "../lib/config/config-snapshot.test-support.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { expandProvider } from "./model-providers.test-support.ts";
 import {
-  activated,
   activationFailure,
   button,
   candidate,
-  configSnapshot,
   expectCount,
   expectRequestCounts,
   expectText,
   makeDetection,
-  pollRequestCount,
   providerLogin,
-  runningStep,
   runningWizard,
   setupContext,
   setupPages,
@@ -31,138 +29,7 @@ const suite = createControlUiE2eSuite({
 
 const withPage = setupPages(suite, () => setupContext({ viewport: { height: 900, width: 1280 } }));
 
-function configuredProvider(
-  provider: string,
-  displayName: string,
-  id: string,
-  options: { name?: string; config?: object; profiles?: Record<string, string>[] } = {},
-) {
-  const modelRef = `${provider}/${id}`;
-  return {
-    agentModel: modelRef,
-    models: [{ id, name: options.name ?? id, provider, available: true }],
-    methodResponses: {
-      "config.get": configSnapshot(
-        options.config ?? { agents: { defaults: { model: modelRef } } },
-        "configured-provider",
-      ),
-      "models.authStatus": {
-        ts: 1,
-        providerCapabilities: [],
-        providers: [{ provider, displayName, status: "static", profiles: options.profiles ?? [] }],
-      },
-    },
-  };
-}
-
 suite.define(() => {
-  it("verifies the current model connection and retries saved replacement credentials", async () => {
-    await withPage(async ({ page }) => {
-      const provider = configuredProvider("openai", "OpenAI", "gpt-5", {
-        name: "GPT-5",
-        profiles: [{ profileId: "openai:existing", type: "api_key", status: "static" }],
-      });
-      const gateway = await installSetupGateway(page, {
-        ...provider,
-        featureMethods: [
-          "chat.metadata",
-          "chat.startup",
-          rpc.detect,
-          "models.probe",
-          rpc.activate,
-          rpc.auth,
-          rpc.next,
-        ],
-        methodResponses: {
-          ...provider.methodResponses,
-          [rpc.detect]: makeDetection({
-            candidates: [
-              candidate("existing-model", "Current model", "openai/gpt-5", {
-                brandId: "openai",
-                detail: "openai/gpt-5 — already configured",
-              }),
-              candidate("provider-auto:openai", "OpenAI", "openai/gpt-5", {
-                brandId: "openai",
-                detail: "Already configured",
-              }),
-              candidate(
-                "saved-auth:openai:replacement",
-                "Saved OpenAI credentials",
-                "openai/gpt-5",
-                { brandId: "openai", detail: "Saved for retry after a failed setup test" },
-              ),
-              candidate("claude-cli", "Claude Code", "claude-cli/claude-opus-5", {
-                brandId: "claude",
-                detail: "logged in",
-              }),
-            ],
-            configuredModel: "openai/gpt-5",
-            setupComplete: true,
-          }),
-          "models.probe": {
-            provider: "openai",
-            status: "ok",
-            latencyMs: 1234,
-            results: [
-              { label: "Configured credential · openai/gpt-5", status: "ok", latencyMs: 1234 },
-            ],
-          },
-          [rpc.activate]: runningWizard(),
-          [rpc.next]: activated("openai/gpt-5"),
-        },
-      });
-
-      const response = await openModelSetup(page, suite.server.baseUrl);
-      expect(response?.status()).toBe(200);
-      await expectCount(page.locator('[data-candidate-kind="existing-model"]'), 0);
-      await expectCount(page.locator('[data-candidate-kind="claude-cli"]'), 1);
-      expect(await page.locator('[data-candidate-kind="provider-auto:openai"]').count()).toBe(0);
-      const savedCredentials = page.locator(
-        '[data-candidate-kind="saved-auth:openai:replacement"]',
-      );
-      await waitText(savedCredentials, "Saved OpenAI credentials");
-      await page.setViewportSize({ height: 844, width: 390 });
-      await expect
-        .poll(() =>
-          page
-            .locator(".shell-nav.nav-drawer")
-            .evaluate((element) => element.getAttribute("aria-hidden") !== "true"),
-        )
-        .toBe(false);
-      await page.setViewportSize({ height: 900, width: 1280 });
-      await button(page.locator(".model-setup-discovery"), "Close").click();
-      const currentProvider = page.locator('[data-provider-id="openai"]');
-      for (let attempt = 0; attempt < 2; attempt++) {
-        const detections = (await gateway.getRequests(rpc.detect)).length;
-        const probes = (await gateway.getRequests("models.probe")).length;
-        await button(currentProvider, "Test connection").click();
-        const verify = await gateway.waitForRequest("models.probe", { after: probes });
-        expect(verify.params).toEqual({ provider: "openai", agentId: "main" });
-        if (attempt === 1) {
-          await pollRequestCount(gateway, "models.probe").toBe(probes + 1);
-          expect((await gateway.getRequests(rpc.detect)).length).toBe(detections);
-        }
-        await button(currentProvider, "Test connection").waitFor();
-        await waitText(
-          currentProvider.locator(".model-providers__probe-target"),
-          "Connected · Request round-trip: 1234 ms",
-        );
-        await waitText(currentProvider.locator(".model-providers__probe-summary"), "Connected");
-      }
-      await openModelSetup(page);
-      await button(savedCredentials, "Test & use for this agent").click();
-      const activation = await gateway.waitForRequest(rpc.activate);
-      expect(activation.params).toEqual({
-        kind: "saved-auth:openai:replacement",
-        modelRef: "openai/gpt-5",
-        agentId: "main",
-        sessionId: expect.any(String),
-      });
-      await page.locator(".model-setup-success").waitFor();
-      await expectRequestCounts(gateway, { [rpc.activate]: 1, [rpc.auth]: 0 });
-    });
-  });
-
   it.each(["rejected", "uncertain"] as const)(
     "preserves first-run recovery after a terminal %s activation outcome",
     async (outcome) => {
@@ -229,11 +96,16 @@ suite.define(() => {
             },
           },
         };
-        const provider = configuredProvider("lmstudio", "LM Studio", "qwen3-8b-instruct", {
-          config,
-        });
         const gateway = await installSetupGateway(page, {
-          ...provider,
+          agentModel: modelRef,
+          models: [
+            {
+              id: "qwen3-8b-instruct",
+              name: "qwen3-8b-instruct",
+              provider: "lmstudio",
+              available: true,
+            },
+          ],
           featureMethods: [
             "chat.metadata",
             "chat.startup",
@@ -243,23 +115,17 @@ suite.define(() => {
             rpc.next,
           ],
           methodResponses: {
-            ...provider.methodResponses,
+            "config.get": sourceConfigSnapshot(config, "configured-provider"),
+            "models.authStatus": {
+              ts: 1,
+              providerCapabilities: [],
+              providers: [
+                { provider: "lmstudio", displayName: "LM Studio", status: "static", profiles: [] },
+              ],
+            },
             [rpc.detect]: makeDetection({
-              candidates: [
-                candidate("provider-auto:lmstudio", "LM Studio", modelRef, {
-                  brandId: "lmstudio",
-                  detail: "qwen3-8b-instruct at http://localhost:1234/v1",
-                }),
-              ],
-              prepareOptions: [
-                {
-                  id: "lmstudio",
-                  brandId: "lmstudio",
-                  label: "LM Studio",
-                  hint: "Connect to a running LM Studio server and use an already loaded model",
-                  actionLabel: "Connect server",
-                },
-              ],
+              candidates: [candidate("provider-auto:lmstudio", "LM Studio", modelRef)],
+              prepareOptions: [{ id: "lmstudio", label: "LM Studio" }],
               configuredModel: modelRef,
               setupComplete: true,
             }),
@@ -268,30 +134,20 @@ suite.define(() => {
               provider: "lmstudio",
               status: "unknown",
               error: "The connection probe failed.",
-              results: [
-                {
-                  label: "Configured credential · lmstudio/qwen3-8b-instruct",
-                  status: "unknown",
-                  error: "The connection probe failed.",
-                },
-              ],
+              results: [],
             },
-            [rpc.prepare]: runningWizard("lmstudio-recovery-session"),
-            [rpc.next]: runningStep("lmstudio-base-url", "text", "LM Studio base URL", {
-              initialValue: "http://localhost:1234/v1",
-            }),
           },
         });
 
         const response = await page.goto(suite.server.baseUrl + "settings/model-providers");
         expect(response?.status()).toBe(200);
-        const selectedModel = page.locator('[data-provider-id="lmstudio"]');
+        const selectedModel = await expandProvider(page, "lmstudio");
         await waitText(selectedModel, "LM Studio");
         await expectText(
           page.locator(".model-providers__defaults openclaw-select-picker").first(),
           "qwen3-8b-instruct",
         );
-        await button(selectedModel, "Test connection").click();
+        await button(selectedModel, "Test connection: LM Studio").click();
         await selectedModel
           .locator(".model-providers__probe-summary")
           .getByText("Connection failed", { exact: true })
@@ -300,7 +156,7 @@ suite.define(() => {
           selectedModel.locator(".model-providers__probe"),
           "The connection probe failed.",
         );
-        await button(selectedModel, "Test connection").waitFor();
+        await button(selectedModel, "Test connection: LM Studio").waitFor();
         await expectRequestCounts(gateway, { [rpc.prepare]: 0, [rpc.activate]: 0 });
 
         await page.setViewportSize({ height: 844, width: 390 });

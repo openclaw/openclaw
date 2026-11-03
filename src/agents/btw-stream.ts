@@ -1,21 +1,30 @@
+import { isAnthropicOAuthApiKey } from "@openclaw/ai/internal/anthropic";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { streamWithPayloadPatch } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
 import type { AssistantMessageEvent, Message, Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 import { buildBtwQuestionPrompt, buildBtwSystemPrompt } from "./btw-prompts.js";
 import type { RunBtwSideQuestionParams } from "./btw-runtime.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
 import { EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
+import { applyExtraParamsToAgent } from "./embedded-agent-runner/extra-params.js";
+import { materializeProviderContext } from "./embedded-agent-runner/run/images.js";
+import { wrapStreamFnWithMessageTransform } from "./embedded-agent-runner/run/message-transform-stream-wrapper.js";
+import { prepareEmbeddedSessionForkContext } from "./embedded-agent-runner/session-fork-context.js";
+import { runEmbeddedSessionFork } from "./embedded-agent-runner/session-fork.js";
 import { resolveEmbeddedAgentStream } from "./embedded-agent-runner/stream-resolution.js";
+import { mapThinkingLevelForProvider, mapThinkingLevel } from "./embedded-agent-runner/utils.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
 import { registerProviderStreamForModel } from "./provider-stream.js";
 import { getModelRegistryRuntime } from "./sessions/model-registry-runtime.js";
+import { resolveEffectiveToolFsWorkspaceOnly } from "./tool-fs-policy.js";
 import { sanitizeImageBlocks } from "./tool-images.js";
 import { normalizeUsage, type NormalizedUsage } from "./usage.js";
 
 const log = createSubsystemLogger("agents/btw");
 
-export async function runLightweightBtwStream(input: {
+type SideQuestionStreamInput = {
   params: RunBtwSideQuestionParams;
   modelRegistry: Parameters<typeof getModelRegistryRuntime>[0];
   runtimeModel: Model;
@@ -24,11 +33,9 @@ export async function runLightweightBtwStream(input: {
   resolvedAuthProfileId?: string;
   sessionId: string;
   workspaceDir: string;
-  imageLimits: ImageSanitizationLimits;
-  messages: Message[];
-  inFlightPrompt?: string;
-  recordBtwUsage: (model: Model, usage?: NormalizedUsage) => void;
-}): Promise<ReplyPayload | undefined> {
+};
+
+function resolveSideQuestionStream(input: SideQuestionStreamInput) {
   const {
     params,
     modelRegistry,
@@ -38,10 +45,6 @@ export async function runLightweightBtwStream(input: {
     resolvedAuthProfileId,
     sessionId,
     workspaceDir,
-    imageLimits,
-    messages,
-    inFlightPrompt,
-    recordBtwUsage,
   } = input;
   const modelRegistryRuntime = getModelRegistryRuntime(modelRegistry);
 
@@ -55,7 +58,7 @@ export async function runLightweightBtwStream(input: {
     agentDir: params.agentDir,
     workspaceDir,
     env: process.env,
-    wrapProviderStream: true,
+    wrapProviderStream: params.toolCalls !== "deny",
     auth,
     apiRegistry: modelRegistryRuntime.apiRegistry,
   });
@@ -69,6 +72,107 @@ export async function runLightweightBtwStream(input: {
     resolvedApiKey: apiKey,
     authProfileId: resolvedAuthProfileId,
   });
+
+  if (params.toolCalls !== "deny") {
+    return streamFn;
+  }
+  const workspaceOnly = resolveEffectiveToolFsWorkspaceOnly({
+    cfg: params.cfg,
+    agentId: params.agentId,
+  });
+  const agent = {
+    streamFn: wrapStreamFnWithMessageTransform(
+      streamFn,
+      (messages) => messages,
+      ({ context, signal }) =>
+        materializeProviderContext({
+          context,
+          signal,
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+          workspaceOnly,
+          localRoots: workspaceOnly
+            ? undefined
+            : getAgentScopedMediaLocalRoots(params.cfg, params.agentId),
+        }),
+    ),
+  };
+  const thinkingLevel = mapThinkingLevelForProvider(params.resolvedThinkLevel, runtimeModel);
+  applyExtraParamsToAgent(
+    agent,
+    params.cfg,
+    runtimeModel.provider,
+    runtimeModel.id,
+    undefined,
+    thinkingLevel,
+    params.agentId,
+    workspaceDir,
+    runtimeModel,
+    params.agentDir,
+    undefined,
+    { auth },
+  );
+  const preparedStream = agent.streamFn;
+  return (
+    model: Model,
+    context: Parameters<typeof streamFn>[1],
+    options: Parameters<typeof streamFn>[2],
+  ) => preparedStream(model, context, { reasoning: mapThinkingLevel(thinkingLevel), ...options });
+}
+
+export async function runBtwSessionFork(
+  input: SideQuestionStreamInput & {
+    sessionFile: string;
+    assertCurrent: () => void;
+  },
+): Promise<string> {
+  const { params, runtimeModel, apiKey, sessionId, workspaceDir, assertCurrent } = input;
+  const delivery = params.sessionEntry.delivery;
+  const externalDelivery = delivery?.kind === "external" ? delivery : undefined;
+  const context = await prepareEmbeddedSessionForkContext({
+    target: {
+      agentId: params.agentId,
+      sessionId,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    },
+    sessionFile: input.sessionFile,
+    model: runtimeModel,
+    directApiKey: Boolean(apiKey) && !isAnthropicOAuthApiKey(apiKey),
+    config: params.cfg,
+    workspaceDir,
+    agentId: params.agentId,
+    agentDir: params.agentDir,
+    chatType: params.chatType ?? params.sessionEntry.chatType,
+    accountId: params.agentAccountId ?? externalDelivery?.route.accountId,
+    peerId: externalDelivery?.origin.nativeDirectUserId,
+    signal: params.opts?.abortSignal,
+    assertCurrent,
+  });
+  assertCurrent();
+  return runEmbeddedSessionFork({
+    context,
+    streamFn: resolveSideQuestionStream(input),
+    question: params.question,
+    model: runtimeModel,
+    apiKey,
+    signal: params.opts?.abortSignal,
+    assertCurrent,
+    onUsage: params.onUsage,
+  });
+}
+
+export async function runLightweightBtwStream(
+  input: SideQuestionStreamInput & {
+    imageLimits: ImageSanitizationLimits;
+    messages: Message[];
+    inFlightPrompt?: string;
+    recordBtwUsage: (model: Model, usage?: NormalizedUsage) => void;
+  },
+): Promise<ReplyPayload | undefined> {
+  const { params, runtimeModel, apiKey, imageLimits, messages, inFlightPrompt, recordBtwUsage } =
+    input;
+  const streamFn = resolveSideQuestionStream(input);
 
   const chunker =
     params.opts?.onBlockReply && params.blockReplyChunking

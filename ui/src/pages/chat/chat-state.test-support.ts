@@ -2,7 +2,7 @@ import { vi } from "vitest";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
-import { handlePageGatewayEvent } from "./chat-state-events.ts";
+import { handlePageGatewayEvent } from "./chat-state-events.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
 

@@ -1,13 +1,11 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 
-type AgentsConfigCapability = {
-  readonly state: { configFormDirty: boolean };
-  save: (options?: { canDispatch?: () => boolean }) => Promise<boolean>;
-  stageDefaultAgent: (agentId: string) => boolean;
-};
-
 export async function setDefaultAgent(
-  config: AgentsConfigCapability,
+  config: {
+    readonly state: { configFormDirty: boolean };
+    save: (options?: { canDispatch?: () => boolean }) => Promise<boolean>;
+    stageDefaultAgent: (agentId: string) => boolean;
+  },
   agentId: string,
   refreshAgents: () => Promise<unknown>,
   canDispatch: () => boolean = () => true,
@@ -24,18 +22,16 @@ export async function setDefaultAgent(
   }
 }
 
-type AgentIdentityUpdate = {
-  agentId: string;
-  name?: string;
-  emoji?: string;
-  avatar?: string;
-};
-
 /** Persist identity fields through the gateway; the handler also rewrites the
     agent's workspace IDENTITY.md so agent and UI share one identity source. */
 export async function updateAgentIdentity(
   client: GatewayBrowserClient,
-  update: AgentIdentityUpdate,
+  update: {
+    agentId: string;
+    name?: string;
+    emoji?: string;
+    avatar?: string;
+  },
 ): Promise<void> {
   await client.request("agents.update", {
     agentId: update.agentId,

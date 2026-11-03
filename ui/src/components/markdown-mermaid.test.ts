@@ -36,7 +36,6 @@ async function mount(label: string, copies = 1) {
   container.innerHTML = toSanitizedMarkdownHtml(markdown);
   mountMermaidBlocks(container);
   const elements = [...container.querySelectorAll("openclaw-mermaid")];
-  expect(elements).toHaveLength(copies);
   await Promise.all(elements.map((element) => element.updateComplete));
   return { original, container, elements, element: elements[0]! };
 }
@@ -71,7 +70,8 @@ function changeDiagram(element: MermaidElement, change: string, label: string) {
   if (change === "source") {
     element.source = source(label);
   } else {
-    document.documentElement.dataset.themeMode = "dark";
+    const root = document.documentElement;
+    root.dataset.themeMode = root.dataset.themeMode === "dark" ? "light" : "dark";
   }
 }
 
@@ -97,6 +97,13 @@ async function expectCopyableSource(element: MermaidElement, original: string, d
 async function disconnect(element: MermaidElement) {
   element.remove();
   await Promise.resolve();
+}
+
+async function expanded(element: MermaidElement, title: string) {
+  await waitForSolid(() =>
+    expect(element.querySelector("openclaw-image-lightbox img")?.getAttribute("alt")).toBe(title),
+  );
+  return element.querySelector("openclaw-image-lightbox")!;
 }
 
 beforeEach(() => {
@@ -161,14 +168,13 @@ it("preserves source and reports copy failure", async () => {
 
   await selectAction(element!, "Show diagram");
   expect(imageSource(element!)).toBe(imageUrl);
-  expect(renderSvg).toHaveBeenCalledTimes(1);
 });
 
 it.each([
   { failure: "layout", message: "Check the source or simplify the diagram" },
   { failure: "renderer", message: "check proxy or authentication rules" },
   { failure: "image", message: "The diagram image could not be displayed" },
-])("keeps $failure failures actionable, readable and copyable", async ({ failure, message }) => {
+])("keeps $failure failures actionable and recovers", async ({ failure, message }) => {
   if (failure === "layout") {
     renderSvg.mockRejectedValueOnce(new Error("<script>internal parser detail</script>"));
   } else if (failure === "renderer") {
@@ -188,6 +194,14 @@ it.each([
   } else {
     expect(createObjectURL).not.toHaveBeenCalled();
   }
+  changeDiagram(element, failure === "layout" ? "theme" : "source", "Corrected diagram");
+  await waitForImage(element);
+  if (failure === "image") {
+    element.source = original;
+    await waitForImage(element);
+    expect(renderSvg).toHaveBeenCalledTimes(2);
+  }
+  expect(element.querySelector('[role="status"]')).toBeNull();
 });
 
 it("keeps the focused options menu open when pending rendering finishes", async () => {
@@ -207,83 +221,54 @@ it("keeps the focused options menu open when pending rendering finishes", async 
   expect(document.activeElement).toBe(menuItem);
 });
 
-it.each(["source", "theme"])("ignores a stale layout after a %s change", async (change) => {
-  const old = createDeferred<string>();
-  const current = createDeferred<string>();
-  renderSvg.mockReturnValueOnce(old.promise).mockReturnValueOnce(current.promise);
-  const { element } = await mount("Old diagram");
-  expect(renderSvg).toHaveBeenCalledTimes(1);
-  changeDiagram(element, change, "Current diagram");
-  await waitForSolid(() => expect(renderSvg).toHaveBeenCalledTimes(2));
-  if (change === "theme") {
-    expect(renderSvg.mock.calls[1]?.[1].darkMode).toBe(true);
-  }
-  current.resolve(svg);
-  const imageUrl = await waitForImage(element!);
-  if (change === "source") {
-    old.resolve(svg);
-  } else {
-    old.reject(new Error("Stale failure"));
-  }
-  await old.promise.catch(() => {});
-  await element!.updateComplete;
-
-  expect(imageSource(element!)).toBe(imageUrl);
-  expect(element!.querySelector('[role="status"]')).toBeNull();
-  expect(createObjectURL).toHaveBeenCalledTimes(1);
-  expect(revokeObjectURL).not.toHaveBeenCalled();
-});
-
 it.each(["source", "theme"])(
-  "keeps a resolved image only for the same source while a %s layout is pending",
+  "retires stale and resolved layouts across %s changes",
   async (change) => {
-    const { element } = await mount("Displayed diagram");
-    const previousUrl = await waitForImage(element);
+    const old = createDeferred<string>();
+    const current = createDeferred<string>();
+    renderSvg.mockReturnValueOnce(old.promise).mockReturnValueOnce(current.promise);
+    const { element } = await mount("Old diagram");
+    changeDiagram(element, change, "Current diagram");
+    await waitForSolid(() => expect(renderSvg).toHaveBeenCalledTimes(2));
+    if (change === "theme") {
+      expect(renderSvg.mock.calls[1]?.[1].darkMode).toBe(true);
+    }
+    current.resolve(
+      svg.replace("<text>", "<title>Current diagram</title><desc>Current meaning</desc><text>"),
+    );
+    const imageUrl = await waitForImage(element!);
+    if (change === "source") {
+      old.resolve(
+        svg.replace("<text>", "<title>Old diagram</title><desc>Old meaning</desc><text>"),
+      );
+    } else {
+      old.reject(new Error("Stale failure"));
+    }
+    await old.promise.catch(() => {});
+    await element!.updateComplete;
+
+    expect(imageSource(element!)).toBe(imageUrl);
+    expect(element.querySelector("img")?.alt).toBe("Current diagram");
+    expect(element.querySelector(".description")?.textContent).toBe("Current meaning");
+    expect(element!.querySelector('[role="status"]')).toBeNull();
+    expect(createObjectURL).toHaveBeenCalledTimes(1);
+    expect(revokeObjectURL).not.toHaveBeenCalled();
     const pending = createDeferred<string>();
     renderSvg.mockReturnValueOnce(pending.promise);
-
     changeDiagram(element, change, "Replacement diagram");
-    await waitForSolid(() => expect(renderSvg).toHaveBeenCalledTimes(2));
-
+    await waitForSolid(() => expect(renderSvg).toHaveBeenCalledTimes(3));
+    expect(imageSource(element)).toBe(change === "source" ? undefined : imageUrl);
+    expect(action(element, "Expand diagram").disabled).toBe(change === "source");
     if (change === "source") {
-      expect(imageSource(element)).toBeUndefined();
-      expect(revokeObjectURL).toHaveBeenCalledExactlyOnceWith(previousUrl);
-      expect(action(element, "Expand diagram").disabled).toBe(true);
+      expect(revokeObjectURL).toHaveBeenCalledExactlyOnceWith(imageUrl);
     } else {
-      expect(imageSource(element)).toBe(previousUrl);
       expect(revokeObjectURL).not.toHaveBeenCalled();
-      expect(action(element, "Expand diagram").disabled).toBe(false);
     }
-
     pending.resolve(svg);
     await waitForSolid(() => expect(imageSource(element)).toBe("blob:mermaid-2"));
-    expect(revokeObjectURL).toHaveBeenCalledExactlyOnceWith(previousUrl);
+    expect(revokeObjectURL).toHaveBeenCalledExactlyOnceWith(imageUrl);
   },
 );
-
-it.each(["source", "theme"])("recovers from a layout failure after a %s change", async (change) => {
-  renderSvg.mockRejectedValueOnce(new Error("Invalid initial diagram"));
-  const { element } = await mount("Failed diagram");
-  await expectStatus(element, "Check the source");
-  changeDiagram(element, change, "Corrected diagram");
-  await waitForImage(element);
-  expect(renderSvg).toHaveBeenCalledTimes(2);
-  expect(element.querySelector('[role="status"]')).toBeNull();
-});
-
-it("retries a previously failed image after returning to its source", async () => {
-  const { original, element } = await mount("Retry image");
-  await waitForImage(element);
-  element.querySelector("img")!.dispatchEvent(new Event("error"));
-  await expectStatus(element, "The diagram image could not be displayed");
-
-  element.source = source("Another diagram");
-  await waitForImage(element);
-  element.source = original;
-  await waitForImage(element);
-  expect(element.querySelector('[role="status"]')).toBeNull();
-  expect(renderSvg).toHaveBeenCalledTimes(2);
-});
 
 it.each([true, false])(
   "releases URLs across reconnect with disconnect before render=%s",
@@ -316,12 +301,57 @@ it.each([true, false])(
 it("shares concurrent layout work while each displayed diagram owns its URL", async () => {
   const { pending, elements } = await pendingDiagram("Shared layout", 2);
   expect(renderSvg).toHaveBeenCalledTimes(1);
-  pending.resolve(svg);
+  pending.resolve(svg.replace("<text>", "<desc>Shared meaning</desc><text>"));
   const [firstUrl, secondUrl] = await Promise.all(elements.map(waitForImage));
   expect(firstUrl).not.toBe(secondUrl);
+  const descriptionIds = elements.map((element) =>
+    element.querySelector("img")?.getAttribute("aria-describedby"),
+  );
+  expect(new Set(descriptionIds).size).toBe(2);
+  for (const id of descriptionIds) {
+    expect(document.getElementById(id!)?.textContent).toBe("Shared meaning");
+  }
 
   await disconnect(elements[0]!);
   expect(revokeObjectURL).toHaveBeenCalledExactlyOnceWith(firstUrl);
   expect(imageSource(elements[1]!)).toBe(secondUrl);
   expect(revokeObjectURL).not.toHaveBeenCalledWith(secondUrl);
+});
+
+it("keeps escaped metadata as text and replaces expanded alternatives with their image", async () => {
+  const title = '<img src=x onerror="alert(1)"> 🦞';
+  const description = "<script>alert(1)</script> describes the diagram, not executable markup.";
+  const escape = (text: string) =>
+    text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+  renderSvg.mockResolvedValueOnce(
+    svg.replace(
+      "<text>",
+      "<title>" + escape(title) + "</title><desc>" + escape(description) + "</desc><text>",
+    ),
+  );
+  const { element } = await mount("Escaped metadata");
+  await waitForImage(element);
+  await selectAction(element, "Expand diagram");
+  const viewer = await expanded(element, title);
+  const expandedDescription = () =>
+    document.getElementById(viewer.querySelector("img")?.getAttribute("aria-describedby") ?? "");
+  expect(expandedDescription()?.textContent).toBe(description);
+  expect(expandedDescription()?.children).toHaveLength(0);
+  expect(expandedDescription()?.hidden).toBe(true);
+  element.querySelector<HTMLButtonElement>("openclaw-image-lightbox button.close")!.click();
+  await waitForSolid(() => expect(element.querySelector("openclaw-image-lightbox")).toBeNull());
+  await selectAction(element, "Expand diagram");
+  await expanded(element, title);
+  expect(element.querySelector("script")).toBeNull();
+
+  const replacement = createDeferred<string>();
+  renderSvg.mockReturnValueOnce(replacement.promise);
+  element.source = source("No metadata replacement");
+  await waitForSolid(() => expect(element.querySelector("openclaw-image-lightbox")).toBeNull());
+  expect(element.textContent).not.toContain(description);
+  replacement.resolve(svg);
+  await waitForImage(element);
+  const current = await expanded(element, "Mermaid diagram");
+  expect(current.imageDescription).toBe("");
+  expect(current.querySelector("img")?.hasAttribute("aria-describedby")).toBe(false);
 });

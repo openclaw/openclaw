@@ -10,7 +10,7 @@ import {
   SettingsSection,
   SettingsStatus,
 } from "../../components/solid/settings-ui.tsx";
-import "../../components/openclaw-mascot.ts";
+import "../../components/openclaw-mascot.tsx";
 import { WizardBusyButton, WizardStepControls } from "../../components/wizard-step-controls.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import {
@@ -144,7 +144,8 @@ export function ChannelsView(props: ChannelsProps) {
           actions={
             <ChannelRefresh
               updatedAt={props.channels.channelsLastSuccess}
-              disabled={!props.channels.connected || props.channels.channelsLoading}
+              busy={props.channels.channelsLoading}
+              disabled={!props.channels.connected}
               onRefresh={() => props.onRefresh(true)}
             />
           }

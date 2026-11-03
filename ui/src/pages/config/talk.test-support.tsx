@@ -132,9 +132,11 @@ export async function mountTalkSettingsRoutes(initialContext: ApplicationContext
   );
   Object.assign(context, { router });
   const outlet = mountRouterOutlet({ router, retryContext: context });
-  onTestFinished(() => {
+  onTestFinished(async () => {
     outlet.dispose();
     router.stop();
+    // The production route starts independent lazy siblings; finish their imports before teardown.
+    await vi.dynamicImportSettled();
   });
   await router.navigate("talk", context);
   return {

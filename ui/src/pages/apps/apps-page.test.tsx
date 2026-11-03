@@ -5,7 +5,7 @@ import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ApplicationContext } from "../../app/context-types.ts";
-import { ensureCustomElementDefined } from "../../app/lazy-custom-element.ts";
+import { McpAppView } from "../../components/mcp-app-view-lazy.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
 import {
@@ -16,112 +16,181 @@ import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import type { ChatPaneProps } from "../chat/chat-pane-inputs.ts";
 import { AppsPage } from "./apps-page.tsx";
 
-vi.mock("../../app/lazy-custom-element.ts", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../app/lazy-custom-element.ts")>()),
-  ensureCustomElementDefined: vi.fn(),
-}));
-
-beforeEach(() => vi.mocked(ensureCustomElementDefined).mockReset());
-
-function mountApps() {
-  const [search, setSearch] = createSignal("?server=parts&tool=library");
-  const { gateway, publish } = createApplicationGateway();
-  const request = createGatewayRequestMock(async () => ({
-    servers: [
-      {
-        serverName: "parts",
-        label: "Parts library",
-        entrypoints: [
-          {
-            title: "Library",
-            toolName: "library",
-            resourceUri: "ui://parts/library",
-            entrypoint: { type: "global" },
-          },
-        ],
+// mock-isolation: Keep the conversation boundary real without starting the chat runtime.
+vi.mock("../chat/chat-pane.tsx", async () => {
+  const { defineSolidBridge } = await import("../../lib/solid-bridge.ts");
+  const { useApplication } = await import("../../lib/reactive/context.ts");
+  const { chatPaneProperties } = await import("../chat/chat-pane-inputs.ts");
+  return {
+    ChatPaneView: defineSolidBridge<ChatPaneProps>(
+      "openclaw-chat-pane",
+      () => {
+        useApplication();
+        return null;
       },
-    ],
-  }));
+      { properties: chatPaneProperties },
+    ),
+  };
+});
+// mock-isolation: The chat route's styles and page registration are covered by browser CI.
+vi.mock("../chat/route-entry.ts", () => ({}));
+
+beforeEach(async () => {
+  await i18n.setLocale("en");
+});
+
+function mountApps(
+  discovered: Promise<void>,
+  options: { selectedId?: string; sessionKey?: string } = {},
+) {
+  const [search, setSearch] = createSignal("");
+  const { gateway, publish } = createApplicationGateway();
+  const request = createGatewayRequestMock(async () => {
+    await discovered;
+    return {
+      servers: [
+        {
+          serverName: "parts",
+          label: "Parts library",
+          entrypoints: [
+            {
+              title: "Library",
+              toolName: "library",
+              resourceUri: "ui://parts/library",
+              entrypoint: { type: "global" },
+            },
+          ],
+        },
+      ],
+    };
+  });
   publish({
     ...gateway.snapshot,
     client: createTestGatewayClient(request),
     phase: "connected",
-    sessionKey: "agent:main:one",
+    sessionKey: options.sessionKey ?? "agent:main:one",
     hello: gatewayHelloForMethods(["mcp.app.discover"]),
   });
   // The fixture supplies the discovery, navigation and selection capabilities used here.
   const context = {
     gateway,
     navigate: vi.fn(),
-    agentSelection: { state: { selectedId: "main" }, subscribe: () => () => {} },
+    agentSelection: {
+      state: { selectedId: options.selectedId ?? "main" },
+      subscribe: () => () => {},
+    },
     sessions: { describe: async () => ({ session: { key: "agent:main:one" } }) },
   } as unknown as ApplicationContext;
   const mounted = mountSolid(() => <AppsPage appSearch={search()} />, {
     wrapper: createSolidApplicationContextProvider(context).wrapper,
   });
-  return { ...mounted, setSearch };
+  return { ...mounted, setSearch, request };
 }
 
-it("waits for the conversation registration and retries a failed import", async () => {
+it("loads app view and conversation alongside discovery, retries errors, and retires a closed route", async () => {
   const first = createDeferred();
   const retry = createDeferred();
-  vi.mocked(ensureCustomElementDefined)
-    .mockReturnValueOnce(first.promise)
-    .mockReturnValueOnce(retry.promise);
-  const mounted = mountApps();
-  const { container } = mounted;
-  await waitForSolid(() => expect(ensureCustomElementDefined).toHaveBeenCalledOnce());
+  const discovered = createDeferred();
+  const appView = createDeferred<typeof import("../../components/mcp-app-view.tsx")>();
+  const preload = vi.spyOn(McpAppView, "preload").mockReturnValue(appView.promise);
+  const started = vi.fn();
+  function mockLoad(pending: Promise<void>) {
+    // mock-isolation: Hold or reject the actual lazy region import at its external boundary.
+    vi.doMock("./apps-conversation.tsx", async (importOriginal) => {
+      started();
+      await pending;
+      return importOriginal<typeof import("./apps-conversation.tsx")>();
+    });
+  }
+  mockLoad(first.promise);
+  const mounted = mountApps(discovered.promise);
+  const { container, setSearch } = mounted;
+  await waitForSolid(() => expect(container.querySelector(".apps-page")).not.toBeNull());
+  expect(started).not.toHaveBeenCalled();
+  expect(preload).not.toHaveBeenCalled();
+
+  setSearch("?server=parts&tool=library");
+  await waitForSolid(() => expect(started).toHaveBeenCalledOnce());
+  expect(preload).toHaveBeenCalledOnce();
   expect(container.querySelector('[role="status"]')?.textContent).toContain("Loading");
   expect(container.querySelector("openclaw-chat-pane")).toBeNull();
-
+  appView.reject(new Error("App view preload failed"));
+  await expect(appView.promise).rejects.toThrow("App view preload failed");
+  await waitForSolid(() => {
+    expect(container.querySelector('[role="status"]')?.textContent).toContain("Loading");
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+  });
   first.reject(new Error("Conversation download failed"));
   await waitForSolid(() =>
     expect(container.querySelector('[role="alert"]')?.textContent).toContain(
       "Conversation download failed",
     ),
   );
+
+  mockLoad(retry.promise);
   mounted.getByRole("button", { name: "Try again" }).click();
-  await waitForSolid(() => expect(ensureCustomElementDefined).toHaveBeenCalledTimes(2));
+  await waitForSolid(() => expect(started).toHaveBeenCalledTimes(2));
   expect(container.querySelector("openclaw-chat-pane")).toBeNull();
-  retry.resolve();
+  setSearch("");
+  await waitForSolid(() => expect(container.querySelector(".apps-page")).not.toBeNull());
+  retry.reject(new Error("Retired conversation download"));
+  await expect(import("./apps-conversation.tsx")).rejects.toThrow();
+  await waitForSolid(() => expect(container.querySelector('[role="alert"]')).toBeNull());
+
+  mockLoad(Promise.resolve());
+  setSearch("?server=parts&tool=library");
+  await waitForSolid(() => expect(started).toHaveBeenCalledTimes(3));
+  expect(container.querySelector("openclaw-chat-pane")).toBeNull();
+  discovered.resolve();
   await waitForSolid(() =>
     expect(container.querySelector("openclaw-chat-pane")?.mcpAppLaunch).toMatchObject({
       sessionKey: "agent:main:one",
       serverName: "parts",
     }),
   );
+  const pane = container.querySelector("openclaw-chat-pane")!;
+  expect(pane.className).toBe("mcp-app-conversation");
+  expect(pane.paneId).toBe("plugin-app");
+  expect(pane.presentationId).toBe("plugin-app:agent:main:one");
+  setSearch("?server=parts&tool=library&path=/updated");
+  await waitForSolid(() => expect(pane.mcpAppLaunch?.deepLink).toBe("/updated"));
+  expect(container.querySelector("openclaw-chat-pane")).toBe(pane);
   expect(container.querySelector('[role="alert"]')).toBeNull();
 });
 
-it("retires a failed registration when the app route closes", async () => {
-  const first = createDeferred();
-  vi.mocked(ensureCustomElementDefined)
-    .mockReturnValueOnce(first.promise)
-    .mockResolvedValue(undefined);
-  const { container, setSearch } = mountApps();
-  await waitForSolid(() => expect(ensureCustomElementDefined).toHaveBeenCalledOnce());
-  setSearch("");
-  await waitForSolid(() => expect(container.querySelector(".apps-page")).not.toBeNull());
-  first.reject(new Error("Retired conversation download"));
+it("discovers the session's agent while selection is switching", async () => {
+  const discovered = createDeferred();
+  const mounted = mountApps(discovered.promise, {
+    selectedId: "claude",
+    sessionKey: "agent:main:main",
+  });
+  mounted.setSearch("?server=parts&tool=library");
+
+  await waitForSolid(() => expect(mounted.request).toHaveBeenCalledOnce());
+  expect(mounted.request).toHaveBeenCalledWith("mcp.app.discover", {
+    sessionKey: "agent:main:main",
+    agentId: "main",
+  });
+  discovered.resolve();
   await waitForSolid(() =>
-    expect(container.textContent).not.toContain("Retired conversation download"),
+    expect(mounted.container.querySelector("openclaw-chat-pane")?.mcpAppLaunch).toMatchObject({
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      serverName: "parts",
+    }),
   );
-  setSearch("?server=parts&tool=library");
-  await waitForSolid(() => expect(container.querySelector("openclaw-chat-pane")).not.toBeNull());
-  expect(container.querySelector('[role="alert"]')).toBeNull();
+});
+
+afterEach(() => {
+  cleanupSolid();
+  vi.restoreAllMocks();
+  vi.doUnmock("./apps-conversation.tsx");
 });
 
 describe("AppsPage", () => {
-  beforeEach(async () => {
-    await i18n.setLocale("en");
-  });
-
-  afterEach(() => {
-    cleanupSolid();
-  });
-
   it("names the page with one level-one heading above the hero", () => {
     const provider = createSolidApplicationContextProvider({
       gateway: createApplicationGateway().gateway,

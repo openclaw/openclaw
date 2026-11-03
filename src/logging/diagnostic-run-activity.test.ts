@@ -149,11 +149,12 @@ describe("diagnostic run activity listener lifecycle", () => {
     const ref = { sessionId: "reused-session", sessionKey: "agent:main:reused" };
 
     markDiagnosticEmbeddedRunStarted({ sessionId: ref.sessionId, runId: "first-run" });
-    markDiagnosticEmbeddedRunStarted({ ...ref, workKey: "reply:main" });
+    markDiagnosticEmbeddedRunStarted({ ...ref, runId: "first-run" });
+    markDiagnosticEmbeddedRunStarted({ ...ref, sessionId: "parallel-session" });
     for (const alias of [{ sessionId: ref.sessionId }, { sessionKey: ref.sessionKey }]) {
       expectActivity(alias, { activeWorkKind: "embedded_run" });
     }
-    markDiagnosticEmbeddedRunEnded({ ...ref, workKey: "reply:main" });
+    markDiagnosticEmbeddedRunEnded({ ...ref, sessionId: "parallel-session" });
     expectActivity(ref, { activeWorkKind: "embedded_run" });
     markDiagnosticEmbeddedRunEnded(ref);
     markDiagnosticRunProgress({ runId: "first-run", reason: "stale-first-run" });

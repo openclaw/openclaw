@@ -24,6 +24,7 @@ import {
   normalizeAgentRuntimeTools,
   projectRuntimeToolInputSchema,
   resolveAgentDir,
+  resolveMessageToolSourceReplyFinal,
   resolveToolExecutionErrorKind,
   runAgentHarnessAfterToolCallHook,
   sanitizeToolResult,
@@ -64,7 +65,6 @@ type ToolDelivery = AgentHarnessMessagingDeliveryFacts &
   >;
 
 export type AgentsApiToolExecutionResult = AgentsApiFunctionResult & {
-  sourceReplyDelivered?: true;
   terminate?: true;
 };
 
@@ -462,9 +462,14 @@ export async function buildAgentsApiToolSurface(
                 result: raw,
                 isError: rawIsError,
               });
+              // An omitted final takes the run's default; cron sends do not end the turn.
+              const messageFinal = resolveMessageToolSourceReplyFinal(
+                executedArgs,
+                params.messageToolFinalByDefault,
+              );
               terminate =
-                sourceReplyDelivered ||
-                (raw.terminate === true && !(sourceRouteDelivered && executedArgs.final === false));
+                (sourceReplyDelivered && messageFinal) ||
+                (raw.terminate === true && !(sourceRouteDelivered && !messageFinal));
               if (sourceReplyDelivered) {
                 delivery.sourceReplyDelivered = true;
               }
@@ -482,7 +487,7 @@ export async function buildAgentsApiToolSurface(
                     recordAgentHarnessMessagingDelivery({
                       facts: delivery,
                       sourceReplyPayload: payload,
-                      sourceReplyFinal: args.final !== false,
+                      sourceReplyFinal: messageFinal,
                     });
                   } else {
                     const routedArgs = {
@@ -537,7 +542,7 @@ export async function buildAgentsApiToolSurface(
                   delivery.toolTrustedLocalMedia = true;
                 }
               }
-              recordDelivery(sourceRouteDelivered ? executedArgs.final !== false : undefined);
+              recordDelivery(sourceRouteDelivered ? messageFinal : undefined);
               // Presentation failures cannot downgrade a completed host mutation's receipt.
               observeTerminal(
                 raw,
@@ -610,7 +615,6 @@ export async function buildAgentsApiToolSurface(
       );
       return {
         ...nativeResult,
-        ...(sourceReplyDelivered ? { sourceReplyDelivered: true as const } : {}),
         ...(terminate ? { terminate: true as const } : {}),
       };
     },

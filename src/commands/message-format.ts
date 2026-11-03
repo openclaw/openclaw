@@ -1,16 +1,17 @@
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonEmptyStringPreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
   getTerminalTableWidth,
-  renderTable,
   renderTerminalSafeTable,
 } from "../../packages/terminal-core/src/table.js";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
-import { getLoadedChannelPlugin } from "../channels/plugins/index.js";
+import { findChatChannelMeta } from "../channels/chat-meta.js";
+import { getChannelPlugin, getLoadedChannelPlugin } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
+import { normalizeChatChannelId } from "../channels/registry.js";
 import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
-import { formatGatewaySummary, formatOutboundDeliverySummary } from "../infra/outbound/format.js";
 import {
   resolveMessageActionMessageId,
   resolveMessageActionOutcome,
@@ -57,7 +58,7 @@ function renderSummaryValue(value: unknown): string {
 
 function renderObjectSummary(payload: unknown, opts: FormatOpts): string {
   if (!payload || typeof payload !== "object") {
-    return String(payload);
+    return sanitizeTerminalText(String(payload));
   }
   const obj = payload as Record<string, unknown>;
   const keys = Object.keys(obj);
@@ -69,7 +70,7 @@ function renderObjectSummary(payload: unknown, opts: FormatOpts): string {
     const value = renderSummaryValue(obj[k]);
     return { Key: k, Value: shortenText(value, 96) };
   });
-  return renderTable({
+  return renderTerminalSafeTable({
     width: opts.width,
     columns: [
       { key: "Key", header: "Key", minWidth: 16 },
@@ -153,8 +154,14 @@ export function formatMessageCliText(
   opts?: { displayLimit?: number },
 ): string[] {
   const rich = isRich();
-  const ok = (text: string) => (rich ? theme.success(text) : text);
-  const fail = (text: string) => (rich ? theme.error(text) : text);
+  const ok = (text: string) => {
+    const safeText = sanitizeTerminalText(text);
+    return rich ? theme.success(safeText) : safeText;
+  };
+  const fail = (text: string) => {
+    const safeText = sanitizeTerminalText(text);
+    return rich ? theme.error(safeText) : safeText;
+  };
   const muted = (text: string) => (rich ? theme.muted(text) : text);
   const heading = (text: string) => (rich ? theme.heading(text) : text);
 
@@ -185,7 +192,7 @@ export function formatMessageCliText(
     );
     return [
       headingLine,
-      renderTable({
+      renderTerminalSafeTable({
         width: formatOpts.width,
         columns: [
           { key: "Channel", header: "Channel", minWidth: 10 },
@@ -213,14 +220,26 @@ export function formatMessageCliText(
       const directResult = poll?.result
         ? { ...poll.result, channel: poll.channel }
         : (send?.result as OutboundDeliveryResult | undefined);
-      const summary =
-        delivery.via === "direct"
-          ? formatOutboundDeliverySummary(delivery.channel, directResult, { action })
-          : formatGatewaySummary({
-              action,
-              channel: delivery.channel,
-              messageId: delivery.result?.messageId ?? null,
-            });
+      let summary: string;
+      if (delivery.via === "direct") {
+        const resultChannel = directResult ? directResult.channel : delivery.channel;
+        let label = getChannelPlugin(resultChannel)?.meta.label;
+        if (!label) {
+          // Some legacy chat channels are not plugins; keep their human labels for CLI output.
+          const normalized = normalizeChatChannelId(resultChannel);
+          label = normalized
+            ? (findChatChannelMeta(normalized)?.label ?? resultChannel)
+            : resultChannel;
+        }
+        const base = `✅ ${action} via ${label}. Message ID: ${directResult ? directResult.messageId : "unknown"}`;
+        summary = directResult?.target
+          ? `${base} (${directResult.target.kind} ${directResult.target.id})`
+          : base;
+      } else {
+        const channelSuffix = delivery.channel ? ` (${delivery.channel})` : "";
+        const messageId = delivery.result?.messageId ?? "unknown";
+        summary = `✅ ${action} via gateway${channelSuffix}. Message ID: ${messageId}`;
+      }
       const lines = [ok(summary)];
       if (pollId) {
         lines.push(ok(`Poll id: ${pollId}`));

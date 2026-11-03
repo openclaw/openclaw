@@ -1,11 +1,19 @@
-import path from "node:path";
 import { expect, it } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { emptyPairingSnapshot } from "../pages/channels/pairing.test-support.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
   startControlUiE2eServer,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
+import { sessionsUsageResponse } from "../test-helpers/sessions-usage-response.ts";
+import { agentRoster as createAgentRoster } from "./agent-roster.test-support.ts";
+import {
+  configSnapshot,
+  pageRunner,
+  settingsPageOptions,
+} from "./config-composer-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -14,32 +22,8 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 
-const proofStage = process.env.OPENCLAW_UI_PROOF_STAGE ?? "after";
-const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const captureBeforeProof = captureUiProof && proofStage === "before";
-
-async function captureScreenshot(
-  target: import("playwright").Locator,
-  name: string,
-): Promise<void> {
-  if (!captureUiProof) {
-    return;
-  }
-  await target.screenshot({
-    animations: "disabled",
-    path: path.join(suite.artifactDir, `${proofStage}-${name}.png`),
-  });
-}
-
-async function captureLoadingState(
-  target: import("playwright").Locator,
-  name: string,
-): Promise<void> {
+async function expectLoadingState(target: import("playwright").Locator): Promise<void> {
   await target.waitFor({ state: "visible" });
-  await captureScreenshot(target, name);
-  if (captureBeforeProof) {
-    return;
-  }
   const skeletons = target.locator(".settings-loading-skeleton");
   await expect.poll(() => skeletons.count()).toBeGreaterThan(0);
   expect(
@@ -50,42 +34,20 @@ async function captureLoadingState(
   ).toBe(0);
 }
 
-async function withPage(run: (page: import("playwright").Page) => Promise<void>): Promise<void> {
-  await suite.withPage(
-    {
-      colorScheme: "dark",
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 1000, width: 1440 },
-    },
-    async ({ page }) => run(page),
-  );
-}
+const runPage = pageRunner(suite, settingsPageOptions);
+const withPage = (run: (page: import("playwright").Page) => Promise<void>) =>
+  runPage(({ page }) => run(page));
 
 suite.define(() => {
   it("renders the Models initial load as a skeleton", async () => {
     await withPage(async (page) => {
       const gateway = await installMockGateway(page, {
         methodResponses: {
-          "agents.list": {
-            agents: [
-              { id: "main", name: "Main" },
-              { id: "reviewer", name: "Reviewer" },
-            ],
-            defaultId: "main",
-            mainKey: "main",
-            scope: "agent",
-          },
-          "config.get": {
-            config: {},
-            hash: "settings-loading-models",
-            issues: [],
-            raw: "{}",
-            valid: true,
-          },
+          "agents.list": createAgentRoster({ main: "Main", reviewer: "Reviewer" }, "main", "agent"),
+          "config.get": configSnapshot({}, "settings-loading-models"),
           "models.list": { models: [] },
           "models.authStatus": { providers: [], ts: Date.now() },
-          "sessions.usage": { aggregates: { byProvider: [] } },
+          "sessions.usage": sessionsUsageResponse(),
           "usage.status": { providers: [] },
         },
       });
@@ -101,61 +63,12 @@ suite.define(() => {
       await gateway.deferNext("models.authStatus");
       const agentPicker = page.locator(".settings-sidebar__agent openclaw-agent-select");
       await agentPicker.locator(".agent-select__trigger").click();
-      await agentPicker.getByRole("menuitemradio", { name: "Reviewer", exact: true }).click();
+      await agentPicker.getByRole("option", { name: "Reviewer", exact: true }).click();
       await expect
         .poll(async () => (await agentPicker.locator(".agent-select__label").textContent())?.trim())
         .toBe("Reviewer");
       await gateway.waitForRequest("models.authStatus", { after: authStatusRequestCount });
-      await captureLoadingState(page.locator(".settings-page").first(), "models");
-    });
-  });
-
-  it("renders the Channels pairing load as a skeleton", async () => {
-    await withPage(async (page) => {
-      await installMockGateway(page, {
-        heldMethods: ["channels.pairing.list"],
-        methodResponses: {
-          "channels.status": {
-            channelAccounts: {},
-            channelDefaultAccountId: {},
-            channelLabels: {},
-            channelMeta: [],
-            channelOrder: [],
-            channels: {},
-            ts: Date.now(),
-          },
-        },
-      });
-      await page.goto(`${suite.server.baseUrl}settings/channels`);
-      await waitForControlUiRoute(page, {
-        pathname: "/settings/channels",
-        routeId: "channels",
-      });
-      await captureLoadingState(page.locator(".settings-page").first(), "channels-pairing");
-    });
-  });
-
-  it("renders the Devices inventory load as one skeleton", async () => {
-    await withPage(async (page) => {
-      const gateway = await installMockGateway(page, {
-        methodResponses: {
-          "device.pair.list": { paired: [], pending: [] },
-          "node.list": { nodes: [] },
-        },
-        presenceUsers: [{ host: "Gateway", id: "gateway", mode: "gateway" }],
-      });
-      await page.goto(`${suite.server.baseUrl}settings/devices`);
-      await waitForControlUiRoute(page, {
-        pathname: "/settings/devices",
-        routeId: "devices",
-      });
-      await gateway.waitForRequest("device.pair.list");
-      await gateway.deferNext("device.pair.list");
-      await gateway.emitGatewayEvent("device.pair.requested", {});
-      await captureLoadingState(
-        page.locator(".settings-section", { hasText: "Devices" }).first(),
-        "devices",
-      );
+      await expectLoadingState(page.locator(".settings-page").first());
     });
   });
 
@@ -167,7 +80,7 @@ suite.define(() => {
         pathname: "/settings/mcp",
         routeId: "mcp",
       });
-      await captureLoadingState(page.locator(".mcp-server-list"), "mcp");
+      await expectLoadingState(page.locator(".mcp-server-list"));
     });
   });
 
@@ -179,7 +92,7 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}settings/plugins`);
       await gateway.waitForRequest("plugins.list");
-      await captureLoadingState(page.locator("#plugin-settings-panel"), "plugins-panel");
+      await expectLoadingState(page.locator("#plugin-settings-panel"));
     });
   });
 
@@ -202,10 +115,7 @@ suite.define(() => {
         routeId: "plugin-settings",
         search: "?tab=advanced",
       });
-      await captureLoadingState(
-        page.locator("#plugin-settings-advanced .settings-section"),
-        "plugins-advanced",
-      );
+      await expectLoadingState(page.locator("#plugin-settings-advanced .settings-section"));
     });
   });
 
@@ -226,7 +136,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}settings/profile`);
       await waitForControlUiRoute(page, { pathname: "/settings/profile", routeId: "profile" });
       await gateway.waitForRequest("users.self");
-      await captureLoadingState(page.locator("#settings-profile-identity"), "profile-identity");
+      await expectLoadingState(page.locator("#settings-profile-identity"));
     });
   });
 
@@ -236,22 +146,14 @@ suite.define(() => {
         agents: { entries: { main: { tools: { profile: "full" } } } },
       };
       const gateway = await installMockGateway(page, {
+        featureMethods: [...defaultControlUiFeatureMethods, "tools.catalog", "tools.effective"],
         heldMethods: ["tools.catalog", "tools.effective"],
         methodResponses: {
-          "agents.list": {
-            agents: [{ id: "main", name: "Main agent" }],
-            defaultId: "main",
-            mainKey: "main",
-            scope: "agent",
-          },
+          "agents.list": createAgentRoster({ main: "Main agent" }, "main", "agent"),
           "config.get": {
-            config,
+            ...configSnapshot(config, "settings-loading-tools"),
             sourceConfig: config,
             runtimeConfig: config,
-            hash: "settings-loading-tools",
-            issues: [],
-            raw: JSON.stringify(config),
-            valid: true,
           },
         },
       });
@@ -259,30 +161,12 @@ suite.define(() => {
       await gateway.waitForRequest("tools.catalog");
       await gateway.waitForRequest("tools.effective");
       const panel = page.locator("#agent-panel");
-      await captureLoadingState(
+      await expectLoadingState(
         panel.locator(".settings-section", { hasText: "Tool preview" }).first(),
-        "agent-tools-available",
       );
-      await captureLoadingState(
-        captureBeforeProof
-          ? panel.locator(".callout", { hasText: "Loading runtime tool catalog" }).first()
-          : panel.locator(".settings-section", { hasText: "Tool catalog" }).first(),
-        "agent-tools-catalog",
+      await expectLoadingState(
+        panel.locator(".settings-section", { hasText: "Tool catalog" }).first(),
       );
-    });
-  });
-
-  it("renders the Custodian history load as a skeleton", async () => {
-    await withPage(async (page) => {
-      const gateway = await installMockGateway(page, {
-        featureMethods: [...defaultControlUiFeatureMethods, "openclaw.changes.list"],
-        heldMethods: ["openclaw.changes.list"],
-      });
-      await page.goto(`${suite.server.baseUrl}custodian`);
-      await waitForControlUiRoute(page, { pathname: "/custodian", routeId: "custodian" });
-      await page.getByRole("button", { name: "History", exact: true }).click();
-      await gateway.waitForRequest("openclaw.changes.list");
-      await captureLoadingState(page.locator(".custodian__history"), "custodian-history");
     });
   });
 
@@ -321,24 +205,6 @@ suite.define(() => {
       const spinner = history.locator(".custodian__history-spinner");
       await spinner.waitFor({ state: "visible" });
       expect(await history.locator(".settings-loading-skeleton").count()).toBe(0);
-      await captureScreenshot(history, "custodian-refresh");
-    });
-  });
-
-  it("renders the Approvals history load as a skeleton", async () => {
-    await withPage(async (page) => {
-      const gateway = await installMockGateway(page, {
-        featureMethods: [...defaultControlUiFeatureMethods, "approval.history"],
-        heldMethods: ["approval.history"],
-        operatorScopes: ["operator.admin", "operator.read", "operator.write", "operator.approvals"],
-      });
-      await page.goto(`${suite.server.baseUrl}settings/approvals`);
-      await waitForControlUiRoute(page, {
-        pathname: "/settings/approvals",
-        routeId: "approvals",
-      });
-      await gateway.waitForRequest("approval.history");
-      await captureLoadingState(page.locator(".settings-page").first(), "approvals-history");
     });
   });
 
@@ -348,12 +214,7 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         heldMethods: ["config.schema"],
         methodResponses: {
-          "channels.pairing.list": {
-            accounts: [],
-            requests: [],
-            commandOwnerConfigured: true,
-            limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
-          },
+          "channels.pairing.list": emptyPairingSnapshot(),
           "channels.status": {
             ts: Date.now(),
             channelOrder: ["whatsapp"],
@@ -370,13 +231,7 @@ suite.define(() => {
             channelAccounts: {},
             channelDefaultAccountId: {},
           },
-          "config.get": {
-            config,
-            hash: "settings-loading-channel-schema",
-            issues: [],
-            raw: JSON.stringify(config),
-            valid: true,
-          },
+          "config.get": configSnapshot(config, "settings-loading-channel-schema"),
         },
       });
       await page.goto(`${suite.server.baseUrl}settings/channels`);
@@ -386,7 +241,7 @@ suite.define(() => {
         .locator("button.channels-item, button.channels-item__detail", { hasText: "WhatsApp" })
         .first()
         .click();
-      await captureLoadingState(page.locator(".channels-detail"), "channels-schema");
+      await expectLoadingState(page.locator(".channels-detail"));
     });
   });
 
@@ -395,13 +250,7 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         heldMethods: ["config.schema"],
         methodResponses: {
-          "config.get": {
-            config: {},
-            hash: "settings-loading-config-schema",
-            issues: [],
-            raw: "{}",
-            valid: true,
-          },
+          "config.get": configSnapshot({}, "settings-loading-config-schema"),
         },
       });
       await page.goto(`${suite.server.baseUrl}settings/infrastructure`);
@@ -415,7 +264,6 @@ suite.define(() => {
       await spinner.waitFor({ state: "visible" });
       expect(await spinner.isVisible()).toBe(true);
       expect(await panel.locator(".settings-loading-skeleton").count()).toBe(0);
-      await captureScreenshot(panel, "config-schema");
     });
   });
 
@@ -444,17 +292,14 @@ suite.define(() => {
         expect(textBox).not.toBeNull();
         expect(controlBox).not.toBeNull();
         expect(controlBox!.y).toBeGreaterThanOrEqual(textBox!.y + textBox!.height);
-        await captureLoadingState(page.locator(".settings-page").first(), "secrets-mobile");
+        await expectLoadingState(page.locator(".settings-page").first());
       },
     );
   });
 
   it("renders the lazy Settings sidebar as navigation skeletons", async () => {
     await withPage(async (page) => {
-      let releaseSidebar: (() => void) | undefined;
-      const sidebarRelease = new Promise<void>((resolve) => {
-        releaseSidebar = resolve;
-      });
+      const { promise: sidebarRelease, resolve: releaseSidebar } = createDeferred();
       await page.route("**/src/components/settings-sidebar.ts*", async (route) => {
         await sidebarRelease;
         await route.continue();
@@ -462,7 +307,7 @@ suite.define(() => {
       await installMockGateway(page);
       try {
         await page.goto(`${suite.server.baseUrl}settings/appearance`);
-        await captureLoadingState(page.locator(".settings-sidebar"), "settings-sidebar");
+        await expectLoadingState(page.locator(".settings-sidebar"));
       } finally {
         releaseSidebar?.();
       }

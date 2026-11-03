@@ -17,6 +17,7 @@ import {
   withSqliteWorkerOperationAdmission as withAdmission,
 } from "../sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationContext } from "../sqlite-worker-operation-settlement.js";
+import * as bridgePrestart from "./bridge-prestart.js";
 import { PostgresSyncConnection } from "./connection.js";
 import { usePostgresFixture } from "./fixture.test-support.js";
 import type { BridgeReply, BridgeRequest, PostgresErrorData } from "./protocol.js";
@@ -40,7 +41,7 @@ function transactionFixture() {
 }
 
 function transportFixture(
-  initialMode: "normal" | "spurious" | "mismatched" | "missing" | "timeout",
+  initialMode: "normal" | "spurious" | "mismatched" | "missing" | "timeout" | "service-death",
 ) {
   let mode = initialMode;
   let command: string | undefined;
@@ -48,14 +49,11 @@ function transportFixture(
   const { port1, port2 } = new MessageChannel();
   const control = new Int32Array(new SharedArrayBuffer(8));
   control.set([1, 1]);
-  const terminate = vi.fn(async () => 0);
+  const service = new Int32Array(new SharedArrayBuffer(8));
   // Exercise the connection over real ports; live tests cover worker startup and admission.
   const db = harness.connection();
   Object.assign(db, {
-    port: port1,
-    control,
-    worker: { terminate, off: vi.fn() },
-    requestId: 1,
+    bridge: { port: port1, control, service, requestId: 1 },
   });
   const sent = vi.spyOn(port1, "postMessage");
   const waits: Array<{ observed: number | bigint; timeout: number | undefined }> = [];
@@ -83,7 +81,10 @@ function transportFixture(
         now += 1;
         return "ok";
       }
-      if (mode === "timeout") {
+      if (mode === "timeout" || mode === "service-death") {
+        if (mode === "service-death") {
+          Atomics.store(service, 1, 1);
+        }
         now += timeout ?? 0;
         return "timed-out";
       }
@@ -92,28 +93,30 @@ function transportFixture(
     if (mode !== "missing" || !query) {
       const sql = query?.sql ?? "";
       const reply: BridgeReply =
-        queryError && query
-          ? { id, error: queryError }
-          : {
-              id: mode === "mismatched" && query ? id + 1 : id,
-              result: {
-                inTransaction: /^\s*BEGIN\b/i.test(sql)
-                  ? true
-                  : /^\s*(?:COMMIT|ROLLBACK)\s*;?\s*$/i.test(sql)
-                    ? false
-                    : db.isTransaction,
-                command,
-                mutation: /^(?:INSERT|UPDATE|DELETE|MERGE)$/.test(command ?? "")
-                  ? "scoped"
-                  : undefined,
-                rows: [{ value: 7 }],
-                rowCount: 1,
-                fields: [{ name: "value", dataTypeID: 23 }],
-              },
-            };
+        pending.operation === "release"
+          ? { id, reusable: !db.isTransaction }
+          : queryError && query
+            ? { id, error: queryError }
+            : {
+                id: mode === "mismatched" && query ? id + 1 : id,
+                result: {
+                  inTransaction: /^\s*BEGIN\b/i.test(sql)
+                    ? true
+                    : /^\s*(?:COMMIT|ROLLBACK)\s*;?\s*$/i.test(sql)
+                      ? false
+                      : db.isTransaction,
+                  command,
+                  mutation: /^(?:INSERT|UPDATE|DELETE|MERGE)$/.test(command ?? "")
+                    ? "scoped"
+                    : undefined,
+                  rows: [{ value: 7 }],
+                  rowCount: 1,
+                  fields: [{ name: "value", dataTypeID: 23 }],
+                },
+              };
       port2.postMessage(reply);
     }
-    Atomics.store(control, index, id);
+    Atomics.store(control, 0, id);
     return "ok";
   });
   harness.cleanups.push(() => {
@@ -130,12 +133,84 @@ function transportFixture(
     db,
     sent,
     waits,
-    terminate,
+    elapse: (ms: number) => (now += ms),
     normal: () => (mode = "normal"),
     command: (value: string) => (command = value),
     rejectQuery: (error: PostgresErrorData) => (queryError = error),
   };
 }
+
+it.each([0, 999, 1000, 1001])("validates reuse after %d idle ms", (idleMs) => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const fixture = transportFixture("normal");
+  const params = {
+    url: "postgresql://localhost/synthetic",
+    schema: "schema_a",
+    storeId: "store_a",
+  };
+  Object.assign(fixture.db, {
+    schema: params.schema,
+    reuseKey: bridgePrestart.postgresBridgeReuseKey(params),
+  });
+  const create = vi.spyOn(bridgePrestart, "createPostgresBridge").mockImplementation(() => {
+    throw new Error("Unexpected physical connection");
+  });
+  let next: PostgresSyncConnection | undefined;
+  try {
+    withEngineStoreAdmission(() => fixture.db.prepare("SELECT 7 AS value").get());
+    fixture.sent.mockClear();
+    fixture.db.releaseIdleTransport();
+    fixture.elapse(idleMs);
+    const reader = withEngineStoreAdmission(
+      () =>
+        new PostgresSyncConnection(params.url, "schema_b", harness.nativeDatabase(), "store_b", {
+          reuse: true,
+        }),
+    );
+    next = reader;
+    expect(create).not.toHaveBeenCalled();
+    expect(fixture.sent).not.toHaveBeenCalled();
+    const read = () => withEngineStoreAdmission(() => reader.prepare("SELECT 7 AS value").get());
+    expect([read(), read()]).toEqual([{ value: 7 }, { value: 7 }]);
+    expect(fixture.sent.mock.calls.map(([request]) => request)).toEqual([
+      {
+        operation: "query",
+        schema: "schema_b",
+        sql: "SELECT 7 AS value",
+        parameters: [],
+        reconnectIfIdle: true,
+        ...(idleMs >= 1000 ? { validateIfIdle: true } : {}),
+        id: 3,
+      },
+      { operation: "query", schema: "schema_b", sql: "SELECT 7 AS value", parameters: [], id: 4 },
+    ]);
+  } finally {
+    next?.close();
+    vi.advanceTimersByTime(3 * 60_000);
+    vi.useRealTimers();
+  }
+});
+
+it("checks transport status after a query error instead of reusing an earlier idle reply", () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const fixture = transportFixture("normal");
+  Object.assign(fixture.db, { reuseKey: "failed-query" });
+  try {
+    withEngineStoreAdmission(() => fixture.db.prepare("SELECT 7 AS value").get());
+    fixture.rejectQuery({ name: "error", message: "duplicate", code: "23505" });
+    expect(() =>
+      withEngineStoreAdmission(() => fixture.db.exec("INSERT INTO entries VALUES (7)")),
+    ).toThrow("UNIQUE constraint failed");
+    fixture.sent.mockClear();
+    fixture.db.releaseIdleTransport();
+    expect(fixture.sent.mock.calls.map(([request]) => request)).toEqual([
+      { operation: "release", id: 4 },
+    ]);
+  } finally {
+    vi.advanceTimersByTime(3 * 60_000);
+    vi.useRealTimers();
+  }
+});
 
 it("reports an invalid DSN promptly with connection repair guidance", () => {
   const anchor = harness.nativeDatabase();
@@ -229,18 +304,18 @@ it("waits through a late notify until its own completion and preserves increasin
   const { db, sent, waits, normal } = transportFixture("spurious");
   expect(db.prepare("SELECT 7 AS value").get()).toEqual({ value: 7 });
   expect(waits).toEqual([
-    { observed: 1, timeout: 120_000 },
-    { observed: 1, timeout: 119_999 },
+    { observed: 1, timeout: 50 },
+    { observed: 1, timeout: 50 },
   ]);
   normal();
   expect(db.prepare("SELECT 7 AS value").get()).toEqual({ value: 7 });
   expect(sent.mock.calls.map(([request]) => request.id)).toEqual([2, 3]);
 });
 
-it.each(["mismatched", "missing", "timeout"] as const)(
+it.each(["mismatched", "missing", "timeout", "service-death"] as const)(
   "poisons %s requests and never sends another operation",
   (mode) => {
-    const { db, sent, terminate, waits } = transportFixture(mode);
+    const { db, sent, waits } = transportFixture(mode);
     const before = readToken(db.anchor, "entry");
     let failure: unknown;
     try {
@@ -255,9 +330,12 @@ it.each(["mismatched", "missing", "timeout"] as const)(
     expect(hasSqliteWorkerOutcomeUnknown(failure)).toBe(true);
     const after = readToken(db.anchor, "entry");
     expect(after).not.toBe(before);
-    expect(terminate).toHaveBeenCalledOnce();
     if (mode === "timeout") {
-      expect(waits).toHaveLength(1);
+      expect(waits.reduce((sum, wait) => sum + (wait.timeout ?? 0), 0)).toBe(120_000);
+      expect(waits.every((wait) => wait.timeout! <= 50)).toBe(true);
+    }
+    if (mode === "service-death") {
+      expect(waits).toEqual([{ observed: 1, timeout: 50 }]);
     }
     const count = sent.mock.calls.length;
     expect(() => db.exec("SELECT 8")).toThrow("PostgreSQL connection lost; outcome unknown");

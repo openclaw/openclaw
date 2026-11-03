@@ -53,15 +53,9 @@ describe("X guest daily usage", () => {
     await withOpenClawTestState({ label: "x-guest-daily-usage" }, async (state) => {
       const host = runtime(state);
       const usage = openXGuestUsage(host);
-      const settled = await Promise.allSettled(
+      const results = await Promise.all(
         Array.from({ length: 6 }, (_, index) => usage.admit({ ...request, postId: String(index) })),
       );
-      const results = settled.map((result) => {
-        if (result.status === "rejected") {
-          throw result.reason;
-        }
-        return result.value;
-      });
       expect(results.filter(Boolean)).toHaveLength(2);
       expect(await usage.counts("default")).toEqual({ admittedToday: 2, rateLimitedToday: 4 });
 

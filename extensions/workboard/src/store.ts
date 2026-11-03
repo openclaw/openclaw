@@ -40,6 +40,7 @@ import type {
 import { capText, normalizeBoardId, normalizeTimestamp } from "./store-normalizers.js";
 import { WorkboardNotificationStore } from "./store-notifications.js";
 import { readCards } from "./store-read.js";
+import { finishRun } from "./store-status-write.js";
 
 export type { WorkboardDispatchResult } from "./store-inputs.js";
 export { WorkboardCardConflictError } from "./store-core.js";
@@ -457,7 +458,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
             const reason = timedOut
               ? "Run exceeded the card max runtime."
               : "Claim expired without a recent heartbeat.";
-            const finished = this.finishRun(latest, "blocked", now, reason);
+            const finished = finishRun(latest, "blocked", now, reason);
             latest = await this.updateCard(latest, {
               ...finished,
               metadata: {
@@ -628,8 +629,8 @@ export class WorkboardStore extends WorkboardNotificationStore {
     return { card, workerContext: buildWorkerContext(card, relatedCards) };
   }
 
-  static openSqlite(workerModuleUrl: URL) {
-    const stores = createWorkboardSqliteStores({ workerModuleUrl });
+  static openSqlite(workerModuleUrl: URL, options?: { lazy?: boolean }) {
+    const stores = createWorkboardSqliteStores({ ...options, workerModuleUrl });
     return new WorkboardStore(stores.cards, stores);
   }
 }

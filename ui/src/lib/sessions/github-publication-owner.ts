@@ -35,7 +35,7 @@ type Presentation = {
 };
 export type GitHubPublicationPresentationBinding = {
   subscribe: (listener: () => void) => () => void;
-  sync: (scope: GitHubPublicationPresentation) => void;
+  sync: (scope: GitHubPublicationPresentation | null) => void;
   view: () => GitHubPublicationView | undefined;
   reset: () => void;
   detach: () => void;

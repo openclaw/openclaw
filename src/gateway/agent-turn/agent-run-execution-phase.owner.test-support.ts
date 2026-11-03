@@ -16,7 +16,7 @@ import { createTestRpcSource, testRpcSourceController } from "./rpc-source.test-
 export function createExecution(
   options: {
     aborted?: boolean;
-    assertContextCurrent?: () => void;
+    assertGatewayLifetimeCurrent?: () => void;
     pendingInputSettlement?: () => Promise<void>;
   } = {},
 ) {
@@ -37,7 +37,7 @@ export function createExecution(
     callerRelease,
     runtimeRelease,
     params: {
-      assertContextCurrent: options.assertContextCurrent,
+      assertGatewayLifetimeCurrent: options.assertGatewayLifetimeCurrent,
       prepared: {
         releaseCallerAuthority: callerRelease,
         activeGatewayWorkAdmission: {
@@ -49,7 +49,11 @@ export function createExecution(
         effectiveAllowModelOverride: false,
         lifecycleStorePath: "",
         operationalRunInstance: {},
-        preparedModelRuntimeLease: { [Symbol.asyncDispose]: runtimeRelease, snapshot: {} },
+        preparedModelRuntimeLease: {
+          run: <T>(run: () => T): T => run(),
+          [Symbol.asyncDispose]: runtimeRelease,
+          snapshot: {},
+        },
         replyDispatchRuntime: { config: { runtime: "A" }, pluginGeneration: "generation-A" },
         unpersistedOffloadedRefs: [],
         userTurn: {
@@ -70,7 +74,6 @@ export function createExecution(
       isNewSession: false,
       isRawModelRun: true,
       isOneShotModelRun: true,
-      isRestartRecoveryResumeRun: false,
       suppressVisibleSessionEffects: true,
       images: [],
       imageOrder: [],

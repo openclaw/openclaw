@@ -29,11 +29,6 @@ interface ReefRejectionNotice {
 const MAX_REJECTION_TRACKED = 1_024;
 const REJECTION_RESEND_COOLDOWN_MS = 15 * 60 * 1_000;
 
-interface ReefReceiptNotifierOptions {
-  scheduler: PluginServiceSchedulerV1;
-  onError?: (error: unknown, receiptId: string) => void;
-}
-
 interface ReefRejectionNoticeStore {
   loadState(
     rejection: ReefDeliveryRejection,
@@ -54,11 +49,6 @@ interface ReefPeerNoticeState {
   resendBlocked?: boolean;
 }
 
-interface ReefNoticePlan {
-  notice: ReefRejectionNotice;
-  state: ReefRejectionNoticeState;
-}
-
 export class ReefReceiptNotifier {
   private readonly completed = new Set<string>();
   private readonly peerStates = new Map<string, ReefPeerNoticeState>();
@@ -67,7 +57,10 @@ export class ReefReceiptNotifier {
   constructor(
     private readonly notify: (notice: ReefRejectionNotice) => Promise<void>,
     private readonly store: ReefRejectionNoticeStore,
-    private readonly options: ReefReceiptNotifierOptions,
+    private readonly options: {
+      scheduler: PluginServiceSchedulerV1;
+      onError?: (error: unknown, receiptId: string) => void;
+    },
   ) {}
 
   async notifyRejections(rejections: readonly ReefDeliveryRejection[]): Promise<void> {
@@ -149,7 +142,10 @@ export class ReefReceiptNotifier {
     previous: ReefRejectionNoticeState | undefined,
     reserved: ReefRejectionNoticeState | undefined,
     resendBlocked: boolean,
-  ): ReefNoticePlan {
+  ): {
+    notice: ReefRejectionNotice;
+    state: ReefRejectionNoticeState;
+  } {
     if (reserved) {
       const state = mergeReefRejectionNotice(previous, reserved);
       return {

@@ -8,6 +8,7 @@ import { ChannelPicker } from "../../components/solid/channel-picker.tsx";
 import {
   SettingsEmpty,
   SettingsLoadingSkeleton,
+  SettingsRow,
   SettingsSection,
   SettingsStatus,
 } from "../../components/solid/settings-ui.tsx";
@@ -101,7 +102,7 @@ function PairingRequest(props: ChannelsProps & { request: ChannelsPairingRequest
                 class={["btn btn--sm", { primary: action === "approve" }]}
                 disabled={
                   !props.channels.connected ||
-                  Boolean(props.channels.pairingBusyRequestId) ||
+                  Boolean(props.channels.pairingBusy) ||
                   !props.canManagePairing
                 }
                 aria-label={t(`channels.pairing.${action}Aria`, {
@@ -116,8 +117,8 @@ function PairingRequest(props: ChannelsProps & { request: ChannelsPairingRequest
                 }
               >
                 {t(
-                  action === "approve" &&
-                    props.channels.pairingBusyRequestId === request().requestId
+                  props.channels.pairingBusy?.action === action &&
+                    props.channels.pairingBusy.requestId === request().requestId
                     ? "common.loading"
                     : `channels.pairing.${action}`,
                 )}
@@ -220,9 +221,8 @@ export function renderChannelPairingQueue(props: ChannelsProps) {
         actions={
           <ChannelRefresh
             updatedAt={props.canManagePairing ? props.channels.pairingLastSuccess : null}
-            disabled={
-              !props.channels.connected || props.channels.pairingLoading || !props.canManagePairing
-            }
+            busy={props.channels.pairingLoading}
+            disabled={!props.channels.connected || !props.canManagePairing}
             onRefresh={props.onPairingRefresh}
           />
         }
@@ -307,31 +307,31 @@ export function renderChannelPairingDetail(channelId: string, props: ChannelsPro
                 ).length,
             );
             return (
-              <div class="settings-row">
-                <div class="settings-row__text">
-                  <span class="settings-row__title">{accountName(account())}</span>
-                  <span class="settings-row__desc">{account().accountId}</span>
-                </div>
-                <div class="settings-row__control">
-                  <SettingsStatus
-                    kind={pending() > 0 ? "warn" : "muted"}
-                    label={
-                      pending() > 0
-                        ? t("channels.pairing.pendingCount", { count: String(pending()) })
-                        : t("channels.pairing.noPending")
-                    }
-                  />
-                  <button
-                    type="button"
-                    class="btn btn--sm"
-                    onClick={() =>
-                      props.onPairingReviewAccount(account().channel, account().accountId)
-                    }
-                  >
-                    {t("channels.pairing.review")}
-                  </button>
-                </div>
-              </div>
+              <SettingsRow
+                title={accountName(account())}
+                description={account().accountId}
+                control={
+                  <>
+                    <SettingsStatus
+                      kind={pending() > 0 ? "warn" : "muted"}
+                      label={
+                        pending() > 0
+                          ? t("channels.pairing.pendingCount", { count: String(pending()) })
+                          : t("channels.pairing.noPending")
+                      }
+                    />
+                    <button
+                      type="button"
+                      class="btn btn--sm"
+                      onClick={() =>
+                        props.onPairingReviewAccount(account().channel, account().accountId)
+                      }
+                    >
+                      {t("channels.pairing.review")}
+                    </button>
+                  </>
+                }
+              />
             );
           }}
         </For>
@@ -355,7 +355,7 @@ function PairingPromptContent(params: {
   const request = () => params.prompt.request;
   const busy = () =>
     params.props.mutationBusy?.pairing ||
-    params.props.channels.pairingBusyRequestId === request().requestId;
+    params.props.channels.pairingBusy?.requestId === request().requestId;
   const approving = () => params.prompt.kind === "approve";
   const ownerMissing = () =>
     params.props.channels.pairingSnapshot?.commandOwnerConfigured === false;
@@ -419,7 +419,7 @@ function PairingPromptContent(params: {
             disabled={!params.props.channels.connected || busy()}
             onClick={() => params.props.onPairingPromptConfirm()}
           >
-            {t(`channels.pairing.${params.prompt.kind}`)}
+            {t(busy() ? "common.loading" : `channels.pairing.${params.prompt.kind}`)}
           </button>
         </openclaw-modal-actions>
       </div>

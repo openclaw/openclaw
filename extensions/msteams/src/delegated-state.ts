@@ -10,7 +10,7 @@ export const MSTEAMS_DELEGATED_TOKEN_NAMESPACE = "delegated-token";
 export const MSTEAMS_DELEGATED_TOKEN_KEY = "current";
 export const MSTEAMS_DELEGATED_TOKEN_MAX_ENTRIES = 1;
 
-export type MSTeamsDelegatedRefreshClaim = {
+type MSTeamsDelegatedRefreshClaim = {
   refreshClaim: string;
   requestKey: string;
   callerKey: string;

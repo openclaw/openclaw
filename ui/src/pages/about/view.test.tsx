@@ -29,9 +29,7 @@ function render(
       buildId: "test",
       ...buildInfo,
     },
-    gatewayVersion: "2026.7.9",
-    copyState: "idle",
-    onCopyCommit: vi.fn(),
+    gateway: { version: "2026.7.9", commit: "abcdef0", builtAt: "2026-07-09T08:07:00.000Z" },
     clawdWaving: false,
     onPokeClawd: vi.fn(),
     ...overrides,
@@ -79,9 +77,6 @@ it("renders the hero, links, license, and Clawd's active wave", () => {
     "https://x.com/openclaw",
     "https://docs.openclaw.ai/releases",
   ]);
-  expect(links.find((link) => link.textContent?.trim() === "Support")?.href).toBe(
-    "https://community.openclaw.ai/",
-  );
   for (const link of links) {
     expect(link.getAttribute("target")).toBe("_blank");
     expect(link.getAttribute("rel")).toContain("noopener");
@@ -90,68 +85,66 @@ it("renders the hero, links, license, and Clawd's active wave", () => {
   expect(query(".about-footer")?.textContent).toContain("MIT License");
 });
 
-it("keeps version, commit, branch, and localized UTC build date in one facts grid", async () => {
-  const { query } = render();
-  const facts = query(".settings-kv");
-  const values = facts?.querySelectorAll("dd");
-  expect(facts).toMatchObject({ tagName: "DL", ariaLabel: "Control UI build details" });
-  expect(facts?.hasAttribute("role")).toBe(false);
-  expect(facts?.classList.contains("about-build-grid")).toBe(true);
-  expect(values).toHaveLength(4);
-  expect(values?.[0]?.textContent).toContain("2026.7.10");
-  expect(values?.[1]?.querySelector("code")).toMatchObject({
-    textContent: COMMIT.slice(0, 12),
+function facts(container: HTMLElement, label: string) {
+  const list = container.querySelector(`dl.settings-kv[aria-label="${label}"]`);
+  const rows = new Map<string, Element>();
+  for (const term of Array.from(list?.querySelectorAll("dt") ?? [])) {
+    rows.set(term.textContent ?? "", term.nextElementSibling!);
+  }
+  return { list, rows };
+}
+
+it("shows Control UI and Gateway build identity with the shared settings facts", async () => {
+  const { container } = render();
+  const headings = Array.from(container.querySelectorAll(".settings-section__heading"));
+  expect(headings.map((heading) => heading.textContent)).toEqual(["Control UI", "Gateway"]);
+  const ui = facts(container, "Control UI build details");
+  const gateway = facts(container, "Gateway");
+  expect([...ui.rows.keys()]).toEqual(["Version", "Commit", "Branch", "Built"]);
+  expect([...gateway.rows.keys()]).toEqual(["Version", "Commit", "Built"]);
+  expect(ui.rows.get("Version")?.textContent).toBe("2026.7.10");
+  expect(ui.rows.get("Commit")?.querySelector("code")).toMatchObject({
+    textContent: COMMIT.slice(0, 7),
     title: COMMIT,
     dir: "ltr",
   });
-  const commitAge = values?.[1]?.querySelector("time.about-commit__age");
-  expect(commitAge).toMatchObject({
-    dateTime: COMMIT_AT,
-    nextElementSibling: { tagName: "OPENCLAW-TOOLTIP" },
-  });
-  expect(commitAge?.textContent?.trim()).not.toBe("");
-  expect(values?.[2]?.textContent).toContain("feature/build-chip*");
-  const time = values?.[3]?.querySelector("time");
+  expect(ui.rows.get("Branch")?.textContent).toBe("feature/build-chip*");
+  expect(gateway.rows.get("Version")?.textContent).toBe("2026.7.9");
+  expect(gateway.rows.get("Commit")?.querySelector("code")?.textContent).toBe("abcdef0");
+  for (const list of [ui, gateway]) {
+    expect(
+      list.rows.get("Commit")?.querySelector("button.chat-copy-btn")?.getAttribute("aria-label"),
+    ).toBe("Copy full commit hash");
+  }
+  const time = ui.rows.get("Built")?.querySelector("time");
   expect(time).toMatchObject({ dateTime: BUILT_AT, title: BUILT_AT, dir: "auto" });
   for (const locale of ["en", "de"] as const) {
     await i18n.setLocale(locale);
     flush();
-    const day = new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeZone: "UTC" });
-    expect(time?.textContent).toBe(day.format(new Date(BUILT_AT)));
-    expect(commitAge?.getAttribute("title")).toBe(
-      new Date(COMMIT_AT).toLocaleString(locale, { dateStyle: "medium", timeStyle: "short" }),
-    );
+    const stamp = new Intl.DateTimeFormat(locale, {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZone: "UTC",
+      timeZoneName: "short",
+    });
+    expect(time?.textContent).toBe(stamp.format(new Date(BUILT_AT)));
   }
+  expect(container.querySelector(".settings-section__desc")).toBeNull();
 });
 
-it("keeps the commit hash without an age when no commit timestamp is embedded", () => {
-  const { query } = render({}, { commitAt: null });
-  expect(query(".about-commit code")?.textContent).toBe(COMMIT.slice(0, 12));
-  expect(query(".about-commit__age")).toBeNull();
-});
-
-it("copies the full commit while announcing success accessibly", () => {
-  const { query, props } = render({ copyState: "copied" });
-  const button = query<HTMLButtonElement>(".about-commit button");
-  expect(button?.getAttribute("aria-label")).toBe("Commit hash copied");
-  expect(query("[role='status']")?.textContent?.trim()).toBe("Commit hash copied");
-  button?.click();
-  expect(props.onCopyCommit).toHaveBeenCalledOnce();
-});
-
-it("states when artifact identity and Gateway version are unavailable", () => {
-  const { container, query } = render(
-    { gatewayVersion: null },
-    {
-      version: null,
-      commit: null,
-      commitAt: null,
-      builtAt: null,
-      branch: null,
-    },
+it("omits unknown facts and marks a disconnected Gateway unavailable", () => {
+  const { container } = render(
+    { gateway: { version: null, commit: null, builtAt: null } },
+    { commit: null, builtAt: null, branch: null },
   );
-  expect(container.querySelectorAll(".settings-kv .muted")).toHaveLength(3);
-  expect(query(".settings-row__value")?.textContent).toContain("Unavailable");
-  expect(query(".about-commit button")).toBeNull();
-  expect(container.textContent).not.toContain("Unknown build");
+  const ui = facts(container, "Control UI build details");
+  const gateway = facts(container, "Gateway");
+  expect([...ui.rows.keys()]).toEqual(["Version"]);
+  expect(ui.rows.get("Version")?.textContent).toBe("2026.7.10");
+  expect([...gateway.rows.keys()]).toEqual(["Version"]);
+  expect(gateway.rows.get("Version")?.textContent).toBe("Unavailable");
+  expect(container.querySelector(".chat-copy-btn")).toBeNull();
 });

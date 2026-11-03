@@ -8,7 +8,7 @@ import type { ControlUiAction } from "../../../src/plugin-sdk/control-ui.js";
 import { iconData, type IconName } from "../components/icon-data.ts";
 import type { SidebarMenus } from "../components/sidebar-menus.tsx";
 import { Icon } from "../components/solid/icon.tsx";
-import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
 import { findUiSessionRow } from "../lib/sessions/route-navigation.ts";
@@ -162,13 +162,11 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
         aria-haspopup={link.item.entry.value.actions?.length ? "menu" : undefined}
         onContextMenu={menu}
         onKeyDown={menu}
-        onClick={(event) => {
-          if (!shouldHandleNavigationClick(event)) {
-            return;
-          }
-          event.preventDefault();
-          link.item.entry.host.navigation.openPage(link.item.entry.value.page);
-        }}
+        onClick={(event) =>
+          handleNavigationClick(event, () => {
+            link.item.entry.host.navigation.openPage(link.item.entry.value.page);
+          })
+        }
       >
         <span class="nav-item__icon" aria-hidden="true">
           <Show

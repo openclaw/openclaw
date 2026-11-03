@@ -34,10 +34,15 @@ function submitForm(modal: ParentNode) {
     .querySelector("form")!
     .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
 }
-function key(target: EventTarget, value: string) {
-  const event = new KeyboardEvent("keydown", { key: value, bubbles: true, cancelable: true });
+function key(target: EventTarget, value: string, init: KeyboardEventInit = {}, prevented = true) {
+  const event = new KeyboardEvent("keydown", {
+    key: value,
+    bubbles: true,
+    cancelable: true,
+    ...init,
+  });
   target.dispatchEvent(event);
-  expect(event.defaultPrevented).toBe(true);
+  expect(event.defaultPrevented).toBe(prevented);
 }
 const saveButton = (modal: ParentNode) =>
   modal.querySelector<HTMLButtonElement>('button[type="submit"]');
@@ -80,22 +85,9 @@ it("keeps folder input focus while filtering and saves the keyboard-completed fo
     expect(modal.querySelector('[role="option"]')?.textContent).toContain("tools");
     expect(document.activeElement).toBe(input);
   });
-  const composingEnter = new KeyboardEvent("keydown", {
-    key: "Enter",
-    isComposing: true,
-    bubbles: true,
-    cancelable: true,
-  });
-  input.dispatchEvent(composingEnter);
-  expect(composingEnter.defaultPrevented).toBe(false);
+  key(input, "Enter", { isComposing: true }, false);
   input.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
-  const committingEnter = new KeyboardEvent("keydown", {
-    key: "Enter",
-    bubbles: true,
-    cancelable: true,
-  });
-  input.dispatchEvent(committingEnter);
-  expect(committingEnter.defaultPrevented).toBe(false);
+  key(input, "Enter", {}, false);
   key(input, "Tab");
   await waitForSolid(() => expect(input.value).toBe("/workspace/tools"));
   modal.querySelector<HTMLButtonElement>(".new-session-page__browser-use")!.click();
@@ -206,54 +198,77 @@ it("retires a pending save without letting its late completion release a reopene
   }
 });
 
-it("gates saving synchronously and lets a failed save retry the restored worktree choice", async () => {
-  const { promise: repository, resolve: resolveRepository } = createDeferred<"git">();
-  const { promise: pendingSave, resolve: resolveSave } = createDeferred<string | null>();
-  const worktreeDefaults = { ...defaults, worktree: true };
-  const submit = fixture.mockRequest(
-    vi.fn<DialogOptions["submit"]>(async () => null).mockReturnValueOnce(pendingSave),
-  );
-  try {
-    const { completed, modal } = await openDialog({
-      defaults: worktreeDefaults,
-      inspectRepository: async () => repository,
-      submit,
-    });
-    submitForm(modal);
-    expect(submit).not.toHaveBeenCalled();
-    expect(saveButton(modal)?.disabled).toBe(true);
-    const cancelButton = Array.from(modal.querySelectorAll<HTMLButtonElement>("button")).find(
-      (button) => button.textContent === "Cancel",
-    )!;
-    cancelButton.focus();
-    resolveRepository("git");
-    await waitForSolid(() => {
-      expect(saveButton(modal)?.disabled).toBe(false);
-      expect(cancelButton.isConnected).toBe(true);
-      expect(document.activeElement).toBe(cancelButton);
-      expect(
-        modal.querySelector("#session-group-defaults-mode-trigger")?.getAttribute("data-value"),
-      ).toBe("worktree");
-    });
-    submitForm(modal);
-    submitForm(modal);
-    const cancel = new Event("modal-cancel", { bubbles: true, cancelable: true });
-    modal.dispatchEvent(cancel);
-    expect(cancel.defaultPrevented).toBe(true);
-    expect(submit).toHaveBeenCalledExactlyOnceWith(worktreeDefaults);
-    resolveSave("Try saving again");
-    await waitForSolid(() => {
-      expect(saveButton(modal)?.disabled).toBe(false);
-      expect(modal.querySelector('[role="alert"]')?.textContent).toBe("Try saving again");
-    });
-    submitForm(modal);
-    await completed;
-    expect(submit.mock.calls).toEqual([[worktreeDefaults], [worktreeDefaults]]);
-  } finally {
-    resolveRepository("git");
-    resolveSave(null);
-  }
-});
+it.each(["returned", "rejected"] as const)(
+  "gates saving and retries the restored worktree after a %s failure",
+  async (failure) => {
+    const { promise: repository, resolve: resolveRepository } = createDeferred<"git">();
+    const {
+      promise: pendingSave,
+      resolve: resolveSave,
+      reject: rejectSave,
+    } = createDeferred<string | null>();
+    const retry = createDeferred<string | null>();
+    const worktreeDefaults = { ...defaults, worktree: true };
+    const submit = fixture.mockRequest(
+      vi
+        .fn<DialogOptions["submit"]>(async () => null)
+        .mockReturnValueOnce(pendingSave)
+        .mockReturnValueOnce(retry.promise),
+    );
+    try {
+      const { completed, modal } = await openDialog({
+        defaults: worktreeDefaults,
+        inspectRepository: async () => repository,
+        submit,
+      });
+      submitForm(modal);
+      expect(submit).not.toHaveBeenCalled();
+      expect(saveButton(modal)?.disabled).toBe(true);
+      const cancelButton = Array.from(modal.querySelectorAll<HTMLButtonElement>("button")).find(
+        (button) => button.textContent === "Cancel",
+      )!;
+      cancelButton.focus();
+      resolveRepository("git");
+      await waitForSolid(() => {
+        expect(saveButton(modal)?.disabled).toBe(false);
+        expect(cancelButton.isConnected).toBe(true);
+        expect(document.activeElement).toBe(cancelButton);
+        expect(
+          modal.querySelector("#session-group-defaults-mode-trigger")?.getAttribute("data-value"),
+        ).toBe("worktree");
+      });
+      submitForm(modal);
+      submitForm(modal);
+      const cancel = new Event("modal-cancel", { bubbles: true, cancelable: true });
+      modal.dispatchEvent(cancel);
+      expect(cancel.defaultPrevented).toBe(true);
+      expect(submit).toHaveBeenCalledExactlyOnceWith(worktreeDefaults);
+      if (failure === "rejected") {
+        rejectSave(new Error("Try saving again"));
+      } else {
+        resolveSave("Try saving again");
+      }
+      await waitForSolid(() => {
+        expect(saveButton(modal)?.disabled).toBe(false);
+        expect(modal.querySelector('[role="alert"]')?.textContent).toBe("Try saving again");
+      });
+      const folder = modal.querySelector("#session-group-defaults-folder-trigger");
+      submitForm(modal);
+      await waitForSolid(() => {
+        expect(saveButton(modal)?.disabled).toBe(true);
+        expect(modal.querySelector('[role="alert"]')).toBeNull();
+        expect(modal.querySelector("#session-group-defaults-folder-trigger")).toBe(folder);
+      });
+      retry.resolve(null);
+      await completed;
+      expect(submit.mock.calls).toEqual([[worktreeDefaults], [worktreeDefaults]]);
+    } finally {
+      resolveRepository("git");
+      resolveSave(null);
+      retry.resolve(null);
+    }
+  },
+);
 
 it("keeps the selected folder pending across a stale inspection and permission retry", async () => {
   const initial = createDeferred<"git">();

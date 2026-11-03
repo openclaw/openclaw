@@ -11,6 +11,7 @@ import type { OpenClawStateAsyncLeaseContext } from "../state/openclaw-state-lea
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import type { McpOAuthIdentity } from "./mcp-oauth-identity.js";
 import type { McpOAuthRefreshBoundary } from "./mcp-oauth-refresh-boundary.js";
+import { mcpOAuthAuthorizationRequiredError } from "./mcp-oauth-store.authorization.js";
 import { readMcpOAuthStore, mutateMcpOAuthStore, type McpOAuthStore } from "./mcp-oauth-store.js";
 import { MCP_OAUTH_DEFAULT_REDIRECT_URL } from "./mcp-oauth-store.mutations.js";
 import type { McpOAuthMutation } from "./mcp-oauth-store.types.js";
@@ -28,6 +29,13 @@ export type McpOAuthLoginLifecycle = {
   beforeTokensSaved: () => void;
   onTokensSaved: () => void;
 };
+
+export class McpOAuthCredentialsRetainedError extends Error {
+  constructor() {
+    super("Existing authentication was retained. Use the CLI sign-in flow.");
+    this.name = "McpOAuthCredentialsRetainedError";
+  }
+}
 
 function resolveTokenExpiresAt(tokens: OAuthTokens): number | undefined {
   const expiresIn = tokens.expires_in;
@@ -149,9 +157,7 @@ export async function createMcpOAuthClientProvider(params: {
   const assertAuthorizationRedirectAllowed = () => {
     params.login?.assertCurrent();
     if (params.allowAuthorizationRedirect !== true) {
-      throw new Error(
-        `MCP server "${params.identity.serverName}" requires OAuth authorization. Run openclaw mcp login ${params.identity.serverName}.`,
-      );
+      throw mcpOAuthAuthorizationRequiredError(params.identity, storeContext.admission);
     }
   };
   return {
@@ -304,7 +310,7 @@ export async function createMcpOAuthClientProvider(params: {
       params.login?.assertCurrent();
       params.refreshBoundary?.assertCanInvalidate();
       if (params.login) {
-        throw new Error("Existing authentication was retained. Use the CLI sign-in flow.");
+        throw new McpOAuthCredentialsRetainedError();
       }
       await updateStore({
         kind: "invalidate",

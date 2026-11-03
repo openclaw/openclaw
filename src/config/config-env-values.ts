@@ -1,9 +1,5 @@
 import { resolveEnvNormalizationKeys } from "../infra/env.js";
-import {
-  clearFsSafeEnvFallback,
-  fsSafeEnvInput,
-  normalizeFsSafeNativeEnv,
-} from "../infra/fs-safe-env.js";
+import { clearFsSafeEnvFallback, fsSafeEnvInput } from "../infra/fs-safe-env.js";
 import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
@@ -22,6 +18,7 @@ export function isConfigRuntimeEnvVarAllowed(key: string, value: string): boolea
     upperKey !== ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV &&
     upperKey !== "OPENCLAW_INCLUDE_ROOTS" &&
     upperKey !== "OPENCLAW_CONFIG_READONLY" &&
+    upperKey !== "OPENCLAW_CONFIG_READONLY_NOTICE" &&
     upperKey !== "OPENCLAW_DISABLE_GATEWAY_LOCAL_TERMINALS" &&
     upperKey !== "OPENCLAW_DISABLE_CRON_HOST_EXECUTION" &&
     !isDangerousHostEnvVarName(key) &&
@@ -127,24 +124,4 @@ export function snapshotEnvProperties(
   env: Readonly<NodeJS.ProcessEnv>,
 ): Map<string, EnvSnapshotEntry> {
   return new Map(Object.entries(fsSafeEnvInput(env)).map(([key, value]) => [key, { key, value }]));
-}
-
-export type PublishedConfigRuntimeEnvChange = {
-  before: EnvSnapshotEntry | undefined;
-  after: EnvSnapshotEntry | undefined;
-};
-
-export function rollbackConfigRuntimeEnvChanges(
-  env: NodeJS.ProcessEnv,
-  changes: ReadonlyMap<string, PublishedConfigRuntimeEnvChange>,
-): void {
-  let current: ReadonlyMap<string, EnvSnapshotEntry> | undefined;
-  for (const [key, change] of changes) {
-    const currentEntry = (current ??= snapshotEnvByPlatformKey(env)).get(key);
-    if (!envSnapshotEntriesEqual(currentEntry, change.after)) {
-      continue;
-    }
-    replaceEnvSnapshotEntry(env, currentEntry, change.before);
-  }
-  normalizeFsSafeNativeEnv(env);
 }

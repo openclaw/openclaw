@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createReplyTurnParticipants } from "../../sessions/session-controller.tool-authority.js";
 import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
@@ -38,7 +37,7 @@ const created = {
 };
 function withTool(check: (tool: AnyAgentTool) => Promise<void>) {
   return withSessionToolTestCaller(
-    () => check(expectDefined(createSessionsCreateTool(), "creation tool")),
+    () => check(createSessionsCreateTool()),
     issueAuthority().authority,
   );
 }
@@ -49,18 +48,29 @@ beforeEach(() => {
 });
 
 describe("sessions_create", () => {
-  it("requires issued session-write authority and rejects a retained revoked source", async () => {
-    expect(createSessionsCreateTool()).toBeNull();
-    expect(
+  it("keeps the definition stable while refusing calls without session-write authority", async () => {
+    const denied = [
+      createSessionsCreateTool(),
       createSessionsCreateTool({
         sessionControlAuthority: issueAuthority(["operator.read"]).authority,
       }),
-    ).toBeNull();
+    ];
+    await withTool(async (authorized) => {
+      for (const tool of denied) {
+        expect(tool.name).toBe(authorized.name);
+        expect(tool.description).toBe(authorized.description);
+        expect(tool.parameters).toEqual(authorized.parameters);
+        const result = await tool.execute("denied", {});
+        expect(result.details).toMatchObject({ gated: true });
+        expect(JSON.stringify(result.content)).toContain("session write authority");
+      }
+    });
+    expect(gateway.request).not.toHaveBeenCalled();
+  });
+
+  it("requires issued authority and rejects a retained revoked source", async () => {
     const { authority, revoke } = issueAuthority();
-    const tool = expectDefined(
-      createSessionsCreateTool({ sessionControlAuthority: authority }),
-      "creation tool",
-    );
+    const tool = createSessionsCreateTool({ sessionControlAuthority: authority });
     expect(tool.parameters).not.toHaveProperty("properties.action");
     expect(tool.parameters).toHaveProperty("additionalProperties", false);
     expect(() => createSessionsCreateTool({ sessionControlAuthority: { ...authority } })).toThrow(
@@ -216,6 +226,35 @@ describe("sessions_create", () => {
     expect(result.policy?.allow).toEqual([...allow, ...added]);
     expect(result.renameOnly).toBe(renameOnly);
     expect(policy.allow).toBe(allow);
+  });
+
+  it("projects only the captured operator grant, including its absence and revocation", async () => {
+    const allow = ["read"];
+    const policy: SandboxToolPolicy = { allow, deny: [], [SANDBOX_DEFAULT_TOOL_ALLOW]: allow };
+    const captured = issueAuthority();
+    await withGatewayToolCallerIdentity(
+      {
+        agentId: "main",
+        sessionKey: "agent:main:dashboard:catalog",
+        operatorAuthority: issueAuthority(["operator.admin"], "other-requester").authority,
+      },
+      () => {
+        for (const authority of [null, issueAuthority(["operator.read"]).authority]) {
+          expect(prepareSandboxSessionTools({ policy, senderIsOwner: false, authority })).toEqual({
+            policy,
+            renameOnly: false,
+          });
+        }
+        const params = { policy, senderIsOwner: false, authority: captured.authority };
+        expect(prepareSandboxSessionTools(params).policy?.allow).toEqual([
+          "read",
+          "sessions",
+          "sessions_create",
+        ]);
+        captured.revoke();
+        expect(() => prepareSandboxSessionTools(params)).toThrow("creation source revoked");
+      },
+    );
   });
 
   it("does not expand explicit allowlists or senderless/insufficient-authority defaults", () => {

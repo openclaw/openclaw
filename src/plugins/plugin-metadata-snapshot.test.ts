@@ -1,6 +1,7 @@
 // Verifies lifecycle snapshot loading, ownership facts, and immutable boundaries.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeTempDir } from "../../test/helpers/temp-dir.js";
+import { model as makeCatalogModel } from "../agents/model-catalog-fixtures.test-support.js";
 import { normalizeStaticProviderModelId } from "../agents/model-ref-shared.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection-config.js";
 import { buildConfiguredModelCatalog } from "../agents/model-selection-shared.js";
@@ -27,6 +28,7 @@ import {
 } from "./current-plugin-metadata.test-support.js";
 import type { PluginDiscoveryResult } from "./discovery.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
+import { normalizeManifestProviderEndpoints } from "./manifest-capability-normalizers.js";
 import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import {
   createPluginCache,
@@ -604,16 +606,7 @@ describe("plugin metadata snapshot", () => {
           demo: {
             api: "openai-completions",
             baseUrl: "http://127.0.0.1",
-            models: [
-              {
-                id: "latest",
-                name: "Latest",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                maxTokens: 1024,
-              },
-            ],
+            models: [makeCatalogModel("latest", "Latest")],
           },
         },
       },
@@ -668,7 +661,7 @@ describe("plugin metadata snapshot", () => {
     plugin.setup = { cliBackends: ["Demo-CLI", "Other-CLI"] };
     plugin.contracts = { tools: [], webSearchProviders: ["demo-search"] };
     other.cliBackends = ["demo-cli"];
-    plugin.providerEndpoints = [
+    plugin.providerEndpoints = normalizeManifestProviderEndpoints([
       {
         endpointClass: " openai-public ",
         hosts: [" API.EXAMPLE.COM ", "api.example.com", " "],
@@ -692,7 +685,7 @@ describe("plugin metadata snapshot", () => {
         hosts: ["GLOBAL.VERTEX.EXAMPLE.COM"],
         googleVertexRegion: " GLOBAL ",
       },
-    ];
+    ]);
     other.providerEndpoints = [{ endpointClass: "azure-openai", hosts: ["api.example.com"] }];
     registry.plugins.push(other);
     index.plugins = [...index.plugins, ...makeIndex("other").plugins];

@@ -27,7 +27,6 @@ import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 import {
   expectMissing,
   expectFiles,
-  containsObjects,
 } from "./doctor-session-sqlite.publication-spies.test-support.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -87,11 +86,8 @@ it.each(["valid", "invalid"] as const)(
         }
         const readCurrent = () => keys.map(readEntry);
         const current = readCurrent();
-        expect(current[0]).toMatchObject({ entry: { label: "current" } });
+        const originalEvents = readEvents("legacy-kept");
         if (kind === "valid") {
-          expect(current[1]).toMatchObject({
-            entry: { sessionId: "new-canonical", label: "current" },
-          });
           fs.appendFileSync(storePath, "\r\n");
         } else {
           fs.writeFileSync(storePath, Buffer.from('{"agent:main:kept":\r\n'));
@@ -127,10 +123,7 @@ it.each(["valid", "invalid"] as const)(
           expectMissing(storePath);
           const events = readEvents("legacy-kept");
           expect(events).toHaveLength(2);
-          containsObjects(events, {
-            id: "kept-message",
-            message: expect.objectContaining({ role: "user", content: "kept" }),
-          });
+          expect(events).toEqual(originalEvents);
           expect((await run("inspect")).totals.sqliteEntries).toBe(2);
           expectFiles(bytes, archived.archivePath);
         }

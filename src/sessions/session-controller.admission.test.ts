@@ -24,7 +24,7 @@ import {
   type SessionControllerEntry,
 } from "./session-controller.state.js";
 
-const turnKinds = ["visible", "heartbeat", "queued_followup", "direct"] as const;
+const turnKinds = ["visible", "queued_followup", "direct"] as const;
 afterEach(() => {
   sessionControllers.clear();
 });
@@ -229,15 +229,15 @@ it("keeps interrupt execution behind a cancelled unclaimed source's raw cleanup"
   }
 });
 
-it.each(
-  turnKinds.flatMap((kind) => [
-    { kind, deliveryPending: false },
-    { kind, deliveryPending: true },
-  ]),
-)(
+it.each([
+  { kind: "visible", deliveryPending: true },
+  { kind: "direct", deliveryPending: true },
+  { kind: "queued_followup", deliveryPending: true },
+  { kind: "queued_followup", deliveryPending: false },
+] as const)(
   "makes mailbox and direct creation agree for $kind (delivery pending=$deliveryPending)",
   async ({ kind, deliveryPending }) => {
-    const blocked = deliveryPending && (kind === "heartbeat" || kind === "queued_followup");
+    const blocked = deliveryPending && kind === "queued_followup";
     const sessionKey = `agent:main:admission-parity:${kind}:${deliveryPending}`;
     const entry = getEntry(sessionKey);
     const input = reserveSource(sessionKey, { policy: { mode: "followup" } });

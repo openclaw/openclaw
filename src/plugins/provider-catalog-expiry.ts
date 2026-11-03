@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { ModelServingContextLimit } from "../agents/model-serving-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
@@ -8,7 +9,11 @@ type CatalogExpiryCapture = {
   observedServingLimits?: ModelServingContextLimit[];
   refreshKeys?: Set<string>;
   expiresAt?: number;
-  discoveryBudget?: { timeoutMs: number | null; deadlineMs: number };
+  discoveryBudget?: {
+    timeoutMs: number | null;
+    deadlineMs: number;
+    providerTimeouts?: Readonly<Record<string, number>>;
+  };
 };
 
 const capture = resolveGlobalSingleton(
@@ -20,6 +25,7 @@ const capture = resolveGlobalSingleton(
 export async function withProviderCatalogDiscoveryBudget<T>(
   timeoutMs: number | null,
   load: () => Promise<T>,
+  providerTimeouts?: Readonly<Record<string, number>>,
 ): Promise<T> {
   const parent = capture.getStore();
   const current: CatalogExpiryCapture = {
@@ -28,6 +34,7 @@ export async function withProviderCatalogDiscoveryBudget<T>(
       servingLimits: new Map(),
     }),
     discoveryBudget: {
+      providerTimeouts: providerTimeouts ?? parent?.discoveryBudget?.providerTimeouts,
       timeoutMs:
         timeoutMs === null
           ? (parent?.discoveryBudget?.timeoutMs ?? null)
@@ -48,6 +55,20 @@ export async function withProviderCatalogDiscoveryBudget<T>(
 /** Stable budget identity is separate from the time remaining on this acquisition. */
 export function getProviderCatalogDiscoveryBudget() {
   return capture.getStore()?.discoveryBudget;
+}
+
+/** Operator settings replace transport defaults; the admitted deadline still bounds acquisition. */
+export function resolveProviderCatalogDiscoveryTimeoutMs(providerId: string, timeoutMs?: number) {
+  if (timeoutMs === 0) {
+    return 0;
+  }
+  const budget = getProviderCatalogDiscoveryBudget();
+  return (
+    budget?.providerTimeouts?.[normalizeProviderId(providerId)] ??
+    timeoutMs ??
+    budget?.timeoutMs ??
+    5_000
+  );
 }
 
 export async function captureProviderCatalogExpiries<T>(

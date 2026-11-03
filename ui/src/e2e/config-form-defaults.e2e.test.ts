@@ -75,7 +75,7 @@ suite.define(() => {
         await gateway.resolveDeferred("config.set");
         await expect
           .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
-          .toContain("Saved");
+          .toContain("Apply changes");
         await page.reload();
         await revealControl(control);
         expect((await control.locator("option:checked").textContent())?.trim()).toBe(label);
@@ -121,7 +121,7 @@ suite.define(() => {
         await gateway.resolveDeferred("config.set");
         await expect
           .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
-          .toContain("Saved");
+          .toContain("Apply changes");
         await page.reload();
         await revealControl(control);
         expect((await control.locator("option:checked").textContent())?.trim()).toBe(label);
@@ -240,7 +240,7 @@ suite.define(() => {
       });
       await expect
         .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
-        .toContain("Saving");
+        .toBe("");
 
       await expect.poll(() => modeRow.locator("select").inputValue()).toBe("__unset__");
       await expect.poll(() => retriesRow.getByRole("spinbutton").inputValue()).toBe("");
@@ -251,7 +251,7 @@ suite.define(() => {
       await gateway.resolveDeferred("config.set");
       await expect
         .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
-        .toContain("Saved");
+        .toContain("Apply changes");
       expect((await page.reload())?.status()).toBe(200);
       await gateway.waitForRequest("config.get");
 

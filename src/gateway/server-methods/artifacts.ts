@@ -24,6 +24,11 @@ import {
 } from "../artifact-download-grants.js";
 import type { PreparedArtifactDownload } from "../artifact-download-projection.js";
 import {
+  type ArtifactLookup,
+  type ArtifactRecord,
+  toArtifactSummary,
+} from "../artifacts-content.js";
+import {
   parseManagedOutgoingArtifactId,
   resolveManagedOutgoingMediaArtifactDownload,
   resolveManagedOutgoingMediaUrlDownload,
@@ -37,11 +42,6 @@ import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-a
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { readSessionArtifacts } from "../session-transcript-readers.js";
 import { parseTranscriptImageArtifactId } from "../transcript-image-artifacts.js";
-import {
-  type ArtifactLookup,
-  type ArtifactRecord,
-  toArtifactSummary,
-} from "./artifacts-content.js";
 import { prepareArtifactSessionRead } from "./artifacts-session-read.js";
 import {
   ArtifactSessionResolutionError,
@@ -426,7 +426,7 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     }
     if (artifactResponseIsCurrent(loaded.value, respond)) {
       respond(true, {
-        artifacts: artifacts.map(toArtifactSummary),
+        artifacts,
         ...(nextCursor ? { nextCursor } : {}),
         ...(omittedOversized ? { omittedOversized: true } : {}),
       });

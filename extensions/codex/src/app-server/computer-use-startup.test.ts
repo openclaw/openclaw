@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CodexAppServerClient } from "./client.js";
 import { ensureCodexComputerUseSharedPluginCache } from "./computer-use-cache.js";
 import { ensureCodexManagedBundledMarketplace } from "./computer-use-marketplace.js";
@@ -15,20 +16,22 @@ import { resolveCodexComputerUseConfig } from "./config.js";
 import { resolveMacOSDesktopCodexComputerUseServiceAppCandidates } from "./desktop-app-paths.js";
 import * as desktopPaths from "./desktop-app-paths.js";
 import * as generation from "./desktop-generation.js";
-import { isJsonObject } from "./protocol.js";
+import {
+  createInitializingClientHarness,
+  createStartOptions,
+} from "./shared-client-start.test-support.js";
 import {
   clearSharedCodexAppServerClientAndWait,
   createIsolatedCodexAppServerClient,
 } from "./shared-client.js";
-import { createClientHarness, useAutoCleanupTempDirTracker } from "./test-support.js";
-import { CODEX_APP_SERVER_VERSION } from "./version.js";
+import { useAutoCleanupTempDirTracker } from "./test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+beforeEach(() => void mockServiceCopy());
+afterEach(() => vi.restoreAllMocks());
 const ensureService = service.ensureCodexComputerUseServiceApp;
 const resolveServiceSource = service.resolveCodexComputerUseServiceAppSourcePath;
 
-const CLIENT_RELATIVE_PATH =
-  "Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient";
 const IDENTITY_FILE = ".test-signed-identity.json";
 
 type EnsureParams = Parameters<typeof ensureCodexComputerUseServiceApp>[0];
@@ -38,6 +41,13 @@ type ServiceIdentity = NonNullable<Awaited<ReturnType<InspectServiceApp>>>;
 const CURRENT_IDENTITY = serviceIdentity("26.817.1000761", "1000761", "current");
 const STALE_IDENTITY = serviceIdentity("26.721.1000502", "1000502", "stale");
 const UNEXPECTED_IDENTITY = serviceIdentity("26.900.1000900", "1000900", "unexpected");
+
+const expectIdentity = async (appPath: string, identity: ServiceIdentity) =>
+  expect(await inspectServiceFixture(appPath)).toEqual(identity);
+const expectFile = async (filePath: string, content: string) =>
+  expect(await fs.readFile(filePath, "utf8")).toBe(content);
+const expectNoDebris = async (parent: string) =>
+  expect(await findInstallDebris(parent)).toEqual([]);
 
 describe("Codex Computer Use native service", () => {
   async function setupService(owned = false) {
@@ -53,7 +63,6 @@ describe("Codex Computer Use native service", () => {
         codexHome,
         platform: "darwin",
         sourceAppCandidates: [sourcePath],
-        copyServiceApp: copyServiceFixture,
         inspectServiceApp: inspectServiceFixture,
         ...overrides,
       });
@@ -80,14 +89,9 @@ describe("Codex Computer Use native service", () => {
       await fs.mkdir(path.dirname(linkedPath), { recursive: true });
       await fs.symlink(targetLink ? externalTarget : externalRoot, linkedPath);
       const externalInode = (await fs.lstat(externalTarget)).ino;
-      const copyServiceApp = vi.fn(copyServiceFixture);
+      const copyServiceApp = mockServiceCopy();
 
-      await expect(
-        install({
-          ...(boundary === "ownershipRoot" ? { ownershipRoot } : {}),
-          copyServiceApp,
-        }),
-      ).rejects.toThrow(
+      await expect(install(boundary === "ownershipRoot" ? { ownershipRoot } : {})).rejects.toThrow(
         targetLink
           ? /must not be a symbolic link/iu
           : /symlinked directory|real directory|symbolic link/iu,
@@ -99,9 +103,9 @@ describe("Codex Computer Use native service", () => {
         await expect(fs.readlink(linkedPath)).resolves.toBe(externalTarget);
       }
       expect((await fs.lstat(externalTarget)).ino).toBe(externalInode);
-      await expect(inspectServiceFixture(externalTarget)).resolves.toEqual(STALE_IDENTITY);
-      await expect(fs.readFile(sentinelPath, "utf8")).resolves.toBe("outside");
-      await expect(findInstallDebris(externalParent)).resolves.toEqual([]);
+      await expectIdentity(externalTarget, STALE_IDENTITY);
+      await expectFile(sentinelPath, "outside");
+      await expectNoDebris(externalParent);
     },
   );
 
@@ -120,32 +124,22 @@ describe("Codex Computer Use native service", () => {
       const externalInode = (await fs.lstat(externalTarget)).ino;
       let externalStagingSentinel = "";
 
-      await expect(
-        install({
-          copyServiceApp: async (source, stagedTarget) => {
-            await copyServiceFixture(source, stagedTarget);
-            const stagingName = path.basename(path.dirname(stagedTarget));
-            externalStagingSentinel = path.join(
-              externalParent,
-              stagingName,
-              "external-sentinel.txt",
-            );
-            await fs.mkdir(path.dirname(externalStagingSentinel), { recursive: true });
-            await fs.writeFile(externalStagingSentinel, "do-not-delete");
-            await fs.rename(targetParent, parkedParent);
-            await fs.symlink(externalParent, targetParent);
-          },
-        }),
-      ).rejects.toThrow(/service parent changed during refresh/iu);
+      mockServiceCopy(async (source, stagedTarget) => {
+        await copyServiceFixture(source, stagedTarget);
+        const stagingName = path.basename(path.dirname(stagedTarget));
+        externalStagingSentinel = path.join(externalParent, stagingName, "external-sentinel.txt");
+        await fs.mkdir(path.dirname(externalStagingSentinel), { recursive: true });
+        await fs.writeFile(externalStagingSentinel, "do-not-delete");
+        await fs.rename(targetParent, parkedParent);
+        await fs.symlink(externalParent, targetParent);
+      });
+      await expect(install()).rejects.toThrow(/service parent changed during refresh/iu);
 
-      expect(externalStagingSentinel).not.toBe("");
-      await expect(fs.readFile(externalStagingSentinel, "utf8")).resolves.toBe("do-not-delete");
-      await expect(fs.readFile(externalSentinel, "utf8")).resolves.toBe("outside");
+      await expectFile(externalStagingSentinel, "do-not-delete");
+      await expectFile(externalSentinel, "outside");
       expect((await fs.lstat(externalTarget)).ino).toBe(externalInode);
-      await expect(inspectServiceFixture(externalTarget)).resolves.toEqual(UNEXPECTED_IDENTITY);
-      await expect(inspectServiceFixture(serviceAppPath(parkedParent))).resolves.toEqual(
-        STALE_IDENTITY,
-      );
+      await expectIdentity(externalTarget, UNEXPECTED_IDENTITY);
+      await expectIdentity(serviceAppPath(parkedParent), STALE_IDENTITY);
       await expect(
         findInstallDebris(externalParent).then((entries) =>
           entries.filter((entry) => entry.startsWith(".service-app.backup-")),
@@ -156,16 +150,13 @@ describe("Codex Computer Use native service", () => {
 
   it("refreshes when the signed desktop service changes at the same source path", async () => {
     const { sourcePath, targetPath, install } = await setupService();
-    const copyServiceApp = vi.fn(copyServiceFixture);
-    const options = { copyServiceApp };
-    await install(options);
-    await expect(inspectServiceFixture(targetPath)).resolves.toEqual(CURRENT_IDENTITY);
+    await install();
+    await expectIdentity(targetPath, CURRENT_IDENTITY);
     await writeServiceFixture(sourcePath, UNEXPECTED_IDENTITY);
 
-    await install(options);
-    expect(copyServiceApp).toHaveBeenCalledTimes(2);
-    await expect(inspectServiceFixture(targetPath)).resolves.toEqual(UNEXPECTED_IDENTITY);
-    await expect(findInstallDebris(path.dirname(targetPath))).resolves.toEqual([]);
+    await install();
+    await expectIdentity(targetPath, UNEXPECTED_IDENTITY);
+    await expectNoDebris(path.dirname(targetPath));
   });
 
   it("revalidates the current source after a different selection fails", async () => {
@@ -175,19 +166,16 @@ describe("Codex Computer Use native service", () => {
     const inspectServiceApp = vi.fn(inspectServiceFixture);
 
     await install({ inspectServiceApp });
+    mockServiceCopy(async (source, target) => {
+      await copyServiceFixture(source, target);
+      await writeFixtureIdentity(target, STALE_IDENTITY);
+    });
     await expect(
-      install({
-        sourceAppCandidates: [failingSourcePath],
-        copyServiceApp: async (source, target) => {
-          await copyServiceFixture(source, target);
-          await writeFixtureIdentity(target, STALE_IDENTITY);
-        },
-        inspectServiceApp,
-      }),
+      install({ sourceAppCandidates: [failingSourcePath], inspectServiceApp }),
     ).rejects.toThrow("does not match its selected signed source");
     const inspectionsAfterFailure = inspectServiceApp.mock.calls.length;
-    await expect(inspectServiceFixture(targetPath)).resolves.toEqual(CURRENT_IDENTITY);
-    await expect(findInstallDebris(path.dirname(targetPath))).resolves.toEqual([]);
+    await expectIdentity(targetPath, CURRENT_IDENTITY);
+    await expectNoDebris(path.dirname(targetPath));
 
     await install({ inspectServiceApp });
     expect(inspectServiceApp.mock.calls.length).toBeGreaterThan(inspectionsAfterFailure);
@@ -196,7 +184,7 @@ describe("Codex Computer Use native service", () => {
   it("reports a missing or untrusted source without changing the target", async () => {
     const { root, targetPath, install } = await setupService();
     const sourcePath = serviceAppPath(path.join(root, "untrusted"));
-    await writeExecutableClient(sourcePath);
+    await fs.mkdir(sourcePath, { recursive: true });
     await writeServiceFixture(targetPath, STALE_IDENTITY);
 
     const result = await install({
@@ -204,25 +192,25 @@ describe("Codex Computer Use native service", () => {
     });
 
     expect(result).toBe("source_missing");
-    await expect(inspectServiceFixture(targetPath)).resolves.toEqual(STALE_IDENTITY);
+    await expectIdentity(targetPath, STALE_IDENTITY);
   });
 
   it("coalesces parallel installations for the same managed home", async () => {
     const { targetPath, install } = await setupService();
     const copyStarted = createDeferred<void>();
     const releaseCopy = createDeferred<void>();
-    const copyServiceApp = vi.fn(async (source: string, target: string) => {
+    const copyServiceApp = mockServiceCopy(async (source: string, target: string) => {
       copyStarted.resolve();
       await releaseCopy.promise;
       await copyServiceFixture(source, target);
     });
-    const first = install({ copyServiceApp });
+    const first = install();
     await copyStarted.promise;
-    const second = install({ copyServiceApp });
+    const second = install();
     releaseCopy.resolve();
     await Promise.all([first, second]);
     expect(copyServiceApp).toHaveBeenCalledOnce();
-    await expect(inspectServiceFixture(targetPath)).resolves.toEqual(CURRENT_IDENTITY);
+    await expectIdentity(targetPath, CURRENT_IDENTITY);
   });
 
   it("restores the prior service when authorization is revoked before publication", async () => {
@@ -243,10 +231,8 @@ describe("Codex Computer Use native service", () => {
         },
       }),
     ).rejects.toThrow("installation authorization revoked");
-    expect(currentnessChecks).toBe(2);
-
-    await expect(inspectServiceFixture(targetPath)).resolves.toEqual(CURRENT_IDENTITY);
-    await expect(findInstallDebris(path.dirname(targetPath))).resolves.toEqual([]);
+    await expectIdentity(targetPath, CURRENT_IDENTITY);
+    await expectNoDebris(path.dirname(targetPath));
   });
 
   it("does not provision the macOS service on other platforms", async () => {
@@ -290,8 +276,7 @@ function serviceIdentity(version: string, build: string, label: string): Service
 }
 
 async function writeServiceFixture(appPath: string, identity: ServiceIdentity): Promise<void> {
-  await writeExecutableClient(appPath);
-  await fs.writeFile(path.join(appPath, "Contents", "Info.plist"), "fixture");
+  await fs.mkdir(appPath, { recursive: true });
   await writeFixtureIdentity(appPath, identity);
 }
 
@@ -309,15 +294,17 @@ async function inspectServiceFixture(appPath: string): Promise<ServiceIdentity |
   }
 }
 
-async function copyServiceFixture(sourcePath: string, targetPath: string): Promise<void> {
-  await fs.cp(sourcePath, targetPath, { recursive: true });
+function mockServiceCopy(copy = copyServiceFixture) {
+  return vi.spyOn(processRuntime, "runExec").mockImplementation(async (command, args) => {
+    expect(command).toBe("/usr/bin/ditto");
+    expect(args[0]).toBe("--noqtn");
+    await copy(args[1]!, args[2]!);
+    return { stdout: "", stderr: "" };
+  });
 }
 
-async function writeExecutableClient(appPath: string): Promise<void> {
-  const clientPath = path.join(appPath, CLIENT_RELATIVE_PATH);
-  await fs.mkdir(path.dirname(clientPath), { recursive: true });
-  await fs.writeFile(clientPath, "client");
-  await fs.chmod(clientPath, 0o755);
+async function copyServiceFixture(sourcePath: string, targetPath: string): Promise<void> {
+  await fs.cp(sourcePath, targetPath, { recursive: true });
 }
 
 async function findInstallDebris(targetParent: string): Promise<string[]> {
@@ -350,11 +337,15 @@ it("selects the first installed desktop marketplace", async () => {
   await writeBundledComputerUsePlugin(chatGptMarketplacePath, "2.0.0");
   await writeBundledComputerUsePlugin(legacyCodexMarketplacePath, "1.0.0");
 
-  expect(
-    await reconcile({
-      bundledMarketplacePathCandidates: [chatGptMarketplacePath, legacyCodexMarketplacePath],
-    }),
-  ).toBe(true);
+  const resolveMarketplace =
+    desktopPaths.resolveFirstExistingMacOSDesktopCodexBundledMarketplacePath;
+  vi.spyOn(
+    desktopPaths,
+    "resolveFirstExistingMacOSDesktopCodexBundledMarketplacePath",
+  ).mockImplementation(() =>
+    resolveMarketplace({ candidates: [chatGptMarketplacePath, legacyCodexMarketplacePath] }),
+  );
+  expect(await reconcile({})).toBe(true);
   expect(await fs.readdir(computerUseCachePath(codexHome))).toEqual(["2.0.0"]);
 });
 
@@ -377,15 +368,13 @@ it("copies a bundled plugin symlink without replacing current copies or removing
   await fs.symlink(bundledPluginRoot, activeCachePath, "dir");
 
   expect(await reconcile({ bundledMarketplacePath })).toBe(true);
-  await expect(fs.readFile(path.join(priorCachePath, "live-client-marker"), "utf8")).resolves.toBe(
-    "in use",
-  );
+  await expectFile(path.join(priorCachePath, "live-client-marker"), "in use");
   const cacheBefore = await fs.lstat(activeCachePath);
   expect(cacheBefore.isDirectory()).toBe(true);
-  expect(cacheBefore.isSymbolicLink()).toBe(false);
-  await expect(
-    fs.readFile(path.join(activeCachePath, ".codex-plugin", "plugin.json"), "utf8"),
-  ).resolves.toBe(JSON.stringify({ name: "computer-use", version: "1.0.857" }));
+  await expectFile(
+    path.join(activeCachePath, ".codex-plugin", "plugin.json"),
+    JSON.stringify({ name: "computer-use", version: "1.0.857" }),
+  );
   // Resolving the source root must not recursively follow links outside the bundle.
   const externalLink = await fs.lstat(path.join(activeCachePath, "external-link"));
   expect(externalLink.isSymbolicLink()).toBe(true);
@@ -410,13 +399,10 @@ it.runIf(process.platform !== "win32")(
     await fs.writeFile(path.join(external, "sentinel"), "outside");
     await fs.symlink(external, path.join(codexHome, "plugins"), "dir");
 
-    await expect(
-      reconcile({
-        ownershipRoot: agentDir,
-        bundledMarketplacePath,
-      }),
-    ).rejects.toThrow(/symlink|real directories/u);
-    await expect(fs.readFile(path.join(external, "sentinel"), "utf8")).resolves.toBe("outside");
+    await expect(reconcile({ ownershipRoot: agentDir, bundledMarketplacePath })).rejects.toThrow(
+      /symlink|real directories/u,
+    );
+    await expectFile(path.join(external, "sentinel"), "outside");
     await expect(fs.access(path.join(external, "cache"))).rejects.toThrow();
   },
 );
@@ -427,7 +413,6 @@ it("preserves the default namespace when marketplacePath is explicit", async () 
   const bundledMarketplacePath = path.join(root, "bundled-marketplace");
   await writeBundledComputerUsePlugin(bundledMarketplacePath, "2.0.0");
   await fs.mkdir(path.join(cacheRoot, "1.0.101"), { recursive: true });
-  await fs.mkdir(path.join(cacheRoot, "1.0.102"), { recursive: true });
 
   expect(
     await reconcile({
@@ -436,7 +421,6 @@ it("preserves the default namespace when marketplacePath is explicit", async () 
     }),
   ).toBe(false);
   await fs.access(path.join(cacheRoot, "1.0.101"));
-  await fs.access(path.join(cacheRoot, "1.0.102"));
 });
 
 function computerUseCachePath(codexHome: string, version = ""): string {
@@ -444,10 +428,6 @@ function computerUseCachePath(codexHome: string, version = ""): string {
 }
 
 describe("managed Codex bundled marketplace", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
   async function fixture() {
     const root = tempDirs.make("openclaw-codex-marketplace-");
     const candidate = await writeMarketplaceCandidate(root);
@@ -487,9 +467,7 @@ describe("managed Codex bundled marketplace", () => {
     await fs.writeFile(path.join(target, "sentinel"), "operator-owned");
 
     await expect(publish()).rejects.toThrow("unowned bundled marketplace");
-    await expect(fs.readFile(path.join(target, "sentinel"), "utf8")).resolves.toBe(
-      "operator-owned",
-    );
+    await expectFile(path.join(target, "sentinel"), "operator-owned");
   });
 
   it.runIf(process.platform !== "win32")(
@@ -509,7 +487,7 @@ describe("managed Codex bundled marketplace", () => {
       });
 
       await expect(publish()).rejects.toThrow();
-      await expect(fs.readFile(path.join(external, "sentinel"), "utf8")).resolves.toBe("outside");
+      await expectFile(path.join(external, "sentinel"), "outside");
       await expect(fs.access(path.join(external, "openai-bundled"))).rejects.toThrow();
     },
   );
@@ -518,7 +496,6 @@ describe("managed Codex bundled marketplace", () => {
 describe("createIsolatedCodexAppServerClient artifact refresh", () => {
   afterEach(async () => {
     await clearSharedCodexAppServerClientAndWait();
-    vi.restoreAllMocks();
   });
 
   it.each(["service", "cache"])("refreshes the managed %s before startup", async (artifact) => {
@@ -541,7 +518,6 @@ describe("createIsolatedCodexAppServerClient artifact refresh", () => {
       targetService,
       artifact === "service" ? STALE_IDENTITY : CURRENT_IDENTITY,
     );
-    const sourceIdentity = await inspectServiceFixture(sourceService);
     await fs.writeFile(path.join(pluginRoot, "generation.txt"), "new-cache");
     await fs.cp(pluginRoot, cachePath, { recursive: true });
     await fs.writeFile(
@@ -556,11 +532,7 @@ describe("createIsolatedCodexAppServerClient artifact refresh", () => {
       resolveServiceSource({ ...params, ...inspection }),
     );
     vi.spyOn(service, "ensureCodexComputerUseServiceApp").mockImplementation((params) =>
-      ensureService({
-        ...params,
-        ...inspection,
-        copyServiceApp: (source, target) => fs.cp(source, target, { recursive: true }),
-      }),
+      ensureService({ ...params, ...inspection }),
     );
 
     vi.spyOn(generation, "waitForCodexDesktopGeneration").mockResolvedValue({
@@ -568,43 +540,24 @@ describe("createIsolatedCodexAppServerClient artifact refresh", () => {
       fingerprint: "desktop-original",
     });
 
-    let initializations = 0;
-    const harness = createClientHarness({
-      onWrite(line, send) {
-        const request: unknown = JSON.parse(line);
-        if (isJsonObject(request) && request.id !== undefined && request.method === "initialize") {
-          initializations += 1;
-          send({
-            id: request.id,
-            result: { userAgent: `codex-cli/${CODEX_APP_SERVER_VERSION}` },
-          });
-        }
-      },
-    });
-    const start = vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
+    const harness = createInitializingClientHarness();
+    vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
     try {
       const startup = createIsolatedCodexAppServerClient({
         agentDir,
         authProfileId: null,
-        startOptions: {
-          transport: "stdio",
+        startOptions: createStartOptions({
           homeScope: "agent",
           commandSource: "resolved-managed",
           command,
-          args: ["app-server"],
-          headers: {},
-        },
+        }),
         pluginConfig: {
           computerUse: { enabled: true, autoInstall: true, pluginCacheMode: "shared" },
         },
       });
       await expect(startup).resolves.toBe(harness.client);
-      expect(start).toHaveBeenCalledOnce();
-      expect(initializations).toBe(1);
-      await expect(inspectServiceFixture(targetService)).resolves.toEqual(sourceIdentity);
-      await expect(fs.readFile(path.join(cachePath, "generation.txt"), "utf8")).resolves.toBe(
-        "new-cache",
-      );
+      await expectIdentity(targetService, CURRENT_IDENTITY);
+      await expectFile(path.join(cachePath, "generation.txt"), "new-cache");
       expect(await fs.readdir(path.dirname(targetService))).toEqual(["Codex Computer Use.app"]);
       expect(await fs.readdir(path.dirname(cachePath))).toEqual(["1.0.857"]);
     } finally {

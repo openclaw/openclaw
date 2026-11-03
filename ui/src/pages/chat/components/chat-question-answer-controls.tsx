@@ -1,7 +1,9 @@
 import type { Question } from "@openclaw/gateway-protocol";
 import { createEffect, createMemo, createSignal, createUniqueId, For, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { Kbd } from "../../../components/solid/kbd.tsx";
+import { registerChatQuestionsEnglish } from "../../../i18n/locales/en-chat-questions.ts";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import {
   adjustTextareaHeight,
   handleTextareaOverflowInteraction,
@@ -10,13 +12,7 @@ import {
   observeTextareaOverflow,
 } from "./chat-composer-dom.ts";
 
-type QuestionOptionsProps = {
-  question: Question;
-  selected: ReadonlySet<string>;
-  disabled: boolean;
-  onSelect: (label: string) => void;
-  optionRef?: (element: HTMLButtonElement) => () => void;
-};
+registerEnglishCatalog(registerChatQuestionsEnglish);
 
 type QuestionFreeTextProps = {
   getTranscriptElement?: () => HTMLElement | null;
@@ -28,15 +24,13 @@ type QuestionFreeTextProps = {
   inputRef?: (element: HTMLInputElement | HTMLTextAreaElement) => void;
 };
 
-function Shortcut(props: { value: number }) {
-  return (
-    <kbd class="shortcut-kbd">
-      <span class="kbd__text">{props.value}</span>
-    </kbd>
-  );
-}
-
-export function QuestionOptions(props: QuestionOptionsProps) {
+export function QuestionOptions(props: {
+  question: Question;
+  selected: ReadonlySet<string>;
+  disabled: boolean;
+  onSelect: (label: string) => void;
+  optionRef?: (element: HTMLButtonElement) => () => void;
+}) {
   const implicit = () => props.question.resource?.selection === "implicit";
   const options = createMemo(() =>
     props.question.options.filter(
@@ -84,6 +78,7 @@ export function QuestionOptions(props: QuestionOptionsProps) {
                         : -1
                     }
                     data-option-index={index()}
+                    data-shortcut={index() < 9 ? index() + 1 : undefined}
                     disabled={props.disabled}
                     onClick={() => props.onSelect(value())}
                   >
@@ -108,7 +103,7 @@ export function QuestionOptions(props: QuestionOptionsProps) {
                       <strong class="chat-question-panel__option-label">{option.label}</strong>
                       {option.description && <small>{option.description}</small>}
                     </span>
-                    {index() < 9 && <Shortcut value={index() + 1} />}
+                    {index() < 9 && <Kbd keys={index() + 1} />}
                   </button>
                   {option.thumbnail && !option.thumbnail?.startsWith("data:") && (
                     <a
@@ -256,6 +251,11 @@ export function QuestionFreeText(props: QuestionFreeTextProps) {
                   "chat-question-panel__option chat-question-panel__option--other",
                   { "chat-question-panel__option--selected": props.selected },
                 ]}
+                data-shortcut={
+                  !props.disabled && props.question.options.length < 9
+                    ? props.question.options.length + 1
+                    : undefined
+                }
               >
                 <span class="chat-question-panel__option-marker" aria-hidden="true" />
                 <FreeTextControl
@@ -265,7 +265,7 @@ export function QuestionFreeText(props: QuestionFreeTextProps) {
                   label={t("chat.questions.ownAnswerFor", { header: props.question.header })}
                 />
                 {props.question.options.length < 9 && (
-                  <Shortcut value={props.question.options.length + 1} />
+                  <Kbd keys={props.question.options.length + 1} />
                 )}
               </div>
             )}

@@ -29,11 +29,10 @@ export function createConfigHealthFingerprint(params: {
   parsed: unknown;
   resolved?: unknown;
   stat: fs.Stats | null;
-  hash?: string;
   observedAt?: string;
 }): ConfigHealthFingerprint {
   return {
-    hash: params.hash ?? hashConfigRaw(params.raw),
+    hash: hashConfigRaw(params.raw),
     bytes: Buffer.byteLength(params.raw, "utf-8"),
     mtimeMs: params.stat?.mtimeMs ?? null,
     ctimeMs: params.stat?.ctimeMs ?? null,

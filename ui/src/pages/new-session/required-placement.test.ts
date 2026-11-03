@@ -2,11 +2,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ModelCatalogEntry } from "../../api/types.ts";
 import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
+import { nativeRuntime } from "../../test-helpers/chat-model.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
 import {
   hostedRuntime,
   mountPlacement,
-  nativeRuntime,
   placementDevice,
   placementFixture,
 } from "./placement.test-support.ts";

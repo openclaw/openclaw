@@ -1,11 +1,13 @@
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
+import { canonicalModelAuthProviderId } from "../../lib/model-auth.ts";
 import type { createModelProviderMutationPresentation } from "./config-mutation-presentation.ts";
 import {
   modelProviderErrorMessage,
   runModelProviderApiKeyMutation,
   runModelProviderDefaultsMutation,
+  type ModelDefaultsSaveField,
   type ModelProviderRowMessage,
 } from "./config-mutation.ts";
 import type { ModelProvidersState } from "./page-state.ts";
@@ -41,10 +43,24 @@ export function createModelProviderConfigActions(deps: {
     state.keyDraft = "";
   }
 
+  // A save warns about its own provider's listing, not another provider's failure.
+  function providerCatalogWarning(provider: string): string | null {
+    const id = canonicalModelAuthProviderId(provider);
+    const own = (state.data?.providerOutcomes ?? []).filter(
+      (outcome) => canonicalModelAuthProviderId(outcome.provider) === id,
+    );
+    if (own.length === 0) {
+      return state.data?.catalogError ?? null;
+    }
+    return own.some((outcome) => outcome.status !== "ready")
+      ? t("modelProviders.defaults.discoverFailed")
+      : null;
+  }
+
   async function mutateApiKey(
     provider: string,
     configKey: string,
-    apiKey: string | null,
+    apiKey: string,
     action: "edit" | "add" = "edit",
   ) {
     const client = gateway.client;
@@ -59,7 +75,6 @@ export function createModelProviderConfigActions(deps: {
     clearProbe(provider);
     const result = await mutations.run(
       "apiKey",
-      key,
       () =>
         runModelProviderApiKeyMutation(
           {
@@ -75,7 +90,7 @@ export function createModelProviderConfigActions(deps: {
                 state.data = previous;
                 return warning;
               }
-              return state.data?.error ?? state.data?.catalogError ?? null;
+              return state.data?.error ?? providerCatalogWarning(provider) ?? null;
             },
             setBusy: (busy) => setBusy(key, busy),
             setMessage: (message) => {
@@ -91,11 +106,7 @@ export function createModelProviderConfigActions(deps: {
             provider: configKey,
             apiKey,
             success: t(
-              action === "add"
-                ? "modelProviders.add.saved"
-                : apiKey === null
-                  ? "modelProviders.apiKey.removed"
-                  : "modelProviders.apiKey.saved",
+              action === "add" ? "modelProviders.add.saved" : "modelProviders.apiKey.saved",
               { provider },
             ),
           },
@@ -122,21 +133,25 @@ export function createModelProviderConfigActions(deps: {
     }
   }
 
-  async function saveDefaults() {
+  async function saveDefaults(field: ModelDefaultsSaveField) {
     const defaults = state.defaultsDraft;
     if (!defaults) {
       return;
     }
     const capturedAgentEpoch = getAgentEpoch();
     const settled = await mutations.run(
-      "defaults",
-      "defaults",
-      () =>
+      field,
+      (onAdmitted) =>
         runModelProviderDefaultsMutation(context, gateway, {
           defaults,
           busy: Boolean(state.busy.defaults),
           isCurrentAgent: () => getAgentEpoch() === capturedAgentEpoch,
-          setBusy: (busy) => setBusy("defaults", busy),
+          setBusy: (busy) => {
+            if (busy) {
+              onAdmitted();
+            }
+            setBusy("defaults", busy);
+          },
           setMessage: (message) => setMessage("defaults", message),
         }),
       (error) => setMessage("defaults", { kind: "error", text: modelProviderErrorMessage(error) }),

@@ -78,7 +78,7 @@ describe("detectInferenceBackends", () => {
       vi.mocked(probes.probeLocalCommand).mockImplementation(
         async (command, args = ["--version"]) => {
           calls.push({ command, args });
-          return { command, found: command === "codex" || command === "claude" };
+          return { command, found: ["codex", "claude", "gemini"].includes(command) };
         },
       );
       vi.mocked(cliCredentials.hasCodexCliAuthFile).mockReturnValue(stored);
@@ -94,8 +94,10 @@ describe("detectInferenceBackends", () => {
             : "installed; login status unverified",
           credentials: stored,
         },
+        { kind: "gemini-cli", detail: "installed; login status unavailable" },
       ]);
       expect(candidates[0]?.credentials).toBeUndefined();
+      expect(candidates[2]?.credentials).toBeUndefined();
     },
   );
 
@@ -140,51 +142,35 @@ describe("detectInferenceBackends", () => {
     },
   );
 
-  it("reports a timed-out Codex probe instead of treating Codex as absent", async () => {
-    vi.mocked(probes.probeLocalCommand).mockImplementation(async (command) => ({
-      command,
-      found: true,
-      timedOut: true,
-      error: "timed out after 1500ms",
-    }));
-    const detection = detectInferenceBackends();
-
-    await expect(detection).rejects.toThrow(
-      "Codex detection failed (codex): timed out after 1500ms",
-    );
-  });
-
-  it.each(["linux", "darwin"] as const)(
-    "reports failed Codex execution during %s discovery",
-    async (platform) => {
-      const probe = vi.fn(async (command: string): Promise<probes.LocalCommandProbe> => ({
-        command,
-        found: false,
-        ...(command === "codex"
-          ? { failure: "error", error: "Operation not permitted" }
-          : { failure: "not-found" }),
-      }));
+  it.each([
+    ["linux", "codex", true],
+    ["linux", "codex", false],
+    ["darwin", "codex", false],
+    ["darwin", "/Applications/ChatGPT.app/Contents/Resources/codex", false],
+  ] as const)(
+    "reports failed %s probe %s (timeout: %s)",
+    async (platform, executable, timedOut) => {
       vi.spyOn(process, "platform", "get").mockReturnValue(platform);
-      vi.mocked(probes.probeLocalCommand).mockImplementation(probe);
+      const error = timedOut ? "timed out after 1500ms" : "Operation not permitted";
+      vi.mocked(probes.probeLocalCommand).mockImplementation(async (command) => ({
+        command,
+        found: command === executable && timedOut,
+        timedOut: command === executable && timedOut,
+        failure: command === executable ? (timedOut ? undefined : "error") : "not-found",
+        error: command === executable ? error : "not found",
+      }));
       await expect(detectInferenceBackends()).rejects.toThrow(
-        "Codex detection failed (codex): Operation not permitted",
+        `Codex detection failed (${executable}): ${error}`,
       );
-      expect(probe.mock.calls.map(([command]) => command)).toEqual(["claude", "codex", "gemini"]);
+      if (executable === "codex") {
+        expect(vi.mocked(probes.probeLocalCommand).mock.calls.map(([command]) => command)).toEqual([
+          "claude",
+          "codex",
+          "gemini",
+        ]);
+      }
     },
   );
-
-  it("reports a failed macOS bundled Codex probe instead of treating it as absent", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-    vi.mocked(probes.probeLocalCommand).mockImplementation(async (command) => ({
-      command,
-      found: false,
-      failure: command.startsWith("/Applications/") ? "error" : "not-found",
-      error: command.startsWith("/Applications/") ? "Operation not permitted" : "not found",
-    }));
-    await expect(detectInferenceBackends()).rejects.toThrow(
-      "Codex detection failed (/Applications/ChatGPT.app/Contents/Resources/codex): Operation not permitted",
-    );
-  });
 
   it("reports inaccessible Codex sign-in state instead of treating the login as absent", async () => {
     vi.mocked(probes.probeLocalCommand).mockImplementation(probeDeps({ codex: true }));
@@ -282,22 +268,6 @@ describe("detectInferenceBackends", () => {
     expect(candidates).toMatchObject([
       { kind: "existing-model", modelRef: "anthropic/claude-opus-4-8" },
     ]);
-  });
-
-  it("keeps missing Gemini legacy credentials and native login states unverified", async () => {
-    vi.mocked(probes.probeLocalCommand).mockImplementation(
-      probeDeps({ claude: true, codex: true, gemini: true }),
-    );
-    const candidates = await detectInferenceBackends();
-
-    expect(candidates).toMatchObject([
-      { kind: "claude-cli", detail: "installed; login status unverified" },
-      { kind: "codex-cli", detail: "installed; login status unverified" },
-      { kind: "gemini-cli", detail: "installed; login status unavailable" },
-    ]);
-    expect(
-      candidates.find((candidate) => candidate.kind === "gemini-cli")?.credentials,
-    ).toBeUndefined();
   });
 
   it("offers stored Codex credentials when its runtime still needs installation", async () => {

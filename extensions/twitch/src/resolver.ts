@@ -26,10 +26,6 @@ type TwitchUser = {
   display_name: string;
 };
 
-type TwitchUsersResponse = {
-  data: TwitchUser[];
-};
-
 export async function resolveTwitchTargets(
   inputs: string[],
   account: TwitchAccountConfig,
@@ -80,7 +76,7 @@ export async function resolveTwitchTargets(
         tokenValidated = true;
       }
 
-      const response = await callTwitchApi<TwitchUsersResponse>(
+      const response = await callTwitchApi<{ data: TwitchUser[] }>(
         { type: "helix", url: "users", query },
         clientId,
         normalizedToken,

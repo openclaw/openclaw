@@ -1,6 +1,7 @@
 import { createRouter } from "@openclaw/uirouter";
 import { createComponent, createSignal } from "solid-js";
 import { resolveThemeBranding } from "../../../../packages/gateway-protocol/src/theme.ts";
+import { pathForRoute } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
@@ -8,8 +9,8 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { createConfigPage } from "./config-page-state.ts";
-import { ConfigPage, type ConfigPageId } from "./config-page.tsx";
-import type { ConfigRouteData } from "./route-data.ts";
+import { ConfigRoute, type ConfigPageId } from "./config-page.tsx";
+import { configRouteData, type ConfigRouteData } from "./route-data.ts";
 
 export function createConfigRouteContext(): ApplicationContext {
   const config = { messages: { ackReaction: "!" }, tts: { provider: "synthetic" } };
@@ -148,10 +149,12 @@ export function completeConfigContext(context: ApplicationContext): ApplicationC
   });
   Object.assign(context.overlays, { snapshot: context.overlays.snapshot ?? {} });
   Object.assign(context.webPush, { snapshot: context.webPush.snapshot ?? {} });
-  Object.assign(context.theme, {
-    branding: context.theme.branding ?? resolveThemeBranding(undefined),
-    settings: context.theme.settings ?? loadSettings(),
-  });
+  if (!context.theme.branding) {
+    Object.assign(context.theme, { branding: resolveThemeBranding(undefined) });
+  }
+  if (!context.theme.settings) {
+    Object.defineProperty(context.theme, "settings", { configurable: true, get: loadSettings });
+  }
   Object.assign(context.gateway, {
     connection: context.gateway.connection ?? { gatewayUrl: "ws://config.test" },
     subscribeEvents: context.gateway.subscribeEvents ?? subscribe,
@@ -187,19 +190,23 @@ export function completeConfigContext(context: ApplicationContext): ApplicationC
 
 export function mountConfigPage(
   initialContext: ApplicationContext,
-  initial: { pageId?: ConfigPageId; routeData?: ConfigRouteData | null } = {},
+  initial: { pageId?: ConfigPageId; routeData?: ConfigRouteData } = {},
 ) {
   const provider = createSolidApplicationContextProvider(completeConfigContext(initialContext));
   const [props, setProps] = createSignal(initial);
   const view = mountSolid(
     () => {
-      const result = createComponent(ConfigPage, {
-        get pageId() {
-          return props().pageId ?? "advanced";
+      const result = createComponent(ConfigRoute, {
+        get data() {
+          const { pageId = "advanced", routeData } = props();
+          return {
+            ...(routeData ??
+              configRouteData({ pathname: pathForRoute(pageId), search: "", hash: "" })),
+            pageId,
+          };
         },
-        get routeData() {
-          return props().routeData ?? null;
-        },
+        loaderPending: false,
+        presented: true,
       });
       return result;
     },

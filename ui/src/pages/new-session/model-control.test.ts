@@ -122,7 +122,12 @@ it("waits for selected-agent defaults after catalog hydration", async () => {
   expect(controlElement(ready, "model-default", "true")?.textContent).toContain(sol.name);
   expect(controlElement(ready, "model-select")?.textContent).toContain(sol.name);
   expect(controlElement(ready, "thinking-select")?.textContent).toContain("High");
-  expect(controlElement(ready, "thinking-slider")?.dataset.chatThinkingValues).toContain("high");
+  // The effort panel is lazy; its first chunk load can land after the synchronous draw.
+  await vi.waitFor(() =>
+    expect(
+      controlElement(draw(effortAgent), "thinking-slider")?.dataset.chatThinkingValues,
+    ).toContain("high"),
+  );
   expect(control).toMatchObject({ selected: "", thinkingLevel: "" });
 });
 
@@ -209,7 +214,7 @@ it("drops a stored model and reasoning when manual selection is denied", async (
 });
 
 it("clears xhigh when an interactive model switch targets a profile ending at high", async () => {
-  const { control, context, find, changed } = setup([
+  const { control, context, find, draw, changed } = setup([
     testModel("kimi", "k3", {
       reasoning: true,
       thinkingLevels: levels(["off", "low", "medium", "high", "xhigh"]),
@@ -225,6 +230,10 @@ it("clears xhigh when an interactive model switch targets a profile ending at hi
   await vi.waitFor(() => expect(find("model-option", "demo/limited")).not.toBeNull());
   control.selected = "kimi/k3";
   control.thinkingLevel = "xhigh";
+  const search = draw().querySelector<HTMLInputElement>("[data-chat-model-search]")!;
+  search.value = "demo/limited";
+  search.dispatchEvent(new InputEvent("input", { bubbles: true }));
+  flush();
   find("model-option", "demo/limited")!.click();
   expect(control).toMatchObject({ selected: "demo/limited", thinkingLevel: "" });
   expect(changed).toHaveBeenLastCalledWith({ model: "demo/limited", thinkingLevel: "" });
@@ -359,8 +368,18 @@ describe("configured defaults", () => {
     }),
   );
   const agent = { id: "main", model: { primary: "openai/default-model" }, thinkingDefault: "high" };
-  const preference = { model: "openai/other-model", thinkingLevel: "low", fastMode: true };
-  const savedDraft = { agentId: "main", model: preference.model, thinkingLevel: "low" };
+  const preference = {
+    model: "openai/other-model",
+    thinkingLevel: "low",
+    fastMode: true,
+    cyberAccessProgram: "daybreak_red" as const,
+  };
+  const savedDraft = {
+    agentId: "main",
+    model: preference.model,
+    thinkingLevel: "low",
+    cyberAccessProgram: "daybreak_blue" as const,
+  };
   function setupDefaults() {
     const state = setup(models, [], agent);
     Object.assign(state.context, {
@@ -388,12 +407,17 @@ describe("configured defaults", () => {
     expect(control.selected).toBe("");
   });
 
-  it("withholds stale preferences after metadata failure", async () => {
+  it("withholds unavailable model metadata while preserving the saved Access choice", async () => {
     const { request, control, load, settled } = setupDefaults();
     request.mockRejectedValue(new Error("offline"));
     load({ preference: { ...preference, agentRuntime: "stale-runtime" } });
     await settled();
-    expect(control).toMatchObject({ selected: "", agentRuntime: undefined, thinkingLevel: "" });
+    expect(control).toMatchObject({
+      selected: "",
+      agentRuntime: undefined,
+      thinkingLevel: "",
+      cyberAccessProgram: "daybreak_red",
+    });
   });
 
   it.each(["optional", "required", "required-after-hydration"])(
@@ -406,10 +430,15 @@ describe("configured defaults", () => {
         configuredDefaults: placement === "required",
       });
       await settled();
-      expect(control).toMatchObject({ selected: "openai/other-model", thinkingLevel: "low" });
+      expect(control).toMatchObject({
+        selected: "openai/other-model",
+        thinkingLevel: "low",
+        cyberAccessProgram: "daybreak_blue",
+      });
       expect(control.draftSelection("main")).toMatchObject({
         model: "openai/other-model",
         thinkingLevel: "low",
+        cyberAccessProgram: "daybreak_blue",
       });
       load({
         configuredDefaults: placement !== "optional",
@@ -432,6 +461,18 @@ describe("configured defaults", () => {
     expect(control.fastMode).toBe(false);
     load();
     expect(control.fastMode).toBe(false);
+  });
+
+  it("hydrates late Access preferences after an effort choice", async () => {
+    const { control, context, load, settled } = setupDefaults();
+    load({ preference: null });
+    await settled();
+    const props = control.renderProps({ context, agent, agentId: "main", sending: false });
+    props.onThinkingSelect?.("low", props.sessionKey);
+    load();
+    await settled();
+    expect(control.thinkingLevel).toBe("low");
+    expect(control.cyberAccessProgram).toBe("daybreak_red");
   });
 
   it("retires a consumed restored choice but preserves a newer deliberate choice", async () => {
@@ -669,3 +710,86 @@ describe("runtime choices", () => {
     expect(changed).not.toHaveBeenCalled();
   });
 });
+
+it("preserves an explicit Access choice across model and catalog changes", async () => {
+  const { context, control, changed, request } = setup([luna, sol]);
+  const preference = { cyberAccessProgram: "daybreak_blue" as const };
+  control.load(context, "main", true, { preference });
+  await waitForFast(() => expect(control.isRestoringPreference()).toBe(false));
+  expect(control.cyberAccessProgram).toBe("daybreak_blue");
+  const controls = control.renderProps({ agentId: "main", context, sending: false });
+  expect(controls.requestedAccessProgram).toBe("daybreak_blue");
+  controls.onAccessProgramSelect?.("daybreak_red", controls.sessionKey);
+  expect(changed).toHaveBeenLastCalledWith(
+    expect.objectContaining({ cyberAccessProgram: "daybreak_red" }),
+  );
+  control.selectModel("openai/gpt-5.6-sol");
+  expect(control.draftSelection("main")).toMatchObject({ cyberAccessProgram: "daybreak_red" });
+  request.mockResolvedValue({ models: [] });
+  control.invalidate();
+  control.load(context, "main", true, { preference });
+  await waitForFast(() => expect(control.isRestoringPreference()).toBe(false));
+  expect(control.cyberAccessProgram).toBe("daybreak_red");
+  control.load(context, "other", true);
+  expect(control.cyberAccessProgram).toBeUndefined();
+});
+
+it.each(["configured", null, "last-used"] as const)(
+  "keeps Access separate from model-default policy (%s)",
+  async (policy) => {
+    const model = {
+      ...luna,
+      availableAccessPrograms: {
+        cyber: [
+          "standard",
+          "daybreak_blue",
+          "daybreak_red",
+        ] satisfies import("../../api/types.ts").CyberAccessProgram[],
+      },
+      cyberAccessProgramDefault: "daybreak_blue" as const,
+    };
+    const { context, control } = setup([model]);
+    context.config.current.newSessionModelDefaults = policy;
+    control.load(context, "main", true, {
+      preference: { cyberAccessProgram: "daybreak_red", daybreakAccessProgram: "daybreak_red" },
+    });
+    await waitForFast(() => expect(control.isRestoringPreference()).toBe(false));
+    expect(control.accessProgramForSubmission()).toBe("daybreak_red");
+    const props = control.renderProps({ context, agentId: "main", sending: false });
+    props.onAccessProgramSelect?.("standard", props.sessionKey);
+    expect(
+      control.renderProps({ context, agentId: "main", sending: false }).daybreakAccessProgram,
+    ).toBe("daybreak_red");
+  },
+);
+
+it.each([undefined, "daybreak_blue"] as const)(
+  "commits the displayed first-use Access choice (%s)",
+  async (configured) => {
+    const model: ModelCatalogEntry = {
+      ...luna,
+      availableAccessPrograms: {
+        cyber: [
+          "standard",
+          "daybreak_blue",
+        ] satisfies import("../../api/types.ts").CyberAccessProgram[],
+      },
+      cyberAccessProgramDefault: configured ?? "standard",
+    };
+    const { context, control, changed } = setup([model]);
+    const agent = { id: "main", model: { primary: "openai/gpt-5.6-luna" } };
+    control.load(context, "main", true, { agent });
+    await waitForFast(() => expect(control.isRestoringPreference()).toBe(false));
+    await control.metadataRead;
+    const expected = configured ?? "standard";
+    expect(
+      control.renderProps({ context, agentId: "main", agent, sending: false })
+        .requestedAccessProgram,
+    ).toBe(expected);
+    expect(control.accessProgramForSubmission()).toBe(expected);
+    control.initializeAccessProgram();
+    expect(changed).toHaveBeenLastCalledWith(
+      expect.objectContaining({ cyberAccessProgram: expected }),
+    );
+  },
+);

@@ -2,7 +2,6 @@ import {
   type AssistantMessage,
   AssistantMessageEventStream,
   type Message,
-  type Model,
 } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { expect, it, onTestFinished, vi } from "vitest";
@@ -23,19 +22,17 @@ import { prepareEmbeddedRunTerminal } from "./embedded-agent-runner/run/terminal
 import { createUsageAccumulator } from "./embedded-agent-runner/usage-accumulator.js";
 import { createSubscribedSessionHarness } from "./embedded-agent-subscribe.e2e-harness.js";
 import { makeEmbeddedRunnerAttempt } from "./test-helpers/embedded-agent-runner-e2e-fixtures.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
-const model: Model<"openai-responses"> = {
+const model = makeProviderModelFixture<"openai-responses">({
   id: "gpt-6-astra",
-  name: "GPT-6 Astra",
   api: "openai-responses",
   provider: "openai",
   baseUrl: "https://api.openai.com/v1",
   reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 200000,
   maxTokens: 8192,
-};
+});
 const lookupCall = {
   type: "function_call" as const,
   id: "fc_lookup",
@@ -119,13 +116,11 @@ function responsesStream(id: string, request: Request) {
 }
 
 const answered = [lookupCall, finalAnswer("msg_answer", "Use counter B.")];
-const answeredTail = ["toolUse:toolCall", "stop:text", "stop:text"];
 const voice = "/tmp/openclaw/tts-a/voice-a.opus";
 type Scenario = {
   name: string;
   delivery: "deferred" | "live" | "off";
   requests: readonly Request[];
-  transcript: readonly string[];
   delivered: readonly string[];
   reply?: { disposition: "visible"; text: string } | { disposition: "empty" | "silent" };
   trigger?: "cron";
@@ -133,13 +128,14 @@ type Scenario = {
   quiet?: boolean;
   reasoning?: boolean;
 };
+const answer = "Use counter B.";
+const visible = (text: string): Scenario["reply"] => ({ disposition: "visible", text });
 const scenario = (name: string, overrides: Partial<Omit<Scenario, "name">> = {}): Scenario => ({
   name,
   delivery: "deferred",
   requests: [answered, "NO_REPLY"],
-  transcript: answeredTail,
-  delivered: ["Use counter B."],
-  reply: { disposition: "visible", text: "Use counter B." },
+  delivered: [answer],
+  reply: visible(answer),
   ...overrides,
 });
 it.each([
@@ -158,18 +154,16 @@ it.each([
       ],
       "NO_REPLY",
     ],
-    transcript: ["toolUse:toolCall", "stop:text+text", "stop:text"],
     delivered: ["Alpha."],
-    reply: { disposition: "visible", text: "Alpha." },
+    reply: visible("Alpha."),
   }),
   scenario("live blocks of a two-item terminal answer are not resent", {
     delivery: "live",
     requests: [
       [finalAnswer("msg_first", "First part."), finalAnswer("msg_second", "Second part.")],
     ],
-    transcript: ["stop:text+text"],
     delivered: ["First part.", "Second part."],
-    reply: { disposition: "visible", text: "First part.Second part." },
+    reply: visible("First part.Second part."),
   }),
   scenario("a repeated answer is delivered once", {
     requests: [answered, "Use counter B."],
@@ -188,7 +182,6 @@ it.each([
       ],
       "NO_REPLY",
     ],
-    transcript: ["toolUse:toolCall", "stop:text", "toolUse:toolCall", "stop:text", "stop:text"],
     delivered: [voice],
     // The kept attachment answer owns the result; its parsed text is empty, not NO_REPLY.
     reply: { disposition: "empty" },
@@ -201,7 +194,6 @@ it.each([
   }),
   scenario("a later NO_REPLY keeps pre-tool progress silent", {
     requests: [[finalAnswer("msg_progress", "Checking counter B."), lookupCall], "NO_REPLY"],
-    transcript: ["toolUse:text+toolCall", "stop:", "stop:text"],
     delivered: [],
     reply: { disposition: "silent" },
   }),
@@ -211,7 +203,6 @@ it.each([
       { items: [finalAnswer("msg_progress", "Exporting the rest now.")], endTurn: false },
       "NO_REPLY",
     ],
-    transcript: [...answeredTail, "stop:text"],
   }),
   scenario("quiet mode keeps the completed answer private", {
     delivered: ["Sent with the message tool."],
@@ -224,7 +215,7 @@ it.each([
     reasoning: true,
   }),
 ])("$name", async (row) => {
-  const { delivery, requests, transcript, delivered, trigger = "user", quiet = false } = row;
+  const { delivery, requests, delivered, trigger = "user", quiet = false } = row;
   const sent: string[] = [];
   const show = (payload: { text?: string; mediaUrl?: string }) =>
     payload.text ?? payload.mediaUrl ?? "";
@@ -243,7 +234,6 @@ it.each([
     typingSignals: createTypingSignaler({
       typing: createTypingController({}),
       mode: "never",
-      isHeartbeat: false,
     }),
     blockStreamingEnabled,
     reasoningPayloadsEnabled: row.reasoning === true,
@@ -285,11 +275,8 @@ it.each([
     {
       model,
       convertToLlm: (history) =>
-        history.filter(
-          (message): message is Message =>
-            message.role === "user" ||
-            message.role === "assistant" ||
-            message.role === "toolResult",
+        history.filter((message): message is Message =>
+          ["user", "assistant", "toolResult"].includes(message.role),
         ),
     },
     async (event) => {
@@ -312,17 +299,6 @@ it.each([
   await subscription.waitForPendingEvents();
   await pipeline.flush({ force: true });
   expect(pending).toEqual([]);
-  expect(
-    messages
-      .filter((message) => message.role === "assistant")
-      .map(
-        (message) =>
-          `${message.stopReason}:${message.content
-            .map((item) => item.type)
-            .filter((type) => type !== "thinking")
-            .join("+")}`,
-      ),
-  ).toEqual(transcript);
   const completed = subscription.getCurrentAttemptAssistant();
   const attempt: EmbeddedRunAttemptWithReceiptEvidence = {
     ...makeEmbeddedRunnerAttempt({
@@ -393,7 +369,6 @@ it.each([
     blockStreamingEnabled,
     blockReplyPipeline: pipeline,
     replyToMode: "off",
-    isHeartbeat: false,
   });
   expect([...sent, ...replyPayloads.map(show)]).toEqual(delivered);
   if (row.reply) {

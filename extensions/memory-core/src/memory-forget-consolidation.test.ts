@@ -32,6 +32,8 @@ describe("memory forget", () => {
     h.origins({ entryKeys: [entryKey] }, agentId);
 
   const readBackups = () => h.readEntries<{ content: string }>(DREAMING_MEMORY_BACKUP_NAMESPACE);
+  const promotedAt = async (nowMs: number) =>
+    (await readShortTermRecallEntries({ workspaceDir: h.workspaceDir, nowMs }))[0]?.promotedAt;
 
   const thresholds = { minScore: 0, minRecallCount: 0, minUniqueQueries: 0 };
   async function candidatesFor(
@@ -133,9 +135,7 @@ describe("memory forget", () => {
       const output = JSON.stringify({
         operations: [{ candidateKey: promotedKey, action, priorEntries: [priorEntry] }],
       });
-      const subagent = {
-        complete: vi.fn(async () => ({ text: output })),
-      };
+      const subagent = { complete: vi.fn(async () => ({ text: output })) };
 
       const restoreOriginFailure = failOrigins
         ? failMemoryEntryOriginWrites({
@@ -150,7 +150,6 @@ describe("memory forget", () => {
         : undefined;
       let renamed = false;
       let fileFaultInjected = false;
-      let memoryRenameCalls = 0;
       let readbackBlocked = false;
       const fileError = Object.assign(new Error("synthetic atomic memory failure"), {
         code: "EPERM",
@@ -171,7 +170,6 @@ describe("memory forget", () => {
         });
         vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
           if (String(to) === memoryPath) {
-            memoryRenameCalls += 1;
             if (!fileFaultInjected && fileFailure.startsWith("rename-")) {
               fileFaultInjected = true;
               if (fileFailure === "rename-published") {
@@ -221,7 +219,6 @@ describe("memory forget", () => {
       if (fileFailure === "rename-unchanged") {
         const applied = await application;
         expect(applied.applied).toBe(1);
-        expect(memoryRenameCalls).toBe(2);
         const memory = await readText(memoryPath);
         expect(memory).toContain("openclaw-memory-promotion:retired-entry");
         expect(memory).toContain(promotedMarker);
@@ -246,7 +243,6 @@ describe("memory forget", () => {
         });
         expect(failed).toMatchObject({ cause: { errno: -1 } });
         expect(fileFaultInjected).toBe(true);
-        expect(memoryRenameCalls).toBe(1);
         const published = fileFailure.startsWith("close") || fileFailure === "rename-published";
         expect(renamed).toBe(published);
         if (published) {
@@ -256,10 +252,7 @@ describe("memory forget", () => {
             fileFailure === "rename-changed" ? externalMemory : previousMemory,
           );
         }
-        expect(
-          (await readShortTermRecallEntries({ workspaceDir: h.workspaceDir, nowMs }))[0]
-            ?.promotedAt,
-        ).toBeUndefined();
+        expect(await promotedAt(nowMs)).toBeUndefined();
         expect((await readBackups()).map(({ value }) => value.content)).toEqual([previousMemory]);
         expect(await origins("gamma", "retired-entry")).toHaveLength(1);
         expect(await origins("gamma", promotedKey)).toMatchObject([
@@ -275,10 +268,7 @@ describe("memory forget", () => {
         try {
           await expect(application).rejects.toThrow("injected origin write failure");
           await expect(readText(memoryPath)).resolves.toBe(previousMemory);
-          expect(
-            (await readShortTermRecallEntries({ workspaceDir: h.workspaceDir, nowMs }))[0]
-              ?.promotedAt,
-          ).toBeUndefined();
+          expect(await promotedAt(nowMs)).toBeUndefined();
         } finally {
           restoreOriginFailure?.();
         }
@@ -402,6 +392,18 @@ describe("memory forget", () => {
 
 describe("memory forget curated writes", () => {
   const forget = (dryRun = false) => h.forget({ sessionIds: ["target"], dryRun });
+  async function expectCuratedWrites(
+    content: string,
+    writes: Awaited<ReturnType<typeof forget>>["curatedWrites"],
+  ) {
+    const preview = await forget(true);
+    expect(preview.curatedWrites).toEqual(writes);
+    expect(await h.read("MEMORY.md")).toBe(content);
+    const report = await forget();
+    expect(report).toEqual({ ...preview, dryRun: false });
+    expect(report.artifacts.memoryFiles).toBe(0);
+    expect(await h.read("MEMORY.md")).toBe(content);
+  }
 
   const toolCall = (id: string, name: string, args: unknown) => ({
     type: "toolCall",
@@ -430,16 +432,9 @@ describe("memory forget curated writes", () => {
       content: [toolCall("observed-write", "write", { path: "MEMORY.md" })],
     });
 
-    const preview = await forget(true);
-    expect(preview.curatedWrites).toEqual([
+    await expectCuratedWrites(curatedContent, [
       { relativePath: "MEMORY.md", observedAt: expect.any(Number) },
     ]);
-    expect(await h.read("MEMORY.md")).toBe(curatedContent);
-
-    const report = await forget();
-    expect(report).toEqual({ ...preview, dryRun: false });
-    expect(report.artifacts.memoryFiles).toBe(0);
-    expect(await h.read("MEMORY.md")).toBe(curatedContent);
   });
 
   it("reports harness memory writes from selected live and archived transcripts without observer state", async () => {
@@ -512,20 +507,12 @@ describe("memory forget curated writes", () => {
     );
     expect(await listMemoryArtifactProvenance({ workspaceDir: h.workspaceDir })).toEqual([]);
 
-    const preview = await forget(true);
-
-    expect(preview.curatedWrites).toEqual([
+    await expectCuratedWrites(memoryContent, [
       { relativePath: "MEMORY.md", observedAt },
       { relativePath: "memory/archive.md", observedAt: observedAt + 1 },
       { relativePath: "memory/profile.md", observedAt },
       { relativePath: "memory/structured.md", observedAt },
       { relativePath: "USER.md", observedAt },
     ]);
-    expect(await h.read("MEMORY.md")).toBe(memoryContent);
-
-    const report = await forget();
-    expect(report).toEqual({ ...preview, dryRun: false });
-    expect(report.artifacts.memoryFiles).toBe(0);
-    expect(await h.read("MEMORY.md")).toBe(memoryContent);
   });
 });

@@ -2,7 +2,7 @@ import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
 import type { SessionUsageTimePoint } from "../../../../src/shared/session-usage-timeseries-types.js";
-import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
+import type { PanelRefreshStatus } from "../../components/panel-refresh-status-state.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -83,7 +83,7 @@ function log(timestamp: number, role: SessionLogEntry["role"], content: string):
 function toolRows(root: ParentNode) {
   return [...root.querySelectorAll(".usage-list-item")].map((item) => [
     item.firstElementChild?.textContent,
-    text(item, ".usage-list-value > span"),
+    text(item, ".usage-list-value"),
   ]);
 }
 
@@ -160,7 +160,7 @@ function mount(
           sessionLogs: errors.sessionLogsData === undefined ? [] : errors.sessionLogsData,
           sessionLogsStatus: status(errors.sessionLogs, errors.sessionLogsHasLoaded),
           logFilters: errors.logFilters ?? defaults.detail.logFilters,
-          context: { weight: errors.contextWeight, loading: false, read: null, status: status() },
+          context: { weight: errors.contextWeight, read: null, status: status() },
         },
         callbacks: {
           ...defaults.callbacks.details,
@@ -184,6 +184,28 @@ function mount(
   flush();
   return container;
 }
+
+it.each([
+  { label: "total-only reports", input: 0, output: 0 },
+  { label: "partially categorized reports", input: 30, output: 40 },
+])("preserves reported token totals when selecting $label", ({ input, output }) => {
+  const container = mount(
+    [1000, 2000, 3000].map((timestamp) =>
+      point({ timestamp, totalTokens: 150, input, output, cacheRead: 0, cacheWrite: 0 }),
+    ),
+    { breakdownMode: "by-type" },
+  );
+  expect(text(container, ".timeseries-summary")).toContain("450");
+  container
+    .querySelector<HTMLElement>(".chart-handle-left")!
+    .dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+  flush();
+  expect(text(container, ".session-detail-stats")).toContain("300 tokens");
+  expect(text(container, ".timeseries-summary")).toContain("300");
+  expect(text(container, ".timeseries-breakdown .cost-breakdown-total")).toContain(
+    input === 0 ? "0" : "140",
+  );
+});
 
 it.each([
   { key: "ArrowLeft", start: null, end: null, expected: [1000, 3000] },
@@ -405,16 +427,16 @@ it("keeps interval message and tool counts unavailable for initial failure", () 
   ]);
 });
 
-it("keeps stale loaded counts independent of conversation search and role filters", () => {
+it.each(["tool", "user"] as const)("keeps stale counts independent of %s and search", (role) => {
   const start = Date.parse("2026-08-20T12:00:00Z");
   const container = mount([point({ timestamp: start }), point({ timestamp: start + 1000 })], {
     start,
     end: start + 1000,
-    sessionLogsData: [log(start, "user", "Question"), log(start + 1000, "assistant", "Answer")],
+    sessionLogsData: [log(start, "user", "A\u0308"), log(start + 1000, "assistant", "Answer")],
     sessionLogsHasLoaded: true,
     sessionLogs: "refresh failed",
     stale: true,
-    logFilters: { roles: ["tool"], tools: [], hasTools: false, query: "not present" },
+    logFilters: { roles: [role], tools: [], hasTools: false, query: "ä" },
   });
   expect(summary(container)).toMatchObject([
     { value: "2", meta: "1 user · 1 assistant Loaded conversation · selected interval" },
@@ -422,7 +444,7 @@ it("keeps stale loaded counts independent of conversation search and role filter
     {},
     {},
   ]);
-  expect(container.querySelectorAll(".session-log-entry")).toHaveLength(0);
+  expect(container.querySelectorAll(".session-log-entry")).toHaveLength(role === "user" ? 1 : 0);
   expect(text(container, ".usage-detail-error--conversation")).toContain("Showing stale data");
 });
 
@@ -493,17 +515,28 @@ it("keeps loaded details visible and marks them stale after refresh failures", a
   const restoreI18n = captureI18nStateForTesting();
   const timestamp = Date.UTC(2026, 0, 2, 15, 4, 55);
   try {
+    await i18n.setLocale("en");
+    const container = mount([point({ timestamp: 1000 }), point({ timestamp: 2000 })], {
+      timeSeries: "timeline unavailable",
+      sessionLogs: "logs unavailable",
+      sessionLogsData: [
+        log(timestamp, "user", "retained message"),
+        log(Number.NaN, "assistant", "undated message"),
+      ],
+      stale: true,
+    });
     for (const locale of ["en", "fr", "en"] as const) {
       await i18n.setLocale(locale);
-      const container = mount([point({ timestamp: 1000 }), point({ timestamp: 2000 })], {
-        timeSeries: "timeline unavailable",
-        sessionLogs: "logs unavailable",
-        sessionLogsData: [
-          log(timestamp, "user", "retained message"),
-          log(Number.NaN, "assistant", "undated message"),
-        ],
-        stale: true,
+      flush();
+      const chartTimestamp = new Date(1000).toLocaleString(locale, {
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
       });
+      expect(container.querySelector(".ts-bar")?.getAttribute("aria-label")).toBe(
+        `${chartTimestamp} · 100 ${t("usage.metrics.tokens").toLowerCase()}`,
+      );
 
       expect(container.querySelectorAll(".usage-detail-error--timeline strong")).toHaveLength(1);
       expect(container.querySelectorAll(".usage-detail-error--conversation strong")).toHaveLength(

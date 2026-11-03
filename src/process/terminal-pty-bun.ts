@@ -17,15 +17,6 @@ type BunTerminal = {
   resume(): void;
 };
 
-type BunTerminalSubprocess = {
-  readonly pid: number;
-  readonly exited: Promise<number>;
-  readonly exitCode: number | null;
-  readonly signalCode: NodeJS.Signals | null;
-  readonly terminal?: BunTerminal;
-  kill(signal?: NodeJS.Signals): void;
-};
-
 type BunTerminalRuntime = {
   spawn(
     argv: string[],
@@ -41,7 +32,14 @@ type BunTerminalRuntime = {
         exit(terminal: BunTerminal): void;
       };
     },
-  ): BunTerminalSubprocess;
+  ): {
+    readonly pid: number;
+    readonly exited: Promise<number>;
+    readonly exitCode: number | null;
+    readonly signalCode: NodeJS.Signals | null;
+    readonly terminal?: BunTerminal;
+    kill(signal?: NodeJS.Signals): void;
+  };
 };
 
 type TerminalPtyExit = { exitCode: number; signal?: number };

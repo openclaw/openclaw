@@ -26,6 +26,7 @@ import {
   registerAgentRunContext,
 } from "../../infra/agent-run-registry.js";
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
+import * as gatewayScope from "../../plugins/runtime/gateway-request-scope.js";
 import {
   createReplyOperation as createControllerOperation,
   getSessionControllerOperation,
@@ -207,6 +208,32 @@ function resolveState(
     ...options,
   });
 }
+
+it("checks each source's Gateway scope once while preparing a page projector", () => {
+  rpcSourceTesting.clear();
+  const runs = Array.from({ length: 34 }, (_, index) => {
+    const run = makeRun(`page-scope-${index}`);
+    registerChatRun(run.sessionKey, run.sessionId, run.runId);
+    return run;
+  });
+  const projector = (() => {
+    using scopeReads = vi.spyOn(gatewayScope, "getGatewayContextResolver");
+    const project = createVisibleActiveSessionRunProjector();
+    expect(scopeReads).toHaveBeenCalledTimes(runs.length);
+    return project;
+  })();
+  for (const run of runs) {
+    expect(
+      projector({
+        storePath,
+        requestedKey: run.sessionKey,
+        canonicalKey: run.sessionKey,
+        sessionId: run.sessionId,
+        agentId: "main",
+      }),
+    ).toEqual({ active: true, runIds: [run.runId], status: "queued" });
+  }
+});
 
 it("projects an accepted source before its exact controller claim starts", async () => {
   const { sessionKey, sessionId, runId } = makeRun("queued");
@@ -778,6 +805,14 @@ it.each(["store", "Gateway"] as const)(
       bindGatewayContextResolver(source.input.claim!.operation!, resolver);
     }
     expect(resolveState(sessionKey, { sessionId })).toEqual({ active: false, runIds: [] });
+    expect(
+      createVisibleActiveSessionRunProjector()({
+        storePath,
+        requestedKey: sessionKey,
+        canonicalKey: sessionKey,
+        sessionId,
+      }),
+    ).toEqual({ active: false, runIds: [] });
     expect(hasRegisteredChatRunForSessionKey({ storePath, sessionKey, agentId: "main" })).toBe(
       false,
     );

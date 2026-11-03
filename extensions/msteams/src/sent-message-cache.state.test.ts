@@ -7,22 +7,16 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { setMSTeamsRuntime } from "./runtime.js";
 import {
   recordMSTeamsSentMessage,
   wasMSTeamsMessageSentWithPersistence,
 } from "./sent-message-cache.js";
 import { msteamsRuntimeStub } from "./test-support/runtime.js";
+import { useMSTeamsStateTempDirs } from "./test-support/state.js";
 
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterAll(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    resetPluginStateStoreForTests();
-    cleanup();
-  }),
-);
+const tempDirs = useMSTeamsStateTempDirs();
 
 const TTL_MS = 24 * 60 * 60 * 1000;
 const sentMessageMemory = resolveGlobalDedupeCache(Symbol.for("openclaw.msteamsSentMessages"), {

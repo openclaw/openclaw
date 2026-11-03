@@ -316,6 +316,28 @@ it.runIf(!isWin)(
   },
 );
 
+it.each<[Record<string, string>, string | undefined]>([
+  [{ POWERSHELL_DISTRIBUTION_CHANNEL: "synthetic", BASH_VERSION: "5" }, "pwsh"],
+  [{ BASH_VERSION: "5", ZSH_VERSION: "5" }, "bash"],
+  [{ ZSH_VERSION: "5", FISH_VERSION: "4" }, "zsh"],
+  [{ FISH_VERSION: "4", KSH_VERSION: "1" }, "fish"],
+  [{ KSH_VERSION: "1", NU_VERSION: "1" }, "ksh"],
+  [{ NU_VERSION: "1", NUSHELL_VERSION: "1" }, "nu"],
+  [{ NUSHELL_VERSION: "1" }, "nu"],
+  [{ BASH_VERSION: "", ZSH_VERSION: "5" }, "zsh"],
+  [{}, undefined],
+])("detectRuntimeShell preserves runtime hint precedence: %j", (hints, expected) => {
+  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+  for (const key of runtimeHints) {
+    delete process.env[key];
+  }
+  vi.stubEnv("SHELL", "");
+  for (const [key, value] of Object.entries(hints)) {
+    vi.stubEnv(key, value);
+  }
+  expect(detectRuntimeShell()).toBe(expected);
+});
+
 const ps51 = "System32/WindowsPowerShell/v1.0/powershell.exe";
 it.each([
   {
@@ -335,16 +357,43 @@ it.each([
     expected: "bin/pwsh.exe",
   },
   { name: "PowerShell 5.1 fallback", files: [ps51], expected: ps51 },
-])("getShellConfig on Windows selects $name", ({ files, expected }) => {
+  {
+    name: "native PATH executable after an inaccessible app-execution alias",
+    files: ["aliases/pwsh.exe", "bin/pwsh.exe", ps51],
+    expected: "bin/pwsh.exe",
+    inaccessibleAlias: true,
+  },
+  {
+    name: "PowerShell 5.1 instead of an inaccessible app-execution alias",
+    files: ["aliases/pwsh.exe", ps51],
+    expected: ps51,
+    inaccessibleAlias: true,
+  },
+])("getShellConfig on Windows selects $name", ({ files, expected, inaccessibleAlias }) => {
   vi.spyOn(process, "platform", "get").mockReturnValue("win32");
   const root = tempDirs.make("openclaw-powershell-");
   for (const file of files) {
-    writeCommand(root, file, /^(?:shims|bin)\//.test(file));
+    writeCommand(root, file, /^(?:aliases|shims|bin)\//.test(file));
+  }
+  if (inaccessibleAlias) {
+    const alias = path.join(root, "aliases/pwsh.exe");
+    // Windows AppExecLinks pass access(X_OK), but stat fails with EACCES and
+    // activating the alias from S4U can fail while its app runs in another session.
+    fs.accessSync(alias, fs.constants.X_OK);
+    const statSync = fs.statSync;
+    vi.spyOn(fs, "statSync").mockImplementation((candidate, options) => {
+      if (String(candidate) === alias) {
+        throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+      }
+      return statSync(candidate, options);
+    });
   }
   process.env.ProgramFiles = path.join(root, "pfiles");
   process.env.ProgramW6432 = path.join(root, "pw6432");
   process.env.SystemRoot = root;
   delete process.env.WINDIR;
-  process.env.PATH = ["shims", "bin"].map((dir) => path.join(root, dir)).join(path.delimiter);
+  process.env.PATH = ["aliases", "shims", "bin"]
+    .map((dir) => path.join(root, dir))
+    .join(path.delimiter);
   expect(getShellConfig().shell).toBe(path.join(root, expected));
 });

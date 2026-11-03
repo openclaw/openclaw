@@ -30,8 +30,9 @@ vi.mock("../pages/agents/avatar-image.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../pages/agents/avatar-image.ts")>()),
   fileToAvatarDataUrl: picker.convert,
 }));
-// mock-isolation: replace the entire picker with a controlled boundary for dialog-only upload tests.
-vi.mock("../pages/agents/avatar-picker.tsx", () => ({
+// mock-isolation: control picker interactions while keeping the shared result decoder real.
+vi.mock("../pages/agents/avatar-picker.tsx", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../pages/agents/avatar-picker.tsx")>()),
   AvatarPicker: (props: {
     onSelect: (avatar: string) => void;
     onUpload: (file: File) => void;
@@ -118,53 +119,76 @@ it("cancels without creating an agent", () => {
   view.dispose();
 });
 
-it("keeps creation disabled during avatar conversion and recovers from an unusable upload", async () => {
-  const pending = createDeferred<{ ok: false; reason: "too-detailed" }>();
-  const retry = createDeferred<{ ok: true; dataUrl: string }>();
-  picker.convert
-    .mockReset()
-    .mockReturnValueOnce(pending.promise)
-    .mockReturnValueOnce(retry.promise);
-  const onCreate = vi.fn();
-  const view = mountSolid(AgentCreateDialog, {
-    context: dialogContext(),
-    onCancel: vi.fn(),
-    onCreate,
-  });
-  document.body.append(view.container);
-  const name = view.container.querySelector<HTMLInputElement>('input[name="name"]')!;
-  const create = view.container.querySelector<HTMLButtonElement>('button[type="submit"]')!;
-  name.value = "Scout";
-  name.dispatchEvent(new Event("input", { bubbles: true }));
-  flush();
-  expect(create.disabled).toBe(false);
-
-  const file = new File(["avatar"], "avatar.png", { type: "image/png" });
-  picker.upload(file);
-  flush();
-  expect(create.disabled).toBe(true);
-  create.click();
-  expect(onCreate).not.toHaveBeenCalled();
-  pending.resolve({ ok: false, reason: "too-detailed" });
-  await waitForSolid(() => {
-    expect(view.container.querySelector('[role="alert"]')?.textContent).toContain("too detailed");
+it.each(["too-detailed", "unusable", "rejected conversion"] as const)(
+  "retains the draft and recovers from an upload %s",
+  async (failure) => {
+    const pending = createDeferred<{ ok: false; reason: "too-detailed" | "unusable" }>();
+    const retry = createDeferred<{ ok: true; dataUrl: string }>();
+    picker.convert
+      .mockReset()
+      .mockReturnValueOnce(pending.promise)
+      .mockReturnValueOnce(retry.promise);
+    const onCreate = vi.fn();
+    const view = mountSolid(AgentCreateDialog, {
+      context: dialogContext(),
+      onCancel: vi.fn(),
+      onCreate,
+    });
+    document.body.append(view.container);
+    const name = view.container.querySelector<HTMLInputElement>('input[name="name"]')!;
+    const create = view.container.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+    name.value = "Scout";
+    name.dispatchEvent(new Event("input", { bubbles: true }));
+    picker.select!(selectedAvatar);
+    flush();
+    const preview = view.container.querySelector(
+      ".agent-create-dialog__preview .identity-avatar--agent",
+    );
     expect(create.disabled).toBe(false);
-  });
 
-  picker.upload(file);
-  flush();
-  expect(view.container.querySelector('[role="alert"]')).toBeNull();
-  expect(create.disabled).toBe(true);
-  retry.resolve({ ok: true, dataUrl: selectedAvatar });
-  await waitForSolid(() => {
+    const file = new File(["avatar"], "avatar.png", { type: "image/png" });
+    picker.upload(file);
+    flush();
+    expect(create.disabled).toBe(true);
+    create.click();
+    expect(onCreate).not.toHaveBeenCalled();
+    if (failure === "rejected conversion") {
+      pending.reject(new Error("Image conversion failed"));
+    } else {
+      pending.resolve({ ok: false, reason: failure });
+    }
+    await waitForSolid(() => {
+      expect(view.container.querySelector('[role="alert"]')?.textContent).toContain(
+        failure === "rejected conversion"
+          ? "Image conversion failed"
+          : failure === "too-detailed"
+            ? "too detailed"
+            : "That image can't be used",
+      );
+      expect(create.disabled).toBe(false);
+      expect(view.container.querySelector('input[name="name"]')).toBe(name);
+      expect(name.value).toBe("Scout");
+      expect(
+        view.container.querySelector(".agent-create-dialog__preview .identity-avatar--agent"),
+      ).toBe(preview);
+    });
+
+    picker.upload(file);
+    flush();
     expect(view.container.querySelector('[role="alert"]')).toBeNull();
-    expect(create.disabled).toBe(false);
-    expect(view.container.querySelector(".agent-create-dialog__ghost")).toBeNull();
-  });
-  create.click();
-  expect(onCreate).toHaveBeenCalledExactlyOnceWith({ name: "Scout", avatar: selectedAvatar });
-  view.dispose();
-});
+    expect(create.disabled).toBe(true);
+    const uploadedAvatar = "data:image/webp;base64,dXBsb2Fk";
+    retry.resolve({ ok: true, dataUrl: uploadedAvatar });
+    await waitForSolid(() => {
+      expect(view.container.querySelector('[role="alert"]')).toBeNull();
+      expect(create.disabled).toBe(false);
+      expect(view.container.querySelector(".agent-create-dialog__ghost")).toBeNull();
+    });
+    create.click();
+    expect(onCreate).toHaveBeenCalledExactlyOnceWith({ name: "Scout", avatar: uploadedAvatar });
+    view.dispose();
+  },
+);
 
 it("generates first, then saves the named agent with the generated avatar", () => {
   picker.generate.mockClear();

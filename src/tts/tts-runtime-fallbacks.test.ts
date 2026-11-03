@@ -659,6 +659,35 @@ function personaConfig(
 }
 
 describe("TTS runtime persona behavior", () => {
+  it.each([
+    { binding: "none", persona: undefined },
+    { binding: "missing", persona: { fallbackPolicy: "provider-defaults" } },
+    { binding: "applied", persona: { providers: { mock: { voice: "persona-voice" } } } },
+  ] as const)(
+    "reports persona binding when synthesis fails ($binding)",
+    async ({ binding, persona }) => {
+      await withOpenClawTestState({ label: "tts-failed-persona" }, async (state) => {
+        synthesizeMock.mockRejectedValueOnce(new Error("provider failed"));
+        const cfg = persona ? personaConfig(persona) : { tts: { enabled: true, provider: "mock" } };
+        const result = await speak(cfg, {
+          disableFallback: true,
+          prefsPath: state.path("tts-prefs.json"),
+        });
+        expect(result).toMatchObject({
+          success: false,
+          attempts: [
+            {
+              provider: "mock",
+              outcome: "failed",
+              reasonCode: "provider_error",
+              personaBinding: binding,
+            },
+          ],
+        });
+      });
+    },
+  );
+
   it("passes directive overrides to telephony synthesis providers", async () => {
     const synthesizeTelephonyMock = vi.fn(async (_request: SpeechTelephonySynthesisRequest) => ({
       audioBuffer: Buffer.from("voice"),

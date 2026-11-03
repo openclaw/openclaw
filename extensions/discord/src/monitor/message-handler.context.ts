@@ -11,6 +11,7 @@ import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/conversation-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { formatAudioTranscriptForAgent } from "openclaw/plugin-sdk/media-understanding-runtime";
+import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   buildHistoryContextFromEntries,
   buildInboundHistoryFromEntries,
@@ -28,7 +29,6 @@ import {
 import { resolveDiscordConversationIdentity } from "../conversation-identity.js";
 import { ChannelType } from "../internal/discord.js";
 import { normalizeDiscordAllowList, normalizeDiscordSlug } from "./allow-list.js";
-import { resolveTimestampMs } from "./format.js";
 import {
   buildDiscordInboundAccessContext,
   createDiscordSupplementalContextAccessChecker,
@@ -43,7 +43,7 @@ import {
   resolveDiscordHistoryMediaIds,
   type DiscordHistoryEntry,
 } from "./message-handler.history.js";
-import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
+import type { DiscordMessagePreflightContext } from "./message-handler.preflight.types.js";
 import { recoverDiscordChannelHistory } from "./message-handler.recent-history.js";
 import { removeDiscordReplayHistoryEntry } from "./message-handler.retry.js";
 import { formatDiscordMediaText, resolveReferencedReplyMediaList } from "./message-media.js";
@@ -225,7 +225,7 @@ export async function buildDiscordMessageProcessContext(params: {
   let combinedBody = formatInboundEnvelope({
     channel: "Discord",
     from: fromLabel,
-    timestamp: resolveTimestampMs(message.timestamp),
+    timestamp: parseDateStringTimestampMs(message.timestamp),
     body: bodyWithMediaNotice,
     chatType: isDirectMessage ? "direct" : "channel",
     senderLabel,
@@ -251,7 +251,7 @@ export async function buildDiscordMessageProcessContext(params: {
           entries: guildHistories.get(messageChannelId) ?? [],
           mode: contextVisibilityMode,
           isSenderAllowed: isSupplementalContextSenderAllowed,
-        }).entries.slice(-historyLimit);
+        }).slice(-historyLimit);
       }
       if (!isHistoryCurrent()) {
         return null;
@@ -300,7 +300,7 @@ export async function buildDiscordMessageProcessContext(params: {
         accountId,
         parentId: threadParentId,
         parentType: threadParentType,
-        resolveTimestampMs,
+        resolveTimestampMs: parseDateStringTimestampMs,
       });
       if (!isHistoryCurrent()) {
         return null;
@@ -442,7 +442,7 @@ export async function buildDiscordMessageProcessContext(params: {
     accountId: route.accountId,
     messageId: canonicalMessageId ?? message.id,
     messageIdFull: canonicalMessageId && canonicalMessageId !== message.id ? message.id : undefined,
-    timestamp: resolveTimestampMs(message.timestamp),
+    timestamp: parseDateStringTimestampMs(message.timestamp),
     from: effectiveFrom,
     sender: {
       id: sender.id,
@@ -589,7 +589,7 @@ export async function buildDiscordMessageProcessContext(params: {
       entry: {
         sender: senderName,
         body: historyText,
-        timestamp: resolveTimestampMs(message.timestamp),
+        timestamp: parseDateStringTimestampMs(message.timestamp),
         messageId: message.id,
         mediaIds: resolveDiscordHistoryMediaIds(message),
         senderProvenance: createDiscordHistorySenderProvenance({

@@ -17,6 +17,7 @@ import type { OpenClawModalDialog } from "../../components/modal-dialog.tsx";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { MarkdownHtml } from "../../components/solid/markdown-html.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import { SettingsEmpty, SettingsSection } from "../../components/solid/settings-ui.tsx";
 import "../../components/modal-dialog.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
@@ -186,14 +187,18 @@ export function AgentFiles(
         fallback={
           <AgentFileStatus
             request={params.readData().agentFileOutcome}
-            fallback={(message) => <div class="callout danger">{message}</div>}
+            fallback={(message) => (
+              <div class="callout danger" role="alert">
+                {message}
+              </div>
+            )}
           >
             <AgentReadNotice request={params.listRead} />
           </AgentFileStatus>
         }
       >
         {(name) => (
-          <div class="callout danger">
+          <div class="callout danger" role="alert">
             <AgentFileStatus
               request={params.readData().agentFileOutcome}
               fallback={(message) => <span>{message}</span>}
@@ -234,9 +239,9 @@ export function AgentFiles(
           )
         }
         actions={
-          <AgentPanelAction
-            label={loading() ? t("common.loading") : t("common.refresh")}
-            disabled={loading()}
+          <RefreshButton
+            label={t("common.refresh")}
+            busy={loading()}
             onClick={() => params.onLoadFiles(params.agentId)}
           />
         }
@@ -266,7 +271,7 @@ export function AgentFiles(
                   ariaLabel: t("agents.files.coreFilesTitle"),
                   panelId: "agent-file-panel",
                   variant: "sub",
-                  onSelect: params.onSelectFile,
+                  onSelect: (name) => void params.onSelectFile(name),
                 }}
               />
               {creatableFiles().length === 0 ? undefined : (
@@ -280,7 +285,7 @@ export function AgentFiles(
                     const name = select.value;
                     select.value = "";
                     if (name) {
-                      params.onSelectFile(name);
+                      void params.onSelectFile(name);
                     }
                   }}
                 >

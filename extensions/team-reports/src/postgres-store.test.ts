@@ -2,7 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { getEnvironmentData } from "node:worker_threads";
-import { withEngineStoreAdmission } from "openclaw/plugin-sdk/database-engine-worker-runtime";
+import {
+  openEngineStore,
+  withEngineStoreAdmission,
+} from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -18,6 +21,8 @@ import {
   window,
 } from "./sources/github/responses.fixtures.js";
 import { exercise, report } from "./store-conformance.test-support.js";
+import { openTeamReportsConnection } from "./store-database.js";
+import { teamReportsEngineSchema } from "./store-engine-schema.js";
 import { openTeamReportsDatabase, type createSqliteWorkerBackend } from "./store.worker.js";
 
 const configured = getEnvironmentData("openclaw.test.workboard.connection");
@@ -72,6 +77,7 @@ describe.skipIf(!connection)("Team Reports PostgreSQL runtime", () => {
   let namespace: string;
   let database: ReturnType<typeof openTeamReportsDatabase>;
   const input = { connection: connection!, schemaPrefix: "team_reports_test" };
+  const rows = async (sql: string, values?: string[]) => (await observer.query(sql, values)).rows;
 
   beforeAll(async () => {
     directory = fs.mkdtempSync(
@@ -98,10 +104,66 @@ describe.skipIf(!connection)("Team Reports PostgreSQL runtime", () => {
     }
   });
 
+  it("upgrades version 1 index ordering once while retaining run rows", async () => {
+    const pathname = path.join(directory, "upgrade.sqlite");
+    const schema = withEngineStoreAdmission(() => {
+      using anchor = openNodeSqliteDatabase(pathname);
+      const db = openEngineStore({
+        anchor,
+        input,
+        schema: {
+          ...teamReportsEngineSchema,
+          ...teamReportsEngineSchema.postgresMigrations![0]!.fromSchema,
+          version: 1,
+        },
+        prepareAnchor: () => {},
+        inspectSqlite: () => ({ hasEngineAnchor: false, hasExistingData: false }),
+        openSqlite: () => {},
+      });
+      try {
+        db.prepare("INSERT INTO team_reports_schema_migrations VALUES (?, ?)").run("schema-1", 1);
+        db.prepare(`INSERT INTO team_reports_runs (id, kind, started_at_ms, status, periods_json)
+                    VALUES (?, ?, ?, ?, ?)`).run("retained", "scheduled", 1, "complete", "[]");
+        return String(anchor.prepare("SELECT schema FROM openclaw_engine_anchor").get()?.schema);
+      } finally {
+        db.close();
+      }
+    });
+    const index = async () =>
+      (
+        await rows(
+          `SELECT oid::text, pg_get_indexdef(oid) AS definition
+       FROM pg_class WHERE relnamespace = $1::regnamespace
+       AND relname = 'idx_team_reports_runs_started'`,
+          [schema],
+        )
+      )[0]!;
+    try {
+      const before = await index();
+      withEngineStoreAdmission(() => openTeamReportsConnection(pathname, input)).close();
+      const after = await index();
+      expect(after.definition).not.toContain("NULLS LAST");
+      expect(after.oid).not.toBe(before.oid);
+      expect(await rows(`SELECT id FROM "${schema}".team_reports_runs`)).toEqual([
+        { id: "retained" },
+      ]);
+      expect(await rows(`SELECT version::integer FROM "${schema}".openclaw_schema_meta`)).toEqual([
+        { version: 2 },
+      ]);
+      expect(
+        await rows(`SELECT id FROM "${schema}".team_reports_schema_migrations ORDER BY id`),
+      ).toEqual([{ id: "schema-1" }, { id: "schema-2" }]);
+      withEngineStoreAdmission(() => openTeamReportsConnection(pathname, input)).close();
+      expect(await index()).toEqual(after);
+    } finally {
+      await observer.query(`DROP SCHEMA "${schema}" CASCADE`);
+    }
+  });
+
   it("matches SQLite runtime results, including all eight numeric JSON projections", async () => {
-    expect(
-      (await observer.query(`SELECT id FROM "${namespace}".team_reports_schema_migrations`)).rows,
-    ).toEqual([{ id: "schema-1" }]);
+    expect(await rows(`SELECT id FROM "${namespace}".team_reports_schema_migrations`)).toEqual([
+      { id: "schema-2" },
+    ]);
     const sqlite = openTeamReportsDatabase(path.join(directory, "sqlite.sqlite"));
     try {
       const expected = exercise(operations(sqlite));
@@ -163,12 +225,10 @@ describe.skipIf(!connection)("Team Reports PostgreSQL runtime", () => {
         withEngineStoreAdmission(() => database.aggregateActivity(options)).totals.github.total,
       ).toBe(1);
       expect(
-        (
-          await observer.query(
-            "SELECT 1 FROM pg_tables WHERE schemaname = $1 AND tablename = 'team_reports_activity'",
-            [namespace],
-          )
-        ).rows,
+        await rows(
+          "SELECT 1 FROM pg_tables WHERE schemaname = $1 AND tablename = 'team_reports_activity'",
+          [namespace],
+        ),
       ).toEqual([]);
     } finally {
       sibling.close();

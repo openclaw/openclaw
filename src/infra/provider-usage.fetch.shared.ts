@@ -24,23 +24,6 @@ export {
   parseDateStringTimestampMs as parseUsageResetAt,
 } from "@openclaw/normalization-core/number-coercion";
 
-type BuildUsageHttpErrorSnapshotOptions = {
-  provider: UsageProviderId;
-  status: number;
-  message?: string;
-  tokenExpiredStatuses?: readonly number[];
-};
-
-type FetchUsageJsonOptions = {
-  provider: UsageProviderId;
-  url: string;
-  init: RequestInit;
-  timeoutMs: number;
-  fetchFn: typeof fetch;
-  tokenExpiredStatuses?: readonly number[];
-  malformedResponseError?: string;
-};
-
 /** Builds a provider usage snapshot for non-HTTP fetch or parse failures. */
 export function buildUsageErrorSnapshot(
   provider: UsageProviderId,
@@ -54,9 +37,12 @@ export function buildUsageErrorSnapshot(
   };
 }
 
-export function buildUsageHttpErrorSnapshot(
-  options: BuildUsageHttpErrorSnapshotOptions,
-): ProviderUsageSnapshot {
+export function buildUsageHttpErrorSnapshot(options: {
+  provider: UsageProviderId;
+  status: number;
+  message?: string;
+  tokenExpiredStatuses?: readonly number[];
+}): ProviderUsageSnapshot {
   const tokenExpiredStatuses = options.tokenExpiredStatuses ?? [];
   if (tokenExpiredStatuses.includes(options.status)) {
     return buildUsageErrorSnapshot(options.provider, "Token expired");
@@ -81,9 +67,15 @@ export async function readUsageJson(
   }
 }
 
-export async function fetchUsageJson(
-  options: FetchUsageJsonOptions,
-): ReturnType<typeof readUsageJson> {
+export async function fetchUsageJson(options: {
+  provider: UsageProviderId;
+  url: string;
+  init: RequestInit;
+  timeoutMs: number;
+  fetchFn: typeof fetch;
+  tokenExpiredStatuses?: readonly number[];
+  malformedResponseError?: string;
+}): ReturnType<typeof readUsageJson> {
   const response = await fetchJson(options.url, options.init, options.timeoutMs, options.fetchFn);
   if (!response.ok) {
     await cancelUnreadResponseBody(response);

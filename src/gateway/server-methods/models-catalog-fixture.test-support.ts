@@ -6,52 +6,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { GatewayClient } from "../client.js";
 import { startGatewayWithClient } from "../test-helpers.e2e.js";
-import {
-  createModelsTestState,
-  listenModelsEndpoint,
-  modelsTestConfig,
-  startModelsGateway,
-} from "./models-integration.test-support.js";
-
-export async function startCatalogProvider(
-  state: OpenClawTestState,
-  options: {
-    provider: string;
-    token: string;
-    body: string;
-    manifest?: Record<string, unknown>;
-    config?: OpenClawConfig;
-    allowModels?: boolean;
-  },
-) {
-  const { provider, token, body, manifest, config = {} } = options;
-  const pluginPath = await writeCatalogPlugin(
-    state,
-    provider,
-    `module.exports = {
-    id: ${JSON.stringify(provider)}, register(api) { api.registerProvider({
-      id: ${JSON.stringify(provider)}, ${body}
-    }); },
-  };`,
-    manifest,
-  );
-  const cfg = modelsTestConfig(state, token, {
-    ...config,
-    agents:
-      options.allowModels === false
-        ? config.agents
-        : {
-            ...config.agents,
-            defaults: {
-              modelPolicy: { allow: [provider + "/*"] },
-              ...config.agents?.defaults,
-            },
-          },
-    plugins: { allow: [provider], load: { paths: [pluginPath] }, slots: { memory: "none" } },
-  });
-  await state.writeConfig(cfg);
-  return Object.assign(await startModelsGateway(state, cfg, token), { cfg });
-}
+import { createModelsTestState, listenModelsEndpoint } from "./models-integration.test-support.js";
 
 export function createCatalogState(label: string, env: Record<string, string | undefined> = {}) {
   return createModelsTestState(label, {
@@ -202,4 +157,19 @@ export function catalogModelIds(
   provider: string,
 ) {
   return result.models.filter((row) => row.provider === provider).map((row) => row.id);
+}
+
+export function catalogTransportModels(
+  provider: string,
+  requestHeader: string,
+): NonNullable<OpenClawConfig["models"]> {
+  return {
+    providers: {
+      [provider]: {
+        baseUrl: "",
+        models: [],
+        request: { allowPrivateNetwork: true, headers: { "X-Dispatch-Request": requestHeader } },
+      },
+    },
+  };
 }

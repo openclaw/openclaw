@@ -33,7 +33,6 @@ export async function withTwitchIngressTestQueue<T>(
           accountId: "default",
           runtime: { error: () => {} },
           queue,
-          pollIntervalMs: 5,
           ...options,
         });
         ingresses.push(ingress);

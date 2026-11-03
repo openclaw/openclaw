@@ -8,16 +8,7 @@ import {
 } from "../../node-host/gateway-cloudflare-access.js";
 import { decodePairingSetupCode } from "../../pairing/setup-code.js";
 
-type NodeGatewayOptions = Pick<
-  NodeHostGatewayConfig,
-  "host" | "contextPath" | "tls" | "tlsFingerprint"
-> & {
-  port?: string | number;
-};
-
 type NodePairGatewayOptions = ReturnType<typeof resolveNodePairGatewayPayload>;
-
-type PairingSetupPayload = ReturnType<typeof decodePairingSetupCode>;
 
 function gatewayConfigFromUrl(
   url: string,
@@ -42,7 +33,7 @@ export function resolveNodePairGatewayOptions(
 }
 
 /** Project a validated pairing payload into the canonical node-host candidate list. */
-export function resolveNodePairGatewayPayload(payload: PairingSetupPayload) {
+export function resolveNodePairGatewayPayload(payload: ReturnType<typeof decodePairingSetupCode>) {
   const candidates = (payload.urls ?? [payload.url]).map((url) =>
     gatewayConfigFromUrl(url, url === payload.url ? payload.tlsFingerprint : undefined),
   );
@@ -60,7 +51,9 @@ export function resolveNodePairGatewayPayload(payload: PairingSetupPayload) {
 }
 
 export function resolveNodeGatewayOptions(
-  options: NodeGatewayOptions,
+  options: Pick<NodeHostGatewayConfig, "host" | "contextPath" | "tls" | "tlsFingerprint"> & {
+    port?: string | number;
+  },
   config: NodeHostConfig | null,
   pair?: NodePairGatewayOptions,
   env: NodeJS.ProcessEnv = process.env,

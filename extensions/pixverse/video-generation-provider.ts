@@ -7,7 +7,7 @@ import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
   pollProviderOperationJson,
-  postJsonRequest,
+  postJsonResponse,
   postMultipartRequest,
   readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
@@ -56,14 +56,6 @@ type PixVerseEnvelope<T> = {
   ErrCode?: unknown;
   ErrMsg?: unknown;
   Resp?: T;
-};
-
-type PixVerseUploadImageResponse = {
-  img_id?: unknown;
-};
-
-type PixVerseVideoCreateResponse = {
-  video_id?: unknown;
 };
 
 type PixVerseVideoResultResponse = {
@@ -119,19 +111,19 @@ function readPixVerseInteger(value: unknown, label: string): number {
 }
 
 function readPixVerseStatus(payload: PixVerseVideoResultResponse): number {
-  return readPixVerseInteger(payload.status, "PixVerse video status response missing status");
-}
-
-function readPixVerseFailureMessage(payload: PixVerseVideoResultResponse): string | undefined {
-  switch (readPixVerseStatus(payload)) {
+  const status = readPixVerseInteger(
+    payload.status,
+    "PixVerse video status response missing status",
+  );
+  switch (status) {
     case 7:
-      return "PixVerse video generation failed content moderation";
+      throw new Error("PixVerse video generation failed content moderation");
     case 8:
-      return "PixVerse video generation failed";
+      throw new Error("PixVerse video generation failed");
     case 6:
-      return "PixVerse video generation was deleted before completion";
+      throw new Error("PixVerse video generation was deleted before completion");
     default:
-      return undefined;
+      return status;
   }
 }
 
@@ -263,7 +255,7 @@ export function buildPixVerseVideoGenerationProvider(): VideoGenerationProvider 
         });
         try {
           await assertOkOrThrowHttpError(upload.response, "PixVerse image upload failed");
-          const uploaded = await readPixVerseJson<PixVerseUploadImageResponse>(
+          const uploaded = await readPixVerseJson<{ img_id?: unknown }>(
             upload.response,
             "PixVerse image upload failed",
           );
@@ -331,8 +323,9 @@ export function buildPixVerseVideoGenerationProvider(): VideoGenerationProvider 
       }
 
       const endpoint = imageId === undefined ? "/video/text/generate" : "/video/img/generate";
-      const create = await postJsonRequest({
+      const submittedEnvelope = await postJsonResponse<PixVerseEnvelope<{ video_id?: unknown }>>({
         url: `${baseUrl}${endpoint}`,
+        errorLabel: "PixVerse video generation failed",
         headers: buildPixVerseHeaders(headers, "application/json"),
         body,
         timeoutMs: resolveProviderOperationTimeoutMs({
@@ -343,64 +336,55 @@ export function buildPixVerseVideoGenerationProvider(): VideoGenerationProvider 
         allowPrivateNetwork,
         dispatcherPolicy,
       });
-      try {
-        await assertOkOrThrowHttpError(create.response, "PixVerse video generation failed");
-        const submitted = await readPixVerseJson<PixVerseVideoCreateResponse>(
-          create.response,
-          "PixVerse video generation failed",
-        );
-        const videoId = readPixVerseInteger(
-          submitted.video_id,
-          "PixVerse video generation response missing video_id",
-        );
-        const readResult = (payload: PixVerseEnvelope<PixVerseVideoResultResponse>) =>
-          readPixVerseSuccess(payload, "PixVerse video status request failed");
-        const completedEnvelope = await pollProviderOperationJson<
-          PixVerseEnvelope<PixVerseVideoResultResponse>
-        >({
-          url: `${baseUrl}/video/result/${videoId}`,
-          headers: () => buildPixVerseHeaders(headers),
-          deadline,
-          defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
-          fetchFn,
-          maxAttempts: MAX_POLL_ATTEMPTS,
-          pollIntervalMs: POLL_INTERVAL_MS,
-          requestFailedMessage: "PixVerse video status request failed",
-          timeoutMessage: `PixVerse video generation task ${videoId} did not finish in time`,
-          isComplete: (candidate) => readPixVerseStatus(readResult(candidate)) === 1,
-          getFailureMessage: (candidate) => readPixVerseFailureMessage(readResult(candidate)),
-          allowPrivateNetwork,
-          dispatcherPolicy,
-        });
-        const completed = readResult(completedEnvelope);
-        const url = normalizeOptionalString(completed.url);
-        if (!url) {
-          throw new Error("PixVerse video generation completed without output URL");
-        }
-        const video = {
-          url,
-          mimeType: "video/mp4",
-          fileName: "video-1.mp4",
-          metadata: {
-            sourceUrl: url,
-            outputWidth: asFiniteNumber(completed.outputWidth),
-            outputHeight: asFiniteNumber(completed.outputHeight),
-          },
-        };
-        return {
-          videos: [video],
-          model,
-          metadata: {
-            endpoint,
-            videoId,
-            status: readPixVerseStatus(completed),
-            seed: readPixVerseSeed(completed.seed),
-            size: asFiniteNumber(completed.size),
-          },
-        };
-      } finally {
-        await create.release();
+      const submitted = readPixVerseSuccess(submittedEnvelope, "PixVerse video generation failed");
+      const videoId = readPixVerseInteger(
+        submitted.video_id,
+        "PixVerse video generation response missing video_id",
+      );
+      const readResult = (payload: PixVerseEnvelope<PixVerseVideoResultResponse>) =>
+        readPixVerseSuccess(payload, "PixVerse video status request failed");
+      const completedEnvelope = await pollProviderOperationJson<
+        PixVerseEnvelope<PixVerseVideoResultResponse>
+      >({
+        url: `${baseUrl}/video/result/${videoId}`,
+        headers: () => buildPixVerseHeaders(headers),
+        deadline,
+        defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+        fetchFn,
+        maxAttempts: MAX_POLL_ATTEMPTS,
+        pollIntervalMs: POLL_INTERVAL_MS,
+        requestFailedMessage: "PixVerse video status request failed",
+        timeoutMessage: `PixVerse video generation task ${videoId} did not finish in time`,
+        isComplete: (candidate) => readPixVerseStatus(readResult(candidate)) === 1,
+        allowPrivateNetwork,
+        dispatcherPolicy,
+      });
+      const completed = readResult(completedEnvelope);
+      const url = normalizeOptionalString(completed.url);
+      if (!url) {
+        throw new Error("PixVerse video generation completed without output URL");
       }
+      const video = {
+        url,
+        mimeType: "video/mp4",
+        fileName: "video-1.mp4",
+        metadata: {
+          sourceUrl: url,
+          outputWidth: asFiniteNumber(completed.outputWidth),
+          outputHeight: asFiniteNumber(completed.outputHeight),
+        },
+      };
+      return {
+        videos: [video],
+        model,
+        metadata: {
+          endpoint,
+          videoId,
+          status: readPixVerseStatus(completed),
+          seed: readPixVerseSeed(completed.seed),
+          size: asFiniteNumber(completed.size),
+        },
+      };
     },
   };
 }

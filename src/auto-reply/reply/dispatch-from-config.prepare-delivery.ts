@@ -110,10 +110,7 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     isInternalWebchatTurn,
     shouldRouteToOriginating: hasRouteReplyCandidate,
   } = resolveRouting(Boolean);
-  const routeReplyRuntime =
-    hasRouteReplyCandidate && !state.replyOperationRunState.heartbeat
-      ? await loadRouteReplyRuntime()
-      : undefined;
+  const routeReplyRuntime = hasRouteReplyCandidate ? await loadRouteReplyRuntime() : undefined;
   const {
     originatingChannel: routeReplyChannel,
     currentSurface,
@@ -130,11 +127,9 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     routeReplyTo &&
     routeReplyChannel === normalizedCurrentSurface,
   );
-  // Heartbeat's custom dispatcher routes the reply, but synthesis still needs its destination.
-  const deliveryChannel =
-    shouldRouteToOriginating || state.replyOperationRunState.heartbeat
-      ? (routeReplyChannel ?? currentSurface)
-      : currentSurface;
+  const deliveryChannel = shouldRouteToOriginating
+    ? (routeReplyChannel ?? currentSurface)
+    : currentSurface;
   const { preparedTtsPreferences, getDispatchReplyOperation } = state;
   const maybeApplyTtsWithFinalizationLease = async (
     payload: ReplyPayload,

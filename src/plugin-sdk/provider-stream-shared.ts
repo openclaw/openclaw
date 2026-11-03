@@ -60,6 +60,7 @@ export {
 } from "@openclaw/ai/internal/shared";
 export {
   createEmptyTransportUsage,
+  mergeTransportHeaders,
   createProviderWaitObserver,
   failTransportStream,
   MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,

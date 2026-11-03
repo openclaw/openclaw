@@ -34,7 +34,6 @@ export async function isSlackSubteamMentionForBot(params: {
   text?: string | null;
   botUserId?: string | null;
   teamId?: string;
-  now?: number;
   log?: (message: string) => void;
 }): Promise<boolean> {
   const botUserId = normalizeSlackId(params.botUserId);
@@ -45,7 +44,7 @@ export async function isSlackSubteamMentionForBot(params: {
   if (subteamIds.length === 0) {
     return false;
   }
-  const now = params.now ?? Date.now();
+  const now = Date.now();
   for (const subteamId of subteamIds) {
     const { client, log } = params;
     const teamId = normalizeOptionalString(params.teamId);

@@ -593,6 +593,7 @@ suite.define(() => {
           await manageDevices.click({ trial: true });
           if (viewport.width === 1280) {
             await page.locator(".device-pair-setup__close").click();
+            await dialog.waitFor({ state: "hidden" });
           }
         }
         // The body scrolls while completion actions stay outside it in the pinned footer.

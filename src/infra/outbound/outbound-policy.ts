@@ -137,10 +137,7 @@ export function enforceCrossContextPolicy(params: {
     return;
   }
 
-  const messageConfig = resolveEffectiveMessageToolsConfig({
-    cfg: params.cfg,
-    agentId: params.agentId,
-  });
+  const messageConfig = resolveEffectiveMessageToolsConfig(params);
   // Doctor moves the shipped allowCrossContextSend flag into this canonical policy.
   // Runtime must not keep a second legacy interpretation path here.
   const currentProvider = params.toolContext?.currentChannelProvider;
@@ -214,10 +211,7 @@ export async function buildCrossContextDecoration(params: {
     return null;
   }
 
-  const markerConfig = resolveEffectiveMessageToolsConfig({
-    cfg: params.cfg,
-    agentId: params.agentId,
-  })?.crossContext?.marker;
+  const markerConfig = resolveEffectiveMessageToolsConfig(params)?.crossContext?.marker;
   if (markerConfig?.enabled === false) {
     return null;
   }

@@ -28,6 +28,7 @@ import {
   requireString,
   waitForRequests,
 } from "./chat-flow.test-support.ts";
+import { readOutboxQueue } from "./chat-outbox-payloads.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 async function followUpSettings(page: import("playwright").Page, mode: string, shortcut?: string) {
@@ -64,6 +65,7 @@ async function restoredSteer(name: string, age: number, offset: number, seq: num
   };
   const sessionInfo = { activeRunIds: [runId], hasActiveRun: true, key: "agent:main:main" };
   const gateway = await installMockGateway(page, {
+    subscriptionInitialHistory: false,
     historyMessages: [userMessage],
     inFlightRun: { runId, startedAt, text: "" },
     sessionInfo,
@@ -125,7 +127,7 @@ suite.define(() => {
       sessionInfo,
     });
     await page.goto(`${suite.server.baseUrl}chat`);
-    const stop = page.getByRole("button", { name: "Stop generating" });
+    const stop = page.getByRole("button", { name: "Stop", exact: true });
     await stop.waitFor();
     const steerText = "Keep the numbers in metrics.json, not USER.md.";
     await gateway.deferNext("chat.send");
@@ -217,7 +219,7 @@ suite.define(() => {
     await sendMessage(page, activePrompt);
 
     await gateway.waitForRequest("chat.send");
-    await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
+    await page.getByRole("button", { name: "Stop", exact: true }).waitFor({ timeout: 10_000 });
 
     const queuedPrompt = "queue this on the server";
     await sendMessage(page, queuedPrompt, "Queue message");
@@ -272,7 +274,7 @@ suite.define(() => {
       .locator(".chat-tool-msg-summary")
       .getByRole("img", { name: "exec", exact: true })
       .waitFor();
-    await page.getByRole("button", { name: "Stop generating" }).waitFor();
+    await page.getByRole("button", { name: "Stop", exact: true }).waitFor();
     let agentSequence = 0;
     const commentaryText = "The active commentary stays visible.";
     await gateway.emitGatewayEvent(
@@ -498,7 +500,7 @@ suite.define(() => {
       });
       await reconnect();
       await transcript.getByText(steerText, { exact: true }).waitFor();
-      await page.getByRole("button", { name: "Stop generating" }).waitFor();
+      await page.getByRole("button", { name: "Stop", exact: true }).waitFor();
       if (historyOrder === "before") {
         await emitSteer();
       }
@@ -594,7 +596,7 @@ suite.define(() => {
     });
     await reconnect();
     await transcript.getByText(commentaryText, { exact: true }).waitFor();
-    await page.getByRole("button", { name: "Stop generating" }).waitFor();
+    await page.getByRole("button", { name: "Stop", exact: true }).waitFor();
     await emitDelta(afterText);
 
     await expect
@@ -629,7 +631,7 @@ suite.define(() => {
     const composer = chatComposer(page);
     await sendMessage(page, "keep the modifier shortcut run active");
     await gateway.waitForRequest("chat.send");
-    await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
+    await page.getByRole("button", { name: "Stop", exact: true }).waitFor({ timeout: 10_000 });
 
     const queuedText = "leave this modifier follow-up queued";
     await composer.fill(queuedText);
@@ -650,7 +652,7 @@ suite.define(() => {
     await sendMessage(page, "keep the disconnect run active");
     const initial = requireRecord((await gateway.waitForRequest("chat.send")).params);
     const activeRunId = requireString(initial.idempotencyKey, "initial accepted run");
-    await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
+    await page.getByRole("button", { name: "Stop", exact: true }).waitFor({ timeout: 10_000 });
 
     // Establish delivery before disconnect; the follow-up is the only unsent turn.
     const acceptedSession = {
@@ -672,7 +674,7 @@ suite.define(() => {
       ],
     });
     await gateway.emitGatewayEvent("sessions.changed", acceptedSession);
-    await page.locator(".chat-send-status").waitFor({ state: "detached" });
+    await expect.poll(async () => (await readOutboxQueue(page)).length).toBe(0);
 
     await gateway.setOnline(false);
     await waitForControlUiGatewayReconnecting(page);
@@ -722,7 +724,7 @@ suite.define(() => {
 
     await sendMessage(page, "keep this run active");
     await gateway.waitForRequest("chat.send");
-    await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
+    await page.getByRole("button", { name: "Stop", exact: true }).waitFor({ timeout: 10_000 });
 
     const followUp = "interrupt for this session override";
     await sendMessage(page, followUp);
@@ -744,7 +746,7 @@ suite.define(() => {
 
     await sendMessage(page, "keep this run active");
     await gateway.waitForRequest("chat.send");
-    await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
+    await page.getByRole("button", { name: "Stop", exact: true }).waitFor({ timeout: 10_000 });
 
     const queuedPrompt = "steer this after restoring the queue";
     await sendMessage(page, queuedPrompt, "Queue message");

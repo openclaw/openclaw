@@ -277,7 +277,6 @@ export async function readProviderUsage(
 export async function loadUsageStatusStaleWhileRevalidate(options: {
   config: OpenClawConfig;
   coldRead?: "refresh-marker";
-  now?: number;
 }): Promise<UsageSummary> {
   const snapshot = await getProviderUsageRuntimeSnapshot({ config: options.config });
   const params: ProviderUsageCacheParams = {
@@ -288,7 +287,7 @@ export async function loadUsageStatusStaleWhileRevalidate(options: {
     credentialKey: snapshot.credentialKey,
     providerIds: snapshot.providerIds,
     coldRead: options.coldRead,
-    now: options.now ?? Date.now(),
+    now: Date.now(),
   };
   if (params.providerIds.length === 0) {
     usageCacheByAgentId.delete(params.agentId);

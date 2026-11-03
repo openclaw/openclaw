@@ -1,24 +1,31 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { flush, resolve } from "solid-js";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { ToolsEffectiveResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { githubIdentityViewFixture } from "../../features/github-connections/github-identity.test-support.ts";
 import type { AgentsPanel } from "../../lib/agents/panels.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
-  agentsCapability,
+  agentsList,
   agentsRouteData,
   createAgentsPage,
+  emitGatewayEvent,
   emitGatewaySnapshot,
   gateway,
-  pageContext,
+  ownedAgentsContext,
   snapshot,
 } from "./agents-page.test-support.ts";
-import { createBaseParams } from "./panels-tools-skills.test-support.ts";
+import {
+  createBaseParams,
+  createReadToolCatalog,
+  openToolGroups,
+} from "./panels-tools-skills.test-support.ts";
 import { AgentTools } from "./panels-tools-skills.tsx";
 
 afterEach(cleanupSolid);
@@ -38,26 +45,32 @@ function effective(label: string): ToolsEffectiveResult {
   };
 }
 
-function mountEffective(read: () => Promise<ToolsEffectiveResult>, panel: AgentsPanel = "tools") {
-  const request = vi.fn(async (method: string) =>
-    method === "tools.effective"
-      ? read()
-      : {
-          agentId: "main",
-          profiles: [],
-          groups: [
-            {
-              id: "core",
-              label: "Built-in tools",
-              source: "core",
-              tools: [{ id: "read", label: "Read", description: "Read", source: "core" }],
-            },
-          ],
-        },
-  );
+async function mountEffective(
+  read: () => Promise<ToolsEffectiveResult>,
+  panel: AgentsPanel = "tools",
+  scopes: string[] = ["operator.admin"],
+) {
+  const request = vi.fn(async (method: string) => {
+    if (method === "agents.list") {
+      return agentsList;
+    }
+    if (method === "agents.files.list") {
+      return { agentId: "main", workspace: "", files: [] };
+    }
+    if (method === "tools.effective") {
+      return read();
+    }
+    if (method === "tools.catalog") {
+      return createReadToolCatalog();
+    }
+    throw new Error(`Unexpected gateway method: ${method}`);
+  });
   const client = createTestGatewayClient(request);
   const currentGateway = gateway(snapshot(client));
-  const agents = agentsCapability(async () => ({ agentId: "main", workspace: "", files: [] }));
+  currentGateway.snapshot.hello = gatewayHelloForMethods(
+    currentGateway.snapshot.hello?.features?.methods ?? [],
+    scopes,
+  );
   const listeners = new Set<() => void>();
   const modelOverrides: Record<string, string | null> = {};
   // SAFETY: This fixture supplies the session state and subscription consumed by the Agents page.
@@ -70,13 +83,13 @@ function mountEffective(read: () => Promise<ToolsEffectiveResult>, panel: Agents
       };
     },
   } as unknown as ApplicationContext["sessions"];
-  const context = pageContext(currentGateway, agents, { sessions });
+  const context = await ownedAgentsContext(currentGateway, { sessions });
   const save = vi.fn(async () => true);
   Object.assign(context.runtimeConfig, { save, state: {} });
   const route = (next: AgentsPanel) => ({
     ...agentsRouteData(
       currentGateway,
-      agents.state.agentsList,
+      context.agents.state.agentsList,
       context.settingsAgentSelection.state.selectedId,
       context.settingsAgentSelection,
     ),
@@ -111,6 +124,15 @@ function mountEffective(read: () => Promise<ToolsEffectiveResult>, panel: Agents
         notify();
       }
     },
+    emit(event: string, payload: unknown) {
+      emitGatewayEvent(currentGateway, { type: "event", event, payload });
+    },
+    async settleEffective() {
+      flush();
+      const result = await resolve(() => page.read().tools.readEffective());
+      flush();
+      return result;
+    },
   };
 }
 
@@ -118,9 +140,24 @@ const preview = (container: HTMLElement) =>
   container.querySelector(".agent-tools-runtime-chip")?.textContent;
 
 describe("Agents effective-tools read", () => {
+  it.each([{ scopes: [] }, { scopes: ["operator.sessions.read"] }])(
+    "honors the active read grant $scopes",
+    async ({ scopes }) => {
+      const view = await mountEffective(async () => effective("Readable preview"), "tools", scopes);
+      await view.settleEffective();
+      expect(view.calls()).toHaveLength(scopes.length ? 1 : 0);
+      expect(view.request.mock.calls.filter(([method]) => method === "tools.catalog")).toHaveLength(
+        0,
+      );
+      expect(preview(view.container)?.includes("Readable preview") ?? false).toBe(
+        scopes.length > 0,
+      );
+    },
+  );
+
   it("loads only on demand, joins pending receipts, and retains the accepted result across panel visits", async () => {
     const pending = deferred<ToolsEffectiveResult>();
-    const view = mountEffective(() => pending.promise, "files");
+    const view = await mountEffective(() => pending.promise, "files");
     expect(view.calls()).toHaveLength(0);
     view.setPanel("tools");
     view.context.settingsAgentSelection.set("main");
@@ -132,7 +169,7 @@ describe("Agents effective-tools read", () => {
     });
     expect(view.container.textContent).toContain("Loading…");
     await waitForSolid(() =>
-      expect(view.container.querySelector(".agent-tool-card")).not.toBeNull(),
+      expect(view.container.querySelector(".agent-tools-group")).not.toBeNull(),
     );
     expect(
       view.container.querySelector<HTMLButtonElement>(".agent-tools-buttons button")?.disabled,
@@ -154,17 +191,22 @@ describe("Agents effective-tools read", () => {
       .mockResolvedValueOnce(effective("Accepted preview"))
       .mockReturnValueOnce(next.promise)
       .mockReturnValue(recovered.promise);
-    const view = mountEffective(read);
+    const view = await mountEffective(read);
     await waitForSolid(() => expect(preview(view.container)).toContain("Accepted preview"));
     const github = view.container.querySelector("openclaw-github-identity");
     const preset = view.container.querySelector<HTMLButtonElement>(".agent-tools-buttons button")!;
+    openToolGroups(view.container);
     const card = view.container.querySelector<HTMLDetailsElement>("#agent-tool-read")!;
     const group = card.closest<HTMLDetailsElement>(".agent-tools-group")!;
     const toggle = card.querySelector<HTMLInputElement>("input.settings-toggle__input")!;
     group.open = true;
     card.open = true;
     toggle.focus();
-    view.publishSessions();
+    view.emit("sessions.changed", {
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      reason: "patch",
+    });
     await waitForSolid(() => expect(view.calls()).toHaveLength(2));
     expect(view.container.textContent).toContain("Loading…");
     expect(view.container.querySelector("#agent-tool-read")).toBe(card);
@@ -211,7 +253,7 @@ describe("Agents effective-tools read", () => {
         .fn<() => Promise<ToolsEffectiveResult>>()
         .mockReturnValueOnce(stale.promise)
         .mockResolvedValue(effective("Current connection"));
-      const view = mountEffective(read);
+      const view = await mountEffective(read);
       await waitForSolid(() => expect(view.calls()).toHaveLength(1));
       const currentClient =
         change === "client replacement" ? createTestGatewayClient(view.request) : view.client;
@@ -241,7 +283,7 @@ describe("Agents effective-tools read", () => {
       .fn<() => Promise<ToolsEffectiveResult>>()
       .mockResolvedValueOnce(effective("Before save"))
       .mockResolvedValue(effective("After save"));
-    const view = mountEffective(read);
+    const view = await mountEffective(read);
     await waitForSolid(() => expect(preview(view.container)).toContain("Before save"));
     await view.page.read().onConfigSave();
     await waitForSolid(() => expect(preview(view.container)).toContain("After save"));
@@ -269,9 +311,10 @@ describe("Agents effective-tools read", () => {
       .fn<() => Promise<ToolsEffectiveResult>>()
       .mockResolvedValueOnce(old)
       .mockReturnValue(next.promise);
-    const view = mountEffective(read);
+    const view = await mountEffective(read);
     await waitForSolid(() => expect(preview(view.container)).toContain("Old session preview"));
     expect(view.container.textContent).toContain("Old session notice");
+    openToolGroups(view.container);
     emitGatewaySnapshot(view.currentGateway, {
       ...snapshot(view.client),
       sessionKey: "agent:main:replacement",
@@ -299,8 +342,9 @@ describe("Agents effective-tools read", () => {
       .fn<() => Promise<ToolsEffectiveResult>>()
       .mockResolvedValueOnce(effective("Initial model preview"))
       .mockReturnValue(next.promise);
-    const view = mountEffective(read);
+    const view = await mountEffective(read);
     await waitForSolid(() => expect(preview(view.container)).toContain("Initial model preview"));
+    openToolGroups(view.container);
     view.modelOverrides.main = "openai/gpt-5-mini";
     view.publishSessions();
     await waitForSolid(() => expect(view.calls()).toHaveLength(2));
@@ -310,5 +354,162 @@ describe("Agents effective-tools read", () => {
     );
     next.resolve(effective("Current model preview"));
     await waitForSolid(() => expect(preview(view.container)).toContain("Current model preview"));
+  });
+
+  it("ignores unrelated session publications while refreshing its session, owner and local model changes", async () => {
+    let revision = 1;
+    const view = await mountEffective(async () => effective(`Inventory ${revision++}`));
+    await view.settleEffective();
+    expect(view.calls()).toHaveLength(1);
+    for (const payload of [
+      { sessionKey: "agent:main:other", agentId: "main", reason: "patch" },
+      { sessionKey: "main", agentId: "other", reason: "patch" },
+    ]) {
+      view.emit("sessions.changed", payload);
+      view.publishSessions();
+      await view.settleEffective();
+      expect(view.calls()).toHaveLength(1);
+    }
+    view.emit("sessions.changed", {
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      reason: "patch",
+      session: {
+        key: "agent:main:main",
+        agentId: "main",
+        owner: { actor: { type: "human", id: "fixture-owner" } },
+        toolOverrides: { webSearch: false },
+      },
+    });
+    expect(await view.settleEffective()).toMatchObject({
+      groups: [{ tools: [{ label: "Inventory 2" }] }],
+    });
+    expect(view.calls()).toHaveLength(2);
+    view.modelOverrides.main = "openai/gpt-5-mini";
+    view.publishSessions();
+    expect(await view.settleEffective()).toMatchObject({
+      groups: [{ tools: [{ label: "Inventory 3" }] }],
+    });
+    expect(view.calls()).toHaveLength(3);
+    view.emit("sessions.changed", {
+      sessionKey: "agent:main:child",
+      agentId: "main",
+      reason: "patch",
+      ancestorSessions: [{ key: "agent:main:main", agentId: "main" }],
+    });
+    expect(await view.settleEffective()).toMatchObject({
+      groups: [{ tools: [{ label: "Inventory 4" }] }],
+    });
+    expect(view.calls()).toHaveLength(4);
+    view.emit("sessions.changed", { reason: "profile-identity" });
+    expect(await view.settleEffective()).toMatchObject({
+      groups: [{ tools: [{ label: "Inventory 5" }] }],
+    });
+    expect(view.calls()).toHaveLength(5);
+  });
+
+  it("refreshes for scoped catalog replacements without reading picker observations", async () => {
+    let revision = 1;
+    const view = await mountEffective(async () => effective(`Inventory ${revision++}`));
+    await view.settleEffective();
+    view.emit("chat.metadata.changed", {
+      agentId: "other",
+      modelCatalogChanged: true,
+      authChanged: true,
+      commandsChanged: false,
+    });
+    await view.settleEffective();
+    expect(view.calls()).toHaveLength(1);
+    view.emit("config.changed", {});
+    await view.settleEffective();
+    expect(view.calls()).toHaveLength(1);
+    view.emit("chat.metadata.changed", {
+      agentId: "main",
+      modelCatalogChanged: true,
+      authChanged: true,
+    });
+    expect(await view.settleEffective()).toMatchObject({
+      groups: [{ tools: [{ label: "Inventory 2" }] }],
+    });
+    for (let index = 0; index < 60; index += 1) {
+      view.emit("chat.metadata.changed", {
+        agentId: "main",
+        modelCatalogChanged: true,
+        authChanged: false,
+        commandsChanged: false,
+      });
+      await view.settleEffective();
+    }
+    view.emit("chat.metadata.changed", {
+      agentId: "main",
+      modelCatalogChanged: false,
+      modelCatalogStatusChanged: true,
+      authChanged: false,
+      commandsChanged: false,
+    });
+    await view.settleEffective();
+    expect(view.calls()).toHaveLength(2);
+    view.emit("chat.metadata.changed", {
+      agentId: "main",
+      modelCatalogChanged: true,
+      authChanged: true,
+      commandsChanged: false,
+    });
+    expect(await view.settleEffective()).toMatchObject({
+      groups: [{ tools: [{ label: "Inventory 3" }] }],
+    });
+    expect(view.calls()).toHaveLength(3);
+    view.emit("chat.metadata.changed", {
+      agentId: "main",
+      modelSelectionChanged: true,
+      authChanged: false,
+      commandsChanged: false,
+    });
+    expect(await view.settleEffective()).toMatchObject({
+      groups: [{ tools: [{ label: "Inventory 4" }] }],
+    });
+    view.emit("chat.metadata.changed", { agentId: "main", modelCatalogChanged: true });
+    expect(await view.settleEffective()).toMatchObject({
+      groups: [{ tools: [{ label: "Inventory 5" }] }],
+    });
+    expect(view.calls()).toHaveLength(5);
+  });
+
+  it("defers hidden inventory invalidations and catches up once when visible", async () => {
+    let revision = 1;
+    let visibility: DocumentVisibilityState = "visible";
+    const visible = vi
+      .spyOn(document, "visibilityState", "get")
+      .mockImplementation(() => visibility);
+    onTestFinished(() => visible.mockRestore());
+    const view = await mountEffective(async () => effective(`Inventory ${revision++}`));
+    await view.settleEffective();
+    visibility = "hidden";
+    document.dispatchEvent(new Event("visibilitychange"));
+    for (let index = 0; index < 60; index += 1) {
+      view.emit("chat.metadata.changed", { agentId: "main", modelCatalogChanged: true });
+    }
+    view.emit("config.changed", {});
+    view.emit("sessions.changed", { sessionKey: "agent:main:main", agentId: "main" });
+    view.publishSessions();
+    await view.settleEffective();
+    expect(view.calls()).toHaveLength(1);
+    visibility = "visible";
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(await view.settleEffective()).toMatchObject({
+      groups: [{ tools: [{ label: "Inventory 2" }] }],
+    });
+    expect(view.calls()).toHaveLength(2);
+    window.dispatchEvent(new Event("focus"));
+    await view.settleEffective();
+    expect(view.calls()).toHaveLength(2);
+    visibility = "hidden";
+    document.dispatchEvent(new Event("visibilitychange"));
+    view.emit("sessions.changed", { sessionKey: "agent:main:other", agentId: "main" });
+    view.publishSessions();
+    visibility = "visible";
+    document.dispatchEvent(new Event("visibilitychange"));
+    await view.settleEffective();
+    expect(view.calls()).toHaveLength(2);
   });
 });

@@ -6,11 +6,12 @@ import type {
 import {
   GATEWAY_OWNER_PROFILE_ID,
   GIT_COAUTHOR_PREFERENCE_KEY,
+  PR_ATTRIBUTION_PREFERENCE_KEY,
   isGitCoauthorCreditEnabled,
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context-types.ts";
-import { hasOperatorSelfReadAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
+import { hasOperatorSelfReadAccess } from "../../app/operator-access.ts";
 import { invalidateUserPreferences, saveUserPreferences } from "../../app/user-prefs-cache.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import { resolveCurrentSelfUser } from "../../app/user-profile.ts";
@@ -24,7 +25,7 @@ import { userProfileAvatarUrl } from "./profile-avatar-url.ts";
 export type IdentityChange =
   | { kind: "display-name" }
   | { kind: "avatar"; file: File }
-  | { kind: "git-coauthor"; enabled: boolean };
+  | { kind: "git-coauthor" | "pr-attribution"; enabled: boolean };
 
 export class ProfileState {
   private publishTarget?: () => void;
@@ -45,6 +46,7 @@ export class ProfileState {
   ownProfile: UserProfile | null = null;
   displayName = "";
   gitCoauthorEnabled = true;
+  prAttributionEnabled = false;
   identityLoading = false;
   identityBusy: IdentityChange["kind"] | null = null;
   identityError: string | null = null;
@@ -88,7 +90,8 @@ export class ProfileState {
     // Hello can precede users.self; unresolved identity is not a sign-out.
     const identityReady = nextConnected && snapshot.selfUser !== undefined;
     const nextCanRead = hasOperatorSelfReadAccess(snapshot.hello?.auth ?? null);
-    const nextCanWrite = nextConnected && hasOperatorWriteAccess(snapshot.hello?.auth ?? null);
+    // Personal identity edits do not grant general server or session write access.
+    const nextCanWrite = nextConnected && nextCanRead;
     const connectionChanged =
       nextConnected !== this.connected ||
       identityReady !== this.identityReady ||
@@ -101,15 +104,8 @@ export class ProfileState {
     const selfProfileChanged =
       nextSelfUser?.id !== this.selfUser?.id ||
       nextSelfUser?.identity?.id !== this.selfUser?.identity?.id;
-    const writeAccessLost =
-      nextConnected &&
-      !nextCanWrite &&
-      this.connectionScopes?.some(
-        (scope) => scope === "operator.write" || scope === "operator.admin",
-      );
     const readAccessLost = nextConnected && this.canRead && !nextCanRead;
-    const identitySourceChanged =
-      clientChanged || selfProfileChanged || writeAccessLost || readAccessLost;
+    const identitySourceChanged = clientChanged || selfProfileChanged || readAccessLost;
     this.client = snapshot.client;
     this.connected = nextConnected;
     this.identityReady = identityReady;
@@ -136,6 +132,7 @@ export class ProfileState {
       this.ownProfile = null;
       this.displayName = "";
       this.gitCoauthorEnabled = true;
+      this.prAttributionEnabled = false;
     }
     this.publish();
     if (!identityReady || !snapshot.client) {
@@ -185,23 +182,28 @@ export class ProfileState {
       }
       this.displayName = hasUnsavedDisplayName ? displayNameDraft : (profile.displayName ?? "");
       this.gitCoauthorEnabled = true;
+      this.prAttributionEnabled = false;
       this.publish();
       // Consent belongs to the person, not to a display-primary GitHub account.
-      if (profile.id !== GATEWAY_OWNER_PROFILE_ID) {
-        const { loadUserPreferences } = await import("../../app/user-prefs-request.ts");
-        if (requestId !== this.identityRequestId) {
-          return;
-        }
-        const preferences = await loadUserPreferences(client, profile.id, {
-          keys: [GIT_COAUTHOR_PREFERENCE_KEY],
-        });
-        if (requestId !== this.identityRequestId) {
-          return;
-        }
-        this.gitCoauthorEnabled =
-          preferences.status === "ok" &&
-          isGitCoauthorCreditEnabled(preferences.entries[GIT_COAUTHOR_PREFERENCE_KEY]);
+      const { loadUserPreferences } = await import("../../app/user-prefs-request.ts");
+      if (requestId !== this.identityRequestId) {
+        return;
       }
+      const preferences = await loadUserPreferences(client, profile.id, {
+        keys:
+          profile.id === GATEWAY_OWNER_PROFILE_ID
+            ? [PR_ATTRIBUTION_PREFERENCE_KEY]
+            : [GIT_COAUTHOR_PREFERENCE_KEY, PR_ATTRIBUTION_PREFERENCE_KEY],
+      });
+      if (requestId !== this.identityRequestId) {
+        return;
+      }
+      this.gitCoauthorEnabled =
+        profile.id !== GATEWAY_OWNER_PROFILE_ID &&
+        preferences.status === "ok" &&
+        isGitCoauthorCreditEnabled(preferences.entries[GIT_COAUTHOR_PREFERENCE_KEY]);
+      this.prAttributionEnabled =
+        preferences.status === "ok" && preferences.entries[PR_ATTRIBUTION_PREFERENCE_KEY] === true;
     } catch (error) {
       if (requestId === this.identityRequestId) {
         this.identityError = formatUiError(error, t("profilePage.identity.profileUnavailable"));
@@ -284,9 +286,14 @@ export class ProfileState {
           }
           break;
         }
-        case "git-coauthor": {
+        case "git-coauthor":
+        case "pr-attribution": {
+          const key =
+            change.kind === "git-coauthor"
+              ? GIT_COAUTHOR_PREFERENCE_KEY
+              : PR_ATTRIBUTION_PREFERENCE_KEY;
           const result = await saveUserPreferences(client, {
-            entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: change.enabled },
+            entries: { [key]: change.enabled },
           });
           if (!isCurrent()) {
             return;
@@ -294,7 +301,11 @@ export class ProfileState {
           if (result.status !== "ok") {
             throw new Error(t("profilePage.identity.profileUnavailable"));
           }
-          this.gitCoauthorEnabled = change.enabled;
+          if (change.kind === "git-coauthor") {
+            this.gitCoauthorEnabled = change.enabled;
+          } else {
+            this.prAttributionEnabled = change.enabled;
+          }
           return;
         }
       }

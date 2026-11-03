@@ -312,11 +312,10 @@ export function requestTalkVoiceChange(params: {
     completion,
     timer: setTimeout(() => {
       cancelChange(change, new Error("Voice change timed out before the replacement connected"));
-    }, TALK_VOICE_CHANGE_TIMEOUT_MS),
+    }, TALK_VOICE_CHANGE_TIMEOUT_MS).unref(),
     claimed: false,
     clientReady: false,
   };
-  change.timer.unref?.();
   changes.set(id, change);
   trackConnection(params.requesterConnId);
   try {

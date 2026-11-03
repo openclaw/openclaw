@@ -1,10 +1,13 @@
 import { Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Menu } from "../../../components/solid/menu.tsx";
+import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts";
 import { beginClipboardCopy } from "../../../lib/clipboard.ts";
 import { downloadImageBlob } from "../../../lib/image-download.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { showToast } from "../../../lib/toast.ts";
+
+registerEnglishCatalog(registerChatMediaEnglish);
 
 let nextMenuId = 0;
 
@@ -69,11 +72,15 @@ export async function copyImageToClipboard(readBlob: () => Promise<Blob>): Promi
 }
 
 export function ChatImageActions(props: {
+  disabled?: boolean;
   title: string;
   readOriginalBlob: () => Promise<Blob>;
   overlay?: boolean;
 }) {
   const download = async () => {
+    if (props.disabled) {
+      return;
+    }
     try {
       const blob = await props.readOriginalBlob();
       downloadImageBlob(blob, props.title);
@@ -82,6 +89,9 @@ export function ChatImageActions(props: {
     }
   };
   const copy = async () => {
+    if (props.disabled) {
+      return;
+    }
     try {
       await copyImageToClipboard(props.readOriginalBlob);
       showToast({ message: t("common.copied") });
@@ -100,7 +110,15 @@ export function ChatImageActions(props: {
           triggerClass="chat-image-action"
           placement="bottom-end"
           label={t("chat.imageLightbox.actions")}
-          triggerAttributes={{ title: t("chat.imageLightbox.actions") }}
+          triggerAttributes={{
+            title: t("chat.imageLightbox.actions"),
+            "aria-disabled": props.disabled ? "true" : undefined,
+          }}
+          onBeforeShow={(event) => {
+            if (props.disabled) {
+              event.preventDefault();
+            }
+          }}
           trigger={<Icon name="moreHorizontal" />}
           items={[
             {
@@ -138,6 +156,7 @@ export function ChatImageActions(props: {
           class="chat-image-action"
           title={t("chat.imageLightbox.download")}
           aria-label={t("chat.imageLightbox.download")}
+          aria-disabled={props.disabled ? "true" : undefined}
           onClick={() => void download()}
         >
           <Icon name="download" />
@@ -147,6 +166,7 @@ export function ChatImageActions(props: {
           class="chat-image-action"
           title={t("chat.imageLightbox.copy")}
           aria-label={t("chat.imageLightbox.copy")}
+          aria-disabled={props.disabled ? "true" : undefined}
           onClick={() => void copy()}
         >
           <Icon name="copy" />
