@@ -1,4 +1,3 @@
-import { registerAgentHarnessCompletionHandoff } from "openclaw/plugin-sdk/agent-harness-completion";
 import type { AgentHarnessRuntimeArtifactBinding } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { captureSessionEntryCurrentCheckAsync } from "openclaw/plugin-sdk/session-binding-runtime";
 import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
@@ -40,6 +39,7 @@ import {
   runCodexCleanupStep,
 } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptPrompt } from "./run-attempt-prompt.js";
+import { createCodexNativeContinuation } from "./run-attempt-state.js";
 import {
   releaseCodexSandboxExecServerEnvironment,
   type CodexSandboxExecEnvironment,
@@ -338,16 +338,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
             nativeHookRelay?.rejectPendingDirectChild(childThreadId, reason),
           onDirectChildAccepted:
             params.sessionKey && params.agentHarnessCompletionScope
-              ? (handoff) => {
-                  if (handoff?.completionCustody) {
-                    registerAgentHarnessCompletionHandoff({
-                      scope: params.agentHarnessCompletionScope!,
-                      completionCustody: handoff.completionCustody,
-                      runId: handoff.runId,
-                    });
-                  }
-                  state.runtimeContinuationStarted = true;
-                }
+              ? createCodexNativeContinuation(params, state)
               : undefined,
         });
         parentTransferred = submissionStore !== undefined;

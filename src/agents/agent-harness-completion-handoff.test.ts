@@ -9,9 +9,11 @@ import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
 import { settleRequesterRun } from "./requester-run-settlement.js";
 
 const state = vi.hoisted(() => ({ currentInstance: undefined as unknown }));
+// mock-isolation: Control the current operational run without starting the process registry.
 vi.mock("../infra/agent-run-registry.js", () => ({
   getActiveAgentRunDelegatedAuthority: () => ({ operationalRunInstance: state.currentInstance }),
 }));
+// mock-isolation: Isolate Gateway dispatch; real custody and settlement remain exercised.
 vi.mock("../gateway/server-plugin-in-process-dispatch.js", () => ({
   captureOperatorToolGatewayContinuationContext: async () => ({
     signal: new AbortController().signal,
@@ -20,6 +22,7 @@ vi.mock("../gateway/server-plugin-in-process-dispatch.js", () => ({
     release() {},
   }),
 }));
+// mock-isolation: Avoid retaining process-wide Gateway work in this custody fixture.
 vi.mock("../process/gateway-work-admission.js", () => ({
   retainGatewayRootWorkAdmissionContinuationScope: () => undefined,
 }));
@@ -46,6 +49,7 @@ vi.mock("./subagents/announce/subagent-announce-delivery.runtime.js", async (imp
     consume: (isCurrent?: () => boolean) => Promise<T>,
   ) => consume(),
 }));
+// mock-isolation: Observe core-spawn settlement without creating child sessions.
 vi.mock("./subagents/registry/subagent-registry.js", () => ({
   markRequesterTurnYielded: vi.fn(),
   settleRequesterAfterSessionSpawns: vi.fn(async () => true),
