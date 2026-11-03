@@ -85,6 +85,8 @@ function gatewayOwner(pid = process.pid) {
     databasePath: resolveOpenClawStateSqlitePath(),
     payload: {
       pid,
+      startTime:
+        withHostPlatform(() => processIdentity.getFileLockProcessStartTime(pid)) ?? undefined,
       processNamespace: gatewayNamespace.readGatewayLockProcessNamespace(),
       createdAt: new Date().toISOString(),
       configPath: process.env.OPENCLAW_CONFIG_PATH!,
@@ -196,6 +198,8 @@ describe("package update entry point", () => {
         "OPENCLAW_CONFIG_PATH",
         path.join(process.env.OPENCLAW_STATE_DIR!, "openclaw.json"),
       );
+      // The metadata child must observe the same real process identity as this owner.
+      vi.mocked(processIdentity.getFileLockProcessStartTime).mockRestore();
       openOpenClawStateDatabase();
       if (malformedPreview) {
         fs.writeFileSync(process.env.OPENCLAW_CONFIG_PATH!, "{");

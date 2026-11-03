@@ -2,6 +2,7 @@ import { acquireFileLockSync } from "../../infra/file-lock-manager.js";
 import { parseGatewayLockPayload, type GatewayLockRole } from "../../infra/gateway-lock-payload.js";
 import { defaultPayload } from "../../infra/gateway-state-owner-record.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
+import { getFileLockProcessStartTime } from "../../shared/pid-alive.js";
 
 // A generic sidecar holds custody without registering schema authority in this process.
 export function createUnregisteredStateOwner(
@@ -14,7 +15,12 @@ export function createUnregisteredStateOwner(
   return acquireFileLockSync(anchor.path, {
     lockPath: anchor.path,
     retry: { retries: 0 },
-    payload: () => ({ ...defaultPayload(databasePath), pid, role, startTime: undefined }),
+    payload: () => ({
+      ...defaultPayload(databasePath),
+      pid,
+      role,
+      startTime: getFileLockProcessStartTime(pid) ?? undefined,
+    }),
     parsePayload: parseGatewayLockPayload,
   });
 }
