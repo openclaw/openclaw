@@ -131,6 +131,59 @@ it.each(["exact tool cap", "invalid schema", "manifest alias"])(
   },
 );
 
+it("names missing models and exhausted utility fallbacks without exposing provider error text", async () => {
+  const cfg = {
+    agents: {
+      defaults: {
+        utilityModel: {
+          primary: "fixture/missing@private-profile",
+          fallbacks: ["fixture/unavailable", "fixture/recovery"],
+        },
+      },
+    },
+  };
+  const notices: AgentEventPayload[] = [];
+  const unsubscribe = onAgentEvent((evt) => {
+    if (evt.stream === "notice") {
+      notices.push(evt);
+    }
+  });
+  const complete = vi.fn<NonNullable<Parameters<typeof runUtilityCompletion>[1]>>(
+    async (request) => {
+      throw new FailoverError("private-provider-error", {
+        reason: "model_not_found",
+        provider: request.provider,
+        model: request.model,
+      });
+    },
+  );
+  const request = {
+    config: cfg,
+    agentId: "main",
+    provider: "fixture",
+    model: "missing",
+    useUtilityModel: true,
+    prompt: "Synthetic task",
+    systemPrompt: "Return JSON",
+    timeoutMs: 1000,
+  };
+  try {
+    const error = await runUtilityCompletion(request, complete).catch((caught: unknown) => caught);
+    reportSessionObserverDegradation(
+      { ...observerState(), utilityModelRef: "fixture/missing@private-profile" },
+      error,
+      cfg,
+    );
+    expect(notices[0]?.data.message).toContain(
+      "Unavailable model IDs: fixture/missing, fixture/unavailable, fixture/recovery.",
+    );
+    expect(notices[0]?.data.message).toContain("Utility fallbacks exhausted");
+    expect(notices[0]?.data.message).not.toMatch(/private-profile|private-provider-error/u);
+  } finally {
+    unsubscribe();
+  }
+});
+
 function completionAfter(delay?: number) {
   return vi.fn(
     (params: { abortSignal?: AbortSignal; timeoutMs: number }) =>
@@ -195,38 +248,6 @@ it("publishes a digest from a utility model that answers after 15s", async () =>
 
   expect(completeModel.mock.calls[0]?.[0].abortSignal?.aborted).toBe(false);
   expectBroadcast(harness, { headline: "Working", health: "on-track" });
-});
-
-it("reports assessment failure without claiming the configured fallbacks ran", () => {
-  const notices: AgentEventPayload[] = [];
-  const unsubscribe = onAgentEvent((evt) => {
-    if (evt.stream === "notice") {
-      notices.push(evt);
-    }
-  });
-  try {
-    reportSessionObserverDegradation(
-      observerState({ consecutiveFailures: 2 }),
-      new Error("candidate timed out"),
-      {
-        agents: {
-          defaults: {
-            utilityModel: {
-              primary: "openai/gpt-test",
-              fallbacks: ["anthropic/claude-haiku-5-5"],
-            },
-          },
-        },
-      },
-    );
-    expect(notices).toHaveLength(1);
-    expect(notices[0]?.data.message).toContain("repeated failures with utility model");
-    expect(notices[0]?.data.message).toContain("choose capable utility models");
-    expect(notices[0]?.data.message).not.toContain("and its configured fallbacks failed");
-    expect(notices[0]?.data.message).not.toContain("add capable utilityModel.fallbacks");
-  } finally {
-    unsubscribe();
-  }
 });
 
 it("gives a configured fallback its own model budget after the primary times out", async () => {

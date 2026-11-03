@@ -4,6 +4,7 @@ import {
   titleForRoute,
   type NavigationRouteId,
 } from "../app-navigation.ts";
+import { pluginSettingsIdFromPath } from "../app-route-paths.ts";
 import type { NativeDeviceSettingsSnapshot } from "../app/native-device-settings.ts";
 import { askBrandLabel } from "../components/theme-brand-label.ts";
 import { i18n, t } from "../i18n/index.ts";
@@ -13,10 +14,24 @@ const SETTINGS_SUBPAGE_OWNER_ROUTES: Partial<
 > = {
   "ai-agents": "agents",
   "model-setup": "model-providers",
+  lobsterdex: "appearance",
 };
 
 export function settingsNavigationOwnerRoute(routeId: NavigationRouteId): NavigationRouteId {
   return SETTINGS_SUBPAGE_OWNER_ROUTES[routeId] ?? routeId;
+}
+
+/** The page one level up, or null when this page is already a top-level section. */
+export function settingsParentRoute(
+  routeId: NavigationRouteId,
+  pathname = "",
+  basePath = "",
+): NavigationRouteId | null {
+  if (routeId === "plugin-settings" && pluginSettingsIdFromPath(pathname, basePath)) {
+    return "plugin-settings";
+  }
+  const owner = settingsNavigationOwnerRoute(routeId);
+  return owner === routeId ? null : owner;
 }
 
 export function settingsNavigationLabelForRoute(

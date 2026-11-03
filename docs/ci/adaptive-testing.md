@@ -45,6 +45,75 @@ identities is treated as missing.
 The export contains repository-relative source identities, counts, outcomes,
 durations, and dependencies. It does not copy test titles, errors, or log text.
 
+## Observation pilot
+
+Ordinary canonical CI collects the first explicit `unit-fast` Vitest invocation
+for each runtime in a job on schedules and on PR runs whose run ID ends in `0`.
+Frozen targets and other events retain their existing execution. Runtime
+partitioning finishes before the reporter and dependency-recording options are
+added. Native Bun tests retain their existing command and are not represented by
+Vitest observations. The pilot never skips a test or changes a required check.
+
+Each observed invocation uses a fresh Vite cache directory. This prevents native
+dependency records from leaking between configurations or runtimes, but also
+changes optimizer and transform-cache identity. Compare complete paired job
+times, including this cold-cache cost and artifact upload. `capturePreparationMs`
+excludes final serialization and file writing as well as native recording and
+cache misses; it is not the complete collection overhead.
+
+The `ci-test-observations-*` artifacts retain sanitized exports for seven days.
+Each file is bounded to 8 MiB, with at most one invocation per Vitest runtime per
+job. Source metadata includes the workflow run, attempt, job, timestamps and
+actual checkout commit/tree. Configuration identity hashes native config
+dependencies and effective test settings; environment identity hashes an explicit
+allowlist and include-file contents. These are observational identities, not a
+claim that every possible environment input is covered. Missing exports and
+missing dependencies remain data gaps. Export/upload failures do not replace the
+test result, and raw test logs and assertion text are not uploaded by this pilot.
+
+At Vitest's run-start callback, before global setup and test execution, the
+capture writes an incomplete export to the same `observations.json` path. Its
+`preExecution` field contains `recordedAt` and a sanitized observation snapshot:
+the checkout/configuration identity and invocation inventory, with unknown
+outcomes and no dependencies. Completion replaces the export atomically with
+final outcomes and dependencies, retaining the original `preExecution` snapshot
+and context. Changes to configuration or include files during execution cannot
+rewrite that frozen identity. A missing or invalid terminal receipt leaves the
+incomplete snapshot available if the artifact upload runs.
+
+If expanded dependency paths exceed the export limit, the capture retains
+terminal outcomes and the frozen snapshot with all dependencies set to `null`,
+and emits a warning. Missing graph data still requires conservative selection.
+If that smaller export also exceeds the limit, the incomplete snapshot remains.
+
+This snapshot follows configuration evaluation and native test selection. It
+does not contain a prior graph, source diff, model ranking or selection decision.
+Global setup can still change worker settings after capture. The local recording
+timestamp is not artifact availability: a later consumer must also retain the
+publication/download time before using an earlier run as predictive evidence.
+
+For the canonical `unit-fast` configuration, `preExecution.graphInputs` records
+a version-1 profile with separate configuration and environment hashes. These
+omit resolved include membership and pre/post-shard include-file contents. They
+retain native configuration sources, direct setup sources, declared execution
+and transform settings, runtime identity, and an explicit environment allowlist.
+Repository paths in settings are normalized before hashing; regular expressions
+retain their pattern and flags. Unsupported profiles or nonserializable settings
+produce `null` without discarding the exact-run observations.
+
+These hashes allow comparison of declared graph inputs across different file
+selections. They do not establish interchangeable graphs or outcomes: `unit-fast`
+shares process state between files, and the captured environment and direct setup
+sources are not an exhaustive dependency contract. Consumers must also compare
+the repository, lock, project/pool, runtime, platform and dependency-root identity,
+retain source/diff provenance, and measure overlapping-file graph differences.
+The shadow selector still requires the original exact context. Matching graph
+inputs never grants permission to omit tests.
+
+The first readout compares usable-data coverage, native-Bun gaps, observed
+failures, fallback causes, and paired total job costs. Learned selection and
+automatic omission require a separate evaluation and rollout decision.
+
 A passed or failed file is complete only after a terminal run receipt and all
 its cases complete without skips or pending cases. Interrupted, filtered,
 unhandled-error, and missing-result runs remain unknown. Failure-tail replays
@@ -54,9 +123,9 @@ are ignored; conflicting receipts are rejected.
 
 Resource-reporter users receive the additional versioned inventory and case
 counts. This includes existing UI and diagnostic lanes. Ordinary Node shard CI
-does not yet enable this reporter or dependency recording. Native Bun-test
-execution does not emit Vitest observations. Missing observations must never be
-interpreted as passing or irrelevant tests.
+enables collection only for the sampled `unit-fast` invocations described above.
+Other configs and native Bun-test execution do not emit these pilot exports.
+Missing observations must never be interpreted as passing or irrelevant tests.
 
 Keep rollout in shadow mode until representative full-run audits establish
 failure recall, graph completeness, and net savings including collection cost.

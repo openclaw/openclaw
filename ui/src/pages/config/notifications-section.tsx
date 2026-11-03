@@ -161,7 +161,7 @@ function NativeNotificationSection(props: {
       >
         <NotificationActions>
           {props.native.permission === "granted" ? (
-            <button class="btn primary" disabled={testPending()} onClick={() => void sendTest()}>
+            <button class="btn" disabled={testPending()} onClick={() => void sendTest()}>
               <Icon name={testPending() ? "loader" : "send"} />
               {testPending()
                 ? t("configView.notifications.sendingTest")
@@ -380,7 +380,7 @@ function WebPushSection(props: {
                 </button>
                 <Show when={registered() && props.push.canManage}>
                   <button
-                    class="btn primary"
+                    class="btn"
                     disabled={busy() || !props.actions.connected}
                     onClick={() => submit(props.actions.onWebPushTest?.())}
                   >
