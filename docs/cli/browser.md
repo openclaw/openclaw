@@ -361,6 +361,9 @@ Explicit download paths and `trace stop --out` preserve filename whitespace wher
 
 If saving a download fails, OpenClaw requests cancellation of the transfer and reports the original save error. Correct the output path or filesystem problem before starting a new download.
 
+If a page closes before its next download starts, the pending download wait rejects
+immediately. Accepted downloads keep their existing save and cancellation behavior.
+
 When an action opens a modal dialog, text output reports the block and pending dialog IDs. The JSON response returns `blockedByDialog` with `browserState.dialogs.pending`. Pass `--dialog-id` to answer it directly. Dialogs handled outside OpenClaw appear under `browserState.dialogs.recent`.
 
 Batch actions:
