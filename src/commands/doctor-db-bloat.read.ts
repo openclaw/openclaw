@@ -91,7 +91,12 @@ async function readSqliteBloatStatsFromHeader(
   // journal, 2 = WAL. A WAL file with a non-empty sidecar may carry committed
   // freelist changes in uncheckpointed frames, so its header count is stale in
   // either direction; an absent or empty sidecar means the header is current.
-  if (header.getUint8(18) !== 1 || header.getUint8(19) !== 1) {
+  const writeVersion = header.getUint8(18);
+  const readVersion = header.getUint8(19);
+  if ((writeVersion !== 1 && writeVersion !== 2) || (readVersion !== 1 && readVersion !== 2)) {
+    return null;
+  }
+  if (writeVersion === 2 || readVersion === 2) {
     const walBytes = readWalSidecarBytes(pathname);
     if (walBytes === null || walBytes > 0) {
       return null;

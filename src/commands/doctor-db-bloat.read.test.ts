@@ -199,16 +199,19 @@ it("answers a WAL-mode file with nothing uncheckpointed from the header without 
   expect(results[0]?.stats.freeBytes).toBe(readFreelistCount(pathname) * 4096);
 });
 
-it("falls back when the header freelist count exceeds the file extent", async () => {
+it.each([
+  { damage: "freelist beyond the file extent", offset: 36, bytes: [0xff, 0xff, 0xff, 0xff] },
+  { damage: "unsupported write version", offset: 18, bytes: [3] },
+  { damage: "unsupported read version", offset: 19, bytes: [3] },
+])("falls back for $damage in an otherwise valid header", async ({ offset, bytes }) => {
   const pathname = createPaddedDatabase({
     label: "doctor-bloat-header-freelist-",
     pageSize: 4096,
   });
-  // A damaged header keeps its magic and page size but claims a freelist whose
-  // byte span cannot fit inside the file.
+  // Keep valid magic and page size so the damaged field must select the fallback.
   const handle = fs.openSync(pathname, "r+");
   try {
-    fs.writeSync(handle, Buffer.from([0xff, 0xff, 0xff, 0xff]), 0, 4, 36);
+    fs.writeSync(handle, Buffer.from(bytes), 0, bytes.length, offset);
   } finally {
     fs.closeSync(handle);
   }
