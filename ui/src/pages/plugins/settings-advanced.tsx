@@ -41,6 +41,7 @@ function AdvancedSettingsFields(options: InventoryProps): JSX.Element {
                 unsupported: new Set(options.configUnsupportedPaths),
                 disabled: !options.canEditConfig || options.configBusy,
                 showLabel: false,
+                secretFields: options.configSecretFields,
                 onPatch: options.onConfigPatch,
                 onRemove: options.onConfigRemove,
               }}

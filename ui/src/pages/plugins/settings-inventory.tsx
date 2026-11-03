@@ -130,7 +130,7 @@ function InstalledRows(
                 <span class="settings-row__chevron" aria-hidden="true">
                   <i
                     class="session-css-icon"
-                    style={{ "mask-image": sessionIconMask("chevronRight") }}
+                    style={{ "mask-image": sessionIconMask("chevronRight", 1.6) }}
                   />
                 </span>
               </div>

@@ -390,6 +390,7 @@ const startupEnglish = {
     connected: "Connected",
     refresh: "Refresh",
     retry: "Retry",
+    helpFor: "Help for {section}",
     staleData: "Showing stale data.",
     reload: "Reload",
     reset: "Reset",
@@ -452,7 +453,6 @@ const startupEnglish = {
     publicKey: "Public Key",
     probeOk: "Connection check passed",
     probeFailed: "Connection check failed",
-    reloadConfig: "Reload Config",
     multiSelect: {
       addCustom: "Add “{value}”",
       noMatches: "No matches",
@@ -821,11 +821,8 @@ const startupEnglish = {
     context: {},
     identity: {},
     overview: {
-      title: {},
-      subtitle: {},
       selectedSkills: "{count} selected",
-      allSkills: "all skills",
-      unsavedConfig: {},
+      allSkills: "All skills",
       modelSelection: {},
       primaryModel: {},
       primaryModelDefault: {},
@@ -1319,6 +1316,7 @@ const startupEnglish = {
       chooseAvatar: "Choose image",
       displayName: "Display name",
       linkedEmails: "Linked emails",
+      attribution: "Attribution",
     },
     modelAccounts: {},
   },
@@ -1748,7 +1746,6 @@ const startupEnglish = {
     skillLearned: {},
     progressLabels: {},
     turnRecap: {
-      doneIn: "Done in {duration}",
       tokens: "{count} output tokens",
       tokensOne: "1 output token",
     },
@@ -1943,7 +1940,7 @@ const startupEnglish = {
       modelLocked: "Locked",
       modelLockedLabel: "Model selection controlled for this session",
       lockedSessionModel: "Session model",
-      thinkingLevel: "Chat thinking level",
+      thinkingLevel: "Effort",
     },
     permissions: {},
     toolCards: {

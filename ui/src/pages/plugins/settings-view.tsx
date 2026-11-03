@@ -16,8 +16,8 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { renderPluginReadme } from "./catalog-detail.tsx";
 import { PluginArtTile } from "./consent-dialog.tsx";
 import { renderPluginDetailShell as PluginDetailShell } from "./detail-shell.tsx";
-import "./custom-elements.ts";
 import type { InstalledPluginDetailTab } from "./detail-tabs.ts";
+import "./custom-elements.ts";
 import { PluginInstallAction, type PluginInstallActionProps } from "./install-action.tsx";
 import type { PluginInstallProgress } from "./install-progress.ts";
 import {
@@ -35,6 +35,7 @@ import {
 } from "./plugin-row-message.tsx";
 import type { PluginDetailRead } from "./plugins-detail-reads.ts";
 import type { PluginMutationAction } from "./plugins-page-model.ts";
+import { PluginRecommendedPrompts } from "./recommended-prompts.tsx";
 import {
   flattenPluginSettingsFields,
   pluginSettingsNodeOptions,
@@ -82,6 +83,9 @@ export type DetailProps = SharedProps &
   PluginSettingsEditorModel & {
     resolveCredential?: PluginSettingsEditorProps["resolveCredential"];
     onAskPlugin?: () => void;
+    onSelectPrompt?: (prompt: string) => void;
+    promptBusy?: boolean;
+    promptBlockedReason?: string | null;
     mcpLoginBusy?: boolean;
     canMcpLogin?: boolean;
     onMcpLogin?: (serverName: string) => void;
@@ -116,6 +120,14 @@ function PluginConnectionAction(props: {
   const verb = () => CONNECTION_VERBS[props.kind][props.ready ? 1 : 0];
   return (
     <>
+      {props.ready ? (
+        <span class="plugin-connection-status" role="status">
+          <Icon name="check" />
+          {t(
+            props.kind === "Account" ? "pluginsPage.auth.connected" : "pluginsPage.auth.configured",
+          )}
+        </span>
+      ) : null}
       <button
         type="button"
         class="btn btn--sm oc-action oc-action-secondary"
@@ -125,14 +137,6 @@ function PluginConnectionAction(props: {
       >
         {t(`pluginsPage.auth.${verb()}`)}
       </button>
-      {props.ready ? (
-        <span class="plugin-connection-status" role="status">
-          <Icon name="check" />
-          {t(
-            props.kind === "Account" ? "pluginsPage.auth.connected" : "pluginsPage.auth.configured",
-          )}
-        </span>
-      ) : null}
     </>
   );
 }
@@ -238,7 +242,7 @@ export function renderPluginSettingsDetail(props: DetailProps): JSX.Element {
       ) : !plugin()?.installed ? (
         <SettingsPage carapace={true}>
           <a
-            class="btn btn--sm oc-action oc-action-secondary"
+            class="btn btn--sm oc-action oc-action-secondary plugins-settings-back"
             href={props.backHref}
             onClick={(event) => {
               event.preventDefault();
@@ -351,6 +355,24 @@ function PluginOverview(props: DetailProps): JSX.Element {
           />
         }
         identity={renderPluginPublisher(catalog(), props.inspection?.overview?.publisherName)}
+        recommendations={
+          <PluginRecommendedPrompts
+            id={plugin().id}
+            name={plugin().name}
+            prompts={
+              plugin().recommendedPrompts ??
+              props.inspection?.overview?.recommendedPrompts ??
+              catalog()?.detail.recommendedPrompts
+            }
+            iconUrl={props.iconUrls[plugin().id] ?? catalogIcon().src}
+            registerIcon={props.registerIcon}
+            onIconError={() => props.onIconError(plugin().id)}
+            busy={Boolean(props.busy[pluginRowKey(plugin().id)]) || props.promptBusy}
+            disabled={Boolean(props.promptBlockedReason)}
+            disabledReason={props.promptBlockedReason}
+            onSelect={props.onSelectPrompt}
+          />
+        }
         titleAction={
           <Show
             when={Boolean(props.installProgress)}
