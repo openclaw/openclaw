@@ -58,6 +58,7 @@ let targets = explicitTargets
   : [
       "extensions/workboard",
       "extensions/logbook/src/postgres-store.test.ts",
+      "extensions/logbook/src/store-transport.postgres.test.ts",
       "extensions/matrix/src/matrix/account-state.postgres.test.ts",
       "extensions/team-reports/src/postgres-store.test.ts",
       "src/infra/postgres-sync",
