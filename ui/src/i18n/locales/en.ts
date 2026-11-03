@@ -1067,7 +1067,7 @@ const startupEnglish = {
     labs: "Labs",
     updates: "Updates",
     about: "About",
-    aiAgents: "Agent Defaults",
+    aiAgents: "Agent defaults",
     modelSetup: "Model Setup",
     memoryImport: "Import Memory",
     security: "Privacy & Security",

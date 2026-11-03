@@ -403,7 +403,7 @@ describe("renderSkills", () => {
     expect([...select.options].map((option) => option.textContent)).toEqual([
       "All 2",
       "Ready 1",
-      "Needs Setup 0",
+      "Needs setup 0",
       "Disabled 1",
     ]);
     select.value = "needs-setup";
@@ -420,7 +420,7 @@ describe("renderSkills", () => {
 
     expect(container.querySelectorAll(".plugins-item")).toHaveLength(0);
     expect(text()).toContain("Ready 0");
-    expect(text()).toContain("Needs Setup 1");
+    expect(text()).toContain("Needs setup 1");
 
     render({ report, statusFilter: "needs-setup", detailKey: "repo-skill" });
     await Promise.resolve();
