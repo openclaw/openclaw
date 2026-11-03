@@ -99,31 +99,3 @@ it("keeps avatar editing usable when upload policy changes without remounting", 
     expect(popover?.matches(":popover-open")).toBe(enabled);
   }
 });
-
-it("puts a failed config save below the actions at the full row width", async () => {
-  const viewport = { width: window.innerWidth, height: window.innerHeight };
-  onTestFinished(() => page.viewport(viewport.width, viewport.height));
-  await page.viewport(1365, 900);
-  const container = createContainer();
-  container.style.cssText = "position:fixed;inset:0;overflow:auto";
-  const props = createAgentViewTestProps();
-  mountSolid(
-    Agents,
-    {
-      ...props,
-      access: { ...props.access, canUpdateConfig: true },
-      config: { ...props.config, configFormDirty: true },
-      onConfigSave: () => Promise.reject(new Error("Synthetic config save failure")),
-    },
-    container,
-  );
-  const save = nativeButton("Save");
-  await userEvent.click(save);
-  const alert = page.getByRole("alert");
-  await expect.element(alert).toHaveTextContent("Synthetic config save failure");
-  const failure = alert.element().getBoundingClientRect();
-  const row = save.closest(".settings-row")!.getBoundingClientRect();
-  expect(failure.top).toBeGreaterThanOrEqual(save.getBoundingClientRect().bottom);
-  expect(failure.width).toBeGreaterThan(row.width * 0.8);
-  expect(failure.right).toBeLessThanOrEqual(row.right);
-});

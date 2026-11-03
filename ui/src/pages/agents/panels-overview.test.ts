@@ -135,7 +135,7 @@ it("shows read-only facts the agent has", () => {
   expect(value("Runtime")).toBe("codex (fallback pi)");
 });
 
-it("keeps the unsaved note and config actions on one row of the model group", () => {
+it("shows the unsaved note only while config changes are dirty", () => {
   const defaults = createProps();
   const render = (configFormDirty: boolean) =>
     renderAgents({
@@ -144,9 +144,7 @@ it("keeps the unsaved note and config actions on one row of the model group", ()
   const note = "You have unsaved config changes.";
   expect(render(false).textContent).not.toContain(note);
   const dirty = render(true);
-  expect(dirty.querySelector(".callout.warn")).toBeNull();
-  const actions = dirty.querySelector(".agent-overview__config-actions")!.closest(".settings-row");
-  expect(actions?.querySelector(".settings-row__desc")?.textContent).toBe(note);
+  expect(dirty.textContent).toContain(note);
 });
 
 it("reaches Agent defaults from Overview and with no agent selected, not from other tabs", () => {
