@@ -2,7 +2,7 @@
   "v": 1,
   "name": "windows-provider-artwork-owned-popup-v1",
   "baseCommit": "c550174d517b5e8830726cd5c32d4e132c144659",
-  "candidateTree": "f03cab09b4e81e3c2113428024862f9fee6c42e6",
+  "candidateTree": "1d14a8f660666d85e606620ca9bdd2f152dba42c",
   "baselineCaptureTree": "50de4508d71a67ed2fb44ad9d1cdf56781d4d4a2",
   "sourceContracts": [
     {
@@ -63,8 +63,8 @@
     },
     {
       "path": "CONTROLLER-STATIC.json",
-      "bytes": 576,
-      "sha256": "8c4b1a383fd98f7842c14b4acf3f688588a3cbd0acce1aa2fcced81865637fa5"
+      "bytes": 531,
+      "sha256": "07fdff2ddceb9247bf290961ce1dda5a77ec720391161170f2df19c0ac261d03"
     },
     {
       "path": "Initialize-NativeRuntime.ps1",
@@ -73,13 +73,13 @@
     },
     {
       "path": "Invoke-ProviderArtworkCI.ps1",
-      "bytes": 10021,
-      "sha256": "0aecc51345719a79458e25c625fcbaf7ba4dec193bd1f259e5378a455b496434"
+      "bytes": 10022,
+      "sha256": "83f04de4f4cddccb1c85982e399ac81a03d4e2cfcc927585c09a2956fd4f9c5d"
     },
     {
       "path": "Invoke-ProviderArtworkProof.ps1",
-      "bytes": 22352,
-      "sha256": "21df5035ee6481f9de5bf256df0eeb07966a469c60f533668d75f1cfba192015"
+      "bytes": 24360,
+      "sha256": "7708b11ef8ee69ff5b2eea097014c5b6267e34253898504681c4efc997b50145"
     },
     {
       "path": "Invoke-SourceLauncherProcess.ps1",
@@ -92,24 +92,29 @@
       "sha256": "eb0f0f467bdd6f09fc14c0ff1ca2f1802b4c4ca56d8b01f288a0dbe905e07390"
     },
     {
+      "path": "NATIVE-DIALOG-UIA.md",
+      "bytes": 5698,
+      "sha256": "c6562ad90e61126cfeb2c0cf64a3c59fe019b62b929ac8fe994463bccdd86b96"
+    },
+    {
       "path": "OWNED-POPUP.md",
       "bytes": 5565,
       "sha256": "dccf5df392c5b090ed37bc6c58aad5e2856a920d8965f7492c677e081776026a"
     },
     {
       "path": "PRIVATE-CUTOVER.md",
-      "bytes": 694,
-      "sha256": "9c0d076a632b8504ecac4bd9c02ce3e0f56a1cfcbffc03b43f23c64449010b45"
+      "bytes": 749,
+      "sha256": "1a70dcf7dd18f1f349dc986ef35aa62ec0a929b928bef9fcedd6ef98b12e3cbb"
     },
     {
       "path": "PROOF-OVERLAYS.json",
-      "bytes": 3381,
-      "sha256": "51fdd36e0d63656be46b04cf1fa2c3bfa15aee0f0b36235c68e6a5b580919671"
+      "bytes": 3410,
+      "sha256": "e3a879cb4f2e08b3a083ad16d90b074c99e63a9cc785b00bd640120dc8e3f361"
     },
     {
       "path": "PROOF-PLAN.md",
-      "bytes": 694,
-      "sha256": "9c0d076a632b8504ecac4bd9c02ce3e0f56a1cfcbffc03b43f23c64449010b45"
+      "bytes": 749,
+      "sha256": "1a70dcf7dd18f1f349dc986ef35aa62ec0a929b928bef9fcedd6ef98b12e3cbb"
     },
     {
       "path": "Program.cs",
@@ -128,8 +133,8 @@
     },
     {
       "path": "README.md",
-      "bytes": 694,
-      "sha256": "9c0d076a632b8504ecac4bd9c02ce3e0f56a1cfcbffc03b43f23c64449010b45"
+      "bytes": 749,
+      "sha256": "1a70dcf7dd18f1f349dc986ef35aa62ec0a929b928bef9fcedd6ef98b12e3cbb"
     },
     {
       "path": "REVIEW-RUNTIME2.md",
@@ -143,8 +148,8 @@
     },
     {
       "path": "STATIC-PREPARATION.json",
-      "bytes": 576,
-      "sha256": "8c4b1a383fd98f7842c14b4acf3f688588a3cbd0acce1aa2fcced81865637fa5"
+      "bytes": 531,
+      "sha256": "07fdff2ddceb9247bf290961ce1dda5a77ec720391161170f2df19c0ac261d03"
     },
     {
       "path": "Save-CalculatedVersion.ps1",
@@ -153,8 +158,8 @@
     },
     {
       "path": "TEST-COST.json",
-      "bytes": 702,
-      "sha256": "51c635b76cd676b6c897a427c714c0ebb991b799f1a55d43aafe690b77f0202a"
+      "bytes": 781,
+      "sha256": "1ddba72729b5ef123c13fa7ea5061d7acbe7c9b76f0dbcc5f694e81ef879ad09"
     },
     {
       "path": "Test-LauncherParameterTransport.ps1",
@@ -173,8 +178,8 @@
     },
     {
       "path": "after-private-capture.patch",
-      "bytes": 33493,
-      "sha256": "1ee81d58be2cf6363cb5e0f03f1ff7017e07fb62d565a623974c3e4ba31e0504"
+      "bytes": 35829,
+      "sha256": "0b33ae6b2c7578adc48ba472601e62812fa491d28d61af220f7950fea18b7c45"
     },
     {
       "path": "baseline-capture.patch",
@@ -188,13 +193,13 @@
     },
     {
       "path": "candidate-source.json",
-      "bytes": 353221,
-      "sha256": "c38efe3e331f4f35a882a64153ec377a884bfe209b0eb829e9f2f2ccaa009212"
+      "bytes": 353534,
+      "sha256": "0da2285019ab40df6c01d43070368b0bba9d5bb7683afd6e052322708ef0b951"
     },
     {
       "path": "candidate.patch",
-      "bytes": 31550,
-      "sha256": "0a8528b875ba8c54b7834eb2075ca89e2d0775b101f8da2de6b307d06eff1e8c"
+      "bytes": 47150,
+      "sha256": "ead934d1f50739c263c524268db9f8a2a378a3c7497671932c63930050d5674d"
     },
     {
       "path": "postimages/docs/PROVIDER_ARTWORK.md",
@@ -228,13 +233,18 @@
     },
     {
       "path": "postimages/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs",
-      "bytes": 166598,
-      "sha256": "a3042c0b79c5ff29f1fabcdac96a6cc662fc4433f95b982d4e1f47cdb40fbcc9"
+      "bytes": 167565,
+      "sha256": "3fd768503787ba6fd3c75f003dc368ed769c9320d3d41684cb718f35d0428474"
     },
     {
       "path": "postimages/tests/OpenClaw.Tray.UITests/OnboardingArtworkRenderingTests.cs",
       "bytes": 42272,
       "sha256": "23f4701c6602166348a8d47152f37035cabb738126bfb34dcabf7e0586ad24e5"
+    },
+    {
+      "path": "postimages/tests/OpenClaw.Tray.UITests/OnboardingNativeProof.cs",
+      "bytes": 68040,
+      "sha256": "fe52d97435792574195d597c2466b2dda9ebf742968913e116311f3d97d0993f"
     },
     {
       "path": "private-overlay/ProviderArtworkPrivatePresentation.cs",
@@ -244,7 +254,7 @@
     {
       "path": "proof-postimages/After/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs",
       "bytes": 188191,
-      "sha256": "efdddac055a60ca17cb3df3b74daded9dacca8c054002d1460859843497a5c1c"
+      "sha256": "113322f53330ce77fbb14be6a9e313a64b539e8d83746442db4e2b29da15c2d5"
     },
     {
       "path": "proof-postimages/Before/tests/OpenClaw.Tray.UITests/MountedControlCapture.cs",
@@ -258,9 +268,9 @@
     },
     {
       "path": "source-pins.json",
-      "bytes": 12332,
-      "sha256": "bdd8c7170602f319f5cf995cc6bf4775d27d2ca0994428c8d188b9d008e49082"
+      "bytes": 13260,
+      "sha256": "9f409132c8986fc696d27caea5027645d6248acaea4f9342c9dcceabb6fbf40a"
     }
   ],
-  "afterCaptureTree": "be03e4b06c06f1ff4e0397be6709274f3cfd1aed"
+  "afterCaptureTree": "9aa2dadf0031e6e848ccd687b7caf6c0da69869b"
 }

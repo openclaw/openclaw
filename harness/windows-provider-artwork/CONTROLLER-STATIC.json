@@ -1,9 +1,8 @@
 {
   "state": "PREPARATION-STATIC-ONLY-NO-NATIVE",
-  "base": "5a37c950b200109717990538041bc5b91141a88d",
-  "canonicalFiles": 8,
-  "productionAndCaptureOwnerUnchanged": true,
-  "onlyTwoEventSettlementTestsChanged": true,
+  "base": "30ac6382f17d23baa66907da725f00a0ec37531c",
+  "canonicalFiles": 9,
+  "priorSevenUnchangedExceptDialogTest": true,
   "onePrintWindowCallsite": true,
   "noArbitraryHandleAPI": true,
   "activeABRetired": true,

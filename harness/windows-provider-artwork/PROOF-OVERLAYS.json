@@ -1,52 +1,52 @@
 {
   "canonicalBeforeTree": "eab5a16b2c6b57a741c7a1a22f830f737592d1ee",
-  "canonicalAfterTree": "f03cab09b4e81e3c2113428024862f9fee6c42e6",
-  "priorCanonicalAfterTree": "d9b8fb0cad24ee525219ba9aeb9b56d14427b0fd",
+  "canonicalAfterTree": "1d14a8f660666d85e606620ca9bdd2f152dba42c",
+  "priorCanonicalAfterTree": "f03cab09b4e81e3c2113428024862f9fee6c42e6",
   "before": {
     "tree": "50de4508d71a67ed2fb44ad9d1cdf56781d4d4a2",
     "patch": "baseline-capture.patch",
     "patchSha256": "d2396ed9ebba4944f4e49a5c38a3c2f0e52f1abf063294de1fbea7652800eae1",
     "changes": [
       {
-        "path": "tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs",
-        "beforeSha256": "f238918a76271fee64392bd3fbd3a93da912d24fedebad80b705a136628697e6",
-        "afterSha256": "c70a26b6bc87c0e36636a7528296725669fab6181533d0bf0e1194e34f85705e",
-        "bytes": 184597,
-        "afterBlob": "e01bb84ccf302b75ce5e26b5b0c5f202e789c085"
-      },
-      {
         "path": "tests/OpenClaw.Tray.UITests/MountedControlCapture.cs",
         "beforeSha256": "04ba3c57ffc976063b42bbde41f5fc835912bf18a51fe1e6ac961c1a2d8fbd84",
         "afterSha256": "110350013890cf70155b9826284fb61d12160cd286f2a6a8fe0904c3356b3efd",
         "bytes": 16753,
         "afterBlob": "6052a7ef89c422f13b80366a252d93903be4269e"
+      },
+      {
+        "path": "tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs",
+        "beforeSha256": "f238918a76271fee64392bd3fbd3a93da912d24fedebad80b705a136628697e6",
+        "afterSha256": "c70a26b6bc87c0e36636a7528296725669fab6181533d0bf0e1194e34f85705e",
+        "bytes": 184597,
+        "afterBlob": "e01bb84ccf302b75ce5e26b5b0c5f202e789c085"
       }
     ]
   },
   "after": {
-    "tree": "be03e4b06c06f1ff4e0397be6709274f3cfd1aed",
+    "tree": "9aa2dadf0031e6e848ccd687b7caf6c0da69869b",
     "patch": "after-private-capture.patch",
-    "patchSha256": "1ee81d58be2cf6363cb5e0f03f1ff7017e07fb62d565a623974c3e4ba31e0504",
+    "patchSha256": "0b33ae6b2c7578adc48ba472601e62812fa491d28d61af220f7950fea18b7c45",
     "changes": [
       {
         "path": "tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs",
-        "beforeSha256": "a3042c0b79c5ff29f1fabcdac96a6cc662fc4433f95b982d4e1f47cdb40fbcc9",
-        "afterSha256": "efdddac055a60ca17cb3df3b74daded9dacca8c054002d1460859843497a5c1c",
+        "beforeSha256": "3fd768503787ba6fd3c75f003dc368ed769c9320d3d41684cb718f35d0428474",
+        "afterSha256": "113322f53330ce77fbb14be6a9e313a64b539e8d83746442db4e2b29da15c2d5",
         "bytes": 188191,
-        "afterBlob": "47365cb491ed569ace506d625011335e43544020"
+        "afterBlob": "b5b64f9225a82742ee63c02226e8e3235d09799f"
       }
     ]
   },
-  "sourceOwner": "canonical MountedControlCapture; one private PrintWindow primitive with parent-window and narrowly admitted active owned ComboBox popup callers",
-  "foregroundHelpers": "UNCHANGED",
-  "scope": "canonical eighth test-owner capability, production/capture owner unchanged; only test event boundaries changed; Before same owner plus test-only existing compilation-unit overlay; After only existing test compilation-unit overlay",
+  "sourceOwner": "canonical MountedControlCapture unchanged; canonical OnboardingNativeProof alone owns new native UIA dialog-name assertion",
+  "foregroundHelpers": "existing foreground/input/capture methods byte-unchanged; new UIA operation added to same source owner",
+  "scope": "ninth existing UIA owner plus dialog test/native fixture adapter; production UI/docs/capture/rebind unchanged; Before50de exact retained; After only existing test compilation-unit adapter",
   "canonicalSourceManifest": {
     "path": "candidate-source.json",
-    "sha256": "c38efe3e331f4f35a882a64153ec377a884bfe209b0eb829e9f2f2ccaa009212",
+    "sha256": "0da2285019ab40df6c01d43070368b0bba9d5bb7683afd6e052322708ef0b951",
     "entries": 2090
   },
   "sourceProjectionContracts": {
-    "Before": "canonical source map; revert all eight changed files to beforeSha256; then apply both Before proof postimage hashes",
+    "Before": "canonical source map; revert all nine changed files to beforeSha256; then apply both Before proof postimage hashes",
     "After": "canonical source map; apply sole After test-file proof postimage hash"
   },
   "aliases": {

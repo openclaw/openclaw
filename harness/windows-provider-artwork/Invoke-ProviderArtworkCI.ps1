@@ -11,7 +11,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
 $PSNativeCommandUseErrorActionPreference=$true
-if (!$ExecutionAuthorized -or !$IsWindows -or $env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or $env:GITHUB_EVENT_NAME -cne 'workflow_dispatch' -or $env:GITHUB_REF -cne 'refs/heads/roboclaw/local-ai-native-followups-20261102' -or $Qualification -cne 'native-icons-w5-owned-popup-after-v1') { throw 'Only the parent-authorized, reviewed manual Windows CI qualification is admitted.' }
+if (!$ExecutionAuthorized -or !$IsWindows -or $env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or $env:GITHUB_EVENT_NAME -cne 'workflow_dispatch' -or $env:GITHUB_REF -cne 'refs/heads/roboclaw/local-ai-native-followups-20261102' -or $Qualification -cne 'native-icons-w5-native-dialog-name-v1') { throw 'Only the parent-authorized, reviewed manual Windows CI qualification is admitted.' }
 function Hash([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
 function Json($Value,[string]$Path) { ConvertTo-Json -InputObject $Value -Depth 16 | Set-Content -LiteralPath $Path -Encoding utf8NoBOM }
 $manifestPath=Join-Path $PSScriptRoot 'payload-manifest.json'
@@ -28,7 +28,7 @@ if ($ast.parsedFiles.Count -ne $scriptFiles.Count) { throw 'AST preflight did no
 foreach ($file in $ast.parsedFiles) { if ((Hash (Join-Path $PSScriptRoot $file.path)) -cne $file.sha256.ToLowerInvariant()) { throw 'Script changed after AST/stage admission.' } }
 $pin=Get-Content (Join-Path $PSScriptRoot 'source-pins.json') -Raw | ConvertFrom-Json
 if ($ast.nativeGitSmoke.state -cne 'passed' -or $ast.nativeGitSmoke.expectedSha -cne '23dac5b69b37a75f3a4c111044a841b8a6b76761' -or $ast.nativeGitSmoke.observedSha -cne $ast.nativeGitSmoke.expectedSha -or $ast.nativeGitSmoke.driverFunctionSha256 -cne $pin.nativeGitWrapperSha256) { throw 'First CI preflight did not prove the current driver native Git wrapper.' }
-if ($pin.candidateTree -cne 'f03cab09b4e81e3c2113428024862f9fee6c42e6' -or $pin.baseCommit -cne 'c550174d517b5e8830726cd5c32d4e132c144659') { throw 'Parent-reviewed product source pins differ.' }
+if ($pin.candidateTree -cne '1d14a8f660666d85e606620ca9bdd2f152dba42c' -or $pin.baseCommit -cne 'c550174d517b5e8830726cd5c32d4e132c144659') { throw 'Parent-reviewed product source pins differ.' }
 $BeforeSource=(Resolve-Path $BeforeSource).Path
 $AfterSource=(Resolve-Path $AfterSource).Path
 $Artifacts=[IO.Path]::GetFullPath($Artifacts)

@@ -131,8 +131,8 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper 
                 await AssertBundledArtworkAsync(icon, brand);
                 Assert.Same(session, icon.Session);
                 Assert.Equal(label, Assert.IsType<TextBlock>(dialog.FindName("ProviderName")).Text);
-                var peer = Assert.IsAssignableFrom<AutomationPeer>(FrameworkElementAutomationPeer.CreatePeerForElement(dialog));
-                Assert.Equal("Provider " + type, peer.GetName());
+                await OnboardingNativeProof.AssertNativeDialogNameAsync(_privateProofWindow!, dialog, "Provider " + type,
+                    opened, $"provider-{brand}-{type}-{theme}", output);
                 if (type == "text")
                 {
                     var input = Assert.IsType<TextBox>(dialog.FindName("TextInput"));

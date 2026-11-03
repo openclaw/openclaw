@@ -116,8 +116,8 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper 
                 await AssertBundledArtworkAsync(icon, brand);
                 Assert.Same(session, icon.Session);
                 Assert.Equal(label, Assert.IsType<TextBlock>(dialog.FindName("ProviderName")).Text);
-                var peer = Assert.IsAssignableFrom<AutomationPeer>(FrameworkElementAutomationPeer.CreatePeerForElement(dialog));
-                Assert.Equal("Provider " + type, peer.GetName());
+                await OnboardingNativeProof.AssertNativeDialogNameAsync(ui.TestWindow, dialog, "Provider " + type,
+                    opened, $"provider-{brand}-{type}-{theme}", output);
                 if (type == "text")
                 {
                     var input = Assert.IsType<TextBox>(dialog.FindName("TextInput"));
@@ -162,7 +162,7 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper 
             Assert.Null(Assert.IsType<Image>(icon.FindName("ArtworkImage")).Source);
             Assert.Null(Assert.IsType<Image>(row.FindName("ArtworkImage")).Source);
             Assert.Equal(0, completed());
-        }, theme: theme, nativeProof: !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("OPENCLAW_UI_PROOF_DIR")),
+        }, nativeAutomation: true, theme: theme, nativeProof: !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("OPENCLAW_UI_PROOF_DIR")),
             configure: transport =>
             {
                 transport.DetectionOverride = new()
@@ -2662,7 +2662,7 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper 
         string? expectedGatewayId = null, bool nativeProof = false, ElementTheme theme = ElementTheme.Light,
         double width = 720, LocalAiInstallAndUseIntent? installAndUse = null, Func<bool>? ready = null,
         Action<GatewayAiSetupCompletion>? completedProof = null, Action? closeSetupWindow = null,
-        bool prepareDiscovery = false, SetupLoadingProgress? loading = null)
+        bool prepareDiscovery = false, SetupLoadingProgress? loading = null, bool nativeAutomation = false)
     {
         await ui.ResetContainerAsync();
         await ui.RunOnUIAsync(async () =>
@@ -2698,6 +2698,18 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper 
                     ui.TestWindow.AppWindow.Move(new Windows.Graphics.PointInt32(work.X + 32, work.Y + 32));
                     ui.Container.Padding = new Thickness(0);
                     OnboardingNativeProof.ActivateOwned(ui.TestWindow);
+                }
+                else if (nativeAutomation)
+                {
+                    // Native name exposure needs an owned HWND, not the headless 1x1 parking rectangle.
+                    var scale = ui.Container.XamlRoot.RasterizationScale;
+                    ui.TestWindow.AppWindow.Resize(new Windows.Graphics.SizeInt32(
+                        NativeProofLayout.PhysicalPixels(720, scale), NativeProofLayout.PhysicalPixels(820, scale)));
+                    var work = Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(ui.TestWindow.AppWindow.Id,
+                        Microsoft.UI.Windowing.DisplayAreaFallback.Nearest).WorkArea;
+                    ui.TestWindow.AppWindow.Move(new Windows.Graphics.PointInt32(work.X, work.Y));
+                    ui.TestWindow.AppWindow.Show(activateWindow: false);
+                    await OnboardingNativeProof.NextCompositionAsync();
                 }
                 else
                     ui.TestWindow.AppWindow.Resize(new Windows.Graphics.SizeInt32(816, 944));
@@ -2751,7 +2763,7 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper 
                     if (originalBackground == DependencyProperty.UnsetValue) ui.Container.ClearValue(Panel.BackgroundProperty);
                     else ui.Container.SetValue(Panel.BackgroundProperty, originalBackground);
                     ui.TestWindow.AppWindow.Resize(originalSize);
-                    if (nativeProof) ui.TestWindow.AppWindow.Move(originalPosition);
+                    if (nativeProof || nativeAutomation) ui.TestWindow.AppWindow.Move(originalPosition);
                     _nativeProof = false;
                     await ui.YieldToRenderAsync();
                 }

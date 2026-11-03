@@ -1,5 +1,5 @@
 diff --git a/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs b/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs
-index 3c893a3..47365cb 100644
+index bbdc01f..b5b64f9 100644
 --- a/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs
 +++ b/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs
 @@ -1,3 +1,9 @@
@@ -57,6 +57,15 @@ index 3c893a3..47365cb 100644
              configure: transport => transport.DetectionOverride = new()
              {
                  Candidates = [], Workspace = "/synthetic-workspace", SetupComplete = false,
+@@ -116,7 +131,7 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
+                 await AssertBundledArtworkAsync(icon, brand);
+                 Assert.Same(session, icon.Session);
+                 Assert.Equal(label, Assert.IsType<TextBlock>(dialog.FindName("ProviderName")).Text);
+-                await OnboardingNativeProof.AssertNativeDialogNameAsync(ui.TestWindow, dialog, "Provider " + type,
++                await OnboardingNativeProof.AssertNativeDialogNameAsync(_privateProofWindow!, dialog, "Provider " + type,
+                     opened, $"provider-{brand}-{type}-{theme}", output);
+                 if (type == "text")
+                 {
 @@ -126,9 +141,8 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
                  }
                  if (type == "confirm")
@@ -73,11 +82,20 @@ index 3c893a3..47365cb 100644
              Assert.Null(Assert.IsType<Image>(icon.FindName("ArtworkImage")).Source);
              Assert.Null(Assert.IsType<Image>(row.FindName("ArtworkImage")).Source);
              Assert.Equal(0, completed());
--        }, theme: theme, nativeProof: !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("OPENCLAW_UI_PROOF_DIR")),
+-        }, nativeAutomation: true, theme: theme, nativeProof: !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("OPENCLAW_UI_PROOF_DIR")),
 +        }, theme: theme, nativeProof: true,
              configure: transport =>
              {
                  transport.DetectionOverride = new()
+@@ -2662,7 +2676,7 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
+         string? expectedGatewayId = null, bool nativeProof = false, ElementTheme theme = ElementTheme.Light,
+         double width = 720, LocalAiInstallAndUseIntent? installAndUse = null, Func<bool>? ready = null,
+         Action<GatewayAiSetupCompletion>? completedProof = null, Action? closeSetupWindow = null,
+-        bool prepareDiscovery = false, SetupLoadingProgress? loading = null, bool nativeAutomation = false)
++        bool prepareDiscovery = false, SetupLoadingProgress? loading = null)
+     {
+         await ui.ResetContainerAsync();
+         await ui.RunOnUIAsync(async () =>
 @@ -2675,12 +2689,26 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
                  ? await GatewayAiPreparation.PrepareAsync(transport, preparationOwner, CancellationToken.None) : null;
              var completions = 0;
@@ -111,10 +129,22 @@ index 3c893a3..47365cb 100644
              Frame? frame = null;
              AiSetupPage? page = null;
              IDisposable? navigation = null;
-@@ -2690,18 +2718,21 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
+@@ -2690,30 +2718,21 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
                  {
                      OnboardingNativeProof.AssertIsolatedRoots();
                      OnboardingNativeProof.RequireProofDirectory();
+-                    var scale = ui.Container.XamlRoot.RasterizationScale;
+-                    ui.TestWindow.AppWindow.Resize(new Windows.Graphics.SizeInt32(
+-                        NativeProofLayout.PhysicalPixels(720, scale), NativeProofLayout.PhysicalPixels(820, scale)));
+-                    var work = Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(ui.TestWindow.AppWindow.Id,
+-                        Microsoft.UI.Windowing.DisplayAreaFallback.Nearest).WorkArea;
+-                    ui.TestWindow.AppWindow.Move(new Windows.Graphics.PointInt32(work.X + 32, work.Y + 32));
+-                    ui.Container.Padding = new Thickness(0);
+-                    OnboardingNativeProof.ActivateOwned(ui.TestWindow);
+-                }
+-                else if (nativeAutomation)
+-                {
+-                    // Native name exposure needs an owned HWND, not the headless 1x1 parking rectangle.
 -                    var scale = ui.Container.XamlRoot.RasterizationScale;
 -                    ui.TestWindow.AppWindow.Resize(new Windows.Graphics.SizeInt32(
 +                    var scale = privateMounted ? ui.Container.XamlRoot.RasterizationScale : container.XamlRoot.RasterizationScale;
@@ -123,9 +153,9 @@ index 3c893a3..47365cb 100644
 -                    var work = Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(ui.TestWindow.AppWindow.Id,
 +                    var work = Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(window.AppWindow.Id,
                          Microsoft.UI.Windowing.DisplayAreaFallback.Nearest).WorkArea;
--                    ui.TestWindow.AppWindow.Move(new Windows.Graphics.PointInt32(work.X + 32, work.Y + 32));
--                    ui.Container.Padding = new Thickness(0);
--                    OnboardingNativeProof.ActivateOwned(ui.TestWindow);
+-                    ui.TestWindow.AppWindow.Move(new Windows.Graphics.PointInt32(work.X, work.Y));
+-                    ui.TestWindow.AppWindow.Show(activateWindow: false);
+-                    await OnboardingNativeProof.NextCompositionAsync();
 +                    window.AppWindow.Move(new Windows.Graphics.PointInt32(work.X + 32, work.Y + 32));
 +                    container.Padding = new Thickness(0);
 +                    if (privateMounted)
@@ -141,7 +171,7 @@ index 3c893a3..47365cb 100644
                  var data = Environment.GetEnvironmentVariable("OPENCLAW_TRAY_DATA_DIR")
                      ?? throw new InvalidOperationException("Set isolated tray data before onboarding UI tests.");
                  var args = new AiSetupPageArgs(new SetupConfig(), data, data,
-@@ -2721,15 +2752,19 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
+@@ -2733,15 +2752,19 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
                      });
                  frame = nativeProof ? new Frame() : new Frame { Width = width, Height = 820 };
                  navigation = OnboardingNativeProof.TrackNavigation(frame);
@@ -164,7 +194,7 @@ index 3c893a3..47365cb 100644
                  await ui.YieldToRenderAsync();
                  await assertion(page, transport, () => completions);
              }
-@@ -2743,15 +2778,24 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
+@@ -2755,15 +2778,24 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
                  }
                  finally
                  {
@@ -177,7 +207,7 @@ index 3c893a3..47365cb 100644
 -                    if (originalBackground == DependencyProperty.UnsetValue) ui.Container.ClearValue(Panel.BackgroundProperty);
 -                    else ui.Container.SetValue(Panel.BackgroundProperty, originalBackground);
 -                    ui.TestWindow.AppWindow.Resize(originalSize);
--                    if (nativeProof) ui.TestWindow.AppWindow.Move(originalPosition);
+-                    if (nativeProof || nativeAutomation) ui.TestWindow.AppWindow.Move(originalPosition);
 +                    container.Padding = originalPadding;
 +                    container.Style = originalStyle;
 +                    container.RequestedTheme = originalTheme;
@@ -197,7 +227,7 @@ index 3c893a3..47365cb 100644
                      _nativeProof = false;
                      await ui.YieldToRenderAsync();
                  }
-@@ -2807,9 +2851,9 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
+@@ -2819,9 +2851,9 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
 
      private Task InvokeCardAsync(SettingsCard card)
      {
@@ -209,7 +239,7 @@ index 3c893a3..47365cb 100644
          var handler = card.Name switch
          {
              "ApiKeysButton" => "ApiKeys_Click",
-@@ -3024,3 +3068,290 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
+@@ -3036,3 +3068,290 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
          }
      }
  }

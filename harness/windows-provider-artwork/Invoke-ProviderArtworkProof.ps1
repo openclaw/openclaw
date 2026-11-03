@@ -163,7 +163,8 @@ try {
         $expectedCases=6
         $framePrefix='before-'
     }
-    $selections=@(@{name='candidate';filter=$filter;cases=7})
+    $selections=@(@{name='candidate-dialog';filter='FullyQualifiedName~OnboardingAiPageTests.ProviderDialog_KeepsSelectedArtworkThroughTypedPromptsAndReleasesOnlyItsBorrow';cases=4},
+        @{name='candidate-picker-lifetime';filter='FullyQualifiedName~OnboardingAiPageTests.ProviderPicker_ShowsAdvertisedBrandsAndHonestFallbacksWithoutStartingSetup|FullyQualifiedName~OnboardingArtworkRenderingTests.ProviderArtwork_RebindingDetachesThePreviousSessionWithoutClosingTheBorrowedReplacement';cases=3})
     if ($Stage -ceq 'Before') {
         # The original picker is the named unknown leaf. Do not spend the dialog
         # selection after a genuine popup/occlusion/PrintWindow failure here.
@@ -245,6 +246,20 @@ try {
         if (@($required.ocr.MissingLabels).Count -ne 0) { throw 'A required icon-matrix OCR label is missing; no new exception is admitted.' }
     }
     if (@(Manifest).Count -ne $sourceFiles.Count) { throw 'Frozen source inventory changed.' }
+    if ($Stage -ceq 'After') {
+        if (@(Get-ChildItem $frames -Filter '*.dialog-uia.json' -File).Count -ne 12) { throw 'Expected all twelve actual dialog role/name observations.' }
+        foreach ($brand in @('llama-app','ollama')) { foreach ($theme in @('Light','Dark')) { foreach ($step in @('note','text','confirm')) {
+            $state='provider-'+$brand+'-'+$step+'-'+$theme
+            $nameReceipt=Get-Content (Join-Path $frames ($state+'.dialog-uia.json')) -Raw | ConvertFrom-Json
+            if ($nameReceipt.schema -cne 'owned-native-dialog-name-v1' -or $nameReceipt.state -cne $state -or $nameReceipt.status -cne 'name-verified' -or
+                !$nameReceipt.openedObserved -or $nameReceipt.expectedName -cne ('Provider '+$step) -or $nameReceipt.selected.Name -cne $nameReceipt.expectedName -or
+                $nameReceipt.selected.Role -cne 'ControlType.Window' -or $nameReceipt.selected.ClassName -cne 'Popup' -or !$nameReceipt.selected.IsModal -or $nameReceipt.selected.IsOffscreen -or
+                $nameReceipt.selected.ProcessId -ne $nameReceipt.ProcessId -or $nameReceipt.selected.RuntimeId.Count -eq 0 -or
+                $nameReceipt.observed.Overflow -or $nameReceipt.observed.Errors.Count -ne 0 -or
+                $nameReceipt.head -cne $head -or $nameReceipt.freezeManifestSha256 -cne $env:OPENCLAW_UI_PROOF_MANIFEST_SHA256 -or
+                $nameReceipt.assemblySha256 -cne (Hash (Join-Path $bin 'OpenClaw.Tray.UITests.dll'))) { throw 'Actual owned native dialog role/name receipt is absent or unverified.' }
+        } } }
+    }
     foreach ($file in $sourceFiles) { if ((Hash (Join-Path $Source $file.path)) -cne $file.sha256) { throw "Source drift: $($file.path)" } }
     foreach ($file in $binaryFiles) { if ((Hash (Join-Path $bin $file.path.Substring(15))) -cne $file.sha256) { throw "Binary drift: $($file.path)" } }
     Assert-Tree

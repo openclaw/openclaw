@@ -1,5 +1,5 @@
 {
-  "state": "NEW-CAPTURE-OWNER-UNCOMPILED-UNEXECUTED-COST-UNMEASURED",
+  "state": "NEW-NATIVE-DIALOG-NAME-BOUNDARY-UNCOMPILED-UNEXECUTED-COST-UNMEASURED",
   "Before": {
     "cases": 6,
     "frames": 16,
@@ -8,7 +8,8 @@
   "After": {
     "cases": 7,
     "frames": 16,
-    "suiteBoots": 1
+    "suiteBoots": 2,
+    "order": "dialog4 first; fail closed before picker/rebind3"
   },
   "newBootOrTimerOwner": false,
   "negativeControl": "closed genuine mounted ComboBox rejected in each existing picker case, no extra boot/window/PNG",
