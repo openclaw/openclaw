@@ -170,10 +170,13 @@ export async function fetchClawRouterImageModels(params: {
       !isSupportedClawRouterImageModel(id) ||
       !Array.isArray(model?.capabilities) ||
       !model.capabilities.includes("image.generation")
-    )
+    ) {
       continue;
+    }
     const limits = parseImageLimits(model.pricing);
-    if (!limits) continue;
+    if (!limits) {
+      continue;
+    }
     seen.add(id);
     result.push({
       kind: "image_generation",

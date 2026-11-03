@@ -88,16 +88,18 @@ export function readClawRouterCapabilityOffers(
       provider.executable !== true ||
       !Array.isArray(provider.routes) ||
       !Array.isArray(provider.offers)
-    )
+    ) {
       continue;
-    for (const value of provider.offers) {
-      const offer = asOptionalRecord(value);
+    }
+    for (const offerValue of provider.offers) {
+      const offer = asOptionalRecord(offerValue);
       if (
         offer?.eligible !== true ||
         offer.transport !== "http" ||
         (offer.affordability !== "exact-covered" && offer.affordability !== "request-dependent")
-      )
+      ) {
         continue;
+      }
       const endpoint = normalizeOptionalString(offer.endpoint);
       const route = provider.routes.map(asOptionalRecord).find((row) => row?.endpoint === endpoint);
       const requestFormat = normalizeOptionalString(route?.requestFormat);
@@ -113,18 +115,25 @@ export function readClawRouterCapabilityOffers(
         !path.startsWith("/") ||
         /[\\?#]/u.test(path) ||
         path.includes("..")
-      )
+      ) {
         continue;
+      }
       const model =
         offer.modelId === null
           ? undefined
           : (Array.isArray(provider.models) ? provider.models : [])
               .map(asOptionalRecord)
               .find((row) => row?.id === offer.modelId);
-      if (offer.modelId !== null && (typeof offer.modelId !== "string" || !offer.modelId || !model))
+      if (
+        offer.modelId !== null &&
+        (typeof offer.modelId !== "string" || !offer.modelId || !model)
+      ) {
         continue;
+      }
       const routeKind = offer.routeKind;
-      if (routeKind !== "native" && routeKind !== "manifest" && routeKind !== "unified") continue;
+      if (routeKind !== "native" && routeKind !== "manifest" && routeKind !== "unified") {
+        continue;
+      }
       const expected =
         routeKind === "native" && provider.nativeBaseUrl === `/v1/native/${providerId}`
           ? `${provider.nativeBaseUrl}${path}`
@@ -133,15 +142,22 @@ export function readClawRouterCapabilityOffers(
             : routeKind === "unified"
               ? UNIFIED_ROUTES[requestFormat]
               : undefined;
-      if (!expected || offer.route !== expected) continue;
-      const upstream = normalizeOptionalString(model?.upstream);
-      if (expected.includes("${model}") && (!upstream || upstream === "." || upstream === ".."))
+      if (!expected || offer.route !== expected) {
         continue;
+      }
+      const upstream = normalizeOptionalString(model?.upstream);
+      if (expected.includes("${model}") && (!upstream || upstream === "." || upstream === "..")) {
+        continue;
+      }
       const resolved = expected.replaceAll("${model}", encodeURIComponent(upstream ?? ""));
-      if (resolved.includes("${")) continue;
+      if (resolved.includes("${")) {
+        continue;
+      }
       const url = root + resolved;
       const key = JSON.stringify([providerId, endpoint, offer.modelId, routeKind]);
-      if (seen.has(key)) continue;
+      if (seen.has(key)) {
+        continue;
+      }
       seen.add(key);
       result.push({
         providerId,
@@ -189,10 +205,11 @@ export async function fetchClawRouterCapabilityOffers(params: {
     },
   );
   try {
-    if (!response.ok)
+    if (!response.ok) {
       throw new Error(
         `ClawRouter capability catalog failed (HTTP ${response.status}). Check the ClawRouter key, grants and budget.`,
       );
+    }
     const body = await readProviderJsonResponse(response, "clawrouter.capability-catalog", {
       maxBytes: 1024 * 1024,
       timeoutMs: remaining,
