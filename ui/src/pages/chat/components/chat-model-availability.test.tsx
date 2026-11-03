@@ -7,9 +7,14 @@ import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatModelControls } from "./chat-model-controls.tsx";
 
-it.each([false, true])(
-  "projects cooldown and selected-account expiry through the picker (alternate=%s)",
-  async (alternate) => {
+it.each([
+  { alternate: false, pinned: false },
+  { alternate: true, pinned: false },
+  { alternate: false, pinned: true },
+  { alternate: true, pinned: true },
+])(
+  "projects inert cooldown and selected-account expiry (alternate=$alternate, pinned=$pinned)",
+  async ({ alternate, pinned }) => {
     installModelPickerLayout();
     const now = 1_800_000_000_000;
     const clock = vi.spyOn(Date, "now").mockReturnValue(now);
@@ -24,6 +29,7 @@ it.each([false, true])(
       name: "Model",
       provider: "example",
       available: true,
+      contextWindow: 400_000,
       agentRuntime: { id: "openclaw", source: "model" },
       ...(alternate
         ? { runtimeChoices: [{ ...unavailable, agentRuntime: { id: "codex", source: "model" } }] }
@@ -39,6 +45,7 @@ it.each([false, true])(
       id: alternate ? "codex" : "openclaw",
       source: alternate ? "session-key" : "model",
     };
+    sessions.sessions[0]!.modelOverrideSource = pinned ? "user" : undefined;
     const view = mountSolid(() => (
       <ChatModelControls
         activeRunId={null}
@@ -73,6 +80,8 @@ it.each([false, true])(
                   profileId: "example:personal",
                   type: "oauth",
                   status: "expiring",
+                  displayName: "Personal",
+                  email: "you@example.com",
                   expiry: { at: now + 180_000, remainingMs: 180_000, label: "3m" },
                 },
               ],
@@ -90,9 +99,16 @@ it.each([false, true])(
       '[data-chat-model-option="example/model"]',
     );
     expect(row?.disabled).toBe(true);
+    expect(row?.classList.contains("chat-controls__inline-select-option--selected")).toBe(false);
+    expect(row?.hasAttribute("data-chat-model-highlighted")).toBe(false);
+    expect(row?.querySelector(".chat-controls__inline-select-check")).toBeNull();
+    expect(row?.querySelector(".chat-controls__model-option-meta")?.textContent).toBe(
+      "Cooldown 12m",
+    );
     expect(
       view.container.querySelector(".chat-controls__auth-meta openclaw-tooltip"),
-    ).toHaveProperty("content", "Credential expires in 3m");
+    ).toHaveProperty("content", "you@example.com\nCredential expires in 3m");
+    expect(view.container.querySelector(".chat-controls__auth-meta")?.textContent).toBe("Personal");
     view.unmount();
   },
 );

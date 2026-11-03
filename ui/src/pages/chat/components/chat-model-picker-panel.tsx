@@ -458,15 +458,15 @@ export function ChatModelPickerPanel(panel: {
     const authKind = () => auth()?.kind;
     const showAuth = () => Boolean(auth());
     const authLabel = () => (showAuth() ? auth()?.label : undefined);
-    const authHelp = () =>
-      [
+    const authHelp = () => {
+      const expiryLabel = props.lead[0]?.expiryLabel;
+      return [
         auth()?.detail,
-        props.lead[0]?.expiryLabel
-          ? t("modelProviders.expiresIn", { time: props.lead[0]!.expiryLabel! })
-          : undefined,
+        expiryLabel ? t("modelProviders.expiresIn", { time: expiryLabel }) : undefined,
       ]
         .filter(Boolean)
         .join("\n");
+    };
     return (
       <section
         class="chat-controls__provider-model-group"
