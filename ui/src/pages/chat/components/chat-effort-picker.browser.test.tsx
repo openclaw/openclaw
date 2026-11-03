@@ -12,6 +12,7 @@ import { emulateOverlayMedia } from "../../../test-helpers/overlay-browser-media
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import "../../../styles/base.css";
 import "../../../styles/chat/composer.css";
+import "../../../styles/chat/composer-surface.css";
 import type { ChatAccessProgramControlProps } from "./chat-access-program-control.tsx";
 import { focusComposerFromChrome } from "./chat-composer-dom.ts";
 import { ChatEffortPicker } from "./chat-effort-picker.tsx";
@@ -240,6 +241,21 @@ describe("effort selection", () => {
     expect(speed("ultrafast").getAttribute("aria-checked")).toBe("true");
     expect(speed("off").getAttribute("tabindex")).toBe("0");
     expect(speed("ultrafast").getAttribute("tabindex")).toBe("-1");
+  });
+
+  it("draws the composer lightning inside its own icon box", async () => {
+    const composer = document.body.appendChild(document.createElement("div"));
+    composer.className = "agent-chat__input";
+    onTestFinished(() => composer.remove());
+    host = composer.appendChild(document.createElement("div"));
+    host.className = "agent-chat__composer-footer";
+    for (const mode of [true, "ultrafast"] as const) {
+      await speedFixture(speedState(mode, ["priority", "ultrafast"]));
+      const zap = host.querySelector(".chat-controls__effort-zap")!;
+      const box = zap.getBoundingClientRect();
+      const glyph = zap.querySelector("svg")!.getBoundingClientRect();
+      expect([glyph.width, glyph.height]).toEqual([box.width, box.height]);
+    }
   });
 
   it("shows the effective level and marks the default level in the menu", async () => {
