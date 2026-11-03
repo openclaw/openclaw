@@ -10,6 +10,7 @@ import { loadCronJobsStore } from "../../cron/store.js";
 import { resolveCronJobsStorePathFromConfigAsync } from "../../cron/store/paths.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { isSkillUsageTracked, readSkillUsage } from "../runtime/skill-usage.js";
 import type { WorkshopChange } from "./changes.kernel.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
 import {
@@ -18,7 +19,6 @@ import {
   listWorkshopSkills,
   WorkshopWriteError,
 } from "./library.js";
-import { isSkillUsageTracked, readSkillUsage } from "./skill-usage.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
 
 const log = createSubsystemLogger("skills/workshop");

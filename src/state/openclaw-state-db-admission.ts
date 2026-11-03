@@ -1,4 +1,7 @@
-import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
+import {
+  requireNativeDatabaseFile,
+  getPostgresPhysicalFacts,
+} from "../infra/database-engine/physical-facts.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import {
@@ -14,6 +17,7 @@ import {
   getAdmittedSqliteSchemaFacts,
   isSqliteSchemaAdmissionCold,
 } from "../infra/sqlite-schema-facts.js";
+import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 
 function getStateSchemaFacts(database: EngineConnection) {
   return isPostgresSqlConnection(database)
@@ -225,4 +229,15 @@ export function publishStateRuntimeSchemaAdmission(
   startupReady: boolean,
 ): void {
   runtimeAdmission.publish(database, { startupReady });
+}
+
+export function readPublishedStateSchemaVersion(database: EngineConnection): number {
+  const admitted = getStateSchemaVersionAdmission(database);
+  if (admitted) {
+    return admitted.userVersion;
+  }
+  if (isPostgresSqlConnection(database)) {
+    requireNativeDatabaseFile("postgres", "repair");
+  }
+  return readSqliteUserVersion(database);
 }

@@ -153,13 +153,13 @@ suite.define(() => {
         const modal = modalFor(page, "Update Gateway");
         for (const width of [1440, 390, 320]) {
           await page.setViewportSize({ width, height: 1000 });
-          await inspectActions(page, modal, ".exec-approval-actions");
+          await inspectActions(page, modal, "openclaw-modal-actions");
         }
         expect(await gateway.getRequests("update.run")).toHaveLength(0);
         await exactButton(modal, "Update and restart").click();
         await gateway.waitForRequest("update.run");
         await exactButton(modal, "Updating…").waitFor();
-        await inspectActions(page, modal, ".exec-approval-actions");
+        await inspectActions(page, modal, "openclaw-modal-actions");
         expect(await gateway.getRequests("update.run")).toHaveLength(1);
       },
     ));

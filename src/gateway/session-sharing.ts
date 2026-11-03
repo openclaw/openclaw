@@ -375,15 +375,21 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
     authorizesAgentRun,
     preparedPolicy,
   });
+  // Reentrant source assertions must consume the committing facts, not an older publication.
+  let committingFacts:
+    | { target: SessionSharingTarget | null; members: readonly string[] }
+    | undefined;
   const assertTargetCurrent = (
     targetRef: SessionMutationTarget,
     expected: AuthorizedSessionMutationTarget | undefined,
     currentCfg: OpenClawConfig,
     ensuredSessionId?: string,
-    prepared?: { target: SessionSharingTarget | null; members: readonly string[] },
+    supplied?: typeof committingFacts,
     currentTalkTarget?: PreparedTalkSessionTarget,
     bindSessionIdentity = true,
   ): void => {
+    const prepared = committingFacts ?? supplied;
+    // A prepared consuming frame already owns the current source facts.
     if (!prepared && !consuming.sharing && params.preparedTargets) {
       const retained = findPreparedSharingTarget(params, targetRef);
       if (!retained) {
@@ -540,20 +546,29 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
       () => targetChanged(expected.sessionKey),
       [expected],
     );
-    return consumeSharing(
-      {
-        ...prepared,
-        members: facts.members,
-        assertCurrent: () => {
-          assertSourceCurrent();
-          assertRoutingCurrent(params.context.getRuntimeConfig());
+    const previous = committingFacts;
+    committingFacts = {
+      target: prepared.target,
+      members: facts.members.map((member) => member.identityId),
+    };
+    try {
+      return consumeSharing(
+        {
+          ...prepared,
+          members: facts.members,
+          assertCurrent: () => {
+            assertSourceCurrent();
+            assertRoutingCurrent(params.context.getRuntimeConfig());
+          },
         },
-      },
-      () => {
-        assertCurrent(expected, cfg);
-        return consume();
-      },
-    );
+        () => {
+          assertCurrent(expected, cfg);
+          return consume();
+        },
+      );
+    } finally {
+      committingFacts = previous;
+    }
   };
   const authorization: SessionMutationAuthorization = {
     ...(params.preparedTargets

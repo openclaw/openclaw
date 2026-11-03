@@ -210,7 +210,10 @@ export function Config(props: ConfigProps) {
     const configBusy = props.loading || props.saving || props.applying || props.updating;
     const formBusy = configBusy || props.schemaLoading;
     const mutationAllowed = props.mutationAllowed !== false;
-    const showSectionTabs = props.settingsLayout !== "accordion" && topTabs.length > 1;
+    const showSectionTabs =
+      props.settingsLayout !== "accordion" &&
+      props.settingsLayout !== "stack" &&
+      topTabs.length > 1;
     const showToolbar = showModeToggle || showSectionTabs;
     const showValidityWarning = props.valid === false && !viewState.validityDismissed;
     return {
@@ -221,6 +224,10 @@ export function Config(props: ConfigProps) {
       analysis,
       unsupportedActivePaths,
       rawAvailable,
+      activeTabLabel: showSectionTabs
+        ? topTabs.find((tab) => tab.key === props.activeSection)?.label
+        : undefined,
+      openRaw: showModeToggle && rawAvailable ? () => props.onFormModeChange("raw") : undefined,
       rawDraftPending,
       formMode,
       categories,
@@ -453,8 +460,11 @@ export function Config(props: ConfigProps) {
         value={props.formValue}
         embedded={props.embeddedEditor === true || state().showSetup}
         rawAvailable={state().rawAvailable}
+        repeatedHeadings={[props.navRootLabel, state().activeTabLabel]}
+        onOpenRaw={state().openRaw}
         disabled={state().formBusy || !props.formValue || !state().mutationAllowed}
         unsupportedPaths={state().analysis.unsupportedPaths}
+        secretFields={props.secretFields}
         onPatch={props.onFormPatch}
         onRemove={props.onFormRemove}
         activeSection={props.activeSection}
@@ -487,6 +497,7 @@ export function Config(props: ConfigProps) {
         }
         showSectionDocs={props.showSectionDocs}
         sectionPrelude={props.sectionPrelude}
+        curatedSections={props.curatedSections}
         revealSensitive={props.activeSection === "env" && view().envRevealed}
         maskSensitive
         isSensitivePathRevealed={(path) => isSensitivePathRevealed(view(), path)}
@@ -621,17 +632,11 @@ export function Config(props: ConfigProps) {
             ) : null
           ) : state().formMode === "form" ? (
             <>
-              {state().unsupportedActivePaths.length > 0 &&
-              state().showModeToggle &&
-              state().rawAvailable ? (
+              {state().unsupportedActivePaths.length > 0 && state().openRaw ? (
                 <div class="config-content-callout">
                   <div class="callout info">
                     <UnsupportedPathSummary paths={state().unsupportedActivePaths} />{" "}
-                    <button
-                      type="button"
-                      class="btn btn--sm"
-                      onClick={() => props.onFormModeChange("raw")}
-                    >
+                    <button type="button" class="btn btn--sm" onClick={() => state().openRaw?.()}>
                       {t("configView.openRawEditor")}
                     </button>
                   </div>

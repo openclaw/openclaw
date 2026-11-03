@@ -167,7 +167,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "src/utils/string-readers.ts":
     case "ui/src/components/file-kind.ts":
     case "ui/src/lib/reactive/application-native.ts":
-    case "ui/src/lib/reactive/visible-poll.ts":
     case "ui/src/lib/chat/follow-up-mode.ts":
     case "ui/src/lib/sessions/session-archive-reason.ts":
     case "ui/src/lib/sessions/session-message-subscriptions.runtime.ts":
@@ -560,6 +559,8 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 modules.add("node_modules/@solidjs/signals/dist/prod/deferred.js");
                 // Callback-backed leaf owners already share the boot projection runtime.
                 modules.add("ui/src/lib/reactive/callback-owner.ts");
+                // Portal polling must not load optional session controls or a separate chunk.
+                modules.add("ui/src/lib/reactive/visible-poll.ts");
                 // Chat and creation share the same identity-scoped preference owner.
                 modules.add("ui/src/pages/new-session/draft-preference-state.ts");
                 modules.add("ui/src/pages/new-session/preferences.ts");
