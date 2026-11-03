@@ -185,34 +185,37 @@ afterAll(async () => {
 });
 
 describe("exportTrajectoryBundle", () => {
-  it("resolves legacy marker metadata without decoding saved session prompts", async () => {
-    const { tmpDir, sessionTarget } = exportPaths();
-    const prompt = "trajectory-listing-saved-prompt".repeat(128);
-    for (const sessionKey of [sessionTarget.sessionKey, "agent:main:unrelated"]) {
-      await replaceSessionEntry(
-        { ...sessionTarget, sessionKey },
-        {
-          sessionId:
-            sessionKey === sessionTarget.sessionKey ? sessionTarget.sessionId : "unrelated",
-          updatedAt: 1,
-          skillsSnapshot: { prompt, skills: [] },
-        },
-      );
-    }
-    await replaceTranscriptEvents(sessionTarget, simpleSessionEntries(tmpDir));
-    listSessionEntriesReadOnly({ ...sessionTarget, projection: "list" });
-    const parses = vi.spyOn(JSON, "parse");
-    try {
-      const bundle = await exportFrom(tmpDir, {
-        sessionFile: formatSqliteSessionFileMarker(sessionTarget),
-        sessionKey: sessionTarget.sessionKey,
-      });
-      expect(eventTypes(bundle.events)).toEqual(["user.message", "assistant.message"]);
-      expect(parses.mock.calls.filter(([text]) => text.includes(prompt))).toHaveLength(0);
-    } finally {
-      parses.mockRestore();
-    }
-  });
+  it.each(["agent:main:session-1", "session-1", " agent:main:session-1 "])(
+    "resolves legacy marker metadata without decoding saved session prompts (%s)",
+    async (sessionKey) => {
+      const { tmpDir, sessionTarget } = exportPaths();
+      const prompt = "trajectory-listing-saved-prompt".repeat(128);
+      for (const storedKey of [sessionTarget.sessionKey, "agent:main:unrelated"]) {
+        await replaceSessionEntry(
+          { ...sessionTarget, sessionKey: storedKey },
+          {
+            sessionId:
+              storedKey === sessionTarget.sessionKey ? sessionTarget.sessionId : "unrelated",
+            updatedAt: 1,
+            skillsSnapshot: { prompt, skills: [] },
+          },
+        );
+      }
+      await replaceTranscriptEvents(sessionTarget, simpleSessionEntries(tmpDir));
+      listSessionEntriesReadOnly({ ...sessionTarget, projection: "list" });
+      const parses = vi.spyOn(JSON, "parse");
+      try {
+        const bundle = await exportFrom(tmpDir, {
+          sessionFile: formatSqliteSessionFileMarker(sessionTarget),
+          sessionKey,
+        });
+        expect(eventTypes(bundle.events)).toEqual(["user.message", "assistant.message"]);
+        expect(parses.mock.calls.filter(([text]) => text.includes(prompt))).toHaveLength(0);
+      } finally {
+        parses.mockRestore();
+      }
+    },
+  );
 
   it.each([
     {

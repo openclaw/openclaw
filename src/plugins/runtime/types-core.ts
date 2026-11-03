@@ -366,7 +366,6 @@ export type PluginRuntimeCore = {
       listSessionEntries: (
         params?: Partial<Omit<RuntimeSessionStoreReadParams, "sessionKey">> & {
           readOnly?: boolean;
-          /** Omit saved snapshots for metadata-only scans; defaults to complete entries. */
           projection?: "full" | "list";
           /** Restrict results to exact persisted keys while retaining canonical listing validation. */
           sessionKeys?: readonly string[];

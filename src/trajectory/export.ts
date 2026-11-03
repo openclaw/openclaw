@@ -17,6 +17,7 @@ import {
   loadTranscriptEvents,
   type SessionTranscriptRuntimeTarget,
 } from "../config/sessions/session-accessor.js";
+import { resolveSqliteSessionKey } from "../config/sessions/session-accessor.sqlite-scope-helpers.js";
 import { withSessionTranscriptHydrationCaller } from "../config/sessions/session-transcript-hydration-caller.js";
 import {
   isCanonicalSessionTranscriptEntry,
@@ -200,7 +201,8 @@ async function readSessionEntries(params: {
       projection: "list",
     }).map(({ sessionKey, entry }) => [sessionKey, entry]),
   );
-  const targetKeyEntry = markerEntries.get(incompleteTarget?.sessionKey ?? "");
+  const entryForKey = (key = "") => markerEntries.get(resolveSqliteSessionKey(key, marker.agentId));
+  const targetKeyEntry = entryForKey(incompleteTarget?.sessionKey);
   if (
     incompleteTarget &&
     ((incompleteTarget.agentId && incompleteTarget.agentId !== marker.agentId) ||
@@ -212,7 +214,7 @@ async function readSessionEntries(params: {
   ) {
     throw new Error("Trajectory export transcript target conflicts with the legacy marker");
   }
-  const suppliedKeyEntry = markerEntries.get(params.sessionKey ?? "");
+  const suppliedKeyEntry = entryForKey(params.sessionKey);
   const matches = [...markerEntries].filter(([, entry]) => entry.sessionId === marker.sessionId);
   if (suppliedKeyEntry && suppliedKeyEntry.sessionId !== marker.sessionId) {
     throw new Error("Trajectory export session key conflicts with the legacy marker");
