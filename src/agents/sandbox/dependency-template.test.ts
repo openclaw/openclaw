@@ -1,9 +1,12 @@
+import { performance } from "node:perf_hooks";
 import { beforeEach, expect, it, vi } from "vitest";
+import { startChatSendDiagnostics } from "../../gateway/server-methods/chat-send-diagnostics.js";
 import { withDiagnosticsTimelineObserver } from "../../infra/diagnostics-timeline.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import {
   prepareSandboxDependencyTemplate,
   resolveSandboxDependencyTemplateIdentity,
+  retireSandboxDependencyTemplate,
 } from "./dependency-template.js";
 import { createSandboxTestContext } from "./test-fixtures.js";
 import type { SandboxConfig } from "./types.js";
@@ -177,6 +180,52 @@ it("refuses to publish a template whose builder could not be retired", async () 
   mocks.retire.mockRejectedValue(new Error("writer is still live"));
   await expect(prepare()).rejects.toThrow("writer is still live");
 });
+
+it.each([true, false])(
+  "attributes retirement on the slow-send line (terminated=%s)",
+  async (terminated) => {
+    let clock = 0;
+    const now = vi.spyOn(performance, "now").mockImplementation(() => clock);
+    const info = vi.fn();
+    const diagnostics = startChatSendDiagnostics({ info });
+    const prefix =
+      "detail.attempt.setup.sandbox.workspace_selection.prepare.reconcile.dependency.retire";
+    mocks.exec.mockImplementation(async (_engine, args: string[]) => {
+      clock += args[0] === "kill" ? 19_000 : args[0] === "wait" ? 500 : 100;
+      return { code: 0, stdout: containerId, stderr: "" };
+    });
+    mocks.retire.mockImplementation(async () => {
+      clock += 200;
+      return terminated;
+    });
+    try {
+      const retired = withDiagnosticsTimelineObserver(diagnostics.observeSpan, () =>
+        retireSandboxDependencyTemplate(directory, () => {}),
+      );
+      if (terminated) {
+        await retired;
+      } else {
+        await expect(retired).rejects.toThrow("still running; template retained");
+      }
+      diagnostics.finish();
+      expect(info).toHaveBeenCalledOnce();
+      const line = info.mock.calls[0]![0];
+      for (const field of [
+        "inspect=100ms",
+        "kill=19000ms",
+        "wait=500ms",
+        "verify=200ms",
+        "verify.attempts=1",
+      ]) {
+        expect(line).toContain(`${prefix}.${field}`);
+      }
+      expect(line).not.toContain(containerId);
+      expect(line).not.toContain(directory);
+    } finally {
+      now.mockRestore();
+    }
+  },
+);
 
 it("retries a failed dependency generation when its network policy changes", async () => {
   const options = { assertCurrent: () => {} };
