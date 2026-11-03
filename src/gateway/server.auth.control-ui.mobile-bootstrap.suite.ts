@@ -140,23 +140,8 @@ export function registerControlUiMobileBootstrapSuite(): void {
     deviceFamily: "Apple Watch",
   } satisfies ConnectParams["client"];
 
-  test.each([
-    { name: "iPhone Share", platform: "iOS 26.4.0", deviceFamily: "iPhone", allowed: true },
-    { name: "iPad Share", platform: "iPadOS 26.4.0", deviceFamily: "iPad", allowed: true },
-    { name: "node host", platform: "linux", deviceFamily: "Linux", allowed: true },
-    { name: "mismatched Share", platform: "Android 16", deviceFamily: "Android", allowed: false },
-  ])("node-only setup provisions $name without an operator grant", async (entry) => {
-    const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
+  const issueNodeSetup = async () => {
     const { decodePairingSetupCode } = await import("../pairing/setup-code.js");
-    const { identityPath, identity } = await createOperatorIdentityFixture("openclaw-share-setup-");
-    const client = {
-      id: entry.name === "node host" ? "node-host" : "openclaw-ios",
-      version: "2026.10.50",
-      platform: entry.platform,
-      mode: "node" as const,
-      deviceFamily: entry.deviceFamily,
-      displayName: "OpenClaw Share",
-    };
     const owner = await openWs(port);
     expect((await connectReq(owner, { scopes: ["operator.admin"], prePairDevice: true })).ok).toBe(
       true,
@@ -170,7 +155,26 @@ export function registerControlUiMobileBootstrapSuite(): void {
     if (!setup.payload?.setupCode) {
       throw new Error("expected owner-authorized node-only setup");
     }
-    const bootstrap = decodePairingSetupCode(setup.payload.setupCode);
+    return { owner, bootstrap: decodePairingSetupCode(setup.payload.setupCode) };
+  };
+
+  test.each([
+    { name: "iPhone Share", platform: "iOS 26.4.0", deviceFamily: "iPhone", allowed: true },
+    { name: "iPad Share", platform: "iPadOS 26.4.0", deviceFamily: "iPad", allowed: true },
+    { name: "node host", platform: "linux", deviceFamily: "Linux", allowed: true },
+    { name: "mismatched Share", platform: "Android 16", deviceFamily: "Android", allowed: false },
+  ])("node-only setup provisions $name without an operator grant", async (entry) => {
+    const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
+    const { identityPath, identity } = await createOperatorIdentityFixture("openclaw-share-setup-");
+    const client = {
+      id: entry.name === "node host" ? "node-host" : "openclaw-ios",
+      version: "2026.10.50",
+      platform: entry.platform,
+      mode: "node" as const,
+      deviceFamily: entry.deviceFamily,
+      displayName: "OpenClaw Share",
+    };
+    const { owner, bootstrap } = await issueNodeSetup();
     const node = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
     const initial = await connectReq(node, {
       skipDefaultAuth: true,
@@ -230,6 +234,99 @@ export function registerControlUiMobileBootstrapSuite(): void {
     expect(denied.error?.details).toMatchObject({
       code: ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH,
     });
+
+    expect(
+      (await rpcReq(owner, "device.token.revoke", { deviceId: identity.deviceId, role: "node" }))
+        .ok,
+    ).toBe(true);
+    const revoked = await getPairedDevice(identity.deviceId);
+    expect(revoked?.tokens?.node?.revokedAtMs).toEqual(expect.any(Number));
+    const revokedReconnect = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
+    const rejected = await connectReq(revokedReconnect, {
+      skipDefaultAuth: true,
+      deviceToken: auth.deviceToken,
+      role: "node",
+      scopes: [],
+      client,
+      deviceIdentityPath: identityPath,
+    });
+    expect(rejected.ok).toBe(false);
+    expect(rejected.error?.details).toMatchObject({
+      code: ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH,
+    });
+    expect((await getPairedDevice(identity.deviceId))?.tokens).toEqual(revoked?.tokens);
+  });
+
+  test("Limited access cannot issue a Share setup credential", async () => {
+    const limited = await openWs(port);
+    expect((await connectReq(limited, { scopes: ["operator.read"], prePairDevice: true })).ok).toBe(
+      true,
+    );
+    const setup = await rpcReq(limited, "device.pair.setupCode", {
+      bootstrapProfile: "node",
+      includeQr: false,
+      publicUrl: `ws://127.0.0.1:${port}`,
+    });
+    expect(setup.ok).toBe(false);
+    expect(setup.error?.message).toContain("missing scope: operator.admin");
+    expect(setup.payload).toBeUndefined();
+  });
+
+  test("revocation after Share bootstrap authentication prevents pairing and token issuance", async ({
+    signal,
+  }) => {
+    const bootstrapOwner = await import("../infra/device-bootstrap.js");
+    const { getPairedDevice } = await import("../infra/device-pairing.js");
+    const { identityPath, identity } =
+      await createOperatorIdentityFixture("openclaw-share-revoke-");
+    const { bootstrap } = await issueNodeSetup();
+    const bootstrapToken = bootstrap.bootstrapToken;
+    if (!bootstrapToken) {
+      throw new Error("expected a node bootstrap credential");
+    }
+    const authenticated = createDeferred();
+    const resume = createDeferred();
+    const verify = bootstrapOwner.verifyDeviceBootstrapToken;
+    const verification = vi
+      .spyOn(bootstrapOwner, "verifyDeviceBootstrapToken")
+      .mockImplementation(async (params) => {
+        const result = await verify(params);
+        if (params.token === bootstrapToken) {
+          expect(result.ok).toBe(true);
+          authenticated.resolve();
+          await resume.promise;
+        }
+        return result;
+      });
+    const node = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
+    const connecting = connectReq(node, {
+      skipDefaultAuth: true,
+      bootstrapToken,
+      role: "node",
+      scopes: [],
+      client: {
+        id: "openclaw-ios",
+        version: "2026.10.50",
+        platform: "iPadOS 26.4.0",
+        mode: "node",
+        deviceFamily: "iPad",
+      },
+      deviceIdentityPath: identityPath,
+    });
+    try {
+      await withinTest(authenticated.promise, signal);
+      expect(
+        (await bootstrapOwner.revokeDeviceBootstrapToken({ token: bootstrapToken })).removed,
+      ).toBe(true);
+      resume.resolve();
+      const result = await connecting;
+      expect(result.ok).toBe(false);
+      expect(result.payload).toBeUndefined();
+      expect(await getPairedDevice(identity.deviceId)).toBeNull();
+    } finally {
+      resume.resolve();
+      verification.mockRestore();
+    }
   });
 
   test("cloud-worker setup does not provision an iOS Share identity", async () => {

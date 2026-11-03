@@ -93,8 +93,8 @@ struct ShareGatewayRelayPairingTests {
         await owner.disconnect()
     }
 
-    @Test(.stateDirectoryIsolated)
-    func `disconnect during sharing setup cannot enroll on a replacement route`() async throws {
+    @Test(.stateDirectoryIsolated, arguments: [false, true])
+    func `interrupted sharing setup cannot enroll or persist credentials`(cancel: Bool) async throws {
         let url = try #require(URL(string: "wss://gateway.example.invalid"))
         let socket = FakeGatewayWebSocketSession(helloAuth: [
             "role": "operator", "scopes": ["operator.admin"],
@@ -102,20 +102,142 @@ struct ShareGatewayRelayPairingTests {
         let shareSocket = FakeGatewayWebSocketSession()
         let owner = GatewayNodeSession()
         try await self.connectOwner(owner, url: url, gatewayID: "old-gateway", session: socket)
-        async let preparation: Void = ShareGatewayRelaySettings.prepareDeviceAuth(
-            operatorGateway: owner,
-            url: url,
-            gatewayStableID: "old-gateway",
-            sessionBox: WebSocketSessionBox(session: shareSocket))
+        let preparation = Task {
+            try await ShareGatewayRelaySettings.prepareDeviceAuth(
+                operatorGateway: owner,
+                url: url,
+                gatewayStableID: "old-gateway",
+                sessionBox: WebSocketSessionBox(session: shareSocket))
+        }
         let task = try #require(socket.latestTask())
         await task.waitForSentRequests(method: "device.pair.setupCode", count: 1)
-        await owner.disconnect()
+        if cancel {
+            preparation.cancel()
+            let request = try #require(task.sentRequests(method: "device.pair.setupCode").first)
+            try task.emitResponse(id: #require(request["id"] as? String), payload: [
+                "setupCode": #"{"url":"wss://gateway.example.invalid","bootstrapToken":"late-bootstrap"}"#,
+            ])
+        } else {
+            await owner.disconnect()
+        }
         do {
-            try await preparation
-            Issue.record("Sharing setup should fail after its paired route disconnects")
+            try await preparation.value
+            Issue.record("Sharing setup should fail after cancellation or disconnect")
         } catch {
             #expect(shareSocket.snapshotMakeCount() == 0)
+            let identity = try #require(DeviceIdentityStore.loadOrCreatePersisted(profile: .shareExtension))
+            #expect(DeviceAuthStore.loadToken(
+                deviceId: identity.deviceId,
+                role: "node",
+                gatewayID: "old-gateway",
+                profile: .shareExtension) == nil)
         }
+        await owner.disconnect()
+    }
+
+    @Test(.stateDirectoryIsolated)
+    func `rejected Share credentials remain stored and cannot trigger automatic reenrollment`() async throws {
+        let url = try #require(URL(string: "wss://gateway.example.invalid"))
+        let gatewayID = "revoked-share-gateway"
+        let identity = try #require(DeviceIdentityStore.loadOrCreatePersisted(profile: .shareExtension))
+        #expect(DeviceAuthStore.storeTokenPersisted(
+            deviceId: identity.deviceId,
+            role: "node",
+            token: "revoked-share-token",
+            gatewayID: gatewayID,
+            profile: .shareExtension))
+        let before = DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: "node", gatewayID: gatewayID)
+        let rejectedSocket = FakeGatewayWebSocketSession(connectError: [
+            "code": "UNAVAILABLE", "message": "device token mismatch",
+            "details": ["code": "AUTH_DEVICE_TOKEN_MISMATCH"],
+        ])
+        let share = GatewayNodeSession()
+        do {
+            try await share.connect(
+                url: url,
+                credentials: GatewayNodeSessionCredentials(),
+                connectOptions: ShareGatewayRelaySettings.connectOptions(gatewayStableID: gatewayID),
+                sessionBox: WebSocketSessionBox(session: rejectedSocket),
+                onConnected: {},
+                onDisconnected: { _ in },
+                onInvoke: { req in BridgeInvokeResponse(id: req.id, ok: false) })
+            Issue.record("Revoked Share access should be rejected")
+        } catch {
+            #expect((error as? GatewayConnectAuthError)?.detail == .authDeviceTokenMismatch)
+        }
+        await share.disconnect()
+        #expect(DeviceAuthStore.loadToken(
+            deviceId: identity.deviceId, role: "node", gatewayID: gatewayID) == before)
+        let ownerSocket = FakeGatewayWebSocketSession(helloAuth: [
+            "role": "operator", "scopes": ["operator.admin"],
+        ])
+        let owner = GatewayNodeSession()
+        try await self.connectOwner(owner, url: url, gatewayID: gatewayID, session: ownerSocket)
+        try await ShareGatewayRelaySettings.prepareDeviceAuth(
+            operatorGateway: owner,
+            url: url,
+            gatewayStableID: gatewayID,
+            sessionBox: WebSocketSessionBox(session: rejectedSocket))
+        #expect(ownerSocket.latestTask()?.sentRequestCount(method: "device.pair.setupCode") == 0)
+        #expect(rejectedSocket.snapshotMakeCount() == 1)
+        await owner.disconnect()
+    }
+
+    @Test(.stateDirectoryIsolated)
+    func `upgrade imports existing Share identity and credential without enrolling again`() async throws {
+        let gatewayID = "upgraded-share-gateway"
+        let url = try #require(URL(string: "wss://gateway.example.invalid"))
+        let identity = DeviceIdentityStore.generateMaterial().identity
+        let directory = DeviceIdentityStore.stateDirectoryURL.appendingPathComponent("identity")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let identityURL = directory.appendingPathComponent("share-device.json")
+        let authURL = directory.appendingPathComponent("share-device-auth.json")
+        let identityData = try JSONEncoder().encode(identity)
+        // The shipped v1 auth shape, including its gateway owner and original timestamp.
+        let authData = try JSONSerialization.data(withJSONObject: [
+            "version": 1, "deviceId": identity.deviceId,
+            "tokens": ["node": [
+                "token": "existing-share-token", "role": "node", "scopes": [],
+                "updatedAtMs": 100, "gatewayID": gatewayID,
+            ]],
+        ])
+        try identityData.write(to: identityURL)
+        try authData.write(to: authURL)
+        let ownerSocket = FakeGatewayWebSocketSession(helloAuth: [
+            "role": "operator", "scopes": ["operator.admin"],
+        ])
+        let owner = GatewayNodeSession()
+        try await self.connectOwner(owner, url: url, gatewayID: gatewayID, session: ownerSocket)
+        let shareSocket = FakeGatewayWebSocketSession()
+        try await ShareGatewayRelaySettings.prepareDeviceAuth(
+            operatorGateway: owner,
+            url: url,
+            gatewayStableID: gatewayID,
+            sessionBox: WebSocketSessionBox(session: shareSocket))
+        #expect(ownerSocket.latestTask()?.sentRequestCount(method: "device.pair.setupCode") == 0)
+        #expect(shareSocket.snapshotMakeCount() == 0)
+        #expect(DeviceIdentityStore.loadOrCreatePersisted(profile: .shareExtension) == identity)
+        #expect(DeviceAuthStore.loadToken(
+            deviceId: identity.deviceId,
+            role: "node",
+            gatewayID: gatewayID,
+            profile: .shareExtension) == DeviceAuthEntry(
+            token: "existing-share-token", role: "node", scopes: [], updatedAtMs: 100, gatewayID: gatewayID))
+        let share = GatewayNodeSession()
+        try await share.connect(
+            url: url,
+            credentials: GatewayNodeSessionCredentials(),
+            connectOptions: ShareGatewayRelaySettings.connectOptions(gatewayStableID: gatewayID),
+            sessionBox: WebSocketSessionBox(session: shareSocket),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { req in BridgeInvokeResponse(id: req.id, ok: false) })
+        #expect(shareSocket.latestTask()?.latestConnectAuth()?["token"] as? String == "existing-share-token")
+        #expect(shareSocket.latestTask()?.latestConnectDevice()?["id"] as? String == identity.deviceId)
+        #expect(try Data(contentsOf: identityURL) == identityData)
+        #expect(try Data(contentsOf: authURL) == authData)
+        await share.disconnect()
+        await owner.disconnect()
     }
 
     private func connectOwner(

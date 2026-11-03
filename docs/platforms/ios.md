@@ -332,6 +332,9 @@ creation has a token or password auth path.
    approval. The extension keeps its own Gateway-scoped, node-only credential;
    it does not receive the app's administrative credential. Existing Share
    credentials are not automatically replaced, including after revocation.
+   After upgrading, reconnecting an already full-access app also prepares Share
+   if it has no credential yet. Existing identities and credentials are reused;
+   reconnecting does not restore revoked Share access.
    Limited connections still require separate Share approval. Cloudflare Access
    Gateways continue to require sending from the foreground app.
 
