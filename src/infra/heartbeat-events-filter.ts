@@ -121,11 +121,19 @@ export function buildExecEventPrompt(
       `${completionInstruction} Do not mention, summarize, or reuse command output.`
     );
   }
+  return formatExecCompletionPrompt(eventText, { useHeartbeatResponseTool, hasMissingOutput });
+}
+
+/** Wrap already-prepared turn text without reapplying producer truncation or parsing. */
+export function formatExecCompletionPrompt(
+  eventText: string,
+  opts?: { useHeartbeatResponseTool?: boolean; hasMissingOutput?: boolean },
+): string {
   // Delivery eligibility permits an update; it does not make every completion news.
-  const completionInstruction = useHeartbeatResponseTool
+  const completionInstruction = opts?.useHeartbeatResponseTool
     ? HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS
     : `If no user-facing update is needed, reply ${SILENT_REPLY_TOKEN} only.`;
-  const missingOutputInstruction = hasMissingOutput
+  const missingOutputInstruction = opts?.hasMissingOutput
     ? " If reporting a failure without captured output, include the exit status or signal. " +
       "Do not ask the user to provide missing logs, and do not try to retrieve logs from an exec/session id."
     : "";

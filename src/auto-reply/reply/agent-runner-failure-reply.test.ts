@@ -5,7 +5,7 @@ import {
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
 } from "../../agents/failover/user-copy.js";
 import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
-import { resolveReplyCompletion } from "../../agents/reply-completion.js";
+import { resolveReplyCompletion, resolveReplyExpectation } from "../../agents/reply-completion.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import { SkillResourceDeliveryLimitError } from "../../skills/runtime/resource-delivery-error.js";
 import { SkillLibraryError } from "../../skills/skill-library-error.js";
@@ -20,6 +20,26 @@ import {
 import { resolveSourceReplyExpectation } from "./source-reply-delivery-mode.js";
 
 describe("buildEmptyInteractiveReplyPayload", () => {
+  it.each([false, true])(
+    "keeps exec silence optional unless terminal reply is required: %s",
+    (required) => {
+      const expectation = resolveReplyExpectation({
+        inputProvenance: { kind: "internal_system", sourceTool: "exec" },
+        ...(required ? { terminalReplyExpectation: "required" as const } : {}),
+      });
+      const completion = resolveReplyCompletion(expectation, "empty");
+      const payload = buildEmptyInteractiveReplyPayload({ completion });
+      if (required) {
+        expect(completion.outcome).toBe("missing");
+        expect(payload?.isError).toBe(true);
+        expect(payload?.text).not.toBe(SILENT_REPLY_TOKEN);
+      } else {
+        expect(completion.outcome).toBe("silent");
+        expect(payload).toBeUndefined();
+      }
+    },
+  );
+
   it("surfaces missing output for a mentioned group request even when silence is allowed", () => {
     const expectation = resolveSourceReplyExpectation({
       ctx: {

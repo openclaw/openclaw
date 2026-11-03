@@ -10,6 +10,7 @@ import { finalizeCronPromptForResolvedTools } from "../../cron/isolated-agent/ru
 import { resolveCronSourceDeliveryPlan } from "../../cron/isolated-agent/source-delivery-plan.js";
 import * as cronInference from "../../cron/run-inference.js";
 import type { CronAgentExecutionPhaseUpdate } from "../../cron/types.js";
+import { parseClaudeCliHistoryEntry } from "../../gateway/cli-session-history.claude.js";
 import { onAgentEvent, type AgentEventPayload } from "../../infra/agent-events.js";
 import { useBundledProviderPolicyArtifactsForTest } from "../../plugin-sdk/test-helpers/provider-policy-artifacts.test-support.js";
 import {
@@ -20,6 +21,8 @@ import {
   type FallbackRunnerParams,
   setupAgentRunnerExecutionTestState,
 } from "./agent-runner-execution.test-support.js";
+import { createQueueCase } from "./queue.case.test-support.js";
+import { clearFollowupQueue } from "./queue/state.js";
 import type {
   ScheduledSessionAutomation,
   SessionEventExecution,
@@ -81,6 +84,104 @@ function expectedCompletionEvidence(runtime: "embedded" | "cli") {
 }
 
 describe("ordinary session event execution", () => {
+  it.for(["embedded", "cli"] as const)(
+    "restores exec guidance after queue overflow in the %s turn without changing the system prefix",
+    async (runtime, { signal, onTestFinished }) => {
+      const queue = createQueueCase({ mode: "followup", cap: 1 }, 2);
+      onTestFinished(() => {
+        clearFollowupQueue(queue.key);
+      });
+      const completion = createFollowupRun();
+      Object.assign(completion.run, {
+        inputProvenance: { kind: "internal_system", sourceTool: "exec" },
+        extraSystemPrompt: "Existing shared session instructions",
+        extraSystemPromptStatic: "Stable shared session instructions",
+      });
+      completion.prompt = `Exec completed (job-1234, code 0) :: ${"output ".repeat(40)}`;
+      completion.summaryLine = completion.prompt;
+      const next = {
+        ...completion,
+        prompt: "A plugin event",
+        summaryLine: "A plugin event",
+        run: {
+          ...completion.run,
+          inputProvenance: { kind: "internal_system" as const, sourceTool: "plugin" },
+        },
+      };
+      queue.add(completion);
+      queue.add(next);
+      const observed: (RunEmbeddedAgentInternalParams | RunCliAgentParams)[] = [];
+      const inspect = async (params: RunEmbeddedAgentInternalParams | RunCliAgentParams) => {
+        observed.push(params);
+        return { payloads: [{ text: "done" }], meta: {} };
+      };
+      state.runEmbeddedAgentMock.mockImplementation(inspect);
+      const staticPrompts: (string | undefined)[] = [];
+      state.runCliAgentMock.mockImplementation((params: RunCliAgentParams) => {
+        staticPrompts.push(params.extraSystemPromptStatic);
+        return inspect(params);
+      });
+      const failures: unknown[] = [];
+      await withinTest(
+        queue.drain(async (followupRun) => {
+          try {
+            if (runtime === "cli") {
+              useCliFallback(followupRun);
+            }
+            const result = await executeAgentTurn({
+              ...createMinimalRunAgentTurnParams({ followupRun }),
+              commandBody: followupRun.prompt,
+            });
+            expect(result.outcome).toMatchObject({ kind: "settled", status: "ok" });
+          } catch (error) {
+            failures.push(error);
+          } finally {
+            await queue.runFollowup(followupRun);
+          }
+        }),
+        signal,
+      );
+      expect(failures).toEqual([]);
+      expect(observed).toHaveLength(2);
+      const prompt = observed[0]!.prompt;
+      expect(prompt).toContain("[Queue overflow]");
+      expect(prompt).not.toContain(completion.prompt);
+      expect(prompt).toContain("An async command you ran earlier has completed.");
+      expect(prompt).toContain("internal continuation, not a new user request");
+      expect(prompt).toContain("requested result not yet delivered");
+      expect(prompt).toContain("duplicate or superseded results");
+      expect(prompt).toContain("reply NO_REPLY only");
+      expect(observed[1]!.prompt).toBe("A plugin event");
+      const longResult = `Exec completed (large-result, code 0) :: ${"result ".repeat(1_200)}tail-canary`;
+      if (runtime === "cli") {
+        useCliFallback(completion);
+      }
+      await executeAgentTurn({
+        ...createMinimalRunAgentTurnParams({ followupRun: completion }),
+        commandBody: longResult,
+      });
+      expect(observed[2]!.prompt).toContain(longResult);
+      for (const params of observed) {
+        expect(params.extraSystemPrompt).toBe("Existing shared session instructions");
+      }
+      if (runtime === "cli") {
+        const imported = parseClaudeCliHistoryEntry(
+          { type: "user", uuid: "exec-overflow", message: { role: "user", content: prompt } },
+          "native-session",
+          1,
+          new Map(),
+          { reseedMode: "recover" },
+        );
+        expect(imported?.provenance).toMatchObject({ kind: "internal_system", sourceTool: "exec" });
+        expect(staticPrompts).toEqual([
+          "Stable shared session instructions",
+          "Stable shared session instructions",
+          "Stable shared session instructions",
+        ]);
+      }
+    },
+  );
+
   it.each(["embedded", "cli"] as const)(
     "retains scheduled destination guidance in the %s turn without changing the system prefix",
     async (runtime) => {

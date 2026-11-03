@@ -20,6 +20,7 @@ import {
   assertAgentRunLifecycleGenerationCurrent,
   getAgentEventLifecycleGeneration,
 } from "../../infra/agent-events.js";
+import { formatExecCompletionPrompt } from "../../infra/heartbeat-events-filter.js";
 import type { AgentFallbackCandidateCommonParams } from "./agent-runner-fallback-cycle.types.js";
 import type { FollowupRun } from "./queue.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
@@ -168,6 +169,12 @@ export async function resolveRunModelHasVision(params: {
 /** Project prepared turn facts shared by the CLI and embedded runtime adapters. */
 export function buildFallbackCandidateTurnParams(params: AgentFallbackCandidateCommonParams) {
   const { turn } = params;
+  const provenance = turn.followupRun.run.inputProvenance;
+  // Add guidance after queue summarization so overflow cannot discard it.
+  const prompt =
+    provenance?.kind === "internal_system" && provenance.sourceTool === "exec"
+      ? formatExecCompletionPrompt(turn.commandBody)
+      : turn.commandBody;
   return {
     preparedTtsPreferences: turn.opts?.preparedTtsPreferences,
     awaitSessionDiffBaseline: turn.opts?.awaitSessionDiffBaseline,
@@ -182,7 +189,7 @@ export function buildFallbackCandidateTurnParams(params: AgentFallbackCandidateC
     isFinalFallbackAttempt: params.isFinalFallbackAttempt,
     resolvedModelSelection: params.resolvedModelSelection,
     modelFallbacksOverride: params.modelFallbacksOverride,
-    prompt: turn.commandBody,
+    prompt,
     finalizePromptForResolvedTools:
       turn.followupRun.run.scheduledAutomation?.finalizePromptForResolvedTools,
     transcriptPrompt: turn.transcriptCommandBody,
