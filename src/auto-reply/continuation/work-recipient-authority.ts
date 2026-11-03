@@ -19,7 +19,7 @@ import { captureSessionRecipientAuthority } from "../../config/sessions/session-
 import type { SessionAccessScope } from "../../config/sessions/session-accessor.sqlite-contract.js";
 import {
   type AdmittedSessionRecipientAuthority,
-  withSessionRecipientAuthorityRecords,
+  withSessionRecipientAuthorityVerdicts,
 } from "../../config/sessions/session-recipient-authority-current.js";
 import {
   sessionRecipientAuthorityMatches,
@@ -91,11 +91,12 @@ export async function refuseStaleContinuationWork(
   stage: ContinuationWorkRefusalStage,
   onRefused?: (flowId: string) => void,
 ): Promise<PendingContinuationWork[]> {
-  const sessionKeys = [...new Set(works.map((work) => work.sessionKey))];
-  const reasons = await withSessionRecipientAuthorityRecords(
-    sessionKeys.map(workRecipientScope),
-    (records) =>
-      works.map((work) => refusalReason(records[sessionKeys.indexOf(work.sessionKey)]!, work)),
+  const reasons = await withSessionRecipientAuthorityVerdicts(
+    works.map((work) => ({
+      scope: workRecipientScope(work.sessionKey),
+      judge: (record: AdmittedSessionRecipientAuthority) => refusalReason(record, work),
+    })),
+    (verdicts) => verdicts,
   );
   const kept: PendingContinuationWork[] = [];
   for (const [index, work] of works.entries()) {

@@ -30,6 +30,12 @@ export type SessionRecipientAuthorityCheck = {
   authority: SessionRecipientAuthority;
 };
 
+/** Judges one scope's row as soon as it is read, inside the witnessed section. */
+export type SessionRecipientAuthorityJudgement<V> = {
+  scope: SessionAccessScope;
+  judge: (record: AdmittedSessionRecipientAuthority) => V;
+};
+
 /**
  * A session's recipient-authority row as the writer admission read it. `unowned`: an incognito
  * actor's session, whose authority no durable row records. A database that does not exist holds no
@@ -42,17 +48,18 @@ export type AdmittedSessionRecipientAuthority =
 /** A native writer racing every attempt is a live conflict; the caller then fails closed. */
 const ORDERED_READ_ATTEMPTS = 3;
 
-type PreparedCheck = {
+type PreparedCheck<V> = {
   index: number;
+  judge: (record: AdmittedSessionRecipientAuthority) => V;
   database: { agentId: string; path: string; env: NodeJS.ProcessEnv };
   options: ReturnType<typeof toDatabaseOptions> & { env: NodeJS.ProcessEnv; path: string };
   commandScope: SessionAccessScope;
 };
 
-async function prepareCheck(
-  scope: SessionAccessScope,
+async function prepareCheck<V>(
+  { scope, judge }: SessionRecipientAuthorityJudgement<V>,
   index: number,
-): Promise<PreparedCheck | undefined> {
+): Promise<PreparedCheck<V> | undefined> {
   // An incognito actor's session has no durable authority row; it is never current.
   if (captureSessionActorStorageOwner(scope, { assertCurrent() {}, authorize() {} })) {
     return undefined;
@@ -64,6 +71,7 @@ async function prepareCheck(
   const path = resolveOpenClawAgentSqlitePath({ ...resolvedOptions, env });
   return {
     index,
+    judge,
     // The witness looks up the physical database, which a shared store keys by its owner.
     database: { agentId: resolvedOptions.agentId, path, env },
     options: { ...resolvedOptions, env, path },
@@ -76,12 +84,12 @@ async function prepareCheck(
   };
 }
 
-async function readUnderAdmission<T>(
-  prepared: readonly PreparedCheck[],
-  records: AdmittedSessionRecipientAuthority[],
-  decide: (records: readonly AdmittedSessionRecipientAuthority[]) => T,
+async function readUnderAdmission<V, T>(
+  prepared: readonly PreparedCheck<V>[],
+  verdicts: V[],
+  decide: (verdicts: readonly V[]) => T,
 ): Promise<T> {
-  const byPath = new Map<string, PreparedCheck[]>();
+  const byPath = new Map<string, PreparedCheck<V>[]>();
   for (const check of prepared) {
     byPath.set(check.database.path, [...(byPath.get(check.database.path) ?? []), check]);
   }
@@ -109,7 +117,7 @@ async function readUnderAdmission<T>(
                 { type: "authority.read", input: { scope: check.commandScope } },
                 () => execution.assertCurrent(),
               );
-              records[check.index] = read?.value ?? { state: "missing" };
+              verdicts[check.index] = check.judge(read?.value ?? { state: "missing" });
             }
           } finally {
             await worker.close();
@@ -119,7 +127,7 @@ async function readUnderAdmission<T>(
         }
       }
       assertNativeCurrent();
-      const value = decide(records);
+      const value = decide(verdicts);
       if (isPromiseLike(value)) {
         void Promise.resolve(value).catch(() => {});
         throw new Error("Recipient authority decisions must remain synchronous");
@@ -130,27 +138,28 @@ async function readUnderAdmission<T>(
 }
 
 /**
- * Decides with each scope's recipient-authority row. `decide` runs synchronously under the writer
- * admission of every involved agent database, so an effect it performs (adopting, enqueueing,
- * settling a verdict) cannot be overtaken by a revocation that commits after the read. A decision
- * that needs the verdict after another await must call this again.
+ * Decides with each judgement's verdict on its scope's recipient-authority row. `decide` runs
+ * synchronously under the writer admission of every involved agent database, so an effect it
+ * performs (adopting, enqueueing, settling a verdict) cannot be overtaken by a revocation that
+ * commits after the read. A decision that needs the verdict after another await must call this
+ * again.
  */
-export async function withSessionRecipientAuthorityRecords<T>(
-  scopes: readonly SessionAccessScope[],
-  decide: (records: readonly AdmittedSessionRecipientAuthority[]) => T,
+export async function withSessionRecipientAuthorityVerdicts<V, T>(
+  judgements: readonly SessionRecipientAuthorityJudgement<V>[],
+  decide: (verdicts: readonly V[]) => T,
 ): Promise<T> {
-  if (scopes.length === 0) {
+  if (judgements.length === 0) {
     return decide([]);
   }
   for (let attempt = 1; ; attempt += 1) {
-    const records: AdmittedSessionRecipientAuthority[] = scopes.map(() => ({ state: "unowned" }));
-    const prepared = (await Promise.all(scopes.map(prepareCheck))).filter(
-      (check): check is PreparedCheck => check !== undefined,
+    const verdicts = judgements.map(({ judge }) => judge({ state: "unowned" }));
+    const prepared = (await Promise.all(judgements.map(prepareCheck))).filter(
+      (check): check is PreparedCheck<V> => check !== undefined,
     );
     try {
       return prepared.length === 0
-        ? decide(records)
-        : await readUnderAdmission(prepared, records, decide);
+        ? decide(verdicts)
+        : await readUnderAdmission(prepared, verdicts, decide);
     } catch (error) {
       if (
         !(error instanceof SessionEntryChangedDuringReadError) ||
@@ -167,16 +176,13 @@ export async function withCurrentSessionRecipientAuthority<T>(
   checks: readonly SessionRecipientAuthorityCheck[],
   decide: (current: readonly boolean[]) => T,
 ): Promise<T> {
-  return await withSessionRecipientAuthorityRecords(
-    checks.map((check) => check.scope),
-    (records) =>
-      decide(
-        records.map(
-          (record, index) =>
-            record.state !== "unowned" &&
-            sessionRecipientAuthorityMatches(checks[index]!.authority, record),
-        ),
-      ),
+  return await withSessionRecipientAuthorityVerdicts(
+    checks.map(({ scope, authority }) => ({
+      scope,
+      judge: (record: AdmittedSessionRecipientAuthority) =>
+        record.state !== "unowned" && sessionRecipientAuthorityMatches(authority, record),
+    })),
+    decide,
   );
 }
 
