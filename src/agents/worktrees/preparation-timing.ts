@@ -33,6 +33,8 @@ type PreparationPhase =
   | "warmPoolApply"
   | "templateRelease"
   | "provision"
+  | "provisionInspect"
+  | "provisionCopy"
   | "publication"
   | "indexRefresh"
   | "indexCopy"

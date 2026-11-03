@@ -15,15 +15,14 @@ afterAll(() => fs.rmSync(braveProfileDir, { recursive: true, force: true }));
 const chromeMcpMock = vi.hoisted(() => ({
   closeChromeMcpSession: vi.fn(async () => true),
   ensureChromeMcpAvailable: vi.fn<typeof import("./chrome-mcp.js").ensureChromeMcpAvailable>(
-    async (_profileName, _profile, options) => {
-      options?.pageProbe?.onResult(1);
-    },
+    async () => {},
   ),
   focusChromeMcpTab: vi.fn(async () => {}),
   listChromeMcpTabs: vi.fn<typeof import("./chrome-mcp.js").listChromeMcpTabs>(),
   openChromeMcpTab: vi.fn<typeof import("./chrome-mcp.js").openChromeMcpTab>(),
   closeChromeMcpTab: vi.fn(async () => {}),
   getChromeMcpPid: vi.fn(() => 4321),
+  getChromeMcpStatus: vi.fn(() => ({ running: false, tabCount: null })),
 }));
 
 vi.mock("./chrome-mcp.js", () => chromeMcpMock);
@@ -137,11 +136,7 @@ describe("browser server-context existing-session profile", () => {
     expect(profiles).toMatchObject([
       { transport: "chrome-mcp", cdpPort: null, cdpUrl: "http://127.0.0.1:9222" },
     ]);
-    expect(chromeMcp.ensureChromeMcpAvailable).toHaveBeenCalledWith(
-      "chrome-live",
-      expect.objectContaining({ cdpUrl: "http://openclaw:relay-token@127.0.0.1:9222" }),
-      expect.anything(),
-    );
+    expect(chromeMcp.ensureChromeMcpAvailable).not.toHaveBeenCalled();
   });
 
   it("eagerly closes MCP while attach readiness is pending and prevents retry", async () => {

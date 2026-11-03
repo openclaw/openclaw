@@ -12,10 +12,7 @@ import {
 } from "../memory/memory-artifact-provenance.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
-import {
-  collectMemoryProvenanceExclusionFindings,
-  MEMORY_PROVENANCE_CHECK_ID,
-} from "./doctor-memory-provenance.js";
+import { collectMemoryProvenanceExclusionFindings } from "./doctor-memory-provenance.js";
 import { createCapturingTestRuntime } from "./test-runtime-config-helpers.js";
 
 const memoryRuntime = vi.hoisted(() => ({ available: true }));
@@ -120,7 +117,7 @@ it("reports untrusted root memory files with the last recorded write", async () 
 
     expect(findings).toEqual([
       expect.objectContaining({
-        checkId: MEMORY_PROVENANCE_CHECK_ID,
+        checkId: "core/doctor/memory-provenance",
         severity: "warning",
         path: path.join(workspaceDir, "MEMORY.md"),
         message,

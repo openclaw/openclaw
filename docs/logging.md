@@ -535,6 +535,19 @@ parents as inclusive totals; do not add a parent to its children. Prompt-media
 warnings beginning `Native image:` concern image-file access, not container-image
 validation, and occur outside attempt setup.
 
+Within `detail.attempt.system-prompt.project-memory`, `detail.project-memory.*`
+separates runtime selection, dynamic imports, provider preparation, candidate
+retrieval, authority checks, rendering, provider close, and final publication.
+Legacy memory runtimes instead report `legacy.manager`, `legacy.candidates`, and
+`legacy.render`. The native provider owners further report
+`detail.memory.provider-open.*` (authority preparation, runtime lookup, opening,
+revalidation, failed-open cleanup, and binding) and `detail.memory.provider-call.*` (authority
+preparation, execution, and revalidation). Authority phases include waits for
+pending audience publications; candidate execution includes the provider's own
+storage and filtering work. These fixed labels contain no project keys or memory
+content, and include failed or denied operations. Parent totals overlap their
+children; the same provider phases can also occur during other memory operations.
+
 Fresh managed sandbox projections also record fixed stages beneath
 `sandbox.workspace_selection.prepare.reconcile`: template selection and cloning,
 checkout packing, indexing and materialization, manifest scanning, publication,

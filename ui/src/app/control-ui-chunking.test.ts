@@ -351,6 +351,8 @@ describe("Control UI build chunking", () => {
   it("keeps routes and optional code lazy with one shared stylesheet", async () => {
     const chat = modulePath("../pages/chat/chat-pane.tsx");
     const newSession = modulePath("../pages/new-session/new-session-page.tsx");
+    const portals = modulePath("../pages/portals/portals-page.tsx");
+    const visiblePoll = modulePath("../lib/reactive/visible-poll.ts");
     const runFrame = modulePath("../pages/chat/components/chat-agent-run-frame.tsx");
     const runStream = modulePath("../pages/chat/components/chat-message-stream-view.tsx");
     const sourcePreviews = modulePath("../lib/chat/source-previews.ts");
@@ -416,11 +418,11 @@ describe("Control UI build chunking", () => {
     const sources = new Map([
       [
         entry,
-        `export const chat = () => import(${JSON.stringify(chat)}); export const newSession = () => import(${JSON.stringify(newSession)}); export const devices = () => import(${JSON.stringify(devices)}); export const sessions = () => import(${JSON.stringify(sessions)}); export const cron = () => import(${JSON.stringify(cron)}); export const agents = () => import(${JSON.stringify(agents)}); export { validate } from ${JSON.stringify(validator)}; export const talk = () => import(${JSON.stringify(talk)}); export const styleOnly = () => import(${JSON.stringify(styleOnly)}); export const plugins = () => import(${JSON.stringify(pluginLoader)}); export const mutate = () => import(${JSON.stringify(mutations)});`,
+        `export const chat = () => import(${JSON.stringify(chat)}); export const newSession = () => import(${JSON.stringify(newSession)}); export const portals = () => import(${JSON.stringify(portals)}); export const devices = () => import(${JSON.stringify(devices)}); export const sessions = () => import(${JSON.stringify(sessions)}); export const cron = () => import(${JSON.stringify(cron)}); export const agents = () => import(${JSON.stringify(agents)}); export { validate } from ${JSON.stringify(validator)}; export const talk = () => import(${JSON.stringify(talk)}); export const styleOnly = () => import(${JSON.stringify(styleOnly)}); export const plugins = () => import(${JSON.stringify(pluginLoader)}); export const mutate = () => import(${JSON.stringify(mutations)});`,
       ],
       [
         chat,
-        `import ${JSON.stringify(sharedStyle)}; import ${JSON.stringify(transcriptStyle)}; import { label } from ${JSON.stringify(sharedUi)}; import { action } from ${JSON.stringify(pluginActions)}; import { people } from ${JSON.stringify(peopleCopy)}; import { patch } from ${JSON.stringify(mutations)}; export { version } from ${JSON.stringify(inlineView)}; export { skeleton } from ${JSON.stringify(skeleton)}; export { card } from ${JSON.stringify(permissionCard)}; export { row as process } from ${JSON.stringify(processRow)}; export { renderRun, renderPreview } from ${JSON.stringify(runFrame)}; export class Chat { label = patch(action(label + people)); } export const openPanel = () => import(${JSON.stringify(optional)});`,
+        `import ${JSON.stringify(sharedStyle)}; import ${JSON.stringify(transcriptStyle)}; import { label } from ${JSON.stringify(sharedUi)}; import { action } from ${JSON.stringify(pluginActions)}; import { people } from ${JSON.stringify(peopleCopy)}; import { patch } from ${JSON.stringify(mutations)}; export { version } from ${JSON.stringify(inlineView)}; export { skeleton } from ${JSON.stringify(skeleton)}; export { poll } from ${JSON.stringify(visiblePoll)}; export { card } from ${JSON.stringify(permissionCard)}; export { row as process } from ${JSON.stringify(processRow)}; export { renderRun, renderPreview } from ${JSON.stringify(runFrame)}; export class Chat { label = patch(action(label + people)); } export const openPanel = () => import(${JSON.stringify(optional)});`,
       ],
       [
         newSession,
@@ -430,6 +432,8 @@ describe("Control UI build chunking", () => {
         runFrame,
         `import { stream } from ${JSON.stringify(runStream)}; import { preview } from ${JSON.stringify(sourcePreviews)}; export const renderRun = () => stream + preview; export const renderPreview = () => import(${JSON.stringify(sourcePreviewView)});`,
       ],
+      [portals, `export { poll } from ${JSON.stringify(visiblePoll)};`],
+      [visiblePoll, 'export const poll = () => "visible";'],
       [runStream, 'export const stream = "stream";'],
       [sourcePreviews, 'export const preview = "preview";'],
       [sourcePreviewView, 'export const view = "source-preview";'],
@@ -614,6 +618,14 @@ describe("Control UI build chunking", () => {
     expect(staticImports(pluginChunk.fileName)).toContain(actionChunk.fileName);
     expect(staticImports(pluginChunk.fileName)).not.toContain(chatChunk.fileName);
     const entryChunk = chunks.find((chunk) => chunk.isEntry)!;
+    const portalsChunk = chunks.find((chunk) => portals in chunk.modules)!;
+    const pollChunk = chunks.find((chunk) => visiblePoll in chunk.modules)!;
+    expect(pollChunk.fileName).toBe(sharedChunk.fileName);
+    expect(staticImports(portalsChunk.fileName)).toContain(pollChunk.fileName);
+    expect(staticImports(portalsChunk.fileName)).not.toContain(
+      chunks.find((chunk) => skeleton in chunk.modules)!.fileName,
+    );
+    expect(staticImports(entryChunk.fileName)).not.toContain(pollChunk.fileName);
     const cronChunk = chunks.find((chunk) => cron in chunk.modules)!;
     const cronDetailChunk = chunks.find((chunk) => cronDetail in chunk.modules)!;
     expect(cronView in cronChunk.modules).toBe(true);

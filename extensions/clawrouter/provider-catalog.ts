@@ -50,6 +50,7 @@ export const CLAWROUTER_REASONING_EFFORT_LEVELS = [
 type CatalogReasoningEffort = (typeof CLAWROUTER_REASONING_EFFORT_LEVELS)[number][0];
 
 type CatalogRoute = {
+  endpoint?: string;
   path: string;
   requestFormat: string;
   methods: string[];
@@ -102,6 +103,7 @@ function parseCatalogRoute(value: unknown): CatalogRoute | undefined {
     return undefined;
   }
   return {
+    endpoint: normalizeOptionalString(row?.endpoint),
     path,
     requestFormat,
     methods: normalizeTrimmedStringList(row?.methods).map((method) => method.toUpperCase()),
@@ -116,12 +118,15 @@ function parseCatalogInput(value: unknown): Array<"text" | "image"> | undefined 
   if (
     !Array.isArray(value) ||
     value.length === 0 ||
-    value.length > 2 ||
-    !value.every((modality) => modality === "text" || modality === "image")
+    value.length > 5 ||
+    !value.every((modality) => ["text", "image", "audio", "video", "json"].includes(modality))
   ) {
     return ["text"];
   }
-  return value;
+  const input = value.filter(
+    (modality): modality is "text" | "image" => modality === "text" || modality === "image",
+  );
+  return input.length > 0 ? input : ["text"];
 }
 
 function parseCatalogProvider(value: unknown): CatalogProvider | undefined {
@@ -209,12 +214,15 @@ function buildRoutedModel(
   let api: NonNullable<ModelDefinitionConfig["api"]>;
   let baseUrl: string;
   let upstreamModel: string | undefined;
+  let endpoint: string | undefined;
 
   if (provider.openaiCompatible && capabilities.includes("llm.responses")) {
     api = "openai-responses";
+    endpoint = "responses";
     baseUrl = `${rootUrl}/v1`;
   } else if (provider.openaiCompatible && capabilities.includes("llm.chat")) {
     api = "openai-completions";
+    endpoint = "chat_completions";
     baseUrl = `${rootUrl}/v1`;
   } else if (
     capabilities.includes("llm.messages") &&
@@ -223,6 +231,9 @@ function buildRoutedModel(
     )
   ) {
     api = "anthropic-messages";
+    endpoint = provider.routes.find(
+      (route) => route.methods.includes("POST") && route.requestFormat === "anthropic.messages",
+    )?.endpoint;
     baseUrl = `${rootUrl}${provider.nativeBaseUrl}`;
     upstreamModel = upstream;
   } else {
@@ -239,9 +250,17 @@ function buildRoutedModel(
       return undefined;
     }
     api = "google-generative-ai";
+    endpoint = googleRoute.endpoint;
     baseUrl = `${rootUrl}${provider.nativeBaseUrl}${googleRoute.path.slice(0, modelPathIndex)}`;
     upstreamModel = upstream;
   }
+
+  const endpointFacts =
+    native?.version === "clawrouter.native-capabilities.v1" && endpoint
+      ? asOptionalRecord(asOptionalRecord(native.endpoints)?.[endpoint])
+      : undefined;
+  const endpointMaxTokens = asPositiveSafeInteger(endpointFacts?.maxOutputTokens);
+  const pricingMaxTokens = asPositiveSafeInteger(pricing?.defaultMaxOutputTokens);
 
   const providerPrefix = `${provider.id}/`;
   const modelLabel = id.startsWith(providerPrefix) ? id.slice(providerPrefix.length) : id;
@@ -296,6 +315,7 @@ function buildRoutedModel(
     // A family comes from the bundled catalog's declaration, never from this row's id.
     ...(identityFacts?.family ? { family: identityFacts.family } : {}),
     input:
+      parseCatalogInput(endpointFacts?.input) ??
       parseCatalogInput(row?.input) ??
       ((provider.id === "openai" && OPENAI_NATIVE_IMAGE_MODEL_IDS.has(upstream)) ||
       /(?:claude-|gemini-|gpt-4o|gpt-5)/u.test(qualifiedId)
@@ -318,8 +338,18 @@ function buildRoutedModel(
           ),
         }
       : DEFAULT_COST,
-    contextWindow: asPositiveSafeInteger(pricing?.maxInputTokens) ?? DEFAULT_CONTEXT_WINDOW,
-    maxTokens: asPositiveSafeInteger(pricing?.defaultMaxOutputTokens) ?? DEFAULT_MAX_TOKENS,
+    contextWindow:
+      asPositiveSafeInteger(endpointFacts?.contextWindow) ??
+      asPositiveSafeInteger(pricing?.maxInputTokens) ??
+      DEFAULT_CONTEXT_WINDOW,
+    ...(asPositiveSafeInteger(endpointFacts?.contextTokens)
+      ? { contextTokens: asPositiveSafeInteger(endpointFacts?.contextTokens) }
+      : {}),
+    // A native output ceiling never raises the router's reservation default.
+    maxTokens:
+      endpointMaxTokens && pricingMaxTokens
+        ? Math.min(endpointMaxTokens, pricingMaxTokens)
+        : (endpointMaxTokens ?? pricingMaxTokens ?? DEFAULT_MAX_TOKENS),
     params: {
       [ROUTE_METADATA_KEY]: {
         api,
