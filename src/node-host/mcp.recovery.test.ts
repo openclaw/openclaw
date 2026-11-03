@@ -306,6 +306,7 @@ describe("node host MCP live lifecycle", () => {
   });
 
   it("reconnects and warns when session disposal throws after transport close", async () => {
+    vi.useFakeTimers();
     const first = createClient({ tools: () => [schemaTool("lost")] });
     const warn = vi.fn();
     let generations = 0;
@@ -330,13 +331,18 @@ describe("node host MCP live lifecycle", () => {
     expect(toolNames(manager)).toEqual(["lost"]);
 
     first.onclose?.();
-    await vi.waitFor(() => expect(toolNames(manager)).toEqual(["recovered"]));
+    // Let the disposal settle and register the retry timer, then fire the reconnect.
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(toolNames(manager)).toEqual(["recovered"]);
     expect(generations).toBe(2);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("cleanup failed"));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("check the server process"));
     await manager.close();
   });
 
   it("reconnects and warns when session disposal throws after a failed refresh", async () => {
+    vi.useFakeTimers();
     const failing = createClient({
       list: vi
         .fn<() => Promise<{ tools: Tool[] }>>()
@@ -366,9 +372,13 @@ describe("node host MCP live lifecycle", () => {
     expect(toolNames(manager)).toEqual(["initial"]);
 
     failing.onToolsChanged?.();
-    await vi.waitFor(() => expect(toolNames(manager)).toEqual(["recovered"]));
+    // Let the refresh failure settle and register the retry timer, then fire the reconnect.
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(toolNames(manager)).toEqual(["recovered"]);
     expect(generations).toBe(2);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("cleanup failed"));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("check the server process"));
     await manager.close();
   });
 
