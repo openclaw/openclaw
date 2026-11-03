@@ -142,16 +142,6 @@ const SessionsToolSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const SessionOwnerToolSchema = Type.Object(
-  {
-    ...Type.Required(Type.Pick(SessionsToolSchema, ["ownerType", "ownerId"])).properties,
-    user: SessionsToolSchema.properties.user,
-    action: stringEnum(["assign_owner"]),
-    sessionKey: SessionsToolSchema.properties.sessionKey,
-  },
-  { additionalProperties: false },
-);
-
 export const SessionControlToolSchema = Type.Object(
   {
     user: SessionsToolSchema.properties.user,
@@ -187,45 +177,14 @@ export const SessionRenameToolSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const SessionRenameOwnerToolSchema = Type.Object(
-  {
-    ...SessionRenameToolSchema.properties,
-    action: stringEnum(["patch", "assign_owner"]),
-    ownerType: SessionsToolSchema.properties.ownerType,
-    ownerId: SessionsToolSchema.properties.ownerId,
-  },
-  { additionalProperties: false },
-);
-
 /** Restrict only the newly exposed Stop action; preserve pre-existing collector controls. */
-export function resolveSessionsToolSchema(
-  controlOnly: boolean,
-  stopAllowed: boolean,
-  renameAllowed = false,
-) {
-  const schema = controlOnly
-    ? Type.Object(
-        {
-          ...SessionControlToolSchema.properties,
-          ...(renameAllowed ? { label: SessionsToolSchema.properties.label } : {}),
-          action: stringEnum(["patch", "stop", "assign_owner"]),
-          ownerType: SessionsToolSchema.properties.ownerType,
-          ownerId: SessionsToolSchema.properties.ownerId,
-        },
-        { additionalProperties: false },
-      )
-    : SessionsToolSchema;
+export function resolveSessionsToolSchema(stopAllowed: boolean) {
   if (stopAllowed) {
-    return schema;
+    return SessionsToolSchema;
   }
-  const { runId: _runId, clearQueued: _clearQueued, ...properties } = schema.properties;
+  const { runId: _runId, clearQueued: _clearQueued, ...properties } = SessionsToolSchema.properties;
   return Type.Object(
-    {
-      ...properties,
-      action: stringEnum(
-        controlOnly ? ["patch", "assign_owner"] : ACTIONS.filter((action) => action !== "stop"),
-      ),
-    },
+    { ...properties, action: stringEnum(ACTIONS.filter((action) => action !== "stop")) },
     { additionalProperties: false },
   );
 }

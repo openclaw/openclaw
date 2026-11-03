@@ -369,7 +369,7 @@ describe("admitted WebChat prompt reactions", () => {
     await persist();
     const selected = tool({ sourceReplyOnly: true });
     expect(Check(selected.parameters, { action: "send", message: "Done" })).toBe(true);
-    expect(Check(selected.parameters, { action: "react", emoji: "👍" })).toBe(false);
+    expect(selected.parameters).toEqual(tool({}).parameters);
     await expect(execute({ final: true }, selected)).rejects.toThrow('permit only action "send"');
     expect(broadcast).not.toHaveBeenCalled();
     expect(external).not.toHaveBeenCalled();

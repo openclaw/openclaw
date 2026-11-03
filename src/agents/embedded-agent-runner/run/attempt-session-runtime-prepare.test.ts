@@ -28,17 +28,11 @@ vi.mock("../../anthropic-payload-log.js", () => ({
   createAnthropicPayloadLogger: mocks.createAnthropicPayloadLogger,
 }));
 vi.mock("../../cache-trace.js", () => ({ createCacheTrace: mocks.createCacheTrace }));
-vi.mock("../session-prompt-state.js", async (importOriginal) => {
-  const { prepareSessionSystemPrompt, persistSessionSystemPrompt, retireSessionSystemPrompt } =
-    await importOriginal<typeof import("../session-prompt-state.js")>();
-  return {
-    retainEmbeddedSessionPromptState: mocks.retainSessionPromptState,
-    beginSessionSystemPrompt: mocks.beginSessionSystemPrompt,
-    prepareSessionSystemPrompt,
-    persistSessionSystemPrompt,
-    retireSessionSystemPrompt,
-  };
-});
+vi.mock("../session-prompt-state.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../session-prompt-state.js")>()),
+  retainEmbeddedSessionPromptState: mocks.retainSessionPromptState,
+  beginSessionSystemPrompt: mocks.beginSessionSystemPrompt,
+}));
 vi.mock("../tool-result-truncation.js", () => ({
   restoreCacheTtlToolResultProjections: mocks.restoreProjections,
 }));

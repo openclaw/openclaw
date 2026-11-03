@@ -10,25 +10,16 @@ import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { Message } from "../../llm/types.js";
 import type { NormalizedUsage } from "../usage.js";
 import { log } from "./logger.js";
+import type { PromptCacheToolSnapshot } from "./prompt-cache-tool-snapshot.js";
 import type { ProviderPromptCachePrefix } from "./provider-prompt-serialization.js";
 import type { ProviderPromptState } from "./provider-prompt-state.js";
+
+export { collectPromptCacheTools } from "./prompt-cache-tool-snapshot.js";
 
 type PromptHistoryRewriteReason = "compaction" | "pruning" | "runtimeContextCarrier";
 type PromptCacheIdentity = { sessionId: string; promptCacheKey?: string; sessionKey?: string };
 
 export type { PromptCacheChange };
-
-type PromptCacheToolSnapshot = {
-  name: string;
-  descriptionDigest?: string;
-  schemaDigest?: string;
-};
-
-type PromptCacheToolDescriptor = {
-  readonly name?: string;
-  readonly description?: string;
-  readonly parameters?: object;
-};
 
 const PROMPT_SECTION_NAMES = [
   "Skills",
@@ -79,6 +70,8 @@ type PromptCacheTracker = {
   requestedAt: number;
   pendingChanges: PromptCacheChange[] | null;
   unmeasuredChanges?: PromptCacheChange[] | null;
+  /** The session tool pin changed the tool block on purpose before the next request. */
+  toolPinChanged?: boolean;
 };
 
 type PromptHistoryFingerprint = {
@@ -102,8 +95,6 @@ type RecordFingerprint = {
 };
 // Primitive revisions avoid rehashing retained text; nested values remain mutable.
 const recordFingerprints = new WeakMap<object, RecordFingerprint>();
-// Schemas are provider-owned declarations; unlike transcript blocks, they do not mutate in place.
-const toolSchemaFingerprints = new WeakMap<object, string>();
 const MAX_TRACKERS = 512;
 const historyRewriteWarnings = createDedupeCache({ ttlMs: 0, maxSize: MAX_TRACKERS });
 const MAX_HISTORY_DIFF_FIELDS = 8;
@@ -504,36 +495,9 @@ function diffSnapshots(
   return changes.length > 0 ? changes : null;
 }
 
-export function collectPromptCacheTools(
-  tools: readonly PromptCacheToolDescriptor[],
-): PromptCacheToolSnapshot[] {
-  const snapshots: PromptCacheToolSnapshot[] = [];
-  for (const tool of tools) {
-    try {
-      const name = tool.name?.trim();
-      if (!name) {
-        continue;
-      }
-      const { description, parameters } = tool;
-      let schemaDigest: string | undefined;
-      if (parameters) {
-        schemaDigest = toolSchemaFingerprints.get(parameters);
-        if (!schemaDigest) {
-          schemaDigest = sha256Hex(stableStringify(parameters));
-          toolSchemaFingerprints.set(parameters, schemaDigest);
-        }
-      }
-      snapshots.push({
-        name,
-        descriptionDigest: description === undefined ? undefined : sha256Hex(description),
-        schemaDigest,
-      });
-    } catch {
-      continue;
-    }
-  }
-  return sortPromptCacheToolsByName(snapshots);
-}
+// The session tool pin holds the tool block on every route; system prompts are
+// pinned only on routes with in-history prompt updates, so they are reported, not asserted.
+const PROMPT_PREFIX_CHANGE_CODES = new Set<PromptCacheChange["code"]>(["tools"]);
 
 export function beginPromptCacheObservation(
   params: PromptCacheIdentity & {
@@ -546,6 +510,8 @@ export function beginPromptCacheObservation(
     systemPrompt: string;
     tools: readonly PromptCacheToolSnapshot[];
     messages: readonly Message[];
+    /** Turn attribution for diagnostics, such as the trigger and input provenance. */
+    turn?: string;
   },
 ) {
   const key = buildTrackerKey(params);
@@ -633,10 +599,20 @@ export function beginPromptCacheObservation(
   trackers.delete(key);
   pruneMapToMaxSize(trackers, MAX_TRACKERS - 1);
   trackers.set(key, tracker);
+  // Within one session the tool definitions depend only on session and config facts;
+  // a model, transport or retention change starts over.
+  const prefixChanges =
+    restarted || previous?.toolPinChanged
+      ? []
+      : changes.filter(({ code }) => PROMPT_PREFIX_CHANGE_CODES.has(code));
+  if (process.env.OPENCLAW_PROMPT_CACHE_ASSERT === "1" && (violation || prefixChanges.length)) {
+    const detail = [violation, ...prefixChanges]
+      .filter((change) => change !== undefined)
+      .map((change) => `${change.code}(${change.detail})`)
+      .join(", ");
+    throw new Error(`[prompt-cache] prefix changed within session: ${detail} ${params.turn ?? ""}`);
+  }
   if (violation) {
-    if (process.env.OPENCLAW_PROMPT_CACHE_ASSERT === "1") {
-      throw new Error(violation.detail);
-    }
     if (!historyRewriteWarnings.check(params.sessionKey?.trim() || params.sessionId)) {
       log.warn(`[prompt-cache] ${violation.detail} sessionKey=${params.sessionKey ?? key}`);
     }
@@ -660,6 +636,17 @@ export function declarePromptHistoryRewrite(
       tracker.sessionKey === params.sessionKey?.trim()
     ) {
       (tracker.declaredRewrites ??= new Set()).add(params.reason);
+    }
+  }
+}
+
+export function declarePromptToolPin(params: PromptCacheIdentity): void {
+  for (const tracker of trackers.values()) {
+    if (
+      tracker.sessionId === params.sessionId &&
+      tracker.sessionKey === params.sessionKey?.trim()
+    ) {
+      tracker.toolPinChanged = true;
     }
   }
 }

@@ -88,7 +88,7 @@ describe("happy path prompt snapshots", () => {
     const scenarios = [
       { name: "telegram-direct", replacements: [] },
       { name: "discord-group", replacements: ["sessions_spawn"] },
-      { name: "heartbeat-turn", replacements: ["openclaw_direct"] },
+      { name: "heartbeat-turn", replacements: [] },
     ];
 
     for (const { name, replacements } of scenarios) {

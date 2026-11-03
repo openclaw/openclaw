@@ -44,13 +44,9 @@ export function prepareSessionPortalToolAccess(input: {
       name !== "sessions" &&
       (name !== AUTOMATIONS_TOOL_NAME || !hasAutomationGrant),
   );
-  const ownerOnlyCoreToolPolicy = ownerOnlyCoreToolDenylist.length
-    ? { deny: ownerOnlyCoreToolDenylist }
-    : undefined;
   return {
     sessionPortalTarget,
     ownerOnlyCoreToolDenylist,
-    ownerOnlyCoreToolPolicy,
     cronCreatorAuthorityResolver,
   };
 }

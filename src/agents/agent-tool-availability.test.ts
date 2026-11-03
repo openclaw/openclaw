@@ -111,7 +111,7 @@ describe("execution allowlist availability", () => {
       await expect(tool.execute("denied", { task: "inspect", collect: true })).rejects.toThrow(
         "Collector results are unavailable",
       );
-      expect(tool.parameters).not.toHaveProperty("properties.collect");
+      expect(tool.parameters).toHaveProperty("properties.collect");
       expect(spawn).not.toHaveBeenCalled();
     };
     try {
@@ -182,7 +182,7 @@ describe("collector tool availability", () => {
   });
 
   it.each(["missing", "lookalike", "quarantined", "denied", "execution-denied"] as const)(
-    "hides and refuses collection with a %s reader, without disabling ordinary spawning or fastMode",
+    "preserves offered collection but refuses an unavailable %s reader",
     async (kind) => {
       const tool = spawnTool();
       const wait = reader();
@@ -198,9 +198,14 @@ describe("collector tool availability", () => {
         kind === "denied" ? { toolExecutionAllow: ["sessions_spawn"] } : undefined,
       );
       expect(tool.parameters).toHaveProperty("properties.fastMode");
-      expect(tool.description).not.toContain("collect=true");
+      const offered = kind === "denied" || kind === "execution-denied";
+      expect(tool.description.includes("collect=true")).toBe(offered);
       for (const field of ["collect", "outputSchema", "groupId"]) {
-        expect(tool.parameters).not.toHaveProperty(`properties.${field}`);
+        if (offered) {
+          expect(tool.parameters).toHaveProperty(`properties.${field}`);
+        } else {
+          expect(tool.parameters).not.toHaveProperty(`properties.${field}`);
+        }
       }
       await expect(
         tool.execute("collect", {
@@ -288,11 +293,15 @@ describe("collector tool availability", () => {
         for (const schema of [tool.parameters, entry?.parameters]) {
           expect(schema).toHaveProperty("properties.fastMode");
           for (const field of ["collect", "outputSchema", "groupId"]) {
-            expect(schema).not.toHaveProperty(`properties.${field}`);
+            if (readerState === "lookalike") {
+              expect(schema).not.toHaveProperty(`properties.${field}`);
+            } else {
+              expect(schema).toHaveProperty(`properties.${field}`);
+            }
           }
         }
-        expect(tool.description).not.toContain("collect=true");
-        expect(entry?.description).not.toContain("collect=true");
+        expect(tool.description.includes("collect=true")).toBe(readerState !== "lookalike");
+        expect(entry?.description.includes("collect=true")).toBe(readerState !== "lookalike");
       } finally {
         clearToolSearchCatalog({ catalogRef });
       }

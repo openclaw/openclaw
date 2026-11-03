@@ -5,7 +5,15 @@ import { textResult } from "./tools/tool-results.js";
 type ToolDefinition = Pick<AnyAgentTool, "name" | "parameters" | "description">;
 
 export type AgentToolAvailabilityBinding = {
-  prepare: (tool: ToolDefinition, callableTools: ReadonlyMap<string, ToolDefinition>) => void;
+  /**
+   * `offeredTools` shape the definition, so it stays stable across turns;
+   * `callableTools` decide what this turn may execute.
+   */
+  prepare: (
+    tool: ToolDefinition,
+    callableTools: ReadonlyMap<string, ToolDefinition>,
+    offeredTools: ReadonlyMap<string, ToolDefinition>,
+  ) => void;
   prepareBeforeNormalization?: true;
   executionSchema?: (schema: unknown) => unknown;
 };
@@ -93,7 +101,7 @@ export function finalizeAgentToolAvailability<T extends ToolDefinition>(
   for (const tool of tools) {
     const binding = availabilityBindings.get(tool)?.binding;
     if (binding && (!options?.beforeNormalization || binding.prepareBeforeNormalization)) {
-      binding.prepare(tool, callableTools);
+      binding.prepare(tool, callableTools, winners);
       options?.onPrepared?.(tool);
     }
   }

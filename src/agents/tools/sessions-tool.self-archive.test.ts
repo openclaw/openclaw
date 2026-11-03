@@ -298,6 +298,39 @@ it.each([false, true])(
 
 const sessionKey = "agent:main:main";
 describe("sessions tool ownership", () => {
+  it.each(["assignment", "rename", "sandbox"])(
+    "explains archive unavailability as current authority context (%s)",
+    async (surface) => {
+      const tool = createSessionsTool({
+        senderIsOwner: false,
+        sandboxSessionRenameOnly: surface === "sandbox",
+        ...(surface === "rename"
+          ? {
+              sessionControlAuthority: createAdmittedRunOperatorAuthority({
+                profileId: "rename-requester",
+                scopes: ["operator.sessions.write"],
+                assertCurrent: () => {},
+              }),
+            }
+          : {}),
+      });
+      if (surface === "sandbox") {
+        expect(tool.description).toContain(
+          "Archive and restore are unavailable in this authority context.",
+        );
+        expect(tool.parameters).not.toHaveProperty("properties.archived");
+        return;
+      }
+      // Turn authority does not change the definition; the archive call is refused.
+      expect(tool.description).toContain(
+        "Turns without owner authority are limited when the action runs.",
+      );
+      await expect(tool.execute("archive", { action: "patch", archived: true })).rejects.toThrow(
+        surface === "rename" ? /current operator write grant/ : /Only assign_owner/,
+      );
+    },
+  );
+
   it.each([
     { senderIsOwner: false, controls: true },
     { senderIsOwner: false, controls: false },
@@ -345,13 +378,11 @@ describe("sessions tool ownership", () => {
         });
         return;
       }
-      expect(tool.parameters).toHaveProperty("properties.action.enum", [
-        "patch",
-        "stop",
-        "assign_owner",
-      ]);
-      expect(tool.parameters).toHaveProperty("properties.user");
-      expect(tool.parameters).not.toHaveProperty("properties.model");
+      // The full definition stays stable; the control gate refuses settings when they run.
+      expect(tool.parameters).toHaveProperty(
+        "properties.action.enum",
+        expect.arrayContaining(["patch", "stop", "assign_owner"]),
+      );
       for (const denied of [
         { action: "group_set", names: [] },
         { action: "patch", archived: true, model: "other" },

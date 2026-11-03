@@ -1500,7 +1500,7 @@ async function readRecoverySession(
         .prepare(
           "SELECT seq, event_json AS eventJson FROM transcript_events WHERE session_id = ? ORDER BY seq ASC",
         )
-        .all(sessionId) as Array<{ seq: number; eventJson: string }>,
+        .all(sessionId) as Array<{ seq: number; eventJson: string | null }>,
   );
   const messages = events.flatMap(({ seq, eventJson }) => {
     const event = parseJsonObject(eventJson);
@@ -2401,7 +2401,11 @@ function findArchiveArtifact(
   );
 }
 
-function parseJsonObject(text: string): Record<string, unknown> | undefined {
+// Large events are stored compressed (`event_zstd`) with a NULL `event_json`.
+function parseJsonObject(text: string | null | undefined): Record<string, unknown> | undefined {
+  if (typeof text !== "string") {
+    return undefined;
+  }
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
   if (start < 0 || end < start) {

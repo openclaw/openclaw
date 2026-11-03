@@ -93,3 +93,19 @@ export function createCodingToolsGatewayCaller(params: {
     );
   };
 }
+
+/** Captures callable function tools plus independently admitted provider-hosted search. */
+export function sessionEventToolNames(
+  tools: readonly { name: string }[],
+  turnAuthorized: (tool: { name: string }) => boolean,
+  profile: ResolvedConversationCapabilityProfile,
+): string[] {
+  const names = tools.filter(turnAuthorized).map((tool) => tool.name);
+  if (
+    !tools.some((tool) => tool.name === "web_search") &&
+    isConversationToolAllowed(profile, "web_search")
+  ) {
+    names.push("web_search");
+  }
+  return names;
+}

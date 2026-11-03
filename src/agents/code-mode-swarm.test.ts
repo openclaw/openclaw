@@ -235,6 +235,14 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 
+function expectCollectAdvertised(tool: { parameters: unknown }, advertised: boolean) {
+  if (advertised) {
+    expect(tool.parameters).toHaveProperty("properties.collect");
+  } else {
+    expect(tool.parameters).not.toHaveProperty("properties.collect");
+  }
+}
+
 describe("Code Mode swarm guest", () => {
   it("maps agents.run schema options through spawn and returns structured completion", async () => {
     const first = await workerExec(
@@ -443,25 +451,27 @@ describe("Code Mode swarm host bridge", () => {
         };
         applyCodeModeCatalog(catalogParams);
         const baselineEntries = harness.catalogRef.current!.entries;
-        const assertCollectorHidden = () =>
-          expect(harness.spawnTool.parameters).not.toHaveProperty("properties.collect");
-        assertCollectorHidden();
+        // The collector definition follows the offered reader, so an execution-denied
+        // reader keeps it stable; raw collection is refused by the spawn guard below.
+        const assertCollectorOffered = (offered = true) =>
+          expectCollectAdvertised(harness.spawnTool, offered);
+        assertCollectorOffered();
         addClientToolsToToolCatalog({
           catalogRef: harness.catalogRef,
           enabled: true,
           tools: [fakeTool("client_lookup", "Lookup")],
         });
-        assertCollectorHidden();
+        assertCollectorOffered();
         for (const names of [["sessions_spawn"], ["sessions_spawn", "agents_wait"]]) {
           restrictToolSearchCatalog({
             catalogRef: harness.catalogRef,
             baselineEntries,
             allowedToolNames: new Set(names),
           });
-          assertCollectorHidden();
+          assertCollectorOffered(names.includes("agents_wait"));
         }
         applyCodeModeCatalog(catalogParams);
-        assertCollectorHidden();
+        assertCollectorOffered();
       }
       swarmMocks.waitForCollectorCompletion.mockResolvedValueOnce({
         runId: "collector-1",
@@ -470,7 +480,9 @@ describe("Code Mode swarm host bridge", () => {
         structured: { answer: "restored" },
         sessionKey: "agent:main:subagent:1",
       });
-      expect(harness.spawnTool.parameters).not.toHaveProperty("properties.collect");
+      // Only a missing reader hides the fields; an offered reader keeps them stable.
+      const advertised = reader === "execution-denied";
+      expectCollectAdvertised(harness.spawnTool, advertised);
       const result = await runSwarmCode(
         harness,
         `
@@ -492,7 +504,7 @@ describe("Code Mode swarm host bridge", () => {
             expect.stringContaining("Collector results are unavailable"),
             expect.stringContaining("Collector results are unavailable"),
           ],
-          advertised: false,
+          advertised,
           joined: { answer: "restored" },
         },
       });
@@ -505,7 +517,7 @@ describe("Code Mode swarm host bridge", () => {
       const guard = swarmMocks.spawnSubagentDirect.mock.calls[0]?.[1].assertActive;
       expect(guard).toBeTypeOf("function");
       expect(() => guard()).toThrow("Joined collector spawn is no longer active");
-      expect(harness.spawnTool.parameters).not.toHaveProperty("properties.collect");
+      expectCollectAdvertised(harness.spawnTool, advertised);
     },
   );
 

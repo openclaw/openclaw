@@ -100,6 +100,7 @@ function prepare(input: {
   uncompactedEffectiveTools?: ReturnType<typeof createStubTool>[];
   clientTools?: ReturnType<typeof clientTool>[];
   getToolAbortSignal?: () => AbortSignal;
+  pinTools?: Parameters<typeof prepareEmbeddedAttemptClientTools>[0]["pinTools"];
 }) {
   return prepareEmbeddedAttemptClientTools({
     attempt: {
@@ -120,6 +121,7 @@ function prepare(input: {
     uncompactedEffectiveTools: input.uncompactedEffectiveTools ?? [],
     clientTools: input.clientTools ?? [clientTool("client_probe")],
     getToolAbortSignal: input.getToolAbortSignal,
+    pinTools: input.pinTools,
   } as unknown as Parameters<typeof prepareEmbeddedAttemptClientTools>[0]);
 }
 
@@ -394,6 +396,49 @@ describe("prepareEmbeddedAttemptClientTools", () => {
 
     expect(result.trustedLocalMediaToolNames).toBe(trustedLocalMediaToolNames);
     expect(result.trustedLocalMediaToolNames).toEqual(new Set());
+  });
+
+  it("rebuilds pinned tools from the refreshed catalog", async () => {
+    const executorOf = (name: string, generation: string) =>
+      Object.assign(createStubTool(name), {
+        execute: async () => jsonResult({ generation }),
+      });
+    const effectiveTools = [executorOf("read", "before"), executorOf("gateway", "before")];
+    const pinned = new Set<string>();
+    const result = prepare({
+      codeModeControlsEnabledForRun: false,
+      attemptConfig: CATALOGS_DISABLED_CONFIG,
+      toolSearchRuntimeConfig: CATALOGS_DISABLED_CONFIG,
+      catalogRef: createToolSearchCatalogRef(),
+      effectiveTools,
+      clientTools: [],
+      pinTools: (tools) => {
+        for (const tool of tools) {
+          pinned.add(tool.name);
+        }
+        return [
+          ...tools,
+          ...[...pinned]
+            .filter((name) => !tools.some((tool) => tool.name === name))
+            .map((name) => executorOf(name, "gated")),
+        ];
+      },
+    });
+
+    effectiveTools.splice(0, effectiveTools.length, executorOf("read", "after"));
+    result.refreshTools();
+
+    const run = async (name: string) => {
+      const tool = wrapToolDefinition(
+        expectDefined(
+          result.allCustomTools.find((entry) => entry.name === name),
+          name,
+        ),
+      );
+      return (await tool.execute("call", {})).details;
+    };
+    expect(await run("read")).toEqual({ generation: "after" });
+    expect(await run("gateway")).toEqual({ generation: "gated" });
   });
 
   it.each([CODE_MODE_CONFIG])("hides client tools when the attempt engages code mode", (config) => {

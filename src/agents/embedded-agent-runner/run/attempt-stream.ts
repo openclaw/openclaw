@@ -194,8 +194,15 @@ export function installEmbeddedAttemptStreamGuards(
     }
   };
   const providerPromptState = getProviderPromptState(attempt.runId);
+  // Turn facts attribute a prefix change to the kind of turn that caused it.
+  const turnFacts =
+    `trigger=${attempt.trigger ?? "unknown"} ` +
+    `provenance=${attempt.inputProvenance?.kind ?? "none"}${attempt.inputProvenance?.sourceTool ? `:${attempt.inputProvenance.sourceTool}` : ""} ` +
+    `replyMode=${attempt.sourceReplyDeliveryMode ?? "unset"} ` +
+    `senderIsOwner=${attempt.senderIsOwner ?? "unset"}`;
   const cacheObserver = createPromptCacheRequestObserver(
     {
+      turn: turnFacts,
       sessionId: attempt.sessionId,
       sessionKey: attempt.sessionKey,
       promptCacheKey: attempt.promptCacheKey,
@@ -213,6 +220,7 @@ export function installEmbeddedAttemptStreamGuards(
             `runId=${attempt.runId} request=${observation.requestIndex} for ${snapshot.provider}/${snapshot.modelId} via ${streamStrategy}; ${changes}; ` +
             `requestGapMs=${observation.requestGapMs ?? "unknown"} promptTokens=${observation.promptTokens ?? "unknown"} ` +
             `responseId=${observation.responseId ?? "unknown"} sessionId=${attempt.sessionId} ` +
+            `${turnFacts} ` +
             `providerPrefix=${observation.providerPrefix ?? "unavailable"} ` +
             `requests=${JSON.stringify(observation.requests)}`,
         );
