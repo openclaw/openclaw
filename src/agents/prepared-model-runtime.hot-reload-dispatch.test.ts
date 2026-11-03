@@ -816,6 +816,7 @@ it.for(["config write", "plugins.reload"] as const)(
       { cleanups, logMocks: logger },
       {
         config: initialConfig,
+        env: process.env,
         abortOnCandidateStart: false,
         initialStop: async () => {
           throw new Error("Synthetic plugin service refuses cleanup");
@@ -848,7 +849,6 @@ it.for(["config write", "plugins.reload"] as const)(
     );
     const configOwner = createReloaderHarness(async () => makeSnapshot({ config: diskConfig }), {
       initialConfig,
-      scheduler: createTestGatewayScheduler(),
       onHotReload: async (plan, config, ownership) => {
         try {
           return await handler.applyHotReload(plan, config, {
@@ -884,12 +884,15 @@ it.for(["config write", "plugins.reload"] as const)(
       await configOwner.reloader.ready;
       if (entrypoint === "plugins.reload") {
         await expect(
-          withPluginLifecycleLeaseAsync({}, () =>
-            configOwner.reloader.applyPluginLifecycleChange({
-              config: diskConfig,
-              pluginIds: ["first"],
-              reason: "reload",
-            }),
+          withinTest(
+            withPluginLifecycleLeaseAsync({}, () =>
+              configOwner.reloader.applyPluginLifecycleChange({
+                config: diskConfig,
+                pluginIds: ["first"],
+                reason: "reload",
+              }),
+            ),
+            signal,
           ),
         ).rejects.toBeInstanceOf(PluginRuntimeApplicationError);
       } else {
@@ -900,12 +903,12 @@ it.for(["config write", "plugins.reload"] as const)(
         configOwner.emitWrite(
           attachRuntimeConfigWriteApplication(makeWrite(diskConfig, "changed"), applied),
         );
-        await expect(applied.result).resolves.toBe("failed");
+        await expect(withinTest(applied.result, signal)).resolves.toBe("failed");
       }
-      expect(failure).toMatchObject({ details: { phase: "drain", committed: false } });
       expect(String(failure)).toContain(
         "Plugin runtime rollback could not republish the model runtime",
       );
+      expect(failure).toMatchObject({ details: { phase: "drain", committed: false } });
       // This synchronous observation fails on the base, before waiting for absent restart work.
       expect(handler.hasOutstandingGatewayRestart() || emitRestart.mock.calls.length === 1).toBe(
         true,
