@@ -160,7 +160,8 @@ test("stop interrupts a read the peer never answers", async () => {
     const pending = assert.rejects(local.recv.read(16), /stopped/);
     await within(local.recv.stop(7), 2000, "stop");
     await pending;
-    await assert.rejects(within(peer.send.write(Buffer.from("late")), 2000, "write"), /7/);
+    // STOP_SENDING reaches the peer asynchronously; its writes start failing once it arrives.
+    await within(writeUntilStopped(peer.send), 2000, "peer observing stop");
     await assertConnectionUsable(conn, sconn);
   } finally {
     await client.close();
@@ -187,4 +188,17 @@ test("reset abandons a write the peer never reads", async () => {
 // Reads until end of stream or error.
 async function drain(recv) {
   while ((await recv.read(1 << 20)) !== null) {}
+}
+
+// Keeps writing small chunks until the peer's STOP_SENDING arrives and a write rejects with code 7.
+async function writeUntilStopped(send) {
+  for (;;) {
+    try {
+      await send.write(Buffer.from("late"));
+    } catch (error) {
+      assert.match(String(error), /7/);
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
 }
