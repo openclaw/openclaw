@@ -11,7 +11,10 @@ const fetchFixture = await vi.hoisted(async () => {
 });
 const fetchImpl = vi.mocked(fetchFixture.current);
 const fetchWithSsrFGuardMock = fetchFixture.fetchWithSsrFGuard;
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", fetchFixture.mockRuntime);
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
+  return { ...actual, fetchWithSsrFGuard: fetchFixture.fetchWithSsrFGuard };
+});
 
 import {
   cancelTrackedTextResponse,
