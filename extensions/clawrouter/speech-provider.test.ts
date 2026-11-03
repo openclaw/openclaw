@@ -592,7 +592,11 @@ describe("ClawRouter native Gradium speech", () => {
     await withFixture(async (fixture) => {
       const cfg = selectGradium(fixture);
       expect(
-        await speech(cfg).synthesize({ ...fixture.request(), cfg, target: "voice-note" }),
+        await speech(cfg).synthesize({
+          ...fixture.request(cfg.tts.providers.clawrouter),
+          cfg,
+          target: "voice-note",
+        }),
       ).toMatchObject({
         outputFormat: "opus",
         voiceCompatible: true,
