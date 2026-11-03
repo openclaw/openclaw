@@ -369,7 +369,7 @@ const startupEnglish = {
   },
   capacityMeter: {},
   agentsHome: {
-    loadFailed: "Could not load agents. Try again.",
+    loadFailed: "Couldn’t load agents. Retry.",
   },
   outputs: {
     dashboard: "Dashboard",
@@ -808,7 +808,7 @@ const startupEnglish = {
     moveToTopLevel: "Move to top level",
   },
   agents: {
-    noAgents: "No agents",
+    noAgents: "No agents yet",
     createdBy: {},
     defaults: {},
     copyId: {},

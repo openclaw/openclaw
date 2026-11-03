@@ -660,7 +660,7 @@ their agent's avatar as the icon.
 Other sessions appear under collapsible agent headers in configured roster order,
 which stays stable as activity changes. **Home** disappears from Pages: click an agent header's avatar or name to
 open that agent's main chat. The separate collapse control only folds its sessions.
-The accented rail **+** below the workspace mark, labeled **New conversation**, opens the New session composer directly with your last-selected agent.
+The accented rail **+** below the workspace mark, labeled **New session**, opens the New session composer directly with your last-selected agent.
 The selection is remembered in this browser for each Gateway; you can choose a
 different agent inside the composer.
 Each group's **+** opens a composer for that specific agent, appearing on hover or keyboard focus and remaining visible on touch devices. Selecting a session switches the active

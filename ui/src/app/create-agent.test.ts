@@ -167,26 +167,27 @@ async function fixture(
 }
 
 describe("application agent creation", () => {
-  it.each(["read-only", "unadvertised", "unpaired"] as const)(
-    "refuses %s creation before opening a provisional chat",
-    async (access) => {
-      const { context, request, navigate, toast, publishGateway } = await fixture();
-      publishGateway({
-        hello:
-          access === "unpaired"
-            ? null
-            : gatewayHelloForMethods(
-                access === "unadvertised" ? [] : ["agents.create"],
-                access === "read-only" ? ["operator.read"] : ["operator.admin"],
-              ),
-      });
-      await createApplicationAgent(context);
-      expect(navigate).not.toHaveBeenCalled();
-      expect(request.mock.calls.map(([method]) => method)).toEqual(["agents.list"]);
-      expect(context.chatSubmissions.creation).toBeUndefined();
-      await vi.waitFor(() => expect(toast.toast?.message).toContain("Pair this browser"));
-    },
-  );
+  it.each([
+    ["read-only", "You need admin access to create an agent."],
+    ["unadvertised", "This Gateway doesn’t support agent creation."],
+    ["unpaired", "Reconnect to create an agent."],
+  ] as const)("refuses %s creation before opening a provisional chat", async (access, message) => {
+    const { context, request, navigate, toast, publishGateway } = await fixture();
+    publishGateway({
+      hello:
+        access === "unpaired"
+          ? null
+          : gatewayHelloForMethods(
+              access === "unadvertised" ? [] : ["agents.create"],
+              access === "read-only" ? ["operator.read"] : ["operator.admin"],
+            ),
+    });
+    await createApplicationAgent(context);
+    expect(navigate).not.toHaveBeenCalled();
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["agents.list"]);
+    expect(context.chatSubmissions.creation).toBeUndefined();
+    await vi.waitFor(() => expect(toast.toast?.message).toBe(message));
+  });
 
   it("creates the chosen name and avatar and opens that agent's own chat", async () => {
     const avatar = "data:image/webp;base64,Ym90";
@@ -344,7 +345,7 @@ describe("application agent creation", () => {
     await vi.dynamicImportSettled();
     expect(toast.active).toBe(true);
     expect(toast.querySelector(".app-toast__message")?.textContent).toContain(
-      "Your agent was created, but its first message couldn't be sent",
+      "Your agent was created. Couldn’t send its first message.",
     );
   });
 });
