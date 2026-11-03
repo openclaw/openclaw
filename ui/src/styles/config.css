@@ -144,10 +144,11 @@
   color: var(--ok);
 }
 
+/* The settings page inside owns the column and its inset, as on every other page. */
 .config-content {
   flex: 1;
   overflow-y: auto;
-  padding: 20px 22px;
+  padding-block: 20px;
   min-width: 0;
   scroll-behavior: smooth;
 }
