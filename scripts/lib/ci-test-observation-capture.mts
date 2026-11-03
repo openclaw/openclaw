@@ -205,7 +205,7 @@ export function createCiTestObservationCapture(options: {
                 dependencies,
               );
         preparedAt = performance.now();
-        const output = JSON.stringify({
+        const exported = {
           version: 1,
           source: {
             runId: env.GITHUB_RUN_ID ?? null,
@@ -220,13 +220,30 @@ export function createCiTestObservationCapture(options: {
           // Excludes serialization/write, native recording, and cache misses.
           capturePreparationMs: captureMs + preparedAt - started,
           observations,
-        });
+        };
+        let output = JSON.stringify(exported);
+        let omittedDependencies = false;
+        if (kind === "run" && Buffer.byteLength(output) > MAX_BYTES) {
+          // Native indexes can expand far beyond their on-disk size. Keep outcomes usable.
+          for (const invocation of observations.invocations) {
+            for (const file of invocation.files) {
+              file.dependencies = null;
+            }
+          }
+          output = JSON.stringify(exported);
+          omittedDependencies = true;
+        }
         if (Buffer.byteLength(output) > MAX_BYTES) {
           throw new Error("Observation export exceeds the byte limit");
         }
         const target = path.join(directory, "observations.json");
         writeFileSync(`${target}.tmp`, `${output}\n`);
         renameSync(`${target}.tmp`, target);
+        if (omittedDependencies) {
+          console.warn(
+            "[adaptive-ci] dependency export exceeds byte limit; terminal outcomes retained without dependencies",
+          );
+        }
       } catch {
         disabled = true;
         warn();

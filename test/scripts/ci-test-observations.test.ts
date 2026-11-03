@@ -245,6 +245,76 @@ describe("CI observation export", () => {
     }
   });
 
+  it("retains terminal outcomes when native dependency indexes expand beyond the export limit", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "ci-observation-capture-"));
+    try {
+      const files = Array.from({ length: 80 }, (_, index) => ({
+        ...file,
+        file: `src/example-${index}.test.ts`,
+      }));
+      const modules = Array.from(
+        { length: 300 },
+        (_, index) =>
+          `src/${"a".repeat(140)}/${"b".repeat(140)}/${"c".repeat(140)}/module-${index}.ts`,
+      );
+      writeFileSync(
+        path.join(directory, "dependencies.json"),
+        JSON.stringify({
+          version: 1,
+          projects: {
+            unit: {
+              modules,
+              files: Object.fromEntries(files.map((row) => [row.file, modules.map((_, i) => i)])),
+            },
+          },
+        }),
+      );
+      const capture = createCiTestObservationCapture({
+        repositoryRoot: process.cwd(),
+        cacheDirectory: directory,
+        configFiles: [],
+        configuration: {},
+        env: { OPENCLAW_VITEST_OBSERVATION_DIR: directory },
+      })!;
+      const events = receipts().map((line) => {
+        const match = /\[vitest:(\w+)\] (.*)/u.exec(line)!;
+        return { kind: match[1]!, value: JSON.parse(match[2]!) };
+      });
+      capture.record("inventory", { ...events[0]!.value, files });
+      const target = path.join(directory, "observations.json");
+      const initial = JSON.parse(readFileSync(target, "utf8"));
+      for (const [index, row] of files.entries()) {
+        capture.record("module", {
+          ...events[1]!.value,
+          ...row,
+          observationFile: row.file,
+          state: index === 1 ? "failed" : "passed",
+          cases: {
+            passed: 1,
+            failed: Number(index === 1),
+            skipped: Number(index === 2),
+            pending: 0,
+          },
+        });
+      }
+      capture.record("run", { ...events[2]!.value, reason: "failed", files: files.length });
+      const text = readFileSync(target, "utf8");
+      const result = JSON.parse(text);
+      expect(Buffer.byteLength(text)).toBeLessThanOrEqual(8 * 1024 * 1024);
+      expect(result.preExecution).toEqual(initial.preExecution);
+      const invocation = result.observations.invocations[0];
+      expect(invocation.elapsedMs).toBe(100);
+      expect(invocation.files.map((row: { outcome: string }) => row.outcome)).toEqual(
+        files.map((_, index) => (index === 1 ? "failed" : index === 2 ? "unknown" : "passed")),
+      );
+      expect(
+        invocation.files.every((row: { dependencies: null }) => row.dependencies === null),
+      ).toBe(true);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("preserves the incomplete snapshot when terminal receipts cannot be exported", () => {
     const directory = mkdtempSync(path.join(tmpdir(), "ci-observation-capture-"));
     try {
