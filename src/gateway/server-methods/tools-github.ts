@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import {
   ErrorCodes,
   errorShape,
@@ -19,6 +20,8 @@ import {
   captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
 } from "../../agents/tools/gateway-caller-context.js";
+import { logWarn } from "../../logger.js";
+import { redactToolPayloadText } from "../../logging/redact.js";
 import { capturePluginLifecycleAuthority } from "../../plugins/registry-lifecycle.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
@@ -219,7 +222,11 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
             selectedScope: params.scope,
           }),
         );
-      } catch {
+      } catch (error) {
+        // Credential setup causes must be safe even in raw file logs.
+        logWarn(
+          `tools-github: GitHub identity setup failed: ${formatErrorMessage(error, { redact: redactToolPayloadText })}`,
+        );
         respondError(respond, ErrorCodes.UNAVAILABLE, "GitHub identity setup failed");
       }
     },

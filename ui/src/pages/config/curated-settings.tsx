@@ -10,6 +10,7 @@ import {
   SettingsSegmented,
   SettingsToggleRow,
 } from "../../components/solid/settings-ui.tsx";
+import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { liveValue } from "../../lib/reactive/live-value.ts";
@@ -21,6 +22,7 @@ import {
 } from "./curated-settings-presentation.ts";
 
 registerEnglishCatalog(registerSettingsEnglish);
+registerEnglishCatalog(registerCronEnglish);
 
 type CuratedSettingsProps = {
   document: Record<string, unknown> | null;
@@ -193,6 +195,11 @@ function CuratedField(props: { settings: CuratedSettingsProps; spec: CuratedSett
               placeholder={defaultValue()}
               onChange={(event) => {
                 const input = event.currentTarget;
+                if (input.validity.badInput) {
+                  // Browsers sanitize unfinished numbers to empty, not a deliberate clear.
+                  input.value = text();
+                  return;
+                }
                 const next = input.value.trim();
                 if (!next) {
                   props.settings.onPatch(props.spec.path, undefined);

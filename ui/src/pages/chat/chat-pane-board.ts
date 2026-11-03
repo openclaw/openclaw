@@ -201,6 +201,19 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     }
     const initialized = this.initializeBrowserSidebarLayout(layout);
     state.updateSidebarLayout(this.fitPaneSidebarLayout(initialized), options);
+    if (options?.automaticResource || options?.retireAutomaticResource) {
+      const mobile = this.mobileHost(state.sidebarLayout);
+      if (options.automaticResource && mobile && !mobile.open) {
+        // Fresh discovery reveals the resource; restoring a saved layout does not.
+        mobile.navigate({ area: "panels", slot: options.automaticResource });
+      } else if (
+        options.retireAutomaticResource &&
+        mobile?.destination.area === "panels" &&
+        !state.sidebarLayout.open
+      ) {
+        mobile.close();
+      }
+    }
   }
 
   private fitPaneSidebarLayout(layout: SidebarLayout): SidebarLayout {

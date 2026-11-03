@@ -592,6 +592,11 @@ const sessionMemoryOwners: string[] = [
 
 it.each<[name: string, entrypoints: string[], deferredOwners: string[], dynamic?: boolean]>([
   [
+    "operator role policy",
+    ["src/gateway/operator-role-policy.ts"],
+    ["packages/gateway-protocol/src/protocol-validator.ts"],
+  ],
+  [
     "native session worker transactions",
     [
       "src/config/sessions/session-actor.worker.ts",
@@ -650,8 +655,8 @@ it.each<[name: string, entrypoints: string[], deferredOwners: string[], dynamic?
     ["src/infra/state-migrations.cron-run-logs.ts", "src/cron/run-history-detail.ts"],
   ],
   [
-    "shared-state read command handlers",
-    ["src/state/openclaw-state-read-handlers.ts"],
+    "state and session readiness",
+    ["src/state/openclaw-state-read-handlers.ts", "src/config/sessions/startup-migration.ts"],
     ["src/state/openclaw-agent-db.ts"],
   ],
   [

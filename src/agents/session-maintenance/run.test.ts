@@ -3,12 +3,27 @@ import { expect, it, vi } from "vitest";
 import { buildEmbeddedRunExecutionParams } from "../../auto-reply/reply/agent-runner-utils.js";
 import { createTestFollowupRun } from "../../auto-reply/reply/agent-runner.test-fixtures.js";
 import { resolveVisibleActiveSessionRunState } from "../../gateway/server-methods/session-active-runs.js";
+import { PluginInstance } from "../../plugins/plugin-instance.js";
+import { PluginInvocationScope } from "../../plugins/plugin-invocation-scope.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  createPluginRegistryOwner,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../../plugins/runtime.js";
+import {
+  getPluginRegistryForContext,
+  withPluginRuntimeGatewayRequestScope,
+} from "../../plugins/runtime/gateway-request-scope.js";
+import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 import { isCurrentSessionControllerOperation } from "../../sessions/session-controller.identity.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { waitForSessionMaintenance } from "./coordinator.js";
-import { createSessionMaintenanceFollowup } from "./run.js";
+import { createSessionMaintenanceFollowup, scheduleSessionMaintenance } from "./run.js";
 import { blockFlush, expectEffects, memory, setup } from "./run.test-support.js";
 
 // mock-isolation: Real admission stores; only optional memory effects are inert.
@@ -121,3 +136,48 @@ it.each([false, true])(
       }
     }),
 );
+
+it("admits maintenance on its Gateway successor after the foreground plugin scope closes", async () => {
+  await withOpenClawTestState({ label: "maintenance-plugin-handoff" }, async ({ env }) => {
+    const { scope, request } = await setup(env, "maintenance-plugin-handoff");
+    const snapshot = captureActivePluginRegistrySnapshot();
+    const previous = createEmptyPluginRegistry();
+    const next = createEmptyPluginRegistry();
+    const record = createPluginRecord({ id: "maintenance-plugin", status: "loaded" });
+    previous.plugins.push(record);
+    next.plugins.push(record);
+    const instance = new PluginInstance(record.id, { record, registry: previous });
+    const foreground = new PluginInvocationScope(previous, [instance], { retained: true });
+    const finished = createDeferredCore<boolean>();
+    const effects: string[] = [];
+    const callable = instance.wrap(() => effects.push("maintenance"));
+    let selected: ReturnType<typeof getPluginRegistryForContext> = null;
+    memory.runSessionCompactionIfNeeded.mockImplementationOnce(async () => {
+      selected = getPluginRegistryForContext();
+      callable();
+    });
+    setActivePluginRegistry(previous);
+    const owner = createPluginRegistryOwner(previous);
+    try {
+      foreground.run(() =>
+        withPluginRuntimeGatewayRequestScope(
+          { pluginRegistry: previous, isWebchatConnect: () => false },
+          () => scheduleSessionMaintenance(request, finished.promise),
+        ),
+      );
+      foreground.release();
+      setActivePluginRegistry(next);
+      owner.publish(next, async () => {});
+      finished.resolve(true);
+      await waitForSessionMaintenance(scope.sessionKey);
+      expect(effects).toEqual(["maintenance"]);
+      expect(selected).toBe(next);
+    } finally {
+      foreground.release();
+      finished.resolve(false);
+      await waitForSessionMaintenance(scope.sessionKey);
+      await owner.close();
+      restoreActivePluginRegistrySnapshot(snapshot);
+    }
+  });
+});

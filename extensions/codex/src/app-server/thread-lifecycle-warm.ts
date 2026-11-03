@@ -378,7 +378,12 @@ export async function tryReuseCodexLiveThread(
     return { kind: "rotate" };
   }
 
-  if (!binding.clientId || binding.clientId !== clientId || (ringZeroActive && !incognito)) {
+  if (
+    !binding.clientId ||
+    binding.clientId !== clientId ||
+    (params.inferenceRoute && !getCodexInferenceThread(params.client, binding.threadId)) ||
+    (ringZeroActive && !incognito)
+  ) {
     return { kind: "resume" };
   }
 

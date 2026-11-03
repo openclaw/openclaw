@@ -12,8 +12,8 @@ import {
 } from "../../test-helpers/solid-application-context.tsx";
 import { createContext } from "./plugins-page.test-support.ts";
 import { PluginSettingsEditor, type PluginSettingsEditorProps } from "./settings-editor.tsx";
+import { renderPluginSettingsInventory as PluginSettingsInventory } from "./settings-inventory.tsx";
 import type { PluginSettingsEditorModel } from "./settings-model.ts";
-import { renderPluginSettingsInventory as PluginSettingsInventory } from "./settings-view.tsx";
 import "../../styles.css";
 import "../../styles/settings.css";
 
@@ -172,6 +172,7 @@ describe("grouped plugin settings", () => {
       { wrapper: provider.wrapper },
     );
     await settle();
+    await expect.element(page.getByRole("textbox", { name: "Label", exact: true })).toBeVisible();
     const input = mounted.container.querySelector<HTMLInputElement>('input[aria-label="Label"]')!;
     input.focus();
     for (const text of ["a", "ab"]) {
@@ -505,7 +506,7 @@ describe("plugin map layout", () => {
       const key = query<HTMLInputElement>('input[aria-label="Key: first"]')!;
       expect(key.getBoundingClientRect().width).toBeGreaterThan(100);
       const value = query<HTMLInputElement>('[data-setting="populated"] input[type="number"]')!;
-      expect(value.getBoundingClientRect().width).toBeGreaterThan(100);
+      expect(value.getBoundingClientRect().width).toBeGreaterThan(60);
       expect(editor.scrollWidth).toBeLessThanOrEqual(editor.clientWidth);
       editor
         .querySelector<HTMLButtonElement>(

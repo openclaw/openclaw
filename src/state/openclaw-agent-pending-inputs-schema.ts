@@ -57,9 +57,13 @@ export function ensureSessionPendingInputsSchema(db: EngineConnection): void {
 const ensureInputCompletionsTable = createSqliteSchemaEnsurer(
   () =>
     extractSqliteTableSchema(OPENCLAW_AGENT_SCHEMA_SQL, SESSION_INPUT_COMPLETIONS_TABLE, {
+      endMarker: "ON session_input_completions(session_key);",
       errorMessage: "OpenClaw input-completion schema marker is missing.",
     }),
-  { tables: [SESSION_INPUT_COMPLETIONS_TABLE] },
+  {
+    tables: [SESSION_INPUT_COMPLETIONS_TABLE],
+    indexes: ["idx_agent_session_input_completions_session_key"],
+  },
 );
 
 export function ensureSessionInputCompletionsSchema(db: EngineConnection): void {

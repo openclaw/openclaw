@@ -98,16 +98,17 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}settings/agents`);
         await gateway.waitForRequest("agents.list");
         await page.locator(".agent-select__trigger").click();
-        await page.getByRole("menuitemradio", { name: /Research agent/ }).waitFor();
+        await page.getByRole("option", { name: /Research agent/ }).waitFor();
 
         expect(await page.locator(".agent-select__option .agent-select__badge").count()).toBe(0);
         await page
-          .getByRole("menuitemradio", {
+          .getByRole("option", {
             name: selectionRequired ? "Main agent" : "Research agent",
             exact: true,
           })
           .click();
-        const defaultAction = page.getByRole("button", {
+        await page.locator(".agents-page-menu__trigger").click();
+        const defaultAction = page.getByRole("menuitem", {
           name: selectionRequired ? "Set Default" : "Default",
           exact: true,
         });

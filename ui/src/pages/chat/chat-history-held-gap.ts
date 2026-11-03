@@ -37,11 +37,9 @@ function heldHistoryGapCursor(options: {
   ) {
     return null;
   }
-  const readEnd = options.previousPagination.totalMessages ?? 0;
   const rowsBeforeTail = next.totalMessages - next.nextOffset;
-  return rowsBeforeTail > readEnd && rowsBeforeTail <= CHAT_HISTORY_OLDER_PAGE_LIMIT
-    ? next.olderCursor
-    : null;
+  // A cursor reset may advance the leaf, invalidating even a fully held prefix.
+  return rowsBeforeTail <= CHAT_HISTORY_OLDER_PAGE_LIMIT ? next.olderCursor : null;
 }
 
 /**

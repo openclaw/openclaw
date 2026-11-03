@@ -1,4 +1,3 @@
-import os from "node:os";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   GATEWAY_CLIENT_IDS,
@@ -22,12 +21,12 @@ import {
 } from "../../../utils/message-channel.js";
 import { resolveRuntimeServiceVersion } from "../../../version.js";
 import { verifyAgentRuntimeIdentityToken } from "../../agent-runtime-identity-token.js";
-import { buildAuthenticatedPresenceUser } from "../../authenticated-presence-user.js";
 import { prepareGatewayRecipientProfile } from "../../expected-profile.js";
 import { shouldUseGatewayOwnerProfile } from "../../gateway-owner-profile.js";
 import {
   createAuthenticatedGitHubIdentitySync,
   resolveTrustedEnterpriseGitHubAccountId,
+  resolveRepositoryConnectionIdentity,
 } from "../../github-user-identity.js";
 import { getRemoteControlUiIngressContext } from "../../ingress-attribution.js";
 import {
@@ -47,6 +46,7 @@ import {
   type PluginNodeCapabilitySurface,
 } from "../../plugin-node-capability.js";
 import { formatForLog } from "../../ws-log.js";
+import { buildClientPresence } from "../client-presence.js";
 import { truncateCloseReason } from "../close-reason.js";
 import type { GatewayWsClient } from "../ws-types.js";
 import {
@@ -194,7 +194,15 @@ export async function attachAuthenticatedGatewayConnect(
     : undefined;
   const authenticatedUserIsTailscaleProvider = tailscaleLogin?.kind === "provider";
   const profileLifecycle = createGatewayConnectProfileLifecycle(context, state);
+  const repositoryIdentity = resolveRepositoryConnectionIdentity({
+    authResult,
+    authConfig: context.configSnapshot.gateway?.auth,
+    config: context.configSnapshot,
+    requestHeaders: context.handler.upgradeReq.headers,
+    assertCurrent: profileLifecycle.assertCurrent,
+  });
   const resolveAuthenticatedGitHubIdentity = createAuthenticatedGitHubIdentitySync({
+    repositoryIdentity,
     authResult,
     authConfig: context.configSnapshot.gateway?.auth,
     config: context.configSnapshot,
@@ -417,6 +425,12 @@ export async function attachAuthenticatedGatewayConnect(
     presenceKey,
     ...(authenticatedUserId ? { authenticatedUserId } : {}),
     ...(authenticatedFactoryGitHubAccountId ? { authenticatedFactoryGitHubAccountId } : {}),
+    ...(repositoryIdentity
+      ? {
+          authenticatedGitHubAccountId: repositoryIdentity.accountId,
+          authenticatedRepositoryCredentialSource: repositoryIdentity.credentialSource,
+        }
+      : {}),
     ...(authenticatedUserIsTailscaleProvider ? { authenticatedUserIsTailscaleProvider: true } : {}),
     ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
     clientIp: reportedClientIp,
@@ -580,35 +594,11 @@ export async function attachAuthenticatedGatewayConnect(
       .join(" "),
   );
 
-  const currentAuthenticatedPresenceUser = () =>
-    nextClient.authenticatedGitHubIdentitySync && !nextClient.authenticatedUserProfile
-      ? undefined
-      : buildAuthenticatedPresenceUser({
-          authenticatedUserId,
-          authenticatedUserIsTailscaleProvider,
-          authenticatedUserProfile: nextClient.authenticatedUserProfile,
-        });
-
   if (presenceKey) {
-    const authenticatedPresenceUser = currentAuthenticatedPresenceUser();
     upsertPresence(
       presenceKey,
       {
-        connectionId: connId,
-        host: connectParams.client.displayName ?? connectParams.client.id ?? os.hostname(),
-        clientId: connectParams.client.id,
-        ip: isLocalClient ? undefined : reportedClientIp,
-        version: connectParams.client.version,
-        platform: connectParams.client.platform,
-        deviceFamily: connectParams.client.deviceFamily,
-        modelIdentifier: connectParams.client.modelIdentifier,
-        timeZone: connectParams.client.timeZone,
-        mode: connectParams.client.mode,
-        deviceId: device?.id,
-        roles: [role],
-        scopes,
-        instanceId: role === "node" ? (device?.id ?? instanceId) : instanceId,
-        ...(authenticatedPresenceUser ? { user: authenticatedPresenceUser } : {}),
+        ...buildClientPresence(nextClient),
         reason: "connect",
       },
       { pending: true },

@@ -860,6 +860,10 @@
     "target": "NVIDIA"
   },
   {
+    "source": "NVIDIA Jetson",
+    "target": "NVIDIA Jetson"
+  },
+  {
     "source": "NVIDIA API key",
     "target": "NVIDIA API key"
   },
@@ -1130,6 +1134,18 @@
   {
     "source": "Fireworks",
     "target": "Fireworks"
+  },
+  {
+    "source": "Google (Gemini)",
+    "target": "Google（Gemini）"
+  },
+  {
+    "source": "Google (Vertex AI)",
+    "target": "Google（Vertex AI）"
+  },
+  {
+    "source": "google-vertex",
+    "target": "google-vertex"
   },
   {
     "source": "Google Chat",
