@@ -339,3 +339,41 @@ it("discards pending PR work after same-file reopen even when persisted rows are
     }
   });
 });
+
+it("ages branch PR cache entries by elapsed time across a wall-clock correction", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await captureRuntimeConfigAsyncReader()();
+    const sessionKey = "agent:main:clock-pr-snapshot";
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey },
+      { sessionId: "clock-pr-session", updatedAt: 1, spawnedCwd: state.workspaceDir },
+    );
+    const fetchImpl = routedFetch([
+      {
+        match: "/pulls?head=",
+        response: () => githubJson([pullListItem({ title: "Clocked", state: "open" })]),
+      },
+    ]);
+    vi.stubGlobal("fetch", fetchImpl);
+    const load = () =>
+      loadControlUiSessionPullRequests(
+        { sessionKey },
+        { resolveGitContext: async () => ({ ...testGitContext, branch: "clock-pr-snapshot" }) },
+      );
+    const fresh = await load();
+    expect(fresh.pullRequests[0]?.title).toBe("Clocked");
+    const initialCalls = fetchImpl.mock.calls.length;
+
+    // Correct the wall clock backward while elapsed time advances: the branch PR
+    // cache window is process-local elapsed time, so the step must not extend it.
+    vi.setSystemTime(Date.now() - 60_000);
+    vi.advanceTimersByTime(1_000);
+    expect((await load()).pullRequests[0]?.title).toBe("Clocked");
+    expect(fetchImpl.mock.calls).toHaveLength(initialCalls);
+
+    // Advance past the 90-second success TTL on the shared clock; the entry expires.
+    vi.advanceTimersByTime(91_000);
+    expect((await load()).pullRequests[0]?.title).toBe("Clocked");
+    expect(fetchImpl.mock.calls.length).toBeGreaterThan(initialCalls);
+  });
+});
