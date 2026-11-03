@@ -92,7 +92,7 @@ export async function evaluateClawRouterLiquidDecision(
       context: {
         ...request,
         trustConfiguredBaseUrlOrigin: false,
-        ssrfPolicy: { allowPrivateNetwork: request.allowPrivateNetwork },
+        ssrfPolicy: undefined,
       },
       signal: context.signal,
       timeoutMs: () => {

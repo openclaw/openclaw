@@ -48,7 +48,13 @@ export function readLiquidDecisionOffer(offer: ClawRouterCapabilityOffer) {
       input: endpoint.input.filter((input) => input === "text" || input === "image"),
     },
   });
-  if (!parsed.success || !parsed.data.decision) {
+  if (
+    !parsed.success ||
+    !parsed.data.decision ||
+    Object.keys(parsed.data.decision.questions ?? {}).some(
+      (kind) => !["boolean", "choice", "score"].includes(kind),
+    )
+  ) {
     return undefined;
   }
   return { offer, upstream, inference: parsed.data };

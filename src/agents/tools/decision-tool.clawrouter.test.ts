@@ -196,6 +196,12 @@ it.each(["native", "manifest"] as const)(
               reason: "unsupported-input",
             });
             facts.decision.protocol = "liquid-ai-systemone";
+            facts.decision.billing.source = "configured";
+            expect((await evaluate()).details).toMatchObject({
+              status: "unavailable",
+              reason: "unsupported-input",
+            });
+            facts.decision.billing.source = "provider-catalog";
             expect(seen.filter((request) => request.path === route)).toHaveLength(1);
             reply.usage.output_tokens = 1;
             expect((await evaluate()).details).toMatchObject({
