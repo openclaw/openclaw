@@ -830,63 +830,18 @@ describe("release validation no-push transport", () => {
   });
 
   it.each([
-    {
-      group: "install-smoke",
-      groups: ["install-smoke"],
-      packageRequired: "false",
-      dockerRequired: "false",
-    },
-    {
-      group: "qa",
-      groups: ["qa-parity", "qa-live"],
-      packageRequired: "false",
-      dockerRequired: "false",
-    },
-    {
-      group: "qa-parity",
-      groups: ["qa-parity"],
-      packageRequired: "false",
-      dockerRequired: "false",
-    },
-    {
-      group: "qa-live",
-      groups: ["qa-live"],
-      packageRequired: "false",
-      dockerRequired: "false",
-    },
-    {
-      group: "cross-os",
-      groups: ["cross-os"],
-      packageRequired: "true",
-      dockerRequired: "false",
-    },
-    {
-      group: "package",
-      groups: ["package"],
-      packageRequired: "true",
-      dockerRequired: "false",
-    },
-    {
-      group: "qualified-package",
-      groups: ["qualified-package"],
-      packageRequired: "true",
-      dockerRequired: "false",
-    },
-    {
-      group: "windows-node",
-      groups: ["windows-node"],
-      packageRequired: "true",
-      dockerRequired: "false",
-    },
-    {
-      group: "live-e2e",
-      groups: ["live-e2e"],
-      packageRequired: "true",
-      dockerRequired: "true",
-    },
-  ])(
-    "maps $group to explicit release resources",
-    ({ group, groups, packageRequired, dockerRequired }) => {
+    ["install-smoke", ["install-smoke"], "false", "false"],
+    ["qa", ["qa-parity", "qa-live"], "false", "false"],
+    ["qa-parity", ["qa-parity"], "false", "false"],
+    ["qa-live", ["qa-live"], "false", "false"],
+    ["cross-os", ["cross-os"], "true", "false"],
+    ["package", ["package"], "true", "false"],
+    ["qualified-package", ["qualified-package"], "true", "false"],
+    ["windows-node", ["windows-node"], "true", "false"],
+    ["live-e2e", ["live-e2e"], "true", "true"],
+  ] as const)(
+    "maps %s to explicit release resources",
+    (group, groups, packageRequired, dockerRequired) => {
       const outputs = runReleaseGroupCapture(group);
       expect(JSON.parse(outputs.release_check_groups_json ?? "null")).toEqual(groups);
       expect(outputs.package_required).toBe(packageRequired);
