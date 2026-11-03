@@ -534,7 +534,8 @@ export function SelectInput(props: {
         disabled: isRequired && schema.default === undefined,
         label:
           schema.default !== undefined
-            ? t("configForm.useDefaultValue", {
+            ? // A required field stores its default, so it can't promise to unset.
+              t(isRequired ? "configForm.defaultOption" : "configForm.useDefaultValue", {
                 value: configEnumOptionLabel(schema.default, options),
               })
             : (hintForPath(path, hints)?.placeholder ?? t("configForm.select")),

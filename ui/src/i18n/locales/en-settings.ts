@@ -443,6 +443,7 @@ const enSettings = {
     structuredSecretFile: "Structured value (SecretRef) - edit the config file directly",
     defaultValue: en.configForm.defaultValue,
     useDefaultValue: "Use default ({value})",
+    defaultOption: "{value} (default)",
     select: "Select...",
     required: "Required",
     enumOn: "On",
