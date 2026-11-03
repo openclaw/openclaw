@@ -407,7 +407,7 @@ describe("devices inventory rendering", () => {
     expect(row.querySelector(".device-entry__desktop")).toBeNull();
     // Reads on a phone too, where a title would never show.
     expect(row.textContent).toContain("Desktop sharing");
-    expect(row.textContent).toContain("pending desktop capability request");
+    expect(row.textContent).toContain("pending desktop access request");
     expect(row.querySelector(".device-entry__facts")?.textContent).toContain("desktop.stream");
   });
 
