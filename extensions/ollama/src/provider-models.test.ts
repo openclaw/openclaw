@@ -361,7 +361,16 @@ describe("buildOllamaBaseUrlSsrFPolicy", () => {
     "http://100.100.100.200",
     "http://[fd00:ec2::254]",
     "http://[fe80::1]",
+    "http://[::ffff:6464:64c8]",
+    "http://[::ffff:a9fe:102]",
   ])("rejects empty, invalid, metadata, or link-local base URL %s", (url) => {
     expect(buildOllamaBaseUrlSsrFPolicy(url)).toBeUndefined();
+  });
+
+  it("keeps hostname isolation for a public IPv6 address that ends in a metadata hextet", () => {
+    expect(buildOllamaBaseUrlSsrFPolicy("http://[2001:4860:4860::a9fe:a9fe]")).toMatchObject({
+      allowPrivateNetwork: true,
+      hostnameAllowlist: ["[2001:4860:4860::a9fe:a9fe]"],
+    });
   });
 });
