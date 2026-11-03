@@ -200,6 +200,7 @@ function provision(owner?: ReturnType<typeof source>, scopeKey = "guest") {
     engine: DOCKER_SANDBOX_ENGINE,
     operatorAuthority: owner?.authority,
     scopeKey,
+    sessionKey: scopeKey,
     workspaceDir: "/workspace",
     agentWorkspaceDir: "/workspace",
     cfg: structuredClone(sandboxConfig),
