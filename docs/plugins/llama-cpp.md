@@ -436,10 +436,23 @@ Setting it to `false` disables private-network and configured-origin trust
 for both discovery and inference. Discovery has no separate retry or redirect
 exception.
 
-For discovered models, OpenClaw advertises reasoning and effort controls only
-when `/props` sets `chat_template_caps.supports_reasoning_effort` to `true`.
-Missing or false values leave those capabilities unadvertised. Explicit
-configured context and tool values remain authoritative over discovery.
+Reasoning output and reasoning-effort controls are separate capabilities.
+Automatic discovery advertises effort selection only when the server reports
+chat-template support for reasoning effort. A missing or false value does not
+establish that the model cannot produce reasoning output. Automatic
+thinking-control metadata still uses that effort capability; this integration
+does not add independent reasoning detection. Explicit configured reasoning and
+compatibility overrides remain authoritative, without model-name inference.
+
+When both limits are reported, OpenClaw keeps the model's native capacity in
+`contextWindow` and the effective serving limit in `contextTokens`.
+Native capacity comes from the model row's `context_length` or
+`meta.n_ctx_train`; the serving limit comes from generation settings in
+`/props` or the loaded row's `meta.n_ctx`. For example, a model can advertise
+40,960 tokens while its server slot is configured for 4,096. A cold row reporting
+only native capacity does not establish an effective serving limit. Discovered
+output budgets respect an observed serving limit; authored context overrides
+remain authoritative.
 
 Normal merge-mode setup saves the connection and preserves authored model
 overrides; discovered rows stay in the provider-owned runtime catalog. Explicit

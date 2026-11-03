@@ -33,6 +33,38 @@ it("maps runtime context and chat-template capabilities", () => {
   });
 });
 
+it("keeps cold native context without inventing a loaded runtime cap", () => {
+  for (const useRuntimeDefaults of [true, false]) {
+    const config = mapLlamaServerModel(
+      { ...row("model"), context_length: 40960, status: { value: "unloaded" } },
+      undefined,
+      useRuntimeDefaults,
+    )?.config;
+    expect(config?.contextWindow).toBe(40960);
+    expect(config?.contextTokens).toBeUndefined();
+  }
+});
+
+it("keeps loaded native context and effective limits separate", () => {
+  const discovered = mapLlamaServerModel(
+    { ...row("model"), context_length: 40960, meta: { n_ctx: 4096, n_ctx_train: 40960 } },
+    { default_generation_settings: { n_ctx: 4096, params: { max_tokens: -1 } } },
+  );
+  const metadataOnly = mapLlamaServerModel({
+    ...row("metadata-only"),
+    meta: { n_ctx: 4096, n_ctx_train: 40960 },
+  });
+  if (!discovered || !metadataOnly) {
+    throw new Error("expected model fixtures to map");
+  }
+  expect(discovered.config).toMatchObject({
+    contextWindow: 40960,
+    contextTokens: 4096,
+    maxTokens: 4096,
+  });
+  expect(metadataOnly.config).toMatchObject({ contextWindow: 40960, contextTokens: 4096 });
+});
+
 it("preserves image input advertised by router rows or runtime properties", () => {
   expect(
     mapLlamaServerModel({
@@ -61,9 +93,13 @@ it("keeps explicit model rows ahead of discovered rows", () => {
     input: ["text"] as Array<"text" | "image">,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 32768,
+    contextTokens: 2048,
     maxTokens: 2048,
   };
-  const discovered = mapLlamaServerModel(row("model"));
+  const discovered = mapLlamaServerModel(
+    { ...row("model"), context_length: 40960, meta: { n_ctx: 4096 } },
+    { chat_template_caps: { supports_reasoning_effort: false } },
+  );
   const second = mapLlamaServerModel(row("other"));
   if (!discovered || !second) {
     throw new Error("expected model fixtures to map");
