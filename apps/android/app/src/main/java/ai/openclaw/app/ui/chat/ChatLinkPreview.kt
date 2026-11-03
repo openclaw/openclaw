@@ -104,7 +104,7 @@ internal class LinkPreviewFetcher(
       webFetcher.fetch(
         originalUrl = originalUrl,
         accept = LINK_PREVIEW_ACCEPT,
-        allowedContentTypes = setOf("text/html"),
+        allowedContentTypes = setOf("text/html", "application/xhtml+xml"),
         maxBytes = LINK_PREVIEW_BODY_MAX_BYTES,
         rejectOversizedBody = false,
       ) ?: return LinkPreviewResult.Failed
