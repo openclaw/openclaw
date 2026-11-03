@@ -2,7 +2,7 @@
   "v": 1,
   "name": "windows-provider-artwork-owned-popup-v1",
   "baseCommit": "c550174d517b5e8830726cd5c32d4e132c144659",
-  "candidateTree": "c49960f7bf554b0954beebccc9f36d91f936b411",
+  "candidateTree": "e34b68701316c4f026a4dabebe2584491c291ec4",
   "baselineCaptureTree": "50de4508d71a67ed2fb44ad9d1cdf56781d4d4a2",
   "sourceContracts": [
     {
@@ -64,7 +64,12 @@
     {
       "path": "CONTROLLER-STATIC.json",
       "bytes": 537,
-      "sha256": "f51426524a750fe98dc9c0efdc8e7c3c2d1a5b379ca9e86037305c293b2f15f5"
+      "sha256": "59d9503cf81be370d3f83c98e0058fa9682a39eeae52b2a8db046e840765486d"
+    },
+    {
+      "path": "CURRENT-STEP-LAYOUT.md",
+      "bytes": 3621,
+      "sha256": "32682ef27ed0bc13331c412ffe152e4f840e6fc9076b89071c922339fadbb105"
     },
     {
       "path": "Initialize-NativeRuntime.ps1",
@@ -74,7 +79,7 @@
     {
       "path": "Invoke-ProviderArtworkCI.ps1",
       "bytes": 10022,
-      "sha256": "35b630b97ed83bba6b40431d3788d0ad667d82f055621477ccc822ff82a2392b"
+      "sha256": "e9a0bc7b9e1cdc39fc0b8c686b8d7f4fbb57c5234b5a55c2cf68060f8ea9a1ad"
     },
     {
       "path": "Invoke-ProviderArtworkProof.ps1",
@@ -103,18 +108,18 @@
     },
     {
       "path": "PRIVATE-CUTOVER.md",
-      "bytes": 856,
-      "sha256": "9b5850d2fd10bda6b1af82e79a61bf363abbbb8177157be14b63c900d8be922e"
+      "bytes": 880,
+      "sha256": "263fd9aebbc22753523f1dda02ecadef63db31a5adeeec8c9f8b152b154588d4"
     },
     {
       "path": "PROOF-OVERLAYS.json",
       "bytes": 3410,
-      "sha256": "5cfe916a3600a61c4ec7df25b8f8fe8850a1afd6c04ce293904862bd70585525"
+      "sha256": "c537f778c9725fc54af28c89536bff54ebba5671b571c37c5be2b609b14c54db"
     },
     {
       "path": "PROOF-PLAN.md",
-      "bytes": 856,
-      "sha256": "9b5850d2fd10bda6b1af82e79a61bf363abbbb8177157be14b63c900d8be922e"
+      "bytes": 880,
+      "sha256": "263fd9aebbc22753523f1dda02ecadef63db31a5adeeec8c9f8b152b154588d4"
     },
     {
       "path": "PROVIDER-CONTAINMENT-CONTRACT.md",
@@ -143,8 +148,8 @@
     },
     {
       "path": "README.md",
-      "bytes": 856,
-      "sha256": "9b5850d2fd10bda6b1af82e79a61bf363abbbb8177157be14b63c900d8be922e"
+      "bytes": 880,
+      "sha256": "263fd9aebbc22753523f1dda02ecadef63db31a5adeeec8c9f8b152b154588d4"
     },
     {
       "path": "REVIEW-RUNTIME2.md",
@@ -159,7 +164,7 @@
     {
       "path": "STATIC-PREPARATION.json",
       "bytes": 537,
-      "sha256": "f51426524a750fe98dc9c0efdc8e7c3c2d1a5b379ca9e86037305c293b2f15f5"
+      "sha256": "59d9503cf81be370d3f83c98e0058fa9682a39eeae52b2a8db046e840765486d"
     },
     {
       "path": "Save-CalculatedVersion.ps1",
@@ -203,13 +208,13 @@
     },
     {
       "path": "candidate-source.json",
-      "bytes": 353591,
-      "sha256": "c93d4847f0d384bc26949236d192f0a25773b572fe75a10b59fd8469cdc20c66"
+      "bytes": 353579,
+      "sha256": "90024eb6b4b0b4edc7a45efed3372eb3cefdd99ca3eb4119fe1257feb83ae5d6"
     },
     {
       "path": "candidate.patch",
-      "bytes": 50545,
-      "sha256": "7efdb6ae045a40f8d61560d0d1a9f4da12841349a9b5ebf0e877273897377958"
+      "bytes": 52221,
+      "sha256": "16065df486f36a5a877ea3c02ece278679432c2420026ce7da14c8e5e2f4c494"
     },
     {
       "path": "postimages/docs/PROVIDER_ARTWORK.md",
@@ -253,8 +258,8 @@
     },
     {
       "path": "postimages/tests/OpenClaw.Tray.UITests/OnboardingNativeProof.cs",
-      "bytes": 71407,
-      "sha256": "a89cc562a325f85a61925e96bf435753662252ad6edb8df0bf5ac034836f0e6e"
+      "bytes": 73059,
+      "sha256": "56dec2c2171e7f97bbd1f022739d166b1446d68b690b04fdaecb979f0f4d88cf"
     },
     {
       "path": "private-overlay/ProviderArtworkPrivatePresentation.cs",
@@ -278,9 +283,9 @@
     },
     {
       "path": "source-pins.json",
-      "bytes": 13467,
-      "sha256": "657d0609e758306688631fd9a66a28b7b3214bfb30ca9f6518fd941f2469d20d"
+      "bytes": 13565,
+      "sha256": "b79d201720d2dbd7acea405c2aaee16cdbd43778a7ddc3344251ed1a40e03d37"
     }
   ],
-  "afterCaptureTree": "32dff90773ea4513a3c56b72c9ba0aa9311adf7e"
+  "afterCaptureTree": "df456fb000b41db292ea442cab025dc575262cb1"
 }

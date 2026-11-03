@@ -1,0 +1,18 @@
+# Actual current-step layout admission: preparation only
+
+Exact harness basecc91cc7fac40f703b4702438e99fd0661dd38ccd. Run41616948328 already proved CURRENT C# native note name+containment4times and produced4real branded header originals; NOTE→TEXT then failed exact before/after contentheight122→154 because its first snapshot preceded current-step measure/arrange. No new geometry/name contract change is needed.
+
+Only existing canonical OnboardingNativeProof.cs changes. Before FIRST BindNativeDialog snapshot the method verifies current UI dispatcher access, own window PID, actual nonnull shared XamlRoot and current expected Title; calls actual dialog.UpdateLayout() SYNCHRONOUSLY ONCE; for current Provider text requires actual named TextBox TextInput loaded/visible/same root and finite positive actual width/height. Its actual layout operation/completion, UI-thread ID/current title/input readiness are logged before MTA and preserved as layoutAdmission in every native observation.
+
+This uses the documented existing Microsoft.UI.Xaml.UIElement.UpdateLayout contract: ensures child positions properly updated for layout; basically InvalidateMeasure+InvalidateArrange in sequence, forcing pending layout instead of relying on the deferred layout system. Public API:
+https://learn.microsoft.com/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.uielement.updatelayout?view=windows-app-sdk-1.8
+
+The production owner ProviderSetupDialog.Update/RenderStep applies text/confirm visual property changes synchronously, but layout is deferred. The test helper currently treats logical Title/CanSubmit as readiness; admitting pending layout before measuring it corrects that ordering. This does not repair app data binding or change production UI. Source-owned raw API reference is retained privately in UpdateLayout-public.txt.
+
+NO timer/sleep/while-stable/newpollmanager/nativeUIA-as-wait/retry/newframehelper. No extra composition wait is added without evidence. The native request still follows real Opened. All CURRENT exact before/after HWND/PID/UI-thread/root/parent/content/rendered/rawslot/physicalslot/Title/provider comparisons remain byte-unchanged. Any layout change after admission STILL FAILS and retains observations. Existing proper rendered⊆native⊆measuredslot, exact native Window/Popup/modal/name/visible/provideridentity/runtime-ID gates remain unchanged.
+
+The new Text/Confirm behavior is UNPROVEN until native execution. A synchronous UpdateLayout admission is a source-contract fix, not an asserted passing result. No future timeout/layout change will be hidden by relaxing stability. Normal headless Show(false) mode remains unselected/unverified by the private fixture.
+
+All other eight canonical source postimages (production4UI/docs/capture/dialog/rebind tests), proof test adapters, source session/cleanup, typed/noauth/noactivation/borrow/cancel/reopen/close/rebind assertions unchanged. Before50de6/16retained exact and not rerun. Same Afterdialog4-FIRST then remaining3,7cases/0skip/16originalPNGs/12native-name receipts, full source/binary/loaded/freeze/index/terminal postflight required. TypedJSONpositive+exit23probe and working source launcher unchanged/pre-runtimebuild; all8otherworkflowjobs unchanged.
+
+No source/harness commit/CI/pub/nativeexperiment/capture/move/focus/default-desktop/ACL/permission/config/dependency/Gateway change performed. Host lacks dotnet/pwsh/Windows; compile/AST/newnative/TextConfirm/pixels/cost UNRUN. Parent critical/canonical review and separate execution authorization required. Shared RED/unwaived; installer/Reactor hold unchanged.

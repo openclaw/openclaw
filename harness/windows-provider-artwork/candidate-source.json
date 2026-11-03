@@ -1,10 +1,10 @@
 {
   "baseCommit": "c550174d517b5e8830726cd5c32d4e132c144659",
   "baseTree": "eab5a16b2c6b57a741c7a1a22f830f737592d1ee",
-  "candidateTree": "c49960f7bf554b0954beebccc9f36d91f936b411",
-  "priorCandidateTree": "89e9012ee2346da3ccb2304af61f1b85e01949dc",
+  "candidateTree": "e34b68701316c4f026a4dabebe2584491c291ec4",
+  "priorCandidateTree": "c49960f7bf554b0954beebccc9f36d91f936b411",
   "priorCandidatePatchSha256": "6194060d067b8858d832ab17951c0f518bc0750f9f6b26e807b744947bd3dc7e",
-  "patchSha256": "7efdb6ae045a40f8d61560d0d1a9f4da12841349a9b5ebf0e877273897377958",
+  "patchSha256": "16065df486f36a5a877ea3c02ece278679432c2420026ce7da14c8e5e2f4c494",
   "changedFiles": [
     {
       "path": "docs/PROVIDER_ARTWORK.md",
@@ -65,9 +65,9 @@
     {
       "path": "tests/OpenClaw.Tray.UITests/OnboardingNativeProof.cs",
       "beforeSha256": "ee3cfce10129b857848acc7ecc982bc03826eaa5101a3da562174a5a32d1ec52",
-      "afterSha256": "a89cc562a325f85a61925e96bf435753662252ad6edb8df0bf5ac034836f0e6e",
-      "bytes": 71407,
-      "afterBlob": "af4cd21aacfb7043e47401b38cb0c73f65bfa854"
+      "afterSha256": "56dec2c2171e7f97bbd1f022739d166b1446d68b690b04fdaecb979f0f4d88cf",
+      "bytes": 73059,
+      "afterBlob": "9d61baf30f036fea32c597760a777231123c1c0f"
     }
   ],
   "sourceFiles": [
@@ -8245,7 +8245,7 @@
     },
     {
       "path": "tests/OpenClaw.Tray.UITests/OnboardingNativeProof.cs",
-      "sha256": "a89cc562a325f85a61925e96bf435753662252ad6edb8df0bf5ac034836f0e6e"
+      "sha256": "56dec2c2171e7f97bbd1f022739d166b1446d68b690b04fdaecb979f0f4d88cf"
     },
     {
       "path": "tests/OpenClaw.Tray.UITests/OnboardingNativeProofTests.cs",
@@ -8434,7 +8434,7 @@
   ],
   "count": 2090,
   "sourceCommit": "NOT_CREATED",
-  "canonicalChangeFromPrior": "Only native UIA provider geometry contract corrected: rendered extent within native accessibility bounds within measured slot, rounded physical semantics; all other eight source files unchanged",
-  "AfterProofTree": "32dff90773ea4513a3c56b72c9ba0aa9311adf7e",
+  "canonicalChangeFromPrior": "Only native UIA current-step admission: synchronous actual dialog UpdateLayout before first binding plus current visible TextInput readiness; all exact guards/other8source unchanged",
+  "AfterProofTree": "df456fb000b41db292ea442cab025dc575262cb1",
   "BeforeProofTree": "50de4508d71a67ed2fb44ad9d1cdf56781d4d4a2"
 }

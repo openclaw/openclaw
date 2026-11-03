@@ -1,7 +1,7 @@
 {
   "canonicalBeforeTree": "eab5a16b2c6b57a741c7a1a22f830f737592d1ee",
-  "canonicalAfterTree": "c49960f7bf554b0954beebccc9f36d91f936b411",
-  "priorCanonicalAfterTree": "89e9012ee2346da3ccb2304af61f1b85e01949dc",
+  "canonicalAfterTree": "e34b68701316c4f026a4dabebe2584491c291ec4",
+  "priorCanonicalAfterTree": "c49960f7bf554b0954beebccc9f36d91f936b411",
   "before": {
     "tree": "50de4508d71a67ed2fb44ad9d1cdf56781d4d4a2",
     "patch": "baseline-capture.patch",
@@ -24,7 +24,7 @@
     ]
   },
   "after": {
-    "tree": "32dff90773ea4513a3c56b72c9ba0aa9311adf7e",
+    "tree": "df456fb000b41db292ea442cab025dc575262cb1",
     "patch": "after-private-capture.patch",
     "patchSha256": "0b33ae6b2c7578adc48ba472601e62812fa491d28d61af220f7950fea18b7c45",
     "changes": [
@@ -42,7 +42,7 @@
   "scope": "ninth existing UIA owner plus dialog test/native fixture adapter; production UI/docs/capture/rebind unchanged; Before50de exact retained; After only existing test compilation-unit adapter",
   "canonicalSourceManifest": {
     "path": "candidate-source.json",
-    "sha256": "c93d4847f0d384bc26949236d192f0a25773b572fe75a10b59fd8469cdc20c66",
+    "sha256": "90024eb6b4b0b4edc7a45efed3372eb3cefdd99ca3eb4119fe1257feb83ae5d6",
     "entries": 2090
   },
   "sourceProjectionContracts": {

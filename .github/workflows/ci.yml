@@ -510,7 +510,7 @@ jobs:
             -AfterSource "$env:GITHUB_WORKSPACE/source-after" `
             -Artifacts "$env:GITHUB_WORKSPACE/.artifacts/native-icons-w5" `
             -AstReceipt "$env:GITHUB_WORKSPACE/packet-preflight.json" `
-            -ExpectedPayloadSha256 '4e5cd4399868d7c40016c592809996f4c782d8c285d7cfc898c16765a22f2db3' `
+            -ExpectedPayloadSha256 '574d4ebfbcdf818a05aa8bc9eaf5ff1f48dbdbcf095cd687aedf827f75885d08' `
             -Qualification 'native-icons-w5-native-dialog-name-v1' -ExecutionAuthorized
       - name: Retain complete evidence or the real first blocking leaf
         if: always()

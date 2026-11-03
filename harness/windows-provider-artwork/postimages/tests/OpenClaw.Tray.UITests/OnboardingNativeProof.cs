@@ -712,6 +712,30 @@ internal static class OnboardingNativeProof
         bool openedObserved, string state, ITestOutputHelper output)
     {
         Assert.True(openedObserved, "Observe this dialog's actual Opened event before querying native automation.");
+        Assert.True(window.DispatcherQueue.HasThreadAccess);
+        AssertOwned(Handle(window));
+        var currentRoot = Assert.IsAssignableFrom<FrameworkElement>(window.Content);
+        Assert.NotNull(currentRoot.XamlRoot);
+        Assert.Same(currentRoot.XamlRoot, dialog.XamlRoot);
+        Assert.Equal(expectedName, Assert.IsType<string>(dialog.Title));
+        // Logical step readiness precedes WinUI's deferred measure/arrange. Admit current layout before snapshotting it.
+        dialog.UpdateLayout();
+        var textInput = Assert.IsType<TextBox>(dialog.FindName("TextInput"));
+        if (expectedName == "Provider text")
+        {
+            Assert.True(textInput.IsLoaded && textInput.Visibility == Visibility.Visible);
+            Assert.Same(currentRoot.XamlRoot, textInput.XamlRoot);
+            Assert.True(double.IsFinite(textInput.ActualWidth) && double.IsFinite(textInput.ActualHeight) &&
+                textInput.ActualWidth > 0 && textInput.ActualHeight > 0);
+        }
+        var layoutAdmission = new
+        {
+            operation = "UIElement.UpdateLayout", completed = true, currentTitle = Assert.IsType<string>(dialog.Title),
+            textInputLoaded = textInput.IsLoaded, textInputVisibility = textInput.Visibility.ToString(),
+            textInputWidth = textInput.ActualWidth, textInputHeight = textInput.ActualHeight,
+            uiThreadId = GetCurrentThreadId(), completedUtc = DateTimeOffset.UtcNow,
+        };
+        output.WriteLine($"native-dialog-layout-admitted={state}; operation=UIElement.UpdateLayout; title={layoutAdmission.currentTitle}; thread={layoutAdmission.uiThreadId}");
         var binding = BindNativeDialog(window, dialog);
         var proofDirectory = Environment.GetEnvironmentVariable("OPENCLAW_UI_PROOF_DIR");
         if (!string.IsNullOrWhiteSpace(proofDirectory)) AssertSourceUnchanged();
@@ -723,7 +747,7 @@ internal static class OnboardingNativeProof
         {
             var json = JsonSerializer.Serialize(new
             {
-                schema = "owned-native-dialog-name-v1", providerGeometryContract = "rendered-in-native-in-measured-slot-physical-pixels", state, status, expectedName, openedObserved,
+                schema = "owned-native-dialog-name-v1", layoutAdmission, providerGeometryContract = "rendered-in-native-in-measured-slot-physical-pixels", state, status, expectedName, openedObserved,
                 binding.Hwnd, binding.ProcessId, binding.ThreadId, binding.Title, binding.Provider,
                 binding.WindowBounds, binding.ContentBounds, binding.RenderedProviderBounds, binding.ProviderLayoutSlotInParent, binding.ProviderLayoutSlotBounds,
                 referenceContract = "microsoft-ui-xaml 948461c2d0c93bce2e9c039ec28b4a25976afede: ContentDialog projects Name to PopupAutomationPeer; class Popup, Window role",
