@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
-import { readGitHubConfig } from "../../extensions/github-repositories/config-api.js";
 import {
   resolveManagedGitHubProfileDir,
   writeManagedGitHubProfileFiles,
@@ -14,6 +13,7 @@ import * as processExec from "../process/exec.js";
 import { captureSessionControllerSettlement } from "../sessions/session-controller.lifecycle.js";
 import { getRpcSource } from "../sessions/session-controller.rpc-sources.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import { readGitHubConfig } from "./github-repository-fixture-api.test-support.js";
 import { controlUiClient } from "./server.sessions.create.projects.test-support.js";
 import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils-store.js";
 import { dispatchInboundMessageMock } from "./test-helpers.js";

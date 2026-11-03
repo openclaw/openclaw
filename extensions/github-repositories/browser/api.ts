@@ -16,7 +16,7 @@ export { GitHubPublicationAction } from "./chat-github-publication.tsx";
 export { createPublicationPresentation } from "./publication-presentation.ts";
 
 export { createHovercardAccessoryMount } from "./hovercard-accessory.tsx";
-export { createSidebarAccessoryMount } from "./sidebar-accessory.tsx";
+export { createSidebarBadgeAccessory } from "./sidebar-accessory.tsx";
 export type { RepositoryBrowserRuntime } from "./repository-runtime.ts";
 
 export { createSessionAccessoryMount } from "./session-accessory.tsx";

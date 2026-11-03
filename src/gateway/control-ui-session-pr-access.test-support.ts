@@ -1,6 +1,5 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { expect, vi } from "vitest";
-import { repositorySessionPrTarget } from "../../extensions/github-repositories/control-ui-session-pr-read-api.js";
-import { startGitHubSessionPresentation } from "../../extensions/github-repositories/session-presentation-service-api.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { deleteSessionEntryLifecycle } from "../config/sessions.js";
@@ -25,13 +24,14 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { ControlUiSessionPullRequests } from "./control-ui-contract.js";
 import { createRepositorySessionReadHost } from "./control-ui-session-pr-runtime.js";
 import { prepareSelectedRepositorySessionRead } from "./control-ui-session-pr-source.js";
-import {
-  spyOnSessionPrLoader,
-  type SessionPrLoader,
-} from "./control-ui-session-pr-subscriptions.test-support.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
-import { installGitHubAccountRpcFixture } from "./github-account-service.test-support.js";
+import { startTestRepositorySessionPresentation } from "./github-account-service.test-support.js";
 import type { OperatorScope } from "./operator-scopes.js";
+import type {
+  PreparedRepositorySessionRead,
+  RepositorySessionObservation,
+  RepositorySessionSourceScope,
+} from "./repository-session-read.types.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import {
@@ -68,7 +68,146 @@ export const readerChanges = [
   "grant without abort",
   "replacement grant",
 ] as const;
-export type Load = SessionPrLoader;
+export type Load = (
+  query: { sessionKey: string; agentId: string },
+  signal: AbortSignal,
+  source: {
+    observation: RepositorySessionObservation;
+    sourceScope: RepositorySessionSourceScope;
+    assertCurrent: () => void;
+  },
+) => Promise<ControlUiSessionPullRequests>;
+
+/** Native integration tests substitute only admitted source facts and HTTP responses. */
+export function installSourceTransportProbe(
+  host: ReturnType<typeof createRepositorySessionReadHost>,
+  load: Load,
+  signal: AbortSignal,
+  projectReads?: (
+    reads: ReturnType<ReturnType<typeof createRepositorySessionReadHost>["bindService"]>,
+  ) => ReturnType<ReturnType<typeof createRepositorySessionReadHost>["bindService"]>,
+) {
+  type Source = {
+    observation: RepositorySessionObservation;
+    sourceScope: RepositorySessionSourceScope;
+    assertCurrent: () => void;
+    value?: ControlUiSessionPullRequests;
+  };
+  const transport = new AsyncLocalStorage<Source>();
+  const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const source = transport.getStore();
+    if (!source) {
+      throw new Error("PR transport outside admitted fixture source");
+    }
+    const url = new URL(
+      typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
+    );
+    if (url.pathname.endsWith("/pulls")) {
+      source.value = await load(
+        {
+          sessionKey: source.observation.session.sessionKey,
+          agentId: source.observation.session.agentId,
+        },
+        init?.signal ?? signal,
+        source,
+      );
+    }
+    const value = source.value;
+    const number = Number(url.pathname.match(/\/pulls\/(\d+)/)?.[1]);
+    const item = (pr: ControlUiSessionPullRequests["pullRequests"][number]) => ({
+      number: pr.number,
+      title: pr.title,
+      html_url: pr.url,
+      state: pr.state === "open" || pr.state === "draft" ? "open" : "closed",
+      draft: pr.state === "draft",
+      merged_at: pr.state === "merged" ? "2026-01-01T00:00:00Z" : null,
+      head: { sha: pr.headSha ?? "a".repeat(40), ref: pr.branch },
+      base: { ref: "main", repo: { name: pr.repo, owner: { login: pr.owner } } },
+      additions: pr.additions ?? 0,
+      deletions: pr.deletions ?? 0,
+      changed_files: pr.changedFiles ?? 0,
+    });
+    const selected = value?.pullRequests.find((pr) => pr.number === number);
+    const body = url.pathname.endsWith("/pulls")
+      ? (value?.pullRequests.map(item) ?? [])
+      : selected
+        ? item(selected)
+        : { fork: false, total_count: 0, check_runs: [], statuses: [] };
+    return new Response(JSON.stringify(body), {
+      status: value?.rateLimited ? 403 : 200,
+      headers: {
+        "Content-Type": "application/json",
+        ...(value?.rateLimited ? { "x-ratelimit-remaining": "0" } : {}),
+      },
+    });
+  });
+  const sourceRun = <T>(
+    observation: RepositorySessionObservation,
+    scope: RepositorySessionSourceScope,
+    operation: (scope: RepositorySessionSourceScope) => Promise<T>,
+  ) => {
+    const selected = observation.source;
+    const source: RepositorySessionSourceScope = {
+      ...scope,
+      readCheckoutRevision: async () => JSON.stringify(selected),
+      readCheckoutFacts: async () =>
+        selected
+          ? {
+              originUrl:
+                selected.kind === "repository"
+                  ? selected.url
+                  : "https://github.com/synthetic/publication",
+              branch: selected.kind === "repository" ? selected.branch : branch.branch,
+              ...(selected.kind === "checkout" ? { root: selected.root } : {}),
+              defaultBranch: "main",
+            }
+          : undefined,
+      readCheckoutBranchFacts: async () => ({ creatable: false, stats: null }),
+    };
+    return transport.run(
+      { observation, sourceScope: scope, assertCurrent: scope.assertCurrent },
+      () => operation(source),
+    );
+  };
+  const bind = host.bindService.bind(host);
+  const binding = vi.spyOn(host, "bindService").mockImplementation((...args) => {
+    const native = bind(...args);
+    const reads = projectReads ? projectReads(native) : native;
+    const originals = new WeakMap<RepositorySessionObservation, PreparedRepositorySessionRead>();
+    const wrapped = new WeakMap<PreparedRepositorySessionRead, PreparedRepositorySessionRead>();
+    const prepare = (read: PreparedRepositorySessionRead | undefined) => {
+      if (!read) {
+        return undefined;
+      }
+      let projected = wrapped.get(read);
+      if (!projected) {
+        projected = {
+          ...read,
+          withSource: (operation) => read.withSource((scope) => sourceRun(read, scope, operation)),
+        };
+        wrapped.set(read, projected);
+        originals.set(projected, read);
+      }
+      return projected;
+    };
+    return {
+      ...reads,
+      prepareServiceRead: async (query) => prepare(await reads.prepareServiceRead(query)),
+      createViewerRead: (...params) => {
+        const read = reads.createViewerRead(...params);
+        return read && (async () => prepare(await read()));
+      },
+      withSource: (observation, operation) =>
+        reads.withSource(originals.get(observation) ?? observation, (scope) =>
+          sourceRun(observation, scope, operation),
+        ),
+    };
+  });
+  return () => {
+    binding.mockRestore();
+    fetch.mockRestore();
+  };
+}
 
 export function createRpcResponseCapture(received = vi.fn<RespondFn>()) {
   // Undefined optional metadata is absent on the wire; retain any actual metadata.
@@ -148,10 +287,7 @@ export async function createFixture(
     connections.clients.add(client);
     return { client, socket, access };
   };
-  const load = vi.fn<SessionPrLoader>(async () => snapshot);
-  if (!useDefaultLoader) {
-    spyOnSessionPrLoader(load);
-  }
+  const load = vi.fn<Load>(async () => snapshot);
   const contextParams = makeContextParams(connections);
   const context = createGatewayRequestContext(contextParams);
   context.getRuntimeConfig = getRuntimeConfig;
@@ -159,7 +295,6 @@ export async function createFixture(
   context.resolveGatewayContext = resolveGatewayContext;
   const resources = new LegacyPluginSdkResourceHost();
   bindLegacyPluginSdkResourceHost(resolveGatewayContext, resources);
-  installGitHubAccountRpcFixture(getRuntimeConfig());
   const readHost = createRepositorySessionReadHost({
     signal: scheduler.signal,
     getRuntimeConfig,
@@ -170,25 +305,28 @@ export async function createFixture(
   });
   contextParams.runtime.runtimeState.repositorySessions = readHost;
   const reads = readHost.bindService(scheduler.signal, () => scheduler.signal.throwIfAborted());
-  const native = startGitHubSessionPresentation({ scheduler, getConfig: getRuntimeConfig, reads });
+  const stopProbe = !useDefaultLoader
+    ? installSourceTransportProbe(readHost, load, scheduler.signal)
+    : undefined;
+  const native = await startTestRepositorySessionPresentation(context, scheduler, undefined, {
+    cleanupOnFinish: false,
+  });
   const services = {
     stop: async () => {
-      await native.stop();
-      await scheduler.stop();
-      await resources.close();
+      try {
+        await native.stop({ strict: true });
+      } finally {
+        stopProbe?.();
+        await scheduler.stop();
+        await resources.close();
+      }
     },
   };
-  const presentation = native.presentation;
-  const subscriptions = {
-    ...presentation,
-    readPrepared: (
-      target:
-        | Parameters<typeof repositorySessionPrTarget>[0]
-        | ReturnType<typeof repositorySessionPrTarget>,
-      admitLoad?: () => boolean,
-    ) =>
-      presentation.readPrepared("observation" in target ? target.observation : target, admitLoad),
-  };
+  const presentation = readHost.presentation;
+  if (!presentation) {
+    throw new Error("Missing registered session presentation");
+  }
+  const subscriptions = presentation;
   await initializeSessionReadContext(context);
   const reader = addReader("guest-publication-reader");
   const projection = getSessionRowProjection(context);
@@ -386,7 +524,8 @@ export async function prepareSessionPrFixtureRead(params: {
   try {
     const repository = workspace?.current();
     const read = prepareSelectedRepositorySessionRead(
-      selected,
+      // Native projection/viewer observations use the admitted physical store target.
+      { ...selected, storePath: selected.readSource?.path ?? selected.storePath },
       repository &&
         repository.workspaceId === selected.entry?.repositoryWorkspaceId &&
         repository.agentId === selected.agentId &&

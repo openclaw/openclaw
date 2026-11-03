@@ -1,15 +1,16 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
+import type { ControlUiSessionPullRequests } from "openclaw/plugin-sdk/native-github-session-read";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
-} from "../test-utils/gateway-scheduler-clock.js";
-import type { ControlUiSessionPullRequests } from "./control-ui-contract.js";
-import type { TestSessionPrTarget as ControlUiSessionPrTarget } from "./control-ui-session-pr-subscriptions.test-support.js";
+} from "openclaw/plugin-sdk/plugin-test-api";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { TestSessionPrTarget as ControlUiSessionPrTarget } from "./session-pr-subscriptions.test-support.js";
 import {
   createTestControlUiSessionPrSubscriptions,
   createTestSessionPrReadSource,
-} from "./control-ui-session-pr-subscriptions.test-support.js";
+} from "./session-pr-subscriptions.test-support.js";
 
 const CHANGED_EVENT = "controlUi.sessionPullRequests.changed";
 const READY: ControlUiSessionPullRequests = { pullRequests: [], rateLimited: false };
@@ -75,8 +76,8 @@ function start(options: Omit<Options, "scheduler" | "broadcastToConnIds">) {
   return running;
 }
 
-beforeEach(({ onTestFinished }) => {
-  readSource = createTestSessionPrReadSource(onTestFinished);
+beforeEach(() => {
+  readSource = createTestSessionPrReadSource();
   broadcastToConnIds = vi.fn<Options["broadcastToConnIds"]>();
 });
 afterEach(async () => {

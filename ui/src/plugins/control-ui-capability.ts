@@ -3,6 +3,7 @@ import type {
   ControlUiActionV2 as ControlUiAction,
   ControlUiAccessory,
   ControlUiSessionAccessory,
+  ControlUiSessionBadgeAccessory,
   ControlUiDisposer,
   ControlUiHostV2 as ControlUiHost,
   ControlUiNavigationItem,
@@ -45,7 +46,7 @@ export type ControlUiContributions = {
   navigation: ControlUiNavigationItem;
   panels: ControlUiPanel;
   actions: ControlUiAction;
-  accessories: ControlUiAccessory | ControlUiSessionAccessory;
+  accessories: ControlUiAccessory | ControlUiSessionAccessory | ControlUiSessionBadgeAccessory;
   textReferences: ControlUiTextReferenceProvider;
   widgets: ControlUiWidget;
   inlineViews: Parameters<ControlUiHost["ui"]["registerInlineView"]>[0];

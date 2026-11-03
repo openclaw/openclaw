@@ -548,8 +548,16 @@ it("keeps a restored pin's badges after roster handoff until its own descriptor 
     children: [],
     state: {
       hasApproval: true,
-      pullRequestCount: 3,
-      pullRequest: { numbers: [17], state: "open" as const },
+      badges: [
+        {
+          pluginId: "github-repositories",
+          id: "pull-request",
+          icon: "gitPullRequest",
+          label: "3 pull requests",
+          count: 3,
+          state: "open",
+        },
+      ],
     },
   };
   host.restoreSidebarSnapshot({ ...emptySnapshot, pinnedSessions: [saved] });

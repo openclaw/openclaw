@@ -1,8 +1,15 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { GitHubCliUnavailableError } from "../../../extensions/github-repositories/cli-preflight-api.js";
-import { repositoryHandlers as toolsGitHubHandlers } from "../../../extensions/github-repositories/runtime-api.js";
-import { installGitHubAccountFixture } from "../github-account-service.test-support.js";
+import { captureRuntimeConfigAsyncReader } from "../../config/io.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  installGitHubAccountFixture,
+  installPublicationRpcFixture,
+} from "../github-account-service.test-support.js";
+import type { LegacyGitHubOAuthService } from "../github-oauth-lifecycle-host.types.js";
+import { loadGitHubRepositoryRuntimeFixture } from "../github-repository-fixture-api.test-support.js";
+import { createContext } from "../server-plugin-in-process-dispatch.test-support.js";
+import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const github = vi.hoisted(() => ({
   createProfileId: vi.fn(() => "ghp_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"),
@@ -14,30 +21,55 @@ const github = vi.hoisted(() => ({
 }));
 const secrets = vi.hoisted(() => ({ consumeHandoff: vi.fn() }));
 const logging = vi.hoisted(() => ({ logWarn: vi.fn() }));
-const oauth = {
-  startAuthorization: vi.fn(),
-  pollAuthorization: vi.fn(),
-  cancelAuthorizationAsync: vi.fn(),
-  refreshEffectiveIdentity: vi.fn(),
-  retireProfileAsync: vi.fn(),
+const executable = vi.hoisted(() => ({
+  resolve: vi.fn<typeof import("../../infra/executable-path.js").resolveExecutablePath>(),
+}));
+const unexpectedOAuthOperation = (): never => {
+  throw new Error("Unexpected OAuth operation in RPC dispatch fixture");
 };
+const oauth = {
+  startAuthorization: vi.fn<LegacyGitHubOAuthService["startAuthorization"]>(),
+  pollAuthorization: vi.fn<LegacyGitHubOAuthService["pollAuthorization"]>(),
+  cancelAuthorizationAsync: vi.fn<LegacyGitHubOAuthService["cancelAuthorizationAsync"]>(),
+  refreshEffectiveIdentity: vi.fn<LegacyGitHubOAuthService["refreshEffectiveIdentity"]>(),
+  retireProfileAsync: vi.fn<LegacyGitHubOAuthService["retireProfileAsync"]>(),
+  cancelAuthorization: unexpectedOAuthOperation,
+  retireProfile: unexpectedOAuthOperation,
+  status: unexpectedOAuthOperation,
+  maintain: unexpectedOAuthOperation,
+  start: unexpectedOAuthOperation,
+  stop: unexpectedOAuthOperation,
+  personal: {
+    status: unexpectedOAuthOperation,
+    revalidateStatus: unexpectedOAuthOperation,
+    startAuthorization: unexpectedOAuthOperation,
+    pollAuthorization: unexpectedOAuthOperation,
+    cancelAuthorization: unexpectedOAuthOperation,
+    cancelAuthorizationAsync: unexpectedOAuthOperation,
+    disconnect: unexpectedOAuthOperation,
+    disconnectAsync: unexpectedOAuthOperation,
+    refresh: unexpectedOAuthOperation,
+    maintain: unexpectedOAuthOperation,
+    stop: unexpectedOAuthOperation,
+  },
+} satisfies LegacyGitHubOAuthService;
 // mock-isolation: Keep credential/profile I/O synthetic while testing account RPC authorization and dispatch.
-vi.mock("../../../extensions/github-repositories/tool-identity-api.js", () => ({
+vi.mock("../../../extensions/github-repositories/tool-identity-api.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   createManagedGitHubProfileId: github.createProfileId,
   installManagedGitHubProfile: github.install,
   resolveConfiguredGitHubToolIdentity: github.configured,
   resolveManagedGitHubProfileDir: github.profileDir,
   resolveGitHubToolIdentityStatus: github.status,
 }));
-vi.mock(
-  "../../../extensions/github-repositories/tool-identity-config-api.js",
-  async (importOriginal) => ({
-    ...(await importOriginal<
-      typeof import("../../../extensions/github-repositories/tool-identity-config-api.js")
-    >()),
-    updateGitHubToolIdentityConfig: github.updateConfig,
-  }),
-);
+vi.mock("../../../extensions/github-repositories/tool-identity-config-api.js", () => ({
+  updateGitHubToolIdentityConfig: github.updateConfig,
+}));
+// The real plugin preflight owns CLI classification; only executable discovery is synthetic.
+vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugin-sdk/process-runtime.js")>()),
+  resolveExecutablePath: executable.resolve,
+}));
 vi.mock("../../secrets/store/secret-store.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../secrets/store/secret-store.js")>()),
   consumeGitHubSetupHandoff: secrets.consumeHandoff,
@@ -51,6 +83,8 @@ vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
   listAgentIds: vi.fn(() => ["main", "reviewer"]),
   resolveDefaultAgentId: vi.fn(() => "main"),
 }));
+
+const { repositoryHandlers: toolsGitHubHandlers } = await loadGitHubRepositoryRuntimeFixture();
 
 const status = {
   agentId: "main",
@@ -94,27 +128,31 @@ async function invoke(
     | "tools.github.authorize.cancel",
   params: Record<string, unknown>,
 ) {
-  const respond = vi.fn();
-  const context = { getRuntimeConfig: () => ({}) };
-  const uninstall = await installGitHubAccountFixture(context as never, oauth as never);
-  await expectDefined(
-    toolsGitHubHandlers[method],
-    `${method} handler`,
-  )({
-    params,
-    respond: respond as never,
-    context: context as never,
-    client: null,
-    req: { type: "req", id: "req-github", method },
-    isWebchatConnect: () => false,
-  });
-  await uninstall();
+  const respond = vi.fn<GatewayRequestHandlerOptions["respond"]>();
+  const context = createContext();
+  const uninstall = await installGitHubAccountFixture(context, oauth);
+  try {
+    await expectDefined(
+      toolsGitHubHandlers[method],
+      `${method} handler`,
+    )({
+      params,
+      respond,
+      context,
+      client: null,
+      req: { type: "req", id: "req-github", method },
+      isWebchatConnect: () => false,
+    });
+  } finally {
+    await uninstall();
+  }
   return respond;
 }
 
 describe("tools.github handlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    executable.resolve.mockReset().mockReturnValue("gh");
     github.configured.mockReturnValue(undefined);
     github.status.mockResolvedValue(status);
     github.updateConfig.mockResolvedValue({ next: true });
@@ -295,7 +333,7 @@ describe("tools.github handlers", () => {
       pollAfterMs: 5_000,
     });
     oauth.pollAuthorization.mockResolvedValue({ status: "pending", retryAfterMs: 10_000 });
-    oauth.cancelAuthorizationAsync.mockReturnValue(true);
+    oauth.cancelAuthorizationAsync.mockResolvedValue(true);
 
     const start = await invoke("tools.github.authorize.start", {
       scope: "agent",
@@ -335,18 +373,43 @@ describe("tools.github handlers", () => {
   });
 
   it("returns installation guidance when the Gateway host has no GitHub CLI", async () => {
-    oauth.startAuthorization.mockRejectedValue(new GitHubCliUnavailableError());
-
-    const respond = await invoke("tools.github.authorize.start", {
-      scope: "system",
-      agentId: "main",
+    executable.resolve.mockReturnValue(undefined);
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+      await captureRuntimeConfigAsyncReader()();
+      const context = createContext();
+      const account = await installPublicationRpcFixture(context, {});
+      const network = vi
+        .spyOn(globalThis, "fetch")
+        .mockRejectedValue(new Error("Unexpected OAuth request"));
+      const respond = vi.fn<GatewayRequestHandlerOptions["respond"]>();
+      try {
+        await expectDefined(
+          toolsGitHubHandlers["tools.github.authorize.start"],
+          "authorization handler",
+        )({
+          params: { scope: "system", agentId: "main" },
+          context,
+          respond,
+          client: null,
+          req: { type: "req", id: "missing-cli", method: "tools.github.authorize.start" },
+          isWebchatConnect: () => false,
+        });
+        expect(respond.mock.calls[0]?.[0]).toBe(false);
+        expect(JSON.stringify(respond.mock.calls)).toContain(
+          "GitHub CLI (`gh`) is required on the Gateway host. Install it and retry.",
+        );
+        expect(JSON.stringify(respond.mock.calls)).not.toContain("device_code");
+        expect(executable.resolve).toHaveBeenCalledWith(
+          "gh",
+          expect.objectContaining({ useCache: false }),
+        );
+        expect(oauth.startAuthorization).not.toHaveBeenCalled();
+        expect(network).not.toHaveBeenCalled();
+      } finally {
+        network.mockRestore();
+        await account.stop();
+      }
     });
-
-    expect(respond.mock.calls[0]?.[0]).toBe(false);
-    expect(JSON.stringify(respond.mock.calls)).toContain(
-      "GitHub CLI (`gh`) is required on the Gateway host. Install it and retry.",
-    );
-    expect(JSON.stringify(respond.mock.calls)).not.toContain("device_code");
   });
 
   it("fails closed when the secrets owner rejects the handoff", async () => {

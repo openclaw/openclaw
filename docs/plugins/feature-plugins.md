@@ -947,3 +947,14 @@ available immediately while other plugins are still initializing.
 
 For the underlying manifest fields, see [Plugin manifest](/plugins/manifest).
 For install, update, and removal, see [Manage plugins](/plugins/manage-plugins).
+
+A V2 `session-row` accessory may use `presentation: "badge"` with a synchronous
+`resolve(target)` and optional scoped `observe(target, changed)`. Resolve returns
+`{ status: "pending" }` while facts are unavailable, or `{ status: "ready", badge }`
+with native icon, label, count, fixed tone, and plain state facts. Ready without a
+badge explicitly clears it. Pending retains only that current producer's previously
+captured facts for the same session, target facts, and live registration; withdrawal removes them. The host uses that
+same projection for live badges and the existing principal-scoped sidebar snapshot;
+cached facts run no plugin code and supply no action or RPC authority. Registration
+withdrawal and the current catalog retire the live producer, while the existing
+snapshot owner retains scope, deletion, expiry, and handoff policy.

@@ -21,7 +21,7 @@ import {
 } from "./app-identity-api.js";
 import type { GitHubToolIdentityConfig } from "./config-api.js";
 import { readGitHubConfig, readGitHubAgentIdentity } from "./config-api.js";
-import { resolveConfiguredGitHubApiBaseUrl } from "./host-api.js";
+import { resolveConfiguredGitHubApiBaseUrl, resolveConfiguredGitHubHost } from "./host-api.js";
 import { resolveGitHubApiBaseUrl, resolveGitHubHost, withGitHubToken } from "./host-runtime-api.js";
 import { verifyGitHubCredential } from "./oauth-api.js";
 import {
@@ -168,6 +168,7 @@ function prepareGitHubToolEnvironmentForIdentity(
       managedLocalIdentity
         ? managedGitHubIdentityEnvironment({
             profileDir: resolveSelectedGitHubProfileDir(params, identity),
+            host: resolveConfiguredGitHubHost(params.config),
             gitAuthor: identity.config.gitAuthor,
           })
         : {},

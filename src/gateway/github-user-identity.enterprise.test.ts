@@ -26,7 +26,8 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import { prepareGitHubPublicationContent } from "./github-publication-content.test-support.js";
+import { installGitHubAccountRpcFixture } from "./github-account-service.test-support.js";
+import { prepareGitHubPublicationContentFacts } from "./github-publication-content.test-support.js";
 import { createAuthenticatedGitHubIdentitySync } from "./github-user-identity.js";
 import { createControlUiRequestOptions } from "./server-methods/control-ui-request.test-support.js";
 import { identifiedClient } from "./server-methods/sessions-sharing.test-support.js";
@@ -77,21 +78,13 @@ async function creditSession(env: NodeJS.ProcessEnv, id: string, participants: s
 
 function publicationFor(scope: Awaited<ReturnType<typeof creditSession>>, host: string) {
   const id = scope.sessionKey.slice("agent:main:".length);
-  return prepareGitHubPublicationContent({
+  return prepareGitHubPublicationContentFacts({
     host,
-    row: {
-      request_id: id,
-      agent_id: "main",
-      session_id: id,
-      session_key: scope.sessionKey,
-      branch: "work",
-      title: "Prepared change",
-    },
+    session: { agentId: "main", sessionId: id, sessionKey: scope.sessionKey },
     storePath: resolveSessionStorePathForScope(scope, {}),
     accountId: 999,
     assertCurrent: () => {},
     readCurrentEntry: () => loadSessionEntryReadOnly(scope),
-    description: "Synthetic publication",
   });
 }
 
@@ -119,6 +112,7 @@ function withCreditState(run: (state: OpenClawTestState) => Promise<void>) {
     { scenario: "minimal", prepareProfileCatalog: true },
     async (state) => {
       await captureRuntimeConfigAsyncReader()();
+      installGitHubAccountRpcFixture({});
       await run(state);
     },
   );
@@ -226,13 +220,13 @@ it.each(["ghe.example.test", "code.example.test"])(
       expect(prepared.attribution).toEqual(enterpriseCredit);
       expect(await resolveGitCoauthorAttribution({ ...scope, config: {} })).toEqual(publicCredit);
       const content = await publicationFor(scope, host);
-      expect(content.trailers).toEqual(enterpriseCredit.trailers);
-      expect(content.commitMessage).not.toContain("public-ada");
+      expect(content.credit.trailers).toEqual(enterpriseCredit.trailers);
+      expect(content.credit.logins).not.toContain("public-ada");
       const publicContent = await publicationFor(scope, "github.com");
-      expect(publicContent.trailers).toEqual(publicCredit.trailers);
+      expect(publicContent.credit.trailers).toEqual(publicCredit.trailers);
       setUserPreferences(profile.id, optedOut);
       expect(prepared.isCurrent()).toBe(false);
-      expect(() => content.assertAction()).toThrow("contributor credit changed");
+      expect(() => content.assertCurrent()).toThrow("contributor credit changed");
       expect(await resolveGitCoauthorAttribution(params)).toBeUndefined();
       await enterpriseSync("ada@enterprise.example", host)();
       expect(getUserPreferences(profile.id, [CREDIT_KEY])).toEqual(optedOut);
@@ -340,8 +334,10 @@ it("keeps global consent writable without a display primary after merging two en
     const scope = await creditSession(state.env, "multi-host-consent", [second.profileId]);
     const firstContent = await publicationFor(scope, "ghe.example.test");
     const secondContent = await publicationFor(scope, "code.example.test");
-    expect(firstContent.trailers).toEqual(enterpriseCredit.trailers);
-    expect(secondContent.trailers).toEqual(["Co-authored-by: enterprise-ada <ada@other.example>"]);
+    expect(firstContent.credit.trailers).toEqual(enterpriseCredit.trailers);
+    expect(secondContent.credit.trailers).toEqual([
+      "Co-authored-by: enterprise-ada <ada@other.example>",
+    ]);
     respond.mockClear();
     await call("users.prefs.set", { entries: optedOut });
     expect(respond).toHaveBeenCalledExactlyOnceWith(true, { status: "ok" }, undefined);
@@ -353,10 +349,10 @@ it("keeps global consent writable without a display primary after merging two en
       { status: "ok", entries: optedOut },
       undefined,
     );
-    expect(() => firstContent.assertAction()).toThrow("contributor credit changed");
-    expect(() => secondContent.assertAction()).toThrow("contributor credit changed");
+    expect(() => firstContent.assertCurrent()).toThrow("contributor credit changed");
+    expect(() => secondContent.assertCurrent()).toThrow("contributor credit changed");
     for (const host of ["ghe.example.test", "code.example.test"]) {
-      expect((await publicationFor(scope, host)).trailers).toEqual([]);
+      expect((await publicationFor(scope, host)).credit.trailers).toEqual([]);
     }
   });
 });

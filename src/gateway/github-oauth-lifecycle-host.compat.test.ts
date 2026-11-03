@@ -2,19 +2,32 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
-import repositoryManifest from "../../extensions/github-repositories/openclaw.plugin.json" with { type: "json" };
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { installNativeGitHubLegacyOAuthLookup } from "../plugin-sdk/native-github-account-host.js";
 import { loadOpenClawPluginsAsync } from "../plugins/loader.js";
+import { loadPluginManifest } from "../plugins/manifest.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { startPluginServices, type PluginServicesHandle } from "../plugins/services.js";
 import { updateUserGitHubConnection } from "../state/user-github-connections.test-support.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { resolveBundledPluginPublicModulePath } from "../test-utils/bundled-plugin-public-surface.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createRepositorySessionReadHost } from "./control-ui-session-pr-runtime.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams } from "./server-request-context.test-support.js";
+
+const repositoryRoot = path.dirname(
+  resolveBundledPluginPublicModulePath({
+    pluginId: "github-repositories",
+    artifactBasename: "index.ts",
+  }),
+);
+const loadedManifest = loadPluginManifest(repositoryRoot, false);
+if (!loadedManifest.ok) {
+  throw new Error(loadedManifest.error);
+}
+const repositoryManifest = loadedManifest.manifest;
 
 it("keeps the production legacy lookup absent without an admitted managed service", async () => {
   const params = makeContextParams();
@@ -43,7 +56,7 @@ it("projects only each Gateway's real account owner and retires captured sync ca
         plugins: {
           allow: [repositoryManifest.id],
           load: {
-            paths: [path.resolve(import.meta.dirname, "../../extensions/github-repositories")],
+            paths: [repositoryRoot],
           },
           entries: { [repositoryManifest.id]: { enabled: true } },
         },

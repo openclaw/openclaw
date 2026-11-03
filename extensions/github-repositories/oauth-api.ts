@@ -8,6 +8,7 @@ import {
   createOAuthRefreshResponseError,
 } from "openclaw/plugin-sdk/provider-oauth-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import { fetchWithRuntimeDispatcherOrMockedGlobal } from "openclaw/plugin-sdk/runtime-fetch";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveConfiguredGitHubApiBaseUrl } from "./host-api.js";
 import { clearNativeGitHubTokenCache } from "./read-identity-api.js";
@@ -203,7 +204,7 @@ async function postGitHubOAuthForm(
     await options.assertCurrent?.();
     signal.throwIfAborted();
     dispatched = true;
-    const response = await fetch(url, {
+    const response = await fetchWithRuntimeDispatcherOrMockedGlobal(url, {
       method: "POST",
       redirect: "error",
       headers: {
@@ -268,7 +269,7 @@ export async function verifyGitHubCredential(
         1,
       );
       const timeout = AbortSignal.timeout(timeoutMs);
-      const response = await fetch(`${apiBaseUrl}/user`, {
+      const response = await fetchWithRuntimeDispatcherOrMockedGlobal(`${apiBaseUrl}/user`, {
         method: "GET",
         redirect: "error",
         headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${token}` },

@@ -3,7 +3,6 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, expect, test, vi } from "vitest";
-import { readGitHubConfig } from "../../extensions/github-repositories/config-api.js";
 import { ProjectCloneError } from "../../extensions/github-repositories/project-clone-runtime-api.js";
 import { captureMethodCall } from "../../test/helpers/capture-method-call.js";
 import {
@@ -39,6 +38,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
+import { readGitHubConfig } from "./github-repository-fixture-api.test-support.js";
 import { createRepositorySources } from "./repository-sources.js";
 import { createChatRunState } from "./server-chat-state.js";
 import {
@@ -66,16 +66,11 @@ vi.mock("../auto-reply/reply/conversation-label-generator.js", () => ({
 }));
 
 vi.mock("../../extensions/github-repositories/project-clone-api.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<
-      typeof import("../../extensions/github-repositories/project-clone-api.js")
-    >();
+  const actual = await importOriginal<Record<string, unknown>>();
   return { ...actual, materializeProjectClone: projectCloneMocks.materialize };
 });
 vi.mock("../../extensions/github-repositories/tool-identity-api.js", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("../../extensions/github-repositories/tool-identity-api.js")
-  >()),
+  ...(await importOriginal<Record<string, unknown>>()),
   prepareGitHubReadIdentity: projectCloneMocks.prepareIdentity,
 }));
 

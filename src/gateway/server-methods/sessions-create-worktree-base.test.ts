@@ -90,10 +90,7 @@ async function cleanupRun(
 }
 
 vi.mock("../../../extensions/github-repositories/project-clone-api.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<
-      typeof import("../../../extensions/github-repositories/project-clone-api.js")
-    >();
+  const actual = await importOriginal<Record<string, unknown>>();
   return { ...actual, materializeProjectClone: projectCloneMocks.materialize };
 });
 

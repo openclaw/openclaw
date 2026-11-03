@@ -30,6 +30,24 @@ const childrenState = {
   queuedChildCount: json.optional(json.number),
   unreadChildCount: json.optional(json.number),
 };
+const badgeText = json.refine(json.text, (value) => value.length <= 1024);
+const badgeFields = {
+  icon: badgeText,
+  label: badgeText,
+  count: json.optional(
+    json.refine(json.number, (value) => Number.isSafeInteger(value) && value >= 0),
+  ),
+  tone: json.optional(json.enumeration(["muted", "positive", "negative", "accent", "violet"])),
+  state: json.optional(badgeText),
+};
+export const sessionBadgeSchema = json.object(badgeFields);
+const cachedSessionBadgeSchema = json.object({
+  pluginId: badgeText,
+  id: json.refine(badgeText, (value) => /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(value)),
+  ...badgeFields,
+});
+export type SidebarSnapshotSessionBadge = json.SnapshotValue<typeof cachedSessionBadgeSchema>;
+
 const state = json.object({
   pinnable: json.optional(json.literal(false)),
   childCount: json.optional(json.number),
@@ -53,6 +71,7 @@ const state = json.object({
   ),
   pullRequestCount: json.optional(json.number),
   hasApproval: json.optional(json.boolean),
+  badges: json.optional(json.array(cachedSessionBadgeSchema)),
 });
 const sessionFields = {
   key: sessionKey,

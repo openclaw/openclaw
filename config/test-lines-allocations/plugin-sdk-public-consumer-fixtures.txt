@@ -1,0 +1,2 @@
+# Public registered-provider and native source-owner fixtures, typed facade adapters, lifecycle cleanup, and passive-badge reload regressions retain original consumer assertions while removing private implementation imports. Exact repair growth beyond existing allocations; shared scalar unchanged.
+2824

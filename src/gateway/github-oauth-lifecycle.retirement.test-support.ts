@@ -1,7 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { expect, it, type Mock } from "vitest";
-import type { createGitHubOAuthLifecycle } from "../../extensions/github-repositories/oauth-lifecycle-api.js";
-import { resolveConfiguredGitHubToolIdentity } from "../../extensions/github-repositories/tool-identity-api.js";
 import { listGitHubDeviceAuthorizationRecords } from "../agents/github-oauth-records.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -9,10 +7,22 @@ import {
   removeAgentDeletionJournal,
 } from "../test-utils/agent-deletion-journal.js";
 import { seedAgentProvenance } from "../test-utils/agent-provenance.js";
+import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
+import type { LegacyGitHubOAuthService } from "./github-oauth-lifecycle-host.types.js";
 import { NOW } from "./github-oauth-lifecycle.test-support.js";
 
+const { resolveConfiguredGitHubToolIdentity } = await loadBundledPluginFacade<{
+  resolveConfiguredGitHubToolIdentity(params: {
+    config: OpenClawConfig;
+    agentId: string;
+    scope: "system" | "agent";
+  }): { profileId: string } | undefined;
+}>({ pluginId: "github-repositories", artifactBasename: "tool-identity-api.js" });
+
 export function registerGitHubOAuthRetirementTests(params: {
-  createLifecycle: () => ReturnType<typeof createGitHubOAuthLifecycle>;
+  createLifecycle: () => Promise<
+    Pick<LegacyGitHubOAuthService, "startAuthorization" | "pollAuthorization" | "stop">
+  >;
   replaceIdentity: () => void;
   getConfig: () => OpenClawConfig;
   advanceToPoll: (requestId: string) => Promise<void>;
@@ -28,7 +38,7 @@ export function registerGitHubOAuthRetirementTests(params: {
   it.each(["identity replacement", "shutdown"] as const)(
     "does not request a device code after %s during agent preparation",
     async (change) => {
-      const lifecycle = createLifecycle();
+      const lifecycle = await createLifecycle();
       const pending = lifecycle.startAuthorization({ scope: "agent", agentId: "main" });
       const rejected = expect(pending).rejects.toThrow();
       if (change === "identity replacement") {
@@ -44,7 +54,7 @@ export function registerGitHubOAuthRetirementTests(params: {
   );
 
   it("rejects an agent authorization after the agent enters deletion", async () => {
-    const lifecycle = createLifecycle();
+    const lifecycle = await createLifecycle();
     const started = await lifecycle.startAuthorization({ scope: "agent", agentId: "main" });
     const deletion = beginAgentDeletionJournal({
       agentId: "main",
@@ -69,7 +79,7 @@ export function registerGitHubOAuthRetirementTests(params: {
   });
 
   it("rejects an agent authorization after same-id recreation gets fresh provenance", async () => {
-    const lifecycle = createLifecycle();
+    const lifecycle = await createLifecycle();
     const started = await lifecycle.startAuthorization({ scope: "agent", agentId: "main" });
     seedAgentProvenance("main", { createdVia: "operator" }, { nowMs: NOW + 1 });
     await advanceToPoll(started.requestId);

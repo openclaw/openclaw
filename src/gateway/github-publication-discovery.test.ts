@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createGitHubPublicationProvider } from "../../extensions/github-repositories/runtime-api.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import {
@@ -7,6 +6,7 @@ import {
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import { createRepositoryPublicationDiscovery } from "./github-publication-discovery.js";
+import { loadGitHubRepositoryRuntimeFixture } from "./github-repository-fixture-api.test-support.js";
 import { prepareRepositoryWorkerPublicationFact } from "./worker-environments/worker-github-binding.js";
 
 // Keep workspace qualification outside this demand-cache test; its worker suite exercises real ownership.
@@ -16,9 +16,7 @@ vi.mock("./worker-environments/worker-github-binding.js", async (importOriginal)
 }));
 // The actual vendor issues an opaque identity lease; only credential discovery is synthetic.
 vi.mock("../../extensions/github-repositories/tool-identity-api.js", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("../../extensions/github-repositories/tool-identity-api.js")
-  >()),
+  ...(await importOriginal<Record<string, unknown>>()),
   prepareGitHubPublicationIdentity: async () => ({
     source: "system-detected",
     account: { accountId: 42, login: "discovery-bot" },
@@ -26,6 +24,8 @@ vi.mock("../../extensions/github-repositories/tool-identity-api.js", async (impo
   }),
   matchesPreparedGitHubPublicationIdentity: () => true,
 }));
+
+const { createGitHubPublicationProvider } = await loadGitHubRepositoryRuntimeFixture();
 
 const session = { agentId: "main", sessionKey: "agent:main:discovery", sessionId: "session-1" };
 type PreparedFact = Awaited<ReturnType<typeof prepareRepositoryWorkerPublicationFact>>;

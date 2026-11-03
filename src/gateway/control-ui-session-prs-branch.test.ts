@@ -7,9 +7,22 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as worktreeGit from "../agents/worktrees/git.js";
 import { runGitReadOperation } from "../infra/git-read-cache.js";
+import * as gitWorker from "../infra/git-worker.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
+import {
+  createTestControlUiSessionPrSubscriptions,
+  createTestSessionPrReadSource,
+  prepareTestSessionPrRead,
+} from "./control-ui-session-pr-subscriptions.test-support.js";
 import {
   createSessionPullRequestsFixture,
   githubJson,
+  localPrGitReads as localGitReads,
+  mockPrCheckout,
+  requestUrl,
   pullListItem,
   routedFetch,
   testGitContext as context,
@@ -147,6 +160,7 @@ describe("session branch diff stats", () => {
     vi.stubGlobal("fetch", routedFetch([]));
     const load = () => loadCheckout("discovery", true);
     const initial = {
+      status: "ready",
       pullRequests: [],
       rateLimited: false,
       repository: { owner: "openclaw", repo: "openclaw" },
@@ -159,7 +173,11 @@ describe("session branch diff stats", () => {
     expect(reads).not.toHaveBeenCalled();
     reads.mockRestore();
     await git("remote", "set-url", "origin", "https://gitlab.com/openclaw/openclaw.git");
-    await expect(load()).resolves.toEqual({ pullRequests: [], rateLimited: false });
+    await expect(load()).resolves.toEqual({
+      pullRequests: [],
+      rateLimited: false,
+      status: "ready",
+    });
     await git("remote", "set-url", "origin", "https://github.com/openclaw/openclaw.git");
     await git("checkout", "--detach");
     await expect(load()).resolves.toEqual(initial);
@@ -403,5 +421,280 @@ describe("session branch diff stats", () => {
       });
       expect((await load()).pullRequests).toEqual([]);
     });
+  });
+});
+
+// Revision-aware Git caches belong to the native source, behind the plugin read contract.
+describe("native checkout observations behind the session PR SDK", () => {
+  let elapsedMs = 0;
+  const running = new Set<Awaited<ReturnType<typeof createTestControlUiSessionPrSubscriptions>>>();
+  beforeEach(() => {
+    vi.spyOn(gitWorker, "runGitWorkerOperation");
+    vi.useFakeTimers({ toFake: ["Date", "performance"] });
+    elapsedMs = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
+    vi.stubEnv("GH_TOKEN", "");
+    vi.stubEnv("GITHUB_TOKEN", "");
+  });
+  afterEach(async () => {
+    for (const service of running) {
+      await service.stop();
+    }
+    running.clear();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+  const load = (
+    params: Partial<Parameters<typeof loadControlUiSessionPullRequests>[0]> = {},
+    deps: Parameters<typeof loadControlUiSessionPullRequests>[1] = {},
+  ) =>
+    loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:main", ...params },
+      { resolveGitContext: async () => context, ...deps },
+    );
+  const pullsRoute = (response: () => Response | Promise<Response>) => ({
+    match: "/pulls?head=",
+    response,
+  });
+  const repoRoute = () => ({
+    match: "/repos/openclaw/openclaw",
+    response: () => githubJson({ fork: false }),
+  });
+  it("revalidates local facts on refresh and observes changed merged heads or the slow fallback", async () => {
+    let pulls: Record<string, unknown>[] = [];
+    const fetchImpl = routedFetch([pullsRoute(() => githubJson(pulls)), repoRoute()]);
+    vi.stubGlobal("fetch", fetchImpl);
+    let additions = 1;
+    mockPrCheckout({
+      revision: () => "unchanged",
+      additions: (root) => (root === "/repo/b" ? 3 : additions),
+    });
+    const loadSession = (sessionKey: string, refresh = false) =>
+      load(
+        { sessionKey, ...(refresh ? { refresh: true } : {}) },
+        {
+          resolveGitContext: async () => ({
+            ...context,
+            branch: "cache/test",
+            root: sessionKey.endsWith(":b") ? "/repo/b" : "/repo/a",
+            defaultBranch: "main",
+          }),
+        },
+      );
+
+    expect((await loadSession("agent:main:a")).branch?.additions).toBe(1);
+    additions = 2;
+    expect((await loadSession("agent:main:a")).branch?.additions).toBe(1);
+    expect(localGitReads()).toHaveLength(1);
+    expect((await loadSession("agent:main:a", true)).branch?.additions).toBe(1);
+    expect(localGitReads()).toHaveLength(1);
+    expect(
+      fetchImpl.mock.calls.filter((call) =>
+        requestUrl(call[0] as RequestInfo | URL).includes("/pulls?head="),
+      ),
+    ).toHaveLength(2);
+
+    pulls = [pullListItem({ merged_at: "2026-07-09T10:00:00Z" })];
+    additions = 4;
+    expect((await loadSession("agent:main:a", true)).branch?.additions).toBe(4);
+    expect(localGitReads()).toHaveLength(2);
+
+    const githubRequests = fetchImpl.mock.calls.length;
+    elapsedMs += 60_000;
+    vi.advanceTimersByTime(60_000);
+    additions = 5;
+    expect((await loadSession("agent:main:a")).branch?.additions).toBe(4);
+    expect(localGitReads()).toHaveLength(2);
+    expect(fetchImpl.mock.calls).toHaveLength(githubRequests);
+
+    elapsedMs += 240_001;
+    vi.advanceTimersByTime(240_001);
+    expect((await loadSession("agent:main:a")).branch?.additions).toBe(5);
+    expect(localGitReads()).toHaveLength(3);
+
+    expect((await loadSession("agent:main:b")).branch?.additions).toBe(3);
+    expect(localGitReads()).toHaveLength(4);
+  });
+
+  it("refreshes branch context on metadata changes without repeating it for working-tree activity", async () => {
+    let branch = "feature-a";
+    let revision: string | null = "initial";
+    vi.stubGlobal("fetch", routedFetch([pullsRoute(() => githubJson([])), repoRoute()]));
+    mockPrCheckout({
+      revision: () => revision,
+      resolve: (root) => ({
+        originUrl: `https://github.com/${context.owner}/${context.repo}`,
+        branch,
+        root,
+        defaultBranch: "main",
+      }),
+    });
+    const loadContext = (refresh = false) =>
+      load(
+        { sessionKey: "agent:main:context-refresh", ...(refresh ? { refresh: true } : {}) },
+        { resolveGitRoot: async () => "/repo/forced-context", resolveGitContext: undefined },
+      );
+
+    expect((await loadContext()).branch?.branch).toBe("feature-a");
+    branch = "feature-b";
+    expect((await loadContext()).branch?.branch).toBe("feature-a");
+    expect((await loadContext(true)).branch?.branch).toBe("feature-a");
+    revision = "changed-head";
+    expect((await loadContext()).branch?.branch).toBe("feature-b");
+    expect(
+      localGitReads().filter(([operation]) => operation.type === "checkout.context"),
+    ).toHaveLength(2);
+    // Unsupported layouts retain immediate explicit branch discovery.
+    revision = null;
+    expect((await loadContext()).branch?.branch).toBe("feature-b");
+    branch = "feature-c";
+    expect((await loadContext(true)).branch?.branch).toBe("feature-c");
+  });
+
+  const stubPulls = (response: () => Response, includeRepository = false) => {
+    const fetchImpl = routedFetch([
+      pullsRoute(response),
+      ...(includeRepository ? [repoRoute()] : []),
+    ]);
+    vi.stubGlobal("fetch", fetchImpl);
+    return fetchImpl;
+  };
+  const watchedKeys = (count: number, offset = 0) =>
+    Array.from({ length: count }, (_, index) => `watched-${index + offset}`);
+  const mockCheckout = (
+    revision: () => string | null,
+    branch: (root: string) => string | null,
+    additions?: () => number,
+  ) =>
+    mockPrCheckout({
+      revision,
+      additions,
+      emptyFacts: true,
+      resolve: (root) => ({
+        originUrl: "https://github.com/openclaw/openclaw",
+        root,
+        branch: branch(root),
+        defaultBranch: "main",
+      }),
+    });
+  const subscribe = async (
+    root: string | ((key: string) => string),
+    broadcastToConnIds: Parameters<
+      typeof createTestControlUiSessionPrSubscriptions
+    >[0]["broadcastToConnIds"] = vi.fn(),
+  ) => {
+    const readSource = createTestSessionPrReadSource();
+    const clock = createGatewaySchedulerClock(Date.now());
+    const service = await createTestControlUiSessionPrSubscriptions({
+      scheduler: createTestGatewayScheduler(clock.clock),
+      broadcastToConnIds,
+      prepareRead: async (_connId, session) => async () =>
+        prepareTestSessionPrRead({
+          session: {
+            ...session,
+            agentId: session.agentId ?? "main",
+            sessionId: session.sessionKey,
+          },
+          identity: session.sessionKey,
+          readSource,
+          source: {
+            kind: "checkout",
+            root: typeof root === "string" ? root : root(session.sessionKey),
+          },
+        }),
+    });
+    running.add(service);
+    return service;
+  };
+  const pollAfter = async (service: Awaited<ReturnType<typeof subscribe>>, elapsed: number) => {
+    elapsedMs += elapsed;
+    vi.setSystemTime(Date.now() + elapsed);
+    await service.pollNow();
+  };
+
+  it("shares checkout facts across subscribers and refreshes both only when refs change", async () => {
+    let revision = "first-head";
+    let additions = 1;
+    stubPulls(() => githubJson([]), true);
+    mockCheckout(
+      () => revision,
+      () => "shared-feature",
+      () => additions,
+    );
+    const broadcastToConnIds = vi.fn();
+    const subscriptions = await subscribe("/watched/shared-checkout", broadcastToConnIds);
+    const expectReads = (count: number) => {
+      for (const type of ["checkout.context", "pull-request.branch-facts"]) {
+        expect(localGitReads().filter(([operation]) => operation.type === type)).toHaveLength(
+          count,
+        );
+      }
+    };
+    const expectDelivered = (connId: string, sessionKey: string, expectedAdditions: number) => {
+      const snapshot = expect.objectContaining({
+        status: "ready",
+        branch: expect.objectContaining({ additions: expectedAdditions }),
+      });
+      expect(broadcastToConnIds).toHaveBeenCalledWith(
+        "controlUi.sessionPullRequests.changed",
+        { sessions: { [sessionKey]: snapshot } },
+        new Set([connId]),
+        expect.anything(),
+      );
+    };
+    await Promise.all([
+      subscriptions.replace("first", ["shared-first"]),
+      subscriptions.replace("second", ["shared-second"]),
+    ]);
+    expectReads(1);
+    expectDelivered("first", "shared-first", 1);
+    expectDelivered("second", "shared-second", 1);
+
+    broadcastToConnIds.mockClear();
+    await subscriptions.replace("first", ["shared-first"], new Set(["shared-first"]));
+    await subscriptions.pollNow();
+    expectReads(1);
+    expectDelivered("first", "shared-first", 1);
+
+    revision = "second-head";
+    additions = 2;
+    broadcastToConnIds.mockClear();
+    await subscriptions.pollNow();
+    expectReads(2);
+    expectDelivered("first", "shared-first", 2);
+    expectDelivered("second", "shared-second", 2);
+
+    subscriptions.unsubscribe("first");
+    broadcastToConnIds.mockClear();
+    await subscriptions.replace("second", ["shared-second"], new Set(["shared-second"]));
+    expectReads(2);
+    expectDelivered("second", "shared-second", 2);
+  });
+
+  it("retains GitHub snapshots for the watched union across a poll", async () => {
+    const fetchImpl = stubPulls(() =>
+      githubJson([pullListItem({ merged_at: "2026-07-09T10:00:00Z" })]),
+    );
+    mockCheckout(
+      () => "unchanged",
+      (root) => root.slice("/watched/".length),
+    );
+    const subscriptions = await subscribe((key) => `/watched/${key}`);
+    await subscriptions.replace("first", watchedKeys(200));
+    await subscriptions.replace("second", watchedKeys(100, 200));
+    expect(fetchImpl.mock.calls).toHaveLength(300);
+    expect(localGitReads()).toHaveLength(600);
+
+    for (const elapsed of [60_000, 15_001]) {
+      await pollAfter(subscriptions, elapsed);
+      expect(fetchImpl.mock.calls).toHaveLength(300);
+      expect(localGitReads()).toHaveLength(600);
+    }
+    await pollAfter(subscriptions, 225_000);
+    expect(localGitReads()).toHaveLength(900);
+    await subscriptions.stop();
+    running.delete(subscriptions);
   });
 });

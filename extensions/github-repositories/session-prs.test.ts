@@ -1,22 +1,18 @@
 import { getEventListeners } from "node:events";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { parseGitHubRemoteUrl } from "../../extensions/github-repositories/remote-api.js";
-import { createDeferred } from "../../test/helpers/promise.js";
-import { runGitWorkerOperation } from "../infra/git-worker.js";
+import { parseGitHubRemoteUrl } from "./remote-api.js";
 import {
   createSessionPullRequestsFixture,
   githubJson,
-  localPrGitReads as localGitReads,
-  mockPrCheckout,
+  resetLocalPrGitReads,
   pullListItem,
   requestUrl,
   routedFetch,
   testGitContext as context,
-} from "./control-ui-session-prs.test-support.js";
+} from "./session-prs.test-support.js";
 
 const { load: loadControlUiSessionPullRequests } = createSessionPullRequestsFixture();
-
-vi.mock("../infra/git-worker.js", () => ({ runGitWorkerOperation: vi.fn() }));
 
 const resolveGitContext = async () => context;
 let cacheEpochMs = Date.now();
@@ -106,7 +102,7 @@ describe("parseGitHubRemoteUrl", () => {
 
 describe("loadControlUiSessionPullRequests", () => {
   beforeEach(() => {
-    vi.mocked(runGitWorkerOperation).mockReset();
+    resetLocalPrGitReads();
     vi.useFakeTimers();
     vi.stubEnv("GH_TOKEN", "");
     vi.stubEnv("GITHUB_TOKEN", "");
@@ -382,95 +378,6 @@ describe("loadControlUiSessionPullRequests", () => {
     const result = await load({}, { resolveGitContext: async () => null });
     expect(result).toEqual({ pullRequests: [], rateLimited: false });
     expect(fetchImpl.mock.calls).toHaveLength(0);
-  });
-
-  it("revalidates local facts on refresh and observes changed merged heads or the slow fallback", async () => {
-    let pulls: Record<string, unknown>[] = [];
-    const fetchImpl = routedFetch([pullsRoute(() => githubJson(pulls)), repoRoute()]);
-    vi.stubGlobal("fetch", fetchImpl);
-    let additions = 1;
-    mockPrCheckout({
-      revision: () => "unchanged",
-      additions: (root) => (root === "/repo/b" ? 3 : additions),
-    });
-    const loadSession = (sessionKey: string, refresh = false) =>
-      load(
-        { sessionKey, ...(refresh ? { refresh: true } : {}) },
-        {
-          resolveGitContext: async () => ({
-            ...context,
-            branch: "cache/test",
-            root: sessionKey.endsWith(":b") ? "/repo/b" : "/repo/a",
-            defaultBranch: "main",
-          }),
-        },
-      );
-
-    expect((await loadSession("agent:main:a")).branch?.additions).toBe(1);
-    additions = 2;
-    expect((await loadSession("agent:main:a")).branch?.additions).toBe(1);
-    expect(localGitReads()).toHaveLength(1);
-    expect((await loadSession("agent:main:a", true)).branch?.additions).toBe(1);
-    expect(localGitReads()).toHaveLength(1);
-    expect(
-      fetchImpl.mock.calls.filter((call) =>
-        requestUrl(call[0] as RequestInfo | URL).includes("/pulls?head="),
-      ),
-    ).toHaveLength(2);
-
-    pulls = [pullListItem({ merged_at: "2026-07-09T10:00:00Z" })];
-    additions = 4;
-    expect((await loadSession("agent:main:a", true)).branch?.additions).toBe(4);
-    expect(localGitReads()).toHaveLength(2);
-
-    const githubRequests = fetchImpl.mock.calls.length;
-    vi.advanceTimersByTime(60_000);
-    additions = 5;
-    expect((await loadSession("agent:main:a")).branch?.additions).toBe(4);
-    expect(localGitReads()).toHaveLength(2);
-    expect(fetchImpl.mock.calls).toHaveLength(githubRequests);
-
-    vi.advanceTimersByTime(240_001);
-    expect((await loadSession("agent:main:a")).branch?.additions).toBe(5);
-    expect(localGitReads()).toHaveLength(3);
-
-    expect((await loadSession("agent:main:b")).branch?.additions).toBe(3);
-    expect(localGitReads()).toHaveLength(4);
-  });
-
-  it("refreshes branch context on metadata changes without repeating it for working-tree activity", async () => {
-    let branch = "feature-a";
-    let revision: string | null = "initial";
-    vi.stubGlobal("fetch", routedFetch([pullsRoute(() => githubJson([])), repoRoute()]));
-    mockPrCheckout({
-      revision: () => revision,
-      resolve: (root) => ({
-        originUrl: `https://github.com/${context.owner}/${context.repo}`,
-        branch,
-        root,
-        defaultBranch: "main",
-      }),
-    });
-    const loadContext = (refresh = false) =>
-      load(
-        { sessionKey: "agent:main:context-refresh", ...(refresh ? { refresh: true } : {}) },
-        { resolveGitRoot: async () => "/repo/forced-context", resolveGitContext: undefined },
-      );
-
-    expect((await loadContext()).branch?.branch).toBe("feature-a");
-    branch = "feature-b";
-    expect((await loadContext()).branch?.branch).toBe("feature-a");
-    expect((await loadContext(true)).branch?.branch).toBe("feature-a");
-    revision = "changed-head";
-    expect((await loadContext()).branch?.branch).toBe("feature-b");
-    expect(
-      localGitReads().filter(([operation]) => operation.type === "checkout.context"),
-    ).toHaveLength(2);
-    // Unsupported layouts retain immediate explicit branch discovery.
-    revision = null;
-    expect((await loadContext()).branch?.branch).toBe("feature-b");
-    branch = "feature-c";
-    expect((await loadContext(true)).branch?.branch).toBe("feature-c");
   });
 
   it("queues one forced refresh behind an ordinary in-flight lookup", async () => {

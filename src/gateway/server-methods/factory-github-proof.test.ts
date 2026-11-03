@@ -7,9 +7,7 @@ import { coreGatewayHandlers } from "./core-handlers.js";
 import type { GatewayClient, GatewayRequestHandlerOptions } from "./types.js";
 
 vi.mock("../../../extensions/github-repositories/host-runtime-api.js", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("../../../extensions/github-repositories/host-runtime-api.js")
-  >()),
+  ...(await importOriginal<Record<string, unknown>>()),
   resolveGitHubHost: () => "example.ghe.com",
 }));
 

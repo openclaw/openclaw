@@ -18,6 +18,7 @@ import {
   type GitCommandOptions,
   type GitOperationStarter,
 } from "openclaw/plugin-sdk/process-runtime";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
 export { ProjectCloneError, configureProjectCheckoutMaintenance };
 
@@ -219,7 +220,9 @@ export async function refreshProjectCheckout(
     );
   }
   const objects = await fs.realpath(objectPath.stdout.trim());
-  const staging = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-project-fetch-"));
+  const staging = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-project-fetch-"),
+  );
   let retainStaging = false;
   try {
     const initialized = await runProjectCheckoutGit({ target: staging }, options, [
@@ -426,7 +429,7 @@ export async function ensureProjectCheckoutCommit(
   if (present.code === 0 && present.termination === "exit" && present.stdout.trim()) {
     return;
   }
-  const fetch = () =>
+  const fetchCommit = () =>
     command([
       "fetch",
       "--no-auto-maintenance",
@@ -438,12 +441,12 @@ export async function ensureProjectCheckoutCommit(
     ]);
   const fetched = await withGitRepositoryRepair({
     cwd: input.target,
-    result: await fetch(),
+    result: await fetchCommit(),
     remote: input.url,
     signal: options.signal,
     assertCurrent: options.assertCurrent,
     run: (args, commandOptions) => runProjectCheckoutGit(input, options, args, commandOptions),
-    retry: fetch,
+    retry: fetchCommit,
   });
   if (fetched.code !== 0 || fetched.termination !== "exit") {
     throw classifyProjectGitFailure(fetched, "fetch", Boolean(options.token));
@@ -504,7 +507,7 @@ export async function resolveProjectCheckoutBase(
           "Choose a branch, tag, or commit as the worktree base.",
         ),
     );
-    const fetch = () =>
+    const fetchRef = () =>
       runProjectCheckoutGit(
         input,
         { ...options, timeoutMs: options.timeoutMs ?? PROJECT_FETCH_TIMEOUT_MS },
@@ -520,12 +523,12 @@ export async function resolveProjectCheckoutBase(
       );
     const fetched = await withGitRepositoryRepair({
       cwd: input.target,
-      result: await fetch(),
+      result: await fetchRef(),
       remote: input.url,
       signal: options.signal,
       assertCurrent: options.assertCurrent,
       run: (args, commandOptions) => runProjectCheckoutGit(input, options, args, commandOptions),
-      retry: fetch,
+      retry: fetchRef,
     });
     if (fetched.code !== 0 || fetched.termination !== "exit") {
       if (

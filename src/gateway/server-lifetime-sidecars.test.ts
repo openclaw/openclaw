@@ -41,9 +41,7 @@ import { createSessionRowProjectionFixture } from "./session-row-projection.test
 const oauth = vi.hoisted(() => ({ create: vi.fn() }));
 
 vi.mock("../../extensions/github-repositories/oauth-lifecycle-api.js", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("../../extensions/github-repositories/oauth-lifecycle-api.js")
-  >()),
+  ...(await importOriginal<Record<string, unknown>>()),
   createGitHubOAuthLifecycle: oauth.create,
 }));
 

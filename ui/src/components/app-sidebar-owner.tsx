@@ -9,6 +9,7 @@ import {
   catalogSessionKeyFromSearch,
 } from "../lib/sessions/catalog-key.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
+import type { SessionBadgeCaptureContext } from "../plugins/control-ui-session-badges.ts";
 import "./sidebar-attention.tsx";
 import "./tooltip.ts";
 import { SidebarOnlineHeader, SidebarPagesHeader } from "./app-sidebar-panel-headers.tsx";
@@ -185,13 +186,18 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     return isSidebarSnapshotSettled(this);
   }
 
-  captureSidebarSnapshot(): SidebarSnapshotModel | null {
+  captureSidebarSnapshot(
+    previous?: SidebarSnapshotModel,
+    badges?: SessionBadgeCaptureContext,
+  ): SidebarSnapshotModel | null {
     const rows = this.selectedAgentSessionRows(this.getSessionNavigationState());
     return captureSidebarSnapshotModel(
       this,
       this.context,
       rows,
       this.zonedVisibleSections(rows).sections,
+      previous,
+      badges,
     );
   }
 

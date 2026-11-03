@@ -1,7 +1,7 @@
 import { onTestFinished } from "vitest";
 import { createRepositoryBrowserRuntime } from "../../../extensions/github-repositories/browser/repository-runtime.ts";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../extensions/github-repositories/browser/session-pull-requests.ts";
-import { createSidebarAccessoryMount } from "../../../extensions/github-repositories/browser/sidebar-accessory.tsx";
+import { createSidebarBadgeAccessory } from "../../../extensions/github-repositories/browser/sidebar-accessory.tsx";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../packages/gateway-protocol/src/control-ui-session-pull-requests.ts";
 import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
@@ -94,13 +94,9 @@ export function installSidebarRepository(context: ApplicationContext) {
     actions: [],
     accessories: [
       {
-        key: "github-repositories/repository-row",
+        key: "github-repositories/pull-request",
         pluginId: "github-repositories",
-        value: {
-          id: "repository-row",
-          placement: "session-row",
-          mount: createSidebarAccessoryMount(repository),
-        },
+        value: createSidebarBadgeAccessory(host, repository),
         host,
         signal: abort.signal,
       },

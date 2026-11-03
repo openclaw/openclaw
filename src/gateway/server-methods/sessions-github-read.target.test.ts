@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { prepareGitHubPublicationTarget } from "../../../extensions/github-repositories/runtime-api.js";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runGit } from "../../agents/worktrees/git.js";
@@ -25,7 +24,6 @@ import {
   mockPublicationIdentity,
   optionsResult,
   publisher,
-  publisherIdentity,
   receipt,
   sessionKey,
   withHeldReceipt,
@@ -203,17 +201,7 @@ describe("registered guest publication target discovery", () => {
       expectReply(await options(fixture), sharedOptions);
       expect(lookup).toHaveBeenCalledOnce();
       await expect(
-        (async () => {
-          const source = await availability.readRepositoryPublicationTargetFacts({
-            worktree,
-            assertCurrent: () => {},
-          });
-          return prepareGitHubPublicationTarget({
-            source,
-            identity: { ...publisherIdentity(), env: {} },
-            assertCurrent: () => {},
-          });
-        })(),
+        availability.readRepositoryPublicationTargetFacts({ worktree, assertCurrent: () => {} }),
       ).rejects.toThrow(repositoryChanged);
       now += 1;
       expectFailure(await options(fixture), { message: repositoryChanged });

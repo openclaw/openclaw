@@ -108,30 +108,6 @@ export function SettingsSecretInput(
   const host = useSettings().components;
   return hostControl(() => ({ ...props }), host.mountSecretInput);
 }
-export function SettingsSegmented<T extends string>(props: {
-  value: T;
-  options: readonly { value: T; label: string }[];
-  disabled?: boolean;
-  ariaLabel?: string;
-  onChange: (value: T) => void;
-}) {
-  const host = useSettings().components;
-  return hostControl(
-    () => ({
-      value: props.value,
-      options: props.options,
-      disabled: props.disabled,
-      ariaLabel: props.ariaLabel,
-      onChange: (value: string) => {
-        const option = props.options.find((entry) => entry.value === value);
-        if (option) {
-          props.onChange(option.value);
-        }
-      },
-    }),
-    host.mountSegmented,
-  );
-}
 export function Icon(props: { name: "copy" }) {
   const host = useSettings().components;
   return hostControl(() => ({ name: props.name }), host.mountIcon);

@@ -27,9 +27,7 @@ import { createRepositorySourcesFixture } from "./repository-source.test-support
 import { createWorkerEnvironmentService } from "./service.js";
 
 vi.mock("../../../extensions/github-repositories/tool-identity-api.js", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("../../../extensions/github-repositories/tool-identity-api.js")
-  >()),
+  ...(await importOriginal<Record<string, unknown>>()),
   prepareGitHubReadIdentity: async ({ assertActive }: { assertActive: () => void }) => {
     assertActive();
     return {

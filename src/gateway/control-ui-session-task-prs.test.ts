@@ -1,9 +1,4 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import {
-  createControlUiSessionPrRead,
-  prepareControlUiSessionPrServiceTarget,
-  type ControlUiSessionPrTarget,
-} from "../../extensions/github-repositories/runtime-api.js";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { publishSubagentRunChanges } from "../agents/subagents/registry/subagent-registry-publication.js";
@@ -34,6 +29,7 @@ import { prepareTaskPublicationSessions } from "./control-ui-session-task-prs.js
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { insertRepositoryGitHubPublicationFixture } from "./github-publication-store.test-support.js";
 import { repositoryGitHubPublicationDigest } from "./github-repository-publication.kernel.js";
+import type { PreparedRepositorySessionRead } from "./repository-session-read.types.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import * as records from "./session-row-projection-record.js";
@@ -96,8 +92,8 @@ function snapshots(socket = fixture.socket): ControlUiSessionPullRequestSnapshot
 }
 const latest = () => snapshots().at(-1);
 const taskNumbers = () => latest()?.taskPullRequests?.map((pr) => pr.number);
-async function taskSessionKeys(target: ControlUiSessionPrTarget | undefined) {
-  const publications = await target?.read?.readTaskPublications({});
+async function taskSessionKeys(target: PreparedRepositorySessionRead | undefined) {
+  const publications = await target?.readTaskPublications({});
   return publications?.receipts.map((publication) => publication.session.sessionKey).toSorted();
 }
 
@@ -136,10 +132,7 @@ it("reuses unchanged watcher currency and retires it on owner publications", asy
   receipt(sessionKey, 1);
   receipt(child, 2);
   const projection = getSessionRowProjection(f.context)!;
-  const read = createControlUiSessionPrRead(
-    f.sessionReads.createViewerRead(f.client.connId!, { sessionKey }),
-    f.context.getRuntimeConfig,
-  )!;
+  const read = f.sessionReads.createViewerRead(f.client.connId!, { sessionKey })!;
   const target = (await read())!;
   expect(await taskSessionKeys(target)).toEqual([child, sessionKey]);
   target.assertCurrent!();
@@ -229,10 +222,7 @@ it("prepares creator aliases once per task audience validation", async () => {
   }
   receipt(sessionKey, 5);
   const projection = getSessionRowProjection(fixture.context)!;
-  const read = createControlUiSessionPrRead(
-    fixture.sessionReads.createViewerRead(fixture.client.connId!, { sessionKey }),
-    fixture.context.getRuntimeConfig,
-  )!;
+  const read = fixture.sessionReads.createViewerRead(fixture.client.connId!, { sessionKey })!;
   const target = (await read())!;
   expect(await taskSessionKeys(target)).toHaveLength(5);
   await fixture.seed("agent:main:unrelated", fixture.profile.id);
@@ -478,11 +468,10 @@ it("projects three descendant receipts without mixing the parent's current branc
     taskPullRequestCount: 3,
   });
   expect(taskNumbers()?.toSorted((a, b) => a - b)).toEqual([1, 2, 3]);
-  const sharedTarget = await prepareControlUiSessionPrServiceTarget(
-    fixture.sessionReads,
-    fixture.context.getRuntimeConfig,
-    { sessionKey, agentId: "main" },
-  );
+  const sharedTarget = await fixture.sessionReads.prepareServiceRead({
+    sessionKey,
+    agentId: "main",
+  });
   expect(sharedTarget).toBeDefined();
   const shared = fixture.subscriptions.readPrepared(sharedTarget!, () => false);
   expect(shared).toMatchObject({ status: "ready", pullRequests: [{ number: 40 }] });

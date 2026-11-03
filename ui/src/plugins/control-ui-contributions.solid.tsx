@@ -64,7 +64,11 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
         : props.kind === "header" || props.kind === "composer"
           ? "actions"
           : "accessories";
-    return (runtime?.registrations(family).length ?? 0) > 0;
+    return family === "accessories"
+      ? runtime
+          ?.registrations("accessories")
+          .some((entry) => "mount" in entry.value && entry.value.placement === props.kind) === true
+      : (runtime?.registrations(family).length ?? 0) > 0;
   };
   onSettled(() => {
     if (!available()) {

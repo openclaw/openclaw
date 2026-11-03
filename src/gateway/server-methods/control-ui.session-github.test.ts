@@ -2,7 +2,6 @@ import { generateKeyPairSync } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { afterEach, expect, it, vi } from "vitest";
-import { readGitHubConfig } from "../../../extensions/github-repositories/config-api.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { linkEmail } from "../../state/user-profile-writes.worker.js";
@@ -12,6 +11,7 @@ import {
   redeemFactoryGitHubProof,
   type FactoryGitHubProofVerdict,
 } from "../factory-github-proof.js";
+import { readGitHubConfig } from "../github-repository-fixture-api.test-support.js";
 import { handleGatewayRequest } from "../server-methods.js";
 
 const host = "engineering.ghe.com";

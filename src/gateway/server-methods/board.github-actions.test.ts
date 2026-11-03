@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   afterAll,
   afterEach,
@@ -12,13 +13,6 @@ import {
   onTestFinished,
   vi,
 } from "vitest";
-import { registerGitHubBoardBinding } from "../../../extensions/github-repositories/board-binding-api.js";
-import { readGitHubConfig } from "../../../extensions/github-repositories/config-api.js";
-import { clearGitHubCredentialVerificationCache } from "../../../extensions/github-repositories/oauth-api.js";
-import manifest from "../../../extensions/github-repositories/openclaw.plugin.json" with { type: "json" };
-import { gitHubPublicApi } from "../../../extensions/github-repositories/public-api.js";
-import { clearNativeGitHubTokenCache } from "../../../extensions/github-repositories/read-identity-api.js";
-import { resolveManagedGitHubProfileDir } from "../../../extensions/github-repositories/tool-identity-api.js";
 import type { BoardSnapshot } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { commandResult } from "../../agents/github-identity.test-support.js";
@@ -34,6 +28,8 @@ import {
 } from "../../plugin-sdk/plugin-test-contracts.js";
 import { registerPluginDashboardCapabilities } from "../../plugins/dashboard-capabilities.js";
 import { createPluginRecord } from "../../plugins/loader-records.js";
+import { loadPluginManifest } from "../../plugins/manifest.js";
+import type { OpenClawPluginDefinition } from "../../plugins/plugin-definition.types.js";
 import { getPluginInstance } from "../../plugins/plugin-instance-scope.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -41,13 +37,52 @@ import * as processExec from "../../process/exec.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import * as lazyPromise from "../../shared/lazy-promise.js";
 import {
+  loadBundledPluginFacade,
+  resolveBundledPluginPublicModulePath,
+} from "../../test-utils/bundled-plugin-public-surface.js";
+import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { toRequestUrl } from "../../test-utils/provider-usage-fetch.js";
 import { drainSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import {
+  readGitHubConfig,
+  loadGitHubRepositoryRuntimeFixture,
+} from "../github-repository-fixture-api.test-support.js";
+import { gitHubAccountApi as gitHubPublicApi } from "../native-github-account-api.js";
 import { createBoardHarness } from "./board.test-support.js";
 import type { GatewayRequestHandlerOptions, RespondFn } from "./types.js";
+
+const { clearGitHubCredentialVerificationCache } = await loadGitHubRepositoryRuntimeFixture();
+const { clearNativeGitHubTokenCache } = await loadBundledPluginFacade<{
+  clearNativeGitHubTokenCache(): void;
+}>({ pluginId: "github-repositories", artifactBasename: "read-identity-api.ts" });
+const { resolveManagedGitHubProfileDir } = await loadBundledPluginFacade<{
+  resolveManagedGitHubProfileDir(input: {
+    agentId: string;
+    scope: "system" | "agent";
+    profileId: string;
+  }): string;
+}>({ pluginId: "github-repositories", artifactBasename: "tool-identity-api.ts" });
+const { default: repositoryPlugin } = await loadBundledPluginFacade<{
+  default: OpenClawPluginDefinition;
+}>({ pluginId: "github-repositories", artifactBasename: "index.ts" });
+const manifestResult = loadPluginManifest(
+  path.dirname(
+    resolveBundledPluginPublicModulePath({
+      pluginId: "github-repositories",
+      artifactBasename: "index.ts",
+    }),
+  ),
+  false,
+);
+if (!manifestResult.ok) throw new Error(manifestResult.error);
+const manifest = manifestResult.manifest;
+const registerRepositoryPlugin = expectDefined(
+  repositoryPlugin.register,
+  "GitHub repository registration",
+);
 
 const profileId = "ghp_11111111111111111111111111111111";
 const token = "synthetic-board-token";
@@ -190,8 +225,10 @@ describe("board authenticated GitHub Actions", () => {
       enabled: true,
       configSchema: false,
       dashboard: manifest.dashboard,
+      repositorySources: manifest.repositorySources,
+      contracts: manifest.contracts,
     });
-    registerTestPlugin({ ...fixture, record, register: registerGitHubBoardBinding });
+    registerTestPlugin({ ...fixture, record, register: registerRepositoryPlugin });
     pluginRegistry = fixture.registry.registry;
     registerPluginDashboardCapabilities({ record, registry: pluginRegistry });
     setActivePluginRegistry(pluginRegistry);

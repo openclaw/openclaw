@@ -2,12 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, test, vi } from "vitest";
-import {
-  clearGitHubCredentialVerificationCache,
-  createGitHubRepositorySource,
-  resolveManagedGitHubProfileDir,
-  writeManagedGitHubProfileFiles,
-} from "../../extensions/github-repositories/runtime-api.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { NodeWorkerWorkspaceRuntime } from "../node-host/node-worker-workspace.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
@@ -21,6 +15,10 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import {
+  loadGitHubRepositoryRuntimeFixture,
+  loadGitHubProfileFixture,
+} from "./github-repository-fixture-api.test-support.js";
 import { createRepositorySources } from "./repository-sources.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "./server-methods.js";
@@ -41,6 +39,11 @@ import { createRepositoryPolicySource } from "./worker-environments/repository-p
 import { deriveEnvironmentIntent } from "./worker-environments/service-contract.js";
 import { captureWorkspaceManifest } from "./worker-environments/workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./worker-environments/workspace-manifest.js";
+
+const { clearGitHubCredentialVerificationCache, createGitHubRepositorySource } =
+  await loadGitHubRepositoryRuntimeFixture();
+const { resolveManagedGitHubProfileDir, writeManagedGitHubProfileFiles } =
+  await loadGitHubProfileFixture();
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 afterEach(() => {

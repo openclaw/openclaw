@@ -1,18 +1,41 @@
 import { vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { SecretInput } from "../../config/types.secrets.js";
+import type { GitHubToolIdentityConfig } from "../../config/types.tools.js";
+import type {
+  NativeGitHubIdentityScope,
+  NativeGitHubToolAccount,
+} from "../../plugin-sdk/native-github-account-host.js";
+import type {
+  ExecutionEnvironmentPreparationV1,
+  PreparedExecutionEnvironment,
+} from "../../plugins/execution-environment-types.js";
 import { resolveCommandEnv } from "../../process/exec-spawn.js";
 import type { UserProfile } from "../../state/user-profiles.types.js";
+import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import type { GatewayClient } from "./types.js";
 
 const network = vi.hoisted(() => ({
-  assertCli: vi.fn(),
+  resolveExecutable: vi.fn<typeof import("../../infra/executable-path.js").resolveExecutablePath>(),
   start: vi.fn(),
   poll: vi.fn(),
   refresh: vi.fn(),
-  verify:
-    vi.fn<
-      typeof import("../../../extensions/github-repositories/oauth-api.js").verifyGitHubCredential
-    >(),
+  verify: vi.fn<
+    (
+      token: string,
+      options?: {
+        signal?: AbortSignal;
+        timeoutMs?: number;
+        apiBaseUrl?: string;
+        assertCurrent?: () => void | Promise<void>;
+        allowStale?: boolean;
+      },
+    ) => Promise<
+      | { status: "available"; account: NativeGitHubToolAccount; scopes: string[]; stale?: true }
+      | { status: "unavailable" | "rate_limited" | "unverified" }
+    >
+  >(),
   command: vi.fn(),
 }));
 export { network };
@@ -29,13 +52,37 @@ vi.mock("../../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../process/exec.js")>()),
   runCommandBuffered: network.command,
 }));
-vi.mock("../../../extensions/github-repositories/cli-preflight-api.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<
-      typeof import("../../../extensions/github-repositories/cli-preflight-api.js")
-    >();
-  return { ...actual, assertGitHubCliAvailable: network.assertCli };
-});
+// Exercise the plugin's real preflight and error class through its public SDK process boundary.
+vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugin-sdk/process-runtime.js")>()),
+  resolveExecutablePath: network.resolveExecutable,
+}));
+
+export const { readGitHubConfig } = await loadBundledPluginFacade<{
+  readGitHubConfig(config: OpenClawConfig): {
+    service?: { host?: string; token?: SecretInput };
+    system?: GitHubToolIdentityConfig;
+    agents?: Record<string, GitHubToolIdentityConfig>;
+  };
+}>({ pluginId: "github-repositories", artifactBasename: "config-api.ts" });
+export const {
+  prepareGitHubToolEnvironment,
+  resolveManagedGitHubProfileDir,
+  writeManagedGitHubProfileFiles,
+} = await loadBundledPluginFacade<{
+  prepareGitHubToolEnvironment(
+    params: Pick<ExecutionEnvironmentPreparationV1, "config" | "agentId">,
+  ): PreparedExecutionEnvironment;
+  resolveManagedGitHubProfileDir(params: {
+    scope: NativeGitHubIdentityScope | "personal";
+    agentId: string;
+    profileId: string;
+  }): string;
+  writeManagedGitHubProfileFiles(
+    profileDir: string,
+    identity: { login: string; token: string },
+  ): Promise<void>;
+}>({ pluginId: "github-repositories", artifactBasename: "tool-identity-api.ts" });
 
 export const tokens = {
   accessToken: "synthetic-access",
@@ -47,7 +94,7 @@ export const tokens = {
 };
 
 export function resetPersonalGitHubNetwork() {
-  network.assertCli.mockReset();
+  network.resolveExecutable.mockReset().mockReturnValue("gh");
   network.start.mockReset().mockResolvedValue({
     deviceCode: "d".repeat(40),
     userCode: "ABCD-1234",

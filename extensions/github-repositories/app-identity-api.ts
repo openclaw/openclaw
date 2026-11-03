@@ -5,6 +5,7 @@ import { assertSecretOwnerAvailable } from "openclaw/plugin-sdk/channel-secret-o
 import { formatConcreteConfigPath } from "openclaw/plugin-sdk/config-contracts";
 import { registerSecretValueForRedaction } from "openclaw/plugin-sdk/logging-core";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import { fetchWithRuntimeDispatcherOrMockedGlobal } from "openclaw/plugin-sdk/runtime-fetch";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
 import { z } from "zod";
 import type { GitHubAppSelection, GitHubCredentialReader } from "./credential-reader-api.js";
@@ -209,18 +210,21 @@ export async function prepareAppGitHubIdentity(
         body?: unknown,
       ): Promise<T> => {
         assertIssuanceCurrent();
-        const response = await fetch(`${apiBaseUrl}${endpoint}`, {
-          method: body === undefined ? "GET" : "POST",
-          redirect: "error",
-          signal,
-          headers: {
-            authorization: `Bearer ${bearer}`,
-            accept: "application/vnd.github+json",
-            "content-type": "application/json",
-            "x-github-api-version": "2022-11-28",
+        const response = await fetchWithRuntimeDispatcherOrMockedGlobal(
+          `${apiBaseUrl}${endpoint}`,
+          {
+            method: body === undefined ? "GET" : "POST",
+            redirect: "error",
+            signal,
+            headers: {
+              authorization: `Bearer ${bearer}`,
+              accept: "application/vnd.github+json",
+              "content-type": "application/json",
+              "x-github-api-version": "2022-11-28",
+            },
+            ...(body === undefined ? {} : { body: JSON.stringify(body) }),
           },
-          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-        });
+        );
         if (!response.ok) {
           void response.body?.cancel().catch(() => {});
           throw failure();
@@ -339,7 +343,7 @@ export async function prepareAppGitHubIdentity(
       } catch (error) {
         // A failed grant never escapes. Cleanup is bounded and cannot re-authorize work.
         if (issuedToken) {
-          await fetch(`${apiBaseUrl}/installation/token`, {
+          await fetchWithRuntimeDispatcherOrMockedGlobal(`${apiBaseUrl}/installation/token`, {
             method: "DELETE",
             redirect: "error",
             signal: AbortSignal.timeout(5_000),
@@ -358,7 +362,7 @@ export async function prepareAppGitHubIdentity(
     const issued = await issueInstallation();
     const revoke = () => {
       closed = true;
-      revocation ??= fetch(`${apiBaseUrl}/installation/token`, {
+      revocation ??= fetchWithRuntimeDispatcherOrMockedGlobal(`${apiBaseUrl}/installation/token`, {
         method: "DELETE",
         redirect: "error",
         signal: AbortSignal.timeout(5_000),

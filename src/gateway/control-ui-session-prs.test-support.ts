@@ -1,13 +1,6 @@
 // Shared fixtures for the control-ui session PR tests; test-only module.
 import { randomUUID } from "node:crypto";
-import { afterEach, beforeEach, vi } from "vitest";
-import {
-  repositorySessionPrTarget,
-  type ControlUiSessionPrTarget,
-  type ControlUiSessionPrReadContext,
-} from "../../extensions/github-repositories/control-ui-session-pr-read-api.js";
-import type { GitHubCheckoutContext as GitCheckoutContext } from "../../extensions/github-repositories/control-ui-session-prs-api.js";
-import { loadControlUiSessionPullRequests as loadPrs } from "../../extensions/github-repositories/control-ui-session-prs-api.js";
+import { afterEach, beforeEach, onTestFinished, vi } from "vitest";
 import { getRuntimeConfig } from "../config/io.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
@@ -18,19 +11,34 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GitCheckoutContext as RawGitCheckoutContext } from "../infra/git-read-operations.js";
 import { runGitWorkerOperation } from "../infra/git-worker.js";
 import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
+import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import type { ControlUiSessionBranch } from "./control-ui-contract.js";
 import {
   prepareSessionPrFixtureRead,
   recordSessionPrFixtureCheckout,
   resolveSessionPrFixtureRequest,
 } from "./control-ui-session-pr-access.test-support.js";
+import { createTestControlUiSessionPrSubscriptions } from "./control-ui-session-pr-subscriptions.test-support.js";
+import type {
+  PreparedRepositorySessionRead,
+  RepositorySessionSourceScope,
+} from "./repository-session-read.types.js";
+import { initializeSessionReadContext } from "./server-methods/sessions-read-cache.test-support.js";
+import { withReadySessionRows } from "./session-row-prepared-read.js";
+import { getSessionRowProjection } from "./session-row-projection-access.js";
 
-type PrRequest = Parameters<typeof loadPrs>[0];
-type PrDeps = Omit<Parameters<typeof loadPrs>[1], "read"> & {
+type PrRequest = { sessionKey: string; agentId?: string; refresh?: boolean };
+type CheckoutFixture = Pick<ControlUiSessionBranch, "owner" | "repo"> &
+  Omit<RawGitCheckoutContext, "originUrl"> & { host?: string };
+type PrDeps = {
   resolveGitRoot?: (params: PrRequest) => Promise<string | null>;
-  resolveGitContext?: (params: PrRequest) => Promise<GitCheckoutContext | null>;
+  resolveGitContext?: (params: PrRequest) => Promise<CheckoutFixture | null>;
 };
 
 export function githubJson(body: unknown, status = 200): Response {
@@ -77,32 +85,69 @@ export const testGitContext = {
   branch: "claude/browser-tabs-tighter-header",
 };
 
-const releases = new WeakMap<ControlUiSessionPrTarget, () => void>();
+const releases = new WeakMap<PreparedRepositorySessionRead, () => void>();
 const retained = new Set<() => void>();
-afterEach(() => {
+const preparedByKey = new Map<string, PreparedRepositorySessionRead>();
+const checkoutByKey = new Map<string, CheckoutFixture | null>();
+let service:
+  | Promise<Awaited<ReturnType<typeof createTestControlUiSessionPrSubscriptions>>>
+  | undefined;
+let clock: ReturnType<typeof createGatewaySchedulerClock>;
+let clockNow = 0;
+const keyFor = (query: { sessionKey: string; agentId?: string }) =>
+  JSON.stringify([query.agentId ?? "main", query.sessionKey]);
+async function getService(read?: PreparedRepositorySessionRead) {
+  if (!service) {
+    clockNow = Date.now();
+    clock = createGatewaySchedulerClock(clockNow);
+    service = (async () => {
+      const current = await createTestControlUiSessionPrSubscriptions({
+        scheduler: createTestGatewayScheduler(clock.clock),
+        getConfig: getRuntimeConfig,
+        getSessionRowProjection: () => getSessionRowProjection(context),
+        prepareRead: async (_connId, query) => async () => preparedByKey.get(keyFor(query)),
+        readCheckoutFacts: async (observation, native, refresh) => {
+          const key = keyFor(observation.session);
+          return checkoutByKey.has(key)
+            ? checkoutFacts(checkoutByKey.get(key) ?? null)
+            : native.readCheckoutFacts(refresh);
+        },
+        broadcastToConnIds: vi.fn(),
+      });
+      const context = current.context;
+      await initializeSessionReadContext(context);
+      return current;
+    })();
+    onTestFinished(stopTestSessionPrService);
+  }
+  const owner = await service;
+  if (read) {
+    const projection = getSessionRowProjection(owner.context);
+    if (!projection) {
+      throw new Error("Missing native session-row projection");
+    }
+    await withReadySessionRows(
+      projection,
+      () => [{ key: read.session.sessionKey, agentId: read.session.agentId }],
+      () => {},
+    );
+  }
+  return owner;
+}
+export async function stopTestSessionPrService() {
+  const current = service;
+  service = undefined;
+  await (await current)?.stop();
+  preparedByKey.clear();
+  checkoutByKey.clear();
+}
+afterEach(async () => {
+  await stopTestSessionPrService();
   for (const release of retained) {
     release();
   }
   retained.clear();
 });
-
-/** The loader fixture retains the same real session/source owner as production. */
-export function withTestSessionPrRead<T>(
-  target: ControlUiSessionPrTarget,
-  operation: (read: ControlUiSessionPrReadContext) => Promise<T>,
-): Promise<T> {
-  if (!target.read) {
-    throw new Error("Missing prepared fixture read");
-  }
-  return target.read.withSource((sourceScope) =>
-    operation({
-      target,
-      sourceScope,
-      sourceIdentity: sourceScope.identity,
-      assertCurrent: sourceScope.assertCurrent,
-    }),
-  );
-}
 
 export function localPrGitReads(type?: string) {
   return vi
@@ -151,50 +196,99 @@ export function mockPrCheckout(options: {
   });
 }
 
-/** Direct loader tests supply real target facts; registered callers use the row projection. */
-export async function loadTestSessionPullRequests(
-  params: PrRequest,
-  deps: PrDeps = {},
-): ReturnType<typeof loadPrs> {
+function checkoutFacts(
+  context: CheckoutFixture | null,
+): Awaited<ReturnType<RepositorySessionSourceScope["readCheckoutFacts"]>> {
+  return context
+    ? {
+        originUrl: `https://${context.host ?? "github.com"}/${context.owner}/${context.repo}`,
+        branch: context.branch,
+        ...(context.root ? { root: context.root } : {}),
+        ...(context.defaultBranch ? { defaultBranch: context.defaultBranch } : {}),
+        ...(context.forkHeadCandidates ? { forkHeadCandidates: context.forkHeadCandidates } : {}),
+      }
+    : undefined;
+}
+
+/** Override only native checkout facts; session and physical-source ownership remain real. */
+export function withTestSessionPrCheckout(
+  native: PreparedRepositorySessionRead,
+  context: CheckoutFixture | null,
+): PreparedRepositorySessionRead {
+  return {
+    ...native,
+    ...(context ? {} : { source: null }),
+    withSource: (operation) =>
+      native.withSource((scope) =>
+        operation({
+          ...scope,
+          readCheckoutFacts: async () => checkoutFacts(context),
+        }),
+      ),
+  };
+}
+
+/** Read the actual registered presentation with native session/source authority. */
+export async function loadTestSessionPullRequests(params: PrRequest, deps: PrDeps = {}) {
   const { agentId } = resolveSessionPrFixtureRequest(params);
-  const { resolveGitRoot, resolveGitContext, ...ownerDeps } = deps;
-  const requestedContext = await resolveGitContext?.(params);
-  const root = resolveGitRoot ? await resolveGitRoot(params) : requestedContext?.root;
+  const requestedContext = await deps.resolveGitContext?.(params);
+  const root = deps.resolveGitRoot ? await deps.resolveGitRoot(params) : requestedContext?.root;
   if (typeof root === "string") {
-    // A requested test checkout is recorded on the real session, not selected by a runtime hook.
     await recordSessionPrFixtureCheckout({ ...params, agentId }, root);
   }
-  const target = await prepareTestSessionPrTarget({ ...params, agentId });
-  if (!target) {
-    return { pullRequests: [], rateLimited: false };
+  const prepared = await prepareSessionPrFixtureRead({ ...params, agentId });
+  if (!prepared) {
+    return { pullRequests: [], rateLimited: false, status: "ready" as const };
   }
+  const read = deps.resolveGitContext
+    ? withTestSessionPrCheckout(prepared.read, requestedContext ?? null)
+    : root === null
+      ? { ...prepared.read, source: null }
+      : prepared.read;
+  const key = keyFor(read.session);
+  if (deps.resolveGitContext) {
+    checkoutByKey.set(key, requestedContext ?? null);
+  } else {
+    checkoutByKey.delete(key);
+  }
+  preparedByKey.set(key, read);
+  const owner = await getService(read);
   try {
-    const source = resolveGitContext
-      ? (requestedContext ?? null)
-      : root === null
-        ? null
-        : target.source;
-    return await withTestSessionPrRead({ ...target, source }, (read) =>
-      loadPrs(params, { ...ownerDeps, read }),
-    );
-  } finally {
-    const release = releases.get(target);
-    release?.();
-    if (release) {
-      retained.delete(release);
+    if (params.refresh) {
+      // Exercise the public forced-refresh operation at its supported cadence.
+      clock.setTime((clockNow += 10_001));
+      await owner.replace(
+        keyFor(read.session),
+        [read.session.sessionKey],
+        new Set([read.session.sessionKey]),
+      );
     }
+    return await owner.read(read, read.assertCurrent);
+  } finally {
+    prepared.release();
   }
 }
 
-async function prepareTestSessionPrTarget(params: { sessionKey: string; agentId?: string }) {
+async function prepareTestSessionPrTarget(
+  params: { sessionKey: string; agentId?: string },
+  context?: CheckoutFixture,
+) {
   const prepared = await prepareSessionPrFixtureRead(params);
   if (!prepared) {
     return undefined;
   }
-  const target = repositorySessionPrTarget(prepared.read, getRuntimeConfig(), prepared.read);
-  releases.set(target, prepared.release);
+  const read = context ? withTestSessionPrCheckout(prepared.read, context) : prepared.read;
+  const key = keyFor(read.session);
+  if (context) {
+    checkoutByKey.set(key, context);
+  } else {
+    checkoutByKey.delete(key);
+  }
+  preparedByKey.set(key, read);
+  (await getService(read)).retainRead(read);
+  releases.set(read, prepared.release);
   retained.add(prepared.release);
-  return target;
+  return read;
 }
 
 /** Git/network fixtures still select real sessions; each test owns its cache namespace. */
@@ -217,6 +311,7 @@ export function createSessionPullRequestsFixture() {
   });
   afterEach(async () => {
     vi.useRealTimers();
+    await stopTestSessionPrService();
     await state?.cleanup();
     state = undefined;
   });
@@ -239,9 +334,10 @@ export function createSessionPullRequestsFixture() {
       seed(params);
       return loadTestSessionPullRequests(params, deps);
     },
-    prepareRead: async (_connId: string, session: PrRequest) => {
+    presentation: getService,
+    prepareRead: async (_connId: string, session: PrRequest, context?: CheckoutFixture) => {
       const params = seed(session);
-      return () => prepareTestSessionPrTarget(params);
+      return () => prepareTestSessionPrTarget(params, context);
     },
   };
 }

@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildGitHubExecLaunchArgv } from "../../extensions/github-repositories/exec-launch-api.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
@@ -45,6 +44,7 @@ import type {
   ExecApprovalFollowupFactory,
   ExecApprovalFollowupOutcome,
 } from "./bash-tools.exec-types.js";
+import { prepareManagedGitHubExecutionFixture } from "./execution-environment.test-support.js";
 import { captureSecurityEvents } from "./test-helpers/security-events.js";
 
 type SendExecApprovalFollowupResult =
@@ -1316,7 +1316,7 @@ describe("processGatewayAllowlist", () => {
         "./bash-tools.exec-runtime.js",
       );
       runExecProcessMock.mockImplementation(runtime.runExecProcess);
-      const profileDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "delayed-github-")));
+      const { environment: prepared, profileDir, cleanup } = prepareManagedGitHubExecutionFixture();
       const hostsPath = path.join(profileDir, "hosts.yml");
       fs.writeFileSync(hostsPath, "github.com:\n  oauth_token: synthetic-before-approval\n", {
         mode: 0o600,
@@ -1350,7 +1350,7 @@ describe("processGatewayAllowlist", () => {
           command,
           env,
           requestedEnv: env,
-          wrapLocalLaunch: (argv) => buildGitHubExecLaunchArgv([...argv], profileDir),
+          wrapLocalLaunch: prepared.wrapLocalLaunch,
         });
         await vi.waitFor(() => expect(approvalDecisionMock).toHaveBeenCalledOnce());
         expect(startupCancellationMocks.spawn).not.toHaveBeenCalled();
@@ -1372,7 +1372,7 @@ describe("processGatewayAllowlist", () => {
         releaseApproval();
         await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
         await supervisor.shutdown();
-        fs.rmSync(profileDir, { recursive: true, force: true });
+        cleanup();
       }
     },
   );

@@ -151,8 +151,8 @@ function pullRequest(overrides: Partial<PullRequest> = {}): PullRequest {
     repo: "project",
     branch: "change",
     state: "open",
-    title: "",
-    url: "",
+    title: "Synthetic change",
+    url: "https://github.com/synthetic/project/pull/12",
     ...overrides,
   };
 }

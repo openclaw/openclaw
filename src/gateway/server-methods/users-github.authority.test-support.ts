@@ -6,6 +6,7 @@ import {
   expireUserGitHubAccessToken,
   updateUserGitHubConnection,
 } from "../../state/user-github-connections.test-support.js";
+import type { LegacyPersonalGitHubService } from "../github-oauth-lifecycle-host.types.js";
 import { preparePersonalProfileAction } from "./personal-profile-authorization.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 import { network, tokens } from "./users-github.test-support.js";
@@ -48,9 +49,9 @@ export async function expectReceiptBackedPersonalGitHubAuthority(options: {
   }
 }
 
-export async function preparePendingPersonalGitHubRefresh<T>(
+export async function preparePendingPersonalGitHubRefresh(
   owner: string,
-  personal: { refresh: (owner: string) => Promise<T> },
+  personal: Pick<LegacyPersonalGitHubService, "refresh">,
 ) {
   expireUserGitHubAccessToken(owner);
   const refresh = createDeferredCore<{ status: "refreshed"; tokens: typeof tokens }>();

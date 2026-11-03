@@ -27,6 +27,7 @@ import {
   root,
   seedLocalPublication,
 } from "./github-publication.test-support.js";
+import { loadActualGitHubIdentityFixture } from "./github-repository-fixture-api.test-support.js";
 import { RepositoryPublicationRequesterUnavailableError } from "./repository-publication-errors.js";
 import {
   REQUEST,
@@ -497,9 +498,7 @@ describe("Gateway GitHub publication boundaries", () => {
         },
       };
       mocks.getConfigSnapshot.mockReturnValue({ config, sourceConfig: config });
-      const { prepareGitHubPublicationIdentity } = await vi.importActual<
-        typeof import("../../extensions/github-repositories/tool-identity-api.js")
-      >("../../extensions/github-repositories/tool-identity-api.js");
+      const { prepareGitHubPublicationIdentity } = await loadActualGitHubIdentityFixture();
       mocks.prepareIdentity.mockImplementation(prepareGitHubPublicationIdentity);
     } else {
       mocks.findWorktreeById.mockReturnValue(worktree());

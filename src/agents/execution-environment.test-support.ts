@@ -1,5 +1,8 @@
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { onTestFinished } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import { onTestFinished, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createPluginRegistryFixture,
@@ -16,6 +19,7 @@ import {
   loadBundledPluginFacade,
   resolveBundledPluginPublicModulePath,
 } from "../test-utils/bundled-plugin-public-surface.js";
+import { capturePreparedExecutionEnvironment } from "./execution-environment.js";
 
 const entry = resolveBundledPluginPublicModulePath({
   pluginId: "github-repositories",
@@ -64,6 +68,39 @@ export function createGitHubExecutionFixture(config: OpenClawConfig) {
         { pluginRegistry: fixture.registry.registry, isWebchatConnect: () => false },
         run,
       );
+    },
+  };
+}
+
+/** Prepare one managed profile through the real provider for native launch/approval fixtures. */
+export function prepareManagedGitHubExecutionFixture() {
+  const stateDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "delayed-github-")));
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  const config: OpenClawConfig = {
+    plugins: {
+      entries: {
+        "github-repositories": {
+          config: { system: { profileId: "ghp_11111111111111111111111111111111" } },
+        },
+      },
+    },
+  };
+  const execution = createGitHubExecutionFixture(config);
+  const environment = capturePreparedExecutionEnvironment(
+    { config, agentId: "main", assertCurrent() {} },
+    execution.registry,
+  );
+  const profileDir = expectDefined(
+    environment.localIdentityEnv.GH_CONFIG_DIR,
+    "managed GitHub profile",
+  );
+  fs.mkdirSync(profileDir, { recursive: true, mode: 0o700 });
+  return {
+    environment,
+    profileDir,
+    cleanup: () => {
+      vi.unstubAllEnvs();
+      fs.rmSync(stateDir, { recursive: true, force: true });
     },
   };
 }

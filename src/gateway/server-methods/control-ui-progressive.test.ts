@@ -1,13 +1,15 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { controlUiGitHubHandlers as controlUiHandlers } from "../../../extensions/github-repositories/runtime-api.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.js";
+import { loadGitHubRepositoryRuntimeFixture } from "../github-repository-fixture-api.test-support.js";
 import { createControlUiRequestOptions } from "./control-ui-request.test-support.js";
 import type { RespondFn } from "./types.js";
+
+const { controlUiGitHubHandlers: controlUiHandlers } = await loadGitHubRepositoryRuntimeFixture();
 
 const requestOptions = createControlUiRequestOptions(() => ({ agents: { entries: { main: {} } } }));
 

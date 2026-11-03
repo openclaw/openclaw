@@ -296,6 +296,33 @@ export type ControlUiAccessory = {
   mount: ControlUiView<BoardGetParams>;
 };
 
+/** Passive display facts; never HTML, actions, module metadata, or request authority. */
+export type ControlUiSessionBadge = Readonly<{
+  icon: string;
+  label: string;
+  count?: number;
+  tone?: "muted" | "positive" | "negative" | "accent" | "violet";
+  /** Plain display state, exposed as data-<accessory id>-state alongside the badge. */
+  state?: string;
+}>;
+export type ControlUiSessionBadgeTarget = Pick<
+  ControlUiAccessoryProps,
+  "sessionKey" | "agentId" | "worktreeId" | "artifact"
+>;
+export type ControlUiSessionBadgeAccessory = {
+  id: string;
+  placement: "session-row";
+  presentation: "badge";
+  /** The same synchronous projection supplies native live rendering and the sidebar snapshot. */
+  resolve: (
+    target: ControlUiSessionBadgeTarget,
+  ) => { status: "pending" } | { status: "ready"; badge?: ControlUiSessionBadge };
+  observe?: (
+    target: ControlUiSessionBadgeTarget & { signal: AbortSignal },
+    changed: () => void,
+  ) => ControlUiDisposer;
+};
+
 export type ControlUiSessionAccessory = {
   id: string;
   placement:
@@ -500,7 +527,7 @@ export type ControlUiHostV2 = Omit<ControlUiHost, "sessions" | "navigation" | "u
     registerWidget: (widget: ControlUiWidgetV2) => ControlUiDisposer;
     registerReplacement: (replacement: ControlUiReplacementV2) => ControlUiDisposer;
     registerAccessory: (
-      accessory: ControlUiAccessory | ControlUiSessionAccessory,
+      accessory: ControlUiAccessory | ControlUiSessionAccessory | ControlUiSessionBadgeAccessory,
     ) => ControlUiDisposer;
     registerTextReferenceProvider: (provider: ControlUiTextReferenceProvider) => ControlUiDisposer;
   };

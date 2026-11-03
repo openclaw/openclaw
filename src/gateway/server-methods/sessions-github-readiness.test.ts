@@ -6,13 +6,6 @@ import { pathToFileURL } from "node:url";
 import { getEnvironmentData, setEnvironmentData } from "node:worker_threads";
 import { Value } from "typebox/value";
 import { afterEach, assert, expect, it, vi } from "vitest";
-import * as oauth from "../../../extensions/github-repositories/account-runtime-api.js";
-import * as publicationTarget from "../../../extensions/github-repositories/publication-target-api.js";
-import {
-  createGitHubPublicationProvider,
-  readRepositoryServices,
-} from "../../../extensions/github-repositories/runtime-api.js";
-import * as identity from "../../../extensions/github-repositories/tool-identity-api.js";
 import { SessionGitHubReadinessResultSchema } from "../../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -69,7 +62,7 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
-import { installGitHubAccountFixture } from "../github-account-service.test-support.js";
+import { publicationFixtureApi } from "../github-account-service.test-support.js";
 import { digestGitHubPublicationRequest } from "../github-publication-receipt.js";
 import {
   claimGitHubPublicationExecutionFixture,
@@ -111,33 +104,32 @@ async function fixture(
       const forbidden = () => {
         throw new Error("Readiness attempted an external effect or credential preparation");
       };
-      const refresh = vi.fn(forbidden);
-      const provider = createGitHubPublicationProvider({
-        signal: f.readScheduler.signal,
-        assertCurrent: () => f.readScheduler.signal.throwIfAborted(),
-        getConfig: f.context.getRuntimeConfig,
-        refreshIdentity: refresh,
-        refreshPersonal: refresh,
-      });
+      // Instrument our native caller adapter, never mutate managed plugin handles.
+      const provider = {
+        ...f.provider,
+        preparePublisher: vi.fn(forbidden),
+        readOptionsIdentity: vi.fn(forbidden),
+        prepareTarget: vi.fn(forbidden),
+      };
       const service = createGitHubPublicationCoordinator({
         provider,
         placements: createWorkerSessionPlacementStore(),
         getCommittedRuntimeConfig: f.context.getRuntimeConfig,
       });
       f.context.githubPublicationService = service;
-      const services = readRepositoryServices(f.context);
-      assert(services, "Expected the fixture's registered GitHub account service");
-      await f.stopAccount();
-      f.stopAccount = await installGitHubAccountFixture(f.context, services.oauth, service);
+      // The registered host bridge retains this supplied fixture object; replace its methods,
+      // preserving the account service and its exact managed lifetime.
+      Object.assign(
+        f.publication,
+        publicationFixtureApi(service, () => f.readScheduler.signal.throwIfAborted()),
+      );
       const effects = [
-        refresh,
         vi.spyOn(service, "requestForSessionV2").mockImplementation(forbidden),
         vi.spyOn(service, "preparePersonalStatus").mockImplementation(forbidden),
         vi.spyOn(service, "personalPending").mockImplementation(forbidden),
-        vi.spyOn(identity, "prepareGitHubPublicationIdentity").mockImplementation(forbidden),
-        vi.spyOn(identity, "prepareGitHubPublicationOptionsIdentity").mockImplementation(forbidden),
-        vi.spyOn(oauth, "requestCurrentGitHubOAuthRefresh").mockImplementation(forbidden),
-        vi.spyOn(publicationTarget, "prepareGitHubPublicationTarget").mockImplementation(forbidden),
+        provider.preparePublisher,
+        provider.readOptionsIdentity,
+        provider.prepareTarget,
         vi.spyOn(gatewayTransport, "callGatewayTool").mockImplementation(forbidden),
       ];
       try {

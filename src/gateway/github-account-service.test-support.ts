@@ -1,25 +1,30 @@
+import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { onTestFinished, vi } from "vitest";
-import {
-  installRepositoryServices,
-  readRepositoryServices,
-  type RepositoryServices,
-} from "../../extensions/github-repositories/account-runtime-api.js";
-import repositoryPlugin from "../../extensions/github-repositories/index.js";
-import repositoryManifest from "../../extensions/github-repositories/openclaw.plugin.json" with { type: "json" };
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
-import { createTestPluginServiceScheduler } from "../plugin-sdk/plugin-test-api.js";
 import {
   createPluginRegistryFixture,
   registerTestPlugin,
 } from "../plugin-sdk/plugin-test-contracts.js";
+import { loadPluginManifest } from "../plugins/manifest.js";
+import type { OpenClawPluginDefinition } from "../plugins/plugin-definition.types.js";
 import { setActivePluginRegistry, resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { getGatewayServiceLifetime } from "../plugins/runtime/gateway-service-owner.js";
 import { startPluginServices } from "../plugins/services.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import {
+  loadBundledPluginFacade,
+  resolveBundledPluginPublicModulePath,
+} from "../test-utils/bundled-plugin-public-surface.js";
 import { createRepositorySessionReadHost } from "./control-ui-session-pr-runtime.js";
-import type { RepositoryPublicationHostBinding } from "./repository-publication-contract.js";
+import type { LegacyGitHubOAuthService } from "./github-oauth-lifecycle-host.types.js";
+import type {
+  RepositoryPublicationHostBinding,
+  RepositoryPublicationApi,
+  RepositoryPublicationProvider,
+} from "./repository-publication-contract.js";
 import type { RepositorySessionPresentation } from "./repository-session-read.types.js";
 import { createRepositorySources } from "./repository-sources.js";
 import { handleGatewayRequest } from "./server-methods.js";
@@ -31,6 +36,42 @@ import {
   readWorkspacePublicationHost,
 } from "./workspace-publication-binding.js";
 
+type RepositoryServices = {
+  oauth: LegacyGitHubOAuthService;
+  publication?: RepositoryPublicationApi;
+};
+const { installRepositoryServices, readRepositoryServices } = await loadBundledPluginFacade<{
+  installRepositoryServices(
+    owner: AbortSignal,
+    services: RepositoryServices,
+    signal: AbortSignal,
+  ): () => void;
+  readRepositoryServices(context: GatewayRequestContext): RepositoryServices | undefined;
+}>({ pluginId: "github-repositories", artifactBasename: "account-runtime-api.ts" });
+const { default: repositoryPlugin } = await loadBundledPluginFacade<{
+  default: OpenClawPluginDefinition;
+}>({
+  pluginId: "github-repositories",
+  artifactBasename: "index.ts",
+});
+const manifest = loadPluginManifest(
+  path.dirname(
+    resolveBundledPluginPublicModulePath({
+      pluginId: "github-repositories",
+      artifactBasename: "index.ts",
+    }),
+  ),
+  false,
+);
+if (!manifest.ok) {
+  throw new Error(manifest.error);
+}
+const repositoryManifest = manifest.manifest;
+const registerRepositoryPlugin = expectDefined(
+  repositoryPlugin.register,
+  "GitHub plugin registration",
+);
+
 /** RPC admission fixtures inject one coordinator; provider bootstrap has its own real service proof. */
 export async function installGitHubAccountFixture(
   context: GatewayRequestContext,
@@ -40,7 +81,7 @@ export async function installGitHubAccountFixture(
   context.resolveGatewayContext ??= () => context;
   const lifetime = new AbortController();
   const signal = AbortSignal.any([lifetime.signal, getGatewayServiceLifetime(context)]);
-  let stopServices: (() => void) | undefined;
+  let stopServices: (() => void) | undefined = undefined;
   let stopped = false;
   const stop = async () => {
     if (stopped) {
@@ -53,8 +94,15 @@ export async function installGitHubAccountFixture(
   onTestFinished(stop);
   let api: RepositoryServices["publication"];
   if (publication) {
-    const { createGitHubPublicationProvider } =
-      await import("../../extensions/github-repositories/runtime-api.js");
+    const { createGitHubPublicationProvider } = await loadBundledPluginFacade<{
+      createGitHubPublicationProvider(owner: {
+        signal: AbortSignal;
+        assertCurrent: () => void;
+        getConfig: () => OpenClawConfig;
+        refreshIdentity: (agentId: string) => Promise<void>;
+        refreshPersonal: (profileId: string) => Promise<void>;
+      }): RepositoryPublicationProvider;
+    }>({ pluginId: "github-repositories", artifactBasename: "runtime-api.ts" });
     const assertCurrent = () => {
       signal.throwIfAborted();
       if (readWorkspacePublicationHost(context) !== binding) {
@@ -68,66 +116,12 @@ export async function installGitHubAccountFixture(
       refreshIdentity: (agentId) => oauth.refreshEffectiveIdentity(agentId),
       refreshPersonal: (profileId) => oauth.personal.refresh(profileId),
     });
-    const unavailable = (): never => {
-      throw new Error("Unexpected publication operation in authorization fixture");
-    };
-    const selectedApi: NonNullable<RepositoryServices["publication"]> = {
-      ...publicationFixtureApi(publication, assertCurrent),
-      supportsOrigin(originUrl) {
-        assertCurrent();
-        return publication.supportsOrigin?.(originUrl) ?? provider.supportsOrigin(originUrl);
-      },
-      async performPullRequestAction(input) {
-        assertCurrent();
-        const result = await (publication.performPullRequestAction?.(input) ?? unavailable());
-        assertCurrent();
-        return result;
-      },
-      async inspectPullRequest(input) {
-        assertCurrent();
-        const result = await (publication.inspectPullRequest?.(input) ?? unavailable());
-        assertCurrent();
-        return result;
-      },
-      async readOptionsIdentity(input) {
-        assertCurrent();
-        const result = await (publication.readOptionsIdentity?.(input) ??
-          provider.readOptionsIdentity(input));
-        assertCurrent();
-        input.assertCurrent();
-        return result;
-      },
-      async preparePersonalAccountStatus(action) {
-        assertCurrent();
-        if (publication.preparePersonalAccountStatus) {
-          const prepared = await publication.preparePersonalAccountStatus(action);
-          assertCurrent();
-          return {
-            status: prepared.status,
-            assertCurrent() {
-              assertCurrent();
-              prepared.assertCurrent();
-            },
-          };
-        }
-        const status = await oauth.personal.status(action);
-        assertCurrent();
-        return {
-          status,
-          assertCurrent() {
-            assertCurrent();
-            oauth.personal.revalidateStatus(action, status);
-          },
-        };
-      },
-      async isPublicationSuperseded(snapshot, readPublished) {
-        assertCurrent();
-        const result = await (publication.isPublicationSuperseded?.(snapshot, readPublished) ??
-          provider.isPublicationSuperseded(snapshot, readPublished));
-        assertCurrent();
-        return result;
-      },
-    };
+    const selectedApi = createBoundPublicationFixtureApi(
+      publication,
+      provider,
+      assertCurrent,
+      oauth,
+    );
     // This fixture is the host caller, not a second publication startup/recovery runtime.
     const binding: RepositoryPublicationHostBinding = {
       readApi() {
@@ -158,8 +152,87 @@ export async function installGitHubAccountFixture(
   );
   return stop;
 }
+function createBoundPublicationFixtureApi(
+  publication: Partial<RepositoryPublicationApi>,
+  provider: RepositoryPublicationProvider,
+  assertCurrent: () => void,
+  oauth?: LegacyGitHubOAuthService,
+): RepositoryPublicationApi {
+  const unavailable = (): never => {
+    throw new Error("Unexpected publication operation in authorization fixture");
+  };
+  return {
+    ...publicationFixtureApi(publication, assertCurrent),
+    supportsOrigin(originUrl) {
+      assertCurrent();
+      return publication.supportsOrigin?.(originUrl) ?? provider.supportsOrigin(originUrl);
+    },
+    async performPullRequestAction(input) {
+      assertCurrent();
+      const result = await (publication.performPullRequestAction?.(input) ?? unavailable());
+      assertCurrent();
+      return result;
+    },
+    async inspectPullRequest(input) {
+      assertCurrent();
+      const result = await (publication.inspectPullRequest?.(input) ?? unavailable());
+      assertCurrent();
+      return result;
+    },
+    async readOptionsIdentity(input) {
+      assertCurrent();
+      const result = await (publication.readOptionsIdentity?.(input) ??
+        provider.readOptionsIdentity(input));
+      assertCurrent();
+      input.assertCurrent();
+      return result;
+    },
+    async preparePersonalAccountStatus(action) {
+      assertCurrent();
+      if (publication.preparePersonalAccountStatus) {
+        const prepared = await publication.preparePersonalAccountStatus(action);
+        assertCurrent();
+        return {
+          status: prepared.status,
+          assertCurrent() {
+            assertCurrent();
+            prepared.assertCurrent();
+          },
+        };
+      }
+      if (!oauth) {
+        const prepared = await provider.preparePersonalAccountStatus(action);
+        assertCurrent();
+        return {
+          status: prepared.status,
+          assertCurrent() {
+            assertCurrent();
+            prepared.assertCurrent();
+          },
+        };
+      }
+      const status = await oauth.personal.status(action);
+      assertCurrent();
+      return {
+        status,
+        assertCurrent() {
+          assertCurrent();
+          oauth.personal.revalidateStatus(action, status);
+        },
+      };
+    },
+    async isPublicationSuperseded(snapshot, readPublished) {
+      assertCurrent();
+      const result = await (publication.isPublicationSuperseded?.(snapshot, readPublished) ??
+        provider.isPublicationSuperseded(snapshot, readPublished));
+      assertCurrent();
+      return result;
+    },
+  };
+}
+
 /** Keep synthetic receipt I/O observable through late-installed spies at its actual owner. */
-function publicationFixtureApi(
+export function publicationFixtureApi(
   publication: Partial<NonNullable<RepositoryServices["publication"]>>,
   assertCurrent: () => void,
 ): Omit<
@@ -235,25 +308,87 @@ function publicationFixtureApi(
 }
 export async function installPublicationRpcFixture(
   context: GatewayRequestContext,
-  publication: Partial<NonNullable<RepositoryServices["publication"]>>,
+  publication: Partial<RepositoryPublicationApi>,
 ) {
-  const { createGitHubOAuthLifecycle } =
-    await import("../../extensions/github-repositories/oauth-lifecycle-api.js");
   const { createTestGatewayScheduler } = await import("../test-utils/gateway-scheduler-clock.js");
   const scheduler = createTestGatewayScheduler();
-  const serviceScheduler = createTestPluginServiceScheduler(scheduler);
-  const oauth = createGitHubOAuthLifecycle({
-    scheduler: serviceScheduler,
-    getConfig: context.getRuntimeConfig,
-    warn: () => {},
+  context.resolveGatewayContext ??= () => context;
+  let provider: RepositoryPublicationProvider | undefined;
+  let api: RepositoryPublicationApi | undefined;
+  let current: { signal: AbortSignal; assertCurrent: () => void } | undefined;
+  const binding: RepositoryPublicationHostBinding = {
+    readApi() {
+      if (!current || current.signal.aborted) {
+        return undefined;
+      }
+      current.assertCurrent();
+      return api;
+    },
+    captureProviderAuthority(pluginId) {
+      if (!provider || provider.id !== pluginId || !current || current.signal.aborted) {
+        return undefined;
+      }
+      current.assertCurrent();
+      return current.assertCurrent;
+    },
+    async install(next, ownerSignal) {
+      const signal = AbortSignal.any([
+        scheduler.signal,
+        ownerSignal,
+        getGatewayServiceLifetime(context),
+      ]);
+      const assertCurrent = () => {
+        signal.throwIfAborted();
+        if (provider !== next || readWorkspacePublicationHost(context) !== binding) {
+          throw new Error("The publication fixture owner changed");
+        }
+        next.assertCurrent();
+      };
+      provider = next;
+      current = { signal, assertCurrent };
+      assertCurrent();
+      const selectedApi = createBoundPublicationFixtureApi(publication, next, assertCurrent);
+      api = selectedApi;
+      return {
+        api: selectedApi,
+        uninstall() {
+          if (provider === next) {
+            provider = undefined;
+            api = undefined;
+            current = undefined;
+          }
+        },
+      };
+    },
+  };
+  bindWorkspacePublicationHost(context.resolveGatewayContext() ?? context, binding);
+  let services: Awaited<ReturnType<typeof startTestRepositorySessionPresentation>> | undefined =
+    undefined;
+  let closed = false;
+  const close = async () => {
+    if (closed) {
+      return;
+    }
+    closed = true;
+    registeredPublicationProviderCleanup.delete(close);
+    try {
+      await services?.stop({ strict: true });
+      await scheduler.stop();
+    } finally {
+      resetPluginRuntimeStateForTest();
+    }
+  };
+  registeredPublicationProviderCleanup.add(close);
+  onTestFinished(close);
+  services = await startTestRepositorySessionPresentation(context, scheduler, undefined, {
+    cleanupOnFinish: false,
   });
-  const stop = await installGitHubAccountFixture(context, oauth, publication);
-  onTestFinished(async () => {
-    await stop();
-    await oauth.stop();
-    await serviceScheduler.stop();
-    await scheduler.stop();
-  });
+  return {
+    stop: close,
+    provider: expectDefined(provider, "The registered publication provider"),
+    oauth: expectDefined(readRepositoryServices(context), "The registered GitHub account service")
+      .oauth,
+  };
 }
 
 export function installGitHubAccountRpcFixture(config: OpenClawConfig) {
@@ -267,7 +402,7 @@ export function installGitHubAccountRpcFixture(config: OpenClawConfig) {
       repositorySources: repositoryManifest.repositorySources,
       dashboard: repositoryManifest.dashboard,
     }),
-    register: repositoryPlugin.register,
+    register: registerRepositoryPlugin,
   });
   setActivePluginRegistry(fixture.registry.registry);
   onTestFinished(resetPluginRuntimeStateForTest);
@@ -323,7 +458,7 @@ export async function startTestRepositorySessionPresentation(
       contracts: repositoryManifest.contracts,
       dashboard: repositoryManifest.dashboard,
     }),
-    register: repositoryPlugin.register,
+    register: registerRepositoryPlugin,
   });
   setActivePluginRegistry(fixture.registry.registry);
   let services: Awaited<ReturnType<typeof startPluginServices>> | undefined = undefined;
@@ -370,78 +505,6 @@ export async function stopTestRegisteredPublicationProviders() {
   }
 }
 
-/** The real registered service and SDK installation bridge, with isolated native transaction custody. */
-export async function startTestRegisteredPublicationProvider() {
-  const { makeContextParams } = await import("./server-request-context.test-support.js");
-  const { createGatewayRequestContext } = await import("./server-request-context.js");
-  const { createWorkspacePublicationHost } = await import("./workspace-publication-provider.js");
-  const { createWorkerSessionPlacementStore } =
-    await import("./worker-environments/placement-store.js");
-  const { openOpenClawStateDatabase } = await import("../state/openclaw-state-db.js");
-  const { loadWorkerPlacementSessionRuntimeModule } =
-    await import("./server-worker-placement-startup.js");
-  const { currentGitHubPublicationConfig } =
-    await import("../../extensions/github-repositories/publication-availability-api.js");
-  const params = makeContextParams();
-  const scheduler = params.runtime.scheduler;
-  const host = createWorkspacePublicationHost({
-    placements: createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() }),
-    scheduler,
-    getCommittedRuntimeConfig: currentGitHubPublicationConfig,
-    loadSessionRuntime: loadWorkerPlacementSessionRuntimeModule,
-    managedByPlacement: true,
-    warn() {},
-  });
-  params.runtime.workspacePublicationHost = host;
-  const context = createGatewayRequestContext(params);
-  context.getRuntimeConfig = currentGitHubPublicationConfig;
-  context.getCommittedRuntimeConfig = currentGitHubPublicationConfig;
-  context.resolveGatewayContext = () => context;
-  params.runtime.runtimeState.repositorySessions = createRepositorySessionReadHost({
-    signal: scheduler.signal,
-    getRuntimeConfig: currentGitHubPublicationConfig,
-    getSessionRowProjection: () => undefined,
-    getClient: () => undefined,
-    resolveGatewayContext: () => context,
-    broadcastToConnIds() {},
-  });
-  let services: Awaited<ReturnType<typeof startTestRepositorySessionPresentation>> | undefined =
-    undefined;
-  let stopped = false;
-  const stop = async () => {
-    if (stopped) {
-      return;
-    }
-    stopped = true;
-    await services?.stop({ strict: true });
-  };
-  let closed = false;
-  const close = async () => {
-    if (closed) {
-      return;
-    }
-    closed = true;
-    registeredPublicationProviderCleanup.delete(close);
-    try {
-      await stop();
-      await host.close();
-      await scheduler.stop();
-    } finally {
-      resetPluginRuntimeStateForTest();
-    }
-  };
-  registeredPublicationProviderCleanup.add(close);
-  onTestFinished(close);
-  services = await startTestRepositorySessionPresentation(context, scheduler, undefined, {
-    cleanupOnFinish: false,
-  });
-  const api = readRepositoryServices(context)?.publication;
-  if (!api) {
-    throw new Error("The registered plugin did not install its publication provider.");
-  }
-  return { api, stop };
-}
-
 export async function createTestRepositorySessionPresentation(
   scheduler: GatewayScheduler,
   client: GatewayClient & { connId: string },
@@ -459,20 +522,13 @@ export async function createTestRepositorySessionPresentation(
     broadcastToConnIds: vi.fn(),
   });
   context.repositorySessions = host;
-  const serviceScheduler = createTestPluginServiceScheduler(scheduler);
-  const { startGitHubSessionPresentation } =
-    await import("../../extensions/github-repositories/session-presentation-service-api.js");
-  const service = startGitHubSessionPresentation({
-    scheduler: serviceScheduler,
-    getConfig: context.getRuntimeConfig,
-    reads: host.bindService(scheduler.signal, () => scheduler.signal.throwIfAborted()),
+  const services = await startTestRepositorySessionPresentation(context, scheduler, client, {
+    cleanupOnFinish: false,
   });
-  service.presentation.replace = replace;
-  return {
-    context,
-    stop: async () => {
-      await service.stop();
-      await serviceScheduler.stop();
-    },
-  };
+  const presentation = host.presentation;
+  if (!presentation) {
+    throw new Error("The registered plugin did not install its session presentation.");
+  }
+  presentation.replace = replace;
+  return { context, stop: () => services.stop({ strict: true }) };
 }

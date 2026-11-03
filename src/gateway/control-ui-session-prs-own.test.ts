@@ -1,5 +1,4 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { prepareControlUiSessionPrServiceTarget } from "../../extensions/github-repositories/control-ui-session-pr-read-api.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { syncCanonicalGitHubIdentity } from "../state/user-profile-writes.js";
@@ -14,7 +13,7 @@ import { handleGatewayRequest } from "./server-methods.js";
 
 const io = vi.hoisted(() => ({ command: vi.fn(), identity: vi.fn(), currentIdentity: vi.fn() }));
 vi.mock("../../extensions/github-repositories/tool-identity-api.js", async (original) => ({
-  ...(await original<typeof import("../../extensions/github-repositories/tool-identity-api.js")>()),
+  ...(await original<Record<string, unknown>>()),
   prepareGitHubPublicationIdentity: io.identity,
   matchesPreparedGitHubPublicationIdentity: io.currentIdentity,
 }));
@@ -270,11 +269,7 @@ it("does not hydrate public or service cards from an authenticated imported snap
     await f.seed(sessionKey, f.profile.id, { worktree });
     await poll(f);
     expect(lastSnapshot(f)?.pullRequests).toHaveLength(1);
-    const service = await prepareControlUiSessionPrServiceTarget(
-      f.sessionReads,
-      f.context.getRuntimeConfig,
-      { sessionKey, agentId: "main" },
-    );
+    const service = await f.sessionReads.prepareServiceRead({ sessionKey, agentId: "main" });
     expect(service).toBeDefined();
     if (!service) {
       throw new Error("Missing service fixture target");

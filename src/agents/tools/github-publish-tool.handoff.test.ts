@@ -1,6 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
-import { registerGitHubAgentTools } from "../../../extensions/github-repositories/agent-tools-api.js";
 import type { SessionGitHubPublicationResult } from "../../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import { withinTest } from "../../../test/helpers/promise.js";
 import { createTestReplyOperation } from "../../auto-reply/reply/reply-run-registry.test-helpers.js";
@@ -26,14 +25,11 @@ import {
 import { readSessionMessagesAsync } from "../../gateway/session-transcript-readers.js";
 import * as exec from "../../infra/exec-request-context.js";
 import { resetSystemEventsForTest } from "../../infra/system-events.js";
-import { createPluginRuntimeMock } from "../../plugin-sdk/test-helpers/plugin-runtime-mock.js";
 import {
   bindLegacyPluginSdkResourceHost,
   LegacyPluginSdkResourceHost,
 } from "../../plugins/legacy-sdk-resource-host.js";
-import { createTestPluginRegistry } from "../../plugins/registry-runtime.test-helpers.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
-import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import { createPluginToolFactoryContext } from "../../plugins/tool-factory-context.js";
 import { bindPluginToolCallbacks } from "../../plugins/tool-factory-runtime.js";
 import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
@@ -49,6 +45,7 @@ import { applyCodeModeCatalog } from "../code-mode.js";
 import { createCodeModeHarness } from "../code-mode.test-support.js";
 import { SESSIONS_YIELD_ABORT_REASON } from "../embedded-agent-runner/run/attempt-sessions-yield.js";
 import { runEmbeddedAgent } from "../embedded-agent.js";
+import { createGitHubExecutionFixture } from "../execution-environment.test-support.js";
 import type { OpenClawToolsOptions } from "../openclaw-tools.types.js";
 import { createOperationalRunInstanceRef } from "../operational-run-instance.js";
 import { preparePluginToolExecutionCapabilities } from "../plugin-tool-execution.js";
@@ -79,15 +76,9 @@ function bindPublicationTool(
   options: Pick<OpenClawToolsOptions, "sandbox" | "sessionId" | "runId" | "onYield">,
   assertInvocationCurrent: () => void,
 ) {
-  const builder = createTestPluginRegistry(createPluginRuntimeMock());
-  const record = createPluginRecord({
-    id: "publication-fixture",
-    contracts: { tools: ["github_identity_status", "github_publish"] },
-  });
-  builder.registry.plugins.push(record);
-  registerGitHubAgentTools(builder.createApi(record, { config: {}, registrationMode: "full" }));
+  const { registry } = createGitHubExecutionFixture({});
   const entry = expectDefined(
-    builder.registry.tools.find((registered) => registered.names?.includes("github_publish")),
+    registry.tools.find((registered) => registered.names?.includes("github_publish")),
     "registered publication factory",
   );
   const bindGateway = preparePluginToolGatewayCapability(
@@ -99,7 +90,7 @@ function bindPublicationTool(
   });
   const context = createPluginToolFactoryContext({
     entry,
-    registry: builder.registry,
+    registry: registry,
     context: {},
     assertInvocationCurrent,
     bindExecutionCapabilities: (assertCurrent, signal) => ({
@@ -113,7 +104,7 @@ function bindPublicationTool(
   });
   const created = entry.factory(context);
   const tool = expectDefined(Array.isArray(created) ? created[0] : created, "publication tool");
-  return bindPluginToolCallbacks(entry, builder.registry, tool, context.assertInvocationCurrent);
+  return bindPluginToolCallbacks(entry, registry, tool, context.assertInvocationCurrent);
 }
 
 afterEach(() => {

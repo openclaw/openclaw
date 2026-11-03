@@ -7,8 +7,6 @@ import { lookup as dnsLookup } from "node:dns/promises";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import { readGitHubConfig } from "../../extensions/github-repositories/config-api.js";
-import { updateGitHubToolIdentityConfig } from "../../extensions/github-repositories/tool-identity-config-api.js";
 import { createSandboxFsBridge } from "../agents/sandbox/fs-bridge.js";
 import { createSandboxTestContext } from "../agents/sandbox/test-fixtures.js";
 import { setRuntimeConfigSnapshot, writeConfigFile } from "../config/config.js";
@@ -30,6 +28,10 @@ import {
   overrideCommands,
   SESSION_KEY,
 } from "./github-publication.test-support.js";
+import {
+  readGitHubConfig,
+  loadActualGitHubIdentityFixture,
+} from "./github-repository-fixture-api.test-support.js";
 import { createContext as createRequestContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import { createOperatorWsClient } from "./server/ws-connection/authenticated-request-dispatch.test-support.js";
 import { prepareGatewayConnectOperatorAccess } from "./server/ws-connection/connect-operator-access.js";
@@ -108,9 +110,7 @@ async function evidenceFixture(imported = false) {
     },
   };
   setRuntimeConfigSnapshot(config);
-  const actualIdentity = await vi.importActual<
-    typeof import("../../extensions/github-repositories/tool-identity-api.js")
-  >("../../extensions/github-repositories/tool-identity-api.js");
+  const actualIdentity = await loadActualGitHubIdentityFixture();
   mocks.matchesIdentity.mockImplementation(actualIdentity.matchesPreparedGitHubPublicationIdentity);
   overrideCommands((argv) =>
     argv.includes(`repos/${f.publication.repository}`) && argv.includes(".id")
@@ -215,11 +215,9 @@ async function evidenceFixture(imported = false) {
     upload,
     config,
     async deselectPublisher() {
-      const next = await updateGitHubToolIdentityConfig({
-        scope: "system",
-        agentId: "main",
-        expectedIdentity: readGitHubConfig(config).system,
-      });
+      const next = structuredClone(config);
+      delete readGitHubConfig(next).system;
+      await writeConfigFile(next);
       setRuntimeConfigSnapshot(next);
     },
     onLookup(callback: () => Promise<void>) {

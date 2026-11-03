@@ -1,31 +1,25 @@
 import { getEventListeners } from "node:events";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { createTestGatewayScheduler } from "openclaw/plugin-sdk/plugin-test-api";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getRuntimeConfig } from "../config/io.js";
-import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
-import { runGitWorkerOperation } from "../infra/git-worker.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   createTestControlUiSessionPrSubscriptions as createSubscriptions,
   spyOnSessionPrLoader,
   type SessionPrLoader,
-} from "./control-ui-session-pr-subscriptions.test-support.js";
+} from "./session-pr-subscriptions.test-support.js";
 import {
   createSessionPullRequestsFixture,
   githubJson,
-  localPrGitReads as localGitReads,
   mockPrCheckout,
+  resetLocalPrGitReads,
   pullListItem,
   routedFetch,
   testGitContext,
-} from "./control-ui-session-prs.test-support.js";
-import { resolveSessionStoreKey } from "./session-store-key.js";
+} from "./session-prs.test-support.js";
 
 let requestedRoot: string | ((key: string) => string) | undefined;
 const fixture = createSessionPullRequestsFixture();
 const loadPrs = fixture.load;
-
-vi.mock("../infra/git-worker.js", () => ({ runGitWorkerOperation: vi.fn() }));
 
 let cacheEpochMs = Date.now();
 let elapsedMs = 0;
@@ -93,17 +87,9 @@ function subscribe(
     prepareRead: async (connId, session) => {
       const read = await fixture.prepareRead(connId, session);
       if (requestedRoot) {
-        const sessionKey = resolveSessionStoreKey({
-          cfg: getRuntimeConfig(),
-          sessionKey: session.sessionKey,
-          storeAgentId: "main",
-        });
-        await upsertSessionEntryCore(
-          { agentId: "main", sessionKey },
-          {
-            spawnedCwd:
-              typeof requestedRoot === "string" ? requestedRoot : requestedRoot(sessionKey),
-          },
+        fixture.setCheckout(
+          session.sessionKey,
+          typeof requestedRoot === "string" ? requestedRoot : requestedRoot(session.sessionKey),
         );
       }
       return read;
@@ -123,7 +109,7 @@ async function pollAfter(subscriptions: ReturnType<typeof subscribe>, elapsed: n
 
 beforeEach(() => {
   requestedRoot = undefined;
-  vi.mocked(runGitWorkerOperation).mockReset();
+  resetLocalPrGitReads();
   vi.useFakeTimers();
   elapsedMs = 0;
   vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
@@ -145,65 +131,6 @@ afterEach(async () => {
 });
 
 describe("watched session PR retention", () => {
-  it("shares checkout facts across subscribers and refreshes both only when refs change", async () => {
-    let revision = "first-head";
-    let additions = 1;
-    stubPulls(() => githubJson([]), true);
-    mockCheckout(
-      () => revision,
-      () => "shared-feature",
-      () => additions,
-    );
-    const broadcastToConnIds = vi.fn();
-    const subscriptions = subscribe(loadFromRoot("/watched/shared-checkout"), broadcastToConnIds);
-    const expectReads = (count: number) => {
-      for (const type of ["checkout.context", "pull-request.branch-facts"]) {
-        expect(localGitReads().filter(([operation]) => operation.type === type)).toHaveLength(
-          count,
-        );
-      }
-    };
-    const expectDelivered = (connId: string, sessionKey: string, expectedAdditions: number) => {
-      const snapshot = expect.objectContaining({
-        status: "ready",
-        branch: expect.objectContaining({ additions: expectedAdditions }),
-      });
-      expect(broadcastToConnIds).toHaveBeenCalledWith(
-        "controlUi.sessionPullRequests.changed",
-        { sessions: { [sessionKey]: snapshot } },
-        new Set([connId]),
-        expect.anything(),
-      );
-    };
-    await Promise.all([
-      subscriptions.replace("first", ["shared-first"]),
-      subscriptions.replace("second", ["shared-second"]),
-    ]);
-    expectReads(1);
-    expectDelivered("first", "shared-first", 1);
-    expectDelivered("second", "shared-second", 1);
-
-    broadcastToConnIds.mockClear();
-    await subscriptions.replace("first", ["shared-first"], new Set(["shared-first"]));
-    await subscriptions.pollNow();
-    expectReads(1);
-    expectDelivered("first", "shared-first", 1);
-
-    revision = "second-head";
-    additions = 2;
-    broadcastToConnIds.mockClear();
-    await subscriptions.pollNow();
-    expectReads(2);
-    expectDelivered("first", "shared-first", 2);
-    expectDelivered("second", "shared-second", 2);
-
-    subscriptions.unsubscribe("first");
-    broadcastToConnIds.mockClear();
-    await subscriptions.replace("second", ["shared-second"], new Set(["shared-second"]));
-    expectReads(2);
-    expectDelivered("second", "shared-second", 2);
-  });
-
   it("keeps every watched branch's last-good chips through quota backoff", async () => {
     let limited = false;
     const fetchImpl = stubPulls(() => (limited ? githubJson({}, 429) : githubJson([mergedPull])));
@@ -268,15 +195,12 @@ describe("watched session PR retention", () => {
     await subscriptions.replace("first", watchedKeys(200));
     await subscriptions.replace("second", watchedKeys(100, 200));
     expect(fetchImpl.mock.calls).toHaveLength(300);
-    expect(localGitReads()).toHaveLength(600);
 
     for (const elapsed of [60_000, 15_001]) {
       await pollAfter(subscriptions, elapsed);
       expect(fetchImpl.mock.calls).toHaveLength(300);
-      expect(localGitReads()).toHaveLength(600);
     }
     await pollAfter(subscriptions, 225_000);
-    expect(localGitReads()).toHaveLength(900);
     expect(signals.size).toBe(300);
     expect([...signals].map(listenerCount)).toEqual(Array<number>(300).fill(1));
     await subscriptions.stop();
@@ -293,13 +217,13 @@ describe("watched session PR retention", () => {
     let response: 200 | 503 | "throws" = 200;
     stubPulls(() => githubJson(response === 503 ? {} : [], response === 503 ? 503 : 200), true);
     mockCheckout(
+      () => branch,
       () => {
         if (response === "throws") {
           throw new Error("session unavailable");
         }
         return branch;
       },
-      () => branch,
     );
     const load = () =>
       loadPrs(

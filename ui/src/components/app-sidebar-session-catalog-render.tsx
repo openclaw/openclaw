@@ -19,7 +19,6 @@ import {
 import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { renderHoverMarquee } from "../lib/solid/hover-marquee.tsx";
-import { PluginContributions } from "../plugins/control-ui-contributions.solid.tsx";
 import {
   catalogErrorMessages,
   formatSidebarTimestamp,
@@ -32,6 +31,7 @@ import {
   catalogRowFocusControl,
   type SidebarSessionCatalog,
 } from "./app-sidebar-session-catalogs.ts";
+import { CatalogSessionIndicators } from "./app-sidebar-session-indicators.tsx";
 import type { SessionCatalogGroupsParams } from "./app-sidebar-session-render-types.ts";
 import { renderRecentSession as RecentSession } from "./app-sidebar-session-row-render.tsx";
 import { renderSidebarSessionSectionHeader as SessionSectionHeader } from "./app-sidebar-session-section-header.tsx";
@@ -244,15 +244,13 @@ function renderCatalogHostGroup(
             <span class="sidebar-recent-session__text">
               <span class="sidebar-recent-session__title-row"> {marqueeLabel} </span>
               <span class="sidebar-recent-session__details">
-                <span class="sidebar-recent-session__details-endcap">
-                  <PluginContributions
-                    kind="session-row"
-                    sessionKey={key()}
-                    agentId={params.snapshot.newSessionAgentId}
-                    artifact={readSession().pullRequest}
-                    presented={true}
-                  />
-                </span>
+                <CatalogSessionIndicators
+                  plugins={params.host.sessionDataContext?.plugins}
+                  sessionKey={key()}
+                  agentId={params.snapshot.newSessionAgentId}
+                  artifact={readSession().pullRequest}
+                  onChange={() => params.host.sessionData.requestSessionDataUpdate()}
+                />
               </span>
             </span>
           </a>

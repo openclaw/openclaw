@@ -1,9 +1,7 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import * as publicationTransport from "openclaw/plugin-sdk/process-runtime";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
-import * as publicationIdentity from "../../../extensions/github-repositories/publication-availability-api.js";
-import * as publicationTransport from "../../../extensions/github-repositories/publication-git-transport-api.js";
-import { createGitHubPublicationProvider } from "../../../extensions/github-repositories/publication-provider-api.js";
 import { readAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { createOpenClawCodingToolsAsync } from "../../agents/agent-tools.js";
 import { withPreparedEmbeddedGatewayTools } from "../../agents/embedded-agent-runner/run/attempt-gateway-tools.js";
@@ -24,6 +22,7 @@ import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { captureGatewayAuthPolicy } from "../../gateway/auth-policy.js";
 import { installPublicationRpcFixture } from "../../gateway/github-account-service.test-support.js";
 import { createGitHubPublicationCoordinator } from "../../gateway/github-publication.js";
+import { loadGitHubRepositoryRuntimeFixture } from "../../gateway/github-repository-fixture-api.test-support.js";
 import { captureGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
 import { cronHandlers } from "../../gateway/server-methods/cron.js";
 import {
@@ -55,6 +54,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { setCanonicalUserProfileRole } from "../../state/user-profile-writes.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { createGatewaySchedulerClock } from "../../test-utils/gateway-scheduler-clock.js";
 import type { CronEvent } from "../service.js";
 import { resolveCronRequesterExecutionRevision } from "../service/jobs-tool-policy.js";
@@ -101,6 +101,27 @@ await Promise.all([
     runtime.prewarmConfigDrivenReplyRuntime(),
   ),
 ]);
+const { createGitHubPublicationProvider } = await loadGitHubRepositoryRuntimeFixture();
+type PublicationIdentity = {
+  source: "system-detected" | "system-configured" | "agent-override" | "personal";
+  profileId?: string;
+  host?: string;
+  account: { accountId: number; login: string; avatarUrl: string | null };
+  env: NodeJS.ProcessEnv;
+  stale?: true;
+  accessExpiresAtMs?: number;
+};
+const publicationIdentity = await loadBundledPluginFacade<{
+  prepareCurrentGitHubPublicationIdentity(
+    agentId: string,
+    assertCurrent?: () => void,
+  ): Promise<PublicationIdentity>;
+  matchesCurrentGitHubPublicationIdentity(input: {
+    agentId: string;
+    identity: PublicationIdentity;
+  }): boolean;
+}>({ pluginId: "github-repositories", artifactBasename: "publication-availability-api.js" });
+
 const session = await vi.importActual<typeof import("./session.js")>("./session.js");
 const accessor = await vi.importActual<typeof import("../../config/sessions/session-accessor.js")>(
   "../../config/sessions/session-accessor.js",
@@ -447,9 +468,8 @@ it.each([
   let reads = 0;
   const writes: unknown[] = [];
   const github = vi
-    .spyOn(publicationTransport, "runGitHubPublicationCommand")
+    .spyOn(publicationTransport, "runCommandBuffered")
     .mockImplementation(async (argv, options) => {
-      options?.beforeRun?.();
       if (selfRemoving) {
         expect(context.cron.getJob(job.id)).toBeUndefined();
       }

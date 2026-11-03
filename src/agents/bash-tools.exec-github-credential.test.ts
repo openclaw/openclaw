@@ -4,14 +4,14 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildGitHubExecLaunchArgv } from "../../extensions/github-repositories/exec-launch-api.js";
-import { prepareGitHubToolEnvironment } from "../../extensions/github-repositories/tool-identity-api.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { createProcessSupervisor } from "../process/supervisor/supervisor.js";
 import type { SpawnInput } from "../process/supervisor/types.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { resolvePreparedExecEnvironment } from "./bash-tools.exec-request-preparation.js";
 import { runExecProcess } from "./bash-tools.exec-runtime.js";
+import { capturePreparedExecutionEnvironment } from "./execution-environment.js";
+import { createGitHubExecutionFixture } from "./execution-environment.test-support.js";
 
 const boundary = vi.hoisted(() => ({ spawn: vi.fn(), prepare: vi.fn() }));
 vi.mock("../process/supervisor/index.js", () => ({
@@ -36,6 +36,30 @@ async function writeToken(token = "synthetic-launch-token", host = "github.com")
 
 let supervisor: ReturnType<typeof createProcessSupervisor>;
 let command: string;
+let execution: ReturnType<typeof createGitHubExecutionFixture>;
+function prepareExecution(host = "github.com") {
+  return capturePreparedExecutionEnvironment(
+    {
+      config: {
+        plugins: {
+          entries: {
+            "github-repositories": {
+              config: {
+                host,
+                apiBaseUrl:
+                  host === "github.com" ? "https://api.github.com" : `https://${host}/api/v3`,
+                system: { profileId: "ghp_11111111111111111111111111111111" },
+              },
+            },
+          },
+        },
+      },
+      agentId: "main",
+      assertCurrent() {},
+    },
+    execution.registry,
+  );
+}
 
 function launch(overrides: Partial<Parameters<typeof runExecProcess>[0]> = {}) {
   return runExecProcess({
@@ -49,10 +73,7 @@ function launch(overrides: Partial<Parameters<typeof runExecProcess>[0]> = {}) {
       GH_TOKEN: "",
       GITHUB_TOKEN: "",
     },
-    wrapLocalLaunch: (argv) =>
-      buildGitHubExecLaunchArgv([...argv], profileDir, {
-        githubHost: overrides.env?.GH_HOST ?? "github.com",
-      }),
+    wrapLocalLaunch: prepareExecution(overrides.env?.GH_HOST ?? "github.com").wrapLocalLaunch,
     usePty: false,
     warnings: [],
     maxOutput: 1000,
@@ -65,9 +86,14 @@ function launch(overrides: Partial<Parameters<typeof runExecProcess>[0]> = {}) {
 
 beforeEach(async () => {
   root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "exec-private-credential-")));
-  profileDir = path.join(root, "profile");
+  vi.stubEnv("OPENCLAW_STATE_DIR", root);
+  execution = createGitHubExecutionFixture({});
+  profileDir = expectDefined(
+    prepareExecution().localIdentityEnv.GH_CONFIG_DIR,
+    "managed GitHub profile",
+  );
   hostsPath = path.join(profileDir, "hosts.yml");
-  await fs.mkdir(profileDir, { mode: 0o700 });
+  await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
   await writeToken();
   supervisor = createProcessSupervisor();
   boundary.spawn.mockReset().mockImplementation(supervisor.spawn.bind(supervisor));
@@ -93,6 +119,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
   await supervisor.shutdown();
   resetProcessRegistryForTests();
+  vi.unstubAllEnvs();
   await fs.rm(root, { recursive: true, force: true });
 });
 
@@ -138,22 +165,7 @@ describe.skipIf(process.platform === "win32")("local GitHub credential launch bo
   );
 
   it("keeps prepared, requested and PTY snapshot environments secretless", async () => {
-    const prepared = prepareGitHubToolEnvironment({
-      config: {
-        tools: {},
-        plugins: {
-          entries: {
-            "github-repositories": {
-              config: {
-                system: { profileId: "ghp_11111111111111111111111111111111" },
-              },
-            },
-          },
-        },
-      },
-      agentId: "main",
-      env: { OPENCLAW_STATE_DIR: root },
-    });
+    const prepared = prepareExecution();
     profileDir = expectDefined(prepared.localIdentityEnv.GH_CONFIG_DIR, "managed GitHub profile");
     hostsPath = path.join(profileDir, "hosts.yml");
     await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });

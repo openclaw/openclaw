@@ -14,6 +14,7 @@ import {
 } from "./publication-presentation.ts";
 import { createRepositoryBrowserRuntime } from "./repository-runtime.ts";
 import { registerOpenPullRequestAction } from "./session-open-pull-request.ts";
+import { createSidebarBadgeAccessory } from "./sidebar-accessory.tsx";
 import { createGitHubTextReferenceProvider } from "./text-reference-provider.ts";
 
 export { createGitHubIdentity } from "./github-identity.ts";
@@ -123,15 +124,7 @@ export default defineControlUiPluginV2({
         ),
       ),
     });
-    const stopRow = host.ui.registerAccessory({
-      id: "repository-row",
-      placement: "session-row",
-      mount: lazyView(() =>
-        import("./sidebar-accessory.tsx").then((module) =>
-          module.createSidebarAccessoryMount(runtime),
-        ),
-      ),
-    });
+    const stopRow = host.ui.registerAccessory(createSidebarBadgeAccessory(host, runtime));
     const stopContext = host.ui.registerAccessory({
       id: "repository",
       placement: "session-context",

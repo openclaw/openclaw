@@ -9,30 +9,39 @@ import {
 } from "./github-publication.test-support.js";
 import { randomUUID } from "node:crypto";
 import { afterEach, expect, onTestFinished, vi } from "vitest";
-import { createGitHubOAuthLifecycle } from "../../extensions/github-repositories/oauth-lifecycle-api.js";
-import { personalGitHubStatusAsync as personalGitHubStatus } from "../../extensions/github-repositories/personal-status-api.js";
-import {
-  resolveManagedGitHubProfileDir,
-  writeManagedGitHubProfileFiles,
-} from "../../extensions/github-repositories/tool-identity-api.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createTestPluginServiceScheduler } from "../plugin-sdk/plugin-test-api.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { updateUserGitHubConnection } from "../state/user-github-connections.test-support.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
-import { installGitHubAccountFixture } from "./github-account-service.test-support.js";
+import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
+import { installPublicationRpcFixture } from "./github-account-service.test-support.js";
 import type { PersonalGitHubSessionActionV2 } from "./github-personal-publication.js";
 import { resolveGatewayOperatorAccessAuthority } from "./operator-access-policy.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { preparePersonalGitHubSessionActionV2 } from "./server-methods/github-personal-authorization.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
+import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import { gatewayConnect, gatewayProfile } from "./server/client-fixtures.test-support.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
+
+const { resolveManagedGitHubProfileDir, writeManagedGitHubProfileFiles } =
+  await loadBundledPluginFacade<{
+    resolveManagedGitHubProfileDir(params: {
+      agentId: string;
+      scope: "system" | "agent" | "personal";
+      profileId: string;
+      env?: NodeJS.ProcessEnv;
+    }): string;
+    writeManagedGitHubProfileFiles(
+      dir: string,
+      identity: { login: string; token: string },
+      options?: { assertCurrent: () => void },
+    ): Promise<void>;
+  }>({ pluginId: "github-repositories", artifactBasename: "tool-identity-api.ts" });
 
 const mocks = githubPublicationTestMocks();
 export const personalPublicationAccount = { accountId: 101, login: "personal-alice" };
@@ -200,11 +209,9 @@ export async function createPersonalPublicationFixture() {
   };
   const runtime = { live: true, verifiedAccount: account, client };
   const config: OpenClawConfig = {};
-  const context = {
-    getRuntimeConfig: () => config,
-    getClientConnIds: (filter?: (candidate: GatewayClient) => boolean) =>
-      new Set(runtime.live && (!filter || filter(runtime.client)) ? [runtime.client.connId!] : []),
-  } as unknown as GatewayRequestContext;
+  const context = createContext([], () => config);
+  context.getClientConnIds = (filter) =>
+    new Set(runtime.live && (!filter || filter(runtime.client)) ? [runtime.client.connId!] : []);
   const action = await preparePersonalPublicationFixtureAction({ client, context });
   const placements = createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() });
   const coordinator = createTestGitHubPublicationCoordinator({ placements });
@@ -229,20 +236,9 @@ export async function callPersonalPublicationRpc(
   params: Record<string, unknown> = { sessionKey: SESSION_KEY },
 ) {
   const respond = vi.fn();
-  const scheduler = createTestGatewayScheduler();
-  const serviceScheduler = createTestPluginServiceScheduler(scheduler);
-  const oauth = createGitHubOAuthLifecycle({
-    scheduler: serviceScheduler,
-    getConfig: context.getRuntimeConfig,
-    warn() {},
-  });
   const rpcContext = { ...context };
   rpcContext.resolveGatewayContext = () => rpcContext;
-  const uninstall = await installGitHubAccountFixture(
-    rpcContext,
-    { ...oauth, personal: { ...oauth.personal, status: personalGitHubStatus } },
-    coordinator,
-  );
+  const installedAccount = await installPublicationRpcFixture(rpcContext, coordinator);
   try {
     await handleGatewayRequest({
       req: { type: "req", id: randomUUID(), method, params },
@@ -253,10 +249,7 @@ export async function callPersonalPublicationRpc(
     });
     return respond.mock.calls[0]!;
   } finally {
-    await uninstall();
-    await oauth.stop();
-    await serviceScheduler.stop();
-    await scheduler.stop();
+    await installedAccount.stop();
   }
 }
 

@@ -118,14 +118,6 @@ vi.mock("./project-checkout-maintenance.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./project-checkout-maintenance.js")>()),
   configureProjectCheckoutMaintenance: vi.fn(),
 }));
-// mock-isolation: environment routing must not spawn Git or resolve bases for synthetic checkouts.
-vi.mock("../../extensions/github-repositories/project-clone-runtime-api.js", () => ({
-  ProjectCloneError: class extends Error {},
-  cloneProjectCheckout: mocks.clone,
-  refreshProjectCheckout: mocks.refresh,
-  ensureProjectCheckoutCommit: vi.fn(),
-  resolveProjectCheckoutBase: mocks.forbiddenFilesystem,
-}));
 vi.mock("./project-registry.kernel.js", () => ({
   ensureProjectRegistrySchema: mocks.forbiddenSqlite,
   removeProjectCheckoutReferenceInDatabase: mocks.forbiddenSqlite,
@@ -163,7 +155,8 @@ import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import type { OpenClawStateWorkerOperations } from "../state/openclaw-state-worker-contract.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
-import { materializeProjectClone, refreshProjectClone } from "./project-clone.test-support.js";
+import type { ManagedProjectSourceV1 } from "./managed-project-source.js";
+import { materializeProjectClone, refreshProjectClone } from "./project-clone.js";
 import {
   registerProjectRegistry,
   removeProjectRegistry,
@@ -183,6 +176,16 @@ beforeEach(() => {
 });
 
 type LeaseRun = (lease: OpenClawStateLeaseContext) => Promise<unknown>;
+const fixtureSource: ManagedProjectSourceV1 = {
+  resolveUrl: (url) => ({ url, name: "project" }),
+  invalidUrlMessage: "Select the fixture repository",
+  clone: mocks.clone,
+  refresh: mocks.refresh,
+  ensureCommit: async () => {
+    throw new Error("Environment routing must not request a pinned commit");
+  },
+  resolveBase: mocks.forbiddenFilesystem,
+};
 
 const root = path.resolve("/synthetic-project-state");
 const databasePath = path.join(root, "state", "openclaw.sqlite");
@@ -290,8 +293,12 @@ it.each(["remove", "register", "materialize", "refresh", "selector", "migration"
         remove: () => removeProjectRegistry(project, options),
         register: () => registerProjectRegistry({ path: project.repoRoot }, options),
         materialize: () =>
-          materializeProjectClone({ cfg: {}, gitUrl: originUrl, name: "Project" }, options),
-        refresh: () => refreshProjectClone(project, options),
+          materializeProjectClone(
+            { cfg: {}, gitUrl: originUrl, name: "Project" },
+            options,
+            fixtureSource,
+          ),
+        refresh: () => refreshProjectClone(project, options, fixtureSource),
         selector: async () => {
           const selected = await selectStoredProjectRegistry(sourceProject.id, options);
           expect(selected?.project).toEqual(sourceProject);
@@ -370,6 +377,7 @@ describe("clone registration", () => {
     materializeProjectClone(
       { cfg: {}, gitUrl: "https://github.com/example/project.git" },
       { env: { OPENCLAW_STATE_DIR: "/synthetic/state" } },
+      fixtureSource,
     );
 
   beforeEach(() => {

@@ -25,6 +25,7 @@ import {
   persistPublicationTestSession,
   SESSION_KEY,
 } from "./github-publication.test-support.js";
+import { loadActualGitHubIdentityFixture } from "./github-repository-fixture-api.test-support.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import { createContext as createRequestContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import { createOperatorWsClient } from "./server/ws-connection/authenticated-request-dispatch.test-support.js";
@@ -439,9 +440,7 @@ describe("session PR actions through the agent tool and registered Gateway metho
     const f = await fixture();
     const original = structuredClone(f.state);
     const identity = await mocks.prepareIdentity();
-    const actual = await vi.importActual<
-      typeof import("../../extensions/github-repositories/tool-identity-api.js")
-    >("../../extensions/github-repositories/tool-identity-api.js");
+    const actual = await loadActualGitHubIdentityFixture();
     mocks.matchesIdentity.mockImplementation(actual.matchesPreparedGitHubPublicationIdentity);
     const configForProfile = (profileId: string | undefined) => ({
       ...f.config,

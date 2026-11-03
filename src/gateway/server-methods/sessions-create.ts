@@ -134,8 +134,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     const emptyWorkspace = p.worktreeSource === "empty";
     const worktreeSelectionError = validateSessionWorktreeSelection(p);
     if (worktreeSelectionError) {
-      respond(false, undefined, worktreeSelectionError);
-      return;
+      return respond(false, undefined, worktreeSelectionError);
     }
     const parentSessionKey = normalizeOptionalString(p.parentSessionKey);
     const creation = resolveOperatorSessionCreation(client, { allowTrustedHint: true });

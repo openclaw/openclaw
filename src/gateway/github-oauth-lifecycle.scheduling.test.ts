@@ -1,7 +1,4 @@
-import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, expect, it, vi } from "vitest";
-import { createGitHubOAuthLifecycle } from "../../extensions/github-repositories/oauth-lifecycle-api.js";
-import { createPersonalGitHubOAuthLifecycle } from "../../extensions/github-repositories/personal-oauth-api.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as githubRecords from "../agents/github-oauth-records.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -16,6 +13,7 @@ import {
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import {
+  startRegisteredGitHubOAuth,
   configForScope,
   identity,
   NOW,
@@ -25,7 +23,7 @@ import {
 
 const refreshToken = vi.hoisted(() => vi.fn());
 vi.mock("../../extensions/github-repositories/oauth-api.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../extensions/github-repositories/oauth-api.js")>()),
+  ...(await importOriginal<Record<string, unknown>>()),
   refreshGitHubOAuthToken: refreshToken,
 }));
 
@@ -55,11 +53,8 @@ it("refreshes once after sleep while personal maintenance is pending, then stops
     },
   });
   refreshToken.mockResolvedValue({ status: "error", code: "device_flow_disabled" });
-  const lifecycle = createGitHubOAuthLifecycle({
-    getConfig: () => config,
-    warn: vi.fn(),
-    scheduler: createTestPluginServiceScheduler(scheduler),
-  });
+  const fixture = await startRegisteredGitHubOAuth(() => config, scheduler);
+  const lifecycle = fixture.oauth;
   const personal = createDeferredCore();
   const maintainPersonal = vi
     .spyOn(lifecycle.personal, "maintain")
@@ -86,7 +81,7 @@ it("refreshes once after sleep while personal maintenance is pending, then stops
   } finally {
     personal.resolve();
     await initialWake;
-    await lifecycle.stop();
+    await fixture.stop();
   }
 });
 
@@ -96,11 +91,11 @@ it("skips empty OAuth inventories until a committed write makes work available",
   openOpenClawStateDatabase();
   const inventory = vi.spyOn(githubRecords, "listGitHubAuthorizationRecords");
   const time = createGatewaySchedulerClock(NOW);
-  const lifecycle = createGitHubOAuthLifecycle({
-    getConfig: () => configForScope("system"),
-    warn: vi.fn(),
-    scheduler: createTestPluginServiceScheduler(createTestGatewayScheduler(time.clock)),
-  });
+  const fixture = await startRegisteredGitHubOAuth(
+    () => configForScope("system"),
+    createTestGatewayScheduler(time.clock),
+  );
+  const lifecycle = fixture.oauth;
   vi.spyOn(lifecycle.personal, "maintain").mockResolvedValue(undefined);
   try {
     await lifecycle.maintain();
@@ -112,7 +107,7 @@ it("skips empty OAuth inventories until a committed write makes work available",
     expect(inventory).toHaveBeenCalledTimes(2);
     expect(await githubRecords.inspectGitHubOAuthRecord(OLD_PROFILE)).toEqual({ state: "missing" });
   } finally {
-    await lifecycle.stop();
+    await fixture.stop();
   }
 });
 
@@ -121,7 +116,8 @@ it("resumes personal maintenance after a connection write and retains its expiry
   const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
   const owner = (await ensureCanonicalUserProfileForEmail("oauth-maintenance@example.test")).id;
   const records = vi.spyOn(userGitHubConnections, "listUserGitHubConnectionsAsync");
-  const lifecycle = createPersonalGitHubOAuthLifecycle();
+  const fixture = await startRegisteredGitHubOAuth(() => configForScope("system"));
+  const lifecycle = fixture.oauth.personal;
   try {
     await lifecycle.maintain();
     await lifecycle.maintain();
@@ -150,6 +146,6 @@ it("resumes personal maintenance after a connection write and retains its expiry
       (await userGitHubConnections.readUserGitHubConnectionAsync(owner))?.pending,
     ).toBeUndefined();
   } finally {
-    await lifecycle.stop();
+    await fixture.stop();
   }
 });

@@ -11,6 +11,7 @@ import { readUpdateCompatibilityInventory } from "../scripts/lib/update-compat-c
 import { ModuleGraph } from "../scripts/lib/update-compat-module-graph.mts";
 import { buildPackageDistEntriesFromExports } from "../scripts/lib/workspace-package-entries.mts";
 import {
+  runtimeProcessHelperManifest,
   runtimeProcessScriptEntrypoints,
   runtimeProcessToolingEntrypoints,
 } from "../src/infra/runtime-process-manifest.ts";
@@ -613,6 +614,8 @@ const rootEntries = [
     ...Object.values(runtimeProcessBuildEntries),
     ...createManagedHandoffBuildConfigs().flatMap(({ entry }) => Object.values(entry)),
   ].map((source) => `${path.relative(".", source).replaceAll("\\", "/")}!`),
+  // tsdown builds these helper roots by manifest path, outside the shared runtime graph.
+  ...Object.values(runtimeProcessHelperManifest).map(({ source }) => `${source}!`),
   // The runtime manifest also declares generated script sources/outputs and source-only tooling.
   ...collectRuntimeProcessManifestEntries(
     runtimeProcessScriptEntrypoints,
@@ -657,7 +660,6 @@ const rootEntries = [
   "src/worker/worker-deploy-sqlite-source-revision.ts!",
   "src/worker/worker-deploy-sqlite-store.ts!",
   "src/worker/worker-deploy-state-read.ts!",
-  "src/worker/workspace-rsync-receiver.ts!",
   // v2026.9.1 Gateways lazy-import this stable dist entry after an in-place update.
   "src/gateway/plugin-channel-reload-targets.ts!",
   // Published-update bridges import lifecycle facts from this stable dist entry.

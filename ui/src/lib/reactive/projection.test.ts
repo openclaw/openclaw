@@ -151,6 +151,37 @@ describe("owner projections", () => {
     view.check(1, 2);
   });
 
+  it("does not track synchronous subscription callbacks as observer inputs", () => {
+    const [handler, setHandler] = createSignal({ run: () => {} });
+    const owner = new ValueSignal(1);
+    const stopped = vi.fn();
+    const subscribe = vi.fn((current: ValueSignal<number>, notify: () => void) => {
+      const changed = () => {
+        notify();
+        handler().run();
+      };
+      const stop = current.subscribe(changed);
+      changed();
+      return () => {
+        stopped();
+        stop();
+      };
+    });
+    const projection = projectSource(owner, {
+      read: (current) => current.value,
+      subscribe,
+      equality: "revision",
+    });
+    disposals.push(projection.dispose);
+    const view = observe(projection.read);
+    setHandler({ run: () => {} });
+    flush();
+    expect(subscribe).toHaveBeenCalledOnce();
+    expect(stopped).not.toHaveBeenCalled();
+    owner.set(2);
+    view.check(1, 2);
+  });
+
   it("honors value equality without suppressing revision-only snapshots", () => {
     const { owner, projection } = source<string>("same", Object.is);
     const listener = vi.fn();

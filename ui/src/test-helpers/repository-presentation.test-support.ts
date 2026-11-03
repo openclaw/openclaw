@@ -4,7 +4,7 @@ import {
   createSessionAccessoryMount,
   createMobileSessionAccessoryMount,
   createHovercardAccessoryMount,
-  createSidebarAccessoryMount,
+  createSidebarBadgeAccessory,
   type RepositoryBrowserRuntime,
 } from "../../../extensions/github-repositories/browser/api.ts";
 import githubPlugin from "../../../extensions/github-repositories/browser/index.tsx";
@@ -135,11 +135,7 @@ export function installRepositoryPresentation(
       placement: "session-hovercard",
       mount: createHovercardAccessoryMount(repository),
     });
-    runtime.register(owner, "accessories", {
-      id: "repository-row",
-      placement: "session-row",
-      mount: createSidebarAccessoryMount(repository),
-    });
+    runtime.register(owner, "accessories", createSidebarBadgeAccessory(activationHost, repository));
     runtime.register(owner, "accessories", {
       id: "repository",
       placement: "session-context",

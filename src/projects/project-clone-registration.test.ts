@@ -1,6 +1,6 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js";
-import { materializeProjectClone } from "./project-clone.test-support.js";
+import { materializeProjectClone } from "./project-clone.js";
 import type { ProjectRegistryRecord } from "./project-registry.types.js";
 type LeaseRun = (lease: OpenClawStateLeaseContext) => Promise<unknown>;
 
@@ -53,17 +53,6 @@ vi.mock("./project-registry.js", async (original) => ({
   ...(await original<typeof import("./project-registry.js")>()),
   listProjectRegistry: async () => [],
 }));
-// mock-isolation: clone outcomes are synthetic and must not run Git or access the network.
-vi.mock(
-  "../../extensions/github-repositories/project-clone-runtime-api.js",
-  async (importOriginal) => ({
-    ...(await importOriginal<
-      typeof import("../../extensions/github-repositories/project-clone-runtime-api.js")
-    >()),
-    cloneProjectCheckout: fixture.clone,
-  }),
-);
-
 vi.mock("../state/openclaw-state-lease-worker-operation.js", async (original) => ({
   ...(await original<typeof import("../state/openclaw-state-lease-worker-operation.js")>()),
   runWithOpenClawStateLeaseWorker: async (
@@ -87,6 +76,14 @@ const materialize = () =>
   materializeProjectClone(
     { cfg: {}, gitUrl: "https://github.com/example/project.git" },
     { env: { OPENCLAW_STATE_DIR: "/synthetic/state" } },
+    {
+      resolveUrl: (url) => ({ url, name: "project" }),
+      invalidUrlMessage: "Select the fixture repository",
+      clone: fixture.clone,
+      ensureCommit: async () => {
+        throw new Error("Registration must not request a pinned commit");
+      },
+    },
   );
 
 beforeEach(() => {

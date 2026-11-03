@@ -66,7 +66,11 @@ export type GitHubPublicationRequesterPreparation = (
       gatewayAccessGrant?: AdmittedRunOperatorAuthority["gatewayAccessGrant"];
       release?: () => void;
     }> | null;
-    invocationAuthority?: Readonly<{ assertCurrent: () => void; signal?: AbortSignal }>;
+    invocationAuthority?: Readonly<{
+      assertCurrent: () => void;
+      signal?: AbortSignal;
+      release?: () => void;
+    }>;
   } & Pick<GatewayRequestHandlerOptions, "signal" | "sessionMutationAuthorization">,
   session: { sessionKey: string; agentId: string },
 ) => Promise<{ requester: GitHubPublicationRequesterV2; release: () => void }>;

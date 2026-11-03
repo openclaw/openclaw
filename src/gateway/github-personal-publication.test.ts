@@ -1,4 +1,4 @@
-import { readGitHubConfig } from "../../extensions/github-repositories/config-api.js";
+import { readGitHubConfig } from "./github-repository-fixture-api.test-support.js";
 // Register the shared Git transport before any publication or run-lease consumer.
 // oxfmt-ignore
 import {

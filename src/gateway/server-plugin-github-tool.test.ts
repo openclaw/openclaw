@@ -1,15 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { readGitHubConfig } from "../../extensions/github-repositories/config-api.js";
-import { clearNativeGitHubTokenCache } from "../../extensions/github-repositories/read-identity-api.js";
-import {
-  clearGitHubCredentialVerificationCache,
-  controlUiGitHubHandlers as controlUiHandlers,
-} from "../../extensions/github-repositories/runtime-api.js";
-import {
-  resolveManagedGitHubProfileDir,
-  writeManagedGitHubProfileFiles,
-} from "../../extensions/github-repositories/tool-identity-api.js";
 import { prepareConversationCapabilityProfile } from "../agents/conversation-capability-profile.js";
 import { createAdmittedHostCapabilityTestFixture } from "../agents/harness/host-capability.test-support.js";
 import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.js";
@@ -40,6 +30,12 @@ import type { OpenClawPluginDefinition } from "../plugins/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  readGitHubConfig,
+  loadGitHubRepositoryRuntimeFixture,
+  loadGitHubProfileFixture,
+  loadGitHubNativeCredentialFixture,
+} from "./github-repository-fixture-api.test-support.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { createRequestGatewayMethodRegistry } from "./server-methods.js";
 import { createControlUiRequestOptions } from "./server-methods/control-ui-request.test-support.js";
@@ -50,6 +46,12 @@ import {
   createOperatorClient,
 } from "./server-plugin-in-process-dispatch.test-support.js";
 import { resetTestPluginRegistry, setTestPluginRegistry } from "./test-helpers.plugin-registry.js";
+
+const { clearGitHubCredentialVerificationCache, controlUiGitHubHandlers: controlUiHandlers } =
+  await loadGitHubRepositoryRuntimeFixture();
+const { clearNativeGitHubTokenCache } = await loadGitHubNativeCredentialFixture();
+const { resolveManagedGitHubProfileDir, writeManagedGitHubProfileFiles } =
+  await loadGitHubProfileFixture();
 
 const { default: github } = await loadBundledPluginFacade<{ default: OpenClawPluginDefinition }>({
   pluginId: "github",

@@ -125,6 +125,7 @@ export function PluginContributionsContent(input: {
         .registrations("accessories")
         .filter(
           (entry) =>
+            "mount" in entry.value &&
             entry.value.placement === kind &&
             !entry.signal.aborted &&
             (kind !== "session-mobile-page" || entry.pluginId === detailsPage?.pluginId),

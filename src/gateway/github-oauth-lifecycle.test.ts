@@ -1,13 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { requestCurrentGitHubOAuthRefresh } from "../../extensions/github-repositories/account-runtime-api.js";
-import type { GitHubToolIdentityConfig } from "../../extensions/github-repositories/config-api.js";
-import { readGitHubConfig } from "../../extensions/github-repositories/config-api.js";
-import {
-  GitHubAccountMismatchError,
-  resolveConfiguredGitHubToolIdentity,
-} from "../../extensions/github-repositories/tool-identity-api.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -20,7 +12,10 @@ import {
   type GitHubOAuthRecord,
   type GitHubIdentityScope,
 } from "../agents/github-oauth-records.js";
+import { createSnapshot } from "../config/mutate.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { GitHubToolIdentityConfig } from "../config/types.tools.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import * as hiddenSecrets from "../secrets/store/secret-store-hidden-github.js";
 import { writeHiddenGitHubSecretRecord } from "../secrets/store/secret-store.js";
@@ -34,12 +29,12 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
-import { installGitHubAccountFixture } from "./github-account-service.test-support.js";
-import { createGatewayRequestContext } from "./server-request-context.js";
-import { makeContextParams } from "./server-request-context.test-support.js";
+import type { LegacyGitHubOAuthService } from "./github-oauth-lifecycle-host.types.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
 
 const mocks = vi.hoisted(() => ({
-  assertCli: vi.fn(),
+  resolveExecutable: vi.fn<typeof import("../infra/executable-path.js").resolveExecutablePath>(),
+  readPersistedConfig: vi.fn<typeof import("../config/io.js").readConfigFileSnapshotForWrite>(),
   clearVerificationCache: vi.fn(),
   verifyCredential: vi.fn(),
   requestDeviceCode: vi.fn(),
@@ -68,7 +63,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../extensions/github-repositories/oauth-api.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../extensions/github-repositories/oauth-api.js")>()),
+  ...(await importOriginal<Record<string, unknown>>()),
   clearGitHubCredentialVerificationCache: mocks.clearVerificationCache,
   verifyGitHubCredential: mocks.verifyCredential,
   requestGitHubOAuthDeviceCode: mocks.requestDeviceCode,
@@ -88,10 +83,7 @@ vi.mock("../agents/github-oauth-records.js", async (importOriginal) => {
 });
 
 vi.mock("../../extensions/github-repositories/tool-identity-api.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<
-      typeof import("../../extensions/github-repositories/tool-identity-api.js")
-    >();
+  const actual = await importOriginal<Record<string, unknown>>();
   return {
     ...actual,
     createManagedGitHubProfileId: mocks.createProfileId,
@@ -105,26 +97,28 @@ vi.mock("../../extensions/github-repositories/tool-identity-api.js", async (impo
 vi.mock(
   "../../extensions/github-repositories/tool-identity-config-api.js",
   async (importOriginal) => ({
-    ...(await importOriginal<
-      typeof import("../../extensions/github-repositories/tool-identity-config-api.js")
-    >()),
+    ...(await importOriginal<Record<string, unknown>>()),
     updateGitHubToolIdentityConfig: mocks.updateConfig,
   }),
 );
 
-vi.mock("../../extensions/github-repositories/cli-preflight-api.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<
-      typeof import("../../extensions/github-repositories/cli-preflight-api.js")
-    >();
-  return { ...actual, assertGitHubCliAvailable: mocks.assertCli };
-});
+vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugin-sdk/process-runtime.js")>()),
+  resolveExecutablePath: mocks.resolveExecutable,
+}));
+vi.mock("openclaw/plugin-sdk/config-mutation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugin-sdk/config-mutation.js")>()),
+  readConfigFileSnapshotForWrite: mocks.readPersistedConfig,
+}));
 
-import { GitHubCliUnavailableError } from "../../extensions/github-repositories/cli-preflight-api.js";
-import { createGitHubOAuthLifecycle } from "../../extensions/github-repositories/oauth-lifecycle-api.js";
 import { registerGitHubOAuthRetirementTests } from "./github-oauth-lifecycle.retirement.test-support.js";
 import {
   ACCOUNT,
+  readGitHubConfig,
+  resolveConfiguredGitHubToolIdentity,
+  requestCurrentGitHubOAuthRefresh,
+  GitHubAccountMismatchError,
+  startRegisteredGitHubOAuth,
   configForScope,
   configWithSelectedIdentity,
   createGitHubOAuthInventoryReader,
@@ -139,7 +133,7 @@ import {
   TOKENS,
 } from "./github-oauth-lifecycle.test-support.js";
 
-type GitHubOAuthLifecycle = ReturnType<typeof createGitHubOAuthLifecycle>;
+type GitHubOAuthLifecycle = LegacyGitHubOAuthService;
 type AuthorizedTokens = { status: "authorized"; tokens: typeof TOKENS };
 type RefreshedTokens = { status: "refreshed"; tokens: typeof TOKENS };
 
@@ -170,7 +164,10 @@ let currentConfig: OpenClawConfig;
 let stateDir: string;
 let installedTokens: string[];
 let refreshedTokens: string[];
-let lifecycleInstances: GitHubOAuthLifecycle[];
+let lifecycleInstances: Array<{ stop(): Promise<void> }>;
+let lifecycleContext: GatewayRequestContext;
+let stopLifecycleService: () => Promise<void>;
+let persistedReader: () => Promise<OpenClawConfig>;
 let time: ReturnType<typeof createGatewaySchedulerClock>;
 
 function selectedIdentity(
@@ -188,21 +185,21 @@ function setSelectedIdentity(
   currentConfig = configWithSelectedIdentity(currentConfig, scope, agentId, nextIdentity);
 }
 
-function createLifecycle(
+async function createLifecycle(
   options: {
     getPersistedConfig?: () => Promise<OpenClawConfig>;
-    scheduler?: Parameters<typeof createGitHubOAuthLifecycle>[0]["scheduler"];
+    scheduler?: GatewayScheduler;
   } = {},
-): GitHubOAuthLifecycle {
-  const lifecycle = createGitHubOAuthLifecycle({
-    getConfig: () => currentConfig,
-    getPersistedConfig: options.getPersistedConfig ?? (async () => currentConfig),
-    warn: vi.fn(),
-    scheduler:
-      options.scheduler ?? createTestPluginServiceScheduler(createTestGatewayScheduler(time.clock)),
-  });
-  lifecycleInstances.push(lifecycle);
-  return lifecycle;
+): Promise<GitHubOAuthLifecycle> {
+  persistedReader = options.getPersistedConfig ?? (async () => currentConfig);
+  const fixture = await startRegisteredGitHubOAuth(
+    () => currentConfig,
+    options.scheduler ?? createTestGatewayScheduler(time.clock),
+  );
+  lifecycleInstances.push(fixture);
+  lifecycleContext = fixture.context;
+  stopLifecycleService = fixture.stop;
+  return fixture.oauth;
 }
 
 async function startAuthorization(lifecycle: GitHubOAuthLifecycle, scope: GitHubIdentityScope) {
@@ -214,7 +211,7 @@ async function refreshFixture(record: Partial<GitHubOAuthRecord> = {}, author = 
   currentConfig = configForScope("system", configured);
   await writeGitHubOAuthRecord(oauthRecord(OLD_PROFILE, record));
   mocks.refreshToken.mockResolvedValue({ status: "refreshed", tokens: TOKENS });
-  return { configured, lifecycle: createLifecycle() };
+  return { configured, lifecycle: await createLifecycle() };
 }
 
 async function advanceToPoll(requestId: string): Promise<void> {
@@ -239,6 +236,14 @@ beforeEach(() => {
   for (const mock of Object.values(mocks)) {
     mock.mockReset();
   }
+  mocks.resolveExecutable.mockReturnValue("gh");
+  mocks.readPersistedConfig.mockImplementation(async () => ({
+    snapshot: createSnapshot({
+      path: stateDir + "/openclaw.json",
+      sourceConfig: await persistedReader(),
+    }),
+    writeOptions: {},
+  }));
   mocks.requestDeviceCode.mockResolvedValue({
     deviceCode: DEVICE_CODE,
     userCode: "ABCD-EFGH",
@@ -283,10 +288,8 @@ afterEach(async () => {
 
 describe("GitHub OAuth authorization lifecycle", () => {
   it("rejects a missing GitHub CLI before requesting a device code", async () => {
-    mocks.assertCli.mockImplementationOnce(() => {
-      throw new GitHubCliUnavailableError();
-    });
-    const lifecycle = createLifecycle();
+    mocks.resolveExecutable.mockReturnValueOnce(undefined);
+    const lifecycle = await createLifecycle();
 
     await expect(startAuthorization(lifecycle, "agent")).rejects.toThrow(
       "GitHub CLI (`gh`) is required on the Gateway host. Install it and retry.",
@@ -296,7 +299,7 @@ describe("GitHub OAuth authorization lifecycle", () => {
   });
 
   registerGitHubOAuthRetirementTests({
-    createLifecycle: () => {
+    createLifecycle: async () => {
       currentConfig = configForScope("agent");
       return createLifecycle();
     },
@@ -310,7 +313,7 @@ describe("GitHub OAuth authorization lifecycle", () => {
     const scope = "agent";
     const expected = identity(OLD_PROFILE, { author: true });
     currentConfig = configForScope(scope, expected);
-    const lifecycle = createLifecycle();
+    const lifecycle = await createLifecycle();
 
     const started = await startAuthorization(lifecycle, scope);
     const stored = await readGitHubDeviceAuthorizationRecord(started.requestId);
@@ -343,7 +346,7 @@ describe("GitHub OAuth authorization lifecycle", () => {
   it("preserves custom Git author data when reconnecting an existing identity", async () => {
     const previous = identity(OLD_PROFILE, { oauth: true, author: true });
     currentConfig = configForScope("system", previous);
-    const lifecycle = createLifecycle();
+    const lifecycle = await createLifecycle();
     const started = await startAuthorization(lifecycle, "system");
     mocks.pollDeviceToken.mockResolvedValue({ status: "authorized", tokens: TOKENS });
     await advanceToPoll(started.requestId);
@@ -358,7 +361,7 @@ describe("GitHub OAuth authorization lifecycle", () => {
   });
 
   it("applies pending and cumulative server slow_down intervals to the durable record", async () => {
-    const lifecycle = createLifecycle();
+    const lifecycle = await createLifecycle();
     const started = await startAuthorization(lifecycle, "system");
     mocks.pollDeviceToken
       .mockResolvedValueOnce({ status: "authorization_pending" })
@@ -395,7 +398,7 @@ describe("GitHub OAuth authorization lifecycle", () => {
   ] as const)(
     "returns typed terminal state %# and deletes pending state",
     async (upstream, expected) => {
-      const lifecycle = createLifecycle();
+      const lifecycle = await createLifecycle();
       const started = await startAuthorization(lifecycle, "system");
       mocks.pollDeviceToken.mockResolvedValue(upstream);
       await advanceToPoll(started.requestId);
@@ -406,7 +409,7 @@ describe("GitHub OAuth authorization lifecycle", () => {
   );
 
   it("keeps a network failure retryable without exposing upstream diagnostics", async () => {
-    const lifecycle = createLifecycle();
+    const lifecycle = await createLifecycle();
     const started = await startAuthorization(lifecycle, "system");
     mocks.pollDeviceToken.mockRejectedValue(new Error("access-token-secret upstream failure"));
     await advanceToPoll(started.requestId);
@@ -421,7 +424,7 @@ describe("GitHub OAuth authorization lifecycle", () => {
   });
 
   it("expires locally without polling GitHub", async () => {
-    const lifecycle = createLifecycle();
+    const lifecycle = await createLifecycle();
     const started = await startAuthorization(lifecycle, "system");
     const stored = await readGitHubDeviceAuthorizationRecord(started.requestId);
     if (!stored) {
@@ -439,7 +442,7 @@ describe("GitHub OAuth authorization lifecycle", () => {
   it("installs a secret-free agent OAuth generation and removes pending state", async () => {
     const scope = "agent";
     currentConfig = configForScope(scope);
-    const lifecycle = createLifecycle();
+    const lifecycle = await createLifecycle();
     const started = await startAuthorization(lifecycle, scope);
     mocks.pollDeviceToken.mockResolvedValue({ status: "authorized", tokens: TOKENS });
     await advanceToPoll(started.requestId);
@@ -474,7 +477,7 @@ describe("GitHub OAuth authorization lifecycle", () => {
   });
 
   it("singleflights concurrent polls for one request", async () => {
-    const lifecycle = createLifecycle();
+    const lifecycle = await createLifecycle();
     const started = await startAuthorization(lifecycle, "system");
     const { upstream, waitFor } = holdTokenExchange<{
       status: "authorization_pending";
@@ -491,7 +494,7 @@ describe("GitHub OAuth authorization lifecycle", () => {
   });
 
   it("fences an in-flight token exchange after the operator cancels", async () => {
-    const lifecycle = createLifecycle();
+    const lifecycle = await createLifecycle();
     const started = await startAuthorization(lifecycle, "system");
     const { upstream, waitFor } = holdTokenExchange<AuthorizedTokens>(mocks.pollDeviceToken);
     await advanceToPoll(started.requestId);
@@ -509,7 +512,7 @@ describe("GitHub OAuth authorization lifecycle", () => {
   it.each(["cancellation", "expiry"] as const)(
     "fences profile installation when %s wins before commit",
     async (race) => {
-      const lifecycle = createLifecycle();
+      const lifecycle = await createLifecycle();
       const started = await startAuthorization(lifecycle, "system");
       const installStarted = deferred();
       const continueInstall = deferred();
@@ -540,7 +543,7 @@ describe("GitHub OAuth authorization lifecycle", () => {
   );
 
   it("reports cancellation as too late once the config commit starts", async () => {
-    const lifecycle = createLifecycle();
+    const lifecycle = await createLifecycle();
     const started = await startAuthorization(lifecycle, "system");
     const commitStarted = deferred();
     const continueCommit = deferred();
@@ -567,7 +570,7 @@ describe("GitHub OAuth authorization lifecycle", () => {
   });
 
   it("rejects an authorization whose selected identity changes while polling", async () => {
-    const lifecycle = createLifecycle();
+    const lifecycle = await createLifecycle();
     const started = await startAuthorization(lifecycle, "system");
     const upstream = deferred<{ status: "authorized"; tokens: typeof TOKENS }>();
     mocks.pollDeviceToken.mockReturnValue(upstream.promise);
@@ -585,7 +588,7 @@ describe("GitHub OAuth authorization lifecycle", () => {
   it.each(["install", "config"] as const)(
     "rolls back pending and metadata state after initial %s failure",
     async (failure) => {
-      const lifecycle = createLifecycle();
+      const lifecycle = await createLifecycle();
       const started = await startAuthorization(lifecycle, "system");
       mocks.pollDeviceToken.mockResolvedValue({ status: "authorized", tokens: TOKENS });
       if (failure === "install") {
@@ -606,7 +609,7 @@ describe("GitHub OAuth authorization lifecycle", () => {
   it.each(["config write", "staging cleanup"] as const)(
     "preserves an initial OAuth generation when %s throws after config committed",
     async (failure) => {
-      const lifecycle = createLifecycle();
+      const lifecycle = await createLifecycle();
       const started = await startAuthorization(lifecycle, "system");
       mocks.pollDeviceToken.mockResolvedValue({ status: "authorized", tokens: TOKENS });
       if (failure === "config write") {
@@ -637,7 +640,7 @@ describe("GitHub OAuth authorization lifecycle", () => {
     currentConfig = runtimeBefore;
     let persisted = runtimeBefore;
     let persistedReadable = false;
-    const lifecycle = createLifecycle({
+    const lifecycle = await createLifecycle({
       getPersistedConfig: async () => {
         if (!persistedReadable) {
           throw new Error("persisted config temporarily unreadable");
@@ -683,7 +686,7 @@ describe("GitHub OAuth authorization lifecycle", () => {
     async ({ entry, change }) => {
       const readStarted = deferred();
       const persistedRead = deferred<OpenClawConfig>();
-      const lifecycle = createLifecycle({
+      const lifecycle = await createLifecycle({
         getPersistedConfig: () => {
           readStarted.resolve();
           return persistedRead.promise;
@@ -754,7 +757,7 @@ describe("GitHub OAuth authorization lifecycle", () => {
   );
 
   it("replaces an older pending authorization for the same exact scope only", async () => {
-    const lifecycle = createLifecycle();
+    const lifecycle = await createLifecycle();
     const systemFirst = await startAuthorization(lifecycle, "system");
     const agent = await startAuthorization(lifecycle, "agent");
     const systemSecond = await startAuthorization(lifecycle, "system");
@@ -836,7 +839,7 @@ describe("GitHub OAuth refresh and maintenance", () => {
     await lifecycle.stop();
     closeOpenClawStateDatabaseForTest();
     time.setTime(NOW + 10 * 3_600_000);
-    const restarted = createLifecycle();
+    const restarted = await createLifecycle();
     restarted.start();
     await time.wake();
     expect(mocks.refreshToken).toHaveBeenCalledTimes(2);
@@ -845,7 +848,7 @@ describe("GitHub OAuth refresh and maintenance", () => {
   it("respects refresh skew and marks transient and terminal refresh failures", async () => {
     const configured = identity(OLD_PROFILE, { oauth: true, author: true });
     currentConfig = configForScope("system", configured);
-    const lifecycle = createLifecycle();
+    const lifecycle = await createLifecycle();
 
     await writeGitHubOAuthRecord(
       oauthRecord(OLD_PROFILE, { accessExpiresAtMs: NOW + 10 * 60_000 + 1 }),
@@ -961,12 +964,9 @@ describe("GitHub OAuth refresh and maintenance", () => {
   it("drains a non-idempotent refresh before shutdown completes", async () => {
     const { configured, lifecycle } = await refreshFixture();
     const { upstream, waitFor } = holdTokenExchange<RefreshedTokens>(mocks.refreshToken);
-    const contextParams = makeContextParams();
-    onTestFinished(() => contextParams.runtime.scheduler.stop());
-    const context = createGatewayRequestContext(contextParams);
+    const context = lifecycleContext;
     const resolveGatewayContext = () => context;
-    context.resolveGatewayContext = resolveGatewayContext;
-    const uninstall = await installGitHubAccountFixture(context, lifecycle);
+    const uninstall = stopLifecycleService;
     const requestRefresh = () =>
       withPluginRuntimeGatewayContextResolver(resolveGatewayContext, () =>
         requestCurrentGitHubOAuthRefresh("main"),
@@ -1015,7 +1015,7 @@ describe("GitHub OAuth refresh and maintenance", () => {
       return upstream.promise;
     });
     const scheduler = createTestGatewayScheduler(time.clock);
-    const lifecycle = createLifecycle({ scheduler: createTestPluginServiceScheduler(scheduler) });
+    const lifecycle = await createLifecycle({ scheduler });
 
     const refresh = lifecycle.refreshEffectiveIdentity("main");
     await awaitGateBeforeSettlement(
@@ -1073,7 +1073,7 @@ describe("GitHub OAuth refresh and maintenance", () => {
       name: `github-oauth-${"4".repeat(32)}`,
       value: "corrupt",
     });
-    const lifecycle = createLifecycle();
+    const lifecycle = await createLifecycle();
 
     await lifecycle.maintain();
 

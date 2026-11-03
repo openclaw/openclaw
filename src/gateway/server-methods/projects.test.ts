@@ -2,9 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { StatementSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { readGitHubConfig } from "../../../extensions/github-repositories/config-api.js";
-import * as projectGitHubSearch from "../../../extensions/github-repositories/project-search-api.js";
-import * as githubReadIdentity from "../../../extensions/github-repositories/read-identity-api.js";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as runtimeOwnership from "../../agents/harness/session-runtime-ownership.js";
 import * as worktreeGit from "../../agents/worktrees/git.js";
@@ -30,8 +27,10 @@ import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { bumpGatewayAccessRevision } from "../gateway-access-revision.js";
+import { readGitHubConfig } from "../github-repository-fixture-api.test-support.js";
 import {
   createSessionRowProjection,
   type SessionRowProjection,
@@ -53,6 +52,15 @@ import {
   resolveRepositoryIdentity,
   withProjectState,
 } from "./projects.test-support.js";
+
+const githubReadIdentity = await loadBundledPluginFacade<{
+  readCachedNativeGitHubToken(
+    env: NodeJS.ProcessEnv,
+    requireAbsentProof?: boolean,
+    host?: string,
+    display?: { onStale: () => void },
+  ): Promise<string | undefined>;
+}>({ pluginId: "github-repositories", artifactBasename: "read-identity-api.ts" });
 
 const discoverRepository = resolveRepositoryIdentity.getMockImplementation()!;
 
@@ -545,9 +553,12 @@ test("projects.list replies before cold or stale observed Git discovery settles"
 });
 
 test("projects.searchRemote redacts unexpected error diagnostics", async () => {
-  using _ = vi
-    .spyOn(projectGitHubSearch, "searchRemoteProjects")
-    .mockRejectedValue(new Error("GitHub request failed with token=synthetic-secret"));
+  vi.stubGlobal(
+    "fetch",
+    vi
+      .fn<typeof fetch>()
+      .mockRejectedValue(new Error("GitHub request failed with token=synthetic-secret")),
+  );
   const result = await invoke("projects.searchRemote", { query: "openclaw" });
   expect(result).toEqual({
     ok: false,

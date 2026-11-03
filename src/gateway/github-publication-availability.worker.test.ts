@@ -1,8 +1,6 @@
 import * as pluginProcessCommands from "openclaw/plugin-sdk/process-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createGitHubPublicationProvider } from "../../extensions/github-repositories/runtime-api.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import "../test-utils/prepare-compiled-subprocesses.js";
 import * as registryRead from "../agents/worktrees/registry-read.js";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import {
@@ -10,6 +8,7 @@ import {
   insertRegistryWorktree,
   updateRegistryWorktree,
 } from "../agents/worktrees/registry.js";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { findLiveRegistryWorktreeByOwner } from "../agents/worktrees/registry.test-support.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
@@ -38,8 +37,11 @@ import {
   prepareGitHubPublicationWorkspaceOwner,
 } from "./github-publication-availability.js";
 import { createRepositoryPublicationDiscovery } from "./github-publication-discovery.js";
+import { loadGitHubRepositoryRuntimeFixture } from "./github-repository-fixture-api.test-support.js";
 import type { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 import { prepareRepositoryWorkerPublicationFact } from "./worker-environments/worker-github-binding.js";
+
+const { createGitHubPublicationProvider } = await loadGitHubRepositoryRuntimeFixture();
 
 let service: AbortController;
 function provider() {

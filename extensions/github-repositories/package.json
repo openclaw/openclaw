@@ -8,7 +8,6 @@
     "typebox": "1.4.3",
     "@openclaw/fs-safe": "0.27.0",
     "@openclaw/gateway-protocol": "workspace:*",
-    "@openclaw/normalization-core": "workspace:*",
     "@solidjs/web": "2.0.0-rc.18",
     "solid-js": "2.0.0-rc.18",
     "yaml": "2.9.1",

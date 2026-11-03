@@ -1,3 +1,9 @@
+import { createDeferred as createDeferredCore } from "openclaw/plugin-sdk/concurrency-runtime";
+import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
+import { isRecoverableOAuthRefreshFailure } from "openclaw/plugin-sdk/provider-oauth-runtime";
+import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { jsonResponse } from "openclaw/plugin-sdk/test-env";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   clearGitHubCredentialVerificationCache,
@@ -5,14 +11,8 @@ import {
   refreshGitHubOAuthToken,
   requestGitHubOAuthDeviceCode,
   verifyGitHubCredential,
-} from "../../extensions/github-repositories/oauth-api.js";
-import { clearNativeGitHubTokenCache } from "../../extensions/github-repositories/read-identity-api.js";
-import { withinTest } from "../../test/helpers/promise.js";
-import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import { redactRegisteredSecretValues } from "../logging/secret-redaction-registry.js";
-import { createDeferredCore } from "../shared/deferred.js";
-import { isRecoverableOAuthRefreshFailure } from "../shared/oauth-refresh-outcome.js";
-import { jsonResponse } from "../test-helpers/http.js";
+} from "./oauth-api.js";
+import { clearNativeGitHubTokenCache } from "./read-identity-api.js";
 
 const GITHUB_CREDENTIAL_VERIFICATION_TTL_MS = 60_000;
 
@@ -65,9 +65,7 @@ describe("GitHub OAuth client", () => {
         headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${token}` },
       }),
     );
-    expect(redactRegisteredSecretValues(`failed with ${token}`, () => "[REDACTED]")).toBe(
-      "failed with [REDACTED]",
-    );
+    expect(redactSensitiveText(`failed with ${token}`)).toBe("failed with synthe…_org");
   });
 
   it("re-probes a remotely revoked token after expiry without caching its rejection", async () => {

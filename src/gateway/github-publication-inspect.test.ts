@@ -4,7 +4,6 @@ import { commandResult, githubPublicationTestMocks, installGitHubPublicationTest
 import { randomUUID } from "node:crypto";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { readGitHubConfig } from "../../extensions/github-repositories/config-api.js";
 import { SessionGitHubPullRequestInspectResultSchema } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { createGitHubPublishTool } from "../agents/test-helpers/github-plugin-tools.js";
@@ -25,6 +24,7 @@ import {
 } from "../state/user-profile-writes.js";
 import { installPublicationRpcFixture } from "./github-account-service.test-support.js";
 import { createRequesterPolicyFixture } from "./github-publication-requester.test-support.js";
+import { readGitHubConfig } from "./github-repository-fixture-api.test-support.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 

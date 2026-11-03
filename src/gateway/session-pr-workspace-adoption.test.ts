@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import "../config/sessions/session-entry-patch-delivery.test-support.js";
 import { afterEach, assert, expect, it, onTestFinished, vi } from "vitest";
-import { createGitHubPublicationProvider } from "../../extensions/github-repositories/runtime-api.js";
 import { acknowledgeInternalToolResult } from "../../packages/agent-core/src/internal-hooks.js";
 import { makeTextToolResult } from "../../test/helpers/text-tool-result.js";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
@@ -49,6 +48,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { installPublicationRpcFixture } from "./github-account-service.test-support.js";
 import * as baseRefresh from "./github-publication-base-refresh.js";
 import { createGitHubPublicationCoordinator } from "./github-publication.js";
+import { loadGitHubRepositoryRuntimeFixture } from "./github-repository-fixture-api.test-support.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import { SESSION_READ_SCOPE, SESSION_WRITE_SCOPE } from "./operator-scopes.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
@@ -65,6 +65,8 @@ import { createWorkerSessionPlacementStore } from "./worker-environments/placeme
 afterEach(() => {
   vi.restoreAllMocks();
 });
+
+const { createGitHubPublicationProvider } = await loadGitHubRepositoryRuntimeFixture();
 
 const { getSessionEntryPatchDelivery } =
   await import("../config/sessions/session-entry-patch-delivery.test-support.js");

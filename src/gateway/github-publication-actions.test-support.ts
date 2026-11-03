@@ -16,10 +16,7 @@ import {
   bindLegacyPluginSdkResourceHost,
   LegacyPluginSdkResourceHost,
 } from "../plugins/legacy-sdk-resource-host.js";
-import {
-  installPublicationRpcFixture,
-  startTestRegisteredPublicationProvider,
-} from "./github-account-service.test-support.js";
+import { installGitHubAccountFixture } from "./github-account-service.test-support.js";
 import {
   createGitHubPublicationRequesterFixture,
   createRequesterPublicationFixture,
@@ -192,7 +189,6 @@ export function createPublicationActionInvoker(
   f: Awaited<ReturnType<typeof createRequesterPublicationFixture>>,
   writerSource = f.maintainerSource,
 ) {
-  let registered: ReturnType<typeof startTestRegisteredPublicationProvider> | undefined;
   return async (
     actor: "guest" | "admin" | "writer",
     args: Record<string, unknown>,
@@ -203,11 +199,6 @@ export function createPublicationActionInvoker(
       sandbox?: SandboxContext;
     } = {},
   ) => {
-    registered ??= startTestRegisteredPublicationProvider();
-    const provider = await registered;
-    Object.assign(f.coordinator, {
-      performPullRequestAction: provider.api.performPullRequestAction,
-    });
     const principal =
       actor === "guest" ? f.guestSource : actor === "writer" ? writerSource : f.maintainerSource;
     const client = invocation.client ?? principal.client;
@@ -219,7 +210,7 @@ export function createPublicationActionInvoker(
     const resources = new LegacyPluginSdkResourceHost();
     bindLegacyPluginSdkResourceHost(context.resolveGatewayContext, resources);
     onTestFinished(() => resources.close());
-    await installPublicationRpcFixture(context, f.coordinator);
+    await installGitHubAccountFixture(context, f.account.oauth, f.coordinator);
     const operator = await captureGatewayOperatorRunAuthority({ client, context });
     const callGateway: InProcessGatewayCaller = async <T>(
       method: string,

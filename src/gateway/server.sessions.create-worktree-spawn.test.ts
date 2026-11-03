@@ -63,9 +63,7 @@ const projectCloneMocks = vi.hoisted(() => ({
   refreshProjectClone: vi.fn(),
 }));
 vi.mock("../../extensions/github-repositories/project-clone-api.js", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("../../extensions/github-repositories/project-clone-api.js")
-  >()),
+  ...(await importOriginal<Record<string, unknown>>()),
   ...projectCloneMocks,
 }));
 

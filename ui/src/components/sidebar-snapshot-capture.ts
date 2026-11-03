@@ -5,6 +5,11 @@ import { loadSettings } from "../app/settings.ts";
 import type { AuthenticatedUser } from "../app/user-profile.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
 import { presenceViewerLastActivity, profilePresenceViewer } from "../lib/presence-users.ts";
+import { scopedSessionArtifactKey } from "../lib/sessions/session-key.ts";
+import {
+  readSessionBadges,
+  type SessionBadgeCaptureContext,
+} from "../plugins/control-ui-session-badges.ts";
 import { readSidebarBrandPresentation, type AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import type { SidebarVisibleSections } from "./app-sidebar-session-projection.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
@@ -12,12 +17,14 @@ import { hasSidebarListFilter } from "./session-data-events.ts";
 import { sidebarSessionBadgeFacts } from "./session-row-badge-presentation.ts";
 import { resolveSidebarSessionRowSubtitle } from "./session-row-subtitle.ts";
 import { resolveSidebarOnline, sidebarOnlineOrder } from "./sidebar-online-state.ts";
+import type { SidebarSnapshotSessionBadge } from "./sidebar-snapshot-data.ts";
 import {
   parseSidebarSnapshot,
   snapshotSections,
   snapshotSessions,
   snapshotIssuesCount,
   type SidebarSnapshotModel,
+  type SidebarSnapshotSession,
 } from "./sidebar-snapshot-model.ts";
 
 function displayUser(user: AuthenticatedUser | null | undefined) {
@@ -32,6 +39,22 @@ function displayUser(user: AuthenticatedUser | null | undefined) {
 export function isSidebarSnapshotSettled(host: AppSidebarRenderHost): boolean {
   const context = host.sessionDataContext;
   if (!host.connected || !context) {
+    return false;
+  }
+  // A cached producer's activation must settle before its native facts hand off to live rows.
+  if (
+    host.sidebarSnapshot &&
+    [
+      ...host.sidebarSnapshot.pages,
+      ...host.sidebarSnapshot.pinnedSessions,
+      ...host.sidebarSnapshot.sections.flatMap((section) => section.rows),
+    ].some(function pending(row): boolean {
+      return (
+        row.state?.badges?.some((badge) => context.plugins.isLoading(badge.pluginId)) === true ||
+        row.children.some(pending)
+      );
+    })
+  ) {
     return false;
   }
   if (host.navigationView === "pages") {
@@ -88,6 +111,8 @@ export function captureSidebarSnapshotModel(
   context: ApplicationContext,
   rows: SidebarRecentSession[],
   sections: SidebarVisibleSections["sections"],
+  previous?: SidebarSnapshotModel,
+  badges?: SessionBadgeCaptureContext,
 ): SidebarSnapshotModel | null {
   const bootRoster = context.sessions.captureBootRoster();
   const agents = context.agents.state.agentsList;
@@ -119,12 +144,41 @@ export function captureSidebarSnapshotModel(
   for (const { key, pluginId, value } of host.pluginNavigation()) {
     plugins.push({ key, pluginId, id: value.page.id, label: value.label, icon: value.icon });
   }
+  const previousBadges = new Map<string, readonly SidebarSnapshotSessionBadge[]>();
+  function remember(items: readonly SidebarSnapshotSession[]) {
+    for (const row of items) {
+      if (row.state?.badges) {
+        previousBadges.set(scopedSessionArtifactKey(row.key, row.agentId), row.state.badges);
+      }
+      remember(row.children);
+    }
+  }
+  if (previous) {
+    remember([
+      ...previous.pages,
+      ...previous.pinnedSessions,
+      ...previous.sections.flatMap((section) => section.rows),
+    ]);
+  }
   const presentation = (row: SidebarRecentSession) => ({
     childrenDisplayMode: host.sessionProjection.children.capture(row.key),
     snapshotSubtitle: row.snapshot
       ? row.snapshotSubtitle
       : resolveSidebarSessionRowSubtitle(host, row),
-    state: sidebarSessionBadgeFacts(row),
+    state: {
+      ...sidebarSessionBadgeFacts(row),
+      badges: readSessionBadges(
+        context.plugins,
+        {
+          sessionKey: row.key,
+          agentId: row.agentId,
+          worktreeId: row.worktreeId,
+          artifact: row.pullRequest,
+        },
+        previousBadges.get(scopedSessionArtifactKey(row.key, row.agentId)),
+        badges,
+      ),
+    },
   });
   return parseSidebarSnapshot({
     routingDefaults: {

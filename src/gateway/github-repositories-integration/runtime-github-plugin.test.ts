@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { readGitHubConfig } from "../../../extensions/github-repositories/config-api.js";
 import {
   asConfig,
   setupSecretsRuntimeSnapshotTestHooks,
 } from "../../secrets/runtime.test-support.js";
+import { readGitHubConfig } from "../github-repository-fixture-api.test-support.js";
 
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
 const app = {

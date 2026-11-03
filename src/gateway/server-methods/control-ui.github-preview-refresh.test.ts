@@ -1,21 +1,72 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
-import { clearGitHubCredentialVerificationCache } from "../../../extensions/github-repositories/oauth-api.js";
-import { clearNativeGitHubTokenCache } from "../../../extensions/github-repositories/read-identity-api.js";
-import { controlUiGitHubHandlers } from "../../../extensions/github-repositories/runtime-api.js";
-import * as githubIdentity from "../../../extensions/github-repositories/tool-identity-api.js";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.js";
+import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { installGitHubAccountRpcFixture } from "../github-account-service.test-support.js";
+import { loadGitHubRepositoryRuntimeFixture } from "../github-repository-fixture-api.test-support.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { createControlUiRequestOptions } from "./control-ui-request.test-support.js";
 import { soloClient } from "./sessions-sharing.test-support.js";
 import type { GatewayClient, RespondFn } from "./types.js";
+
+type PreparedPreviewIdentity = {
+  token: string;
+  selection: {
+    source: "system-detected" | "system-configured" | "agent-override";
+    profileId?: string;
+    accountId: number;
+  };
+  cacheScope: string;
+  stale?: true;
+  revoke?: () => Promise<void>;
+  assertSelected: () => void;
+  revalidate: () => Promise<void>;
+  start: <T>(operation: () => T) => Promise<Awaited<T>>;
+};
+type PreviewIdentityPreparation = {
+  config: OpenClawConfig;
+  sourceConfig?: OpenClawConfig;
+  readNativeCredential?: import("../../agents/github-credential-reader.js").GitHubCredentialReader;
+  agentId: string;
+  env?: NodeJS.ProcessEnv;
+  issuer?: "github.com";
+  allowAppInstallation?: boolean;
+  requestedRepository?: string;
+  allowStale?: boolean;
+  getCurrentConfig: () => OpenClawConfig;
+  assertActive: () => void;
+  startActive?: PreparedPreviewIdentity["start"];
+  refresh: () => Promise<void>;
+};
+const { clearGitHubCredentialVerificationCache, controlUiGitHubHandlers } =
+  await loadGitHubRepositoryRuntimeFixture();
+const { clearNativeGitHubTokenCache } = await loadBundledPluginFacade<{
+  clearNativeGitHubTokenCache(): void;
+}>({ pluginId: "github-repositories", artifactBasename: "read-identity-api.js" });
+const githubIdentity = await loadBundledPluginFacade<{
+  prepareGitHubReadIdentity(input: PreviewIdentityPreparation): Promise<PreparedPreviewIdentity>;
+  resolveManagedGitHubProfileDir(input: {
+    agentId: string;
+    scope: "agent";
+    profileId: string;
+  }): string;
+  writeManagedGitHubProfileFiles(
+    dir: string,
+    identity: { login: string; token: string },
+  ): Promise<void>;
+  removeManagedGitHubProfile(dir: string): Promise<void>;
+  refreshManagedGitHubProfile(input: {
+    profileDir: string;
+    token: string;
+    expectedAccountId: number;
+  }): Promise<unknown>;
+}>({ pluginId: "github-repositories", artifactBasename: "tool-identity-api.js" });
 
 const requestOptions = createControlUiRequestOptions(() => ({}));
 

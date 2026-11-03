@@ -7,16 +7,6 @@ export const GITHUB_PUBLIC_HOST = "github.com";
 const GITHUB_PUBLIC_API_BASE_URL = "https://api.github.com";
 const CONFIG_PATH = "plugins.entries.github-repositories.config";
 
-function optionalString(value: unknown, field: string): string | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  if (typeof value !== "string") {
-    throw new Error(`${CONFIG_PATH}.${field} must be a string`);
-  }
-  return value;
-}
-
 /** Canonical configuration only; this projection never activates an optional plugin. */
 export function readNativeGitHubApiConfig(config?: OpenClawConfig | null): Record<string, unknown> {
   const configured = config?.plugins?.entries?.["github-repositories"]?.config;
@@ -24,9 +14,11 @@ export function readNativeGitHubApiConfig(config?: OpenClawConfig | null): Recor
 }
 
 export function resolveConfiguredGitHubHost(config?: OpenClawConfig | null): string {
-  const host =
-    optionalString(readNativeGitHubApiConfig(config).host, "host")?.trim().toLowerCase() ||
-    GITHUB_PUBLIC_HOST;
+  const configuredHost = readNativeGitHubApiConfig(config).host;
+  if (configuredHost !== undefined && typeof configuredHost !== "string") {
+    throw new Error(`${CONFIG_PATH}.host must be a string`);
+  }
+  const host = configuredHost?.trim().toLowerCase() || GITHUB_PUBLIC_HOST;
   if (!/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/u.test(host) || host.includes("..")) {
     throw new Error("plugins.entries.github-repositories.config.host must be a hostname");
   }
@@ -34,9 +26,11 @@ export function resolveConfiguredGitHubHost(config?: OpenClawConfig | null): str
 }
 
 export function resolveConfiguredGitHubApiBaseUrl(config?: OpenClawConfig | null): string {
-  const raw =
-    optionalString(readNativeGitHubApiConfig(config).apiBaseUrl, "apiBaseUrl")?.trim() ||
-    GITHUB_PUBLIC_API_BASE_URL;
+  const configuredBaseUrl = readNativeGitHubApiConfig(config).apiBaseUrl;
+  if (configuredBaseUrl !== undefined && typeof configuredBaseUrl !== "string") {
+    throw new Error(`${CONFIG_PATH}.apiBaseUrl must be a string`);
+  }
+  const raw = configuredBaseUrl?.trim() || GITHUB_PUBLIC_API_BASE_URL;
   const parsed = new URL(raw);
   if (
     parsed.protocol !== "https:" ||

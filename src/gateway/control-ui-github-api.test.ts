@@ -1,12 +1,46 @@
 import { once } from "node:events";
 import { afterEach, expect, it, vi } from "vitest";
-import {
-  CONTROL_UI_GITHUB_CREDENTIAL_UNAVAILABLE_MESSAGE,
-  gitHubPublicApi as api,
-} from "../../extensions/github-repositories/public-api.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
+import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { gitHubAccountApi } from "./native-github-account-api.js";
+
+type ReaderApi = Pick<
+  typeof gitHubAccountApi,
+  "ControlUiGitHubError" | "readGitHubJsonResponse"
+> & {
+  fetchGitHubApi: (
+    url: string,
+    fetchImpl: typeof fetch,
+    token?: string,
+    beforeRedirect?: (url: URL) => Promise<void>,
+    identity?: {
+      revalidate: () => Promise<void>;
+      assertSelected: () => void;
+      signal?: AbortSignal;
+    },
+    etag?: string,
+    signal?: AbortSignal,
+    graphql?: { query: string; variables: Record<string, string> },
+    apiBaseUrl?: string,
+  ) => Promise<Response>;
+  readGitHubGraphQLResponse(
+    response: Response,
+    fetchImpl: typeof fetch,
+    token: string,
+  ): Promise<unknown>;
+  fetchGitHubJson(url: string, fetchImpl: typeof fetch): Promise<unknown>;
+  formatControlUiGitHubPreviewError(error: unknown): {
+    message: string;
+    retryable: boolean;
+    retryAfterMs?: number;
+  };
+};
+const { gitHubPublicApi: api, CONTROL_UI_GITHUB_CREDENTIAL_UNAVAILABLE_MESSAGE } =
+  await loadBundledPluginFacade<{
+    gitHubPublicApi: ReaderApi;
+    CONTROL_UI_GITHUB_CREDENTIAL_UNAVAILABLE_MESSAGE: string;
+  }>({ pluginId: "github-repositories", artifactBasename: "public-api.js" });
 
 const repoUrl = "https://api.github.com/repos/owner/repo";
 const now = 1_800_000_000_000;

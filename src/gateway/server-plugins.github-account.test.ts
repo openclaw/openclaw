@@ -1,5 +1,4 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { readGitHubConfig } from "../../extensions/github-repositories/config-api.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import * as pluginLoader from "../plugins/loader.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
@@ -11,6 +10,7 @@ import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createFixture } from "./control-ui-session-pr-access.test-support.js";
+import { readGitHubConfig } from "./github-repository-fixture-api.test-support.js";
 import { createRequestGatewayMethodRegistry } from "./server-methods.js";
 import { loadGatewayPlugins } from "./server-plugins.js";
 

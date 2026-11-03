@@ -1,3 +1,5 @@
+import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";
 import {
   createPluginRegistryFixture,
@@ -8,9 +10,28 @@ import {
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, expect, it, vi } from "vitest";
-import plugin from "../../extensions/github/index.js";
-import manifest from "../../extensions/github/openclaw.plugin.json" with { type: "json" };
+import { loadPluginManifest } from "../plugins/manifest.js";
+import type { OpenClawPluginDefinition } from "../plugins/plugin-definition.types.js";
+import {
+  loadBundledPluginFacade,
+  resolveBundledPluginPublicModulePath,
+} from "../test-utils/bundled-plugin-public-surface.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
+
+const { default: plugin } = await loadBundledPluginFacade<{ default: OpenClawPluginDefinition }>({
+  pluginId: "github",
+  artifactBasename: "index.ts",
+});
+const loadedManifest = loadPluginManifest(
+  path.dirname(
+    resolveBundledPluginPublicModulePath({ pluginId: "github", artifactBasename: "index.ts" }),
+  ),
+  false,
+);
+if (!loadedManifest.ok) {
+  throw new Error(loadedManifest.error);
+}
+const manifest = loadedManifest.manifest;
 
 const config = {
   agents: { entries: { main: {} } },
@@ -68,7 +89,7 @@ it.each([
       id: "github",
       name: "GitHub",
       contracts: manifest.contracts,
-      register: plugin.register,
+      register: expectDefined(plugin.register, "GitHub plugin registration"),
     });
     const handler = fixture.registry.registry.gatewayHandlers[method]!;
     const respond = vi.fn<GatewayRequestHandlerOptions["respond"]>();
