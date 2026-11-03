@@ -188,14 +188,14 @@ export function buildSidebarSessionNavigationState(input: {
       context?.sessions.isPreparedWorkSession(row.key) === true;
     const pullRequest = context?.sessions.pullRequestSummary(row.key);
     const outboxAttentionCount = input.outboxAttentionCountForSessionKey(row.key);
-    const viewingSession =
-      input.highlightCurrentSession &&
-      matchesSession(
-        row.key,
-        row.agentId ?? (isUiGlobalSessionKey(row.key) ? input.sessionsAgentId : undefined),
-      );
     const hasComposerDraft =
-      !viewingSession && row.incognito !== true && input.hasSessionDraft(row.key);
+      row.incognito !== true &&
+      input.hasSessionDraft(row.key) &&
+      (!input.highlightCurrentSession ||
+        !matchesSession(
+          row.key,
+          row.agentId ?? (isUiGlobalSessionKey(row.key) ? input.sessionsAgentId : undefined),
+        ));
     const agentStatusNote = input.resolveAgentStatusNote(row);
     const loadingChildren = input.loadingChildSessionKeys.has(row.key);
     return input.rowProjection.read(
