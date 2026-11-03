@@ -461,7 +461,14 @@ export async function buildPreparedModelCatalogSnapshot(
           owners.modelCatalogProviders.get(provider) ?? owners.providers.get(provider);
         const pluginId = pluginIds?.length === 1 ? pluginIds[0] : undefined;
         const plugin = pluginId ? manifestMetadataSnapshot.byPluginId.get(pluginId) : undefined;
-        if (!isProviderCatalogSourceAllowed({ provider, config: cfg, plugin })) {
+        if (
+          !isProviderCatalogSourceAllowed({
+            provider,
+            config: cfg,
+            plugin,
+            sourceBaseUrl: entry.baseUrl,
+          })
+        ) {
           continue;
         }
         const id = normalizeModelId(provider, entry.id);

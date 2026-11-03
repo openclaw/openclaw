@@ -352,15 +352,25 @@ it.each([
       decision: { protocol: "fixture", input: ["text" as const] },
     };
     mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValueOnce([
-      row("demo", "listed", { inference }),
-      row("demo", "unlisted", { inference }),
-      row("demo", "chat", { api: "openai-responses" }),
+      row("demo", "listed", { inference, baseUrl: "https://selected.example/v1" }),
+      row("demo", "unlisted", { inference, baseUrl: "https://selected.example/v1" }),
+      row("demo", "chat", { api: "openai-responses", baseUrl: "https://selected.example/v1" }),
+      row("demo", "foreign", { inference, baseUrl: "https://foreign.example/v1" }),
     ]);
     const snapshot = await build({
-      metadataSnapshot: providerManifestSnapshot("demo", "runtime", []),
+      config: {
+        models: { providers: { demo: { baseUrl: "https://selected.example/v1", models: [] } } },
+      },
+      metadataSnapshot: createManifestSnapshot("demo", {
+        configuredEndpointDiscovery: ["demo"],
+        discovery: { demo: "runtime" },
+        providers: {
+          demo: { baseUrl: "https://default.example/v1", api: "openai-responses", models: [] },
+        },
+      }),
       providerOutcomes: [
         { provider: "demo", status: "unavailable" },
-        { provider, status, listedModelIds: ["listed", "chat"] },
+        { provider, status, listedModelIds: ["listed", "chat", "foreign"] },
       ],
       readOnly: false,
     });
