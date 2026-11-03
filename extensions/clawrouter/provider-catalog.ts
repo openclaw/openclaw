@@ -4,12 +4,12 @@ import {
   getCachedLiveProviderModelRows,
   loadBundledModelIdentityFactsResolver,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import { XAI_TOOL_MODEL_COMPAT } from "openclaw/plugin-sdk/provider-model-shared";
-import type {
-  ModelDefinitionConfig,
-  ModelProviderConfig,
+import {
+  MISTRAL_MODEL_TRANSPORT_PATCH,
+  XAI_TOOL_MODEL_COMPAT,
+  type ModelDefinitionConfig,
+  type ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { MISTRAL_MODEL_TRANSPORT_PATCH } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   asFiniteNumberInRange,
   asOptionalRecord,
