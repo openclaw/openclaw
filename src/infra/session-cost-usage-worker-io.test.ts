@@ -279,7 +279,7 @@ it("reads recorded usage across append, rewrite, and rollup replacement without 
 
 it("filters refresh work before reading historical transcripts", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const { archive } = await writeArchive(state.stateDir, "excluded-archive");
+    const { archive, encoded } = await writeArchive(state.stateDir, "excluded-archive");
     const { archive: recordedArchive } = await writeArchive(state.stateDir, "recorded-archive");
     const probe = await observeUsageWorkerReads(state.stateDir, [archive, recordedArchive]);
     await probe.run(async () => {
@@ -316,6 +316,12 @@ it("filters refresh work before reading historical transcripts", async () => {
           );
         });
       }
+      const oversized = encodeSessionArchiveContent("x".repeat(2 * 1024 * 1024));
+      await fs.writeFile(archive, oversized.bytes);
+      await probe.clear();
+      await expect(refreshUsage({ agentId: "main" })).rejects.toThrow(/decompressed bytes/);
+      await expectNoRead(probe, "transcript-stats");
+      await fs.writeFile(archive, encoded.bytes);
       const sessions = await writeSessions(
         await sessionsDirectory(state.stateDir),
         ["current", "quarter-gap", "removed"],
