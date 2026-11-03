@@ -426,21 +426,31 @@ a different account. Multi-user personal connections are not supported yet.
 
 ### Request, approve, fill
 
-Once a private approval delivery adapter is available, request a task's logins together (one to five
-entries). Each entry has an HTTPS website, a short reason (100 characters), and
-optional keywords (up to five, each 50 characters). The task goal is limited to
+Request a task's logins together (one to five entries). Each entry has an HTTPS
+website, a short reason (100 characters), and optional keywords (up to five, each 50 characters). The task goal is limited to
 140 characters. Keep secrets, personal messages, and account identifiers out of
 all request text.
 
-The extension returns a sensitive `onepassword://` approval link. Plugin code
-hands it only to a private, authenticated delivery adapter, never to the model,
-transcript, or ordinary message sender. A channel that cannot deliver and open
-that scheme reports `approvalDelivery: unsupported`; do not ask the model to
-copy or reconstruct the link. A dedicated sensitive-link transport is required.
+The extension returns a sensitive `onepassword://` approval link. The plugin keeps
+it in Gateway memory, never in the tool result, model context, transcript, logs,
+or durable request storage. The chat stores only the request ID and a non-secret
+summary. Open the conversation in the **OpenClaw Control UI** and select **Approve
+in 1Password** on the computer with your Nightly 1Password app. The prompt closes
+after two minutes. Native plugin UI uses the Gateway's authenticated same-origin
+HTTPS or trusted-loopback connection; no Labs switch is required for this bundled
+plugin.
 
-Chat cannot observe when a person opens a link. Automatic status checks therefore
-start only after the person explicitly confirms opening it. There are no checks
-for five seconds; checks then run every two seconds to 30 seconds, every five
+Only a current Control UI administrator with access to the originating conversation
+and its Autofill tool policy can hydrate the private link. Links expire after about
+ten minutes and are discarded on plugin reload or Gateway restart. An unavailable
+view asks for a new request. Other channels show the Control UI requirement and
+never claim that they delivered an approval link. Do not ask the model to copy or
+reconstruct it.
+
+Selecting the approval button records when it opened and starts one Gateway-owned
+status checker. Select **Refresh status** after deciding to see the latest result.
+Explicitly telling the agent that you opened or approved the prompt remains a
+fallback. There are no checks for five seconds; checks then run every two seconds to 30 seconds, every five
 seconds to one minute, and every ten seconds to two minutes, then stop. Rate
 limits impose at least a 60-second connection-wide backoff. After the window,
 tell the agent when you have approved: it can check once more. A still-pending
@@ -516,8 +526,9 @@ known successful rotation.
   The plugin does not write system browser policy; whole-browser Agentic Mode
   policy must not conflict with the adapter's tab-scoped enable/release calls.
   Status probes launch the owned browser if needed, without requesting access.
-- `approvalDelivery: unsupported`: your channel lacks a private, non-transcript
-  link transport. Do not put the approval link in a normal message.
+- **Approval view unavailable**: open the originating conversation in the OpenClaw
+  Control UI with administrator access and the Autofill tool allowed. If the
+  private link expired or the Gateway restarted, ask for a new approval request.
 - `gatewayOwnerRequired`: use an authenticated owner conversation; an agent ID
   or arbitrary channel sender is not a personal credential identity.
 - `integrationKeyMissingReconnect`: new consent did not issue a key and no

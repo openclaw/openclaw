@@ -1,4 +1,5 @@
 import { webcrypto } from "node:crypto";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { afterEach, expect, it, vi } from "vitest";
 import type { AccessRequest, AgenticAutofillExtension } from "./autofill-contract.js";
 import { decodeConnectionPath } from "./autofill-input.js";
@@ -10,6 +11,11 @@ import {
 } from "./autofill-service.js";
 import { createAutofillTool } from "./autofill-tool.js";
 import { MemoryKeyedStore } from "./memory-store.test-support.js";
+
+const inlineView: OpenClawPluginApi["inlineView"] = (viewId, payload, options) => ({
+  content: [{ type: "text", text: options.summary }],
+  details: { pluginInlineView: { pluginId: "onepassword", viewId, payload, ...options } },
+});
 
 const key =
   "ops_" +
@@ -108,7 +114,6 @@ function setup() {
       result: { status: "fill_submitted" },
     })),
   };
-  const delivery = { deliver: vi.fn(async () => "sent" as const) };
   const service = new AutofillService({
     stores: { connections, requests },
     relay,
@@ -140,7 +145,6 @@ function setup() {
     requests,
     relay,
     extension,
-    delivery,
     connect,
     delays,
     advance(ms: number) {
@@ -165,7 +169,7 @@ it("keeps tokens, keys, links and references outside tool results through connec
       sessionId: "conversation",
       assertInvocationCurrent() {},
     },
-    s.delivery,
+    inlineView,
   );
   const execute = async (params: unknown) => JSON.stringify(await tool.execute("call", params));
   const start = JSON.parse(await execute({ action: "connect" })) as {
@@ -175,7 +179,10 @@ it("keeps tokens, keys, links and references outside tool results through connec
     await execute({ action: "connect", sessionId: start.details.sessionId }),
     await execute({ action: "request_logins", requests: input }),
   ];
-  expect(s.delivery.deliver).toHaveBeenCalledWith("onepassword://synthetic-private-link");
+  expect(JSON.parse(outputs[1]!).details.pluginInlineView.payload).toEqual({
+    requestId: "request",
+  });
+  expect(outputs[1]).not.toContain("appLink");
   outputs.push(await execute({ action: "check_status", requestId: "request" }));
   expect(s.extension.getAccessRequestStatus).not.toHaveBeenCalled();
   outputs.push(
@@ -219,14 +226,14 @@ it("serializes refresh once and atomically retains the rotated token across a fa
   s.advance(850_000);
   const register = s.connections.register.bind(s.connections);
   vi.spyOn(s.connections, "register").mockRejectedValueOnce(new Error("synthetic storage failure"));
-  await expect(s.service.requestLogins(input, "chat", s.delivery, authority)).rejects.toThrow(
+  await expect(s.service.requestLogins(input, "chat", authority)).rejects.toThrow(
     "synthetic storage failure",
   );
   expect(s.relay.refresh).toHaveBeenCalledTimes(1);
   s.connections.register = register;
   await Promise.all([
-    s.service.requestLogins(input, "chat", s.delivery, authority),
-    s.service.requestLogins(input, "chat", s.delivery, authority),
+    s.service.requestLogins(input, "chat", authority),
+    s.service.requestLogins(input, "chat", authority),
   ]);
   expect(s.relay.refresh).toHaveBeenCalledTimes(1);
   expect(await s.connections.lookup(path)).toMatchObject({
@@ -253,7 +260,7 @@ it("preserves the original key on null pickup and revokes when there is no uniqu
 it("clears grants on invalid_grant but preserves all state when revocation fails", async () => {
   const s = setup();
   await s.connect();
-  await s.service.requestLogins(input, "chat", s.delivery, authority);
+  await s.service.requestLogins(input, "chat", authority);
   s.relay.revoke.mockRejectedValueOnce(new AutofillError("revokeFailed"));
   await expect(s.service.disconnect(authority)).rejects.toMatchObject({ code: "revokeFailed" });
   expect(await s.connections.entries()).toHaveLength(1);
@@ -270,16 +277,20 @@ it("clears grants on invalid_grant but preserves all state when revocation fails
 it("rejects nonowners, changed policy, unknown grants and cross-conversation requests before effects", async () => {
   const s = setup();
   await s.connect();
-  const tool = createAutofillTool(s.service, {
-    senderIsOwner: false,
-    sessionKey: "chat",
-    sessionId: "conversation",
-    assertInvocationCurrent() {},
-  });
+  const tool = createAutofillTool(
+    s.service,
+    {
+      senderIsOwner: false,
+      sessionKey: "chat",
+      sessionId: "conversation",
+      assertInvocationCurrent() {},
+    },
+    inlineView,
+  );
   expect(
     (await tool.execute("call", { action: "request_logins", requests: input })).details,
   ).toMatchObject({ code: "gatewayOwnerRequired" });
-  await s.service.requestLogins(input, "chat", s.delivery, authority);
+  await s.service.requestLogins(input, "chat", authority);
   await expect(
     s.service.checkStatus("request", "other-chat", true, authority),
   ).rejects.toMatchObject({ code: "requestNotFound" });
@@ -287,16 +298,16 @@ it("rejects nonowners, changed policy, unknown grants and cross-conversation req
     s.service.fill("request", "entry", { targetId: "tab" }, "chat", authority),
   ).rejects.toMatchObject({ code: "loginNotGranted" });
   s.disable();
-  await expect(s.service.requestLogins(input, "chat", s.delivery, authority)).rejects.toMatchObject(
-    { code: "autofillDisabled" },
-  );
+  await expect(s.service.requestLogins(input, "chat", authority)).rejects.toMatchObject({
+    code: "autofillDisabled",
+  });
   expect(s.extension.fillCredential).not.toHaveBeenCalled();
 });
 
 it("stops on unknown final states, coalesces checkers, backs off rate limits and bounds the pending window", async () => {
   const s = setup();
   await s.connect();
-  await s.service.requestLogins(input, "chat", s.delivery, authority);
+  await s.service.requestLogins(input, "chat", authority);
   s.extension.getAccessRequestStatus.mockResolvedValue({
     success: true,
     result: { path: "status", state: "pending", resolved: [] },
@@ -349,11 +360,11 @@ it("retains one-use pickup and refresh responses when the initiating authority c
     current = false;
     return { ...tokens, access_token: "rotated-access", refresh_token: "rotated-refresh" };
   });
-  await expect(s.service.requestLogins(input, "chat", s.delivery, changing)).rejects.toThrow(
+  await expect(s.service.requestLogins(input, "chat", changing)).rejects.toThrow(
     "closed invocation",
   );
   current = true;
-  await s.service.requestLogins(input, "chat", s.delivery, changing);
+  await s.service.requestLogins(input, "chat", changing);
   expect(s.relay.refresh).toHaveBeenCalledTimes(1);
   expect((await s.connections.lookup(path))?.refreshToken).toBe("rotated-refresh");
 });
@@ -361,7 +372,7 @@ it("retains one-use pickup and refresh responses when the initiating authority c
 it("retains final statuses before fallible local writes and never rechecks them", async () => {
   const s = setup();
   await s.connect();
-  await s.service.requestLogins(input, "chat", s.delivery, authority);
+  await s.service.requestLogins(input, "chat", authority);
   vi.spyOn(s.connections, "register").mockRejectedValueOnce(
     new Error("synthetic cooldown write failure"),
   );
@@ -402,9 +413,9 @@ it.each([
   "rejects out-of-contract request text and websites before reading credentials",
   async (invalid) => {
     const s = setup();
-    await expect(
-      s.service.requestLogins(invalid, "chat", s.delivery, authority),
-    ).rejects.toMatchObject({ code: "invalidRequest" });
+    await expect(s.service.requestLogins(invalid, "chat", authority)).rejects.toMatchObject({
+      code: "invalidRequest",
+    });
     expect(s.extension.createAccessRequest).not.toHaveBeenCalled();
   },
 );
@@ -416,7 +427,7 @@ it("uses a conservative expiry for delayed pickup and refreshes expired canceled
   await s.service.pickup(session.sessionId, authority);
   expect((await s.connections.lookup(path))?.expiresAt).toBe(900_000);
   s.advance(350_000);
-  await s.service.requestLogins(input, "chat", s.delivery, authority);
+  await s.service.requestLogins(input, "chat", authority);
   expect(s.relay.refresh).toHaveBeenCalledTimes(1);
   await s.service.disconnect(authority);
   const pending = await s.service.connect(authority);
@@ -470,7 +481,7 @@ it("keeps completed pickup recovery across relay expiry, including when a new co
 it("does not resurrect a request after disconnect and reconnect during its polling wait", async () => {
   const s = setup();
   await s.connect();
-  await s.service.requestLogins(input, "chat", s.delivery, authority);
+  await s.service.requestLogins(input, "chat", authority);
   s.onSleep(async () => {
     await s.service.disconnect(authority);
     await s.connect();
@@ -485,7 +496,7 @@ it("does not resurrect a request after disconnect and reconnect during its polli
 it("refuses references from a retired keyset if cleanup was interrupted before deleting requests", async () => {
   const s = setup();
   await s.connect();
-  await s.service.requestLogins(input, "chat", s.delivery, authority);
+  await s.service.requestLogins(input, "chat", authority);
   await s.service.checkStatus("request", "chat", true, authority);
   vi.spyOn(s.requests, "delete").mockRejectedValueOnce(new Error("synthetic interrupted cleanup"));
   await expect(s.service.disconnect(authority)).rejects.toThrow("interrupted cleanup");
@@ -530,7 +541,7 @@ it("settles multiple canceled consent responses when the first revocation ends t
 it("finishes interrupted grant cleanup on a later disconnect without repeating revocation", async () => {
   const s = setup();
   await s.connect();
-  await s.service.requestLogins(input, "chat", s.delivery, authority);
+  await s.service.requestLogins(input, "chat", authority);
   vi.spyOn(s.requests, "delete").mockRejectedValueOnce(new Error("synthetic interrupted cleanup"));
   await expect(s.service.disconnect(authority)).rejects.toThrow("interrupted cleanup");
   expect(await s.connections.entries()).toEqual([]);
@@ -542,7 +553,7 @@ it("finishes interrupted grant cleanup on a later disconnect without repeating r
 it("does not recreate a request from an initial lookup that completed after disconnect", async () => {
   const s = setup();
   await s.connect();
-  await s.service.requestLogins(input, "chat", s.delivery, authority);
+  await s.service.requestLogins(input, "chat", authority);
   const lookup = s.requests.lookup.bind(s.requests);
   vi.spyOn(s.requests, "lookup").mockImplementationOnce(async (id) => {
     const stale = await lookup(id);
@@ -559,7 +570,7 @@ it("does not recreate a request from an initial lookup that completed after disc
 it("does not overwrite a final state with a stale initiating lookup or poll it again", async () => {
   const s = setup();
   await s.connect();
-  await s.service.requestLogins(input, "chat", s.delivery, authority);
+  await s.service.requestLogins(input, "chat", authority);
   const lookup = s.requests.lookup.bind(s.requests);
   vi.spyOn(s.requests, "lookup").mockImplementationOnce(async (id) => {
     const stale = await lookup(id);
@@ -571,4 +582,68 @@ it("does not overwrite a final state with a stale initiating lookup or poll it a
   });
   expect(s.extension.getAccessRequestStatus).toHaveBeenCalledTimes(1);
   expect((await s.requests.lookup("request"))?.status.state).toBe("resolved");
+});
+
+it("hydrates a private link without polling, rejects other sessions, and expires it without storage", async () => {
+  const s = setup();
+  await s.connect();
+  await s.service.requestLogins(input, "chat", authority);
+  expect(await s.service.approval("request", "chat", authority)).toEqual({
+    state: "pending",
+    appLink: "onepassword://synthetic-private-link",
+    expiresAt: 600_000,
+  });
+  expect(s.extension.getAccessRequestStatus).not.toHaveBeenCalled();
+  expect(JSON.stringify(await s.requests.entries())).not.toContain("onepassword://");
+  await expect(s.service.approval("request", "other-chat", authority)).rejects.toMatchObject({
+    code: "requestNotFound",
+  });
+  s.advance(600_000);
+  expect(await s.service.approval("request", "chat", authority)).toEqual({ state: "unavailable" });
+});
+
+it("invalidates private views on reload, connection replacement, and authority loss", async () => {
+  const s = setup();
+  await s.connect();
+  await s.service.requestLogins(input, "chat", authority);
+  s.service.clearApprovalLinks();
+  expect(await s.service.approval("request", "chat", authority)).toEqual({ state: "unavailable" });
+  await s.service.requestLogins(input, "chat", authority);
+  await expect(
+    s.service.approval("request", "chat", {
+      assertCurrent() {
+        throw new AutofillError("requesterChanged");
+      },
+    }),
+  ).rejects.toMatchObject({ code: "requesterChanged" });
+  await s.connections.delete(path);
+  await expect(s.service.approval("request", "chat", authority)).rejects.toMatchObject({
+    code: "requestNotFound",
+  });
+});
+
+it("records the actual click before polling starts and schedules from that moment", async () => {
+  const s = setup();
+  await s.connect();
+  await s.service.requestLogins(input, "chat", authority);
+  s.advance(1000);
+  await s.service.noteApprovalOpened("request", "chat", authority);
+  expect((await s.requests.lookup("request"))?.openedAt).toBe(1000);
+  expect((await s.service.checkStatus("request", "chat", false, authority)).guidance).toContain(
+    "was opened",
+  );
+  expect(s.extension.getAccessRequestStatus).not.toHaveBeenCalled();
+  s.advance(2000);
+  await s.service.checkStatus("request", "chat", true, authority);
+  expect(s.delays).toEqual([3000]);
+  expect(await s.service.approval("request", "chat", authority)).toEqual({ state: "resolved" });
+});
+
+it("makes a failed background checker unavailable instead of showing indefinite pending", async () => {
+  const s = setup();
+  await s.connect();
+  await s.service.requestLogins(input, "chat", authority);
+  await s.service.noteApprovalOpened("request", "chat", authority);
+  s.service.forgetApprovalLink("request");
+  expect(await s.service.approval("request", "chat", authority)).toEqual({ state: "unavailable" });
 });

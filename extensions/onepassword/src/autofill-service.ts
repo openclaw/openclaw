@@ -1,12 +1,12 @@
 import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { AutofillApprovalLinks } from "./autofill-approval-links.js";
 import { autofillBrowserGuidance } from "./autofill-browser.js";
 import type {
   AccessRequest,
   AccessRequestInput,
   AccessRequestStatus,
   AgenticAutofillExtension,
-  AutofillApprovalDelivery,
   ExtResult,
 } from "./autofill-contract.js";
 import { accessRequestInputSchema, decodeConnectionPath } from "./autofill-input.js";
@@ -84,10 +84,12 @@ export class AutofillService {
   private readonly pickups = new Map<string, Exclude<Pickup, { state: "pending" }>>();
   private readonly unsettledConnections = new Map<string, AutofillConnection>();
   private readonly queues = new Map<string, Promise<unknown>>();
+  private readonly approvalLinks: AutofillApprovalLinks;
   private readonly checkers = new Map<string, Promise<unknown>>();
 
   constructor(private readonly options: ServiceOptions) {
     this.clock = options.clock ?? autofillClock;
+    this.approvalLinks = new AutofillApprovalLinks(this.clock);
   }
 
   // Queue settlement includes rotation publication: a sibling never reads the old refresh token.
@@ -177,6 +179,7 @@ export class AutofillService {
     for (const entry of await this.options.stores.requests.entries()) {
       if (entry.value.connectionPath === path) {
         this.finalStatuses.delete(entry.key);
+        this.forgetApprovalLink(entry.key);
         await this.options.stores.requests.delete(entry.key, {
           assertCurrent: () => this.assertCurrent(authority),
         });
@@ -418,17 +421,13 @@ export class AutofillService {
         this.finalStatuses.delete(entry.key);
       }
       this.sessions.clear();
+      this.clearApprovalLinks();
       return { state: "disconnected" };
     });
   }
 
   /** Request a task's logins and hand its opaque approval link only to sensitive delivery code. */
-  async requestLogins(
-    input: AccessRequestInput,
-    scope: string,
-    delivery: AutofillApprovalDelivery,
-    authority: AutofillAuthority,
-  ) {
+  async requestLogins(input: AccessRequestInput, scope: string, authority: AutofillAuthority) {
     const parsed = accessRequestInputSchema.safeParse(input);
     if (!parsed.success) {
       throw new AutofillError("invalidRequest");
@@ -460,20 +459,52 @@ export class AutofillService {
         assertCurrent: () => this.assertCurrent(authority),
       });
       this.assertCurrent(authority);
-      let approvalDelivery: "sent" | "unsupported" = "unsupported";
-      try {
-        approvalDelivery = await delivery.deliver(created.appLink);
-      } catch {
-        // A transport exception may contain the link. Never surface it or log it.
+      this.approvalLinks.remember(record.request.id, created.appLink);
+      return this.publicRequest(record);
+    });
+  }
+
+  /** Release ephemeral links at service retirement and during its expiry sweep. */
+  clearApprovalLinks(): void {
+    this.approvalLinks.clear();
+  }
+
+  /** Retire an unusable or completed private approval reference. */
+  forgetApprovalLink(id: string): void {
+    this.approvalLinks.forget(id);
+  }
+
+  /** The service scheduler calls this even when nobody reads old transcript views. */
+  pruneApprovalLinks(): void {
+    this.approvalLinks.prune();
+  }
+
+  /** Private native-view hydration. Reading never acknowledges or polls a request. */
+  async approval(id: string, scope: string, authority: AutofillAuthority) {
+    const record = await this.request(id, scope, authority);
+    const connection = await this.options.stores.connections.lookup(record.connectionPath);
+    this.assertCurrent(authority);
+    if (!connection || sha256Hex(connection.integrationKey) !== record.integrationKeyFingerprint) {
+      throw new AutofillError("requestNotFound");
+    }
+    return this.approvalLinks.snapshot(record);
+  }
+
+  /** Persist the explicit button click before admitting a service-owned checker. */
+  async noteApprovalOpened(id: string, scope: string, authority: AutofillAuthority): Promise<void> {
+    const openedAt = this.clock.now();
+    const initial = await this.request(id, scope, authority);
+    await this.serialize(initial.connectionPath, async () => {
+      const current = await this.request(id, scope, authority, false);
+      if (current.status.state === "pending" && current.openedAt === undefined) {
+        await this.options.stores.requests.register(
+          id,
+          { ...current, openedAt },
+          {
+            assertCurrent: () => this.assertCurrent(authority),
+          },
+        );
       }
-      return {
-        ...this.publicRequest(record),
-        approvalDelivery,
-        guidance:
-          approvalDelivery === "sent"
-            ? "Open the approval on your device, then confirm you opened it before checking status."
-            : "This channel cannot privately deliver a 1Password approval link without transcript capture. A sensitive approval transport must be wired before you can approve this request.",
-      };
     });
   }
 
@@ -541,7 +572,9 @@ export class AutofillService {
         ...this.publicRequest(record),
         guidance:
           record.status.state === "pending"
-            ? "Confirm you opened the approval link on your device before polling."
+            ? record.openedAt === undefined
+              ? "Confirm you opened the approval link on your device before polling."
+              : "The approval was opened. Check its Control UI status or explicitly confirm approval for another check."
             : "Request finished; it will not be checked again.",
       };
     }

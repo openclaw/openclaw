@@ -4,7 +4,9 @@
   "description": "1Password SecretRef resolver and audited agent secrets broker for OpenClaw",
   "type": "module",
   "devDependencies": {
-    "@openclaw/plugin-sdk": "workspace:*"
+    "@openclaw/plugin-sdk": "workspace:*",
+    "@solidjs/compiler": "2.0.0-rc.18",
+    "esbuild": "0.28.2"
   },
   "openclaw": {
     "extensions": [
@@ -40,6 +42,14 @@
     "release": {
       "publishToClawHub": true,
       "publishToNpm": true
+    },
+    "controlUi": "./browser/index.tsx",
+    "assetScripts": {
+      "build": "cd ../.. && node --import ./scripts/tsx.mjs scripts/build-plugin-control-ui.mts extensions/onepassword",
+      "copy": "cd ../.. && node --import ./scripts/tsx.mjs scripts/build-plugin-control-ui.mts extensions/onepassword --copy",
+      "buildOutputs": [
+        "dist/openclaw.plugin.json"
+      ]
     }
   },
   "repository": {
@@ -47,6 +57,8 @@
     "url": "https://github.com/openclaw/openclaw"
   },
   "dependencies": {
+    "@solidjs/web": "2.0.0-rc.18",
+    "solid-js": "2.0.0-rc.18",
     "zod": "4.6.7"
   }
 }

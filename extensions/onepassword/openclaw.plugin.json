@@ -1,5 +1,6 @@
 {
   "id": "onepassword",
+  "uiCapabilities": ["inline"],
   "categories": ["security"],
   "name": "1Password",
   "description": "1Password SecretRefs, audited secret access, and an opt-in Agentic Autofill preview.",

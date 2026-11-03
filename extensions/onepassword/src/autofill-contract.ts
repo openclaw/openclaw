@@ -44,15 +44,3 @@ export interface AgenticAutofillExtension {
     tab: { targetId: string; profile?: string };
   }): Promise<ExtResult<{ status: "fill_submitted" }>>;
 }
-
-/** Opaque link delivery must never mirror content into transcripts, model context or logs. */
-export interface AutofillApprovalDelivery {
-  deliver(appLink: string): Promise<"sent" | "unsupported">;
-}
-
-/** Normal plugin text delivery mirrors into history and is NOT a sensitive-link transport. */
-export const unavailableApprovalDelivery: AutofillApprovalDelivery = {
-  async deliver() {
-    return "unsupported";
-  },
-};

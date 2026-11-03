@@ -1,8 +1,11 @@
-import type { AnyAgentTool, OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
+import type {
+  AnyAgentTool,
+  OpenClawPluginApi,
+  OpenClawPluginToolContext,
+} from "openclaw/plugin-sdk/plugin-entry";
 import { jsonResult } from "openclaw/plugin-sdk/tool-results";
 import { z } from "zod";
 import { autofillBrowserGuidance } from "./autofill-browser.js";
-import { unavailableApprovalDelivery, type AutofillApprovalDelivery } from "./autofill-contract.js";
 import { accessRequestInputSchema } from "./autofill-input.js";
 import { AutofillError } from "./autofill-relay.js";
 import type { AutofillAuthority, AutofillService } from "./autofill-service.js";
@@ -34,7 +37,7 @@ const toolInput = z.discriminatedUnion("action", [
 export function createAutofillTool(
   service: AutofillService,
   context: OpenClawPluginToolContext<2>,
-  delivery: AutofillApprovalDelivery = unavailableApprovalDelivery,
+  inlineView: OpenClawPluginApi["inlineView"],
 ): AnyAgentTool {
   const scope = JSON.stringify([context.sessionKey, context.sessionId]);
   const authority: AutofillAuthority = {
@@ -50,7 +53,7 @@ export function createAutofillTool(
     name: "onepassword_autofill",
     label: "1Password Agentic Autofill",
     description:
-      "Connect your own 1Password, request task-specific logins, check approval, or fill and submit a granted login. Never returns passwords. Owner-only preview; configure the managed browser profile and private approval delivery.",
+      "Connect your own 1Password, request task-specific logins, check approval, or fill and submit a granted login. Never returns passwords. Owner-only preview; configure the managed browser profile. Approval requires the OpenClaw Control UI on a computer with 1Password.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -139,10 +142,18 @@ export function createAutofillTool(
             return jsonResult(await service.disconnect(invocation));
           case "status":
             return jsonResult(await service.status(invocation));
-          case "request_logins":
-            return jsonResult(
-              await service.requestLogins(input.requests, scope, delivery, invocation),
+          case "request_logins": {
+            const request = await service.requestLogins(input.requests, scope, invocation);
+            authority.assertCurrent();
+            return inlineView(
+              "approval",
+              { requestId: request.requestId },
+              {
+                version: 1,
+                summary: `1Password approval requested for ${request.entries.map((entry) => new URL(entry.website).origin.slice(0, 256)).join(", ")}. Approval requires the OpenClaw Control UI; approve with the button shown there on a computer with 1Password. Text-only channels do not receive approval links.`,
+              },
             );
+          }
           case "check_status":
             return jsonResult(
               await service.checkStatus(
