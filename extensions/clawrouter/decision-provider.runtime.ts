@@ -43,6 +43,10 @@ export async function evaluateClawRouterDecision(
   context: DecisionProviderContextV2,
 ): Promise<ProviderDecisionOutcomeV2> {
   context.signal.throwIfAborted();
+  if (context.model.provider === "clawrouter" && context.model.id.startsWith("baseten/")) {
+    const { evaluateClawRouterBasetenDecision } = await import("./decision-baseten.runtime.js");
+    return evaluateClawRouterBasetenDecision(batch, context);
+  }
   if (
     context.model.provider !== "clawrouter" ||
     context.model.id !== "openai/gpt-6-luna" ||
