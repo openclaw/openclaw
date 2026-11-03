@@ -471,6 +471,47 @@ describe("bundled channel ingress runtime ownership", () => {
     expect(command).toHaveBeenCalledTimes(3);
   });
 
+  it("admits channel-less guest turns with bindings only for the caller's declared tools", async () => {
+    const runtime = createPluginRuntime();
+    const command = vi.fn(async () => ({ payloads: [] }));
+    Object.defineProperty(runtime.agent, "runCommandFromIngress", {
+      configurable: true,
+      value: command,
+    });
+    const registryBuilder = createRegistry(runtime);
+    const record = createPluginRecord({
+      id: "phone-bridge",
+      origin: "bundled",
+      contracts: { tools: ["phone_call"] },
+    });
+    const api = registryBuilder.createApi(record, { config: {} });
+    registryBuilder.registry.plugins.push(record);
+    markPluginRegistryActive(registryBuilder.registry);
+    const commandRuntime = { log: vi.fn(), error: vi.fn() } as never;
+    const run = api.runtime.agent.runCommandFromIngress;
+    const toolBindings = { phone_call: { kind: "active-call", callId: "call-1" } };
+    const guest = { message: "caller turn", allowModelOverride: false, toolBindings };
+
+    await expect(run(guest, commandRuntime)).resolves.toEqual({ payloads: [] });
+    expect(command).toHaveBeenLastCalledWith(
+      { message: "caller turn", allowModelOverride: false, senderIsOwner: false, toolBindings },
+      commandRuntime,
+    );
+    const forwarded = (command.mock.lastCall as unknown as [typeof guest])[0];
+    expect(forwarded.toolBindings).not.toBe(toolBindings);
+
+    await expect(run({ ...guest, senderIsOwner: true }, commandRuntime)).rejects.toThrow(
+      'Plugin "phone-bridge" cannot admit authenticated owner authority for channel "unknown"',
+    );
+    await expect(run({ ...guest, messageChannel: "discord" }, commandRuntime)).rejects.toThrow(
+      'Plugin "phone-bridge" cannot admit authenticated owner authority for channel "discord"',
+    );
+    await expect(
+      run({ ...guest, toolBindings: { browser: { kind: "tab" } } }, commandRuntime),
+    ).rejects.toThrow('Plugin "phone-bridge" cannot bind tool "browser" it does not declare.');
+    expect(command).toHaveBeenCalledOnce();
+  });
+
   it("defers and preserves the exact active runtime across an inactive prepared load", async () => {
     const audit = createAudit();
     const gateway = createGateway(audit);

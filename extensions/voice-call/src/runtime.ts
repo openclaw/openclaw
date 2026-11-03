@@ -366,6 +366,9 @@ export async function createVoiceCallRuntime(params: {
             userLabel: "Caller",
             assistantLabel: "Agent",
             questionSourceLabel: "caller",
+            // An ordinary agent turn of the call session: the agent's runtime (including
+            // Claude CLI), the call's history and the caller's guest tool policy apply.
+            runner: "agent-turn",
             provider: agentProvider,
             model,
             thinkLevel,
