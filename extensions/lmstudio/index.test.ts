@@ -32,19 +32,6 @@ vi.mock("./src/models.fetch.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./src/models.fetch.js")>()),
   fetchLmstudioModels: fetchLmstudioModelsMock,
   discoverLmstudioModels: discoverLmstudioModelsMock,
-  discoverLmstudioDynamicModels: (
-    allowPrivateNetwork: boolean | undefined,
-    discoveryBaseUrl: string,
-    apiKey: string,
-    headers?: Record<string, string>,
-  ) =>
-    discoverLmstudioModelsMock({
-      baseUrl: discoveryBaseUrl,
-      apiKey,
-      headers,
-      allowPrivateNetwork,
-      quiet: true,
-    }),
 }));
 
 function required<T>(value: T | undefined): T {

@@ -214,21 +214,6 @@ export async function discoverLmstudioModels(params: {
   return mapLmstudioWireModels(fetched.models, "runtime");
 }
 
-export function discoverLmstudioDynamicModels(
-  allowPrivateNetwork: boolean | undefined,
-  baseUrl: string,
-  apiKey: string,
-  headers?: Record<string, string>,
-): Promise<ModelDefinitionConfig[]> {
-  return discoverLmstudioModels({
-    baseUrl,
-    apiKey,
-    headers,
-    allowPrivateNetwork,
-    quiet: true,
-  });
-}
-
 type LmstudioModelLoadParams = {
   baseUrl?: string;
   apiKey?: string;

@@ -15,6 +15,7 @@ import {
   createStreamingResponse,
 } from "../../test-support/streaming-error-response.js";
 import plugin from "../index.js";
+import { discoverLmstudioProvider } from "./catalog.js";
 import { LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH } from "./defaults.js";
 import {
   discoverLmstudioModels,
@@ -26,7 +27,6 @@ import {
   resolveLmstudioReasoningCompat,
   type LmstudioModelWire,
 } from "./models.js";
-import { discoverLmstudioProvider } from "./setup.js";
 
 const guardedFetch = vi.hoisted(() => vi.fn());
 function expectRequest(mock: ReturnType<typeof vi.fn>, headers: Record<string, string>) {
