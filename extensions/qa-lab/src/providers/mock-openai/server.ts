@@ -183,7 +183,6 @@ import {
 } from "./mock-openai-slack-requester.js";
 import * as mockSubagent from "./mock-openai-subagent-completion.js";
 import { planSubagentFanoutTurn } from "./mock-openai-subagent-fanout.js";
-import { planQaToolPlanTurn } from "./mock-openai-tool-plan.js";
 import {
   QA_CODE_MODE_TARGET_MARKER,
   encodeCodeModeTarget,
@@ -533,15 +532,14 @@ async function buildResponsesPayload(
   }
   const compactionRetryScenarioActive =
     scenarioState.compactionRetryActive || hasCompactionRetryMarker;
-  const scriptedTurn =
-    planAutomationScenarioTurn({
-      prompt,
-      input,
-      body: toolDeclarationBody,
-      buildToolCall: buildToolCallEventsWithArgs,
-    }) ?? planQaToolPlanTurn(prompt, input, toolDeclarationBody, buildToolCallEventsWithArgs);
-  if (scriptedTurn) {
-    return scriptedTurn;
+  const automationScenarioTurn = planAutomationScenarioTurn({
+    prompt,
+    input,
+    body: toolDeclarationBody,
+    buildToolCall: buildToolCallEventsWithArgs,
+  });
+  if (automationScenarioTurn) {
+    return automationScenarioTurn;
   }
   // The queued followup carries the stalled prompt in transcript history, so
   // current-turn dispatch must win before the persistent recovery fixture.

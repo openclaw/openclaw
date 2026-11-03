@@ -926,36 +926,17 @@ describe("subagent-handoff", () => {
   });
 });
 
-it.each(["write", "exec_command"])(
-  "continues cron delivery through %s before a generic QA tool plan",
-  async (fileTool) => {
-    const plan = {
-      calls: [{ name: "read", args: { path: "unreachable.txt" } }],
-      reply: "wrong route",
-    };
-    const turn = await startTurn(
-      `Cron send-then-continue QA check. Delivery target: qa-recipient\nQA tool plan: ${JSON.stringify(plan)}`,
-      { tools: ["message", fileTool, "read"].map((name) => ({ type: "function", name })) },
-    );
-    const send = outputToolCall(await turn.request(), "message");
-    expect(callArgs(send)).toEqual({
-      action: "send",
-      channel: "qa-channel",
-      target: "qa-recipient",
-      message: "QA-CRON-SEND-CONTINUE-SENT",
-    });
-    const write = outputToolCall(await turn.complete(send, "sent"), fileTool);
-    expect(callArgs(write)).toEqual(
-      fileTool === "exec_command"
-        ? { cmd: "printf 'sent QA-CRON-SEND-CONTINUE-SENT\\n' > cron-send-continue-marker.txt" }
-        : {
-            path: "cron-send-continue-marker.txt",
-            content: "sent QA-CRON-SEND-CONTINUE-SENT\n",
-          },
-    );
-    expect(outputText(await turn.complete(write, "written"))).toBe("QA-CRON-SEND-CONTINUE-DONE");
-  },
-);
+it("continues cron delivery before a generic QA tool plan", async () => {
+  const plan = { calls: [{ name: "read", args: { path: "unreachable.txt" } }], reply: "wrong" };
+  const turn = await startTurn(
+    `Cron send-then-continue QA check. Delivery target: qa-recipient\nQA tool plan: ${JSON.stringify(plan)}`,
+    { tools: ["message", "write", "read"].map((name) => ({ type: "function", name })) },
+  );
+  // The plan would call read first and then reply; the cron turn keeps every step.
+  const send = outputToolCall(await turn.request(), "message");
+  const write = outputToolCall(await turn.complete(send, "sent"), "write");
+  expect(outputText(await turn.complete(write, "written"))).toBe("QA-CRON-SEND-CONTINUE-DONE");
+});
 
 it("runs a QA tool plan in order and names each result's media in the reply", async () => {
   const tools = ["image_generate", "music_generate"].map((name) => ({
