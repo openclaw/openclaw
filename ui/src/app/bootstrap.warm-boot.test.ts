@@ -116,8 +116,8 @@ describe("warm boot profile validation", () => {
     expectDefaults(runtime);
     const signal = new AbortController().signal;
     await expect(
-      loadChatRoute(runtime.context, makeLocation("/chat/main"), "chat", signal),
-    ).resolves.toMatchObject({ kind: "session", sessionKey: "agent:main:workspace" });
+      loadChatRoute(runtime.context, makeLocation("/chat/main/~key/topic"), "chat", signal),
+    ).resolves.toMatchObject({ kind: "session", sessionKey: "agent:main:topic" });
     expect(request).not.toHaveBeenCalled();
     expect(agents.state.agentsList).toBeNull();
     gateway.snapshot.phase = "connected";

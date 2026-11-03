@@ -43,6 +43,7 @@ import {
   authorizeSessionAgentRun,
   authorizeSessionSharingTarget,
   hiddenSessionNotFound,
+  isRestrictedHomeSession,
   resolveIncognitoSessionSharingTarget,
   sharingIdentity,
   type SessionSharingTarget,
@@ -81,9 +82,7 @@ export {
   prepareSessionSharing,
   prepareProjectedSessionSharing,
   createSessionListEntryFilter,
-  createProfileSessionEntryFilter,
 } from "./session-sharing-read.js";
-
 export {
   allowedSessionVisibilities,
   authorizeIncognitoSessionTarget,
@@ -141,6 +140,14 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
     projection?: SessionRowProjection,
     members?: readonly string[],
   ) => {
+    const cap = policy ? policy.sessionCap : sessionCap(cfg);
+    const scopes = params.client?.connect?.scopes;
+    if (
+      !target &&
+      isRestrictedHomeSession(targetRef.sessionKey, cap, cfg.session?.mainKey, scopes)
+    ) {
+      return hiddenSessionNotFound(targetRef.sessionKey);
+    }
     const error =
       (target && authorizesAgentRun
         ? authorizeSessionAgentRun(
@@ -156,8 +163,7 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
     if (
       error ||
       !target ||
-      (VISIBILITY_AUTHORIZED_METHODS.has(params.method) &&
-        ((policy ? policy.sessionCap : sessionCap(cfg)) ?? "write") === "write")
+      (VISIBILITY_AUTHORIZED_METHODS.has(params.method) && (cap ?? "write") === "write")
     ) {
       return error;
     }
@@ -238,7 +244,7 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
       return { error };
     }
     if (
-      hidesForeignSessions &&
+      (hidesForeignSessions || authorizesRead) &&
       target &&
       !(
         preparedPolicy(getPolicyConfig())?.canReadTarget(target) ??

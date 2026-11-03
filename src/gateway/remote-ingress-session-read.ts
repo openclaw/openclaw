@@ -47,6 +47,8 @@ export async function prepareRemoteIngressSessionRead(
       {
         profileId: identity.profileId,
         sessionCap: principal.operatorRolePolicy?.sessions.others,
+        mainKey: getRuntimeConfig().session?.mainKey,
+        operatorScopes: principal.scopes,
         membership,
       },
       prepareSessionCreatorProfile(identity.profileId, identity.aliases),

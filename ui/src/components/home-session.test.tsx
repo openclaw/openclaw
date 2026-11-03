@@ -2,7 +2,6 @@
 
 import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
-import { GatewayRequestError } from "../api/gateway.ts";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
 import type { ChatWorkContext } from "../pages/chat/chat-work-context.ts";
 import { createContext, createGateway, createSessions } from "../test-helpers/app-sidebar.ts";
@@ -29,6 +28,7 @@ it("captures external text, clears it on context changes, and retains the conver
     createGateway(createTestGatewayClient(async () => ({}))),
     createSessions("main", []),
   );
+  context.gateway.snapshot.hello = gatewayHelloForMethods([], ["operator.read", "operator.write"]);
   const provider = createApplicationContextProvider(context);
   document.body.append(provider);
   const [work, setWork] = createSignal<ChatWorkContext>({ page: "chat", file: "first.ts" });
@@ -78,27 +78,17 @@ it("captures external text, clears it on context changes, and retains the conver
   expect(view.container.querySelector("openclaw-chat-pane")).toBe(pane);
 });
 
-it.each([false, true])(
-  "confirms restricted dock Home before loading chat (visible: %s)",
-  async (visible) => {
-    const request = vi.fn(async () => {
-      if (!visible) {
-        throw new GatewayRequestError({ code: "INVALID_REQUEST", message: "No session found" });
-      }
-      return { ok: true, key: "agent:main:main", agentId: "main" };
-    });
+it.each(["none", "invited", "view", "suggest", "write"] as const)(
+  "admits known Home only with the full session-write cap (cap: %s)",
+  async (sessionCap) => {
+    const request = vi.fn(async () => ({ ok: true, key: "agent:main:main", agentId: "main" }));
     const context = createContext(
       createGateway(createTestGatewayClient(request)),
       createSessions("main", []),
+      { defaultId: "main", mainKey: "main", scope: "per-sender", agents: [{ id: "main" }] },
     );
-    context.agents.state.agentsList = {
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [{ id: "main" }],
-    };
     const hello = gatewayHelloForMethods(["sessions.resolve"], ["operator.sessions.write"]);
-    hello.auth!.sessionCap = "none";
+    hello.auth!.sessionCap = sessionCap;
     context.gateway.snapshot.hello = hello;
     const navigate = vi.spyOn(context, "navigate");
     const view = mountSolid(() => (
@@ -106,7 +96,7 @@ it.each([false, true])(
         <HomeSession sessionKey="agent:main:main" agentId="main" />
       </ApplicationProvider>
     ));
-    if (visible) {
+    if (sessionCap === "write") {
       await waitForSolid(() =>
         expect(view.container.querySelector("openclaw-chat-pane")).not.toBeNull(),
       );
@@ -118,10 +108,6 @@ it.each([false, true])(
       view.getByRole("button", { name: "New conversation" }).click();
       expect(navigate).toHaveBeenCalledWith("new-session", { search: "?agent=main" });
     }
-    expect(request).toHaveBeenCalledExactlyOnceWith("sessions.resolve", {
-      key: "agent:main:main",
-      agentId: "main",
-      allowMissing: true,
-    });
+    expect(request).not.toHaveBeenCalled();
   },
 );
