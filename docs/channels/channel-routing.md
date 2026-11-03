@@ -18,6 +18,8 @@ channel converge on the agent's [main session](/concepts/main-session).
 - **AccountId**: per-channel account instance (when supported).
 - Optional channel default account: `channels.<channel>.defaultAccount` chooses
   which account is used when an outbound path does not specify `accountId`.
+  Durable outbound messages capture that account before entering the queue; retries keep
+  the original sender even if the configured default changes.
   - In multi-account setups, set an explicit default (`defaultAccount` or an account named `default`) when two or more accounts are configured. Without it, fallback routing may pick the first normalized account ID.
 - **AgentId**: an isolated workspace + session store ("brain").
 - **SessionKey**: the bucket key used to store context and control concurrency.
