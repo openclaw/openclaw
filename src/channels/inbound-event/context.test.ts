@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { InboundMediaFacts } from "../turn/types.js";
 import {
   buildChannelInboundEventContext,
   finalizeChannelInboundContext,
@@ -247,5 +248,31 @@ describe("finalizeChannelInboundContext supplemental media resolution", () => {
     expect(media).not.toHaveBeenCalled();
     expect(result.quoteHidden).toBe(true);
     expect(result.supplemental?.quote).toBeUndefined();
+  });
+
+  it("preserves text modality for text reply to message with quote media", async () => {
+    const attachment = { path: "/tmp/quote.png", contentType: "image/png" };
+    const result = await finalizeQuote({
+      media: [],
+      contextVisibility: "all",
+      supplemental: { quote: { id: "quote-1", body: "quoted photo", media: vi.fn(async () => [attachment]) } },
+    });
+    expect(result.context.SourceModality).toBe("text");
+    expect(result.context.media).toHaveLength(1);
+    expect(result.context.media).toMatchObject([attachment]);
+  });
+
+  it("does not override modality when message has its own attachments and quote media", async () => {
+    const documentAttachment = { path: "/tmp/report.pdf", kind: "document" } satisfies InboundMediaFacts;
+    const quoteAttachment = { path: "/tmp/quote.png", contentType: "image/png" };
+    const media = vi.fn(async () => [quoteAttachment]);
+    const result = await finalizeQuote({
+      media: [documentAttachment],
+      contextVisibility: "all",
+      supplemental: { quote: { id: "quote-1", body: "quoted photo", media } },
+    });
+    expect(result.context.SourceModality).toBeUndefined();
+    expect(result.context.media).toHaveLength(2);
+    expect(result.context.media).toMatchObject([documentAttachment, quoteAttachment]);
   });
 });

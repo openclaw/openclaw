@@ -309,8 +309,14 @@ export function finalizeChannelInboundContext<T extends Record<string, unknown>>
         ([, value]) => value !== undefined,
       ),
     );
+    const initialMedia = params.media ?? [];
+    const originalSourceModality = (originalContext as { SourceModality?: string }).SourceModality;
+    const sourceModality =
+      originalSourceModality ??
+      (initialMedia.length === 0 && media.length > 0 ? "text" : undefined);
     const baseContext = {
       ...originalContext,
+      ...(sourceModality !== undefined ? { SourceModality: sourceModality } : {}),
       SupplementalContext: supplemental,
       media: [...media],
       ...mediaPayload,
