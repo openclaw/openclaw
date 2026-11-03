@@ -1359,9 +1359,7 @@ describe("previous release update compatibility", () => {
     const child = childProcess.spawn(
       testNodeExecPath,
       [server, archive, portFile, String(failFirstRequests)],
-      {
-        stdio: "ignore",
-      },
+      { stdio: "ignore" },
     );
     const deadline = Date.now() + 5_000;
     while (!fsSync.existsSync(portFile) && Date.now() < deadline) {
