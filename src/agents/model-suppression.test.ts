@@ -68,13 +68,17 @@ describe("model suppression", () => {
     const resolver = vi.fn().mockReturnValueOnce({ suppress: true }).mockReturnValueOnce(undefined);
     const config = {};
     mocks.buildManifestBuiltInModelSuppressionResolver.mockReturnValueOnce(resolver);
+    const metadataSnapshot = createPluginMetadataSnapshot({
+      config,
+      manifestRegistry: { plugins: [], diagnostics: [] },
+    });
 
-    const shouldSuppress = buildShouldSuppressBuiltInModelCore({ config });
+    const shouldSuppress = buildShouldSuppressBuiltInModelCore({ config, metadataSnapshot });
 
     expect(shouldSuppress({ provider: "bedrock", id: "Claude-3" })).toBe(true);
     expect(shouldSuppress({ provider: "aws-bedrock", id: "claude-4" })).toBe(false);
     expect(mocks.buildManifestBuiltInModelSuppressionResolver.mock.calls).toEqual([
-      [{ config, env: process.env }],
+      [{ config, metadataSnapshot }],
     ]);
   });
 });

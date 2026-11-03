@@ -13,8 +13,8 @@ import type {
   PluginModelCatalogMetadataSnapshot,
   PersistedPluginModelCatalog,
 } from "./plugin-model-catalog.js";
-import { AuthStorage } from "./sessions/auth-storage.js";
-import { ModelRegistry } from "./sessions/model-registry.js";
+import { AuthStorage } from "./sessions/auth-storage-core.js";
+import { ModelRegistry } from "./sessions/model-registry-core.js";
 
 const CAPTURED_MODELS_JSON_SOURCE_PATH = "captured:models.json";
 

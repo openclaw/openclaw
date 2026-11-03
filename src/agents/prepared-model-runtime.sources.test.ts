@@ -41,13 +41,11 @@ import {
   prepareWorkspaceBuildGroup,
   type PreparedConfiguredModelRegistries,
 } from "./prepared-model-runtime.facts.js";
-import {
-  createPreparedModelRuntimeSnapshot,
-  prepareFullCatalogFacts,
-} from "./prepared-model-runtime.full-catalog.js";
+import { prepareFullCatalogFacts } from "./prepared-model-runtime.full-catalog.js";
 import * as inboundRegistry from "./prepared-model-runtime.inbound-registry.js";
 import { discardPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
 import { prepareAgentCatalogSource } from "./prepared-model-runtime.scoped-catalog.js";
+import { createPreparedModelRuntimeSnapshot } from "./prepared-model-runtime.snapshot.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
 import { ModelRegistry } from "./sessions/model-registry.js";
 
@@ -463,6 +461,9 @@ describe("prepared catalog source composition", () => {
         .soft(snapshot.modelCatalog.entries.map((entry) => entry.id).toSorted())
         .toEqual(["configured-only", "shared"]);
       expect.soft(snapshot.modelCatalog.staticEntries ?? []).toEqual([]);
+      const stores = snapshot.createStores();
+      expect(stores.authStorage.constructor).toBe(AuthStorage);
+      expect(stores.modelRegistry.constructor).toBe(ModelRegistry);
     }
   });
   it.each(["same", "credentials"] as const)(

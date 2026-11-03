@@ -183,6 +183,8 @@ describe("ModelRegistry", () => {
     const first = template.fork(firstAuth);
     const second = template.fork(secondAuth);
 
+    expect(first.constructor).toBe(ModelRegistry);
+    expect(second.constructor).toBe(ModelRegistry);
     await expect(first.getApiKeyForProvider("custom")).resolves.toBe("test-token-placeholder");
     await expect(
       first.getApiKeyAndHeaders(first.find("custom", "example-model")!),

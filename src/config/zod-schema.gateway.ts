@@ -1,25 +1,14 @@
-import { isValidAgentId, normalizeAgentId } from "@openclaw/normalization-core/agent-id";
-import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
 import { CONTROL_UI_ENVIRONMENT_COLORS } from "../gateway/control-ui-bootstrap-contract.js";
-import {
-  ADMIN_SCOPE,
-  APPROVALS_SCOPE,
-  CRON_SCOPE,
-  PAIRING_SCOPE,
-  QUESTIONS_SCOPE,
-  READ_SCOPE,
-  SESSION_READ_SCOPE,
-  SESSION_WRITE_SCOPE,
-  TALK_SCOPE,
-  TALK_SECRETS_SCOPE,
-  WRITE_SCOPE,
-} from "../gateway/operator-scopes.js";
 import { normalizeGitHubLogin } from "../utils/github-login.js";
 import {
   isValidPortalIngressDomain,
   portalIngressConflictsWithOrigin,
 } from "./gateway-portal-ingress.js";
+import {
+  GatewayOperatorRoleDefinitionSchema,
+  OperatorScopeSchema,
+} from "./zod-schema.gateway-roles.js";
 import {
   GatewayRemoteConfigSchema,
   ResponsesEndpointUrlFetchShape,
@@ -28,19 +17,8 @@ import {
 import { SecretInputSchema } from "./zod-schema.secret-input.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
-const OperatorScopeSchema = z.enum([
-  ADMIN_SCOPE,
-  READ_SCOPE,
-  WRITE_SCOPE,
-  CRON_SCOPE,
-  SESSION_READ_SCOPE,
-  SESSION_WRITE_SCOPE,
-  APPROVALS_SCOPE,
-  QUESTIONS_SCOPE,
-  PAIRING_SCOPE,
-  TALK_SCOPE,
-  TALK_SECRETS_SCOPE,
-]);
+export { GatewayOperatorRoleDefinitionSchema } from "./zod-schema.gateway-roles.js";
+
 const GatewayGitHubEndpointSchema = z
   .strictObject({
     host: z.string().trim().min(1).optional(),
@@ -81,49 +59,6 @@ const GatewayGitHubEndpointSchema = z
       });
     }
   });
-export const GatewayOperatorRoleDefinitionSchema = z.strictObject({
-  sessions: z.strictObject({
-    /** Maximum access to another person's sessions without explicit membership. */
-    others: z.enum(["none", "view", "suggest", "write"]),
-  }),
-  /** Require sandbox isolation for newly created sessions, or inherit agent policy by default. */
-  sandbox: z.enum(["inherit", "required"]).optional(),
-  /** Agent IDs available for session creation and runs, or all agents when set to "*". */
-  agents: z.union([
-    z.literal("*"),
-    z
-      .array(z.string().trim().min(1).refine(isValidAgentId, "Invalid agent id"))
-      .transform((agents) => uniqueValues(agents.map(normalizeAgentId))),
-  ]),
-  /** Cloud profiles this role may explicitly dispatch its own sessions to. */
-  workerProfiles: z.array(z.string().trim().min(1)).transform(uniqueValues).optional(),
-  /** Optional model ceiling for this role; defaults to the source agent's primary and fallbacks. */
-  modelPolicy: z
-    .strictObject({
-      sourceAgent: z
-        .string()
-        .trim()
-        .min(1)
-        .refine(isValidAgentId, "Invalid agent id")
-        .transform(normalizeAgentId)
-        .optional(),
-      allow: z.array(z.string().trim().min(1)).optional(),
-      deny: z.array(z.string().trim().min(1)).optional(),
-    })
-    .optional(),
-  /** Nonstandard Access requires an explicit grant, independent of model membership. */
-  accessPrograms: z
-    .strictObject({
-      cyber: z
-        .array(z.enum(["daybreak_blue", "daybreak_red"]))
-        .transform((programs) => uniqueValues(programs)),
-    })
-    .optional(),
-  /** Ceiling applied to the authenticated profile's granted operator scopes. */
-  scopes: z.array(OperatorScopeSchema).transform((scopes) => uniqueValues(scopes)),
-  /** Required access-policy plugin; availability is checked at admission, not config parsing. */
-  accessPolicyPlugin: z.string().trim().min(1).max(128).optional(),
-});
 const GatewayOperatorRoleNameSchema = z.string().trim().min(1).max(128);
 const GATEWAY_HTTP_LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 const GatewayHttpImagesSchema = z.strictObject(ResponsesEndpointUrlFetchShape).optional();

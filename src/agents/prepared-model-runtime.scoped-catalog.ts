@@ -6,7 +6,12 @@ import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
 import { MODEL_RUNTIME_PROVIDER_DISCOVERY_TIMEOUT_MS } from "./model-catalog-timeouts.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
-import { ensureOpenClawModelsJson, planOpenClawModelsJsonSource } from "./models-config.js";
+import {
+  ensurePreparedModelsJson,
+  planPreparedModelsJsonSource,
+  prepareModelsConfigContext,
+  resolveModelsConfigInput,
+} from "./models-config.prepared.js";
 import { loadPersistedPluginModelCatalogs } from "./plugin-model-catalog-execution.js";
 import type {
   PreparedModelRuntimeAgentFacts,
@@ -117,12 +122,16 @@ export async function prepareAgentCatalogSource(
             sourceOptions.providerDiscoveryTimeoutMs ?? MODEL_RUNTIME_PROVIDER_DISCOVERY_TIMEOUT_MS,
         }),
   };
+  const prepareContext = () =>
+    prepareModelsConfigContext(
+      resolveModelsConfigInput(input.config),
+      process.env,
+      input.agentDir,
+      options,
+    );
   const prepareSource = async () => {
     if (!persist) {
-      const source = await planOpenClawModelsJsonSource(input.config, input.agentDir, {
-        ...options,
-        ...(sourceOptions.authStore ? { authStore: sourceOptions.authStore } : {}),
-      });
+      const source = await planPreparedModelsJsonSource(prepareContext(), sourceOptions.authStore);
       return {
         modelsJsonContents: source.modelsJsonContents,
         pluginCatalogs: source.pluginCatalogs,
@@ -130,11 +139,7 @@ export async function prepareAgentCatalogSource(
       };
     }
     if (!input.readOnly) {
-      const { publishedSource } = await ensureOpenClawModelsJson(
-        input.config,
-        input.agentDir,
-        options,
-      );
+      const { publishedSource } = await ensurePreparedModelsJson(prepareContext());
       if (publishedSource) {
         return { ...publishedSource, providerOutcomes: resultOutcomes() };
       }

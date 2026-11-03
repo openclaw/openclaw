@@ -240,9 +240,23 @@ vi.mock("./model-catalog.js", async () => ({
   buildPreparedModelCatalogSnapshot: mocks.buildPreparedModelCatalogSnapshot,
 }));
 
-vi.mock("./models-config.js", () => ({
-  ensureOpenClawModelsJson: mocks.ensureOpenClawModelsJson,
-  planOpenClawModelsJsonSource: mocks.planOpenClawModelsJsonSource,
+// mock-isolation: Catalog lifecycle fixtures carry inputs without preparing filesystem context.
+vi.mock("./models-config.prepared.js", () => ({
+  resolveModelsConfigInput: (config: unknown) => config,
+  prepareModelsConfigContext: (config: unknown, _env: unknown, ...args: unknown[]) => [
+    config,
+    ...args,
+  ],
+  ensurePreparedModelsJson: ([config, agentDir, options]: [unknown, unknown, unknown]) =>
+    mocks.ensureOpenClawModelsJson(config, agentDir, options),
+  planPreparedModelsJsonSource: (
+    [config, agentDir, options]: [unknown, unknown, Record<string, unknown>],
+    authStore?: unknown,
+  ) =>
+    mocks.planOpenClawModelsJsonSource(config, agentDir, {
+      ...options,
+      ...(authStore ? { authStore } : {}),
+    }),
 }));
 
 vi.mock("./models-config.providers.implicit.js", () => ({

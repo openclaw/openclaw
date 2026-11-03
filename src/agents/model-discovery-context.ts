@@ -3,7 +3,7 @@
  * Keeps callers from reaching into runtime config or plugin metadata snapshot
  * plumbing directly.
  */
-import { getRuntimeConfig } from "../config/config.js";
+import { readRuntimeConfig } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   getCurrentPluginMetadataSnapshot,
@@ -53,7 +53,7 @@ export function resolveModelPluginMetadataSnapshot(params: {
         return current;
       }
     }
-    const config = params.config ?? getRuntimeConfig();
+    const config = params.config ?? readRuntimeConfig();
     return (
       // Current snapshots are already lifecycle-owned; discovery should reuse
       // them before doing config/env-based resolution.

@@ -67,13 +67,17 @@ describe("admitted SQLite schema facts", () => {
     return { filename, database };
   }
 
-  it("keeps read receipts stable for mutation words while tracking callback writes", () => {
+  it.each([
+    "SELECT 'openclaw.system-update', 'it''s DELETE', 1 AS [INSERT] /* REPLACE */",
+    "; -- UPDATE\n /* CREATE */ SELECT 'DROP; DELETE'; INSERT INTO original VALUES (7); CREATE TABLE ignored(id)",
+  ])("keeps prepared read receipts stable while tracking callback writes: %s", (sql) => {
     const database = openDatabase();
     const before = readSqliteDatabaseWriteRevision(database);
-    database
-      .prepare("SELECT 'openclaw.system-update', 'it''s DELETE', 1 AS [INSERT] /* REPLACE */")
-      .get();
+    const schemaBefore = getSqliteDatabaseSchemaRevision(database);
+    database.prepare(sql).get();
     expect(readSqliteDatabaseWriteRevision(database)).toBe(before);
+    expect(getSqliteDatabaseSchemaRevision(database)).toBe(schemaBefore);
+    expectSchema(database, { original: true, ignored: false });
 
     database.function("mutate", () => {
       database.exec("INSERT INTO original VALUES (9)");
@@ -82,6 +86,14 @@ describe("admitted SQLite schema facts", () => {
     database.prepare("SELECT mutate()").get();
     expect(readSqliteDatabaseWriteRevision(database)).not.toBe(before);
     expect(database.prepare("SELECT id FROM original").all()).toEqual([{ id: 9 }]);
+
+    const callbackRevision = readSqliteDatabaseWriteRevision(database);
+    database.exec("SELECT 'UPDATE'; INSERT INTO original VALUES (8)");
+    expect(readSqliteDatabaseWriteRevision(database)).not.toBe(callbackRevision);
+    expect(database.prepare("SELECT id FROM original ORDER BY id").all()).toEqual([
+      { id: 8 },
+      { id: 9 },
+    ]);
   });
 
   it("serves admitted runtime schema checks without executing SQL", () => {

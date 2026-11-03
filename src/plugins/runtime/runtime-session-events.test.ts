@@ -6,6 +6,7 @@ import type {
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withPluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
 import { createRuntimeBase } from "./runtime-base.js";
+import { createRuntimeSystem } from "./runtime-system.js";
 
 const host = vi.hoisted(() => ({
   capture: vi.fn<(...args: unknown[]) => Promise<SessionEventTarget>>(),
@@ -24,7 +25,7 @@ const target: SessionEventTarget = {
   generation: "process",
 };
 const address = { agentId: "main", sessionKey: "agent:main:main" };
-const system = () => createRuntimeBase().system;
+const system = () => createRuntimeBase(createRuntimeSystem).system;
 const captureTarget = () => system().captureSessionEventTarget(address.agentId, address.sessionKey);
 let active: boolean;
 const inOwnerScope = <T>(run: () => T) =>
@@ -83,7 +84,8 @@ describe("plugin session-event boundary", () => {
     const expectedTarget = await captureTarget();
     vi.resetModules();
     const { createRuntimeBase: createDuplicate } = await import("./runtime-base.js");
-    createDuplicate().system.enqueueSessionEvent("Completed", {
+    const { createRuntimeSystem: createDuplicateSystem } = await import("./runtime-system.js");
+    createDuplicate(createDuplicateSystem).system.enqueueSessionEvent("Completed", {
       ...address,
       expectedTarget,
     });

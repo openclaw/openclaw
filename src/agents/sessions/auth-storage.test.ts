@@ -625,9 +625,10 @@ describe("SQLite auth storage", () => {
   it("initializes detached in-memory credentials without a legacy reload warning", () => {
     const warn = vi.spyOn(sdkDeprecation, "warnPluginSdkDeprecation").mockImplementation(() => {});
     const credential = apiKey("synthetic-initial-key");
-    const storage = PublicAuthStorage.inMemory({ fixture: credential });
+    const storage = PublicAuthStorage.inMemory.call(undefined, { fixture: credential });
     credential.key = "synthetic-mutated-key";
 
+    expect(storage.constructor).toBe(PublicAuthStorage);
     expect(storage.get("fixture")).toEqual(apiKey("synthetic-initial-key"));
     expect(warn).not.toHaveBeenCalled();
 
@@ -640,10 +641,55 @@ describe("SQLite auth storage", () => {
     expect(storage.get("fixture")).toEqual(apiKey("synthetic-initial-key"));
   });
 
+  it("keeps detached SDK factories and default model paths on their public classes", async () => {
+    vi.stubEnv("OPENCLAW_AGENT_DIR", agentDir);
+    const auth = PublicAuthStorage.fromStorage.call(undefined, {
+      withLock: (read) => read(JSON.stringify({ fixture: apiKey("synthetic-sdk-key") })).result,
+      async withLockAsync() {
+        throw new Error("reading custom storage must not acquire an async write lock");
+      },
+    });
+    expect(auth.constructor).toBe(PublicAuthStorage);
+    expect(PublicAuthStorage.forAgent.call(undefined).constructor).toBe(PublicAuthStorage);
+    await expect(auth.getApiKey("fixture")).resolves.toBe("synthetic-sdk-key");
+
+    const contents = JSON.stringify({
+      providers: {
+        fixture: {
+          api: "openai-completions",
+          baseUrl: "https://models.example/v1",
+          models: [{ id: "fixture-model", name: "Fixture" }],
+        },
+      },
+    });
+    const modelsPath = path.join(agentDir, "models.json");
+    fs.writeFileSync(modelsPath, contents);
+    const options = { includePluginCatalogs: false };
+    const registries = [
+      PublicModelRegistry.create.call(undefined, auth, undefined, options),
+      await PublicModelRegistry.createAsync.call(undefined, auth, undefined, options),
+      PublicModelRegistry.fromCapturedSources.call(undefined, auth, modelsPath, {
+        ...options,
+        modelsJsonContents: contents,
+        pluginCatalogs: [],
+      }),
+    ];
+    for (const registry of registries) {
+      expect(registry.constructor).toBe(PublicModelRegistry);
+      expect(registry.find("fixture", "fixture-model")?.name).toBe("Fixture");
+      expect(registry.fork(auth).constructor).toBe(PublicModelRegistry);
+    }
+    expect(PublicModelRegistry.inMemory.call(undefined, auth).constructor).toBe(
+      PublicModelRegistry,
+    );
+  });
+
   it("merges async SDK writes and reloads committed peer changes without host SQLite", async () => {
     await withWorkerState("auth-async-sdk-", async () => {
-      const left = await PublicAuthStorage.forAgentAsync(agentDir);
+      vi.stubEnv("OPENCLAW_AGENT_DIR", agentDir);
+      const left = await PublicAuthStorage.forAgentAsync.call(undefined);
       const right = await PublicAuthStorage.forAgentAsync(agentDir);
+      expect(left.constructor).toBe(PublicAuthStorage);
       await withoutHostSql(async () => {
         await Promise.all([
           left.setAsync("openai", apiKey("synthetic-openai")),
@@ -762,7 +808,8 @@ describe("SQLite auth storage", () => {
 
   it("keeps AuthStorage.create(path) as a named SQLite-backed deprecation", () => {
     const legacyPath = path.join(agentDir, "auth.json");
-    const storage = AuthStorage.create(legacyPath);
+    const storage = PublicAuthStorage.create.call(undefined, legacyPath);
+    expect(storage.constructor).toBe(PublicAuthStorage);
     storage.set("openai", apiKey("fake-openai-key"));
 
     expect(stored("openai:default")).toMatchObject({

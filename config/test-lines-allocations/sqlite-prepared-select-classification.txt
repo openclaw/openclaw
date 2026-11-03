@@ -1,0 +1,2 @@
+# Prepared SELECT receipts, ignored SQL tails, callback writes, and batch mutation coverage.
+12

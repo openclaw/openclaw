@@ -53,6 +53,7 @@ import {
   captureSessionEventTarget,
   enqueueSessionEvent,
 } from "./runtime/runtime-session-events.js";
+import { createRuntimeSystem } from "./runtime/runtime-system.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import * as sdkAlias from "./sdk-alias.js";
 
@@ -121,12 +122,16 @@ it("keeps host config/state/system/model policy ownership across broad runtime l
         const resolveRuntime = vi.spyOn(sdkAlias, "resolvePluginRuntimeModulePathWithDiagnostics");
         let fullRuntime: typeof import("./runtime/index.js") | null = null;
         const nativeLoad = nativeModule.tryNativeRequireModule;
+        const systems = vi.fn(createRuntimeSystem);
         const factories = vi.fn(
           (...args: Parameters<typeof import("./runtime/index.js").createPluginRuntime>) =>
             fullRuntime!.createPluginRuntime(...args),
         );
         vi.spyOn(nativeModule, "tryNativeRequireModule").mockImplementation(
           (modulePath, options) => {
+            if (path.basename(modulePath) === "runtime-system.ts") {
+              return { ok: true, moduleExport: { createRuntimeSystem: systems } };
+            }
             if (modulePath === resolveRuntime.mock.results.at(-1)?.value?.resolvedPath) {
               if (!fullRuntime) {
                 throw new Error("broad runtime requested before state registration completed");
@@ -190,7 +195,9 @@ it("keeps host config/state/system/model policy ownership across broad runtime l
           config,
         });
         expect(fs.existsSync(path.join(root, "state", "state", "openclaw.sqlite"))).toBe(false);
-        expect(resolveRuntime).not.toHaveBeenCalled();
+        expect(resolveRuntime).toHaveBeenCalledTimes(1);
+        expect(systems).toHaveBeenCalledTimes(1);
+        expect(factories).not.toHaveBeenCalled();
         const runtime = getPluginRegistryRuntime(registry)!;
         const configApi = runtime.config;
         const refreshedConfig = { ...config, agents: { defaults: { workspace: "/refreshed" } } };
@@ -238,7 +245,7 @@ it("keeps host config/state/system/model policy ownership across broad runtime l
         ] as const) {
           expect(descriptors[key].get?.()).toBe(prepared);
         }
-        expect(resolveRuntime).not.toHaveBeenCalled();
+        expect(resolveRuntime).toHaveBeenCalledTimes(1);
         const program = new Command();
         await registry.cliRegistrars[0]!.register({
           program,
@@ -247,7 +254,7 @@ it("keeps host config/state/system/model policy ownership across broad runtime l
           workspaceDir: undefined,
           logger: { info() {}, warn() {}, error() {} },
         });
-        expect(resolveRuntime).not.toHaveBeenCalled();
+        expect(resolveRuntime).toHaveBeenCalledTimes(1);
         fullRuntime = await import("./runtime/index.js");
         await program.parseAsync(["state-proof"], { from: "user" });
         expect(JSON.parse(fs.readFileSync(observed, "utf8"))).toEqual({
@@ -255,7 +262,8 @@ it("keeps host config/state/system/model policy ownership across broad runtime l
           version: expect.any(String),
           row: { value: "retained" },
         });
-        expect(resolveRuntime).toHaveBeenCalledTimes(1);
+        expect(resolveRuntime).toHaveBeenCalledTimes(2);
+        expect(systems).toHaveBeenCalledTimes(1);
         expect(factories).toHaveBeenCalledTimes(1);
         expect(runtime.config).toBe(configApi);
         setRuntimeConfigSnapshot(config);
@@ -380,7 +388,7 @@ it("keeps host config/state/system/model policy ownership across broad runtime l
           expect(runtime[key]).toBeUndefined();
           expect(descriptor.get?.()).toBeUndefined();
         }
-        expect(resolveRuntime).toHaveBeenCalledTimes(1);
+        expect(resolveRuntime).toHaveBeenCalledTimes(2);
       } finally {
         drainSystemEvents("agent:main:prepared-runtime-system");
       }

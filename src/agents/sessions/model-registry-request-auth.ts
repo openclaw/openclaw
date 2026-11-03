@@ -2,11 +2,6 @@ import type { Model } from "../../llm/types.js";
 import { applyLocalNoAuthHeaders, resolveExplicitProviderNoAuth } from "../model-auth-markers.js";
 import type { AuthStorage } from "./auth-storage.js";
 import type { ProviderRequestConfig, ResolvedRequestAuth } from "./model-registry-sources.js";
-import {
-  resolveConfigValueOrThrow,
-  resolveConfigValueUncached,
-  resolveHeadersOrThrow,
-} from "./resolve-config-value.js";
 
 /** Resolves registry request auth after the registry has scoped the provider to this route. */
 export async function resolveModelRegistryRequestAuth(params: {
@@ -20,6 +15,10 @@ export async function resolveModelRegistryRequestAuth(params: {
     if (providerConfig?.auth === "native-command") {
       return { ok: false, error: "Native command auth requires the Codex runtime." };
     }
+    // Catalog availability checks never execute command credentials or headers.
+    // Load their standalone shell/config defaults only for request resolution.
+    const { resolveConfigValueOrThrow, resolveHeadersOrThrow } =
+      await import("./resolve-config-value.js");
     const noAuth = resolveExplicitProviderNoAuth({
       provider: model.provider,
       providerConfig: { auth: providerConfig?.auth },
@@ -99,7 +98,11 @@ export async function resolveModelRegistryProviderApiKey(params: {
     return apiKey;
   }
   const providerApiKey = params.readProviderConfig()?.apiKey;
-  return providerApiKey ? resolveConfigValueUncached(providerApiKey) : undefined;
+  if (!providerApiKey) {
+    return undefined;
+  }
+  const { resolveConfigValueUncached } = await import("./resolve-config-value.js");
+  return resolveConfigValueUncached(providerApiKey);
 }
 
 /** Registry availability describes host credentials, never a native runtime's command. */

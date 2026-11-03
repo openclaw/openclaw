@@ -181,8 +181,11 @@ export function canPreserveTransactionSnapshot(
 }
 
 export function classifySqliteMutation(sql: string, mode: "batch" | "statement") {
-  const schemaChange = changesSchema(sql);
-  const dataChange = changesData(sql);
+  // Native prepare compiles one statement; a SELECT body cannot contain SQL writes.
+  // Keep callback execution observed, but do not scan read payloads for mutation hints.
+  const select = mode === "statement" && /^SELECT\b/iu.test(sql.replace(sqlLeadingTrivia, ""));
+  const schemaChange = !select && changesSchema(sql);
+  const dataChange = !select && changesData(sql);
   const temporaryTableSchemaChange = schemaChange && changesOnlyTemporaryTable(sql);
   return {
     schemaChange,
@@ -191,6 +194,6 @@ export function classifySqliteMutation(sql: string, mode: "batch" | "statement")
     temporaryTableSchemaChange,
     dataChange,
     temporaryWriteTables: dataChange ? temporaryWriteTables(sql) : undefined,
-    control: readTransactionControl(sql, mode),
+    control: select ? undefined : readTransactionControl(sql, mode),
   };
 }

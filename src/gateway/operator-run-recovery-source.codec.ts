@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { GatewayOperatorRoleDefinitionSchema } from "../config/zod-schema.gateway.js";
+import { GatewayOperatorRoleDefinitionSchema } from "../config/zod-schema.gateway-roles.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import { userChannelAuthorizationReferenceSchema } from "../state/user-channel-authorization-reference.js";
 
