@@ -1,5 +1,6 @@
 import { createMemo, For, Loading, Show } from "solid-js";
 import type { SecretStoreEntry } from "../../../../packages/gateway-protocol/src/index.js";
+import { DialogHeader } from "../../components/solid/dialog-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
 import "../../components/modal-dialog.tsx";
@@ -253,8 +254,8 @@ function SecretDialog(props: {
       props.bulk
         ? "secretsStore.bulk"
         : props.view.state.dialogMode === "edit"
-          ? "secretsStore.edit"
-          : "secretsStore.add",
+          ? "secretsStore.editDialogTitle"
+          : "secretsStore.addDialogTitle",
     );
   const close = () => {
     const bulk = props.bulk;
@@ -268,23 +269,23 @@ function SecretDialog(props: {
       onModal-cancel={close}
     >
       <form
-        class="secrets-store-dialog"
+        class="oc-dialog secrets-store-dialog"
         aria-busy={props.view.busy ? "true" : "false"}
         onSubmit={(event) => {
           event.preventDefault();
           props.view.onSubmit(Boolean(props.bulk));
         }}
       >
-        <div class="secrets-store-dialog__header">
-          <h2>{title()}</h2>
+        <DialogHeader title={title()} closeDisabled={props.view.busy} onClose={close} />
+        <div class="oc-dialog__body">
+          {props.children}
+          <Show when={props.view.state.formError}>
+            <div class="callout danger" role="alert">
+              {props.view.state.formError}
+            </div>
+          </Show>
         </div>
-        {props.children}
-        <Show when={props.view.state.formError}>
-          <div class="callout danger" role="alert">
-            {props.view.state.formError}
-          </div>
-        </Show>
-        <openclaw-modal-actions class="secrets-store-dialog__actions">
+        <openclaw-modal-actions class="oc-dialog__footer">
           <button class="btn" type="button" disabled={props.view.busy} onClick={close}>
             {t("common.cancel")}
           </button>

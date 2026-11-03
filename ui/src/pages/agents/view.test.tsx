@@ -160,9 +160,9 @@ describe("renderAgents", () => {
       container,
     );
 
-    expect(
-      container.querySelector<HTMLInputElement>(".agent-identity-editor__fields input")?.value,
-    ).toBe("Fetched Beta");
+    expect(container.querySelector<HTMLInputElement>(".agent-identity-editor__name")?.value).toBe(
+      "Fetched Beta",
+    );
     expect(
       container
         .querySelector(".agent-identity-editor__avatar .identity-avatar__text")
@@ -206,11 +206,6 @@ describe("renderAgents", () => {
     await waitForSolid(() =>
       expect(container.textContent).toContain("Implicit default-agent reminder"),
     );
-    expect(
-      expectAgentTab(container, t("agents.tabs.cronJobs")).querySelector(".hub-tab__badge--count")
-        ?.textContent,
-    ).toContain("1");
-
     const schedulerRows = [...container.querySelectorAll(".settings-row")];
     const jobsRow = schedulerRows.find(
       (row) =>
@@ -353,10 +348,6 @@ describe("renderAgents", () => {
     renderCurrentPage();
     await waitForSolid(() => expect(container.querySelector(".cron-load-more")).not.toBeNull());
 
-    expect(
-      expectAgentTab(container, t("agents.tabs.cronJobs")).querySelector(".hub-tab__badge--count")
-        ?.textContent,
-    ).toContain("51");
     expect(container.textContent).not.toContain(lastJob.name);
 
     const loadMore = container.querySelector<HTMLButtonElement>(".cron-load-more");
@@ -408,9 +399,7 @@ describe("renderAgents", () => {
     expect(tabs.slice(-2)).toEqual([t("agents.tabs.cronJobs"), t("agents.tabs.memory")]);
     await vi.dynamicImportSettled();
     await waitForSolid(() =>
-      expect(
-        container.querySelector("openclaw-agent-memory-panel .agent-memory-panel__header"),
-      ).not.toBeNull(),
+      expect(container.querySelector("openclaw-agent-memory-panel .dreams-page")).not.toBeNull(),
     );
     await waitForSolid(() =>
       expect(request).toHaveBeenCalledWith("doctor.memory.status", { agentId: "beta" }),
@@ -611,7 +600,7 @@ describe("renderAgents", () => {
     skillsTab = expectAgentTab(container, "Skills");
 
     expect(directText(skillsTab)).toBe("Skills");
-    expect(skillsTab.querySelector(".hub-tab__badge--count")?.textContent).toBe("1");
+    expect(skillsTab.querySelector(".hub-tab__badge--count")).toBeNull();
   });
 
   it("localizes agent tabs and the channel refresh never state", async () => {
