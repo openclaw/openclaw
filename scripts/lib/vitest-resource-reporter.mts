@@ -119,6 +119,53 @@ export default class VitestResourceReporter implements Reporter {
         hookTimeout: ctx.config.hookTimeout,
         retry: ctx.config.retry,
       },
+      graphConfiguration:
+        ctx.config.name === "unit-fast" &&
+        ctx.vite.config.configFile ===
+          path.join(this.repositoryRoot, "test/vitest/vitest.unit-fast.config.ts")
+          ? {
+              files: [
+                ctx.vite.config.configFile,
+                ...ctx.vite.config.configFileDependencies,
+                ...ctx.config.setupFiles,
+                ...[ctx.config.globalSetup].flat(),
+              ],
+              settings: {
+                exclude: ctx.config.exclude,
+                pool: ctx.config.pool,
+                isolate: ctx.config.isolate,
+                maxWorkers: ctx.config.maxWorkers,
+                maxConcurrency: ctx.config.maxConcurrency,
+                testTimeout: ctx.config.testTimeout,
+                hookTimeout: ctx.config.hookTimeout,
+                retry: ctx.config.retry,
+                environment: ctx.config.environment,
+                environmentOptions: ctx.config.environmentOptions,
+                setupFiles: ctx.config.setupFiles,
+                globalSetup: ctx.config.globalSetup,
+                runner: ctx.config.runner,
+                execArgv: ctx.config.execArgv,
+                globals: ctx.config.globals,
+                env: ctx.config.env,
+                clearMocks: ctx.config.clearMocks,
+                mockReset: ctx.config.mockReset,
+                restoreMocks: ctx.config.restoreMocks,
+                unstubGlobals: ctx.config.unstubGlobals,
+                unstubEnvs: ctx.config.unstubEnvs,
+                sequence: {
+                  hooks: ctx.config.sequence.hooks,
+                  setupFiles: ctx.config.sequence.setupFiles,
+                  shuffle: ctx.config.sequence.shuffle,
+                  concurrent: ctx.config.sequence.concurrent,
+                  seed: ctx.config.sequence.shuffle ? ctx.config.sequence.seed : null,
+                },
+                resolve: ctx.vite.config.resolve,
+                define: ctx.vite.config.define,
+                esbuild: ctx.vite.config.esbuild,
+                plugins: ctx.vite.config.plugins.map((plugin) => plugin.name),
+              },
+            }
+          : undefined,
     });
     this.dependencyRoot = path
       .relative(this.repositoryRoot, ctx.config.root)

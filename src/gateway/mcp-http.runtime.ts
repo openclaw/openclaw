@@ -336,9 +336,6 @@ async function constructMcpLoopbackTools(
   if (includeNodeExecTool) {
     excludeToolNames.delete("exec");
   }
-  const skillWorkshop = params.skillLibraryAuthoring
-    ? { libraryAuthoring: params.skillLibraryAuthoring }
-    : undefined;
   const scopeOptions: Parameters<typeof resolveGatewayScopedTools>[0] = {
     ...context,
     messageActionTurnCapability: params.messageActionTurnCapability,
@@ -347,7 +344,7 @@ async function constructMcpLoopbackTools(
     cfg: params.cfg,
     authProfileStore: params.authProfileStore,
     onYield: params.onYield,
-    skillWorkshop,
+    skillLibraryAuthoring: params.skillLibraryAuthoring,
     bundledTools: params.bundledTools,
     nativeCronCreatorToolAllowlist: context.nativeCronCreatorToolAllowlist ?? undefined,
     agentDir: params.authProfileStoreAgentDir,

@@ -764,7 +764,7 @@ suite.define(() => {
       await page.getByRole("button", { name: /(?:Remove|Uninstall) Workboard/iu }).click();
       await page.getByRole("dialog").waitFor();
       await page
-        .locator(".exec-approval-actions")
+        .locator("openclaw-modal-actions")
         .getByRole("button", { name: "Remove", exact: true })
         .click();
       await gateway.waitForRequest("plugins.uninstall", { after: uninstallCount });
@@ -836,6 +836,9 @@ suite.define(() => {
       await advancedTitles.getByText("Plugin system enabled", { exact: true }).waitFor();
       await advancedTitles.getByText("Allowed plugin IDs", { exact: true }).waitFor();
       await advancedTitles.getByText("Blocked plugin IDs", { exact: true }).waitFor();
+      for (const closed of await page.locator("details.cfg-object:not([open]) > summary").all()) {
+        await closed.click();
+      }
       await advancedTitles.getByText("Additional plugin load paths", { exact: true }).waitFor();
       await expect
         .poll(() =>

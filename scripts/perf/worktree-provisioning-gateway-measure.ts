@@ -35,6 +35,7 @@ import {
   measureGatewayCpuUsage,
   readGatewayCpuUsage,
   readGatewayHeapProfile,
+  startGatewayDiagnostics,
 } from "../lib/gateway-bench-profile.ts";
 import {
   BASE_GATEWAY_BENCH_CONFIG,
@@ -196,6 +197,9 @@ try {
     scopes: ["operator.read", "operator.write", "operator.admin"],
     caps: [],
   });
+  const concurrentKey = `agent:main:provision-probe-${randomUUID()}`;
+  await rpc("sessions.create", { key: concurrentKey, agentId: "main", worktree: false });
+  await rpc("chat.history", { sessionKey: concurrentKey, limit: 1 });
   const rows = [];
   for (let index = values["skip-warmup"] ? 1 : 0; index <= samples; index++) {
     const loadBefore = loadavg();
@@ -207,17 +211,37 @@ try {
     if (profile) {
       await controlGatewayProfile(gateway, profile, "start", profilePath, {
         includeCollectedObjects: true,
+        includeWorkers: true,
       });
     }
     const cpuBefore = await readGatewayCpuUsage(gateway);
+    const stopDiagnostics = profile ? undefined : await startGatewayDiagnostics(gateway);
+    const concurrentRpcMs: number[] = [];
+    const probeController = new AbortController();
+    const probeSession = (async () => {
+      while (!probeController.signal.aborted) {
+        const sent = performance.now();
+        await rpc("chat.history", { sessionKey: concurrentKey, limit: 1 });
+        concurrentRpcMs.push(performance.now() - sent);
+        await delay(50);
+      }
+    })();
     const started = performance.now();
-    const record = await rpc("worktrees.create", {
-      repoRoot: repo,
-      baseRef: "HEAD",
-      name: `measure-${randomUUID()}`,
-    });
-    const elapsedMs = performance.now() - started;
+    let record: unknown;
+    let elapsedMs: number;
+    try {
+      record = await rpc("worktrees.create", {
+        repoRoot: repo,
+        baseRef: "HEAD",
+        name: `measure-${randomUUID()}`,
+      });
+    } finally {
+      elapsedMs = performance.now() - started;
+      probeController.abort();
+      await probeSession;
+    }
     const cpu = measureGatewayCpuUsage(cpuBefore, await readGatewayCpuUsage(gateway));
+    const diagnostics = await stopDiagnostics?.();
     if (profile) {
       await controlGatewayProfile(gateway, profile, "stop", profilePath);
     }
@@ -226,6 +250,8 @@ try {
       warmup: index === 0,
       elapsedMs,
       cpu,
+      concurrentRpcMs,
+      diagnostics,
       loadBefore,
       loadAfter: loadavg(),
       ...(profile === "heap"

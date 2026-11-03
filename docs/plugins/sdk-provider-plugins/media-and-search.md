@@ -354,5 +354,9 @@ merging a nested value such as voice settings.
     one-argument implementations remain valid; OpenClaw rejects late fetch
     results after cancellation before publishing them to its fetch cache.
 
+    Forward the same signal to `resolveCitationRedirectUrl(url, signal)` when
+    enriching search citations. Caller cancellation rejects with its original
+    reason; ordinary redirect failures and timeouts keep the original URL.
+
   </Tab>
 </Tabs>
