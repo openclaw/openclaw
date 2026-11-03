@@ -12,6 +12,7 @@ import {
   writeFakeContainerExecutable,
   writeFakeSystemdScope,
 } from "./container-engine.scope.test-support.js";
+import { bindPodmanSandboxEngine } from "./podman-runtime.js";
 
 vi.mock("../../process/linux-exec-cgroup.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../process/linux-exec-cgroup.js")>()),
@@ -26,12 +27,12 @@ afterEach(() => {
 it.skipIf(process.platform === "win32").for([
   {
     name: "bound local Podman",
-    engine: { ...PODMAN_SANDBOX_ENGINE, globalArgs: [] },
+    engine: bindPodmanSandboxEngine({ key: "local", globalArgs: [] }),
     scoped: true,
   },
   {
     name: "captured local Podman",
-    engine: { ...PODMAN_SANDBOX_ENGINE, globalArgs: [] },
+    engine: bindPodmanSandboxEngine({ key: "local", globalArgs: [] }),
     scoped: true,
     captured: true,
   },
@@ -44,19 +45,19 @@ it.skipIf(process.platform === "win32").for([
   { name: "Docker", engine: DOCKER_SANDBOX_ENGINE, scoped: false },
   {
     name: "undelegated Podman",
-    engine: { ...PODMAN_SANDBOX_ENGINE, globalArgs: [] },
+    engine: bindPodmanSandboxEngine({ key: "local", globalArgs: [] }),
     scoped: false,
     delegated: false,
   },
   {
     name: "rootful Podman",
-    engine: { ...PODMAN_SANDBOX_ENGINE, globalArgs: [] },
+    engine: bindPodmanSandboxEngine({ key: "local", globalArgs: [] }),
     scoped: false,
     uid: 0,
   },
   {
     name: "non-Linux Podman",
-    engine: { ...PODMAN_SANDBOX_ENGINE, globalArgs: [] },
+    engine: bindPodmanSandboxEngine({ key: "local", globalArgs: [] }),
     scoped: false,
     platform: "darwin",
   },

@@ -24,6 +24,7 @@ import hashlib, json, os, pathlib, sys, time
 root = pathlib.Path(${JSON.stringify(state)})
 calls = pathlib.Path(${JSON.stringify(calls)})
 args = sys.argv[1:]
+if args[:1] == ['--remote=false']: args = args[1:]
 if args[:1] == ['--url']: args = args[2:]
 op = args[0]
 def event(phase):
