@@ -238,7 +238,7 @@ export function renderPluginSettingsDetail(props: DetailProps): JSX.Element {
       ) : !plugin()?.installed ? (
         <SettingsPage carapace={true}>
           <a
-            class="btn btn--sm oc-action oc-action-secondary"
+            class="btn btn--sm oc-action oc-action-secondary plugins-settings-back"
             href={props.backHref}
             onClick={(event) => {
               event.preventDefault();

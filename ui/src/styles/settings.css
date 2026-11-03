@@ -760,6 +760,18 @@ openclaw-appearance-background .settings-background-preview .session-background_
   margin-inline: auto -6px;
 }
 
+.settings-disclosure__summary {
+  list-style: none;
+}
+
+.settings-disclosure__summary::-webkit-details-marker {
+  display: none;
+}
+
+.settings-disclosure[open] > .settings-disclosure__summary .settings-disclosure__chevron {
+  transform: rotate(90deg);
+}
+
 .settings-row {
   display: flex;
   align-items: center;
@@ -1881,6 +1893,222 @@ textarea.settings-input {
   }
 }
 
+.standing-grants-table td.mono {
+  overflow-wrap: anywhere;
+}
+
+/* The footnote starts where the log rows' text does, at every width. */
+openclaw-approvals-page .data-table-pagination {
+  border-top: 0;
+  padding-inline: calc(var(--space-1) + var(--space-2));
+}
+
+/* Phone widths stack this bar and center its items. */
+openclaw-approvals-page .data-table-pagination__info {
+  margin-inline-end: auto;
+  text-align: start;
+}
+
+/* Approval history is a log: scan the request, its outcome and when; open one
+   entry to investigate it. Collapsed rows all share one height. */
+.approval-log {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: var(--space-1);
+  list-style: none;
+  container: approval-log / inline-size;
+}
+
+.approval-log__summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px var(--space-3);
+  align-items: baseline;
+  width: 100%;
+  padding: var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.45;
+  text-align: start;
+  cursor: var(--cursor-action);
+}
+
+.approval-log__summary:hover {
+  background: color-mix(in srgb, var(--text) var(--surface-hover-amount), transparent);
+}
+
+.approval-log__request {
+  grid-column: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The open row wraps the request in place instead of repeating it below. */
+[aria-expanded="true"] > .approval-log__request {
+  overflow: visible;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  user-select: text;
+}
+
+.approval-log__meta {
+  display: flex;
+  grid-column: 1 / -1;
+  gap: var(--space-3);
+  align-items: center;
+  min-width: 0;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.approval-log__meta .settings-status {
+  min-width: 0;
+}
+
+.approval-log__meta .settings-status > :last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.approval-log__meta time {
+  flex: none;
+}
+
+.approval-log__chevron {
+  display: inline-flex;
+  grid-area: 1 / 2;
+  align-self: start;
+  align-items: center;
+  height: 1.45em;
+  color: var(--muted);
+  transition: transform var(--duration-fast) var(--ease-out);
+}
+
+.approval-log__chevron svg {
+  width: 14px;
+  height: 14px;
+}
+
+[aria-expanded="true"] > .approval-log__chevron {
+  transform: rotate(90deg);
+}
+
+.approval-log__details {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2) var(--space-3);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.approval-log__details dl {
+  display: grid;
+  grid-template-columns: 5.5rem minmax(0, 1fr);
+  gap: var(--space-1) var(--space-2);
+  margin: 0;
+}
+
+.approval-log__details dl > div {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+}
+
+.approval-log__details dt {
+  color: var(--muted);
+}
+
+.approval-log__details dd {
+  margin: 0;
+}
+
+/* The green dot and "Always allow" already say it was allowed. */
+@container approval-log (max-width: 320px) {
+  .approval-log__allowed {
+    display: none;
+  }
+}
+
+@container approval-log (min-width: 640px) {
+  .approval-log__summary {
+    grid-template-columns: minmax(0, 1fr) 11rem 8rem auto;
+  }
+
+  .approval-log__meta {
+    display: contents;
+  }
+
+  .approval-log__meta .settings-status {
+    grid-column: 2;
+  }
+
+  .approval-log__meta time {
+    grid-column: 3;
+    text-align: end;
+    color: var(--muted);
+  }
+
+  .approval-log__chevron {
+    grid-area: 1 / 4;
+  }
+}
+
+/* Each grant is one exact command with one action, so the whole command stays
+   visible and nothing hides behind a disclosure. */
+.standing-grants {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: var(--space-1);
+  list-style: none;
+}
+
+.standing-grants__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px var(--space-4);
+  padding: var(--space-2);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.45;
+}
+
+.standing-grants__automation,
+.standing-grants__command,
+.standing-grants__meta {
+  grid-column: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.standing-grants__command {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font-size: inherit;
+}
+
+.standing-grants__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--space-3);
+  color: var(--muted);
+}
+
+.standing-grants__revoke {
+  grid-area: 1 / 2 / span 3;
+  align-self: start;
+}
+
 /* Quiet-hours details stay connected to their toggle without changing row controls. */
 .quiet-hours-window .settings-row {
   padding-top: 0;
@@ -2073,30 +2301,49 @@ textarea.settings-input {
 }
 
 .settings-sidebar__subitem {
+  padding-block: 4px;
+}
+
+.settings-sidebar__subitem-text {
   display: flex;
-  align-items: center;
-  min-height: 28px;
-  margin-inline-start: 24px;
-  padding: 0 9px;
-  border-radius: var(--radius-sm);
-  color: var(--text);
+  flex-direction: column;
+  min-width: 0;
 }
 
 .settings-sidebar__subitem:hover {
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  background: var(--surface-hover);
 }
 
 .settings-sidebar__subitem--active {
   color: var(--text-strong);
-  background: color-mix(in srgb, var(--accent-subtle) 72%, transparent);
+  background: var(--surface-selected);
 }
 
-.settings-sidebar__subitem-label {
-  font-size: calc(12.5px * var(--control-ui-text-scale));
-  font-weight: 500;
+.settings-sidebar__subitem--active:hover {
+  background: var(--surface-selected-hover);
+}
+
+/* One selected row: the section you jumped to, not it and its page. */
+.settings-sidebar__item--active:not(:hover):has(~ .settings-sidebar__subitem--active) {
+  background: transparent;
+}
+
+.settings-sidebar__subitem-label,
+.settings-sidebar__subitem-page {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.settings-sidebar__subitem-label {
+  font-size: calc(13px * var(--control-ui-text-scale));
+  font-weight: 500;
+}
+
+.settings-sidebar__subitem-page {
+  color: var(--muted);
+  font-size: calc(11.5px * var(--control-ui-text-scale));
+  opacity: 0.8;
 }
 
 .settings-sidebar__footer {

@@ -160,3 +160,13 @@ it.each(["missing_credential", "expired"] as const)(
     );
   },
 );
+
+it("hands the accent to an open API key form", () => {
+  const editable = card({ id: "example", displayName: "Example", catalogStatus: "ready" });
+  const viewProps = props({ cards: [editable], configuredModels: [] });
+  const container = mount(viewProps);
+  const connect = () => container.querySelector("[data-model-readiness] .btn") as HTMLButtonElement;
+  expect(connect().classList.contains("primary")).toBe(true);
+  mount({ ...viewProps, keyEditorProvider: "example" }, container);
+  expect(connect().classList.contains("primary")).toBe(false);
+});
