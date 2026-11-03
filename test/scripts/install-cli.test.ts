@@ -160,6 +160,28 @@ describe("install-cli.sh", () => {
     expect(result.stdout).not.toContain("unexpected-node-install");
   });
 
+  it("creates every prefix level privately without changing existing parents before downloading Node", () => {
+    const root = tempDirs.make("openclaw-install-cli-umask-");
+    const prefix = join(root, "nested", "state");
+    chmodSync(root, 0o775);
+    const result = runInstallCliShell(
+      `
+      umask 0002
+      os_detect() { echo linux; }; arch_detect() { echo x64; }
+      is_musl_linux() { return 1; }; linked_node_is_usable() { return 1; }
+      detect_downloader() { :; }; download_file() { echo download-unavailable >&2; return 1; }
+      main --node-only --prefix "$FIXTURE_PREFIX"
+    `,
+      { FIXTURE_PREFIX: prefix },
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("download-unavailable");
+    expect(lstatSync(root).mode & 0o777).toBe(0o775);
+    for (const directory of [join(root, "nested"), prefix, join(prefix, "tools")]) {
+      expect(lstatSync(directory).mode & 0o777, directory).toBe(0o700);
+    }
+  });
+
   it.each([
     { tempBase: "directory", downloadFails: false },
     { tempBase: "file", downloadFails: true },
@@ -1156,9 +1178,11 @@ fi
     const root = tempDirs.make("openclaw-install-cli-broken-npm-");
     const bad = join(root, "bad");
     const good = join(root, "good");
-    const prefix = join(root, "prefix");
+    const prefix = join(root, "nested", "prefix");
     mkdirSync(bad);
     mkdirSync(good);
+    chmodSync(root, 0o775);
+    writeFileSync(join(good, "package.json"), '{"type":"commonjs"}\n');
     symlinkSync(nodeExecutable, join(bad, "node"));
     writeShell(join(bad, "npm"), 'printf "%s\\n" "$*" >> "$BAD_NPM_LOG"\nexit 42');
     writeShell(
@@ -1178,16 +1202,29 @@ fi
     const result = runInstallCliShell(
       `
       export PATH="$FIXTURE_PATH"
+      umask 0002
       PREFIX="$FIXTURE_PREFIX"
       try_link_usable_node_runtime_from_path
+      printf 'umask=%s\n' "$(umask)"
     `,
       { ...logs, FIXTURE_PATH: `${bad}:${good}:${process.env.PATH ?? ""}`, FIXTURE_PREFIX: prefix },
     );
     expect(result.status).toBe(0);
+    expect(result.stdout).toContain("umask=0002");
+    expect(lstatSync(root).mode & 0o777).toBe(0o775);
     expect(readFileSync(logs.BAD_NPM_LOG, "utf8")).toBe("--version\n");
     expect(readFileSync(logs.GOOD_NPM_LOG, "utf8")).toBe("--version\n");
     expect(readFileSync(logs.GOOD_NODE_LOG, "utf8")).toContain("npm --version");
     const bin = join(prefix, "tools", "node-v24.22.1", "bin");
+    for (const directory of [
+      join(root, "nested"),
+      prefix,
+      join(prefix, "tools"),
+      join(prefix, "tools", "node-v24.22.1"),
+      bin,
+    ]) {
+      expect(lstatSync(directory).mode & 0o777, directory).toBe(0o700);
+    }
     expect(lstatSync(join(bin, "node")).isSymbolicLink()).toBe(true);
     for (const tool of ["node", "npm"]) {
       expect(readlinkSync(join(bin, tool))).toBe(join(good, tool));

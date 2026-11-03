@@ -1,10 +1,13 @@
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
+import * as sqliteCopy from "./sqlite-file-copy.js";
 import {
   inspectSqliteSchemaHeaderInProcess,
   prepareSqliteReadOnlyCopyInProcess,
@@ -176,6 +179,77 @@ describe("stable read-only snapshot copies", () => {
     expect(fs.readdirSync(fixture.stagingRoot)).toEqual([]);
     for (const { suffix, bytes } of family.filter((file) => file.suffix !== "-shm")) {
       expect(fs.readFileSync(fixture.sourcePath + suffix)).toEqual(bytes);
+    }
+  });
+
+  it("does not recopy a stable WAL family when a reader creates its wal-index", async () => {
+    const fixture = createFixture(Buffer.alloc(0));
+    fs.rmSync(fixture.sourcePath);
+    const { DatabaseSync } = requireNodeSqlite();
+    let family: Buffer[];
+    {
+      const db = new DatabaseSync(fixture.sourcePath);
+      try {
+        db.exec(`
+          PRAGMA journal_mode=WAL;
+          PRAGMA wal_autocheckpoint=0;
+          CREATE TABLE probe(value TEXT);
+          INSERT INTO probe VALUES ('retained in WAL');
+        `);
+        family = ["", "-wal"].map((suffix) => fs.readFileSync(fixture.sourcePath + suffix));
+      } finally {
+        // Closing checkpoints and removes the WAL; restore the captured bytes below.
+        db.close();
+      }
+    }
+    fs.rmSync(`${fixture.sourcePath}-shm`, { force: true });
+    for (const [index, suffix] of ["", "-wal"].entries()) {
+      fs.writeFileSync(fixture.sourcePath + suffix, family[index]!);
+    }
+    expect(fs.existsSync(`${fixture.sourcePath}-shm`)).toBe(false);
+    const copy = sqliteCopy.copySqliteFile;
+    let mainCopies = 0;
+    vi.spyOn(sqliteCopy, "copySqliteFile").mockImplementation(async (...args) => {
+      const result = await copy(...args);
+      if (args[0] === fixture.sourcePath && ++mainCopies === 1) {
+        const probe = spawnSync(
+          resolveTestNodeExecPath(),
+          [
+            "--input-type=module",
+            "-e",
+            `
+        import { DatabaseSync } from 'node:sqlite';
+        using db = new DatabaseSync(process.argv[1], { readOnly: true });
+        process.stdout.write(JSON.stringify(db.prepare('SELECT value FROM probe').all()));
+      `,
+            fixture.sourcePath,
+          ],
+          { encoding: "utf8" },
+        );
+        expect(probe.status, probe.stderr).toBe(0);
+        expect(JSON.parse(probe.stdout)).toEqual([{ value: "retained in WAL" }]);
+      }
+      return result;
+    });
+    const prepared = await prepareSqliteReadOnlyCopyInProcess(
+      fixture.sourcePath,
+      fixture.stagingRoot,
+    );
+    try {
+      const copied = new DatabaseSync(prepared.location, { readOnly: true });
+      try {
+        expect(copied.prepare("SELECT value FROM probe").all()).toEqual([
+          { value: "retained in WAL" },
+        ]);
+      } finally {
+        copied.close();
+      }
+      expect(["", "-wal"].map((suffix) => fs.readFileSync(fixture.sourcePath + suffix))).toEqual(
+        family!,
+      );
+      expect(mainCopies).toBe(1);
+    } finally {
+      prepared.cleanup();
     }
   });
 

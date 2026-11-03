@@ -144,11 +144,15 @@ function readySnapshot(
   uptimeMs = FIVE_MIN_MS,
   extra: Record<string, unknown> = {},
 ): Record<string, unknown> {
-  return { ready: true, failing: [], uptimeMs, ...extra };
+  return { ready: true, coreReady: true, failing: [], uptimeMs, ...extra };
 }
 
-function failingSnapshot(failing: string[], uptimeMs = FIVE_MIN_MS): Record<string, unknown> {
-  return { ready: false, failing, uptimeMs };
+function failingSnapshot(
+  failing: string[],
+  uptimeMs = FIVE_MIN_MS,
+  coreReady = false,
+): Record<string, unknown> {
+  return { ready: false, coreReady, failing, uptimeMs };
 }
 
 describe("createReadinessChecker", () => {
@@ -244,7 +248,7 @@ describe("createReadinessChecker", () => {
       });
 
       pluginReload = undefined;
-      expect(readiness()).toEqual(failingSnapshot(["discord"]));
+      expect(readiness()).toEqual(failingSnapshot(["discord"], FIVE_MIN_MS, true));
     });
   });
 
@@ -277,7 +281,9 @@ describe("createReadinessChecker", () => {
           shouldSkipChannelReadiness: () => skipChannels,
           getAgentDatabaseAdmissionRefusals: () => refusals,
         });
-        const channelReadiness = channelFailed ? failingSnapshot(["discord"]) : readySnapshot();
+        const channelReadiness = channelFailed
+          ? failingSnapshot(["discord"], FIVE_MIN_MS, true)
+          : readySnapshot();
         expect(readiness()).toEqual(channelReadiness);
 
         refusals = [pending];
@@ -373,7 +379,7 @@ describe("createReadinessChecker", () => {
           }),
         },
       });
-      expect(readiness()).toEqual(failingSnapshot(["slack"]));
+      expect(readiness()).toEqual(failingSnapshot(["slack"], FIVE_MIN_MS, true));
     });
   });
 
@@ -389,7 +395,7 @@ describe("createReadinessChecker", () => {
           }),
         },
       });
-      expect(readiness()).toEqual(failingSnapshot(["discord"], 30_000));
+      expect(readiness()).toEqual(failingSnapshot(["discord"], 30_000, true));
     });
   });
 
@@ -464,7 +470,7 @@ describe("createReadinessChecker", () => {
           }),
         },
       });
-      expect(readiness()).toEqual(failingSnapshot(["discord"]));
+      expect(readiness()).toEqual(failingSnapshot(["discord"], FIVE_MIN_MS, true));
     });
   });
 
@@ -514,7 +520,7 @@ describe("createReadinessChecker", () => {
       );
       vi.setSystemTime(Date.now() - 60_000);
 
-      expect(readiness()).toEqual(failingSnapshot(["discord"], FIVE_MIN_MS - 60_000));
+      expect(readiness()).toEqual(failingSnapshot(["discord"], FIVE_MIN_MS - 60_000, true));
       expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(2);
     });
   });

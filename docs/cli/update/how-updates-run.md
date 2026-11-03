@@ -700,7 +700,10 @@ inspection, followed by service start
 in `restarting`. Update verification does not use model inference. In `verifying`,
 the updater checks that the managed service is running and owns its port, requires
 the normal 12-check health settle and a Gateway hello handshake matching the
-expected version and Git build identity, and requires HTTP 200 from `/readyz`.
+expected version and Git build identity, and verifies HTTP liveness and core readiness.
+A channel-only HTTP 503 can complete with a warning when the detailed `/readyz`
+response explicitly reports `coreReady: true`; ordinary service-start checks
+still require full readiness.
 Plugin activation or load failures remain named warnings
 when these core checks pass; they do not turn a successful core update into an error.
 Channel probe errors, timeouts, and stopped or suppressed channels become named
@@ -1118,11 +1121,25 @@ is running; the new CLI cannot fix the old CLI's pre-update inspection.
 #### Node runtime for package-manager updates
 
 Package-manager updates normally keep using the Node binary recorded in the
-managed service. If that Node cannot run the target release, but the current
-CLI Node can and the service is proven to belong to the package being updated,
-a restart-enabled update uses the current Node for finalization and rewrites
-the service metadata to that runtime. `--no-restart` cannot repair service
-metadata, so the same runtime mismatch stops before package mutation.
+managed service. If it cannot run the target release, a restart-enabled update
+can select an existing compatible Node only after verifying the owned service
+and its permission to refresh the definition. Otherwise the update refuses
+before staging or migration and names the runtime and recovery steps.
+`--no-restart` does not authorize a service runtime change. Changing the shell's
+Node alone does not change an absolute Node path in the service unit.
+
+For an installation already updated with an unsupported service Node, run
+`openclaw doctor --fix` under a supported Node. Doctor can refresh the runtime
+of a verified owned service, keeping a backup and preserving native settings
+and unrelated systemd drop-ins. This includes a drop-in whose
+`EnvironmentFile=-%t/...` supplies unrelated environment variables. A drop-in
+that overrides the launcher or PATH must be repaired by its owner; Doctor
+leaves it unchanged and identifies the unit to inspect with `systemctl --user cat`.
+
+Explicit saved runtime pins remain operator choices. To replace an unsupported
+pin, run `openclaw gateway install --force --runtime node --runtime-path /path/to/supported/node`
+from the intended installation and profile. Preserve operator overrides; the
+installer cannot repair a conflicting drop-in by rewriting the base unit.
 
 #### macOS LaunchAgent verification
 

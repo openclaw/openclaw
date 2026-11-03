@@ -6,7 +6,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createNodeProxyAgent } from "../infra/net/node-proxy-agent.js";
 import { registerManagedProxyGatewayLoopbackBypass } from "../infra/net/proxy/proxy-lifecycle.js";
 
-const GATEWAY_HTTP_PROBE_MAX_RESPONSE_CHARS = 1024;
+const GATEWAY_HTTP_PROBE_MAX_RESPONSE_CHARS = 64 * 1024;
 const directHttpAgent = new HttpAgent({ keepAlive: false });
 // Do not reuse sockets or TLS sessions: certificate renewal must expose the
 // listener's current certificate to the pin check on every local probe.
@@ -108,8 +108,12 @@ async function requestGatewayLocalHttpProbe(params: {
         res.setEncoding("utf8");
         res.on("data", (chunk: string) => {
           if (body.length + chunk.length > GATEWAY_HTTP_PROBE_MAX_RESPONSE_CHARS) {
+            finish({
+              statusCode: res.statusCode ?? 0,
+              body: "",
+              ...(tlsFingerprint ? { tlsFingerprint } : {}),
+            });
             res.destroy();
-            finish(null);
             return;
           }
           body += chunk;

@@ -72,7 +72,8 @@ import {
   formatGatewayServiceRepairPreview,
   reportGatewayServiceConfigAudit,
   hasRepairableServiceDefinitionDrift,
-  isOperatorOwnedEnvironmentIssue,
+  canRepairRuntime,
+  isOperatorOwnedServiceIssue,
   isPreservedLaunchdTimeoutWarning,
   isServiceDefinitionOnlyRepair,
   isServiceInstallationOnlyRepair,
@@ -259,13 +260,14 @@ export async function maybeRepairGatewayServiceConfig(
   const serviceRepairPolicy = resolveServiceRepairPolicy();
   const serviceRepairDeferred = isServiceRepairDeferred(serviceRepairPolicy);
 
+  const platform = process.platform;
   const service = resolveGatewayService();
   const command = await service.readCommand(process.env).catch(() => null);
   if (!command) {
     const audit = await auditGatewayServiceConfig({
       env: process.env,
       command: null,
-      platform: process.platform,
+      platform,
     });
     reportServiceDefinitionDrift(audit);
     if (audit.issues.length > 0) {
@@ -355,6 +357,7 @@ export async function maybeRepairGatewayServiceConfig(
     expectedPlan.environment,
   );
   const audit = await auditGatewayServiceConfig({
+    platform,
     env: process.env,
     command,
     expectedGatewayToken,
@@ -364,11 +367,6 @@ export async function maybeRepairGatewayServiceConfig(
     ...(installationDrift ? { expectedCommand: expectedPlan } : {}),
   });
   reportServiceDefinitionDrift(audit);
-  const definitionRepair =
-    !installationDrift &&
-    Boolean(expectedRoot) &&
-    !expectedLayout?.entrypointSourceCheckout &&
-    hasRepairableServiceDefinitionDrift(audit);
   if (audit.runtimeNote) {
     note(audit.runtimeNote, "Gateway runtime");
   }
@@ -386,7 +384,7 @@ export async function maybeRepairGatewayServiceConfig(
     !hasInstallWrapper && !activeRuntimePin && needsNodeRuntimeMigration(audit.issues);
   // Unusable runtimes and version-managed Node services migrate through a concrete system Node.
   const systemNodeInfo = needsNodeRuntime
-    ? await resolveSystemNodeInfo({ env: process.env })
+    ? await resolveSystemNodeInfo({ env: process.env, platform })
     : null;
   const systemNodePath = systemNodeInfo?.status === "supported" ? systemNodeInfo.path : null;
   if (needsNodeRuntime && !systemNodePath && runtimeChoice !== "node") {
@@ -397,7 +395,7 @@ export async function maybeRepairGatewayServiceConfig(
     );
   }
 
-  const expectedRuntimePlan =
+  const repairPlan =
     needsNodeRuntime && systemNodePath
       ? await buildExpectedGatewayServicePlan({
           cfg,
@@ -428,9 +426,7 @@ export async function maybeRepairGatewayServiceConfig(
     }
   }
   const runtimeLayout =
-    expectedRuntimePlan === expectedPlan
-      ? expectedLayout
-      : await summarizeGatewayServiceLayout(expectedRuntimePlan);
+    repairPlan === expectedPlan ? expectedLayout : await summarizeGatewayServiceLayout(repairPlan);
   if (
     runtimeLayout?.entrypointReal &&
     serviceLayout?.entrypointReal &&
@@ -443,6 +439,20 @@ export async function maybeRepairGatewayServiceConfig(
       level: "recommended",
     });
   }
+
+  const runtimeRepair = await canRepairRuntime(
+    audit,
+    command,
+    repairPlan,
+    expectedLayout,
+    platform,
+  );
+  const definitionRepair =
+    !runtimeRepair &&
+    !installationDrift &&
+    Boolean(expectedRoot) &&
+    !expectedLayout?.entrypointSourceCheckout &&
+    hasRepairableServiceDefinitionDrift(audit);
 
   const serviceRewriteBlock = installationDrift
     ? undefined
@@ -476,7 +486,7 @@ export async function maybeRepairGatewayServiceConfig(
       (audit.definitionDriftError !== undefined ||
         audit.definitionDrift?.some((finding) => finding.kind === "unknown-edit") === true));
 
-  if (needsAggressive && !prompter.shouldForce) {
+  if (needsAggressive && !prompter.shouldForce && !runtimeRepair) {
     note(
       "Custom or unexpected service edits detected. Rerun with --force to overwrite.",
       "Gateway service config",
@@ -501,13 +511,13 @@ export async function maybeRepairGatewayServiceConfig(
   }
 
   if (
-    process.platform === "linux" &&
+    platform === "linux" &&
     audit.issues.some(
       (issue) =>
         (isExecStartRepairIssue(issue) && hasGatewayServiceLauncherOverride(command)) ||
         (issue.code === SERVICE_AUDIT_CODES.gatewayPortMismatch &&
           hasGatewayServiceLauncherOverride(command, { includeWorkingDirectory: false })) ||
-        isOperatorOwnedEnvironmentIssue(issue, command, expectedPlan.environmentValueSources),
+        isOperatorOwnedServiceIssue(issue, command, expectedPlan.environmentValueSources),
     )
   ) {
     const unitName = resolveSystemdUnitNameFromServicePath(command.sourcePath);
@@ -531,23 +541,24 @@ export async function maybeRepairGatewayServiceConfig(
     formatGatewayServiceRepairPreview({
       command,
       managedDefinition,
-      plan: expectedRuntimePlan,
+      plan: repairPlan,
       currentLayout: serviceLayout,
       plannedLayout: runtimeLayout,
-      missingSystemNode: needsNodeRuntime && !systemNodePath,
+      missingSystemNode: needsNodeRuntime && !systemNodePath && !runtimeRepair,
       definitionDrift: audit.definitionDrift,
     });
   note(preview, "Gateway service repair preview");
   const repair = await prompter.confirmRuntimeRepair({
     message: needsConfigWrite
       ? "Preserve the Gateway token in the secret store, write its SecretRef to config, and reinstall the service now?"
-      : needsAggressive
+      : needsAggressive && !runtimeRepair
         ? "Overwrite gateway service config with the repair shown above now?"
         : "Apply the gateway service repair shown above now?",
     initialValue: needsConfigWrite ? false : needsAggressive ? prompter.shouldForce : true,
     requiresInteractiveConfirmation:
       needsConfigWrite ||
       (!(installationDrift && isServiceInstallationOnlyRepair(audit)) &&
+        !runtimeRepair &&
         !(definitionRepair && isServiceDefinitionOnlyRepair(audit))),
   });
   if (!repair) {
@@ -570,7 +581,7 @@ export async function maybeRepairGatewayServiceConfig(
     // both before token persistence; native publication still revalidates under locks.
     for (const environment of [
       mergeGatewayServiceEnv(serviceInstallEnv, command),
-      expectedRuntimePlan.environment,
+      repairPlan.environment,
     ]) {
       const capability = await service
         .readDefinitionMutationCapability?.({ env: serviceInstallEnv, environment })
@@ -642,7 +653,8 @@ export async function maybeRepairGatewayServiceConfig(
               kind: "config",
               ...(expectedRoot &&
               !expectedLayout?.entrypointSourceCheckout &&
-              audit.definitionDrift?.some((finding) => finding.kind === "preserved")
+              (runtimeRepair ||
+                audit.definitionDrift?.some((finding) => finding.kind === "preserved"))
                 ? { root: expectedRoot }
                 : {}),
             },

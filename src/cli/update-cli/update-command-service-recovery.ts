@@ -38,6 +38,7 @@ import {
   assertOriginalServiceStateCompatible,
   revalidateOriginalManagedServiceRuntime,
 } from "./update-command-original-service.js";
+import { POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON } from "./update-command-post-plugin-validation.js";
 import {
   observeUpdateGatewayReadiness,
   verifyPreviousGatewayForUpdate,
@@ -228,12 +229,19 @@ export async function admitInstalledGatewayRecovery(
   }
   const settlement = result.steps.findLast((step) => step.name === "doctor process settlement");
   const databaseRollback = result.steps.findLast((step) => step.name === "database rollback");
-  // Current-core maintenance has no package rollback, but still owns its Doctor park.
+  // Current-core maintenance owns its Doctor park even after a normal child exit,
+  // which needs no cancellation settlement receipt. Only an exited post-plugin Doctor
+  // reports failure facts here, after its process custody settles; data-at-risk
+  // refusals are thrown instead and still refuse recovery.
+  const plugins = result.postUpdate?.plugins;
   const currentCore =
     params.coreAlreadyCurrent === true &&
     !params.packageTransaction &&
     result.status === "error" &&
-    settlement !== undefined;
+    (settlement !== undefined ||
+      (plugins?.status === "error" &&
+        plugins.reason === POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON &&
+        (plugins.failureFacts?.length ?? 0) > 0));
   if (
     (!currentCore && result.reason !== "state-migrated-no-rollback") ||
     (params.coreAlreadyCurrent && result.recovery?.serviceRestartSafe === false) ||
@@ -241,7 +249,8 @@ export async function admitInstalledGatewayRecovery(
     !params.shouldRestart ||
     !params.preManagedServiceStop?.stopped ||
     databaseRollback?.exitCode === 0 ||
-    (!settlement && !databaseRollback) ||
+    // Normal current-core Doctor completion needs no settlement receipt.
+    (!currentCore && !settlement && !databaseRollback) ||
     (result.recovery?.serviceRestartSafe === false &&
       result.recovery.reason === "source-rollback-failed")
   ) {

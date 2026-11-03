@@ -109,6 +109,7 @@ if (args.includes("--fix")) {
         selection: { kind: "explicit-tmpdir", directory: stateDir },
       },
       cleanupDirectories: [],
+      prepareRuntime: async (assertCurrent) => assertCurrent(),
       cleanup: async () => {},
     });
     const options = { env: { OPENCLAW_STATE_DIR: path.join(root, "ledger") } };

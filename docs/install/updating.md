@@ -68,6 +68,40 @@ recorded.
 
 **Updates always work** (`openclaw update` finishes best effort everywhere). Changes to update, Doctor, service lifecycle, migrations, plugin loading: state their update behavior. Installed updater runs first, can't be patched; candidate fixes key on markers shipped drivers set; existing operator state = input. Recoverable hiccups → recorded warnings; back up before mutating, let rollback restore it; refuse only for named data risk with previous Gateway kept running. Timeouts and budgets: generous, derived from measured state, sized for slow hardware. Proof: published-driver × candidate cell.
 
+Stopped update and Doctor database snapshots tolerate concurrent read-only SQLite
+probes. The transient `-shm` WAL index is rebuilt privately, never copied or used
+to detect durable changes. Empty WAL files created by readers count as absent.
+Changes to the main database, WAL data, or rollback journal still refuse the
+stopped backup and identify the changed file. This repair must
+be present in the runtime performing the snapshot, including the candidate worker
+when the installed updater delegates capture to it.
+
+Channel outages are warnings once the expected Gateway build is running and its
+core readiness is verified. Detailed `/readyz` responses report `coreReady`
+separately while preserving HTTP 503, `ready: false`, and failing channel names.
+Update history retains those channel and HTTP facts. Startup, state and agent
+database admission, and plugin-replacement failures still prevent
+core readiness; an older HTTP 503 without explicit core proof remains unverified.
+Run `openclaw channels status --probe` to investigate channel warnings. This
+requires the repaired installed updater; a new candidate cannot change the
+checks of an updater already running.
+
+Package verification checks file hashes, sizes, and required executability. When
+a non-executable dist file gains execute bits, verification continues with one
+warning listing the affected file count, provided it has no group/world write or
+setuid/setgid/sticky bits. Other permission differences retain their existing
+behavior, including owner-only recovery modes. File permissions are left
+unchanged. Missing required executability, changed content, and unsafe file types
+still fail verification. The installed updater must contain this fix; a newer
+candidate cannot change an older updater's package verification.
+
+When an updater stops a macOS LaunchAgent, it waits for both launchd's process
+and the verified serving Gateway child to exit before continuing. An unloaded
+job or a closed listener does not prove that the child has released its agent
+databases. Pending process cleanup produces a warning and shares the existing
+bounded stop deadline; other processes using the state still receive Doctor's
+maintenance refusal. The updater performing the stop must contain this fix.
+
 This retention covers Node and Bun late imports, including CommonJS dependencies
 and JSON. Module state already loaded by the updater stays shared through cleanup;
 imports outside that retained generation continue using the active installation.
@@ -612,9 +646,13 @@ installed-checkout check during candidate builds.
 The canary uses a temporary loopback Gateway port and suppresses background
 listeners, including the MCP Apps sandbox, browser control, and channel services.
 This lets validation run while the serving Gateway keeps its configured ports.
-It preserves non-secret Gateway auth settings such as `gateway.auth.rateLimit`
-for policy checks, while using a temporary token and disabling Tailscale identity
-authentication.
+Doctor and policy checks use the copied deployment settings, so an accepted
+policy attestation remains valid for an unchanged deployment. Only after these
+checks finish does the canary apply its temporary token, disable Tailscale and
+Control UI, and suppress background services for Gateway startup. Genuine policy
+drift still fails validation; no attestation pin is changed or skipped. The updater
+running the rehearsal must contain this fix; a newer candidate cannot undo
+configuration overrides already applied by an older updater.
 Doctor omits the onboarding URL warning derived from that temporary loopback
 binding during rehearsal; other findings remain visible.
 The activated Gateway retains your normal listener settings. Candidate startup

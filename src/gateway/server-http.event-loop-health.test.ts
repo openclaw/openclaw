@@ -69,6 +69,7 @@ describe("Gateway HTTP event-loop sampling", () => {
             }
             return {
               ready: true,
+              coreReady: true,
               failing: [],
               uptimeMs: clock.clock.now(),
               eventLoop: monitor.snapshot(),

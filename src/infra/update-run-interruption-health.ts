@@ -3,6 +3,7 @@ import {
   type GatewayRestartCleanup,
   type GatewayRestartDeadline,
 } from "../cli/daemon-cli/restart-health-deadline.js";
+import { getGatewayChannelWarnings } from "../cli/daemon-cli/restart-health-diagnostics.js";
 import {
   resolveGatewayRestartProbeContext,
   waitForGatewayHttpReadiness,
@@ -29,6 +30,7 @@ export type InterruptedUpdateGatewayObservation = {
   phase: string;
   waitOutcome?: GatewayRestartWaitOutcome;
   verification?: UpdateRunRecord["verification"];
+  channelWarnings?: string[];
   cleanup?: GatewayRestartCleanup;
   timeout?: { elapsedMs: number; phase: string };
 };
@@ -77,6 +79,7 @@ export async function observeInterruptedUpdateGateway(
       expectedVersion: candidate.version,
       expectedBuildId: candidate.buildId,
       requirePluginHealth: true,
+      requireChannelHealth: false,
     };
     const inspect = (phase: string) =>
       deadline.read(phase, () => inspectGatewayRestart({ ...probe, phase }));
@@ -99,6 +102,7 @@ export async function observeInterruptedUpdateGateway(
     }
     const http = await deadline.read("reconciliation:http", () =>
       waitForGatewayHttpReadiness({
+        requireChannelHealth: false,
         config: context.config,
         port,
         attempts: 1,
@@ -111,8 +115,7 @@ export async function observeInterruptedUpdateGateway(
     const inspected = await inspect("reconciliation:inspect-before");
     const after = await inspect("reconciliation:inspect-after");
     if (
-      http.healthz !== 200 ||
-      http.readyz !== 200 ||
+      !(http.coreReady ?? (http.healthz === 200 && http.readyz === 200)) ||
       !servingMatches(after) ||
       !servingMatches(inspected) ||
       !isSameGatewayRestartGeneration(before, inspected) ||
@@ -124,6 +127,7 @@ export async function observeInterruptedUpdateGateway(
     deadline.signal.throwIfAborted();
     return {
       ...result("settled"),
+      channelWarnings: getGatewayChannelWarnings(after, http).map(({ id }) => id),
       verification: {
         booted: true,
         serviceRunning: true,
@@ -132,9 +136,10 @@ export async function observeInterruptedUpdateGateway(
         runningVersion: candidate.version,
         runningBuildId: candidate.buildId,
         versionMatch: true,
-        readyz: true,
+        readyz: http.readyz === 200,
+        ...(http.coreReady !== undefined ? { coreReady: http.coreReady } : {}),
         settled: true,
-        channelsReady: true,
+        channelsReady: http.readyz === 200 && getGatewayChannelWarnings(after, http).length === 0,
         pluginErrors: after.activatedPluginErrors?.map((error) => JSON.stringify(error)) ?? [],
       },
     };

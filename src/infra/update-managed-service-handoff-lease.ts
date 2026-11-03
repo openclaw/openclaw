@@ -109,7 +109,8 @@ export async function prepareManagedHandoffLeaseStore(
     options.databasePath,
     options.existingIdentity,
   );
-  return createLeaseStore(options, logger, database);
+  // Original acquisition must retain the writer's admitted path across Windows aliases.
+  return createLeaseStore({ ...options, databasePath: database.databasePath }, logger, database);
 }
 
 function createLeaseStore(

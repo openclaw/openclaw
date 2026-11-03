@@ -112,7 +112,8 @@ async function inspectRestorableDatabaseFiles(
 ) {
   const identities = new Map<string, BigIntStats>();
   for (const database of databases) {
-    for (const suffix of ["", "-wal", "-shm", "-journal"]) {
+    // Readers rebuild the transient WAL index; only durable files fence capture.
+    for (const suffix of ["", "-wal", "-journal"]) {
       const file = `${database}${suffix}`;
       let info;
       try {
@@ -127,6 +128,10 @@ async function inspectRestorableDatabaseFiles(
         throw new Error(
           `Update database rollback requires a regular file with one link: ${file}. Resolve database aliases before retrying; the databases have not been migrated.`,
         );
+      }
+      // A reader-created empty WAL carries no durable changes.
+      if (suffix === "-wal" && info.size === 0n) {
+        continue;
       }
       const before = previous?.get(file);
       if (
@@ -144,7 +149,10 @@ async function inspectRestorableDatabaseFiles(
     (identities.size !== previous.size ||
       [...identities.keys()].some((file) => !previous.has(file)))
   ) {
-    throw new Error("Update database journal state changed during stopped backup.");
+    const changed = [...new Set([...identities.keys(), ...previous.keys()])].find(
+      (file) => identities.has(file) !== previous.has(file),
+    );
+    throw new Error(`Update database journal state changed during stopped backup: ${changed}.`);
   }
   return identities;
 }

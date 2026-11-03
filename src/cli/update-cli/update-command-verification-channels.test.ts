@@ -21,8 +21,12 @@ import { recordUpdatePackageCompletion } from "./update-command-terminal.js";
 import { verifyUpdatedGateway } from "./update-command-verification.js";
 
 let server: Server;
-async function listen() {
-  server = createServer((_req, res) => res.writeHead(200).end());
+async function listen(readiness?: { ready: false; coreReady?: boolean; failing: string[] }) {
+  server = createServer((req, res) =>
+    res
+      .writeHead(req.url === "/readyz" && readiness ? 503 : 200)
+      .end(readiness ? JSON.stringify(readiness) : undefined),
+  );
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const address = server.address();
@@ -144,6 +148,53 @@ describe("update repair channel warnings", () => {
         expect(report).toContain("openclaw health --json");
       }
       expect(report).not.toContain("restart remains unsafe");
+    },
+  );
+
+  it.each([true, false, undefined])(
+    "completes an update during a channel outage only with core readiness (%s)",
+    async (coreReady) => {
+      const service = makeGatewayService({ status: "running", pid: 8000 });
+      service.isLoaded = vi.fn(async () => true);
+      vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(service);
+      inspectPortUsage.mockImplementation(async (port) => ({
+        port,
+        status: "busy",
+        listeners: [{ pid: 8000 }],
+        hints: [],
+      }));
+      callGateway.mockImplementation(
+        gatewayHealthResponse({
+          server: { version: "2026.10.3", buildId: "candidate", bootId: "candidate-boot" },
+          health: { channels: { telegram: { configured: true, running: false } } },
+        }),
+      );
+      const result: UpdateRunResult = {
+        status: "ok",
+        mode: "npm",
+        after: { version: "2026.10.3", buildId: "candidate" },
+        steps: [],
+        durationMs: 0,
+      };
+      const validation = await verifyUpdatedGateway({
+        result,
+        opts: { json: true },
+        serviceEnv: { HOME: "/synthetic-home" },
+        gatewayPort: await listen({ ready: false, coreReady, failing: ["telegram"] }),
+        expectedVersion: "2026.10.3",
+        expectedBuildId: "candidate",
+        purpose: "recovery",
+        waitForStartup: false,
+      });
+      expect(validation.ok).toBe(coreReady === true);
+      expect(result.verification).toMatchObject({ readyz: false, channelsReady: false });
+      if (coreReady === true) {
+        expect(result.steps[0]).toMatchObject({ exitCode: 0 });
+        expect(renderUpdateRunReport(updateRunReportInputFromResult(result)).markdown).toContain(
+          "telegram",
+        );
+        expect(result.verification).toMatchObject({ coreReady: true, settled: true });
+      }
     },
   );
 

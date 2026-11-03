@@ -399,6 +399,26 @@ describe("update run ledger", () => {
       }
     },
   );
+  it("confirms channel-only outages without inheriting a stale core proof", () => {
+    const options = isolatedOptions();
+    const run = createUpdateRun({ trigger: "cli" }, options);
+    recordUpdateRunVerification(run.runId, { coreReady: true }, options);
+    const facts = {
+      serviceRunning: true,
+      versionMatch: true,
+      settled: true,
+      pluginErrors: [],
+      readyz: false,
+      channelsReady: false,
+    };
+    expect(recordUpdateRunVerification(run.runId, facts, options).confirmedAtMs).toBeNull();
+    recordUpdateRunVerification(run.runId, { ...facts, coreReady: true }, options);
+    expect(getUpdateRun(run.runId, options)).toMatchObject({
+      confirmedAtMs: expect.any(Number),
+      verification: { ...facts, coreReady: true },
+    });
+  });
+
   it("keeps a terminal result unchanged for running-only boot observations", () => {
     const status = "failed";
     const options = isolatedOptions();

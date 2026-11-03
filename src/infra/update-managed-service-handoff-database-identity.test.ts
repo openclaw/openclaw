@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as fileLocks from "./file-lock-sync.js";
 import {
   assertManagedUpdateLeaseDatabaseIdentity,
   captureManagedUpdateLeaseDatabaseIdentity,
@@ -88,9 +89,13 @@ it.each(["prepare", "create"] as const)(
   },
 );
 
-it.skipIf(process.platform === "win32").each([false, true])(
-  "preserves original admission through a prepared parent (aliased ancestor=%s)",
-  async (aliased) => {
+it.skipIf(process.platform === "win32").each([
+  { aliased: false, retainsOrdinaryAlias: false },
+  { aliased: true, retainsOrdinaryAlias: false },
+  { aliased: true, retainsOrdinaryAlias: true },
+])(
+  "preserves original admission through a prepared parent (%o)",
+  async ({ aliased, retainsOrdinaryAlias }) => {
     const directory = fs.realpathSync(dirs.make("handoff-original-parent-"));
     const root = path.join(directory, "install");
     const parent = path.join(directory, "private");
@@ -100,6 +105,20 @@ it.skipIf(process.platform === "win32").each([false, true])(
     fs.symlinkSync(directory, alias, "dir");
     const databasePath = path.join(aliased ? alias : directory, "private", "handoffs.sqlite");
     const canonical = path.join(parent, "handoffs.sqlite");
+    if (retainsOrdinaryAlias) {
+      const ordinaryRealpath = fs.realpathSync;
+      // Windows S4U can retain a short TEMP spelling while native Root expands it.
+      vi.spyOn(fs, "realpathSync").mockImplementation((...args) => {
+        const resolved = ordinaryRealpath(...args);
+        return args[0] === databasePath && typeof resolved === "string" ? databasePath : resolved;
+      });
+      fs.realpathSync.native = ordinaryRealpath.native;
+    }
+    const acquireLock = fileLocks.acquireFileLockSyncWithRetry;
+    // Keep genuine self-contention deterministic without waiting for the retry budget.
+    vi.spyOn(fileLocks, "acquireFileLockSyncWithRetry").mockImplementation((file, options) =>
+      acquireLock(file, { ...options, timeoutMs: 0 }),
+    );
     const store = await prepareManagedHandoffLeaseStore({
       databasePath,
       serviceManagerEnv: process.env,

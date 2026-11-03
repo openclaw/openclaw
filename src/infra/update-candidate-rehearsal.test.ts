@@ -16,17 +16,42 @@ const { registerPolicyDoctorChecks } = await loadBundledPluginFacade<{
 }>({ pluginId: "policy", artifactBasename: "api.ts" });
 
 it.each(["token", "password"] as const)(
-  "preserves policy rate limits while isolating %s authentication",
+  "preserves attested config and policy for %s authentication",
   async (mode) => {
     const root = tempDirs.make("candidate-policy-");
     await materializeUpdateCandidateStateWorker(root);
     const policyPath = path.join(root, "policy.jsonc");
     await fs.writeFile(
       policyPath,
-      JSON.stringify({ gateway: { auth: { requireAuth: true, requireExplicitRateLimit: true } } }),
+      JSON.stringify({
+        gateway: { auth: { requireAuth: true, requireExplicitRateLimit: true } },
+        dataHandling: { sensitiveLogging: { requireRedaction: true } },
+        secrets: { allowInsecureProviders: true },
+      }),
     );
     const config: OpenClawConfig = {
-      plugins: { entries: { policy: { enabled: true, config: { path: policyPath } } } },
+      plugins: {
+        entries: {
+          policy: {
+            enabled: true,
+            config: {
+              path: policyPath,
+              expectedAttestationHash:
+                mode === "token"
+                  ? "sha256:4fdc3e88ded7ecdfcdec09f8b30be01337df919cf9e51211e92a7a4d664ae545"
+                  : "sha256:ede6e4f088dd6d2177dc3e8bbafcc80388a051381fc75301f01d42fef9d42218",
+            },
+          },
+        },
+      },
+      diagnostics: {
+        enabled: true,
+        otel: {
+          enabled: true,
+          captureContent: true,
+          headers: { Authorization: "synthetic-otel-secret", "X-Reference": "${OTEL_SECRET}" },
+        },
+      },
       gateway: {
         bind: "lan",
         port: 18789,
@@ -70,21 +95,19 @@ it.each(["token", "password"] as const)(
       const result = await lint(copied, rehearsal.configPath);
       expect(result.findings).toEqual([]);
       expect(exitCodeFromFindings(result.findings)).toBe(0);
-      expect(copied.gateway).toMatchObject({
-        bind: "loopback",
-        port: rehearsal.port,
-        trustedProxies: config.gateway?.trustedProxies,
-        auth: {
-          mode: "token",
-          rateLimit: config.gateway?.auth?.rateLimit,
-          identityScopes: config.gateway?.auth?.identityScopes,
-          trustedProxy: config.gateway?.auth?.trustedProxy,
-          allowTailscale: false,
+      expect(copied.gateway).toEqual({
+        ...config.gateway,
+        auth: { ...config.gateway?.auth, token: expect.any(String) },
+      });
+      expect(copied.gateway?.auth?.token).not.toBe(config.gateway?.auth?.token);
+      expect(copied.diagnostics).toEqual({
+        ...config.diagnostics,
+        otel: {
+          ...config.diagnostics?.otel,
+          headers: { Authorization: expect.any(String), "X-Reference": "${OTEL_SECRET}" },
         },
       });
-      expect(copied.gateway?.auth?.token).toEqual(expect.any(String));
-      expect(copied.gateway?.auth?.token).not.toBe(config.gateway?.auth?.token);
-      expect(copied.gateway?.auth?.password).toBeUndefined();
+      expect(copied.diagnostics?.otel?.headers?.Authorization).not.toBe("synthetic-otel-secret");
       expect(rehearsal.env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
       expect(rehearsal.env.OPENCLAW_GATEWAY_PASSWORD).toBeUndefined();
       expect(config).toEqual(original);

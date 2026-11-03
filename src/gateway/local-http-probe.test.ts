@@ -83,6 +83,50 @@ test("probes local TLS directly under a managed proxy while enforcing its certif
   });
 });
 
+test("reads detailed channel outages and retains status when the body exceeds its bound", async () => {
+  let oversized = false;
+  const failing = Array.from({ length: 80 }, (_, index) => `channel-${index}-${"x".repeat(30)}`);
+  const server = createHttpServer((req, res) => {
+    res.writeHead(req.url === "/readyz" ? 503 : 200).end(
+      JSON.stringify({
+        ready: false,
+        coreReady: true,
+        failing,
+        ...(oversized ? { padding: "x".repeat(70_000) } : {}),
+      }),
+    );
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Expected an ephemeral TCP listener");
+  }
+  const observe = () =>
+    waitForGatewayHttpReadiness({
+      attempts: 1,
+      deadlineAt: performance.now() + 1000,
+      delayMs: 0,
+      port: address.port,
+      requireChannelHealth: false,
+    });
+  try {
+    expect(await observe()).toEqual({
+      healthz: 200,
+      readyz: 503,
+      coreReady: true,
+      failingChannels: failing,
+    });
+    oversized = true;
+    expect(await observe()).toEqual({ healthz: 200, readyz: 503, coreReady: false });
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
+  }
+});
+
 test("cancels pending readiness requests when the repair budget expires", async () => {
   const server = createHttpServer();
   server.listen(0, "127.0.0.1");

@@ -385,6 +385,7 @@ export async function readPackageDistContentInventoryIfPresent(
 
 export async function collectPackageDistContentInventoryErrors(
   packageRoot: string,
+  warnings?: string[],
 ): Promise<string[]> {
   const expected = await readPackageDistContentInventoryIfPresent(packageRoot);
   if (expected === null) {
@@ -393,5 +394,6 @@ export async function collectPackageDistContentInventoryErrors(
   return comparePackageDistContentInventory(
     expected,
     await collectPackageDistContentInventory(packageRoot),
+    warnings,
   );
 }

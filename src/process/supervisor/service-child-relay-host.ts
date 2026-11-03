@@ -625,14 +625,16 @@ export async function createServiceChildRelayAdapter(
         startup.promise,
         delivery?.deliverTo(child, { abortSignal: params.abortSignal }),
       ]);
-      const startupError = startupResult.status === "rejected" ? startupResult.reason : undefined;
-      const secretDeliveryError =
-        secretDeliveryResult.status === "rejected" ? secretDeliveryResult.reason : undefined;
       // Preserve admission failure over the secret pipe it closes as a consequence.
-      if (startupError !== undefined || secretDeliveryError !== undefined) {
-        throw startupError !== undefined
-          ? await joinStartupFailureCleanup(startupError, startupErrorAckDelivery, cleanup.promise)
-          : secretDeliveryError;
+      if (startupResult.status === "rejected") {
+        throw await joinStartupFailureCleanup(
+          startupResult.reason,
+          startupErrorAckDelivery,
+          cleanup.promise,
+        );
+      }
+      if (secretDeliveryResult.status === "rejected") {
+        throw secretDeliveryResult.reason;
       }
       if (params.input !== undefined && params.prepareInput) {
         await params.prepareInput();

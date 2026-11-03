@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
+import { rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -10,6 +12,7 @@ import { parseUpdateRecoveryBackupManifest } from "../commands/backup-verify-man
 import { AGENT_FTS_SCHEMAS } from "../state/openclaw-agent-fts-schema.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { admitOpenClawMaintenanceLiveAuthorityReads } from "../state/openclaw-state-maintenance-context.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as diskSpace from "./disk-space.js";
 import * as fileDescriptor from "./file-descriptor.js";
@@ -250,6 +253,93 @@ it.each(["", "-wal"])(
     expect(await fs.readdir(f.directory)).toEqual([]);
     expect(await fs.readFile(f.shared)).toEqual(before);
     expect((await fs.lstat(alias)).ino).toBe((await fs.lstat(source)).ino);
+  },
+);
+
+it.each([
+  "reader",
+  "reader-new-shm",
+  "reader-recreated-shm",
+  "reader-empty-wal",
+  "reader-recreated-empty-wal",
+  "wal-writer",
+  "checkpoint-writer",
+] as const)(
+  "captures WAL state with a concurrent %s without accepting writes",
+  async (activity) => {
+    const f = await fixture();
+    const files = [f.shared, `${f.shared}-wal`, `${f.shared}-shm`];
+    let before: Buffer[];
+    {
+      using database = new DatabaseSync(f.shared);
+      database.exec("PRAGMA journal_mode=WAL; INSERT INTO payload VALUES ('checkpoint pending');");
+      before = await Promise.all(files.map((file) => fs.readFile(file)));
+    }
+    if (activity === "reader-empty-wal" || activity === "reader-recreated-empty-wal") {
+      // A fully checkpointed WAL-mode database has no sidecars until a reader opens it.
+      before = [await fs.readFile(f.shared), Buffer.alloc(0)];
+      if (activity === "reader-recreated-empty-wal") {
+        await fs.writeFile(files[1]!, "");
+      }
+    } else {
+      // Retain WAL without a live native connection whose POSIX locks copying could release.
+      for (const [index, file] of files.entries()) {
+        if (activity !== "reader-new-shm" || index !== 2) {
+          await fs.writeFile(file, before[index]!);
+        }
+      }
+    }
+    const reader = activity.startsWith("reader");
+    const capture = createUpdateDatabaseBackupInProcess({
+      ...f.input,
+      inspectionPlan: f.inspectionPlan,
+      stopped: true,
+      onProgress: ({ phase, path: source }) => {
+        if (phase !== "pre-migration database backup" || source !== f.shared) {
+          return;
+        }
+        // A reader can recreate transient sidecars with a new inode after another connection closes.
+        if (activity === "reader-recreated-shm") {
+          rmSync(files[2]!, { force: true });
+        } else if (activity === "reader-recreated-empty-wal") {
+          rmSync(files[1]!, { force: true });
+        }
+        const probe = spawnSync(
+          resolveTestNodeExecPath(),
+          [
+            "--input-type=module",
+            "-e",
+            `
+        import { DatabaseSync } from 'node:sqlite';
+        const db = new DatabaseSync(process.argv[1], { readOnly: ${reader} });
+        ${reader ? "" : "db.exec(\"INSERT INTO payload VALUES ('external write')\");"}
+        ${activity === "checkpoint-writer" ? "db.exec('PRAGMA wal_checkpoint(TRUNCATE)');" : ""}
+        db.prepare('SELECT rowid,value FROM payload ORDER BY rowid').all();
+        process.exit(0);
+      `,
+            f.shared,
+          ],
+          { encoding: "utf8" },
+        );
+        expect(probe.status, probe.stderr).toBe(0);
+      },
+    });
+    if (!reader) {
+      // Writes are never accepted as a sealed generation.
+      await expect(capture).rejects.toThrow(
+        /Update database (?:file|journal state) changed during (?:stopped )?backup: .*openclaw\.sqlite(?:-wal)?\./u,
+      );
+      return;
+    }
+    const backup = await capture;
+    expect(await Promise.all(files.slice(0, 2).map((file) => fs.readFile(file)))).toEqual(
+      before.slice(0, 2),
+    );
+    using retained = new DatabaseSync(backup.databases[0]!.snapshotPath, { readOnly: true });
+    expect(retained.prepare("SELECT rowid,value FROM payload ORDER BY rowid").all()).toEqual([
+      { rowid: 42, value: "retained" },
+      { rowid: 43, value: "checkpoint pending" },
+    ]);
   },
 );
 

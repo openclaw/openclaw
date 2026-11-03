@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { readAgentRosterProperty } from "../agents/agent-roster.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { promoteConfigSnapshotToLastKnownGood, readConfigFileSnapshot } from "../config/config.js";
@@ -27,6 +27,58 @@ import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-su
 describe("Doctor workspace persistence", () => {
   afterEach(() => {
     closeOpenClawStateDatabaseForTest();
+  });
+
+  it("keeps a valid Kubernetes reseed without metadata and still recovers a later invalid config", async () => {
+    await withDoctorConfigPreflightHome(async (home) => {
+      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+        const configPath = await writeOpenClawConfig(home, {
+          gateway: { mode: "local", port: 19091 },
+          plugins: { enabled: false },
+        });
+        await runInitialConfigWriteHealth(await prepareDoctorContext(configPath));
+        const baseline = await readConfigFileSnapshot();
+        expect(await promoteConfigSnapshotToLastKnownGood(baseline)).toBe(true);
+        for (const suffix of [".bak", ".bak.1"]) {
+          await fs.copyFile(configPath, `${configPath}${suffix}`);
+        }
+        const { meta: _meta, ...reseeded } = JSON.parse(await fs.readFile(configPath, "utf8"));
+        reseeded.gateway.port = 19092;
+        const reseededRaw = JSON.stringify(reseeded, null, 2);
+        await fs.unlink(configPath);
+        await fs.writeFile(configPath, reseededRaw);
+
+        const ctx = await prepareDoctorContext(configPath);
+        expect(ctx.cfg.gateway?.port).toBe(19092);
+        expect(await fs.readFile(configPath, "utf8")).toBe(reseededRaw);
+        expect(await fs.readdir(path.dirname(configPath))).not.toEqual(
+          expect.arrayContaining([expect.stringContaining(".clobbered.")]),
+        );
+        // Gateway startup promotes the accepted config; the meta-less reseed must qualify.
+        expect(await promoteConfigSnapshotToLastKnownGood(await readConfigFileSnapshot())).toBe(
+          true,
+        );
+
+        const invalidRaw = '{ "gateway": { "mode": 123 } }';
+        await fs.writeFile(configPath, invalidRaw);
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        try {
+          const recovered = await prepareDoctorContext(configPath);
+          expect(recovered.cfg.gateway?.port).toBe(19092);
+          const clobbered = (await fs.readdir(path.dirname(configPath))).filter((name) =>
+            name.includes(".clobbered."),
+          );
+          expect(clobbered).toHaveLength(1);
+          const originalPath = path.join(path.dirname(configPath), clobbered[0]!);
+          expect(await fs.readFile(originalPath, "utf8")).toBe(invalidRaw);
+          const warnings = warn.mock.calls.flat().join("\n");
+          expect(warnings).toContain(originalPath);
+          expect(warnings).toContain("to undo, stop the Gateway and copy it back");
+        } finally {
+          warn.mockRestore();
+        }
+      });
+    });
   });
 
   it("refuses retired config until the bridge release migrates it", async () => {
