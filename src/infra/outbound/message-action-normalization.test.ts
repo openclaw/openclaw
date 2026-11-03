@@ -82,6 +82,12 @@ describe("normalizeMessageActionInput", () => {
       { target: "chat_id:42", to: "chat_id:42", chatId: 42 },
       [],
     ],
+    [makeInput("send", { target: "channel:C1", messageThreadId: 99 }), { threadId: "99" }, []],
+    [
+      makeInput("send", { target: "channel:C1", threadId: "99", messageThreadId: 99 }),
+      { threadId: "99" },
+      [],
+    ],
   ])("normalizes message action input for %j", (input, expected, absent) => {
     const normalized = normalizeMessageActionInput(input);
     expect(normalized).toMatchObject(expected);
@@ -139,6 +145,14 @@ describe("normalizeMessageActionInput", () => {
         },
       }),
     ).toThrow(/conflicting target and delivery alias/);
+  });
+
+  it("rejects conflicting thread id aliases", () => {
+    expect(() =>
+      normalizeMessageActionInput(
+        makeInput("send", { target: "channel:C1", threadId: "42", messageThreadId: "99" }),
+      ),
+    ).toThrow(/conflicting threadId and messageThreadId/);
   });
 
   it("allows a trusted direct operator to use an opaque resource without a conversation", () => {

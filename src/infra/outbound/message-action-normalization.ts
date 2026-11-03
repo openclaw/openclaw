@@ -1,6 +1,7 @@
 import {
   hasNonEmptyString,
   normalizeOptionalString,
+  normalizeOptionalStringifiedId,
 } from "@openclaw/normalization-core/string-coerce";
 import { isMessageToolSendActionName } from "../../agents/embedded-agent-messaging.js";
 import { resolveChannelMessageActionFacts } from "../../channels/plugins/message-action-names.js";
@@ -57,6 +58,18 @@ export function normalizeMessageActionInput(params: {
 }): Record<string, unknown> {
   const normalizedArgs = { ...params.args };
   const { action, toolContext } = params;
+  // Provider handlers may read `messageThreadId` before `threadId` (Telegram does). Fold
+  // it so cross-context policy, core delivery and the provider all judge one thread.
+  const threadAlias = normalizeOptionalStringifiedId(normalizedArgs.messageThreadId);
+  if (threadAlias) {
+    const threadId = normalizeOptionalStringifiedId(normalizedArgs.threadId);
+    if (threadId && threadId !== threadAlias) {
+      throw new Error(`Action ${action} received conflicting threadId and messageThreadId values.`);
+    }
+    if (!threadId) {
+      normalizedArgs.threadId = threadAlias;
+    }
+  }
   const explicitChannel = normalizeOptionalString(normalizedArgs.channel) ?? "";
   const inferredChannel =
     explicitChannel || normalizeMessageChannel(toolContext?.currentChannelProvider) || "";
