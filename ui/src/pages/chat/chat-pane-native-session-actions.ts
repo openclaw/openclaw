@@ -1,9 +1,6 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import {
-  resolveCloudWorkerStopAction,
-  sessionStopCopyKey,
-} from "../../components/cloud-worker-stop.ts";
+import { resolveCloudWorkerStopAction } from "../../components/cloud-worker-stop.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { registerSessionOrganizationSharedEnglish } from "../../i18n/locales/en-session-organization-shared.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
@@ -25,9 +22,10 @@ export class ChatPaneNativeSessionActions {
   ): HeaderMenuSessionAction[] {
     const enabled = context.nativeConversation?.supportsSessionActions;
     const pluginActions = enabled && row ? pluginSessionMenuActions(context.plugins, row) : [];
+    const stopAction = resolveCloudWorkerStopAction(row?.placement);
     const canStop = Boolean(
       enabled &&
-      resolveCloudWorkerStopAction(row?.placement) &&
+      stopAction &&
       isGatewayMethodAdvertised(context.gateway.snapshot, "sessions.reclaim"),
     );
     return this.memo.read(
@@ -35,7 +33,7 @@ export class ChatPaneNativeSessionActions {
         ...pluginActions.flatMap(({ id, label, disabled }) => [id, label, disabled]),
         canStop,
         row?.key,
-        row?.placement,
+        stopAction?.copyKey,
         context,
         stopDisabledReason,
         i18n.getLocale(),
@@ -49,11 +47,11 @@ export class ChatPaneNativeSessionActions {
           icon: "plug",
           onActivate: () => onAction({ kind: "plugin", id: action.id }),
         })),
-        ...(canStop
+        ...(canStop && stopAction
           ? [
               {
                 id: "stop-cloud-worker",
-                label: t(sessionStopCopyKey(row?.placement)),
+                label: t(stopAction.copyKey),
                 icon: "stop" as const,
                 variant: "danger" as const,
                 disabled: Boolean(stopDisabledReason),

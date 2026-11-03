@@ -93,7 +93,7 @@ it.each<[string, DialogAction]>([
       method: "sessions.reclaim" as const,
       requiredScope: "operator.write" as const,
       blocksActiveRun: true,
-      copyKey: "sessionsView.stopCloudWorker",
+      copyKey: "sessionsView.stopCloudWorker" as const,
     },
   };
   const failure = new Error("Synthetic dialog preparation failed");

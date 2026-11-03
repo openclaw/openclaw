@@ -2,10 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { requestCloudWorkerStop } from "../../components/cloud-worker-stop.runtime.ts";
-import {
-  resolveCloudWorkerStopAction,
-  sessionStopCopyKey,
-} from "../../components/cloud-worker-stop.ts";
+import { resolveCloudWorkerStopAction } from "../../components/cloud-worker-stop.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import {
   confirmWithBoundAutomations,
@@ -360,8 +357,8 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
     const scope = captureRequestScope();
     if (
       !scope ||
-      !(await confirmMutation(t(`${sessionStopCopyKey(row.placement)}Description`), {
-        title: t(`${sessionStopCopyKey(row.placement)}Confirm`, { session: label }),
+      !(await confirmMutation(t(`${stopAction.copyKey}Description`), {
+        title: t(`${stopAction.copyKey}Confirm`, { session: label }),
         confirmLabel: t("sessionsView.stopCloudWorkerConfirmAction"),
         signal: scope.signal,
       })) ||
