@@ -166,9 +166,14 @@ function WorkspaceContents(props: { workspace: SessionWorkspaceProps }) {
     const artifacts = workspace.list?.artifacts ?? [];
     const browser = workspace.list?.browser;
     const entries = browser?.entries ?? [];
-    const search = foldSearchCase(normalizeOptionalString(workspace.browserSearch) ?? "");
+    // Canonically equivalent names may arrive in either Unicode form; compare on NFC.
+    const search = foldSearchCase(normalizeOptionalString(workspace.browserSearch) ?? "").normalize(
+      "NFC",
+    );
     const matches = (...values: (string | undefined)[]) =>
-      values.some((value) => value !== undefined && foldSearchCase(value).includes(search));
+      values.some(
+        (value) => value !== undefined && foldSearchCase(value).normalize("NFC").includes(search),
+      );
     const modified = files.filter((file) => file.kind === "modified");
     const readFiles = files.filter((file) => file.kind === "read");
     const filters = [

@@ -346,6 +346,24 @@ describe("session workspace path actions", () => {
     expect(fileNames(mount)).toEqual([`ui${separator}index.ts`]);
   });
 
+  it("matches NFD macOS browser paths against NFC browser search queries", async () => {
+    // macOS stores file paths in NFD; users type in NFC. Without canonical
+    // normalization the includes() check misses across the two forms.
+    const nfdPath = "src/resume\u0301.md".normalize("NFD");
+    const nfcQuery = "resum\u00e9".normalize("NFC");
+    expect(nfdPath).not.toContain(nfcQuery); // sanity: NFD and NFC forms differ
+    const workspace = createWorkspace({
+      list: {
+        files: [],
+        root: "/synthetic/project",
+        browser: { path: "", entries: [{ kind: "file", name: nfdPath.slice(4), path: nfdPath }] },
+      },
+    });
+    workspace.browserSearch = nfcQuery;
+    const { container: mounted } = await mountWorkspace(workspace);
+    expect(mounted.querySelectorAll(".chat-workspace-rail__file-name")).toHaveLength(1);
+  });
+
   it("shows Copy failed when copying a session Files path", async () => {
     const writeText = clipboard(
       vi.fn().mockRejectedValue(new DOMException("Clipboard access denied", "NotAllowedError")),
