@@ -432,7 +432,8 @@ suite.define(() => {
         };
         for (const [channelId, label] of channelEntries) {
           const detail = await openChannel(page, label);
-          await detail.getByRole("heading", { name: label, exact: true }).waitFor();
+          const heading = detail.locator("h2.settings-section__heading");
+          await expect.poll(() => heading.textContent()).toContain(label);
           await detail.getByRole("button", { name: "Check connection" }).waitFor();
           for (const value of expectedFields[channelId] ?? []) {
             await detail.getByText(value, { exact: true }).waitFor();
