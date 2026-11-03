@@ -28,21 +28,20 @@ const enDesktop = {
     loading: "Loading desktop sources…",
     empty: "No desktop-capable sources are available.",
     sourceUnavailable: "The requested desktop is unavailable. Retry when the machine is ready.",
-    hostDesktopOff:
-      "Desktop access is not enabled on the Gateway host. This panel shares the Gateway host's screen, not the screen of the device running this browser.",
+    hostDesktopOff: "Desktop access is off. This will share the Gateway host's screen.",
     hostDesktopEnableHint:
-      "Enable desktop access to view and control the Gateway host in OpenClaw.",
+      "Enable it to view and control the screen of the machine running your Gateway.",
     hostScreenSharingSetupHint:
-      "On the Gateway host Mac, open System Settings → General → Sharing. Turn on Screen Sharing, or allow the Gateway host account to Observe and Control in Remote Management, then check again.",
+      "On the Gateway Mac, open System Settings → General → Sharing and turn on Screen Sharing. If you use Remote Management, allow the macOS account you’ll sign in with to Observe and Control.",
     hostDesktopServerSetupHint:
-      "Set up a password-protected VNC server on the Gateway host, or configure a managed desktop on Linux, then check again.",
+      "Set up a password-protected VNC server on the Gateway host, or a managed desktop on Linux. Then check again.",
     hostScreenSharingAccount:
-      "Screen Sharing signs in with a macOS user account on the Gateway host. A sign-in prompt follows after you enable access.",
+      "After enabling access, sign in with a macOS account on the Gateway host.",
     hostDesktopServerAccount:
-      "The desktop server on the Gateway host uses its own password. A sign-in prompt may follow after you enable access.",
-    screenSharingNetwork:
-      "Screen Sharing may also be reachable from other devices on your network.",
-    desktopServerNetwork: "The desktop server may be reachable from other devices on your network.",
+      "The desktop server uses its own password. You may be asked to sign in after enabling access.",
+    screenSharingNetwork: "Screen Sharing may also be accessible to other devices on your network.",
+    desktopServerNetwork:
+      "The desktop server may also be accessible to other devices on your network.",
     macLocked:
       "This Mac is locked. Sign in through Screen Sharing or on the Mac to use computer control.",
     macLockStateUnknown:

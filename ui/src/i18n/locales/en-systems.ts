@@ -42,7 +42,7 @@ const enSystems = {
     desktopSetupEnabled: "Desktop access is enabled",
     desktopSetupConnecting: "Waiting for desktop access to become available.",
     desktopSetupApplyHint: "Applies without restarting the Gateway.",
-    desktopSetupAdminHint: "A Gateway administrator can enable desktop access.",
+    desktopSetupAdminHint: "A Gateway administrator must enable desktop access.",
     desktopSetupCheckAgain: "Check again",
     desktopSetupFailed: "Desktop access could not be enabled. Refresh machines and try again.",
     accessTitle: "Desktop access unavailable",

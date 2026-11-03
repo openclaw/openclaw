@@ -116,7 +116,6 @@ export async function loadDesktopEnvironments(
   )?.id;
   let hostSetup: EnvironmentSummary | undefined;
   if (
-    !options.recoverToPicker &&
     selectedTarget === "gateway" &&
     selectedSource === undefined &&
     selectedEnvironment?.status === "available"
