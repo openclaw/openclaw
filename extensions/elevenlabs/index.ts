@@ -7,6 +7,7 @@ import {
   resolveProviderHttpRequestConfig,
   requireTranscriptionText,
 } from "openclaw/plugin-sdk/provider-http";
+import { createElevenLabsDialogueTool } from "./dialogue-tool.js";
 import { buildElevenLabsRealtimeTranscriptionProvider } from "./realtime-transcription-provider-factory.js";
 import { DEFAULT_ELEVENLABS_BASE_URL, normalizeElevenLabsBaseUrl } from "./shared.js";
 import { buildElevenLabsSpeechProvider } from "./speech-provider-factory.js";
@@ -18,6 +19,14 @@ export default definePluginEntry({
   name: "ElevenLabs Speech",
   description: "Bundled ElevenLabs speech provider",
   register(api) {
+    api.registerTool(
+      {
+        contextVersion: 2,
+        create: (context) =>
+          createElevenLabsDialogueTool(context, () => api.runtime.config.current()),
+      },
+      { name: "elevenlabs_dialogue", optional: true, workspaceAccess: false },
+    );
     api.registerSpeechProvider(buildElevenLabsSpeechProvider);
     api.registerMediaUnderstandingProvider({
       id: "elevenlabs",
