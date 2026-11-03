@@ -50,6 +50,27 @@ it never downloads, loads, wakes, or unloads models. The app remains responsible
 for the server and inference-triggered model loading. Run it on the Gateway
 host or use an endpoint the Gateway can reach.
 
+### Set up the app connection
+
+Choose **Llama** in provider setup. On a fresh machine, first get the app from
+[llama.app](https://llama.app/), choose and download a model inside Llama, and
+start its API server. OpenClaw's setup explains this handoff; it does not install
+the app, choose a download on your behalf, or adopt the app's cache or process.
+If the server is unavailable or has no usable models, setup stays incomplete
+and names what to do before retrying.
+
+Guided detection is passive and preparation rechecks the exact selected model.
+The app may load a cold model when the subsequent inference probe runs. A
+successful tool-free setup probe does not qualify tools or vision.
+Normal merge-mode setup saves connection facts, not a snapshot of discovered
+model rows; authored overrides survive. Explicit model-catalog replace mode
+continues to seed the catalog through the shared connection policy.
+
+The endpoint must be reachable **from the Gateway**, not just the desktop app.
+In particular, Windows-host loopback and a WSL Gateway's loopback are not the
+same network location. Use an authenticated, reachable endpoint where required;
+setup does not change firewall, proxy, or WSL networking settings.
+
 ## Choose server ownership
 
 | Setup choice          | Process owner                 | Local embeddings |
@@ -415,11 +436,13 @@ when `/props` sets `chat_template_caps.supports_reasoning_effort` to `true`.
 Missing or false values leave those capabilities unadvertised. Explicit
 configured context and tool values remain authoritative over discovery.
 
-Setup saves context limits and tool support only when live `/props` verifies
-them. Unloaded router models remain in the configured inventory with those
-fields unset. Runtime discovery uses a 128,000-token context fallback and keeps
-tools disabled while those facts are unknown; it does not save these defaults
-as model overrides. After loading a model yourself, refresh its live facts:
+Normal merge-mode setup saves the connection and preserves authored model
+overrides; discovered rows stay in the provider-owned runtime catalog. Explicit
+replace mode seeds discovered rows through the shared connection policy,
+leaving unverified context and tool fields unset. Inference preparation can use
+a 128,000-token context fallback and keeps unknown tools disabled, but those
+fallbacks are not advertised as catalog facts or saved as model overrides.
+After loading a model yourself, refresh its live facts:
 
 ```bash
 openclaw models list --provider llama-cpp --refresh

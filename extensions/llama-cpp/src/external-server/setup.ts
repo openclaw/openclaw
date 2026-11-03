@@ -21,14 +21,14 @@ import {
   type ModelProviderConfig,
   selectPreferredLocalModelId,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import { applyProviderConnectionConfig } from "openclaw/plugin-sdk/provider-onboard";
 import { applyProviderDefaultModel } from "openclaw/plugin-sdk/provider-setup";
 import { buildLlamaCppAuthProfileRemovalPatch } from "../auth-config.js";
 import { hasLlamaServerAuthorizationHeader } from "./auth-policy.js";
 import { resolveLlamaServerProviderHeaders, resolveLlamaServerRuntimeApiKey } from "./auth.js";
 import { LLAMA_CPP_SERVER, type LlamaServerIdentity } from "./defaults.js";
 import { discoverLlamaServer, type LlamaServerDiscoveryResult } from "./discovery.js";
-import { resolveLlamaServerEndpoint } from "./endpoint.js";
-import { buildLlamaServerProviderConfig } from "./models.js";
+import { normalizeLlamaServerProviderConfig, resolveLlamaServerEndpoint } from "./endpoint.js";
 
 function selectSetupModelId(discovery: Extract<LlamaServerDiscoveryResult, { kind: "success" }>) {
   const candidates = discovery.models.filter((model) => !model.failed);
@@ -44,13 +44,17 @@ function describeDiscoveryFailure(
   server: LlamaServerIdentity,
 ): string {
   const label = server.id === LLAMA_CPP_SERVER.id ? "llama-server" : server.label;
+  const nextStep =
+    server.id === LLAMA_CPP_SERVER.id
+      ? ""
+      : " Open https://llama.app/, start its API server on a reachable address, then retry.";
   switch (result.kind) {
     case "unreachable":
-      return `${label} could not be reached at ${result.endpoint.origin}.`;
+      return `${label} could not be reached at ${result.endpoint.origin}.${nextStep}`;
     case "http-error":
-      return `${label} returned HTTP ${result.status} for ${result.path} at ${result.endpoint.origin}.`;
+      return `${label} returned HTTP ${result.status} for ${result.path} at ${result.endpoint.origin}.${nextStep}`;
     case "invalid-response":
-      return `${label} returned an invalid response from ${result.path} at ${result.endpoint.origin}.`;
+      return `${label} returned an invalid response from ${result.path} at ${result.endpoint.origin}.${nextStep}`;
     default:
       throw new Error("Unexpected llama-server discovery result");
   }
@@ -168,15 +172,26 @@ function buildExistingProviderConfig(
     params.persistence.kind === "preserve"
       ? endpointSafe
       : stripAuthOverrides(endpointSafe, params.persistence.kind === "upsert");
-  return buildLlamaServerProviderConfig({
-    server,
-    configured: {
-      ...existing,
-      baseUrl: params.discovery.endpoint.inferenceBaseUrl,
-      models: existing?.models ?? [],
+  const baseUrl = params.discovery.endpoint.inferenceBaseUrl;
+  const connection = applyProviderConnectionConfig(
+    {
+      models: {
+        mode: params.config.models?.mode,
+        providers: { [server.id]: { ...existing, baseUrl, models: existing?.models ?? [] } },
+      },
     },
-    discoveredModels: params.discovery.models,
-  });
+    {
+      providerId: server.id,
+      api: "openai-completions",
+      baseUrl,
+      catalogModels: params.discovery.models.map(({ config }) => config),
+    },
+  );
+  // The connection owner decides catalog seeding; auth fields stay with this owner.
+  return normalizeLlamaServerProviderConfig(
+    { ...existing, baseUrl, models: connection.models?.providers?.[server.id]?.models ?? [] },
+    server,
+  );
 }
 
 function buildSetupResult(
@@ -418,7 +433,12 @@ export async function runLlamaServerSetup(
   }
   const modelId = selectSetupModelId(discovery);
   if (!modelId) {
-    throw new Error(`No ${serverName} text models were found at ${discovery.endpoint.origin}.`);
+    throw new Error(
+      `No ${serverName} text models were found at ${discovery.endpoint.origin}.` +
+        (server.id === LLAMA_CPP_SERVER.id
+          ? ""
+          : " Choose and download a model in Llama, then retry."),
+    );
   }
   if (persistence.kind === "remove") {
     await removeDefaultAuthProfile(ctx.config, ctx.agentDir, server);
@@ -511,7 +531,10 @@ async function validateNonInteractiveDiscovery(
     throw new Error(
       requestedModelId
         ? `${server.id === LLAMA_CPP_SERVER.id ? "llama-server" : server.label} model ${requestedModelId} was not found. Available models: ${available}`
-        : `No llama-server text models were found at ${discovery.endpoint.origin}.`,
+        : `No ${server.id === LLAMA_CPP_SERVER.id ? "llama-server" : server.label} text models were found at ${discovery.endpoint.origin}.` +
+            (server.id === LLAMA_CPP_SERVER.id
+              ? ""
+              : " Choose and download a model in Llama, then retry."),
     );
   }
   return {
