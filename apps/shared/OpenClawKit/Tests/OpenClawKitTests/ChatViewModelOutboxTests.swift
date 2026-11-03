@@ -469,7 +469,7 @@ final class OutboxTestTransport: @unchecked Sendable, OpenClawChatTransport {
         }
         if await self.state.sendRejects {
             // Gateway responded but refused to start the run.
-            return OpenClawChatSendResponse(runId: idempotencyKey, status: await self.state.sendRejectionStatus)
+            return await OpenClawChatSendResponse(runId: idempotencyKey, status: self.state.sendRejectionStatus)
         }
         await self.state.recordSend(
             sessionKey: sessionKey,
@@ -2249,8 +2249,7 @@ struct ChatViewModelOutboxTests {
     }
 
     @Test
-    func `startup rejection retains the original send after typing`() async throws
-    {
+    func `startup rejection retains the original send after typing`() async throws {
         let (store, _, databaseDirectory) = try makeOutboxStore()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
         let transport = OutboxTestTransport(healthy: true)
@@ -2427,7 +2426,9 @@ struct ChatViewModelOutboxTests {
         if storage == "full" {
             for index in 0..<OpenClawChatSQLiteTranscriptCache.maxQueuedCommands {
                 var parked = outboxTestCommand(
-                    id: "parked-\(index)", text: "existing work", createdAt: Date().timeIntervalSince1970,
+                    id: "parked-\(index)",
+                    text: "existing work",
+                    createdAt: Date().timeIntervalSince1970,
                     sessionKey: "other")
                 parked.status = .failed
                 #expect(await store.enqueueCommand(parked))
@@ -2461,7 +2462,7 @@ struct ChatViewModelOutboxTests {
         let expectedInput = navigated ? "destination draft" : newer ? "newer original draft" :
             accepted ? "" : "retain without durable admission"
         #expect(vm.input == expectedInput)
-        let expectedTexts = (accepted ? [] : ["retain without durable admission"]) +
+        let expectedTexts: [String] = (accepted ? [] : ["retain without durable admission"]) +
             (navigated ? ["destination draft"] : newer ? ["newer original draft"] : [])
         if navigated {
             #expect(vm.errorText ==

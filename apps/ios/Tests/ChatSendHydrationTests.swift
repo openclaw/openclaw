@@ -100,7 +100,10 @@ private actor ChatSendHydrationGateway {
             let text = try XCTUnwrap(params["message"] as? String)
             let runID = try XCTUnwrap(params["idempotencyKey"] as? String)
             self.messages.append(SentMessage(
-                id: UUID().uuidString, text: text, runID: runID, sessionKey: Self.sessionKey(params),
+                id: UUID().uuidString,
+                text: text,
+                runID: runID,
+                sessionKey: Self.sessionKey(params),
                 timestamp: Date().timeIntervalSince1970 * 1000))
             payload = ["runId": runID, "status": self.acknowledgesStartedRun ? "started" : "ok"]
         case "agent.wait":
@@ -196,6 +199,21 @@ final class ChatSendHydrationTests: XCTestCase {
         try await self.checkSend(.startedAcknowledgement)
     }
 
+    private func completeStartedRun(
+        owner: IOSChatViewModelOwner,
+        gateway: ChatSendHydrationGateway,
+        text: String) async throws
+    {
+        let pendingModel = try XCTUnwrap(owner.viewModel)
+        XCTAssertEqual(pendingModel.pendingRunCount, 1)
+        XCTAssertEqual(
+            pendingModel.messages.filter { $0.role == "user" && $0.content.contains { $0.text == text } }.count,
+            1,
+            "A started acknowledgement must retain the submitted turn while canonical history lags.")
+        await gateway.waitForRunObservation()
+        try await gateway.completeRun()
+    }
+
     private func checkSend(_ transition: Transition) async throws {
         let appModel = NodeAppModel()
         let gateway = ChatSendHydrationGateway(acknowledgesStartedRun: transition == .startedAcknowledgement)
@@ -210,8 +228,13 @@ final class ChatSendHydrationTests: XCTestCase {
         options.deviceAuthGatewayID = stableID
         func config(token: String) -> GatewayConnectConfig {
             GatewayConnectConfig(
-                url: url, stableID: stableID, tls: nil, token: token,
-                bootstrapToken: nil, password: nil, nodeOptions: options)
+                url: url,
+                stableID: stableID,
+                tls: nil,
+                token: token,
+                bootstrapToken: nil,
+                password: nil,
+                nodeOptions: options)
         }
         appModel.activeGatewayConnectConfig = config(token: "synthetic-first-account")
         let owner = appModel.chatPresentation
@@ -311,14 +334,7 @@ final class ChatSendHydrationTests: XCTestCase {
                 XCTAssertEqual(original.messages.filter { $0.role == "user" }.count, 1)
             }
             if transition == .startedAcknowledgement {
-                let pendingModel = try XCTUnwrap(owner.viewModel)
-                XCTAssertEqual(pendingModel.pendingRunCount, 1)
-                XCTAssertEqual(
-                    pendingModel.messages.filter { $0.role == "user" && $0.content.contains { $0.text == text } }.count,
-                    1,
-                    "A started acknowledgement must retain the submitted turn while canonical history lags.")
-                await gateway.waitForRunObservation()
-                try await gateway.completeRun()
+                try await self.completeStartedRun(owner: owner, gateway: gateway, text: text)
             }
             // The owner must apply deferred identity itself after accepted send activity settles.
             await ChatSendHydrationObservation.wait {

@@ -90,7 +90,9 @@ public final class OpenClawChatViewModel {
     public internal(set) var isSubmittingDraft = false
     var unsecuredLiveSendRecoveryComposerKey: String?
 
-    public var hasUnsecuredLiveSendRecovery: Bool { self.unsecuredLiveSendRecoveryComposerKey != nil }
+    public var hasUnsecuredLiveSendRecovery: Bool {
+        self.unsecuredLiveSendRecoveryComposerKey != nil
+    }
 
     public var isLiveSendRecoveryPinned: Bool {
         self.isTransportDetached && (self.isSubmittingDraft || self.hasUnsecuredLiveSendRecovery)
@@ -1236,34 +1238,6 @@ extension OpenClawChatViewModel {
             self.webConversation?.navigate?(context, intent == .userInitiated ? .user : .synchronization)
         }
         self.startBootstrap(sessionKey: next)
-    }
-
-    public var retiredComposerRecoveryTexts: [String] {
-        guard let key = self.unsecuredLiveSendRecoveryComposerKey else { return [] }
-        var texts: [String] = []
-        // A failed submission can coexist with newer original/destination drafts.
-        // Keep each visible for copying without replacing any composer text.
-        for text in [self.inputHistoriesBySession[key]?.recoveryInput, self.draftsBySession[key], self.input] {
-            if let text, !text.isEmpty, !texts.contains(text) { texts.append(text) }
-        }
-        return texts
-    }
-
-    public func clearRetiredComposerRecovery() {
-        guard self.isTransportDetached, let key = self.unsecuredLiveSendRecoveryComposerKey else { return }
-        self.inputHistoriesBySession[key]?.clearRecovery()
-        for draftKey in [key, self.composerSessionKey(for: self.sessionKey)] {
-            self.draftsBySession.removeValue(forKey: draftKey)
-            self.savedDraftRevisionsBySession.removeValue(forKey: draftKey)
-        }
-        self.input = ""
-        self.resolveRetiredComposerRecovery()
-    }
-
-    func resolveRetiredComposerRecovery() {
-        if self.unsecuredLiveSendRecoveryComposerKey != nil, self.retiredComposerRecoveryTexts.isEmpty {
-            self.unsecuredLiveSendRecoveryComposerKey = nil
-        }
     }
 
     func applyDeferredExternalStateIfReady() {

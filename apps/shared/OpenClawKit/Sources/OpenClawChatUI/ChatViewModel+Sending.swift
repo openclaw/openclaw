@@ -12,6 +12,34 @@ private let chatSendingLogger = Logger(subsystem: "ai.openclaw", category: "Open
 private let localSessionCommands: Set<String> = ["/new", "/reset", "/clear", "/compact"]
 
 extension OpenClawChatViewModel {
+    public var retiredComposerRecoveryTexts: [String] {
+        guard let key = self.unsecuredLiveSendRecoveryComposerKey else { return [] }
+        var texts: [String] = []
+        // A failed submission can coexist with newer original/destination drafts.
+        // Keep each visible for copying without replacing any composer text.
+        for text in [self.inputHistoriesBySession[key]?.recoveryInput, self.draftsBySession[key], self.input] {
+            if let text, !text.isEmpty, !texts.contains(text) { texts.append(text) }
+        }
+        return texts
+    }
+
+    public func clearRetiredComposerRecovery() {
+        guard self.isTransportDetached, let key = self.unsecuredLiveSendRecoveryComposerKey else { return }
+        self.inputHistoriesBySession[key]?.clearRecovery()
+        for draftKey in [key, self.composerSessionKey(for: self.sessionKey)] {
+            self.draftsBySession.removeValue(forKey: draftKey)
+            self.savedDraftRevisionsBySession.removeValue(forKey: draftKey)
+        }
+        self.input = ""
+        self.resolveRetiredComposerRecovery()
+    }
+
+    func resolveRetiredComposerRecovery() {
+        if self.unsecuredLiveSendRecoveryComposerKey != nil, self.retiredComposerRecoveryTexts.isEmpty {
+            self.unsecuredLiveSendRecoveryComposerKey = nil
+        }
+    }
+
     public var canSend: Bool {
         !self.usesWebConversation && !self.isTransportDetached &&
             !isSubmittingDraft &&
