@@ -575,7 +575,8 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
   const observe = Boolean(
     observationRoot &&
     (baseEnv.GITHUB_EVENT_NAME === "schedule" ||
-      (baseEnv.GITHUB_EVENT_NAME === "pull_request" && /0$/u.test(baseEnv.GITHUB_RUN_ID ?? ""))),
+      (baseEnv.GITHUB_EVENT_NAME === "pull_request" &&
+        (baseEnv.GITHUB_RUN_ID ?? "").endsWith("0"))),
   );
   const observedRuntimes = new Set<string>();
   const extraArgs = (entry: ShardPlan) =>

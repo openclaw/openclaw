@@ -84,9 +84,9 @@ are ignored; conflicting receipts are rejected.
 
 Resource-reporter users receive the additional versioned inventory and case
 counts. This includes existing UI and diagnostic lanes. Ordinary Node shard CI
-does not yet enable this reporter or dependency recording. Native Bun-test
-execution does not emit Vitest observations. Missing observations must never be
-interpreted as passing or irrelevant tests.
+enables collection only for the sampled `unit-fast` invocations described above.
+Other configs and native Bun-test execution do not emit these pilot exports.
+Missing observations must never be interpreted as passing or irrelevant tests.
 
 Keep rollout in shadow mode until representative full-run audits establish
 failure recall, graph completeness, and net savings including collection cost.
