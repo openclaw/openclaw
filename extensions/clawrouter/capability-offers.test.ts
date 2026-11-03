@@ -1,4 +1,4 @@
-import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
+import * as providerHttp from "openclaw/plugin-sdk/provider-http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   fetchClawRouterCapabilityOffers,
@@ -7,7 +7,7 @@ import {
 
 async function readOffers(payload: unknown, baseUrl: string) {
   const release = vi.fn(async () => undefined);
-  vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockResolvedValueOnce({
+  vi.spyOn(providerHttp, "fetchWithTimeoutGuarded").mockResolvedValueOnce({
     response: Response.json(payload),
     finalUrl: baseUrl + "/catalog",
     release,
