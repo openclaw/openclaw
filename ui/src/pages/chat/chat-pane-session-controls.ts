@@ -3,6 +3,7 @@ import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
 import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import {
   readSessionMethodAccess,
   readSessionMethodScopeAccess,
@@ -443,7 +444,7 @@ export function renderChatPaneComposerControls(params: {
             selection.pending = change;
           }
           state.chatError = state.lastError = t("chat.permissionControls.updateFailed", {
-            error: String(error),
+            error: formatUiError(error),
           });
         } finally {
           if (ownsOutcome()) {

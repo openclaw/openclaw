@@ -39,6 +39,21 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it.each([
+  [new TypeError("Cannot read properties of undefined"), "Native browser request failed"],
+  [new Error("Permission denied"), "Permission denied"],
+  ["native implementation detail", "Native browser request failed"],
+  [{ message: "native implementation detail" }, "Native browser request failed"],
+])(
+  "formats native exceptions without exposing non-Error rejections: %s",
+  async (error, message) => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    install(vi.fn().mockRejectedValue(error));
+
+    expect(await send("reload")).toEqual({ ok: false, error: message });
+  },
+);
+
 it("is inert outside the native host", async () => {
   const listener = vi.fn();
   expect(hasNativeBrowserBridge()).toBe(false);

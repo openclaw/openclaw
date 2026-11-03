@@ -526,7 +526,7 @@ function renderSidebarMenus(
                       if (!actionSignal.aborted) {
                         showToast({
                           severity: "error",
-                          message: error instanceof Error ? error.message : String(error),
+                          message: formatUiError(error),
                         });
                       }
                     });

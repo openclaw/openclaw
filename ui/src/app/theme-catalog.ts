@@ -9,6 +9,7 @@ import {
   type ThemeColorMode,
   type ThemeDescriptor,
 } from "../../../packages/gateway-protocol/src/theme.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import type { ImportedCustomTheme } from "./custom-theme.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 import { normalizeThemePalette } from "./theme-palette.ts";
@@ -122,7 +123,7 @@ export function createThemeCatalog(
         onChange();
       } catch (error) {
         if (remainsCurrent(client, profile)) {
-          snapshot = { ...snapshot, error: error instanceof Error ? error.message : String(error) };
+          snapshot = { ...snapshot, error: formatUiError(error) };
           onChange();
         }
       }
@@ -157,7 +158,7 @@ export function createThemeCatalog(
       },
       (error: unknown) => {
         if (remainsCurrent(client, profile)) {
-          definitionErrors.set(id, error instanceof Error ? error.message : String(error));
+          definitionErrors.set(id, formatUiError(error));
           onChange();
         }
       },
