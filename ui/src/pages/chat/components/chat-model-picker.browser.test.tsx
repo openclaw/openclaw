@@ -227,6 +227,7 @@ it("preserves composition ownership and ordinary model-search keyboard behavior"
   params.modelOptions = [
     modelOption("example", "alpha", { label: "Alpha" }),
     modelOption("other", "gamma", { label: "Gamma" }),
+    modelOption("other", "delta", { label: "Delta" }),
   ];
   update();
   for (const composition of ["active", "keyCode229", "none"]) {
@@ -237,13 +238,13 @@ it("preserves composition ownership and ordinary model-search keyboard behavior"
         expect(picker.querySelectorAll("[data-chat-model-option]"), label).toHaveLength(1),
       );
       const other = picker.querySelector<HTMLButtonElement>(
-        '[data-chat-model-provider-group="other"] [data-chat-model-provider-toggle]',
+        '[data-chat-model-provider-toggle="other"]',
       )!;
       if (key.startsWith("Arrow")) {
         await userEvent.click(other);
       }
       const search = getSearch();
-      const query = key.startsWith("Arrow") ? "" : "other";
+      const query = key.startsWith("Arrow") ? "" : "gamma";
       if (query) {
         search.value = query;
         search.dispatchEvent(new InputEvent("input", { bubbles: true }));
@@ -307,8 +308,10 @@ it("preserves composition ownership and ordinary model-search keyboard behavior"
         search.value = "";
         search.dispatchEvent(new InputEvent("input", { bubbles: true }));
         flush();
-        if (other.ariaExpanded === "true") {
-          await userEvent.click(other);
+        if (other.ariaSelected === "true") {
+          await userEvent.click(
+            picker.querySelector<HTMLButtonElement>('[data-chat-model-provider-toggle="example"]')!,
+          );
         }
         await toggle(() => userEvent.click(trigger));
         expect(picker.open, label).toBe(false);
@@ -366,13 +369,11 @@ it.each(["trigger", "Escape", "selection"])(
     await open();
     const search = getSearch();
     const providerToggle = (provider: string) =>
-      picker.querySelector<HTMLButtonElement>(
-        `[data-chat-model-provider-group="${provider}"] [data-chat-model-provider-toggle]`,
-      )!;
+      picker.querySelector<HTMLButtonElement>(`[data-chat-model-provider-toggle="${provider}"]`)!;
     const selectedToggle = providerToggle("example"),
       otherToggle = providerToggle("other");
     const expectExpanded = () =>
-      expect([selectedToggle.ariaExpanded, otherToggle.ariaExpanded]).toEqual(["false", "true"]);
+      expect([selectedToggle.ariaSelected, otherToggle.ariaSelected]).toEqual(["false", "true"]);
     await userEvent.click(selectedToggle);
     await userEvent.click(otherToggle);
     expectExpanded();

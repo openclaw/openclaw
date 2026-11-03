@@ -34,9 +34,7 @@ export function ChatModelAccountSectionView(
             <Icon name="users" />
           </span>
           <span class="chat-controls__provider-label">{t("chat.modelAccounts.section")}</span>
-          <span class="chat-controls__account-selection" title={props.selectedIdentity}>
-            {props.selectedIdentity}
-          </span>
+          <span class="chat-controls__account-selection">{props.selectedIdentity}</span>
           <span class="chat-controls__inline-select-chevron" aria-hidden="true">
             <Icon name={props.open ? "chevronUp" : "chevronDown"} />
           </span>
@@ -96,7 +94,7 @@ export function ChatModelAccountSectionView(
                     <span class="chat-controls__model-option-copy">
                       <span class="chat-controls__model-option-name">{option().label}</span>
                       <Show when={option().description}>
-                        <span class="chat-controls__auth-meta" title={option().description}>
+                        <span class="chat-controls__auth-meta">
                           <span class="chat-controls__model-option-name">
                             {option().description}
                           </span>

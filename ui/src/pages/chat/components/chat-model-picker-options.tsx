@@ -162,7 +162,6 @@ function ModelOptionButton(
       aria-setsize={search?.row(key())?.size}
       hidden={hidden()}
       aria-selected={props.presentation.selected ? "true" : "false"}
-      title={props.presentation.accessibleStatus || undefined}
       aria-label={[
         props.presentation.modelLabel,
         props.presentation.runtimeLabel,
