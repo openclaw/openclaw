@@ -5961,6 +5961,9 @@ jobs:
             -only-testing:OpenClawTests/OpenClawTypographyTests
             -only-testing:OpenClawTests/GatewayConnectionSecurityTests
             -only-testing:OpenClawTests/GatewaySettingsStoreTests
+            -only-testing:OpenClawTests/Security2AdvertisementTests
+            -only-testing:OpenClawTests/ESPSetupWireTests
+            -only-testing:OpenClawTests/ESPSetupSessionTests
           )
           if [[ "$IOS_CI_PHASE" == "tests" ]]; then
             test_args+=(
