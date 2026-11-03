@@ -322,8 +322,7 @@ export async function resolveIMessageInboundDecision(params: {
   selfChatCache?: SelfChatCache;
   reactionNotifications?: IMessageReactionNotificationMode;
 }): Promise<IMessageInboundDecision> {
-  const senderRaw = params.message.sender ?? "";
-  const sender = senderRaw.trim();
+  const sender = (params.message.sender ?? "").trim();
   if (!sender) {
     return { kind: "drop", reason: "missing sender" };
   }
@@ -454,6 +453,7 @@ export async function resolveIMessageInboundDecision(params: {
     identity: imessageIngressIdentity,
     cfg: params.cfg,
     readStoreAllowFrom: () => (storeAllowFrom ??= params.readStoreAllowFrom()),
+    throwOnStoreReadError: true,
   });
   const resolveChannelIngress = (contextBinding?: ChannelIngressContextBinding) =>
     ingressResolver.message({

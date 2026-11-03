@@ -115,6 +115,7 @@ function createChannelIngressResolverForOwner(
         mentionFacts: input.mentionFacts,
         readStoreAllowFrom: base.readStoreAllowFrom,
         useDefaultPairingStore: base.useDefaultPairingStore,
+        throwOnStoreReadError: base.throwOnStoreReadError,
         command: resolveCommandInput(input.command, base.useAccessGroups),
       },
       owner,

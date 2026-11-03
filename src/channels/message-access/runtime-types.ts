@@ -220,6 +220,8 @@ export type ResolveChannelMessageIngressParams = {
   }) => Promise<readonly (string | number)[] | null | undefined>;
   /** Reads the default pairing store when no explicit reader is supplied. */
   useDefaultPairingStore?: boolean;
+  /** Propagate a supplied store reader failure instead of falling back to an empty list. */
+  throwOnStoreReadError?: boolean;
   /** Command gate input; omit when no command policy is requested. */
   command?: ChannelMessageIngressCommandInput;
 };
@@ -236,6 +238,7 @@ export type CreateChannelIngressResolverParams = Pick<
   | "accessGroupMatchedAllowFromEntry"
   | "readStoreAllowFrom"
   | "useDefaultPairingStore"
+  | "throwOnStoreReadError"
 > & {
   /** Config subset used for access groups and command behavior. */
   cfg?: ChannelIngressConfigInput;

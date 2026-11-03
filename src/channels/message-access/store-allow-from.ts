@@ -39,18 +39,22 @@ export async function readChannelIngressStoreAllowFrom(
   ) {
     return [];
   }
-  const entries = params.readStoreAllowFrom
-    ? await params.readStoreAllowFrom({
-        channelId: params.channelId,
-        accountId: params.accountId,
-        dmPolicy: params.policy.dmPolicy,
-      })
-    : params.useDefaultPairingStore
-      ? await readChannelIngressStoreAllowFromForDmPolicy({
-          provider: params.channelId,
-          accountId: params.accountId,
-          dmPolicy: params.policy.dmPolicy,
-        })
-      : [];
+  let entries: readonly (string | number)[] | null | undefined;
+  if (params.readStoreAllowFrom) {
+    const read = params.readStoreAllowFrom({
+      channelId: params.channelId,
+      accountId: params.accountId,
+      dmPolicy: params.policy.dmPolicy,
+    });
+    entries = params.throwOnStoreReadError ? await read : await read.catch(() => []);
+  } else if (params.useDefaultPairingStore) {
+    entries = await readChannelIngressStoreAllowFromForDmPolicy({
+      provider: params.channelId,
+      accountId: params.accountId,
+      dmPolicy: params.policy.dmPolicy,
+    });
+  } else {
+    entries = [];
+  }
   return [...(entries ?? [])];
 }
