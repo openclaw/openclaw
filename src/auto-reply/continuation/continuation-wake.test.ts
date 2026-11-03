@@ -74,17 +74,43 @@ vi.mock("../../agents/embedded-agent-runner/run.js", () => ({
 }));
 const runEmbeddedAgentMock = vi.mocked(runEmbeddedAgent);
 const failingAcks = vi.hoisted(() => new Set<string>());
-// Durable acks stay real unless a case arms a failing row.
+const ackedRows = vi.hoisted(() => new Set<string>());
+// Durable acks and refusals stay real unless a case arms a failing row.
 vi.mock("../../infra/session-delivery-queue-storage.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../infra/session-delivery-queue-storage.js")>();
+  const failFor = (id: string) => {
+    if (failingAcks.has(id)) {
+      throw new Error(`settlement failed for ${id}`);
+    }
+  };
   return {
     ...actual,
     ackSessionDelivery: async (...args: Parameters<typeof actual.ackSessionDelivery>) => {
-      if (failingAcks.has(args[0])) {
-        throw new Error(`ack failed for ${args[0]}`);
-      }
+      failFor(args[0]);
+      ackedRows.add(args[0]);
       return await actual.ackSessionDelivery(...args);
+    },
+    moveSessionDeliveryToFailed: async (
+      ...args: Parameters<typeof actual.moveSessionDeliveryToFailed>
+    ) => {
+      failFor(args[0]);
+      return await actual.moveSessionDeliveryToFailed(...args);
+    },
+  };
+});
+const warnings = vi.hoisted(() => [] as string[]);
+vi.mock("../../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => {
+      const logger = actual.createSubsystemLogger(subsystem);
+      const warn = (message: string, meta?: Record<string, unknown>) => {
+        warnings.push(message);
+        logger.warn(message, meta);
+      };
+      return { ...logger, warn };
     },
   };
 });
@@ -118,6 +144,8 @@ const ROUTE = { channel: "telegram", to: "-100001", accountId: "default" };
 
 afterEach(() => {
   failingAcks.clear();
+  ackedRows.clear();
+  warnings.length = 0;
   failingStamp.armed = false;
   resetContinuationWakesForTest();
   resetSystemEventsForTest();
@@ -602,9 +630,7 @@ it("leaves a return for a missing target queued and its row pending", async ({ s
   );
 });
 
-it("retires a return whose recipient authority a reset or owner change advanced", async ({
-  signal,
-}) => {
+it("refuses a return whose recipient authority an owner change advanced", async ({ signal }) => {
   await withWakeFixture("stale-authority", async ({ sessionKey, prompts }) => {
     answerTurns(prompts, "unreachable");
     const scope = { agentId: AGENT_ID, sessionKey };
@@ -621,8 +647,12 @@ it("retires a return whose recipient authority a reset or owner change advanced"
     await withinTest(settleContinuationWakesForTest(), signal);
 
     expect(prompts).toEqual([]);
-    // Retired, never delivered: the row settles and the event leaves the queue.
+    // Refused, never delivered or acked: the row settles and the event leaves the queue.
     expect(await rowPending(row)).toBe(false);
+    expect(ackedRows.has(row)).toBe(false);
+    expect(warnings).toContain(
+      `[continuation:return-refused] stage=wake reason=recipient-authority-changed session=${sessionKey} deliveryId=${row}`,
+    );
     expect(peekSystemEventEntries(resolveSystemEventQueueKey(sessionKey, AGENT_ID))).toEqual([]);
   });
 });

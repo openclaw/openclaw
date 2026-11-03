@@ -214,7 +214,7 @@ describe("continuation trace-context propagation integration", () => {
           enqueuedTargeted.push(payload);
           return `targeted-${enqueuedTargeted.length}`;
         }),
-        ackSessionDelivery: vi.fn(async () => undefined),
+        refuseSessionDelivery: vi.fn(async () => undefined),
         enqueueSystemEvent: vi.fn((_text, opts) => {
           targetedSystemEvents.push({
             sessionKey: opts.sessionKey,
@@ -247,7 +247,7 @@ describe("continuation trace-context propagation integration", () => {
       },
       {
         enqueueSessionDelivery: vi.fn(async (_payload: QueuedSessionDeliveryPayload) => "fanout"),
-        ackSessionDelivery: vi.fn(async () => undefined),
+        refuseSessionDelivery: vi.fn(async () => undefined),
         enqueueSystemEvent: vi.fn(() => true),
         requestContinuationWake: vi.fn(),
       },

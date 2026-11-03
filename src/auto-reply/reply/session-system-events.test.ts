@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   adoptSelectedSystemEventEntries: vi.fn(),
   buildChannelSummary: vi.fn(async () => []),
   ackSessionDelivery: vi.fn(async () => undefined),
+  refuseContinuationReturnDelivery: vi.fn(async () => undefined),
   loadSessionEntry: vi.fn(),
   loadTranscriptEvents: vi.fn<() => Promise<unknown[]>>(async () => []),
   isSessionRecipientAuthorityCurrent: vi.fn(() => true),
@@ -44,6 +45,10 @@ vi.mock("../../infra/session-delivery-queue-storage.js", async (importOriginal) 
     ackSessionDelivery: mocks.ackSessionDelivery,
   };
 });
+vi.mock("../continuation/return-refusal.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../continuation/return-refusal.js")>()),
+  refuseContinuationReturnDelivery: mocks.refuseContinuationReturnDelivery,
+}));
 // mock-isolation: Transcript events come from the test; the real accessor reads SQLite.
 vi.mock("../../config/sessions/session-accessor.js", () => ({
   loadTranscriptEvents: mocks.loadTranscriptEvents,
@@ -96,6 +101,7 @@ describe("drainFormattedSystemEvents trace context", () => {
     mocks.adoptSelectedSystemEventEntries.mockReset();
     mocks.buildChannelSummary.mockClear();
     mocks.ackSessionDelivery.mockClear();
+    mocks.refuseContinuationReturnDelivery.mockReset();
     mocks.loadSessionEntry.mockReset().mockReturnValue({ sessionId: "current-session" });
     mocks.loadTranscriptEvents.mockReset().mockResolvedValue([]);
     mocks.isSessionRecipientAuthorityCurrent.mockReset().mockReturnValue(true);
@@ -185,7 +191,7 @@ describe("drainFormattedSystemEvents trace context", () => {
     expect(mocks.ackSessionDelivery).not.toHaveBeenCalled();
   });
 
-  it("settles a stale bound recipient before prompt adoption", async () => {
+  it("refuses a stale bound recipient before prompt adoption", async () => {
     const event: SystemEvent = {
       text: "stale delegate result",
       ts: 1,
@@ -212,10 +218,11 @@ describe("drainFormattedSystemEvents trace context", () => {
     });
 
     expect(prepared).toEqual({ blocks: [], managedDeliveries: [] });
-    // No explicit queue state dir on the event: the ack binds to the process's
+    // No explicit queue state dir on the event: the refusal binds to the process's
     // own default queue context (89be566948 made the context mandatory).
     const processQueue = captureContinuationQueueContext();
-    expect(mocks.ackSessionDelivery).toHaveBeenCalledWith(
+    expect(mocks.ackSessionDelivery).not.toHaveBeenCalled();
+    expect(mocks.refuseContinuationReturnDelivery).toHaveBeenCalledWith(
       "delivery-stale-authority",
       expect.objectContaining({
         admission: expect.objectContaining({ databasePath: processQueue.admission.databasePath }),
@@ -227,6 +234,9 @@ describe("drainFormattedSystemEvents trace context", () => {
     expect(mocks.adoptSelectedSystemEventEntries).toHaveBeenCalledWith(MAIN_QUEUE_KEY, [event], {
       deferredEventIds: undefined,
     });
+    expect(mocks.emitContinuationQueueDrainSpan).toHaveBeenCalledWith(
+      expect.objectContaining({ refusedCount: 1, refusalReason: "recipient-authority-changed" }),
+    );
   });
 
   it("acknowledges only deliveries evidenced by the persisted recipient turn", async () => {
@@ -296,7 +306,7 @@ describe("drainFormattedSystemEvents trace context", () => {
     }
     mocks.isSessionRecipientAuthorityCurrent.mockReturnValue(false);
     // Settlement runs in queue order: the first stale row settles, the second fails.
-    mocks.ackSessionDelivery
+    mocks.refuseContinuationReturnDelivery
       .mockResolvedValueOnce(undefined)
       .mockRejectedValueOnce(new Error("stale settlement failed"));
 

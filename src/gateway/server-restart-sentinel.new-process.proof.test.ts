@@ -102,7 +102,7 @@ describe("fork-only: recipient-bound continuation rows across process lifetimes"
         peekSessionKeys: ["agent:main:revoked", "agent:main:kept"],
       });
       expect(recovered.output).toContain(
-        `session event delivery skipped: recipient authority changed sessionKey=agent:main:revoked queueId=${revokedId}`,
+        `[continuation:return-refused] stage=replay reason=recipient-authority-changed session=agent:main:revoked deliveryId=${revokedId}`,
       );
       expect(recovered.queued?.["agent:main:revoked"]).toEqual([]);
       expect(recovered.queued?.["agent:main:kept"]).toEqual([
@@ -114,11 +114,12 @@ describe("fork-only: recipient-bound continuation rows across process lifetimes"
       ]);
       // The kept row stays pending until a prompt adopts its in-memory event.
       expect(ids(recovered.after)).toEqual([keptId]);
-      expect(recovered.logs).toEqual([`info: Recovered session delivery ${revokedId}`]);
-      expect(storedRows(stateDir)).toEqual({
-        [revokedId!]: "completed",
-        [keptId!]: "pending",
-      });
+      // Refused, not recovered: the revoked row is retired as failed and never reported delivered.
+      expect(recovered.logs).toEqual([
+        `warn: Session delivery: dead-letter decision for entry ${revokedId}: continuation return refused: recipient-authority-changed`,
+        `warn: Session delivery: entry ${revokedId} was dead-lettered and moved to failed`,
+      ]);
+      expect(storedRows(stateDir)).toEqual({ [keptId!]: "pending" });
       expect(storedRows(environment)).toBeNull();
     },
   );

@@ -2,7 +2,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { QueuedSessionDeliveryPayload } from "../../infra/session-delivery-queue-storage.js";
 import {
-  ackSessionDelivery as realAckSessionDelivery,
   enqueueSessionDelivery as realEnqueueSessionDelivery,
   loadPendingSessionDeliveries,
 } from "../../infra/session-delivery-queue-storage.js";
@@ -166,7 +165,7 @@ describe("nonexistent-target-session: delivery resilience (targeting.ts)", () =>
       enqueued.push(payload);
       return `delivery-${enqueued.length}`;
     });
-    const ackSessionDelivery = vi.fn(async () => undefined);
+    const refuseSessionDelivery = vi.fn(async () => undefined);
     const mockEnqueueSystemEvent = vi.fn<EnqueueSystemEvent>((text, opts) => {
       systemEvents.push({ text, sessionKey: opts.sessionKey });
       return true;
@@ -184,7 +183,7 @@ describe("nonexistent-target-session: delivery resilience (targeting.ts)", () =>
       },
       {
         enqueueSessionDelivery,
-        ackSessionDelivery,
+        refuseSessionDelivery,
         enqueueSystemEvent: mockEnqueueSystemEvent,
         requestContinuationWake,
       },
@@ -203,7 +202,7 @@ describe("nonexistent-target-session: delivery resilience (targeting.ts)", () =>
       },
     ]);
     expect(requestContinuationWake).toHaveBeenCalledTimes(1);
-    expect(ackSessionDelivery).not.toHaveBeenCalled();
+    expect(refuseSessionDelivery).not.toHaveBeenCalled();
   });
 
   it("delivers to multiple nonexistent targets, all complete gracefully", async () => {
@@ -225,7 +224,7 @@ describe("nonexistent-target-session: delivery resilience (targeting.ts)", () =>
       },
       {
         enqueueSessionDelivery,
-        ackSessionDelivery: vi.fn(async () => undefined),
+        refuseSessionDelivery: vi.fn(async () => undefined),
         enqueueSystemEvent: vi.fn<EnqueueSystemEvent>(() => true),
         requestContinuationWake,
       },
@@ -260,7 +259,7 @@ describe("nonexistent-target-session: delivery resilience (targeting.ts)", () =>
       },
       {
         enqueueSessionDelivery,
-        ackSessionDelivery: vi.fn(async () => undefined),
+        refuseSessionDelivery: vi.fn(async () => undefined),
         enqueueSystemEvent: vi.fn<EnqueueSystemEvent>(() => true),
         requestContinuationWake,
       },
@@ -288,7 +287,6 @@ describe("nonexistent-target-session: delivery resilience (targeting.ts)", () =>
         },
         {
           enqueueSessionDelivery: realEnqueueSessionDelivery,
-          ackSessionDelivery: realAckSessionDelivery,
           enqueueSystemEvent: mockEnqueueSystemEvent,
           requestContinuationWake,
         },
@@ -323,7 +321,6 @@ describe("nonexistent-target-session: delivery resilience (targeting.ts)", () =>
         },
         {
           enqueueSessionDelivery: realEnqueueSessionDelivery,
-          ackSessionDelivery: realAckSessionDelivery,
           enqueueSystemEvent,
           requestContinuationWake,
         },

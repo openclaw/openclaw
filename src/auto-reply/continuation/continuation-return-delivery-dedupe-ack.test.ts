@@ -1,7 +1,8 @@
 // Regression: idempotent continuation-return delivery
 // retries can return the same durable delivery id that already backs the
 // surviving queued system event. If the in-memory queue de-dupes the retry, do
-// NOT ack that id here or restart recovery loses the surviving queued event.
+// NOT ack or retire that id here or restart recovery loses the surviving queued event.
+// Enqueue has no ack path at all; the refusal seam is the only way it settles a row.
 
 import { describe, expect, it, vi } from "vitest";
 import { enqueueContinuationReturnDeliveries } from "./targeting.js";
@@ -12,7 +13,7 @@ function makeDeps(overrides: { enqueueSystemEvent: () => boolean }) {
   const enqueueSessionDelivery = vi.fn<ReturnDeliveryDeps["enqueueSessionDelivery"]>(
     async () => "delivery-id-1",
   );
-  const ackSessionDelivery = vi.fn<NonNullable<ReturnDeliveryDeps["ackSessionDelivery"]>>(
+  const refuseSessionDelivery = vi.fn<NonNullable<ReturnDeliveryDeps["refuseSessionDelivery"]>>(
     async () => {},
   );
   const enqueueSystemEvent = vi.fn<ReturnDeliveryDeps["enqueueSystemEvent"]>(() =>
@@ -21,7 +22,7 @@ function makeDeps(overrides: { enqueueSystemEvent: () => boolean }) {
   const requestContinuationWake = vi.fn<ReturnDeliveryDeps["requestContinuationWake"]>();
   return {
     enqueueSessionDelivery,
-    ackSessionDelivery,
+    refuseSessionDelivery,
     enqueueSystemEvent,
     requestContinuationWake,
   };
@@ -44,9 +45,9 @@ describe("enqueueContinuationReturnDeliveries :: de-duplicated ack reconciliatio
 
     expect(deps.enqueueSessionDelivery).toHaveBeenCalledTimes(1);
     expect(deps.enqueueSystemEvent).toHaveBeenCalledTimes(1);
-    // The existing queued event carries the ack id; acking it here would delete
+    // The existing queued event carries the ack id; retiring it here would delete
     // the restart-recovery backing row before prompt drain consumes it.
-    expect(deps.ackSessionDelivery).not.toHaveBeenCalled();
+    expect(deps.refuseSessionDelivery).not.toHaveBeenCalled();
     // The content still counts as delivered via the surviving duplicate.
     expect(result.enqueued).toBe(1);
   });
@@ -67,6 +68,6 @@ describe("enqueueContinuationReturnDeliveries :: de-duplicated ack reconciliatio
 
     expect(deps.enqueueSystemEvent).toHaveBeenCalledTimes(1);
     // Queued event carries the ack id; the prompt-drain path acks it later.
-    expect(deps.ackSessionDelivery).not.toHaveBeenCalled();
+    expect(deps.refuseSessionDelivery).not.toHaveBeenCalled();
   });
 });

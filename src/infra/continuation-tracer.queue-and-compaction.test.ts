@@ -119,7 +119,7 @@ describe("continuation-tracer :: emitContinuationFanoutSpan helper", () => {
     return { tracer, spans };
   }
 
-  it("emits one fanout span with aggregate recipient outcomes and parent trace context", () => {
+  it("emits one fanout span with per-recipient outcomes and parent trace context", () => {
     const { tracer, spans } = makeRecordingTracer();
     setContinuationTracer(tracer);
     const traceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
@@ -127,7 +127,8 @@ describe("continuation-tracer :: emitContinuationFanoutSpan helper", () => {
     emitContinuationFanoutSpan({
       fanoutMode: "all",
       targetSessionKeys: ["agent:main:a", "agent:main:b", "agent:main:c"],
-      deliveredCount: 3,
+      recipientOutcomes: ["delivered", "refused", "queued"],
+      refusalReason: "recipient-authority-changed",
       chainStepRemaining: 8,
       traceparent,
     });
@@ -139,13 +140,15 @@ describe("continuation-tracer :: emitContinuationFanoutSpan helper", () => {
     const attrs = span.options?.attributes as ContinuationSpanAttrs;
     expect(attrs["fanout.mode"]).toBe("all");
     expect(attrs["fanout.recipient_count"]).toBe(3);
-    expect(attrs["fanout.delivered_count"]).toBe(3);
+    expect(attrs["fanout.delivered_count"]).toBe(1);
+    expect(attrs["fanout.refused_count"]).toBe(1);
+    expect(attrs["refusal.reason"]).toBe("recipient-authority-changed");
     expect(attrs["fanout.recipient.session_key_hashes"]).toEqual([
       "8d58a705b979",
       "55d2be10b02a",
       "45ace0256ba6",
     ]);
-    expect(attrs["fanout.recipient.outcomes"]).toEqual(["delivered", "delivered", "delivered"]);
+    expect(attrs["fanout.recipient.outcomes"]).toEqual(["delivered", "refused", "queued"]);
     expect(attrs["chain.step.remaining"]).toBe(8);
     expect(span.statusCalls).toEqual([{ status: "OK", message: undefined }]);
     expect(span.ended).toBe(true);
@@ -158,7 +161,7 @@ describe("continuation-tracer :: emitContinuationFanoutSpan helper", () => {
     emitContinuationFanoutSpan({
       fanoutMode: "tree",
       targetSessionKeys: ["agent:main:a", "agent:main:b"],
-      deliveredCount: 2,
+      recipientOutcomes: ["delivered", "delivered"],
       chainStepRemaining: 0,
     });
 

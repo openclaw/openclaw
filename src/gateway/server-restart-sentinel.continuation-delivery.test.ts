@@ -355,19 +355,25 @@ describe("restart recovery of queued continuation deliveries", () => {
         legacyKey: undefined,
       });
 
-      await deliverQueuedSessionDelivery({
-        deps: {} as never,
-        stateDir: testState.stateDir,
-        entry: {
-          id: `delivery-stale-${invalidationSlug}`,
-          kind: "systemEvent",
-          sessionKey,
-          text: "stale delegate result",
-          enqueuedAt: 1,
-          retryCount: 0,
-          recipientAuthority,
-          awaitPromptAdoption: true,
-        },
+      // Refused: dead-lettered with its reason, so recovery never settles it as recovered.
+      await expect(
+        deliverQueuedSessionDelivery({
+          deps: {} as never,
+          stateDir: testState.stateDir,
+          entry: {
+            id: `delivery-stale-${invalidationSlug}`,
+            kind: "systemEvent",
+            sessionKey,
+            text: "stale delegate result",
+            enqueuedAt: 1,
+            retryCount: 0,
+            recipientAuthority,
+            awaitPromptAdoption: true,
+          },
+        }),
+      ).rejects.toMatchObject({
+        name: "SessionDeliveryDeadLetteredError",
+        message: "continuation return refused: recipient-authority-changed",
       });
 
       expect(mocks.isSessionRecipientAuthorityCurrent).toHaveBeenCalledWith(

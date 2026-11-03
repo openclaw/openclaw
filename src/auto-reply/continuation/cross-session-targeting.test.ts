@@ -15,7 +15,6 @@ import {
 } from "../../infra/continuation-tracer.js";
 import type { QueuedSessionDeliveryPayload } from "../../infra/session-delivery-queue-storage.js";
 import {
-  ackSessionDelivery as realAckSessionDelivery,
   enqueueSessionDelivery as realEnqueueSessionDelivery,
   loadPendingSessionDeliveries,
 } from "../../infra/session-delivery-queue-storage.js";
@@ -97,7 +96,7 @@ describe("continuation cross-session targeting", () => {
         },
         {
           enqueueSessionDelivery,
-          ackSessionDelivery: vi.fn(),
+          refuseSessionDelivery: vi.fn(),
           enqueueSystemEvent: vi.fn(),
           requestContinuationWake: vi.fn(),
         },
@@ -120,7 +119,7 @@ describe("continuation cross-session targeting", () => {
         },
         {
           enqueueSessionDelivery,
-          ackSessionDelivery: vi.fn(),
+          refuseSessionDelivery: vi.fn(),
           enqueueSystemEvent: vi.fn(),
           requestContinuationWake: vi.fn(),
         },
@@ -142,7 +141,7 @@ describe("continuation cross-session targeting", () => {
         },
         {
           enqueueSessionDelivery,
-          ackSessionDelivery: vi.fn(),
+          refuseSessionDelivery: vi.fn(),
           enqueueSystemEvent: vi.fn(),
           requestContinuationWake: vi.fn(),
         },
@@ -187,7 +186,7 @@ describe("continuation cross-session targeting", () => {
       enqueued.push(payload);
       return `delivery-${enqueued.length}`;
     });
-    const ackSessionDelivery = vi.fn(async () => undefined);
+    const refuseSessionDelivery = vi.fn(async () => undefined);
     const mockEnqueueSystemEvent = vi.fn<EnqueueSystemEvent>((text, opts) => {
       systemEvents.push({ text, sessionKey: opts.sessionKey });
       return true;
@@ -205,7 +204,7 @@ describe("continuation cross-session targeting", () => {
       },
       {
         enqueueSessionDelivery,
-        ackSessionDelivery,
+        refuseSessionDelivery,
         enqueueSystemEvent: mockEnqueueSystemEvent,
         requestContinuationWake,
       },
@@ -240,7 +239,7 @@ describe("continuation cross-session targeting", () => {
     // queue file must persist until the recipient consumes it via the recovery
     // loop. Acking here would destroy the only durable channel and leave
     // targeted recipients silently unreached.
-    expect(ackSessionDelivery).not.toHaveBeenCalled();
+    expect(refuseSessionDelivery).not.toHaveBeenCalled();
   });
 
   it("keeps a recipient idempotency key stable when earlier tree recipients disappear", async () => {
@@ -251,7 +250,7 @@ describe("continuation cross-session targeting", () => {
     });
     const deps = {
       enqueueSessionDelivery,
-      ackSessionDelivery: vi.fn(async () => undefined),
+      refuseSessionDelivery: vi.fn(async () => undefined),
       enqueueSystemEvent: vi.fn<EnqueueSystemEvent>(() => true),
       requestContinuationWake: vi.fn(),
     };
@@ -334,7 +333,6 @@ describe("continuation cross-session targeting", () => {
         },
         {
           enqueueSessionDelivery: realEnqueueSessionDelivery,
-          ackSessionDelivery: realAckSessionDelivery,
           enqueueSystemEvent,
           requestContinuationWake,
         },
@@ -403,7 +401,7 @@ describe("continuation cross-session targeting", () => {
       enqueued.push(payload);
       return `delivery-${enqueued.length}`;
     });
-    const ackSessionDelivery = vi.fn(async () => undefined);
+    const refuseSessionDelivery = vi.fn(async () => undefined);
     const mockEnqueueSystemEvent = vi.fn<EnqueueSystemEvent>((_text, opts) => {
       systemEvents.push({ sessionKey: opts.sessionKey, traceparent: opts.traceparent });
       return true;
@@ -419,7 +417,7 @@ describe("continuation cross-session targeting", () => {
       },
       {
         enqueueSessionDelivery,
-        ackSessionDelivery,
+        refuseSessionDelivery,
         enqueueSystemEvent: mockEnqueueSystemEvent,
         requestContinuationWake: vi.fn(),
       },
@@ -455,7 +453,7 @@ describe("continuation cross-session targeting", () => {
       },
       {
         enqueueSessionDelivery,
-        ackSessionDelivery: vi.fn(async () => undefined),
+        refuseSessionDelivery: vi.fn(async () => undefined),
         enqueueSystemEvent: mockEnqueueSystemEvent,
         requestContinuationWake: vi.fn(),
       },
@@ -501,7 +499,7 @@ describe("continuation cross-session targeting", () => {
           enqueued.push(payload);
           return `delivery-${enqueued.length}`;
         }),
-        ackSessionDelivery: vi.fn(async () => undefined),
+        refuseSessionDelivery: vi.fn(async () => undefined),
         enqueueSystemEvent: vi.fn<EnqueueSystemEvent>(() => true),
         requestContinuationWake: vi.fn(),
       },
@@ -528,7 +526,7 @@ describe("continuation cross-session targeting", () => {
   // queue file to `.delivered` and unlinked it, leaving
   // ZERO durable record for non-attached recipients (different process
   // and/or pre-restart) to pick up. This test exercises the REAL
-  // `enqueueSessionDelivery` + `ackSessionDelivery` chain (no I/O mocking
+  // `enqueueSessionDelivery` with no ack seam at all (no I/O mocking
   // for the queue layer) and asserts the queue file
   // PERSISTS in the flat `<state-dir>/session-delivery-queue/<id>.json`
   // location until the recovery loop drains it post-restart.
@@ -549,7 +547,6 @@ describe("continuation cross-session targeting", () => {
         },
         {
           enqueueSessionDelivery: realEnqueueSessionDelivery,
-          ackSessionDelivery: realAckSessionDelivery,
           enqueueSystemEvent: mockEnqueueSystemEvent,
           requestContinuationWake,
         },
@@ -585,7 +582,6 @@ describe("continuation cross-session targeting", () => {
         },
         {
           enqueueSessionDelivery: realEnqueueSessionDelivery,
-          ackSessionDelivery: realAckSessionDelivery,
           enqueueSystemEvent,
           requestContinuationWake: vi.fn(),
         },
@@ -622,7 +618,6 @@ describe("continuation cross-session targeting", () => {
         },
         {
           enqueueSessionDelivery: realEnqueueSessionDelivery,
-          ackSessionDelivery: realAckSessionDelivery,
           enqueueSystemEvent: vi.fn<EnqueueSystemEvent>(() => true),
           requestContinuationWake: vi.fn(),
         },

@@ -533,38 +533,60 @@ describe("subagent announce targeted continuation return integration", () => {
     });
   });
 
-  it("does not fall back to a cleaned requester when every tree recipient is filtered", async () => {
-    await withTestDir({ prefix: "openclaw-targeted-return-empty-tree-" }, async (stateDir) => {
-      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-      const requesterSessionKey = "agent:main:subagent:cleaned-tree";
-      registryRuntimeMock.shouldIgnorePostCompletionAnnounceForSession.mockReturnValueOnce(true);
+  it.each(["filtered", "refused for stale recipient authority"])(
+    "does not fall back to the requester or log a delivery when every tree recipient is %s",
+    async (emptied) => {
+      await withTestDir({ prefix: "openclaw-targeted-return-empty-tree-" }, async (stateDir) => {
+        vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+        const requesterSessionKey = "agent:main:subagent:cleaned-tree";
+        if (emptied === "filtered") {
+          registryRuntimeMock.shouldIgnorePostCompletionAnnounceForSession.mockReturnValueOnce(
+            true,
+          );
+        }
 
-      const didAnnounce = await runSubagentAnnounceFlow({
-        childSessionKey: "agent:main:subagent:empty-tree-return",
-        childRunId: "run-empty-tree-targeted-return",
-        requesterSessionKey,
-        task: "[continuation:chain-hop:1] empty filtered tree",
-        timeoutMs: 100,
-        cleanup: "keep",
-        startedAt: 10,
-        endedAt: 20,
-        outcome: { status: "ok" },
-        roundOneReply: "delegate completed",
-        silentAnnounce: true,
-        wakeOnReturn: true,
-        continuationTargetSessionKeys: [requesterSessionKey],
-        continuationFanoutMode: "tree",
+        const didAnnounce = await runSubagentAnnounceFlow({
+          childSessionKey: "agent:main:subagent:empty-tree-return",
+          childRunId: "run-empty-tree-targeted-return",
+          requesterSessionKey,
+          task: "[continuation:chain-hop:1] empty filtered tree",
+          timeoutMs: 100,
+          cleanup: "keep",
+          startedAt: 10,
+          endedAt: 20,
+          outcome: { status: "ok" },
+          roundOneReply: "delegate completed",
+          silentAnnounce: true,
+          wakeOnReturn: true,
+          continuationTargetSessionKeys: [requesterSessionKey],
+          continuationFanoutMode: "tree",
+          // An epoch no session holds: the recipient's authority is not current.
+          ...(emptied === "filtered"
+            ? {}
+            : {
+                continuationRecipientAuthorityBinding: {
+                  version: 1 as const,
+                  selection: "selected" as const,
+                  recipients: [
+                    {
+                      sessionKey: requesterSessionKey,
+                      authority: { state: "bound" as const, epoch: crypto.randomUUID() },
+                    },
+                  ],
+                },
+              }),
+        });
+
+        expect(didAnnounce).toBe("delivered");
+        expect(await readQueuedSystemEventDeliveries(stateDir)).toEqual([]);
+        expect(peekSystemEventEntries(requesterSessionKey)).toEqual([]);
+        expect(requestContinuationWakeMock).not.toHaveBeenCalled();
+        expect(runtimeLogMock).not.toHaveBeenCalledWith(
+          expect.stringContaining("[continuation:targeted-return] Delivered to"),
+        );
       });
-
-      expect(didAnnounce).toBe("delivered");
-      expect(await readQueuedSystemEventDeliveries(stateDir)).toEqual([]);
-      expect(peekSystemEventEntries(requesterSessionKey)).toEqual([]);
-      expect(requestContinuationWakeMock).not.toHaveBeenCalled();
-      expect(runtimeLogMock).toHaveBeenCalledWith(
-        expect.stringContaining("[continuation:targeted-return] Delivered to  from"),
-      );
-    });
-  });
+    },
+  );
 
   it("delivers post-compaction fanoutMode=tree returns like normal tree returns", async () => {
     await withTestDir({ prefix: "openclaw-post-compaction-tree-return-" }, async (stateDir) => {

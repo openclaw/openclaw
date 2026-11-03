@@ -23,10 +23,9 @@ export function reportRefusedContinuationReturn(params: {
   sessionKey: string;
   deliveryId?: string;
 }): void {
-  log.warn(
-    `[continuation:return-refused] stage=${params.stage} reason=${params.reason} session=${params.sessionKey}${params.deliveryId ? ` deliveryId=${params.deliveryId}` : ""}`,
-    { ...params },
-  );
+  const message = `[continuation:return-refused] stage=${params.stage} reason=${params.reason} session=${params.sessionKey}${params.deliveryId ? ` deliveryId=${params.deliveryId}` : ""}`;
+  // The file log keeps the fields structured; the console line already spells them out.
+  log.warn(message, { ...params, consoleMessage: message });
 }
 
 /**

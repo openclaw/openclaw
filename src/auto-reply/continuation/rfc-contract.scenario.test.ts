@@ -32,14 +32,14 @@ function makeReturnDeliveryDeps() {
   const requestContinuationWake = vi.fn((request: Record<string, unknown>) => {
     void request;
   });
-  const ackSessionDelivery = vi.fn(async (id: string) => {
+  const refuseSessionDelivery = vi.fn(async (id: string) => {
     void id;
   });
   return {
     enqueueSessionDelivery,
     enqueueSystemEvent,
     requestContinuationWake,
-    ackSessionDelivery,
+    refuseSessionDelivery,
   };
 }
 
@@ -385,7 +385,7 @@ describe("continuation RFC contract scenarios", () => {
         },
         {
           enqueueSessionDelivery: deps.enqueueSessionDelivery as never,
-          ackSessionDelivery: deps.ackSessionDelivery as never,
+          refuseSessionDelivery: deps.refuseSessionDelivery as never,
           enqueueSystemEvent: deps.enqueueSystemEvent as never,
           requestContinuationWake: deps.requestContinuationWake as never,
         },
@@ -398,6 +398,7 @@ describe("continuation RFC contract scenarios", () => {
         deliveredSessionKeys: [ROOT_SESSION, SIBLING_SESSION],
         heldSessionKeys: [],
         resetHeldSessionKeys: [],
+        refusedSessionKeys: [],
       });
 
       expect(deps.enqueueSessionDelivery).toHaveBeenCalledTimes(2);
@@ -459,7 +460,7 @@ describe("continuation RFC contract scenarios", () => {
           deliveryIds: [`delivery:${SIBLING_SESSION}`],
         },
       ]);
-      expect(deps.ackSessionDelivery).not.toHaveBeenCalled();
+      expect(deps.refuseSessionDelivery).not.toHaveBeenCalled();
     });
 
     it("silent non-wake delivery queues enrichment without wake requests", async () => {
@@ -475,7 +476,7 @@ describe("continuation RFC contract scenarios", () => {
         },
         {
           enqueueSessionDelivery: deps.enqueueSessionDelivery as never,
-          ackSessionDelivery: deps.ackSessionDelivery as never,
+          refuseSessionDelivery: deps.refuseSessionDelivery as never,
           enqueueSystemEvent: deps.enqueueSystemEvent as never,
           requestContinuationWake: deps.requestContinuationWake as never,
         },
@@ -484,7 +485,7 @@ describe("continuation RFC contract scenarios", () => {
       expect(deps.enqueueSessionDelivery).toHaveBeenCalledTimes(2);
       expect(deps.enqueueSystemEvent).toHaveBeenCalledTimes(2);
       expect(deps.requestContinuationWake).not.toHaveBeenCalled();
-      expect(deps.ackSessionDelivery).not.toHaveBeenCalled();
+      expect(deps.refuseSessionDelivery).not.toHaveBeenCalled();
     });
 
     it("absence of trace context degrades observability without failing queued return delivery", async () => {
@@ -500,7 +501,7 @@ describe("continuation RFC contract scenarios", () => {
         },
         {
           enqueueSessionDelivery: deps.enqueueSessionDelivery as never,
-          ackSessionDelivery: deps.ackSessionDelivery as never,
+          refuseSessionDelivery: deps.refuseSessionDelivery as never,
           enqueueSystemEvent: deps.enqueueSystemEvent as never,
           requestContinuationWake: deps.requestContinuationWake as never,
         },
