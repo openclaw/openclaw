@@ -21,10 +21,10 @@ function requireCapability<T>(capability: T | undefined, message: string): T {
 
 export function requireUpdateCommandAcquisition(
   acquired: ReturnType<ReturnType<typeof createManagedHandoffLeaseStore>["acquire"]>,
-  message: string,
+  message: string | (() => string),
 ) {
   if (acquired.kind !== "acquired") {
-    throw new UpdateCommandRecoveryPendingError(message);
+    throw new UpdateCommandRecoveryPendingError(typeof message === "string" ? message : message());
   }
   return acquired;
 }
