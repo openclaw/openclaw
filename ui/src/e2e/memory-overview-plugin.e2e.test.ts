@@ -61,7 +61,7 @@ suite.define(() => {
         await expect(row).toHaveCSS("min-height", "48px");
         await expect(row).toHaveCSS("padding", "12px 16px");
       }
-      await expect(overview.locator(".memory-overview__hero")).toHaveCSS("display", "grid");
+      await expect(overview.locator(".memory-overview__status")).toHaveCSS("display", "flex");
       await expect(overview.locator(".memory-overview__lobster")).toHaveCSS(
         "aspect-ratio",
         "120 / 105",
