@@ -1,4 +1,5 @@
 import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
+import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -29,11 +30,11 @@ import type { SessionEventOptions, SessionEventTarget } from "./session-event-co
 import {
   getSessionEventRuntimeConfig,
   readSessionEventTargetCommandOwner,
-  readSessionEventTargetRetainedRequester,
   readSessionEventTargetEnvironment,
   readSessionEventTargetOperatorAuthority,
   readSessionEventTargetOwnerContinuation,
   readSessionEventTargetRequesterOwner,
+  readSessionEventTargetRetainedRequester,
   resolveSessionEventKey,
 } from "./session-event-target.js";
 import { setChannelSourceTurnId } from "./source-turn-id.js";
@@ -273,7 +274,7 @@ export function buildSessionEventContext(params: {
   } else {
     const commandOwner = readSessionEventTargetCommandOwner(target);
     if (commandOwner) {
-      const { authority, requester } = commandOwner;
+      const { authority } = commandOwner;
       // A continuation of the requester's own work keeps their owner tools only while
       // they are still an owner under the current config.
       bindCommandOwnerAuthority(ctx, {
@@ -289,33 +290,24 @@ export function buildSessionEventContext(params: {
           isCurrent: () => authority.isCurrent(getSessionEventRuntimeConfig()),
         },
       });
-      // Owner-checked effects (for example Gateway maintenance) recheck this sender at
-      // use. Project it only on the requester's own channel account, never across
-      // channels where the same raw ID can name someone else.
-      if (
-        deliveryContext?.channel === requester.channel &&
-        normalizeAccountId(deliveryContext.accountId) === normalizeAccountId(requester.accountId)
-      ) {
-        ctx.SenderId = requester.senderId;
-        ctx.SenderE164 = requester.senderE164;
-      }
-    } else {
-      // A completion whose originating requester is not a command owner (for example an
-      // owner authorized only via toolsBySender) still continues that requester's own work.
-      // Project the host-trusted retained sender identity so the completion turn revalidates
-      // against the requester's CURRENT sender policy instead of falling to the wildcard.
-      // This grants no owner authority: senderIsOwner stays false and owner-checked effects
-      // still gate on their own authority. Project it only on the requester's own channel
-      // account, never across channels where the same raw ID can name someone else.
-      const retained = readSessionEventTargetRetainedRequester(target);
-      if (
-        retained &&
-        deliveryContext?.channel === retained.channel &&
-        normalizeAccountId(deliveryContext.accountId) === normalizeAccountId(retained.accountId)
-      ) {
-        ctx.SenderId = retained.senderId;
-        ctx.SenderE164 = retained.senderE164;
-      }
+    }
+    // A completion continues its requester's own work, owner or not. Restore the requester
+    // and the conversation they spoke in so the turn resolves their current sender, DM and
+    // group policy; this grants nothing itself, and owner-checked effects (for example
+    // Gateway maintenance) still recheck the sender at use. Restore them only on the
+    // requester's own channel account, where the raw ID names them, and only on a turn of
+    // their conversation's type, since a DM restriction applies only to a direct turn.
+    // Otherwise the turn stays senderless and gets the unknown-sender policy.
+    const requester = readSessionEventTargetRetainedRequester(target);
+    if (
+      requester &&
+      deliveryContext?.channel === requester.channel &&
+      normalizeAccountId(deliveryContext.accountId) === normalizeAccountId(requester.accountId) &&
+      normalizeChatType(ctx.ChatType) === requester.chatType
+    ) {
+      ctx.SenderId = requester.senderId;
+      ctx.SenderE164 = requester.senderE164;
+      ctx.ChatId = requester.conversationId;
     }
   }
   setChannelSourceTurnId(ctx, options.sourceTurnId);

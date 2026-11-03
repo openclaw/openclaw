@@ -19,6 +19,7 @@ import {
   getGatewayToolCallerIdentity,
   prepareGatewayToolCallerAssertion,
 } from "../../agents/tools/gateway-caller-context.js";
+import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
@@ -60,12 +61,7 @@ const targetScopes = resolveGlobalSingleton(
         };
         /** A scheduled job's recorded requester; see `requesterOwner` on capture. */
         requesterOwner?: SessionEventRequesterOwner;
-        /**
-         * The host-trusted originating requester retained for a completion (exec, media,
-         * subagent announce). Its sender identity is projected onto the completion turn so
-         * the turn revalidates against the requester's CURRENT sender policy, even when the
-         * requester is not a command owner (e.g. authorized only via toolsBySender).
-         */
+        /** The requester and conversation a completion continues; see `retainRequesterOwner`. */
         retainedRequester?: RetainedSessionEventRequester;
         deletion?: { agentId: string; isBlocked: () => boolean };
       }
@@ -115,7 +111,8 @@ export async function captureSessionEventTargetForHost(
     /** The producing turn held command-owner authority under `operatorAuthority`. */
     ownerContinuation?: true;
     /**
-     * Continue the producing turn's requester as command owner while they remain one.
+     * Continue the producing turn's requester: their identity and conversation for current
+     * sender and conversation policy, and command-owner authority while they remain an owner.
      * The identity comes from the host-owned caller, never from the producer.
      */
     retainRequesterOwner?: true;
@@ -266,6 +263,8 @@ export async function captureSessionEventTargetForHost(
               accountId: requester.accountId ?? undefined,
               senderId: requester.senderId,
               senderE164: requester.senderE164 ?? undefined,
+              chatType: normalizeChatType(requester.chatType),
+              conversationId: requester.conversationId ?? undefined,
             }),
           }
         : {}),
@@ -473,14 +472,9 @@ export type CommandOwnerRequester = Readonly<{
   senderE164?: string;
 }>;
 
-/**
- * The host-trusted originating requester retained for a completion. Its sender identity is
- * projected onto the completion turn so the turn revalidates against the requester's CURRENT
- * sender policy (toolsBySender), even when the requester is not a command owner. The identity
- * comes from the host-owned tool caller (never the producer), and projection is gated on the
- * completion's own delivery route so it never crosses into another channel account.
- */
-export type RetainedSessionEventRequester = CommandOwnerRequester;
+/** The host-captured requester of a completion and the conversation they spoke in. */
+export type RetainedSessionEventRequester = CommandOwnerRequester &
+  Readonly<{ chatType?: ChatType; conversationId?: string }>;
 
 /** The retained owner authority and the host-captured requester it belongs to. */
 export function readSessionEventTargetCommandOwner(
@@ -489,7 +483,6 @@ export function readSessionEventTargetCommandOwner(
   return targetScopes.get(target)?.commandOwner;
 }
 
-/** The host-trusted originating requester retained for a completion's sender-policy revalidation. */
 export function readSessionEventTargetRetainedRequester(
   target: SessionEventTarget,
 ): RetainedSessionEventRequester | undefined {
