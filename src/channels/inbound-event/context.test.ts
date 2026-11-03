@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { hasAnyInboundAudio, hasInboundAudio } from "../../auto-reply/reply/inbound-media.js";
 import {
   buildChannelInboundEventContext,
   finalizeChannelInboundContext,
@@ -187,6 +188,24 @@ describe("buildChannelInboundEventContext", () => {
       expect(ctx.CommandAuthorized).toBe(true);
     },
   );
+
+  const voiceNote = { path: "/tmp/voice.ogg", contentType: "audio/ogg" };
+  it.each([
+    { name: "text", media: [], ownAudio: false },
+    {
+      name: "photo",
+      media: [{ path: "/tmp/photo.png", contentType: "image/png" }],
+      ownAudio: false,
+    },
+    { name: "voice note", media: [voiceNote], ownAudio: true },
+  ])("counts only own audio as inbound when replying to a voice note with $name", (params) => {
+    const ctx = buildContext({
+      media: params.media,
+      supplemental: { quote: { id: "quote-1", senderAllowed: true, media: [voiceNote] } },
+    });
+    expect(hasInboundAudio(ctx)).toBe(params.ownAudio);
+    expect(hasAnyInboundAudio(ctx)).toBe(true);
+  });
 
   it.each([
     ["allowlist", false, hiddenSupplemental],

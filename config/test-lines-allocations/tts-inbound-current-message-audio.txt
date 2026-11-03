@@ -1,0 +1,2 @@
+# Inbound auto-TTS counts only the current message's own audio, not a replied voice note's.
+21
