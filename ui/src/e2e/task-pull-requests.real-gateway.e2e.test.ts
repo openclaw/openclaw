@@ -322,6 +322,7 @@ suite.define(() => {
             sidecarStartup: "defer",
           });
         gateway = await start();
+        await gateway.startupSettled;
         // Browser WebSocket traffic is never replaced: only external GitHub HTTP is fixture-backed.
         for (const stage of ["initial", "restarted"] as const) {
           const stageStartedAt = performance.now();
@@ -588,6 +589,7 @@ suite.define(() => {
             // Reopen persisted rows, not this process's retained projection/database handles.
             await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
             gateway = await start();
+            await gateway.startupSettled;
           }
         }
       },
