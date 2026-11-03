@@ -124,18 +124,52 @@ it.each<[string, Request, Record<string, unknown>]>([
     { model: "gen4_aleph", videoUri: "https://example.com/input.mp4", ratio: "960:960" },
   ],
 ])("submits %s, polls, and downloads the output", async (endpoint, request, body) => {
-  mockSuccessfulTask();
-  const result = await generateVideo(request);
-  expect(postJsonRequestMock).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({
-      url: `https://api.dev.runwayml.com/v1/${endpoint}`,
-      body: endpoint === "text_to_video" ? body : expect.objectContaining(body),
-    }),
-  );
-  expect(result).toMatchObject({
-    videos: [{ fileName: "video-1.webm", buffer: Buffer.from("mp4-bytes") }],
-    metadata: { taskId: "task-1", status: "SUCCEEDED", endpoint: `/v1/${endpoint}` },
-  });
+  const pollPendingStates = endpoint === "text_to_video";
+  if (pollPendingStates) {
+    vi.useFakeTimers();
+  }
+  try {
+    if (pollPendingStates) {
+      mockSubmission(
+        Response.json({ id: "task-1", status: "FAILED", failure: "ignored submit status" }),
+      );
+      for (const status of [" PENDING ", " RUNNING ", " THROTTLED "]) {
+        fetchWithTimeoutMock.mockResolvedValueOnce(Response.json({ status }));
+      }
+      fetchWithTimeoutMock.mockResolvedValueOnce(
+        Response.json({
+          status: " SUCCEEDED ",
+          output: [outputUrl],
+          failure: "ignored success failure",
+        }),
+      );
+      fetchWithTimeoutMock.mockResolvedValueOnce(response("mp4-bytes", "video/webm"));
+    } else {
+      mockSuccessfulTask();
+    }
+    const pending = generateVideo(request);
+    if (pollPendingStates) {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetchWithTimeoutMock).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(fetchWithTimeoutMock).toHaveBeenCalledTimes(5);
+    }
+    const result = await pending;
+    expect(postJsonRequestMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        url: `https://api.dev.runwayml.com/v1/${endpoint}`,
+        body: endpoint === "text_to_video" ? body : expect.objectContaining(body),
+      }),
+    );
+    expect(result).toMatchObject({
+      videos: [{ fileName: "video-1.webm", buffer: Buffer.from("mp4-bytes") }],
+      metadata: { taskId: "task-1", status: "SUCCEEDED", endpoint: `/v1/${endpoint}` },
+    });
+  } finally {
+    if (pollPendingStates) {
+      vi.useRealTimers();
+    }
+  }
 });
 
 it("authenticates video generation with a resolved file SecretRef provider overlay", async () => {
@@ -192,6 +226,38 @@ const failures: Record<string, [Request, (() => ReturnType<typeof mockSubmission
     () => mockSubmission(response("{ not json", "application/json")),
   ],
   "Runway video status response missing task status": [{}, () => mockTaskResponse({})],
+  "Runway video status response returned unknown task status: UNKNOWN": [
+    {},
+    () => mockTaskResponse({ status: " UNKNOWN " }),
+  ],
+  "Runway video status response returned unknown task status: succeeded": [
+    {},
+    () => mockTaskResponse({ status: "succeeded", output: [outputUrl] }),
+  ],
+  "trimmed string failure": [
+    {},
+    () => mockTaskResponse({ status: " FAILED ", failure: "  trimmed string failure  " }),
+  ],
+  "trimmed object failure": [
+    {},
+    () =>
+      mockTaskResponse({
+        status: " CANCELLED ",
+        failure: { message: "  trimmed object failure  " },
+      }),
+  ],
+  "Runway video generation failed": [
+    {},
+    () => mockTaskResponse({ status: "FAILED", failure: " " }),
+  ],
+  "Runway video generation cancelled": [
+    {},
+    () => mockTaskResponse({ status: "CANCELLED", failure: { message: 42 } }),
+  ],
+  "Runway video generation response missing task id": [
+    {},
+    () => mockSubmission(Response.json({ status: "FAILED", failure: "must validate id first" })),
+  ],
   "Runway video generation completed with malformed output URLs": [
     {},
     () => mockTaskResponse({ status: "SUCCEEDED", output: outputUrl }),
@@ -212,6 +278,9 @@ it.each(Object.entries(failures))("rejects: %s", async (error, [request, setup])
     expect(release).toHaveBeenCalledOnce();
   } else {
     expect(postJsonRequestMock).not.toHaveBeenCalled();
+  }
+  if (error === "Runway video generation response missing task id") {
+    expect(fetchWithTimeoutMock).not.toHaveBeenCalled();
   }
 });
 
