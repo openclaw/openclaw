@@ -95,7 +95,7 @@ openclaw storage list --json
 Initialization writes the location marker at
 `openclaw/openclaw-storage.json` for the example above. The displayed target is
 `r2://openclaw-artifacts/openclaw`. A successful test confirms that it wrote, read,
-verified, and deleted its probe object; add `--json` for `state: "ok"`.
+verified, and deleted its check object; add `--json` for `state: "ok"`.
 Keep the marker and encryption passphrase: losing either can make encrypted
 objects unreadable. R2 health checks verify bucket access without reporting free
 or total space.
@@ -122,6 +122,13 @@ No custom endpoint is required. A prefix is a namespace within the bucket, not a
 separate permission boundary; the token remains scoped to the bucket.
 
 ## Troubleshooting
+
+Downloads use sequential 64 MiB ranges and resume from the last received byte
+after a connection reset, timeout, or retryable server error, with up to eight
+retries per range. Each range must match the original object's ETag. If the object
+changes during a download, restart the command to read the new object. Failed
+downloads report the byte count and next offset; restarting a command starts a
+new download rather than reusing a previous scratch file.
 
 For a 401 or 403 error, check that the R2 token has **Object Read & Write** on the
 configured bucket and that both SecretRefs resolve in the process running the

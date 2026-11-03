@@ -1,10 +1,19 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
+import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/server-capabilities.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { buildBrowserGatewayConnectPlan } from "../api/gateway-connect-plan.ts";
 import { loadCommandPaletteCatalogItems } from "../components/command-palette-catalog-search.ts";
+import { usesCronInventoryEvents } from "../lib/cron/inventory-connection.ts";
+import { readCronInventory } from "../lib/cron/inventory.ts";
+import { isGatewayConnectionAttemptPending } from "../lib/gateway-status.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
 import { resolveAvatar } from "../lib/identity-avatar.ts";
+import { invalidateModelCatalogCache } from "../lib/model-catalog-cache.ts";
+import { loadModelCatalog } from "../lib/model-catalog-store.ts";
+import { requestSessionList } from "../lib/sessions/session-requests.ts";
+import { cronJobsListResponse } from "../test-helpers/cron.ts";
 import {
   createGatewayEvent,
   createGatewayStoreTestStore as createStore,
@@ -58,8 +67,238 @@ describe("createApplicationGateway connection ownership", () => {
 
   function connect() {
     gateway.start();
-    current().opts.onHello?.(HELLO);
+    current().testOptions.onHello?.(HELLO);
   }
+
+  it("keeps shared cron inventory capabilities when the current identity hydrates", async () => {
+    const profile = createDeferred<unknown>();
+    gateway.start();
+    const client = current();
+    client.request.mockImplementation((method) =>
+      method === "users.self" ? profile.promise : Promise.resolve(cronJobsListResponse()),
+    );
+    client.testOptions.onHello?.({
+      ...HELLO,
+      auth: { role: "operator", scopes: ["operator.read"] },
+      features: { events: ["cron.inventory.changed"] },
+    });
+    await readCronInventory(client, { compact: true });
+    await readCronInventory(client, { compact: true });
+    expect(client.request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(1);
+    profile.resolve({ profile: { id: "hydrated-reader", emails: [] } });
+    await profile.promise;
+    expect(gateway.snapshot.selfUser?.id).toBe("hydrated-reader");
+    expect(usesCronInventoryEvents(client)).toBe(true);
+    await readCronInventory(client, { compact: true });
+    await readCronInventory(client, { compact: true });
+    expect(client.request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(2);
+  });
+
+  it.each([false, true])(
+    "waits for a connect catalog only when the peer advertises it: %s",
+    async (advertised) => {
+      vi.useFakeTimers();
+      const scope = { agentId: "main", sessionKey: "agent:main:catalog" };
+      const catalog = { models: [{ id: "current", provider: "fixture", name: "Current" }] };
+      ({ gateway, current } = createStore({ getModelCatalogTarget: () => scope }));
+      gateway.start();
+      // Authentication is unrelated to whether this peer negotiated catalog publication.
+      vi.stubGlobal("crypto", undefined);
+      const plan = await buildBrowserGatewayConnectPlan({
+        opts: current().testOptions,
+        connectNonce: "catalog-challenge",
+        connectChallengeTs: 1_800_000_000_000,
+        generation: 1,
+        serverCapabilities: advertised ? [GATEWAY_SERVER_CAPS.MODEL_CATALOG_SNAPSHOT] : [],
+        nativeSignal: new AbortController().signal,
+        selectAuth: () => ({}),
+      });
+      expect(plan.params.modelCatalog).toEqual(advertised ? scope : undefined);
+      current().testOptions.onHello?.(HELLO);
+      current().request.mockResolvedValue(catalog);
+      const read = loadModelCatalog(gateway.snapshot.client!, scope).catch(
+        (error: unknown) => error,
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(current().request.mock.calls.filter(([method]) => method === "models.list")).toEqual(
+        advertised ? [] : [["models.list", { ...scope, view: "configured" }]],
+      );
+      if (advertised) {
+        current().testOptions.onEvent?.(
+          createGatewayEvent("models.snapshot", { target: scope, scope, catalog }),
+        );
+      }
+      expect(await read).toEqual(catalog);
+    },
+  );
+
+  it("retires a negotiated catalog target before reconnecting to a peer without snapshots", async () => {
+    vi.useFakeTimers();
+    const scope = { agentId: "main", sessionKey: "agent:main:catalog" };
+    const catalog = { models: [{ id: "current", provider: "fixture", name: "Current" }] };
+    ({ gateway, current } = createStore({ getModelCatalogTarget: () => scope }));
+    gateway.start();
+    vi.stubGlobal("crypto", undefined);
+    const plan = (serverCapabilities: string[]) =>
+      buildBrowserGatewayConnectPlan({
+        opts: current().testOptions,
+        connectNonce: "catalog-challenge",
+        connectChallengeTs: 1_800_000_000_000,
+        generation: 1,
+        serverCapabilities,
+        nativeSignal: new AbortController().signal,
+        selectAuth: () => ({}),
+      });
+    await plan([GATEWAY_SERVER_CAPS.MODEL_CATALOG_SNAPSHOT]);
+    current().testOptions.onHello?.(HELLO);
+    current().testOptions.onEvent?.(
+      createGatewayEvent("models.snapshot", { target: scope, scope, catalog }),
+    );
+    expect(await loadModelCatalog(gateway.snapshot.client!, scope)).toEqual(catalog);
+
+    current().testOptions.onClose?.({ code: 1006, reason: "reconnect", willRetry: true });
+    expect((await plan([])).params.modelCatalog).toBeUndefined();
+    current().testOptions.onHello?.(HELLO);
+    current().request.mockResolvedValue(catalog);
+    const read = loadModelCatalog(gateway.snapshot.client!, scope).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(current().request).toHaveBeenCalledExactlyOnceWith("models.list", {
+      ...scope,
+      view: "configured",
+    });
+    expect(await read).toEqual(catalog);
+  });
+
+  it("keeps interleaved native clients scoped to their Gateway store", () => {
+    const other = createStore();
+    try {
+      gateway.start();
+      other.gateway.start();
+      const first = current();
+      const second = other.current();
+      expect(gateway.snapshot.client).toBe(first);
+      expect(other.gateway.snapshot.client).toBe(second);
+      first.testOptions.onHello?.(HELLO);
+      expect(gateway.snapshot.phase).toBe("connected");
+      expect(other.gateway.snapshot.phase).toBe("connecting");
+      other.gateway.connect();
+      gateway.connect();
+      expect(clients).toHaveLength(2);
+      expect(other.clients).toHaveLength(2);
+      expect(first.stopped).toBe(1);
+      expect(second.stopped).toBe(1);
+      expect(current()).not.toBe(other.current());
+      expect(gateway.snapshot.client).toBe(current());
+      expect(other.gateway.snapshot.client).toBe(other.current());
+      other.current().testOptions.onHello?.(HELLO);
+      expect(other.gateway.snapshot.phase).toBe("connected");
+      expect(gateway.snapshot.phase).toBe("reconnecting");
+    } finally {
+      other.gateway.stop();
+    }
+  });
+
+  it("retires attempt feedback on stop and ignores callbacks from a replaced client", () => {
+    connect();
+    const previous = current();
+    previous.testOptions.onClose?.({ code: 1006, reason: "lost transport", willRetry: true });
+    previous.testOptions.onConnecting?.();
+    expect(isGatewayConnectionAttemptPending(gateway.snapshot)).toBe(true);
+    gateway.connect();
+    const replacement = current();
+    replacement.testOptions.onConnecting?.();
+    previous.testOptions.onReconnectScheduled?.(800);
+    previous.testOptions.onClose?.({ code: 1006, reason: "retired attempt", willRetry: true });
+    expect(isGatewayConnectionAttemptPending(gateway.snapshot)).toBe(true);
+    replacement.testOptions.onHello?.(HELLO);
+    expect(isGatewayConnectionAttemptPending(gateway.snapshot)).toBe(false);
+    replacement.testOptions.onConnecting?.();
+    gateway.stop();
+    replacement.testOptions.onConnecting?.();
+    expect(isGatewayConnectionAttemptPending(gateway.snapshot)).toBe(false);
+    expect(gateway.snapshot.phase).toBe("stopped");
+  });
+
+  it.each(["session", "agent", "short", "late"])(
+    "shares the connect %s catalog across cold readers and returns",
+    async (kind) => {
+      vi.useFakeTimers();
+      const scope = {
+        agentId: "main",
+        ...(kind !== "agent"
+          ? { sessionKey: "agent:main:12345678-1234-1234-1234-123456789abc" }
+          : {}),
+      };
+      const catalog = { models: [{ id: "first", provider: "fixture", name: "First" }] };
+      const target =
+        kind === "agent" ? {} : kind === "short" ? { agentId: "main", shortId: "12345678" } : scope;
+      ({ gateway, current } = createStore({ getModelCatalogTarget: () => target }));
+      gateway.start();
+      expect(current().testOptions.modelCatalog).toEqual(target);
+      current().testOptions.onHello?.(HELLO);
+      current().request.mockResolvedValue(catalog);
+      if (kind === "late") {
+        await vi.advanceTimersByTimeAsync(1_000);
+      }
+      const client = gateway.snapshot.client!;
+      const first = loadModelCatalog(client, scope);
+      const shared = loadModelCatalog(client, scope);
+      expect(current().request).not.toHaveBeenCalledWith("models.list", expect.anything());
+      current().testOptions.onEvent?.(
+        createGatewayEvent("models.snapshot", { target, scope, catalog }),
+      );
+      expect(await first).toEqual(catalog);
+      expect(await shared).toEqual(catalog);
+      const other = { agentId: "main", sessionKey: "agent:main:other" };
+      await loadModelCatalog(client, other);
+      await loadModelCatalog(client, scope);
+      await loadModelCatalog(client, other);
+      expect(current().request.mock.calls.filter(([method]) => method === "models.list")).toEqual([
+        ["models.list", { ...other, view: "configured" }],
+      ]);
+    },
+  );
+
+  it.each(["timeout", "invalidation", "refresh", "reconnect"])(
+    "recovers a waiting bootstrap read after %s without publishing retired facts",
+    async (recovery) => {
+      vi.useFakeTimers();
+      const scope = { agentId: "main", sessionKey: "agent:main:catalog" };
+      const catalog = { models: [{ id: "current", provider: "fixture", name: "Current" }] };
+      ({ gateway, current } = createStore({ getModelCatalogTarget: () => scope }));
+      gateway.start();
+      expect(current().testOptions.modelCatalog).toEqual(scope);
+      current().testOptions.onHello?.(HELLO);
+      current().request.mockResolvedValue(catalog);
+      const client = gateway.snapshot.client!;
+      const waiting = loadModelCatalog(client, scope);
+      const outcome = waiting.catch((error: unknown) => error);
+      if (recovery === "timeout") {
+        await vi.advanceTimersByTimeAsync(1_000);
+      } else if (recovery === "invalidation") {
+        invalidateModelCatalogCache(client, scope);
+      } else if (recovery === "refresh") {
+        await loadModelCatalog(client, { ...scope, refresh: true });
+      } else {
+        current().testOptions.onClose?.({ code: 1006, reason: "restart", willRetry: true });
+        expect(await outcome).toMatchObject({ name: "AbortError" });
+        expect(current().request).not.toHaveBeenCalled();
+        return;
+      }
+      expect(await outcome).toEqual(catalog);
+      current().testOptions.onEvent?.(
+        createGatewayEvent("models.snapshot", {
+          target: scope,
+          scope,
+          catalog: { models: [{ id: "retired", provider: "fixture", name: "Retired" }] },
+        }),
+      );
+      expect(await loadModelCatalog(client, scope)).toEqual(catalog);
+      expect(
+        current().request.mock.calls.filter(([method]) => method === "models.list"),
+      ).toHaveLength(recovery === "refresh" ? 2 : 1);
+    },
+  );
 
   function unavailable(reason: string, details: Record<string, unknown>, code = 1013) {
     return {
@@ -71,7 +310,7 @@ describe("createApplicationGateway connection ownership", () => {
   }
 
   function rejectUnavailable(reason: string, phase?: string) {
-    current().opts.onClose?.(unavailable(reason, { reason, phase }));
+    current().testOptions.onClose?.(unavailable(reason, { reason, phase }));
   }
 
   it("passes the explicit same-origin resource base to avatar resolution", () => {
@@ -86,26 +325,6 @@ describe("createApplicationGateway connection ownership", () => {
       kind: "profile",
       url: "http://127.0.0.1:18789/wilfred/api/users/p1/avatar",
     });
-  });
-
-  it("retires a completed native handoff while keeping stale hello operations fenced", () => {
-    ({ gateway, current } = createStore({
-      clientOptions: { clientName: "openclaw-ios", mode: "ui" },
-    }));
-    gateway.connect({ bootstrapToken: "synthetic-native-bootstrap", bootstrapProfile: "owner" });
-
-    current().opts.onHello?.({
-      ...HELLO,
-      server: { version: "2026.7.19", buildId: "replacement-build", connId: "native-conn" },
-      pluginSurfaceUrls: { canvas: "https://canvas.test/__openclaw__/cap/hello" },
-    });
-
-    expect(gateway.snapshot.phase).toBe("reconnecting");
-    expect(gateway.snapshot.canvasPluginSurfaceUrl).toBeNull();
-    expect(current().request).not.toHaveBeenCalled();
-    gateway.connect();
-    expect(current().opts.bootstrapToken).toBeUndefined();
-    expect(current().opts.bootstrapProfile).toBeUndefined();
   });
 
   it("does not reload a native stale hello after its observer replaces the connection", async () => {
@@ -130,16 +349,21 @@ describe("createApplicationGateway connection ownership", () => {
     gateway.connect({ bootstrapToken: "synthetic-native-bootstrap", bootstrapProfile: "owner" });
     gateway.subscribe((snapshot) => {
       if (snapshot.phase === "reconnecting") {
+        expect(snapshot.canvasPluginSurfaceUrl).toBeNull();
+        expect(current().request).not.toHaveBeenCalled();
         gateway.connect();
       }
     });
-    current().opts.onHello?.({
+    current().testOptions.onHello?.({
       ...HELLO,
       server: { version: "2026.7.19", buildId: "replacement-build", connId: "native-conn" },
+      pluginSurfaceUrls: { canvas: "https://canvas.test/__openclaw__/cap/hello" },
     });
     await scheduleStaleChunkReloadMock.mock.results[0]?.value;
     expect(fetchMock).not.toHaveBeenCalled();
     expect(replace).not.toHaveBeenCalled();
+    expect(current().testOptions.bootstrapToken).toBeUndefined();
+    expect(current().testOptions.bootstrapProfile).toBeUndefined();
     expect(sessionStorage.getItem("openclaw.controlUi.staleChunkReloadBuildId")).toBeNull();
   });
 
@@ -148,14 +372,22 @@ describe("createApplicationGateway connection ownership", () => {
     const legacyHello = {
       ...HELLO,
       server: { version: "2026.7.20", connId: "legacy-conn" },
+      features: { methods: ["plugins.reload"] },
     };
 
-    current().opts.onHello?.(legacyHello);
+    current().testOptions.onHello?.(legacyHello);
     expect(gateway.snapshot.phase).toBe("connected");
+    const capabilities = gateway.snapshot.pluginCapabilities;
+    expect(capabilities).not.toBeNull();
 
-    current().opts.onClose?.({ code: 1006, reason: "restarting", willRetry: true });
-    current().opts.onHello?.(legacyHello);
+    current().testOptions.onClose?.({ code: 1006, reason: "restarting", willRetry: true });
+    expect(gateway.snapshot.hello).toBe(legacyHello);
+    expect(gateway.snapshot.pluginCapabilities).toBe(capabilities);
+    const staleHello = { ...legacyHello };
+    current().testOptions.onHello?.(staleHello);
     expect(gateway.snapshot.phase).toBe("reconnecting");
+    expect(gateway.snapshot.hello).toBe(staleHello);
+    expect(gateway.snapshot.pluginCapabilities).toBeNull();
   });
 
   it("does not invent an assistant agent id before the gateway advertises one", () => {
@@ -164,9 +396,15 @@ describe("createApplicationGateway connection ownership", () => {
     expect(gateway.snapshot.assistantAgentId).toBeNull();
 
     gateway.connect();
-    current().opts.onHello?.({
+    current().testOptions.onHello?.({
       ...HELLO,
-      snapshot: { sessionDefaults: { defaultAgentId: "roboclaw" } },
+      snapshot: {
+        sessionDefaults: {
+          defaultAgentId: "roboclaw",
+          mainKey: "main",
+          mainSessionKey: "agent:roboclaw:main",
+        },
+      },
     });
     expect(gateway.snapshot.assistantAgentId).toBe("roboclaw");
     gateway.stop();
@@ -182,7 +420,7 @@ describe("createApplicationGateway connection ownership", () => {
         ? firstRefresh.promise
         : Promise.resolve({ profile: { id: "reader", emails: [] } }),
     );
-    first.opts.onHello?.({
+    first.testOptions.onHello?.({
       ...HELLO,
       auth: { role: "operator", scopes: ["operator.read"] },
       pluginSurfaceUrls: { canvas: "https://canvas.test/__openclaw__/cap/first" },
@@ -194,7 +432,7 @@ describe("createApplicationGateway connection ownership", () => {
     });
 
     gateway.connect();
-    current().opts.onHello?.({
+    current().testOptions.onHello?.({
       ...HELLO,
       pluginSurfaceUrls: { canvas: "https://canvas.test/__openclaw__/cap/current" },
     });
@@ -219,7 +457,7 @@ describe("createApplicationGateway connection ownership", () => {
       4013,
     );
     Object.assign(startupClose.error, { retryAfterMs: 250 });
-    current().opts.onClose?.(startupClose);
+    current().testOptions.onClose?.(startupClose);
 
     expect(gateway.snapshot.phase).toBe("starting");
     expect(gateway.snapshot.lastError).toBeNull();
@@ -227,36 +465,35 @@ describe("createApplicationGateway connection ownership", () => {
 
     const listener = vi.fn();
     gateway.subscribe(listener);
-    current().opts.onClose?.(startupClose);
+    current().testOptions.onClose?.(startupClose);
     expect(listener).not.toHaveBeenCalled();
   });
 
-  it("redacts a secret-shaped WebSocket close reason", () => {
-    gateway.start();
-
-    current().opts.onClose?.({
-      code: 1006,
-      reason: "OPENAI_API_KEY=sk-1234567890abcdef",
-      willRetry: true,
-    });
-
-    expect(gateway.snapshot.lastError).toContain("OPENAI_API_KEY=sk-123...cdef");
-    expect(gateway.snapshot.lastError).not.toContain("sk-1234567890abcdef");
+  it.each([
+    { reason: "OPENAI_API_KEY=sk-1234567890abcdef", willRetry: true },
+    { reason: "", willRetry: true },
+    { reason: "", willRetry: false },
+  ])("explains a close safely ($reason, retry=$willRetry)", ({ reason, willRetry }) => {
+    if (reason) {
+      gateway.start();
+    } else {
+      connect();
+    }
+    current().testOptions.onClose?.({ code: 1006, reason, willRetry });
+    if (reason) {
+      expect(gateway.snapshot.lastError).toContain("OPENAI_API_KEY=sk-123...cdef");
+      expect(gateway.snapshot.lastError).not.toContain("sk-1234567890abcdef");
+    } else {
+      expect(gateway.snapshot.phase).toBe(willRetry ? "reconnecting" : "offline");
+      expect(gateway.snapshot.lastError).toBe(
+        willRetry
+          ? "Connection to the Gateway was interrupted. Reconnecting automatically. (WebSocket 1006)"
+          : "Connection to the Gateway was interrupted. Check your connection and try again. (WebSocket 1006)",
+      );
+    }
   });
 
-  it.each([true, false])("explains a reasonless close with retry=%s", (willRetry) => {
-    connect();
-    current().opts.onClose?.({ code: 1006, reason: "", willRetry });
-
-    expect(gateway.snapshot.phase).toBe(willRetry ? "reconnecting" : "offline");
-    expect(gateway.snapshot.lastError).toBe(
-      willRetry
-        ? "Connection to the Gateway was interrupted. Reconnecting automatically. (WebSocket 1006)"
-        : "Connection to the Gateway was interrupted. Check your connection and try again. (WebSocket 1006)",
-    );
-  });
-
-  it("restores the newly selected Gateway's saved agent", () => {
+  it("switches Gateway selection, credentials, and first-retry ownership together", () => {
     const otherGateway = "wss://other-gateway.example.test";
     const selection = {
       sessionKey: "global",
@@ -270,26 +507,21 @@ describe("createApplicationGateway connection ownership", () => {
         sessionsByGateway: { [otherGateway]: selection },
       }),
     );
-    ({ gateway } = createStore({
-      settings: { ...loadSettings(), selectedAgentId: "openclaw" },
+    ({ gateway, current } = createStore({
+      settings: { ...loadSettings(), selectedAgentId: "openclaw", token: "old-token" },
     }));
-
+    connect();
+    gateway.connect({ password: "old-password", bootstrapToken: "old-bootstrap" });
     gateway.connect({ gatewayUrl: otherGateway });
 
     expect(gateway.snapshot.sessionKey).toBe("global");
     expect(loadSettings()).toMatchObject(selection);
-  });
-
-  it("clears inherited credentials when selecting another Gateway", () => {
-    const settings = { ...loadSettings(), token: "old-token" };
-    ({ gateway, current } = createStore({ settings }));
-    gateway.connect({ password: "old-password", bootstrapToken: "old-bootstrap" });
-
-    gateway.connect({ gatewayUrl: "wss://other-gateway.example.test" });
-
-    expect(current().opts.token).toBeUndefined();
-    expect(current().opts.password).toBeUndefined();
-    expect(current().opts.bootstrapToken).toBeUndefined();
+    expect(current().testOptions.token).toBeUndefined();
+    expect(current().testOptions.password).toBeUndefined();
+    expect(current().testOptions.bootstrapToken).toBeUndefined();
+    current().testOptions.onClose?.({ code: 1006, reason: "remote refused", willRetry: true });
+    expect(gateway.snapshot.phase).toBe("connecting");
+    expect(gateway.snapshot.lastError).toBe("disconnected (1006): remote refused");
   });
 
   it("advances the connection revision only when credentials change", () => {
@@ -302,20 +534,10 @@ describe("createApplicationGateway connection ownership", () => {
     expect(gateway.connectionRevision).toBe(1);
   });
 
-  it("keeps a newly selected Gateway's first retry at the login gate", () => {
-    connect();
-    gateway.connect({ gatewayUrl: "wss://other-gateway.example.test" });
-
-    current().opts.onClose?.({ code: 1006, reason: "remote refused", willRetry: true });
-
-    expect(gateway.snapshot.phase).toBe("connecting");
-    expect(gateway.snapshot.lastError).toBe("disconnected (1006): remote refused");
-  });
-
   it("keeps reload-required ahead of retryable startup presentation", () => {
     gateway.start();
 
-    current().opts.onClose?.(
+    current().testOptions.onClose?.(
       unavailable(
         "Control UI updated; reload this page to continue",
         {
@@ -336,89 +558,92 @@ describe("createApplicationGateway connection ownership", () => {
     expect(gateway.snapshot.lastErrorCode).toBe(ConnectErrorDetailCodes.PROTOCOL_MISMATCH);
   });
 
-  it("discards the gapped frame after recovery synchronously replaces its client", () => {
-    const listener = vi.fn();
-    gateway.subscribeEventLog(() => {});
-    gateway.subscribeEvents(listener);
-    gateway.start();
-    const stale = current();
-    stale.opts.onHello?.(HELLO);
+  it.each([false, true])(
+    "retains row bases through gap recovery unless an observer replaces the client (observer=%s)",
+    async (observer) => {
+      const listener = vi.fn();
+      gateway.subscribeEventLog(() => {});
+      gateway.subscribeEvents(listener);
+      connect();
+      const stale = current();
+      const row = { key: "agent:main:held", kind: "direct" as const };
+      stale.request.mockResolvedValue({ sessions: [row], rowsRevision: "held-revision" });
+      const query = { rowMode: "sidebar" as const };
+      await requestSessionList(gateway.snapshot.client!, query, () => true);
+      if (observer) {
+        gateway.subscribe((snapshot) => {
+          if (snapshot.lastError?.startsWith("event gap detected")) {
+            gateway.connect();
+          }
+        });
+      }
+      // The protocol drops the gapped frame and owns socket reconnection.
+      stale.testOptions.onGap?.({ expected: 2, received: 5 });
+      expect(clients).toHaveLength(observer ? 2 : 1);
+      if (observer) {
+        stale.testOptions.onEvent?.(createGatewayEvent("stale.gap", { stale: true }, 5));
+      } else {
+        stale.testOptions.onClose?.({ code: 4000, reason: "event sequence gap", willRetry: true });
+        stale.testOptions.onHello?.(HELLO);
+        stale.request.mockResolvedValue({
+          sessions: [],
+          rowsRevision: "held-revision",
+          rowsUnchanged: true,
+        });
+        expect(await requestSessionList(gateway.snapshot.client!, query, () => true)).toMatchObject(
+          {
+            sessions: [row],
+          },
+        );
+        expect(stale.request).toHaveBeenLastCalledWith(
+          "sessions.list",
+          expect.objectContaining({ ifRowsRevision: "delta:held-revision" }),
+        );
+      }
+      expect(listener).not.toHaveBeenCalled();
+      expect(gateway.eventLog).toEqual([]);
+      expect(current().started).toBe(1);
+      expect(gateway.snapshot.client).toBe(current());
+      const activeEvent = createGatewayEvent("fresh.event", { active: true }, 6);
+      current().testOptions.onEvent?.(activeEvent);
+      expect(listener).toHaveBeenCalledExactlyOnceWith(activeEvent);
+      expect(gateway.eventLog).toMatchObject([{ event: "fresh.event", payload: { active: true } }]);
+    },
+  );
 
-    // The protocol invokes onGap before onEvent for the same received frame.
-    stale.opts.onGap?.({ expected: 2, received: 5 });
-    stale.opts.onEvent?.(createGatewayEvent("stale.gap", { stale: true }, 5));
-
-    expect(listener).not.toHaveBeenCalled();
-    expect(gateway.eventLog).toEqual([]);
-
-    const activeEvent = createGatewayEvent("fresh.event", { active: true }, 6);
-    current().opts.onEvent?.(activeEvent);
-
-    expect(listener).toHaveBeenCalledOnce();
-    expect(listener).toHaveBeenCalledWith(activeEvent);
-    expect(gateway.eventLog).toMatchObject([{ event: "fresh.event", payload: { active: true } }]);
-  });
-
-  it("resets the session lineage on stop so the next start uses the gate again", () => {
-    connect();
-    gateway.stop();
-
-    expect(gateway.snapshot.phase).toBe("stopped");
-
-    gateway.start();
-    current().opts.onClose?.({ code: 1006, reason: "refused", willRetry: true });
-
-    expect(gateway.snapshot.phase).toBe("connecting");
-  });
-
-  it("snapshots subscribers when an event adds or removes another listener", () => {
-    const second = vi.fn();
-    const third = vi.fn();
-    let unsubscribeSecond = () => {};
-    const first = vi.fn(() => {
-      unsubscribeSecond();
-      gateway.subscribeEvents(third);
-    });
-    gateway.subscribeEvents(first);
-    unsubscribeSecond = gateway.subscribeEvents(second);
-    gateway.start();
-    const firstEvent = createGatewayEvent("chat", { text: "first" });
-
-    current().opts.onEvent?.(firstEvent);
-
-    expect(first).toHaveBeenCalledExactlyOnceWith(firstEvent);
-    expect(second).toHaveBeenCalledExactlyOnceWith(firstEvent);
-    expect(third).not.toHaveBeenCalled();
-
-    const secondEvent = createGatewayEvent("chat", { text: "second" }, 2);
-    current().opts.onEvent?.(secondEvent);
-
-    expect(first).toHaveBeenCalledTimes(2);
-    expect(second).toHaveBeenCalledOnce();
-    expect(third).toHaveBeenCalledExactlyOnceWith(secondEvent);
-  });
-
-  it("isolates a failing subscriber from later event subscribers", () => {
-    gateway.subscribeEventLog(() => {});
-    const failure = new Error("subscriber failed");
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    const failing = vi.fn(() => {
-      throw failure;
-    });
-    const healthy = vi.fn();
-    gateway.subscribeEvents(failing);
-    gateway.subscribeEvents(healthy);
-    gateway.start();
-    const event = createGatewayEvent("chat", { text: "still delivered" });
-
-    current().opts.onEvent?.(event);
-
-    expect(failing).toHaveBeenCalledExactlyOnceWith(event);
-    expect(healthy).toHaveBeenCalledExactlyOnceWith(event);
-    expect(gateway.eventLog).toMatchObject([
-      { event: "chat", payload: { text: "still delivered" } },
-    ]);
-  });
+  it.each(["subscription change", "exception"])(
+    "isolates event subscribers from an earlier %s",
+    (action) => {
+      const second = vi.fn();
+      const third = vi.fn();
+      let unsubscribeSecond = () => {};
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const first = vi.fn(() => {
+        if (action === "exception") {
+          throw new Error("subscriber failed");
+        }
+        unsubscribeSecond();
+        gateway.subscribeEvents(third);
+      });
+      gateway.subscribeEventLog(() => {});
+      gateway.subscribeEvents(first);
+      unsubscribeSecond = gateway.subscribeEvents(second);
+      gateway.start();
+      const firstEvent = createGatewayEvent("chat", { text: "first" });
+      current().testOptions.onEvent?.(firstEvent);
+      expect(first).toHaveBeenCalledExactlyOnceWith(firstEvent);
+      expect(second).toHaveBeenCalledExactlyOnceWith(firstEvent);
+      expect(third).not.toHaveBeenCalled();
+      expect(gateway.eventLog).toMatchObject([{ event: "chat", payload: { text: "first" } }]);
+      if (action === "subscription change") {
+        const secondEvent = createGatewayEvent("chat", { text: "second" }, 2);
+        current().testOptions.onEvent?.(secondEvent);
+        expect(first).toHaveBeenCalledTimes(2);
+        expect(second).toHaveBeenCalledOnce();
+        expect(third).toHaveBeenCalledExactlyOnceWith(secondEvent);
+      }
+    },
+  );
 
   it("keeps ephemeral login on the serving gateway from persisting the selection", () => {
     const pageGateway = "ws://127.0.0.1:18789";
@@ -436,14 +661,14 @@ describe("createApplicationGateway connection ownership", () => {
     gateway.start();
     gateway.connect({ gatewayUrl: pageGateway, token: "approval-token", password: "pw" });
 
-    expect(current().opts.url).toBe(pageGateway);
-    expect(current().opts.token).toBe("approval-token");
+    expect(current().testOptions.url).toBe(pageGateway);
+    expect(current().testOptions.token).toBe("approval-token");
     expect(localStorage.getItem(pageSettingsKey)).toBeNull();
     expect(localStorage.getItem(selectionKey)).toBe(remoteGateway);
 
     gateway.connect({ gatewayUrl: otherGateway });
 
-    expect(current().opts.url).toBe(otherGateway);
+    expect(current().testOptions.url).toBe(otherGateway);
     expect(localStorage.getItem(selectionKey)).toBe(otherGateway);
   });
 
@@ -453,7 +678,7 @@ describe("createApplicationGateway connection ownership", () => {
     const stop = gateway.subscribe(observed);
     observed.mockClear();
     const publish = (usageUpdatedAt: number, usageRefreshFailed = false, agentId = "main") =>
-      current().opts.onEvent?.(
+      current().testOptions.onEvent?.(
         createGatewayEvent("chat.metadata.changed", {
           agentId,
           usageUpdatedAt,
@@ -478,9 +703,9 @@ describe("createApplicationGateway connection ownership", () => {
     publish(23);
     expect(gateway.snapshot.usagePublications?.main?.usageRefreshFailed).toBeUndefined();
     expect(failed).toMatchObject({ usageUpdatedAt: 21, usageRefreshFailed: true });
-    current().opts.onClose?.({ code: 1001, reason: "restart", willRetry: true });
+    current().testOptions.onClose?.({ code: 1001, reason: "restart", willRetry: true });
     expect(gateway.snapshot.usagePublications).toBeUndefined();
-    current().opts.onHello?.(HELLO);
+    current().testOptions.onHello?.(HELLO);
     publish(1);
     expect(gateway.snapshot.usagePublications?.main?.usageUpdatedAt).toBe(1);
     stop();
@@ -510,100 +735,50 @@ describe("createApplicationGateway connection ownership", () => {
       const unsubscribe = gateway.subscribeEvents(() => {
         pending = load();
       });
-      current().opts.onEvent?.({ type: "event", event, payload: {} });
+      current().testOptions.onEvent?.({ type: "event", event, payload: {} });
       await pending;
       unsubscribe();
     }
     expect(count()).toBe(3);
-    current().opts.onHello?.({ ...HELLO });
+    current().testOptions.onHello?.({ ...HELLO });
     await load();
     expect(count()).toBe(4);
   });
 
-  it("retires event-log delivery when the first observer replaces its client", () => {
-    const stale = vi.fn();
-    const delivered = vi.fn();
-    gateway.subscribeEventLog(() => {
-      gateway.connect();
-    });
-    gateway.subscribeEventLog(stale);
-    gateway.subscribeEvents(delivered);
-    gateway.start();
-    const retired = current();
-    retired.opts.onHello?.(HELLO);
-
-    retired.opts.onEvent?.(createGatewayEvent("chat", { text: "event-1" }, 1));
-
-    expect(stale).not.toHaveBeenCalled();
-    expect(delivered).not.toHaveBeenCalled();
-    expect(gateway.eventLog).toHaveLength(1);
-    expect(clients).toHaveLength(2);
-    expect(gateway.snapshot.phase).toBe("reconnecting");
-  });
-
-  it("never logs a metadata event after its snapshot observer replaces the client", () => {
-    const logged = vi.fn();
-    const delivered = vi.fn();
-    gateway.subscribe((snapshot) => {
-      if (snapshot.usagePublications?.main?.usageUpdatedAt === 1) {
-        gateway.connect();
+  it.each(["event log", "snapshot"])(
+    "retires event delivery when a %s observer replaces its client",
+    (stage) => {
+      const logged = vi.fn();
+      const delivered = vi.fn();
+      if (stage === "event log") {
+        gateway.subscribeEventLog(() => gateway.connect());
+      } else {
+        gateway.subscribe((snapshot) => {
+          if (snapshot.usagePublications?.main?.usageUpdatedAt === 1) {
+            gateway.connect();
+          }
+        });
       }
-    });
-    gateway.subscribeEventLog(logged);
-    gateway.subscribeEvents(delivered);
-    gateway.start();
-    const retired = current();
-    retired.opts.onHello?.(HELLO);
-
-    retired.opts.onEvent?.(
-      createGatewayEvent("chat.metadata.changed", { agentId: "main", usageUpdatedAt: 1 }),
-    );
-
-    expect(gateway.snapshot.selfUser).toBeNull();
-    expect(gateway.eventLog).toEqual([]);
-    expect(logged).not.toHaveBeenCalled();
-    expect(delivered).not.toHaveBeenCalled();
-  });
-
-  it("does not reconnect again after a gap observer replaces its client", () => {
-    gateway.start();
-    const retired = clients[0];
-    retired?.opts.onHello?.(HELLO);
-    gateway.subscribe((snapshot) => {
-      if (snapshot.lastError?.startsWith("event gap detected")) {
-        gateway.connect();
+      gateway.subscribeEventLog(logged);
+      gateway.subscribeEvents(delivered);
+      connect();
+      current().testOptions.onEvent?.(
+        stage === "event log"
+          ? createGatewayEvent("chat", { text: "event-1" }, 1)
+          : createGatewayEvent("chat.metadata.changed", { agentId: "main", usageUpdatedAt: 1 }),
+      );
+      expect(logged).not.toHaveBeenCalled();
+      expect(delivered).not.toHaveBeenCalled();
+      expect(gateway.snapshot.selfUser).toBeNull();
+      expect(clients).toHaveLength(2);
+      expect(gateway.snapshot.phase).toBe("reconnecting");
+      if (stage === "event log") {
+        expect(gateway.eventLog).toHaveLength(1);
+      } else {
+        expect(gateway.eventLog).toEqual([]);
       }
-    });
-
-    retired?.opts.onGap?.({ expected: 2, received: 5 });
-
-    expect(clients).toHaveLength(2);
-    expect(clients[1]?.started).toBe(1);
-    expect(gateway.snapshot.client).toBe(clients[1]);
-  });
-
-  it("projects suspension hello/events without changing transport and drops stale connection state", () => {
-    gateway.start();
-    const first = current();
-    const suspendedHello = { ...HELLO, snapshot: { suspension: { phase: "prepared" } } };
-    first.opts.onHello?.(suspendedHello);
-    expect(gateway.snapshot.suspensionPhase).toBe("prepared");
-    for (const phase of ["accepting", "preparing", "draining", "prepared", "accepting"] as const) {
-      first.opts.onEvent?.(createGatewayEvent("gateway.suspension", { phase }));
-      expect(gateway.snapshot.suspensionPhase).toBe(phase);
-      expect(gateway.snapshot.phase).toBe("connected");
-    }
-    first.opts.onEvent?.(createGatewayEvent("gateway.suspension", { phase: "resuming" }));
-    expect(gateway.snapshot.suspensionPhase).toBe("accepting");
-    first.opts.onHello?.(suspendedHello);
-    first.opts.onClose?.({ code: 1006, reason: "offline", willRetry: true });
-    expect(gateway.snapshot.suspensionPhase).toBeUndefined();
-    gateway.connect();
-    first.opts.onEvent?.(createGatewayEvent("gateway.suspension", { phase: "prepared" }));
-    expect(gateway.snapshot.suspensionPhase).toBeUndefined();
-    current().opts.onHello?.(HELLO);
-    expect(gateway.snapshot.suspensionPhase).toBeUndefined();
-  });
+    },
+  );
 
   it("defaults unknown suspension evidence while reconnecting and replaces it on hello", async () => {
     vi.useFakeTimers();
@@ -614,52 +789,67 @@ describe("createApplicationGateway connection ownership", () => {
     await vi.advanceTimersByTimeAsync(2_000);
     expect(gateway.snapshot.offlineStable).toBe(true);
     expect(gateway.snapshot.suspensionPhase).toBe("prepared");
-    current().opts.onHello?.(HELLO);
+    current().testOptions.onHello?.(HELLO);
     expect(gateway.snapshot.suspensionPhase).toBeUndefined();
-    current().opts.onEvent?.(createGatewayEvent("gateway.suspension", { phase: "prepared" }));
+    current().testOptions.onEvent?.(
+      createGatewayEvent("gateway.suspension", { phase: "prepared" }),
+    );
     await vi.advanceTimersByTimeAsync(15_000);
     expect(gateway.snapshot.suspensionPhase).toBe("prepared");
   });
 
-  it("expires suspension evidence 15 seconds after the latest connect rejection", async () => {
-    vi.useFakeTimers();
-    gateway.start();
-    const rejectConnect = () => rejectUnavailable("gateway-suspending", "prepared");
-    rejectConnect();
-    expect(gateway.snapshot.phase).toBe("connecting");
-    expect(gateway.snapshot.suspensionPhase).toBe("prepared");
-    await vi.advanceTimersByTimeAsync(10_000);
-    rejectConnect();
-    await vi.advanceTimersByTimeAsync(14_999);
-    expect(gateway.snapshot.suspensionPhase).toBe("prepared");
-    await vi.advanceTimersByTimeAsync(1);
-    expect(gateway.snapshot.suspensionPhase).toBeUndefined();
-    expect(gateway.snapshot.offlineStable).toBe(true);
-  });
-
-  it("degrades an overdue restart to stable offline after its deadline", async () => {
-    vi.useFakeTimers();
-    connect();
-    current().opts.onEvent?.(
-      createGatewayEvent("shutdown", { reason: "gateway restart", restartExpectedMs: 8_000 }),
-    );
-    current().opts.onClose?.({ code: 1012, reason: "gateway restarting", willRetry: true });
-    await vi.advanceTimersByTimeAsync(23_999);
-    expect(gateway.snapshot.restartPending).toBe(true);
-    expect(gateway.snapshot.offlineStable).toBe(true);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(gateway.snapshot.restartPending).toBe(false);
-    expect(gateway.snapshot.offlineStable).toBe(true);
-  });
-
-  it("keeps an ordinary stop on the offline pill path (no restart state)", () => {
-    connect();
-    current().opts.onEvent?.(createGatewayEvent("shutdown", { reason: "gateway stopping" }));
-    expect(gateway.snapshot.restartPending).toBeFalsy();
-    current().opts.onClose?.({ code: 1001, reason: "gateway stopping", willRetry: true });
-    expect(gateway.snapshot.restartPending).toBeFalsy();
-    expect(gateway.snapshot.phase).toBe("reconnecting");
-  });
+  it.each(["suspension", "restart", "restart after connected drain"])(
+    "expires %s evidence at its deadline into stable offline",
+    async (kind) => {
+      vi.useFakeTimers();
+      if (kind === "suspension") {
+        gateway.start();
+        rejectUnavailable("gateway-suspending", "prepared");
+        expect(gateway.snapshot.phase).toBe("connecting");
+        expect(gateway.snapshot.suspensionPhase).toBe("prepared");
+        await vi.advanceTimersByTimeAsync(10_000);
+        rejectUnavailable("gateway-suspending", "prepared");
+      } else {
+        connect();
+        current().testOptions.onEvent?.(
+          createGatewayEvent("shutdown", {
+            reason: "gateway restart",
+            restartExpectedMs: kind === "restart" ? 8_000 : 1_500,
+          }),
+        );
+        if (kind === "restart after connected drain") {
+          await vi.advanceTimersByTimeAsync(10 * 60_000);
+          expect(gateway.snapshot.phase).toBe("connected");
+          expect(gateway.snapshot.restartPending).toBe(true);
+          expect(gateway.snapshot.offlineStable).toBe(false);
+        }
+        current().testOptions.onClose?.({
+          code: 1012,
+          reason: "gateway restarting",
+          willRetry: true,
+        });
+      }
+      await vi.advanceTimersByTimeAsync(kind === "restart" ? 23_999 : 14_999);
+      if (kind === "suspension") {
+        expect(gateway.snapshot.suspensionPhase).toBe("prepared");
+      } else {
+        expect(gateway.snapshot.restartPending).toBe(true);
+      }
+      expect(gateway.snapshot.offlineStable).toBe(true);
+      await vi.advanceTimersByTimeAsync(1);
+      if (kind === "suspension") {
+        expect(gateway.snapshot.suspensionPhase).toBeUndefined();
+      } else {
+        expect(gateway.snapshot.restartPending).toBe(false);
+      }
+      expect(gateway.snapshot.offlineStable).toBe(true);
+      current().testOptions.onHello?.(HELLO);
+      expect(gateway.snapshot.phase).toBe("connected");
+      expect(gateway.snapshot.restartPending).toBe(false);
+      expect(gateway.snapshot.suspensionPhase).toBeUndefined();
+      expect(gateway.snapshot.offlineStable).toBe(false);
+    },
+  );
 
   it("recognizes the structured restart rejection before the first successful hello", () => {
     gateway.start();

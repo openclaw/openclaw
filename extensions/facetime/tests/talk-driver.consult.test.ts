@@ -25,8 +25,9 @@ function consult(itemId: string, callId: string, question: string) {
 describe("FaceTime talk driver consult delivery", () => {
   beforeEach(resetTalkDriverMocks);
 
-  it("never lets late cancellation of a superseded consult abort its successor", async () => {
+  it("cancels a superseded consult without aborting its successor on late completion", async () => {
     mocks.consult.mockImplementation(() => new Promise<{ text: string }>(() => {}));
+    const finishFirst = deferConsult();
     await startReadyFaceTimeTalkDriver();
     const runTool = (callId: string) =>
       void mocks.sessionParams?.onToolCall({
@@ -42,26 +43,17 @@ describe("FaceTime talk driver consult delivery", () => {
     await vi.waitFor(() => expect(mocks.consult).toHaveBeenCalledTimes(2));
     const first = mocks.consult.mock.calls[0]?.[0] as {
       abortSignal: AbortSignal;
-      onRunStarted(params: { runId: string; sessionId: string; timeoutMs: number }): {
-        abortSignal: AbortSignal;
-      };
     };
     const second = mocks.consult.mock.calls[1]?.[0] as typeof first;
-    const secondRun = second.onRunStarted({
-      runId: "run-b",
-      sessionId: "shared-session",
-      timeoutMs: 1_000,
-    });
-    const lateFirstRun = first.onRunStarted({
-      runId: "run-a",
-      sessionId: "shared-session",
-      timeoutMs: 1_000,
-    });
 
     expect(first.abortSignal.aborted).toBe(true);
-    expect(lateFirstRun.abortSignal.aborted).toBe(true);
     expect(second.abortSignal.aborted).toBe(false);
-    expect(secondRun.abortSignal.aborted).toBe(false);
+    finishFirst({ text: "Superseded answer." });
+    await Promise.resolve();
+    expect(second.abortSignal.aborted).toBe(false);
+    expect(mocks.bridge.submitToolResult).not.toHaveBeenCalledWith("consult-a", {
+      text: "Superseded answer.",
+    });
   });
 
   it("retires old consult and playback ownership on provider continuity reset", async () => {
@@ -242,13 +234,13 @@ describe("FaceTime talk driver consult delivery", () => {
     },
   );
 
-  it("routes one normalized FaceTime session to the configured default agent", async () => {
+  it("routes one normalized FaceTime session to the sole configured agent", async () => {
     mocks.consult.mockResolvedValueOnce({ text: "I know my SOUL.md." });
     await startReadyFaceTimeTalkDriver(
       startParams({
         callUUID: "17BC43FD-5800-4B54-86DB-698C49253C42",
         fullConfig: {
-          agents: { list: [{ id: "lobster", default: true }] },
+          agents: { entries: { lobster: {} } },
         },
       }),
     );

@@ -15,7 +15,7 @@ Join Slack huddles through a dedicated Slack user in Chrome.
 ## Distribution
 
 - Package: `@openclaw/slack-huddles`
-- Install route: npm or ClawHub: `clawhub:@openclaw/slack-huddles`
+- Install route: npm or ClawHub: `@openclaw/slack-huddles`
 
 ## Surface
 

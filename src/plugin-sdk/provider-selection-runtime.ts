@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 
 /** Provider descriptor fields needed for explicit or automatic selection. */
 export type AutoSelectableProvider = {
@@ -93,18 +94,14 @@ export function resolveProviderRawConfig(params: {
     ? [params.providerId, params.configuredProviderId]
     : [...(params.providerAliases ?? []).toReversed(), params.providerId];
   return Object.fromEntries(
-    providerIds.flatMap((providerId) =>
-      Object.entries(readProviderConfig(params.providerConfigs, providerId) ?? {}),
-    ),
+    providerIds.flatMap((providerId) => {
+      const config = providerId ? params.providerConfigs?.[providerId] : undefined;
+      return config && typeof config === "object" ? Object.entries(config) : [];
+    }),
   );
 }
 
-/** Resolve a configured or auto-selected provider that passes capability config checks. */
-export function resolveConfiguredCapabilityProvider<
-  TConfig,
-  TFullConfig,
-  TProvider extends AutoSelectableProvider,
->(params: {
+type CapabilityProviderSelectionParams<TFullConfig, TProvider extends AutoSelectableProvider> = {
   /** Optional explicit provider id from config or user input. */
   configuredProviderId?: string;
   /** Provider config map used to merge alias defaults, canonical settings, and explicit overrides. */
@@ -119,72 +116,155 @@ export function resolveConfiguredCapabilityProvider<
   listProviders: () => Iterable<TProvider>;
   /** Availability gate checked before provider-specific config normalization. */
   isProviderAvailable?: (params: { provider: TProvider }) => boolean;
-  resolveProviderConfig: (params: {
-    /** Candidate provider being resolved. */
-    provider: TProvider;
-    /** Full config passed through for capability-specific config resolution. */
-    cfg: TFullConfig;
-    /** Raw provider config after alias defaults and canonical/explicit precedence. */
-    rawConfig: Record<string, unknown>;
-  }) => TConfig;
-  isProviderConfigured: (params: {
-    /** Candidate provider being checked. */
-    provider: TProvider;
-    /** Current full config used by capability-specific configured checks. */
-    cfg: TFullConfig | undefined;
-    /** Resolved capability-specific provider config. */
-    providerConfig: TConfig;
-  }) => boolean;
-}): ResolvedConfiguredProvider<TProvider, TConfig> {
+};
+
+type ProviderConfigContext<TProvider, TFullConfig> = {
+  provider: TProvider;
+  cfg: TFullConfig;
+  rawConfig: Record<string, unknown>;
+};
+
+type ProviderConfiguredContext<TProvider, TFullConfig, TConfig> = {
+  provider: TProvider;
+  cfg: TFullConfig | undefined;
+  providerConfig: TConfig;
+};
+
+function prepareProviderCandidates<TFullConfig, TProvider extends AutoSelectableProvider>(
+  params: CapabilityProviderSelectionParams<TFullConfig, TProvider>,
+) {
   const configuredProviderId = normalizeOptionalString(params.configuredProviderId);
-  const resolveCandidate = (
-    provider: TProvider,
-  ): ResolvedConfiguredProvider<TProvider, TConfig> => {
-    const providerConfig = params.resolveProviderConfig({
-      provider,
-      cfg: params.cfgForResolve,
-      rawConfig: resolveProviderRawConfig({
-        providerId: provider.id,
-        providerAliases: provider.aliases,
-        configuredProviderId,
-        providerConfigs: params.providerConfigs,
-      }),
-    });
-    return params.isProviderConfigured({ provider, cfg: params.cfg, providerConfig })
-      ? { ok: true, configuredProviderId, provider, providerConfig }
-      : { ok: false, code: "provider-not-configured", configuredProviderId, provider };
+  const provider = configuredProviderId
+    ? params.getConfiguredProvider(configuredProviderId)
+    : undefined;
+  return {
+    configuredProviderId,
+    providers: configuredProviderId
+      ? provider
+        ? [provider]
+        : []
+      : [...params.listProviders()].toSorted(compareProviderAutoSelectOrder),
   };
-  if (configuredProviderId) {
-    const provider = params.getConfiguredProvider(configuredProviderId);
-    if (!provider) {
-      return {
-        ok: false,
-        code: "missing-configured-provider",
-        configuredProviderId,
-      };
-    }
+}
 
-    return resolveCandidate(provider);
-  }
+function providerConfigContext<TFullConfig, TProvider extends AutoSelectableProvider>(
+  params: CapabilityProviderSelectionParams<TFullConfig, TProvider>,
+  provider: TProvider,
+  configuredProviderId: string | undefined,
+): ProviderConfigContext<TProvider, TFullConfig> {
+  return {
+    provider,
+    cfg: params.cfgForResolve,
+    rawConfig: resolveProviderRawConfig({
+      providerId: provider.id,
+      providerAliases: provider.aliases,
+      configuredProviderId,
+      providerConfigs: params.providerConfigs,
+    }),
+  };
+}
 
-  const providers = [...params.listProviders()].toSorted(compareProviderAutoSelectOrder);
+/** @deprecated Use resolveConfiguredCapabilityProviderAsync when providers resolve stored credentials. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
+export function resolveConfiguredCapabilityProvider<
+  TConfig,
+  TFullConfig,
+  TProvider extends AutoSelectableProvider,
+>(
+  params: CapabilityProviderSelectionParams<TFullConfig, TProvider> & {
+    resolveProviderConfig: (params: ProviderConfigContext<TProvider, TFullConfig>) => TConfig;
+    isProviderConfigured: (
+      params: ProviderConfiguredContext<TProvider, TFullConfig, TConfig>,
+    ) => boolean;
+  },
+): ResolvedConfiguredProvider<TProvider, TConfig> {
+  warnPluginSdkDeprecation({
+    family: "provider-selection",
+    method: "resolveConfiguredCapabilityProvider",
+    replacement: "await resolveConfiguredCapabilityProviderAsync()",
+  });
+  const { configuredProviderId, providers } = prepareProviderCandidates(params);
   if (providers.length === 0) {
     return {
       ok: false,
-      code: "no-registered-provider",
+      code: configuredProviderId ? "missing-configured-provider" : "no-registered-provider",
+      ...(configuredProviderId ? { configuredProviderId } : {}),
     };
   }
 
   let firstUnavailable: TProvider | undefined;
   let firstUnconfigured: TProvider | undefined;
   for (const provider of providers) {
-    if (params.isProviderAvailable && !params.isProviderAvailable({ provider })) {
+    if (
+      !configuredProviderId &&
+      params.isProviderAvailable &&
+      !params.isProviderAvailable({ provider })
+    ) {
       firstUnavailable ??= provider;
       continue;
     }
-    const resolution = resolveCandidate(provider);
-    if (resolution.ok) {
-      return resolution;
+    const providerConfig = params.resolveProviderConfig(
+      providerConfigContext(params, provider, configuredProviderId),
+    );
+    if (params.isProviderConfigured({ provider, cfg: params.cfg, providerConfig })) {
+      return { ok: true, configuredProviderId, provider, providerConfig };
+    }
+    if (configuredProviderId) {
+      return { ok: false, code: "provider-not-configured", configuredProviderId, provider };
+    }
+    firstUnconfigured ??= provider;
+  }
+
+  return {
+    ok: false,
+    code:
+      !firstUnconfigured && firstUnavailable ? "provider-unavailable" : "provider-not-configured",
+    provider: firstUnconfigured ?? firstUnavailable,
+  };
+}
+
+/** Async configuration and availability preserve provider selection order. */
+export async function resolveConfiguredCapabilityProviderAsync<
+  TConfig,
+  TFullConfig,
+  TProvider extends AutoSelectableProvider,
+>(
+  params: CapabilityProviderSelectionParams<TFullConfig, TProvider> & {
+    resolveProviderConfig: (
+      params: ProviderConfigContext<TProvider, TFullConfig>,
+    ) => TConfig | Promise<TConfig>;
+    isProviderConfigured: (
+      params: ProviderConfiguredContext<TProvider, TFullConfig, TConfig>,
+    ) => boolean | Promise<boolean>;
+  },
+): Promise<ResolvedConfiguredProvider<TProvider, TConfig>> {
+  const { configuredProviderId, providers } = prepareProviderCandidates(params);
+  if (providers.length === 0) {
+    return {
+      ok: false,
+      code: configuredProviderId ? "missing-configured-provider" : "no-registered-provider",
+      ...(configuredProviderId ? { configuredProviderId } : {}),
+    };
+  }
+
+  let firstUnavailable: TProvider | undefined;
+  let firstUnconfigured: TProvider | undefined;
+  for (const provider of providers) {
+    if (
+      !configuredProviderId &&
+      params.isProviderAvailable &&
+      !params.isProviderAvailable({ provider })
+    ) {
+      firstUnavailable ??= provider;
+      continue;
+    }
+    const providerConfig = await params.resolveProviderConfig(
+      providerConfigContext(params, provider, configuredProviderId),
+    );
+    if (await params.isProviderConfigured({ provider, cfg: params.cfg, providerConfig })) {
+      return { ok: true, configuredProviderId, provider, providerConfig };
+    }
+    if (configuredProviderId) {
+      return { ok: false, code: "provider-not-configured", configuredProviderId, provider };
     }
     firstUnconfigured ??= provider;
   }
@@ -217,15 +297,4 @@ function selectFirstAutoProvider<TProvider extends AutoSelectableProvider>(
     }
   }
   return selected;
-}
-
-function readProviderConfig(
-  providerConfigs: Record<string, Record<string, unknown> | undefined> | undefined,
-  providerId: string | undefined,
-): Record<string, unknown> | undefined {
-  if (!providerId) {
-    return undefined;
-  }
-  const providerConfig = providerConfigs?.[providerId];
-  return providerConfig && typeof providerConfig === "object" ? providerConfig : undefined;
 }

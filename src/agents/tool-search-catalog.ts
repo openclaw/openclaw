@@ -1,7 +1,9 @@
+import { getPublishedRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
 import { stableStringify } from "@openclaw/normalization-core";
-import { sha256StableValue } from "@openclaw/normalization-core/node-crypto";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { generateSecureHex } from "../infra/secure-random.js";
-import { getPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tool-metadata.js";
+import { classifyAgentToolSource } from "../plugins/tool-metadata.js";
 import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import {
@@ -9,12 +11,20 @@ import {
   rewrapToolWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
-import { getBeforeToolCallDiagnosticOptions } from "./before-tool-call-metadata.js";
+import {
+  getBeforeToolCallDiagnosticOptions,
+  getBeforeToolCallHookContext,
+} from "./before-tool-call-metadata.js";
 import { disposeCodeModeResults } from "./code-mode-results.js";
-import { isCoreCodingSurfaceToolName } from "./core-tool-factory-descriptors.js";
+import { applyGatewayToolPolicy } from "./gateway-tool-policy.js";
 import type { ToolDefinition } from "./sessions/index.js";
+import { isCoreCodingSurfaceToolName } from "./tool-catalog.js";
 import { compactToolInputHint, compactToolOutputHint } from "./tool-schema-hints.js";
 import { disposeToolSearchSchedule } from "./tool-search-scheduling.js";
+import {
+  createToolSearchSelectionMatcher,
+  type ToolSearchSelection,
+} from "./tool-search-selection.js";
 import {
   TOOL_SEARCH_CONTROL_TOOL_NAMES,
   type CatalogSource,
@@ -30,98 +40,114 @@ import {
 } from "./tool-search-types.js";
 import { ToolInputError, type AnyAgentTool } from "./tools/common.js";
 
+// Catalog entry arrays are immutable snapshots. Keying rendered directories by array identity
+// preserves prompt-prefix bytes without retaining retired catalogs.
+export const toolSchemaDirectoryPromptCache = new WeakMap<
+  ToolSearchCatalogEntry[],
+  Map<string, string>
+>();
 const catalogMetadata = new WeakMap<
   ToolSearchCatalogSession,
-  { fingerprint: string; toolExecutionAllow?: readonly string[] }
+  {
+    toolExecutionAllow?: readonly string[];
+    directTools?: readonly AnyAgentTool[];
+    directClientTools?: readonly CatalogTool[];
+  }
 >();
-const untrustedSchemaIdentities = new WeakMap<object, number>();
-let nextUntrustedSchemaIdentity = 1;
+const MAX_SEARCH_MCP_INSTRUCTIONS_CHARS = 512;
+const MAX_TOOL_SEARCH_DESCRIBE_TEXT_CHARS = 20_000;
+export const INCOMPLETE_INSTRUCTIONS_HINT =
+  "Call tool_describe before use to load the complete server instructions.";
+const UNRETRIEVABLE_INSTRUCTIONS_HINT =
+  "Server instructions exceed the tool_describe response limit; only the visible excerpt can be returned.";
 
-function catalogEntriesFingerprint(entries: readonly ToolSearchCatalogEntry[]): string {
-  return entries
-    .map(
-      (entry) =>
-        sha256StableValue([
-          entry.id,
-          entry.source,
-          entry.sourceName ?? "",
-          entry.mcp,
-          entry.name,
-          entry.label ?? "",
-          entry.description,
-          entry.directVisible === true,
-          entry.source === "openclaw"
-            ? entry.parameters
-            : untrustedSchemaFingerprint(entry.parameters),
-          entry.source === "openclaw"
-            ? entry.outputSchema
-            : untrustedSchemaFingerprint(entry.outputSchema),
-        ]).digest,
-    )
-    .toSorted()
-    .join("\n");
+function compactMcpInstructions(instructions: string | undefined): string | undefined {
+  if (!instructions || instructions.length <= MAX_SEARCH_MCP_INSTRUCTIONS_CHARS) {
+    return instructions;
+  }
+  return `${truncateUtf16Safe(instructions, MAX_SEARCH_MCP_INSTRUCTIONS_CHARS - 3)}...`;
 }
 
-function untrustedSchemaFingerprint(schema: unknown): string {
-  if (schema === null || typeof schema !== "object") {
-    return stableStringify(schema);
+export function describeToolSearchCatalogEntry(entry: ToolSearchCatalogEntry) {
+  const { mcp, ...descriptor } = compactToolSearchCatalogEntry(entry, {
+    fullInstructions: true,
+  });
+  return {
+    ...descriptor,
+    parameters: entry.parameters ?? {},
+    ...(entry.outputSchema ? { outputSchema: entry.outputSchema } : {}),
+    ...(mcp ? { mcp } : {}),
+  };
+}
+
+function instructionsHintForEntry(entry: ToolSearchCatalogEntry): string | undefined {
+  const instructions = entry.mcp?.instructions;
+  if (!instructions || instructions.length <= MAX_SEARCH_MCP_INSTRUCTIONS_CHARS) {
+    return undefined;
   }
-  // Remote/client schemas may be attacker-sized or lazy hostile objects. Identity
-  // invalidates reuse when their owning runtime replaces them without traversing them.
-  const existing = untrustedSchemaIdentities.get(schema);
-  if (existing !== undefined) {
-    return `object:${existing}`;
+  if (instructions.length > MAX_TOOL_SEARCH_DESCRIBE_TEXT_CHARS) {
+    return UNRETRIEVABLE_INSTRUCTIONS_HINT;
   }
-  const next = nextUntrustedSchemaIdentity++;
-  untrustedSchemaIdentities.set(schema, next);
-  return `object:${next}`;
+  return JSON.stringify(describeToolSearchCatalogEntry(entry), null, 2).length <=
+    MAX_TOOL_SEARCH_DESCRIBE_TEXT_CHARS
+    ? INCOMPLETE_INSTRUCTIONS_HINT
+    : UNRETRIEVABLE_INSTRUCTIONS_HINT;
+}
+
+// Registered entries are immutable snapshots, so reuse compares live descriptors. Registration
+// keeps entries id-sorted and unique, so equal catalogs match position by position.
+function sameCatalogDescriptors(
+  previous: readonly ToolSearchCatalogEntry[],
+  next: readonly ToolSearchCatalogEntry[],
+): boolean {
+  return (
+    previous.length === next.length &&
+    previous.every((entry, index) => sameCatalogDescriptor(entry, next[index]!))
+  );
+}
+
+function sameCatalogDescriptor(a: ToolSearchCatalogEntry, b: ToolSearchCatalogEntry): boolean {
+  return (
+    a === b ||
+    (a.id === b.id &&
+      a.source === b.source &&
+      (a.sourceName ?? "") === (b.sourceName ?? "") &&
+      a.name === b.name &&
+      (a.label ?? "") === (b.label ?? "") &&
+      a.description === b.description &&
+      (a.directVisible === true) === (b.directVisible === true) &&
+      (a.requiresExactId === true) === (b.requiresExactId === true) &&
+      (a.mcp === b.mcp || stableStringify(a.mcp) === stableStringify(b.mcp)) &&
+      sameCatalogSchema(a.source, a.parameters, b.parameters) &&
+      sameCatalogSchema(a.source, a.outputSchema, b.outputSchema))
+  );
+}
+
+function sameCatalogSchema(source: CatalogSource, a: unknown, b: unknown): boolean {
+  if (a === b) {
+    return true;
+  }
+  // Remote/client schemas may be attacker-sized or lazy hostile objects; only identity
+  // proves reuse, so a replaced schema never gets traversed.
+  if (source !== "openclaw") {
+    return false;
+  }
+  const publishedA = getPublishedRuntimeToolInputSchema(a)?.fingerprint;
+  const publishedB = getPublishedRuntimeToolInputSchema(b)?.fingerprint;
+  return publishedA !== undefined || publishedB !== undefined
+    ? publishedA === publishedB
+    : stableStringify(a) === stableStringify(b);
 }
 
 function rebindCatalogExecutors(
   existingEntries: ToolSearchCatalogEntry[],
   currentEntries: readonly ToolSearchCatalogEntry[],
-): ToolSearchCatalogEntry[] | undefined {
-  const currentTools = new Map(currentEntries.map((entry) => [entry.id, entry.tool]));
-  if (currentTools.size !== currentEntries.length || currentTools.size !== existingEntries.length) {
-    return undefined;
-  }
+): ToolSearchCatalogEntry[] {
   // Keep identical same-run entries; changed executors need a detached descriptor snapshot.
-  // Every exact ID must still resolve, so missing entries fail the reuse check below.
-  const rebound = existingEntries.every(
-    (entry) => entry.tool && currentTools.get(entry.id) === entry.tool,
-  )
+  // The caller already compared the ordered, unique descriptors position by position.
+  return existingEntries.every((entry, index) => entry.tool === currentEntries[index]!.tool)
     ? existingEntries
-    : existingEntries.map((entry) => {
-        const tool = currentTools.get(entry.id);
-        return tool ? { ...entry, tool } : undefined;
-      });
-  return rebound.every((entry): entry is ToolSearchCatalogEntry => entry !== undefined)
-    ? rebound
-    : undefined;
-}
-
-function classifyTool(tool: CatalogTool): {
-  source: CatalogSource;
-  sourceName?: string;
-  mcp?: PluginToolMcpMeta;
-} {
-  const meta = getPluginToolMeta(tool as AnyAgentTool);
-  const pluginId = meta?.pluginId?.trim();
-  const mcp = meta?.mcp;
-  if (mcp) {
-    return { source: "mcp", sourceName: mcp.safeServerName || pluginId || "mcp", mcp };
-  }
-  if (pluginId === "bundle-mcp") {
-    return { source: "mcp", sourceName: pluginId };
-  }
-  return { source: "openclaw", sourceName: pluginId || "core" };
-}
-
-function wrapCatalogTool(tool: AnyAgentTool, hookContext?: HookContext): AnyAgentTool {
-  if (!hookContext || isToolWrappedWithBeforeToolCallHook(tool)) {
-    return tool;
-  }
-  return wrapToolWithBeforeToolCallHook(tool, hookContext);
+    : existingEntries.map((entry, index) => ({ ...entry, tool: currentEntries[index]!.tool }));
 }
 
 export function prepareToolSearchCatalogExecutionTool(
@@ -154,11 +180,15 @@ function toCatalogEntry(
   sourceOverride?: CatalogSource,
   hookContext?: HookContext,
 ): ToolSearchCatalogEntry {
-  const classified = classifyTool(tool);
+  const classified = classifyAgentToolSource(tool);
   const source = sourceOverride ?? classified.source;
   const sourceName = sourceOverride === "client" ? "client" : classified.sourceName;
+  // SAFETY: source classification excludes client callbacks from the native hook wrapper.
+  const nativeTool = tool as AnyAgentTool;
   const catalogTool =
-    source === "client" ? tool : wrapCatalogTool(tool as AnyAgentTool, hookContext);
+    source !== "client" && hookContext && !isToolWrappedWithBeforeToolCallHook(nativeTool)
+      ? wrapToolWithBeforeToolCallHook(nativeTool, hookContext)
+      : tool;
   return {
     id: `${source}:${sourceName?.trim() || "core"}:${tool.name}`,
     source,
@@ -189,7 +219,7 @@ export function isDirectVisibleCatalogTool(
   tool: AnyAgentTool,
   directToolNames: ReadonlySet<string>,
 ): boolean {
-  const classified = classifyTool(tool);
+  const classified = classifyAgentToolSource(tool);
   return (
     classified.source === "openclaw" &&
     (directToolNames.has(tool.name) ||
@@ -202,14 +232,24 @@ export function registerHeadlessToolSearchCatalog(params: {
   tools: readonly AnyAgentTool[];
   hookContext?: HookContext;
 }): void {
-  const { catalogRef, tools, hookContext } = params;
-  const entries = tools.filter(shouldCatalogTool).map((tool) => {
-    const scopedTool =
-      hookContext && isToolWrappedWithBeforeToolCallHook(tool)
-        ? rewrapToolWithBeforeToolCallHook(tool, hookContext)
+  const { catalogRef, tools } = params;
+  const config = params.hookContext?.config ?? getRuntimeConfigSnapshot() ?? undefined;
+  const hookContext = params.hookContext
+    ? { ...params.hookContext, config }
+    : config?.tools?.gatewayPolicy
+      ? { config }
+      : undefined;
+  const entries = applyGatewayToolPolicy([...tools], config)
+    .filter(shouldCatalogTool)
+    .map((tool) => {
+      const scopedTool = hookContext
+        ? rewrapToolWithBeforeToolCallHook(tool, {
+            ...getBeforeToolCallHookContext(tool),
+            ...hookContext,
+          })
         : tool;
-    return toCatalogEntry(scopedTool, undefined, hookContext);
-  });
+      return toCatalogEntry(scopedTool);
+    });
   registerToolSearchCatalog({ catalogRef, entries });
 }
 
@@ -230,23 +270,37 @@ export function collectUniqueCatalogToolNames(tools: readonly AnyAgentTool[]): S
 function finalizeCatalogAvailability(
   entries: ToolSearchCatalogEntry[],
   toolExecutionAllow?: readonly string[],
+  directTools: readonly AnyAgentTool[] = [],
+  directClientTools: readonly CatalogTool[] = [],
 ): ToolSearchCatalogEntry[] {
   const orderedEntries = entries.toSorted((a, b) => a.id.localeCompare(b.id));
+  // Selected-out eligible tools still own their native names. Recording the collision
+  // on descriptors keeps cached directories and name-based lookup in agreement.
+  const directNames = new Set(
+    [...directTools.filter(shouldCatalogTool), ...directClientTools].map((tool) => tool.name),
+  );
   // Client definitions win exact-name shadows, matching the guest projection.
-  const tools = orderedEntries
-    .toSorted((a, b) => Number(a.source === "client") - Number(b.source === "client"))
-    .map((entry) => entry.tool);
+  const tools = [
+    ...directTools,
+    ...orderedEntries
+      .toSorted((a, b) => Number(a.source === "client") - Number(b.source === "client"))
+      .map((entry) => entry.tool),
+    ...directClientTools,
+  ];
   finalizeAgentToolAvailability(tools, { toolExecutionAllow });
   // The array is a fresh copy, but its descriptors may belong to retained snapshots.
   orderedEntries.forEach((entry, index) => {
+    const requiresExactId = directNames.has(entry.name);
     if (
       entry.parameters !== entry.tool.parameters ||
-      entry.description !== entry.tool.description
+      entry.description !== entry.tool.description ||
+      (entry.requiresExactId === true) !== requiresExactId
     ) {
       orderedEntries[index] = {
         ...entry,
         parameters: entry.tool.parameters,
         description: entry.tool.description ?? "",
+        requiresExactId,
       };
     }
   });
@@ -256,20 +310,59 @@ function finalizeCatalogAvailability(
 function registerToolSearchCatalog(params: {
   catalogRef: ToolSearchCatalogRef;
   entries: ToolSearchCatalogEntry[];
-  append?: boolean;
+  mode?: "append" | "reuse";
+  replaceSource?: CatalogSource;
   toolExecutionAllow?: readonly string[];
-}): void {
-  const prior = params.append ? params.catalogRef.current : undefined;
+  directTools?: readonly AnyAgentTool[];
+  directClientTools?: readonly CatalogTool[];
+}): boolean {
+  const existing = params.catalogRef.current;
+  const prior = params.mode === "append" ? existing : undefined;
+  const priorMetadata = prior && catalogMetadata.get(prior);
   // Appending client definitions cannot widen the current run's execution policy.
-  const toolExecutionAllow = prior
-    ? catalogMetadata.get(prior)?.toolExecutionAllow
-    : params.toolExecutionAllow;
-  const byId = new Map((prior?.entries ?? []).map((entry) => [entry.id, entry]));
+  const toolExecutionAllow = prior ? priorMetadata?.toolExecutionAllow : params.toolExecutionAllow;
+  const directTools = params.directTools ?? priorMetadata?.directTools;
+  const directClientTools = params.directClientTools ?? priorMetadata?.directClientTools;
+  const byId = new Map(
+    (prior?.entries ?? [])
+      .filter((entry) => entry.source !== params.replaceSource)
+      .map((entry) => [entry.id, entry]),
+  );
   for (const entry of params.entries) {
     byId.set(entry.id, entry);
   }
+  // Callable bindings can change while descriptors stay equal; finalize before reuse.
+  const entries = finalizeCatalogAvailability(
+    Array.from(byId.values()),
+    toolExecutionAllow,
+    directTools,
+    directClientTools,
+  );
+  const metadata = existing && catalogMetadata.get(existing);
+  const reboundEntries =
+    params.mode === "reuse" &&
+    existing &&
+    metadata &&
+    (metadata.toolExecutionAllow === toolExecutionAllow ||
+      (metadata.toolExecutionAllow !== undefined &&
+        toolExecutionAllow !== undefined &&
+        metadata.toolExecutionAllow.length === toolExecutionAllow.length &&
+        metadata.toolExecutionAllow.every((name, index) => name === toolExecutionAllow[index]))) &&
+    sameCatalogDescriptors(existing.entries, entries)
+      ? rebindCatalogExecutors(existing.entries, entries)
+      : undefined;
+  if (existing && reboundEntries) {
+    const prompts = toolSchemaDirectoryPromptCache.get(existing.entries);
+    if (prompts && reboundEntries !== existing.entries) {
+      // Rebinding swaps executors only; rendered descriptors stay identical.
+      toolSchemaDirectoryPromptCache.set(reboundEntries, prompts);
+    }
+    existing.entries = reboundEntries;
+    catalogMetadata.set(existing, { toolExecutionAllow, directTools, directClientTools });
+    return true;
+  }
   const next = {
-    entries: finalizeCatalogAvailability(Array.from(byId.values()), toolExecutionAllow),
+    entries,
     // Appended client tools extend the same counter lifetime. A replacement
     // gets a new scope so telemetry consumers never infer resets from values.
     // Hex avoids credential-shaped substrings that transcript redaction would alter.
@@ -278,33 +371,32 @@ function registerToolSearchCatalog(params: {
     describeCount: prior?.describeCount ?? 0,
     callCount: prior?.callCount ?? 0,
   };
-  // Finalization can narrow schemas after last-write-wins registration.
   catalogMetadata.set(next, {
-    fingerprint: catalogEntriesFingerprint(next.entries),
     toolExecutionAllow,
+    directTools,
+    directClientTools,
   });
   params.catalogRef.current = next;
   if (!prior) {
     disposeCodeModeResults(params.catalogRef);
   }
   delete params.catalogRef.closedTelemetry;
-  params.catalogRef.onChange?.();
+  return false;
 }
 
-export function clearToolSearchCatalog(params: {
-  sessionId?: string;
-  sessionKey?: string;
-  agentId?: string;
-  runId?: string;
-  catalogRef?: ToolSearchCatalogRef;
-}): void {
+export function clearToolSearchCatalog(params: { catalogRef?: ToolSearchCatalogRef }): void {
   if (params.catalogRef) {
     // Capture only aggregate facts before releasing executable state. Disposal
     // can wake an in-flight wait that still needs its final diagnostics.
     if (params.catalogRef.current) {
       params.catalogRef.closedTelemetry = getTelemetry(params.catalogRef.current);
+      const metadata = catalogMetadata.get(params.catalogRef.current);
       finalizeAgentToolAvailability(
-        params.catalogRef.current.entries.map((entry) => entry.tool),
+        [
+          ...params.catalogRef.current.entries.map((entry) => entry.tool),
+          ...(metadata?.directTools ?? []),
+          ...(metadata?.directClientTools ?? []),
+        ],
         {
           toolExecutionAllow: [],
         },
@@ -315,10 +407,7 @@ export function clearToolSearchCatalog(params: {
     delete params.catalogRef.baselineDirectOnlyToolNames;
     disposeCodeModeResults(params.catalogRef);
     disposeToolSearchSchedule(params.catalogRef);
-    params.catalogRef.disposeObserver?.();
     params.catalogRef.onDispose?.forEach((dispose) => dispose());
-    delete params.catalogRef.onChange;
-    delete params.catalogRef.disposeObserver;
     delete params.catalogRef.onDispose;
   }
 }
@@ -327,6 +416,8 @@ export function clearToolSearchCatalog(params: {
 export function restrictToolSearchCatalog(params: {
   catalogRef?: ToolSearchCatalogRef;
   allowedToolNames: ReadonlySet<string>;
+  /** Availability dependencies only; these names never authorize catalog entries. */
+  allowedDirectToolNames?: ReadonlySet<string>;
   baselineEntries?: readonly ToolSearchCatalogEntry[];
 }): number {
   const owner = params.catalogRef;
@@ -335,11 +426,14 @@ export function restrictToolSearchCatalog(params: {
     return 0;
   }
   const metadata = catalogMetadata.get(current);
+  const allowedDirectToolNames = params.allowedDirectToolNames ?? params.allowedToolNames;
   const entries = finalizeCatalogAvailability(
     (params.baselineEntries ?? current.entries).filter((entry) =>
       params.allowedToolNames.has(entry.name),
     ),
     metadata?.toolExecutionAllow,
+    metadata?.directTools?.filter((tool) => allowedDirectToolNames.has(tool.name)),
+    metadata?.directClientTools?.filter((tool) => allowedDirectToolNames.has(tool.name)),
   );
   if (
     entries.length === current.entries.length &&
@@ -349,11 +443,6 @@ export function restrictToolSearchCatalog(params: {
   }
   current.entries = entries;
   disposeCodeModeResults(owner);
-  catalogMetadata.set(current, {
-    ...metadata,
-    fingerprint: catalogEntriesFingerprint(current.entries),
-  });
-  params.catalogRef?.onChange?.();
   return entries.length;
 }
 
@@ -404,9 +493,16 @@ export function visibleCatalogEntries(
   );
 }
 
-export function compactToolSearchCatalogEntry(entry: ToolSearchCatalogEntry) {
+export function compactToolSearchCatalogEntry(
+  entry: ToolSearchCatalogEntry,
+  options: { fullInstructions?: boolean } = {},
+) {
   const output =
     entry.source === "openclaw" ? compactToolOutputHint(entry.outputSchema) : undefined;
+  const fullInstructions = entry.mcp?.instructions;
+  const instructions = options.fullInstructions
+    ? fullInstructions
+    : compactMcpInstructions(fullInstructions);
   // Node provenance is namespace-only metadata; generic Tool Search keeps its
   // existing MCP result shape outside Code Mode.
   const mcp = entry.mcp
@@ -415,8 +511,10 @@ export function compactToolSearchCatalogEntry(entry: ToolSearchCatalogEntry) {
         safeServerName: entry.mcp.safeServerName,
         toolName: entry.mcp.toolName,
         operation: entry.mcp.operation,
+        ...(instructions ? { instructions } : {}),
       }
     : undefined;
+  const instructionsHint = options.fullInstructions ? undefined : instructionsHintForEntry(entry);
   return {
     id: entry.id,
     source: entry.source,
@@ -426,6 +524,7 @@ export function compactToolSearchCatalogEntry(entry: ToolSearchCatalogEntry) {
     label: entry.label,
     description: entry.description,
     input: entry.source === "openclaw" ? compactToolInputHint(entry.parameters) : "unknown",
+    ...(instructionsHint ? { instructionsHint } : {}),
     ...(output ? { output } : {}),
   };
 }
@@ -437,20 +536,30 @@ export function createToolSearchCatalogRef(): ToolSearchCatalogRef {
 export function applyToolCatalogCompaction(
   params: ToolSearchCatalogCompactionParams,
 ): ToolSearchCatalogApplyResult {
-  if (!params.enabled) {
-    return {
-      tools: params.tools,
-      compacted: false,
-      catalogToolCount: 0,
-      catalogRegistered: false,
-      catalogReused: false,
-    };
-  }
-  const hasControlTool = params.tools.some((tool) => params.isVisibleControlTool(tool));
+  const config =
+    params.toolHookContext?.config ?? params.config ?? getRuntimeConfigSnapshot() ?? undefined;
+  const hasGatewayPolicy = Boolean(config?.tools?.gatewayPolicy);
+  const toolHookContext = params.toolHookContext
+    ? { ...params.toolHookContext, config }
+    : hasGatewayPolicy
+      ? { config }
+      : undefined;
+  const tools = applyGatewayToolPolicy(params.tools, config).map((tool) => {
+    if (!hasGatewayPolicy || !toolHookContext) {
+      return tool;
+    }
+    return rewrapToolWithBeforeToolCallHook(tool, {
+      ...getBeforeToolCallHookContext(tool),
+      ...toolHookContext,
+    });
+  });
+  const hasControlTool = params.enabled && tools.some((tool) => params.isVisibleControlTool(tool));
   const catalogRef = params.catalogRef;
   if (!hasControlTool || !catalogRef) {
     return {
-      tools: params.tools.filter((tool) => !TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name)),
+      tools: params.enabled
+        ? tools.filter((tool) => !TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name))
+        : tools,
       compacted: false,
       catalogToolCount: 0,
       catalogRegistered: false,
@@ -459,45 +568,43 @@ export function applyToolCatalogCompaction(
   }
 
   const visible: AnyAgentTool[] = [];
-  let catalog: ToolSearchCatalogEntry[] = [];
-  for (const tool of params.tools) {
+  const directTools: AnyAgentTool[] = [];
+  const catalog: ToolSearchCatalogEntry[] = [];
+  const selected = createToolSearchSelectionMatcher(params.selection);
+  for (const tool of tools) {
     if (params.isVisibleControlTool(tool)) {
-      visible.push(tool);
+      visible.push(
+        toolHookContext && !isToolWrappedWithBeforeToolCallHook(tool)
+          ? wrapToolWithBeforeToolCallHook(tool, toolHookContext)
+          : tool,
+      );
       continue;
     }
     if (TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name)) {
       continue;
     }
-    if (shouldCatalogTool(tool) && (params.shouldCatalogTool?.(tool) ?? true)) {
+    if (
+      shouldCatalogTool(tool) &&
+      (params.shouldCatalogTool?.(tool) ?? true) &&
+      selected({ ...classifyAgentToolSource(tool), name: tool.name })
+    ) {
       const directVisible = params.isVisibleCatalogTool?.(tool) === true;
-      catalog.push({ ...toCatalogEntry(tool, undefined, params.toolHookContext), directVisible });
+      catalog.push({ ...toCatalogEntry(tool, undefined, toolHookContext), directVisible });
       if (!directVisible) {
         continue;
       }
+    } else {
+      directTools.push(tool);
     }
     visible.push(tool);
   }
-  // Callable bindings can change while descriptors stay equal; normalize before cache reuse.
-  catalog = finalizeCatalogAvailability(catalog, params.toolExecutionAllow);
-  const existingCatalog = catalogRef.current;
-  const incomingFingerprint = existingCatalog ? catalogEntriesFingerprint(catalog) : undefined;
-  const metadata = existingCatalog && catalogMetadata.get(existingCatalog);
-  const reboundEntries =
-    existingCatalog &&
-    metadata &&
-    metadata.fingerprint === incomingFingerprint &&
-    stableStringify(metadata.toolExecutionAllow) === stableStringify(params.toolExecutionAllow)
-      ? rebindCatalogExecutors(existingCatalog.entries, catalog)
-      : undefined;
-  if (existingCatalog && reboundEntries) {
-    existingCatalog.entries = reboundEntries;
-  } else {
-    registerToolSearchCatalog({
-      catalogRef,
-      entries: catalog,
-      toolExecutionAllow: params.toolExecutionAllow,
-    });
-  }
+  const catalogReused = registerToolSearchCatalog({
+    catalogRef,
+    entries: catalog,
+    mode: "reuse",
+    toolExecutionAllow: params.toolExecutionAllow,
+    directTools,
+  });
   catalogRef.directOnlyToolNames = new Set(
     visible.filter((tool) => tool.catalogMode === "direct-only").map((tool) => tool.name),
   );
@@ -507,27 +614,44 @@ export function applyToolCatalogCompaction(
     compacted: catalog.length > 0,
     catalogToolCount: catalog.length,
     catalogRegistered: true,
-    catalogReused: reboundEntries !== undefined,
+    catalogReused,
   };
 }
 
 export function addClientToolsToToolCatalog(params: {
   tools: ToolDefinition[];
   enabled: boolean;
-  sessionId?: string;
-  sessionKey?: string;
-  agentId?: string;
-  runId?: string;
   catalogRef?: ToolSearchCatalogRef;
+  selection?: ToolSearchSelection;
 }): { tools: ToolDefinition[]; compacted: boolean; catalogToolCount: number } {
   const catalogRef = params.catalogRef;
-  if (!params.enabled || !catalogRef?.current || params.tools.length === 0) {
+  if (!catalogRef?.current) {
+    return { tools: params.tools, compacted: false, catalogToolCount: 0 };
+  }
+  const selected = createToolSearchSelectionMatcher(params.selection);
+  const entries: ToolSearchCatalogEntry[] = [];
+  const visible: ToolDefinition[] = [];
+  for (const tool of params.tools) {
+    if (params.enabled && selected({ source: "client", name: tool.name })) {
+      entries.push(toCatalogEntry(tool, "client"));
+    } else {
+      visible.push(tool);
+    }
+  }
+  if (
+    entries.length === 0 &&
+    params.tools.length === 0 &&
+    !catalogRef.current.entries.some((entry) => entry.source === "client") &&
+    !catalogMetadata.get(catalogRef.current)?.directClientTools?.length
+  ) {
     return { tools: params.tools, compacted: false, catalogToolCount: 0 };
   }
   registerToolSearchCatalog({
     catalogRef,
-    entries: params.tools.map((tool) => toCatalogEntry(tool, "client")),
-    append: true,
+    entries,
+    mode: "append",
+    replaceSource: "client",
+    directClientTools: visible,
   });
-  return { tools: [], compacted: params.tools.length > 0, catalogToolCount: params.tools.length };
+  return { tools: visible, compacted: entries.length > 0, catalogToolCount: entries.length };
 }

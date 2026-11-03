@@ -72,8 +72,8 @@ export type MemorySearchRequest = {
   lexicalOnly?: boolean;
   activeProjectKeys?: readonly string[];
 };
-export type MemoryGetRequest = { reference: MemoryReference; from?: number; lines?: number };
-export type MemoryGetResult =
+type MemoryGetRequest = { reference: MemoryReference; from?: number; lines?: number };
+type MemoryGetResult =
   | {
       status: "ok";
       reference: MemoryReference;
@@ -90,7 +90,7 @@ export type MemoryHealth = {
   message?: string;
   details?: Record<string, unknown>;
 };
-export type MemoryCandidateRequest = {
+type MemoryCandidateRequest = {
   kind: "trigger" | "project";
   limit?: number;
   activeProjectKeys?: readonly string[];

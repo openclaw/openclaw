@@ -1,27 +1,68 @@
 import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { sleepWithAbort } from "@openclaw/retry";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import {
+  isAgentDatabaseInspectionPendingError,
+  resolveGatewayReadRetryDelayMs,
+} from "../../lib/gateway-availability.ts";
 
-const DEFAULT_RETRY_MS = 500;
-const MAX_RETRY_MS = 5_000;
 export const CHAT_HISTORY_RETRY_WINDOW_MS = 60_000;
 
 type RetryableChatReadError = GatewayRequestError | GatewayProtocolRequestTimeoutError;
 
-export function isAgentDatabaseInspectionPendingError(error: unknown): boolean {
-  const details =
-    error instanceof GatewayRequestError ? asOptionalRecord(error.details) : undefined;
-  return (
-    error instanceof GatewayRequestError &&
-    error.gatewayCode === "UNAVAILABLE" &&
-    error.retryable &&
-    details?.code === "agent-database-inspection-pending"
+/** One deadline and retry policy for tail, older-page, and speculative history reads. */
+export async function retryChatHistoryRead<T>(options: {
+  method: "chat.history" | "chat.startup";
+  controller: AbortController;
+  signal?: AbortSignal;
+  isCurrent: () => boolean;
+  request: (signal: AbortSignal) => Promise<T>;
+  onRetry?: () => void;
+}): Promise<T> {
+  const { controller, method } = options;
+  const signal = options.signal
+    ? AbortSignal.any([options.signal, controller.signal])
+    : controller.signal;
+  let lastRetryableError: unknown;
+  const deadlineAt = Date.now() + CHAT_HISTORY_RETRY_WINDOW_MS;
+  const timeout = setTimeout(
+    () =>
+      controller.abort(
+        isAgentDatabaseInspectionPendingError(lastRetryableError)
+          ? lastRetryableError
+          : new GatewayProtocolRequestTimeoutError(
+              { method, timeoutMs: CHAT_HISTORY_RETRY_WINDOW_MS, requestSent: true },
+              t("chat.historyRequestTimedOut"),
+            ),
+      ),
+    CHAT_HISTORY_RETRY_WINDOW_MS,
   );
+  const shouldRetry = () => !signal.aborted && Date.now() < deadlineAt && options.isCurrent();
+  try {
+    for (let attempt = 0; ; attempt += 1) {
+      signal.throwIfAborted();
+      try {
+        return await options.request(signal);
+      } catch (error) {
+        if (!shouldRetry() || !isRetryableChatReadError(error, method)) {
+          throw error;
+        }
+        lastRetryableError = error;
+        options.onRetry?.();
+        await sleepWithAbort(resolveGatewayReadRetryDelayMs(error, attempt), signal);
+        if (!shouldRetry()) {
+          throw error;
+        }
+      }
+    }
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
-/** Reads are replayable; subscription acquisition first settles its coordinator's compensation. */
 export function isRetryableChatReadError(
   err: unknown,
   method: string,
@@ -29,18 +70,22 @@ export function isRetryableChatReadError(
   if (err instanceof GatewayProtocolRequestTimeoutError) {
     return err.method === method;
   }
-  if (
-    !(err instanceof GatewayRequestError) ||
-    err.gatewayCode !== "UNAVAILABLE" ||
-    !err.retryable
-  ) {
+  if (!(err instanceof GatewayRequestError)) {
     return false;
   }
-  const details = err.details;
-  if (!details || typeof details !== "object") {
-    return true;
+  const details = asOptionalRecord(err.details);
+  if (err.gatewayCode === "INVALID_REQUEST") {
+    // A fresh subscription rechecks access; never replay a mutation or a denial.
+    return (
+      method === "sessions.messages.subscribe" &&
+      details?.code === "SESSION_MUTATION_AUTHORIZATION_CHANGED" &&
+      details.method === method
+    );
   }
-  const detailMethod = (details as { method?: unknown }).method;
+  if (err.gatewayCode !== "UNAVAILABLE" || !err.retryable) {
+    return false;
+  }
+  const detailMethod = details?.method;
   return typeof detailMethod !== "string" || detailMethod === method;
 }
 
@@ -51,16 +96,4 @@ export function formatChatHistoryLoadError(error: unknown): string {
   return error instanceof GatewayProtocolRequestTimeoutError
     ? t("chat.historyRequestTimedOut")
     : formatUiError(error);
-}
-
-export function resolveChatReadRetryDelayMs(err: RetryableChatReadError, attempt = 0): number {
-  if (
-    err instanceof GatewayRequestError &&
-    typeof err.retryAfterMs === "number" &&
-    Number.isFinite(err.retryAfterMs)
-  ) {
-    // Server hints are minimum waits; the owning consumer deadline bounds the operation.
-    return Math.max(err.retryAfterMs, 100);
-  }
-  return Math.min(DEFAULT_RETRY_MS * 2 ** Math.min(attempt, 4), MAX_RETRY_MS);
 }

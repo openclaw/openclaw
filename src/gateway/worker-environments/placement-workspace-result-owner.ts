@@ -1,3 +1,6 @@
+import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
+import { requireRepositoryWorkspaceDiskAuthority } from "../../state/session-repository-workspaces.authority.js";
+import type { WorkerPlacementMoveIntent } from "./placement-move-intent.types.js";
 import {
   isCurrentPlacementTurnClaim,
   placementTurnOwner,
@@ -45,6 +48,38 @@ export function isCurrentWorkerWorkspacePendingResultOwner(
   return matchesWorkspaceResultGeneration(placement, pending.placementGeneration);
 }
 
+/** A Move may refresh only to export its original accepted disk, never to launch work. */
+export function isRepositoryDiskGatewayMoveResult(
+  placement: WorkerSessionPlacementRecord | undefined,
+  pending: WorkerWorkspacePendingResult | undefined,
+  move: WorkerPlacementMoveIntent | undefined,
+): boolean {
+  return Boolean(
+    placement?.state === "draining" &&
+    pending?.repositoryWorkspaceId &&
+    pending.repositoryDiskAuthority?.environmentId === placement.environmentId &&
+    pending.placementGeneration === placement.generation &&
+    pending.claimId === pending.runId &&
+    pending.claimId.startsWith("reclaim-") &&
+    isCurrentWorkerWorkspacePendingResultOwner(placement, pending) &&
+    move?.sessionId === placement.sessionId &&
+    move.target.kind === "gateway" &&
+    !move.abandonSource &&
+    move.source.environmentId === placement.environmentId &&
+    move.source.ownerEpoch === placement.activeOwnerEpoch &&
+    move.source.generation + 1 === placement.generation,
+  );
+}
+
+export function isWorkerWorkspaceResultReconciling(
+  placement: WorkerSessionPlacementRecord | undefined,
+  pending: WorkerWorkspacePendingResult,
+): boolean {
+  const isPostTerminal =
+    placement?.turnClaim?.owner === "worker" || pending.stagedResultRef !== null;
+  return isPostTerminal && isCurrentWorkerWorkspacePendingResultOwner(placement, pending);
+}
+
 export function matchesWorkspaceResultClaim(
   placement: WorkerSessionPlacementRecord,
   pending: WorkerWorkspacePendingResult,
@@ -70,4 +105,29 @@ export function matchesWorkspaceResultClaim(
         claim.owner.environmentId === recoveryOwner.environmentId &&
         claim.owner.ownerEpoch === recoveryOwner.ownerEpoch))
   );
+}
+
+export function pendingResultFromRow(
+  row: StateDatabase["worker_workspace_pending_results"],
+): WorkerWorkspacePendingResult {
+  return {
+    sessionId: row.session_id,
+    environmentId: row.environment_id,
+    ownerEpoch: row.owner_epoch,
+    placementGeneration: row.placement_generation,
+    claimId: row.claim_id,
+    runId: row.run_id,
+    gatewayInstanceId: row.gateway_instance_id,
+    recoveryRequestedAtMs: row.recovery_requested_at_ms,
+    workspaceAcceptedAtMs: row.workspace_accepted_at_ms,
+    stagedResultRef: row.staged_result_ref,
+    ...(row.repository_workspace_id ? { repositoryWorkspaceId: row.repository_workspace_id } : {}),
+    ...(row.repository_disk_authority_json !== null
+      ? {
+          repositoryDiskAuthority: requireRepositoryWorkspaceDiskAuthority(
+            JSON.parse(row.repository_disk_authority_json),
+          ),
+        }
+      : {}),
+  };
 }

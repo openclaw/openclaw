@@ -1,4 +1,3 @@
-/** Detached macOS launchd restart handoff for restarting from inside the service. */
 import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -18,13 +17,6 @@ type LaunchdHandoffMode = LaunchdRestartHandoffMode | "park";
 
 type LaunchdRestartHandoffResult = Result<Promise<boolean>, string>;
 
-type LaunchdRestartTarget = {
-  domain: string;
-  label: string;
-  plistPath: string;
-  serviceTarget: string;
-};
-
 // The booted-out label stays registered until launchd finishes stopping the
 // old process. ExitTimeOut bounds that stop with SIGKILL, so the reload wait is
 // that ceiling plus teardown margin. A 3s poll could advance mid-stop and
@@ -32,21 +24,6 @@ type LaunchdRestartTarget = {
 const RELOAD_BOOTOUT_WAIT_DELAY_SECONDS = 1;
 const RELOAD_BOOTOUT_WAIT_COUNT = LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS + 15;
 const RELOAD_BOOTSTRAP_RETRY_COUNT = 15;
-
-function resolveLaunchdRestartTarget(
-  env: Record<string, string | undefined> = process.env,
-): LaunchdRestartTarget {
-  const domain = resolveLaunchAgentGuiDomain();
-  const label = resolveLaunchAgentLabel(env);
-  const home = normalizeOptionalString(env.HOME) || os.homedir();
-  const plistPath = path.join(home, "Library", "LaunchAgents", `${label}.plist`);
-  return {
-    domain,
-    label,
-    plistPath,
-    serviceTarget: `${domain}/${label}`,
-  };
-}
 
 function buildLaunchdRestartScript(
   mode: LaunchdHandoffMode,
@@ -183,7 +160,11 @@ function scheduleDetachedLaunchdHandoff(params: {
   mode: LaunchdHandoffMode;
   waitForPid?: number;
 }): LaunchdRestartHandoffResult {
-  const target = resolveLaunchdRestartTarget(params.env);
+  const env = params.env ?? process.env;
+  const domain = resolveLaunchAgentGuiDomain();
+  const label = resolveLaunchAgentLabel(env);
+  const home = normalizeOptionalString(env.HOME) || os.homedir();
+  const plistPath = path.join(home, "Library", "LaunchAgents", `${label}.plist`);
   const waitForPid =
     typeof params.waitForPid === "number" && Number.isFinite(params.waitForPid)
       ? Math.floor(params.waitForPid)
@@ -199,11 +180,11 @@ function scheduleDetachedLaunchdHandoff(params: {
       "/bin/sh",
       [
         "-c",
-        buildLaunchdRestartScript(params.mode, restartLogEnv, target.label),
+        buildLaunchdRestartScript(params.mode, restartLogEnv, label),
         "openclaw-launchd-restart-handoff",
-        target.serviceTarget,
-        target.domain,
-        target.plistPath,
+        `${domain}/${label}`,
+        domain,
+        plistPath,
         String(waitForPid),
       ],
       {

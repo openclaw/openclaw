@@ -24,7 +24,7 @@ afterEach(async () => {
 });
 
 it.skipIf(process.platform === "win32")(
-  "releases every completed exec group while the owning session stays open",
+  "recovers from NUL input and releases every completed exec group while the session stays open",
   async () => {
     const cwd = tempDirs.make("exec-group-cleanup-");
     const fixture = path.join(cwd, "command.cjs");
@@ -61,6 +61,17 @@ child.once("spawn", () => {
           scopeKey: "agent:main:exec-group-cleanup",
           cwd,
         });
+        await expect(exec.execute("invalid", { command: "printf bad\0command" })).rejects.toThrow(
+          /NUL bytes|null bytes/,
+        );
+        const corrected = await exec.execute("corrected", {
+          command: "printf '<%s>\\n' '' '\\0'\ncat <<'EOF'\nheredoc\\0\nEOF",
+        });
+        expect(corrected.details).toMatchObject({
+          status: "completed",
+          exitCode: 0,
+          aggregated: "<>\n<\\0>\nheredoc\\0",
+        });
         for (let call = 0; call < 5; call += 1) {
           const result = await exec.execute(`exec-${call}`, {
             command: `exec ${quote(process.execPath)} ${quote(fixture)}`,
@@ -78,6 +89,7 @@ child.once("spawn", () => {
         }
         // Completed output remains available without retaining the process group.
         expect(pids.filter(isPidAlive)).toEqual([]);
+        await supervisor.shutdown();
       },
     );
   },

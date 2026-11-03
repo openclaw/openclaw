@@ -5,7 +5,6 @@ export async function resolveSandboxDockerUser(params: {
   backend: string;
   docker: SandboxDockerConfig;
   workspaceDir: string;
-  stat?: (workspaceDir: string) => Promise<{ uid: number; gid: number }>;
 }): Promise<SandboxDockerConfig> {
   const configuredUser = params.docker.user?.trim();
   if (configuredUser) {
@@ -15,9 +14,8 @@ export async function resolveSandboxDockerUser(params: {
   if (backend !== "docker" && backend !== "podman") {
     return params.docker;
   }
-  const stat = params.stat ?? ((workspaceDir: string) => fs.stat(workspaceDir));
   try {
-    const workspaceStat = await stat(params.workspaceDir);
+    const workspaceStat = await fs.stat(params.workspaceDir);
     const uid = Number.isInteger(workspaceStat.uid) ? workspaceStat.uid : null;
     const gid = Number.isInteger(workspaceStat.gid) ? workspaceStat.gid : null;
     if (uid === null || gid === null || uid < 0 || gid < 0) {

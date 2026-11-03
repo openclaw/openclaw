@@ -248,7 +248,10 @@ struct TailscaleIntegrationSection: View {
 
     private func applySettings() async {
         guard self.hasLoaded else { return }
-        let currentSettings = self.currentSettingsSnapshot()
+        let currentSettings = GatewayTailscaleSettingsSnapshot(
+            mode: self.tailscaleMode,
+            requireCredentialsForServe: self.requireCredentialsForServe,
+            password: self.password)
         let result = await Self.applySettingsIfChanged(
             currentSettings: currentSettings,
             lastAppliedSettings: self.lastAppliedSettings)
@@ -312,13 +315,6 @@ struct TailscaleIntegrationSection: View {
     private func restartGatewayIfNeeded() {
         guard self.connectionMode == .local, !self.isPaused else { return }
         Task { _ = await GatewayLaunchAgentManager.kickstart() }
-    }
-
-    private func currentSettingsSnapshot() -> GatewayTailscaleSettingsSnapshot {
-        GatewayTailscaleSettingsSnapshot(
-            mode: self.tailscaleMode,
-            requireCredentialsForServe: self.requireCredentialsForServe,
-            password: self.password)
     }
 
     static func loadedSettings(from root: [String: Any]) -> GatewayTailscaleLoadedSettings {

@@ -10,7 +10,7 @@ import type {
 } from "../process/command-process-custody.types.js";
 import type { CommandProcessOutcome } from "../process/exec-result.js";
 import { retainCommandProcessCleanup } from "../process/exec-spawn.js";
-import { hasErrnoCode } from "./errno.js";
+import { ignoreMissingPath } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import { UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV } from "./update-doctor-result.js";
 import {
@@ -73,9 +73,7 @@ export async function retainUpdateDoctorProcesses(
   try {
     raw = fs.readFileSync(file, "utf8");
   } catch (error) {
-    if (!hasErrnoCode(error, "ENOENT")) {
-      throw error;
-    }
+    ignoreMissingPath(error);
     // Shipped parents do not join this channel, but the candidate still retains
     // its writer inventory if killed. Only the reserving owner may remove it.
     ownedByDoctor = true;
@@ -125,7 +123,29 @@ export async function retainUpdateDoctorProcesses(
       cwd: process.cwd(),
     });
   }
-  let nativeCustody: ReturnType<typeof createManagedCommandProcessCustody> | undefined;
+  const namespace = receipt.namespace ?? (root ? { roots: [root] } : undefined);
+  let nativeCustody: Awaited<ReturnType<typeof createManagedCommandProcessCustody>> | undefined;
+  let preparationFailure: { error: unknown } | undefined;
+  if (namespace) {
+    try {
+      nativeCustody = await createManagedCommandProcessCustody({
+        ...namespace,
+        runId: receipt.runId,
+        anchorOwner: `doctor:${receipt.nonce}`,
+        parents: authority?.parents,
+        assertCurrent,
+      });
+    } catch (error) {
+      // Diagnostics without native children do not depend on command storage.
+      preparationFailure = { error };
+    }
+  }
+  if (nativeCustody && namespace) {
+    receipt.namespace ??= {
+      roots: namespace.roots,
+      databaseIdentity: nativeCustody.databaseIdentity,
+    };
+  }
   let sequence = 0;
   return {
     [Symbol.dispose]() {
@@ -137,24 +157,13 @@ export async function retainUpdateDoctorProcesses(
       }
     },
     reserve(argv) {
+      if (preparationFailure) {
+        throw preparationFailure.error;
+      }
       // Root discovery may be unavailable during otherwise useful diagnostics.
       // Native installation custody is required before dispatching a child.
       if (!nativeCustody) {
-        const namespace = receipt.namespace ?? (root ? { roots: [root] } : undefined);
-        if (!namespace) {
-          throw new Error("Doctor process custody requires its installation root.");
-        }
-        nativeCustody = createManagedCommandProcessCustody({
-          ...namespace,
-          runId: receipt.runId,
-          anchorOwner: `doctor:${receipt.nonce}`,
-          parents: authority?.parents,
-          assertCurrent,
-        });
-        receipt.namespace ??= {
-          roots: namespace.roots,
-          databaseIdentity: nativeCustody.databaseIdentity,
-        };
+        throw new Error("Doctor process custody requires its installation root.");
       }
       const retained = nativeCustody.custody.reserve(argv);
       const slot: Receipt["slots"][number] = { id: ++sequence };
@@ -163,21 +172,20 @@ export async function retainUpdateDoctorProcesses(
         writeReceipt(file, receipt);
       } catch (error) {
         retained.settled();
+        receipt.slots.splice(receipt.slots.indexOf(slot), 1);
         throw error;
       }
       return {
         spawned(identity: CommandProcessIdentity) {
-          retained.spawned(identity);
+          // Publish the owned PID before binding so a failed bind cannot leave anonymous custody.
           slot.identity = identity;
           writeReceipt(file, receipt);
+          retained.spawned(identity);
         },
         settled() {
           retained.settled();
-          const index = receipt.slots.indexOf(slot);
-          if (index >= 0) {
-            receipt.slots.splice(index, 1);
-            writeReceipt(file, receipt);
-          }
+          receipt.slots.splice(receipt.slots.indexOf(slot), 1);
+          writeReceipt(file, receipt);
         },
       };
     },
@@ -189,7 +197,7 @@ export type UpdateDoctorProcessNamespace = {
   databaseIdentity?: ManagedUpdateLeaseDatabaseIdentity;
 };
 
-export function createUpdateDoctorProcessCustody(
+export async function createUpdateDoctorProcessCustody(
   runId: string,
   root: string,
   resultPath: string,
@@ -205,7 +213,7 @@ export function createUpdateDoctorProcessCustody(
   const nativeCustody =
     process.platform === "win32"
       ? undefined
-      : createManagedCommandProcessCustody({
+      : await createManagedCommandProcessCustody({
           roots,
           runId,
           anchorOwner: `doctor:${descriptor.nonce}`,
@@ -270,7 +278,7 @@ export function createUpdateDoctorProcessCustody(
         // A missing or partial receipt cannot prove that no native work started.
       }
       // Shipped targets without this IPC retain normal completion, after the
-      // original pinned namespace also confirms that no command claims remain.
+      // original pinned namespace also confirms that no owned command claims remain.
       const legacyCompletion = !receipt && !interrupted && rootExtinct;
       const identities =
         receipt?.slots.flatMap((slot) => (slot.identity ? [slot.identity] : [])) ?? [];
@@ -278,6 +286,7 @@ export function createUpdateDoctorProcessCustody(
       // Withheld private input proves no Doctor writers, not whole Windows Job extinction.
       const admitted =
         (rootExtinct && (receipt !== undefined || legacyCompletion)) || inputWithheld;
+      let diagnostics: string[] = [];
       const cleanup = (async () => {
         const pids = [...identities.map((identity) => identity.pid), ...(pid ? [pid] : [])];
         if (!admitted || pid === undefined) {
@@ -289,10 +298,11 @@ export function createUpdateDoctorProcessCustody(
         }
         try {
           // Snapshot exact native handles before joining; mutable IPC never selects this namespace.
-          const retire = nativeCustody?.prepareSettlement(pid, identities);
+          const prepared = nativeCustody?.prepareSettlement(pid, identities);
+          diagnostics = prepared?.diagnostics ?? [];
           const groups = await settleCommandProcessGroups(identities);
           if (groups.settled && pending === 0) {
-            retire?.();
+            prepared?.retire();
           }
           return groups;
         } catch (error) {
@@ -305,11 +315,19 @@ export function createUpdateDoctorProcessCustody(
       const groups = await cleanup;
       const settled = admitted && pending === 0 && groups.settled;
       mayRemove = settled;
+      const step: UpdateStepResult = {
+        name: "doctor process settlement",
+        command: "settle doctor process groups",
+        cwd: root,
+        durationMs: Date.now() - started,
+        exitCode: settled ? 0 : 1,
+        ...(diagnostics.length ? { diagnostics } : {}),
+      };
       if (
         settled &&
         (inputWithheld || legacyCompletion || (!abnormal && receipt?.slots.length === 0))
       ) {
-        return undefined;
+        return diagnostics.length ? step : undefined;
       }
       const knownPid = pid ?? receipt?.pid;
       const pids = [
@@ -322,11 +340,7 @@ export function createUpdateDoctorProcessCustody(
         ? "Doctor did not finish normally, but every tracked process group stopped. Preserving migrated state; run `openclaw update repair` to finish deferred maintenance."
         : `Doctor processes remain unsettled, data-at-risk. PIDs/process groups: ${pids.join(", ") || "unavailable"}; ${!receipt ? "custody receipt unavailable" : pending > 0 ? `${pending} spawn reservations lack a process identity` : (groups.reason ?? "process extinction could not be proven")}. Keep the Gateway stopped and preserve ${descriptor.path}; resolve retained process custody before retrying \`openclaw update repair\`. Repeating repair alone cannot clear unknown reservations.`;
       return {
-        name: "doctor process settlement",
-        command: "settle doctor process groups",
-        cwd: root,
-        durationMs: Date.now() - started,
-        exitCode: settled ? 0 : 1,
+        ...step,
         ...(settled
           ? { advisory: { kind: "recoverable-maintenance" as const, message } }
           : {

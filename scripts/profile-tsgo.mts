@@ -52,14 +52,7 @@ const DEFAULT_GRAPHS = [
   ...TSGO_CORE_TEST_SHARDS.map((shard) => `core-test-${shard.name}` as CoreTestGraphName),
   "extensions-test",
 ] satisfies GraphName[];
-type ProfileOptions = {
-  all: boolean;
-  deep: boolean;
-  explain: boolean;
-  json: boolean;
-  reuse: boolean;
-  outDir: string;
-};
+type ProfileOptions = ReturnType<typeof parseArgs>["options"];
 type Diagnostics = Record<string, number>;
 type ProfileGraphResult = ReturnType<typeof profileGraph>;
 type ProfileReport = {
@@ -91,9 +84,9 @@ function usage(): string {
   ].join("\n");
 }
 
-function parseArgs(argv: string[]): { options: ProfileOptions; selectedGraphs: GraphName[] } {
+function parseArgs(argv: string[]) {
   const graphNames: GraphName[] = [];
-  const options: ProfileOptions = {
+  const options = {
     all: false,
     deep: false,
     explain: false,
@@ -147,8 +140,7 @@ function runTsgo(
   params: { maxBuffer?: number } = {},
 ): { elapsedMs: number; stdout: string; stderr: string } {
   const { args: finalArgs, env } = applyLocalTsgoPolicy(args, process.env, {
-    logicalCpuCount:
-      typeof os.availableParallelism === "function" ? os.availableParallelism() : os.cpus().length,
+    logicalCpuCount: os.availableParallelism(),
     totalMemoryBytes: os.totalmem(),
   });
   const startedAt = Date.now();

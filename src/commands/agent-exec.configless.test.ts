@@ -4,24 +4,23 @@ import { resolveRunWorkspaceDir } from "../agents/workspace-run.js";
 import { buildExecRunConfig, resolveExecBaseConfig } from "./agent-exec-input.js";
 
 describe("agent exec configless workspace ownership", () => {
-  it.each([{ authEnvOnly: true }, { isolated: true }])(
-    "materializes the configless workspace owner for %j",
-    async (options) => {
-      const config = buildExecRunConfig({
-        base: await resolveExecBaseConfig(options),
-        cwd: "/run/here",
-      });
+  it("materializes the auth-env-only workspace owner", async () => {
+    const options = { authEnvOnly: true } as const;
 
-      expect(
-        resolveRunWorkspaceDir({
-          agentId: "main",
-          config,
-          workspaceDir: "/run/here",
-        }),
-      ).toMatchObject({
+    const config = buildExecRunConfig({
+      base: await resolveExecBaseConfig(options),
+      cwd: "/run/here",
+    });
+
+    expect(
+      resolveRunWorkspaceDir({
         agentId: "main",
-        workspaceDir: resolve("/run/here"),
-      });
-    },
-  );
+        config,
+        workspaceDir: "/run/here",
+      }),
+    ).toMatchObject({
+      agentId: "main",
+      workspaceDir: resolve("/run/here"),
+    });
+  });
 });

@@ -44,11 +44,15 @@
     },
     "obsidian.useOfficialCli": {
       "label": "Use Obsidian CLI",
-      "help": "Probe and use the official Obsidian CLI when available."
+      "help": "Check and use the official Obsidian CLI when available."
     },
     "bridge.enabled": {
       "label": "Enable Bridge Mode",
       "help": "Read public memory artifacts and events from the active memory plugin in bridge mode."
+    },
+    "bridge.ownership": {
+      "label": "Bridge Ownership",
+      "help": "Use sandboxed-only (default) for shared bridge reads, or owner to scope every caller's bridge reads to its agent. Native wiki pages stay shared. This filters wiki tool results, not filesystem access."
     },
     "bridge.readMemoryArtifacts": {
       "label": "Read Memory Artifacts",
@@ -191,6 +195,10 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
+          "ownership": {
+            "type": "string",
+            "enum": ["sandboxed-only", "owner"]
+          },
           "enabled": {
             "type": "boolean"
           },

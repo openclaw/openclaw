@@ -15,7 +15,8 @@ import { writeSecretStoreEntryForConfigRefInDatabase } from "../secrets/store/se
 import * as secretStore from "../secrets/store/secret-store.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { SystemAgentOperationExitError } from "./operations-execution-helpers.js";
-import { executeSystemAgentOperation, type SystemAgentCommandDeps } from "./operations.js";
+import { executeSystemAgentOperation } from "./operations.js";
+import * as setupInference from "./setup-inference.js";
 import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -74,15 +75,12 @@ describe("executeSystemAgentOperation approved config writes", () => {
         JSON.stringify({ agents: { defaults: { model: { primary: "fixture/primary" } } } }),
       );
       const { runtime, lines } = createSystemAgentTestRuntime();
-      const verifyInferenceConfig = vi.fn<
-        NonNullable<SystemAgentCommandDeps["verifyInferenceConfig"]>
-      >(async () => {
-        throw new Error("Unexpected config-write inference probe");
-      });
+      const verifyInferenceConfig = vi
+        .spyOn(setupInference, "verifySetupInferenceConfig")
+        .mockRejectedValue(new Error("Unexpected config-write inference probe"));
       await expect(
         executeSystemAgentOperation({ kind: "config-set", path: configKey, value }, runtime, {
           approved: true,
-          deps: { verifyInferenceConfig },
         }),
       ).resolves.toMatchObject({ applied: true });
       expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toMatchObject(saved);
@@ -205,10 +203,10 @@ describe("chat secret config-write recovery", () => {
     if (!(failure instanceof Error)) {
       throw new Error("expected failed config operation");
     }
-    const entries = secretStore.listSecretStoreEntries({ scope: team, includeDeleted: true });
+    const entries = await secretStore.listSecretStoreEntries({ scope: team, includeDeleted: true });
     expect(entries).toHaveLength(1);
     const name = entries[0]!.name;
-    expect(secretStore.readSecretStoreValue({ scope: team, name })).toEqual({
+    expect(await secretStore.readSecretStoreValue({ scope: team, name })).toEqual({
       ok: true,
       value: secret,
     });

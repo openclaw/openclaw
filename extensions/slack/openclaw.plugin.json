@@ -27,8 +27,5 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {}
-  },
-  "controlUi": {
-    "entry": "dist/control-ui/2f4b1e827be6b68ced2ea0d8b7da8529a4eafbe72be27ee37e1064bdd530ec10/index.js"
   }
 }

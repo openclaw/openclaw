@@ -1,244 +1,119 @@
 import { spawnSync } from "node:child_process";
-import fs from "node:fs/promises";
-import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { collectRepositoryWrapperShadowing } from "../../scripts/check-wrapper-shadowing.mts";
 import { withTempDir } from "../../src/test-utils/temp-dir.js";
+import { writeFixtureFiles } from "./z0632-fixtures.test-support.js";
 
-const guardScriptPath = fileURLToPath(
-  new URL("../../scripts/check-wrapper-shadowing.mts", import.meta.url),
-);
+type Files = Record<string, string>;
+const inner = "export function task() {}";
+const alias = 'import { task as impl } from "./inner.js"; export const task: () => void = impl;';
+const named = 'export { task } from "./inner.js";';
+const stars = 'export * from "./left.js"; export * from "./right.js";';
+const wrapper = (module: string) =>
+  `import { task as impl } from "./${module}.js"; export function task() { prepare(); return impl(); }`;
 
-type GuardFixture = Record<string, string>;
-
-async function runFixture(files: GuardFixture) {
-  return await withTempDir("openclaw-wrapper-shadowing-", async (repoRoot) => {
-    await Promise.all(
-      Object.entries(files).map(async ([repoPath, content]) => {
-        const filePath = path.join(repoRoot, repoPath);
-        await fs.mkdir(path.dirname(filePath), { recursive: true });
-        await fs.writeFile(filePath, content);
-      }),
+async function check(files: Files) {
+  return withTempDir("openclaw-wrapper-shadowing-", async (root) => {
+    writeFixtureFiles(
+      root,
+      Object.fromEntries(Object.entries(files).map(([name, text]) => [`src/${name}`, text])),
     );
-    return await collectRepositoryWrapperShadowing(repoRoot);
+    return collectRepositoryWrapperShadowing(root);
   });
 }
+const violation = (wrapped: string, via?: string) => ({
+  name: "task",
+  wrapped: `src/${wrapped}`,
+  wrapper: "src/outer.ts",
+  ...(via ? { via: `src/${via}` } : {}),
+});
 
-const directViolation: GuardFixture = {
-  "src/inner.js": "export function runTask() { return 'inner'; }\n",
-  "src/outer.ts": [
-    'import { runTask as runTaskInner } from "./inner.js";',
-    "export function runTask() {",
-    "  prepareTask();",
-    "  return runTaskInner();",
-    "}",
-  ].join("\n"),
-};
-
-const wrapperThroughFacade: GuardFixture = {
-  "src/inner.ts": "export function runTask() { return 'inner'; }\n",
-  "src/outer.ts": [
-    'import { runTask as runTaskFacade } from "./facade.js";',
-    "export function runTask() {",
-    "  prepareTask();",
-    "  return runTaskFacade();",
-    "}",
-  ].join("\n"),
-};
-
-describe("wrapper shadowing guard", () => {
-  it("fails for a same-name wrapper around an imported implementation", async () => {
-    const result = await runFixture({
-      ...directViolation,
-      ...Object.fromEntries(
-        Array.from({ length: 40 }, (_, index) => [
-          `src/module-${String(index).padStart(2, "0")}.ts`,
-          `export const value${index} = ${index};`,
-        ]),
-      ),
-    });
-
-    expect(result).toEqual([{ name: "runTask", wrapped: "src/inner.js", wrapper: "src/outer.ts" }]);
-  });
-
-  it.each([
-    ["pure re-export", 'export { runTask } from "./inner.js";'],
-    [
-      "untyped identity alias",
-      'import { runTask as runTaskInner } from "./inner.js"; export const runTask = runTaskInner;',
-    ],
-    [
-      "typed identity alias",
-      'import { runTask as runTaskInner } from "./inner.js"; export const runTask: () => string = runTaskInner;',
-    ],
-    [
-      "namespace identity alias",
-      'import * as runtime from "./inner.js"; export const runTask = runtime.runTask;',
-    ],
-  ])("passes for a %s", async (_name, content) => {
-    const result = await runFixture({
-      "src/inner.ts": "export function runTask() { return 'inner'; }\n",
-      "src/outer.ts": content,
-    });
-
-    expect(result).toEqual([]);
-  });
-
-  it.each([
-    ["typed arrow wrapper", "export const runTask: () => string = () => runTaskInner();"],
-    ["call initializer", "export const runTask = runTaskInner();"],
-    ["destructured binding", "export const { runTask } = runTaskInner;"],
-  ])("still reports a %s as a value definition", async (_name, declaration) => {
-    const result = await runFixture({
-      "src/inner.ts":
-        "export const runTask = Object.assign(() => 'inner', { runTask: () => 'nested' });",
-      "src/outer.ts": `import { runTask as runTaskInner } from "./inner.js";\n${declaration}`,
-    });
-
-    expect(result).toEqual([{ name: "runTask", wrapped: "src/inner.ts", wrapper: "src/outer.ts" }]);
-  });
-
-  it("resolves a real wrapper through a typed identity re-export", async () => {
-    const result = await runFixture({
-      "src/inner.ts": "export function runTask() { return 'inner'; }\n",
-      "src/facade.ts": [
-        'import { runTask as runTaskInner } from "./inner.js";',
-        "export const runTask: () => string = runTaskInner;",
-      ].join("\n"),
-      "src/outer.ts": [
-        'import { runTask as runTaskFacade } from "./facade.js";',
-        "export function runTask() {",
-        "  prepareTask();",
-        "  return runTaskFacade();",
-        "}",
-      ].join("\n"),
-    });
-
-    expect(result).toEqual([
-      { name: "runTask", wrapped: "src/inner.ts", wrapper: "src/outer.ts", via: "src/facade.ts" },
-    ]);
-  });
-
-  it.each([
-    [
-      "two identity aliases",
-      'import { runTask as inner } from "./inner.js"; export const runTask: () => string = inner;',
-      'import * as bridge from "./bridge.js"; export const runTask = bridge.runTask;',
-    ],
-    [
-      "a named barrel and an identity alias",
-      'import { runTask as inner } from "./inner.js"; export const runTask: () => string = inner;',
-      'export { runTask } from "./bridge.js";',
-    ],
-    [
-      "a star barrel and an identity alias",
-      'import { runTask as inner } from "./inner.js"; export const runTask: () => string = inner;',
-      'export * from "./bridge.js";',
-    ],
-  ])("resolves a real wrapper through %s", async (_name, bridge, facade) => {
-    expect(
-      await runFixture({
-        ...wrapperThroughFacade,
-        "src/bridge.ts": bridge,
-        "src/facade.ts": facade,
-      }),
-    ).toEqual([
-      { name: "runTask", wrapped: "src/inner.ts", wrapper: "src/outer.ts", via: "src/facade.ts" },
-    ]);
-  });
-
-  it("resolves a cycle through its alternate definition branch", async () => {
-    expect(
-      await runFixture({
-        ...wrapperThroughFacade,
-        "src/facade.ts": 'export * from "./cycle.js"; export * from "./inner.js";',
-        "src/cycle.ts": 'export * from "./facade.js";',
-      }),
-    ).toEqual([
-      { name: "runTask", wrapped: "src/inner.ts", wrapper: "src/outer.ts", via: "src/facade.ts" },
-    ]);
-  });
-
-  it.each([false, true])(
-    "distinguishes duplicate paths from ambiguous star origins (distinct=%s)",
-    async (distinct) => {
-      const result = await runFixture({
-        ...wrapperThroughFacade,
-        "src/facade.ts": 'export * from "./left.js"; export * from "./right.js";',
-        "src/left.ts": 'export { runTask } from "./inner.js";',
-        "src/right.ts": `export { runTask } from "./${distinct ? "other" : "inner"}.js";`,
-        "src/other.ts": "export function runTask() { return 'other'; }",
-      });
-
-      expect(result).toEqual(
-        distinct
-          ? []
-          : [
-              {
-                name: "runTask",
-                wrapped: "src/inner.ts",
-                wrapper: "src/outer.ts",
-                via: "src/facade.ts",
-              },
-            ],
-      );
-    },
+it("finds a JS implementation across parser batches", async () => {
+  const fillers = Object.fromEntries(
+    Array.from({ length: 40 }, (_, i) => [`module-${i}.ts`, "export {};"]),
   );
+  expect(await check({ "inner.js": inner, "outer.ts": wrapper("inner"), ...fillers })).toEqual([
+    violation("inner.js"),
+  ]);
+});
 
-  it.each([
-    ["local", "export function runTask() { return 'local'; }", "src/facade.ts"],
-    ["named", 'export { runTask } from "./inner.js";', "src/inner.ts"],
-  ])("keeps %s binding precedence over star exports", async (_name, binding, wrapped) => {
-    expect(
-      await runFixture({
-        ...wrapperThroughFacade,
-        "src/facade.ts": `${binding}\nexport * from "./other.js";`,
-        "src/other.ts": "export function runTask() { return 'other'; }",
-      }),
-    ).toEqual([
-      {
-        name: "runTask",
-        wrapped,
-        wrapper: "src/outer.ts",
-        ...(wrapped === "src/facade.ts" ? {} : { via: "src/facade.ts" }),
-      },
-    ]);
-  });
+it.each([
+  "export const task: () => void = () => impl();",
+  "export const task = impl();",
+  "export const { task } = impl;",
+])("reports a value definition: %s", async (declaration) => {
+  expect(
+    await check({
+      "inner.ts": "export const task = Object.assign(() => 0, { task: () => 1 });",
+      "outer.ts": `import { task as impl } from "./inner.js"; ${declaration}`,
+    }),
+  ).toEqual([violation("inner.ts")]);
+});
 
-  it("does not follow a star hidden by an explicitly renamed binding", async () => {
-    expect(
-      await runFixture({
-        ...wrapperThroughFacade,
-        "src/facade.ts":
-          'export { otherTask as runTask } from "./other.js"; export * from "./inner.js";',
-        "src/other.ts": "export function otherTask() { return 'other'; }",
-      }),
-    ).toEqual([]);
-  });
+function starGraph(distinct: boolean): Files {
+  return {
+    "facade.ts": stars,
+    "left.ts": named,
+    "right.ts": `export { task } from "./${distinct ? "other" : "inner"}.js";`,
+    "other.ts": inner,
+  };
+}
+function shadowGraph(binding: string, star = "other"): Files {
+  return {
+    "facade.ts": `${binding} export * from "./${star}.js";`,
+    "other.ts": `${inner} export function other() {}`,
+  };
+}
 
-  it("keeps a chain of identity-only facades exempt", async () => {
-    expect(
-      await runFixture({
-        "src/inner.ts": "export function runTask() { return 'inner'; }",
-        "src/bridge.ts":
-          'import { runTask as inner } from "./inner.js"; export const runTask: () => string = inner;',
-        "src/facade.ts":
-          'import * as bridge from "./bridge.js"; export const runTask = bridge.runTask;',
-      }),
-    ).toEqual([]);
-  });
+it.each<[string, Files, string | null]>([
+  [
+    "identity aliases",
+    {
+      "bridge.ts": alias,
+      "facade.ts": 'import * as b from "./bridge.js"; export const task = b.task;',
+    },
+    "inner.ts",
+  ],
+  [
+    "star and identity alias",
+    { "bridge.ts": alias, "facade.ts": 'export * from "./bridge.js";' },
+    "inner.ts",
+  ],
+  [
+    "cycle",
+    {
+      "facade.ts": 'export * from "./cycle.js"; export * from "./inner.js";',
+      "cycle.ts": 'export * from "./facade.js";',
+    },
+    "inner.ts",
+  ],
+  ["duplicate origins", starGraph(false), "inner.ts"],
+  ["ambiguous origins", starGraph(true), null],
+  ["local shadows stars", shadowGraph(inner), "facade.ts"],
+  ["named shadows stars", shadowGraph(named), "inner.ts"],
+  [
+    "renamed shadows stars",
+    shadowGraph('export { other as task } from "./other.js";', "inner"),
+    null,
+  ],
+])("resolves %s", async (_name, files, wrapped) => {
+  expect(await check({ "inner.ts": inner, "outer.ts": wrapper("facade"), ...files })).toEqual(
+    wrapped ? [violation(wrapped, wrapped === "facade.ts" ? undefined : "facade.ts")] : [],
+  );
+});
 
-  it("rejects debt-baseline updates with the wrapper trailer", () => {
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", guardScriptPath, "--update-debt-baseline"],
-      { encoding: "utf8" },
-    );
-
-    expect(result.status).toBe(2);
-    expect(result.stderr.trimEnd().split("\n").at(-1)).toBe(
-      "[check-wrapper-shadowing] FAILED (exit 2)",
-    );
-  });
+it("rejects debt-baseline updates with the wrapper trailer", () => {
+  const script = fileURLToPath(
+    new URL("../../scripts/check-wrapper-shadowing.mts", import.meta.url),
+  );
+  const result = spawnSync(
+    process.execPath,
+    ["--import", "tsx", script, "--update-debt-baseline"],
+    { encoding: "utf8" },
+  );
+  expect(result.status).toBe(2);
+  expect(result.stderr.trimEnd().split("\n").at(-1)).toBe(
+    "[check-wrapper-shadowing] FAILED (exit 2)",
+  );
 });

@@ -1,10 +1,8 @@
-// Global Commander pre-action hook: startup presentation, config guard, logging, and plugin preflight.
 import type { Command } from "commander";
 import type { StartupConfigPreflightOptions } from "../../commands/startup-config-preflight.js";
 import { setVerbose } from "../../globals.js";
 import { parseOpenClawProcessTitle } from "../../infra/openclaw-installation-id.js";
 import type { LogLevel } from "../../logging/levels.js";
-import { resolvePluginInstallInvalidConfigPolicy } from "../../plugins/install-config.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveCliArgvInvocation } from "../argv-invocation.js";
 import { getVerboseFlag, isHelpOrVersionInvocation } from "../argv.js";
@@ -17,47 +15,11 @@ import { resolveCliCommandPathPolicy } from "../command-path-policy.js";
 import { resolveCliStartupPolicy } from "../command-startup-policy.js";
 import { applyResolvedCommandOutputMode } from "../json-output-mode.js";
 import { isModelsPlainMachineOutput } from "../models-output-mode.js";
-import { resolvePluginInstallPreactionRequest } from "../plugin-install-config-policy.js";
 import { getCommanderCommandPath, hasCommanderOptionToken } from "./commander-parse-facts.js";
 import { isCommandJsonOutputMode } from "./json-mode.js";
 import { isParentDefaultHelpAction } from "./parent-default-help.js";
 
 const HELP_OR_VERSION_FLAGS = new Set(["-h", "--help", "-V", "--version"]);
-
-// Every CLI invocation presents as `openclaw` in process listings instead of `node`; only the
-// long-running Gateway takes a distinct title (see gateway-cli/run-loop.ts), so lock readers and
-// operators can tell it apart from ordinary commands.
-function setProcessTitleForCommand() {
-  // TUI identity is installation-scoped so an updater can distinguish its own clients.
-  // All ordinary commands retain the canonical `openclaw` title established on main.
-  if (parseOpenClawProcessTitle(process.title)?.name === "openclaw-tui") {
-    return;
-  }
-  if (process.title !== CLI_NAME) {
-    process.title = CLI_NAME;
-  }
-}
-
-function shouldAllowInvalidConfigForAction(actionCommand: Command, commandPath: string[]): boolean {
-  return (
-    commandPath[0] === "update" ||
-    resolvePluginInstallInvalidConfigPolicy(
-      resolvePluginInstallPreactionRequest({
-        actionCommand,
-        commandPath,
-        argv: process.argv,
-      }),
-    ) === "allow-plugin-recovery"
-  );
-}
-
-function getCliLogLevel(actionCommand: Command): LogLevel | undefined {
-  if (actionCommand.getOptionValueSourceWithGlobals("logLevel") !== "cli") {
-    return undefined;
-  }
-  const logLevel = actionCommand.optsWithGlobals<{ logLevel?: unknown }>().logLevel;
-  return typeof logLevel === "string" ? (logLevel as LogLevel) : undefined;
-}
 
 function isBareParentDefaultHelpInvocation(actionCommand: Command, argv: string[]): boolean {
   if (!isParentDefaultHelpAction(actionCommand)) {
@@ -69,37 +31,6 @@ function isBareParentDefaultHelpInvocation(actionCommand: Command, argv: string[
     return false;
   }
   return primary === actionCommand.name() || actionCommand.aliases().includes(primary);
-}
-
-function isGuidedConfigAction(actionCommand: Command): boolean {
-  return actionCommand.name() === "config" && !actionCommand.parent?.parent;
-}
-
-function isGuidedConfigCommandPath(commandPath: string[]): boolean {
-  const [primary, secondary, extra] = commandPath;
-  if (primary !== "config" || extra !== undefined) {
-    return false;
-  }
-  return (
-    secondary !== "get" &&
-    secondary !== "set" &&
-    secondary !== "patch" &&
-    secondary !== "unset" &&
-    secondary !== "file" &&
-    secondary !== "schema" &&
-    secondary !== "validate"
-  );
-}
-
-function isGatewayRunAction(actionCommand: Command): boolean {
-  if (actionCommand.name() === "gateway") {
-    return actionCommand.parent?.parent === null;
-  }
-  return (
-    actionCommand.name() === "run" &&
-    actionCommand.parent?.name() === "gateway" &&
-    actionCommand.parent.parent?.parent === null
-  );
 }
 
 async function runStateStoreGuard(commandPath: string[]): Promise<void> {
@@ -126,7 +57,15 @@ async function runStateStoreGuard(commandPath: string[]): Promise<void> {
 /** Register global pre-action bootstrap hooks for every non-help command invocation. */
 export function registerPreActionHooks(program: Command, programVersion: string) {
   program.hook("preAction", async (_thisCommand, actionCommand) => {
-    setProcessTitleForCommand();
+    // Every CLI invocation presents as `openclaw` in process listings instead of `node`; only the
+    // long-running Gateway takes a distinct title (see gateway-cli/run-loop.ts), so lock readers and
+    // operators can tell it apart from ordinary commands.
+    if (
+      process.title !== CLI_NAME &&
+      parseOpenClawProcessTitle(process.title)?.name !== "openclaw-tui"
+    ) {
+      process.title = CLI_NAME;
+    }
     const argv = process.argv;
     const helpOrVersionWasOptionValue = hasCommanderOptionToken(
       actionCommand,
@@ -165,9 +104,13 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       startupPolicy,
       version: programVersion,
     });
-    const verbose = getVerboseFlag(argv, { includeDebug: true });
+    const verbose = getVerboseFlag(argv);
     setVerbose(verbose);
-    const cliLogLevel = getCliLogLevel(actionCommand);
+    let cliLogLevel: LogLevel | undefined;
+    if (actionCommand.getOptionValueSourceWithGlobals("logLevel") === "cli") {
+      const logLevel = actionCommand.optsWithGlobals<{ logLevel?: unknown }>().logLevel;
+      cliLogLevel = typeof logLevel === "string" ? (logLevel as LogLevel) : undefined;
+    }
     if (cliLogLevel) {
       process.env.OPENCLAW_LOG_LEVEL = cliLogLevel;
     }
@@ -175,10 +118,18 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       process.env.NODE_NO_WARNINGS ??= "1";
     }
     // Capability discovery precedes staged-update admission and must not migrate live state.
+    const [primary, secondary, extra] = commandPath;
     if (
       nativeUpdateExecutorCheck ||
-      isGuidedConfigAction(actionCommand) ||
-      isGuidedConfigCommandPath(commandPath)
+      (primary === "config" &&
+        extra === undefined &&
+        secondary !== "get" &&
+        secondary !== "set" &&
+        secondary !== "patch" &&
+        secondary !== "unset" &&
+        secondary !== "file" &&
+        secondary !== "schema" &&
+        secondary !== "validate")
     ) {
       return;
     }
@@ -190,28 +141,37 @@ export function registerPreActionHooks(program: Command, programVersion: string)
         runtime: defaultRuntime,
         commandPath,
         startupPolicy,
-        skipConfigGuard: true,
       });
       return;
     }
     let beforeStatePreparation: StartupConfigPreflightOptions["beforeStatePreparation"];
-    let allowInvalid = shouldAllowInvalidConfigForAction(actionCommand, commandPath);
-    if (isGatewayRunAction(actionCommand)) {
+    const [{ resolvePluginInstallInvalidConfigPolicy }, { resolvePluginInstallPreactionRequest }] =
+      await Promise.all([
+        import("../../plugins/install-config.js"),
+        import("../plugin-install-config-policy.js"),
+      ]);
+    let allowInvalid =
+      commandPath[0] === "update" ||
+      resolvePluginInstallInvalidConfigPolicy(
+        resolvePluginInstallPreactionRequest({ actionCommand, commandPath }),
+      ) === "allow-plugin-recovery";
+    const isGatewayRun =
+      commandPath[0] === "gateway" &&
+      (commandPath.length === 1 || (commandPath.length === 2 && commandPath[1] === "run"));
+    if (isGatewayRun) {
       const { prepareGatewayRunBootstrap, recheckGatewayRunBootstrap } =
         await import("../gateway-cli/pre-bootstrap.js");
       const { resolveGatewayRunOptions } = await import("../gateway-cli/run-options.js");
-      const resolvedOptions = resolveGatewayRunOptions(actionCommand.opts(), actionCommand);
-      allowInvalid ||= resolvedOptions.allowUnconfigured === true;
-      const opts = resolvedOptions;
+      const opts = resolveGatewayRunOptions(actionCommand.opts(), actionCommand);
+      allowInvalid ||= opts.allowUnconfigured === true;
       const shouldBootstrap = await prepareGatewayRunBootstrap({ opts, runtime: defaultRuntime });
       if (!shouldBootstrap) {
         return;
       }
-      beforeStatePreparation = (snapshot, committedWrite) =>
+      beforeStatePreparation = (snapshot) =>
         recheckGatewayRunBootstrap({
           opts,
           runtime: defaultRuntime,
-          committedWrite,
           ...(snapshot ? { snapshot } : {}),
         });
     }
@@ -222,7 +182,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       allowInvalid,
       ...(beforeStatePreparation ? { beforeStatePreparation } : {}),
     });
-    if (beforeStatePreparation && isGatewayRunAction(actionCommand)) {
+    if (beforeStatePreparation) {
       const { reloadTrustedGatewayRunEnvironment } =
         await import("../gateway-cli/pre-bootstrap.js");
       await reloadTrustedGatewayRunEnvironment({ runtime: defaultRuntime });

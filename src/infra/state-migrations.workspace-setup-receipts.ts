@@ -1,6 +1,5 @@
 // Receipt lookup and source-removal bookkeeping for legacy workspace migration.
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { root } from "@openclaw/fs-safe";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
@@ -20,6 +19,7 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { pathMayExistSync } from "./path-existence.js";
+import type { EngineConnection } from "./sql-connection.js";
 import {
   readLegacyMigrationReceipt,
   resolveLegacyMigrationSourceKey,
@@ -103,7 +103,7 @@ function moveWorkspacePath(
 }
 
 function readWorkspaceMoveReceipts(
-  database: DatabaseSync,
+  database: EngineConnection,
   storedIdentity: WorkspaceStateIdentity,
   currentIdentity: WorkspaceStateIdentity,
 ) {
@@ -158,7 +158,7 @@ export type WorkspaceMigrationReceiptMove = {
 };
 
 function assertReceiptMoveDestinations(
-  database: DatabaseSync,
+  database: EngineConnection,
   plan: WorkspaceMigrationReceiptMove,
 ) {
   const destinationKeys = new Set<string>();
@@ -203,7 +203,7 @@ async function verifyCarriedReceiptFile(
 
 /** Prepare filesystem evidence before the move owner's synchronous write transaction. */
 export async function prepareWorkspaceMigrationReceiptMove(params: {
-  database: DatabaseSync;
+  database: EngineConnection;
   storedIdentity: WorkspaceStateIdentity;
   currentIdentity: WorkspaceStateIdentity;
   storedSetup: (WorkspaceSetupMilestones & { version: number | null }) | undefined;
@@ -350,7 +350,7 @@ export async function prepareWorkspaceMigrationReceiptMove(params: {
 
 /** Apply with the setup/alias move; preserve run history and every source-cleanup flag. */
 export function applyWorkspaceMigrationReceiptMove(
-  database: DatabaseSync,
+  database: EngineConnection,
   plan: WorkspaceMigrationReceiptMove,
 ): void {
   const current = readWorkspaceMoveReceipts(database, plan.storedIdentity, plan.currentIdentity);

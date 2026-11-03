@@ -13,7 +13,15 @@ export const visitorInviteDetailsSchema = Type.Object(
     githubLogin: Type.Optional(Type.String()),
     expiresAt: expiresAtSchema,
     gatewayAccess: Type.String(),
-    signInUrl: Type.String(),
+    signInUrl: Type.Optional(
+      Type.String({
+        description: "Absent without gateway.publicOrigin or when the Control UI is disabled.",
+      }),
+    ),
+    noteStored: Type.Boolean({ description: "Whether the grant now carries an inviter note." }),
+    invitationText: Type.String({
+      description: "Plain text for the inviter to hand to the visitor; contains no credentials.",
+    }),
   },
   {
     additionalProperties: false,
@@ -56,13 +64,11 @@ export const visitorListDetailsSchema = Type.Object(
           grantId: Type.Optional(
             Type.String({ description: "Stable selector for canceling this invitation." }),
           ),
-          profileId: Type.Optional(
-            Type.String({ description: "Canonical person selector for visitor_revoke." }),
-          ),
+          profileId: Type.Optional(Type.String({ description: "Person ID for visitor_revoke." })),
           githubLogin: Type.Optional(
             Type.String({
               description:
-                "Current verified GitHub identity selected by the Gateway profile, when available. Use grantId to cancel one invitation; GitHub input selects its immutable account and the canonical person's recorded grants.",
+                "Current verified GitHub identity selected by the Gateway profile, when available. Use grantId to cancel one invitation; GitHub input selects its immutable account and the person's recorded grants.",
             }),
           ),
           invitedAt: Type.String(),
@@ -73,6 +79,28 @@ export const visitorListDetailsSchema = Type.Object(
               description:
                 "Missing policy membership takes precedence; expired grants await provider cleanup.",
             },
+          ),
+          welcome: Type.Optional(
+            Type.Object(
+              {
+                state: Type.Union([
+                  Type.Literal("pending"),
+                  Type.Literal("ready"),
+                  Type.Literal("failed"),
+                ]),
+                sessionKey: Type.Optional(
+                  Type.String({
+                    description:
+                      "This invitation's welcome session, once reserved. A deleted session is not recreated.",
+                  }),
+                ),
+              },
+              {
+                additionalProperties: false,
+                description:
+                  "Welcome-session progress for this invitation; absent on grants recorded before onboarding.",
+              },
+            ),
           ),
           gatewayAccess: Type.String(),
         },

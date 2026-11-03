@@ -1,7 +1,9 @@
+import type { ProgressContinuationDraft } from "../channels/progress-continuation.js";
 import { getAgentRunLifecycleGeneration } from "../infra/agent-run-registry.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { notifyListeners, registerListener } from "../shared/listeners.js";
 
 /** Process-owned provider work. Completion delivery belongs to the durable session queue. */
 export type MediaGenerationOperation = {
@@ -9,18 +11,26 @@ export type MediaGenerationOperation = {
   runId?: string;
   taskKind: string;
   sourceId?: string;
+  /** Successful generation result; sourceId retains the submission identity. */
+  provider?: string;
+  model?: string;
+  requestKey?: string;
   requesterSessionKey: string;
   requesterAgentId?: string;
   task?: string;
   status: "queued" | "running" | "succeeded" | "failed";
-  createdAt: number;
-  startedAt?: number;
   endedAt?: number;
-  lastEventAt?: number;
   progressSummary?: string;
-  terminalSummary?: string;
+  /** The durable queue owns delivery; the requester must release its turn. */
+  completionDelivery?: "queued";
   terminalOutcome?: "blocked";
-  error?: string;
+};
+
+type MediaProgressDraft = {
+  draft: ProgressContinuationDraft;
+  /** Owed runs and their card titles. */
+  runs: Map<string, string>;
+  undelivered: boolean;
 };
 
 const state = resolveGlobalSingleton(Symbol.for("openclaw.mediaGenerationOperations"), () => ({
@@ -28,6 +38,9 @@ const state = resolveGlobalSingleton(Symbol.for("openclaw.mediaGenerationOperati
   active: new Map<string, { sessionKey: string; agentId?: string; generation: string }>(),
   owners: new Map<string, string>(),
   admissions: new Map<string, string>(),
+  // Process-local like the channel transport that renders the retained card.
+  drafts: new Map<string, MediaProgressDraft>(),
+  listeners: new Set<(operation: MediaGenerationOperation) => void>(),
 }));
 const RECENT_COMPLETION_MS = 2 * 60_000;
 
@@ -42,8 +55,8 @@ function pruneCompletedOperations(): void {
         operation.endedAt <
           (operation.terminalOutcome === "blocked" ? now - 7 * 24 * 60 * 60_000 : cutoff))
     ) {
+      clearGeneratedMediaTaskActivity(id);
       state.operations.delete(id);
-      state.active.delete(id);
       state.owners.delete(id);
     }
   }
@@ -76,8 +89,67 @@ export function registerGeneratedMediaTaskActivity(
     generation,
   });
 }
+/**
+ * Every ending path clears activity after its completion wake. A retained card
+ * leaves once every run delivered its result; otherwise it keeps the failed run
+ * as the chat's visible outcome.
+ */
 export function clearGeneratedMediaTaskActivity(runId: string): void {
   state.active.delete(runId);
+  const live = state.drafts.get(runId);
+  const title = live?.runs.get(runId);
+  if (!live || !title) {
+    return;
+  }
+  state.drafts.delete(runId);
+  live.runs.delete(runId);
+  const operation = state.operations.get(runId);
+  const delivered = operation?.status === "succeeded" && operation.terminalOutcome !== "blocked";
+  live.undelivered ||= !delivered;
+  if (live.runs.size === 0 && !live.undelivered) {
+    live.draft.retire();
+    return;
+  }
+  live.draft.push({
+    itemId: runId,
+    kind: "subagent",
+    title,
+    phase: "end",
+    status: delivered ? "completed" : "failed",
+  });
+}
+
+/**
+ * Keep a waiting turn's confirmed progress card while the media runs it delegated
+ * to are still owed. The completion wake stays the only result owner; each run
+ * shows as delegated work, whose terminal state the quiet card keeps.
+ */
+export function adoptMediaGenerationProgressDraft(
+  sessionKey: string,
+  requesterAgentId: string | undefined,
+  draft: ProgressContinuationDraft,
+): boolean {
+  const runs = new Map(
+    listMediaGenerationOperations(sessionKey, requesterAgentId).flatMap((operation) =>
+      operation.runId && state.active.has(operation.runId) && !state.drafts.has(operation.runId)
+        ? [
+            [
+              operation.runId,
+              `${operation.taskKind.charAt(0).toUpperCase()}${operation.taskKind.slice(1).replaceAll("_", " ")}`,
+            ] as const,
+          ]
+        : [],
+    ),
+  );
+  if (runs.size === 0) {
+    return false;
+  }
+  const live = { draft, runs, undelivered: false };
+  for (const [runId, title] of runs) {
+    state.drafts.set(runId, live);
+    draft.push({ itemId: runId, kind: "subagent", title, phase: "update", status: "running" });
+  }
+  return true;
 }
 export function createMediaGenerationOperation(
   operation: MediaGenerationOperation,
@@ -92,6 +164,7 @@ export function createMediaGenerationOperation(
     operation.requesterSessionKey,
     operation.requesterAgentId,
   );
+  notifyListeners(state.listeners, operation);
   return operation;
 }
 export function updateMediaGenerationOperation(
@@ -99,13 +172,14 @@ export function updateMediaGenerationOperation(
   update: Partial<
     Pick<
       MediaGenerationOperation,
+      | "requestKey"
       | "status"
       | "endedAt"
-      | "lastEventAt"
       | "progressSummary"
-      | "terminalSummary"
+      | "provider"
+      | "model"
+      | "completionDelivery"
       | "terminalOutcome"
-      | "error"
     >
   >,
 ): void {
@@ -114,6 +188,14 @@ export function updateMediaGenerationOperation(
     return;
   }
   Object.assign(operation, update);
+  if (update.status !== undefined || update.completionDelivery !== undefined) {
+    notifyListeners(state.listeners, operation);
+  }
+}
+export function onMediaGenerationOperationChanged(
+  listener: (operation: MediaGenerationOperation) => void,
+): () => void {
+  return registerListener(state.listeners, listener);
 }
 export function findMediaGenerationOperation(runId: string): MediaGenerationOperation | undefined {
   return isMediaGenerationOperationCurrent(runId) ? state.operations.get(runId) : undefined;
@@ -123,15 +205,16 @@ export function listMediaGenerationOperations(
   requesterAgentId?: string,
 ): MediaGenerationOperation[] {
   pruneCompletedOperations();
-  const agentId = requesterAgentId ?? parseAgentSessionKey(sessionKey)?.agentId;
+  let keyAgentId: string | undefined;
+  const agentId = requesterAgentId ?? (keyAgentId = parseAgentSessionKey(sessionKey)?.agentId);
   if (!agentId) {
     return [];
   }
   return [...state.operations.values()].filter(
     (operation) =>
       operation.requesterSessionKey === sessionKey &&
-      (operation.requesterAgentId ??
-        parseAgentSessionKey(operation.requesterSessionKey)?.agentId) === agentId &&
+      (operation.requesterAgentId ?? (keyAgentId ??= parseAgentSessionKey(sessionKey)?.agentId)) ===
+        agentId &&
       Boolean(operation.runId && isMediaGenerationOperationCurrent(operation.runId)),
   );
 }

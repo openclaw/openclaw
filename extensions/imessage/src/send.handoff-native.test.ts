@@ -11,12 +11,22 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { IMessageRpcClient } from "./client.js";
 import { loadFreshIMessageReplyCacheForTest } from "./test-support/runtime.js";
 
+const effectGate = vi.hoisted(() => ({ prepare: undefined as (() => Promise<void>) | undefined }));
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>();
+  const { withEffectPreparation } = await import("./test-support/authority.js");
+  return {
+    ...actual,
+    captureEffectAuthority: withEffectPreparation(actual, effectGate).captureEffectAuthority,
+  };
+});
+
+afterEach(() => {
+  effectGate.prepare = undefined;
+});
+
 type SendMessage = typeof import("./send.js").sendMessageIMessage;
-type NativeRpcRequest = {
-  id: number;
-  method: string;
-  params: Record<string, unknown>;
-};
+type NativeRpcRequest = { id: number; method: string; params: Record<string, unknown> };
 type NativeRecord = { kind: "cli"; args: string[] } | { kind: "rpc"; request: NativeRpcRequest };
 type NativeMode = "group" | "thread" | "accepted" | "immediate";
 
@@ -36,70 +46,52 @@ function createNativeFixture(state: OpenClawTestState, mode: NativeMode) {
   fs.writeFileSync(logPath, "");
   fs.writeFileSync(
     cliPath,
-    [
-      "#!" + process.execPath,
-      'import fs from "node:fs";',
-      'import readline from "node:readline";',
-      'import { setTimeout as delay } from "node:timers/promises";',
-      fixtureReceiptClientSource(receipts.endpoint),
-      "const mode = " + JSON.stringify(mode) + ";",
-      "const logPath = " + JSON.stringify(logPath) + ";",
-      "const releasePath = " + JSON.stringify(releasePath) + ";",
-      "const args = process.argv.slice(2);",
-      "const record = (value) => {",
-      '  fs.appendFileSync(logPath, JSON.stringify(value) + "\\n");',
-      "  sendReceipt(logPath, value.kind);",
-      "};",
-      'const write = (value) => process.stdout.write(JSON.stringify(value) + "\\n");',
-      "const fail = (error) => {",
-      '  process.stderr.write(String(error) + "\\n");',
-      "  process.exit(1);",
-      "};",
-      "async function waitForRelease() {",
-      "  const deadline = Date.now() + 15000;",
-      "  while (!fs.existsSync(releasePath)) {",
-      '    if (Date.now() >= deadline) throw new Error("synthetic response gate timed out");',
-      "    await delay(5);",
-      "  }",
-      "}",
-      'if (args[0] === "rpc") {',
-      "  async function handle(request) {",
-      '    record({ kind: "rpc", request });',
-      '    if (mode === "thread" && request.params.reply_to) {',
-      "      await waitForRelease();",
-      "      write({",
-      '        jsonrpc: "2.0", id: request.id,',
-      "        error: {",
-      "          code: -32602,",
-      '          message: "reply_to requires bridge transport; AppleScript fallback cannot send threaded replies"',
-      "        }",
-      "      });",
-      "      return;",
-      "    }",
-      '    if (mode === "accepted" && request.params.text === "caller A") {',
-      "      await waitForRelease();",
-      "    }",
-      '    const guid = request.params.text === "caller A" ? "p:0/caller-a" :',
-      '      request.params.text === "caller B" ? "p:0/caller-b" : "p:0/native-send";',
-      '    write({ jsonrpc: "2.0", id: request.id, result: { guid, status: "sent" } });',
-      "  }",
-      '  readline.createInterface({ input: process.stdin }).on("line", (line) => {',
-      "    void handle(JSON.parse(line)).catch(fail);",
-      "  });",
-      "} else {",
-      "  async function run() {",
-      '    record({ kind: "cli", args });',
-      '    if (mode === "group" && args[0] === "group") await waitForRelease();',
-      '    const fileIndex = args.indexOf("--file");',
-      "    if (fileIndex >= 0 && !fs.existsSync(args[fileIndex + 1])) {",
-      '      throw new Error("synthetic attachment file is missing");',
-      "    }",
-      '    write(args[0] === "group" ? { guid: "iMessage;+;synthetic-chat" } :',
-      '      { success: true, messageGuid: "p:0/native-attachment" });',
-      "  }",
-      "  void run().catch(fail);",
-      "}",
-    ].join("\n"),
+    String.raw`#!${process.execPath}
+import fs from "node:fs";
+import readline from "node:readline";
+import { setTimeout as delay } from "node:timers/promises";
+${fixtureReceiptClientSource(receipts.endpoint)}
+const { mode, logPath, releasePath } = ${JSON.stringify({ mode, logPath, releasePath })};
+const args = process.argv.slice(2);
+const record = (value) => {
+  fs.appendFileSync(logPath, JSON.stringify(value) + "\n");
+  sendReceipt(logPath, value.kind);
+};
+const write = (value) => process.stdout.write(JSON.stringify(value) + "\n");
+const fail = (error) => { process.stderr.write(String(error) + "\n"); process.exit(1); };
+async function waitForRelease() {
+  const deadline = Date.now() + 15000;
+  while (!fs.existsSync(releasePath)) {
+    if (Date.now() >= deadline) throw new Error("synthetic response gate timed out");
+    await delay(5);
+  }
+}
+if (args[0] === "rpc") {
+  async function handle(request) {
+    record({ kind: "rpc", request });
+    const threaded = mode === "thread" && request.params.reply_to;
+    if (threaded || (mode === "accepted" && request.params.text === "caller A")) await waitForRelease();
+    const guid = request.params.text === "caller A" ? "p:0/caller-a" :
+      request.params.text === "caller B" ? "p:0/caller-b" : "p:0/native-send";
+    const payload = threaded ? { error: { code: -32602,
+      message: "reply_to requires bridge transport; AppleScript fallback cannot send threaded replies"
+    } } : { result: { guid, status: "sent" } };
+    write({ jsonrpc: "2.0", id: request.id, ...payload });
+  }
+  readline.createInterface({ input: process.stdin }).on("line", (line) => {
+    void handle(JSON.parse(line)).catch(fail);
+  });
+} else {
+  void (async () => {
+    record({ kind: "cli", args });
+    if (mode === "group" && args[0] === "group") await waitForRelease();
+    const fileIndex = args.indexOf("--file");
+    if (fileIndex >= 0 && !fs.existsSync(args[fileIndex + 1])) throw new Error("synthetic attachment file is missing");
+    write(args[0] === "group" ? { guid: "iMessage;+;synthetic-chat" } :
+      { success: true, messageGuid: "p:0/native-attachment" });
+  })().catch(fail);
+}
+`,
     { mode: 0o755 },
   );
   const readRecords = (): NativeRecord[] =>
@@ -189,6 +181,11 @@ describe("iMessage caller authority at native request boundaries", () => {
       dispatch,
       retired,
       retire: () => caller.abort(retired),
+      attachment() {
+        const mediaUrl = state.path("attachment.pdf");
+        fs.writeFileSync(mediaUrl, "%PDF-1.4\nsynthetic attachment");
+        return this.send("", { mediaUrl, mediaLocalRoots: [state.root] });
+      },
       send(text: string, options: Partial<Parameters<SendMessage>[2]> = {}) {
         const sending = observeSend(
           sendMessageIMessage("chat_id:42", text, {
@@ -210,13 +207,49 @@ describe("iMessage caller authority at native request boundaries", () => {
     });
   }
 
-  it("stops after a native group lookup when the caller retires without marking a send", async ({
-    signal,
-  }) => {
+  it.each(["CLI", "RPC"] as const)(
+    "rechecks authority after awaited %s preparation",
+    async (boundary) => {
+      const fixture = handoff("immediate");
+      const entered = createDeferred<void>();
+      const released = createDeferred<void>();
+      releases.push(() => released.resolve());
+      const prepare = async () => {
+        entered.resolve();
+        await released.promise;
+      };
+      if (boundary === "CLI") {
+        effectGate.prepare = prepare;
+      } else {
+        const clientRuntime = await import("./client.js");
+        vi.spyOn(clientRuntime, "createIMessageRpcClient").mockImplementationOnce(
+          async (options) => {
+            const client = await createIMessageRpcClient(options);
+            clients.push(client);
+            await prepare();
+            return client;
+          },
+        );
+      }
+      const sending = boundary === "CLI" ? fixture.attachment() : fixture.send("client creation");
+      await Promise.race([
+        entered.promise,
+        sending.then((cause) => {
+          throw new Error("send settled before its preparation boundary", { cause });
+        }),
+      ]);
+      expect(fixture.readRecords()).toEqual([]);
+      fixture.retire();
+      released.resolve();
+      await expect(sending).resolves.toEqual({ error: fixture.retired });
+      expect(fixture.readRecords()).toEqual([]);
+      expect(fixture.dispatch).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not dispatch after retiring during native group lookup", async ({ signal }) => {
     const fixture = handoff("group");
-    const mediaPath = state.path("attachment.pdf");
-    fs.writeFileSync(mediaPath, "%PDF-1.4\nsynthetic attachment");
-    const sending = fixture.send("", { mediaUrl: mediaPath, mediaLocalRoots: [state.root] });
+    const sending = fixture.attachment();
     await fixture.waitForRequest(sending, signal);
     expect(fixture.readRecords()).toEqual([
       { kind: "cli", args: ["group", "--chat-id", "42", "--db", fixture.dbPath, "--json"] },
@@ -270,9 +303,7 @@ describe("iMessage caller authority at native request boundaries", () => {
     },
   );
 
-  it("settles submitted success after caller A retires while caller B shares its real RPC client", async ({
-    signal,
-  }) => {
+  it("settles retired A without closing B’s shared native RPC client", async ({ signal }) => {
     const fixture = handoff("accepted");
     const client = await createIMessageRpcClient({
       cliPath: fixture.cliPath,
@@ -308,32 +339,5 @@ describe("iMessage caller authority at native request boundaries", () => {
     ]);
     expect(fixture.dispatch).toHaveBeenCalledOnce();
     expect(dispatchB).toHaveBeenCalledTimes(2);
-  });
-
-  it("rechecks authority after awaited real client creation before writing an RPC request", async () => {
-    const fixture = handoff("immediate");
-    const created = createDeferred<IMessageRpcClient>();
-    const releaseCreation = createDeferred<void>();
-    releases.push(() => releaseCreation.resolve());
-    const sending = fixture.send("client creation", {
-      createClient: async (options) => {
-        const client = await createIMessageRpcClient(options);
-        clients.push(client);
-        created.resolve(client);
-        await releaseCreation.promise;
-        return client;
-      },
-    });
-    await Promise.race([
-      created.promise,
-      sending.then((outcome) => {
-        throw new Error("send settled before RPC client creation", { cause: outcome });
-      }),
-    ]);
-    fixture.retire();
-    releaseCreation.resolve();
-    await expect(sending).resolves.toEqual({ error: fixture.retired });
-    expect(fixture.readRecords()).toEqual([]);
-    expect(fixture.dispatch).not.toHaveBeenCalled();
   });
 });

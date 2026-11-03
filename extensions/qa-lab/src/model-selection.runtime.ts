@@ -19,8 +19,8 @@ export function resolveQaRuntimeModelPair(params: {
   const alternateModel =
     normalizeModel(params.alternateModel) ??
     (providerMode === DEFAULT_QA_LIVE_PROVIDER_MODE
-      ? (resolveQaLiveFrontierAlternateModel(primaryModel) ??
-        defaultQaModelForMode(providerMode, { alternate: true }))
-      : defaultQaModelForMode(providerMode, { alternate: true }));
+      ? resolveQaLiveFrontierAlternateModel(primaryModel)
+      : undefined) ??
+    defaultQaModelForMode(providerMode, { alternate: true });
   return { primaryModel, alternateModel };
 }

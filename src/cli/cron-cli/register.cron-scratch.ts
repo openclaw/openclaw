@@ -12,17 +12,6 @@ import { createCronOutputCommand } from "./output-mode.js";
 import { handleCronCliError, printCronJson, requireCronJobId } from "./shared.js";
 import { readCronScratchContent } from "./trigger-options.js";
 
-function parseExpectedRevision(value: string | undefined): number | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  const revision = parseStrictNonNegativeInteger(value);
-  if (revision === undefined) {
-    throw new CronCliError("--expected-revision must be a non-negative integer");
-  }
-  return revision;
-}
-
 export function registerCronScratchCommand(cron: Command) {
   addGatewayClientOptions(
     createCronOutputCommand(cron, "scratch")
@@ -65,8 +54,11 @@ export function registerCronScratchCommand(cron: Command) {
               }
               return;
             }
-            expectedRevision =
-              parseExpectedRevision(opts.expectedRevision) ?? current.currentRevision;
+            const explicitRevision = parseStrictNonNegativeInteger(opts.expectedRevision);
+            if (opts.expectedRevision !== undefined && explicitRevision === undefined) {
+              throw new CronCliError("--expected-revision must be a non-negative integer");
+            }
+            expectedRevision = explicitRevision ?? current.currentRevision;
           }
 
           const content = opts.unset

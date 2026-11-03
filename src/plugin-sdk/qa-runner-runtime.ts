@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { formatErrorMessage } from "../infra/errors.js";
 import { loadBundledPluginManifestRegistry } from "../plugins/manifest-registry-build.js";
 import { loadPluginManifestRegistryCore } from "../plugins/manifest-registry.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.types.js";
@@ -420,13 +421,19 @@ function registerLiveTransportQaCli(
   }
 
   command.action(async (opts: LiveTransportQaCommanderOptions) => {
-    // The collector drops blanks; explicit selection must not broaden into a default run.
-    if (command.getOptionValueSource("scenario") === "cli" && opts.scenario?.length === 0) {
-      throw new Error("--scenario must name at least one non-empty scenario id.");
+    try {
+      // The collector drops blanks; explicit selection must not broaden into a default run.
+      if (command.getOptionValueSource("scenario") === "cli" && opts.scenario?.length === 0) {
+        throw new Error("--scenario must name at least one non-empty scenario id.");
+      }
+      await params.run(
+        mapLiveTransportQaCommanderOptions(opts, params.normalizeInactiveSelectionOptions === true),
+      );
+    } catch (error) {
+      // The root CLI hides unclassified errors; QA failures are the operator's diagnostics.
+      process.stderr.write(`${formatErrorMessage(error)}\n`);
+      process.exitCode = 1;
     }
-    await params.run(
-      mapLiveTransportQaCommanderOptions(opts, params.normalizeInactiveSelectionOptions === true),
-    );
   });
 }
 
@@ -528,9 +535,7 @@ export async function runLiveTransportQaSuiteCommand(params: LiveTransportQaSuit
   return await loadQaRuntimeModule().runLiveTransportQaSuiteCommand(params);
 }
 
-function listDeclaredQaRunnerPlugins(
-  env: NodeJS.ProcessEnv | undefined = resolvePrivateQaBundledPluginsEnv(),
-): Array<
+function listDeclaredQaRunnerPlugins(env: NodeJS.ProcessEnv | undefined): Array<
   PluginManifestRecord & {
     qaRunners: NonNullable<PluginManifestRecord["qaRunners"]>;
   }

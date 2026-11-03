@@ -4,11 +4,7 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
-import {
-  createAdmittedRunOperatorAuthority,
-  createOperationalRunInstanceRef,
-  prepareAgentRunAdmission,
-} from "../agents/admitted-run-context.js";
+import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import * as computerAvailability from "../agents/computer-use-node-capabilities.js";
 import "../agents/test-helpers/fast-bash-tools.js";
 import "../agents/test-helpers/fast-coding-tools.js";
@@ -16,12 +12,13 @@ import { prepareSessionPortalToolTarget } from "../agents/tools/session-portal-t
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeGatewayContextResolver as withGatewayResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import * as mcp from "./mcp-http-request.test-support.js";
 import {
-  McpLoopbackToolCache,
-  resolveMcpLoopbackPolicyTools,
-  resolveMcpLoopbackScopedTools,
+  McpLoopbackToolCache as ToolCache,
+  resolveMcpLoopbackPolicyTools as resolvePolicy,
+  resolveMcpLoopbackScopedTools as resolveExact,
 } from "./mcp-http.runtime.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
@@ -34,9 +31,12 @@ it.for([
   { mode: "exact", boundary: "final publication" },
   { mode: "policy", boundary: "final publication" },
   { mode: "cached", boundary: "final publication" },
+  { mode: "cached", boundary: "readiness" },
 ] as const)(
   "revalidates portal catalog facts after $mode $boundary",
   async ({ mode, boundary }, { signal }) => {
+    const readiness = boundary === "readiness";
+    const publication = boundary === "final publication" || readiness;
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const cfg: OpenClawConfig = { tools: { profile: "coding", deny: ["computer"] } };
       await state.writeConfig(cfg);
@@ -47,7 +47,11 @@ it.for([
         agentId: "main",
       };
       const scope = { agentId: identity.agentId, sessionKey: identity.sessionKey };
-      const entry = { sessionId: identity.sessionId, updatedAt: 1, modelSelectionLocked: false };
+      const entry = {
+        sessionId: identity.sessionId,
+        updatedAt: 1,
+        modelSelectionLocked: readiness,
+      };
       replaceSessionEntrySync(scope, entry);
       const projection = await createSessionRowProjection({ cfg });
       const binding = { ...identity, environmentId: "attached", ownerEpoch: 1, generation: 1 };
@@ -69,14 +73,9 @@ it.for([
       const authorityAbort = new AbortController();
       const admission =
         boundary === "authority"
-          ? prepareAgentRunAdmission({
+          ? mcp.prepareAdmission("portal-controller", "portal-readiness", {
               cfg,
-              operationalRunInstance: createOperationalRunInstanceRef("portal-controller"),
-              facts: {
-                runId: "portal-controller",
-                agentId: identity.agentId,
-                ingress: { kind: "system", boundary: "portal-readiness", state: "present" },
-              },
+              agentId: identity.agentId,
               operatorAuthority: createAdmittedRunOperatorAuthority({
                 profileId: "portal-controller",
                 scopes: ["operator.write"],
@@ -85,7 +84,7 @@ it.for([
               }),
             })
           : undefined;
-      const cache = new McpLoopbackToolCache();
+      const cache = new ToolCache();
       const releaseAvailability = createDeferred();
       let pending: Promise<unknown> | undefined;
       let restore: (() => void) | undefined;
@@ -93,10 +92,10 @@ it.for([
       signal.addEventListener("abort", onAbort, { once: true });
       try {
         await projection.ensureMaterialized();
-        await withPluginRuntimeGatewayContextResolver(
+        await withGatewayResolver(
           () => context,
           async () => {
-            const params: Parameters<McpLoopbackToolCache["resolve"]>[0] = {
+            const params: Parameters<ToolCache["resolve"]>[0] = {
               cfg,
               grantToken: "synthetic-portal-grant",
               isGrantCurrent: () => true,
@@ -106,22 +105,38 @@ it.for([
                 ...identity,
                 senderIsOwner: false,
                 modelHasVision: true,
-                toolsAllow: boundary === "final publication" ? ["portal"] : ["portal", "computer"],
+                toolsAllow: publication ? ["portal"] : ["portal", "computer"],
               },
             };
             const resolve =
               mode === "cached"
                 ? cache.resolve.bind(cache)
                 : mode === "exact"
-                  ? resolveMcpLoopbackScopedTools
-                  : resolveMcpLoopbackPolicyTools;
+                  ? resolveExact
+                  : resolvePolicy;
             const primed = await resolve(params);
-            expect(primed.tools.map((tool) => tool.name)).toEqual(["portal"]);
+            expect(primed.tools.map((tool) => tool.name)).toEqual(readiness ? [] : ["portal"]);
             const retained = prepareSessionPortalToolTarget(identity);
-            expect(retained).toBeDefined();
+            if (!readiness) {
+              expect(retained).toBeDefined();
+            }
 
-            if (boundary === "final publication") {
-              let published = false;
+            const availabilityReturned = createDeferred();
+            let published = false;
+            const update = (modelSelectionLocked: boolean) =>
+              replaceSessionEntrySync(scope, { ...entry, updatedAt: 2, modelSelectionLocked });
+            if (boundary === "availability") {
+              const load = computerAvailability.loadPairedComputerUseAvailabilityForSurface;
+              const spy = vi
+                .spyOn(computerAvailability, "loadPairedComputerUseAvailabilityForSurface")
+                .mockImplementation(async (...args) => {
+                  const result = await load(...args);
+                  availabilityReturned.resolve();
+                  await releaseAvailability.promise;
+                  return result;
+                });
+              restore = () => spy.mockRestore();
+            } else {
               const prepare = projection.withPreparedExactRows.bind(projection);
               const spy = vi
                 .spyOn(projection, "withPreparedExactRows")
@@ -130,13 +145,11 @@ it.for([
                     queries,
                     (read) => {
                       const catalog = consume(read);
-                      if (!published) {
+                      if (boundary === "authority") {
+                        authorityAbort.abort(new Error("Synthetic controller retirement"));
+                      } else if (!published) {
                         published = true;
-                        replaceSessionEntrySync(scope, {
-                          ...entry,
-                          updatedAt: 2,
-                          modelSelectionLocked: true,
-                        });
+                        update(!readiness);
                       }
                       return catalog;
                     },
@@ -144,69 +157,37 @@ it.for([
                   ),
                 );
               restore = () => spy.mockRestore();
-              const resolving = resolve(params);
-              pending = resolving;
-              expect((await withinTest(resolving, signal)).tools.map((tool) => tool.name)).toEqual(
-                [],
-              );
-              expect(published).toBe(true);
-              expect(() => retained?.assertCurrent()).toThrow();
-              return;
             }
-
-            if (boundary === "authority") {
-              const selected: unknown[] = [];
-              const prepare = projection.withPreparedExactRows.bind(projection);
-              const spy = vi
-                .spyOn(projection, "withPreparedExactRows")
-                .mockImplementation((queries, consume, options) =>
-                  prepare(
-                    queries,
-                    (read) => {
-                      const catalog = consume(read);
-                      selected.push(catalog);
-                      authorityAbort.abort(new Error("Synthetic controller retirement"));
-                      return catalog;
-                    },
-                    options,
-                  ),
-                );
-              restore = () => spy.mockRestore();
-              pending = resolve(params);
-              await expect(pending).rejects.toThrow(
-                "admitted run operator authority is no longer active",
-              );
-              expect(selected).toEqual([primed]);
-              return;
-            }
-
-            const availabilityReturned = createDeferred();
-            const load = computerAvailability.loadPairedComputerUseAvailabilityForSurface;
-            const spy = vi
-              .spyOn(computerAvailability, "loadPairedComputerUseAvailabilityForSurface")
-              .mockImplementation(async (...args) => {
-                const result = await load(...args);
-                availabilityReturned.resolve();
-                await releaseAvailability.promise;
-                return result;
-              });
-            restore = () => spy.mockRestore();
             const resolving = resolve(params);
             pending = resolving;
-            await withinTest(
-              awaitGateBeforeSettlement(
-                availabilityReturned.promise,
-                resolving,
-                "catalog resolved before the availability barrier",
-              ),
-              signal,
-            );
-            replaceSessionEntrySync(scope, { ...entry, updatedAt: 2, modelSelectionLocked: true });
-            expect(() => retained?.assertCurrent()).toThrow();
-            releaseAvailability.resolve();
+            if (boundary === "authority") {
+              await expect(resolving).rejects.toThrow(
+                "admitted run operator authority is no longer active",
+              );
+              return;
+            }
+            if (boundary === "availability") {
+              await withinTest(
+                awaitGateBeforeSettlement(
+                  availabilityReturned.promise,
+                  resolving,
+                  "catalog resolved before the availability barrier",
+                ),
+                signal,
+              );
+              update(true);
+              expect(() => retained?.assertCurrent()).toThrow();
+              releaseAvailability.resolve();
+            }
             expect((await withinTest(resolving, signal)).tools.map((tool) => tool.name)).toEqual(
-              [],
+              readiness ? ["portal"] : [],
             );
+            if (publication) {
+              expect(published).toBe(true);
+              if (retained) {
+                expect(() => retained.assertCurrent()).toThrow();
+              }
+            }
           },
         );
       } finally {

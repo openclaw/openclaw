@@ -1,5 +1,4 @@
 #!/usr/bin/env -S node --import tsx
-// Openclaw Prepack script supports OpenClaw repository automation.
 
 import { spawnSync, type SpawnSyncOptions } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
@@ -118,7 +117,7 @@ export function collectPreparedPrepackErrors(
     errors.push(`missing required prepared artifact: ${group.join(" or ")}`);
   }
 
-  if (!normalizedAssets.values().next().done) {
+  if (normalizedAssets.size > 0) {
     for (const suffix of requiredControlUiCompressionSuffixes) {
       if (!Array.from(normalizedAssets).some((assetPath) => assetPath.endsWith(suffix))) {
         errors.push(
@@ -133,10 +132,9 @@ export function collectPreparedPrepackErrors(
   return errors;
 }
 
-function collectPreparedFilePaths(reader: PreparedFileReader = { existsSync, readdirSync }): {
-  files: Set<string>;
-  assets: string[];
-} {
+export function collectPreparedPrepackErrorsFromDisk(
+  reader: PreparedFileReader = { existsSync, readdirSync },
+): string[] {
   const assets = reader
     .readdirSync("dist/control-ui/assets", { withFileTypes: true })
     .flatMap((entry) =>
@@ -152,17 +150,7 @@ function collectPreparedFilePaths(reader: PreparedFileReader = { existsSync, rea
     }
   }
 
-  return {
-    files,
-    assets,
-  };
-}
-
-export function collectPreparedPrepackErrorsFromDisk(
-  reader: PreparedFileReader = { existsSync, readdirSync },
-): string[] {
-  const preparedFiles = collectPreparedFilePaths(reader);
-  return collectPreparedPrepackErrors(preparedFiles.files, preparedFiles.assets);
+  return collectPreparedPrepackErrors(files, assets);
 }
 
 function ensurePreparedArtifacts(): void {
@@ -305,8 +293,6 @@ async function main(): Promise<void> {
   // Preserve those artifacts while still running the complete packaging lifecycle.
   if (buildEnv[PREPARED_RELEASE_ENV]?.trim() !== "1") {
     runPnpm(["build:package"], buildEnv);
-  } else {
-    runPnpm(["update:compat:check"], buildEnv);
   }
   await preparePrepackArtifacts(buildEnv);
 }

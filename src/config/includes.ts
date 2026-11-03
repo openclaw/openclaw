@@ -93,6 +93,8 @@ export function isInternalIncludeWriteTarget(params: {
 }
 
 export type IncludeResolver = {
+  /** Projects archived paths before the normal containment and file-open checks. */
+  mapPath?: (absolutePath: string) => string;
   readFile: (path: string) => string;
   readFileWithGuards?: (params: IncludeFileReadParams) => string;
   parseJson: (raw: string) => unknown;
@@ -416,7 +418,7 @@ class IncludeProcessor {
     const resolved = path.isAbsolute(includePath)
       ? includePath
       : path.resolve(configDir, includePath);
-    const normalized = path.normalize(resolved);
+    const normalized = path.normalize(this.resolver.mapPath?.(resolved) ?? resolved);
 
     if (normalized.length >= MAX_INCLUDE_PATH_LENGTH) {
       throw new ConfigIncludeError(

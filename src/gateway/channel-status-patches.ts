@@ -5,18 +5,6 @@ import type { ChannelAccountSnapshot } from "../channels/plugins/types.core.js";
 import { extractErrorCode, formatErrorMessage } from "../infra/errors.js";
 import { isPluginTrustRefusalError } from "../plugins/plugin-trust.js";
 
-/** Patch emitted when a channel connection is established. */
-type ConnectedChannelStatusPatch = {
-  connected: true;
-  lastConnectedAt: number;
-  lastEventAt: number;
-};
-
-/** Patch emitted when a channel transport reports activity without reconnecting. */
-type TransportActivityChannelStatusPatch = {
-  lastTransportActivityAt: number;
-};
-
 type ReadyChannelStatusPatch = {
   running: true;
   connected: true;
@@ -51,20 +39,16 @@ type StoppedChannelStatusExtras = Partial<
 >;
 
 /** Creates a connected-channel status patch with matching connection/event timestamps. */
-export function createConnectedChannelStatusPatch(
-  at: number = Date.now(),
-): ConnectedChannelStatusPatch {
+export function createConnectedChannelStatusPatch(at: number = Date.now()) {
   return {
-    connected: true,
+    connected: true as const,
     lastConnectedAt: at,
     lastEventAt: at,
   };
 }
 
 /** Creates a transport-activity patch for health/activity monitors. */
-export function createTransportActivityStatusPatch(
-  at: number = Date.now(),
-): TransportActivityChannelStatusPatch {
+export function createTransportActivityStatusPatch(at: number = Date.now()) {
   return {
     lastTransportActivityAt: at,
   };
@@ -78,17 +62,15 @@ export function channelReadyPatch<TExtras extends ReadyChannelStatusExtras>(
 export function channelReadyPatch(
   extras: ReadyChannelStatusExtras = {},
 ): ReadyChannelStatusPatch & ReadyChannelStatusExtras {
-  return Object.assign(
-    {
-      running: true as const,
-      connected: true as const,
-      lifecycle: "ready" as const,
-      lastConnectedAt: Date.now(),
-      lastError: null,
-      terminalDisconnect: undefined,
-    },
-    extras,
-  );
+  return {
+    running: true,
+    connected: true,
+    lifecycle: "ready",
+    lastConnectedAt: Date.now(),
+    lastError: null,
+    terminalDisconnect: undefined,
+    ...extras,
+  };
 }
 
 /** Creates a terminal blocked patch with a required operator-facing error. */
@@ -101,14 +83,12 @@ export function channelBlockedPatch(
   lastError: string,
   extras: BlockedChannelStatusExtras = {},
 ): BlockedChannelStatusPatch & BlockedChannelStatusExtras {
-  return Object.assign(
-    {
-      lifecycle: "blocked" as const,
-      terminalDisconnect: true as const,
-      lastError,
-    },
-    extras,
-  );
+  return {
+    lifecycle: "blocked",
+    terminalDisconnect: true,
+    lastError,
+    ...extras,
+  };
 }
 
 /** Classifies startup failures before transport cleanup or retry policy can hide their cause. */
@@ -137,14 +117,12 @@ export function channelStoppedPatch<TExtras extends StoppedChannelStatusExtras>(
 export function channelStoppedPatch(
   extras: StoppedChannelStatusExtras = {},
 ): StoppedChannelStatusPatch & StoppedChannelStatusExtras {
-  return Object.assign(
-    {
-      running: false as const,
-      connected: false as const,
-      lifecycle: "stopped" as const,
-    },
-    extras,
-  );
+  return {
+    running: false,
+    connected: false,
+    lifecycle: "stopped",
+    ...extras,
+  };
 }
 
 export function sanitizeAbortedTaskStatusPatch(

@@ -1,5 +1,5 @@
+import { listen } from "../lib/reactive/listener.ts";
 import { isMobileNavLayout } from "./mobile-nav-layout.ts";
-import { navDrawerFocusableElements } from "./navigation-surface.ts";
 
 const MIN_OPEN_DISTANCE_PX = 44;
 const OPEN_RATIO = 0.15;
@@ -11,19 +11,18 @@ type Swipe = {
   startX: number;
   startY: number;
   lockedHorizontal: boolean;
-  drawerWidth: number;
-  drawer: HTMLElement | null;
-  backdrop: HTMLElement | null;
 };
 
-export type NavDrawerHost = HTMLElement & {
+export type NavDrawerHost = Pick<HTMLElement, "isConnected"> & {
+  readonly element: HTMLElement;
+  readonly navDrawerElement?: HTMLElement;
   readonly onboardingMode: boolean;
-  readonly updateComplete: Promise<boolean>;
   readonly navDrawerOpen: boolean;
 };
 
 export class NavDrawerSwipeOwner {
   private swipe: Swipe | null = null;
+  private stops: (() => void)[] = [];
 
   constructor(
     private readonly host: NavDrawerHost,
@@ -40,72 +39,34 @@ export class NavDrawerSwipeOwner {
   }
 
   connect(): void {
-    this.host.addEventListener("touchstart", this.handleStart, { passive: true });
-    this.host.addEventListener("touchmove", this.handleMove, { passive: false });
-    this.host.addEventListener("touchend", this.handleEnd, { passive: true });
-    this.host.addEventListener("touchcancel", this.handleCancel, { passive: true });
-    if (this.host.navDrawerOpen) {
-      this.opened();
-    }
+    this.stops = [
+      listen(this.host.element, "touchstart", this.handleStart, { passive: true }),
+      listen(this.host.element, "touchmove", this.handleMove, { passive: false }),
+      listen(this.host.element, "touchend", this.handleEnd, { passive: true }),
+      listen(this.host.element, "touchcancel", this.cancel, { passive: true }),
+    ];
   }
 
   disconnect(): void {
-    this.host.removeEventListener("touchstart", this.handleStart);
-    this.host.removeEventListener("touchmove", this.handleMove);
-    this.host.removeEventListener("touchend", this.handleEnd);
-    this.host.removeEventListener("touchcancel", this.handleCancel);
+    this.stops.forEach((stop) => stop());
     this.reset();
   }
 
   reset(): void {
     this.swipe = null;
-    const drawer = this.host.querySelector<HTMLElement>(".shell-nav");
-    const backdrop = this.host.querySelector<HTMLElement>(".shell-nav-backdrop");
-    drawer?.removeAttribute("data-nav-drawer-dragging");
-    drawer?.style.removeProperty("transform");
-    drawer?.style.removeProperty("opacity");
-    backdrop?.removeAttribute("data-nav-drawer-dragging");
-    backdrop?.style.removeProperty("visibility");
-    backdrop?.style.removeProperty("opacity");
   }
 
-  opened(): void {
-    void this.host.updateComplete.then(() => {
-      if (!this.host.isConnected || !this.host.navDrawerOpen) {
-        return;
-      }
+  private openAfterSwipe(deltaX: number): void {
+    const width = this.host.navDrawerElement?.getBoundingClientRect().width ?? 0;
+    if (deltaX >= Math.max(MIN_OPEN_DISTANCE_PX, width * OPEN_RATIO)) {
+      // Commit once intent is clear; a held gesture must not leave clipped
+      // navigation text and a non-interactive scrim sitting over the chat.
       this.reset();
-      const drawer = this.host.querySelector<HTMLElement>(".shell-nav");
-      if (drawer) {
-        (navDrawerFocusableElements(drawer)[0] ?? drawer).focus({ preventScroll: true });
-      }
-    });
+      this.requestOpen();
+    }
   }
 
-  private paint(swipe: Swipe, deltaX: number): void {
-    const drawer = swipe.drawer ?? this.host.querySelector<HTMLElement>(".shell-nav");
-    const backdrop = swipe.backdrop ?? this.host.querySelector<HTMLElement>(".shell-nav-backdrop");
-    if (!drawer || !backdrop) {
-      return;
-    }
-    swipe.drawer = drawer;
-    swipe.backdrop = backdrop;
-    if (swipe.drawerWidth === 0) {
-      swipe.drawerWidth = drawer.getBoundingClientRect().width;
-      drawer.setAttribute("data-nav-drawer-dragging", "");
-      backdrop.setAttribute("data-nav-drawer-dragging", "");
-    }
-    const reveal = Math.min(swipe.drawerWidth, Math.max(0, deltaX));
-    drawer.style.transform = `translateX(${reveal - swipe.drawerWidth}px)`;
-    drawer.style.opacity = "1";
-    backdrop.style.visibility = "visible";
-    backdrop.style.opacity = String(swipe.drawerWidth > 0 ? reveal / swipe.drawerWidth : 0);
-  }
-
-  private cancel(): void {
-    this.swipe = null;
-    requestAnimationFrame(() => this.reset());
-  }
+  private readonly cancel = (): void => this.reset();
 
   private readonly handleStart = (event: TouchEvent): void => {
     this.reset();
@@ -142,9 +103,6 @@ export class NavDrawerSwipeOwner {
       startX: touch.clientX,
       startY: touch.clientY,
       lockedHorizontal: false,
-      drawerWidth: 0,
-      drawer: null,
-      backdrop: null,
     };
   };
 
@@ -161,7 +119,7 @@ export class NavDrawerSwipeOwner {
     const deltaY = touch.clientY - swipe.startY;
     if (swipe.lockedHorizontal) {
       event.preventDefault();
-      this.paint(swipe, deltaX);
+      this.openAfterSwipe(deltaX);
       return;
     }
     const distanceX = Math.abs(deltaX);
@@ -172,7 +130,7 @@ export class NavDrawerSwipeOwner {
     if (deltaX > 0 && distanceX >= distanceY * DIRECTION_RATIO) {
       swipe.lockedHorizontal = true;
       event.preventDefault();
-      this.paint(swipe, deltaX);
+      this.openAfterSwipe(deltaX);
     } else if (deltaX <= -LOCK_DISTANCE_PX || distanceY >= distanceX * DIRECTION_RATIO) {
       this.reset();
     }
@@ -190,15 +148,7 @@ export class NavDrawerSwipeOwner {
       return;
     }
     const deltaX = touch.clientX - swipe.startX;
-    this.paint(swipe, deltaX);
-    const shouldOpen = deltaX >= Math.max(MIN_OPEN_DISTANCE_PX, swipe.drawerWidth * OPEN_RATIO);
-    this.swipe = null;
-    if (shouldOpen) {
-      this.requestOpen();
-    } else {
-      requestAnimationFrame(() => this.reset());
-    }
+    this.openAfterSwipe(deltaX);
+    this.reset();
   };
-
-  private readonly handleCancel = (): void => this.cancel();
 }

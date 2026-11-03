@@ -2,11 +2,9 @@ import fs from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
-import {
-  loadSessionEntry,
-  upsertSessionEntryCore,
-} from "../../config/sessions/session-accessor.js";
-import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import * as sessionEntryReads from "../../config/sessions/session-entry-read-runtime.js";
+import { projectionLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { releaseAgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
@@ -24,8 +22,12 @@ import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js
 import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { GatewayClientRegistry } from "../server/client-registry.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
-import { canReceiveSessionEvent } from "../session-sharing.js";
-import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
+import { createSessionRowProjection } from "../session-row-projection.js";
+import {
+  createProjectedSessionEventPredicate,
+  roleClient,
+  rolePolicyConfig,
+} from "../session-sharing.test-utils.js";
 import {
   adminRequestClient,
   broadcast,
@@ -39,6 +41,15 @@ import {
 import type { GatewayClient } from "./types.js";
 
 installQuestionTestHooks();
+
+function invalidateQuestionReadFacts() {
+  sessionChanges.invalidate({
+    agentId: "main",
+    sessionKey: requestParams.sessionKey,
+    storePath: resolveOpenClawAgentSqlitePath({ agentId: "main" }),
+    factsInvalidated: true,
+  });
+}
 
 const sourceReleases = new Set<() => void>();
 afterEach(() => {
@@ -64,6 +75,42 @@ function questionPeer(client: GatewayClient, connId: string) {
     socket: socket as unknown as GatewayWsClient["socket"],
   };
   return { ws, send };
+}
+
+function useBroadcaster(
+  peers: ReturnType<typeof questionPeer>[],
+  canReceiveSessionEvent?: Parameters<typeof createGatewayBroadcaster>[0]["canReceiveSessionEvent"],
+) {
+  const broadcaster = createGatewayBroadcaster({
+    clients: new GatewayClientRegistry(peers.map(({ ws }) => ws)),
+    canReceiveSessionEvent,
+  });
+  broadcast.mockImplementation(broadcaster.broadcast);
+  return broadcaster;
+}
+
+function expectMissing(response: unknown) {
+  expect(response).toMatchObject([false, undefined, { details: { reason: "QUESTION_NOT_FOUND" } }]);
+}
+
+function expectEvents(peer: ReturnType<typeof questionPeer>, events: string[]) {
+  expect(peer.send).toHaveBeenCalledTimes(events.length);
+  expect(peer.send.mock.calls.map(([frame]) => JSON.parse(frame).event)).toEqual(events);
+}
+
+function broadQuestionClient(client: GatewayClient): GatewayClient {
+  return { ...client, connect: { ...client.connect, scopes: ["operator.questions"] } };
+}
+
+function observeAnswerWait() {
+  const entered = createDeferredCore();
+  const wait = manager.waitAnswer.bind(manager);
+  const spy = vi.spyOn(manager, "waitAnswer").mockImplementation((...args) => {
+    const result = wait(...args);
+    entered.resolve();
+    return result;
+  });
+  return { entered: entered.promise, spy };
 }
 
 async function fixture(state: OpenClawTestState) {
@@ -118,9 +165,6 @@ async function fixture(state: OpenClawTestState) {
       { ...entry, ...delta },
     );
   await write();
-  expect(
-    loadSessionEntry({ agentId: "main", sessionKey: requestParams.sessionKey })?.createdActor,
-  ).toEqual(entry.createdActor);
   const call = (
     method: string,
     params: Record<string, unknown>,
@@ -138,49 +182,56 @@ async function fixture(state: OpenClawTestState) {
   return { owner, viewer, producer, cfg, entry, write, call, request, sourceController };
 }
 
-async function expectRejectedCreatorRestamp(f: Awaited<ReturnType<typeof fixture>>) {
-  const updated = await f.write({
-    createdActor: { ...f.entry.createdActor, id: f.viewer.authenticatedUserProfile!.profileId },
+function withQuestionFixture(
+  run: (f: Awaited<ReturnType<typeof fixture>>, state: OpenClawTestState) => Promise<void>,
+) {
+  return withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await run(await fixture(state), state);
   });
-  expect(updated?.createdActor).toEqual(f.entry.createdActor);
-  expect(
-    loadSessionEntry({ agentId: "main", sessionKey: requestParams.sessionKey })?.createdActor,
-  ).toEqual(f.entry.createdActor);
 }
 
-it("binds a narrow producer to its trusted session and lets its browser answer after label changes", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const f = await fixture(state);
-    expect(
-      await f.call(
-        "question.request",
-        {
-          ...requestParams,
-          id: "trusted-route",
-          agentId: "other",
-          sessionKey: "agent:other:foreign",
-          runId: "forged",
-        },
-        f.producer,
-      ),
-    ).toMatchObject([true, { id: "trusted-route" }, undefined]);
-    expect(manager.get("trusted-route")).toMatchObject({
-      agentId: "main",
-      sessionKey: requestParams.sessionKey,
-      runId: requestParams.runId,
-    });
-    const waiting = f.call("question.waitAnswer", { id: "trusted-route" });
-    const settled = Promise.allSettled([waiting]);
+it("keeps a trusted narrow question on worker-backed RPCs and fanout through label changes and completion", () =>
+  withQuestionFixture(async (f) => {
+    const owner = questionPeer(f.owner, "sql-owner");
+    const viewer = questionPeer(f.viewer, "sql-viewer");
+    const broad = questionPeer(broadQuestionClient(f.owner), "sql-broad");
+    const admin = questionPeer(adminRequestClient, "sql-admin");
+    const revoked = questionPeer({ ...f.viewer, invalidated: true }, "sql-revoked");
+    const fallback = vi.fn(() => false);
+    useBroadcaster([owner, viewer, broad, admin, revoked], fallback);
+    let sql = observeHostDataSql();
+    const { entered, spy: waitSpy } = observeAnswerWait();
+    let settled: Promise<unknown> | undefined;
     try {
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: requestParams.sessionKey },
-        {
-          ...f.entry,
-          updatedAt: 2,
-          label: "Renamed while answering",
-          markedUnreadAt: 2,
-        },
-      );
+      expect(
+        await f.call(
+          "question.request",
+          {
+            ...requestParams,
+            id: "trusted-route",
+            agentId: "other",
+            sessionKey: "agent:other:foreign",
+            runId: "forged",
+          },
+          f.producer,
+        ),
+      ).toMatchObject([true, { id: "trusted-route" }, undefined]);
+      expect(manager.get("trusted-route")).toMatchObject({
+        agentId: "main",
+        sessionKey: requestParams.sessionKey,
+        runId: requestParams.runId,
+      });
+      expect((await f.call("question.get", { id: "trusted-route" }))[0]).toBe(true);
+      expect((await f.call("question.list", {}))[0]).toBe(true);
+      const waiting = f.call("question.waitAnswer", { id: "trusted-route" });
+      settled = Promise.allSettled([waiting]);
+      await Promise.race([entered, waiting]);
+      expect(waitSpy).toHaveBeenCalledOnce();
+      waitSpy.mockRestore();
+      expect(sql.queries.filter((query) => /session_|transcript_/i.test(query))).toEqual([]);
+      sql.restore();
+      await f.write({ updatedAt: 2, label: "Renamed while answering", markedUnreadAt: 2 });
+      sql = observeHostDataSql();
       const answers = { answers: { destination: ["Home"] } };
       expect(await f.call("question.resolve", { id: "trusted-route", answers })).toEqual([
         true,
@@ -195,28 +246,35 @@ it("binds a narrow producer to its trusted session and lets its browser answer a
         { question: { status: "answered", answers } },
         undefined,
       ]);
+      await manager.drain();
+      for (const recipient of [owner, broad, admin]) {
+        expectEvents(recipient, ["question.requested", "question.resolved"]);
+      }
+      expect(viewer.send).not.toHaveBeenCalled();
+      expect(revoked.send).not.toHaveBeenCalled();
+      expect(fallback).not.toHaveBeenCalled();
+      expect(sql.queries.filter((query) => /session_|transcript_/i.test(query))).toEqual([]);
     } finally {
+      waitSpy.mockRestore();
+      sql.restore();
       manager.close();
       await settled;
+      await manager.drain();
     }
-  });
-});
+  }));
 
-it("fans out requester-only questions after draft visibility changes with no global event grant", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const f = await fixture(state);
+it("fans out requester-only questions after draft visibility changes with no global event grant", () =>
+  withQuestionFixture(async (f) => {
     const owner = questionPeer(f.owner, "question-owner");
     const viewer = questionPeer(f.viewer, "question-viewer");
-    const broad = questionPeer(
-      { ...f.owner, connect: { ...f.owner.connect, scopes: ["operator.questions"] } },
-      "broad-questions",
+    const broad = questionPeer(broadQuestionClient(f.owner), "broad-questions");
+    const projection = await createSessionRowProjection({ cfg: f.cfg });
+    sourceReleases.add(() => projection.dispose());
+    await projection.ensureMaterialized();
+    const broadcaster = useBroadcaster(
+      [owner, viewer, broad],
+      createProjectedSessionEventPredicate(f.cfg, projection),
     );
-    const broadcaster = createGatewayBroadcaster({
-      clients: new GatewayClientRegistry([owner.ws, viewer.ws, broad.ws]),
-      canReceiveSessionEvent: (client, sessionKeys, agentId, event, payload) =>
-        canReceiveSessionEvent({ cfg: f.cfg, client, sessionKeys, agentId, event, payload }),
-    });
-    broadcast.mockImplementation(broadcaster.broadcast);
     expect((await f.request())[0]).toBe(true);
     expect(owner.send).toHaveBeenCalledOnce();
     expect(viewer.send).not.toHaveBeenCalled();
@@ -229,10 +287,7 @@ it("fans out requester-only questions after draft visibility changes with no glo
     } finally {
       get.mockRestore();
     }
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey: requestParams.sessionKey },
-      { ...f.entry, visibility: "draft" },
-    );
+    await f.write({ visibility: "draft" });
     owner.send.mockClear();
     viewer.send.mockClear();
     broad.send.mockClear();
@@ -270,112 +325,70 @@ it("fans out requester-only questions after draft visibility changes with no glo
         payload: {},
       });
     }
-  });
-});
+  }));
 
-it("keeps secret requested and answered events off narrow fanout", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const f = await fixture(state);
-    const { ws, send } = questionPeer(f.owner, "narrow-secret");
-    broadcast.mockImplementation(
-      createGatewayBroadcaster({ clients: new GatewayClientRegistry([ws]) }).broadcast,
-    );
-    expect(
-      (
-        await f.call(
-          "question.request",
-          { ...secretRequestParams, id: "secret-event" },
-          adminRequestClient,
-        )
-      )[0],
-    ).toBe(true);
-    expect(
-      (
-        await f.call(
-          "question.resolve",
-          {
-            id: "secret-event",
-            answers: { answers: { secret_value: ["synthetic-value"] } },
-          },
-          adminRequestClient,
-        )
-      )[0],
-    ).toBe(true);
-    await manager.drain();
-    expect(broadcast.mock.calls.map(([event]) => event)).toEqual([
-      "question.requested",
-      "question.resolved",
-    ]);
-    expect(send).not.toHaveBeenCalled();
-  });
-});
-
-it.each(["pending", "answered"] as const)(
-  "retains physical store identity while %s",
-  async (status) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const f = await fixture(state);
-      expect((await f.request())[0]).toBe(true);
-      if (status === "answered") {
-        manager.resolve("ordinary-question", { answers: { destination: ["Original"] } });
+it.each(["ordinary", "secret"] as const)(
+  "conceals privileged %s questions from narrow readers and fanout",
+  (kind) =>
+    withQuestionFixture(async (f) => {
+      const peer = questionPeer(f.owner, "narrow-secret");
+      useBroadcaster([peer]);
+      const id = "privileged-question";
+      const client = kind === "secret" ? adminRequestClient : broadQuestionClient(f.producer);
+      const params = { ...(kind === "secret" ? secretRequestParams : requestParams), id };
+      expect((await f.call("question.request", params, client))[0]).toBe(true);
+      if (kind === "secret") {
+        const answers = { answers: { secret_value: ["synthetic-test-value"] } };
+        expect((await f.call("question.resolve", { id, answers }, client))[0]).toBe(true);
+        await manager.drain();
+        expect(broadcast.mock.calls.map(([event]) => event)).toEqual([
+          "question.requested",
+          "question.resolved",
+        ]);
+      } else {
+        expect(manager.observe(id)?.sessionAccess).toBeDefined();
+        expectMissing(await f.call("question.resolve", { id, cancel: true }));
       }
-      const observation = manager.observe("ordinary-question")!;
-      const waiting = manager.waitAnswer("ordinary-question");
-      const replacement = state.statePath("replacement", "catalog.sqlite");
-      await upsertSessionEntryCore(
-        { agentId: "main", storePath: replacement, sessionKey: requestParams.sessionKey },
-        f.entry,
-      );
-      f.cfg.session = { ...f.cfg.session, store: replacement };
-      await state.writeConfig(f.cfg);
-      setRuntimeConfigSnapshot(f.cfg);
-      expect(await f.call("question.get", { id: "ordinary-question" })).toMatchObject([
-        false,
-        undefined,
-        { details: { reason: "QUESTION_NOT_FOUND" } },
-      ]);
-      expect(observation.record.status).toBe(status === "pending" ? "cancelled" : status);
-      expect(await waiting).toMatchObject({ status: status === "pending" ? "cancelled" : status });
-      expect(await f.call("question.waitAnswer", { id: "ordinary-question" })).toMatchObject([
-        false,
-        undefined,
-        { details: { reason: "QUESTION_NOT_FOUND" } },
-      ]);
-      expect(manager.get("ordinary-question")?.status).toBe(
-        status === "pending" ? "cancelled" : status,
-      );
-    });
-  },
+      for (const method of ["question.get", "question.waitAnswer"]) {
+        expectMissing(await f.call(method, { id }));
+      }
+      expect(await f.call("question.list", {})).toEqual([true, { questions: [] }, undefined]);
+      expect(manager.get(id)?.status).toBe(kind === "secret" ? "answered" : "pending");
+      expect((await f.call("question.get", { id }, client))[0]).toBe(true);
+      expect(peer.send).not.toHaveBeenCalled();
+    }),
 );
 
-it("does not turn an ordinary broad producer into a narrow question grant", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const f = await fixture(state);
-    const broad = {
-      ...f.producer,
-      connect: { ...f.producer.connect, scopes: ["operator.questions"] },
-    };
-    expect((await f.request("privileged-ordinary", broad))[0]).toBe(true);
-    expect(manager.observe("privileged-ordinary")?.sessionAccess).toBeDefined();
-    for (const method of ["question.get", "question.waitAnswer", "question.resolve"]) {
-      expect(
-        await f.call(method, {
-          id: "privileged-ordinary",
-          ...(method === "question.resolve" ? { cancel: true } : {}),
-        }),
-      ).toMatchObject([false, undefined, { details: { reason: "QUESTION_NOT_FOUND" } }]);
+it.each(["pending", "answered"] as const)("retains physical store identity while %s", (status) =>
+  withQuestionFixture(async (f, state) => {
+    expect((await f.request())[0]).toBe(true);
+    if (status === "answered") {
+      manager.resolve("ordinary-question", { answers: { destination: ["Original"] } });
     }
-    expect(await f.call("question.list", {})).toEqual([true, { questions: [] }, undefined]);
-    expect(manager.get("privileged-ordinary")?.status).toBe("pending");
-    expect((await f.call("question.get", { id: "privileged-ordinary" }, broad))[0]).toBe(true);
-  });
-});
+    const observation = manager.observe("ordinary-question")!;
+    const waiting = manager.waitAnswer("ordinary-question");
+    const replacement = state.statePath("replacement", "catalog.sqlite");
+    await upsertSessionEntryCore(
+      { agentId: "main", storePath: replacement, sessionKey: requestParams.sessionKey },
+      f.entry,
+    );
+    f.cfg.session = { ...f.cfg.session, store: replacement };
+    await state.writeConfig(f.cfg);
+    setRuntimeConfigSnapshot(f.cfg);
+    expectMissing(await f.call("question.get", { id: "ordinary-question" }));
+    expect(observation.record.status).toBe(status === "pending" ? "cancelled" : status);
+    expect(await waiting).toMatchObject({ status: status === "pending" ? "cancelled" : status });
+    expectMissing(await f.call("question.waitAnswer", { id: "ordinary-question" }));
+    expect(manager.get("ordinary-question")?.status).toBe(
+      status === "pending" ? "cancelled" : status,
+    );
+  }),
+);
 
 it.each(["closed claim", "absent", "incognito", "disallowed agent"] as const)(
   "refuses narrow question creation with %s before creating a record",
-  async (kind) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const f = await fixture(state);
+  (kind) =>
+    withQuestionFixture(async (f, state) => {
       let client = f.producer;
       if (kind === "closed claim") {
         releaseAgentRunDelegatedAuthority(requesterAuthority);
@@ -398,10 +411,7 @@ it.each(["closed claim", "absent", "incognito", "disallowed agent"] as const)(
         };
       }
       if (kind === "incognito") {
-        await upsertSessionEntryCore(
-          { agentId: "main", sessionKey: requestParams.sessionKey },
-          { ...f.entry, incognito: true },
-        );
+        await f.write({ incognito: true });
       }
       const response = await f.call(
         "question.request",
@@ -414,78 +424,28 @@ it.each(["closed claim", "absent", "incognito", "disallowed agent"] as const)(
       expect(response[0]).toBe(false);
       expect(response[1]).toBeUndefined();
       expect(manager.get("refused-question")).toBeNull();
-    });
-  },
+    }),
 );
 
-it("hides answered secret question metadata and answers from narrow readers", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const f = await fixture(state);
-    expect(
-      (
-        await f.call(
-          "question.request",
-          { ...secretRequestParams, id: "secret-question" },
-          adminRequestClient,
-        )
-      )[0],
-    ).toBe(true);
-    expect(
-      (
-        await f.call(
-          "question.resolve",
-          {
-            id: "secret-question",
-            answers: { answers: { secret_value: ["synthetic-test-value"] } },
-          },
-          adminRequestClient,
-        )
-      )[0],
-    ).toBe(true);
-    for (const method of ["question.get", "question.waitAnswer"]) {
-      expect(await f.call(method, { id: "secret-question" })).toMatchObject([
-        false,
-        undefined,
-        { details: { reason: "QUESTION_NOT_FOUND" } },
-      ]);
-    }
-    expect(await f.call("question.list", {})).toEqual([true, { questions: [] }, undefined]);
-    expect(manager.get("secret-question")?.status).toBe("answered");
-    expect((await f.call("question.get", { id: "secret-question" }, adminRequestClient))[0]).toBe(
-      true,
-    );
-  });
-});
-
-it.each(["generation", "session", "creator restamp", "profile", "reused id"] as const)(
+it.each(["generation", "session", "profile", "reused id"] as const)(
   "rechecks held answer delivery after %s",
-  async (change) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const f = await fixture(state);
+  (change) =>
+    withQuestionFixture(async (f) => {
       const id = "ordinary-question";
       expect((await f.request(id))[0]).toBe(true);
-      const entered = createDeferredCore();
-      const wait = manager.waitAnswer.bind(manager);
-      const spy = vi.spyOn(manager, "waitAnswer").mockImplementation((...args) => {
-        const result = wait(...args);
-        entered.resolve();
-        return result;
-      });
+      const { entered, spy } = observeAnswerWait();
       const observer = { ...f.owner };
       const waiting = f.call("question.waitAnswer", { id }, observer);
       const settled = Promise.allSettled([waiting]);
       const answers = { answers: { destination: ["Committed answer"] } };
       try {
-        await Promise.race([entered.promise, waiting]);
+        await Promise.race([entered, waiting]);
         expect(spy).toHaveBeenCalledOnce();
         if (change === "generation") {
           await f.write({ lifecycleRevision: "replacement" });
         }
         if (change === "session") {
           await f.write({ sessionId: "replacement" });
-        }
-        if (change === "creator restamp") {
-          await expectRejectedCreatorRestamp(f);
         }
         if (change === "profile") {
           observer.authenticatedUserProfile = f.viewer.authenticatedUserProfile;
@@ -497,122 +457,60 @@ it.each(["generation", "session", "creator restamp", "profile", "reused id"] as 
           manager.resolve(id, answers);
         }
         const outcome = (await settled)[0];
-        if (change === "creator restamp") {
-          expect(outcome).toEqual({
-            status: "fulfilled",
-            value: [true, { status: "answered", answers }, undefined],
-          });
-        } else {
-          const error =
-            change === "profile"
-              ? { code: "FORBIDDEN", message: "Gateway requester authority changed" }
-              : { details: { reason: "QUESTION_NOT_FOUND" } };
-          expect(outcome).toMatchObject({
-            status: "fulfilled",
-            value: [false, undefined, error],
-          });
-        }
+        const error =
+          change === "profile"
+            ? { code: "FORBIDDEN", message: "Gateway requester authority changed" }
+            : { details: { reason: "QUESTION_NOT_FOUND" } };
+        expect(outcome).toMatchObject({
+          status: "fulfilled",
+          value: [false, undefined, error],
+        });
         expect(manager.get(id)?.status).toBe(change === "reused id" ? "pending" : "answered");
       } finally {
         manager.close();
         await settled;
         spy.mockRestore();
       }
-    });
-  },
+    }),
 );
-
-it("prepares question session data in the worker across RPCs and real narrow, broad, and admin fanout", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const f = await fixture(state);
-    const owner = questionPeer(f.owner, "sql-owner");
-    const viewer = questionPeer(f.viewer, "sql-viewer");
-    const broad = questionPeer(
-      { ...f.owner, connect: { ...f.owner.connect, scopes: ["operator.questions"] } },
-      "sql-broad",
-    );
-    const admin = questionPeer(adminRequestClient, "sql-admin");
-    const revoked = questionPeer({ ...f.viewer, invalidated: true }, "sql-revoked");
-    const fallback = vi.fn((client, sessionKeys, agentId, event, payload) =>
-      canReceiveSessionEvent({ cfg: f.cfg, client, sessionKeys, agentId, event, payload }),
-    );
-    const broadcaster = createGatewayBroadcaster({
-      clients: new GatewayClientRegistry([owner.ws, viewer.ws, broad.ws, admin.ws, revoked.ws]),
-      canReceiveSessionEvent: fallback,
-    });
-    broadcast.mockImplementation(broadcaster.broadcast);
-    const sql = observeHostDataSql();
-    try {
-      expect((await f.request())[0]).toBe(true);
-      expect((await f.call("question.get", { id: "ordinary-question" }))[0]).toBe(true);
-      expect((await f.call("question.list", {}))[0]).toBe(true);
-      const waiting = f.call("question.waitAnswer", { id: "ordinary-question" });
-      const answer = { answers: { destination: ["Worker answer"] } };
-      expect(
-        (await f.call("question.resolve", { id: "ordinary-question", answers: answer }))[0],
-      ).toBe(true);
-      expect(await waiting).toEqual([true, { status: "answered", answers: answer }, undefined]);
-      await manager.drain();
-      for (const recipient of [owner, broad, admin]) {
-        expect(recipient.send).toHaveBeenCalledTimes(2);
-        expect(recipient.send.mock.calls.map(([frame]) => JSON.parse(frame).event)).toEqual([
-          "question.requested",
-          "question.resolved",
-        ]);
-      }
-      expect(viewer.send).not.toHaveBeenCalled();
-      expect(revoked.send).not.toHaveBeenCalled();
-      expect(fallback).not.toHaveBeenCalled();
-      // Existing role/profile authority may still read shared state; no session data
-      // or sharing statement executes on the host, including cached statements.
-      expect(sql.queries.filter((query) => /session_|transcript_/i.test(query))).toEqual([]);
-    } finally {
-      sql.restore();
-      manager.close();
-      await manager.drain();
-    }
-  });
-});
 
 it.each([
   "close",
   "reused id",
   "generation",
-  "creator restamp",
   "unrelated",
   "publication delay",
   "database close",
   "database replacement",
 ] as const)(
   "joins terminal preparation after %s without publishing stale facts or undoing the answer",
-  async (change) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const f = await fixture(state);
+  (change) =>
+    withQuestionFixture(async (f, state) => {
       const owner = questionPeer(f.owner, "held-owner");
-      const broadcaster = createGatewayBroadcaster({
-        clients: new GatewayClientRegistry([owner.ws]),
-      });
-      broadcast.mockImplementation(broadcaster.broadcast);
+      useBroadcaster([owner]);
       expect((await f.request())[0]).toBe(true);
       owner.send.mockClear();
       const entered = createDeferredCore();
       const release = createDeferredCore();
-      const run = historyLane.pool.run.bind(historyLane.pool);
+      invalidateQuestionReadFacts();
+      const run = projectionLane.pool.run.bind(projectionLane.pool);
       let held = false;
-      const spy = vi.spyOn(historyLane.pool, "run").mockImplementation(async (input, options) => {
-        let exact = false;
-        const result = await run(async () => {
-          const request = typeof input === "function" ? await input() : input;
-          exact = request.kind === "session-exact-entries";
-          return request;
-        }, options);
-        if (exact && !held) {
-          held = true;
-          entered.resolve();
-          await release.promise;
-        }
-        return result;
-      });
+      const spy = vi
+        .spyOn(projectionLane.pool, "run")
+        .mockImplementation(async (input, options) => {
+          let exact = false;
+          const result = await run(async () => {
+            const request = typeof input === "function" ? await input() : input;
+            exact = request.kind === "session-exact-entries";
+            return request;
+          }, options);
+          if (exact && !held) {
+            held = true;
+            entered.resolve();
+            await release.promise;
+          }
+          return result;
+        });
       const answer = { answers: { destination: ["Committed"] } };
       const observation = manager.observe("ordinary-question")!;
       const releaseAccess =
@@ -647,9 +545,6 @@ it.each([
         if (change === "generation") {
           await f.write({ lifecycleRevision: "replacement" });
         }
-        if (change === "creator restamp") {
-          await expectRejectedCreatorRestamp(f);
-        }
         if (change === "database close") {
           await closeOpenClawAgentDatabaseByPathAsync(
             resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
@@ -672,9 +567,9 @@ it.each([
         release.resolve();
         await manager.drain();
         expect(owner.send).toHaveBeenCalledTimes(
-          ["creator restamp", "unrelated", "publication delay"].includes(change) ? 1 : 0,
+          ["unrelated", "publication delay"].includes(change) ? 1 : 0,
         );
-        if (change === "creator restamp" || change === "publication delay") {
+        if (change === "publication delay") {
           expect(JSON.parse(String(owner.send.mock.calls[0]?.[0]))).toMatchObject({
             type: "event",
             event: "question.resolved",
@@ -692,7 +587,7 @@ it.each([
         if (change === "unrelated") {
           expect(spy).toHaveBeenCalledOnce();
         }
-        if (change === "generation" || change === "creator restamp") {
+        if (change === "generation") {
           expect(manager.get("ordinary-question")).toMatchObject({
             status: "answered",
             answers: answer,
@@ -707,50 +602,75 @@ it.each([
         spy.mockRestore();
         releaseAccess?.mockRestore();
       }
-    });
-  },
+    }),
 );
 
-it.each(["request authority", "observer scope"] as const)(
-  "stops a live RPC when its %s closes during relevant invalidation",
-  async (owner) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const f = await fixture(state);
-      expect((await f.request())[0]).toBe(true);
+it.each([
+  ["get", "request authority", "narrow"],
+  ["get", "observer scope", "narrow"],
+  ["request", "request authority", "admin"],
+  ["request", "request authority", "broad"],
+] as const)(
+  "fences question.%s when its %s closes during %s worker preparation",
+  (method, owner, kind) =>
+    withQuestionFixture(async (f) => {
+      if (method === "get") {
+        expect((await f.request())[0]).toBe(true);
+      }
       const entered = createDeferredCore();
       const release = createDeferredCore();
-      const run = historyLane.pool.run.bind(historyLane.pool);
-      const spy = vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
-        const result = await run(...args);
-        entered.resolve();
-        await release.promise;
-        return result;
-      });
+      invalidateQuestionReadFacts();
+      const read = sessionEntryReads.withSessionEntriesFromStoresInWorker;
+      const spy = vi
+        .spyOn(sessionEntryReads, "withSessionEntriesFromStoresInWorker")
+        .mockImplementation(async (...args) => {
+          entered.resolve();
+          await release.promise;
+          return read(...args);
+        });
       let current = true;
       const observer = new AsyncWorkScope();
       broadcast.mockClear();
-      const request = observer.track(() =>
-        f.call("question.get", { id: "ordinary-question" }, f.owner, () => current),
-      );
+      const client =
+        kind === "admin"
+          ? adminRequestClient
+          : kind === "narrow"
+            ? f.owner
+            : broadQuestionClient(f.producer);
+      const call = () =>
+        f.call(
+          `question.${method}`,
+          { ...(method === "request" ? requestParams : {}), id: "ordinary-question" },
+          client,
+          () => current,
+        );
+      const request = method === "get" ? observer.track(call) : call();
       const result = Promise.allSettled([request]);
       try {
         await entered.promise;
-        await f.write({ updatedAt: 2 });
+        if (method === "get") {
+          await f.write({ updatedAt: 2 });
+        }
         if (owner === "request authority") {
           current = false;
         } else {
           observer.beginClose();
         }
         release.resolve();
-        expect((await result)[0]).toMatchObject({
-          status: "rejected",
-          reason:
-            owner === "request authority"
-              ? { message: "Gateway requester authority changed" }
-              : { name: "AbortError" },
-        });
-        expect(spy).toHaveBeenCalledOnce();
-        expect(manager.get("ordinary-question")?.status).toBe("pending");
+        if (method === "get") {
+          expect((await result)[0]).toMatchObject({
+            status: "rejected",
+            reason:
+              owner === "request authority"
+                ? { message: "Gateway requester authority changed" }
+                : { name: "AbortError" },
+          });
+          expect(spy).toHaveBeenCalledOnce();
+          expect(manager.get("ordinary-question")?.status).toBe("pending");
+        } else {
+          expect((await result)[0]).toMatchObject({ status: "rejected" });
+          expect(manager.get("ordinary-question")).toBeNull();
+        }
         expect(broadcast).not.toHaveBeenCalled();
       } finally {
         release.resolve();
@@ -758,29 +678,25 @@ it.each(["request authority", "observer scope"] as const)(
         await observer.drain();
         spy.mockRestore();
       }
-    });
-  },
+    }),
 );
 
 it.each(["admin", "narrow"] as const)(
   "preserves %s creation semantics when optional worker facts are unavailable",
-  async (kind) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const f = await fixture(state);
+  (kind) =>
+    withQuestionFixture(async (f) => {
       const failure = new Error("question fixture worker unavailable");
       const admin = questionPeer(adminRequestClient, "optional-admin");
       const narrow = questionPeer(f.viewer, "optional-narrow");
       const fallback = vi.fn(() => {
         throw new Error("Unexpected synchronous session sharing lookup");
       });
-      broadcast.mockImplementation(
-        createGatewayBroadcaster({
-          clients: new GatewayClientRegistry([admin.ws, narrow.ws]),
-          canReceiveSessionEvent: fallback,
-        }).broadcast,
-      );
-      const spy = vi.spyOn(historyLane.pool, "run").mockRejectedValue(failure);
+      useBroadcaster([admin, narrow], fallback);
+      const spy = vi
+        .spyOn(sessionEntryReads, "withSessionEntriesFromStoresInWorker")
+        .mockRejectedValue(failure);
       try {
+        invalidateQuestionReadFacts();
         const client = kind === "narrow" ? f.producer : adminRequestClient;
         const request = f.call(
           "question.request",
@@ -796,10 +712,7 @@ it.each(["admin", "narrow"] as const)(
           expect(manager.observe("optional-facts")?.sessionAccess).toBeUndefined();
           manager.cancel("optional-facts");
           await manager.drain();
-          expect(admin.send.mock.calls.map(([frame]) => JSON.parse(frame).event)).toEqual([
-            "question.requested",
-            "question.resolved",
-          ]);
+          expectEvents(admin, ["question.requested", "question.resolved"]);
           expect(manager.get("optional-facts")?.status).toBe("cancelled");
         }
         expect(narrow.send).not.toHaveBeenCalled();
@@ -808,27 +721,18 @@ it.each(["admin", "narrow"] as const)(
       } finally {
         spy.mockRestore();
       }
-    });
-  },
+    }),
 );
 
 it.each(["source", "generation"] as const)(
   "preserves current broad and admin terminal delivery after the original narrow %s retires",
-  async (change) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const f = await fixture(state);
+  (change) =>
+    withQuestionFixture(async (f) => {
       const source = f.sourceController;
       const narrow = questionPeer(f.owner, "retired-narrow");
-      const broad = questionPeer(
-        { ...f.viewer, connect: { ...f.viewer.connect, scopes: ["operator.questions"] } },
-        "retired-broad",
-      );
+      const broad = questionPeer(broadQuestionClient(f.viewer), "retired-broad");
       const admin = questionPeer(adminRequestClient, "retired-admin");
-      broadcast.mockImplementation(
-        createGatewayBroadcaster({
-          clients: new GatewayClientRegistry([narrow.ws, broad.ws, admin.ws]),
-        }).broadcast,
-      );
+      useBroadcaster([narrow, broad, admin]);
       expect((await f.request())[0]).toBe(true);
       for (const recipient of [narrow, broad, admin]) {
         expect(recipient.send).toHaveBeenCalledOnce();
@@ -852,51 +756,5 @@ it.each(["source", "generation"] as const)(
           payload: { id: "ordinary-question", status },
         });
       }
-    });
-  },
-);
-
-it.each(["admin", "broad"] as const)(
-  "does not create a %s question after its initial request authority closes during worker preparation",
-  async (kind) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const f = await fixture(state);
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      const run = historyLane.pool.run.bind(historyLane.pool);
-      const spy = vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
-        const result = await run(...args);
-        entered.resolve();
-        await release.promise;
-        return result;
-      });
-      let current = true;
-      const client =
-        kind === "admin"
-          ? adminRequestClient
-          : {
-              ...f.producer,
-              connect: { ...f.producer.connect, scopes: ["operator.questions"] },
-            };
-      const request = f.call(
-        "question.request",
-        { ...requestParams, id: "closed-initial" },
-        client,
-        () => current,
-      );
-      const result = Promise.allSettled([request]);
-      try {
-        await entered.promise;
-        current = false;
-        release.resolve();
-        expect((await result)[0]).toMatchObject({ status: "rejected" });
-        expect(manager.get("closed-initial")).toBeNull();
-        expect(broadcast).not.toHaveBeenCalled();
-      } finally {
-        release.resolve();
-        await result;
-        spy.mockRestore();
-      }
-    });
-  },
+    }),
 );

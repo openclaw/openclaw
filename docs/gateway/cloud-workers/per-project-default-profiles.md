@@ -1,10 +1,12 @@
 ---
-summary: "Map a repository to a default cloud worker profile, and how provision replay adopts a fixed lease"
+doc-schema-version: 1
+summary: "Map a repository to a default cloud worker profile and retain resource identity for cleanup"
 title: "Per-project default profiles"
 read_when: "You want a repository to pick its own cloud profile, or you are reconciling an interrupted provision."
 ---
 
-Selecting a default profile from a managed worktree's origin remote, and how the enrolled node's state and fixed lease ID survive an interrupted dispatch.
+Select a default profile from a managed worktree’s origin remote. Resource identity
+and cleanup records remain durable when provisioning is interrupted.
 
 ## Per-project default profiles
 
@@ -20,14 +22,18 @@ Use `cloudWorkers.projectProfiles` to select a default profile from a managed se
 }
 ```
 
-In **Settings → Connections → Cloud workers → Repositories**, add, edit, or delete repository defaults by selecting a configured profile. The editor validates repository identities and refuses mappings to missing profiles.
+In **Settings → Connections → Cloud environments**, select a repository and use **Machine → Change** to choose a configured profile. This writes its `cloudWorkers.projectProfiles` default. Repository identities are validated, and mappings to missing profiles are refused. Add defaults for repositories not yet listed, or remove a default, through configuration.
 
-An explicit `profileId` or `deviceId` in `sessions.dispatch` always wins. A target-less project-profile lookup requires `operator.admin`. Deleting a profile from the Cloud workers settings also removes project defaults that reference it. If a manually configured mapping names a profile that is not present in `cloudWorkers.profiles`, dispatch fails closed and names both the repository key and missing profile. A worktree with no `origin` or no matching mapping returns a typed `INVALID_REQUEST` without provisioning or falling back to another target.
+An explicit `profileId` or `deviceId` in `sessions.dispatch` always wins. A target-less project-profile lookup requires `operator.admin`. Deleting a profile from **Advanced → Machines** in Cloud environments also removes project defaults that reference it. If a manually configured mapping names a profile that is not present in `cloudWorkers.profiles`, dispatch stops with an error naming both the repository key and missing profile. A worktree with no `origin` or no matching mapping returns a typed `INVALID_REQUEST` without provisioning or falling back to another target.
 
-The enrolled node stores its identity, durable device token, endpoint, worker bundles, and workspaces under an isolated per-lease state directory on the disposable box. Provision replay first adopts the fixed Crabbox lease, then resumes that node state or issues a fresh pairing credential for the same setup identity after a closed enrollment. After a Gateway restart, a live replacement enrollment may adopt a surviving pending credential; first-device redemption requires that enrollment to remain live. Replay never mints a second environment identity for the same operation.
+The enrolled node stores its identity, durable device token, endpoint, worker bundles, and workspaces under an isolated per-lease state directory on the disposable box. Allocation retries use the fixed Crabbox lease and existing setup identity; first-device redemption requires its enrollment to remain live. Cleanup can retain that resource identity after cancellation without restarting the old dispatch.
 
-OpenClaw derives one canonical `cbx_...` lease ID from the durable provision operation and passes it to `crabbox warmup --lease-id`; the deterministic slug is display metadata only. If warmup commits but its response is lost, Gateway reconciliation repeats the same fixed-ID operation and Crabbox returns or adopts only the exactly attested lease. Intent drift, terminal ID reuse, and ambiguous unverified resources fail closed without allocating a replacement.
+OpenClaw derives one fixed `cbx_...` lease ID from the durable provision operation and passes it to `crabbox warmup --lease-id`; the generated slug is display metadata only. If warmup commits but its response is lost, Gateway reconciliation repeats the same fixed-ID operation and Crabbox returns or adopts only the exactly attested lease. Intent drift, terminal ID reuse, and ambiguous unverified resources are rejected without allocating a replacement.
 
-A Gateway restart that interrupts pending provisioning leaves the placement in `provisioning` and resumes the same environment and provider operation after startup. Explicit **Stop cloud worker…** still requests destruction and prevents replay.
+Graceful Gateway shutdown cancels in-flight provisioning and releases its resources.
+Startup does not reconstruct or replay that dispatch. The root session’s resume
+input can request provisioning again after checking current state. Durable resource
+identity, leases, and cleanup intent still prevent lost allocations from being
+blindly replaced; explicit **Stop cloud worker…** keeps its destruction behavior.
 
-An interrupted legacy dispatch may have allocated a random lease without recording its ID. OpenClaw cannot identify that allocation safely from the old operation alone. It refuses replay and slug adoption, retaining the unresolved allocation and cleanup record across restarts instead of treating the resource as gone. Identify and clean up any prior lease before starting a new dispatch; do not guess by slug. Automatic identification or settlement of the old record is not supported. Legacy records already marked failed are not reopened automatically.
+An interrupted legacy dispatch may have allocated a random lease without recording its ID. OpenClaw cannot identify that allocation safely from the old operation alone. It refuses reconstruction and slug adoption, retaining the unresolved allocation and cleanup record across restarts instead of treating the resource as gone. Identify and clean up any prior lease before starting a new dispatch; do not guess by slug. Automatic identification or settlement of the old record is not supported. Legacy records already marked failed are not reopened automatically.

@@ -97,7 +97,32 @@ plugin makes it available; the model's `agentRuntime` setting selects it for
 conversations. See [runtime configuration](/plugins/sdk-agent-harness/runtime-config)
 for provider and per-agent model settings.
 
+### Shared model tuning
+
+Agents API uses its own native context management. Shared OpenClaw settings
+`responsesServerCompaction` and `responsesCompactThreshold` do not prevent
+selecting it, but they do not control hosted compaction (including when
+`responsesServerCompaction` is `false`). They keep their existing behavior when
+you use the same model with the OpenClaw runtime. Model capability metadata such
+as `supportsTemperature` and `codeMode` also does not require an exact native
+implementation.
+
+This is best-effort tuning compatibility, not permission to drop request policy.
+Custom endpoints, authentication, headers, request parameters, and storage
+behavior still require a runtime that can honor them; Agents API continues to
+require its official API-key route.
+
 ### 3. Start a conversation and try a task
+
+In the Control UI, open **New session → Environments** and select
+**OpenAI (Agents API)** under **Hosted workspaces**. The option uses the Gateway’s
+configured model/runtime choices and API-key availability. If another runtime
+should remain your default, add `pickerRuntimes: ["agentsapi"]` to the exact
+model entry instead of changing its `agentRuntime`. See
+[model runtime choices](/concepts/models#choose-the-same-model-with-different-runtimes).
+The hosted choice does not copy your selected local folder, project, or worktree;
+send input files as chat attachments. Switching back restores your local draft
+choices and requires an available compatible host runtime.
 
 Apply the configuration through your usual Gateway workflow. In your chat
 channel, send `/new`, then try:
@@ -116,6 +141,15 @@ generated files in [Work with files and tools](/plugins/agentsapi#work-with-file
 Follow-up messages use the same Agents API session. Ask the agent to revise its
 answer, work with another attachment, or take the next step. A message sent while
 the agent is working can redirect it; stopping the task cancels its remote turn.
+
+Saved sessions from `v2026.9.9` are upgraded on their first continuation without
+changing the remote session ID. Keep the original API key and configuration
+until that continuation succeeds. If they no longer match, the plugin retains
+the binding and explains how to restore them or explicitly reset with a key
+that can settle the original native session. A failed upgrade never silently
+creates a replacement conversation. See the [saved-session upgrade
+notes](https://github.com/openclaw/openclaw/blob/main/extensions/agentsapi/README.md#upgrading-saved-sessions)
+for key rotation and rollback.
 
 New sessions receive your OpenClaw instructions and persona, including
 `AGENTS.md`, `SOUL.md`, and your user context. After editing those instructions,
@@ -137,9 +171,15 @@ Download outputs you want to keep: the hosted workspace is separate from your
 Gateway's files, and a saved conversation does not guarantee permanent file
 storage.
 
-Built-in web search is available in new sessions. Your enabled OpenClaw and
-plugin tools remain available under your configured tool policies, including
-memory search and recall. You can also connect remote tools through MCP; see
+Built-in web search is available in new sessions unless disabled globally with
+`tools.web.search.enabled: false` or through the session’s **Web search** control.
+Changing the effective search setting requires `/new` or `/reset`; an existing
+session refuses to continue with a different native search policy.
+By default, your enabled OpenClaw and plugin tools remain available under your
+configured tool policies, including memory search and recall. You can disable
+[Gateway tool and MCP forwarding](/plugins/agentsapi#forwarding-controls) separately
+without disabling hosted commands, files, or attachments. You can also connect
+remote tools through MCP; see
 [MCP connections](/plugins/agentsapi#mcp-connections) below.
 
 ## Advanced configuration and reference
@@ -160,6 +200,61 @@ needs their contents in its workspace. See the
 [hosted environment guide](https://developers.openai.com/api/docs/guides/agents-api/environments/openai-hosted)
 for environment lifecycle and storage behavior.
 
+### Forwarding controls
+
+To use the hosted environment without exposing Gateway function callbacks or
+configured MCP servers, merge this into your existing configuration:
+
+```json5
+{
+  plugins: {
+    entries: {
+      agentsapi: {
+        enabled: true,
+        config: {
+          forwarding: {
+            gatewayTools: false,
+            mcpServers: false,
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Both settings default to `true` and are independent:
+
+- `gatewayTools: false` skips constructing OpenClaw and plugin tools for Gateway
+  function callbacks. No Gateway functions are declared, and unexpected remote
+  function calls are rejected without invoking a tool or its execution hooks.
+- `mcpServers: false` skips loading configured and plugin-bundled MCP servers,
+  including discovery and credential resolution. It also excludes servers added
+  later; it is not a list of currently known server names.
+
+Set both to `false` for no forwarded Gateway functions or MCP servers. A native
+shell/file tool allowlist alone does not disable MCP forwarding. These controls
+apply only to the Agents API plugin, not other harnesses or the Gateway's own
+tool configuration. Native hosted shell and file operations, attachment uploads,
+output artifact delivery, and same-session follow-ups remain available.
+
+Native tool declarations are separate. To omit hosted web search, set
+`plugins.entries.agentsapi.config.nativeTools` to a list without `web_search`,
+for example `[{ type: "programmatic_tool_calling", enabled: true }]`. A supplied
+list replaces the defaults. These forwarding controls do not change native
+shell, file, or web-search permissions or bypass the existing preflight checks.
+
+Apply the configuration through your usual Gateway workflow, then use `/new` or
+`/reset`. Remote tool declarations are fixed for a session: changing either
+forwarding setting refuses continuation and retains the original binding until
+you reset it. Reset and deletion can still settle the saved native session under
+the new policy; the plugin never silently creates a replacement conversation.
+
+This is **tool-exposure isolation, not full Gateway prompt or persona isolation**.
+OpenClaw instructions, persona, and ordinary prompt/lifecycle hooks still apply.
+Tool-authorized prompt hooks receive only the exposed Gateway function names,
+which are empty when Gateway tool forwarding is disabled.
+
 ### MCP connections
 
 Configure remote MCP servers in `mcp.servers` or an enabled plugin's MCP bundle
@@ -174,19 +269,152 @@ has connection settings, header references, and tool filters.
 
 ### Self-hosted execution
 
-For commands on your own infrastructure, configure a self-hosted environment
-with an operator-managed executor controller and matching workspace paths.
-`hostExecutorSkillDirectories` can expose skill directories installed on that
-executor. The
-[environment setup reference](https://github.com/openclaw/openclaw/blob/main/extensions/agentsapi/README.md)
-covers controller prerequisites, attachment staging, and session resets.
+Self-hosted execution keeps the agent harness in OpenAI's cloud and runs commands
+and file operations on infrastructure you manage. The bundled `agentsapi` plugin
+owns the conversation and native session. An external lifecycle owner connects
+that session to a `codex exec-server` process on your host and manages its cleanup.
+
+#### One executor per session
+
+Each native Agents API session has its own environment ID, connection URL, and
+executor process. Follow-up turns reuse that session and executor. Starting
+another conversation creates another session with its own executor.
+
+**All executors can run in the same persistent environment**, such as one VM,
+remote host, or container, and use the same workspace directory. This is one
+possible deployment, not a requirement. You can instead place executors in
+separate environments according to your isolation and persistence needs.
+
+For example, two conversations can have this layout:
+
+```text
+OpenClaw Gateway                 One persistent remote host
+  Conversation A -> Session A -> Executor A --+--> /srv/agent/workspace
+  Conversation B -> Session B -> Executor B --+
+```
+
+The sessions have separate conversation histories and executor connections, but
+share the files and installed software on that host. Session separation is not
+filesystem or credential isolation. Concurrent sessions can change the same
+files; use separate workspaces, users, or hosts when workloads need isolation.
+Retiring one session's executor must leave other executors and the shared
+workspace intact. Your host's storage and backup policy determine file durability.
+
+#### 1. Prepare the execution host
+
+Complete the API-key and model setup above. On the execution host, prepare an
+absolute workspace path, install the tools and dependencies your agent needs,
+and install a Codex CLI version supporting `codex exec-server`. Follow the
+[official self-hosted setup](https://developers.openai.com/api/docs/guides/agents-api/environments/self-hosted)
+for the current installation and outbound-network requirements.
+
+Provision a restricted environment key from the platform dashboard for the same
+organization, project, and user or service account as the session owner. Supply
+that key to the executor as `CODEX_API_KEY`; keep the Gateway's application API
+key out of the executor environment. Your external lifecycle owner is responsible
+for secure credential delivery, host access, process supervision, and filesystem provisioning.
+
+#### 2. Configure external executor management
+
+Use an external lifecycle owner, for example through the
+[Agents API webhook lifecycle](https://developers.openai.com/api/docs/guides/agents-api/environments/lifecycle#start-compute-from-webhooks).
+It owns session-scoped startup, reconnection, and cleanup. It must authenticate
+API reads, handle only its intended sessions, and use each session's environment
+ID and unchanged remote URL. The workspace path sent by OpenClaw must already
+exist at the same absolute path on the executor. Choose one lifecycle owner for
+each session.
+
+An external owner typically launches this command on the execution host, in its
+prepared workspace, with the environment key supplied securely as `CODEX_API_KEY`:
+
+```bash
+codex exec-server \
+  --remote "<session.environment.remote_url>" \
+  --environment-id "<session.environment.id>"
+```
+
+Use a separate managed process for each native session and make startup safe to
+repeat. Reconnection does not guarantee an interrupted command survives. Check
+the original turn's outcome before repeating work that may have changed files or
+called a service. Input submission has a 60-second HTTP deadline, including
+connection wait, so prepare hosts to connect promptly.
+
+#### 3. Select self-hosted execution
+
+Merge this into your existing configuration and keep your model's
+`agentRuntime.id: "agentsapi"` setting from the setup above:
+
+```json5
+{
+  plugins: {
+    entries: {
+      agentsapi: {
+        enabled: true,
+        config: { environment: "self_hosted" },
+      },
+    },
+  },
+}
+```
+
+Optionally set `plugins.entries.agentsapi.config.hostExecutorSkillDirectories`
+to absolute skill-directory paths on the execution host. Provision their files
+and dependencies yourself. OpenClaw forwards the paths for native discovery; it
+does not copy Gateway skills to the host.
+
+Apply the configuration and start a fresh conversation with `/new` or `/reset`.
+Changing the environment or workspace for an existing conversation requires a
+reset. It does not migrate files between hosts. OpenClaw settles native work
+before reset or deletion removes the local session binding; your external owner
+remains responsible for stopping the session's executor.
+
+#### Upgrading from a controller plugin
+
+`executorController` and `api.registerAgentExecutorController` are no longer
+supported. Before upgrading, use the previous OpenClaw version with the original
+controller plugin to retire every controlled session and verify its executor has
+stopped. Then remove `executorController` and configure an external lifecycle
+owner before starting new self-hosted sessions. This is a deployment migration,
+not an automatic transfer of executor ownership.
+
+The new version rejects the old configuration and retains any saved controller
+binding, including records written before executor startup completed. Run, reset,
+deletion, and transcript context reset cannot discard these records. Return to
+the previous version and original controller to complete cleanup; removing the
+configuration key alone does not migrate an existing controlled session.
+
+#### Check the setup and file boundaries
+
+Start with the calculation from the hosted setup, then ask the agent to write a
+small file in its workspace and read it in a follow-up. For a shared-host setup,
+start a second conversation and check that it uses a different executor while
+seeing the same file. Reset one conversation and confirm the other still works
+and the shared file remains. Inspect controller process records and Gateway
+logs as well as the chat reply; a model-authentication probe does not test an
+executor connection.
+
+Executor management does not automatically synchronize Gateway files or add
+attachment transfer. Self-hosted input attachments require a registered workspace
+provider with attachment staging. External executor management does not add automatic
+self-hosted output transfer. Configure the appropriate workspace/file integration
+for your deployment, or use the hosted environment for its built-in transfers.
+Gateway memory and tools retain their own storage and permissions. See the
+[package reference](https://github.com/openclaw/openclaw/blob/main/extensions/agentsapi/README.md)
+for these boundaries and upgrade notes.
 
 ### Session settings and diagnostics
 
 Use `/new` or `/reset` to adopt changes to session instructions, MCP connections,
-or reasoning-summary display. These commands start a fresh session on the next
-message. Remote history and workspace resources remain managed through the
-Agents API.
+forwarding controls, or reasoning-summary display. These commands start a fresh
+session on the next message. Remote history and workspace resources remain
+managed through the Agents API.
+
+Reset and deletion confirm that native work has stopped before removing a session
+binding, including after a Gateway restart. If that confirmation fails, the binding
+is retained for recovery. This does not delete the remote conversation or its retained
+files. Rewinding or switching a local transcript branch also invalidates its old
+native binding after the local change commits. External executor cleanup remains
+the responsibility of its lifecycle owner.
 
 OpenClaw shows progress and records conversation and tool history in its normal
 transcript. Channel settings control progress and reasoning visibility. Token

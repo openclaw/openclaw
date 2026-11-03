@@ -1,68 +1,38 @@
-/**
- * Shared helpers for bash exec/process tools.
- * Owns output slicing, environment coercion, and compact session labels.
- */
 import { parseStrictInteger } from "@openclaw/normalization-core/number-coercion";
+import { parseEnvValue as stripQuotes } from "../secrets/shared.js";
 import { sliceUtf16Safe } from "../utils.js";
-import type {
-  SandboxBackendExecSpec,
-  SandboxBackendHandle,
-  SandboxBackendWorkdirValidation,
-  SandboxBackendWorkdirValidator,
-} from "./sandbox/backend-handle.types.js";
+import type { SandboxBackendHandle } from "./sandbox/backend-handle.types.js";
+import type { ReadOnlyWorkspaceSkillMount } from "./sandbox/workspace-mounts.js";
 
 const CHUNK_LIMIT = 8 * 1024;
-
-/** Sandbox metadata needed to map host workspaces into container exec calls. */
-type BashSandboxWorkdirMount = {
-  hostPath: string;
-  containerPath: string;
-};
 
 export type BashSandboxConfig = {
   containerName: string;
   workspaceDir: string;
   containerWorkdir: string;
-  workdirValidation?: SandboxBackendWorkdirValidation;
-  validateWorkdir?: SandboxBackendWorkdirValidator;
-  discardPreparedWorkdir?: (workdir: string) => void;
+  workdirValidation?: SandboxBackendHandle["workdirValidation"];
+  validateWorkdir?: SandboxBackendHandle["validateWorkdir"];
+  discardPreparedWorkdir?: SandboxBackendHandle["discardPreparedWorkdir"];
   workdirRoots?: readonly string[];
   /** Approved read-only skill mounts that may be selected as an exec workdir. */
-  readOnlyWorkspaceSkillMounts?: readonly BashSandboxWorkdirMount[];
+  readOnlyWorkspaceSkillMounts?: readonly ReadOnlyWorkspaceSkillMount[];
   env?: Record<string, string>;
   prepareProcessCleanup?: SandboxBackendHandle["prepareProcessCleanup"];
-  buildExecSpec?: (params: {
-    command: string;
-    workdir?: string;
-    env: Record<string, string>;
-    usePty: boolean;
-  }) => Promise<SandboxBackendExecSpec>;
-  finalizeExec?: (params: {
-    status: "completed" | "failed";
-    exitCode: number | null;
-    timedOut: boolean;
-    token?: unknown;
-  }) => Promise<void>;
+  buildExecSpec?: SandboxBackendHandle["buildExecSpec"];
+  finalizeExec?: SandboxBackendHandle["finalizeExec"];
 };
 
-/** Builds the environment passed into sandboxed exec calls. */
 export function buildSandboxEnv(params: {
   defaultPath: string;
   paramsEnv?: Record<string, string>;
   sandboxEnv?: Record<string, string>;
   containerWorkdir: string;
-}) {
-  const env: Record<string, string> = {
-    PATH: params.defaultPath,
-    HOME: params.containerWorkdir,
-  };
-  for (const [key, value] of Object.entries(params.sandboxEnv ?? {})) {
-    env[key] = value;
-  }
-  for (const [key, value] of Object.entries(params.paramsEnv ?? {})) {
-    env[key] = value;
-  }
-  return env;
+}): Record<string, string> {
+  return Object.assign(
+    { PATH: params.defaultPath, HOME: params.containerWorkdir },
+    params.sandboxEnv,
+    params.paramsEnv,
+  );
 }
 
 /** Coerces process/env-like records to string-only environment variables. */
@@ -101,14 +71,11 @@ export function readEnvInt(key: string, legacyKey?: string) {
 }
 
 /** Splits output into bounded chunks without splitting UTF-16 surrogate pairs. */
-export function chunkString(input: string, limit = CHUNK_LIMIT) {
+export function chunkString(input: string) {
   const chunks: string[] = [];
-  const chunkLimit = Number.isNaN(limit) ? CHUNK_LIMIT : Math.max(1, Math.floor(limit));
   let i = 0;
   while (i < input.length) {
-    const firstCodePointWidth = (input.codePointAt(i) ?? 0) > 0xffff ? 2 : 1;
-    // A code point is indivisible; a tiny limit may require one chunk to exceed it.
-    const chunk = sliceUtf16Safe(input, i, i + Math.max(chunkLimit, firstCodePointWidth));
+    const chunk = sliceUtf16Safe(input, i, i + CHUNK_LIMIT);
     chunks.push(chunk);
     i += chunk.length;
   }
@@ -124,7 +91,6 @@ export function truncateMiddle(str: string, max: number) {
   return `${sliceUtf16Safe(str, 0, half)}...${sliceUtf16Safe(str, -half)}`;
 }
 
-/** Returns a line-based log slice plus original line/character counts. */
 export function sliceLogLines(
   text: string,
   offset?: number,
@@ -156,12 +122,9 @@ export function sliceLogLines(
 /** Derives a compact human label from a shell command. */
 export function deriveSessionName(command: string): string | undefined {
   const tokens = tokenizeCommand(command);
-  if (tokens.length === 0) {
-    return undefined;
-  }
   const verb = tokens[0];
   if (!verb) {
-    return "";
+    return undefined;
   }
   let target = tokens.slice(1).find((t) => !t.startsWith("-"));
   if (!target) {
@@ -177,15 +140,4 @@ export function deriveSessionName(command: string): string | undefined {
 function tokenizeCommand(command: string): string[] {
   const matches = command.match(/(?:[^\s"']+|"(?:\\.|[^"\\])*"|'[^']*')+/g) ?? [];
   return matches.map((token) => stripQuotes(token)).filter(Boolean);
-}
-
-function stripQuotes(value: string): string {
-  const trimmed = value.trim();
-  if (
-    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
-    (trimmed.startsWith("'") && trimmed.endsWith("'"))
-  ) {
-    return trimmed.slice(1, -1);
-  }
-  return trimmed;
 }

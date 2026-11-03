@@ -1,7 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { durationUnitMs } from "../infra/format-time/duration-units.js";
 
-/** Options for choosing the unit used by bare numeric duration values. */
 type DurationMsParseOptions = {
   defaultUnit?: "ms" | "s" | "m" | "h" | "d";
 };
@@ -40,14 +39,12 @@ function roundSafeDurationMs(raw: string, value: number): number {
   return ms;
 }
 
-/** Parse a non-negative duration into milliseconds, supporting single and composite units. */
 export function parseDurationMs(raw: string, opts?: DurationMsParseOptions): number {
   const trimmed = normalizeLowercaseStringOrEmpty(raw);
   if (!trimmed) {
     throw invalidDuration(raw, "empty");
   }
 
-  // Fast path for a single token (supports default unit for bare numbers).
   const single = /^(\d+(?:\.\d+)?)(ms|s|m|h|d)?$/.exec(trimmed);
   if (single) {
     const value = single[1] ?? "";
@@ -72,7 +69,7 @@ export function parseDurationMs(raw: string, opts?: DurationMsParseOptions): num
     consumed += full.length;
   }
 
-  if (consumed !== trimmed.length || consumed === 0) {
+  if (consumed !== trimmed.length) {
     throw invalidDuration(raw);
   }
 

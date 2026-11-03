@@ -9,18 +9,12 @@ export function runModelsCommand(action: () => Promise<void>) {
   return runCommandWithRuntime(defaultRuntime, action);
 }
 
-export function resolveModelAgentOption(
-  command: Command | undefined,
-  opts?: { agent?: unknown },
-): string | undefined {
-  return (
-    resolveOptionFromCommand<string>(command, "agent") ??
-    (typeof opts?.agent === "string" ? opts.agent : undefined)
-  );
+export function resolveModelAgentOption(command: Command): string | undefined {
+  return resolveOptionFromCommand<string>(command, "agent");
 }
 
 /** `models` subcommands that operate on global state only, never per-agent. */
-export type GlobalOnlyModelCommandName =
+type GlobalOnlyModelCommandName =
   | "set"
   | "set-image"
   | "scan"

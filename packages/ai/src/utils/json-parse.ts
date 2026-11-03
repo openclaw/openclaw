@@ -2,13 +2,8 @@
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { parse as partialParse } from "partial-json";
 
-const VALID_JSON_ESCAPES = new Set(['"', "\\", "/", "b", "f", "n", "r", "t", "u"]);
+const SIMPLE_JSON_ESCAPES = new Set(['"', "\\", "/", "b", "f", "n", "r", "t"]);
 const JSON_CONTROL_ESCAPES = new Set(["b", "f", "n", "r", "t"]);
-
-function isControlCharacter(char: string): boolean {
-  const codePoint = char.codePointAt(0);
-  return codePoint !== undefined && codePoint >= 0x00 && codePoint <= 0x1f;
-}
 
 /**
  * Repairs malformed JSON string literals by:
@@ -67,26 +62,19 @@ export function repairJson(
           index += 5;
           continue;
         }
-        // A \u not followed by four hex digits is an invalid escape: double the
-        // backslash like the other invalid escapes below. Falling through would
-        // hit the valid-escape branch (VALID_JSON_ESCAPES contains "u") and
-        // re-emit the broken \u, leaving the JSON unparseable.
-        repaired += "\\\\";
-        stringValuePrefix += "\\";
-        continue;
       }
 
       if (!preserveValidControlEscapes && JSON_CONTROL_ESCAPES.has(nextChar)) {
         // Only this suffix can influence the Windows-path heuristic.
         stringValuePrefix = stringValuePrefix.slice(-160);
-        if (looksLikeWindowsPathPrefix(stringValuePrefix)) {
+        if (/(?:^|[^A-Za-z0-9])[A-Za-z]:(?:[\\/][^"\\/:*?<>|\r\n]*)*$/.test(stringValuePrefix)) {
           repaired += "\\\\";
           stringValuePrefix += "\\";
           continue;
         }
       }
 
-      if (VALID_JSON_ESCAPES.has(nextChar)) {
+      if (SIMPLE_JSON_ESCAPES.has(nextChar)) {
         repaired += `\\${nextChar}`;
         stringValuePrefix += nextChar === "\\" ? "\\" : `\\${nextChar}`;
         index += 1;
@@ -98,7 +86,7 @@ export function repairJson(
       continue;
     }
 
-    repaired += isControlCharacter(char) ? JSON.stringify(char).slice(1, -1) : char;
+    repaired += char.charCodeAt(0) <= 0x1f ? JSON.stringify(char).slice(1, -1) : char;
     stringValuePrefix += char;
   }
 
@@ -107,10 +95,6 @@ export function repairJson(
 
 export function parseJsonWithRepair(json: string): unknown {
   return JSON.parse(repairJson(json)) as unknown;
-}
-
-function looksLikeWindowsPathPrefix(prefix: string): boolean {
-  return /(?:^|[^A-Za-z0-9])[A-Za-z]:(?:[\\/][^"\\/:*?<>|\r\n]*)*$/.test(prefix);
 }
 
 /**

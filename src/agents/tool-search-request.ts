@@ -114,25 +114,11 @@ export function readToolSearchLimit(value: unknown, config: ToolSearchConfig): n
   return Math.min(value, config.maxSearchLimit);
 }
 
-function readBatchToolSearchQuery(value: unknown, field: string, maxGraphemes?: number): string {
-  if (typeof value !== "string" || !value.trim()) {
-    throw new ToolInputError(`${field} must be a non-empty string.`);
-  }
-  const query = value.trim();
-  if (maxGraphemes !== undefined && !Guard.IsMaxLength(query, maxGraphemes)) {
-    throw new ToolInputError(`${field} must not exceed ${maxGraphemes} characters.`);
-  }
-  return query;
-}
-
 function readToolSearchArgs(
   params: Record<string, unknown>,
+  query: string,
   config: ToolSearchConfig,
 ): { query: string; limit: number } {
-  const query = params.query;
-  if (typeof query !== "string") {
-    throw new ToolInputError("query must be a string.");
-  }
   const options = isRecord(params.options) ? params.options : undefined;
   return {
     query,
@@ -150,11 +136,16 @@ function readBatchToolSearchEntry(
   if (!isRecord(value)) {
     throw new ToolInputError(`queries[${index}] must be an object.`);
   }
-  const query = readBatchToolSearchQuery(
-    value.query,
-    `queries[${index}].query`,
-    MAX_TOOL_SEARCH_BATCH_QUERY_GRAPHEMES,
-  );
+  const rawQuery = value.query;
+  const query = typeof rawQuery === "string" ? rawQuery.trim() : "";
+  if (!query) {
+    throw new ToolInputError(`queries[${index}].query must be a non-empty string.`);
+  }
+  if (!Guard.IsMaxLength(query, MAX_TOOL_SEARCH_BATCH_QUERY_GRAPHEMES)) {
+    throw new ToolInputError(
+      `queries[${index}].query must not exceed ${MAX_TOOL_SEARCH_BATCH_QUERY_GRAPHEMES} characters.`,
+    );
+  }
   try {
     return { query, limit: readToolSearchLimit(value.limit, config) };
   } catch (error) {
@@ -193,26 +184,26 @@ function readBatchToolSearchRequest(
 /** Normalize scalar and batch shapes without dropping independent searches. */
 export function readToolSearchRequest(args: unknown, config: ToolSearchConfig): ToolSearchRequest {
   const params = asToolParamsRecord(args);
-  const query = params.query ?? undefined;
-  const queries = params.queries ?? undefined;
-  const hasQuery = query !== undefined;
-  const hasQueries = queries !== undefined;
+  const query = params.query;
+  const queries = params.queries;
+  const hasQuery = query != null;
+  const hasQueries = queries != null;
   if (!hasQuery && !hasQueries) {
     throw new ToolInputError("provide query or queries.");
   }
-  if (hasQueries && !Array.isArray(queries)) {
+  if (queries != null && !Array.isArray(queries)) {
     throw new ToolInputError("queries must be a non-empty array.");
   }
-  const batchEntries = Array.isArray(queries) ? queries : [];
-  if (hasQuery && typeof query !== "string") {
+  const batchEntries = queries ?? [];
+  if (query != null && typeof query !== "string") {
     throw new ToolInputError("query must be a string.");
   }
-  const singleQuery = typeof query === "string" && query.trim() ? query : undefined;
+  const singleQuery = query?.trim() ? query : undefined;
   if (batchEntries.length === 0) {
-    if (singleQuery === undefined && hasQueries) {
+    if (query == null || (singleQuery === undefined && hasQueries)) {
       throw new ToolInputError("queries must be a non-empty array.");
     }
-    return { kind: "single", search: readToolSearchArgs(params, config) };
+    return { kind: "single", search: readToolSearchArgs(params, query, config) };
   }
   if (singleQuery === undefined && (params.limit != null || params.options !== undefined)) {
     throw new ToolInputError("set limit on each batch query, not on the batch request.");
@@ -222,7 +213,7 @@ export function readToolSearchRequest(args: unknown, config: ToolSearchConfig): 
   );
   if (singleQuery !== undefined) {
     // Even identical text is an independent search with its own limit and budget.
-    const single = readToolSearchArgs(params, config);
+    const single = readToolSearchArgs(params, singleQuery, config);
     searches.unshift({ query: single.query.trim(), limit: single.limit });
   }
   return readBatchToolSearchRequest(searches, config);

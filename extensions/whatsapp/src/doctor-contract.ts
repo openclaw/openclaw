@@ -10,7 +10,6 @@ import {
   asObjectRecord,
   defineChannelAliasMigration,
   hasLegacyAccountStreamingAliases,
-  stripRetiredChannelKeys,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { resolveOAuthDir } from "openclaw/plugin-sdk/state-paths";
 import { listWhatsAppAccountIds, resolveDefaultWhatsAppAccountId } from "./account-ids.js";
@@ -27,9 +26,6 @@ const streamingAliasMigration = defineChannelAliasMigration({
   streaming: { defaultMode: "partial", deliveryOnly: true },
   accountStreamingInheritsDefaultAccount: true,
 });
-
-const hasExposeErrorText = (value: unknown): boolean =>
-  Object.hasOwn(asObjectRecord(value) ?? {}, "exposeErrorText");
 
 const hasAckReaction = (value: unknown): boolean =>
   Boolean(asObjectRecord(asObjectRecord(value)?.ackReaction));
@@ -112,28 +108,7 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
       'channels.whatsapp.accounts.<id>.ackReaction moved to global message acknowledgement settings. Run "openclaw doctor --fix".',
     match: (value) => hasLegacyAccountStreamingAliases(value, hasAckReaction),
   },
-  {
-    path: ["channels", "whatsapp", "exposeErrorText"],
-    message:
-      'channels.whatsapp.exposeErrorText is retired and ignored. Run "openclaw doctor --fix".',
-  },
-  {
-    path: ["channels", "whatsapp", "accounts"],
-    message:
-      'channels.whatsapp.accounts.<id>.exposeErrorText is retired and ignored. Run "openclaw doctor --fix".',
-    match: (value) => hasLegacyAccountStreamingAliases(value, hasExposeErrorText),
-  },
 ];
-
-function removeExposeErrorText(cfg: OpenClawConfig, changes: string[]): OpenClawConfig {
-  return stripRetiredChannelKeys({
-    cfg,
-    channelId: "whatsapp",
-    keys: new Set(["exposeErrorText"]),
-    scope: "root-and-accounts",
-    onRemove: ({ key, pathPrefix }) => changes.push(`Removed retired ${pathPrefix}.${key}.`),
-  }).config;
-}
 
 export function normalizeCompatibilityConfig({
   cfg,
@@ -141,9 +116,8 @@ export function normalizeCompatibilityConfig({
   cfg: OpenClawConfig;
 }): ChannelDoctorConfigMutation {
   const ackReaction = normalizeAckReactionConfig({ cfg });
-  const retiredConfig = removeExposeErrorText(ackReaction.config, ackReaction.changes);
   const normalized = streamingAliasMigration.normalizeChannelConfig({
-    cfg: retiredConfig,
+    cfg: ackReaction.config,
     changes: ackReaction.changes,
   });
   const warnings = collectDefaultAccountWarnings(normalized.config);

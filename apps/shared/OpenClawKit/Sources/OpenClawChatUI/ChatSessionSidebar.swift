@@ -9,6 +9,13 @@ extension ChatSessionSidebarModel.Node {
 
 @MainActor
 struct ChatSessionSidebar: View {
+    struct RowContext {
+        let now: Date
+        let ownership: ChatSidebarOwnership
+        let previewRequest: ChatSessionSidebarPreviews.Request
+        let selectedRows: [OpenClawChatSessionEntry]
+    }
+
     @Bindable var viewModel: OpenClawChatViewModel
     @Binding var query: String
     @Binding var groups: [OpenClawChatSessionGroup]
@@ -44,6 +51,7 @@ struct ChatSessionSidebar: View {
     @State var observedOrder = ChatSessionSidebarModel.ObservedOrder()
     @State var batch = ChatSessionSidebarBatch()
     @State private var lastSnoozeWake = Date.distantPast
+    @State var catalogData = ChatSessionSidebarCatalogs()
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
@@ -56,20 +64,21 @@ struct ChatSessionSidebar: View {
         let nextWake = OpenClawChatSessionSnooze.nextWake(
             in: self.rosterData?.queryRows ?? self.viewModel.sessions, now: now)
         let projectedRows = sections.flatMap(\.nodes).flatMap(\.previewSessions)
-        let ownership = self.ownership(for: projectedRows)
-        let previewRequest = ChatSessionSidebarPreviews.Request(
-            viewModel: self.viewModel,
-            sessions: projectedRows)
-        let hydration = self.hydrationRequest(sections)
-        let selectedTreeSession = self.selectedTreeSession
-        let selectedTreeID = ChatSessionSidebarChildren.key(for: selectedTreeSession)
-        let list = List(selection: self.batchSelectionBinding) {
+        let visibleRows = self.visibleInteractionRows(sections)
+        let rosterIDs = (self.rosterData?.rows ?? self.viewModel.sessions).map(OpenClawChatSessionSidebarData.identity)
+        let context = self.rowContext(now: now, projectedRows: projectedRows, visibleRows: visibleRows)
+        let homes = self.homeTrees
+        let hydration = self.hydrationRequest(sections, homes: homes)
+        let selectedTreeID = ChatSessionSidebarChildren.key(for: hydration.selection)
+        let list = List(selection: self.batchSelectionBinding(
+            visibleRows: visibleRows, renderedRows: self.renderedInteractionRows(projectedRows)))
+        {
             self.newThreadButton
                 .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 16, trailing: 0))
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
                 .selectionDisabled()
-            self.pagesSection(sections, now: now, ownership: ownership, previewRequest: previewRequest)
+            self.pagesSection(sections, context: context)
             ChatSidebarOnlineSection(viewModel: self.viewModel)
             self.agentScopePicker
             if !self.showsAllAgents || self.viewModel.agentChoices.isEmpty {
@@ -82,21 +91,24 @@ struct ChatSessionSidebar: View {
                     self.childLoadState(parent)
                 }
             }
-            self.threadsHeading(ownership: ownership)
+            self.threadsHeading(ownership: context.ownership)
             if self.showsAgentRoster {
-                self.agentRoster(sections, now: now, ownership: ownership, previewRequest: previewRequest)
+                self.agentRoster(sections, homes: homes, homeParents: hydration.homeParentsByAgent, context: context)
             } else {
                 ForEach(sections.filter { $0.id != "pinned" }) { section in
-                    self.sessionSection(section, now: now, ownership: ownership, previewRequest: previewRequest)
+                    self.sessionSection(section, context: context)
                 }
             }
             if let data = self.rosterData { ChatSessionSidebarRosterState(data: data) }
             if !hydration.inlineParents.contains(selectedTreeID),
                !hydration.homeParents.contains(where: { ChatSessionSidebarChildren.key(for: $0) == selectedTreeID })
             {
-                self.childLoadState(selectedTreeSession)
+                self.childLoadState(hydration.selection)
             }
-            if sections.allSatisfy(\.nodes.isEmpty), self.rosterData?.isSettled != false {
+            self.catalogSections(context: context)
+            if sections.allSatisfy(\.nodes.isEmpty), self.catalogPresentation.catalogs.isEmpty,
+               self.rosterData?.isSettled != false
+            {
                 Text(self.query
                     .isEmpty ? (self.sessionStatus == .archived ? String(localized: "No archived threads") :
                         String(localized: "No threads yet")) : String(localized: "No matching threads"))
@@ -108,6 +120,7 @@ struct ChatSessionSidebar: View {
             }
         }
         .listStyle(.sidebar)
+        .modifier(ChatSidebarCatalogLifecycle(data: self.catalogData, viewModel: self.viewModel))
         .listItemTint(.monochrome)
         .sidebarAgentAvatars(owner: self.viewModel.sidebarData, transport: self.viewModel.transport)
         .searchable(
@@ -116,8 +129,9 @@ struct ChatSessionSidebar: View {
             prompt: String(localized: "Search threads"))
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
-                self.batchBar
-                self.connectionFooter
+                self.batchBar(rows: context.selectedRows)
+                self.archiveUndoNotice
+                self.identityFooter(now: now)
             }
             .background(.bar)
         }
@@ -127,9 +141,9 @@ struct ChatSessionSidebar: View {
         }
         .onChange(of: self.viewModel.sidebarData?.scopeRevision) { _, _ in self.batch.reset() }
         .onChange(of: self.rosterData?.query) { _, _ in self.batch.reset(clearConnection: false) }
-        .onChange(of: self.viewModel.sessionKey) { _, _ in self.batch.selection = .init() }
+        .onChange(of: self.viewModel.currentSessionTarget) { _, _ in self.batch.selection = .init() }
         .task(id: self.viewModel.sidebarData?.scopeRevision) { await self.watchPinOrder() }
-        .onChange(of: (self.rosterData?.rows ?? self.viewModel.sessions).map(\.key), initial: true) { _, keys in
+        .onChange(of: rosterIDs, initial: true) { _, keys in
             self.observedOrder.observe(keys)
         }
         .onChange(of: self.query, initial: true) { _, value in
@@ -168,12 +182,12 @@ struct ChatSessionSidebar: View {
             await self.sidebarChildren.synchronize(model: self.viewModel, requiredParents: hydration.parents)
         }
         .onDisappear { self.sidebarChildren.invalidate() }
-        .task(id: previewRequest) {
+        .task(id: context.previewRequest) {
             let model = self.viewModel
             let cache = model.transcriptCache
             await model.pendingCacheWriteTask?.value
-            guard !Task.isCancelled, ObjectIdentifier(self.viewModel) == previewRequest.modelID else { return }
-            await self.previews.refresh(previewRequest, cache: cache)
+            guard !Task.isCancelled, ObjectIdentifier(self.viewModel) == context.previewRequest.modelID else { return }
+            await self.previews.refresh(context.previewRequest, cache: cache)
         }
         .task(id: nextWake) {
             guard let nextWake else { return }
@@ -198,6 +212,18 @@ struct ChatSessionSidebar: View {
             }
         }
         return self.presentingDialogs(content)
+    }
+
+    func rowContext(
+        now: Date,
+        projectedRows: [OpenClawChatSessionEntry],
+        visibleRows: [OpenClawChatSessionEntry]) -> RowContext
+    {
+        RowContext(
+            now: now,
+            ownership: self.ownership(for: projectedRows),
+            previewRequest: .init(viewModel: self.viewModel, sessions: projectedRows),
+            selectedRows: visibleRows.filter { self.batch.selection.keys.contains(self.interactionIdentity($0)) })
     }
 
     private func presentingDialogs(_ content: some View) -> some View {
@@ -325,13 +351,11 @@ struct ChatSessionSidebar: View {
 
     func rows(
         _ nodes: [ChatSessionSidebarModel.Node],
-        now: Date,
-        ownership: ChatSidebarOwnership,
         section: String = "",
-        previewRequest: ChatSessionSidebarPreviews.Request) -> some View
+        context: RowContext) -> some View
     {
-        ForEach(nodes) { node in
-            self.treeRow(node, isChild: false, now: now, ownership: ownership, previewRequest: previewRequest)
+        ForEach(nodes, id: \.sidebarID) { node in
+            self.treeRow(node, isChild: false, context: context)
                 .modifier(ChatSidebarSectionInteraction(
                     sidebar: self,
                     section: section == "pinned" ? "" : section,

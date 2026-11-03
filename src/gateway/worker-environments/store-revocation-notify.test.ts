@@ -43,10 +43,13 @@ describe("worker environment store credential-revocation listeners", () => {
     });
   }
 
-  it("notifies credential-revocation listeners only when transfers must fence", async () => {
+  it("notifies every revocation listener after commit despite an observer failure, only when transfers must fence", async () => {
     const rotating = await seedReady("worker-revoke-rotate");
     const permanent = await seedReady("worker-revoke-permanent");
     const notified: string[] = [];
+    store.onCredentialRevoked(() => {
+      throw new Error("synthetic credential observer failure");
+    });
     store.onCredentialRevoked((environmentId) => {
       notified.push(environmentId);
     });
@@ -56,5 +59,13 @@ describe("worker environment store credential-revocation listeners", () => {
       fenceWorkspaceTransfers: true,
     });
     expect(notified).toEqual([permanent.environmentId]);
+    expect(() => store.getCredential(permanent.environmentId)).toThrow("inventory has closed");
+    expect(
+      database.db
+        .prepare(
+          "SELECT environment_id FROM worker_environment_credentials WHERE environment_id = ?",
+        )
+        .get(permanent.environmentId),
+    ).toBeUndefined();
   });
 });

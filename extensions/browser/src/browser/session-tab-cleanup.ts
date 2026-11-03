@@ -3,7 +3,7 @@ import {
   isCronSessionKey,
   isSubagentSessionKey,
 } from "openclaw/plugin-sdk/routing";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   resolveBrowserConfig,
   type ResolvedBrowserConfig,
@@ -40,7 +40,7 @@ export function startTrackedBrowserTabCleanupTimer(params: {
   onWarn: (message: string) => void;
 }): () => Promise<void> {
   let stopped = false;
-  let timer: NodeJS.Timeout | null = null;
+  let timer: NodeJS.Timeout | undefined;
   let running: Promise<unknown> | null = null;
 
   const schedule = () => {
@@ -83,10 +83,7 @@ export function startTrackedBrowserTabCleanupTimer(params: {
   schedule();
   return async () => {
     stopped = true;
-    if (timer) {
-      clearTimeout(timer);
-      timer = null;
-    }
+    clearTimeout(timer);
     await running?.catch(() => {});
   };
 }

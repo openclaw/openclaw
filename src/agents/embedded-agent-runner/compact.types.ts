@@ -1,13 +1,20 @@
 import type { Model } from "openclaw/plugin-sdk/llm";
 import type { CliSessionBinding, SessionEntry } from "../../config/sessions.js";
+import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
+import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 import type { ExecToolDefaults } from "../bash-tools.exec-types.js";
+import type { AgentHarnessCompactionSourceAuthority } from "../harness/host-source-authority.js";
+import type { ModelCallUrgency } from "../run-trigger.js";
 import type { AgentRuntimeAuthPlan, AgentRuntimePlan } from "../runtime-plan/types.js";
+import type { CompactionRequestConstraints } from "../sessions/compaction/request-budget.js";
+import type { CompactionAppendPersistenceAsync } from "../sessions/session-compaction-persistence.js";
+import type { AcceptedCompactionSuccessor } from "./compaction-successor.js";
+import type { PreparedCompactionSession } from "./run/compaction-accounting-bridge.js";
 
 export type CompactEmbeddedAgentSessionParams = Pick<
   import("./run/params.js").RunEmbeddedAgentParams,
   | "requireWorkspaceOnly"
-  | "requireWritableSandbox"
   | "sessionTarget"
   | "sessionId"
   | "sessionKey"
@@ -22,6 +29,10 @@ export type CompactEmbeddedAgentSessionParams = Pick<
   | "agentAccountId"
   | "conversationRoutePeerId"
   | "conversationToolPolicy"
+  | "requesterOrigin"
+  | "operatorProfileId"
+  | "conversationId"
+  | "messageThreadId"
   | "currentChannelId"
   | "currentThreadTs"
   | "currentMessageId"
@@ -112,6 +123,8 @@ export type CompactEmbeddedAgentSessionParams = Pick<
   /** Diagnostic trigger that made preflight compaction mandatory. */
   preflightCompactionTrigger?: "tokens" | "transcript_bytes";
   trigger?: "budget" | "overflow" | "manual";
+  /** Source-turn urgency survives replacing its trigger with a compaction reason. */
+  modelCallUrgency?: ModelCallUrgency;
   /**
    * Preflight callers can allow native/current-session harness compaction but
    * move plugin-owned budget compaction onto background turn maintenance.
@@ -122,6 +135,8 @@ export type CompactEmbeddedAgentSessionParams = Pick<
   maxAttempts?: number;
   /** @internal Refreshes the host watchdog when delegated native compaction makes progress. */
   compactionTimeoutReset?: () => void;
+  /** @internal Host watchdog ceiling (epoch ms); the summary request ends one window before it. */
+  compactionDeadlineAt?: number;
   onCompactionHookMessages?: (payload: {
     phase: "before" | "after";
     messages: string[];
@@ -138,10 +153,20 @@ export type CompactEmbeddedAgentSessionRuntimeParams = Omit<
   sessionFile?: string;
 };
 
-export type CompactionMessageMetrics = {
-  messages: number;
-  historyTextChars: number;
-  toolResultChars: number;
-  estTokens?: number;
-  contributors: Array<{ role: string; chars: number; tool?: string }>;
+type QueuedCompactionHostCommit = {
+  entry: AcceptedCompactionSuccessor["entry"];
+  tokensAfter?: number;
+  compactionKind: "context-engine" | "server-endpoint";
+};
+
+/** Host-only bookkeeping, deliberately separate from plugin compaction parameters. */
+export type QueuedCompactionHostOptions = CompactionRequestConstraints & {
+  /** Exact in-band turn, never forwarded as plugin authority. */
+  replyOperation?: ReplyOperation;
+  sourceAuthority: AgentHarnessCompactionSourceAuthority;
+  assertActive?: SessionSourceAssertion;
+  preparedSession?: PreparedCompactionSession;
+  withCompactionPersistenceAsync?: CompactionAppendPersistenceAsync;
+  onCommitted?: (accepted: AcceptedCompactionSuccessor) => void;
+  onHostCompactionCommitted?: (commit: QueuedCompactionHostCommit) => Promise<void> | void;
 };

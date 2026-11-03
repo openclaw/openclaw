@@ -5,26 +5,30 @@ import SwiftUI
 
 @MainActor
 struct QuickChatView: View {
+    enum Action {
+        case dismiss
+        case showAgentPicker
+        case showModelMenu
+        case showRecentSessions
+        case toggleReply
+        case toggleDictation
+        case stopDictation
+        case captureTextContext
+        case showCaptureMenu
+        case grantPermissions
+        case pasteReply
+        case sendAccepted(openChat: Bool)
+        case contentHeightChanged(CGFloat)
+        case textViewReady(NSTextView)
+    }
+
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var contrast
 
     @Bindable var model: QuickChatModel
     @Bindable var replyBinding: QuickChatReplyBinding
-    let onDismiss: () -> Void
-    let onSendAccepted: (Bool) -> Void
-    let onShowAgentPicker: () -> Void
-    let onShowModelMenu: () -> Void
-    let onShowRecentSessions: () -> Void
-    let onToggleReply: () -> Void
-    let onToggleDictation: () -> Void
-    let onStopDictation: () -> Void
-    let onCaptureTextContext: () -> Void
-    let onShowCaptureMenu: () -> Void
-    let onGrantPermissions: () -> Void
-    let onPasteReply: () -> Void
-    let onContentHeightChange: (CGFloat) -> Void
-    let onTextViewReady: (NSTextView) -> Void
+    let onAction: (Action) -> Void
 
     @State private var editorHeight: CGFloat = 34
 
@@ -91,7 +95,7 @@ struct QuickChatView: View {
         .onGeometryChange(for: CGFloat.self) { proxy in
             proxy.size.height
         } action: { height in
-            self.onContentHeightChange(height)
+            self.onAction(.contentHeightChanged(height))
         }
     }
 
@@ -118,7 +122,9 @@ struct QuickChatView: View {
                 }
                 self.editor
                     .frame(maxWidth: .infinity)
-                Button(action: self.onToggleReply) {
+                Button {
+                    self.onAction(.toggleReply)
+                } label: {
                     Image(systemName: self.isExpanded ? "chevron.up" : "chevron.down")
                         .font(.system(size: 11, weight: .medium))
                         .frame(width: 28, height: 30)
@@ -167,15 +173,15 @@ struct QuickChatView: View {
                 selectionRange: self.model.dictationSelectionRange,
                 onSubmit: self.submit,
                 onEscape: {
-                    self.onStopDictation()
-                    self.onDismiss()
+                    self.onAction(.stopDictation)
+                    self.onAction(.dismiss)
                 },
                 onUserEdit: {
                     guard self.model.isDictating || self.model.isStartingDictation else { return }
-                    self.onStopDictation()
+                    self.onAction(.stopDictation)
                 },
                 onHeightChange: { self.editorHeight = $0 },
-                onTextViewReady: self.onTextViewReady)
+                onTextViewReady: { self.onAction(.textViewReady($0)) })
                 .frame(height: self.editorHeight)
                 .accessibilityLabel(Text(verbatim: self.model.messagePlaceholder))
                 .accessibilityIdentifier("quick-chat-input")
@@ -205,13 +211,17 @@ struct QuickChatView: View {
 
     private var captureMenu: some View {
         Menu {
-            Button(action: self.onCaptureTextContext) {
+            Button {
+                self.onAction(.captureTextContext)
+            } label: {
                 Label(
                     String(format: String(localized: "Attach text from %@"), self.model.frontmostAppName),
                     systemImage: "doc.text")
             }
             .disabled(!self.model.canCaptureWindow)
-            Button(action: self.onShowCaptureMenu) {
+            Button {
+                self.onAction(.showCaptureMenu)
+            } label: {
                 Label("Capture a screenshot", systemImage: "camera.viewfinder")
             }
             .disabled(!self.model.canCaptureWindow)
@@ -237,7 +247,9 @@ struct QuickChatView: View {
     }
 
     private var historyButton: some View {
-        Button(action: self.onShowRecentSessions) {
+        Button {
+            self.onAction(.showRecentSessions)
+        } label: {
             Image(systemName: "clock.arrow.circlepath")
                 .font(.system(size: 15))
                 .frame(width: 28, height: 30)
@@ -251,7 +263,9 @@ struct QuickChatView: View {
     }
 
     private var dictationButton: some View {
-        Button(action: self.onToggleDictation) {
+        Button {
+            self.onAction(.toggleDictation)
+        } label: {
             Group {
                 if self.model.isStartingDictation {
                     ProgressView().controlSize(.small)
@@ -302,7 +316,9 @@ struct QuickChatView: View {
     @ViewBuilder
     private var agentChip: some View {
         if self.model.agents.count > 1 {
-            Button(action: self.onShowAgentPicker) {
+            Button {
+                self.onAction(.showAgentPicker)
+            } label: {
                 self.agentAvatar
             }
             .buttonStyle(.plain)
@@ -314,7 +330,9 @@ struct QuickChatView: View {
     }
 
     private var modelControl: some View {
-        Button(action: self.onShowModelMenu) {
+        Button {
+            self.onAction(.showModelMenu)
+        } label: {
             HStack(spacing: 5) {
                 if self.model.isLoadingModelControls || self.model.isUpdatingModel {
                     ProgressView().controlSize(.mini)
@@ -388,7 +406,7 @@ struct QuickChatView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            Button("Grant", action: self.onGrantPermissions)
+            Button("Grant", action: { self.onAction(.grantPermissions) })
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
                 .disabled(self.model.isGrantingPermissions)
@@ -447,7 +465,9 @@ struct QuickChatView: View {
             {
                 HStack {
                     Spacer()
-                    Button(action: self.onPasteReply) {
+                    Button {
+                        self.onAction(.pasteReply)
+                    } label: {
                         if self.replyBinding.isPastingReply {
                             ProgressView().controlSize(.small)
                         } else {
@@ -477,13 +497,13 @@ struct QuickChatView: View {
     }
 
     private func submit(openChat: Bool) {
-        self.onStopDictation()
+        self.onAction(.stopDictation)
         guard self.model.canSend, let presentationID = self.model.activePresentationID else { return }
         Task {
             guard await self.model.send() else { return }
             // A dismissed/reopened bar must not inherit the accepted send's navigation.
             guard self.model.activePresentationID == presentationID else { return }
-            self.onSendAccepted(openChat)
+            self.onAction(.sendAccepted(openChat: openChat))
         }
     }
 

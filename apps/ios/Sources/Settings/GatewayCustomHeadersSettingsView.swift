@@ -29,7 +29,7 @@ struct GatewayCustomHeadersSettingsView: View {
                             self.headerValueField("Value", text: $entry.value)
                         }
                     }
-                    .onDelete(perform: self.removeEntries)
+                    .onDelete { self.entries.remove(atOffsets: $0) }
                 } header: {
                     Text("Headers")
                         .font(OpenClawType.captionSemiBold)
@@ -143,10 +143,6 @@ struct GatewayCustomHeadersSettingsView: View {
         self.entries.append(HeaderEntry(name: self.trimmedNewName, value: self.newValue))
         self.newName = ""
         self.newValue = ""
-    }
-
-    private func removeEntries(at offsets: IndexSet) {
-        self.entries.remove(atOffsets: offsets)
     }
 
     private func persist() {

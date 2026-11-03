@@ -30,6 +30,31 @@ before sharding; completed module identities and final counts prove coverage.
 Event intervals are not scheduler-admission times; repeated environment/prepare
 durations must not be summed into wall time.
 These receipts do not establish transform-cache hits.
+
+Ordinary Control UI E2E uses six browser shards with four workers each, retaining
+the previous aggregate ceiling of 24 workers across eight three-worker shards.
+This shares checkout, installation, fixture builds, and browser startup across
+more tests. Private source-server projects and runtime-budget cases remain
+serial within each shard. Full manual inventories retain twelve two-worker
+shards, and the browser-extension row remains separate. The extension command
+inherits the same managed Chromium path as setup, so it uses the restored browser
+instead of downloading another copy under its artifact directory.
+The Control UI E2E test step has a 20-minute deadline inside its 25-minute job
+budget, leaving time to upload the current file and case locations when a test
+hangs. Progress artifacts omit test titles and values.
+
+The protected cache warmer collects Gateway methods in sequential batches of
+at most 32 files. This releases the non-isolated Bun module graph between
+collections while warming the complete canonical inventory in the same cache
+slot. Ordinary test shards, worker limits, and coverage are unchanged.
+The Bun UI runtime policy requests ordinary JavaScriptCore collection after
+256 MiB of allocation per collection cycle. This is an earlier collection
+trigger, not a limit on the live heap. It applies to the existing UI process
+tree and cache warmer; Node execution, test coverage, shard count, and worker
+limits retain their existing policy. UI fixtures must provide the application
+context required by mounted Solid components: repeated missing-context errors
+expose reactive graphs to Vitest's error serializer and can cause large transient
+allocations even when post-collection snapshots show no retained UI leak.
 Tooling stripes install Go only when their selected files include the docs
 translation test; historical whole-config plans retain their existing setup.
 The workflow pins the runner's Go version so frozen targets cannot select a
@@ -42,9 +67,9 @@ retain their two-case limit. Each case owns its commands and temporary roots;
 cleanup joins its process tree and callback work before removing those inputs.
 Outer suites and the remaining checkout contract cases stay sequential.
 
-Once admitted, canonical Linux CI permits up to 96 concurrent Node test jobs.
-The manifest separately enforces total-job budgets: 70 Node rows for canonical
-pushes and 130 for canonical PRs, including precise and plugin plans. GitHub
+Once admitted, upstream Linux CI permits up to 96 concurrent Node test jobs.
+The manifest separately enforces total-job budgets: 70 Node rows for upstream
+pushes and 130 for upstream PRs, including precise and plugin plans. GitHub
 also caps one job's combined outputs at 1 MiB measured in UTF-16, so preflight
 has 524,288 characters for every matrix together. Node rows list each
 striped test file explicitly. The manifest projects the fields consumed by
@@ -53,9 +78,18 @@ contains the codec. Flat configuration rows, including manual CI and exact-head
 PR release gates, use one packed group while retaining their original jobs and
 test selections. Targets without that capability retain their original flat
 fields or projected legacy `groups` JSON. Workflow tests keep the complete
-generated output under half of the cap. The smaller
+generated output under half of the cap. Large Node matrices share compressed
+group pools across rows instead of repeating independently compressed file
+lists. Each pool is at most 60,000 base64 characters, below Linux's per-string
+environment limit. Before execution, the workflow extracts the selected row
+and restores the same standalone descriptor consumed by the shard runner and
+timing collectors. Legacy targets without the codec retain their existing
+transport. Job placement, test selection, timing identities and resource
+settings are unchanged. The output cap protects
+[GitHub's per-job output limit](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idoutputs),
+not a workflow input or matrix-row limit. The smaller
 fast/check lanes remain capped at 12; Windows is capped at two
-and Android at four for canonical Blacksmith push and PR first attempts, including forks; the GitHub override, retries, manual dispatches, schedules, and noncanonical repositories retain two. Compact whole-config batches run
+and Android at four for upstream Blacksmith push and PR first attempts, including forks; the GitHub override, retries, manual dispatches, schedules, and other repositories retain two. Compact whole-config batches run
 with a 120-minute batch timeout, while include-pattern groups share the same
 bounded job budget.
 

@@ -1,35 +1,83 @@
+import { normalizeE164 } from "openclaw/plugin-sdk/account-core";
 import type { AckReactionHandle } from "openclaw/plugin-sdk/channel-feedback";
 import {
   type ChannelInboundTurnPlan,
   resolveGroupThreadConfig,
+  runGroupThread,
 } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  implicitMentionKindWhen,
+  resolveInboundMentionDecision,
+} from "openclaw/plugin-sdk/channel-mention-gating";
+import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   ensureConfiguredBindingRouteReady,
   resolveConfiguredBindingRoute,
 } from "openclaw/plugin-sdk/conversation-binding-runtime";
+import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
+import { parseActivationCommand } from "openclaw/plugin-sdk/group-activation";
+import { formatAudioTranscriptForAgent } from "openclaw/plugin-sdk/media-understanding-runtime";
+import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import type { getReplyFromConfig, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
-import { resolveAgentRoute, buildGroupHistoryKey } from "openclaw/plugin-sdk/routing";
+import {
+  resolveAgentRoute,
+  buildGroupHistoryKey,
+  buildAgentSessionKey,
+  deriveLastRoutePolicy,
+  buildAgentMainSessionKey,
+  DEFAULT_MAIN_KEY,
+} from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveWhatsAppAccount } from "../../accounts.js";
+import { resolveWhatsAppGroupsConfigPath } from "../../group-config-path.js";
 import { resolveWhatsAppGroupSessionRoute } from "../../group-session-key.js";
-import { getPrimaryIdentityId, getSenderIdentity } from "../../identity.js";
-import { requireWhatsAppInboundAdmission } from "../../inbound/admission.js";
+import {
+  getPrimaryIdentityId,
+  getReplyContext,
+  getSelfIdentity,
+  getSenderIdentity,
+  identitiesOverlap,
+} from "../../identity.js";
+import { resolveWhatsAppInboundPolicy } from "../../inbound-policy.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
-import { buildMentionConfig } from "../mentions.js";
+import { formatError } from "../../session.js";
+import { jidToE164 } from "../../targets-runtime.js";
+import { whatsappInboundLog } from "../loggers.js";
+import { buildMentionConfig, isBotMentioned, resolveOwnerList } from "../mentions.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
 import { hasWhatsAppAudioBody, transcribeWhatsAppAudioMessage } from "./audio-preflight.js";
-import { maybeBroadcastMessage } from "./broadcast.js";
-import { applyGroupGating } from "./group-gating.js";
+import { resolveGroupActivationFor } from "./group-activation.js";
+import { noteGroupMember } from "./group-members.js";
 import type { GroupHistoryEntry } from "./inbound-context.js";
 import { updateLastRouteInBackground } from "./last-route.js";
-import { resolvePeerId } from "./peer.js";
 import { processMessage } from "./process-message.js";
 import {
   createWhatsAppStatusReactionController,
   type StatusReactionController,
 } from "./status-reaction.js";
+
+function resolvePeerId(msg: AdmittedWebInboundMessage) {
+  const admission = msg.admission;
+  if (admission.conversation.kind === "group") {
+    return admission.conversation.id;
+  }
+  const sender = getSenderIdentity(msg);
+  if (sender.e164) {
+    return sender.e164;
+  }
+  const conversationId = admission.conversation.id;
+  if (conversationId.includes("@")) {
+    return jidToE164(conversationId) ?? conversationId;
+  }
+  return normalizeE164(conversationId);
+}
+
+const MAX_GROUP_DROP_WARNINGS = 100;
+const groupDropWarned = createDedupeCache({
+  ttlMs: 0,
+  maxSize: MAX_GROUP_DROP_WARNINGS,
+});
 
 export function createWebOnMessageHandler(params: {
   cfg: OpenClawConfig;
@@ -50,7 +98,7 @@ export function createWebOnMessageHandler(params: {
     msg: AdmittedWebInboundMessage,
     peerId: string,
   ): AdmittedWebInboundMessage => {
-    const admission = requireWhatsAppInboundAdmission(msg);
+    const admission = msg.admission;
     if (
       admission.conversation.kind === "group" ||
       msg.platform.sender?.e164 ||
@@ -103,7 +151,7 @@ export function createWebOnMessageHandler(params: {
     const cfg = params.loadConfig?.() ?? params.cfg;
     const peerId = resolvePeerId(normalizedMsg);
     const msg = withDirectSenderPeer(normalizedMsg, peerId);
-    const admission = requireWhatsAppInboundAdmission(msg);
+    const admission = msg.admission;
     if (admission.ingress.admission !== "dispatch" && admission.ingress.admission !== "observe") {
       return;
     }
@@ -126,10 +174,6 @@ export function createWebOnMessageHandler(params: {
       accountId: routeAccountId,
     });
     const baseMentionConfig = buildMentionConfig(cfg);
-
-    if (conversationId === msg.platform.recipientJid) {
-      logVerbose(`📱 Same-phone mode detected (from === to: ${conversationId})`);
-    }
 
     const configuredRoute = resolveConfiguredBindingRoute({
       cfg,
@@ -219,7 +263,6 @@ export function createWebOnMessageHandler(params: {
           agentId: route.agentId,
           sessionKey: route.sessionKey,
           verbose: params.verbose,
-          info: params.replyLogger.info.bind(params.replyLogger),
           warn: params.replyLogger.warn.bind(params.replyLogger),
         });
         ackAlreadySent = ackReaction !== null;
@@ -228,7 +271,7 @@ export function createWebOnMessageHandler(params: {
     };
 
     if (conversationKind === "group") {
-      const sender = getSenderIdentity(msg);
+      const groupSender = getSenderIdentity(msg);
       const metaCtx = {
         From: conversationId,
         To: msg.platform.recipientJid,
@@ -237,9 +280,9 @@ export function createWebOnMessageHandler(params: {
         ChatType: conversationKind,
         ConversationLabel: conversationId,
         GroupSubject: msg.group?.subject,
-        SenderName: sender.name ?? undefined,
-        SenderId: getPrimaryIdentityId(sender) ?? undefined,
-        SenderE164: sender.e164 ?? undefined,
+        SenderName: groupSender.name ?? undefined,
+        SenderId: getPrimaryIdentityId(groupSender) ?? undefined,
+        SenderE164: groupSender.e164 ?? undefined,
         Provider: "whatsapp",
         Surface: "whatsapp",
         OriginatingChannel: "whatsapp",
@@ -251,7 +294,6 @@ export function createWebOnMessageHandler(params: {
           backgroundTasks: params.backgroundTasks,
           storeAgentId: route.agentId,
           sessionKey: route.sessionKey,
-          channel: "whatsapp",
           to: conversationId,
           accountId: route.accountId,
           ctx: metaCtx,
@@ -261,38 +303,199 @@ export function createWebOnMessageHandler(params: {
       // message first; configured ACP routes also wait for backend readiness.
       recordAcceptedConfiguredGroupRoute = recordGroupRoute;
 
-      const gatingParams = {
-        cfg,
-        msg,
-        groupHistoryKey,
-        agentId: route.agentId,
-        sessionKey: route.sessionKey,
-        baseMentionConfig,
-        providerMentionPatterns: account.mentionPatterns,
-        authDir: account.authDir,
-        selfChatMode: account.selfChatMode,
-        groupHistories: params.groupHistories,
-        groupHistoryLimit: params.groupHistoryLimit,
-        groupMemberNames: params.groupMemberNames,
-        logVerbose,
-        replyLogger: params.replyLogger,
+      function skipGroupMessageAndStoreHistory(verboseMessage: string, body?: string) {
+        logVerbose(verboseMessage);
+        const senderIdentity = getSenderIdentity(msg);
+        const sender =
+          senderIdentity.name && senderIdentity.e164
+            ? `${senderIdentity.name} (${senderIdentity.e164})`
+            : (senderIdentity.name ??
+              senderIdentity.e164 ??
+              getPrimaryIdentityId(senderIdentity) ??
+              "Unknown");
+        createChannelHistoryWindow({ historyMap: params.groupHistories }).record({
+          historyKey: groupHistoryKey,
+          limit: params.groupHistoryLimit,
+          entry: {
+            sender,
+            body: body ?? msg.payload.body,
+            timestamp: msg.event.timestamp,
+            id: msg.event.id,
+            senderJid: senderIdentity.jid ?? msg.platform.senderJid,
+            ...(msg.payload.media
+              ? {
+                  media: [
+                    {
+                      path: msg.payload.media.path,
+                      url: msg.payload.media.url ?? msg.payload.media.path,
+                      contentType: msg.payload.media.type,
+                      kind: msg.payload.media.kind ?? undefined,
+                    },
+                  ],
+                }
+              : {}),
+          },
+        });
+        return { shouldProcess: false } as const;
+      }
+
+      const applyGroupGating = async (mentionText?: string, deferMissingMention = false) => {
+        const sender = getSenderIdentity(msg);
+        const self = getSelfIdentity(msg, account.authDir);
+        const inboundPolicy = resolveWhatsAppInboundPolicy({
+          cfg,
+          accountId: admission.accountId,
+          selfE164: self.e164 ?? null,
+        });
+        const conversationGroupPolicy =
+          inboundPolicy.resolveConversationGroupPolicy(conversationId);
+        if (conversationGroupPolicy.allowlistEnabled && !conversationGroupPolicy.allowed) {
+          const accountId = inboundPolicy.account.accountId;
+          const warnKey = JSON.stringify([accountId, conversationId, "group registry"]);
+          if (!groupDropWarned.check(warnKey)) {
+            const groupsPath = resolveWhatsAppGroupsConfigPath({ cfg, accountId });
+            params.replyLogger.warn(
+              { conversationId, accountId, groupsPath },
+              `WhatsApp group ${conversationId} not in ${groupsPath} — inbound dropped. Add the group JID to ${groupsPath} (or add "*" there to admit all groups). Sender authorization still applies.`,
+            );
+          }
+          logVerbose(
+            `Dropping message from unregistered WhatsApp group ${conversationId}. Add the group JID to channels.whatsapp.groups, or add "*" there to admit all groups. Sender authorization still applies.`,
+          );
+          return { shouldProcess: false };
+        }
+
+        noteGroupMember(
+          params.groupMemberNames,
+          groupHistoryKey,
+          sender.e164 ?? undefined,
+          sender.name ?? undefined,
+        );
+
+        const ownerMentionConfig = {
+          ...baseMentionConfig,
+          allowFrom: inboundPolicy.configuredAllowFrom,
+        };
+        const mentionConfig = {
+          ...buildMentionConfig(cfg, route.agentId, {
+            provider: "whatsapp",
+            conversationId,
+            providerPolicy: account.mentionPatterns,
+          }),
+          allowFrom: inboundPolicy.configuredAllowFrom,
+        };
+        const mentionMsg: AdmittedWebInboundMessage = {
+          ...msg,
+          payload: {
+            ...msg.payload,
+            body: mentionText ?? msg.payload.commandBody ?? msg.payload.body,
+          },
+        };
+        let commandBody = mentionMsg.payload.body;
+        const mentionRegexes = mentionConfig.mentionRegexes;
+        const selfE164 = self.e164;
+        for (const re of mentionRegexes) {
+          commandBody = commandBody.replace(re, " ");
+        }
+        if (selfE164) {
+          // `selfE164` is usually like "+1234"; strip down to digits so we can match "+?1234" safely.
+          const digits = selfE164.replace(/\D/g, "");
+          if (digits) {
+            const pattern = new RegExp(`\\+?${digits}`, "g");
+            commandBody = commandBody.replace(pattern, " ");
+          }
+        }
+        commandBody = commandBody.replace(/\s+/g, " ").trim();
+        const activationCommand = parseActivationCommand(commandBody);
+        const ownerSender = normalizeE164(getSenderIdentity(msg, account.authDir).e164 ?? "");
+        const owner =
+          ownerSender.length > 0 &&
+          resolveOwnerList(
+            ownerMentionConfig,
+            getSelfIdentity(msg, account.authDir).e164 ?? undefined,
+          ).includes(ownerSender);
+        const shouldBypassMention = owner && hasControlCommand(commandBody, cfg);
+
+        if (activationCommand.hasCommand && !owner) {
+          return skipGroupMessageAndStoreHistory(
+            `Ignoring /activation from non-owner in group ${conversationId}`,
+          );
+        }
+
+        const wasMentioned = isBotMentioned(mentionMsg, mentionConfig, account.authDir);
+        const activation = await resolveGroupActivationFor({
+          cfg,
+          accountId: inboundPolicy.account.accountId,
+          agentId: route.agentId,
+          sessionKey: route.sessionKey,
+          conversationId,
+        });
+        const requireMention = activation !== "always";
+        const replyContext = getReplyContext(msg, account.authDir);
+        const sharedNumberSelfChat = account.selfChatMode === true;
+        // Shared-number replies to self do not imply a bot mention; explicit mentions still apply.
+        const implicitReplyToSelf = sharedNumberSelfChat && identitiesOverlap(self, sender);
+        const implicitMentionKinds = implicitMentionKindWhen(
+          "quoted_bot",
+          !implicitReplyToSelf && identitiesOverlap(self, replyContext?.sender),
+        );
+        const mentionDecision = resolveInboundMentionDecision({
+          facts: {
+            canDetectMention: true,
+            wasMentioned,
+            implicitMentionKinds,
+          },
+          policy: {
+            isGroup: true,
+            requireMention,
+            allowTextCommands: false,
+            hasControlCommand: false,
+            commandAuthorized: false,
+          },
+        });
+        const effectiveWasMentioned = mentionDecision.effectiveWasMentioned || shouldBypassMention;
+        // Carry the session activation and mention result together. Dispatch needs
+        // both facts to distinguish an always-on group from a blocked unmentioned turn.
+        msg.groupMention = { wasMentioned: effectiveWasMentioned, requireMention };
+        if (!shouldBypassMention && requireMention && mentionDecision.shouldSkip) {
+          if (deferMissingMention) {
+            logVerbose(
+              `Deferring group mention skip until audio preflight completes in ${conversationId}`,
+            );
+            return { shouldProcess: false, needsMentionText: true } as const;
+          }
+          const accountId = inboundPolicy.account.accountId;
+          if (!groupDropWarned.check(JSON.stringify([accountId, conversationId, "no mention"]))) {
+            const groupsPath = resolveWhatsAppGroupsConfigPath({ cfg, accountId });
+            params.replyLogger.warn(
+              { conversationId, accountId, groupsPath },
+              `WhatsApp group ${conversationId}: skipping messages without a mention. Mention patterns can be derived from the agent identity name. Use /activation always for this session, or set ${groupsPath}[${JSON.stringify(conversationId)}].requireMention=false for the default. Preserve existing groups entries; when adding the first groups map, include "*": {} to keep other chats admitted.`,
+            );
+          }
+          // Mention matching needs raw STT text, but deferred history is model-visible later.
+          const pendingHistoryBody =
+            mentionText === undefined ? undefined : formatAudioTranscriptForAgent(mentionText);
+          return skipGroupMessageAndStoreHistory(
+            `Group message stored for context (no mention detected) in ${conversationId}`,
+            pendingHistoryBody,
+          );
+        }
+
+        return { shouldProcess: true };
       };
-      let gating = await applyGroupGating({
-        ...gatingParams,
-        deferMissingMention: hasAudioBody && Boolean(msg.payload.media?.path),
-      });
+      let gating = await applyGroupGating(
+        undefined,
+        hasAudioBody && Boolean(msg.payload.media?.path),
+      );
       if (
         !gating.shouldProcess &&
         "needsMentionText" in gating &&
         gating.needsMentionText === true
       ) {
         await runAudioPreflightOnce();
-        gating = await applyGroupGating({
-          ...gatingParams,
-          ...(typeof preflightAudioTranscript === "string"
-            ? { mentionText: preflightAudioTranscript }
-            : {}),
-        });
+        gating = await applyGroupGating(
+          typeof preflightAudioTranscript === "string" ? preflightAudioTranscript : undefined,
+        );
       }
       if (!gating.shouldProcess) {
         await clearPreDispatchReaction();
@@ -320,9 +523,10 @@ export function createWebOnMessageHandler(params: {
 
     await runAudioPreflightOnce();
 
-    const hasBroadcastTargets =
-      !configuredRoute.bindingResolution &&
-      resolveGroupThreadConfig({ cfg, channel: "whatsapp", peerId }) !== undefined;
+    const broadcastGroup = !configuredRoute.bindingResolution
+      ? resolveGroupThreadConfig({ cfg, channel: "whatsapp", peerId })
+      : undefined;
+    const hasBroadcastTargets = broadcastGroup !== undefined;
     if (hasBroadcastTargets && statusReactionController) {
       await clearPreDispatchReaction();
     }
@@ -330,27 +534,73 @@ export function createWebOnMessageHandler(params: {
       await transcribeAudioOnce();
     }
 
-    if (
-      !configuredRoute.bindingResolution &&
-      (await maybeBroadcastMessage({
+    if (broadcastGroup) {
+      // Group ack eligibility belongs to each target agent/session.
+      const broadcastAckAlreadySent =
+        conversationKind !== "group" && (ackAlreadySent || Boolean(statusReactionController));
+      whatsappInboundLog.info(
+        `Broadcasting message to ${broadcastGroup.agents.length} agents (${broadcastGroup.strategy})`,
+      );
+      const isGroupConversation = admission.conversation.kind === "group";
+      const groupHistorySnapshot = isGroupConversation
+        ? [...(params.groupHistories.get(groupHistoryKey) ?? [])]
+        : undefined;
+
+      await runGroupThread({
         cfg,
-        msg,
+        group: broadcastGroup,
+        channel: "whatsapp",
+        accountId: route.accountId,
         peerId,
-        route,
-        groupHistoryKey,
-        groupHistories: params.groupHistories,
-        ...(preflightAudioTranscript !== undefined ? { preflightAudioTranscript } : {}),
-        // Group ack eligibility depends on the target agent/session, so a
-        // preflight ack attempt on the base route must not suppress downstream
-        // per-agent checks during broadcast fan-out.
-        ...(ackAlreadySent && conversationKind !== "group" ? { ackAlreadySent: true } : {}),
-        ...(ackReaction && conversationKind !== "group" ? { ackReaction } : {}),
-        ...(statusReactionController && conversationKind !== "group"
-          ? { ackAlreadySent: true }
-          : {}),
-        processMessage: (m, r, k, opts) => processForRoute(cfg, m, r, k, opts),
-      }))
-    ) {
+        messageId: msg.event.id,
+        text: [msg.payload.body, preflightAudioTranscript].filter(Boolean).join("\n"),
+        onError: (err, turn) => {
+          whatsappInboundLog.error(`Broadcast agent ${turn.agentId} failed: ${formatError(err)}`);
+        },
+        runTurn: async (turn) => {
+          const sessionKey = buildAgentSessionKey({
+            agentId: turn.agentId,
+            channel: "whatsapp",
+            accountId: route.accountId,
+            peer: {
+              kind: admission.conversation.kind,
+              id: peerId,
+            },
+            dmScope: cfg.session?.dmScope,
+            identityLinks: cfg.session?.identityLinks,
+          });
+          const mainSessionKey = buildAgentMainSessionKey({
+            agentId: turn.agentId,
+            mainKey: DEFAULT_MAIN_KEY,
+          });
+
+          const baseAgentRoute = {
+            ...route,
+            agentId: turn.agentId,
+            sessionKey,
+            mainSessionKey,
+            lastRoutePolicy: deriveLastRoutePolicy({ sessionKey, mainSessionKey }),
+          };
+          const agentRoute = isGroupConversation
+            ? resolveWhatsAppGroupSessionRoute(baseAgentRoute)
+            : baseAgentRoute;
+
+          return processForRoute(cfg, msg, agentRoute, groupHistoryKey, {
+            groupHistory: turn.round === 1 ? groupHistorySnapshot : [],
+            suppressGroupHistoryClear: true,
+            ...(preflightAudioTranscript !== undefined ? { preflightAudioTranscript } : {}),
+            ...(broadcastAckAlreadySent || turn.round > 1 ? { ackAlreadySent: true } : {}),
+            ...(ackReaction && conversationKind !== "group" && turn.round === 1
+              ? { ackReaction }
+              : {}),
+          });
+        },
+      });
+
+      if (isGroupConversation) {
+        params.groupHistories.set(groupHistoryKey, []);
+      }
+
       return;
     }
 

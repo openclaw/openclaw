@@ -1,3 +1,5 @@
+import { setImmediate } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -6,13 +8,43 @@ import {
 } from "../test-utils/gateway-scheduler-clock.js";
 import { createPluginServiceScheduler } from "./service-scheduler.js";
 
-function fixture() {
+function fixture(run?: Parameters<typeof createPluginServiceScheduler>[1]) {
   const time = createGatewaySchedulerClock(1_000);
   const gateway = createTestGatewayScheduler(time.clock);
-  return { time, gateway, owner: createPluginServiceScheduler(gateway).scheduler };
+  return { time, gateway, owner: createPluginServiceScheduler(gateway, run).scheduler };
 }
 
 describe("plugin service scheduling", () => {
+  it.each([false, true])(
+    "releases its runner after root cleanup (pending child: %s)",
+    async (pending) => {
+      class RunnerOwner {
+        run(work: () => void | Promise<unknown>) {
+          return work();
+        }
+      }
+      const { time, gateway, owner } = fixture(RunnerOwner.prototype.run.bind(new RunnerOwner()));
+      const child = owner.scope();
+      const work = createDeferredCore();
+      let wake: ReturnType<typeof time.wake>;
+      if (pending) {
+        child.schedule({ id: "work", delayMs: 0, run: () => work.promise });
+        wake = time.wake();
+      }
+      try {
+        const stopping = owner.stop();
+        work.resolve();
+        await Promise.all([stopping, wake]);
+        await setImmediate();
+        expect(queryObjects(RunnerOwner)).toBe(0);
+        expect(() => child.schedule({ id: "late", delayMs: 0, run() {} })).toThrow("closed");
+      } finally {
+        work.resolve();
+        await Promise.all([owner.stop(), wake, gateway.stop()]);
+      }
+    },
+  );
+
   it("replaces IDs only within their service or child lifetime", async () => {
     const { time, gateway, owner } = fixture();
     const { scheduler: sibling } = createPluginServiceScheduler(gateway);
@@ -57,12 +89,10 @@ describe("plugin service scheduling", () => {
     const stopped = vi.fn();
     const stopping = owner.stop().then(stopped);
     expect([owner, child, descendant].every((scope) => scope.signal.aborted)).toBe(true);
-    expect(completed).not.toHaveBeenCalled();
-    expect(stopped).not.toHaveBeenCalled();
+    expect([completed, stopped].map((call) => call.mock.calls.length)).toEqual([0, 0]);
     work.resolve();
     await Promise.all([wake, stopping, owner.stop()]);
-    expect(completed).toHaveBeenCalledOnce();
-    expect(stopped).toHaveBeenCalledOnce();
+    expect([completed, stopped].map((call) => call.mock.calls.length)).toEqual([1, 1]);
     await time.advanceBy(1_000);
     expect(late).not.toHaveBeenCalled();
     await gateway.stop();

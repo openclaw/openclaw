@@ -1,5 +1,4 @@
-// Gateway startup runtime-config resolver.
-// Normalizes bind/auth/HTTP/Tailscale/hook settings before server construction.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveControlUiAllowedOrigins } from "../config/gateway-control-ui-origins.js";
 import type {
   GatewayAuthConfig,
@@ -7,6 +6,8 @@ import type {
   GatewayTailscaleConfig,
 } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isVitestRuntimeEnv } from "../infra/env.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   formatUnsafeGatewayTailscaleNoAuthMessage,
   isUnsafeGatewayTailscaleNoAuth,
@@ -17,9 +18,8 @@ import {
   resolveGatewayAuth,
 } from "./auth.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
-import { warnLegacyOpenClawEnvVars } from "./env-deprecation.js";
 import { commitHookTransformMappingReload } from "./hooks-mapping.js";
-import { resolveHooksConfig } from "./hooks.js";
+import { resolveHooksConfig, UnresolvedHooksTokenError } from "./hooks.js";
 import {
   defaultGatewayBindMode,
   isLoopbackHost,
@@ -41,6 +41,12 @@ type GatewayRuntimeConfig = {
 };
 
 const GATEWAY_EFFECTIVE_CONFIG_CONFLICT_CODE = "GATEWAY_EFFECTIVE_CONFIG_CONFLICT";
+
+// Legacy env warnings are process-wide and intentionally one-shot so normal
+// gateway startup is noisy enough to notice but not spammed by repeated imports.
+const LEGACY_ENV_PREFIXES = ["CLAWDBOT_", "MOLTBOT_"] as const;
+type LegacyEnvPrefix = (typeof LEGACY_ENV_PREFIXES)[number];
+let warned = false;
 
 /**
  * The effective bind/auth/Tailscale combination (after CLI and service overrides are
@@ -82,9 +88,9 @@ export function assertGatewayRuntimeSecurityConfig(
   const hasSharedSecret =
     (authMode === "token" && Boolean(resolvedAuth.token?.trim())) ||
     (authMode === "password" && Boolean(resolvedAuth.password?.trim()));
-  const controlUiAllowedOrigins = resolveControlUiAllowedOrigins(cfg)
-    .map((value) => value.trim())
-    .filter(Boolean);
+  const hasControlUiAllowedOrigins = resolveControlUiAllowedOrigins(cfg).some((value) =>
+    value.trim(),
+  );
   const dangerouslyAllowHostHeaderOriginFallback =
     cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
 
@@ -112,7 +118,7 @@ export function assertGatewayRuntimeSecurityConfig(
   if (
     controlUiEnabled &&
     !isLoopbackHost(bindHost) &&
-    controlUiAllowedOrigins.length === 0 &&
+    !hasControlUiAllowedOrigins &&
     !dangerouslyAllowHostHeaderOriginFallback
   ) {
     // Remote Control UI must use explicit origins unless the operator deliberately accepts
@@ -128,7 +134,6 @@ export function assertGatewayRuntimeSecurityConfig(
   }
 }
 
-/** Resolves bind, auth, HTTP, Tailscale, and hook settings for one gateway start. */
 export async function resolveGatewayRuntimeConfig(params: {
   cfg: OpenClawConfig;
   port: number;
@@ -138,7 +143,31 @@ export async function resolveGatewayRuntimeConfig(params: {
   auth?: GatewayAuthConfig;
   tailscale?: GatewayTailscaleConfig;
 }): Promise<GatewayRuntimeConfig> {
-  warnLegacyOpenClawEnvVars();
+  if (!warned && !isVitestRuntimeEnv(process.env)) {
+    const prefixCounts = new Map<LegacyEnvPrefix, number>();
+    for (const key of Object.keys(process.env)) {
+      // Count by prefix only; never print env names or values because some legacy
+      // names may still encode account/provider secrets.
+      const prefix = LEGACY_ENV_PREFIXES.find((candidate) => key.startsWith(candidate));
+      if (prefix) {
+        prefixCounts.set(prefix, (prefixCounts.get(prefix) ?? 0) + 1);
+      }
+    }
+    const legacyVarCount = [...prefixCounts.values()].reduce((total, count) => total + count, 0);
+    if (legacyVarCount > 0) {
+      const detectedPrefixes = LEGACY_ENV_PREFIXES.filter((prefix) => prefixCounts.has(prefix))
+        .map((prefix) => `${prefix}*`)
+        .join(", ");
+      process.emitWarning(
+        [
+          `Legacy ${detectedPrefixes} environment variables were detected (${legacyVarCount} total), but OpenClaw only reads OPENCLAW_* names now.`,
+          "Rename them by replacing the legacy prefix with OPENCLAW_; the old names are ignored.",
+        ].join("\n"),
+        { code: "OPENCLAW_LEGACY_ENV_VARS", type: "DeprecationWarning" },
+      );
+      warned = true;
+    }
+  }
 
   // Tailscale serve/funnel hard-requires loopback.  When bind is not
   // explicitly set, we must resolve Tailscale mode *before* choosing the
@@ -180,11 +209,7 @@ export async function resolveGatewayRuntimeConfig(params: {
   const controlUiEnabled =
     params.controlUiEnabled ?? params.cfg.gateway?.controlUi?.enabled ?? true;
   const controlUiBasePath = normalizeControlUiBasePath(params.cfg.gateway?.controlUi?.basePath);
-  const controlUiRootRaw = params.cfg.gateway?.controlUi?.root;
-  const controlUiRoot =
-    typeof controlUiRootRaw === "string" && controlUiRootRaw.trim().length > 0
-      ? controlUiRootRaw.trim()
-      : undefined;
+  const controlUiRoot = normalizeOptionalString(params.cfg.gateway?.controlUi?.root);
   const tailscaleBase = params.cfg.gateway?.tailscale ?? {};
   const tailscaleOverrides = params.tailscale ?? {};
   const tailscaleConfig = mergeGatewayTailscaleConfig(tailscaleBase, tailscaleOverrides);
@@ -196,7 +221,20 @@ export async function resolveGatewayRuntimeConfig(params: {
     tailscaleMode,
   });
   const authMode: ResolvedGatewayAuth["mode"] = resolvedAuth.mode;
-  const hooksConfig = resolveHooksConfig(params.cfg);
+  let hooksConfig: ReturnType<typeof resolveHooksConfig>;
+  try {
+    hooksConfig = resolveHooksConfig(params.cfg);
+  } catch (err) {
+    // Startup has no previous hooks generation to preserve. Disable only this
+    // ingress; reload still rejects invalid candidates and keeps its active generation.
+    if (!(err instanceof UnresolvedHooksTokenError)) {
+      throw err;
+    }
+    hooksConfig = null;
+    createSubsystemLogger("gateway/hooks").warn(
+      `External hooks disabled at startup: ${err.message}. Gateway startup continues.`,
+    );
+  }
   const runtimeConfig = {
     bindHost,
     controlUiEnabled,

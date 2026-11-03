@@ -93,53 +93,25 @@ function removeRetiredTelegramGroupHistoryContextConfig(params: {
     return { entry: params.entry, changed: false };
   }
   const { includeGroupHistoryContext, ...rest } = params.entry;
-  let updated = includeGroupHistoryContext === "none" ? { ...rest, historyLimit: 0 } : rest;
-  if (
-    includeGroupHistoryContext === "recent" &&
-    params.preserveRecentHistoryLimit !== undefined &&
-    updated.historyLimit === undefined
-  ) {
-    updated = { ...updated, historyLimit: params.preserveRecentHistoryLimit };
-  }
-  const historyLimitNote =
+  const historyLimit =
     includeGroupHistoryContext === "none"
-      ? " and set historyLimit to 0"
+      ? 0
       : includeGroupHistoryContext === "recent" &&
           params.preserveRecentHistoryLimit !== undefined &&
           params.entry.historyLimit === undefined
-        ? ` and set historyLimit to ${params.preserveRecentHistoryLimit}`
-        : "";
+        ? params.preserveRecentHistoryLimit
+        : undefined;
+  const updated = historyLimit === undefined ? rest : { ...rest, historyLimit };
+  const historyLimitNote =
+    historyLimit === undefined ? "" : ` and set historyLimit to ${historyLimit}`;
   params.changes.push(
     `Removed ${params.pathPrefix}.includeGroupHistoryContext${historyLimitNote}; Telegram group history is always on for groups and bounded by historyLimit.`,
   );
   return { entry: updated, changed: true };
 }
 
-function resolveCompatibleDefaultGroupEntry(section: Record<string, unknown>): {
-  groups: Record<string, unknown>;
-  entry: Record<string, unknown>;
-} | null {
-  const existingGroups = section.groups;
-  if (existingGroups !== undefined && !asObjectRecord(existingGroups)) {
-    return null;
-  }
-  const groups = asObjectRecord(existingGroups) ?? {};
-  const defaultKey = "*";
-  const existingEntry = groups[defaultKey];
-  if (existingEntry !== undefined && !asObjectRecord(existingEntry)) {
-    return null;
-  }
-  const entry = asObjectRecord(existingEntry) ?? {};
-  return { groups, entry };
-}
-
 export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   ...webhookListenerMigration.legacyConfigRules,
-  {
-    path: ["channels", "telegram", "groupMentionsOnly"],
-    message:
-      'channels.telegram.groupMentionsOnly was removed; use channels.telegram.groups."*".requireMention instead. Run "openclaw doctor --fix".',
-  },
   {
     path: ["channels", "telegram"],
     message:
@@ -155,7 +127,7 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   },
 ];
 
-export function normalizeCompatibilityConfig({
+export function normalizeHistoricalWebhookConfig({
   cfg,
 }: {
   cfg: OpenClawConfig;
@@ -176,7 +148,19 @@ export function normalizeCompatibilityConfig({
             resolveTelegramWebhookPathConflict(path) !== undefined
           );
         });
-  const webhook = webhookListenerMigration.normalizeCompatibilityConfig({ cfg });
+  return {
+    ...webhookListenerMigration.normalizeCompatibilityConfig({ cfg }),
+    historicalWebhookAccountIds,
+  };
+}
+
+export function normalizeCompatibilityConfig({
+  cfg,
+}: {
+  cfg: OpenClawConfig;
+}): ChannelDoctorConfigMutation {
+  const webhook = normalizeHistoricalWebhookConfig({ cfg });
+  const { historicalWebhookAccountIds } = webhook;
   const changes = [...webhook.changes];
   const rawEntry = asObjectRecord(
     (webhook.config.channels as Record<string, unknown> | undefined)?.telegram,
@@ -187,7 +171,6 @@ export function normalizeCompatibilityConfig({
 
   const tuningKnobs = stripRetiredTelegramTuning(rawEntry, "channel");
   let updated = tuningKnobs.entry;
-  let changed = webhook.config !== cfg || tuningKnobs.changed;
   if (tuningKnobs.changed) {
     changes.push("Removed retired Telegram tuning knobs.");
   }
@@ -203,33 +186,6 @@ export function normalizeCompatibilityConfig({
     changes,
   });
   updated = retired.entry;
-  changed = changed || retired.changed;
-
-  if (updated.groupMentionsOnly !== undefined) {
-    const defaultGroupEntry = resolveCompatibleDefaultGroupEntry(updated);
-    if (!defaultGroupEntry) {
-      changes.push(
-        "Skipped channels.telegram.groupMentionsOnly migration because channels.telegram.groups already has an incompatible shape; fix remaining issues manually.",
-      );
-    } else {
-      const { groups, entry } = defaultGroupEntry;
-      if (entry.requireMention === undefined) {
-        entry.requireMention = updated.groupMentionsOnly;
-        groups["*"] = entry;
-        updated = { ...updated, groups };
-        changes.push(
-          'Moved channels.telegram.groupMentionsOnly → channels.telegram.groups."*".requireMention.',
-        );
-      } else {
-        changes.push(
-          'Removed channels.telegram.groupMentionsOnly (channels.telegram.groups."*" already set).',
-        );
-      }
-      const { groupMentionsOnly: _ignored, ...rest } = updated;
-      updated = rest;
-      changed = true;
-    }
-  }
 
   const accounts = normalizeChannelAccounts({
     entry: updated,
@@ -246,9 +202,8 @@ export function normalizeCompatibilityConfig({
       }),
   });
   updated = accounts.entry;
-  changed = changed || accounts.changed;
 
-  if (!changed && changes.length === 0) {
+  if (webhook.config === cfg && updated === rawEntry && changes.length === 0) {
     return { config: cfg, changes: [], historicalWebhookAccountIds };
   }
   return {

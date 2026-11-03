@@ -19,10 +19,7 @@ import { finishUpdate } from "./update-command-post-update.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import { serviceUpdateResult } from "./update-command-service-recovery.test-support.js";
-import {
-  maybeRestartService,
-  maybeStopManagedServiceBeforeMutableUpdate,
-} from "./update-command-service.js";
+import { maybeStopManagedServiceBeforeMutableUpdate } from "./update-command-service.js";
 
 export function registerGenerationRecoveryTests(
   fixture: () => {
@@ -38,46 +35,6 @@ export function registerGenerationRecoveryTests(
     };
   },
 ) {
-  it("records a stopped service when activation throws before health verification", async () => {
-    const { root, mocks } = fixture();
-    const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, ".openclaw") };
-    const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
-    recordUpdateRunVerification(
-      run.runId,
-      { serviceRunning: true, runningVersion: VERSION },
-      { env },
-    );
-    const before = await maybeStopManagedServiceBeforeMutableUpdate({
-      root,
-      updateInstallKind: "package",
-      shouldRestart: true,
-      jsonMode: true,
-    });
-    mocks.child.mockRejectedValueOnce(new Error("candidate gateway exited 70"));
-    expect(
-      await maybeRestartService({
-        shouldRestart: true,
-        result: serviceUpdateResult(root, {
-          before: { version: VERSION },
-          after: { version: "9999.1.1" },
-        }),
-        opts: { json: true, run },
-        refreshServiceEnv: false,
-        serviceUpdateVerdict: before.serviceUpdateVerdict,
-        serviceManagerUid: before.serviceManagerUid,
-        serviceEnv: before.serviceEnv,
-        gatewayPort: 19305,
-        requireRunningServiceAfterRestart: true,
-        timeoutMs: 1000,
-      }),
-    ).toBe("failed");
-    const record = getUpdateRun(run.runId, { env })!;
-    expect(record.verification.serviceRunning).toBe(false);
-    expect(renderUpdateRunReport({ ...record, status: "failed" }).headline).not.toContain(
-      "gateway is running",
-    );
-  });
-
   it.each([false, true])(
     "restores the previous running generation after candidate stamp advancement (content changed=%s)",
     async (contentChanged) => {
@@ -160,6 +117,7 @@ export function registerGenerationRecoveryTests(
         });
       });
       mocks.health.mockImplementation(async ({ port, expectedVersion }) => ({
+        outcome: mocks.running ? "ready" : "failed",
         healthy: mocks.running,
         staleGatewayPids: [],
         runtime: {

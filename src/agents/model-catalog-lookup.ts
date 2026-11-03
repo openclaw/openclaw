@@ -2,12 +2,13 @@
  * Looks up model catalog entries and input capability support.
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { isModelThinkingFormat, type ModelCompatConfig } from "../config/types.models.js";
+import { isModelThinkingFormat } from "../config/types.models.js";
+import type { ModelCompatConfig } from "../config/zod-schema.model-compat.js";
 import type { Model } from "../llm/types.js";
 import {
   resolveProviderModelCatalogId,
@@ -54,10 +55,7 @@ export function projectModelThinkingCompat(compat: unknown): ModelThinkingCompat
   }
   if (record.supportedReasoningEfforts === null) {
     projected.supportedReasoningEfforts = null;
-  } else if (
-    Array.isArray(record.supportedReasoningEfforts) &&
-    record.supportedReasoningEfforts.every((effort) => typeof effort === "string")
-  ) {
+  } else if (isStringArray(record.supportedReasoningEfforts)) {
     projected.supportedReasoningEfforts = [...record.supportedReasoningEfforts];
   }
   return Object.keys(projected).length > 0 ? projected : undefined;

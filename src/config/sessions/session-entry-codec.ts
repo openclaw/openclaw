@@ -1,9 +1,11 @@
+import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import type {
   FileEntry,
   SessionEntry,
   SessionHeader,
+  SessionMessageEntry,
 } from "../../agents/sessions/session-manager-types.js";
 import { MIN_READABLE_SESSION_VERSION } from "./version.js";
 
@@ -115,6 +117,14 @@ const opaqueLeafEntrySchema = z.looseObject({
 });
 const sessionHeaderSchema = z.looseObject({ type: z.literal("session"), id: z.string() });
 
+/** Legacy writers could repeat the same header with a different timestamp. */
+export function equivalentLegacySessionHeaders(
+  first: Record<string, unknown>,
+  next: Record<string, unknown>,
+): boolean {
+  return isDeepStrictEqual({ ...first, timestamp: undefined }, { ...next, timestamp: undefined });
+}
+
 export function findSessionTranscriptHeader(entries: Iterable<unknown>): SessionHeader | undefined {
   for (const entry of entries) {
     if (sessionHeaderSchema.safeParse(entry).success) {
@@ -131,6 +141,15 @@ export function assertCurrentSessionTranscriptHeader(header: SessionHeader | und
       "Persisted legacy session transcripts require doctor/import migration before runtime use",
     );
   }
+}
+
+export function isReadableSessionMessage(
+  message: unknown,
+): message is Extract<
+  SessionMessageEntry["message"],
+  { role: z.infer<typeof readableMessageSchema>["role"] }
+> {
+  return readableMessageSchema.safeParse(message).success;
 }
 
 export function isIndexedSessionEntry(entry: unknown): entry is SessionEntry {

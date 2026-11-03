@@ -1,14 +1,15 @@
-import { fetchWithSsrFGuard } from "../../../api.js";
-import type { GetCallStatusResult } from "../../types.js";
 import {
-  cancelProviderResponseBody,
-  readProviderErrorResponseSnippet,
-  readVoiceCallProviderJsonResponse,
-} from "./response-body.js";
-
+  readResponseTextPrefix,
+  readResponseWithLimit,
+} from "openclaw/plugin-sdk/response-limit-runtime";
+import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
+import { fetchWithSsrFGuard } from "../../../api.js";
 const VOICE_CALL_PROVIDER_API_TIMEOUT_MS = 30_000;
+const PROVIDER_JSON_RESPONSE_MAX_BYTES = 1 * 1024 * 1024;
+const PROVIDER_ERROR_RESPONSE_MAX_BYTES = 8 * 1024;
 
-type GuardedJsonApiRequestParams = {
+/** Send a provider JSON request through the SSRF guard and parse bounded JSON responses. */
+export async function guardedJsonApiRequest<T = unknown>(params: {
   url: string;
   method: "GET" | "POST" | "DELETE" | "PUT" | "PATCH";
   headers: Record<string, string>;
@@ -19,12 +20,7 @@ type GuardedJsonApiRequestParams = {
   errorPrefix: string;
   malformedJsonMessage?: string;
   createError?: (status: number, text: string) => Error;
-};
-
-/** Send a provider JSON request through the SSRF guard and parse bounded JSON responses. */
-export async function guardedJsonApiRequest<T = unknown>(
-  params: GuardedJsonApiRequestParams,
-): Promise<T> {
+}): Promise<T> {
   const { response, release } = await fetchWithSsrFGuard({
     url: params.url,
     init: {
@@ -45,33 +41,36 @@ export async function guardedJsonApiRequest<T = unknown>(
   try {
     if (!response.ok) {
       if (params.allowNotFound && response.status === 404) {
-        await cancelProviderResponseBody(response);
+        await response.body?.cancel().catch(() => undefined);
         return undefined as T;
       }
-      const errorText = await readProviderErrorResponseSnippet(response);
+      const prefix = await readResponseTextPrefix(response, PROVIDER_ERROR_RESPONSE_MAX_BYTES);
+      // Provider errors can echo credentials; tools mode keeps redaction on regardless of log config.
+      const text = redactSensitiveText(prefix.text, { mode: "tools" });
+      const errorText = prefix.truncated ? `${text.trimEnd()}... [truncated]` : text;
       throw params.createError
         ? params.createError(response.status, errorText)
         : new Error(`${params.errorPrefix}: ${response.status} ${errorText}`);
     }
 
-    return (await readVoiceCallProviderJsonResponse<T>(
-      response,
-      params.malformedJsonMessage ?? `${params.errorPrefix}: malformed JSON response`,
-    )) as T;
+    const body = await readResponseWithLimit(response, PROVIDER_JSON_RESPONSE_MAX_BYTES, {
+      onOverflow: ({ size, maxBytes }) =>
+        new Error(`provider response body too large: ${size} bytes (limit: ${maxBytes} bytes)`),
+    });
+    if (body.byteLength === 0) {
+      return undefined as T;
+    }
+    try {
+      const text = new TextDecoder("utf-8", { fatal: true }).decode(body);
+      // SAFETY: Each carrier caller supplies the response type for its provider's JSON endpoint.
+      return JSON.parse(text) as T;
+    } catch (cause) {
+      throw new Error(
+        params.malformedJsonMessage ?? `${params.errorPrefix}: malformed JSON response`,
+        { cause },
+      );
+    }
   } finally {
     await release();
-  }
-}
-
-/** Failed carrier probes keep calls alive; an empty or missing response is terminal. */
-export async function readProviderCallStatus<T>(
-  request: () => Promise<T>,
-  describe: (data: NonNullable<T>) => GetCallStatusResult,
-): Promise<GetCallStatusResult> {
-  try {
-    const data = await request();
-    return data ? describe(data) : { status: "not-found", isTerminal: true };
-  } catch {
-    return { status: "error", isTerminal: false, isUnknown: true };
   }
 }

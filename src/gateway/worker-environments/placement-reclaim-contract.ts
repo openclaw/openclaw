@@ -18,6 +18,7 @@ export type PreparedWorkerWorkspaceRecovery = {
   assertCurrent: () => void;
   resolveConflict: () => Promise<WorkspaceResultConflictLookup>;
   reportConflict: (report: WorkerWorkspaceConflictReport) => Promise<void>;
+  reportNote: (note: string) => Promise<void>;
   reportFailure: (error: string) => Promise<void>;
 };
 
@@ -57,7 +58,7 @@ export type WorkerPlacementReclaimBarriers = {
     params: WorkerPlacementReclaimRequest & {
       authorize?: WorkerPlacementAuthorization;
       beforeDrain?: WorkerPlacementAuthorization;
-      begin: () => WorkerReclaimStartPlacement;
+      begin: (assertCurrent?: () => void) => Promise<WorkerReclaimStartPlacement>;
       reclaim: (
         workspace: WorkerSessionWorkspace,
         placement: WorkerReclaimStartPlacement,

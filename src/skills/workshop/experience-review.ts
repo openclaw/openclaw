@@ -1,42 +1,26 @@
 import { randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
-  createOperationalRunInstanceRef,
-  prepareAgentRunAdmission,
-} from "../../agents/admitted-run-context.js";
-import {
-  createCronCreatorAuthorityCapability,
-  runWithCronCreatorAuthorityCapability,
-} from "../../agents/cron-creator-authority-context.js";
-import { rootedAgentRunParams } from "../../agents/rooted-run-params.js";
-import { SessionManager } from "../../agents/sessions/session-manager.js";
+  prepareSessionFork,
+  readSessionForkTurn,
+  runSessionFork,
+} from "../../agents/session-fork-run.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { getRuntimeConfig } from "../../config/config.js";
-import { resolveInternalSessionEffectsIdentity } from "../../config/sessions/internal-session-key.js";
-import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
-import { validateSessionTranscriptContextAnchor } from "../../config/sessions/session-accessor.sqlite-model-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
-import { createBackgroundWorkOwner } from "../../process/background-work.js";
-import {
-  getGatewayRestartDrainSignal,
-  runWithGatewayDetachedWorkAdmission,
-} from "../../process/gateway-work-admission.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
-import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
-import { recordSkillExperienceReviewOutcome } from "./collection-review-state.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
 import { buildSkillExperienceReviewPrompt } from "./experience-review-prompt.js";
 import type { ExperienceReviewCandidate } from "./experience-review-scheduler.js";
-import { SKILL_WORKSHOP_MAINTENANCE_TOOLS } from "./maintenance-prompt.js";
-import { assertSkillReviewRunSucceeded } from "./review-outcome.js";
-import { resolveWorkshopSkillsDir } from "./skills-root.js";
-import type { SkillWorkshopProposalMutationBudget } from "./types.js";
+import { listWorkshopChanges } from "./library.js";
+import { postWorkshopChangeNotice } from "./review-outcome.js";
+import { workshopReviewRunId } from "./review-undo.js";
 
-const reviews = createBackgroundWorkOwner({ owner: "core:skill-workshop", maxConcurrent: 1 });
+const REVIEW_TOOLS = ["skill_workshop"] as const;
+const REVIEW_OWNER = "core:skill-workshop";
 
+/** Admits a queued review only when Workshop is on and the session's policy exposes the tool. */
 export async function prepareSkillExperienceReviewCandidate(
   candidate: ExperienceReviewCandidate,
   config: OpenClawConfig,
@@ -47,286 +31,123 @@ export async function prepareSkillExperienceReviewCandidate(
   ) {
     return undefined;
   }
-  const { resolveConversationCapabilityProfile } =
-    await import("../../agents/conversation-capability-profile.js");
-  const { resolveSandboxRuntimeStatus } = await import("../../agents/sandbox.js");
-  const { isToolAllowedByPolicies } = await import("../../agents/tool-policy-match.js");
-  const { mergeAlsoAllowPolicy } = await import("../../agents/tool-policy.js");
-  const foreground = candidate.ctx.foregroundPromptContext;
-  const sessionKey = candidate.source.sessionKey;
-  if (
-    resolveSkillWorkshopConfig(config).autonomous.mode === "propose" &&
-    resolveSandboxRuntimeStatus({ cfg: config, sessionKey, agentId: foreground.agentId }).sandboxed
-  ) {
+  // The same host-owned turn facts a plugin fork uses: the anchored turn's requester and model.
+  const turn = await readSessionForkTurn(candidate.source);
+  if (!turn) {
+    // Without the turn's own requester, sender-specific policy cannot be checked.
     return undefined;
   }
-  const capabilityProfile = resolveConversationCapabilityProfile({
+  const model = turn.model ?? {
+    provider: candidate.ctx.modelProviderId,
+    model: candidate.ctx.modelId,
+  };
+  const fork = await prepareSessionFork({
     config,
-    sessionKey,
-    sandboxSessionKey: sessionKey,
-    agentId: foreground.agentId,
-    agentAccountId: foreground.agentAccountId,
-    messageProvider: foreground.messageProvider,
-    messageChannel: foreground.messageChannel,
-    groupId: foreground.groupId,
-    groupChannel: foreground.groupChannel,
-    groupSpace: foreground.groupSpace,
-    spawnedBy: foreground.spawnedBy,
-    senderId: foreground.senderId,
-    senderName: foreground.senderName,
-    senderUsername: foreground.senderUsername,
-    senderE164: foreground.senderE164,
-    senderIsOwner: foreground.senderIsOwner,
-    modelProvider: candidate.ctx.modelProviderId,
-    modelId: candidate.ctx.modelId,
+    source: candidate.source,
+    tools: REVIEW_TOOLS,
+    model,
     workspaceDir: candidate.ctx.workspaceDir,
+    ...(turn.requester ? { requester: turn.requester } : {}),
   });
-  const profilePolicy = mergeAlsoAllowPolicy(
-    capabilityProfile.policy.profilePolicy,
-    capabilityProfile.policy.profileAlsoAllow,
-  );
-  const providerProfilePolicy = mergeAlsoAllowPolicy(
-    capabilityProfile.policy.providerProfilePolicy,
-    capabilityProfile.policy.providerProfileAlsoAllow,
-  );
-  if (
-    !isToolAllowedByPolicies("skill_workshop", [
-      profilePolicy,
-      providerProfilePolicy,
-      capabilityProfile.policy.globalPolicy,
-      capabilityProfile.policy.globalProviderPolicy,
-      capabilityProfile.policy.agentPolicy,
-      capabilityProfile.policy.agentProviderPolicy,
-      capabilityProfile.policy.groupPolicy,
-      capabilityProfile.policy.senderPolicy,
-      capabilityProfile.policy.subagentPolicy,
-      capabilityProfile.policy.inheritedToolPolicy,
-    ])
-  ) {
+  if (!fork) {
     return undefined;
   }
-  return { ...candidate, config };
+  return {
+    ...candidate,
+    ctx: {
+      ...candidate.ctx,
+      workspaceDir: fork.workspaceDir,
+      modelProviderId: model.provider,
+      modelId: model.model,
+    },
+    ...(turn.requester ? { requester: turn.requester } : {}),
+    config,
+  };
 }
 
 export async function runSkillExperienceReview(
   candidate: ExperienceReviewCandidate,
+  options: { abortSignal?: AbortSignal } = {},
 ): Promise<void> {
-  // The foreground root has closed by the idle timer's callback. Admit this
-  // detached review independently; a real Gateway drain still refuses it.
-  await runWithGatewayDetachedWorkAdmission(
-    () => runSkillExperienceReviewInner(candidate),
-    "skills:experience-review",
-  );
-}
-
-async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidate): Promise<void> {
-  // Reset replaces the global controller; this review keeps its original lifetime
-  // across model execution and outcome publication.
-  const abortSignal = getGatewayRestartDrainSignal();
-  const { foregroundPromptContext, workspaceDir } = candidate.ctx;
-  const { sessionKey } = candidate.source;
-  const config = candidate.config;
-  const mode = resolveSkillWorkshopConfig(config).autonomous.mode;
-  if (mode === "off") {
-    return;
-  }
-  const outcomeStore = { context: captureOpenClawStateWorkerContext() };
-  const executionRoot =
-    mode === "auto" ? resolveWorkshopSkillsDir(config, foregroundPromptContext.agentId) : undefined;
-  const runId = `skill-workshop-review:${randomUUID()}`;
-  const reviewSession = resolveInternalSessionEffectsIdentity({
-    agentId: foregroundPromptContext.agentId,
-    runId,
-  });
-  const origin = foregroundPromptContext.cronCreatorCallerOrigin;
-  const capability = origin ? createCronCreatorAuthorityCapability(runId, origin) : undefined;
-  const proposalMutationBudget: SkillWorkshopProposalMutationBudget | undefined =
-    mode === "propose" ? { remaining: 1, readSkillHashes: new Map() } : undefined;
-  const attemptedAtMs = Date.now();
-  let outcome: "completed" | "proposed" | "nothing";
-  let proposalId: string | undefined;
-  let usage: { inputTokens: number; cachedInputTokens: number; outputTokens: number } | undefined;
-  // Runtime identity is private; the captured promptCacheKey retains foreground cache affinity.
-  registerAgentRunContext(runId, {
-    agentId: foregroundPromptContext.agentId,
-    sessionId: reviewSession.sessionId,
-    sessionKey: reviewSession.sessionKey,
-    isControlUiVisible: false,
-    projectSessionActive: false,
-    projectSessionLifecycle: false,
-    projectSessionMessages: false,
-  });
-  try {
-    abortSignal.throwIfAborted();
-    if (executionRoot) {
-      await fs.mkdir(executionRoot, { recursive: true });
-    }
-    const sessionManager = await SessionManager.openModelContextAsync(candidate.source, {
-      cwd: executionRoot ?? workspaceDir,
-      through: candidate.source,
-      signal: abortSignal,
-    });
-    abortSignal.throwIfAborted();
-    const { listWritableWorkshopSkillSummaries } = await import("./workspace-skill-read.js");
-    abortSignal.throwIfAborted();
-    // Deleting or replacing the source session must not revive its captured evidence.
-    // Check after asynchronous preparation; a replacement can retain the old transcript.
-    const sourceEntry = loadSessionEntryReadOnly({
-      ...candidate.source,
-      hydrateSkillPromptRefs: false,
-      readConsistency: "latest",
-    });
-    if (sourceEntry?.sessionId !== candidate.source.sessionId) {
-      throw new Error("Skill experience review source session was deleted or replaced.");
-    }
-    const existingSkills =
-      mode === "propose"
-        ? listWritableWorkshopSkillSummaries({ config, agentId: foregroundPromptContext.agentId })
-        : undefined;
-    validateSessionTranscriptContextAnchor(candidate.source, candidate.source);
-    // Source revocation fences retained tools and completion, even when the
-    // model handles a denied tool call and returns a normal final response.
-    const assertSourceCurrent = () => {
-      abortSignal.throwIfAborted();
-      if (
-        mode === "auto" &&
-        resolveSkillWorkshopConfig(getRuntimeConfig()).autonomous.mode !== "auto"
-      ) {
-        throw new Error("Automatic Skill Workshop maintenance was disabled during review.");
-      }
-      const current = loadSessionEntryReadOnly({
-        ...candidate.source,
-        hydrateSkillPromptRefs: false,
-        readConsistency: "latest",
-      });
-      if (
-        current?.sessionId !== candidate.source.sessionId ||
-        current?.permissionMode !== sourceEntry.permissionMode
-      ) {
-        throw new Error(
-          "Skill experience review source session was deleted, replaced, or changed permissions.",
-        );
-      }
-      validateSessionTranscriptContextAnchor(candidate.source, candidate.source);
-    };
-    const preparedRunAdmission = prepareAgentRunAdmission({
-      cfg: config,
-      operationalRunInstance: createOperationalRunInstanceRef(runId),
-      facts: {
-        runId,
-        agentId: foregroundPromptContext.agentId,
-        ingress: { kind: "system", boundary: "skill-workshop.experience", state: "present" },
-      },
-      assertSourceCurrent,
-    });
-    const run = async () => {
-      const reviewAbortSignal = AbortSignal.any([getGatewayRestartDrainSignal(), abortSignal]);
-      const reviewParams: Parameters<
-        typeof import("../../agents/embedded-agent.js").runEmbeddedAgent
-      >[0] = {
-        ...foregroundPromptContext,
-        preparedRunAdmission,
-        sessionId: reviewSession.sessionId,
-        sessionKey: reviewSession.sessionKey,
-        // Delivery authority closes with the foreground turn and cannot be reused by this fork.
-        messageActionTurnCapability: undefined,
-        sessionManager,
-        sessionPersistence: "detached",
-        workspaceDir,
-        ...(executionRoot ? rootedAgentRunParams(workspaceDir, executionRoot) : {}),
-        permissionMode: sourceEntry.permissionMode ?? foregroundPromptContext.permissionMode,
-        ...(executionRoot ? { skillsSnapshot: { prompt: "", skills: [] } } : {}),
-        config,
-        abortSignal: reviewAbortSignal,
-        prompt: buildSkillExperienceReviewPrompt({ ...candidate, existingSkills }, mode),
+  const { config, source } = candidate;
+  const { agentId } = source;
+  const runId = workshopReviewRunId(randomUUID());
+  // A Gateway reset keeps the sessionId and rotates the lifecycle revision; the notice is
+  // posted only to the generation the review read.
+  let generation: Parameters<typeof postWorkshopChangeNotice>[0]["generation"] | undefined;
+  // Settlement runs inside the fork's detached admission, so a graceful restart waits for the
+  // notice of skills the review already committed.
+  await runSessionFork(
+    {
+      config,
+      source,
+      prompt: buildSkillExperienceReviewPrompt({
+        ...candidate,
+        propose: resolveSkillWorkshopConfig(config).autonomous.mode === "propose",
+      }),
+      tools: REVIEW_TOOLS,
+      runId,
+      owner: REVIEW_OWNER,
+      model: {
         provider: candidate.ctx.modelProviderId,
         model: candidate.ctx.modelId,
-        ...(candidate.ctx.authProfileId
-          ? { authProfileId: candidate.ctx.authProfileId, authProfileIdSource: "user" as const }
-          : {}),
-        timeoutMs: resolveAgentTimeoutMs({ cfg: config }),
-        runId,
-        silentExpected: true,
-        allowEmptyAssistantReplyAsSilent: true,
-        terminalReplyExpectation: "optional",
-        toolExecutionAllow:
-          mode === "auto" ? [...SKILL_WORKSHOP_MAINTENANCE_TOOLS] : ["skill_workshop"],
-        skillWorkshopProposalOnly: mode === "propose",
-        skillWorkshopUpdateProposals: mode === "propose",
-        skillWorkshopAutonomousCapture: mode === "propose",
-        skillWorkshopProposalMutationBudget: proposalMutationBudget,
-        skillWorkshopOrigin: {
-          agentId: foregroundPromptContext.agentId,
-          sessionKey,
-          ...(candidate.ctx.runId ? { runId: candidate.ctx.runId } : {}),
-        },
-        ...(capability ? { cronCreatorAuthorityCapability: capability } : {}),
-        lane: reviews.lane,
-        agentHarnessId: "openclaw",
-        agentHarnessRuntimeOverride: "openclaw",
-        // Review prompts and cloned prefixes are sized for this exact model.
-        modelSelectionLocked: true,
-        modelFallbacksOverride: [],
-        requestedRouteResolution: "resolved",
-        disableTrajectory: true,
-        cleanupBundleMcpOnRunEnd: true,
-        verboseLevel: "off",
-      };
-      reviewAbortSignal.throwIfAborted();
-      try {
-        const { runEmbeddedAgent } = await import("../../agents/embedded-agent.js");
-        return await runEmbeddedAgent(reviewParams);
-      } finally {
-        preparedRunAdmission.close();
-      }
-    };
-    const embeddedResult = capability
-      ? await runWithCronCreatorAuthorityCapability(capability, run)
-      : await run();
-    preparedRunAdmission.assertSourceCurrent();
-
-    // Direct edits have normal file-tool semantics; drafts remain pending even
-    // if the operator enables automatic maintenance while this review runs.
-    assertSkillReviewRunSucceeded(embeddedResult);
-    const proposalIds = [...(proposalMutationBudget?.mutatedProposalIds ?? [])];
-    proposalId = proposalIds[0];
-    outcome = mode === "auto" ? "completed" : proposalIds.length === 0 ? "nothing" : "proposed";
-    const agentUsage = embeddedResult.meta?.agentMeta?.usage;
-    usage = agentUsage
-      ? {
-          inputTokens:
-            (agentUsage.input ?? 0) + (agentUsage.cacheRead ?? 0) + (agentUsage.cacheWrite ?? 0),
-          cachedInputTokens: agentUsage.cacheRead ?? 0,
-          outputTokens: agentUsage.output ?? 0,
-        }
-      : undefined;
-  } catch (error) {
-    await recordSkillExperienceReviewOutcome(
-      foregroundPromptContext.agentId,
-      workspaceDir,
-      {
-        attemptedAtMs,
-        outcome: "failed",
-        error: truncateUtf16Safe(String(error), 300),
+        ...(candidate.ctx.authProfileId ? { authProfileId: candidate.ctx.authProfileId } : {}),
       },
-      outcomeStore,
-    );
-    throw error;
-  } finally {
-    if (executionRoot) {
-      bumpSkillsSnapshotVersion({ reason: "workshop" });
-    }
-    clearAgentRunContext(runId);
-  }
-  await recordSkillExperienceReviewOutcome(
-    foregroundPromptContext.agentId,
-    workspaceDir,
-    {
-      attemptedAtMs,
-      outcome,
-      ...(proposalId ? { proposalId } : {}),
-      ...(usage ? { usage } : {}),
+      workspaceDir: candidate.ctx.workspaceDir,
+      ...(candidate.requester ? { requester: candidate.requester } : {}),
+      timeoutMs: resolveAgentTimeoutMs({ cfg: config }),
+      ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
+      assertCallerCurrent: () => {
+        if (resolveSkillWorkshopConfig(getRuntimeConfig()).autonomous.mode === "off") {
+          throw new Error("Skill Workshop was turned off during review.");
+        }
+      },
+      onSourceAdmitted: (entry) => {
+        generation = {
+          agentId,
+          storePath: source.storePath,
+          sessionKey: source.sessionKey,
+          sessionId: entry.sessionId,
+          lifecycleRevision: entry.lifecycleRevision ?? null,
+        };
+      },
     },
-    outcomeStore,
+    async (outcome) => {
+      const reviewFailure: unknown = outcome.ok ? undefined : outcome.error;
+      // Each skill_workshop call commits on its own, so a failed or aborted run may have changed
+      // skills. Cleanup always runs after the stop, and its independent failure must stay visible
+      // to the scheduler instead of being classified as part of the cancellation.
+      let cleanupFailure: unknown;
+      try {
+        const changes = await listWorkshopChanges(agentId, { runId });
+        if (generation) {
+          await postWorkshopChangeNotice({ config, generation, runId, changes });
+        }
+      } catch (error) {
+        cleanupFailure = error;
+      }
+      if (cleanupFailure !== undefined) {
+        // Cleanup failure identity survives even when the model succeeded. Do not throw it bare:
+        // an aborted controller would classify a plain error as expected cancellation.
+        throw reviewFailure === undefined
+          ? new AggregateError([cleanupFailure], "Skill experience review cleanup failed")
+          : new AggregateError(
+              [reviewFailure, cleanupFailure],
+              "Skill experience review and its cleanup failed",
+            );
+      }
+      if (!outcome.ok) {
+        if (options.abortSignal?.aborted || getGatewayRestartDrainSignal().aborted) {
+          // The model aborts with a plain error; normalize the outcome so the scheduler reports
+          // an expected cancellation rather than a review failure.
+          throw Object.assign(new Error("Skill experience review was stopped by the user."), {
+            name: "AbortError",
+          });
+        }
+        throw outcome.error instanceof Error
+          ? outcome.error
+          : new Error(formatErrorMessage(outcome.error));
+      }
+    },
   );
 }

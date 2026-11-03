@@ -9,17 +9,12 @@ import { ocPathSegment } from "./policy-state-helpers.js";
 import type { PolicyExecApprovalEvidence } from "./policy-state-types.js";
 
 export function scanPolicyExecApprovals(raw: string): readonly PolicyExecApprovalEvidence[] {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return [];
-  }
-  if (!isRecord(parsed) || parsed.version !== 1) {
+  const parsed = parseExecApprovalsFile(raw);
+  if (!parsed.ok) {
     return [];
   }
   const evidence: PolicyExecApprovalEvidence[] = [];
-  const defaults = asNonArrayRecord(parsed.defaults);
+  const defaults = asNonArrayRecord(parsed.value.defaults);
   evidence.push(
     execApprovalPostureEvidence(
       "defaults",
@@ -30,7 +25,7 @@ export function scanPolicyExecApprovals(raw: string): readonly PolicyExecApprova
   );
 
   // Snapshot admission leaves legacy agent and allowlist migration to Doctor.
-  for (const [agentId, value] of Object.entries(asNonArrayRecord(parsed.agents)).toSorted(
+  for (const [agentId, value] of Object.entries(asNonArrayRecord(parsed.value.agents)).toSorted(
     ([a], [b]) => a.localeCompare(b),
   )) {
     if (!isRecord(value)) {
@@ -40,22 +35,51 @@ export function scanPolicyExecApprovals(raw: string): readonly PolicyExecApprova
     evidence.push(
       execApprovalPostureEvidence(`agent:${agentId}`, "agent", value, agentSource, agentId),
     );
-    for (const [index, entry] of execApprovalAllowlistEntries(value.allowlist).entries()) {
-      const allowlistSource = execApprovalsPolicyUri(
-        `agents/${ocPathSegment(agentId)}/allowlist/#${entry.index}`,
-      );
+    if (!Array.isArray(value.allowlist)) {
+      continue;
+    }
+    let allowlistIndex = 0;
+    for (const [index, entry] of value.allowlist.entries()) {
+      if (!isRecord(entry)) {
+        continue;
+      }
+      const pattern = readString(entry.pattern);
+      if (pattern === undefined) {
+        continue;
+      }
+      const argPattern = readString(entry.argPattern);
+      const entrySource = readString(entry.source) === "allow-always" ? "allow-always" : undefined;
       evidence.push({
-        id: `agent:${agentId}:allowlist:${index}`,
+        id: `agent:${agentId}:allowlist:${allowlistIndex++}`,
         kind: "allowlist",
-        source: allowlistSource,
+        source: `${agentSource}/allowlist/#${index}`,
         agentId,
-        pattern: entry.pattern,
-        ...(entry.argPattern === undefined ? {} : { argPattern: entry.argPattern }),
-        ...(entry.entrySource === undefined ? {} : { entrySource: entry.entrySource }),
+        pattern,
+        ...(argPattern === undefined ? {} : { argPattern }),
+        ...(entrySource === undefined ? {} : { entrySource }),
       });
     }
   }
   return evidence;
+}
+
+export function parseExecApprovalsFile(
+  raw: string,
+):
+  | { readonly ok: true; readonly value: Record<string, unknown> }
+  | { readonly ok: false; readonly message: string } {
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (!isRecord(value) || value.version !== 1) {
+      return { ok: false, message: "unsupported exec approvals version" };
+    }
+    return { ok: true, value };
+  } catch (err) {
+    return {
+      ok: false,
+      message: err instanceof Error ? err.message : String(err),
+    };
+  }
 }
 
 function execApprovalPostureEvidence(
@@ -94,39 +118,4 @@ function readExecApprovalAsk(value: unknown): string | undefined {
   return normalized === "off" || normalized === "on-miss" || normalized === "always"
     ? normalized
     : undefined;
-}
-
-function execApprovalAllowlistEntries(value: unknown): readonly {
-  readonly index: number;
-  readonly pattern: string;
-  readonly argPattern?: string;
-  readonly entrySource?: string;
-}[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  const entries: {
-    readonly index: number;
-    readonly pattern: string;
-    readonly argPattern?: string;
-    readonly entrySource?: string;
-  }[] = [];
-  for (const [index, entry] of value.entries()) {
-    if (!isRecord(entry)) {
-      continue;
-    }
-    const pattern = readString(entry.pattern);
-    if (pattern === undefined) {
-      continue;
-    }
-    const argPattern = readString(entry.argPattern);
-    const entrySource = readString(entry.source) === "allow-always" ? "allow-always" : undefined;
-    entries.push({
-      index,
-      pattern,
-      ...(argPattern === undefined ? {} : { argPattern }),
-      ...(entrySource === undefined ? {} : { entrySource }),
-    });
-  }
-  return entries;
 }

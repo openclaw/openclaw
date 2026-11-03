@@ -7,7 +7,6 @@ import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { resolveGatewayProbeSurfaceAuth } from "../../gateway/auth-surface-resolution.js";
 import { isLoopbackHost } from "../../gateway/net.js";
 import type { GatewayProbeCapability, GatewayProbeResult } from "../../gateway/probe.js";
-import { inspectBestEffortPrimaryTailnetIPv4 } from "../../infra/network-discovery-display.js";
 
 const LEGACY_MISSING_SCOPE_PATTERN = /\bmissing scope:\s*[a-z0-9._-]+/i;
 
@@ -99,17 +98,6 @@ export function resolveTargets(
   return targets;
 }
 
-function isLoopbackProbeTarget(target: Pick<GatewayStatusTarget, "kind" | "url">): boolean {
-  if (target.kind === "localLoopback") {
-    return true;
-  }
-  try {
-    return isLoopbackHost(new URL(target.url).hostname);
-  } catch {
-    return false;
-  }
-}
-
 export function resolveProbeBudgetMs(
   overallMs: number,
   target: Pick<GatewayStatusTarget, "kind" | "active" | "url">,
@@ -123,7 +111,8 @@ export function resolveProbeBudgetMs(
   if (target.kind === "localLoopback") {
     return Math.min(800, overallMs);
   }
-  if (!isLoopbackProbeTarget(target)) {
+  const url = URL.parse(target.url);
+  if (url === null || !isLoopbackHost(url.hostname)) {
     return Math.min(1500, overallMs);
   }
   return overallMs;
@@ -131,14 +120,7 @@ export function resolveProbeBudgetMs(
 
 /** Normalizes user-entered SSH targets, accepting both raw targets and `ssh host` input. */
 export function sanitizeSshTarget(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return null;
-  }
-  return trimmed.replace(/^ssh\s+/, "");
+  return normalizeOptionalString(value)?.replace(/^ssh\s+/, "") ?? null;
 }
 
 export async function resolveAuthForTarget(
@@ -170,6 +152,13 @@ export function extractConfigSummary(snapshotUnknown: unknown) {
   const valid = Boolean(snap?.valid);
   const issuesRaw = Array.isArray(snap?.issues) ? snap.issues : [];
   const legacyRaw = Array.isArray(snap?.legacyIssues) ? snap.legacyIssues : [];
+  const summarizeIssues = (issues: ConfigFileSnapshot["issues"]) =>
+    issues
+      .filter(
+        (issue): issue is { path: string; message: string } =>
+          issue && typeof issue.path === "string" && typeof issue.message === "string",
+      )
+      .map((issue) => ({ path: issue.path, message: issue.message }));
 
   const cfg = (snap?.config ?? {}) as Record<string, unknown>;
   const gateway = (cfg.gateway ?? {}) as Record<string, unknown>;
@@ -200,18 +189,8 @@ export function extractConfigSummary(snapshotUnknown: unknown) {
     path,
     exists,
     valid,
-    issues: issuesRaw
-      .filter(
-        (i): i is { path: string; message: string } =>
-          i && typeof i.path === "string" && typeof i.message === "string",
-      )
-      .map((i) => ({ path: i.path, message: i.message })),
-    legacyIssues: legacyRaw
-      .filter(
-        (i): i is { path: string; message: string } =>
-          i && typeof i.path === "string" && typeof i.message === "string",
-      )
-      .map((i) => ({ path: i.path, message: i.message })),
+    issues: summarizeIssues(issuesRaw),
+    legacyIssues: summarizeIssues(legacyRaw),
     gateway: {
       mode: typeof gateway.mode === "string" ? gateway.mode : null,
       bind: typeof gateway.bind === "string" ? gateway.bind : null,
@@ -228,31 +207,6 @@ export function extractConfigSummary(snapshotUnknown: unknown) {
     },
     discovery: { wideAreaEnabled },
   };
-}
-
-export function buildNetworkHints(cfg: OpenClawConfig, localPortOverride?: number) {
-  const { tailnetIPv4 } = inspectBestEffortPrimaryTailnetIPv4();
-  const port = localPortOverride ?? resolveGatewayPort(cfg);
-  const localScheme = cfg.gateway?.tls?.enabled === true ? "wss" : "ws";
-  return {
-    localLoopbackUrl: `${localScheme}://127.0.0.1:${port}`,
-    localTailnetUrl: tailnetIPv4 ? `${localScheme}://${tailnetIPv4}:${port}` : null,
-    tailnetIPv4: tailnetIPv4 ?? null,
-  };
-}
-
-export function renderTargetHeader(target: GatewayStatusTarget, rich: boolean) {
-  const kindLabel =
-    target.kind === "localLoopback"
-      ? "Local loopback"
-      : target.kind === "sshTunnel"
-        ? "Remote over SSH"
-        : target.kind === "configRemote"
-          ? target.active
-            ? "Remote (configured)"
-            : "Remote (configured, inactive)"
-          : "URL (explicit)";
-  return `${colorize(rich, theme.heading, kindLabel)} ${colorize(rich, theme.muted, target.url)}`;
 }
 
 /** Returns true when auth succeeded enough to connect but lacks the read scope. */
@@ -295,32 +249,24 @@ export function summarizeGatewayProbeCapability(
   );
 }
 
-function renderProbeCapabilityLine(probe: GatewayProbeResult, rich: boolean) {
+export function renderProbeSummaryLine(probe: GatewayProbeResult, rich: boolean) {
   const display = gatewayProbeCapabilities.find(
     ({ capability }) => capability === probe.auth.capability,
   );
-  return colorize(
+  const capability = colorize(
     rich,
     theme[display?.color ?? "muted"],
     `Capability: ${display?.label ?? "unknown"}`,
   );
-}
-
-export function renderProbeSummaryLine(probe: GatewayProbeResult, rich: boolean) {
-  const capability = renderProbeCapabilityLine(probe, rich);
-  if (probe.ok) {
+  const detail = !probe.ok && probe.error ? ` - ${probe.error}` : "";
+  if (probe.ok || (probe.gatewayReached && probe.connectLatencyMs != null)) {
     const latency =
       typeof probe.connectLatencyMs === "number" ? `${probe.connectLatencyMs}ms` : "unknown";
-    return `${colorize(rich, theme.success, "Connect: ok")} (${latency}) · ${capability} · ${colorize(rich, theme.success, "Read probe: ok")}`;
-  }
-
-  const detail = probe.error ? ` - ${probe.error}` : "";
-  if (probe.gatewayReached && probe.connectLatencyMs != null) {
-    const latency =
-      typeof probe.connectLatencyMs === "number" ? `${probe.connectLatencyMs}ms` : "unknown";
-    const readStatus = isScopeLimitedProbeFailure(probe)
-      ? colorize(rich, theme.warn, "Read probe: limited")
-      : colorize(rich, theme.error, "Read probe: failed");
+    const readStatus = probe.ok
+      ? colorize(rich, theme.success, "Read check: ok")
+      : isScopeLimitedProbeFailure(probe)
+        ? colorize(rich, theme.warn, "Read check: limited")
+        : colorize(rich, theme.error, "Read check: failed");
     return `${colorize(rich, theme.success, "Connect: ok")} (${latency}) · ${capability} · ${readStatus}${detail}`;
   }
 

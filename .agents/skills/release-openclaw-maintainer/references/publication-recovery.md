@@ -39,9 +39,15 @@ Classify a failure before changing Git state:
   downstream evidence; after npm publication use a new beta/version.
 - Changelog-only defect: replace Release SHA and reuse Code SHA evidence only
   after proving the exact changelog delta.
-- Tooling, source mismatch, credential, infrastructure, wrapper, approval, or selector
-  failure: keep the candidate and recover the smallest failed surface. Change
-  Tooling SHA only when needed and record the invalidated evidence.
+- Qualification harness/contract defect: repair the frozen candidate closure,
+  freeze a new C/Q, and rebind evidence. Missing contracts require deliberate
+  backports, not a newer-main harness.
+- P-only admission/verifier/publisher, credential, infrastructure, monitor,
+  approval, or selector failure: keep C/Q and recover the smallest failed surface.
+  Change independent P only when needed; preserve original producer identities.
+- Uncertain qualification dispatch: reconcile the retained request read-only.
+  Explicit resume is allowed only before any Q ref mutation or FRV POST; never
+  retry an uncertain mutation or relabel historical requests as candidate-owned.
 
 After one diagnosis, fix when needed, and narrow retry, reassess. Do not rerun
 all phases or scan moving main automatically. Operator-authorized beta-attempt
@@ -52,6 +58,17 @@ limits count admitted product attempts, not infrastructure retries.
 Registry propagation may briefly return E404 after a successful npm child.
 Use bounded `--prefer-online` reads and preserve the verified tarball/integrity
 metadata. For an already-published version, run:
+
+If `npm publish` returns E409 with `Cannot publish over previously staged
+version`, treat that exact package and version as staged or completed, not
+absent. The publish wrapper reads the publish target's package metadata,
+performs a read-only exact-package `npm view`, and preserves the failed exit.
+For `openclaw`, it prints the verifier command below. For a companion tarball,
+wait for that exact companion version to become publicly readable, then resume
+the original release workflow so its exact-version check reuses it; the root
+postpublish verifier does not recover a companion publication. Do not rerun
+`npm publish`, even when the registry read is still 404; wait for propagation
+and reconcile the original publisher before following the printed guidance.
 
 ```bash
 OPENCLAW_NPM_EXPECTED_WORKFLOW_REF=refs/tags/release-publish/<tooling-sha12>-<epoch> \
@@ -108,9 +125,54 @@ artifacts also require reconciliation; they do not authorize another dispatch.
 If reconciliation proves that a preparation child never existed, dispatch only
 that missing owner from the original protected tooling tag, with the exact source
 SHA as `ref` and `publish_scope=all-publishable`. For Plugin NPM Release, use
-`preflight_only=true`, `trusted_publisher_preflight=false`, and `npm_dist_tag=default`
-(`extended-stable` for that track). For Plugin ClawHub Release, use `dry_run=true`.
+`preflight_only=true` and `npm_dist_tag=default` (`extended-stable` for that
+track); leave `trusted_publisher_preflight` omitted so this artifact-qualification
+run keeps its default and produces the artifacts preparation must adopt. For
+Plugin ClawHub Release, use `dry_run=true`.
 Then supply both verified positive child IDs; adoption dispatches no new workflow.
+
+Before resuming regular plugin npm publication, verify the trusted-publisher
+exchange read-only from that same protected tooling tag for only the packages
+whose recovered immutable publication plan records `npm-oidc`. This check does
+not pack or publish:
+
+```bash
+gh workflow run plugin-npm-release.yml --repo openclaw/openclaw \
+  --ref release-publish/<tooling-sha12>-<epoch> \
+  -f preflight_only=true \
+  -f trusted_publisher_preflight=true \
+  -f publish_scope=selected \
+  -f plugins=<comma-separated-npm-oidc-package-names> \
+  -f ref=<exact-40-character-release-sha> \
+  -f npm_dist_tag=default
+```
+
+Do not pass parent publication run IDs. Require the `Trusted publisher OIDC
+exchange` job to succeed before recovery continues for those selected `npm-oidc`
+packages; its success confirms authentication only, not publication. Keep
+packages recorded as `npm-token-bootstrap` on the approved
+[first-package route](first-package.md); their recovery does not wait on this
+exchange. If no recovered package uses `npm-oidc`, skip this check.
+
+For extended-stable recovery, use the same read-only exchange from protected
+tooling, but preserve that track's full-roster and frozen-source boundaries:
+
+```bash
+gh workflow run plugin-npm-release.yml --repo openclaw/openclaw \
+  --ref release-publish/<trusted-current-main-tooling-sha12>-<epoch> \
+  -f preflight_only=true \
+  -f trusted_publisher_preflight=true \
+  -f publish_scope=all-publishable \
+  -f ref=<exact-canonical-extended-stable-branch-tip-sha> \
+  -f npm_dist_tag=extended-stable
+```
+
+Leave `plugins`, parent publication run IDs, and `release_candidate_branch`
+empty. The source must equal the canonical `extended-stable/YYYY.M.33` branch
+tip and retain its final `YYYY.M.PATCH` version with `PATCH >= 33`. The protected
+tooling tag must resolve to a workflow revision reachable from current `main`.
+Require the `Trusted publisher OIDC exchange` job to succeed before following
+[trusted-main npm recovery](extended-stable-publish.md#trusted-main-npm-recovery).
 
 Publication records distinguish `unknown` (no confirmed publisher), `unverified`
 (a returned ID without an observed attempt), and `acknowledged` (verified original

@@ -1,4 +1,3 @@
-// Coordinates graceful shutdown for local TUI runs.
 import {
   MAX_TIMER_TIMEOUT_MS,
   parseStrictNonNegativeInteger,
@@ -21,8 +20,4 @@ export function resolveLocalRunShutdownGraceMs(): number {
 /** Resolves the full deadline before a local TUI may be force-exited. */
 export function resolveLocalRunShutdownHardExitMs(): number {
   return TUI_SHUTDOWN_HARD_EXIT_MS + resolveLocalRunShutdownGraceMs();
-}
-
-export function resolveTuiShutdownDeadlineMs(localMode: boolean): number {
-  return localMode ? resolveLocalRunShutdownHardExitMs() : TUI_SHUTDOWN_HARD_EXIT_MS;
 }

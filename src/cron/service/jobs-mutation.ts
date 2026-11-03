@@ -2,8 +2,12 @@
 import { isDeepStrictEqual } from "node:util";
 import { isCronJobActive } from "../active-jobs.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
-import { createCronStreamSourceIdentity, cronStreamScheduleKey } from "../stream-schedule.js";
-import type { CronJob, CronJobPatch, CronStoredJob } from "../types.js";
+import { reconcileCronSourceIdentity } from "../source-schedule.js";
+import {
+  parseCronStreamSandboxTarget,
+  type CronStreamSandboxTarget,
+} from "../stream-sandbox-target.js";
+import type { CronJobPatch, CronStoredJob } from "../types.js";
 import { computeJobNextRunAtMs, hasScheduledNextRunAtMs, isJobEnabled } from "./jobs-scheduling.js";
 import { resolveForcePreservedOneShotAtMs } from "./one-shot-schedule.js";
 
@@ -15,28 +19,36 @@ export function cloneCronJobForMutation(job: CronStoredJob): CronStoredJob {
   return { ...structuredClone(mutableJob), ...(runtimeAuthority ? { runtimeAuthority } : {}) };
 }
 
-function reconcileStreamSourceIdentity(job: CronJob, nextJob: CronJob): void {
-  if (nextJob.schedule.kind !== "stream") {
-    nextJob.state.streamSourceIdentity = undefined;
+/** Only private caller options can install a sandbox target; unrelated edits retain it. */
+export function applyCronStreamSandboxTarget(
+  job: CronStoredJob,
+  target?: CronStreamSandboxTarget,
+): void {
+  if (job.schedule.kind !== "stream") {
+    if (target !== undefined) {
+      throw new TypeError("Sandbox stream targets require a stream schedule");
+    }
+    delete job.streamSandbox;
     return;
   }
-  const sourceChanged =
-    job.schedule.kind !== "stream" ||
-    cronStreamScheduleKey(job.schedule) !== cronStreamScheduleKey(nextJob.schedule) ||
-    isJobEnabled(job) !== isJobEnabled(nextJob);
-  const currentIdentity =
-    job.schedule.kind === "stream" ? job.state.streamSourceIdentity : undefined;
-  nextJob.state.streamSourceIdentity =
-    sourceChanged || !currentIdentity ? createCronStreamSourceIdentity() : currentIdentity;
+  if (target !== undefined) {
+    const parsed = parseCronStreamSandboxTarget(target);
+    if (!parsed) {
+      throw new TypeError("Invalid sandbox stream target");
+    }
+    job.streamSandbox = parsed;
+  }
 }
 
 export function finalizeUpdatedJob(params: {
-  job: CronJob;
-  nextJob: CronJob;
+  job: CronStoredJob;
+  nextJob: CronStoredJob;
   now: number;
   schedulingInputsRequested: boolean;
   scheduleChanged: boolean;
   explicitTriggerState?: CronJobPatch["state"];
+  streamRestartExhaustedRequested?: boolean;
+  isJobActive?: (id: string) => boolean;
 }) {
   const { job, nextJob, now } = params;
   if (params.scheduleChanged && nextJob.schedule.kind === "every") {
@@ -65,7 +77,7 @@ export function finalizeUpdatedJob(params: {
   // Source identity belongs to the durable job mutation, not the process
   // watcher. Equivalent resaves preserve it; disable/enable and source changes
   // rotate it in the same write that changes the public job definition.
-  reconcileStreamSourceIdentity(job, nextJob);
+  reconcileCronSourceIdentity(job, nextJob, params.streamRestartExhaustedRequested);
 
   const previousScript = job.payload.kind === "script" ? job.payload.script : undefined;
   const nextScript = nextJob.payload.kind === "script" ? nextJob.payload.script : undefined;
@@ -122,7 +134,7 @@ export function finalizeUpdatedJob(params: {
       nextJob.state.queuedAtMs = undefined;
       // Preserve only genuine execution. Queued reservations must clear so a
       // disabled job can accept a later force run with the same timestamp.
-      if (!isCronJobActive(nextJob.id)) {
+      if (!(params.isJobActive ?? isCronJobActive)(nextJob.id)) {
         Object.assign(nextJob.state, { runningAtMs: undefined, runningReceiptId: undefined });
         delete nextJob.state.runningScheduleChangeId;
       }

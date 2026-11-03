@@ -15,6 +15,7 @@ import {
 } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { getProcessSupervisor } from "./index.js";
+import { waitForFixtureReceipt } from "./supervisor.fixture-readiness.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let receipts: FixtureReceiptChannel;
@@ -113,25 +114,12 @@ it.skipIf(process.platform !== "linux").for(["consume", "cancel"] as const)(
       () => undefined,
     );
     try {
-      await withinTest(
-        Promise.race([
-          receipts.waitFor(identities, "ready"),
-          starting.then(
-            () => {
-              if (!existsSync(identities)) {
-                throw new Error(
-                  "Root and reader identities were not recorded before startup settled",
-                );
-              }
-            },
-            (error: unknown) => {
-              if (!existsSync(identities)) {
-                throw error;
-              }
-            },
-          ),
-        ]),
+      await waitForFixtureReceipt(
+        receipts,
+        identities,
+        starting,
         signal,
+        "Root and reader identities were not recorded before startup settled",
       );
       const { root } = JSON.parse(readFileSync(identities, "utf8")) as { root: number };
       await waitForRootExit(root, signal);

@@ -1,16 +1,13 @@
-import type { DatabaseSync } from "node:sqlite";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { isLockOwnerDefinitelyStale } from "../../infra/stale-lock-file.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
+import { WorktreeRemovalContentionError } from "./errors.js";
+import { worktreeRegistryPublication } from "./registry-publication.js";
 
 type WorktreeLeaseDatabase = Pick<DB, "worktrees" | "state_leases">;
 export const WORKTREE_REMOVING_LEASE_KEY = "__removing__";
-
-export type RunLeaseOwnerChecks = {
-  isPidDefinitelyDead?: (pid: number) => boolean;
-  getProcessStartTime?: (pid: number) => number | null;
-};
 
 function parseLeaseOwnerPayload(payloadJson: string | null): {
   pid?: number;
@@ -36,10 +33,9 @@ type ScopeLeaseState = {
 };
 
 export function collectLiveRunLeases(
-  db: DatabaseSync,
+  db: EngineConnection,
   k: ReturnType<typeof getNodeSqliteKysely<WorktreeLeaseDatabase>>,
   scope: string,
-  checks: RunLeaseOwnerChecks,
   reapStale = true,
 ): ScopeLeaseState {
   const rows = executeSqliteQuerySync(
@@ -49,19 +45,23 @@ export function collectLiveRunLeases(
       .select(["lease_key", "owner", "payload_json"])
       .where("scope", "=", scope),
   ).rows;
-  const { staleKeys, ...live } = inspectRunLeases(rows, checks);
+  const { staleKeys, ...live } = inspectRunLeases(rows);
   if (reapStale && staleKeys.length > 0) {
-    executeSqliteQuerySync(
+    const removed = executeSqliteQuerySync(
       db,
-      k.deleteFrom("state_leases").where("scope", "=", scope).where("lease_key", "in", staleKeys),
-    );
+      k
+        .deleteFrom("state_leases")
+        .where("scope", "=", scope)
+        .where("lease_key", "in", staleKeys)
+        .returning(["scope", "lease_key"]),
+    ).rows;
+    worktreeRegistryPublication.deleted(db, removed);
   }
   return live;
 }
 
 function inspectRunLeases(
   rows: readonly { lease_key: string; owner: string; payload_json: string | null }[],
-  checks: RunLeaseOwnerChecks,
 ) {
   const livePids: number[] = [];
   const staleKeys: string[] = [];
@@ -70,11 +70,7 @@ function inspectRunLeases(
   let exclusive = false;
   for (const row of rows) {
     const payload = parseLeaseOwnerPayload(row.payload_json);
-    const stale = isLockOwnerDefinitelyStale({
-      payload,
-      isPidDefinitelyDead: checks.isPidDefinitelyDead,
-      getProcessStartTime: checks.getProcessStartTime,
-    });
+    const stale = isLockOwnerDefinitelyStale({ payload });
     if (stale) {
       staleKeys.push(row.lease_key);
       continue;
@@ -103,7 +99,7 @@ function inspectRunLeases(
 
 const WORKTREE_RUN_LEASE_SCOPE_PREFIX = "worktree-run:";
 
-export function readWorktreeRunLeaseStateInDatabase(db: DatabaseSync) {
+export function readWorktreeRunLeaseStateInDatabase(db: EngineConnection) {
   const k = getNodeSqliteKysely<WorktreeLeaseDatabase>(db);
   const rows = executeSqliteQuerySync(
     db,
@@ -115,7 +111,7 @@ export function readWorktreeRunLeaseStateInDatabase(db: DatabaseSync) {
   const liveScopes = new Set<string>();
   const staleScopes = new Set<string>();
   for (const row of rows) {
-    const state = inspectRunLeases([row], {});
+    const state = inspectRunLeases([row]);
     if (state.livePids.length > 0) {
       liveScopes.add(row.scope);
     }
@@ -126,21 +122,11 @@ export function readWorktreeRunLeaseStateInDatabase(db: DatabaseSync) {
   return { liveScopes: [...liveScopes], staleScopes: [...staleScopes] };
 }
 
-export function reapWorktreeRunLeasesInDatabase(db: DatabaseSync, scopes: string[]): void {
+export function reapWorktreeRunLeasesInDatabase(db: EngineConnection, scopes: string[]): void {
   const k = getNodeSqliteKysely<WorktreeLeaseDatabase>(db);
   for (const scope of scopes) {
     // Recheck current owners under the transaction; the sweep grants no delete authority.
-    collectLiveRunLeases(db, k, scope, {});
-  }
-}
-
-export class WorktreeRemovalContentionError extends Error {
-  constructor(
-    readonly kind: "busy" | "finalized",
-    message: string,
-  ) {
-    super(message);
-    this.name = "WorktreeRemovalContentionError";
+    collectLiveRunLeases(db, k, scope);
   }
 }
 
@@ -150,7 +136,7 @@ export function worktreeRunLeaseScope(worktreeId: string): string {
 
 /** Removed exact snapshots retain exclusive lifecycle custody during destructive expiry. */
 export function assertRegistryMutationCustody(
-  db: DatabaseSync,
+  db: EngineConnection,
   k: ReturnType<typeof getNodeSqliteKysely<WorktreeLeaseDatabase>>,
   id: string,
   token?: string,
@@ -165,7 +151,7 @@ export function assertRegistryMutationCustody(
   ) {
     return;
   }
-  const { removingToken } = collectLiveRunLeases(db, k, worktreeRunLeaseScope(id), {});
+  const { removingToken } = collectLiveRunLeases(db, k, worktreeRunLeaseScope(id));
   if (removingToken !== undefined && removingToken !== token) {
     throw new WorktreeRemovalContentionError(
       "busy",

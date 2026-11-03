@@ -1,4 +1,6 @@
 import { readFileSync } from "node:fs";
+import { isStringArray } from "openclaw/plugin-sdk/collection-input-runtime";
+import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import { parse as parseToml, type TomlTable } from "smol-toml";
 import type { CodexAppServerManagedApprovalPolicy, OpenClawExecMode } from "./config-contracts.js";
 import { resolveApprovalPolicy, resolveApprovalsReviewer } from "./config-exec-policy.js";
@@ -11,20 +13,16 @@ const WINDOWS_CODEX_REQUIREMENTS_SUFFIX = "\\OpenAI\\Codex\\requirements.toml";
 export function readCodexRequirementsToml(params: {
   env?: NodeJS.ProcessEnv;
   requirementsToml?: string | null;
-  requirementsPath?: string;
-  readRequirementsFile?: (path: string) => string | undefined;
   platform?: NodeJS.Platform;
 }): string | undefined {
   if (params.requirementsToml !== undefined) {
     return params.requirementsToml ?? undefined;
   }
-  const requirementsPath =
-    readNonEmptyString(params.requirementsPath) ??
-    resolveCodexRequirementsPath(params.env ?? process.env, params.platform ?? process.platform);
+  const requirementsPath = resolveCodexRequirementsPath(
+    params.env ?? process.env,
+    params.platform ?? process.platform,
+  );
   try {
-    if (params.readRequirementsFile) {
-      return params.readRequirementsFile(requirementsPath);
-    }
     return readFileSync(requirementsPath, "utf8");
   } catch {
     return undefined;
@@ -100,23 +98,14 @@ function parseCodexRequirements(content: string): TomlTable | undefined {
 }
 
 function readRequirementsStringArray(value: unknown): string[] | undefined {
-  return Array.isArray(value) && value.every((entry) => typeof entry === "string")
-    ? value
-    : undefined;
+  return isStringArray(value) ? value : undefined;
 }
 
 function normalizeRequirementsSandboxMode(value: string): CodexSandboxMode | undefined {
   const compact = value.replace(/[\s_-]/g, "").toLowerCase();
-  if (compact === "readonly") {
-    return "read-only";
-  }
-  if (compact === "workspacewrite") {
-    return "workspace-write";
-  }
-  if (compact === "dangerfullaccess") {
-    return "danger-full-access";
-  }
-  return undefined;
+  return (["read-only", "workspace-write", "danger-full-access"] as const).find(
+    (mode) => mode.replaceAll("-", "") === compact,
+  );
 }
 
 function normalizeRequirementsHostName(value: string): string | undefined {
@@ -132,29 +121,14 @@ function requirementsHostNameMatchesAnyPattern(hostName: string, patterns: strin
 }
 
 function globPatternMatches(value: string, pattern: string): boolean {
-  let regex = "^";
-  for (const char of pattern) {
-    if (char === "*") {
-      regex += ".*";
-    } else if (char === "?") {
-      regex += ".";
-    } else {
-      regex += char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    }
-  }
-  regex += "$";
-  return new RegExp(regex).test(value);
+  const regex = escapeRegExp(pattern).replaceAll("\\*", ".*").replaceAll("\\?", ".");
+  return new RegExp(`^${regex}$`).test(value);
 }
 
 function normalizeRequirementsApprovalPolicy(
   value: string,
 ): CodexAppServerManagedApprovalPolicy | undefined {
   const normalized = value.trim().toLowerCase();
-  // Codex still accepts this alias in persisted requirements, while its
-  // app-server exposes only the canonical on-request value.
-  if (normalized === "on-failure") {
-    return "on-request";
-  }
   if (normalized === "untrusted") {
     return normalized;
   }
@@ -165,42 +139,24 @@ export function selectGuardianApprovalPolicy(
   allowedApprovalPolicies: Set<CodexAppServerManagedApprovalPolicy> | undefined,
   execModeRequiringPromptingApprovals?: Extract<OpenClawExecMode, "auto" | "ask">,
 ): CodexAppServerManagedApprovalPolicy {
-  if (allowedApprovalPolicies === undefined || allowedApprovalPolicies.has("on-request")) {
-    return "on-request";
-  }
-  if (allowedApprovalPolicies.has("untrusted")) {
-    return "untrusted";
-  }
-  if (execModeRequiringPromptingApprovals) {
-    throw new Error(
+  return selectManagedPolicy(
+    allowedApprovalPolicies,
+    ["on-request", "untrusted", "never"],
+    execModeRequiringPromptingApprovals &&
       `tools.exec.mode=${execModeRequiringPromptingApprovals} requires Codex app-server prompting approvals`,
-    );
-  }
-  if (allowedApprovalPolicies.has("never")) {
-    return "never";
-  }
-  return "on-request";
+  );
 }
 
 export function selectGuardianApprovalsReviewer(
   allowedApprovalsReviewers: Set<CodexApprovalsReviewer> | undefined,
   execModeRequiringAutoReviewer?: Extract<OpenClawExecMode, "auto">,
 ): CodexApprovalsReviewer {
-  if (allowedApprovalsReviewers === undefined || allowedApprovalsReviewers.has("auto_review")) {
-    return "auto_review";
-  }
-  if (allowedApprovalsReviewers.has("guardian_subagent")) {
-    return "guardian_subagent";
-  }
-  if (execModeRequiringAutoReviewer) {
-    throw new Error(
+  return selectManagedPolicy(
+    allowedApprovalsReviewers,
+    ["auto_review", "guardian_subagent", "user"],
+    execModeRequiringAutoReviewer &&
       `tools.exec.mode=${execModeRequiringAutoReviewer} requires Codex app-server auto approvals`,
-    );
-  }
-  if (allowedApprovalsReviewers.has("user")) {
-    return "user";
-  }
-  return "auto_review";
+  );
 }
 
 export function selectUserApprovalsReviewer(
@@ -213,4 +169,21 @@ export function selectUserApprovalsReviewer(
   throw new Error(
     `tools.exec.mode=${execModeRequiringUserReviewer ?? "ask"} requires Codex app-server user approvals`,
   );
+}
+
+function selectManagedPolicy<T extends string>(
+  allowed: Set<T> | undefined,
+  [preferred, alternate, fallback]: readonly [T, T, T],
+  requiredMessage: string | undefined,
+): T {
+  if (allowed === undefined || allowed.has(preferred)) {
+    return preferred;
+  }
+  if (allowed.has(alternate)) {
+    return alternate;
+  }
+  if (requiredMessage) {
+    throw new Error(requiredMessage);
+  }
+  return allowed.has(fallback) ? fallback : preferred;
 }

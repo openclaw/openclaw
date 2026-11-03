@@ -572,6 +572,7 @@ struct OpenClawQuestionCard: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
+                .tint(OpenClawChatTheme.accent)
                 .disabled(!self.model.canSubmit || status == .submitting)
             }
             if let errorText = self.model.errorText {
@@ -847,19 +848,19 @@ extension OpenClawChatViewModel {
         self.markTimelineChanged()
     }
 
-    func handleQuestionEvent(_ event: OpenClawChatTransportEvent) {
+    func handleQuestionEvent(_ event: OpenClawChatTransportEvent) -> Task<Void, Never>? {
         switch event {
         case let .questionRequested(question): self.upsertQuestion(question)
         case let .questionResolved(resolved): self.resolveQuestionEvent(resolved)
-        default: return
+        default: return nil
         }
-        guard !self.isQuestionAuthorityRetired else { return }
+        guard !self.isQuestionAuthorityRetired else { return nil }
         // Invalidate a list snapshot captured before this event, then fetch the
         // authoritative set so other pending cards from that snapshot are not lost.
         self.questionRefreshGeneration &+= 1
         self.questionRefreshRetryTask?.cancel()
         self.questionRefreshRetryTask = nil
-        Task { [weak self] in await self?.refreshQuestions() }
+        return Task { [weak self] in await self?.refreshQuestions() }
     }
 
     func submitQuestion(_ model: OpenClawQuestionCardModel) async {
