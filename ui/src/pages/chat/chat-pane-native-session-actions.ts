@@ -1,6 +1,9 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { resolveCloudWorkerStopAction } from "../../components/cloud-worker-stop.ts";
+import {
+  resolveCloudWorkerStopAction,
+  sessionStopCopyKey,
+} from "../../components/cloud-worker-stop.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { registerSessionOrganizationSharedEnglish } from "../../i18n/locales/en-session-organization-shared.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
@@ -32,6 +35,7 @@ export class ChatPaneNativeSessionActions {
         ...pluginActions.flatMap(({ id, label, disabled }) => [id, label, disabled]),
         canStop,
         row?.key,
+        row?.placement,
         context,
         stopDisabledReason,
         i18n.getLocale(),
@@ -49,7 +53,7 @@ export class ChatPaneNativeSessionActions {
           ? [
               {
                 id: "stop-cloud-worker",
-                label: t("sessionsView.stopCloudWorker"),
+                label: t(sessionStopCopyKey(row?.placement)),
                 icon: "stop" as const,
                 variant: "danger" as const,
                 disabled: Boolean(stopDisabledReason),

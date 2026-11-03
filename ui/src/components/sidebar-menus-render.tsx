@@ -42,6 +42,7 @@ import {
   renderSidebarSessionGroupMenuForMenus,
   renderSidebarSessionSortMenuForMenus,
 } from "./app-sidebar-session-menu-renderers.tsx";
+import { sessionStopCopyKey } from "./cloud-worker-stop.ts";
 import { canRetryGatewayStatus } from "./gateway-status.ts";
 import "../styles/sidebar-menus.css";
 import { sessionMenuReasons } from "./session-menu-access.ts";
@@ -446,6 +447,7 @@ function renderSidebarMenus(
             archiveAllowed={archiveAllowed()}
             deleteAllowed={deleteAllowed()}
             cloudWorkerStopAllowed={cloudWorkerStopAllowed()}
+            cloudWorkerStopLabel={t(sessionStopCopyKey(currentPlacementSession()?.placement))}
             groups={view.knownSessionGroups()}
             currentOwner={session().owner?.actor ?? null}
             work={batchRows() ? null : projected.sessionMenuWork}

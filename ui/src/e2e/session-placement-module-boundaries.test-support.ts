@@ -500,7 +500,7 @@ export function defineSessionPlacementModuleBoundaryTests(
         exact: true,
       });
       await sessionMenu.waitFor();
-      expect(await sessionMenu.getByRole("menuitem", { name: "Stop cloud worker…" }).count()).toBe(
+      expect(await sessionMenu.getByRole("menuitem", { name: "Stop cloud device…" }).count()).toBe(
         0,
       );
       await page.keyboard.press("Escape");
@@ -508,10 +508,10 @@ export function defineSessionPlacementModuleBoundaryTests(
       await sessionRow.click({ button: "right" });
       const stopWorker = page
         .locator("openclaw-session-menu")
-        .getByRole("menuitem", { name: "Stop cloud worker…" });
+        .getByRole("menuitem", { name: "Stop cloud device…" });
       await stopWorker.waitFor();
       await stopWorker.click();
-      await (await waitForConfirmModal(page)).getByRole("button", { name: "Stop worker" }).click();
+      await (await waitForConfirmModal(page)).getByRole("button", { name: "Stop" }).click();
       const reclaim = await gateway.waitForRequest("sessions.reclaim");
       expect(reclaim.params).toEqual({ key: managedSessionKey, agentId: "cloud" });
       expect(await gateway.getRequests("environments.destroy")).toHaveLength(0);

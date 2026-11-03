@@ -517,7 +517,8 @@ export async function stopCloudWorker(
     return;
   }
   const confirmed = await showConfirmDialog({
-    message: t("sessionsView.stopCloudWorkerConfirm", { session: session.label }),
+    title: t(`${stopAction.copyKey}Confirm`, { session: session.label }),
+    message: t(`${stopAction.copyKey}Description`),
     confirmLabel: t("sessionsView.stopCloudWorkerConfirmAction"),
     danger: true,
     signal: scope.signal,

@@ -457,6 +457,7 @@ function cloudWorkerRow(hasActiveRun: boolean): SidebarRecentSession {
       method: "sessions.reclaim",
       requiredScope: "operator.write",
       blocksActiveRun: true,
+      copyKey: "sessionsView.stopCloudWorker",
     },
   });
 }

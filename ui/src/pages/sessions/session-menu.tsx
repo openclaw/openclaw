@@ -5,7 +5,10 @@ import { serializeSidebarEntry } from "../../app-navigation.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { isMobileNavLayout } from "../../app/mobile-nav-layout.ts";
 import { resolveSidebarSessionParentKey } from "../../components/app-sidebar-session-parent.ts";
-import { resolveCloudWorkerStopAction } from "../../components/cloud-worker-stop.ts";
+import {
+  resolveCloudWorkerStopAction,
+  sessionStopCopyKey,
+} from "../../components/cloud-worker-stop.ts";
 import { sessionMenuReasons } from "../../components/session-menu-access.ts";
 import {
   SessionMenu,
@@ -16,6 +19,7 @@ import { sessionPlacementAction } from "../../components/session-placement-actio
 import { openEditor } from "../../lib/editor-links.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 import {
   canArchiveSessionRow,
   canDeleteSessionRows,
@@ -128,6 +132,7 @@ export function SessionManagementMenu(props: SessionsPageMenuProps) {
         archiveAllowed={state().archiveAllowed}
         deleteAllowed={state().deleteAllowed}
         cloudWorkerStopAllowed={state().cloudWorkerStopAllowed}
+        cloudWorkerStopLabel={t(sessionStopCopyKey(props.row.placement))}
         groups={props.groups}
         currentOwner={props.row.owner?.actor ?? null}
         work={visibleWork()}

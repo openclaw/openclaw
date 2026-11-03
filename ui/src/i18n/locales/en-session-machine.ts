@@ -3,24 +3,27 @@ import { en } from "./en.ts";
 
 const copy = {
   sessionsView: {
-    workerStopTitle: "Stop worker?",
-    workerStopDescription: "This will save workspace changes and stop this session’s worker.",
+    workerStopCloudTitle: "Stop this cloud device?",
+    workerStopDeviceTitle: "Stop this session on the device?",
+    workerStopDeviceFallback: "this device",
+    workerStopTitle: "Stop this session?",
+    workerStopDescription:
+      "This session stops working on its device after saving workspace changes. Your conversation and saved changes stay.",
     workerStopCloudDescription:
-      "This will save workspace changes and stop this session’s worker in the cloud.",
+      "The session stops working on it and the machine is released. Your conversation and accepted changes stay.",
     workerStopDeviceDescription:
-      "This will save workspace changes and stop this session’s worker on",
-    workerStopContinue: "Send a new message to continue.",
+      "This session stops working on {device} after saving workspace changes. Other sessions on the device keep running.",
     workerStopping: "Stopping…",
-    workerStopped: "Worker stopped",
+    workerStopped: "Session stopped on device",
     machineConnected: "Connected",
-    machineOffline: "Offline",
+    machineOffline: "Disconnected",
     machineLocal: "Local",
     machineId: "ID",
     machineConfiguration: "Configuration",
-    machineLastKnownState: "Last known worker state",
+    machineLastKnownState: "Last known device state",
     machineKeepGoing: "Keep the session going",
     machineRecoveryDescription:
-      "This device can’t run your messages right now. Wait for it to reconnect, or continue on the Gateway from the last synchronized state.",
+      "This device can’t reply right now. Wait for it to reconnect, or continue on the Gateway from the last synchronized state.",
   },
 } satisfies TranslationMap;
 

@@ -67,13 +67,20 @@ export async function reclaimChatPanePlacement(params: {
       : params.placementStartup.get(key)?.targetKind;
   const agentId = resolveUiSessionRowAgentId(params.row, params.fallbackAgentId);
   await showSessionWorkerStopDialog({
-    machineName: targetKind === "device" ? params.machineName : undefined,
+    title: t(
+      targetKind === "profile"
+        ? "sessionsView.workerStopCloudTitle"
+        : targetKind === "device" || targetKind === "auto-device"
+          ? "sessionsView.workerStopDeviceTitle"
+          : "sessionsView.workerStopTitle",
+    ),
     description: t(
-      targetKind === "device" && params.machineName
+      targetKind === "device" || targetKind === "auto-device"
         ? "sessionsView.workerStopDeviceDescription"
         : targetKind === "profile"
           ? "sessionsView.workerStopCloudDescription"
           : "sessionsView.workerStopDescription",
+      { device: params.machineName || t("sessionsView.workerStopDeviceFallback") },
     ),
     confirm: async () => {
       if (!params.isCurrent()) {

@@ -148,7 +148,7 @@ async function selectRepositoryWorker() {
   selectOption("device:runner");
 }
 
-function answerWorkerPicker(label: "Continue on worker" | "Cancel") {
+function answerWorkerPicker(label: "Continue on device" | "Cancel") {
   clickButton(label, true);
 }
 
@@ -169,7 +169,7 @@ describe("chat pane placement", () => {
       }
       const dispatching = dialogs.track(pane.changeHeaderPlacement(session, "recover"));
       await selectRepositoryWorker();
-      answerWorkerPicker("Continue on worker");
+      answerWorkerPicker("Continue on device");
       await dispatching;
 
       expect(request).toHaveBeenCalledWith("environments.list", { runtimeId: "openclaw" });
@@ -199,7 +199,7 @@ describe("chat pane placement", () => {
         target: { kind: "gateway" },
       },
     };
-    answerWorkerPicker("Continue on worker");
+    answerWorkerPicker("Continue on device");
     await operation;
     expect(request).not.toHaveBeenCalledWith("sessions.dispatch", expect.anything());
   });
@@ -300,7 +300,7 @@ describe("chat pane placement", () => {
     const moving = dialogs.track(startMove(pane, offlineDeviceSession()));
     const actions = await waitForConfirmDialogActions();
     expect(document.body.textContent).toContain(
-      "Unsynced device files and in-flight work may be lost",
+      "Unsynced device files and work in progress may be lost",
     );
     expect(document.body.textContent).toContain("last Gateway-synced state");
     answerConfirmDialog(actions, "cancel");
@@ -430,7 +430,7 @@ describe("local session placement actions", () => {
         };
       }
       state.sessionsResult = { ...createSessionsListResult(), sessions: [current] };
-      answerWorkerPicker("Continue on worker");
+      answerWorkerPicker("Continue on device");
       await moving;
       expect(request).not.toHaveBeenCalledWith("sessions.dispatch", expect.anything());
     },
@@ -478,7 +478,7 @@ describe("local session placement actions", () => {
       option("cloud:cloud")!.click();
       flush();
       pane.context.gateway.snapshot.hello = gatewayHelloForMethods(["sessions.dispatch"], [scope]);
-      answerWorkerPicker("Continue on worker");
+      answerWorkerPicker("Continue on device");
       await moving;
       if (scope === "operator.write") {
         expect(request).toHaveBeenCalledWith("sessions.dispatch", {

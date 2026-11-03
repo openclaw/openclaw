@@ -194,8 +194,8 @@ const enDevices = {
       transportLimitedTitle: "Limited for network safety",
       transportLimitedHint:
         "This Gateway URL uses plaintext ws://. Use wss:// or Tailscale Serve, then create a new code for full access.",
-      failed: "Could not create a setup code.",
-      statusFailed: "Could not verify whether pairing completed.",
+      failed: "Couldn’t create a setup code. Try again.",
+      statusFailed: "Couldn’t check whether pairing finished. Try again.",
       qrAlt: "OpenClaw mobile pairing QR code",
       qrUnavailable: "QR unavailable. Copy the setup code instead.",
       copySetupCode: "Copy setup code",

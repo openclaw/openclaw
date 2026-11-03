@@ -506,7 +506,9 @@ suite.define(() => {
         expect(await qr.count()).toBe(0);
         await gateway.rejectDeferred("device.pair.setupCode", { message: "setup unavailable" });
         const error = page.getByRole("alert");
-        expect(await error.getByText("Could not create a setup code.").isVisible()).toBe(true);
+        expect(await error.getByText("Couldn’t create a setup code. Try again.").isVisible()).toBe(
+          true,
+        );
         expect(await error.getByText("setup unavailable", { exact: false }).isVisible()).toBe(true);
         await captureUiProof(page, "09-desktop-error.png");
 

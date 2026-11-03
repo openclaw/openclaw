@@ -200,9 +200,11 @@ suite.define(() => {
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       await openPlacement(page);
-      await page.getByRole("button", { name: /Device offline/ }).waitFor();
+      await page.getByRole("button", { name: /Device disconnected/ }).waitFor();
       await page
-        .getByText("Waiting for device to reconnect; retry after it returns", { exact: false })
+        .getByText("Waiting for the device to reconnect. Retry when it’s connected.", {
+          exact: false,
+        })
         .waitFor();
       session.placement.runner.status = "available";
       await gateway.setSessionsListResponse(chatSessionListResponse([session]));
@@ -213,7 +215,7 @@ suite.define(() => {
       session.placement.runner.status = "offline";
       await gateway.setSessionsListResponse(chatSessionListResponse([session]));
       await gateway.emitGatewayEvent("sessions.changed", { reason: "runner-availability" });
-      await page.getByRole("button", { name: /Device offline/ }).waitFor();
+      await page.getByRole("button", { name: /Device disconnected/ }).waitFor();
       const continueAction = page.getByRole("menuitem", {
         name: "Continue on Gateway…",
         exact: true,
@@ -244,7 +246,9 @@ suite.define(() => {
       await resolveMove(gateway, localSession.placement);
       await page.locator(".chat-environment__machine-trigger").waitFor({ state: "detached" });
 
-      expect(await page.getByRole("button", { name: "Move failed" }).count()).toBe(0);
+      expect(
+        await page.getByRole("button", { name: "Couldn’t move this session. Try again." }).count(),
+      ).toBe(0);
       expect(await page.getByText("Continue on Gateway…", { exact: true }).count()).toBe(0);
     }));
 
@@ -294,7 +298,7 @@ suite.define(() => {
       await (
         await placementTrigger(page)
       )
-        .and(page.getByRole("button", { name: /Device offline/ }))
+        .and(page.getByRole("button", { name: /Device disconnected/ }))
         .waitFor();
       await closeChatDetails(page);
       await selectChatLayoutAction(page, "Open split view");
@@ -344,7 +348,7 @@ suite.define(() => {
       };
       await gateway.setSessionsListResponse(chatSessionListResponse([localSession]));
       await resolveMove(gateway, localSession.placement);
-      await expectCount(page.getByRole("button", { name: /Device offline/ }), 0);
+      await expectCount(page.getByRole("button", { name: /Device disconnected/ }), 0);
       for (const pane of await panes.all()) {
         const transcript = pane.locator(".chat-thread-inner");
         await expectCount(transcript.getByText(partialText, { exact: true }));
@@ -506,7 +510,7 @@ suite.define(() => {
               (button) => button.getAttribute("aria-label") ?? "",
             ),
           );
-          if ([...labels].some((label) => label.includes("Device offline"))) {
+          if ([...labels].some((label) => label.includes("Device disconnected"))) {
             state.seenOffline = true;
           }
           if (state.seenOffline && [...labels].some((label) => label.includes("Runs on device"))) {
@@ -580,7 +584,7 @@ suite.define(() => {
         after: descriptorCount + 1,
         match: descriptorMatch,
       });
-      await page.getByRole("button", { name: /Device offline/ }).waitFor();
+      await page.getByRole("button", { name: /Device disconnected/ }).waitFor();
       expect(await observedRunnerStatus(page, available.key)).toBe("offline");
       expect(await gateway.getRequests("sessions.describe", descriptorMatch)).toHaveLength(
         descriptorCount + 2,
@@ -598,7 +602,7 @@ suite.define(() => {
         await (
           await placementTrigger(pane)
         )
-          .and(pane.getByRole("button", { name: /Device offline/ }))
+          .and(pane.getByRole("button", { name: /Device disconnected/ }))
           .waitFor();
       }
       expect(await page.getByRole("button", { name: /Runs on device/ }).count()).toBe(0);
@@ -606,7 +610,9 @@ suite.define(() => {
       await openPlacement(panes.last());
       await panes
         .last()
-        .getByText("Waiting for device to reconnect; retry after it returns", { exact: false })
+        .getByText("Waiting for the device to reconnect. Retry when it’s connected.", {
+          exact: false,
+        })
         .waitFor();
     }));
 

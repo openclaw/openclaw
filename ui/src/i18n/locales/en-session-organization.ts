@@ -349,6 +349,7 @@ const enSessionOrganization = {
 
 export const registerSessionOrganizationEnglish = Object.assign(
   () => {
+    registerSessionOrganizationSharedEnglish();
     Object.assign(en.sessionsView, enSessionOrganization.sessionsView);
     Object.assign(en.worktrees, enSessionOrganization.worktrees);
   },
