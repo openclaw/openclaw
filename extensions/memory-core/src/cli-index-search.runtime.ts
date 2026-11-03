@@ -36,7 +36,7 @@ import type {
   MemoryPromoteExplainOptions,
   MemorySearchCommandOptions,
 } from "./cli.types.js";
-import { resolveMemoryPromotionFileMaxChars } from "./memory-budget.js";
+import { resolveMemoryPromotionFileMaxChars } from "./memory-budget-config.js";
 import { forgetMemoryEntries } from "./memory-forget.js";
 import { searchMemoryForCli } from "./memory-search-operation.js";
 import { formatMemoryVectorDegradedWriteReason } from "./memory/manager-vector-warning.js";

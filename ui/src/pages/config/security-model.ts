@@ -5,10 +5,27 @@ type ExecSecurity = "deny" | "allowlist" | "full";
 type ExecAsk = "off" | "on-miss" | "always";
 export type ExecApprovalDefaults = { security: string; ask: string };
 
-/** What config asks for. Startup flags can override it, so it never proves where the Gateway listens. */
+/**
+ * Plain kinds repeat what config asks for, which startup flags can override.
+ * Only `reported*` kinds come from the running Gateway, so only they can reassure.
+ */
 export type GatewayNetworkAccess =
-  | { kind: "unknown" | "default" | "loopback" | "lan" | "tailnet" | "auto" | "serve" | "funnel" }
-  | { kind: "custom" | "via"; host: string };
+  | {
+      kind:
+        | "unknown"
+        | "default"
+        | "loopback"
+        | "lan"
+        | "tailnet"
+        | "auto"
+        | "serve"
+        | "funnel"
+        | "reportedLoopback"
+        | "reportedAllInterfaces"
+        | "reportedServe"
+        | "reportedFunnel";
+    }
+  | { kind: "custom" | "via" | "reportedTailnet" | "reportedHost"; host: string };
 
 /** What the running Gateway reports, which outranks what its config file says. */
 export type SecurityLiveFacts = {
@@ -16,6 +33,9 @@ export type SecurityLiveFacts = {
   authMode?: string | null;
   /** Host of the URL this browser reached the Gateway through. */
   connectedHost?: string | null;
+  /** Older Gateways report neither of these. */
+  bindHost?: string | null;
+  tailscaleMode?: string | null;
   execApprovalDefaults?: ExecApprovalDefaults | null;
 };
 
@@ -61,10 +81,43 @@ function isLoopbackHost(host: string): boolean {
   );
 }
 
+function isTailnetAddress(host: string): boolean {
+  return (
+    /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(host) ||
+    host.toLowerCase().startsWith("fd7a:115c:a1e0:")
+  );
+}
+
+function resolveReportedNetworkAccess(
+  bindHost: string,
+  tailscaleMode: string,
+  connectedHost?: string | null,
+): GatewayNetworkAccess {
+  if (tailscaleMode === "funnel") {
+    return { kind: "reportedFunnel" };
+  }
+  if (tailscaleMode === "serve") {
+    return { kind: "reportedServe" };
+  }
+  if (isLoopbackHost(bindHost)) {
+    // Listening on loopback says nothing about a proxy or tunnel this browser came through.
+    const host = connectedHost?.trim();
+    return host && !isLoopbackHost(host) ? { kind: "via", host } : { kind: "reportedLoopback" };
+  }
+  if (bindHost === "0.0.0.0" || bindHost === "::") {
+    return { kind: "reportedAllInterfaces" };
+  }
+  return { kind: isTailnetAddress(bindHost) ? "reportedTailnet" : "reportedHost", host: bindHost };
+}
+
 function resolveNetworkAccess(
   root: Record<string, unknown>,
   live: SecurityLiveFacts,
 ): GatewayNetworkAccess {
+  // Both or neither: a bind alone can't rule out Tailscale exposure on top of loopback.
+  if (live.bindHost && live.tailscaleMode) {
+    return resolveReportedNetworkAccess(live.bindHost, live.tailscaleMode, live.connectedHost);
+  }
   if (live.configLoaded === false) {
     return { kind: "unknown" };
   }
@@ -144,6 +197,8 @@ export function extractQuickSettingsSecurity(
   const profile = tools?.profile;
   return {
     gatewayAuth: resolveGatewayAuth(root, live),
+    // Gateways that report their exposure also report the auth connections are checked against.
+    gatewayAuthReported: Boolean(live.authMode && live.bindHost && live.tailscaleMode),
     networkAccess: resolveNetworkAccess(root, live),
     execPolicy: resolveExecPolicy(root, live),
     browserEnabled: browser?.enabled !== false,

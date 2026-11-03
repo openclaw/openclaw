@@ -18,13 +18,13 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { resolveUiSelectedSessionAgentId } from "../../lib/sessions/session-key.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import type { ChatPendingInputView, PendingInputRequest } from "./chat-pending-inputs.types.ts";
-import { describeChatQueueAttachmentLabels } from "./chat-queue-attachment-labels.ts";
 import {
   readDeliveredQueuedChatSendForRun,
   removeDeliveredQueuedChatSendForRun,
   removeQueuedMessage,
 } from "./chat-queue.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
+import { describeChatQueueAttachmentLabels } from "./chat-send-presentation.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { projectChatSystemNotice } from "./chat-system-notice.ts";
 import { buildMessageItems } from "./chat-thread-items.ts";
@@ -67,21 +67,23 @@ function reconcileQueuedInputs(
 
 function describePendingInputMessage(message: unknown): string {
   const normalized = normalizeMessage(message);
-  const attachmentLabels = normalized.content.flatMap((part) =>
-    part.type === "attachment" || part.type === "attachment_error"
-      ? [part.attachment.label]
-      : part.type === "image"
-        ? part.sources.flatMap((source) => (source.fileName ? [source.fileName] : []))
-        : [],
-  );
-  const imageCount = normalized.content.filter((part) => part.type === "image").length;
+  let imageCount = 0;
+  const attachmentLabels = normalized.content.flatMap((part) => {
+    if (part.type === "image") {
+      imageCount += 1;
+      return part.sources.map(({ fileName }) => fileName);
+    }
+    return part.type === "attachment" || part.type === "attachment_error"
+      ? part.attachment.label
+      : [];
+  });
   return (
     extractText(message)?.trim() ||
     describeChatQueueAttachmentLabels(attachmentLabels) ||
     describeChatQueueAttachmentLabels(
-      readTranscriptMediaEntries(message).flatMap(({ fileName }) => (fileName ? [fileName] : [])),
-    ) ||
-    (imageCount ? t("chat.queue.imageCount", { count: String(imageCount) }) : "")
+      readTranscriptMediaEntries(message).map(({ fileName }) => fileName),
+      imageCount,
+    )
   );
 }
 

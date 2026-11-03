@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ChatPendingInputsPage } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { buildPendingInputQueueItems } from "./chat-pending-inputs.ts";
-import { describeChatQueueAttachmentLabels } from "./chat-queue-attachment-labels.ts";
+import { describeChatQueueAttachmentLabels } from "./chat-send-presentation.ts";
 
 function queuedComments(
   text: string,
@@ -71,6 +71,13 @@ it.each([
   [["selection-comment.txt"], "1 annotation"],
   [["selection-comment.txt", "selection-comment.txt", "brief.pdf"], "2 annotations, brief.pdf"],
   [["brief.pdf"], "brief.pdf"],
+  [[undefined, "", "selection-comment.txt", undefined, "brief.pdf"], "1 annotation, brief.pdf"],
+  [[undefined, ""], ""],
 ] as const)("summarizes attachment labels %j", (labels, expected) => {
   expect(describeChatQueueAttachmentLabels(labels)).toBe(expected);
+});
+
+it("uses image count only when attachment labels are absent", () => {
+  expect(describeChatQueueAttachmentLabels([undefined, ""], 2)).toBe("Image (2)");
+  expect(describeChatQueueAttachmentLabels(["selection-comment.txt"], 2)).toBe("1 annotation");
 });
