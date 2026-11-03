@@ -1,4 +1,6 @@
+import { resolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../cron/normalize.js";
+import { captureCronCreatedInference } from "../gateway/cron-inference-capture.js";
 import { createScheduledGatewayRunner } from "../gateway/scheduled-run-gateway-context.js";
 import type { GatewayCronServiceContract } from "../gateway/server-cron-contract.js";
 import type { GatewayContextResolver } from "../gateway/server-methods/types.js";
@@ -18,6 +20,7 @@ export type PluginServiceCronHost = Pick<
   | "readEventSources"
   | "runEvent"
   | "getJob"
+  | "getDefaultAgentId"
 >;
 
 export function createPluginServiceCronGetter(params: {
@@ -108,7 +111,36 @@ export function createPluginServiceCronGetter(params: {
         if (!normalized) {
           throw new Error("Plugin service cron create input is invalid");
         }
-        return await cron.add(normalized, { commitGuard });
+        let inference: Awaited<ReturnType<typeof captureCronCreatedInference>>;
+        if (normalized.payload.kind === "agentTurn" && normalized.sessionTarget !== "main") {
+          const context = params.resolveGatewayContext?.();
+          if (!context) {
+            throw new Error("Plugin service cron creation requires an active Gateway");
+          }
+          // Pin the owner used by capture; a reload may change the default while
+          // account selection or the scheduler's store lock is awaited.
+          normalized.agentId = resolveCronJobEffectiveAgentId(normalized, cron.getDefaultAgentId());
+          inference = await captureCronCreatedInference({
+            job: normalized,
+            cfg: context.getRuntimeConfig(),
+            agentId: normalized.agentId,
+            sessionLookupAgentId: normalized.agentId,
+            // Services have no authenticated human. Personal accounts still require
+            // the existing live caller authority; never borrow an operator identity.
+            caller: { client: null, context, signal: undefined },
+          });
+        }
+        try {
+          return await cron.add(normalized, {
+            inferenceBinding: inference?.inferenceBinding,
+            commitGuard: () => {
+              commitGuard();
+              inference?.assertInferenceSelectionCurrent();
+            },
+          });
+        } finally {
+          inference?.disposeInferenceAuthorization();
+        }
       },
       update: async (id, patch) => {
         commitGuard();
