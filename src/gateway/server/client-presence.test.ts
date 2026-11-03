@@ -36,7 +36,7 @@ describe("live person presence timing", () => {
     const validUser = (user: unknown) => Value.Check(PresenceEntrySchema, { ts: 1, user });
     const authenticatedUserId = "same-id";
     const fallback = buildAuthenticatedPresenceUser({ authenticatedUserId });
-    expect(fallback).toEqual({ id: authenticatedUserId, email: authenticatedUserId });
+    expect(fallback).toEqual({ id: authenticatedUserId });
     expect(buildAuthenticatedPresenceUser({})).toBeUndefined();
     const profile = buildAuthenticatedPresenceUser({
       authenticatedUserId,
@@ -49,7 +49,7 @@ describe("live person presence timing", () => {
     expect(validUser(profile)).toBe(true);
     expect(
       validUser({
-        ...fallback,
+        id: authenticatedUserId,
         identity: {
           type: "observation",
           id: authenticatedUserId,
@@ -149,7 +149,7 @@ describe("live person presence timing", () => {
   }
 
   function row(connection: Connection) {
-    return listSystemPresence().find((entry) => entry.user?.email === connection.email);
+    return listSystemPresence().find((entry) => entry.connectionId === connection.client.connId);
   }
   function expectRow(connection: Connection, expected: object) {
     expect(row(connection)).toMatchObject(expected);
