@@ -86,6 +86,58 @@ it("only invalidates model row metadata when the ranked result changes", () => {
   }
 });
 
+it.each([
+  ["NFC", "M\u00dcNCHEN", "Mu\u0308nchen"],
+  ["NFD", "MU\u0308NCHEN", "M\u00fcnchen"],
+])("matches canonical %s model searches across NFD and NFC forms", (_, query, name) => {
+  const reference = `example/${name}`;
+  const fixture = createRoot((dispose) => {
+    const search = createChatModelSearch();
+    const view = createChatModelSearchView(
+      search,
+      () => ({
+        providers: [],
+        lists: ["models"],
+        rows: [
+          {
+            key: "model:accent",
+            name,
+            providerLabel: name,
+            reference,
+            disabled: false,
+            selected: false,
+            hasShortcut: true,
+          },
+          {
+            key: "model:other",
+            name: "unrelated",
+            providerLabel: "example",
+            reference: "example/unrelated",
+            disabled: false,
+            selected: false,
+            hasShortcut: true,
+          },
+        ],
+      }),
+      () => {},
+    );
+    const input = document.createElement("input");
+    const details = document.createElement("details");
+    details.className = "chat-controls__model-picker";
+    details.append(input);
+    search.detailsRef(details);
+    return { dispose, view, input };
+  });
+  try {
+    fixture.input.value = query;
+    updateModelSearch(fixture.input);
+    flush();
+    expect(fixture.view.matches().map((match) => match.row.key)).toEqual(["model:accent"]);
+  } finally {
+    fixture.dispose();
+  }
+});
+
 it("moves the highlight without waking unrelated model and account rows", () => {
   const keys = ["model:first", "model:second", "account:personal"];
   const reads = [0, 0, 0];
