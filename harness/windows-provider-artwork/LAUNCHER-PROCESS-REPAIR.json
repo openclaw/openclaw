@@ -1,0 +1,11 @@
+{
+  "priorRun": 41594791303,
+  "priorOverall": "FAILED",
+  "priorBeforeCell": "passed6cases16originals; retainallguards/evidence, parentverifybeforecombining",
+  "change": "UNCHANGEDsource launcher run in fresh pwsh process; explicit flags + native launcher exit + originalsecurity/ownedchild checks; Afteronlynewnative selection",
+  "productAndOwnerSource": "unchanged canonicald9/Before50de/Afterd7fc",
+  "noTypeSuppressionOrRename": true,
+  "noGuardOrBackendChange": true,
+  "newExpectedAfterCases": 7,
+  "newExpectedAfterPNGs": 16
+}

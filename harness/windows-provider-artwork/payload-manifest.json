@@ -1,6 +1,6 @@
 {
   "v": 1,
-  "name": "windows-provider-artwork-owned-popup-v1",
+  "name": "windows-provider-artwork-after-launcher-process-v1",
   "baseCommit": "c550174d517b5e8830726cd5c32d4e132c144659",
   "candidateTree": "d9b8fb0cad24ee525219ba9aeb9b56d14427b0fd",
   "baselineCaptureTree": "50de4508d71a67ed2fb44ad9d1cdf56781d4d4a2",
@@ -73,13 +73,18 @@
     },
     {
       "path": "Invoke-ProviderArtworkCI.ps1",
-      "bytes": 8141,
-      "sha256": "611efc7d8f19119da802c6961c2c90dba19d6529c4f1b881f91304a13e84cc9d"
+      "bytes": 9028,
+      "sha256": "ed03be972541ee17fac3419bdf16f10b9f21fe026bff267f647af726cf5104f9"
     },
     {
       "path": "Invoke-ProviderArtworkProof.ps1",
       "bytes": 22352,
       "sha256": "21df5035ee6481f9de5bf256df0eeb07966a469c60f533668d75f1cfba192015"
+    },
+    {
+      "path": "LAUNCHER-PROCESS-REPAIR.json",
+      "bytes": 537,
+      "sha256": "eb0f0f467bdd6f09fc14c0ff1ca2f1802b4c4ca56d8b01f288a0dbe905e07390"
     },
     {
       "path": "OWNED-POPUP.md",
@@ -243,8 +248,8 @@
     },
     {
       "path": "source-pins.json",
-      "bytes": 12003,
-      "sha256": "cac6e8b33910ee639060a334dee39262bde01612ddc8021770d179d8c7543215"
+      "bytes": 12107,
+      "sha256": "e202a831542c0addee0cfc7789066f817959c9a344ec6aedd42973f77fea79a4"
     }
   ],
   "afterCaptureTree": "d7fc11b355417fa268430fd98fa2ab01a1d7c9c6"

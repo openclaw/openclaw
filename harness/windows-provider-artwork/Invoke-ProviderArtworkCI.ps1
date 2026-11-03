@@ -11,7 +11,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
 $PSNativeCommandUseErrorActionPreference=$true
-if (!$ExecutionAuthorized -or !$IsWindows -or $env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or $env:GITHUB_EVENT_NAME -cne 'workflow_dispatch' -or $env:GITHUB_REF -cne 'refs/heads/roboclaw/local-ai-native-followups-20261102' -or $Qualification -cne 'native-icons-w5-owned-popup-v1') { throw 'Only the parent-authorized, reviewed manual Windows CI qualification is admitted.' }
+if (!$ExecutionAuthorized -or !$IsWindows -or $env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted' -or $env:GITHUB_EVENT_NAME -cne 'workflow_dispatch' -or $env:GITHUB_REF -cne 'refs/heads/roboclaw/local-ai-native-followups-20261102' -or $Qualification -cne 'native-icons-w5-owned-popup-after-v1') { throw 'Only the parent-authorized, reviewed manual Windows CI qualification is admitted.' }
 function Hash([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
 function Json($Value,[string]$Path) { ConvertTo-Json -InputObject $Value -Depth 16 | Set-Content -LiteralPath $Path -Encoding utf8NoBOM }
 $manifestPath=Join-Path $PSScriptRoot 'payload-manifest.json'
@@ -58,7 +58,7 @@ try {
     # Compile candidate production and its required test owner/overlay before
     # spending native work on the newly admitted popup PrintWindow leaf.
     & (Join-Path $PSScriptRoot 'Invoke-ProviderArtworkProof.ps1') -Source $AfterSource -Artifacts (Join-Path $Artifacts 'After') -Stage After -AcceptedTree $pin.candidateTree -ExecutionAuthorized -BuildOnly
-    foreach ($stage in @('Before','After')) {
+    foreach ($stage in @('After')) {
         $source=if ($stage -ceq 'Before') { $BeforeSource } else { $AfterSource }
         $out=Join-Path $Artifacts $stage
         $leaf="$stage-current-UI-build"
@@ -70,14 +70,23 @@ try {
         $line='-NoProfile -NonInteractive -File "'+$driver+'" -Source "'+$source+'" -Artifacts "'+$out+'" -Stage '+$stage+' -AcceptedTree '+$pin.candidateTree+' -ExecutionAuthorized -TestsOnly'
         $launch=Join-Path $Artifacts ($stage+'-private-desktop.json')
         $launchArgs=@{Executable=(Join-Path $PSHOME 'pwsh.exe');ArgumentLine=$line;DataDirectory=(Join-Path $out 'isolated-data');McpPort=18789;ConsoleProcess=$true;WaitForExit=$true;ProcessTimeoutSeconds=1800;NamePrefix=('ProviderArtwork'+$stage);ResultPath=$launch}
-        & (Join-Path $source 'scripts/Invoke-PrivateDesktop.ps1') @launchArgs
+        # The unchanged source launcher declares process-wide CLR types. Each
+        # stage therefore needs a new PowerShell process, not another runspace.
+        $launcher=Join-Path $source 'scripts/Invoke-PrivateDesktop.ps1'
+        $launcherArguments=@('-NoProfile','-NonInteractive','-File',$launcher,
+            '-Executable',$launchArgs.Executable,'-ArgumentLine',$launchArgs.ArgumentLine,
+            '-DataDirectory',$launchArgs.DataDirectory,'-McpPort',[string]$launchArgs.McpPort,
+            '-ConsoleProcess','-WaitForExit','-ProcessTimeoutSeconds',[string]$launchArgs.ProcessTimeoutSeconds,
+            '-NamePrefix',$launchArgs.NamePrefix,'-ResultPath',$launchArgs.ResultPath)
+        & (Join-Path $PSHOME 'pwsh.exe') @launcherArguments
+        if ($LASTEXITCODE -ne 0) { throw 'Source-owned private launcher process failed. Preserve its actual leaf.' }
         $desktop=Get-Content $launch -Raw | ConvertFrom-Json
         $exit=Get-Content ($launch+'.exit.json') -Raw | ConvertFrom-Json
         if ($desktop.sharedInputDesktopSwitched -or $desktop.securityMode -cne 'default-dacl-and-label' -or !$desktop.aclAndLabelBytesEqual) { throw 'Source-owned private desktop security admission failed.' }
         if ($exit.nativeExitCode -ne 0 -or !$exit.nativeHandleSignaled) { throw 'Admitted private native test process failed. Preserve its real leaf; do not blame the launcher or retry.' }
         if (!(Test-Path (Join-Path $out 'result.json'))) { throw 'Missing source-bound native stage receipt.' }
     }
-    Json @{state='narrow-private-mounted-selections-passed-manual-pixel-review-required';foregroundProven=$false;keyboardProven=$false;compositorProven=$false;candidateTree=$pin.candidateTree;Before=@{cases=6;frames=16};After=@{cases=7;frames=16};Shared='RED-unwaived';fullBuild='not executed';wholeCampaign='not rerun';payloadSha256=$ExpectedPayloadSha256} (Join-Path $Artifacts 'result.json')
+    Json @{state='after-private-mounted-selection-passed-manual-pixel-review-required';foregroundProven=$false;keyboardProven=$false;compositorProven=$false;candidateTree=$pin.candidateTree;Before=@{execution='not rerun';priorRun=41594791303;priorCases=6;priorFrames=16;requiresParentRetainedCellVerification=$true};After=@{cases=7;frames=16};Shared='RED-unwaived';fullBuild='not executed';wholeCampaign='not rerun';payloadSha256=$ExpectedPayloadSha256} (Join-Path $Artifacts 'result.json')
 } catch {
     Json @{state='failed';leaf=$leaf;error=($_|Out-String);candidateTree=$pin.candidateTree;Shared='RED-unwaived';noRetry='The first Before picker selection bounds the unknown capture leaf.'} (Join-Path $Artifacts 'failure.json')
     throw
