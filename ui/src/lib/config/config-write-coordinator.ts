@@ -2,6 +2,7 @@ import { createDeferredCore, type Deferred } from "../../../../src/shared/deferr
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
+import { createConfigAutoSaveSchedule } from "./config-autosave-schedule.ts";
 import { createConfigDraftDiscard } from "./config-draft-discard.ts";
 import {
   removeConfigFormValue,
@@ -53,9 +54,8 @@ export function createConfigWriteCoordinator({
   appliedRefresh,
   isDisposed,
 }: ConfigWriteCoordinatorContext): ConfigWriteCoordinator {
-  let autoSaveTimer: ReturnType<typeof setTimeout> | null = null;
   let inFlight: ConfigWriteFlight | null = null;
-  let autoSaveTrailing = false;
+  const autoSave = createConfigAutoSaveSchedule(state, CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS, publish);
   let autoSaveDraftConnection: { client: GatewayBrowserClient; epoch: number } | null = null;
   let autoSaveRequiresExplicitSubmit = false;
   // Discard drains writes without resaving the draft it is about to remove.
@@ -150,13 +150,7 @@ export function createConfigWriteCoordinator({
       clearAutoSaveDraftConnection();
     }
   };
-  const cancelScheduledAutoSave = () => {
-    if (autoSaveTimer) {
-      clearTimeout(autoSaveTimer);
-      autoSaveTimer = null;
-    }
-    autoSaveTrailing = false;
-  };
+  const cancelScheduledAutoSave = () => autoSave.cancel();
   const invalidateConfigLoad = () => {
     resetConfigLoad();
     nextRequestVersion(state);
@@ -186,13 +180,13 @@ export function createConfigWriteCoordinator({
           auto ? reconcileAutoSaveDraftConnection : undefined,
         );
         const wantsTrailing =
-          autoSaveTrailing ||
+          autoSave.trailing ||
           (auto &&
             saved &&
             state.configFormDirty &&
             state.configFormMode === "form" &&
-            autoSaveTimer === null);
-        autoSaveTrailing = false;
+            !autoSave.timerPending);
+        autoSave.setTrailing(false);
         if (wantsTrailing && !isDisposed()) {
           runAutoSave();
         } else {
@@ -214,7 +208,7 @@ export function createConfigWriteCoordinator({
     }
     if (inFlight) {
       // Edits during any write fold into one trailing autosave on its new base.
-      autoSaveTrailing = true;
+      autoSave.setTrailing(true);
       return;
     }
     appliedRefresh.cancel();
@@ -233,12 +227,9 @@ export function createConfigWriteCoordinator({
     ).catch(() => undefined);
   };
   const flushScheduledAutoSave = () => {
-    if (!autoSaveTimer) {
-      return;
+    if (autoSave.stopTimer()) {
+      runAutoSave();
     }
-    clearTimeout(autoSaveTimer);
-    autoSaveTimer = null;
-    runAutoSave();
   };
   const scheduleAutoSave = () => {
     // Raw JSON5 drafts stay manual; suspended form edits resume after the updater.
@@ -253,13 +244,7 @@ export function createConfigWriteCoordinator({
       return;
     }
     appliedRefresh.cancel();
-    if (autoSaveTimer) {
-      clearTimeout(autoSaveTimer);
-    }
-    autoSaveTimer = setTimeout(() => {
-      autoSaveTimer = null;
-      runAutoSave();
-    }, CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+    autoSave.start(runAutoSave);
   };
   // Drain manual writes and the whole autosave chain before reusing the base hash.
   const drainPendingWrites = async (flushScheduledDraft = false): Promise<void> => {
@@ -408,7 +393,7 @@ export function createConfigWriteCoordinator({
         // Retain uncertain receipts while releasing drains before transport settlement.
         reconciliation.interrupt(inFlight?.submission ?? unacknowledged);
         inFlight = null;
-        autoSaveTrailing = false;
+        autoSave.setTrailing(false);
       }
       // Re-arm first so resumed drains wait on a pending signal on their next iteration.
       const wake = connectionWake;

@@ -159,7 +159,9 @@
 .dreams__bubble {
   position: absolute;
   top: calc(50% - 260px);
-  left: calc(50% - 200px);
+  left: max(0px, calc(50% - 200px));
+  max-width: 100%;
+  box-sizing: border-box;
   padding: 16px 20px;
   background: var(--accent-subtle);
   border: 1px solid color-mix(in srgb, var(--accent) 12%, transparent);
@@ -168,17 +170,28 @@
   flex-direction: column;
   align-items: center;
   gap: 6px;
-  animation: dreams-bubble-float 6s ease-in-out infinite;
+  animation: dreams-bubble-drift 6s ease-in-out infinite;
   pointer-events: none;
 }
 
 .dreams__bubble-text {
   font-size: 16px;
-  color: var(--accent);
+  color: color-mix(in srgb, var(--accent) 50%, var(--text));
   font-style: italic;
-  opacity: 0.8;
   min-width: 180px;
   text-align: center;
+  text-wrap: balance;
+}
+
+/* Motion only: the bubble holds a steady opacity so its text stays readable. */
+@keyframes dreams-bubble-drift {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-8px);
+  }
 }
 
 @keyframes dreams-bubble-float {
@@ -1024,7 +1037,8 @@
 
 @media (max-width: 900px) {
   .dreams {
-    min-height: calc(100vh - 96px);
+    /* Room for the bubble between the moon and the sleeper on short phones. */
+    min-height: max(calc(100vh - 96px), 752px);
   }
 
   .dreams-advanced {
@@ -1039,5 +1053,24 @@
 
   .dreams-diary {
     padding: 20px 16px 48px;
+  }
+}
+
+@media (max-width: 640px) {
+  /* Auto margins, not a transform: the float animation owns transform. */
+  .dreams__bubble {
+    left: 0;
+    right: 0;
+    width: fit-content;
+    margin-inline: auto;
+    padding: clamp(14px, 4.2vw, 16px) clamp(16px, 5vw, 20px);
+  }
+
+  .dreams__bubble-text {
+    font-size: clamp(14px, 4.4vw, 16px);
+  }
+
+  .dreams__moon {
+    right: 16px;
   }
 }

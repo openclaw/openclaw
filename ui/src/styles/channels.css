@@ -136,8 +136,34 @@
 }
 
 .channels-detail__footer {
+  flex-wrap: wrap;
   padding: var(--space-4);
   border-top: 1px solid var(--border);
+}
+
+.channels-detail__status {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.channels-detail__decide {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.channels-detail__feedback {
+  display: grid;
+  flex: none;
+  gap: var(--space-2);
+  max-height: 30dvh;
+  overflow-y: auto;
+  padding: var(--space-3) var(--space-4) 0;
+  overflow-wrap: anywhere;
+}
+
+/* A conflict's choice drops under its message once the dialog is too narrow for both. */
+.channels-detail__feedback .settings-save-indicator {
+  flex-wrap: wrap;
 }
 
 .channels-pairing-filters {

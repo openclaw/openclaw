@@ -340,6 +340,9 @@ function createPreparationSession(context: CaptureCommand) {
                       command.entryFile,
                       (run) => run(),
                       (filename) => mapSource(command.captureId, filename),
+                      undefined,
+                      undefined,
+                      command.bundledReloadSource,
                     ),
               );
               failedCapture = artifact;

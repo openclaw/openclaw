@@ -66,7 +66,7 @@ function mountPage(initial: TestContext) {
     dispose,
     lines,
     async refresh() {
-      query(".settings-section__actions button")!.click();
+      query(".page-header-actions button")!.click();
       await settle();
     },
   };
@@ -143,9 +143,7 @@ it("exports the retained buffer and warns only after old rows are evicted", asyn
   });
   const { page } = await setup(request);
   const expectExport = (expected: string[]) => {
-    page.container
-      .querySelectorAll<HTMLButtonElement>(".settings-section__actions button")[1]!
-      .click();
+    page.container.querySelectorAll<HTMLButtonElement>(".page-header-actions button")[1]!.click();
     expect(downloadTextFile).toHaveBeenLastCalledWith(
       expect.any(String),
       `${expected.join("\n")}\n`,

@@ -2,7 +2,10 @@ import "../lib/toast-host.tsx";
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { createMemo, createSignal, lazy, onSettled, Show } from "solid-js";
 import { registerModalSurface } from "../components/overlay-registry.ts";
-import { LazySettingsSidebar } from "../components/settings-sidebar-lazy.tsx";
+import {
+  LazySettingsSaveStatus,
+  LazySettingsSidebar,
+} from "../components/settings-sidebar-lazy.tsx";
 import { GatewayStatus, gatewayStatusLabel } from "../components/solid/gateway-status.tsx";
 import { Icon } from "../components/solid/icon.tsx";
 import { ShortcutHint } from "../components/solid/kbd.tsx";
@@ -453,6 +456,11 @@ export function ApplicationShell(props: {
             />
           </ShellLayoutProvider>
         </main>
+        <Show when={view().settingsTakeover}>
+          <div class="settings-save-status" inert={view().mobileNavLayout && view().navDrawerOpen}>
+            <LazySettingsSaveStatus host={props.host} />
+          </div>
+        </Show>
         <span class="sr-only" role="status" aria-live="polite" aria-atomic="true">
           {connectionAnnouncement()}
         </span>

@@ -47,7 +47,7 @@ suite.define(() => {
           "config.get": {
             __mockError: {
               code: "INTERNAL_ERROR",
-              message: "Agent configuration unavailable; retry Reload Config",
+              message: "Agent configuration unavailable; retry Reload config",
               retryable: true,
             },
           },
@@ -65,7 +65,7 @@ suite.define(() => {
       );
       const decision = agentsPage.locator("openclaw-select-picker:has(#agent-decision-model)");
       const trigger = primary.locator(".picker-select__trigger");
-      const reload = agentsPage.getByRole("button", { name: "Reload Config" });
+      const reload = agentsPage.getByRole("button", { name: "Reload config" });
       await reload.waitFor();
 
       const error = agentsPage

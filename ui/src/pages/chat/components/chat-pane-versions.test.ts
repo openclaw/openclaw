@@ -4,6 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import {
+  chatPaneHeaderSessionMenu,
   mountChatPaneHeader,
   openNativeMenu,
   selectNativeMenu,
@@ -43,16 +44,16 @@ afterEach(() => {
   }
 });
 
-it("hides unavailable versions without an empty host and lists multiple branches", async () => {
+it("lists versions in the session menu only when the session has them", async () => {
   const header = mountChatPaneHeader(containers, {
+    sessionMenuAction: chatPaneHeaderSessionMenu(),
     branches: [branch("only", "Only path", true, 1)],
   });
-  await waitForSolid(() => {
-    expect(header.container.querySelector("openclaw-chat-pane-versions-menu")).toBeNull();
-  });
+  const menu = header.container.querySelector("openclaw-chat-header-session-menu")!;
+  await openNativeMenu(menu, "submenu:view");
+  expect(menu.querySelector('[data-value="submenu:versions"]')).toBeNull();
 
   header.update({
-    catalog: true,
     branches: [
       branch("active", "Current work", true, 4),
       {
@@ -61,22 +62,16 @@ it("hides unavailable versions without an empty host and lists multiple branches
       },
     ],
   });
-  expect(header.container.querySelector("openclaw-chat-pane-versions-menu")).toBeNull();
-  header.update({ catalog: false });
-  await waitForSolid(() =>
-    expect(header.container.querySelector(".chat-pane__branches-menu")).not.toBeNull(),
-  );
-  const menu = header.container.querySelector(".chat-pane__branches-menu")!;
-  await openNativeMenu(menu);
-  const items = header.container.querySelectorAll(".chat-pane__branch-item");
+  await selectNativeMenu(menu, "submenu:versions");
+  const items = menu.querySelectorAll(".chat-pane__branch-item");
   expect(items).toHaveLength(2);
   expect(items[0]?.textContent).toContain("Current work");
   expect(items[0]?.getAttribute("data-active")).toBe("true");
   expect(items[1]?.textContent).toContain("Earlier idea");
+  expect(header.container.querySelector(".chat-pane__branches-trigger")).toBeNull();
 
-  header.container.querySelector<HTMLButtonElement>('[data-value="other"]')?.click();
-  await Promise.resolve();
-  expect(header.props.onBranchSelect).toHaveBeenCalledWith("other");
+  await selectNativeMenu(menu, "version:other");
+  expect(header.props.onBranchSelect).toHaveBeenCalledExactlyOnceWith("other");
 });
 
 it.each([false, true])("keeps version choices live with merged chrome %s", async (mergedChrome) => {
@@ -85,25 +80,25 @@ it.each([false, true])("keeps version choices live with merged chrome %s", async
   const active = { leafEntryId: "active", headline: "Current", messageCount: 1, active: true };
   const { container, update } = mountChatPaneHeader(containers, {
     mergedChrome,
+    sessionMenuAction: chatPaneHeaderSessionMenu(),
     branches: [active, { ...active, leafEntryId: "before", active: false }],
     onBranchSelect: first,
   });
-  const menu = container.querySelector(".chat-pane__branches-menu")!;
-  await openNativeMenu(menu);
+  const menu = container.querySelector("openclaw-chat-header-session-menu")!;
+  await selectNativeMenu(menu, "submenu:versions");
   update({
     branches: [active, { ...active, leafEntryId: "after", headline: "Updated", active: false }],
     onBranchSelect: next,
     branchSwitchDisabledReason: "Busy",
   });
-  expect(container.querySelector(".chat-pane__branches-menu")).toBe(menu);
-  expect(menu.querySelector('[data-value="before"]')).toBeNull();
-  expect(menu.querySelector('[data-value="after"]')?.textContent).toContain("Updated");
-  expect(menu.querySelector<HTMLButtonElement>(".oc-menu-trigger")?.disabled).toBe(true);
-  menu.querySelector<HTMLButtonElement>('[data-value="after"]')?.click();
-  await Promise.resolve();
-  expect(next).not.toHaveBeenCalled();
+  const versions = menu.querySelector<HTMLButtonElement>('[data-value="submenu:versions"]');
+  await waitForSolid(() => expect(versions?.disabled).toBe(true));
+  expect(versions?.title).toBe("Busy");
   update({ branchSwitchDisabledReason: null });
-  await selectNativeMenu(menu, "after");
+  await selectNativeMenu(menu, "submenu:versions");
+  expect(menu.querySelector('[data-value="version:before"]')).toBeNull();
+  expect(menu.querySelector('[data-value="version:after"]')?.textContent).toContain("Updated");
+  await selectNativeMenu(menu, "version:after");
   expect(next).toHaveBeenCalledExactlyOnceWith("after");
   expect(first).not.toHaveBeenCalled();
 });

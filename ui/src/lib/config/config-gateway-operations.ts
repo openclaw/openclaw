@@ -30,6 +30,7 @@ import {
 import {
   currentConfigConnectionEpoch,
   isCurrentConfigConnection,
+  markConfigAwaitingApply,
   resolveEditableSnapshotConfig,
   type ConfigGatewayClient,
   type LoadConfigOptions,
@@ -401,7 +402,11 @@ export async function submitConfigDraft(
       return false;
     }
     adoptConfigWriteAck(state, submitted, ack);
-    state.configNeedsApply = mode !== "apply";
+    if (mode === "apply") {
+      state.configNeedsApply = false;
+    } else {
+      markConfigAwaitingApply(state);
+    }
     // Manual writes refresh resolved values and applied revision truth. Autosave
     // already has its authoritative hash and must not lock editors with a reload.
     if (mode !== "auto") {
@@ -412,6 +417,9 @@ export async function submitConfigDraft(
     }
     if (mode !== "apply" && state.configAutoSaveStatus !== "conflict") {
       state.configAutoSaveStatus = state.configFormDirty ? "idle" : "saved";
+      if (state.configAutoSaveStatus === "saved") {
+        state.configSaveReceipts += 1;
+      }
     }
     return true;
   } catch (err) {
@@ -524,7 +532,7 @@ export async function patchConfig(
     });
     if (ack.noop !== true) {
       // The commit is authoritative; polling config.get reconciles applied truth.
-      state.configNeedsApply = true;
+      markConfigAwaitingApply(state);
     }
     state.configAutoSaveStatus =
       adoptedStatus === "conflict"
@@ -534,6 +542,9 @@ export async function patchConfig(
           : state.configFormDirty
             ? "idle"
             : "saved";
+    if (state.configAutoSaveStatus === "saved") {
+      state.configSaveReceipts += 1;
+    }
     return true;
   } catch (err) {
     if (isCurrentConfigConnection(state, client, connectionEpoch)) {

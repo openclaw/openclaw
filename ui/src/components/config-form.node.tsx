@@ -283,6 +283,8 @@ function JsonTextarea(props: { params: ConfigNodeRenderParams }): JSX.Element {
           isRequired={props.params.isRequired}
           showRequiredCue={false}
           onToggleSensitivePath={props.params.onToggleSensitivePath}
+          hints={props.params.hints}
+          secretFields={props.params.secretFields}
           onPatch={props.params.onPatch}
         />
       }
