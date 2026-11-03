@@ -269,14 +269,14 @@ export async function prepareFollowupRunToolAuthorityFingerprint(
   route?: ReplyToolAuthorityRoute,
   assertCurrent: () => void = () => {},
 ) {
-  const owner = prepareReplyToolAuthority(snapshot);
+  const { authority: owner, readPreparedFingerprint } = createReplyToolAuthority(snapshot);
   try {
     await owner.fingerprintAsync(route);
     assertCurrent();
     return {
       read: () => {
         assertCurrent();
-        return owner.fingerprint(route);
+        return readPreparedFingerprint(route);
       },
       release: owner.close,
     };
@@ -339,6 +339,16 @@ export function prepareReplyToolAuthority(
       "fingerprintAsync" | "projectAsync" | "projectRequester" | "projectRequesterAsync" | "close"
     >
   > {
+  return createReplyToolAuthority(run, narrow, resolveReader, joinObservation).authority;
+}
+
+/** Builds the snapshot plus a core reader that skips the deprecated sync fingerprint method. */
+function createReplyToolAuthority(
+  run: ReplyToolAuthorityInput,
+  narrow?: ReplyToolAuthorityNarrow,
+  resolveReader?: () => SessionEntryCohortReader | undefined,
+  joinObservation?: ReplyMessageJoinObservation,
+) {
   const capturedJoinObservation = joinObservation ? structuredClone(joinObservation) : undefined;
   const channelOwner = getCommandOwnerAuthority(run.run);
   const inputChannel = readReplyInputChannel(run.run);
@@ -520,6 +530,12 @@ export function prepareReplyToolAuthority(
     }
     return prepared.evaluate(projectInput(caller), route);
   };
+  const readPreparedFingerprint = (route?: ReplyToolAuthorityRoute) => {
+    if (!fingerprintRead) {
+      throw new Error("Reply tool authority requires asynchronous preparation");
+    }
+    return fingerprintRead.evaluate(snapshot, route);
+  };
   const result = {
     close,
     requesterPrincipalKey,
@@ -541,10 +557,7 @@ export function prepareReplyToolAuthority(
         method: "ReplyToolAuthoritySnapshot.fingerprint",
         replacement: "await fingerprintAsync()",
       });
-      if (!fingerprintRead) {
-        throw new Error("Reply tool authority requires asynchronous preparation");
-      }
-      return fingerprintRead.evaluate(snapshot, route);
+      return readPreparedFingerprint(route);
     },
     fingerprintAsync: async (route?: ReplyToolAuthorityRoute) => {
       const prepared = await prepare(snapshot, route);
@@ -701,5 +714,5 @@ export function prepareReplyToolAuthority(
       },
     };
   });
-  return result;
+  return { authority: result, readPreparedFingerprint };
 }

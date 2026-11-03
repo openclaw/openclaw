@@ -1,0 +1,2 @@
+# Follow-up authority reads skip the deprecated sync fingerprint; plugin callers still warn.
+38

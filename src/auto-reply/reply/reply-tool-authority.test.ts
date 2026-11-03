@@ -9,6 +9,8 @@ import { captureGatewayOperatorRunAuthority } from "../../gateway/operator-run-a
 import { createOperatorClient } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-activity.js";
 import type { GatewayAccessGrantRef } from "../../plugins/gateway-access-policy.types.js";
+import { withPluginRuntimePluginScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { getPluginSdkDeprecationUsage } from "../../plugins/sdk-deprecation-usage.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import type { ReplyToolAuthorityOverlay } from "../../sessions/session-controller.contracts.js";
 import type { ReplyBackendQueueMessageOptions } from "../../sessions/session-controller.js";
@@ -20,7 +22,10 @@ import {
   createTestReplyOperation,
   queueCurrentReplyRunMessage,
 } from "./reply-run-registry.test-helpers.js";
-import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
+import {
+  prepareFollowupRunToolAuthorityFingerprint,
+  prepareReplyToolAuthority,
+} from "./reply-tool-authority.js";
 import {
   createQueueTestRun,
   resolveFollowupRunToolAuthorityFingerprintAsync as fingerprintFor,
@@ -226,6 +231,39 @@ it.each(["complete", "abortForRestart"] as const)(
     expect(operation.toolAuthorityFingerprint).toBe(fingerprint);
   },
 );
+
+it("rereads prepared follow-up authority without the deprecated sync fingerprint", async () => {
+  const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+  const run = createQueueTestRun({ prompt: "steer the active run" });
+  const route = { provider: "openai", model: "gpt-primary" };
+  // Inbound steering runs in the channel plugin's frame, which labels SDK warnings.
+  const pluginId = "follow-up-fingerprint-channel";
+  const followup = await prepareFollowupRunToolAuthorityFingerprint(run, route);
+  const snapshot = prepareReplyToolAuthority(run);
+  try {
+    const fingerprint = await snapshot.fingerprintAsync(route);
+    expect(withPluginRuntimePluginScope({ pluginId }, followup.read)).toBe(fingerprint);
+    expect(getPluginSdkDeprecationUsage(pluginId)).toEqual([]);
+    expect(warning).not.toHaveBeenCalled();
+
+    // Plugin callers of the sync snapshot method keep their deprecation warning.
+    expect(withPluginRuntimePluginScope({ pluginId }, () => snapshot.fingerprint(route))).toBe(
+      fingerprint,
+    );
+    expect(getPluginSdkDeprecationUsage(pluginId).map(({ id }) => id)).toEqual([
+      "reply-tool-authority-sync-preparation:ReplyToolAuthoritySnapshot.fingerprint",
+    ]);
+    expect(warning).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining(
+        `Plugin ${pluginId}: ReplyToolAuthoritySnapshot.fingerprint is deprecated; use await fingerprintAsync() instead.`,
+      ),
+      { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
+    );
+  } finally {
+    followup.release();
+    snapshot.close();
+  }
+});
 
 it("keeps the initial policy snapshot while tracking concrete fallback authority", async () => {
   const run = createQueueTestRun({ prompt: "route authority" });
