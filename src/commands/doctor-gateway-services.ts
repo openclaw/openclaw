@@ -1,6 +1,3 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { SUPPORTED_NODE_VERSIONS } from "../../node-version.mjs";
 import { note } from "../../packages/terminal-core/src/note.js";
@@ -17,7 +14,6 @@ import {
   type ExtraGatewayService,
   type GatewayServiceInventory,
 } from "../daemon/inspect.js";
-import { execLaunchctl, isLaunchctlNotLoaded } from "../daemon/launchd-exec.js";
 import { OPENCLAW_WRAPPER_ENV_KEY } from "../daemon/program-args.js";
 import { renderSystemNodeWarning, resolveSystemNodeInfo } from "../daemon/runtime-paths.js";
 import { readDaemonRuntimePin } from "../daemon/runtime-pin-state.js";
@@ -45,7 +41,6 @@ import { formatInstallOwnerMessage, readInstallOwner } from "../infra/install-ow
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { sleep } from "../utils/sleep.js";
 import { resolveGatewayDaemonRuntime } from "./daemon-runtime.js";
 import {
   preserveGatewayAuthTokenForService,
@@ -61,6 +56,7 @@ import {
   resolveSystemdUnitNameFromServicePath,
   type DoctorGatewayInstallationMaintenance,
 } from "./doctor-gateway-installation.js";
+import { cleanupLegacyDarwinServices } from "./doctor-gateway-legacy-launchd.js";
 import {
   classifyLegacyServices,
   cleanupLegacyLinuxUserServices,
@@ -96,30 +92,6 @@ type GatewayServiceConfigRepairOptions = {
   serviceMaintenance?: DoctorGatewayInstallationMaintenance;
 };
 
-const DOCTOR_LAUNCHCTL_TIMEOUT_MS = 5_000;
-const DOCTOR_LAUNCHCTL_CONFIRM_POLL_MS = 100;
-async function confirmLegacyLaunchdServiceUnloaded(serviceTarget: string): Promise<boolean> {
-  const deadline = Date.now() + DOCTOR_LAUNCHCTL_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    const remainingMs = Math.max(1, deadline - Date.now());
-    const probe = await execLaunchctl(
-      ["print", serviceTarget],
-      Math.min(DOCTOR_LAUNCHCTL_TIMEOUT_MS, remainingMs),
-    );
-    if (probe.code !== 0) {
-      // A successful print (including a stopped job) means launchd still owns
-      // the label. Unknown errors and probe timeouts stay fail-closed.
-      return isLaunchctlNotLoaded(probe);
-    }
-    const delayMs = Math.min(DOCTOR_LAUNCHCTL_CONFIRM_POLL_MS, deadline - Date.now());
-    if (delayMs <= 0) {
-      break;
-    }
-    await sleep(delayMs);
-  }
-  return false;
-}
-
 async function filterInactiveExtraGatewayServices(
   services: ExtraGatewayService[],
 ): Promise<ExtraGatewayService[]> {
@@ -153,71 +125,6 @@ export async function detectExtraGatewayServiceIssues(
     services: await filterInactiveExtraGatewayServices(detectedExtraServices.services),
     errors: detectedExtraServices.errors,
   };
-}
-
-async function cleanupLegacyLaunchdService(params: {
-  label: string;
-  plistPath: string;
-}): Promise<{ status: "removed"; destination?: string } | { status: "failed"; reason: string }> {
-  const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
-  await execLaunchctl(["bootout", domain, params.plistPath], DOCTOR_LAUNCHCTL_TIMEOUT_MS);
-  await execLaunchctl(["unload", params.plistPath], DOCTOR_LAUNCHCTL_TIMEOUT_MS);
-
-  // bootout/unload can return before launchd finishes stopping the job. A plist
-  // must stay in place unless a bounded print probe observes the label gone.
-  if (!(await confirmLegacyLaunchdServiceUnloaded(`${domain}/${params.label}`))) {
-    return { status: "failed", reason: "launchctl could not confirm unload" };
-  }
-
-  const trashDir = path.join(os.homedir(), ".Trash");
-  try {
-    await fs.mkdir(trashDir, { recursive: true });
-  } catch {
-    // ignore
-  }
-
-  try {
-    await fs.access(params.plistPath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return { status: "removed" };
-    }
-    return { status: "failed", reason: "could not inspect plist" };
-  }
-
-  const dest = path.join(trashDir, `${params.label}-${Date.now()}.plist`);
-  try {
-    await fs.rename(params.plistPath, dest);
-    return { status: "removed", destination: dest };
-  } catch {
-    return { status: "failed", reason: "could not move plist" };
-  }
-}
-
-async function cleanupLegacyDarwinServices(
-  services: ExtraGatewayService[],
-): Promise<{ removed: string[]; failed: string[] }> {
-  const removed: string[] = [];
-  const failed: string[] = [];
-
-  for (const svc of services) {
-    const plistPath = svc.sourcePath;
-    if (!plistPath) {
-      failed.push(`${svc.label} (missing plist path)`);
-      continue;
-    }
-    const result = await cleanupLegacyLaunchdService({
-      label: svc.label,
-      plistPath,
-    });
-    if (result.status === "removed") {
-      removed.push(result.destination ? `${svc.label} -> ${result.destination}` : svc.label);
-    } else {
-      failed.push(`${svc.label} (${result.reason})`);
-    }
-  }
-
-  return { removed, failed };
 }
 
 /**

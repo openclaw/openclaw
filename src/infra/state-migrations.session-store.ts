@@ -37,7 +37,6 @@ import {
   preserveDeferredPluginSessionSource,
   resolveDeferredPluginSessionStoreSource,
 } from "./deferred-plugin-session-sources.js";
-import { expandHomePrefix } from "./home-dir.js";
 import { importLegacyAcpSessionMetadata } from "./state-migrations.acp-session-metadata.js";
 import {
   existsDir,
@@ -48,6 +47,7 @@ import {
   type SessionEntryLike,
 } from "./state-migrations.fs.js";
 import { saveLegacySessionStore } from "./state-migrations.legacy-session-store.js";
+import { resolveStorePathFromTemplate } from "./state-migrations.session-store-ownership.js";
 import {
   resolveLegacyAcpMetadataSessionStoreTargets,
   resolveSessionStoreAliasPlan,
@@ -58,8 +58,14 @@ import {
   resolveCanonicalAgentSessionOwner,
   type PreparedLegacySessionSurfaces,
 } from "./state-migrations.session-surfaces.js";
-import type { MigrationMessages, SessionStoreAliasPlan } from "./state-migrations.types.js";
+import type { MigrationMessages } from "./state-migrations.types.js";
 import { decodeUtf8Input, Utf8InputError } from "./utf8-input.js";
+
+export {
+  mergeSessionStoreAliasPlans,
+  resolveSessionStoreOwnership,
+  type SessionStoreOwnership,
+} from "./state-migrations.session-store-ownership.js";
 
 type SessionKeyCanonicalizationOptions = {
   agentId: string;
@@ -848,28 +854,6 @@ export async function migrateLegacyAcpSessionMetadata(params: {
   return { changes, warnings };
 }
 
-function resolveStorePathFromTemplate(
-  template: string,
-  agentId: string,
-  env: NodeJS.ProcessEnv,
-): string {
-  return path.resolve(expandHomePrefix(template.replaceAll("{agentId}", agentId), { env }));
-}
-
-export function mergeSessionStoreAliasPlans(
-  left: SessionStoreAliasPlan | undefined,
-  right: SessionStoreAliasPlan,
-): SessionStoreAliasPlan {
-  if (!left) {
-    return right;
-  }
-  return {
-    hasDistinctAliases: left.hasDistinctAliases || right.hasDistinctAliases,
-    hasFinalSymlink: left.hasFinalSymlink || right.hasFinalSymlink,
-    hasUnresolvedIdentity: left.hasUnresolvedIdentity || right.hasUnresolvedIdentity,
-  };
-}
-
 export async function saveSessionStoreStrict(
   storePath: string,
   store: Record<string, SessionEntry>,
@@ -878,56 +862,3 @@ export async function saveSessionStoreStrict(
     skipMaintenance: true,
   });
 }
-
-export type SessionStoreOwnership = {
-  preserveAmbiguousKeys: boolean;
-  preserveForeignMainAliases: boolean;
-  targetStoreAliases: SessionStoreAliasPlan;
-};
-
-export function resolveSessionStoreOwnership(params: {
-  cfg: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  stateDir: string;
-  targetAgentId: string;
-  pluginSessionStoreAgentIds: readonly string[];
-}): SessionStoreOwnership {
-  const targetStorePath = path.join(
-    params.stateDir,
-    "agents",
-    params.targetAgentId,
-    "sessions",
-    "sessions.json",
-  );
-  const configuredStore = params.cfg.session?.store;
-  const resolveAgentStorePath = (agentId: string) =>
-    configuredStore
-      ? resolveStorePathFromTemplate(configuredStore, agentId, params.env)
-      : path.join(params.stateDir, "agents", agentId, "sessions", "sessions.json");
-  const preserveForeignMainAliases = params.pluginSessionStoreAgentIds.some((pluginAgentId) => {
-    const id = normalizeAgentId(pluginAgentId);
-    if (id === DEFAULT_AGENT_ID) {
-      return false;
-    }
-    return sessionStorePathsMatch(resolveAgentStorePath(id), targetStorePath);
-  });
-  const candidateAgentIds = new Set([
-    ...listConfiguredSessionStoreAgentIds(params.cfg).map((id) => normalizeAgentId(id)),
-    ...params.pluginSessionStoreAgentIds.map((id) => normalizeAgentId(id)),
-  ]);
-  const configuredOwnerStorePaths = [...candidateAgentIds].map(resolveAgentStorePath);
-  const targetStoreOwnerCount = configuredOwnerStorePaths.filter((storePath) =>
-    sessionStorePathsMatch(storePath, targetStorePath),
-  ).length;
-  const preserveAmbiguousKeys = targetStoreOwnerCount > 1;
-  const candidateStorePaths = [...configuredOwnerStorePaths];
-  const agentsDir = path.join(params.stateDir, "agents");
-  for (const entry of safeReadDir(agentsDir)) {
-    if (entry.isDirectory()) {
-      candidateStorePaths.push(path.join(agentsDir, entry.name, "sessions", "sessions.json"));
-    }
-  }
-  const targetStoreAliases = resolveSessionStoreAliasPlan(targetStorePath, candidateStorePaths);
-  return { preserveAmbiguousKeys, preserveForeignMainAliases, targetStoreAliases };
-}
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

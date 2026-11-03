@@ -19,7 +19,6 @@ import { isOwnedProcessGroupGone } from "./service-child-group-ownership.js";
 import { createOutputRelay } from "./service-child-output-relay.js";
 import {
   readServiceChildMessage,
-  sendServiceChildMessage,
   type ServiceChildAnchorMessage,
   type ServiceChildStart,
 } from "./service-child-protocol.js";
@@ -31,9 +30,9 @@ import {
 import {
   createServiceChildCleanupExpiryError,
   createServiceChildRelayRetirement,
-  joinStartupFailureCleanup,
   stopServiceChildOwner,
 } from "./service-child-relay-retirement.js";
+import { startServiceChildRelay } from "./service-child-relay-startup.js";
 import type { AwaitedStdoutConsumer, ProcessAdapterStartup } from "./types.js";
 
 type AuthorityState = "starting" | "active" | "closing" | "closed" | "identity-lost";
@@ -611,55 +610,27 @@ export async function createServiceChildRelayAdapter(
     params.terminateOnHostLoss ? (error) => events.emitError(error, "stdin") : undefined,
   );
   params.abortSignal?.addEventListener("abort", onConstructionAbort, { once: true });
-  const ready = (async () => {
-    using delivery = preparation.transferSecretInput();
-    try {
-      params.assertCurrent?.();
-      if (params.abortSignal?.aborted) {
-        onConstructionAbort();
-      }
-      params.beforeSpawn?.();
-      await Promise.race([sendServiceChildMessage(child, start), constructionAbort.promise]);
-      params.assertCurrent?.();
-      const [startupResult, secretDeliveryResult] = await Promise.allSettled([
-        startup.promise,
-        delivery?.deliverTo(child, { abortSignal: params.abortSignal }),
-      ]);
-      // Preserve admission failure over the secret pipe it closes as a consequence.
-      if (startupResult.status === "rejected") {
-        throw await joinStartupFailureCleanup(
-          startupResult.reason,
-          startupErrorAckDelivery,
-          cleanup.promise,
-        );
-      }
-      if (secretDeliveryResult.status === "rejected") {
-        throw secretDeliveryResult.reason;
-      }
-      if (params.input !== undefined && params.prepareInput) {
-        await params.prepareInput();
-      }
-      if (params.abortSignal?.aborted || waitError) {
-        throw waitError ?? new Error("service child construction aborted");
-      }
-      params.assertCurrent?.();
-      if (params.input !== undefined) {
-        stdin?.write(params.input);
-        stdin?.end();
-      } else if (params.stdinMode === "pipe-closed") {
-        stdin?.end();
-      }
-    } catch (error) {
+  const ready = startServiceChildRelay({
+    params,
+    preparation,
+    child,
+    start,
+    stdin,
+    startup: startup.promise,
+    constructionAbort: constructionAbort.promise,
+    onConstructionAbort,
+    getWaitError: () => waitError,
+    getStartupErrorAckDelivery: () => startupErrorAckDelivery,
+    cleanup: cleanup.promise,
+    onFailure: () => {
       void stdoutRelay.drain();
       unpipeStderr?.();
       void stderrRelay.drain();
       // Ready assigns commandPid after native admission; retain transport for its closing/ACK join.
       stopServiceChildOwner(child, useLinuxSubreaper, commandPid ? kill : undefined);
-      throw error;
-    } finally {
-      removeConstructionAbortListener();
-    }
-  })();
+    },
+    removeConstructionAbortListener,
+  });
   void ready.catch(() => {});
 
   function kill(signal: NodeJS.Signals = "SIGKILL") {
