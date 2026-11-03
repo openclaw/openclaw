@@ -995,6 +995,14 @@ export class RealtimeCallHandler {
         ) {
           return;
         }
+        if (role === "user" && !audioController.acceptUserTranscript(isFinal)) {
+          if (isFinal) {
+            console.log(
+              `[voice-call] Ignoring unconfirmed caller transcript during playback callId=${callId}`,
+            );
+          }
+          return;
+        }
         if (text.trim()) {
           outboundGreeting.claim();
           activity.noteSpeech();
@@ -1266,6 +1274,7 @@ export class RealtimeCallHandler {
         activity.noteSpeech();
       }
       if (speechDetector.accept({ rms: inputRms, peak: 0 })) {
+        audioController.noteCallerSpeech();
         outboundGreeting.claim();
         if (localBargeIn && !activity.isPaused()) {
           audioController.cancelOutputAudioForBargeIn("local", (audioPlaybackActive) => {

@@ -47,6 +47,11 @@ flight. Once an active-call helper accepts a hang-up, cancelling the consult
 does not interrupt that control action. The helper still checks that its bound
 call is active before acting.
 
+Caller transcripts during carrier playback and its 400 ms echo tail require
+detected caller speech or a provider barge-in. This prevents unconfirmed echo
+from becoming a new host caller turn. Audio still reaches the realtime provider,
+which owns its own speech detection and responses.
+
 ### GPT-Live
 
 Voice Call uses the same Gateway-owned GPT-Live bridge as Discord and Talk.

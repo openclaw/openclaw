@@ -73,7 +73,12 @@ with sandbox mode `all` or `non-main` in the background. Agents with sandbox mod
 still prepare dependencies on first use. A session arriving during preparation
 waits for the same build; later checkouts arrive with `node_modules`. Other selected commits
 still prepare their dependencies on first use. Shutdown cancels preparation and
-waits for the disposable installer to be removed.
+drains accepted installer cleanup. Before publishing a template, OpenClaw fences
+the disposable installer against restart and verifies that it has stopped. Container
+removal runs serially in the background, so a slow Docker or Podman removal does
+not delay the prepared workspace. Failed removals remain registered, log a warning,
+and retry during housekeeping, including after a Gateway restart. This cleanup
+also runs when ordinary sandbox idle and age pruning are disabled.
 The private checkout storage must support filesystem acceleration, and
 `worktreeAcceleration: false` disables this preparation too.
 
@@ -90,8 +95,8 @@ cache falls back promptly instead of waiting through network retries.
 
 The reusable generation binds the source commit, frozen lockfile, immutable image
 (including its Node and pnpm versions), guest path, and sandbox policy. A changed
-generation prepares a new template; the existing seven-day template cleanup also
-retires interrupted builders. Installation failure or changed tracked source
+generation prepares a new template with a distinct builder identity; background
+housekeeping recovers interrupted builders independently of template expiration. Installation failure or changed tracked source
 records a warning and keeps a source-only template for that generation. Missing
 lockfiles, unsupported filesystems, and unavailable images use source-only
 checkout. The agent can install normally in that private checkout. Dependency

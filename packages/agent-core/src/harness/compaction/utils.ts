@@ -252,7 +252,7 @@ type PersistedSenderCarrier = { role: string };
  * conversation label. Keep this shared with token accounting: adding a label
  * to the prompt without charging it can make bounded compaction overflow.
  */
-export function formatPersistedSenderSuffix(message: PersistedSenderCarrier): string {
+function formatPersistedSenderSuffix(message: PersistedSenderCarrier): string {
   if (message.role !== "user") {
     return "";
   }
@@ -315,7 +315,7 @@ function compactionUserRole(message: PersistedSenderCarrier): string {
 }
 
 /** Compaction request attribution only; admitted internal inputs still start runtime turns. */
-export function isCompactionUserRequest(message: PersistedSenderCarrier): boolean {
+function isCompactionUserRequest(message: PersistedSenderCarrier): boolean {
   return message.role === "user" && compactionUserRole(message) === "User";
 }
 

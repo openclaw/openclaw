@@ -64,6 +64,15 @@
  * A public repository fixture should be exported with git archive at a pinned
  * revision before passing --fixture-source; never import a live operator workspace.
  * First creation has cold owner/template state, not an evicted OS page cache.
+ * --fake-builder-removal-ms 36000 substitutes a process-backed Podman fixture:
+ * creation, termination and removal have persistent engine state; only rm sleeps.
+ * Use with --acceleration --sandbox-backend podman --serial-turns --fresh-only.
+ * Installation takes the real source-only fallback. Registry/housekeeping and
+ * filesystem preparation remain real; this does not qualify Podman or btrfs.
+ * Run separate fresh processes in A/A then ABAB order, at least five per arm.
+ * --crash-builder interrupts the fixture's outstanding rm after the first prepare,
+ * then exits without finalizers. Reopen that same --output with --recover-builder
+ * --fake-builder-removal-ms 36000 to prove startup cleanup from persisted state.
  */
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -102,6 +111,9 @@ const { values } = parseArgs({
     acceleration: { type: "boolean", default: false },
     "sandbox-backend": { type: "string", default: "docker" },
     "sandbox-image": { type: "string" },
+    "fake-builder-removal-ms": { type: "string" },
+    "crash-builder": { type: "boolean", default: false },
+    "recover-builder": { type: "boolean", default: false },
     "sibling-worktrees": { type: "string", default: "0" },
     revision: { type: "string" },
     mode: { type: "string", default: "owner" },
@@ -152,6 +164,10 @@ if (values["freeze-source"]) {
   }
   // Both arms execute this same measurement program, including its worker instrumentation.
   fs.copyFileSync(fileURLToPath(import.meta.url), path.join(destination, scriptRelative));
+  fs.copyFileSync(
+    new URL("./sandbox-builder-engine-fixture.ts", import.meta.url),
+    path.join(destination, "scripts/perf/sandbox-builder-engine-fixture.ts"),
+  );
 
   const digest = createHash("sha256");
   let fileCount = 0;
@@ -257,6 +273,21 @@ assert(!values["fresh-only"] || serialTurns);
 assert(!values.acceleration || serialTurns);
 assert(["docker", "podman"].includes(values["sandbox-backend"]));
 assert(!values["sandbox-image"] || values.acceleration);
+const fakeBuilderRemovalMs =
+  values["fake-builder-removal-ms"] === undefined
+    ? undefined
+    : Number(values["fake-builder-removal-ms"]);
+assert(
+  fakeBuilderRemovalMs === undefined ||
+    (Number.isSafeInteger(fakeBuilderRemovalMs) &&
+      fakeBuilderRemovalMs >= 0 &&
+      (values["recover-builder"] ||
+        (values.acceleration && values["sandbox-backend"] === "podman"))),
+);
+assert(!(values["crash-builder"] && values["recover-builder"]));
+assert(
+  !(values["crash-builder"] || values["recover-builder"]) || fakeBuilderRemovalMs !== undefined,
+);
 const siblingWorktrees = Number(values["sibling-worktrees"]);
 assert(Number.isSafeInteger(siblingWorktrees) && siblingWorktrees >= 0);
 assert(!siblingWorktrees || serialTurns);
@@ -311,9 +342,9 @@ if (values["lease-sources"]) {
   Error.stackTraceLimit = 32;
 }
 const output = path.resolve(values.output);
-fs.mkdirSync(output, { recursive: reuseFixture });
+fs.mkdirSync(output, { recursive: reuseFixture || values["recover-builder"] });
 for (const name of ["home", "tmp", "repo"]) {
-  fs.mkdirSync(path.join(output, name), { recursive: reuseFixture });
+  fs.mkdirSync(path.join(output, name), { recursive: reuseFixture || values["recover-builder"] });
 }
 if (values["agent-storage-dir"] && !reuseFixture) {
   const agentStorage = path.resolve(values["agent-storage-dir"]);
@@ -435,6 +466,40 @@ process.env = createGatewayBenchEnv(path.join(output, "home"), configPath, {
     GIT_COMMITTER_DATE: "2026-01-01T00:00:00Z",
   },
 });
+const fakeBuilderEngine =
+  fakeBuilderRemovalMs === undefined
+    ? undefined
+    : (await import("./sandbox-builder-engine-fixture.ts")).installSandboxBuilderEngineFixture(
+        output,
+        fakeBuilderRemovalMs,
+        values["recover-builder"],
+      );
+if (values["recover-builder"]) {
+  const recoveredConfig = JSON.parse(fs.readFileSync(configPath, "utf8")) as OpenClawConfig;
+  (await import("../../src/config/runtime-snapshot.js")).setRuntimeConfigSnapshot(recoveredConfig);
+  const state = await import("../../src/state/openclaw-state-db.js");
+  state.openOpenClawStateDatabase();
+  const lifecycle = await import("../../src/agents/sandbox/registry-lifecycle.js");
+  const before = fakeBuilderEngine!.snapshot();
+  assert(before.remaining.length > 0, "Recovery needs a persisted interrupted builder");
+  const started = performance.now(),
+    cpuBefore = process.cpuUsage();
+  const close = lifecycle.prepareSandboxRegistryClose();
+  await lifecycle.maybeRunSandboxRegistryHousekeeping(async () => {});
+  await close.drain();
+  const cpu = process.cpuUsage(cpuBefore);
+  const recovery = {
+    before,
+    after: fakeBuilderEngine!.snapshot(),
+    elapsedMs: performance.now() - started,
+    processCpuMs: (cpu.user + cpu.system) / 1000,
+  };
+  fs.writeFileSync(path.join(output, "builder-recovery.json"), JSON.stringify(recovery, null, 2));
+  await state.closeOpenClawStateDatabaseAsync();
+  assert.equal(recovery.after.remaining.length, 0, "Startup leaked an interrupted builder");
+  console.log(JSON.stringify(recovery));
+  process.exit(0);
+}
 const repo = path.join(output, "repo"),
   canonical = path.join(output, "canonical");
 const git = (...args: string[]) =>
@@ -468,6 +533,13 @@ if (reuseFixture) {
   } else {
     for (let i = 0; i < files; i++) {
       fs.writeFileSync(path.join(repo, `file-${i}.txt`), `synthetic ${i}\n`.padEnd(fileBytes, "."));
+    }
+    if (fakeBuilderEngine) {
+      fs.writeFileSync(
+        path.join(repo, "package.json"),
+        '{"name":"synthetic-builder","private":true}\n',
+      );
+      fs.writeFileSync(path.join(repo, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
     }
   }
   // An exported repository may contain deliberately tracked ignored fixtures.
@@ -564,6 +636,9 @@ const state = await import("../../src/state/openclaw-state-db.js");
 const agent = await import("../../src/state/openclaw-agent-db.js");
 (await import("../../src/config/runtime-snapshot.js")).setRuntimeConfigSnapshot(config);
 state.openOpenClawStateDatabase();
+const sandboxRegistryClose = fakeBuilderEngine
+  ? (await import("../../src/agents/sandbox/registry-lifecycle.js")).prepareSandboxRegistryClose()
+  : undefined;
 if (values.mode !== "maintenance" && !reuseFixture) {
   await (
     await import("../../src/agents/worktrees/registry.js")
@@ -853,6 +928,7 @@ measurement: try {
         hostLoad: loadBefore,
         hostLoadAfter: loadavg(),
         spans,
+        ...(fakeBuilderEngine ? { engine: fakeBuilderEngine.snapshot() } : {}),
       };
       turns.push(result);
       console.log(JSON.stringify(result));
@@ -886,6 +962,13 @@ measurement: try {
       return measuredWorkspace;
     };
     await measureTurn("first");
+    if (values["crash-builder"]) {
+      const interruptedPids = await fakeBuilderEngine!.interruptRemoval();
+      const crash = { turns, interruptedPids, engine: fakeBuilderEngine!.snapshot() };
+      fs.writeFileSync(path.join(output, "builder-crash.json"), JSON.stringify(crash, null, 2));
+      console.log(JSON.stringify({ builderCrash: crash }));
+      process.exit(0);
+    }
     for (let i = 0; i < requests; i++) {
       await measureTurn(`unchanged-${i + 1}`);
     }
@@ -1021,6 +1104,7 @@ measurement: try {
         acceleration: values.acceleration,
         sandboxBackend: sandbox.backend,
         sandboxImage: sandbox.docker.image,
+        fakeBuilderRemovalMs,
         filesystemType: fs.statfsSync(output).type,
         pageCache: "not evicted by this benchmark",
       },
@@ -1291,6 +1375,22 @@ measurement: try {
   await heartbeatDone;
   process.off("worker", observeWorker);
   await server?.close({ reason: "synthetic checkpoint measurement complete" });
+  if (sandboxRegistryClose) {
+    const before = performance.now();
+    const cpuBefore = process.cpuUsage();
+    const allocatedBefore = getHeapStatistics().total_allocated_bytes;
+    await sandboxRegistryClose.drain();
+    const cpu = process.cpuUsage(cpuBefore);
+    const cleanup = {
+      drainMs: performance.now() - before,
+      processCpuMs: (cpu.user + cpu.system) / 1000,
+      allocatedBytes: getHeapStatistics().total_allocated_bytes - allocatedBefore,
+      engine: fakeBuilderEngine!.snapshot(),
+    };
+    fs.writeFileSync(path.join(output, "builder-cleanup.json"), JSON.stringify(cleanup, null, 2));
+    console.log(JSON.stringify({ builderCleanup: cleanup }));
+    assert.equal(cleanup.engine.remaining.length, 0, "Builder survived registry shutdown drain");
+  }
   await agent.closeOpenClawAgentDatabasesAsync();
   await state.closeOpenClawStateDatabaseAsync();
   await (await import("../../src/shared/global-singleton.js")).drainGlobalSingletonLifecycleState();
