@@ -41,6 +41,7 @@ function applyWhamCooldownResult(params: {
   existing: ProfileUsageStats;
   computed: ProfileUsageStats;
   now: number;
+  reason: AuthProfileFailureReason;
   whamResult: WhamCooldownProbeResult;
 }): ProfileUsageStats {
   const existingActiveCooldownUntil = resolveActiveWindowUntil(
@@ -69,13 +70,13 @@ function applyWhamCooldownResult(params: {
   const { cooldownClassification } = params.whamResult;
   if (
     !cooldownClassification &&
-    !params.whamResult.available &&
-    (params.computed.cooldownReason === "rate_limit" ||
-      (params.computed.blockedReason === "subscription_limit" &&
+    (params.reason === "rate_limit" ||
+      (!params.whamResult.available &&
+        params.computed.blockedReason === "subscription_limit" &&
         isBlockedWindowActiveForModel(params.computed, params.now)))
   ) {
-    // A failed or incomplete probe supplied no authoritative retry deadline.
-    // Keep the persisted local backoff instead of replacing it with a fixed delay.
+    // A probe without an exhausted window or auth evidence adds no local delay:
+    // a rate limit keeps only its provider deadline and a block keeps its reset.
     return {
       ...params.computed,
       lastProbeAt: params.now,
@@ -110,7 +111,7 @@ export function matchesWhamBlockGeneration(
     stats?.blockedScope === generation?.blockedScope &&
     stats?.lastProbeAt === generation?.lastProbeAt &&
     stats?.lastFailureAt === generation?.lastFailureAt &&
-    stats?.failureCounts?.rate_limit === generation?.failureCounts?.rate_limit
+    stats?.lastRateLimitAt === generation?.lastRateLimitAt
   );
 }
 
@@ -142,6 +143,7 @@ export type AuthProfileFailureReduction = {
   expectedProfile: AuthProfileCredential;
   reason: AuthProfileFailureReason;
   modelId?: string;
+  retryAfterMs?: number;
   whamResult: WhamCooldownProbeResult | null;
   probeEligible: boolean;
   observedProfile?: AuthProfileCredential;
@@ -168,7 +170,15 @@ export function reduceAuthProfileFailure(
   if (!profile || profile.setup?.replacement) {
     return undefined;
   }
-  const { expectedProfile, reason, modelId, whamResult, observedProfile, blockGeneration } = input;
+  const {
+    expectedProfile,
+    reason,
+    modelId,
+    retryAfterMs,
+    whamResult,
+    observedProfile,
+    blockGeneration,
+  } = input;
   const currentWhamResult =
     whamResult &&
     input.probeEligible &&
@@ -189,8 +199,8 @@ export function reduceAuthProfileFailure(
     currentWhamResult?.available && previousStats?.blockedReason === "subscription_limit"
       ? reconcileWhamBlock(previousStats, currentWhamResult, now)
       : (previousStats ?? {});
-  const computed = computeNextProfileUsageStats({ existing, now, reason, modelId });
+  const computed = computeNextProfileUsageStats({ existing, now, reason, modelId, retryAfterMs });
   return currentWhamResult
-    ? applyWhamCooldownResult({ existing, computed, now, whamResult: currentWhamResult })
+    ? applyWhamCooldownResult({ existing, computed, now, reason, whamResult: currentWhamResult })
     : computed;
 }

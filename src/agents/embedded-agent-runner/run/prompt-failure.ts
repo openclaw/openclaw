@@ -18,7 +18,7 @@ import {
   isCliTerminalStopCode,
   resolveFailoverStatus,
 } from "../../failover-error.js";
-import { classifyRateLimitWindow } from "../../failover/retry-evidence.js";
+import { classifyRateLimitWindow, resolveRetryAfterMs } from "../../failover/retry-evidence.js";
 import type { FailoverReason } from "../../failover/signal.js";
 import { isAgentHarnessPreflightError } from "../../harness/errors.js";
 import { resolveSessionSuspensionReason } from "../../session-suspension.js";
@@ -257,6 +257,11 @@ export async function handleEmbeddedPromptFailure(input: {
           profileId: failedProfileId,
           reason: promptProfileFailureReason,
           modelId: preparedRuntime.modelId,
+          retryAfterMs: resolveRetryAfterMs(
+            formatErrorMessage(terminal.promptError),
+            Date.now(),
+            terminal.promptError,
+          ),
         })
         .catch((error: unknown) => {
           log.warn(`prompt profile failure mark failed: ${String(error)}`);

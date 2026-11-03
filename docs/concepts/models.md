@@ -181,8 +181,9 @@ also refresh the affected catalog. Use **Refresh** in Models or
 released models. **Retry** requests discovery again after a failure.
 
 If a credential refresh loses its plugin generation, OpenClaw retries publication
-once against current plugins. If that retry fails, the recorded failure and Gateway
-warning identify the failed fresh-generation retry.
+once against current plugins. If a newer publication supersedes that refresh,
+waiting requests adopt its result instead of failing on the obsolete publication.
+A failed fresh-generation retry still records the failure and emits a Gateway warning.
 
 For models configured to use a CLI runtime, channel picker availability follows that
 runtime's prepared authentication. A provider API key does not substitute for its
@@ -200,6 +201,7 @@ Removing a `models.providers.<id>` entry while the Gateway is running clears sav
 
 Changes to aliases or model restrictions reuse compatible inventory. Changes to
 the provider, plugin, credentials, environment, or workspace can invalidate it.
+The Gateway excludes temporary skill overrides from its shared catalog worker environment.
 
 Automations and command-palette model search show a warning when a provider refresh
 fails, while keeping the models returned by the Gateway. Open Models to retry the

@@ -425,7 +425,7 @@ describe("runtime auth profile snapshots", () => {
         {
           ...published,
           usageStats: {
-            "acme:primary": { cooldownUntil: 30_000, failureCounts: { rate_limit: 2 } },
+            "acme:primary": { cooldownUntil: 30_000, failureCounts: { timeout: 2 } },
           },
         },
         agentDir,
@@ -433,7 +433,7 @@ describe("runtime auth profile snapshots", () => {
       const blocked = read(worker);
       expect(blocked.usageStats?.["acme:primary"]).toEqual({
         cooldownUntil: 30_000,
-        failureCounts: { rate_limit: 2 },
+        failureCounts: { timeout: 2 },
       });
       expectDefined(blocked.usageStats?.["acme:primary"], "published usage").cooldownUntil = 99;
       expect(read(worker).usageStats?.["acme:primary"]?.cooldownUntil).toBe(30_000);

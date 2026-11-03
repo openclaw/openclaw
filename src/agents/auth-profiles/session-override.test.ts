@@ -539,7 +539,7 @@ describe("session auth-profile rotation", () => {
         [OAUTH_PROFILE_ID]: {
           cooldownUntil: Date.now() + 60_000,
           cooldownReason: "rate_limit",
-          failureCounts: { rate_limit: 1 },
+          lastRateLimitAt: Date.now(),
         },
       };
       const sessionEntry: SessionEntry = {
@@ -557,7 +557,7 @@ describe("session auth-profile rotation", () => {
       authStoreMocks.state.store.usageStats[OAUTH_PROFILE_ID] = {
         cooldownUntil: Date.now() - 1,
         cooldownReason: "rate_limit",
-        failureCounts: { rate_limit: 1 },
+        lastRateLimitAt: Date.now() - 60_000,
       };
       sessionEntry.compactionCount = 1;
 

@@ -1,6 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
-import { isActiveUnusableWindow } from "./auth-profiles/usage-state.js";
 import { shouldUseTransientCooldownProbeSlot } from "./failover-policy.js";
 import type { FailoverReason } from "./failover/signal.js";
 import type { ModelFallbackAuthRuntime } from "./model-fallback-attempt.js";
@@ -80,25 +79,8 @@ export function resolveCooldownDecision(params: {
       params.profileIds,
       { now: params.now, forModel: params.candidate.model },
     );
-    // Generic 429 backoff can become stale before its local cooldown expires.
-    // Provider-recorded reset windows still remain authoritative until near expiry.
-    const staleRateLimit =
-      inferredReason === "rate_limit" &&
-      !params.profileIds.some((profileId) => {
-        const stats = params.authStore.usageStats?.[profileId];
-        return (
-          stats &&
-          isActiveUnusableWindow(stats.blockedUntil, params.now) &&
-          stats.blockedReason === "subscription_limit" &&
-          stats.blockedSource &&
-          (!stats.blockedModel || stats.blockedModel === params.candidate.model)
-        );
-      });
     shouldProbe =
-      staleRateLimit ||
-      soonest === null ||
-      !Number.isFinite(soonest) ||
-      params.now >= soonest - PROBE_MARGIN_MS;
+      soonest === null || !Number.isFinite(soonest) || params.now >= soonest - PROBE_MARGIN_MS;
   }
 
   const isPersistentAuthIssue = inferredReason === "auth" || inferredReason === "auth_permanent";

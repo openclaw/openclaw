@@ -12,8 +12,10 @@ import {
   type PluginManifestRegistry,
 } from "../plugins/manifest-registry.js";
 import {
+  cachePluginMetadataSnapshot,
   createPluginCache,
   getPluginCache,
+  readPluginMetadataSnapshotCache,
   retainPluginCache,
   withPluginCache,
 } from "../plugins/plugin-cache.js";
@@ -152,7 +154,7 @@ export async function resolveConfigWidePluginMetadataSnapshotAsync(
         return preparedCurrent;
       }
       const { key } = resolveConfigWideMetadataSelection(captured);
-      const existing = cache.metadata.snapshots.get(key);
+      const existing = readPluginMetadataSnapshotCache(key);
       if (existing) {
         activateDiscovery();
         return existing;
@@ -200,13 +202,12 @@ export function resolveConfigWidePluginMetadataSnapshot(
       });
     }
     const { key, workspaceDirs } = resolveConfigWideMetadataSelection(params);
-    const cache = getPluginCache();
-    const cached = cache.metadata.snapshots.get(key);
+    const cached = readPluginMetadataSnapshotCache(key);
     if (cached) {
       return cached;
     }
     const snapshot = resolveConfigWidePluginMetadataSnapshotImpl(params, workspaceDirs);
-    cache.metadata.snapshots.set(key, snapshot);
+    cachePluginMetadataSnapshot(key, snapshot);
     return snapshot;
   });
 }

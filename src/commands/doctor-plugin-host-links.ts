@@ -2,6 +2,7 @@ import path from "node:path";
 import { coerceErrorMessage as formatPackageReadFailure } from "@openclaw/normalization-core/error-coercion";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
   resolveDefaultPluginExtensionsDir,
   resolveDefaultPluginNpmDir,
@@ -21,6 +22,8 @@ import type { DoctorPrompter } from "./doctor-prompter.js";
 
 type PluginHostLinkDoctorParams = InstalledPluginIndexRecordStoreOptions & {
   prompter: Pick<DoctorPrompter, "shouldRepair">;
+  installRecords?: Record<string, PluginInstallRecord>;
+  beforePersistentEffect?: () => void | Promise<void>;
 };
 
 type PluginPackageReadFailure = {
@@ -125,6 +128,8 @@ export async function maybeRepairPluginOpenClawHostLinks(
     return false;
   }
 
+  const installRecords =
+    params.installRecords ?? (await loadInstalledPluginIndexInstallRecords(params));
   const warnings: string[] = [];
   const logger = {
     info() {},
@@ -135,23 +140,31 @@ export async function maybeRepairPluginOpenClawHostLinks(
       `Could not inspect ${kind} package ${shortenHomePath(packageDir)}: ${formatPackageReadFailure(error)}`,
     );
   };
-  const results = await Promise.all(
+  const results = await Promise.allSettled(
     npmRoots.map((npmRoot) =>
       relinkOpenClawPeerDependenciesInManagedNpmRoot({
         npmRoot,
         logger,
         onPackageReadError: warnReadFailure("managed npm"),
+        beforePersistentEffect: params.beforePersistentEffect,
       }),
     ),
   );
-  const repaired = results.reduce((total, result) => total + result.repaired, 0);
+  let repaired = 0;
+  for (const result of results) {
+    if (result.status === "rejected") {
+      throw result.reason;
+    }
+    repaired += result.value.repaired;
+  }
   const registeredRepair = await reconcileRegisteredOpenClawHostLinks({
-    installRecords: await loadInstalledPluginIndexInstallRecords(params),
+    installRecords,
     extensionsDir: resolveRegisteredPluginExtensionsRoot(params),
     env: params.env,
     mode: "repair",
     logger,
     onPackageReadError: warnReadFailure("registered"),
+    beforePersistentEffect: params.beforePersistentEffect,
   });
 
   for (const [count, kind] of [
@@ -166,10 +179,7 @@ export async function maybeRepairPluginOpenClawHostLinks(
     }
   }
   if (warnings.length > 0) {
-    note(
-      ["Could not repair all managed OpenClaw host peer links:", ...warnings].join("\n"),
-      "Plugin registry",
-    );
+    note(["OpenClaw host peer link warnings:", ...warnings].join("\n"), "Plugin registry");
   }
 
   return repaired > 0 || registeredRepair.repaired > 0;

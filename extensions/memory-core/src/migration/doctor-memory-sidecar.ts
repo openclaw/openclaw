@@ -569,7 +569,12 @@ export const memorySidecarStateMigration: PluginDoctorStateMigration = {
         });
       }
     }
-    return { changes, warnings };
+    // These indexes are derived; failed imports retain their sources for a later repair.
+    return {
+      changes,
+      warnings,
+      ...(warnings.length > 0 ? { warningDisposition: "recoverable" as const } : {}),
+    };
   },
 };
 

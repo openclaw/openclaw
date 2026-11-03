@@ -566,6 +566,7 @@ export async function markAuthProfileFailure(params: {
   agentDir?: string;
   runId?: string;
   modelId?: string;
+  retryAfterMs?: number;
 }): Promise<void> {
   const { store, profileId, reason, agentDir, runId, modelId } = params;
   const profile = structuredClone(store.profiles[profileId]);
@@ -601,6 +602,7 @@ export async function markAuthProfileFailure(params: {
         expectedProfile: profile,
         reason,
         modelId,
+        retryAfterMs: params.retryAfterMs,
         whamResult,
         probeEligible: shouldProbeWham,
         observedProfile: observed?.credential,
@@ -689,10 +691,7 @@ export async function markAuthProfileBlockedUntil(params: {
         cooldownClassification: undefined,
         cooldownModel: undefined,
         lastFailureAt: now,
-        failureCounts: {
-          ...previousStats?.failureCounts,
-          rate_limit: (previousStats?.failureCounts?.rate_limit ?? 0) + 1,
-        },
+        lastRateLimitAt: now,
       };
       freshStore.usageStats ??= {};
       freshStore.usageStats[profileId] = nextStats;

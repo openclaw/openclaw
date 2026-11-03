@@ -1,5 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { describe, expect, it, vi } from "vitest";
+import { captureSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker-context.js";
+import {
+  createSqliteReadOnlyWorkerScope,
+  runScopedSqliteInspection,
+} from "../infra/sqlite-readonly-worker.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { buildPluginApi, createUnavailableRuntime } from "./api-builder.js";
 import { instrumentPluginInstanceApi } from "./api-facades.js";
@@ -39,6 +44,47 @@ function fixture() {
 }
 
 describe("instance-bound background context", () => {
+  it.each([false, true])(
+    "owns readers when registration closes before background work settles (alreadyClosed=%s)",
+    async (alreadyClosed) => {
+      const registration = createSqliteReadOnlyWorkerScope();
+      const owner = registration.run(fixture);
+      const caller = createSqliteReadOnlyWorkerScope();
+      const release = createDeferredCore();
+      let readers: ReturnType<typeof captureSqliteReadOnlyWorkerScope> | undefined;
+      let pending: Promise<string> | undefined;
+      try {
+        if (alreadyClosed) {
+          await registration.close();
+        }
+        pending = caller.run(() =>
+          owner.run(async () => {
+            readers = captureSqliteReadOnlyWorkerScope();
+            await release.promise;
+            return runScopedSqliteInspection(undefined, async (signal) => {
+              signal?.throwIfAborted();
+              return "background read completed";
+            });
+          }),
+        );
+        await registration.close();
+        await caller.close();
+        release.resolve();
+        await expect(pending).resolves.toBe("background read completed");
+        expect(readers?.(() => "live")).toBe("live");
+        owner.instance.onModuleDispose(() => {
+          expect(readers?.(() => "module cleanup")).toBe("module cleanup");
+        });
+        await expect(owner.instance.dispose()).resolves.toEqual({ errors: [] });
+        expect(() => readers?.(() => "retired")).toThrow("SQLite read-only worker scope closed");
+      } finally {
+        release.resolve();
+        await Promise.allSettled([pending, registration.close(), caller.close()]);
+        await owner.instance.dispose();
+      }
+    },
+  );
+
   it("detaches registration and opening requests, follows adoption, and preserves its host", async () => {
     const caller = new AsyncLocalStorage<string>();
     const host = new LegacyPluginSdkResourceHost();

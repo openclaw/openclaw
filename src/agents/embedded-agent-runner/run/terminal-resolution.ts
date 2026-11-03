@@ -12,6 +12,7 @@ import {
   projectAgentRunAttemptTerminal,
 } from "../../agent-run-terminal-outcome.js";
 import type { AuthProfileFailureReason, AuthProfileStore } from "../../auth-profiles.js";
+import { buildAssistantFailoverSignal } from "../../embedded-agent-helpers/assistant-message-failures.js";
 import { AGENT_LANE_SUBAGENT } from "../../lanes.js";
 import type { ResolvedProviderAuth } from "../../model-auth.js";
 import { resolveReplyExpectation } from "../../reply-completion.js";
@@ -31,6 +32,7 @@ import {
   reportEmbeddedRunSuccessfulAuthBinding,
 } from "./auth-profile-success.js";
 import type { EmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
+import type { EmbeddedRunFailoverRetryController } from "./failover-retry-controller.js";
 import { resolveFinalAssistantVisibleText } from "./helpers.js";
 import { countSettledTurnDeliveryPayloads } from "./incomplete-turn-classification.js";
 import {
@@ -185,11 +187,7 @@ export async function resolveEmbeddedRunTerminal(input: {
   readTerminalToolPresentation: () => string | undefined;
   resolveReplayInvalid: (incompleteTurnText?: string | null) => boolean;
   setTerminalLifecycleMeta: NonNullable<EmbeddedRunAttemptResult["setTerminalLifecycleMeta"]>;
-  maybeMarkAuthProfileFailure: (failure: {
-    profileId?: string;
-    reason?: AuthProfileFailureReason | null;
-    modelId?: string;
-  }) => Promise<void>;
+  maybeMarkAuthProfileFailure: EmbeddedRunFailoverRetryController["maybeMarkAuthProfileFailure"];
   assistantProfileFailureReason?: AuthProfileFailureReason | null;
   startedAtMs: number;
   provider: string;
@@ -523,11 +521,13 @@ async function completeEmbeddedRun(
   });
   if (error) {
     if (input.authProfileId) {
+      const assistant = input.attemptAssistant;
       try {
         await input.maybeMarkAuthProfileFailure({
           profileId: input.authProfileId,
           reason: input.assistantProfileFailureReason,
           modelId: input.modelId,
+          retryAfterMs: assistant && buildAssistantFailoverSignal(assistant).retryAfterMs,
         });
       } catch (bookkeepingError) {
         log.warn(

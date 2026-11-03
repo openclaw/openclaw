@@ -3,7 +3,7 @@ import type { AddressInfo } from "node:net";
 import path from "node:path";
 import type { AssistantMessage, Context, Model } from "@openclaw/ai";
 import { streamOpenAICompletions } from "@openclaw/ai/internal/openai";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { readPersistedAuthProfileStateRaw } from "../../src/agents/auth-profiles/sqlite.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../../src/agents/auth-profiles/store-runtime.js";
 import { isProfileInCooldown } from "../../src/agents/auth-profiles/usage-state.js";
@@ -25,6 +25,15 @@ import {
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "../../src/test-utils/plugin-registration.js";
+
+// The fixture server is local; ambient corporate proxies must not intercept its traffic.
+beforeEach(() => {
+  vi.stubEnv("NO_PROXY", "127.0.0.1,localhost");
+  vi.stubEnv("no_proxy", "127.0.0.1,localhost");
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 const MODEL_ID = "qwen3.8-max";
 const QWEN_TOKEN_PLAN_PROVIDER_ID = "qwen-token-plan";
@@ -304,14 +313,12 @@ function runThroughFailureRecovery(params: Parameters<typeof runThroughFailureRe
 
 function expectRateLimitState(result: Awaited<ReturnType<typeof runThroughFailureRecovery>>): void {
   expect.soft(result.failureReason).toBe("rate_limit");
-  expect.soft(result.usage).toMatchObject({
-    cooldownReason: "rate_limit",
-    cooldownModel: MODEL_ID,
-    cooldownUntil: expect.any(Number),
-  });
-  expect.soft(result.usage).not.toHaveProperty("disabledReason");
-  expect.soft(result.usage).not.toHaveProperty("disabledUntil");
-  expect.soft(result.affectedModelBlocked).toBe(true);
+  // These throttles carry no provider retry timing, so a rate limit blocks no model.
+  expect.soft(result.usage).toMatchObject({ lastRateLimitAt: expect.any(Number) });
+  for (const key of ["cooldownReason", "cooldownUntil", "disabledReason", "disabledUntil"]) {
+    expect.soft(result.usage).not.toHaveProperty(key);
+  }
+  expect.soft(result.affectedModelBlocked).toBe(false);
   expect.soft(result.otherModelBlocked).toBe(false);
 }
 

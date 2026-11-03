@@ -277,7 +277,7 @@ describe("shared API-key editing and removal", () => {
         cooldownUntil: Date.now() + 60_000,
         cooldownReason: "rate_limit" as const,
         errorCount: 3,
-        failureCounts: { rate_limit: 3 },
+        lastRateLimitAt: Date.now(),
       };
       stored.usageStats = {
         [profileId]: failureState,

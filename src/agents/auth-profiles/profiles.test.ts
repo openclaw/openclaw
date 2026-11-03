@@ -1005,10 +1005,11 @@ describe("promoteAuthProfileInOrder", () => {
             usageStats: {
               [profileId]: {
                 cooldownUntil: Date.now() + 60_000,
-                cooldownReason: "rate_limit",
+                cooldownReason: "auth",
                 cooldownClassification: "wham_token_expired",
+                lastRateLimitAt: Date.now(),
                 errorCount: 12,
-                failureCounts: { rate_limit: 12 },
+                failureCounts: { auth: 12 },
               },
             },
           },

@@ -287,7 +287,9 @@ Use a user-pinned profile to make one account/key the durable first preference f
 
 ## Cooldowns
 
-When a profile fails due to auth or rate-limit errors, OpenClaw marks it in cooldown and moves to the next profile. A timeout that looks like rate limiting counts as such a failure.
+When a profile fails due to auth or rate-limit errors, OpenClaw moves to the next profile. Auth failures put the profile in cooldown. A timeout that looks like rate limiting counts as a rate-limit failure.
+
+OpenClaw does not invent rate-limit cooldowns. A rate-limited profile enters cooldown only when the provider says how long to wait, and the cooldown lasts exactly that long. Provider timing comes from `retry-after-ms`, `Retry-After` (seconds or an HTTP date), retry text such as OpenAI's `Please try again in 6s` or Gemini's `Please retry in 32s`, or Google `RetryInfo.retryDelay`. Without provider timing, the profile stays available for the next turn; the current turn still rotates to another profile or model. Repeated or concurrent rate limits never lengthen a cooldown. A later provider deadline extends it, and an earlier one cannot shorten it. A quota probe that finds capacity available adds no delay of its own. Provider-reported usage-window resets, such as Codex subscription limits, remain separate blocks. Rate-limit cooldowns left by older releases' local backoff are released on upgrade. After a rate limit, an automatic session fallback returns to an earlier profile in an explicit `auth.order` as soon as that profile is usable again; a successful request clears its rate-limit record.
 
 A provider plugin can declare `managesOwnAvailability: true` in `openclaw.plugin.json` when its upstream gateway owns capacity recovery. This applies to the plugin's declared providers and skips only rate-limit and overload cooldowns (`rate_limit` and `overloaded`). OpenRouter and Kilo Gateway use this declaration. Billing, authentication, permanent credential failures, and provider-reported subscription blocks remain enforced. Routing and auth status use the same policy, including before the provider runtime loads. There is no user configuration setting.
 
@@ -325,7 +327,7 @@ CLI-backed runtimes settle profile health only after their resume, fork, and fre
   </Accordion>
 </AccordionGroup>
 
-Regular (non-billing, non-auth-permanent) cooldowns scale with the profile's recent error count:
+Other cooldowns, apart from rate limits, billing and permanent auth failures, scale with the profile's recent error count:
 
 - 1st failure: 30 seconds
 - 2nd failure: 1 minute
@@ -398,7 +400,7 @@ Provider-busy signals such as `ModelNotReadyException` land in the overloaded bu
 
 `agents.defaults.timeoutSeconds` and run-specific model timeouts apply to each model candidate attempt. When an attempt times out, the next configured fallback receives its own full budget, so total elapsed time can exceed the setting. Progress does not renew an attempt's budget. User cancellation stops the entire fallback chain, and an independent outer deadline, such as the cron scheduler's deadline, still applies. See [Agent timeouts](/concepts/agent-loop#timeouts).
 
-The failover controller owns OpenClaw's transient recovery budget. Rate limits receive up to **10 total attempts per consecutive outage** before auth-profile rotation or model fallback. Jittered exponential waits cap at 30 seconds, while provider `retry-after` and `retry-after-ms` hints remain minimum waits even beyond that cap. Other transient failures retain eight retries and a 90-second window for consecutive outages. A completed successful model response resets that window, the retry count, and backoff; partial output and tool activity alone do not. Existing per-attempt timeouts and any independent outer deadline remain authoritative. Once that budget or window is exhausted, recovery proceeds to eligible auth-profile rotation, configured model fallback, or a visible error. Continuations preserve the transcript instead of replaying the original user request. Recovery and any fallback winner remain turn-local.
+The failover controller owns OpenClaw's transient recovery budget. Rate limits receive up to **10 total attempts per consecutive outage** before auth-profile rotation or model fallback. A rate limit with provider timing waits exactly that long, even beyond the 30-second backoff cap. Without provider timing, jittered exponential waits cap at 30 seconds. For other transient failures, provider hints remain minimum waits. Other transient failures retain eight retries and a 90-second window for consecutive outages. A completed successful model response resets that window, the retry count, and backoff; partial output and tool activity alone do not. Existing per-attempt timeouts and any independent outer deadline remain authoritative. Once that budget or window is exhausted, recovery proceeds to eligible auth-profile rotation, configured model fallback, or a visible error. Continuations preserve the transcript instead of replaying the original user request. Recovery and any fallback winner remain turn-local.
 
 The embedded runtime's existing session setting `retry.provider.maxRetries` overrides its recovery retry budget. `0` disables retries, and rate limits remain capped at 10 total attempts per consecutive outage. It is not an `openclaw.json` key and does not change a native harness's internal request retries. Native harnesses may finish their own request retries before OpenClaw starts continuation recovery. The reply runner does not add another whole-turn replay loop. See [Retry policy](/concepts/retry) for pacing and exclusions.
 

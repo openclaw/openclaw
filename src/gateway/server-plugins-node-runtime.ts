@@ -154,6 +154,10 @@ export async function openOwnedGatewayNodeDuplex(options: {
       await endpoint.drain();
       return result;
     })
+    .catch((error: unknown) => {
+      controller.abort(error);
+      throw error;
+    })
     .finally(() => {
       signal.removeEventListener("abort", onAbort);
       endpoint.close();
@@ -162,7 +166,15 @@ export async function openOwnedGatewayNodeDuplex(options: {
   void closed.catch(ready.reject);
   await ready.promise;
   return {
-    send: (message) => endpoint.send(message),
+    async send(message) {
+      try {
+        await endpoint.send(message);
+      } catch (error) {
+        // Invocation rejection can close framing before the caller resumes setup.
+        assertRuntimeCurrent();
+        throw error;
+      }
+    },
     onMessage: (listener) => {
       assertRuntimeCurrent();
       return endpoint.onMessage(listener);

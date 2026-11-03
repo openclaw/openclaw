@@ -22,7 +22,7 @@ it("preserves a sibling model cooldown until that model succeeds", () => {
     cooldownModel: "primary",
     cooldownUntil: 31_000,
     errorCount: 1,
-    failureCounts: { rate_limit: 1 },
+    lastRateLimitAt: 1_000,
     lastFailureAt: 1_000,
   };
   const siblingSuccess = resetAuthProfileFailureState(existing, { lastUsed: 2_000 }, "fallback");
@@ -305,7 +305,7 @@ describe("auth profile usage state", () => {
     ["active disable", { primary: disabled }, "billing"],
     [
       "explicit cooldown beats stale counts",
-      { primary: cooldown("auth", undefined, { failureCounts: { rate_limit: 99 } }) },
+      { primary: cooldown("auth", undefined, { failureCounts: { billing: 99 } }) },
       "auth",
     ],
     [
@@ -320,7 +320,7 @@ describe("auth profile usage state", () => {
       "most frequent reason",
       {
         primary: cooldown(undefined, undefined, {
-          failureCounts: { overloaded: 2, rate_limit: 1 },
+          failureCounts: { overloaded: 2, auth: 1 },
         }),
       },
       "overloaded",
@@ -402,14 +402,16 @@ describe("auth profile usage state", () => {
         disabledUntil: now + 3_600_000,
         disabledReason: "billing",
         errorCount: 5,
-        failureCounts: { rate_limit: 3, billing: 2 },
+        failureCounts: { billing: 2 },
+        lastRateLimitAt: now - 2_000,
       },
       {
         ...clearedCooldown,
         disabledUntil: now + 3_600_000,
         disabledReason: "billing",
         errorCount: 5,
-        failureCounts: { rate_limit: 3, billing: 2 },
+        failureCounts: { billing: 2 },
+        lastRateLimitAt: now - 2_000,
       },
     ],
     [
@@ -423,24 +425,32 @@ describe("auth profile usage state", () => {
       { cooldownUntil: now + 300_000, ...clearedDisable, errorCount: 3 },
     ],
     [
-      "all expired windows preserve rate-limit history",
+      "all expired windows reset counters but keep rate-limit recovery",
       {
         cooldownUntil: now - 2_000,
         disabledUntil: now - 1_000,
         disabledReason: "billing",
         errorCount: 4,
-        failureCounts: { rate_limit: 2, billing: 2 },
+        failureCounts: { timeout: 2, billing: 2 },
+        lastRateLimitAt: now - 2_000,
       },
-      { ...clearedCooldown, ...clearedDisable, errorCount: 0, failureCounts: { rate_limit: 2 } },
+      {
+        ...clearedCooldown,
+        ...clearedDisable,
+        errorCount: 0,
+        failureCounts: undefined,
+        lastRateLimitAt: now - 2_000,
+      },
     ],
     [
-      "expired provider block preserves retry backoff",
+      "expired provider block keeps rate-limit recovery",
       {
         blockedUntil: now - 1_000,
         blockedReason: "subscription_limit",
         blockedSource: "codex_rate_limits",
         errorCount: 4,
-        failureCounts: { rate_limit: 4, timeout: 2 },
+        failureCounts: { timeout: 2 },
+        lastRateLimitAt: now - 120_000,
         lastFailureAt: now - 120_000,
       },
       {
@@ -450,8 +460,9 @@ describe("auth profile usage state", () => {
         blockedModel: undefined,
         blockedScope: undefined,
         errorCount: 0,
-        failureCounts: { rate_limit: 4 },
+        failureCounts: undefined,
         lastFailureAt: now - 120_000,
+        lastRateLimitAt: now - 120_000,
       },
       true,
     ],

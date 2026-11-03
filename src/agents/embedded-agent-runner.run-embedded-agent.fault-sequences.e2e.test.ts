@@ -255,7 +255,7 @@ function makeAttemptForFault(
           : fault.status === 429
             ? fault.window === "short"
               ? "429 Too Many Requests: rate limit exceeded"
-              : "429 Too Many Requests: subscription usage limit reached"
+              : "429 Too Many Requests: subscription usage limit reached. Please try again in 3600 seconds."
             : "Prompt is too long for this model's context window";
   return makeEmbeddedRunnerAttempt({
     lastAssistant: buildEmbeddedRunnerAssistant({
@@ -577,7 +577,9 @@ describe("runEmbeddedAgent provider fault sequences", () => {
 
       const usageStats = await readUsageStats(agentDir);
       expect(usageStats["openai:p1"]?.cooldownReason).toBe("rate_limit");
-      expect(usageStats["openai:p1"]?.failureCounts?.rate_limit).toBe(1);
+      expect(usageStats["openai:p1"]?.lastRateLimitAt).toEqual(expect.any(Number));
+      expect(usageStats["openai:p1"]?.cooldownUntil).toBeGreaterThan(Date.now());
+      expect(usageStats["openai:p1"]?.errorCount ?? 0).toBe(0);
       expect(usageStats["openai:p2"]?.cooldownReason).toMatch(/^auth/);
       expect(usageStats["openai:p2"]?.failureCounts?.auth).toBe(1);
       expect(usageStats["groq:p1"]?.cooldownUntil).toBeUndefined();

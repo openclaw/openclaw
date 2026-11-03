@@ -332,6 +332,31 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
     expect(acceptedTypingAt).toHaveLength(settledTypingCount);
   });
 
+  it("stops typing between failed recovery attempts and after the final failure", async () => {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await dispatchProgressTurn(
+        async () => {
+          await http.waitForTypingSend();
+          throw new Error("prepared reply dispatch runtime owner was not published for default");
+        },
+        {
+          mode: "off",
+          toolProgress: false,
+          allowErrors: true,
+          outcome: "failed-retryable",
+          suppressFailureFallback: true,
+        },
+      );
+      const typingCount = acceptedCalls.filter((call) => call.method === "sendChatAction").length;
+      expect(typingCount).toBeGreaterThan(attempt);
+      expect(acceptedCalls.filter((call) => call.method === "sendMessage")).toEqual([]);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(acceptedCalls.filter((call) => call.method === "sendChatAction")).toHaveLength(
+        typingCount,
+      );
+    }
+  });
+
   it.each(["control-only", "immediate", "buffered"] as const)(
     "delivers presentation controls through the %s crossing",
     async (branch) => {

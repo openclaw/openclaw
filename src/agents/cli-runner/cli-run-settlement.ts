@@ -28,6 +28,7 @@ import { resolveAuthProfileFailureReason } from "../embedded-agent-runner/run/au
 import { buildEmbeddedRunPayloads } from "../embedded-agent-runner/run/payloads.js";
 import { mergeAttemptToolMediaPayloads } from "../embedded-agent-runner/run/tool-media-payloads.js";
 import { isFailoverError } from "../failover-error.js";
+import { resolveRetryAfterMs } from "../failover/retry-evidence.js";
 import { resolveReplyExpectation } from "../reply-completion.js";
 import { recordAgentCleanupFailure } from "../run-cleanup-timeout.js";
 import { CliAuthProfilePreparationError } from "./auth-profile-preparation-error.js";
@@ -154,6 +155,7 @@ async function settleCliAuthProfile(params: {
         agentDir: params.agentDir,
         runId: params.terminal.runId,
         modelId: params.terminal.modelId,
+        retryAfterMs: resolveRetryAfterMs(formatErrorMessage(error), Date.now(), error),
       });
     }
   } catch (error) {

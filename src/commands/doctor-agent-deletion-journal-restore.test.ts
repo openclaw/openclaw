@@ -336,7 +336,25 @@ it.each(["first-upgrade", "already-held"])(
   },
 );
 
-it.each(["present-incomplete", "other-version", "rewritten-stamp"])(
+it("restores a configured store upgraded to 2026.10.6 after journal reconstruction", async () => {
+  await withFixture(async ({ env, agentPath, sharedPath }) => {
+    using shared = new DatabaseSync(sharedPath);
+    shared.exec("DROP TABLE agent_deletion_journal");
+    shared.close();
+    {
+      using agent = new DatabaseSync(agentPath);
+      agent.exec("UPDATE schema_meta SET app_version = '2026.10.6', updated_at = 2000");
+    }
+    const bytes = fs.readFileSync(agentPath);
+    const result = await repair(env);
+    expect(result.warnings.join("\n")).toContain("Automatically restored agent main");
+    expect(readAgentDeletionRecoveryHolds(openOpenClawStateDatabase({ env }))).toEqual([]);
+    expect(fs.readFileSync(agentPath)).toEqual(bytes);
+    expect(await repair(env)).toEqual({ changes: [], warnings: [] });
+  });
+});
+
+it.each(["present-incomplete", "different-owner", "unconfigured"])(
   "keeps %s stores held",
   async (kind) => {
     await withFixture(async ({ env, agentPath, sharedPath }) => {
@@ -361,12 +379,16 @@ it.each(["present-incomplete", "other-version", "rewritten-stamp"])(
         shared.exec("DROP TABLE agent_deletion_journal");
       }
       shared.close();
-      if (kind !== "present-incomplete") {
+      if (kind === "different-owner") {
         using agent = new DatabaseSync(agentPath);
-        agent.exec(
-          kind === "other-version"
-            ? "UPDATE schema_meta SET app_version = '2026.9.6'"
-            : "UPDATE schema_meta SET updated_at = 2000",
+        agent.exec("UPDATE schema_meta SET agent_id = 'other'");
+      } else if (kind === "unconfigured") {
+        fs.writeFileSync(
+          env.OPENCLAW_CONFIG_PATH!,
+          JSON.stringify({
+            agents: { ownership: "explicit", entries: { other: {} } },
+            plugins: { enabled: false },
+          }),
         );
       }
       const bytes = fs.readFileSync(agentPath);
@@ -386,7 +408,9 @@ it.each(["present-incomplete", "other-version", "rewritten-stamp"])(
           config: { agents: { entries: { main: {} } } },
           configuredAgentDatabaseTargets: [{ agentId: "main", path: agentPath }],
         }),
-      ).rejects.toThrow("Doctor could not complete repair");
+      ).rejects.toThrow(
+        kind === "different-owner" ? "belongs to agent other" : "Doctor could not complete repair",
+      );
     });
   },
 );

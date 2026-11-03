@@ -574,14 +574,18 @@ describe("secret provider integration presets", () => {
     },
   );
 
-  it.skipIf(process.platform === "win32")(
-    "skips node presets whose entrypoint parent directory is writable by others",
-    () => {
+  it.skipIf(process.platform === "win32").each([
+    { writable: "world", dirMode: 0o777, fileMode: 0o644, presets: 0 },
+    { writable: "group", dirMode: 0o775, fileMode: 0o664, presets: 1 },
+  ])(
+    "lists $presets preset(s) when the node entrypoint path is $writable-writable",
+    ({ dirMode, fileMode, presets }) => {
       const rootDir = makeTempDir();
       const binDir = path.join(rootDir, "bin");
       fs.mkdirSync(binDir);
       fs.writeFileSync(path.join(binDir, "resolve.mjs"), "process.stdin.resume();\n");
-      fs.chmodSync(binDir, 0o777);
+      fs.chmodSync(path.join(binDir, "resolve.mjs"), fileMode);
+      fs.chmodSync(binDir, dirMode);
       try {
         writePluginManifest(rootDir, {
           id: "writable-parent-secrets",
@@ -597,7 +601,9 @@ describe("secret provider integration presets", () => {
 
         const registry = loadTestRegistry(rootDir, "writable-parent-secrets");
 
-        expect(listSecretProviderIntegrationPresets({ manifestRegistry: registry })).toEqual([]);
+        expect(listSecretProviderIntegrationPresets({ manifestRegistry: registry })).toHaveLength(
+          presets,
+        );
       } finally {
         fs.chmodSync(binDir, 0o700);
       }

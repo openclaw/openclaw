@@ -11,6 +11,7 @@ import { RETAINED_MANAGED_NPM_KEEP_FILES_REASON } from "../plugins/managed-npm-r
 import {
   hasRetainedManagedNpmInstallMarker,
   markRetainedManagedNpmInstall,
+  resolveRetainedManagedNpmInstallMarkerPath,
 } from "../plugins/managed-npm-retention.js";
 import { getProcessPluginCache } from "../plugins/plugin-cache.js";
 import { PLUGIN_LIFECYCLE_LEASE_IDENTITY } from "../plugins/plugin-lifecycle-lease-identity.js";
@@ -68,34 +69,52 @@ it("leaves shared state and hot metadata untouched with only state captures", as
   });
 });
 
-it("preserves package files retained by plugin uninstall", async () => {
-  await withOpenClawTestState({ label: "gateway-retained-plugin-cleanup" }, async (state) => {
-    const packageDir = writeManagedNpmPlugin({
-      stateDir: state.stateDir,
-      packageName: "@openclaw/kept-plugin",
-      pluginId: "kept-plugin",
-      version: "1.0.0",
-    });
-    await markRetainedManagedNpmInstall({
-      packageDir,
-      pluginId: "kept-plugin",
-      reason: RETAINED_MANAGED_NPM_KEEP_FILES_REASON,
-    });
-    const log = { info: vi.fn(), warn: vi.fn() };
+it.each([
+  ["project", false],
+  ["project", true],
+  ["legacy", false],
+  ["legacy", true],
+] as const)(
+  "preserves uninstalled %s package files when its marker is malformed: %s",
+  async (layout, malformed) => {
+    await withOpenClawTestState({ label: "gateway-retained-plugin-cleanup" }, async (state) => {
+      const packageDir = writeManagedNpmPlugin({
+        stateDir: state.stateDir,
+        packageName: "@openclaw/kept-plugin",
+        pluginId: "kept-plugin",
+        version: "1.0.0",
+        layout,
+      });
+      await markRetainedManagedNpmInstall({
+        packageDir,
+        pluginId: "kept-plugin",
+        reason: RETAINED_MANAGED_NPM_KEEP_FILES_REASON,
+      });
+      if (malformed) {
+        fs.writeFileSync(resolveRetainedManagedNpmInstallMarkerPath(packageDir), '{"reason":');
+      }
+      const log = { info: vi.fn(), warn: vi.fn() };
 
-    await cleanupGatewayRetiredPluginArtifacts({
-      log,
-      startupInstallPaths: [],
-      signal: new AbortController().signal,
-      assertCurrent: () => {},
-    });
+      await cleanupGatewayRetiredPluginArtifacts({
+        log,
+        startupInstallPaths: [],
+        signal: new AbortController().signal,
+        assertCurrent: () => {},
+      });
 
-    expect(fs.existsSync(packageDir)).toBe(true);
-    expect(hasRetainedManagedNpmInstallMarker(packageDir)).toBe(true);
-    expect(log.info).not.toHaveBeenCalled();
-    expect(log.warn).not.toHaveBeenCalled();
-  });
-});
+      expect(fs.existsSync(packageDir)).toBe(true);
+      expect(hasRetainedManagedNpmInstallMarker(packageDir)).toBe(true);
+      expect(log.info).not.toHaveBeenCalled();
+      if (malformed) {
+        expect(log.warn).toHaveBeenCalledWith(
+          expect.stringContaining("retired plugin cleanup unavailable"),
+        );
+      } else {
+        expect(log.warn).not.toHaveBeenCalled();
+      }
+    });
+  },
+);
 
 it.each(["project", "legacy"] as const)(
   "refreshes %s cleanup records without caller-thread SQLite and protects live packages",

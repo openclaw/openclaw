@@ -56,7 +56,9 @@ function isSecurePosixPathStat(stat: fs.Stats): boolean {
   if (process.platform === "win32") {
     return true;
   }
-  if ((stat.mode & 0o022) !== 0) {
+  // Match plugin discovery, which already loads this plugin's code at the same modes:
+  // group write is the default under user-private-group umasks (002), world write is not.
+  if ((stat.mode & 0o002) !== 0) {
     return false;
   }
   if (typeof process.getuid !== "function" || typeof stat.uid !== "number") {

@@ -21,8 +21,8 @@ import { tryProcessCwd } from "./safe-cwd.js";
 import { retainSnapshotWork } from "./sqlite-readonly-location-cleanup.js";
 import type { SqliteReadOnlyOperations } from "./sqlite-readonly-operation-registry.js";
 import {
+  createSqliteReadOnlyWorkerScope,
   readOnlyWorkerScope,
-  type SqliteReadOnlyWorkerScope,
 } from "./sqlite-readonly-worker-context.js";
 import { createSqliteReadOnlyWorkerPool } from "./sqlite-readonly-worker-pool.js";
 import {
@@ -38,6 +38,8 @@ import {
 } from "./sqlite-readonly-worker-protocol.js";
 import type { SqliteReadOnlyWorkerLaunch } from "./sqlite-readonly-worker-session-types.js";
 import { createSqliteReadOnlyWorkerSession } from "./sqlite-readonly-worker-session.js";
+
+export { createSqliteReadOnlyWorkerScope } from "./sqlite-readonly-worker-context.js";
 
 const SLOW_HARDWARE_HEADROOM = 10;
 const SQLITE_INSPECTION_TIMEOUT_MS = 30_000 * SLOW_HARDWARE_HEADROOM;
@@ -126,50 +128,6 @@ export function sqliteInspectionTimeoutError(
   return new Error(
     `SQLite ${operation} timed out after ${timeoutMs / 1000} seconds (budget for ${size}) for ${pathname}. Stop the Gateway service and other OpenClaw processes using this database, then retry; if already stopped, check storage performance.`,
   );
-}
-
-/** Reuse child imports until the lifecycle owner closes; reads reacquire source admission. */
-export function createSqliteReadOnlyWorkerScope(options?: {
-  signal: AbortSignal;
-  deadlineOwnedByCaller: boolean;
-}) {
-  const scope: SqliteReadOnlyWorkerScope = {
-    active: true,
-    busy: false,
-    controller: new AbortController(),
-    pending: new Set(),
-    deadlineOwnedByCaller: options?.deadlineOwnedByCaller ?? false,
-  };
-  const abort = () => scope.controller.abort(options?.signal.reason);
-  options?.signal.addEventListener("abort", abort, { once: true });
-  if (options?.signal.aborted) {
-    abort();
-  }
-  let closing: Promise<void> | undefined;
-  return {
-    run<T>(operation: () => T): T {
-      return readOnlyWorkerScope.run(scope, operation);
-    },
-    close(): Promise<void> {
-      closing ??= (async () => {
-        options?.signal.removeEventListener("abort", abort);
-        scope.active = false;
-        scope.controller.abort(new Error("SQLite read-only worker scope closed"));
-        await Promise.allSettled(scope.pending);
-        const closed = await Promise.allSettled([
-          scope.worker?.close(),
-          scope.releaseReadWorker?.(),
-        ]);
-        const failures = closed.flatMap((result) =>
-          result.status === "rejected" ? [result.reason] : [],
-        );
-        if (failures.length > 0) {
-          throw new AggregateError(failures, "SQLite read-only worker scope cleanup failed");
-        }
-      })();
-      return closing;
-    },
-  };
 }
 
 export async function withSqliteReadOnlyWorkerScope<T>(

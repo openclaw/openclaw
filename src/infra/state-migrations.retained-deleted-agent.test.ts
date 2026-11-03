@@ -239,6 +239,78 @@ describe("Doctor with a deleted agent database", () => {
     );
   });
 
+  it("keeps a configured inheritance owner's credentials when it is deleted after detection", async () => {
+    const stateDir = fs.realpathSync.native(tempDirs.make("doctor-retained-inherited-auth-"));
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const sourcePath = createLegacyDatabaseFixture({
+      agentId: "ops",
+      path: path.join(stateDir, "agents", "ops", "agent", "openclaw-agent.sqlite"),
+      env,
+      eventsBySession: {},
+      schemaVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
+    });
+    {
+      using source = new DatabaseSync(sourcePath);
+      source
+        .prepare(
+          "INSERT INTO auth_profile_store(store_key,store_json,updated_at) VALUES('primary',?,1)",
+        )
+        .run(
+          JSON.stringify({
+            version: 1,
+            profiles: {
+              "fixture:default": {
+                type: "api_key",
+                provider: "fixture",
+                key: "synthetic-owner-key",
+              },
+            },
+          }),
+        );
+    }
+    const detected = detectSharedAuthStoreMigration({
+      stateDir,
+      env,
+      doctorOnlyStateMigrations: true,
+      config: {
+        agents: { defaults: { authInheritance: { agentId: "ops" } }, entries: { ops: {} } },
+      },
+    });
+    expect(detected).toMatchObject({ ownerId: "ops", sourcePath, hasLegacy: true });
+    beginAgentDeletionJournal(
+      {
+        agentId: "ops",
+        operationId: "delete-inherited-auth",
+        agentDir: path.dirname(sourcePath),
+        workspaceDir: path.join(stateDir, "workspace-ops"),
+        sessionsDir: path.join(stateDir, "agents", "ops", "sessions"),
+        deleteFiles: false,
+      },
+      { env },
+    );
+    runOpenClawStateWriteTransaction(
+      (database) =>
+        completeAgentDeletionJournalInDatabase(database, "ops", "delete-inherited-auth"),
+      { env },
+    );
+    const bytes = fs.readFileSync(sourcePath);
+
+    const result = await migrateSharedAuthStore({ detected, stateDir, env });
+
+    expect(result).toMatchObject({ changes: [], outcome: "skipped" });
+    expect(result.warnings.join("\n")).toContain("held for agent ops");
+    expect(fs.readFileSync(sourcePath)).toEqual(bytes);
+    using state = new DatabaseSync(resolveOpenClawStateSqlitePath(env), { readOnly: true });
+    expect(
+      state
+        .prepare(
+          "SELECT state_key FROM config_machine_state WHERE state_key IN ('auth.sharedStore', 'authProfiles.store')",
+        )
+        .all(),
+    ).toEqual([]);
+  });
+
   it("records shared auth as held for deleted main even with a surviving physical registration", async () => {
     const stateDir = fs.realpathSync.native(tempDirs.make("doctor-retained-shared-auth-"));
     const env = { OPENCLAW_STATE_DIR: stateDir };

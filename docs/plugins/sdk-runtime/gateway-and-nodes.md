@@ -54,6 +54,8 @@ await a scope's `stop()` from one of its own running callbacks.
 
 The host first closes scheduling admission and signals cancellation, then invokes
 the service's stop hook. Retirement waits for both that hook and scheduled work.
+For managed plugins, service startup, scheduled callbacks, and cleanup use the
+instance's background readers, so a startup or reload caller ending does not retire them.
 Plugins retain ownership of reconnection policy, sockets, watchers, durable flush
 ordering, and delivery custody. Stop transports and flush pending delivery in the
 owner's required order, then join its child scope before closing resources used

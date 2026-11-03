@@ -1,4 +1,4 @@
-import type { PluginModuleLoader } from "./plugin-cache-artifacts.js";
+import type { InspectionNativeEsmRetention, PluginModuleLoader } from "./plugin-cache-artifacts.js";
 import type { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
 import type { PluginRecoverySource } from "./plugin-generation-source-lookup.js";
 import type {
@@ -21,6 +21,12 @@ export type PluginInstanceModuleLoaderParams = {
   createHostModuleLoader?: () => PluginModuleLoader;
   recoverySourceMap?: (source: string) => string;
   nativeRecovery?: PluginNativeRecovery;
+  /**
+   * Installer-proven identity of an immutable install, set only when the owner registry
+   * is an uncached inspection. Loads with the same identity may share evaluated code.
+   */
+  inspectionSourceIdentity?: string;
+  inspectionRetention?: InspectionNativeEsmRetention;
 };
 
 type RecoveryLoadFacts = Pick<

@@ -26,6 +26,9 @@ must still check the process exit status: `Doctor complete.` records completion
 of the checks, but a subsequent crash remains a failed candidate-Doctor step
 during an update.
 
+Doctor checks every configured agent. Plugin metadata retained between workspace
+checks is bounded, so adding agents does not retain a full plugin inventory per agent.
+
 ## Postures
 
 Doctor supports these postures:

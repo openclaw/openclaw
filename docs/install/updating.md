@@ -94,6 +94,13 @@ and recovery or migration backups remain with their existing durable owners;
 `TMPDIR` does not relocate those writes or remove the need for free space on the
 installation and state filesystems.
 
+Plugin source capture repairs stale dependency links without changing real
+dependency directories. POSIX replacements are staged before publication;
+Windows removes only the junction or symlink before recreating and verifying it.
+A failed link leaves that plugin unprepared with a named error. Doctor retains
+its pending migration obligation while other plugins' migrations continue.
+This repair applies when the candidate loads plugin contracts during Doctor.
+
 OpenClaw.app runs plugin convergence through the selected runtime's Doctor while
 the app owns Gateway activation. This aligns managed official npm plugins with the new
 core before plugin migrations, repairs host peer links, and refreshes the plugin
@@ -495,6 +502,16 @@ naming the directory, its owner when available, and the next action. Dry-run JSO
 includes these outcomes in `failures`; the update report and Doctor's update
 history retain recorded failures. The serving Gateway stays in place during
 these preflight checks.
+
+After an external reinstall changes the OpenClaw installation root, such as
+installing a newer Node version with nvm, mise, or Homebrew and reinstalling
+OpenClaw, Gateway startup repairs managed plugin host links before checking
+plugin availability. Stale or dangling links are rebound to the current
+installation, with a warning showing the old and new targets. Developer-owned
+path installs and links outside the plugin system's owned locations are left
+unchanged. If filesystem permissions prevent repair, startup reports the
+affected plugin and keeps it unavailable until the links can be repaired with
+`openclaw doctor --fix`.
 
 Directory permission checks remain in the **installed updater**. Older updaters cannot gain new
 admission behavior from the candidate they have not staged yet. If upgrading

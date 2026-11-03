@@ -1,5 +1,6 @@
 import { resolveConfigWidePluginManifestRegistry } from "../../../config/io.plugin-metadata.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { pruneMapToMaxSize } from "../../../infra/map-size.js";
 import {
   withPluginMetadataSnapshotScope,
   type PluginMetadataSnapshotScopeRunner,
@@ -8,6 +9,7 @@ import { withDeferredPluginDoctorMigrations } from "../../../plugins/doctor-cont
 import {
   createPluginCache,
   getPluginMetadataSnapshotCache,
+  MAX_CACHED_PLUGIN_METADATA_SNAPSHOTS,
   withPluginCache,
   type PluginCache,
 } from "../../../plugins/plugin-cache.js";
@@ -114,7 +116,9 @@ export function createDoctorPluginMetadataSnapshotScope(params: {
       config,
       env,
     });
+    snapshotsByWorkspace.delete(workspaceDir);
     snapshotsByWorkspace.set(workspaceDir, snapshot);
+    pruneMapToMaxSize(snapshotsByWorkspace, MAX_CACHED_PLUGIN_METADATA_SNAPSHOTS);
     return snapshot;
   };
 

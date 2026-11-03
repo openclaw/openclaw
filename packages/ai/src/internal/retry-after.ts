@@ -169,6 +169,129 @@ export function parseRetryAfterErrorSeconds(
   }
 }
 
+function maxDefined(...values: Array<number | undefined>): number | undefined {
+  let floor: number | undefined;
+  for (const value of values) {
+    if (value !== undefined) {
+      floor = Math.max(floor ?? 0, value);
+    }
+  }
+  return floor;
+}
+
+/** Provider prose such as "Please try again in 6s", "retry in 32s" or "Retry-After: 7". */
+export const RETRY_AFTER_TEXT_RE =
+  /\b(?:retry[- ]after\b\s*:?\s*(?:in\b\s*)?|(?:please\s+)?(?:try again|retry) in\s+)([^\r\n;]+)/i;
+
+const RETRY_TEXT_NUMBER_RE = /^(\d+(?:\.\d+)?|Infinity)\s*([a-z]+)?\b/i;
+const MS_PER_SECOND = 1000;
+const RETRY_TEXT_UNIT_MS = new Map<string, number>(
+  (
+    [
+      ["milliseconds millisecond msecs msec ms", 1],
+      ["seconds second secs sec s", MS_PER_SECOND],
+      ["minutes minute mins min m", 60 * MS_PER_SECOND],
+      ["hours hour hrs hr h", 60 * 60 * MS_PER_SECOND],
+      ["days day d", 24 * 60 * 60 * MS_PER_SECOND],
+    ] as const
+  ).flatMap(([aliases, milliseconds]) =>
+    aliases.split(" ").map((alias) => [alias, milliseconds] as const),
+  ),
+);
+
+/** Seconds named by a captured retry-text value: a number with an optional time unit, or an HTTP-date. */
+export function parseRetryAfterTextSeconds(
+  valueText: string,
+  nowMs = Date.now(),
+): number | undefined {
+  const secondsMatch = RETRY_TEXT_NUMBER_RE.exec(valueText);
+  if (secondsMatch?.[1]) {
+    const value = /^infinity$/i.test(secondsMatch[1]) ? Infinity : Number(secondsMatch[1]);
+    if (Number.isNaN(value) || value < 0) {
+      return undefined;
+    }
+    const unitMilliseconds = RETRY_TEXT_UNIT_MS.get(secondsMatch[2]?.toLowerCase() ?? "s");
+    if (unitMilliseconds === undefined) {
+      return undefined;
+    }
+    return unitMilliseconds === 1
+      ? value / MS_PER_SECOND
+      : value * (unitMilliseconds / MS_PER_SECOND);
+  }
+  const retryAtMs = parseRetryAfterHttpDateMs(valueText, nowMs);
+  return retryAtMs === undefined ? undefined : Math.max(0, (retryAtMs - nowMs) / MS_PER_SECOND);
+}
+
+// Only google.rpc.RetryInfo defines retryDelay; protobuf Duration JSON is decimal seconds.
+const GOOGLE_RETRY_DELAY_TEXT_RE = /"retryDelay"\s*:\s*"(\d+(?:\.\d{1,9})?)s"/g;
+const GOOGLE_RETRY_DELAY_VALUE_RE = /^(\d+(?:\.\d{1,9})?)s$/;
+const GOOGLE_RETRY_INFO_TYPE = "type.googleapis.com/google.rpc.RetryInfo";
+const MAX_GOOGLE_ERROR_DETAILS = 16;
+
+function googleRetryDelayTextSeconds(text: string): number | undefined {
+  let floor: number | undefined;
+  for (const match of text.matchAll(GOOGLE_RETRY_DELAY_TEXT_RE)) {
+    floor = maxDefined(floor, Number(match[1]));
+  }
+  return floor;
+}
+
+function googleStatusRetryDelaySeconds(status: unknown): number | undefined {
+  if (typeof status === "string") {
+    return googleRetryDelayTextSeconds(status);
+  }
+  const details = ownDataValue(status, "details");
+  if (!Array.isArray(details)) {
+    return undefined;
+  }
+  let floor: number | undefined;
+  for (let index = 0; index < Math.min(details.length, MAX_GOOGLE_ERROR_DETAILS); index += 1) {
+    const detail = ownDataValue(details, String(index));
+    if (ownDataValue(detail, "@type") !== GOOGLE_RETRY_INFO_TYPE) {
+      continue;
+    }
+    const delay = ownDataValue(detail, "retryDelay");
+    const match = typeof delay === "string" ? GOOGLE_RETRY_DELAY_VALUE_RE.exec(delay) : null;
+    floor = maxDefined(floor, match?.[1] ? Number(match[1]) : undefined);
+  }
+  return floor;
+}
+
+/**
+ * Reads google.rpc.RetryInfo delays from raw error text or a google.rpc.Status-shaped body
+ * in any key order, with a fixed number of descriptor reads and no getters. Pass the
+ * untruncated body: Gemini puts RetryInfo after its QuotaFailure details.
+ */
+export function parseGoogleRetryDelaySeconds(value: unknown): number | undefined {
+  try {
+    if (typeof value === "string") {
+      return googleRetryDelayTextSeconds(value);
+    }
+    const response = ownDataValue(value, "response");
+    const candidates = [
+      value,
+      ownDataValue(value, "error"),
+      ownDataValue(value, "message"),
+      ownDataValue(value, "errorBody"),
+      ownDataValue(value, "body"),
+      ownDataValue(response, "body"),
+      ownDataValue(response, "data"),
+    ];
+    return maxDefined(
+      ...candidates.flatMap((candidate) => [
+        googleStatusRetryDelaySeconds(candidate),
+        // google.rpc.Status is usually wrapped as { error: Status }.
+        typeof candidate === "string"
+          ? undefined
+          : googleStatusRetryDelaySeconds(ownDataValue(candidate, "error")),
+      ]),
+    );
+  } catch {
+    // Hostile proxies and exotic objects carry no trusted timing.
+    return undefined;
+  }
+}
+
 /** Round leap seconds forward for Retry-After so an unrepresentable instant cannot retry early. */
 export function parseRetryAfterHttpDateMs(value: string, nowMs = Date.now()): number | undefined {
   return parseHttpDateInstant(value, nowMs)?.timestampMs;

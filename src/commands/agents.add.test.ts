@@ -282,6 +282,23 @@ describe("agents add command", () => {
     expect(writeConfig).not.toHaveBeenCalled();
   }
 
+  it("preserves the recovery owner's refusal for an existing held agent", async () => {
+    const message =
+      "Agent main has held databases. Restore its original agentDir and session.store configuration, then rerun agents add to restore the preserved store.";
+    createAgent.mockResolvedValueOnce({
+      status: "error",
+      reason: "already-exists",
+      agentId: "main",
+      message,
+    });
+    await expectRootFailure(
+      agentsAddCommand({ name: "main", workspace: "/tmp/main" }, runtime, {
+        hasAutomationFlags: true,
+      }),
+      message,
+    );
+  });
+
   it.each([
     {
       name: "a missing workspace with automation flags",
@@ -704,7 +721,7 @@ describe("agents add command", () => {
         agentsAddCommand({ name: "Work", workspace: "/tmp/work" }, runtime, {
           hasAutomationFlags: true,
         }),
-        'Agent "work" already exists.',
+        'agent "work" already exists',
       );
     });
 

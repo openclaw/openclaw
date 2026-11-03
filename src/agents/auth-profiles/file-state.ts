@@ -40,6 +40,8 @@ type DirectoryState = {
 };
 
 const directories = new Map<string, DirectoryState>();
+// Late observers use the current Gateway binding, not a temporary request.
+let gatewayFileChangePublisher: DirectoryState["publishChange"] | undefined;
 type FileChangeListener = (change: FileChange) => void | Promise<void>;
 const listeners = new Set<FileChangeListener>();
 const legacyNames = new Set(["auth-profiles.json", "auth-state.json", "auth.json", "oauth.json"]);
@@ -161,10 +163,12 @@ function captureFileChangePublisher(): DirectoryState["publishChange"] {
   };
 }
 
-/** Retained shared state survives a restart; its observers must use the new Gateway readers. */
+/** Retained observers must use the current Gateway's host bindings after a restart. */
 export function bindAuthProfileFileObservationReaders(): void {
+  const publishChange = captureFileChangePublisher();
+  gatewayFileChangePublisher = publishChange;
   for (const state of directories.values()) {
-    state.publishChange = captureFileChangePublisher();
+    state.publishChange = publishChange;
   }
 }
 
@@ -178,7 +182,7 @@ function directoryState(directory: string): DirectoryState {
     identities,
     presence: new Map(),
     dirty: false,
-    publishChange: captureFileChangePublisher(),
+    publishChange: gatewayFileChangePublisher ?? captureFileChangePublisher(),
     observation: observeOwnedDirectory(
       directory,
       (filename) => {
@@ -280,6 +284,7 @@ export async function refreshAuthProfileFileState(): Promise<void> {
 }
 
 function closeAuthProfileFileState(): void {
+  gatewayFileChangePublisher = undefined;
   for (const [directory, state] of directories) {
     retireDirectory(directory, state);
   }

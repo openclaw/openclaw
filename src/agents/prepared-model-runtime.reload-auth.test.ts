@@ -4,6 +4,11 @@ import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-ha
 import { isDeepStrictEqual } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { createChannelIngressDrain } from "../channels/message/ingress-drain.js";
+import {
+  createTestIngressQueue,
+  withTempState,
+} from "../channels/message/ingress-drain.test-helpers.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { getPluginLoaderCacheState } from "../plugins/registry-lifecycle.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
@@ -21,7 +26,104 @@ import { PreparedReplyDispatchPublicationOwner } from "./prepared-reply-dispatch
 const fixture = usePreparedModelRuntimeHarness({ label: "prepared-model-runtime" });
 const { mocks } = fixture;
 
+const loadDispatch = loadPublishedGatewayReplyDispatchRuntime;
+async function start() {
+  mocks.configuredAgentIds = ["default"];
+  await refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true });
+}
+const mutate = (agentId = "default") =>
+  mocks.mutationListener?.({
+    agentDir: fixture.state.agentDir(agentId),
+    affectsInheritedStores: false,
+  });
+
 describe("prepared model runtime reload auth adoption", () => {
+  it("republishes a failed auth owner on the next inbound dispatch", async () => {
+    await start();
+    const failure = new Error("configured model publication timed out");
+    mocks.resolveAmbientCredentials.mockRejectedValueOnce(failure);
+    mutate("default");
+    await expect(loadDispatch({ agentId: "default" })).rejects.toBe(failure);
+
+    const [first, concurrent] = await Promise.all([
+      loadDispatch({ agentId: "default" }),
+      loadDispatch({ agentId: "default" }),
+    ]);
+    expect(first?.agentId).toBe("default");
+    expect(concurrent?.pluginGeneration).toBe(first?.pluginGeneration);
+    expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(3);
+  });
+
+  it.each(["recovers", "fails"] as const)(
+    "%s after the next eligible real recovery without charging backoff replays",
+    async (outcome) => {
+      let now = 10_000;
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+      try {
+        await start();
+        const failure = new Error("configured model publication timed out");
+        mocks.resolveAmbientCredentials.mockRejectedValue(failure);
+        mutate();
+        await expect(loadDispatch({ agentId: "default" })).rejects.toBe(failure);
+        mocks.resolveAmbientCredentials.mockClear();
+
+        await withTempState(async (stateDir) => {
+          const queue = createTestIngressQueue(stateDir, { now: () => now });
+          await queue.enqueue("unavailable", { text: "retained request" });
+          const log = vi.fn();
+          const createDrain = () =>
+            createChannelIngressDrain({
+              queue,
+              now: () => now,
+              onLog: log,
+              dispatchClaimedEvent: async () => {
+                await loadDispatch({ agentId: "default" });
+              },
+            });
+          let drain = createDrain();
+          try {
+            expect(await drain.drainOnce()).toEqual({ started: 1 });
+            await drain.waitForIdle();
+            expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(1);
+            expect(await queue.listPending()).toMatchObject([{ id: "unavailable", attempts: 1 }]);
+            now += 1_000;
+            expect(await drain.drainOnce()).toEqual({ started: 0 });
+            drain.dispose();
+            drain = createDrain();
+            expect(await drain.drainOnce()).toEqual({ started: 0 });
+            now = 15_000;
+            if (outcome === "recovers") {
+              mocks.resolveAmbientCredentials.mockReturnValue({});
+            }
+            expect(await drain.drainOnce()).toEqual({ started: 1 });
+            await drain.waitForIdle();
+            expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(2);
+            expect(await queue.listPending()).toEqual([]);
+            if (outcome === "recovers") {
+              expect(await queue.listFailed?.()).toEqual([]);
+              expect(await queue.enqueue("unavailable", { text: "duplicate" })).toMatchObject({
+                kind: "completed",
+              });
+            } else {
+              expect(await queue.listFailed?.()).toMatchObject([
+                {
+                  id: "unavailable",
+                  payload: { text: "retained request" },
+                  reason: "runtime-recovery-failed",
+                },
+              ]);
+              expect(log).toHaveBeenCalledWith(expect.stringContaining("runtime-recovery-failed"));
+            }
+          } finally {
+            drain.dispose();
+          }
+        });
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
+
   it("does not record an obsolete catalog attempt after its owner is superseded", async () => {
     mocks.configuredAgentIds = ["default"];
     const config = {};
@@ -222,11 +324,6 @@ describe("prepared model runtime reload auth adoption", () => {
       await expect(authWaiter).rejects.toBe(reloadError);
       await expect(
         loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }),
-      ).rejects.toThrow("prepared reply dispatch runtime owner was not published for default");
-
-      await refreshPreparedModelRuntimeSnapshots(replacementConfig, { gatewayLifecycle: true });
-      await expect(
-        loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }),
       ).resolves.toMatchObject({ config: replacementConfig });
     } finally {
       authBuild.resolve({ agentDir: fixture.state.agentDir("default"), wrote: false });
@@ -386,9 +483,6 @@ describe("prepared model runtime reload auth adoption", () => {
 
       await expect(workerDispatch).resolves.toMatchObject({ agentId: "worker" });
       await expect(researchDispatch).rejects.toBe(researchError);
-      await expect(
-        loadPublishedGatewayReplyDispatchRuntime({ agentId: "research" }),
-      ).rejects.toThrow("prepared reply dispatch runtime owner was not published for research");
       expect(events).not.toContain("published");
       expect(events.filter((phase) => phase === "failed")).toHaveLength(1);
       unregister();
@@ -433,10 +527,8 @@ describe("prepared model runtime reload auth adoption", () => {
       agentId: "research",
       agentDir: fixture.state.agentDir("research"),
     });
-    await expect(loadPublishedGatewayReplyDispatchRuntime({ agentId: "worker" })).rejects.toThrow(
-      "prepared reply dispatch runtime owner was not published for worker",
-    );
     expect(events.filter((phase) => phase === "failed")).toHaveLength(1);
+    await expect(loadDispatch({ agentId: "worker" })).resolves.toMatchObject({ agentId: "worker" });
     replaceSpy.mockRestore();
     unregister();
   });
