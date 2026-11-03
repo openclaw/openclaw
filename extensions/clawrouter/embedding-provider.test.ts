@@ -80,7 +80,7 @@ describe("registered ClawRouter memory embeddings", () => {
                     index,
                     embedding: [index + 1, index + 2],
                   }))
-                  .reverse(),
+                  .toReversed(),
                 usage: { prompt_tokens: 2, total_tokens: 2 },
               },
         ),
