@@ -92,6 +92,23 @@ describe("resolveVoiceResponseModel", () => {
     ).toEqual({ provider: "openai", model: "gpt-5.4-mini" });
   });
 
+  it("keeps a literal provider/model verbatim when it is also an alias target", () => {
+    expect(
+      resolveVoiceResponseModel({
+        cfg: {
+          agents: {
+            defaults: {
+              models: { "anthropic/claude-sonnet-5-5": { alias: "medium" } },
+            },
+          },
+        },
+        agentId: "main",
+        voiceConfig: normalizeVoiceCallConfig({ responseModel: "anthropic/claude-sonnet-5-5" }),
+        agentRuntime,
+      }),
+    ).toEqual({ provider: "anthropic", model: "claude-sonnet-5-5" });
+  });
+
   it("inherits the call agent's configured model when responseModel is unset", () => {
     expect(
       resolveVoiceResponseModel({
