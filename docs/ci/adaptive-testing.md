@@ -87,6 +87,24 @@ Global setup can still change worker settings after capture. The local recording
 timestamp is not artifact availability: a later consumer must also retain the
 publication/download time before using an earlier run as predictive evidence.
 
+For the canonical `unit-fast` configuration, `preExecution.graphInputs` records
+a version-1 profile with separate configuration and environment hashes. These
+omit resolved include membership and pre/post-shard include-file contents. They
+retain native configuration sources, direct setup sources, declared execution
+and transform settings, runtime identity, and an explicit environment allowlist.
+Repository paths in settings are normalized before hashing; regular expressions
+retain their pattern and flags. Unsupported profiles or nonserializable settings
+produce `null` without discarding the exact-run observations.
+
+These hashes allow comparison of declared graph inputs across different file
+selections. They do not establish interchangeable graphs or outcomes: `unit-fast`
+shares process state between files, and the captured environment and direct setup
+sources are not an exhaustive dependency contract. Consumers must also compare
+the repository, lock, project/pool, runtime, platform and dependency-root identity,
+retain source/diff provenance, and measure overlapping-file graph differences.
+The shadow selector still requires the original exact context. Matching graph
+inputs never grants permission to omit tests.
+
 The first readout compares usable-data coverage, native-Bun gaps, observed
 failures, fallback causes, and paired total job costs. Learned selection and
 automatic omission require a separate evaluation and rollout decision.
