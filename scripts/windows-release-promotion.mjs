@@ -59,7 +59,9 @@ function readApproval(path) {
     ]) &&
       approval.version === 1 &&
       /^[a-f0-9]{40}$/u.test(approval.signedTagObjectSha) &&
-      isDeepStrictEqual(approval.source, source()),
+      (approval.source === null
+        ? env.DIRECT_RELEASE_RECOVERY === "true"
+        : isDeepStrictEqual(approval.source, source())),
     "Windows approval source or fields do not match this promotion.",
   );
   const expected = {
@@ -180,7 +182,32 @@ function verifyAuthority(path, approval) {
   });
 }
 
-function verifyFiles(directory, approval) {
+function verifyWriter() {
+  const inventory = JSON.parse(
+    runReleaseToolingGh([
+      "api",
+      `repos/${env.GITHUB_REPOSITORY}/actions/runs/${env.GITHUB_RUN_ID}/attempts/${env.GITHUB_RUN_ATTEMPT}/jobs?per_page=100`,
+      "--method",
+      "GET",
+    ]),
+  );
+  const writers = inventory.jobs?.filter((job) => job.name === "Promote signed Windows installers");
+  // GitHub starts this job only after its npm-release environment gate admits it.
+  // Historical approvals cannot authorize a waiting, rejected, or superseded writer.
+  requireValue(
+    Array.isArray(inventory.jobs) &&
+      inventory.total_count === inventory.jobs.length &&
+      writers.length === 1 &&
+      String(writers[0].run_id) === env.GITHUB_RUN_ID &&
+      writers[0].head_sha === env.GITHUB_WORKFLOW_SHA &&
+      writers[0].status === "in_progress" &&
+      writers[0].conclusion === null,
+    "The protected Windows writer is not active for this attempt.",
+  );
+}
+
+function verifyFiles(directory) {
+  const selectedSource = source();
   requireValue(
     isDeepStrictEqual(readdirSync(directory).sort(), [...INSTALLERS, MANIFEST].sort()),
     "Windows writer requires exactly the verified installers and checksum manifest.",
@@ -190,7 +217,7 @@ function verifyFiles(directory, approval) {
       .update(readFileSync(join(directory, name)))
       .digest("hex");
     requireValue(
-      `sha256:${digest}` === approval.source.installerDigests[name],
+      `sha256:${digest}` === selectedSource.installerDigests[name],
       `Windows installer digest mismatch: ${name}.`,
     );
     return `${digest}  ${name}`;
@@ -219,7 +246,7 @@ if (positionals.length === 1 && positionals[0] === "create" && values.receipt &&
   mkdirSync(dirname(values.output), { recursive: true });
   writeFileSync(
     values.output,
-    `${JSON.stringify({ version: 1, release, signedTagObjectSha: env.SIGNED_RELEASE_TAG_OBJECT_SHA, source: source() })}\n`,
+    `${JSON.stringify({ version: 1, release, signedTagObjectSha: env.SIGNED_RELEASE_TAG_OBJECT_SHA, source: !env.WINDOWS_NODE_TAG && !env.WINDOWS_NODE_INSTALLER_DIGESTS ? null : source() })}\n`,
   );
 } else if (
   positionals.length === 1 &&
@@ -234,10 +261,11 @@ if (positionals.length === 1 && positionals[0] === "create" && values.receipt &&
       Boolean(values.assets),
       "Windows publication requires the verified asset directory.",
     );
-    verifyFiles(values.assets, approval);
+    verifyFiles(values.assets);
     for (const name of [...INSTALLERS, MANIFEST]) {
       // Recheck after the environment wait and after every preceding upload.
       verifyAuthority(values.approval, approval);
+      verifyWriter();
       runReleaseToolingGh([
         "release",
         "upload",

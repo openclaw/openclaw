@@ -36,6 +36,13 @@ export const windowsPromotionCases = [
   ["tooling movement after first upload", "after-upload-tooling", 1],
   ["parent rerun after first upload", "after-upload-parent", 1],
   ["tag movement during environment wait", "wait-tag", 0],
+  ["attach Windows after core publication", "late-attachment", 3],
+  ["late attachment requires explicit recovery", "late-automatic", 0],
+  ["waiting writer", "writer-waiting", 0],
+  ["rejected writer", "writer-rejected", 0],
+  ["ambiguous writer", "writer-duplicate", 0],
+  ["writer with different tooling", "writer-sha", 0],
+  ["writer cancelled after first upload", "after-upload-writer", 1],
 ];
 
 export function runWindowsPromotionCase([label, scenario, expectedUploads]) {
@@ -149,6 +156,16 @@ if (args[0] === "attestation") {
   output = {};
 } else if (args[0] === "api" && args[1].includes("/git/ref/tags/")) {
   output = { ref: "refs/tags/" + ref, object: { type: "commit", sha: scenario === "tooling" || (changed && scenario === "after-upload-tooling") ? "e".repeat(40) : sha } };
+} else if (args[0] === "api" && args[1].includes("/attempts/1/jobs")) {
+  const rejected = scenario === "writer-rejected" || (changed && scenario === "after-upload-writer");
+  const writer = {
+    name: "Promote signed Windows installers", run_id: 456,
+    head_sha: scenario === "writer-sha" ? "e".repeat(40) : sha,
+    status: rejected ? "completed" : scenario === "writer-waiting" ? "waiting" : "in_progress",
+    conclusion: rejected ? "cancelled" : null,
+  };
+  const jobs = scenario === "writer-duplicate" ? [writer, writer] : [writer];
+  output = { total_count: jobs.length, jobs };
 } else if (args[0] === "api" && /actions\/runs\/(123|456)$/.test(args[1])) {
   const parent = args[1].endsWith("/123");
   const failed = parent && ["failed", "recovery"].includes(scenario);
@@ -191,14 +208,22 @@ process.stdout.write(JSON.stringify(output));
       SIGNED_RELEASE_TAG_OBJECT_SHA: tagObject,
       WINDOWS_NODE_TAG: "v0.6.3",
       WINDOWS_NODE_INSTALLER_DIGESTS: JSON.stringify(digests),
-      DIRECT_RELEASE_RECOVERY:
-        scenario === "recovery" || scenario === "cancelled" ? "true" : "false",
+      DIRECT_RELEASE_RECOVERY: ["recovery", "cancelled", "late-attachment"].includes(scenario)
+        ? "true"
+        : "false",
     };
     command(
       process.execPath,
       [SCRIPT, "create", "--receipt", receiptPath, "--output", approvalPath],
-      { env, cwd },
+      {
+        env: scenario.startsWith("late-")
+          ? { ...env, WINDOWS_NODE_TAG: "", WINDOWS_NODE_INSTALLER_DIGESTS: "" }
+          : env,
+        cwd,
+      },
     );
+    if (scenario.startsWith("late-"))
+      assert.equal(JSON.parse(readFileSync(approvalPath, "utf8")).source, null);
     if (scenario === "wait-tag")
       command(process.execPath, [SCRIPT, "verify", "--approval", approvalPath], { env, cwd });
     if (["tag", "wait-tag"].includes(scenario))
@@ -244,6 +269,12 @@ process.stdout.write(JSON.stringify(output));
       "after-upload-tooling": "protected release tooling tag is missing, moved",
       "after-upload-parent": "parent run runAttempt",
       "wait-tag": "tag moved, disappeared, or changed",
+      "late-automatic": "approval source or fields",
+      "writer-waiting": "protected Windows writer is not active",
+      "writer-rejected": "protected Windows writer is not active",
+      "writer-duplicate": "protected Windows writer is not active",
+      "writer-sha": "protected Windows writer is not active",
+      "after-upload-writer": "protected Windows writer is not active",
     }[scenario];
     if (refusal) {
       assert.ok(result.stderr.includes(refusal), label + ": wrong refusal: " + result.stderr);

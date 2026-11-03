@@ -41,7 +41,7 @@ on:
         required: true
         type: string
       direct_release_recovery:
-        description: Recover the exact approval after a failed or successful parent
+        description: Recover the original release or attach Windows omitted from core publication
         required: true
         default: false
         type: boolean

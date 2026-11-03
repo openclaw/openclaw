@@ -1440,7 +1440,7 @@ jobs:
 
       - name: Write Windows release approval
         id: windows_approval
-        if: ${{ inputs.publish_openclaw_npm && inputs.npm_dist_tag != 'extended-stable' && inputs.windows_node_tag != '' && inputs.windows_node_installer_digests != '' }}
+        if: ${{ inputs.publish_openclaw_npm && inputs.npm_dist_tag != 'extended-stable' }}
         continue-on-error: true
         env:
           SIGNED_RELEASE_TAG_OBJECT_SHA: ${{ needs.resolve_release_target.outputs.signed_tag_object_sha }}
