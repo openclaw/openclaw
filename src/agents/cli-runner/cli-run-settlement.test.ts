@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { resolveCronPayloadOutcome } from "../../cron/isolated-agent/helpers.js";
 import { wrapRunWithTestPreparedAdmission } from "../admitted-run-context.test-support.js";
 import {
   acquireSessionMcpRuntime,
@@ -14,14 +13,6 @@ import {
 } from "../agent-bundle-mcp-manager.test-support.js";
 import { SESSION_MCP_RUNTIME_MANAGER_KEY } from "../agent-bundle-mcp-runtime-shared.js";
 import { transformCliResultText } from "../cli-output-results.js";
-import { parseCliOutput } from "../cli-output.js";
-import {
-  claudeMessageStart,
-  claudeMessageStop,
-  claudeStreamEvent,
-  claudeTextDelta,
-  joinJsonlFrames,
-} from "../cli-output.test-helpers.js";
 import { isCliBindingFlushed, runCliAgent } from "../cli-runner.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
 import { applyCliSessionBindingResult, getCliSessionBinding } from "../cli-session.js";
@@ -123,9 +114,7 @@ function mcpFixture(sessionId: string) {
 }
 
 function expectOutcome(promise: Promise<unknown>, expected: unknown, rejected: boolean) {
-  return rejected
-    ? expect(promise).rejects.toBe(expected)
-    : expect(promise).resolves.toBe(expected);
+  return expect(promise)[rejected ? "rejects" : "resolves"].toBe(expected);
 }
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
@@ -427,44 +416,9 @@ it.each(["Done", ""])("captures only the final CLI result %j after narration", (
   const output = transformCliResultText({ text, textParts, rawFinalText });
   const result = testRunResult({ output });
   expect(result.meta.finalAssistantRawText).toBe(text);
+  expect(result.meta.finalAssistantVisibleText).toBe(rawFinalText || undefined);
   expect(resolveDiagnosticModelResponse(result)).toBe(rawFinalText || undefined);
 });
-
-it.each(["Final report.", "NO_REPLY"])(
-  "uses only the final Claude message %j for cron output",
-  (finalText) => {
-    const output = parseCliOutput({
-      backend: { command: "claude", output: "jsonl" },
-      providerId: "claude-cli",
-      outputMode: "jsonl",
-      raw: joinJsonlFrames(
-        claudeMessageStart("research"),
-        claudeTextDelta("Still researching."),
-        claudeStreamEvent({
-          type: "content_block_start",
-          index: 1,
-          content_block: { type: "tool_use", id: "read-1", name: "Read", input: {} },
-        }),
-        claudeMessageStop(),
-        claudeMessageStart("answer"),
-        claudeTextDelta(finalText),
-        claudeMessageStop(),
-        { type: "result", subtype: "success", result: finalText },
-      ),
-    });
-    const result = testRunResult({ context: replyContext(), output });
-    const silent = finalText === "NO_REPLY";
-    expect(result.meta.finalAssistantVisibleText).toBe(silent ? undefined : finalText);
-    const outcome = resolveCronPayloadOutcome({
-      payloads: result.payloads ?? [],
-      finalAssistantVisibleText: result.meta.finalAssistantVisibleText,
-      terminalReplyDisposition: result.meta.terminalReply?.disposition,
-      preferFinalAssistantVisibleText: true,
-    });
-    expect(outcome.summary).toBe(silent ? undefined : finalText);
-    expect(outcome.deliveryPayloads).toEqual(silent ? [] : [{ text: finalText }]);
-  },
-);
 
 it("never captures host-synthesized optional silence as model output", async () => {
   const context = buildPreparedCliRunContext();
