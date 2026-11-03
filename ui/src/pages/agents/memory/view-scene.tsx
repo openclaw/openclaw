@@ -32,7 +32,12 @@ const STARS: {
 
 export function DreamingScene(props: DreamingProps) {
   const data = () => props.readStatusData();
-  const dreamText = () => t(DREAM_PHRASE_KEYS[props.viewState.dreamIndex] ?? DREAM_PHRASE_KEYS[0]);
+  // A word joiner after each hyphen keeps compounds whole when the phrase wraps.
+  const dreamText = () =>
+    t(DREAM_PHRASE_KEYS[props.viewState.dreamIndex] ?? DREAM_PHRASE_KEYS[0]).replaceAll(
+      "-",
+      "-\u2060",
+    );
   // Keep the sleeper's seeded identity consistent with this agent's sidebar pet.
   const look = createMemo(() => createLobsterPetLook(lobsterPetSeed(props.selectedAgentId)));
   const style = () => `--lob-shell:${look().palette.shell};--lob-claw:${look().palette.claw}`;

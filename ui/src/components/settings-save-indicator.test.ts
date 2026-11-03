@@ -53,17 +53,42 @@ describe("settings save indicator", () => {
     expect(indicator.textContent?.trim()).toBe("");
   });
 
-  it("stays quiet through autosave and offers pending Apply changes immediately", async () => {
+  it("reports an autosave from the first edit through a brief Saved", async () => {
+    await update({ pending: true });
+    expect(indicator.textContent?.trim()).toBe("Saving…");
     await update({ status: "saving" });
-    expect(indicator.textContent?.trim()).toBe("");
-    expect(indicator.querySelector('[role="status"]')).toBeNull();
+    expect(indicator.textContent?.trim()).toBe("Saving…");
+    await update({ status: "saved", savedNotice: true });
+    expect(indicator.textContent?.trim()).toBe("Saved");
     await update({ status: "saved" });
     expect(indicator.textContent?.trim()).toBe("");
     expect(indicator.querySelector('[role="status"]')).toBeNull();
+  });
+
+  it("lets Saved finish before offering a pending Apply", async () => {
     await update({ status: "saving", needsApply: true });
+    expect(button("Apply changes")).toBeUndefined();
+    await update({ status: "saved", savedNotice: true, needsApply: true });
     expect(button("Apply changes")).toBeUndefined();
     await update({ status: "saved", needsApply: true });
     expect(button("Apply changes")?.disabled).toBe(false);
+  });
+
+  it("keeps a failure in front of newer edits and offers both ways out", async () => {
+    const { onRetry, onReload } = await update({
+      status: "error",
+      lastError: "permission denied",
+      pending: true,
+      savedNotice: true,
+    });
+    expect(indicator.textContent).toContain("Save failed");
+    expect(indicator.textContent).not.toContain("Saving");
+    expect(indicator.querySelector(".settings-save-indicator__reason")?.textContent).toContain(
+      "permission denied",
+    );
+    button("Discard draft and reload")?.click();
+    expect(onReload).toHaveBeenCalledOnce();
+    expect(onRetry).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -74,11 +99,13 @@ describe("settings save indicator", () => {
     const feedback = indicator.querySelector('[role="status"]');
     expect(feedback?.textContent).toContain(message);
     if (status === "error") {
-      expect(feedback).toMatchObject({ title: lastError, ariaLabel: `${message}: ${lastError}` });
+      expect(feedback).toMatchObject({ ariaLabel: `${message}: ${lastError}` });
     } else {
       expect(indicator.textContent).toContain("Current settings are unchanged.");
-      expect(indicator.querySelector("details")?.textContent).toContain(lastError);
-      expect(indicator.querySelector(".settings-save-indicator--danger")).toBeNull();
+      expect(indicator.querySelector(".settings-save-indicator__reason")?.textContent).toContain(
+        lastError,
+      );
+      expect(indicator.querySelector(".settings-save-indicator__failure")).toBeNull();
     }
     button("Retry")?.click();
     expect(onRetry).toHaveBeenCalledOnce();
@@ -103,11 +130,12 @@ describe("settings save indicator", () => {
     await update({ status: "error", lastError });
     expect(indicator.textContent).toContain("Save failed");
     await update({ status: "error", saving: true, lastError: null });
-    expect(indicator.textContent?.trim()).toBe("");
-    expect(indicator.querySelector('[role="status"]')).toBeNull();
+    expect(indicator.textContent?.trim()).toBe("Saving…");
     await update({ status: "error", lastError });
     expect(indicator.textContent).toContain("Save failed");
-    expect(indicator.querySelector('[role="status"]')).toMatchObject({ title: lastError });
+    expect(indicator.querySelector(".settings-save-indicator__reason")?.textContent).toBe(
+      lastError,
+    );
   });
 
   it("applies pending changes and reports the in-flight state", async () => {
@@ -127,7 +155,7 @@ describe("settings save indicator", () => {
     const onSave = vi.fn(() => held.promise);
     await update({ status: "paused", onSave });
     button("Save")!.click();
-    await waitForSolid(() => expect(indicator.textContent?.trim()).toBe(""));
+    await waitForSolid(() => expect(indicator.textContent?.trim()).toBe("Saving…"));
     expect(onSave).toHaveBeenCalledOnce();
     held.resolve(false);
     await waitForSolid(() => expect(button("Save")?.disabled).toBe(false));
@@ -140,7 +168,7 @@ describe("settings save indicator", () => {
     const onRetry = vi.fn(() => held.promise);
     await update({ status: "error", onRetry });
     button("Retry")!.click();
-    await waitForSolid(() => expect(indicator.textContent?.trim()).toBe(""));
+    await waitForSolid(() => expect(indicator.textContent?.trim()).toBe("Saving…"));
     held.reject(new Error("Synthetic retry transport failed"));
     await waitForSolid(() =>
       expect(indicator.querySelector('[role="alert"]')?.textContent).toContain(
