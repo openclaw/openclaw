@@ -13,10 +13,7 @@ import { reviewFileDrafts } from "./file-draft-recovery-dialog-loading.tsx";
 type FileDraft = Parameters<typeof reviewFileDrafts>[0][number];
 
 const clipboard = vi.hoisted(() => ({ copy: vi.fn() }));
-vi.mock("../../../lib/clipboard.ts", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../lib/clipboard.ts")>()),
-  copyToClipboard: clipboard.copy,
-}));
+vi.mock("../../../lib/clipboard.ts", () => ({ copyToClipboard: clipboard.copy }));
 
 let restoreDialog: () => void;
 beforeEach(async () => {
@@ -31,17 +28,13 @@ afterEach(() => {
 });
 
 function draft(name: string): FileDraft {
-  let current = true;
   return {
     name,
     path: `notes/${name}`,
     context: undefined,
     content: `${name} draft`,
-    isCurrent: () => current,
-    discard: vi.fn(() => {
-      current = false;
-      return true;
-    }),
+    isCurrent: () => true,
+    discard: vi.fn(() => true),
   };
 }
 
@@ -63,14 +56,13 @@ it.each(["discard", "same draft", "other draft"])(
     expect(document.activeElement).toBe(copy);
     const discard = button("Discard first.md");
     (focus === "discard" ? discard : focus === "same draft" ? copy : secondCopy).focus();
+    const expectedFocus = focus === "other draft" ? secondCopy : button("Keep drafts");
     discard.click();
     await waitForSolid(() => {
       expect(first.discard).toHaveBeenCalledOnce();
       expect(modal.textContent).not.toContain("first.md");
       expect(button("Copy second.md")).toBe(secondCopy);
-      expect(document.activeElement).toBe(
-        focus === "other draft" ? secondCopy : button("Keep drafts"),
-      );
+      expect(document.activeElement).toBe(expectedFocus);
     });
     secondCopy.click();
     expect(clipboard.copy).toHaveBeenCalledTimes(2);

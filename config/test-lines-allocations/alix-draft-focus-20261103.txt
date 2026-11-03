@@ -1,2 +1,0 @@
-# Preserve the existing owner controls and cover the native draft-focus regression.
-8
