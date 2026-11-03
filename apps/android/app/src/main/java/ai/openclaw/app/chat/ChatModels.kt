@@ -618,6 +618,22 @@ data class ChatHistory(
   val sessionInfo: ChatSessionEntry? = null,
   val inFlightRun: ChatInFlightRun? = null,
   val defaultModelRef: String? = null,
+  val deltaCursor: String? = null,
+  val olderCursor: String? = null,
+  val newerCursor: String? = null,
+  val activeLeafEntryId: String? = null,
+  val hasActiveLeafEntryId: Boolean = false,
+  val isDelta: Boolean = false,
+  val olderComplete: Boolean = false,
+)
+
+/** Paging is independent of initial hydration and never blocks the composer. */
+internal data class ChatHistoryPaging(
+  val hasOlder: Boolean = false,
+  val hasNewer: Boolean = false,
+  val loading: Boolean = false,
+  val failed: Boolean = false,
+  val olderComplete: Boolean = false,
 )
 
 /**
