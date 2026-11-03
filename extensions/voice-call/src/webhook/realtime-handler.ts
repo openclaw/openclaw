@@ -779,6 +779,7 @@ export class RealtimeCallHandler {
       });
     let sessionClosed = false;
     const userTranscriptOwner: UserTranscriptState = {};
+    let transcriptStartedAt: Partial<Record<"user" | "assistant", number>> = {};
     let transcriptPersistence = Promise.resolve();
     let transcriptFailure: { error: unknown } | undefined;
     const reportTranscriptFailure = (error: unknown) => {
@@ -997,6 +998,7 @@ export class RealtimeCallHandler {
         }
         if (role === "user" && !audioController.acceptUserTranscript(isFinal)) {
           if (isFinal) {
+            delete transcriptStartedAt.user;
             console.log(
               `[voice-call] Ignoring unconfirmed caller transcript during playback callId=${callId}`,
             );
@@ -1007,6 +1009,7 @@ export class RealtimeCallHandler {
           outboundGreeting.claim();
           activity.noteSpeech();
         }
+        const timestamp = (transcriptStartedAt[role] ??= Date.now());
         const turnId = harness.ensureTurn();
         const eventType =
           role === "assistant"
@@ -1041,6 +1044,7 @@ export class RealtimeCallHandler {
           }
           return;
         }
+        delete transcriptStartedAt[role];
         let transcript = text;
         let consultTranscript: TranscriptSnapshot | undefined;
         if (role === "user") {
@@ -1068,7 +1072,7 @@ export class RealtimeCallHandler {
           id: `realtime-${role === "user" ? "speech" : "bot"}-${callSid}-${randomUUID()}`,
           callId,
           providerCallId: callSid,
-          timestamp: Date.now(),
+          timestamp,
           transcript,
           ...(role === "user"
             ? { type: "call.speech", isFinal: true }
@@ -1133,6 +1137,7 @@ export class RealtimeCallHandler {
           const turnId = harness.talk.activeTurnId;
           const owner = nativeConsultOwner;
           if (owner && this.isActiveBridgeOwner(callId, owner)) {
+            transcriptStartedAt = {};
             userTranscriptOwner.partial = undefined;
             clearRecentFinalUserTranscript(userTranscriptOwner);
             this.cancelConsultSession(callId, owner, harness.forcedConsults, "continuity-reset");
@@ -1150,6 +1155,7 @@ export class RealtimeCallHandler {
           return;
         }
         if (event.type === "input_audio_buffer.speech_started" && !outboundGreeting.isBlocked()) {
+          transcriptStartedAt.user = Date.now();
           outboundGreeting.claim();
           activity.noteSpeech();
           harness.ensureTurn();
