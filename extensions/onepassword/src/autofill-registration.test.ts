@@ -20,10 +20,22 @@ function fixture() {
   const unexpectedStore = () => {
     throw new Error("This RPC fixture must not access stored credentials.");
   };
+  const eventTarget = Object.freeze({});
+  const system = {
+    ...base.runtime.system,
+    captureSessionEventTarget: vi.fn(async () => eventTarget),
+    enqueueSessionEvent: vi.fn(() => ({
+      id: "event",
+      cancel: () => false,
+      accepted: Promise.resolve({ ok: true as const }),
+      settled: new Promise<never>(() => {}),
+    })),
+  } as unknown as typeof base.runtime.system;
   const api = createTestPluginApi({
     pluginConfig: config,
     runtime: {
       ...base.runtime,
+      system,
       state: {
         ...base.runtime.state,
         openKeyedStoreV2: <T>(): PluginStateKeyedStore<T, 2> =>
@@ -78,7 +90,16 @@ function fixture() {
       retain: () => retained,
     },
   };
-  return { api, handler, options: options as Options, policies, services, retained };
+  return {
+    api,
+    handler,
+    options: options as Options,
+    policies,
+    services,
+    retained,
+    system,
+    eventTarget,
+  };
 }
 
 it("exposes the autofill tool by default once the feature is enabled", () => {
@@ -142,7 +163,9 @@ it("starts a single service-owned checker from the click with retained authority
   const checker = vi.spyOn(AutofillService.prototype, "checkStatus").mockResolvedValue({
     state: "resolved",
     requestId: "request",
-    entries: [],
+    entries: [
+      { entryId: "entry", website: "https://example.com/login", label: "Login", granted: true },
+    ],
     guidance: "Request finished.",
   });
   const browser = await import("./autofill-browser.js");
@@ -188,12 +211,25 @@ it("starts a single service-owned checker from the click with retained authority
     }),
   );
   expect(f.retained.release).toHaveBeenCalledTimes(1);
+  // The finished checker resumes the session captured at click time.
+  expect(f.system.captureSessionEventTarget).toHaveBeenCalledWith("main", "agent:main:chat");
+  expect(f.system.enqueueSessionEvent).toHaveBeenCalledTimes(1);
+  const [text, eventOptions] = vi.mocked(f.system.enqueueSessionEvent).mock.calls[0]!;
+  expect(text).toContain("requestId=request");
+  expect(text).toContain("Granted entryIds: entry.");
+  expect(text).not.toContain("onepassword://");
+  expect(eventOptions).toMatchObject({
+    agentId: "main",
+    sessionKey: "agent:main:chat",
+    expectedTarget: f.eventTarget,
+  });
   f.options.hasCurrentClientAuthority = () => true;
   const forget = vi.spyOn(AutofillService.prototype, "forgetApprovalLink");
   checker.mockRejectedValueOnce(new Error("onepassword://synthetic-private-error"));
   await f.handler(f.options);
   await jobs[2]!();
   expect(forget).toHaveBeenCalledWith("request");
+  expect(f.system.enqueueSessionEvent).toHaveBeenCalledTimes(1);
   expect(f.retained.release).toHaveBeenCalledTimes(2);
   scheduler.schedule.mockImplementationOnce(() => {
     throw new Error("scheduler closed");

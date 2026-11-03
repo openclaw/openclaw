@@ -183,6 +183,10 @@ it("keeps tokens, keys, links and references outside tool results through connec
     requestId: "request",
   });
   expect(outputs[1]).not.toContain("appLink");
+  // The agent needs these lookup keys to check status and fill after approval.
+  const summary = JSON.parse(outputs[1]!).content[0].text as string;
+  expect(summary).toContain("requestId=request");
+  expect(summary).toContain("entryId=entry");
   outputs.push(await execute({ action: "check_status", requestId: "request" }));
   expect(s.extension.getAccessRequestStatus).not.toHaveBeenCalled();
   outputs.push(

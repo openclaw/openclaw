@@ -33,6 +33,23 @@ const toolInput = z.discriminatedUnion("action", [
     .strict(),
 ]);
 
+// Model-facing text for a new request. The approval link stays in the private view;
+// the request and entry ids are lookup keys the agent needs for check_status and fill.
+function approvalSummary(request: {
+  requestId: string;
+  entries: Array<{ entryId: string; website: string }>;
+}): string {
+  const hosts = request.entries.map((entry) => new URL(entry.website).hostname).join(", ");
+  const entries = request.entries
+    .map((entry) => `${new URL(entry.website).hostname} entryId=${entry.entryId}`)
+    .join("; ");
+  return [
+    `1Password approval requested for ${hosts}. Approve it in OpenClaw.`,
+    `requestId=${request.requestId}; ${entries}.`,
+    "After the user approves, use requestId with check_status, then fill with the granted entryId.",
+  ].join(" ");
+}
+
 /** Optional sibling: never broadens the service-account tool's curated-secret policy hook. */
 export function createAutofillTool(
   service: AutofillService,
@@ -148,10 +165,7 @@ export function createAutofillTool(
             return inlineView(
               "approval",
               { requestId: request.requestId },
-              {
-                version: 1,
-                summary: `1Password approval requested for ${request.entries.map((entry) => new URL(entry.website).hostname).join(", ")}. Approve it in OpenClaw.`,
-              },
+              { version: 1, summary: approvalSummary(request) },
             );
           }
           case "check_status":

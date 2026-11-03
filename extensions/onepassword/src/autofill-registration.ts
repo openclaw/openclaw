@@ -1,5 +1,6 @@
 import type { OpenClawPluginApi, PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import { z } from "zod";
+import { ApprovalNotifier } from "./autofill-approval-notice.js";
 import { BrowserAutofillExtension, autofillBrowserGuidance } from "./autofill-browser.js";
 import { isAgenticAutofillEnabled } from "./autofill-input.js";
 import { AutofillError, AutofillRelayClient } from "./autofill-relay.js";
@@ -46,6 +47,7 @@ export function registerAutofill(api: OpenClawPluginApi, resolveConfig: () => un
       }
     },
   });
+  const notifier = new ApprovalNotifier(api.runtime.system, (message) => api.logger.warn(message));
   let scheduler: PluginServiceSchedulerV1 | undefined;
   let approvalJob = 0;
   const pollingReleases = new Set<() => void>();
@@ -134,6 +136,9 @@ export function registerAutofill(api: OpenClawPluginApi, resolveConfig: () => un
           service.forgetApprovalLink(input.requestId);
           throw new AutofillError("operationFailed");
         }
+        // Captured now, while the Control UI click is current, so the checker can resume this session.
+        const resume = await notifier.capture(target);
+        authority.assertCurrent();
         const retained = options.sessionAccessAuthority!.retain();
         const release = () => {
           retained.release();
@@ -149,10 +154,11 @@ export function registerAutofill(api: OpenClawPluginApi, resolveConfig: () => un
             delayMs: 0,
             async run() {
               try {
-                await service.checkStatus(input.requestId, scope, true, {
+                const result = await service.checkStatus(input.requestId, scope, true, {
                   signal,
                   assertCurrent: retained.assertCurrent,
                 });
+                await notifier.notify(resume, result);
               } catch {
                 // Errors may contain upstream data. Expire this private view without logging.
                 service.forgetApprovalLink(input.requestId);
