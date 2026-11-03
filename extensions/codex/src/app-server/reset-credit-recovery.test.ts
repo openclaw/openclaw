@@ -143,7 +143,7 @@ describe("earned Codex reset-credit recovery", () => {
     }
   });
 
-  it("a shared durable claim allows only one of two simultaneous processes to consume", async () => {
+  it("two independent concurrent callers sharing a mocked durable claim allow one consumption", async () => {
     let claimed = false;
     const claim = async () => {
       if (claimed) {
@@ -159,6 +159,16 @@ describe("earned Codex reset-credit recovery", () => {
     ]);
     expect([first.status, second.status].sort()).toEqual(["busy", "restored"]);
     expect(h.consume).toHaveBeenCalledOnce();
+  });
+
+  it("never widens the authorized account chain and fails closed on unavailable storage", async () => {
+    const outside = harness({ firstAvailable: async () => "openai:outside" });
+    expect(await recoverWithEarnedCodexReset(outside.options)).toEqual({ status: "uncertain" });
+    expect(outside.consume).not.toHaveBeenCalled();
+
+    const storage = harness({ claim: async () => { throw new Error("storage offline"); } });
+    expect(await recoverWithEarnedCodexReset(storage.options)).toEqual({ status: "uncertain" });
+    expect(storage.consume).not.toHaveBeenCalled();
   });
 
   it("refuses unavailable durable ownership, capped spending, and cancellation", async () => {
