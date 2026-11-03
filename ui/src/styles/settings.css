@@ -1821,15 +1821,10 @@ textarea.settings-input {
     }
 
     .settings-section__help-button {
-      position: relative;
-      min-width: 16px;
-      min-height: 16px;
-
-      &::after {
-        content: "";
-        position: absolute;
-        inset: -14px;
-      }
+      /* Reserve the touch target inline so it cannot overflow or cover adjacent actions. */
+      min-width: 44px;
+      min-height: 44px;
+      margin-block: -14px;
     }
 
     .settings-segmented > .settings-segmented__btn {
