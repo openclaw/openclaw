@@ -12,6 +12,7 @@ import { useTelegramHttpFixture } from "./send.telegram-http.test-support.js";
 
 const fireEffect = "5104841245755180586";
 const presentation = { blocks: [{ type: "text" as const, text: "Shipped" }] };
+const location = { latitude: 1, longitude: 2 };
 
 describe("Telegram message effects over HTTP", () => {
   const fixture = useTelegramHttpFixture();
@@ -47,14 +48,22 @@ describe("Telegram message effects over HTTP", () => {
     {
       route: "private prepared presentation",
       to: "123",
-      prepared: true,
+      prepared: { presentation },
       params: { presentation, effectId: fireEffect },
       expected: [["sendMessage", fireEffect]],
     },
     {
-      route: "group text",
+      route: "private prepared location",
+      to: "123",
+      prepared: { location },
+      params: { location, effectId: fireEffect },
+      expected: [["sendLocation", fireEffect]],
+    },
+    {
+      route: "group payload from another producer",
       to: "-1001",
-      params: { message: "Shipped", effectId: fireEffect },
+      payload: { text: "Shipped", channelData: { telegram: { messageEffectId: fireEffect } } },
+      params: {},
       expected: [["sendMessage", undefined]],
     },
   ] as const)(
@@ -82,12 +91,15 @@ describe("Telegram message effects over HTTP", () => {
           ...("media" in testCase ? { media: fixture.photoPath } : {}),
         };
         try {
-          if ("prepared" in testCase) {
-            const payload = await telegramPlugin.actions!.prepareSendPayload!({
-              ctx: { channel: "telegram", action: "send", cfg, params: sendParams },
-              to,
-              payload: { presentation },
-            });
+          if ("prepared" in testCase || "payload" in testCase) {
+            const payload =
+              "payload" in testCase
+                ? testCase.payload
+                : await telegramPlugin.actions!.prepareSendPayload!({
+                    ctx: { channel: "telegram", action: "send", cfg, params: sendParams },
+                    to,
+                    payload: testCase.prepared,
+                  });
             await expect(
               sendDurableMessageBatch({
                 cfg,

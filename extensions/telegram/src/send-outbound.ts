@@ -80,7 +80,11 @@ export function withTelegramMessageAction<T, TMessageId extends string | number 
   });
 }
 
-/** Telegram plays message effects in private chats only and rejects them elsewhere. */
+/**
+ * Telegram documents message effects for private chats only. The message action
+ * rejects other targets up front; this keeps other payload producers from sending
+ * the field to a resolved group or channel id.
+ */
 export function resolveTelegramMessageEffectParams(
   chatId: string,
   messageEffectId: string | undefined,

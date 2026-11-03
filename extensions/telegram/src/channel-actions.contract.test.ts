@@ -8,10 +8,14 @@ const telegramConfig = (
 type PreparedSend = Parameters<
   NonNullable<NonNullable<typeof telegramPlugin.actions>["prepareSendPayload"]>
 >[0];
-function prepareSend(params: PreparedSend["ctx"]["params"], payload: PreparedSend["payload"]) {
+function prepareSend(
+  params: PreparedSend["ctx"]["params"],
+  payload: PreparedSend["payload"],
+  to = "123456",
+) {
   return telegramPlugin.actions?.prepareSendPayload?.({
     ctx: { channel: "telegram", action: "send", cfg: {}, params },
-    to: "123456",
+    to,
     payload,
   });
 }
@@ -170,6 +174,15 @@ describe("telegram actions contract", () => {
       channelData: { telegram: { ...telegram, quoteText: quote } },
     });
   });
+
+  it.each(["-1001", "-1001:topic:42", "@somechannel"])(
+    "rejects message effects before prepared delivery to non-private target %s",
+    async (to) => {
+      await expect(
+        prepareSend({ effectId: "5104841245755180586" }, { text: "Chart", presentation }, to),
+      ).rejects.toThrow(/only in private chats/);
+    },
+  );
 
   it("leaves legacy delivery to the legacy owner", async () => {
     expect(

@@ -485,6 +485,11 @@ describe("Telegram registered action authority and input contracts", () => {
       params: { to: "123", message: "Shipped", effectId: "confetti" },
       error: /numeric message effect id/,
     },
+    {
+      action: "send",
+      params: { to: "-1001", message: "Shipped", effectId: "5104841245755180586" },
+      error: /only in private chats/,
+    },
   ] as const)(
     "rejects invalid external $action input before network delivery: $error",
     async ({ action, params, error }) => {

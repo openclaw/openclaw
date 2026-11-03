@@ -208,7 +208,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     edit: { aliases: ["messageId"], deliveryTargetAliases: [] },
     delete: { aliases: ["messageId"], deliveryTargetAliases: [] },
   },
-  prepareSendPayload: async ({ ctx, payload }) => {
+  prepareSendPayload: async ({ ctx, to, payload }) => {
     rejectTelegramNativeButtonParams(ctx.params);
     if (
       ctx.action !== "send" ||
@@ -217,7 +217,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
       return null;
     }
     const quoteText = readStringParam(ctx.params, "quoteText", { trim: false });
-    const messageEffectId = readTelegramMessageEffectId(ctx.params);
+    const messageEffectId = readTelegramMessageEffectId(ctx.params, to);
     if (!quoteText && !messageEffectId) {
       return payload;
     }

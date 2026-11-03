@@ -7,6 +7,7 @@ import {
   isRecord,
   normalizeUniqueTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveTelegramTargetChatType } from "./targets.js";
 
 const TELEGRAM_FORUM_TOPIC_ICON_COLORS = [
   0x6fb9f0, 0xffd67e, 0xcb86db, 0x8eee98, 0xff93b2, 0xfb6f5f,
@@ -55,11 +56,21 @@ export function readTelegramReplyToMessageId(params: Record<string, unknown>) {
   );
 }
 
-/** Telegram effects take the Bot API's numeric message_effect_id, not named effects. */
-export function readTelegramMessageEffectId(params: Record<string, unknown>) {
+/** Telegram effects take the Bot API's numeric message_effect_id and play only in private chats. */
+export function readTelegramMessageEffectId(params: Record<string, unknown>, to: string) {
   const effectId = readStringParam(params, "effectId") ?? readStringParam(params, "effect");
-  if (effectId !== undefined && !TELEGRAM_MESSAGE_EFFECT_ID_RE.test(effectId)) {
-    throw new Error("Telegram effectId must be a numeric message effect id.");
+  if (effectId === undefined) {
+    return undefined;
+  }
+  if (!TELEGRAM_MESSAGE_EFFECT_ID_RE.test(effectId)) {
+    throw new Error(
+      "Telegram effectId must be a numeric message effect id (for example 5104841245755180586); effect names are not supported.",
+    );
+  }
+  if (resolveTelegramTargetChatType(to) !== "direct") {
+    throw new Error(
+      "Telegram message effects work only in private chats; remove effectId to send to this chat.",
+    );
   }
   return effectId;
 }

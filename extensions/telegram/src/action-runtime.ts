@@ -444,7 +444,7 @@ export async function handleTelegramAction(
     const replyToMessageId = readTelegramReplyToMessageId(params);
     const messageThreadId = readTelegramThreadId(params);
     const quoteText = readStringParam(params, "quoteText", { trim: false });
-    const messageEffectId = readTelegramMessageEffectId(params);
+    const messageEffectId = readTelegramMessageEffectId(params, to);
     requireToken();
     const asVoice = readBooleanParam(params, "asVoice");
     const silent = readBooleanParam(params, "silent");
