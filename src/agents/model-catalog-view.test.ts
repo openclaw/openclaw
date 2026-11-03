@@ -252,6 +252,81 @@ describe("prepared model catalog view", () => {
     refreshFailed = true;
     expect(result.snapshot.refreshFailed).toBe(true);
   });
+
+  describe("accepted discovery owns picker membership", () => {
+    const discovered = row("custom", "live-1");
+    const seed = row("custom", "seed-retired");
+    const hosted = row("custom", "hosted-retired");
+    const otherSeed = row("other", "seed");
+
+    it("does not reintroduce static fallback rows after accepted discovery", () => {
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: "custom/live-1" } },
+      };
+      const captured = {
+        ...snapshot([discovered]),
+        staticEntries: [seed, hosted, otherSeed],
+        acceptedDiscoveryOrigins: [{ provider: "custom", profileId: undefined }],
+      };
+      const view = prepare({ cfg, snapshot: captured, view: "default" });
+      // The discovered provider's fallback rows are gone; an unrelated provider
+      // without accepted discovery keeps its fallback row.
+      expect(view.catalog.map(({ id }) => id)).toEqual(["live-1", "seed"]);
+    });
+
+    it("keeps explicit configured references for a discovered provider", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: "custom/live-1",
+            models: { "custom/hosted-retired": {} },
+          },
+        },
+      };
+      const captured = {
+        ...snapshot([discovered]),
+        staticEntries: [seed, hosted],
+        acceptedDiscoveryOrigins: [{ provider: "custom", profileId: undefined }],
+      };
+      const view = prepare({ cfg, snapshot: captured, view: "default" });
+      // Explicitly configured static rows still surface; purely automatic fallbacks do not.
+      expect(view.catalog.map(({ id }) => id)).toEqual(["live-1", "hosted-retired"]);
+    });
+
+    it("keeps the retained model for a discovered provider", () => {
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: "custom/live-1" } },
+      };
+      const captured = {
+        ...snapshot([discovered]),
+        staticEntries: [seed],
+        acceptedDiscoveryOrigins: [{ provider: "custom", profileId: undefined }],
+      };
+      const view = prepare({
+        cfg,
+        snapshot: captured,
+        view: "default",
+        retainedModel: { provider: "custom", model: "seed-retired" },
+      });
+      expect(view.catalog.map(({ id }) => id)).toEqual(["live-1", "seed-retired"]);
+    });
+
+    it("keeps static fallback rows when the provider has no accepted discovery", () => {
+      const cfg: OpenClawConfig = {};
+      const captured = {
+        ...snapshot([discovered]),
+        staticEntries: [seed, hosted, otherSeed],
+        acceptedDiscoveryOrigins: [],
+      };
+      const view = prepare({ cfg, snapshot: captured, view: "default" });
+      expect(view.catalog.map(({ id }) => id)).toEqual([
+        "live-1",
+        "seed-retired",
+        "hosted-retired",
+        "seed",
+      ]);
+    });
+  });
 });
 
 const nativeEntry = { ...row("custom", "native-model"), nativeRuntime: "native-test" };

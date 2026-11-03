@@ -24,6 +24,7 @@ import { DEFAULT_PROVIDER } from "./defaults.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import type { ModelAuthAvailabilityEvaluation } from "./model-auth-availability.js";
 import { resolveSelectedModelCredential } from "./model-auth-selected-credential.js";
+import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
 import {
   projectModelCatalogEntryForRoute,
   createConfiguredModelCatalogOverridesResolver,
@@ -208,6 +209,7 @@ export type ModelCatalogViewFacts = {
   profileProvider?: string;
   view?: ModelCatalogBrowseView;
   retainedModel?: ModelRef;
+  env?: NodeJS.ProcessEnv;
 };
 
 /** Projects captured catalog facts while keeping native observations revocable. */
@@ -228,6 +230,18 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
       ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
       manifestPlugins: params.metadataSnapshot,
     });
+    // Publication normalizes accepted discovery origins with the provider aliases
+    // that capture this catalog generation; the view must match so aliases align.
+    const normalizeProvider = createPreparedModelCatalogProviderNormalizer(
+      params.metadataSnapshot,
+      params.cfg,
+      params.env,
+    );
+    const acceptedProviders = new Set(
+      (params.snapshot.acceptedDiscoveryOrigins ?? []).map(({ provider }) =>
+        normalizeProvider(provider),
+      ),
+    );
     const keyOf = createModelCatalogIdentityKeyResolver();
     const seen = new Set(catalog.map(keyOf));
     const retainedKey = params.retainedModel
@@ -238,10 +252,18 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
       : undefined;
     for (const entry of params.snapshot.staticEntries) {
       const key = keyOf(entry);
+      // A provider with accepted account discovery owns picker membership; its
+      // static fallback rows must not be reintroduced by the default view. Keep
+      // explicit configured references and the retained model so user intent and
+      // pending/failed-with-no-history fallbacks still surface.
+      const discoveredProvider = acceptedProviders.has(normalizeProvider(entry.provider));
+      const explicitlyConfigured = policy.configuredKeys.has(key) || key === retainedKey;
       const include =
         params.view === "configured"
           ? policy.configuredKeys.has(key) || key === retainedKey
-          : policy.allows({ provider: entry.provider, model: entry.id });
+          : discoveredProvider
+            ? explicitlyConfigured
+            : policy.allows({ provider: entry.provider, model: entry.id });
       if (!seen.has(key) && include) {
         seen.add(key);
         catalog.push(entry);
@@ -639,8 +661,6 @@ async function acquirePickerModelCatalogView(
       const { resolveDefaultAgentDir } = await import("./agent-scope.js");
       const { resolvePluginMetadataSnapshot } =
         await import("../plugins/plugin-metadata-snapshot.js");
-      const { createPreparedModelCatalogProviderNormalizer } =
-        await import("./model-catalog-provider-normalizer.js");
       const requestedProvider = normalizeProviderId(params.preferredProvider);
       if (requestedProvider) {
         const env = params.env ?? process.env;
