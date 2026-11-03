@@ -12,7 +12,7 @@ import {
 
 describe("ClawRouter registered file transcription", () => {
   it("uses the native default, scoped router auth and byte-exact multipart through the media runner", async () => {
-    await fixture(async ({ cfg, filePath, requests, audio }) => {
+    await fixture(async ({ cfg, filePath, requests, audio, catalogRequests }) => {
       const result = await transcribeAudioFile({
         cfg,
         filePath,
@@ -27,6 +27,7 @@ describe("ClawRouter registered file transcription", () => {
         decision: { outcome: "success" },
       });
       expect(requests).toHaveLength(1);
+      expect(catalogRequests).toEqual(["Bearer fixture-router"]);
       expect(requests[0]).toMatchObject({
         url: "/v1/native/openai/v1/audio/transcriptions",
         authorization: "Bearer fixture-router",
@@ -56,7 +57,7 @@ describe("ClawRouter registered file transcription", () => {
       cfg.models!.providers!.clawrouter!.apiKey = "fixture-router";
       cfg.tools!.media!.models![0]!.model = "whisper-1";
       await expect(transcribeAudioFile({ cfg, filePath })).rejects.toThrow(
-        /only gpt-4o-transcribe/,
+        /qualified OpenAI or SenseAudio model/,
       );
       expect(requests).toHaveLength(0);
     });
@@ -121,7 +122,7 @@ describe("ClawRouter registered file transcription", () => {
     );
   });
   it("locks stored ClawRouter profiles without borrowing missing or foreign credentials", async () => {
-    await fixture(async ({ cfg, filePath, requests, home }) => {
+    await fixture(async ({ cfg, filePath, requests, home, catalogRequests }) => {
       const agentDir = home + "/.openclaw/agents/main/agent";
       await upsertAuthProfileAsync({
         agentDir,
@@ -138,6 +139,7 @@ describe("ClawRouter registered file transcription", () => {
       expect(requests.map((request) => request.authorization)).toEqual([
         "Bearer fixture-stored-router",
       ]);
+      expect(catalogRequests).toEqual(["Bearer fixture-stored-router"]);
       for (const profile of ["clawrouter:missing", "openai:stt"]) {
         cfg.tools!.media!.models![0]!.profile = profile;
         await expect(transcribeAudioFile({ cfg, filePath, agentDir })).rejects.toThrow(

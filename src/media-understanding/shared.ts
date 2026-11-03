@@ -59,18 +59,22 @@ export function buildOpenAiCompatibleAuthHeaders(
     : { authorization: `Bearer ${apiKey}` };
 }
 
-/** Resolves the multipart upload filename, mapping AAC inputs to provider-friendly `.m4a`. */
-export function resolveAudioTranscriptionUploadFileName(fileName?: string, mime?: string): string {
+/** Resolves a multipart basename; AAC remapping stays the default unless the provider accepts AAC. */
+export function resolveAudioTranscriptionUploadFileName(
+  fileName?: string,
+  mime?: string,
+  preserveAacFileName = false,
+): string {
   // Some providers reject raw `.aac` names even when the bytes are AAC; `.m4a`
   // preserves intent while matching their accepted upload extensions.
   const trimmed = fileName?.trim();
   const baseName = trimmed ? path.basename(trimmed) : "audio";
   const lowerMime = mime?.trim().toLowerCase();
 
-  if (/\.aac$/i.test(baseName)) {
+  if (!preserveAacFileName && /\.aac$/i.test(baseName)) {
     return `${baseName.slice(0, -4) || "audio"}.m4a`;
   }
-  if (!path.extname(baseName) && lowerMime === "audio/aac") {
+  if (!preserveAacFileName && !path.extname(baseName) && lowerMime === "audio/aac") {
     return `${baseName || "audio"}.m4a`;
   }
   return baseName;
@@ -81,6 +85,8 @@ export function buildAudioTranscriptionFormData(params: {
   buffer: Buffer;
   fileName?: string;
   mime?: string;
+  /** Use native AAC filenames only for providers that accept that upload format. */
+  preserveAacFileName?: boolean;
   fields?: Record<string, string | number | boolean | undefined>;
 }): FormData {
   const form = new FormData();
@@ -93,7 +99,15 @@ export function buildAudioTranscriptionFormData(params: {
       form.append(name, text);
     }
   }
-  form.append("file", blob, resolveAudioTranscriptionUploadFileName(params.fileName, params.mime));
+  form.append(
+    "file",
+    blob,
+    resolveAudioTranscriptionUploadFileName(
+      params.fileName,
+      params.mime,
+      params.preserveAacFileName,
+    ),
+  );
   return form;
 }
 
