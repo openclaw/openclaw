@@ -1,0 +1,26 @@
+{
+  "status": "CONTROLLER_REQUALIFIED_RETAINED_CAPTURES_PARENT_ACCEPTANCE_PENDING",
+  "modifiedOriginalConsumer": {
+    "before": "48f9649cf2ed34499ceb7a6bbcd2ac6887eb3b189a7cdce679267d0bf3265523",
+    "after": "95d8210aab377e6b0ee79063989395072c49b6ab3b72716a770ff576683cdfc3"
+  },
+  "completeRuntimePostimages": {
+    "verify-results.py": "95d8210aab377e6b0ee79063989395072c49b6ab3b72716a770ff576683cdfc3",
+    "reference_consumer.py": "06ff78ced8bef5ca72b0d29c1d8e4b771edf51c16a992c5149d2bf1de8be64e1",
+    "SOURCE-PINS.json": "ce86c9e43d6f8c250750b5dafa462dd84fab471ec3375bc1e5193e21248b6dea",
+    "png_codec.py": "7152fb03ea57c90910bb78aa81ba7f6fb6787c85c250b26dcc5f32e50dd3f052"
+  },
+  "reusedBySha": {
+    "png_codec.py": "7152fb03ea57c90910bb78aa81ba7f6fb6787c85c250b26dcc5f32e50dd3f052",
+    "originalBaselineVerifier": "48f9649cf2ed34499ceb7a6bbcd2ac6887eb3b189a7cdce679267d0bf3265523",
+    "originalBaselinePins": "a27788f86cc76b44fcf22dd0b91d27a6b5996ca5255b1353b84aeb9d69a6011d"
+  },
+  "originalInputManifestSha256": "7c32a4a8bcf066e3bd32b03de1313a73cf1b7fa1a9afe975673cc69e1b1f4fb7",
+  "newInputManifestSha256": "65825138b54fdee25c21e5663ebfcc324027940275ecc15ac6b57e93e5bddda1",
+  "changes": "reference consumer + external output receipt only; all product/source/overlay/fixture/threshold pins unchanged",
+  "originalArtifactsNotTransferred": true,
+  "oldRunRemainsFailed": 41572287535,
+  "nativeOps": 0,
+  "newPNG": 0,
+  "canonicalReview": "parent gate; independent narrative review accompanies packet"
+}
