@@ -247,6 +247,12 @@ OAuth refresh settlement remains owned by the OAuth manager.
   </Tab>
 </Tabs>
 
+Custom `StreamFn` factories may return a producer stream or a read-only stream
+with an async iterator and `result()`, either immediately or through a Promise.
+Read-only streams are bridged into the runtime while preserving their final
+`result()` independently of terminal-event completion. Existing synchronous
+producer streams retain their completion identity and lazy result behavior.
+
 Set `supportsSystemPromptCacheBoundary: true` on a provider registration
 only when its `createStreamFn` transport understands the stable/dynamic
 system-prompt boundary. Use `splitSystemPromptCacheBoundary` from

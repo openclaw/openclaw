@@ -1,0 +1,2 @@
+# Match Decision execution purpose and prove the retained registry is reused.
+9

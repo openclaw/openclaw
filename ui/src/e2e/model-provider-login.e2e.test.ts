@@ -129,7 +129,9 @@ suite.define(() => {
         await page.locator("[data-models-connect]").click();
         const dialog = page.locator(".model-provider-login");
         await dialog.locator('[data-models-login-provider="openai"]').waitFor();
-        expect((await dialog.locator(".model-setup-wizard__body > p").textContent())?.trim()).toBe(
+        expect(
+          (await dialog.locator(".oc-dialog__description p").first().textContent())?.trim(),
+        ).toBe(
           "Choose how to connect. Verifying an API key or token can also set this agent's active model.",
         );
         if (recordVisuals) {
@@ -314,7 +316,10 @@ suite.define(() => {
         await page.locator('[data-models-login-provider="example"]').click();
         expect(
           (
-            await page.locator(".model-provider-login .model-setup-wizard__body > p").textContent()
+            await page
+              .locator(".model-provider-login .oc-dialog__description p")
+              .first()
+              .textContent()
           )?.trim(),
         ).toBe("Save credentials for this agent. Choose the active model separately.");
         await page.getByRole("button", { name: "Example browser sign-in", exact: true }).click();
