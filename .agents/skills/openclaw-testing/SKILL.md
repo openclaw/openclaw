@@ -121,7 +121,7 @@ For module mocks, follow the
 [fixture contract](../../../docs/help/testing/fixtures.md#module-mocks-and-export-completeness).
 When an isolation annotation retires an existing baseline entry, commit the annotation and corresponding baseline removal together.
 Inspect the full baseline diff because `--prune` scans the whole checkout.
-Run the guard again without `--prune` before publishing.
+Verify the updated baseline with a guard run without `--prune`.
 
 ### Test failure policy
 
