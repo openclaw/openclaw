@@ -206,7 +206,7 @@ export function normalizeLegacyToolResultId(
   if (resultName && callName && resultName !== callName) {
     return message;
   }
-  return { ...message, toolCallId: toolCall.id, isError: true };
+  return { ...message, toolCallId: toolCall.id };
 }
 
 /** Classifies call/result ownership without reordering or synthesizing transcript messages. */

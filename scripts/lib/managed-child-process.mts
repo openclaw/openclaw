@@ -40,7 +40,14 @@ type ManagedProcessGroupChild = {
   pid?: number;
   signalCode?: string | null;
 };
+type ManagedProcessGroupObservation = {
+  pid: number;
+  error: string;
+  census?: { status: number | null; signal?: string | null; error?: string; rows: string };
+  recheck?: string;
+};
 type ManagedProcessGroupOptions = {
+  onIndeterminate?: (observation: ManagedProcessGroupObservation) => void;
   deadlineAt?: number;
   errorPolicy: ManagedProcessGroupErrorPolicy;
   inspectLeaderWhenNoGroup?: boolean;
@@ -386,6 +393,7 @@ export function inspectManagedProcessGroup(
     deadlineAt,
     errorPolicy,
     inspectLeaderWhenNoGroup = false,
+    onIndeterminate,
     platform = process.platform,
     useProcessGroup = platform !== "win32",
   }: ManagedProcessGroupOptions,
@@ -420,12 +428,18 @@ export function inspectManagedProcessGroup(
     if (isMissingProcessError(error)) {
       return "dead";
     }
-    if (isExitedDarwinGroup(child, platform, error, deadlineAt)) {
+    const observation: ManagedProcessGroupObservation = {
+      pid,
+      error: processErrorCode(error) ?? "UNKNOWN",
+    };
+    if (isExitedDarwinGroup(child, platform, error, deadlineAt, observation)) {
       return "dead";
     }
-    return errorPolicy === "alive-on-eperm" && hasProcessErrorCode(error, "EPERM")
-      ? "live"
-      : "indeterminate";
+    if (errorPolicy === "alive-on-eperm" && hasProcessErrorCode(error, "EPERM")) {
+      return "live";
+    }
+    onIndeterminate?.(observation);
+    return "indeterminate";
   }
 }
 
@@ -433,7 +447,8 @@ function isExitedDarwinGroup(
   child: ManagedProcessGroupChild,
   platform: NodeJS.Platform,
   error: unknown,
-  deadlineAt?: number,
+  deadlineAt: number | undefined,
+  observation?: ManagedProcessGroupObservation,
 ): boolean {
   if (
     platform !== "darwin" ||
@@ -445,12 +460,18 @@ function isExitedDarwinGroup(
   }
   // XNU killpg skips zombies and returns EPERM when none are signalable.
   // Require a zombie-only census or kernel-confirmed disappearance during ps.
-  if (isZombieProcessGroup(child.pid, platform, deadlineAt)) {
+  if (isZombieProcessGroup(child.pid, platform, deadlineAt, observation)) {
     return true;
   }
   try {
     process.kill(-child.pid, 0);
+    if (observation) {
+      observation.recheck = "live";
+    }
   } catch (probeError) {
+    if (observation) {
+      observation.recheck = processErrorCode(probeError) ?? "UNKNOWN";
+    }
     return isMissingProcessError(probeError);
   }
   return false;
@@ -460,6 +481,7 @@ function isZombieProcessGroup(
   pid: number,
   platform: NodeJS.Platform,
   deadlineAt?: number,
+  observation?: ManagedProcessGroupObservation,
 ): boolean {
   const timeout =
     deadlineAt === undefined
@@ -468,6 +490,9 @@ function isZombieProcessGroup(
   // Snapshot work shares its owner's deadline. Exhaustion is not death, and
   // timeout: 0 would silently remove Node's subprocess timeout.
   if (timeout <= 0) {
+    if (observation) {
+      observation.census = { status: null, error: "DEADLINE_EXHAUSTED", rows: "" };
+    }
     return false;
   }
   // Detached children lead their own session. Linux kill(0) includes zombies,
@@ -481,6 +506,15 @@ function isZombieProcessGroup(
     timeout,
     killSignal: "SIGKILL",
   });
+  if (observation) {
+    // Only PGID/state rows are requested. Bound failure evidence without recording argv.
+    observation.census = {
+      status: result.status,
+      signal: result.signal,
+      error: processErrorCode(result.error),
+      rows: result.stdout?.slice(0, 1024) ?? "",
+    };
+  }
   // BSD ps appends flags (for example ZN for a niced zombie); Linux state is one letter.
   const state = platform === "darwin" ? "Z[+<>AELNSsVWX]*" : "Z";
   const zombie = new RegExp(`^\\s*${pid}\\s+${state}\\s*$`, "u");
@@ -1480,6 +1514,11 @@ function isMissingProcessError(error: unknown) {
   return hasProcessErrorCode(error, "ESRCH");
 }
 
+function processErrorCode(error: unknown): string | undefined {
+  const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+  return typeof code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/u.test(code) ? code : undefined;
+}
+
 function hasProcessErrorCode(error: unknown, code: string) {
-  return Boolean(error && typeof error === "object" && "code" in error && error.code === code);
+  return processErrorCode(error) === code;
 }

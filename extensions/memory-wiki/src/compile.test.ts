@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { fromMarkdown } from "mdast-util-from-markdown";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { compileMemoryWikiVault, refreshMemoryWikiIndexesAfterImport } from "./compile.js";
 import { loadMemoryWikiCompiledCache, readMemoryWikiDashboardState } from "./compiled-cache.js";
@@ -49,48 +50,46 @@ describe("compileMemoryWikiVault", () => {
     await expect(read("index.md")).resolves.toBe(indexBefore);
   });
 
-  it("preserves human and empty pages while rebuilding indexes and clickable related links", async () => {
-    const { config, page, write, read } = await createVault({
-      render: { createDashboards: false },
-    });
-    const relativePath = "sources/meeting notes.md";
-    const notesLine = "- 中文 🦀 \uFFFD tail";
-    const sourcePath = await page(
-      relativePath,
-      { pageType: "source", id: "source.notes", title: "Meeting notes" },
-      `# Meeting notes\n\n[Plan](../entities/plan.md)\n\n## Human Notes\n\n${notesLine}\n`,
-    );
-    await page("entities/plan.md", { pageType: "entity", id: "entity.plan", title: "Plan" });
-    const source = await read(relativePath);
-    const emptyPages = [
-      ["sources/empty.md", ""],
-      ["sources/whitespace.md", " \n\t"],
-    ] as const;
-    const emptyPaths = await Promise.all(emptyPages.map(([file, bytes]) => write(file, bytes)));
-    const preserved = await compileMemoryWikiVault(config, { sourcePageWrites: "preserve" });
+  it.each(["Plain", "[x]", "[x", "]", "a\\", "`C:\\x[y]`"])(
+    "preserves source bytes and native links: %s",
+    async (title) => {
+      const { rootDir, config, page, write, read } = await createVault({
+        render: { createDashboards: false },
+      });
+      const relativePath = "sources/meeting notes.md";
+      const notesLine = "- 中文 🦀 \uFFFD tail";
+      const sourcePath = await page(
+        relativePath,
+        { pageType: "source", id: "source.notes", title },
+        `# Meeting notes\n\n[Plan](../entities/plan.md)\n\n## Human Notes\n\n${notesLine}\n`,
+      );
+      await page("entities/plan.md", { pageType: "entity", id: "entity.plan", title: "Plan" });
+      const source = await read(relativePath);
+      const emptyPages = [
+        ["sources/empty.md", ""],
+        ["sources/whitespace.md", " \n\t"],
+      ] as const;
+      await Promise.all(emptyPages.map(([file, bytes]) => write(file, bytes)));
+      const preserved = await compileMemoryWikiVault(config, { sourcePageWrites: "preserve" });
 
-    await expect(read(relativePath)).resolves.toBe(source);
-    await expect(read("index.md")).resolves.toContain(
-      "[Meeting notes](<sources/meeting notes.md>)",
-    );
-    expect(extractWikiLinks(await read("index.md"), "index.md")).toContain(relativePath);
-    expect(preserved.updatedFiles).not.toContain(sourcePath);
-    const snapshot = expectDefined(await loadMemoryWikiCompiledCache(config), "compiled cache");
-    expect(snapshot.digest.pages.map((entry) => entry.path)).toContain(relativePath);
-    const normal = await compileMemoryWikiVault(config);
-    expect(normal.updatedFiles).toContain(sourcePath);
-    await expect(read(relativePath)).resolves.toContain("<!-- openclaw:wiki:related:start -->");
-    await expect(read(relativePath)).resolves.toContain(notesLine);
-    await expect(read("entities/plan.md")).resolves.toContain(
-      "[Meeting notes](<../sources/meeting notes.md>)",
-    );
-    for (const [file, bytes] of emptyPages) {
-      await expect(read(file)).resolves.toBe(bytes);
-    }
-    for (const file of emptyPaths) {
-      expect(normal.updatedFiles).not.toContain(file);
-    }
-  });
+      await expect(read(relativePath)).resolves.toBe(source);
+      const index = await read("index.md");
+      expect(extractWikiLinks(index, "index.md")).toContain(relativePath);
+      expect(JSON.stringify(fromMarkdown(index))).toContain(`"value":${JSON.stringify(title)}`);
+      expect(preserved.updatedFiles).not.toContain(sourcePath);
+      const snapshot = expectDefined(await loadMemoryWikiCompiledCache(config), "compiled cache");
+      expect(snapshot.digest.pages.map((entry) => entry.path)).toContain(relativePath);
+      const normal = await compileMemoryWikiVault(config);
+      expect(normal.updatedFiles).toContain(sourcePath);
+      await expect(read(relativePath)).resolves.toContain("<!-- openclaw:wiki:related:start -->");
+      await expect(read(relativePath)).resolves.toContain(notesLine);
+      await expect(read("entities/plan.md")).resolves.toContain("](<../sources/meeting notes.md>)");
+      for (const [file, bytes] of emptyPages) {
+        await expect(read(file)).resolves.toBe(bytes);
+        expect(normal.updatedFiles).not.toContain(path.join(rootDir, file));
+      }
+    },
+  );
 
   it("rejects directory-index syntax-error frontmatter without changing its bytes", async () => {
     const { config, write, read } = await createVault({ render: { createDashboards: false } });
@@ -189,10 +188,7 @@ describe("compileMemoryWikiVault", () => {
   it("preserves scan ordering, invalid fingerprints, projections, and reports after writes", async () => {
     const { rootDir, config, page, write, read } = await createVault();
     const sources = ["sources/a-stable.md", "sources/z-changed.md"] as const;
-    for (const [relative, id] of [
-      [sources[0], "stable"],
-      [sources[1], "changed"],
-    ] as const) {
+    for (const [id, relative] of Object.entries({ stable: sources[0], changed: sources[1] })) {
       await page(
         relative,
         {

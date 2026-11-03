@@ -1,7 +1,10 @@
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { WorkerTaskError } from "@openclaw/worker-runtime";
 import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
-import type { SqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import {
+  formatSqliteSessionFileMarker,
+  type SqliteSessionFileMarker,
+} from "../config/sessions/legacy-sqlite-marker.js";
 import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { iterateSessionColdRecords } from "../config/sessions/session-cold-storage-chunks.js";
 import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
@@ -16,7 +19,6 @@ import {
 } from "./session-cost-usage-cache.kernel.js";
 import {
   listUsageCountedTranscriptSources,
-  resolveUsageCostTranscriptSources,
   resolveUsageCostTranscriptFiles,
   resolveUsageCostTranscriptPaths,
 } from "./session-cost-usage-collection.js";
@@ -111,35 +113,24 @@ export async function executeUsageCostWorker(
     control,
     target,
     readStore,
+    readCheckpoint: (marker) => {
+      if (operation.kind !== "refresh") {
+        return undefined;
+      }
+      const database = target(marker.agentId, marker.storePath);
+      const checkpoint = byPath.get(
+        formatSqliteSessionFileMarker({ ...marker, storePath: database.path }),
+      )?.envelope?.checkpoint;
+      return checkpoint?.kind === "sqlite" ? checkpoint : undefined;
+    },
   });
   if (operation.kind === "inventory") {
-    const selected = operation.sessionFiles;
-    if (!selected && operation.statistics === false) {
-      const files = await listUsageCountedTranscriptSources(location.agentId, {
-        ...access,
-        storePath: location.storePath,
-        minMtimeMs: operation.minMtimeMs,
-        statistics: false,
-      });
-      return {
-        kind: "inventory",
-        files: files.map(({ kind, sourcePath, sessionId, mtimeMs }) => ({
-          kind,
-          sourcePath,
-          sessionId,
-          mtimeMs,
-        })),
-      };
-    }
-    const files = selected
-      ? (await resolveUsageCostTranscriptSources(selected, access)).filter(
-          (file) => file !== undefined,
-        )
-      : await listUsageCountedTranscriptSources(location.agentId, {
-          ...access,
-          storePath: location.storePath,
-          minMtimeMs: operation.minMtimeMs,
-        });
+    const files = await listUsageCountedTranscriptSources(location.agentId, {
+      ...access,
+      storePath: location.storePath,
+      minMtimeMs: operation.minMtimeMs,
+      statistics: false,
+    });
     return {
       kind: "inventory",
       files: files.map((file) => ({
@@ -147,28 +138,21 @@ export async function executeUsageCostWorker(
         sourcePath: file.sourcePath,
         sessionId: file.sessionId,
         mtimeMs: file.mtimeMs,
-        transcriptFile: file.kind === "sqlite" ? file : undefined,
       })),
     };
   }
 
   // Resolve keys before synchronously capturing the report's bounded cache inputs.
-  const selectedFiles =
-    operation.kind === "refresh" && operation.sessionFiles
-      ? await resolveUsageCostTranscriptFiles(operation.sessionFiles, access)
-      : [];
   const sessionPaths =
     operation.kind === "sessions"
       ? await resolveUsageCostTranscriptPaths(
           operation.sessions.map((session) => session.sessionFile),
           access,
         )
-      : undefined;
-  const selectedPaths = sessionPaths
-    ? sessionPaths.filter((file) => file !== undefined)
-    : operation.kind === "refresh" && operation.sessionFiles
-      ? selectedFiles.flatMap((file) => (file ? [file.filePath] : []))
-      : undefined;
+      : operation.kind === "refresh" && operation.sessionFiles
+        ? await resolveUsageCostTranscriptPaths(operation.sessionFiles, access)
+        : undefined;
+  const selectedPaths = sessionPaths?.filter((file) => file !== undefined);
   const cacheDatabase = input.databases.find(
     (entry) => entry.path === location.databasePath && entry.agentId === location.agentId,
   );
@@ -345,6 +329,7 @@ export async function executeUsageCostWorker(
       operation,
       sessionPaths: sessionPaths ?? [],
       access,
+      readFreshness,
       readCache: readCacheOrEmpty,
       scan: {
         pricingFingerprint: operation.pricingFingerprint,
@@ -357,7 +342,18 @@ export async function executeUsageCostWorker(
   }
 
   const rows = await readMetadata();
-  const byPath = new Map(rows.map((row) => [row.key, row]));
+  const byPath = new Map(
+    rows.map((row) => [
+      row.key,
+      {
+        row,
+        envelope: decodeUsageCostRollupEnvelope(row.valueJson, operation.pricingFingerprint),
+      },
+    ]),
+  );
+  const selectedFiles = operation.sessionFiles
+    ? await resolveUsageCostTranscriptFiles(operation.sessionFiles, access)
+    : [];
 
   const requestedFiles = selectedFiles.filter((file) => file !== undefined);
   if (requestedFiles.length !== (operation.sessionFiles?.length ?? 0)) {
@@ -371,6 +367,7 @@ export async function executeUsageCostWorker(
     let batchBytes = 0;
     const sendBatch = async () => {
       const transfers = batch.map((row) => row.value.buffer);
+      // Settle each bounded snapshot before producing more, releasing writer custody between batches.
       await host("prune-rows", batch, transfers);
       batch = [];
       batchBytes = 0;
@@ -382,7 +379,7 @@ export async function executeUsageCostWorker(
       const value = new TextEncoder().encode(row.valueJson);
       const rowBytes = value.byteLength + 2 * row.key.length;
       // Preserve single-row delivery for oversized metadata without growing other batches.
-      if (batch.length > 0 && (batch.length >= 64 || batchBytes + rowBytes > 1024 * 1024)) {
+      if (batch.length > 0 && (batch.length >= 1024 || batchBytes + rowBytes > 1024 * 1024)) {
         await sendBatch();
       }
       batch.push({ key: row.key, value, updatedAt: row.updatedAt });
@@ -391,7 +388,6 @@ export async function executeUsageCostWorker(
     }
     if (batch.length > 0) {
       await sendBatch();
-      await host("prune", {});
     }
   }
   // Partitions written before quarter rows existed, or by a build without them,
@@ -413,10 +409,9 @@ export async function executeUsageCostWorker(
     if (old && !gap) {
       continue;
     }
-    const row = byPath.get(file.filePath);
-    const envelope = row
-      ? decodeUsageCostRollupEnvelope(row.valueJson, operation.pricingFingerprint)
-      : undefined;
+    const cached = byPath.get(file.filePath);
+    const row = cached?.row;
+    const envelope = cached?.envelope;
     const invalid = rebuildByPath.get(file.filePath);
     const rebuild =
       row &&

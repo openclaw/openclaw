@@ -1,7 +1,6 @@
 import type { SystemInfoResult } from "../../packages/gateway-protocol/src/schema/system-info.js";
 import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { readStartupRecoveryWarning } from "../agents/main-session-recovery/main-session-restart-recovery-diagnostics.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { resolveProjectedSessionContextTokens } from "../config/sessions/context-token-provenance.js";
@@ -564,7 +563,6 @@ export async function prepareStatusSummary(
             [readStartupMigrationWarning(includeSensitive), heartbeat.selectionWarning]
               .filter(Boolean)
               .join("\n") || undefined,
-          startupRecoveryWarning: readStartupRecoveryWarning(includeSensitive),
           modelReasoningWarning: readModelReasoningWarning(includeSensitive),
           installationReplacementWarning: getGatewayInstallationReplacement()?.message,
           ...(utilityModelWarnings.length

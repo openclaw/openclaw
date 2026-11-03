@@ -55,6 +55,19 @@ prints the next eligible check and resumes automatically. Permission-denied
 403 responses remain terminal. A local state file under `$TMPDIR/openclaw-frv/`
 retains the retry boundary and reported events across watcher restarts.
 
+`status` lists blockers by owner, job, conclusion, attempt, and URL in text and
+JSON, including parent failures before the immutable plan is sealed. `watch`
+exits with code 1 when it first observes a failed current-attempt parent job, a
+failed current artifact producer, or a policy-blocking failure carried into a
+child's latest attempt. Partial reruns can retain a failed job without executing
+it again. Duplicate or unfinished job identities remain pending.
+
+The watcher records each blocker before it exits. Resume with the same command
+and state path to keep observing diagnostics without reporting that blocker
+again. Inspect `status`, then preview recovery with `continue --failed --dry-run`.
+An undispatched child requires a fresh all-group FRV; watcher exit does not
+authorize recovery or stop Diagnostic Drain.
+
 Once the immutable execution plan is available, `watch` reports its frozen
 candidate SHA and observes the admitted context ref's current tip freshly. If
 that tip advances, the watcher keeps observing the original run and labels the

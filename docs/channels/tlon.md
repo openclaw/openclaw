@@ -157,8 +157,35 @@ baseline, and override per channel nest:
 }
 ```
 
+With auto-discovery off, Tlon expands citations only from channels currently in `groupChannels`,
+including channels added through the settings store. Other citations stay as opaque references. With
+auto-discovery on, citations can expand from any channel the bot ship can read. This includes
+Notebook and Gallery channels in joined groups, even though Tlon listens and replies only in
+auto-discovered chat channels. In a 1:1 DM from `ownerShip`, citations can expand from any channel
+the bot ship can read regardless of the auto-discovery setting.
+
+Admitted senders can cite posts from channels they cannot read themselves, and the bot adds that
+content to the agent's context. To keep citations inside the conversation they came from, set
+`crossChannelCitations: false`. A citation then expands only when it points at the channel the
+message was posted in. Citations in other DMs and group DMs stay as opaque references, while the
+owner's 1:1 DMs keep the exemption above.
+
+```json5
+{
+  channels: {
+    tlon: {
+      crossChannelCitations: false,
+    },
+  },
+}
+```
+
 Once the bot has replied inside a thread, it keeps responding to later messages in that thread
 without requiring another mention.
+
+Automatic group responses stay at the channel top level for a top-level message,
+or reply to the existing root for a thread message. They do not nest a reply under
+another reply. Explicit reply directives and direct messages keep their own targets.
 
 Set `channels.tlon.implicitMentions.threadParticipation: false` to require a new explicit mention
 for those follow-ups. Account overrides use `channels.tlon.accounts.<id>.implicitMentions`. Tlon
@@ -213,14 +240,16 @@ approval and DM the owner:
 
 The owner replies in DM to act on a request:
 
-| Owner reply                  | Effect                                               |
-| ---------------------------- | ---------------------------------------------------- |
-| `approve` / `deny` / `block` | Acts on the most recent pending approval             |
-| `approve <id>` / `deny <id>` | Acts on a specific approval by id                    |
-| `block`                      | Also blocks the ship natively so it cannot reconnect |
-| `unblock ~ship`              | Reverses a native block                              |
-| `blocked`                    | Lists currently blocked ships                        |
-| `pending`                    | Lists pending approval requests                      |
+| Owner reply                                 | Effect                                                             |
+| ------------------------------------------- | ------------------------------------------------------------------ |
+| `approve` / `deny` / `block`                | Acts only when exactly one request is pending; otherwise lists IDs |
+| `approve <id>` / `deny <id>` / `block <id>` | Acts on a specific pending approval                                |
+| `unblock ~ship`                             | Reverses a native block                                            |
+| `blocked`                                   | Lists currently blocked ships                                      |
+| `pending`                                   | Lists pending approval requests                                    |
+
+Bare decisions keep the single-request workflow concise. When multiple requests are pending, the
+owner must include an ID so a newly queued request cannot change which request receives the action.
 
 Without `ownerShip` configured, unauthorized DMs and channel mentions are just dropped and logged;
 there is no approval prompt.

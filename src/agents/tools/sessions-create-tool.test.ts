@@ -228,6 +228,35 @@ describe("sessions_create", () => {
     expect(policy.allow).toBe(allow);
   });
 
+  it("projects only the captured operator grant, including its absence and revocation", async () => {
+    const allow = ["read"];
+    const policy: SandboxToolPolicy = { allow, deny: [], [SANDBOX_DEFAULT_TOOL_ALLOW]: allow };
+    const captured = issueAuthority();
+    await withGatewayToolCallerIdentity(
+      {
+        agentId: "main",
+        sessionKey: "agent:main:dashboard:catalog",
+        operatorAuthority: issueAuthority(["operator.admin"], "other-requester").authority,
+      },
+      () => {
+        for (const authority of [null, issueAuthority(["operator.read"]).authority]) {
+          expect(prepareSandboxSessionTools({ policy, senderIsOwner: false, authority })).toEqual({
+            policy,
+            renameOnly: false,
+          });
+        }
+        const params = { policy, senderIsOwner: false, authority: captured.authority };
+        expect(prepareSandboxSessionTools(params).policy?.allow).toEqual([
+          "read",
+          "sessions",
+          "sessions_create",
+        ]);
+        captured.revoke();
+        expect(() => prepareSandboxSessionTools(params)).toThrow("creation source revoked");
+      },
+    );
+  });
+
   it("does not expand explicit allowlists or senderless/insufficient-authority defaults", () => {
     const explicit = { allow: ["read"], deny: [] };
     const inherited: SandboxToolPolicy = {

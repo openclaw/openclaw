@@ -300,7 +300,7 @@ openclaw_resolve_frozen_typed_onboarding_contract() {
 
 openclaw_resolve_frozen_session_cold_storage_contract() {
   local source_root="${1:?missing selected source root}" authorization_status=0 has_current has_cold has_legacy
-  local has_legacy_duration
+  local has_legacy_duration has_navigation has_legacy_archival
 
   export OPENCLAW_FROZEN_TARGET_SESSION_COLD_STORAGE_MODE="required"
   openclaw_prepare_frozen_target_context "$source_root" || authorization_status=$?
@@ -310,19 +310,32 @@ openclaw_resolve_frozen_session_cold_storage_contract() {
   # Cold storage introduced the split session schema. A current target with a
   # broken declaration must fail its tests rather than be treated as pre-feature.
   has_current="$(openclaw_frozen_target_source_flag has "$source_root" src/config/zod-schema.session-config.ts)" || return 2
-  [ "$has_current" = 0 ] || return 0
   has_cold="$(openclaw_frozen_target_source_flag contains "$source_root" src/config/zod-schema.session.ts 'coldStorage:')" || return 2
-  [ "$has_cold" = 0 ] || return 0
-  has_legacy="$(openclaw_frozen_target_source_flag contains "$source_root" src/config/zod-schema.session.ts 'export const SessionSchema = z')" || return 2
-  if [ "$has_legacy" = 1 ]; then
-    has_legacy_duration="$(openclaw_frozen_target_source_flag contains "$source_root" src/config/zod-schema.session.ts 'pruneAfter: PositiveDurationSchema.optional()')" || return 2
-    if [ "$has_legacy_duration" = 1 ]; then
-      export OPENCLAW_FROZEN_TARGET_SESSION_COLD_STORAGE_MODE="unsupported"
-      return 0
+  if [ "$has_current:$has_cold" = 0:0 ]; then
+    has_legacy="$(openclaw_frozen_target_source_flag contains "$source_root" src/config/zod-schema.session.ts 'export const SessionSchema = z')" || return 2
+    if [ "$has_legacy" = 1 ]; then
+      has_legacy_duration="$(openclaw_frozen_target_source_flag contains "$source_root" src/config/zod-schema.session.ts 'pruneAfter: PositiveDurationSchema.optional()')" || return 2
+      if [ "$has_legacy_duration" = 1 ]; then
+        export OPENCLAW_FROZEN_TARGET_SESSION_COLD_STORAGE_MODE="unsupported"
+        return 0
+      fi
     fi
+    echo "unable to resolve frozen session cold-storage contract from selected source" >&2
+    return 2
   fi
-  echo "unable to resolve frozen session cold-storage contract from selected source" >&2
-  return 2
+
+  # Stable cuts before cold navigation restore archives on reads. Bind that dialect
+  # to its committed archive writer, never infer it from missing or empty SQL rows.
+  has_navigation="$(openclaw_frozen_target_source_flag contains "$source_root" src/config/sessions/session-cold-storage-worker.ts 'retainSessionColdNavigationInTransaction(database, sessionId)')" || return 2
+  has_legacy_archival="$(openclaw_frozen_target_source_flag contains "$source_root" src/config/sessions/session-cold-storage-worker.ts 'db.deleteFrom("transcript_events").where("session_id", "=", sessionId)')" || return 2
+  case "$has_navigation:$has_legacy_archival" in
+    1:0) ;;
+    0:1) export OPENCLAW_FROZEN_TARGET_SESSION_COLD_STORAGE_MODE="legacy" ;;
+    *)
+      echo "unable to resolve frozen cold transcript archival contract from selected source" >&2
+      return 2
+      ;;
+  esac
 }
 
 openclaw_resolve_frozen_runtime_context_contract() {

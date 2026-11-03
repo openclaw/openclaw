@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { Session, type HeapProfiler } from "node:inspector/promises";
+import { Session } from "node:inspector/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance, PerformanceObserver, type PerformanceEntry } from "node:perf_hooks";
@@ -10,6 +10,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../../src/config/sessions.js";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -74,10 +75,6 @@ async function writeJson(filename: string, value: unknown) {
     filename,
     `${JSON.stringify(value, (_key, item: unknown) => (item instanceof Map ? [...item] : item), 2)}\n`,
   );
-}
-
-function allocatedBytes(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + allocatedBytes(child), 0);
 }
 
 try {
@@ -429,7 +426,9 @@ try {
     matchedEntries,
     cpuMsPerOperation: (cpu.user + cpu.system) / 1_000 / iterations,
     mode: values.mode,
-    allocationBytesPerOperation: profile ? allocatedBytes(profile.head) / iterations : undefined,
+    allocationBytesPerOperation: profile
+      ? sumSampledHeapBytes(profile.head) / iterations
+      : undefined,
     samplingInterval: allocations ? 32_768 : undefined,
     includesCollectedObjects: allocations ? true : undefined,
   };

@@ -166,16 +166,9 @@ it.each([
   }
 });
 
-it.each([
-  "registry",
-  "recovery-cycle",
-  "recovery-run",
-  "recovery-tombstone",
-  "terminal-run",
-] as const)(
-  "keeps pending %s custody hot before recovery dispatch, then permits retired claims",
+it.each(["registry", "resume-marker"] as const)(
+  "keeps %s custody hot during cold selection",
   async (custody) => {
-    const protectedHistory = custody !== "recovery-tombstone" && custody !== "terminal-run";
     if (custody === "registry") {
       registerAgentRunContext("cold-live-run", {
         agentId: "main",
@@ -186,35 +179,17 @@ it.each([
       replaceSessionEntrySync(fixture.scope, {
         sessionId: currentId,
         updatedAt: 1,
-        ...(custody === "recovery-cycle" || custody === "recovery-tombstone"
-          ? {
-              mainRestartRecovery: {
-                cycleId: "waiting",
-                revision: 1,
-                chargedAttempts: 0,
-                ...(custody === "recovery-tombstone" ? { tombstone: { reason: "exhausted" } } : {}),
-              },
-            }
-          : {
-              restartRecoveryRuns: [
-                { runId: "awaiting-recovery", lifecycleGeneration: "previous-gateway" },
-              ],
-              ...(custody === "terminal-run"
-                ? { restartRecoveryTerminalRunIds: ["awaiting-recovery"] }
-                : {}),
-            }),
+        resumeAfterRestart: { queuedInputIds: [] },
       });
     }
     const before = fixture.snapshot();
     try {
       await expect(maintain()).resolves.toEqual({
-        archivedTranscripts: protectedHistory ? 0 : 1,
+        archivedTranscripts: 0,
         externalizedTranscripts: 0,
       });
-      if (protectedHistory) {
-        expect(fixture.snapshot()).toEqual(before);
-        expect(readSessionColdTranscript(fixture.database(), historicalId)).toBeUndefined();
-      }
+      expect(fixture.snapshot()).toEqual(before);
+      expect(readSessionColdTranscript(fixture.database(), historicalId)).toBeUndefined();
     } finally {
       clearAgentRunContext("cold-live-run");
     }

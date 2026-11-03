@@ -465,9 +465,21 @@ suite.define(() => {
               });
               await gateway.resolveDeferred("sessions.processes.stop", { requested: true });
               await first.waitFor({ state: "detached" });
-              await processGroup
-                .getByRole("button", { name: "View all processes", exact: true })
-                .waitFor();
+              const viewAll = processGroup.getByRole("button", {
+                name: "View all processes",
+                exact: true,
+              });
+              const paint = () =>
+                viewAll.evaluate((element) => {
+                  const style = getComputedStyle(element);
+                  return { background: style.backgroundColor, color: style.color };
+                });
+              await page.mouse.move(0, 0);
+              const rest = await paint();
+              await viewAll.hover();
+              // "View all" is a text link: hover brightens it without the shared button background.
+              await expect.poll(async () => (await paint()).color).not.toBe(rest.color);
+              expect((await paint()).background).toBe("rgba(0, 0, 0, 0)");
               expect(await first.locator(".chat-details-processes__stop").count()).toBe(0);
               await page.mouse.move(0, 0);
               await subagents.locator(":scope > summary").scrollIntoViewIfNeeded();

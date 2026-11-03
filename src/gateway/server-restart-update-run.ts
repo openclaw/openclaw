@@ -1,5 +1,6 @@
 import {
   captureDeliveryQueueStateContext,
+  resolveDeliveryQueueStateEnv,
   type DeliveryQueueStateContext,
 } from "../infra/delivery-queue-state-context.js";
 import type { RestartSentinelPayload } from "../infra/restart-sentinel.js";
@@ -25,6 +26,7 @@ export async function finalizeRestartUpdateRun(
   payload: RestartSentinelPayload,
   pendingExpired = false,
   context: DeliveryQueueStateContext = captureDeliveryQueueStateContext(),
+  continuation: { signal?: AbortSignal; assertCurrent?: () => void } = {},
 ) {
   const options = { env: context.workerContext.environment };
   const updateRunId = payload.stats?.runId;
@@ -124,6 +126,23 @@ export async function finalizeRestartUpdateRun(
       !orchestratorOwnsVerification &&
       (pendingExpired || !isPendingControlPlaneUpdateRestartSentinel(payload))
     ) {
+      if (
+        !pendingExpired &&
+        payload.status === "ok" &&
+        updateRun.verification.versionMatch !== false
+      ) {
+        const { commitRestartPluginCohort } = await import("./server-restart-plugin-cohort.js");
+        await commitRestartPluginCohort(updateRun.runId, {
+          // The database projection omits the command's HOME, scratch and config selectors.
+          env: resolveDeliveryQueueStateEnv(undefined, context),
+          signal: continuation.signal,
+          assertCurrent: () => {
+            continuation.signal?.throwIfAborted();
+            continuation.assertCurrent?.();
+            context.workerContext.admission.assertCurrent();
+          },
+        });
+      }
       updateRun = await finishUpdateRun(
         updateRun.runId,
         {

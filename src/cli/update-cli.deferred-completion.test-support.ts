@@ -6,7 +6,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { TempHomeEnv } from "../test-utils/temp-home.js";
 import { createCliRuntimeCapture } from "./test-runtime-capture.js";
-import { createUpdateFixtureAssertions } from "./update-cli-shared-fixture.test-support.js";
+import {
+  createUpdateFixtureAssertions,
+  withPostCoreUpdateFixtureRun,
+} from "./update-cli-shared-fixture.test-support.js";
 
 export const readPackageVersion = vi.fn();
 export const syncPluginsForUpdateChannel = vi.fn();
@@ -213,7 +216,7 @@ export function installDeferredCompletionFixture() {
         OPENCLAW_COMPATIBILITY_HOST_VERSION: process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION,
         ...env,
       },
-      () => updateCommand(options),
+      () => withPostCoreUpdateFixtureRun(() => updateCommand(options)),
     );
   const runPostCoreUpdate = (env: NodeJS.ProcessEnv = {}) =>
     runPostCoreCommand({ yes: true, restart: false }, env);

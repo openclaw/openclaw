@@ -862,6 +862,10 @@ async function compileMemoryWikiVaultUnlocked(
       options?.signal?.throwIfAborted();
     },
     () => loadMemoryWikiVaultIdentity(rootDir),
+    {
+      reuseUnchanged: compiledInputIdentity.compiledCacheSourceGeneration === scan.sourceGeneration,
+      signal: options?.signal,
+    },
   );
   await appendMemoryWikiLog(rootDir, {
     type: "compile",
