@@ -3,8 +3,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTestTimeout } from "../../../test/helpers/promise.js";
 import { mintSecretSentinel } from "../../secrets/sentinel.js";
+import type { ModelProviderRequestTransportOverrides } from "../provider-request-config.types.js";
 import * as pdfNativeProviders from "./pdf-native-providers.js";
 
+// mock-isolation: native PDF tests bypass plugin loading; only Google URL normalization is used.
 vi.mock("../../plugins/provider-runtime.js", () => ({
   normalizeProviderTransportWithPlugin: (params: { context?: { baseUrl?: string } }) =>
     params.context?.baseUrl ? { baseUrl: params.context.baseUrl } : undefined,
@@ -141,28 +143,88 @@ describe("native PDF provider API calls", () => {
     expect(body.messages[0].content[2].type).toBe("text");
   });
 
-  it("unwraps sentinel-backed native PDF headers only at the request handoff", async () => {
-    const apiKey = mintSecretSentinel("native-pdf-api-secret", {
-      label: "model-auth:anthropic",
-    });
-    const managedHeader = mintSecretSentinel("native-pdf-managed-secret", {
-      label: "model-auth:anthropic",
-    });
+  it.each([false, true])(
+    "unwraps sentinel-backed native PDF credentials (OAuth=%s)",
+    async (oauth) => {
+      const credential = oauth ? "sk-ant-oat01-fixture-token" : "native-pdf-api-secret";
+      const apiKey = mintSecretSentinel(credential, { label: "model-auth:anthropic" });
+      const managedHeader = mintSecretSentinel("native-pdf-managed-secret", {
+        label: "model-auth:anthropic",
+      });
+      const fetchMock = mockFetchResponse(
+        jsonResponse({ content: [{ type: "text", text: "Analysis" }] }),
+      );
+
+      await pdfNativeProviders.anthropicAnalyzePdf(
+        makeAnthropicAnalyzeParams({
+          apiKey,
+          requestConfig: { headers: { "X-Managed": `Bearer ${managedHeader}` } },
+        }),
+      );
+
+      const [, opts] = firstFetchCall(fetchMock) as [string, { headers: Headers }];
+      expect(opts.headers.get("x-api-key")).toBe(oauth ? null : credential);
+      expect(opts.headers.get("authorization")).toBe(oauth ? `Bearer ${credential}` : null);
+      expect(opts.headers.get("X-Managed")).toBe("Bearer native-pdf-managed-secret");
+    },
+  );
+
+  it.each<ModelProviderRequestTransportOverrides>([
+    { auth: { mode: "header", headerName: "x-api-key", value: "fixture-override" } },
+    { headers: { "X-Api-Key": "fixture-override" } },
+    {
+      headers: { Authorization: "Bearer stale-fixture" },
+      auth: { mode: "authorization-bearer", token: "fixture-override" },
+    },
+  ])("preserves explicit native PDF authentication: %j", async (request) => {
     const fetchMock = mockFetchResponse(
       jsonResponse({ content: [{ type: "text", text: "Analysis" }] }),
     );
-
     await pdfNativeProviders.anthropicAnalyzePdf(
       makeAnthropicAnalyzeParams({
-        apiKey,
-        requestConfig: { headers: { "X-Managed": `Bearer ${managedHeader}` } },
+        apiKey: "sk-ant-oat01-fixture-token",
+        requestConfig: { request },
       }),
     );
-
-    const [, opts] = firstFetchCall(fetchMock) as [string, { headers: Headers }];
-    expect(opts.headers.get("x-api-key")).toBe("native-pdf-api-secret");
-    expect(opts.headers.get("X-Managed")).toBe("Bearer native-pdf-managed-secret");
+    const headers = (firstFetchCall(fetchMock) as [string, { headers: Headers }])[1].headers;
+    const bearer = request.auth?.mode === "authorization-bearer";
+    expect(headers.get("authorization")).toBe(bearer ? "Bearer fixture-override" : null);
+    expect(headers.get("x-api-key")).toBe(bearer ? null : "fixture-override");
+    expect(headers.get("anthropic-beta")).toBe("pdfs-2024-09-25");
+    expect(headers.has("x-app")).toBe(false);
   });
+
+  it.each(["test-key", "sk-ant-oat01-fixture-token"])(
+    "preserves explicit empty auth and final header overrides for %s",
+    async (apiKey) => {
+      const fetchMock = mockFetchResponse(
+        jsonResponse({ content: [{ type: "text", text: "Analysis" }] }),
+      );
+      await pdfNativeProviders.anthropicAnalyzePdf(
+        makeAnthropicAnalyzeParams({
+          apiKey,
+          requestConfig: {
+            headers: { "X-Custom": "configured" },
+            request: {
+              headers: {
+                "x-api-key": "",
+                Authorization: "",
+                "anthropic-version": "custom-version",
+                "anthropic-beta": "custom-beta",
+                "X-Custom": "override",
+              },
+            },
+          },
+        }),
+      );
+      const headers = (firstFetchCall(fetchMock) as [string, { headers: Headers }])[1].headers;
+      expect(headers.get("x-api-key")).toBe("");
+      expect(headers.get("Authorization")).toBe("");
+      expect(headers.get("anthropic-version")).toBe("custom-version");
+      expect(headers.get("anthropic-beta")).toBe("custom-beta");
+      expect(headers.get("X-Custom")).toBe("override");
+    },
+  );
 
   it("cancels Anthropic API error bodies that exactly fill the byte cap", async () => {
     let canceled = false;

@@ -1165,3 +1165,16 @@ More help: [Troubleshooting](/help/troubleshooting) and [FAQ](/help/faq).
     Anthropic models, Claude CLI, and the native Claude session catalog.
   </Card>
 </CardGroup>
+
+### Saved Claude CLI subscriptions and managed native tools
+
+Saved subscription accounts make configured Claude CLI models available without
+requiring a separate native login. API keys saved for `anthropic` still require
+an explicit account selection for CLI forwarding. Existing sessions retain their
+account until it is selected again or removed.
+
+Operators can keep the native `Agent` and `Workflow` orchestration tools with
+`plugins.entries.anthropic.config.managedNativeTools`. This is off by default;
+`default` sets the list and `agents.<id>` replaces it for one agent. Restricted,
+delegated, workspace-only, and explicitly capped runs keep no native tools.
+See [CLI backends](/gateway/cli-backends#keeping-claude-code-orchestration-tools-on-managed-turns).

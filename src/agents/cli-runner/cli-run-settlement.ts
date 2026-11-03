@@ -76,7 +76,7 @@ export function buildCliReseedReceipt(params: {
 export function buildCliSessionBinding(
   context: PreparedCliRunContext,
   sessionId: string,
-  output: Pick<CliOutput, "resumeCheckpointId">,
+  output: Pick<CliOutput, "resumeCheckpointId" | "terminalInterruption">,
   reseedReceipt?: CliSessionBinding["reseedReceipt"],
 ): CliSessionBinding {
   return {
@@ -100,6 +100,14 @@ export function buildCliSessionBinding(
       ? { mcpResumeHash: context.preparedBackend.mcpResumeHash }
       : {}),
     ...(reseedReceipt ? { reseedReceipt } : {}),
+    ...(context.transcriptCursor && !output.terminalInterruption
+      ? {
+          transcriptCursor: {
+            ...context.transcriptCursor,
+            userEntryId: context.params.userTurnTranscriptRecorder?.getAdmissionReceipt()?.entryId,
+          },
+        }
+      : {}),
   };
 }
 

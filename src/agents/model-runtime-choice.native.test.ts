@@ -2,7 +2,9 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { prepareModelSelectionRuntime } from "../auto-reply/reply/model-runtime-normalization.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import { preparePublishedModelRuntimeChoice } from "./model-runtime-choice.js";
 import { createModelRuntimeChoiceOwnerFixture } from "./model-runtime-choice.test-support.js";
@@ -24,6 +26,7 @@ beforeEach(() => {
   published.owner = undefined;
 });
 afterEach(() => {
+  cliBackendsTesting.resetDepsForTest();
   vi.unstubAllEnvs();
 });
 const request = { agentId: "main", provider: "fixture", model: "model" };
@@ -265,4 +268,62 @@ it("rejects a stale native observation without renewing it", async () => {
     message: expect.stringContaining("Refresh the model catalog and choose again"),
   });
   expect(reload).not.toHaveBeenCalled();
+});
+
+it("keeps the configured Claude CLI runtime when switching models with saved setup tokens", async () => {
+  vi.stubEnv("ANTHROPIC_API_KEY", "");
+  cliBackendsTesting.setDepsForTest({
+    resolveRuntimeCliBackends: () => [
+      {
+        id: "claude-cli",
+        modelProvider: "anthropic",
+        pluginId: "anthropic",
+        config: { command: "claude" },
+      },
+    ],
+  });
+  const entry: ModelCatalogEntry = {
+    provider: "anthropic",
+    id: "claude-sonnet-5",
+    name: "Claude Sonnet",
+    api: "anthropic-messages",
+  };
+  const cfg: OpenClawConfig = {
+    agents: {
+      defaults: {
+        model: { primary: "anthropic/claude-opus-5" },
+        models: { "anthropic/*": { agentRuntime: { id: "claude-cli" } } },
+      },
+    },
+  };
+  const owner = createModelRuntimeChoiceOwnerFixture(cfg, undefined, {
+    modelCatalog: { entries: [entry], routeVariants: [entry] },
+    authModes: {},
+    metadataSnapshot: createPluginMetadataSnapshotFixture({
+      plugins: [{ id: "anthropic", providers: ["anthropic"], cliBackends: ["claude-cli"] }],
+    }),
+  });
+  bindPreparedModelRuntimeAuth(owner, {
+    store: {
+      version: 1,
+      profiles: {
+        first: { type: "token", provider: "anthropic", token: "synthetic-first-token" },
+        second: { type: "token", provider: "anthropic", token: "synthetic-second-token" },
+      },
+    },
+  });
+  published.owner = owner;
+  const selection = await prepareModelSelectionRuntime({
+    cfg,
+    agentId: "main",
+    provider: entry.provider,
+    model: entry.id,
+    sessionEntry: { modelProvider: "anthropic" },
+    catalog: [entry],
+    hydrateThinkingCatalog: false,
+  });
+  expect(selection).toMatchObject({
+    status: "ready",
+    runtime: { kind: "set", runtime: "claude-cli" },
+  });
 });

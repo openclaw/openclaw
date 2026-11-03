@@ -3,9 +3,10 @@
  */
 import type { CliSessionBinding } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { resolveAuthProfileOrderWithMetadata } from "./auth-profiles/order.js";
 import { loadAuthProfileStoreForRuntimeAsync } from "./auth-profiles/store-runtime.js";
-import type { AuthProfileCredential } from "./auth-profiles/types.js";
+import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveCliBackendConfig, resolveCliRuntimeCanonicalProvider } from "./cli-backends.js";
 import { resolveBundledCliBackendAuthPolicy } from "./cli-runner/cli-backend-auth-policy.js";
 
@@ -37,6 +38,101 @@ export function cliBackendAcceptsAuthProfileForwarding(params: {
  * Preserve the session account unless the user selects another or it was removed.
  * A user-locked profile must fail closed rather than run as another user.
  */
+export function selectCliExecutionAuthProfile(params: {
+  cliExecutionProvider: string;
+  authProfileProvider: string;
+  config: OpenClawConfig;
+  store: AuthProfileStore;
+  selected?: CliExecutionAuthProfileSelection;
+  sessionBinding?: CliSessionBinding;
+  readinessMode?: "execution" | "read-only";
+  metadataSnapshot?: PluginMetadataSnapshot;
+}): { profileId: string; provider: string } | undefined {
+  const { store } = params;
+  const selectedAuthProfileId = params.selected?.authProfileId?.trim();
+  const hasExplicitSelection =
+    selectedAuthProfileId && params.selected?.authProfileIdSource !== "auto";
+  const sessionAuthProfileId = params.sessionBinding?.authProfileId?.trim();
+  const nativeAuthProfileIds = resolveBundledCliBackendAuthPolicy(
+    params.cliExecutionProvider,
+  )?.nativeAuthProfileIds;
+  if (!hasExplicitSelection && params.sessionBinding && !sessionAuthProfileId) {
+    return undefined;
+  }
+  const retainedProfileId = hasExplicitSelection
+    ? selectedAuthProfileId
+    : sessionAuthProfileId &&
+        (store.profiles[sessionAuthProfileId] ||
+          nativeAuthProfileIds?.includes(sessionAuthProfileId))
+      ? sessionAuthProfileId
+      : undefined;
+  const nativeProfileId = retainedProfileId ?? selectedAuthProfileId;
+  if (nativeProfileId && nativeAuthProfileIds?.includes(nativeProfileId)) {
+    return undefined;
+  }
+  const canonicalProvider = resolveCliRuntimeCanonicalProvider({
+    runtime: params.cliExecutionProvider,
+    config: params.config,
+    includeSetupRegistry: true,
+    metadataSnapshot: params.metadataSnapshot,
+  });
+  const acceptsCredential = (credential: AuthProfileCredential, explicitSelection: boolean) =>
+    credential.provider === params.cliExecutionProvider ||
+    (credential.provider === canonicalProvider &&
+      (params.cliExecutionProvider === CLAUDE_CLI_PROVIDER_ID
+        ? explicitSelection || credential.type !== "api_key"
+        : params.cliExecutionProvider === GOOGLE_GEMINI_CLI_PROVIDER_ID &&
+          credential.type === "api_key"));
+  if (retainedProfileId) {
+    const credential = store.profiles[retainedProfileId];
+    if (!credential) {
+      throw new CliExecutionAuthProfileError(
+        `No credentials found for profile "${retainedProfileId}".`,
+      );
+    }
+    if (acceptsCredential(credential, true)) {
+      return { profileId: retainedProfileId, provider: credential.provider };
+    }
+    throw new CliExecutionAuthProfileError(
+      `CLI backend "${params.cliExecutionProvider}" cannot use auth profile "${retainedProfileId}" owned by "${credential.provider}".`,
+    );
+  }
+
+  const providers = [params.cliExecutionProvider];
+  if (
+    canonicalProvider &&
+    (params.cliExecutionProvider === CLAUDE_CLI_PROVIDER_ID ||
+      (params.cliExecutionProvider === GOOGLE_GEMINI_CLI_PROVIDER_ID &&
+        params.authProfileProvider === GOOGLE_PROVIDER_ID))
+  ) {
+    providers.push(canonicalProvider);
+  }
+  for (const provider of providers) {
+    const order = resolveAuthProfileOrderWithMetadata({
+      cfg: params.config,
+      store,
+      provider,
+      preferredProfile: selectedAuthProfileId,
+      readinessMode: params.readinessMode,
+      authAliasLookupParams: { metadataSnapshot: params.metadataSnapshot },
+    });
+    for (const profileId of order.profileIds) {
+      const credential = store.profiles[profileId];
+      if (
+        credential &&
+        acceptsCredential(credential, false) &&
+        !nativeAuthProfileIds?.includes(profileId)
+      ) {
+        return { profileId, provider: credential.provider };
+      }
+    }
+    if (order.hasExplicitOrder) {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
 export async function resolveCliExecutionAuthProfileId(params: {
   cliExecutionProvider: string;
   authProfileProvider: string;
@@ -60,75 +156,5 @@ export async function resolveCliExecutionAuthProfileId(params: {
       ? selectedAuthProfileId
       : (sessionAuthProfileId ?? selectedAuthProfileId),
   });
-  const nativeAuthProfileIds = resolveBundledCliBackendAuthPolicy(
-    params.cliExecutionProvider,
-  )?.nativeAuthProfileIds;
-  if (!hasExplicitSelection && params.sessionBinding && !sessionAuthProfileId) {
-    return undefined;
-  }
-  const retainedProfileId = hasExplicitSelection
-    ? selectedAuthProfileId
-    : sessionAuthProfileId &&
-        (store.profiles[sessionAuthProfileId] ||
-          nativeAuthProfileIds?.includes(sessionAuthProfileId))
-      ? sessionAuthProfileId
-      : undefined;
-  const nativeProfileId = retainedProfileId ?? selectedAuthProfileId;
-  if (nativeProfileId && nativeAuthProfileIds?.includes(nativeProfileId)) {
-    return undefined;
-  }
-  const canonicalProvider = resolveCliRuntimeCanonicalProvider({
-    runtime: params.cliExecutionProvider,
-    config: params.config,
-    includeSetupRegistry: true,
-  });
-  const acceptsCredential = (credential: AuthProfileCredential, explicitSelection: boolean) =>
-    credential.provider === params.cliExecutionProvider ||
-    (credential.provider === canonicalProvider &&
-      (params.cliExecutionProvider === CLAUDE_CLI_PROVIDER_ID
-        ? explicitSelection || credential.type !== "api_key"
-        : params.cliExecutionProvider === GOOGLE_GEMINI_CLI_PROVIDER_ID &&
-          credential.type === "api_key"));
-  if (retainedProfileId) {
-    const credential = store.profiles[retainedProfileId];
-    if (!credential) {
-      throw new CliExecutionAuthProfileError(
-        `No credentials found for profile "${retainedProfileId}".`,
-      );
-    }
-    if (acceptsCredential(credential, true)) {
-      return retainedProfileId;
-    }
-    throw new CliExecutionAuthProfileError(
-      `CLI backend "${params.cliExecutionProvider}" cannot use auth profile "${retainedProfileId}" owned by "${credential.provider}".`,
-    );
-  }
-
-  const providers = [params.cliExecutionProvider];
-  if (
-    canonicalProvider &&
-    (params.cliExecutionProvider === CLAUDE_CLI_PROVIDER_ID ||
-      (params.cliExecutionProvider === GOOGLE_GEMINI_CLI_PROVIDER_ID &&
-        params.authProfileProvider === GOOGLE_PROVIDER_ID))
-  ) {
-    providers.push(canonicalProvider);
-  }
-  for (const provider of providers) {
-    const order = resolveAuthProfileOrderWithMetadata({
-      cfg: params.config,
-      store,
-      provider,
-      preferredProfile: selectedAuthProfileId,
-    });
-    const profileId = order.profileIds.find((id) => {
-      const credential = store.profiles[id];
-      return (
-        credential && acceptsCredential(credential, false) && !nativeAuthProfileIds?.includes(id)
-      );
-    });
-    if (profileId || order.hasExplicitOrder) {
-      return profileId;
-    }
-  }
-  return undefined;
+  return selectCliExecutionAuthProfile({ ...params, store })?.profileId;
 }

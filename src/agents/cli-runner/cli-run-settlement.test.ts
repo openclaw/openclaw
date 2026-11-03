@@ -23,6 +23,7 @@ import {
   buildBlockedCliRunResult,
   buildCliDeliveredFailure,
   buildCliRunResult,
+  buildCliSessionBinding,
   settleCliPreparationError,
   settlePreparedCliRun,
 } from "./cli-run-settlement.js";
@@ -448,3 +449,23 @@ describe("CLI MCP retirement", () => {
     }
   });
 });
+
+it.each([false, true])(
+  "records the native input cursor only for an uninterrupted turn (interrupted=%s)",
+  (interrupted) => {
+    const context = buildPreparedCliRunContext();
+    context.transcriptCursor = {
+      localSessionId: context.params.sessionId,
+      entryId: "current-input",
+      runId: "current-run",
+    };
+    const binding = buildCliSessionBinding(
+      context,
+      "native-session",
+      interrupted ? { terminalInterruption: { reason: "aborted" as const } } : {},
+    );
+    expect(binding.transcriptCursor).toEqual(
+      interrupted ? undefined : { ...context.transcriptCursor, userEntryId: undefined },
+    );
+  },
+);

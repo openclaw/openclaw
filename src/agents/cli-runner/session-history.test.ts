@@ -641,7 +641,7 @@ describe("canonical CLI history", () => {
 
 describe("resumed Claude session gaps", () => {
   it.each([false, true])(
-    "notes outside turns without replaying them (memory=%s)",
+    "hands outside turns only to the resumed session (memory=%s)",
     async (memory) => {
       const { target, params } = await createSession();
       const admission = prepareSystemAgentRunAdmission({}, `gap-${memory}`, "main", "history-test");
@@ -688,25 +688,21 @@ describe("resumed Claude session gaps", () => {
           ...resumedClaudeSession,
         };
         const context = await loadCliSessionPromptContext(options);
-        expect(context.sessionGapContext).toBe(
-          '[OpenClaw: 2 messages occurred outside this Claude session from 1970-01-01T00:00:03.000Z to 1970-01-01T00:00:04.000Z, using "mock/test-model". Their contents are not included here. Before answering a question that may depend on these messages, call mcp__openclaw__sessions_history({"sessionKey":"agent:main:history","limit":100}) to read them; page older messages with offset if needed.]',
+        expect(context.sessionGapContext).toBeUndefined();
+        expect(context.resumeContext).toContain("PRIVATE-TOKEN-1");
+        expect(context.resumeContext).not.toContain("PRIVATE-TOKEN-0");
+        expect((await loadCliSessionPromptContext({ ...options, tools: [] })).resumeContext).toBe(
+          context.resumeContext,
         );
-        expect(context.sessionGapContext).not.toContain("PRIVATE-TOKEN");
-        expect(
-          (
-            await loadCliSessionPromptContext({
-              ...options,
-              tools: [],
-            })
-          ).sessionGapContext,
-        ).not.toContain("sessions_history");
         expect((await loadCliSessionPromptContext(params)).sessionGapContext).toBeUndefined();
         const unknown = await loadCliSessionPromptContext({
           ...options,
           rawTranscriptReseedReason: "auth-unknown",
         });
         expect(unknown).toMatchObject({
-          sessionGapContext: context.sessionGapContext,
+          sessionGapContext:
+            '[OpenClaw: 2 messages occurred outside this Claude session from 1970-01-01T00:00:03.000Z to 1970-01-01T00:00:04.000Z, using "mock/test-model". Their contents are not included here. Before answering a question that may depend on these messages, call mcp__openclaw__sessions_history({"sessionKey":"agent:main:history","limit":100}) to read them; page older messages with offset if needed.]',
+          resumeContext: context.resumeContext,
           durableContext: undefined,
           reseedMessages: [],
         });

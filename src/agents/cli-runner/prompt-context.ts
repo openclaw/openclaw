@@ -1,6 +1,5 @@
 import { splitSystemPromptRelocatableBoundary } from "@openclaw/ai/internal/shared";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
-import type { CliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import {
   buildActiveNodeContextText,
   prepareActiveNodeContext,
@@ -35,6 +34,7 @@ async function buildCliTurnAppendContext(
     runtimeContextFragments?: RunCliAgentParams["runtimeContextFragments"];
     sessionTarget?: RunCliAgentParams["sessionTarget"];
     thinkLevel?: ThinkLevel;
+    nativeDelegationTools?: readonly string[];
     requesterProfileId?: string;
     configuredTimezone?: string;
   },
@@ -61,6 +61,7 @@ async function buildCliTurnAppendContext(
     buildProactiveSubagentOrchestrationSection({
       enabled: params.thinkLevel === "ultra",
       hasSessionsSpawn: params.capabilityToolNames.has("sessions_spawn"),
+      nativeDelegationTools: params.nativeDelegationTools,
     }).join("\n"),
     interruptedInputContext
       ? labelRuntimeContextText(projectRuntimeContextFragments([interruptedInputContext]))
@@ -206,20 +207,11 @@ export async function prepareCliSystemPrompt(
 function prependCliSessionResumeUserContext(
   context: RunCliAgentParams["currentInboundContext"],
   reusableCliSession: CliReusableSession,
-  preservedTurnsContext: string | undefined,
 ): RunCliAgentParams["currentInboundContext"] {
-  const completionContext =
-    reusableCliSession.mode === "reuse" || reusableCliSession.mode === "reuse-with-drift"
-      ? preservedTurnsContext
-      : undefined;
-  const note = [
+  const note =
     reusableCliSession.mode === "reuse-with-drift"
       ? buildCliSessionDriftNote(reusableCliSession.drift.reasons)
-      : undefined,
-    completionContext,
-  ]
-    .filter((value): value is string => Boolean(value))
-    .join("\n\n");
+      : undefined;
   if (!note) {
     return context;
   }
@@ -238,15 +230,11 @@ export function createCliCurrentPromptRenderer(
   reusableCliSession: CliReusableSession,
   notes: {
     sessionGapContext?: string;
-    preservedTurnsContext?: string;
-    writer?: CliHistoryWriter;
   } = {},
 ) {
-  // Missed exchanges are saved conversation text: native reuse alone cannot replay them.
   const context = prependCliSessionResumeUserContext(
     params.currentInboundContext,
     reusableCliSession,
-    notes.writer ? notes.preservedTurnsContext : undefined,
   );
   return (prompt: string, preferResumableText = false) =>
     composeCliPromptContext(

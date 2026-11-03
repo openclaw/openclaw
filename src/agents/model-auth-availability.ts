@@ -1299,7 +1299,10 @@ export function createModelAuthAvailabilityResolver(
   if (synthetic.has("codex")) {
     addProviderDiscoveryProviderId(OPENAI_PROVIDER_ID);
   }
-  const evaluateCliRuntimeAuth = createCliRuntimeModelAuthEvaluator(params, evaluateModelAuth);
+  const evaluateCliRuntimeAuth = createCliRuntimeModelAuthEvaluator(
+    { ...params, authStore: orderStore },
+    evaluateModelAuth,
+  );
   return {
     providerDiscoveryProviderIds: [...providerDiscoveryProviderIds].toSorted((left, right) =>
       left.localeCompare(right),

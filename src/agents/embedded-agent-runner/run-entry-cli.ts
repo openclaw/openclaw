@@ -75,10 +75,7 @@ export function withAdmittedCliCandidate(
         assertSettlementCurrent,
         settleResult: async ({ result, expectedSession, sessionStore, preserveBinding }) => {
           const classification = params.classifyResult?.(result);
-          if (
-            preserveBinding ||
-            (classification && result.meta.agentMeta?.clearCliSessionBinding !== true)
-          ) {
+          if (classification && result.meta.agentMeta?.clearCliSessionBinding !== true) {
             return result;
           }
           return persistCliSessionBindingResult({
@@ -89,6 +86,7 @@ export function withAdmittedCliCandidate(
             result,
             expectedSession,
             sessionStore,
+            preserveBinding,
             assertSettlementCurrent,
             abortSignal: params.admission?.abortSignal,
           });

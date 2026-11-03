@@ -137,12 +137,18 @@ import {
 import { cliSessionToolNames, isClaudeCliBackendId, normalizeCliModel } from "./helpers.js";
 import { prepareCliHistoryBoundary } from "./history-boundary.js";
 import { cliBackendLog } from "./log.js";
+import { prepareCliLoopbackBundleMcp } from "./loopback-bundle-mcp.js";
 import { buildCliMcpGrantContext } from "./mcp-grant-context.js";
 import { resolveCliCatalogCapabilities } from "./model-capabilities.js";
 import { detectNodeClaudePlacement, resolveClaudeCliContextModelId } from "./prepare-claude.js";
 import * as mcp from "./prepare-mcp.js";
 import { runWithCliPreparationSource } from "./prepare-source.js";
-import { resolveCliRuntimeToolPolicy } from "./prepare-tool-policy.js";
+import {
+  capCliToolAvailability,
+  keptManagedNativeTools,
+  resolveCliBootstrapFileAccess,
+  resolveCliRuntimeToolPolicy,
+} from "./prepare-tool-policy.js";
 import {
   composeCliPromptContext,
   createCliCurrentPromptRenderer,
@@ -158,6 +164,7 @@ import {
   resolveAutoCliSessionReseedHistoryChars,
 } from "./session-history.js";
 import { resolveCliSkillsPrompt } from "./skills-prompt.js";
+import { resolveStableCliSkillAuthoring } from "./stable-skill-authoring.js";
 import { captureCliRunToolAuthority } from "./tool-authority.js";
 import {
   captureCliRunStartTime,
@@ -315,11 +322,14 @@ async function prepareCliRunContextWithinReadFence(
     backendId: backendResolved.id,
     bundleMcp: backendResolved.bundleMcp,
     canEnforceExactToolAvailability,
+    projectNativeToolAuthority: backendResolved.projectNativeToolAuthority,
+    resolveManagedNativeTools: backendResolved.resolveManagedNativeTools,
+    sideQuestionToolMode: backendResolved.sideQuestionToolMode,
     isSideQuestion,
     skipsTurnPreparation,
   });
   params = toolPolicy.params;
-  const { runtimeToolsAllowPolicy } = toolPolicy;
+  const { runtimeToolsAllowPolicy, managedNativeTools } = toolPolicy;
   const internalParams = params as RunCliAgentPrepareParams;
   const nodeClaudePlacement = detectNodeClaudePlacement({
     backendId: backendResolved.id,
@@ -686,19 +696,168 @@ async function prepareCliRunContextWithinReadFence(
           warn: (message) => cliBackendLog.warn(message),
         }),
       });
+  // Ring-zero OpenClaw runs replace the bundle MCP surface entirely: no
+  // loopback server, no plugin/user servers. A selectable backend also removes
+  // its native tools, leaving only this openclaw stdio server.
+  const systemAgentMcpConfig = internalParams.systemAgentTool
+    ? buildSystemAgentToolsMcpServerConfig(internalParams.systemAgentTool)
+    : undefined;
+  const canUseGatewayTools = !nodeClaudePlacement && !skipsTurnPreparation && !systemAgentMcpConfig;
+  const bundleMcpEnabled =
+    canUseGatewayTools && backendResolved.bundleMcp && params.disableTools !== true;
+  let mcpLoopbackRuntime = bundleMcpEnabled ? getActiveMcpLoopbackRuntime() : undefined;
+  if (bundleMcpEnabled && !mcpLoopbackRuntime) {
+    try {
+      await ensureMcpLoopbackServer();
+    } catch (error) {
+      throw new Error(
+        `Bundled MCP is enabled, but the OpenClaw MCP loopback server failed to start: ${String(error)}`,
+        { cause: error },
+      );
+    }
+    mcpLoopbackRuntime = getActiveMcpLoopbackRuntime();
+  }
+  if (bundleMcpEnabled && !mcpLoopbackRuntime) {
+    throw new Error(
+      "Bundled MCP is enabled, but the OpenClaw MCP loopback server did not publish a runtime after startup.",
+    );
+  }
+  const { nodeWorkshopEnabled, hostOwnedTools } = mcp.resolveCliMcpToolOwnership(params, {
+    backend: backendResolved,
+    enabled: bundleMcpEnabled,
+    nodePlacement: nodeClaudePlacement,
+    skipPreparation: skipsTurnPreparation,
+  });
+  const shouldMaterializeRuntimePolicy =
+    runtimeToolsAllowPolicy !== undefined && canUseGatewayTools && params.disableTools !== true;
+  const skillLibraryAuthoring: RunCliAgentParams["skillLibraryAuthoring"] =
+    resolveStableCliSkillAuthoring(
+      params.sessionKey,
+      nodeWorkshopEnabled && params.skillLibraryAuthoring
+        ? { ...params.skillLibraryAuthoring, defaultTarget: "personal" }
+        : params.skillLibraryAuthoring,
+    );
+  const mcpContextBase =
+    mcpLoopbackRuntime || shouldMaterializeRuntimePolicy || nodeWorkshopEnabled
+      ? buildCliMcpGrantContext({
+          run: { ...params, workspaceDir },
+          config: runConfig,
+          requireExplicitMessageTarget,
+          agentId: sessionAgentId,
+          runtimePolicyAgentId: params.runtimePolicySessionKey ? policyAgentId : undefined,
+          modelProvider,
+          modelId,
+        })
+      : undefined;
+  const mcpToolAuthAgentDir = mcpContextBase
+    ? resolveRuntimeAuthProfileAgentDir(agentDir)
+    : undefined;
+  const mcpToolAuth = mcpContextBase
+    ? {
+        ...(mcpToolAuthAgentDir ? { agentDir: mcpToolAuthAgentDir } : {}),
+        store: authStore ?? (await loadScopedAuthStore()),
+      }
+    : undefined;
+  params.assertCurrent?.();
+  // Exclusive runs cannot hand configured MCP servers to the CLI. Serve them
+  // through the loopback bridge so every turn lists the same tools.
+  await using loopbackBundleMcp =
+    mcpLoopbackRuntime &&
+    mcpContextBase &&
+    (params.cliToolAvailability !== undefined ||
+      shouldMaterializeRuntimePolicy ||
+      promptBuildRestrictsTools)
+      ? await prepareCliLoopbackBundleMcp({
+          run: params,
+          config: runConfig,
+          workspaceDir,
+          agentId: sessionAgentId,
+          agentDir,
+          resolveCapabilityProfile: () =>
+            mcp.resolveCliNativeMcpPolicy(params, {
+              config: runConfig,
+              policySessionKey,
+              policyAgentId,
+              modelProvider,
+              modelId,
+              workspaceDir,
+              cwd,
+              runtimeToolsAllowPolicy,
+            }),
+          runtimeToolsAllow: runtimeToolsAllowPolicy,
+        })
+      : undefined;
+  params.assertCurrent?.();
+  const mcpProjection = mcpContextBase
+    ? await mcp.prepareCliMcpToolProjection(params, {
+        agentId: workspaceResolution.agentId,
+        context: mcpContextBase,
+        runtimeToolsAllowPolicy,
+        defaultMediatedToolNames: hostOwnedTools,
+        scope: {
+          cfg: runConfig,
+          ...(skillLibraryAuthoring ? { skillLibraryAuthoring } : {}),
+          ...(loopbackBundleMcp ? { bundledTools: loopbackBundleMcp.tools } : {}),
+          ...(mcpToolAuth ? { authProfileStore: mcpToolAuth.store } : {}),
+          ...(mcpToolAuth?.agentDir ? { authProfileStoreAgentDir: mcpToolAuth.agentDir } : {}),
+        },
+        resolvePolicyTools: resolveMcpLoopbackPolicyTools,
+        resolveScopedTools: resolveMcpLoopbackScopedTools,
+      })
+    : { params, tools: [] };
+  params = mcpProjection.params;
+  params.assertCurrent?.();
+  const hookFilteredProjectedTools = applyEmbeddedAttemptToolsAllow(
+    mcpProjection.tools,
+    promptBuildToolsAllow,
+  );
+  if (
+    promptBuildRestrictsTools &&
+    (backendResolved.nativeToolMode === "always-on" ||
+      (backendResolved.nativeToolMode === "selectable" && !canEnforceExactToolAvailability))
+  ) {
+    throw new Error(
+      `CLI backend "${backendResolved.id}" cannot enforce before_prompt_build tool restrictions. Use a backend with exact tool availability or remove the hook restriction. OpenClaw did not start the run.`,
+    );
+  }
+  if (
+    (promptBuildRestrictsTools &&
+      params.cliToolAvailability === undefined &&
+      backendResolved.nativeToolMode === "selectable") ||
+    shouldMaterializeRuntimePolicy
+  ) {
+    params = {
+      ...params,
+      cliToolAvailability: {
+        native: params.cliToolAvailability?.native ?? [],
+        openClaw: hookFilteredProjectedTools.map((tool) => tool.name),
+      },
+    };
+  }
+  if (params.cliToolAvailability && promptBuildToolsAllow !== undefined) {
+    params = {
+      ...params,
+      cliToolAvailability: capCliToolAvailability(
+        params.cliToolAvailability,
+        promptBuildToolsAllow,
+      ),
+    };
+  }
+  const projectedTools = applyEmbeddedAttemptToolsAllow(
+    hookFilteredProjectedTools,
+    params.cliToolAvailability?.openClaw,
+  );
   // Mirror the embedded runner's bootstrap routing for backends that transport
-  // OpenClaw's system prompt. Only a declared native-tool backend can complete
-  // the file-based ritual; other backends receive limited guidance.
+  // OpenClaw's system prompt, using the final native or mediated file access.
   const canonicalWorkspace = resolveUserPath(
     resolveAgentWorkspaceDir(params.config ?? {}, workspaceResolution.agentId),
   );
-  const selectedNativeToolsProvideFileAccess =
-    params.cliToolAvailability === undefined || params.cliToolAvailability.native.length > 0;
-  const hasBootstrapFileAccess =
-    (backendResolved.nativeToolMode === "always-on" ||
-      backendResolved.nativeToolMode === "selectable") &&
-    selectedNativeToolsProvideFileAccess &&
-    params.disableTools !== true;
+  const hasBootstrapFileAccess = resolveCliBootstrapFileAccess({
+    backend: backendResolved,
+    params,
+    managedNativeTools,
+    projectedToolNames: projectedTools.map((tool) => tool.name),
+  });
   const bootstrapRouting =
     skipsTurnPreparation || !canTransportSystemPrompt(backendResolved.config)
       ? undefined
@@ -741,129 +900,6 @@ async function prepareCliRunContextWithinReadFence(
     previousSignature: params.bootstrapPromptWarningSignature,
   });
   const bootstrapTruncationNotice = buildBootstrapPromptWarningNotice(bootstrapPromptWarning.lines);
-  // Ring-zero OpenClaw runs replace the bundle MCP surface entirely: no
-  // loopback server, no plugin/user servers. A selectable backend also removes
-  // its native tools, leaving only this openclaw stdio server.
-  const systemAgentMcpConfig = internalParams.systemAgentTool
-    ? buildSystemAgentToolsMcpServerConfig(internalParams.systemAgentTool)
-    : undefined;
-  const canUseGatewayTools = !nodeClaudePlacement && !skipsTurnPreparation && !systemAgentMcpConfig;
-  const bundleMcpEnabled =
-    canUseGatewayTools && backendResolved.bundleMcp && params.disableTools !== true;
-  let mcpLoopbackRuntime = bundleMcpEnabled ? getActiveMcpLoopbackRuntime() : undefined;
-  if (bundleMcpEnabled && !mcpLoopbackRuntime) {
-    try {
-      await ensureMcpLoopbackServer();
-    } catch (error) {
-      throw new Error(
-        `Bundled MCP is enabled, but the OpenClaw MCP loopback server failed to start: ${String(error)}`,
-        { cause: error },
-      );
-    }
-    mcpLoopbackRuntime = getActiveMcpLoopbackRuntime();
-  }
-  if (bundleMcpEnabled && !mcpLoopbackRuntime) {
-    throw new Error(
-      "Bundled MCP is enabled, but the OpenClaw MCP loopback server did not publish a runtime after startup.",
-    );
-  }
-  const { nodeWorkshopEnabled, hostOwnedTools } = mcp.resolveCliMcpToolOwnership(params, {
-    backend: backendResolved,
-    enabled: bundleMcpEnabled,
-    nodePlacement: nodeClaudePlacement,
-    skipPreparation: skipsTurnPreparation,
-  });
-  const shouldMaterializeRuntimePolicy =
-    runtimeToolsAllowPolicy !== undefined && canUseGatewayTools && params.disableTools !== true;
-  const skillLibraryAuthoring: RunCliAgentParams["skillLibraryAuthoring"] =
-    nodeWorkshopEnabled && params.skillLibraryAuthoring
-      ? { ...params.skillLibraryAuthoring, defaultTarget: "personal" }
-      : params.skillLibraryAuthoring;
-  const mcpContextBase =
-    mcpLoopbackRuntime || shouldMaterializeRuntimePolicy || nodeWorkshopEnabled
-      ? buildCliMcpGrantContext({
-          run: { ...params, workspaceDir },
-          config: runConfig,
-          requireExplicitMessageTarget,
-          agentId: sessionAgentId,
-          runtimePolicyAgentId: params.runtimePolicySessionKey ? policyAgentId : undefined,
-          modelProvider,
-          modelId,
-        })
-      : undefined;
-  const mcpToolAuthAgentDir = mcpContextBase
-    ? resolveRuntimeAuthProfileAgentDir(agentDir)
-    : undefined;
-  const mcpToolAuth = mcpContextBase
-    ? {
-        ...(mcpToolAuthAgentDir ? { agentDir: mcpToolAuthAgentDir } : {}),
-        store: authStore ?? (await loadScopedAuthStore()),
-      }
-    : undefined;
-  params.assertCurrent?.();
-  const mcpProjection = mcpContextBase
-    ? await mcp.prepareCliMcpToolProjection(params, {
-        agentId: workspaceResolution.agentId,
-        context: mcpContextBase,
-        runtimeToolsAllowPolicy,
-        defaultMediatedToolNames: hostOwnedTools,
-        scope: {
-          cfg: runConfig,
-          ...(skillLibraryAuthoring ? { skillLibraryAuthoring } : {}),
-          ...(mcpToolAuth ? { authProfileStore: mcpToolAuth.store } : {}),
-          ...(mcpToolAuth?.agentDir ? { authProfileStoreAgentDir: mcpToolAuth.agentDir } : {}),
-        },
-        resolvePolicyTools: resolveMcpLoopbackPolicyTools,
-        resolveScopedTools: resolveMcpLoopbackScopedTools,
-      })
-    : { params, tools: [] };
-  params = mcpProjection.params;
-  params.assertCurrent?.();
-  const hookFilteredProjectedTools = applyEmbeddedAttemptToolsAllow(
-    mcpProjection.tools,
-    promptBuildToolsAllow,
-  );
-  if (
-    promptBuildRestrictsTools &&
-    (backendResolved.nativeToolMode === "always-on" ||
-      (backendResolved.nativeToolMode === "selectable" && !canEnforceExactToolAvailability))
-  ) {
-    throw new Error(
-      `CLI backend "${backendResolved.id}" cannot enforce before_prompt_build tool restrictions. Use a backend with exact tool availability or remove the hook restriction. OpenClaw did not start the run.`,
-    );
-  }
-  if (
-    (promptBuildRestrictsTools &&
-      params.cliToolAvailability === undefined &&
-      backendResolved.nativeToolMode === "selectable") ||
-    shouldMaterializeRuntimePolicy
-  ) {
-    params = {
-      ...params,
-      cliToolAvailability: {
-        native: [],
-        openClaw: hookFilteredProjectedTools.map((tool) => tool.name),
-      },
-    };
-  }
-  if (params.cliToolAvailability && promptBuildToolsAllow !== undefined) {
-    const filterToolNames = (names: string[]) =>
-      applyEmbeddedAttemptToolsAllow(
-        names.map((name) => ({ name })),
-        promptBuildToolsAllow,
-      ).map((tool) => tool.name);
-    params = {
-      ...params,
-      cliToolAvailability: {
-        native: filterToolNames(params.cliToolAvailability.native),
-        openClaw: filterToolNames(params.cliToolAvailability.openClaw),
-      },
-    };
-  }
-  const projectedTools = applyEmbeddedAttemptToolsAllow(
-    hookFilteredProjectedTools,
-    params.cliToolAvailability?.openClaw,
-  );
   const nodeSkillWorkshop = nodeWorkshopEnabled
     ? projectedTools.find((tool) => tool.name === "skill_workshop")
     : undefined;
@@ -952,6 +988,7 @@ async function prepareCliRunContextWithinReadFence(
             bindQuestionAnswerAuthority: (assertActive) =>
               bindQuestionAnswerAuthorityForSession(mcpGrant.context.sessionKey, assertActive),
             ...(skillLibraryAuthoring ? { skillLibraryAuthoring } : {}),
+            ...(loopbackBundleMcp ? { bundledTools: loopbackBundleMcp.tools } : {}),
             ...(mcpToolAuth ? { toolAuth: mcpToolAuth } : {}),
           })
         : undefined;
@@ -1052,15 +1089,18 @@ async function prepareCliRunContextWithinReadFence(
           })()
         : undefined;
     let mcpClientGrantRevoked = false;
-    const cleanupMcpClientGrant = mcpClientGrant
-      ? async () => {
-          if (mcpClientGrantRevoked) {
-            return;
+    const cleanupMcpClientGrant = sequenceCliCleanups(
+      mcpClientGrant
+        ? async () => {
+            if (mcpClientGrantRevoked) {
+              return;
+            }
+            mcpClientGrantRevoked = true;
+            revokeMcpLoopbackClientGrant(mcpClientGrant.token);
           }
-          mcpClientGrantRevoked = true;
-          revokeMcpLoopbackClientGrant(mcpClientGrant.token);
-        }
-      : undefined;
+        : undefined,
+      loopbackBundleMcp?.takeCleanup(),
+    );
     cleanupPreparedResources = cleanupMcpClientGrant;
     const rawLoopbackServerConfig = mcpLoopbackRuntime
       ? createMcpLoopbackServerConfig(mcpLoopbackRuntime.port)
@@ -1224,7 +1264,9 @@ async function prepareCliRunContextWithinReadFence(
           }
         : undefined;
     const claudeSkillsPlugin =
-      skipsTurnPreparation || nodeClaudePlacement
+      // Exact Claude execution strips native plugins; keep selected skills in
+      // the host prompt instead of suppressing them for an unusable plugin.
+      skipsTurnPreparation || nodeClaudePlacement || params.cliToolAvailability !== undefined
         ? { args: [], cleanup: async () => {} }
         : await prepareClaudeCliSkillsPlugin({
             backendId: backendResolved.id,
@@ -1500,7 +1542,7 @@ async function prepareCliRunContextWithinReadFence(
       (params.finalizePromptForResolvedTools ||
         sessionPromptContext?.durableContext ||
         sessionPromptContext?.sessionGapContext ||
-        sessionPromptContext?.preservedTurnsContext ||
+        sessionPromptContext?.resumeContext ||
         effectiveReplyGuidance) &&
       params.transcriptPrompt === undefined
         ? params.prompt
@@ -1545,6 +1587,7 @@ async function prepareCliRunContextWithinReadFence(
         isNewSession:
           !reusableCliSessionId?.trim() || reusableCliSession.mode === "reuse-with-drift",
         thinkLevel: params.thinkLevel,
+        nativeDelegationTools: keptManagedNativeTools(managedNativeTools, params),
         runtimeContextFragments: params.runtimeContextFragments,
         // Caller-owned memory cannot grant access to persisted interrupted inputs.
         sessionTarget: params.isolatedCompletion ? undefined : cliHistoryWriter?.target,
@@ -1552,7 +1595,7 @@ async function prepareCliRunContextWithinReadFence(
       }));
       params.assertCurrent?.();
       params.abortSignal?.throwIfAborted();
-      const notes = { ...sessionPromptContext, writer: cliHistoryWriter };
+      const notes = sessionPromptContext;
       const renderCurrentPrompt = createCliCurrentPromptRenderer(params, reusableCliSession, notes);
       const preferResumableText =
         params.currentInboundEventKind === "room_event" && Boolean(reusableCliSessionId);
@@ -1590,6 +1633,11 @@ async function prepareCliRunContextWithinReadFence(
               : systemPromptWithReplacements,
           model: modelDisplay,
         });
+    if (sessionPromptContext?.resumeContext) {
+      promptForHooks = composeCliPromptContext(promptForHooks ?? preparedPrompt, {
+        prependContext: sessionPromptContext.resumeContext,
+      });
+    }
     const systemPromptReport = buildSystemPromptReport({
       source: "run",
       generatedAt: Date.now(),
@@ -1649,6 +1697,8 @@ async function prepareCliRunContextWithinReadFence(
       systemPromptReport,
       claudeSkillsPluginArgs: claudeSkillsPlugin.args,
       ...(cliHistoryWriter ? { cliHistoryWriter } : {}),
+      resumeContext: sessionPromptContext?.resumeContext,
+      transcriptCursor: sessionPromptContext?.transcriptCursor,
       authEpoch,
       authBindingFingerprint,
       ...(skipLocalCredentialEpoch ? { authBindingSkipsLocalCredential: true as const } : {}),
@@ -1793,7 +1843,8 @@ async function prepareCliRunContextWithinReadFence(
       contextEngine,
       deferContextEngineDisposalUntil,
       contextEngineTurnPrompt,
-      ...(promptContext ? { promptContext, promptForHooks } : {}),
+      ...(promptContext ? { promptContext } : {}),
+      ...(promptForHooks !== undefined ? { promptForHooks } : {}),
       ...(nodeSkillWorkshop ? { nodeSkillWorkshop } : {}),
       ...(openClawHistoryPrompt ? { openClawHistoryPrompt } : {}),
     });

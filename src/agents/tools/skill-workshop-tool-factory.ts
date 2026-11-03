@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SkillLibraryAuthoringCapability } from "../../skills/library/authoring.js";
+import { resolveSkillWorkshopToolConstructionBlock } from "../../skills/workshop/tool-availability.js";
 import type { AnyAgentTool } from "./common.js";
 import { createLibrarySkillWorkshopTool } from "./skill-workshop-tool-library.js";
 import { createSkillWorkshopTool } from "./skill-workshop-tool.js";
@@ -18,7 +19,16 @@ export function createConfiguredSkillWorkshopTool(params: {
   sessionKey?: string;
   runId?: string;
   run?: SkillWorkshopRunOptions;
-}): AnyAgentTool {
+  sandboxed?: boolean;
+}): AnyAgentTool | null {
+  if (
+    resolveSkillWorkshopToolConstructionBlock({
+      sandboxed: params.sandboxed,
+      libraryAuthoring: params.run?.libraryAuthoring,
+    })
+  ) {
+    return null;
+  }
   const sessionKey = normalizeOptionalString(params.sessionKey);
   const runId = normalizeOptionalString(params.runId);
   const createWorkshop = () =>
@@ -36,5 +46,6 @@ export function createConfiguredSkillWorkshopTool(params: {
   return createLibrarySkillWorkshopTool(
     libraryAuthoring,
     libraryAuthoring.defaultTarget === "workspace" ? createWorkshop() : undefined,
+    { sandboxed: params.sandboxed },
   );
 }

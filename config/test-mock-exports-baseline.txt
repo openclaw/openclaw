@@ -3279,7 +3279,6 @@
 ["src/agents/tools/openclaw-tools.spawn-session-key.test.ts","./transcripts-tool.js","39aa39443d2c9e8f65e4e5c997726ce47290d9f77282f57e94fb5b1e2f9671c3",1]
 ["src/agents/tools/openclaw-tools.spawn-session-key.test.ts","./video-generate-tool.js","4a7c8802124ce17baf11ec7469e0f50706cf9106ed37c72d30a82170a974e02b",1]
 ["src/agents/tools/openclaw-tools.spawn-session-key.test.ts","./web-tools.js","c90510f19406b12f65820c052ced96abfc0bcef7be95f8ce33242e23b2f000e2",1]
-["src/agents/tools/pdf-native-providers.test.ts","../../plugins/provider-runtime.js","2dbb712979706fa79a5212ff3643acfad5d566128905c5fa51103b5ac9f444eb",1]
 ["src/agents/tools/plugins-tool.test.ts","./in-process-gateway.js","0169f9349f3eeaa5b8d4228890fc7da15d9058cc6aaef9a41ee193787e28e0c4",1]
 ["src/agents/tools/question-prompt-send.test.ts","../../channels/message/runtime.js","41aedb76b5ae12aa7d3d82ace07412da4c3ed149f1e6f35f4c7cc83f4b54ce53",1]
 ["src/agents/tools/sessions-list-projection.test.ts","../../sessions/session-state-events.js","b2a8907520940b213c149ffa3225c17e3c9ee557c54c4c87ef82ee7a4d5fdf41",1]

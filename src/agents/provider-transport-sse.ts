@@ -181,7 +181,8 @@ export function prepareOpenAISdkSseResponse(
           buffer += text;
         }
       } catch (error) {
-        await cancelReaderBestEffort(reader, error);
+        // An unread response clone can keep tee cancellation pending indefinitely.
+        void cancelReaderBestEffort(reader, error);
         controller.error(error);
       }
     },

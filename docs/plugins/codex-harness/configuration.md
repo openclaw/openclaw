@@ -131,10 +131,14 @@ whether any individual file was fully loaded or truncated.
 
 ### Compaction
 
-Do not set `compaction.model` or `compaction.provider` on Codex-backed
-agents. Codex compacts through its native app-server thread state, so
-OpenClaw ignores those local summarizer overrides at runtime, and
-`openclaw doctor --fix` removes them when the agent uses Codex.
+`agents.defaults.compaction.model` selects the model for OpenClaw host summaries,
+including the history summary before seeding a fresh Codex thread. Doctor preserves
+this setting. Native Codex compaction and `/compact` remain owned by Codex and do
+not use this override. A locked model selection also takes precedence over the
+host summary model.
+
+Do not set `compaction.provider` on Codex-backed agents. Doctor removes unsupported
+provider overrides and migrates legacy Lossless configuration as described below.
 
 An authored `models.providers.*.models[].contextTokens` cap is forwarded to
 Codex thread start and resume as `model_context_window`. Codex clamps the value

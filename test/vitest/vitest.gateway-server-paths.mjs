@@ -114,6 +114,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/managed-image-record-store.test.ts",
   "src/gateway/managed-outgoing-gc-availability.test.ts",
   "src/gateway/mcp-http.completion-lineage.test.ts",
+  "src/gateway/mcp-http.configured-mcp-authority.test.ts",
   "src/gateway/mcp-http.exec-completion.test.ts",
   "src/gateway/mcp-http.exec-egress.test.ts",
   "src/gateway/mcp-http.loopback-real-recovery.test.ts",

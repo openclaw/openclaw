@@ -1,5 +1,4 @@
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   buildSessionContext,
@@ -16,11 +15,13 @@ import { captureSessionActorTranscriptRead } from "../../config/sessions/session
 import { SessionTranscriptStorageUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import { resolveSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { readSessionTranscriptWatermarkAsync } from "../../config/sessions/session-transcript-watermark.js";
+import type { CliSessionBinding } from "../../config/sessions/types.js";
 import {
   annotateInterSessionPromptText,
   normalizeInputProvenance,
-  shouldPreserveUserFacingSessionStateForInputProvenance,
 } from "../../sessions/input-provenance.js";
+import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
+import { isTranscriptOnlyOpenClawAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
 import {
   resolveAdmittedRunActiveAssertion,
   type AdmittedRunContext,
@@ -35,6 +36,12 @@ import {
   type SessionMessageEntry,
 } from "../sessions/session-manager.js";
 import { cliBackendLog } from "./log.js";
+import {
+  classifyCliReplies,
+  readTranscriptRunMetadata,
+  renderClaudeSessionGap,
+  type CliReply,
+} from "./session-history-replies.js";
 import type { CliReusableSession } from "./types.js";
 
 const MAX_CLI_SESSION_HISTORY_BYTES = 5 * 1024 * 1024;
@@ -479,67 +486,73 @@ function renderCliDurableContext(messages: ReturnType<typeof buildSessionContext
   return selected.length > 0 ? render(selected, false) : undefined;
 }
 
-type ClaudeTurnKind = "ordinary" | "preserved" | "background";
-type ClaudeReply = {
-  index: number;
-  kind: ClaudeTurnKind;
-  source?: string;
-  prompt?: string;
-  reply: string;
-};
-
-function readTranscriptRunId(message: object): string | undefined {
-  const runId = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"])?.runId;
-  return typeof runId === "string" ? runId : undefined;
+function resolveResetWindowStart(entries: SessionEntry[]): number {
+  const boundaryIndex = entries.findLastIndex((entry) => entry.type === "reset");
+  const boundary = entries[boundaryIndex];
+  if (boundary?.type !== "reset") {
+    return 0;
+  }
+  const keptIndex = entries.findIndex((entry) => entry.id === boundary.firstKeptEntryId);
+  return keptIndex >= 0 && keptIndex < boundaryIndex ? keptIndex : boundaryIndex + 1;
 }
 
-// Announcements can save only an assistant row; provenance covers queued handoffs.
-// Neither proves that the reply belongs to the requester's bound native session.
-function classifyClaudeReplies(entries: SessionEntry[]) {
-  const replies: ClaudeReply[] = [];
-  let kind: ClaudeTurnKind = "ordinary";
-  let source: string | undefined;
-  let prompt: string | undefined;
-  entries.forEach((entry, index) => {
-    if (entry.type !== "message") {
-      return;
+function renderCliPreservedTurns(
+  entries: SessionEntry[],
+  replies: CliReply[],
+  params: {
+    sessionId?: string;
+    userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
+    cliSessionBinding?: CliSessionBinding;
+  },
+): string | undefined {
+  const cursor = params.cliSessionBinding?.transcriptCursor;
+  const currentUserEntryId = params.userTurnTranscriptRecorder?.getAdmissionReceipt()?.entryId;
+  const since = cursor
+    ? cursor.entryId === null
+      ? -1
+      : entries.findIndex((entry) => entry.id === cursor.entryId)
+    : replies.findLast((reply) => reply.kind === "ordinary")?.index;
+  // A reset, fork or truncated-away anchor cannot authorize older conversation text.
+  if (
+    since === undefined ||
+    since < resolveResetWindowStart(entries) - 1 ||
+    (cursor &&
+      (cursor.localSessionId !== params.sessionId || (cursor.entryId !== null && since < 0)))
+  ) {
+    return undefined;
+  }
+  const background = new Set(
+    replies.filter((reply) => reply.kind === "background").map((reply) => entries[reply.index]),
+  );
+  const eligible = new Set(Array.from(iterateSessionContextEntries(entries), ({ entry }) => entry));
+  const turns = entries.slice(since + 1).flatMap((entry) => {
+    if (
+      entry.type !== "message" ||
+      !eligible.has(entry) ||
+      background.has(entry) ||
+      entry.id === currentUserEntryId ||
+      entry.id === cursor?.userEntryId
+    ) {
+      return [];
     }
     const { message } = entry;
-    if (message.role === "user") {
-      const provenance = normalizeInputProvenance(
-        "provenance" in message ? message.provenance : undefined,
-      );
-      kind = !shouldPreserveUserFacingSessionStateForInputProvenance(provenance)
-        ? "ordinary"
-        : provenance?.kind === "inter_session"
-          ? "preserved"
-          : "background";
-      source = kind === "preserved" ? provenance?.sourceTool : undefined;
-      prompt = annotateInterSessionPromptText(coerceHistoryText(message.content), provenance);
-    } else if (message.role === "assistant" && message.provider === "claude-cli") {
-      const announced = readTranscriptRunId(message)?.startsWith("announce:") === true;
-      const turnSource =
-        kind === "preserved" ? source : announced ? "subagent_announce" : undefined;
-      replies.push({
-        index,
-        kind: announced ? "preserved" : kind,
-        ...(turnSource ? { source: turnSource } : {}),
-        ...(kind === "preserved" && prompt ? { prompt } : {}),
-        reply: coerceHistoryText(message.content),
-      });
-      prompt = undefined;
+    const metadata = readTranscriptRunMetadata(message);
+    if (
+      (message.role !== "user" && message.role !== "assistant") ||
+      isTranscriptOnlyOpenClawAssistantMessage(message) ||
+      (cursor && (metadata?.runId === cursor.runId || metadata?.steerTargetRunId === cursor.runId))
+    ) {
+      return [];
     }
-  });
-  return replies;
-}
-
-function renderClaudePreservedTurns(replies: ClaudeReply[]): string | undefined {
-  const since = replies.findLastIndex((reply) => reply.kind === "ordinary");
-  const turns = replies
-    .slice(since + 1)
-    .flatMap(({ index: _index, kind, ...turn }) =>
-      kind === "preserved" && turn.reply ? [turn] : [],
+    const provenance = normalizeInputProvenance(
+      "provenance" in message ? message.provenance : undefined,
     );
+    if (message.role === "user" && provenance?.kind === "internal_system") {
+      return [];
+    }
+    const content = annotateInterSessionPromptText(coerceHistoryText(message.content), provenance);
+    return content ? [{ role: message.role, content }] : [];
+  });
   return turns.length > 0
     ? formatContextJsonBlock(
         markInboundContextLabel(
@@ -548,67 +561,6 @@ function renderClaudePreservedTurns(replies: ClaudeReply[]): string | undefined 
         turns.slice(-MAX_CLI_SESSION_UNSEEN_TURNS),
       )
     : undefined;
-}
-
-function renderClaudeSessionGap(
-  entries: SessionEntry[],
-  replies: ClaudeReply[],
-  options:
-    | {
-        sessionKey?: string;
-        historyToolAvailable: boolean;
-        freshSession: boolean;
-        /** Content is withheld, so only an ordinary reply proves the session saw a turn. */
-        countPreservedTurns: boolean;
-      }
-    | undefined,
-): string | undefined {
-  if (!options) {
-    return undefined;
-  }
-  // An empty Claude reply has no saved assistant row, so the next turn may repeat this note.
-  const lastClaude =
-    replies.findLast((reply) => !options.countPreservedTurns || reply.kind === "ordinary")?.index ??
-    -1;
-  if (!options.freshSession && lastClaude < 0) {
-    return undefined;
-  }
-  const countsPreservedTurns =
-    !options.freshSession &&
-    replies.some((reply) => reply.index > lastClaude && reply.kind === "preserved");
-  const gap = entries
-    .slice(options.freshSession ? 0 : lastClaude + 1)
-    .filter(
-      (entry): entry is SessionMessageEntry =>
-        entry.type === "message" &&
-        (entry.message.role === "user" || entry.message.role === "assistant"),
-    );
-  const models = new Set<string>();
-  for (const entry of gap) {
-    if (entry.message.role === "assistant") {
-      models.add(`${entry.message.provider}/${entry.message.model}`);
-    }
-  }
-  const first = gap[0];
-  const last = gap.at(-1);
-  if (!first || !last || models.size === 0) {
-    return undefined;
-  }
-  const modelNames = [...models].toSorted();
-  const modelSummary = modelNames
-    .slice(0, 4)
-    .map((model) => JSON.stringify(truncateUtf16Safe(model, 120)))
-    .join(", ");
-  const readHint =
-    options.historyToolAvailable && options.sessionKey
-      ? ` Before answering a question that may depend on these messages, call mcp__openclaw__sessions_history(${JSON.stringify({ sessionKey: options.sessionKey, limit: 100 })}) to read them; page older messages with offset if needed.`
-      : "";
-  const description = options.freshSession
-    ? "earlier messages in this chat"
-    : countsPreservedTurns
-      ? "messages recorded in this chat since your last reply here (possibly already in this session)"
-      : "messages occurred outside this Claude session";
-  return `[OpenClaw: ${gap.length} ${description} from ${first.timestamp} to ${last.timestamp}, using ${modelSummary}${modelNames.length > 4 ? ` (+${modelNames.length - 4} more models)` : ""}. Their contents are not included here.${readHint}]`;
 }
 
 /** Reads one active branch for bounded reference notes and eligible fresh-session history. */
@@ -623,18 +575,19 @@ export async function loadCliSessionPromptContext(
     provider?: string;
     sessionKey?: string;
     tools?: readonly { name: string }[];
+    runId?: string;
+    cliSessionBinding?: CliSessionBinding;
+    userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
   },
 ) {
   const assertActive =
-    params.provider === "claude-cli" &&
     params.sessionTarget &&
     params.sessionId === params.sessionTarget.sessionId &&
     params.sessionKey === params.sessionTarget.sessionKey &&
     params.admittedRunContext
       ? resolveAdmittedRunActiveAssertion(params.admittedRunContext, params.abortSignal)
       : undefined;
-  // e20b56c0b26 (#140294) still blocks raw content across accounts. Metadata
-  // can point an admitted fresh session to on-demand, policy-controlled history.
+  // Summaries and caller-owned history contain the same private context as the raw tail.
   const contentBlocked =
     params.rawTranscriptReseedReason === "auth-profile" ||
     params.rawTranscriptReseedReason === "auth-epoch" ||
@@ -643,45 +596,55 @@ export async function loadCliSessionPromptContext(
     cliBackendLog.warn(
       `cli session history refused across auth boundary: reason=${params.rawTranscriptReseedReason}`,
     );
+    // Only an admitted native-only resume may still receive conversation updates.
     if (!assertActive) {
-      return {
-        reseedMessages: [],
-        durableContext: undefined,
-        sessionGapContext: undefined,
-      };
+      return { reseedMessages: [], durableContext: undefined };
     }
   }
   assertActive?.();
   const entries = await loadCliSessionEntries(params);
   assertActive?.();
-  const replies = params.provider === "claude-cli" ? classifyClaudeReplies(entries) : [];
-  const sessionGapContext = renderClaudeSessionGap(
-    entries,
-    replies,
+  const replies = classifyCliReplies(entries, params.provider);
+  const sessionGapContext =
+    params.provider === "claude-cli" &&
     assertActive &&
-      ((!contentBlocked && params.nativeSessionId) ||
-        params.rawTranscriptReseedReason === "auth-unknown" ||
-        (contentBlocked && !params.nativeSessionId))
-      ? {
+    (params.rawTranscriptReseedReason === "auth-unknown" ||
+      (contentBlocked && !params.nativeSessionId))
+      ? renderClaudeSessionGap(entries, replies, {
           sessionKey: params.sessionKey,
           historyToolAvailable:
             params.tools?.some((tool) => tool.name === "sessions_history") === true,
           freshSession: !params.nativeSessionId,
-          countPreservedTurns: contentBlocked,
+          countPreservedTurns: true,
+        })
+      : undefined;
+  const transcriptCursor =
+    assertActive && params.runId && params.sessionId
+      ? {
+          localSessionId: params.sessionId,
+          entryId: entries.at(-1)?.id ?? null,
+          runId: params.runId,
         }
-      : undefined,
-  );
+      : undefined;
+  // This handoff belongs only to the accepted native resume, never fresh-session recovery.
+  const resumeContext =
+    assertActive &&
+    (!contentBlocked || params.rawTranscriptReseedReason === "auth-unknown") &&
+    params.nativeSessionId &&
+    (!params.cliSessionBinding || params.cliSessionBinding.sessionId === params.nativeSessionId) &&
+    !params.cliSessionBinding?.forceReuse &&
+    !params.cliSessionBinding?.forkNextResume
+      ? renderCliPreservedTurns(entries, replies, params)
+      : undefined;
   if (contentBlocked) {
     return {
       reseedMessages: [],
       durableContext: undefined,
+      resumeContext,
+      transcriptCursor,
       sessionGapContext,
     };
   }
-  // Only a resumed native session can have missed them; a fresh one reseeds instead.
-  const preservedTurnsContext = params.nativeSessionId
-    ? renderClaudePreservedTurns(replies)
-    : undefined;
   // This freshly loaded branch is reseed-owned; use persistence rather than provider timestamps.
   for (const entry of entries) {
     if (entry.type === "message") {
@@ -689,8 +652,7 @@ export async function loadCliSessionPromptContext(
     }
   }
   const historyMessages = buildSessionContext(entries).messages;
-  // CLI bindings have no local-history coverage cursor. Reference notes are
-  // bounded at-least-once context, never evidence that a native turn consumed them.
+  // Reference notes remain bounded recovery context, independent of the resume cursor.
   const durableContext = renderCliDurableContext(historyMessages);
   const summary = historyMessages[0];
   const hasSummary = summary?.role === "compactionSummary" && summary.summary.trim().length > 0;
@@ -699,7 +661,13 @@ export async function loadCliSessionPromptContext(
     !params.sessionManager &&
     (params.allowRawTranscriptReseed !== true || !params.rawTranscriptReseedReason)
   ) {
-    return { reseedMessages: [], durableContext, sessionGapContext, preservedTurnsContext };
+    return {
+      reseedMessages: [],
+      durableContext,
+      resumeContext,
+      transcriptCursor,
+      sessionGapContext,
+    };
   }
   const history = historyMessages.filter(
     (message) =>
@@ -721,5 +689,5 @@ export async function loadCliSessionPromptContext(
           isError: message.role === "toolResult" ? message.isError : undefined,
         };
   });
-  return { reseedMessages, durableContext, sessionGapContext, preservedTurnsContext };
+  return { reseedMessages, durableContext, resumeContext, transcriptCursor, sessionGapContext };
 }

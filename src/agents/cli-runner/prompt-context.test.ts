@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { CliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import { buildCliSessionDriftNote } from "../cli-session.js";
 import * as mediaTaskStatus from "../media-generation-task-status.js";
 import { createCliCurrentPromptRenderer, prepareCliTurnPromptContext } from "./prompt-context.js";
@@ -52,12 +51,10 @@ it("keeps a transient session notice at the top of the native user prompt", () =
   );
 });
 
-const preservedTurnsContext = "Recorded completion: CHILD_RESULT; reply: Relayed.";
 const currentInboundContext = { text: "Conversation info" };
-const historyWriter = {} as CliHistoryWriter;
 
 describe("CLI resume user context", () => {
-  it("puts the drift note before exchanges the resumed session missed", () => {
+  it("puts the drift note before the resumed prompt", () => {
     const render = createCliCurrentPromptRenderer(
       { currentInboundContext },
       {
@@ -65,16 +62,10 @@ describe("CLI resume user context", () => {
         sessionId: "native-bound",
         drift: { reasons: ["system-prompt"] },
       },
-      { preservedTurnsContext, writer: historyWriter },
     );
 
     expect(render("ask")).toBe(
-      [
-        buildCliSessionDriftNote(["system-prompt"]),
-        preservedTurnsContext,
-        "Conversation info",
-        "ask",
-      ].join("\n\n"),
+      [buildCliSessionDriftNote(["system-prompt"]), "Conversation info", "ask"].join("\n\n"),
     );
   });
 
@@ -83,7 +74,6 @@ describe("CLI resume user context", () => {
       createCliCurrentPromptRenderer(
         { currentInboundContext },
         { mode: "invalidate", invalidatedReason: "mcp" },
-        { preservedTurnsContext, writer: historyWriter },
       )("ask"),
     ).toBe("Conversation info\n\nask");
   });
@@ -93,7 +83,6 @@ describe("CLI resume user context", () => {
       createCliCurrentPromptRenderer(
         { currentInboundContext },
         { mode: "reuse", sessionId: "native-bound" },
-        { preservedTurnsContext },
       )("ask"),
     ).toBe("Conversation info\n\nask");
   });
