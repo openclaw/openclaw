@@ -514,7 +514,20 @@ async function runCronIsolatedAgentTurnInTrace(
               }
               const isCronLaneTimeout =
                 isAborted() || isCommandLaneTaskTimeoutError(err, CommandLane.CronNested);
-              const error = isCronLaneTimeout ? abortReason() : normalizeCronRunErrorText(err);
+              // A watchdog-cancelled run throws a generic abort. Surface the precise
+              // recovery cause (e.g. blocked_tool_call) on the persisted error so the run
+              // history (result.error -> job.state.lastError) and the chat/webhook alert
+              // (params.error) record it instead of a cause-free literal. Restart
+              // precedence is preserved: an interrupted restart keeps its own error.
+              const recoveryClassification = ownReplyOperation?.recoveryClassification;
+              const error =
+                recoveryClassification &&
+                recoveryClassification.trim().length > 0 &&
+                !interruptedByRestart
+                  ? recoveryClassification
+                  : isCronLaneTimeout
+                    ? abortReason()
+                    : normalizeCronRunErrorText(err);
               // Preserve the provider's closed reason before user-facing text replaces the error object.
               const errorReason = resolveCronRunErrorReason(
                 isCronLaneTimeout ? error : err,
