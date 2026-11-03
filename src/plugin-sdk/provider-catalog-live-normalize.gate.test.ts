@@ -1,5 +1,6 @@
 // Plugin SDK tests cover the live-discovery unknown-model gate.
 import { describe, expect, it } from "vitest";
+import { makeConfiguredModel } from "../agents/test-helpers/provider-model-fixture.js";
 import { buildOpenAICompatibleLiveModels } from "./provider-catalog-live-normalize.internal.js";
 import type { ModelProviderConfig } from "./provider-model-shared.js";
 
@@ -7,15 +8,13 @@ const fallback = {
   baseUrl: "https://api.example.com",
   api: "anthropic-messages",
   models: [
-    {
+    makeConfiguredModel({
       id: "known-model",
       name: "Known",
-      reasoning: true,
-      input: ["text"],
       cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
       contextWindow: 1_000_000,
       maxTokens: 128_000,
-    },
+    }),
   ],
 } as unknown as ModelProviderConfig;
 

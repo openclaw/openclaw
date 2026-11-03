@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { closePreparedModelRuntimeSnapshots } from "../agents/prepared-model-runtime.lifecycle.js";
+import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
 import { isNixMode, resolveIsConfigReadOnly } from "../config/paths.js";
 import { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { clearGatewayAgentCliShim } from "../infra/openclaw-cli-shim.js";
@@ -143,8 +144,13 @@ async function createGatewayKernelWithSdkHost(
   const bootId = suppliedBootId ?? randomUUID();
   // Join catalog publication and retained cancellation code before bootstrap owns resources.
   const [, { cancelPreparedModelRuntimeRefresh }] = await Promise.all([
-    prepareRemoteModelCatalogStartupSnapshot(),
-    import("../agents/prepared-model-runtime.js"),
+    measureGatewayBootstrapStep("gateway.catalog-startup-snapshot", () =>
+      prepareRemoteModelCatalogStartupSnapshot(),
+    ),
+    measureGatewayBootstrapStep(
+      "gateway.model-runtime-import",
+      () => import("../agents/prepared-model-runtime.js"),
+    ),
   ]);
   ensureOpenClawCliOnPath();
   const pluginMetadata = retainGatewayPluginMetadata(scheduler, async () => {
@@ -208,12 +214,16 @@ async function createGatewayKernelWithSdkHost(
         log,
         logCron,
         shutdownRuntime,
+        exitAfterStartupFailure: opts.exitAfterStartupFailure,
       }),
     );
     lifecycleRuntime = preparedLifecycleRuntime;
     const databaseStartupAdmission = getAgentDatabaseStartupAdmission();
     if (databaseStartupAdmission) {
-      preparedLifecycleRuntime.registerGatewayLifetimeSidecars(databaseStartupAdmission.adopt());
+      preparedLifecycleRuntime.registerGatewayLifetimeSidecars({
+        name: "database-admission",
+        ...databaseStartupAdmission.adopt(),
+      });
     }
     // Retain teardown first. A timer turn lets I/O run before more cached imports.
     await delay(0, undefined, { signal: runtime.connectionWork.signal });
@@ -260,7 +270,7 @@ async function createGatewayKernelWithSdkHost(
     await prelude;
     if (lifecycleRuntime) {
       // The lifecycle releases metadata only after its required joins succeed.
-      await lifecycleRuntime.closeOnStartupFailure();
+      await lifecycleRuntime.closeOnStartupFailure(startupError);
     } else {
       closeStartupTrace?.();
       await kernelState?.mentionInbox.dispose();

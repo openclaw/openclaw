@@ -1,17 +1,23 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
+import { requireOpenClawStateDatabaseIdentity } from "../../state/openclaw-state-db-cache.js";
 import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { createWorkerPlacementDiskSpaceMonitor } from "./placement-disk-space.js";
 import { placementTurnOwner } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import { sessionIdentity } from "./placement-suite.test-support.js";
 import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
+import { capturePlacementReplicaRead } from "./placement-turn-authority.js";
 
 const roots = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -27,12 +33,60 @@ const roots = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
+let database: OpenClawStateDatabase;
+let reader: ReturnType<typeof createWorkerSessionPlacementStore>;
+let writer: ReturnType<typeof createWorkerSessionPlacementStore>;
+beforeEach(() => {
+  vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-read-cache-"));
+  database = openOpenClawStateDatabase();
+  reader = createWorkerSessionPlacementStore({ database });
+  writer = createWorkerSessionPlacementStore({ database });
+});
+
 describe("worker placement read cache", () => {
+  it("keeps the syncing owner when a read captured during commit returns its older snapshot", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-pending-replica-"));
+    const snapshotDatabase = openOpenClawStateDatabase();
+    const store = createWorkerSessionPlacementStore({ database: snapshotDatabase });
+    const identity = { sessionId: "dispatch", agentId: "main", sessionKey: "agent:main:dispatch" };
+    const requested = await store.startDispatch(identity);
+    const provisioning = await store.transition({
+      sessionId: identity.sessionId,
+      from: "requested",
+      to: "provisioning",
+      expectedGeneration: requested.generation,
+      patch: { environmentId: "dispatch-environment" },
+    });
+    const snapshot = await store.readProjection([identity.sessionId], { current: true });
+    const databaseIdentity = requireOpenClawStateDatabaseIdentity({ db: snapshotDatabase.db });
+    let publishRead: ReturnType<typeof capturePlacementReplicaRead> | undefined;
+    const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
+    vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementationOnce(
+      (admit, attachment) =>
+        createAdmission((request, grant) => {
+          admit(request, () => {
+            if (request.stage === "commit") {
+              // The publication has reserved its sequence, but SQLite has not committed yet.
+              publishRead = capturePlacementReplicaRead(databaseIdentity);
+            }
+            return grant();
+          });
+        }, attachment),
+    );
+    const syncing = await store.transition({
+      sessionId: identity.sessionId,
+      from: "provisioning",
+      to: "syncing",
+      expectedGeneration: provisioning.generation,
+      patch: { workerBundleHash: "a".repeat(64) },
+    });
+    expect(store.get(identity.sessionId)).toEqual(syncing);
+    expect(publishRead).toBeTypeOf("function");
+    publishRead!(snapshot.placements.values(), [identity.sessionId]);
+    expect(store.get(identity.sessionId)).toEqual(syncing);
+  });
+
   it("reuses empty recovery candidates and sees committed work across stores", async () => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-recovery-cache-"));
-    const database = openOpenClawStateDatabase();
-    const reader = createWorkerSessionPlacementStore({ database });
-    const writer = createWorkerSessionPlacementStore({ database });
     const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
     const recoveryReadCount = () =>
       reads.mock.calls.filter(
@@ -43,11 +97,7 @@ describe("worker placement read cache", () => {
     expect(await writer.readRecoveryCandidates()).toEqual([]);
     expect(recoveryReadCount()).toBe(1);
 
-    const local = {
-      sessionId: "recovery-local",
-      agentId: "main",
-      sessionKey: "agent:main:recovery-local",
-    };
+    const local = sessionIdentity("recovery-local");
     const claim = await writer.claimTurn({
       ...local,
       owner: { kind: "local" },
@@ -82,10 +132,6 @@ describe("worker placement read cache", () => {
   });
 
   it("returns overlapping recovery snapshots without caching an invalidated empty result", async () => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-recovery-overlap-"));
-    const database = openOpenClawStateDatabase();
-    const reader = createWorkerSessionPlacementStore({ database });
-    const writer = createWorkerSessionPlacementStore({ database });
     const captured = createDeferred();
     const release = createDeferred();
     const execute = stateReads.executeExistingOpenClawStateRead;
@@ -103,11 +149,7 @@ describe("worker placement read cache", () => {
     const reading = reader.readRecoveryCandidates();
     try {
       await awaitGateBeforeSettlement(captured.promise, reading, "recovery snapshot");
-      const remote = await writer.startDispatch({
-        sessionId: "overlapping-recovery",
-        agentId: "main",
-        sessionKey: "agent:main:overlapping-recovery",
-      });
+      const remote = await writer.startDispatch(sessionIdentity("overlapping-recovery"));
       release.resolve();
       await expect(reading).resolves.toEqual([]);
       expect(await reader.readRecoveryCandidates()).toEqual([
@@ -120,22 +162,14 @@ describe("worker placement read cache", () => {
   });
 
   it("reuses the disk sweep inventory and observes committed placement transitions", async () => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-disk-cache-"));
-    const database = openOpenClawStateDatabase();
-    const reader = createWorkerSessionPlacementStore({ database });
-    const writer = createWorkerSessionPlacementStore({ database });
-    const runWorkspaceCommand = vi.fn(async () => ({
-      stdout: JSON.stringify({ availableBytes: "6000000000", totalBytes: "10000000000" }),
-      stderr: "",
-      code: 0,
-      signal: null,
-      killed: false,
-      termination: "exit" as const,
-    }));
+    const runWorkspaceCommand = vi.fn(async () =>
+      createCommandResult({
+        stdout: JSON.stringify({ availableBytes: "6000000000", totalBytes: "10000000000" }),
+      }),
+    );
     const unexpected = async () => {
       throw new Error("unexpected workspace mutation during a disk probe");
     };
-    let nowMs = 1_000;
     const warn = vi.fn();
     const monitor = createWorkerPlacementDiskSpaceMonitor({
       placements: reader,
@@ -152,7 +186,6 @@ describe("worker placement read cache", () => {
       },
       runnerAvailability: { read: () => undefined, version: () => 0 },
       warn,
-      now: () => nowMs,
     });
     const unsubscribe = reader.subscribeChanges(() => monitor.invalidate());
     try {
@@ -162,11 +195,11 @@ describe("worker placement read cache", () => {
       expect(reads).not.toHaveBeenCalled();
       expect(runWorkspaceCommand).not.toHaveBeenCalled();
 
-      const active = await advancePlacementFixtureToActive(writer, database, {
-        sessionId: "disk-cache",
-        sessionKey: "agent:main:disk-cache",
-        agentId: "main",
-      });
+      const active = await advancePlacementFixtureToActive(
+        writer,
+        database,
+        sessionIdentity("disk-cache"),
+      );
       await monitor.sweep();
       expect(runWorkspaceCommand).toHaveBeenCalledOnce();
       expect(monitor.read(active)?.status).toBe("ok");
@@ -177,7 +210,6 @@ describe("worker placement read cache", () => {
         to: "draining",
         expectedGeneration: active.generation,
       });
-      nowMs += 15 * 60_000;
       await monitor.sweep();
       expect(monitor.read(draining)).toBeUndefined();
       expect(runWorkspaceCommand).toHaveBeenCalledOnce();
@@ -188,10 +220,8 @@ describe("worker placement read cache", () => {
   });
 
   it("claims and releases an existing worker placement with a NULL execution mode", async () => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-null-mode-"));
-    const database = openOpenClawStateDatabase();
-    const store = createWorkerSessionPlacementStore({ database });
-    const identity = { sessionId: "legacy", agentId: "main", sessionKey: "agent:main:legacy" };
+    const store = writer;
+    const identity = sessionIdentity("legacy");
     const active = await advancePlacementFixtureToActive(store, database, identity, {
       environmentId: "legacy-environment",
     });
@@ -212,11 +242,9 @@ describe("worker placement read cache", () => {
   it.each([false, true])(
     "observes local claim receipts with a preloaded projection: %s",
     async (preloaded) => {
-      vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-local-cache-"));
-      const database = openOpenClawStateDatabase();
-      const reader = createWorkerSessionPlacementStore({ database });
-      const writer = createWorkerSessionPlacementStore({ database });
-      const identity = { sessionId: "local", agentId: "main", sessionKey: "agent:main:local" };
+      const identity = sessionIdentity("local");
+      const read = async (store = reader) =>
+        (await store.readProjection([identity.sessionId])).placements.get(identity.sessionId)!;
       if (preloaded) {
         expect((await reader.readProjection([identity.sessionId])).placements.size).toBe(0);
       }
@@ -227,72 +255,51 @@ describe("worker placement read cache", () => {
         claimId: "claim",
         runId: "run",
       });
-      const claimed = await reader.readProjection([identity.sessionId]);
-      expect(claimed.placements.get(identity.sessionId)?.turnClaim?.claimId).toBe("claim");
+      const claimed = await read();
+      expect(claimed.turnClaim?.claimId).toBe("claim");
       // Borrowed owner facts reject both placement and nested claim mutation.
-      const warm = await reader.readProjection([identity.sessionId]);
-      expect(Reflect.set(warm.placements.get(identity.sessionId)!, "state", "requested")).toBe(
-        false,
-      );
-      expect(
-        Reflect.set(
-          warm.placements.get(identity.sessionId)!.turnClaim!,
-          "claimId",
-          "caller-change",
-        ),
-      ).toBe(false);
-      expect(
-        (await writer.readProjection([identity.sessionId])).placements.get(identity.sessionId),
-      ).toMatchObject({ state: "local", turnClaim: { claimId: "claim" } });
+      const warm = await read();
+      expect(Reflect.set(warm, "state", "requested")).toBe(false);
+      expect(Reflect.set(warm.turnClaim!, "claimId", "caller-change")).toBe(false);
+      expect(await read(writer)).toMatchObject({ state: "local", turnClaim: { claimId: "claim" } });
       await writer.releaseTurnIfOwned(claim);
-      expect(
-        (await reader.readProjection([identity.sessionId])).placements.get(identity.sessionId),
-      ).toMatchObject({ state: "local", turnClaim: null });
+      expect(await read()).toMatchObject({ state: "local", turnClaim: null });
       expect(reads).toHaveBeenCalledTimes(preloaded ? 0 : 1);
       // A committed replacement leaves the earlier snapshot intact.
-      expect(claimed.placements.get(identity.sessionId)?.turnClaim?.claimId).toBe("claim");
-      expect(Reflect.set(claimed.placements.get(identity.sessionId)!, "state", "requested")).toBe(
-        false,
-      );
-      expect(
-        (await reader.readProjection([identity.sessionId])).placements.get(identity.sessionId)
-          ?.state,
-      ).toBe("local");
+      expect(claimed.turnClaim?.claimId).toBe("claim");
+      expect(Reflect.set(claimed, "state", "requested")).toBe(false);
+      expect((await read()).state).toBe("local");
     },
   );
 
   it("updates prepared preservation from non-local writer receipts", async () => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-preservation-cache-"));
-    const database = openOpenClawStateDatabase();
-    const reader = createWorkerSessionPlacementStore({ database });
-    const writer = createWorkerSessionPlacementStore({ database });
     const initial = await reader.prepareMaintenancePlacements();
     initial.release();
     const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
     const claim = await writer.claimTurn({
-      sessionId: "local",
-      agentId: "main",
-      sessionKey: "agent:main:local",
+      ...sessionIdentity("local"),
       owner: { kind: "local" },
       claimId: "claim",
       runId: "run",
     });
     await writer.releaseTurnIfOwned(claim);
     const unchanged = await reader.prepareMaintenancePlacements();
-    expect(unchanged.placements).toEqual([]);
+    expect([...unchanged.placements]).toEqual([]);
     expect(reads).not.toHaveBeenCalled();
-    const remote = await writer.startDispatch({
-      sessionId: "remote",
-      agentId: "main",
-      sessionKey: "agent:main:remote",
-    });
-    expect(unchanged.placements).toEqual([remote]);
+    const remote = await writer.startDispatch(sessionIdentity("remote"));
+    expect([...unchanged.placements]).toEqual([remote]);
     unchanged.assertCurrent();
     unchanged.release();
     const changed = await reader.prepareMaintenancePlacements();
-    expect(changed.placements).toEqual([remote]);
+    expect([...changed.placements]).toEqual([remote]);
+    expect([...changed.placements][0]).toBe([...changed.placements][0]);
+    const callerSnapshot = [...changed.placements];
+    expect(Reflect.set(callerSnapshot[0]!, "sessionKey", "caller-change")).toBe(false);
+    callerSnapshot.length = 0;
+    expect([...changed.placements]).toEqual([remote]);
     changed.assertCurrent();
     changed.release();
+    expect(() => changed.placements).toThrow();
     expect(
       reads.mock.calls.filter(([, command]) => command.type === "workers.placementPreservation"),
     ).toHaveLength(1);

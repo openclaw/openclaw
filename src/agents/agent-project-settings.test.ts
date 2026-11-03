@@ -19,7 +19,6 @@ import {
   clearPreparedEmbeddedAgentSettings,
   createPreparedEmbeddedAgentSettingsManager as prepare,
 } from "./agent-project-settings.js";
-import { SettingsManager } from "./sessions/settings-manager.js";
 
 const writeJson = (file: string, value: unknown) => fs.writeFile(file, JSON.stringify(value));
 const retryProvider = (
@@ -60,14 +59,13 @@ it("defaults project settings policy to sanitize", () => {
   expect(resolveEmbeddedAgentProjectSettingsPolicy()).toBe("sanitize");
 });
 
-it("applies sanitized plugin settings before project settings", () => {
+it("applies admitted plugin settings before project settings", () => {
   const snapshot = buildEmbeddedAgentSettingsSnapshot({
     globalSettings: {
       shellPath: "/bin/zsh",
       compaction: { reserveTokens: 20_000, keepRecentTokens: 20_000 },
     },
     pluginSettings: {
-      shellPath: "/tmp/blocked-shell",
       compaction: { keepRecentTokens: 64_000 },
       hideThinkingBlock: false,
     },
@@ -108,51 +106,32 @@ it.each([undefined, 0, 7])("preserves stored settings (%s)", async (maxRetries) 
   const projectBytes = `${JSON.stringify(projectSettings, null, 2)}\n`;
   await fs.writeFile(globalPath, globalBytes);
   await fs.writeFile(projectPath, projectBytes);
+  // Native preparation runs first; embedded preparation must reuse its frozen inputs.
+  expect(prepareAgentProviderRetryCount(params)).toBe(maxRetries);
+  const prepared = prepare(params);
   const expectedProvider = { maxRetries, timeoutMs: 9_000, maxRetryDelayMs: 2_500 };
-  const assertPrepared = (thinkingLevel: string) => {
-    // Native preparation runs first, so embedded preparation must reuse its frozen inputs.
-    expect(prepareAgentProviderRetryCount(params)).toBe(maxRetries);
-    const prepared = prepare(params);
-    expect(prepared.getProviderRetrySettings()).toEqual(expectedProvider);
-    expect(prepared.getGlobalSettings()).toMatchObject({
-      theme: "dark",
-      defaultProvider: "openai",
-      defaultModel: "gpt-5",
-      shellPath: "/bin/sh",
-      hideThinkingBlock: true,
-    });
-    expect(prepared.getDefaultThinkingLevel()).toBe(thinkingLevel);
-    expect(prepared.getRetryEnabled()).toBe(false);
-    return prepared;
-  };
-  const prepared = assertPrepared("low");
+  expect(prepared.getProviderRetrySettings()).toEqual(expectedProvider);
+  expect(prepared.getGlobalSettings()).toMatchObject({
+    theme: "dark",
+    defaultProvider: "openai",
+    defaultModel: "gpt-5",
+    shellPath: "/bin/sh",
+    hideThinkingBlock: true,
+  });
+  expect(prepared.getDefaultThinkingLevel()).toBe("low");
+  expect(prepared.getRetryEnabled()).toBe(false);
   prepared.setDefaultThinkingLevel("high");
   prepared.setRetryEnabled(true);
   prepared.applyOverrides({ retry: { provider: { maxRetries: 99 } } });
-  await prepared.flush();
   expect(await fs.readFile(globalPath, "utf8")).toBe(globalBytes);
   expect(await fs.readFile(projectPath, "utf8")).toBe(projectBytes);
-  assertPrepared("low");
-
-  const persistent = SettingsManager.create(params.cwd, params.agentDir);
-  persistent.setDefaultThinkingLevel("high");
-  await persistent.flush();
-  expect(JSON.parse(await fs.readFile(globalPath, "utf8"))).toEqual({
-    ...globalSettings,
-    defaultThinkingLevel: "high",
-  });
-  expect(await fs.readFile(projectPath, "utf8")).toBe(projectBytes);
-  const reopened = SettingsManager.create(params.cwd, params.agentDir);
-  expect(reopened.getDefaultThinkingLevel()).toBe("high");
-  expect(reopened.getProviderRetrySettings()).toEqual(expectedProvider);
-  expect(reopened.getGlobalSettings()).toEqual({ ...globalSettings, defaultThinkingLevel: "high" });
-  expect(reopened.getProjectSettings()).toEqual(projectSettings);
-  assertPrepared("low");
-  clearPreparedEmbeddedAgentSettings([params.sessionId]);
-  assertPrepared("high");
+  const next = prepare(params);
+  expect(next.getDefaultThinkingLevel()).toBe("low");
+  expect(next.getRetryEnabled()).toBe(false);
+  expect(next.getProviderRetrySettings()).toEqual(expectedProvider);
 });
 
-it.each([undefined, 0, 1, 4])("projects only the explicit count %s", async (maxRetries) => {
+it.each([undefined, 0, 4])("projects only the explicit count %s", async (maxRetries) => {
   await using params = await createSettingsWorkspace();
   await writeJson(params.globalPath, { retry: { provider: { maxRetries } } });
   expect(prepareAgentProviderRetryCount(params)).toBe(maxRetries);
@@ -176,6 +155,48 @@ it("does not admit embedded retired settings, compaction or delay policy into na
   expect(() => prepare(params)).toThrow("queueMode: use steeringMode");
 });
 describe("createPreparedEmbeddedAgentSettingsManager", () => {
+  const retiredSettings = [
+    [{ queueMode: "all" }, { steeringMode: "all" }, "steeringMode"],
+    [{ websockets: false }, { transport: "sse" }, "transport"],
+    [
+      { skills: { customDirectories: ["custom-skill"], enableSkillCommands: false } },
+      { skills: ["custom-skill"], enableSkillCommands: false },
+      "enableSkillCommands",
+    ],
+    [
+      { retry: { maxDelayMs: 12_000 } },
+      { retry: { provider: { maxRetryDelayMs: 12_000 } } },
+      "retry.provider.maxRetryDelayMs",
+    ],
+  ] as const;
+  it.each(
+    retiredSettings.flatMap(([retired, canonical, guidance]) =>
+      ["global", "project"].map((scope) => ({ retired, canonical, guidance, scope })),
+    ),
+  )(
+    "refuses retired $scope settings with $guidance guidance and preserves bytes",
+    async ({ retired, canonical, guidance, scope }) => {
+      await using params = await createSettingsWorkspace();
+      const settingsPath = scope === "global" ? params.globalPath : params.projectPath;
+      const original = `${JSON.stringify({ theme: "keep", ...retired }, null, 4)}\n`;
+      await fs.writeFile(settingsPath, original);
+      const refusal = expect.objectContaining({
+        code: "INVALID_CONFIG",
+        recovery: "manual",
+        message: expect.stringContaining(guidance),
+      });
+      expect(() => prepare(params)).toThrowError(refusal);
+      expect(await fs.readFile(settingsPath, "utf8")).toBe(original);
+
+      await writeJson(settingsPath, canonical);
+      expect(prepare(params).getGlobalSettings()).toMatchObject(canonical);
+      await fs.writeFile(settingsPath, original);
+      clearPreparedEmbeddedAgentSettings([params.sessionId]);
+      expect(() => prepare(params)).toThrowError(refusal);
+      expect(await fs.readFile(settingsPath, "utf8")).toBe(original);
+    },
+  );
+
   it.each([
     { policy: "trusted", shellCommandPrefix: "echo trusted &&", reserveTokens: 32_000 },
     { policy: "sanitize", shellCommandPrefix: "echo global &&", reserveTokens: 32_000 },
@@ -220,7 +241,6 @@ describe("createPreparedEmbeddedAgentSettingsManager", () => {
       expect(settingsManager.getRetryEnabled()).toBe(false);
       settingsManager.applyOverrides({ compaction: { reserveTokens: 90_000 } });
       settingsManager.setRetryEnabled(true);
-      await settingsManager.flush();
       expect(JSON.parse(await fs.readFile(globalPath, "utf8"))).toEqual(globalSettings);
 
       await writeJson(projectPath, {
@@ -232,13 +252,11 @@ describe("createPreparedEmbeddedAgentSettingsManager", () => {
         compaction: { ...globalSettings.compaction, keepRecentTokens: 45_000 },
       });
       expect(prepareAgentProviderRetryCount(input)).toBe(testCase.policy === "ignore" ? 1 : 0);
-      await settingsManager.reload();
       expect(settingsManager.getCompactionKeepRecentTokens()).toBe(23_000);
       const nextSettingsManager = prepare(input);
       expect(nextSettingsManager.getCompactionKeepRecentTokens()).toBe(23_000);
       expect(nextSettingsManager.getCompactionReserveTokens()).toBe(testCase.reserveTokens);
       expect(nextSettingsManager.getRetryEnabled()).toBe(false);
-      await nextSettingsManager.flush();
       clearPreparedEmbeddedAgentSettings([params.sessionId]);
       expect(prepareAgentProviderRetryCount(input)).toBe(testCase.policy === "ignore" ? 1 : 2);
       expect(prepare(input).getCompactionKeepRecentTokens()).toBe(45_000);

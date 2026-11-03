@@ -10,21 +10,25 @@ import {
   lstatSync,
   realpathSync,
   readFileSync,
-  readdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { isMainThread, parentPort, Worker, workerData } from "node:worker_threads";
+import { Worker } from "node:worker_threads";
 import { parsePkgAndParentSelector, type PackageSelector } from "@pnpm/parse-overrides";
 import pMap from "p-map";
 import semver from "semver";
 import { list as listTar } from "tar";
 import { parse as parseYaml } from "yaml";
 import { isRecord } from "../packages/normalization-core/src/record-coerce.ts";
+import { resolveRuntimeToolingEntrypointUrl } from "../src/infra/runtime-process-manifest.ts";
 import { listChangedPathsFromGit, listStagedChangedPaths } from "./changed-lanes.mts";
+import {
+  listManagedNpmLockPackageDirs as listManagedPackageDirs,
+  npmLockPackageDirsForChangedPaths as selectChangedPackageDirs,
+} from "./lib/npm-lock-package-selection.mjs";
 import { pnpmLockfileDocuments, resolveSnapshot } from "./lib/pnpm-lockfile-documents.mjs";
 import { resolveNpmRunner } from "./npm-runner.mts";
 
@@ -62,7 +66,6 @@ const NPM_LOCK_MAX_JOBS = 16;
 // Observed nested-override locks settle after one reload; a lock still changing after
 // this many reloads is oscillating and must fail instead of shipping an unstable lock.
 const NPM_LOCK_MAX_RELOAD_PASSES = 3;
-const NPM_LOCK_WORKER_KIND = "openclaw-npm-lock-package";
 
 function usage() {
   return [
@@ -1614,6 +1617,42 @@ function normalizeNpmVersionDrift<T>(lockfile: T): T {
   return lockfile;
 }
 
+function normalizeNpmRegistryIntegrities(lockfile: unknown) {
+  const pnpmIntegrities = readPnpmLockPackageIntegrities();
+  for (const [lockPath, metadata] of Object.entries(recordAt(lockfile, "packages") ?? {})) {
+    if (
+      !isRecord(metadata) ||
+      metadata.link === true ||
+      metadata.inBundle === true ||
+      typeof metadata.resolved !== "string" ||
+      !/^https?:\/\//u.test(metadata.resolved) ||
+      typeof metadata.integrity !== "string" ||
+      !/^sha1-[A-Za-z0-9+/]{27}=$/u.test(metadata.integrity)
+    ) {
+      continue;
+    }
+    const name =
+      typeof metadata.name === "string"
+        ? metadata.name
+        : parseLockPackagePath(lockPath).at(-1)?.name;
+    const packageKey = `${name}@${String(metadata.version)}`;
+    const pins = pnpmIntegrities.get(packageKey);
+    if (pins?.has(metadata.integrity)) {
+      continue;
+    }
+    const [pin] = pins ?? [];
+    if (pins?.size !== 1 || !pin || !/^sha512-[A-Za-z0-9+/]{86}==$/u.test(pin)) {
+      throw new Error(
+        `cannot normalize registry integrity for ${packageKey}: expected one pnpm SHA512 pin`,
+      );
+    }
+    // Some mirrors expose only dist.shasum. Carry the reviewed archive constraint,
+    // not an assertion that SHA1 metadata authenticated those bytes. Consumers
+    // still verify downloaded archives against this SHA512; strong mismatches stay errors.
+    metadata.integrity = pin;
+  }
+}
+
 export function createNpmPackageLockInstallStrategyArgs(
   options: Pick<NpmLockOptions, "installStrategy"> = {},
 ) {
@@ -1667,6 +1706,7 @@ export function generateNpmPackageLock(packageDir: string, options: NpmLockOptio
         parseJsonObject(readFileSync(path.join(tempDir, "package-lock.json"), "utf8")),
       ),
     );
+    normalizeNpmRegistryIntegrities(generated);
     let npmBundleTarball: Buffer | undefined;
     const npmVersion = recordAt(recordAt(generated, "packages"), "node_modules/npm")?.version;
     if (typeof npmVersion === "string" && NPM_BUNDLED_DEPENDENCY_POLICIES.has(npmVersion)) {
@@ -1977,64 +2017,11 @@ function packageLabel(packageDir: string) {
 }
 
 export function listManagedNpmLockPackageDirs(rootDir = ROOT_DIR) {
-  // npm locks are generated on demand for every publishable package, but never committed.
-  return ["extensions", "packages"]
-    .flatMap((parentDir) =>
-      readdirSync(path.join(rootDir, parentDir), { withFileTypes: true })
-        .filter((entry) => entry.isDirectory())
-        .map((entry) => path.posix.join(parentDir, entry.name)),
-    )
-    .filter((packageDir) => {
-      const packageJsonPath = path.join(rootDir, packageDir, "package.json");
-      if (!existsSync(packageJsonPath)) {
-        return false;
-      }
-      const packageJson: unknown = JSON.parse(readFileSync(packageJsonPath, "utf8"));
-      return recordAt(recordAt(packageJson, "openclaw"), "release")?.publishToNpm === true;
-    })
-    .toSorted((left, right) => left.localeCompare(right));
+  return listManagedPackageDirs(rootDir);
 }
 
 function npmLockPackageDirsForChangedPaths(changedPaths: string[]) {
-  const packageDirs = new Set<string>();
-  const managedNpmLockPackageDirs = new Set(listManagedNpmLockPackageDirs());
-  let hasAmbiguousDependencyPolicyChange = false;
-  let hasLockfileChange = false;
-
-  for (const changedPath of changedPaths) {
-    if (!changedPath) {
-      continue;
-    }
-    if (changedPath === "package.json") {
-      packageDirs.add(ROOT_DIR);
-      continue;
-    }
-    const workspacePackageMatch = changedPath.match(
-      /^((?:extensions|packages)\/[^/]+)(?:\/.*)?\/package\.json$/u,
-    );
-    const workspacePackageDir = workspacePackageMatch?.[1];
-    if (workspacePackageDir && managedNpmLockPackageDirs.has(workspacePackageDir)) {
-      packageDirs.add(path.resolve(ROOT_DIR, workspacePackageDir));
-      continue;
-    }
-    if (changedPath === "pnpm-lock.yaml") {
-      hasLockfileChange = true;
-      continue;
-    }
-    if (
-      changedPath === "pnpm-workspace.yaml" ||
-      changedPath === "scripts/generate-npm-package-lock.mts"
-    ) {
-      hasAmbiguousDependencyPolicyChange = true;
-    }
-  }
-
-  if (hasAmbiguousDependencyPolicyChange || hasLockfileChange) {
-    return [ROOT_DIR, ...listManagedNpmLockPackageDirs().map((dir) => path.resolve(ROOT_DIR, dir))];
-  }
-  return [...packageDirs].toSorted((left, right) =>
-    packageLabel(left).localeCompare(packageLabel(right)),
-  );
+  return selectChangedPackageDirs(changedPaths, ROOT_DIR);
 }
 
 /** @internal Directly tested script implementation detail. */
@@ -2144,11 +2131,10 @@ export function resolveNpmLockJobs(
 
 async function runPackageWorker(packageDir: string, rootDir: string) {
   return await new Promise<string>((resolve, reject) => {
-    const worker = new Worker(new URL(import.meta.url), {
+    const worker = new Worker(resolveRuntimeToolingEntrypointUrl("npmPackageLock"), {
       // Each worker loads policy from the source checkout, using this checkout's tooling.
       env: { ...process.env, OPENCLAW_NPM_PACKAGE_LOCK_REPO_ROOT: rootDir },
       workerData: {
-        kind: NPM_LOCK_WORKER_KIND,
         packageDir,
       },
     });
@@ -2227,15 +2213,7 @@ async function main() {
   }
 }
 
-if (!isMainThread && workerData?.kind === NPM_LOCK_WORKER_KIND) {
-  const sendToParent = parentPort?.postMessage.bind(parentPort);
-  try {
-    const output = generateNpmPackageLock(workerData.packageDir);
-    sendToParent?.({ output });
-  } catch (error) {
-    sendToParent?.({ error: error instanceof Error ? error.message : String(error) });
-  }
-} else if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main().catch(handleMainError);
 }
 

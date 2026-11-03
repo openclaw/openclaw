@@ -16,6 +16,9 @@ ChatGPT (SIWC) cannot authorize this tool. Codex OAuth here means an OpenClaw
 model auth profile; signing in only to a native Codex user home does not supply
 `image_generate` with a credential.
 
+Direct Images API generation and editing preserve provider-reported token usage
+in result metadata, including text/image breakdowns and zero-valued counters.
+
 | Capability                | OpenAI API key                     | Codex OAuth                          |
 | ------------------------- | ---------------------------------- | ------------------------------------ |
 | Model ref                 | `openai/gpt-image-2`               | `openai/gpt-image-2`                 |
@@ -96,6 +99,12 @@ with no edge above 3840 pixels and total pixels between 655,360 and 8,294,400.
 The aspect ratio must be between 1:3 and 3:1.
 
 ### Other Image Models
+
+OpenClaw maps size and aspect-ratio hints to the selected model's supported
+dimensions. GPT Image 1.x uses `1024x1024`, `1536x1024`, or `1024x1536`.
+Explicit `dall-e-2` and `dall-e-3` overrides use their legacy size limits;
+OpenAI has retired these models, so this does not restore public API access.
+Custom deployment names retain their endpoint's geometry behavior.
 
 For a transparent-background request, call `image_generate` with
 `model: "openai/gpt-image-1.5"`, `outputFormat: "png"` or `"webp"`, and

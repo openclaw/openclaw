@@ -8,7 +8,7 @@ import {
 import { readAcpSessionMetaForEntries } from "../acp/runtime/session-meta-readonly.js";
 import { resolveSessionStorePathForAcp } from "../acp/runtime/session-meta.js";
 import { resolveCurrentSessionAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
-import { resolveAgentConfig, tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
+import { tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import {
   resolveAuthoredModelContextTokens,
   resolveContextTokensForModelFromCache as resolveContextTokensForModel,
@@ -17,18 +17,15 @@ import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { findModelInCatalog } from "../agents/model-catalog-lookup.js";
 import { selectModelCatalogRuntimeEntry } from "../agents/model-catalog-view.js";
 import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
-import {
-  buildModelAliasIndex,
-  resolveConfiguredPrimaryProviderFallback,
-} from "../agents/model-selection-shared.js";
+import { resolveConfiguredModelRef } from "../agents/model-selection-shared.js";
 import { parseModelRef, resolvePersistedSelectedModelRef } from "../agents/model-selection.js";
 import { getPreparedModelCatalogSnapshot } from "../agents/prepared-model-catalog.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
-import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { SessionEntrySummary } from "../config/sessions/session-accessor.js";
 import type { SessionAcpMeta, SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveStoredSessionKeyForAgentStore } from "../gateway/session-store-key.js";
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { classifySessionKind } from "../sessions/classify-session-kind.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
@@ -115,99 +112,25 @@ async function createStatusModelContextResolver(cfg: OpenClawConfig) {
   };
 }
 
-function resolveStatusModelRefFromRaw(params: {
-  cfg: OpenClawConfig;
-  rawModel: string;
-  defaultProvider: string;
-  agentId?: string;
-}): { provider: string; model: string } | null {
-  const trimmed = params.rawModel.trim();
-  if (!trimmed) {
-    return null;
-  }
-  if (!trimmed.includes("/")) {
-    const aliasIndex = buildModelAliasIndex({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      defaultProvider: params.defaultProvider,
-      allowManifestNormalization: false,
-      allowPluginNormalization: false,
-      // Status must not discover provider metadata while resolving configured aliases.
-      manifestPlugins: [],
-    });
-    return (
-      aliasIndex.byAlias.get(normalizeLowercaseStringOrEmpty(trimmed))?.ref ?? {
-        provider: params.defaultProvider,
-        model: trimmed,
-      }
-    );
-  }
-  return parseModelRef(trimmed, params.defaultProvider, {
-    allowManifestNormalization: false,
-    allowPluginNormalization: false,
-  });
-}
-
 function resolveConfiguredStatusModelRef(params: {
   cfg: OpenClawConfig;
   defaultProvider: string;
   defaultModel: string;
   agentId?: string;
 }): { provider: string; model: string } {
-  const agentRawModel = params.agentId
-    ? resolveAgentModelPrimaryValue(resolveAgentConfig(params.cfg, params.agentId)?.model)
-    : undefined;
-  // Agent-specific primary model wins over global defaults for session status rows.
-  for (const rawModel of [
-    agentRawModel,
-    resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model),
-  ]) {
-    if (rawModel) {
-      const parsed = resolveStatusModelRefFromRaw({
-        cfg: params.cfg,
-        rawModel,
-        defaultProvider: params.defaultProvider,
-        agentId: params.agentId,
-      });
-      if (parsed) {
-        return parsed;
-      }
-    }
-  }
-
-  const fallbackProvider = resolveConfiguredPrimaryProviderFallback({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    defaultProvider: params.defaultProvider,
-    defaultModel: params.defaultModel,
-    allowManifestNormalization: false,
-    allowPluginNormalization: false,
-  });
-  if (fallbackProvider) {
-    return fallbackProvider;
-  }
-
-  return { provider: params.defaultProvider, model: params.defaultModel };
-}
-
-function resolveProviderlessPersistedStatusModelRef(params: {
-  defaultProvider: string;
-  provider?: unknown;
-  model?: unknown;
-}): { provider: string; model: string } | null {
-  const provider = normalizeOptionalString(params.provider);
-  const model = normalizeOptionalString(params.model);
-  if (
-    !model ||
-    provider ||
-    model.includes("/") ||
-    normalizeLowercaseStringOrEmpty(model) === "openrouter:auto"
-  ) {
-    return null;
-  }
-  // Status rows report the persisted session text. Shared ref parsing still
-  // canonicalizes provider-local aliases, which would rewrite this display.
-  return { provider: params.defaultProvider, model };
+  return resolveConfiguredModelRef(
+    {
+      ...params,
+      allowManifestNormalization: false,
+      allowPluginNormalization: false,
+      // Status must not discover provider metadata; the current snapshot keeps declared
+      // providers authoritative without a manifest scan on every status read.
+      manifestPlugins:
+        getCurrentPluginMetadataSnapshot({ config: params.cfg, env: process.env }) ?? [],
+    },
+    // Include ACP agent primaries rather than substituting their native fallback.
+    "acp",
+  );
 }
 
 function resolveStatusModelLookupRef(params: {
@@ -230,15 +153,6 @@ function resolveStatusModelLookupRef(params: {
   return parsed ?? { provider: provider ?? defaultProvider, model };
 }
 
-function resolveStatusModelComparisonLabel(params: {
-  provider?: unknown;
-  model?: unknown;
-  defaultProvider?: unknown;
-}): string | null {
-  const ref = resolveStatusModelLookupRef(params);
-  return ref ? `${ref.provider}/${ref.model}` : null;
-}
-
 function resolveSessionModelRef(
   resolved: { provider: string; model: string },
   entry?:
@@ -246,19 +160,19 @@ function resolveSessionModelRef(
     | Pick<SessionEntry, "model" | "modelProvider" | "modelOverride" | "providerOverride">,
 ): { provider: string; model: string } {
   const defaultProvider = resolved.provider || DEFAULT_PROVIDER;
-  const providerlessPersisted =
-    resolveProviderlessPersistedStatusModelRef({
-      defaultProvider,
-      provider: entry?.providerOverride,
-      model: entry?.modelOverride,
-    }) ??
-    resolveProviderlessPersistedStatusModelRef({
-      defaultProvider,
-      provider: entry?.modelProvider,
-      model: entry?.model,
-    });
-  if (providerlessPersisted) {
-    return providerlessPersisted;
+  const overrideModel = normalizeOptionalString(entry?.modelOverride);
+  const provider = normalizeOptionalString(
+    overrideModel ? entry?.providerOverride : entry?.modelProvider,
+  );
+  const model = overrideModel ?? normalizeOptionalString(entry?.model);
+  if (
+    model &&
+    !provider &&
+    !model.includes("/") &&
+    normalizeLowercaseStringOrEmpty(model) !== "openrouter:auto"
+  ) {
+    // Preserve the selected model's persisted spelling, not an older runtime model's alias.
+    return { provider: defaultProvider, model };
   }
   return (
     // Persisted selected model or overrides describe the active session, not just current config.
@@ -366,5 +280,4 @@ export const statusSummaryRuntime = {
   readSessionRuntimeMetadata,
   resolveConfiguredStatusModelRef,
   resolveStatusModelLookupRef,
-  resolveStatusModelComparisonLabel,
 };

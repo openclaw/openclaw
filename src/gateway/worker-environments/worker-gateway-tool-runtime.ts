@@ -30,7 +30,7 @@ export function createWorkerGatewayToolRuntime(params: {
   signal: AbortSignal;
   prepare(identity: WorkerConnectionIdentity): Promise<{
     tools: AnyAgentTool[];
-    inheritedPublicationTool?: AnyAgentTool;
+    additionalInheritedToolNames?: string[];
     policy: WorkerToolSurface["policy"];
     presentation: WorkerToolSurface["presentation"];
   }>;
@@ -47,7 +47,7 @@ export function createWorkerGatewayToolRuntime(params: {
   let modelTools: Awaited<ReturnType<WorkerGatewayToolRuntime["getPromptProjection"]>> | undefined;
   let issuedTools: Map<string, AnyAgentTool> | undefined;
   let preparedSurface: WorkerToolSurface | undefined;
-  let inheritedPublicationTool: AnyAgentTool | undefined;
+  let additionalInheritedToolNames: string[] = [];
   const calls = new Map<
     string,
     {
@@ -67,17 +67,15 @@ export function createWorkerGatewayToolRuntime(params: {
         throw new Error("Worker tools have not been prepared");
       }
       if (toolsAllow === undefined) {
-        return [...handles.values()].map((tool) => tool.name);
+        return Array.from(handles.values(), (tool) => tool.name);
       }
       const allowed = new Set(
         applyEmbeddedAttemptToolsAllow([...handles.values()], toolsAllow).map((tool) => tool.name),
       );
-      if (inheritedPublicationTool) {
-        inheritedPublicationTool = applyEmbeddedAttemptToolsAllow(
-          [inheritedPublicationTool],
-          toolsAllow,
-        )[0];
-      }
+      additionalInheritedToolNames = applyEmbeddedAttemptToolsAllow(
+        additionalInheritedToolNames.map((name) => ({ name })),
+        toolsAllow,
+      ).map((tool) => tool.name);
       for (const [id, tool] of handles) {
         if (!allowed.has(tool.name)) {
           handles.delete(id);
@@ -87,15 +85,15 @@ export function createWorkerGatewayToolRuntime(params: {
       modelTools = undefined;
       return [...allowed];
     },
-    getInheritedPublicationToolName() {
+    getAdditionalInheritedToolNames() {
       assertCurrent();
-      return inheritedPublicationTool?.name;
+      return additionalInheritedToolNames;
     },
     async getSurface(identity) {
       assertCurrent();
       const surface = await (prepared ??= params
         .prepare(identity)
-        .then(({ tools, policy, presentation, inheritedPublicationTool: publicationTool }) => {
+        .then(({ tools, policy, presentation, additionalInheritedToolNames: names = [] }) => {
           assertCurrent();
           const handles = new Map<string, AnyAgentTool>();
           const catalog = {
@@ -135,7 +133,7 @@ export function createWorkerGatewayToolRuntime(params: {
           }
           issuedTools = handles;
           preparedSurface = catalog;
-          inheritedPublicationTool = publicationTool;
+          additionalInheritedToolNames = names;
           return catalog;
         }));
       assertCurrent();
@@ -240,14 +238,12 @@ export function createWorkerGatewayToolRuntime(params: {
           );
         } catch (error) {
           return workerSessionToolErrorResult(error);
-        } finally {
-          assertCurrent();
         }
       };
       const predecessor =
         tool.executionMode === "parallel"
           ? sequential
-          : Promise.allSettled([...calls.values()].map((call) => call.result));
+          : Promise.allSettled(Array.from(calls.values(), (call) => call.result));
       const result = predecessor.then(execute);
       if (tool.executionMode !== "parallel") {
         sequential = result.catch(() => undefined);
@@ -275,7 +271,7 @@ export function createWorkerGatewayToolRuntime(params: {
     },
     async close() {
       lifetime.abort(new Error("Worker tool surface closed"));
-      await Promise.allSettled([...calls.values()].map((call) => call.result));
+      await Promise.allSettled(Array.from(calls.values(), (call) => call.result));
     },
   };
 }

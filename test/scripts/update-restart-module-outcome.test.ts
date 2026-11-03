@@ -21,7 +21,12 @@ test("retains package backups after unverified post-swap module failures", async
   const { stdout } = await execFileAsync(
     process.execPath,
     nativeTestRunnerArgs([regression], {
-      node: ["--experimental-vm-modules", "--test-reporter=tap"],
+      node: [
+        "--import",
+        path.join(sourceRoot, "scripts/tsx.mjs"),
+        "--experimental-vm-modules",
+        "--test-reporter=tap",
+      ],
       bun: junitReport ? ["--reporter=junit", "--reporter-outfile", junitReport] : [],
     }),
     {

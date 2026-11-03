@@ -14,8 +14,8 @@ import {
   createTestGatewayClient,
 } from "../../../test-helpers/gateway-client.ts";
 import { createStorageMock } from "../../../test-helpers/storage.ts";
-import { createChatPageStateContext } from "../chat-page.test-support.ts";
 import { stopChatRealtimeTalk, type ChatRealtimeState } from "../chat-realtime.ts";
+import { createChatPageStateContext } from "../chat-state-context.test-support.ts";
 import { createPageState } from "../chat-state-page.ts";
 
 type AudioProcessor = {

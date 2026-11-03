@@ -12,7 +12,7 @@ export type McpEventsDependencies = {
   config: McpEventsConfig;
   scheduler: Pick<
     NonNullable<OpenClawPluginServiceContext["scheduler"]>,
-    "signal" | "now" | "schedule"
+    "signal" | "now" | "schedule" | "beginClose"
   >;
   cron: EventCron;
   prepareSource: NonNullable<OpenClawPluginServiceContext["mcpEvents"]>["prepareSource"];

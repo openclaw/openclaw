@@ -76,16 +76,9 @@ const FAILURE_LIKE_TOOL_RESULT_RE =
 const REQUIRED_FIELD_TOOL_RESULT_RE =
   /(?:^|[\n:,({[]\s*)["']?[A-Z_][A-Z0-9_.[\]-]*["']?\s+(?:is\s+)?required\b/iu;
 
-export function classifyToolResultFailure(params: {
-  type?: string;
-  text: string;
-  isError?: unknown;
-  is_error?: unknown;
-}) {
-  const structuredFailure =
-    params.type === "tool_result_error" || params.isError === true || params.is_error === true;
+export function classifyToolResultFailure(params: { text: string; isError?: unknown }) {
   const hardFailure =
-    structuredFailure ||
+    params.isError === true ||
     isHardFailureToolOutputText(params.text) ||
     isWorkspaceBoundaryFailureToolOutput(params.text);
   return {
@@ -168,15 +161,12 @@ export function readTranscriptToolEvidence(transcriptBytes: string, toolName: st
     .map((activity) => {
       const call = {
         id: activity.toolCallId,
-        tool: activity.toolName,
         args: activity.input,
       };
       const text = extractTranscriptText(activity.result?.content);
       const result =
         activity.completed && text
           ? {
-              id: activity.toolCallId,
-              tool: activity.toolName,
               text,
               ...classifyToolResultFailure({ text, isError: !activity.successful }),
             }

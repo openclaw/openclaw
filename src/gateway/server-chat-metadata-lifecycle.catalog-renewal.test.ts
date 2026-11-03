@@ -27,17 +27,20 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { createGatewayChatMetadataLifecycle } from "./server-chat-metadata-lifecycle.js";
-import type { ChatMetadataRuntimeDeps } from "./server-methods/chat-metadata-facts.js";
+import * as projectionRuntime from "./server-methods/chat-metadata-session-projection.js";
+import * as commands from "./server-methods/commands-list-result.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
 
 const mocks = getPreparedModelRuntimeMocks();
 const buildCommands = vi.fn(async () => ({ commands: [] }));
-const buildProjection = vi.fn<ChatMetadataRuntimeDeps["buildProjection"]>(async ({ facts }) => ({
-  modelCatalog: facts.modelCatalog.entries,
-  read: () => ({ models: facts.modelCatalog.entries }),
-  isCurrent: () => true,
-}));
+const buildProjection = vi.fn<typeof projectionRuntime.prepareChatMetadataModelProjection>(
+  async ({ facts }) => ({
+    modelCatalog: facts.modelCatalog.entries,
+    read: () => ({ models: facts.modelCatalog.entries }),
+    isCurrent: () => true,
+  }),
+);
 let owner: PreparedModelRuntimeSnapshot;
 let state: OpenClawTestState;
 let stop: (() => Promise<void>) | undefined;
@@ -51,27 +54,14 @@ const publication = (changed: boolean) => ({
   refreshStatusChanged: true,
 });
 
-vi.mock("./server-methods/chat-metadata-runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./server-methods/chat-metadata-runtime.js")>();
-  return {
-    ...actual,
-    createGatewayChatMetadataRuntime: (
-      params: Parameters<typeof actual.createGatewayChatMetadataRuntime>[0],
-    ) =>
-      actual.createGatewayChatMetadataRuntime({
-        ...params,
-        deps: {
-          buildCommands,
-          buildProjection,
-        },
-      }),
-  };
-});
-
 beforeEach(async () => {
   state = await createOpenClawTestState({ label: "catalog-renewal-metadata" });
   await resetPreparedModelRuntimeHarness(state);
   clearBuilds();
+  vi.spyOn(commands, "buildCommandsListResult").mockImplementation(buildCommands);
+  vi.spyOn(projectionRuntime, "prepareChatMetadataModelProjection").mockImplementation(
+    buildProjection,
+  );
 });
 
 afterEach(async ({ task }) => {
@@ -79,6 +69,7 @@ afterEach(async ({ task }) => {
     await stop?.();
   } finally {
     stop = undefined;
+    vi.restoreAllMocks();
     await cleanupPreparedModelRuntimeHarness(state, task.result?.state === "fail");
   }
 });
@@ -228,7 +219,12 @@ it.for(["usage", "removed", "failed"] as const)(
       expect(published).toEqual(change === "failed" ? [] : [publication(change !== "usage")]);
       expect(harness.broadcast).toHaveBeenCalledExactlyOnceWith(
         "chat.metadata.changed",
-        { modelCatalogChanged: true, authChanged: change === "removed", commandsChanged: false },
+        {
+          modelCatalogChanged: change !== "usage",
+          ...(change === "usage" ? { modelCatalogStatusChanged: true } : {}),
+          authChanged: change === "removed",
+          commandsChanged: false,
+        },
         { dropIfSlow: true },
       );
       expect(harness.observedCatalogs).toHaveLength(1);

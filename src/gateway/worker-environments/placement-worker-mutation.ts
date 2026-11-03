@@ -17,7 +17,6 @@ export function createPlacementWorkerMutation<Receipt>(params: {
   label: string;
   nativeLocation: string;
   orderedAdmission?: boolean;
-  stageFromReceipt?: boolean;
   assertCurrent?: () => void;
   assertGrantCurrent?: () => void;
   admissionFacts?(request: SqliteWorkerAdmissionRequest): unknown;
@@ -38,20 +37,18 @@ export function createPlacementWorkerMutation<Receipt>(params: {
   let commitGranted = false;
   let published = false;
   let installed = false;
-  let stageReceipt: ((facts: unknown) => void) | undefined;
   const check = () => {
     params.context.admission.assertCurrent();
     params.assertCurrent?.();
   };
-  const install = (facts: unknown) => {
+  const install = () => {
     if (!installed) {
-      stageReceipt?.(facts);
       publication?.commit();
       installed = true;
     }
   };
   const publish = (receipt: Receipt) => {
-    install(receipt);
+    install();
     if (!published) {
       published = true;
       params.publish?.(receipt);
@@ -76,11 +73,6 @@ export function createPlacementWorkerMutation<Receipt>(params: {
           {
             assertCurrent: check,
             createAdmission: (retainedAdmission) => {
-              if (params.stageFromReceipt) {
-                stageReceipt = (facts) => {
-                  publication = params.stageCommit(facts, retainedAdmission.settled);
-                };
-              }
               let stage: "transaction" | "commit" = "transaction";
               admission = createSqliteWorkerOperationAdmission((request, grant) => {
                 if (params.orderedAdmission && request.stage !== stage) {
@@ -91,7 +83,7 @@ export function createPlacementWorkerMutation<Receipt>(params: {
                 const facts = params.admissionFacts
                   ? params.admissionFacts(request)
                   : request.facts;
-                if (request.stage === "commit" && !params.stageFromReceipt) {
+                if (request.stage === "commit") {
                   publication = params.stageCommit(facts, retainedAdmission.settled) ?? publication;
                 }
                 if (!grant()) {
@@ -110,7 +102,7 @@ export function createPlacementWorkerMutation<Receipt>(params: {
                 }
                 // Settlement-dependent waiters must not enqueue work on a transport whose reply
                 // can still fail; committed authority itself is already available to consumers.
-                install(facts);
+                install();
               });
               return { nativeLocations: [params.nativeLocation], admission };
             },

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { FailoverError } from "../agents/failover/error.js";
 import { SessionTranscriptReadFenceError } from "../config/sessions/session-transcript-read-fence-error.js";
 import { enqueueCommandInLane, GatewayDrainingError } from "./command-queue.js";
 import { resetCommandQueueStateForTest } from "./command-queue.test-support.js";
@@ -19,6 +20,13 @@ afterEach(resetCommandQueueStateForTest);
 
 it.each([
   ["Gateway shutdown", () => new GatewayDrainingError()],
+  [
+    "unavailable memory persistence tools",
+    () =>
+      Object.assign(new Error("memory flush skipped"), {
+        name: "MemoryFlushToolsUnavailableError",
+      }),
+  ],
   [
     "transcript change",
     () => new SessionTranscriptReadFenceError("Session transcript changed during context read"),
@@ -46,11 +54,10 @@ it.each([
   );
 });
 
-it("reports cleanup failures alongside expected cancellation", async () => {
-  const error = new AggregateError([
-    new GatewayDrainingError(),
-    new Error("database close failed"),
-  ]);
+it.each([
+  new AggregateError([new GatewayDrainingError(), new Error("database close failed")]),
+  new FailoverError("No model response completed", { reason: "rate_limit" }),
+])("reports terminal task failures: %s", async (error) => {
   await expect(
     enqueueCommandInLane("nested", async () => {
       throw error;

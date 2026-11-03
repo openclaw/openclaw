@@ -197,16 +197,29 @@ export async function prepareCandidateAuthProfileCredentialRead(
 }
 
 type CandidateAuthProfileUpdate = {
+  assertCurrent?: () => void;
   candidate: CandidateAuthProfileStore;
   preserveProfileState?: boolean;
   profileId: string;
   updater: (store: AuthProfileStore) => boolean;
 };
 
-/** The writer can skip unrelated generations without opening a write transaction. */
+/** Skip unrelated generations before write admission; possible matches still use the writer. */
 export async function fenceCandidateAuthProfileStore(
   params: CandidateAuthProfileUpdate & { generation: OAuthCredential },
 ): Promise<void> {
+  const store = await loadCandidateAuthProfileStoreAsync(params.candidate);
+  const credential = store?.profiles[params.profileId];
+  if (
+    credential?.type !== "oauth" ||
+    !isSameOAuthRefreshGeneration({
+      profileId: params.profileId,
+      left: credential,
+      right: params.generation,
+    })
+  ) {
+    return;
+  }
   await runCandidateAuthProfileUpdate(params, {
     profileId: params.profileId,
     generation: params.generation,
@@ -244,6 +257,7 @@ async function runCandidateAuthProfileUpdate(
     const assertCurrent = () => {
       workerWrites.assertOwner(candidate.env);
       assertCandidateDatabaseIdentity(candidate);
+      params.assertCurrent?.();
     };
     return runAuthProfileUsage(() =>
       workerWrites.run(() => {
@@ -323,6 +337,7 @@ async function runCandidateAuthProfileUpdate(
     options: { env: candidate.env },
     assertCurrent: () => {
       assertCandidateDatabaseIdentity(candidate);
+      params.assertCurrent?.();
     },
     update(prepared) {
       const store = prepared.store;

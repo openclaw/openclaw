@@ -35,6 +35,7 @@ import { getOrCreateAccountThrottler } from "./account-throttler.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { normalizeTelegramApiRoot } from "./api-root.js";
 import { createTelegramHandlers } from "./bot-handlers.runtime.js";
+import type { TelegramPluginCommandContinuation } from "./bot-handlers.types.js";
 import { createTelegramMessageProcessor } from "./bot-message.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
 import {
@@ -46,7 +47,7 @@ import {
   TelegramSpooledReplayProcessingError,
 } from "./bot-processing-outcome.js";
 import { createTelegramUpdateTracker } from "./bot-update-tracker.js";
-import { apiThrottler, Bot, type ApiClientOptions } from "./bot.runtime.js";
+import { Bot, type ApiClientOptions } from "./bot.runtime.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import {
   setTelegramCallbackQueryAnswerPromise,
@@ -109,7 +110,7 @@ export async function createTelegramBotCore(
     client,
     ...(opts.botInfo ? { botInfo: opts.botInfo } : {}),
   });
-  const accountThrottler = getOrCreateAccountThrottler(opts.token, apiThrottler);
+  const accountThrottler = getOrCreateAccountThrottler(opts.token);
   bot.api.config.use(accountThrottler.transformer);
   const sendChatActionHandler: TelegramSendChatActionHandler = {
     sendChatAction: (chatId, action, threadParams) =>
@@ -131,7 +132,6 @@ export async function createTelegramBotCore(
       typeof opts.updateOffset?.persistenceFloorUpdateId === "number"
         ? opts.updateOffset.persistenceFloorUpdateId
         : initialUpdateId,
-    ackPolicy: "after_agent_dispatch",
     ...(typeof opts.updateOffset?.onUpdateId === "function"
       ? { onAcceptedUpdateId: opts.updateOffset.onUpdateId }
       : {}),
@@ -303,9 +303,17 @@ export async function createTelegramBotCore(
     opts: runtimeOpts,
     resolveTelegramGroupConfig,
   };
+  // Native commands register before the message pipeline exists; continuations bind to it below.
+  const pluginCommandTurns: { continue?: TelegramPluginCommandContinuation } = {};
   const { nativeCommandNames, nativeCommandCallbackDispatcher } =
     await registerTelegramNativeCommands({
       ...botContext,
+      continuePluginCommandTurn: async (turn) => {
+        if (!pluginCommandTurns.continue) {
+          throw new Error("Telegram message pipeline is not ready for plugin command turns.");
+        }
+        await pluginCommandTurns.continue(turn);
+      },
       cfg,
       accountId: account.accountId,
       telegramCfg,
@@ -343,6 +351,7 @@ export async function createTelegramBotCore(
     processMessage,
   });
 
+  pluginCommandTurns.continue = handlers.continuePluginCommandTurn;
   handlers.register(nativeCommandCallbackDispatcher);
 
   const originalStop = bot.stop.bind(bot);

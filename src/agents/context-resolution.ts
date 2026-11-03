@@ -15,8 +15,8 @@ import {
 } from "../config/model-provider-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  lookupCachedContextTokens,
-  lookupCachedContextWindow,
+  lookupCachedContextTokens as lookupContextTokens,
+  lookupCachedContextWindow as lookupContextWindow,
   minPositiveContextTokens,
   providerContextTokenCacheKey,
 } from "./context-cache.js";
@@ -227,20 +227,12 @@ function resolveConfiguredContextTokenLimitsForModel(
 
 export function resolveContextTokensForModelFromCache(
   params: ContextTokenResolutionParams,
-  lookupContextTokens: (modelId?: string) => number | undefined = lookupCachedContextTokens,
-  lookupContextWindow: (modelId?: string) => number | undefined = lookupCachedContextWindow,
 ): number | undefined {
-  return resolveModelContextTokenProjectionFromCache(
-    params,
-    lookupContextTokens,
-    lookupContextWindow,
-  ).contextTokens;
+  return resolveModelContextTokenProjectionFromCache(params).contextTokens;
 }
 
 export function resolveModelContextTokenProjectionFromCache(
   params: ContextTokenResolutionParams,
-  lookupContextTokens: (modelId?: string) => number | undefined = lookupCachedContextTokens,
-  lookupContextWindow: (modelId?: string) => number | undefined = lookupCachedContextWindow,
 ): ModelContextTokenProjection {
   const ref = resolveProviderModelRef(params);
   const explicitProvider = params.provider?.trim();

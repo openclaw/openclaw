@@ -9,7 +9,6 @@ import type {
   CronRunStatus,
   CronRunScope,
   CronRunLogEntry,
-  CronRunsStatusFilter,
   CronRunsStatusValue,
   CronSortDir,
   CronStatus,
@@ -23,6 +22,7 @@ export type CronFormState = {
   name: string;
   description: string;
   agentId: string;
+  ownerProfileId: string;
   sessionKey: string;
   clearAgent: boolean;
   enabled: boolean;
@@ -42,6 +42,14 @@ export type CronFormState = {
   scheduleExact: boolean;
   staggerAmount: string;
   staggerUnit: "seconds" | "minutes";
+  activeHoursEnabled: boolean;
+  activeHoursStart: string;
+  activeHoursEnd: string;
+  activeHoursTimezone: string;
+  idleOnly: boolean;
+  payloadSkipIfScratchEmpty: boolean;
+  deliveryTarget: "" | "owner";
+  deliveryDirectPolicy: "" | "allow" | "block";
   triggerEnabled: boolean;
   triggerScript: string;
   triggerOnce: boolean;
@@ -55,6 +63,7 @@ export type CronFormState = {
   payloadModel: string;
   payloadThinking: string;
   payloadLightContext: boolean;
+  payloadIncludeReasoning: boolean;
   deliveryMode: "" | CronDelivery["mode"];
   deliveryChannel: string;
   deliveryTo: string;
@@ -81,13 +90,18 @@ export type CronFieldKey =
   | "scheduleAt"
   | "everyAmount"
   | "cronExpr"
+  | "cronTz"
   | "staggerAmount"
+  | "activeHoursStart"
+  | "activeHoursEnd"
+  | "activeHoursTimezone"
   | "triggerScript"
   | "payloadText"
   | "payloadModel"
   | "payloadThinking"
   | "timeoutSeconds"
   | "deliveryMode"
+  | "deliveryDirectPolicy"
   | "deliveryTo"
   | "failureAlertAfter"
   | "failureAlertCooldownSeconds";
@@ -101,6 +115,8 @@ export type CronJobsState<Row = CronJob> = {
   connected: boolean;
   cronLoading: boolean;
   cronJobsError: string | null;
+  /** A rejected inventory read, independent of the last connection advertisement. */
+  cronJobsReadDenied?: boolean;
   cronJobsLoadingMore: boolean;
   cronJobsReloadPending: boolean;
   cronJobsReloadPendingTableFilters: boolean;
@@ -126,6 +142,8 @@ export type CronState<Row = CronJob> = CronJobsState<Row> & {
   cronScopedTotal: number | null;
   cronScopedNextWakeAtMs: number | null;
   cronError: string | null;
+  // Neutral outcome of the last action, e.g. a queued run; failures use cronError.
+  cronNotice: string | null;
   cronForm: CronFormState;
   // True while the create panel owns the detail pane; job selection (editing)
   // always wins over it when deriving the visible panel.
@@ -140,14 +158,12 @@ export type CronState<Row = CronJob> = CronJobsState<Row> & {
   cronRunsRunId?: string | null;
   cronRunsLoadingMore: boolean;
   cronRuns: CronRunLogEntry[];
-  cronRunsTotal: number;
   cronRunsHasMore: boolean;
   cronRunsNextOffset: number | null;
   cronRunsLimit: number;
   cronRunsScope: CronRunScope;
   cronRunsStatuses: CronRunsStatusValue[];
   cronRunsDeliveryStatuses: CronDeliveryStatus[];
-  cronRunsStatusFilter: CronRunsStatusFilter;
   cronRunsQuery: string;
   cronRunsSortDir: CronSortDir;
   cronBusy: boolean;

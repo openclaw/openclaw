@@ -570,7 +570,7 @@ public actor GatewayChannelActor {
             "maxProtocol": ProtoAnyCodable(protocols.upperBound),
             "client": ProtoAnyCodable(client),
             // The channel reconstructs rosters before delivery to macOS/iOS subscribers.
-            "caps": ProtoAnyCodable(options.caps + (role == "operator" ? ["presence-deltas"] : [])),
+            "caps": ProtoAnyCodable(options.caps + (role == "operator" ? ["presence-deltas", "health-summary"] : [])),
             "locale": ProtoAnyCodable(primaryLocale),
             "userAgent": ProtoAnyCodable(ProcessInfo.processInfo.operatingSystemVersionString),
             "role": ProtoAnyCodable(role),
@@ -1458,7 +1458,8 @@ extension GatewayChannelActor {
             let code = response.error?.code
             let msg = response.error?.message
             let details = gatewayErrorDetails(response.error)
-            throw GatewayResponseError(method: method, code: code, message: msg, details: details)
+            throw GatewayResponseError(
+                method: method, code: code, message: msg, details: details, retryable: response.error?.retryable)
         }
         if let payload = response.payload {
             // Encode back to JSON with Swift's encoder to preserve types and avoid ObjC bridging exceptions.

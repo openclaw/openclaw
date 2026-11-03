@@ -99,6 +99,84 @@ function expectAcceptedSequence(sequence: Sequence, messageId: number) {
 }
 
 describe("Crabline Telegram accepted lifecycle", () => {
+  it("updates the same snapshot message when Telegram accepts a terminal edit", async () => {
+    await withTelegramTransport(async ({ transport, post, send, wait }) => {
+      const messageId = await send("accepted preview");
+      const initial = transport.state
+        .getSnapshot()
+        .messages.find((message) => message.direction === "outbound")!;
+      expect(initial.text).toBe("accepted preview");
+
+      await post("editMessageText", { message_id: messageId, text: FINAL_TEXT });
+      expectAcceptedSequence(await wait(), messageId);
+
+      const expected = expect.objectContaining({
+        id: initial.id,
+        text: FINAL_TEXT,
+        threadId: THREAD_ID,
+        conversation: { id: CHAT_ID, kind: "group" },
+      });
+      expect(
+        transport.state
+          .getSnapshot()
+          .messages.filter((message) => message.direction === "outbound"),
+      ).toEqual([expected]);
+      expect(transport.state.readMessage({ messageId: initial.id })).toEqual(expected);
+      expect(initial.text).toBe("accepted preview");
+    });
+  });
+
+  it("keeps snapshot edits scoped when Telegram chats reuse a message ID", async () => {
+    await withTelegramTransport(async ({ transport, observe }) => {
+      const otherChatId = "-1001234567891";
+      await transport.sendInbound({
+        conversation: { id: otherChatId, kind: "group" },
+        senderId: "100001",
+        text: "second chat",
+        threadId: THREAD_ID,
+      });
+      const record = (chatId: string, method: string, text: string) => {
+        const event: Parameters<Observer>[0] & { accepted: true } = {
+          at: "2026-01-01T00:00:00.000Z",
+          type: "api",
+          method: "POST",
+          path: `/bot<redacted>/${method}`,
+          query: {},
+          accepted: true,
+          body: {
+            chat_id: chatId,
+            ...(method === "sendMessage"
+              ? { message_thread_id: Number(THREAD_ID) }
+              : { message_id: 42 }),
+            text,
+          },
+        };
+        return observe(event);
+      };
+      await record(CHAT_ID, "sendMessage", "first preview");
+      await record(otherChatId, "sendMessage", "second preview");
+      const initial = transport.state
+        .getSnapshot()
+        .messages.filter((message) => message.direction === "outbound");
+      await record(otherChatId, "editMessageText", "second final");
+      await record(CHAT_ID, "editMessageText", "first final");
+      expect(
+        initial.map((message) => transport.state.readMessage({ messageId: message.id })),
+      ).toEqual([
+        expect.objectContaining({
+          id: initial[0]!.id,
+          text: "first final",
+          conversation: { id: CHAT_ID, kind: "group" },
+        }),
+        expect.objectContaining({
+          id: initial[1]!.id,
+          text: "second final",
+          conversation: { id: otherChatId, kind: "group" },
+        }),
+      ]);
+    });
+  });
+
   it.each(["sendMessage", "editMessageText"] as const)(
     "does not deliver a rejected %s final and preserves accepted recovery",
     async (method) => {
@@ -162,6 +240,11 @@ describe("Crabline Telegram accepted lifecycle", () => {
         ok: true,
         result: true,
       });
+      expect(
+        transport.state
+          .getSnapshot()
+          .messages.filter((message) => message.direction === "outbound"),
+      ).toEqual([expect.objectContaining({ text: FINAL_TEXT, deleted: true })]);
       await expect(wait()).rejects.toThrow("timed out after 25ms");
 
       const replacementId = await send("replacement preview");
@@ -181,6 +264,7 @@ describe("Crabline Telegram accepted lifecycle", () => {
       expect(transport.state.getSnapshot().messages).toEqual([]);
       await expect(wait()).rejects.toThrow("timed out after 25ms");
       await post("editMessageText", { message_id: replacementId, text: FINAL_TEXT });
+      expect(transport.state.getSnapshot().messages).toEqual([]);
       await expect(wait({ minimumPreviewEvents: 0 })).rejects.toThrow("timed out after 25ms");
       const afterReset = await wait({ minimumPreviewEvents: 0, threadId: undefined });
       expect(

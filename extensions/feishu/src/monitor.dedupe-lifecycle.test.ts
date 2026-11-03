@@ -12,6 +12,10 @@ import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuBroadcastIngressSettlement } from "./bot-broadcast.js";
 import type { handleFeishuMessage } from "./bot.js";
 import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
+import {
+  expectFeishuCardButtonRow,
+  expectFirstSentCardUsesFillWidthOnly,
+} from "./card-test-helpers.js";
 import type { FeishuMessageProcessingClaim } from "./dedup.js";
 import type { FeishuIngressLifecycle } from "./feishu-ingress.js";
 import { monitorSingleAccount } from "./monitor.account.js";
@@ -47,8 +51,8 @@ const mocks = vi.hoisted(() => ({
   transport: vi.fn(),
   warmup: vi.fn(),
   claim: vi.fn(),
-  menu: vi.fn(),
-  handleMessage: vi.fn(),
+  sendCard: vi.fn(),
+  handleMessage: vi.fn<typeof handleFeishuMessage>(),
   parseMessage: vi.fn(),
   stopBindings: vi.fn(),
   createBindings: vi.fn(),
@@ -69,7 +73,10 @@ vi.mock("./dedup.js", async (importOriginal) => ({
   claimUnprocessedFeishuMessage: mocks.claim,
   hasProcessedFeishuMessage: vi.fn(async () => false),
 }));
-vi.mock("./card-ux-launcher.js", () => ({ maybeHandleFeishuQuickActionMenu: mocks.menu }));
+vi.mock("./send.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./send.js")>()),
+  sendCardFeishu: mocks.sendCard,
+}));
 vi.mock("./bot.js", () => ({
   handleFeishuMessage: mocks.handleMessage,
   parseFeishuMessageEvent: mocks.parseMessage,
@@ -92,7 +99,7 @@ beforeEach(() => {
     return dispatcher;
   });
   mockIngressQueue(createFeishuTestIngressQueue);
-  mocks.menu.mockResolvedValue(true);
+  mocks.sendCard.mockResolvedValue({ messageId: "m1", chatId: "c1" });
   mocks.createBindings.mockReturnValue({ stop: mocks.stopBindings });
 });
 
@@ -103,14 +110,17 @@ function mockIngressQueue(openChannelIngressQueue: typeof createFeishuTestIngres
 function startAccount(controller: AbortController, vcAutoJoin = false) {
   const credentials = { appId: "fixture-app", appSecret: "fixture-secret", vcAutoJoin };
   const cfg = { channels: { feishu: { accounts: { test: credentials } } } };
-  return monitorSingleAccount({
+  return {
     cfg,
-    account: resolveFeishuAccount({ cfg, accountId: "test" }),
-    abortSignal: controller.signal,
-    botOpenIdSource: { kind: "prefetched", botOpenId: "fixture-bot", source: "provider" },
-    channelRuntime: createPluginRuntimeMock().channel,
-    runtime: createRuntimeEnv(),
-  });
+    monitor: monitorSingleAccount({
+      cfg,
+      account: resolveFeishuAccount({ cfg, accountId: "test" }),
+      abortSignal: controller.signal,
+      botOpenIdSource: { kind: "prefetched", botOpenId: "fixture-bot", source: "provider" },
+      channelRuntime: createPluginRuntimeMock().channel,
+      runtime: createRuntimeEnv(),
+    }),
+  };
 }
 
 const nextTurn = () =>
@@ -147,11 +157,13 @@ function monitorAccount(eventType?: string, vcAutoJoin = false) {
     },
   );
   let stopped = false;
-  const monitor = startAccount(controller, vcAutoJoin).finally(() => {
+  const { cfg, monitor: accountMonitor } = startAccount(controller, vcAutoJoin);
+  const monitor = accountMonitor.finally(() => {
     stopped = true;
   });
   void monitor.catch(ready.reject);
   return {
+    cfg,
     ready: ready.promise,
     monitor,
     close: async (settle?: () => unknown) => {
@@ -171,6 +183,53 @@ function monitorAccount(eventType?: string, vcAutoJoin = false) {
 }
 
 describe("Feishu account replay work ownership", () => {
+  it("opens the launcher through the registered bot menu handler", async () => {
+    const settled = createDeferred<void>();
+    const claim: FeishuMessageProcessingClaim = {
+      keys: ["fixture-launcher"],
+      commit: vi.fn(async () => {
+        settled.resolve();
+        return true;
+      }),
+      release: vi.fn(),
+    };
+    mocks.claim.mockResolvedValue({ kind: "claimed", handle: claim });
+    const { cfg, ready, close } = monitorAccount("application.bot.menu_v6");
+    const clock = vi.spyOn(Date, "now");
+    try {
+      const handler = await ready;
+      clock.mockReturnValue(100);
+      await handler({
+        event_key: "quick-actions",
+        timestamp: "fixture-launcher",
+        operator: { operator_id: { open_id: "u123" } },
+      });
+      await settled.promise;
+      expect(mocks.sendCard).toHaveBeenCalledTimes(1);
+      const sendArgs = mocks.sendCard.mock.calls.at(0)?.[0] as
+        | { accountId?: string; card?: unknown; cfg?: typeof cfg; to?: string }
+        | undefined;
+      expect(Object.keys(sendArgs ?? {}).toSorted()).toEqual(["accountId", "card", "cfg", "to"]);
+      expect(sendArgs?.cfg).toBe(cfg);
+      expect(sendArgs?.to).toBe("user:u123");
+      expect(sendArgs?.accountId).toBe("test");
+      expectFirstSentCardUsesFillWidthOnly(mocks.sendCard);
+      const buttons = expectFeishuCardButtonRow(sendArgs?.card);
+      expect(buttons).toHaveLength(3);
+      expect(buttons.map((button) => button.value)).toEqual([
+        expect.objectContaining({ q: "/help", c: { u: "u123", e: 600_100, t: "p2p" } }),
+        expect.objectContaining({ m: expect.objectContaining({ command: "/new" }) }),
+        expect.objectContaining({ m: expect.objectContaining({ command: "/reset" }) }),
+      ]);
+      expect(claim.commit).toHaveBeenCalledOnce();
+      expect(claim.release).not.toHaveBeenCalled();
+      expect(mocks.handleMessage).not.toHaveBeenCalled();
+    } finally {
+      clock.mockRestore();
+      await close();
+    }
+  });
+
   it.each(["message", "evicted-handler"] as const)(
     "joins %s settlement after transport ownership ends",
     (kind) =>
@@ -382,7 +441,7 @@ describe("Feishu account replay work ownership", () => {
     const controller = new AbortController();
     const warmup = createDeferred<number>();
     mocks.warmup.mockReturnValue(warmup.promise);
-    const monitor = startAccount(controller);
+    const { monitor } = startAccount(controller);
     controller.abort();
     warmup.resolve(1);
     await monitor;
@@ -433,7 +492,7 @@ describe("Feishu account replay work ownership", () => {
         await acknowledgement;
         await monitor;
         expect(mocks.stopBindings).toHaveBeenCalledOnce();
-        expect(mocks.menu).not.toHaveBeenCalled();
+        expect(mocks.sendCard).not.toHaveBeenCalled();
         expect(mocks.handleMessage).not.toHaveBeenCalled();
         expect(claim.release).toHaveBeenCalledOnce();
         expect(claim.commit).not.toHaveBeenCalled();

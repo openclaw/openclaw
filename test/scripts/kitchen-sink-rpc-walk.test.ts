@@ -84,6 +84,7 @@ import {
 } from "../helpers/fixture-receipts.js";
 import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
 import { cleanupTempDirs, makeTempDir, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { fixtureReadyBeforeSettlement } from "./run-process.test-support.js";
 import { toolingMtsEntrypoints } from "./tooling-mts-runtime.test-support.mts";
 
 it("resource proof requires clean joined Gateway exit, not forced termination", () => {
@@ -115,6 +116,7 @@ it.each(["valid", "wrong session", "wrong tool"])(
         mainThread: { user: step * 50, system: step * 5 },
         cpuEnvironment: { availableParallelism: 2, affinity: "0-1" },
         memory: { rss: 100, heapTotal: 100, heapUsed: 100, external: 0, arrayBuffers: 0 },
+        heapSpaces: [],
         activeResources: {},
         runtime: { node: "26.0.0", platform: "linux", arch: "x64" },
       };
@@ -214,26 +216,6 @@ beforeAll(async () => {
 afterAll(async () => {
   await receipts?.close();
 });
-
-// The parent writes readiness before sending a receipt, so process settlement
-// can consult the durable record if the independent receipt pipe arrives late.
-function fixtureReadyBeforeSettlement(readyPath: string, operation: PromiseLike<unknown>) {
-  return Promise.race([
-    receipts.waitFor(readyPath, "ready"),
-    Promise.resolve(operation).then(
-      () => {
-        if (!existsSync(readyPath)) {
-          throw new Error("timed out waiting for condition");
-        }
-      },
-      (error: unknown) => {
-        if (!existsSync(readyPath)) {
-          throw error;
-        }
-      },
-    ),
-  ]);
-}
 
 it("admits resource comparison explicitly without inheriting developer credentials", () => {
   expect(validateCliArgs([])).toBeUndefined();
@@ -1036,7 +1018,10 @@ setInterval(() => {}, 1000);
     onTestFinished(cleanup);
 
     try {
-      await withinTest(fixtureReadyBeforeSettlement(grandchildReadyPath, runPromise), signal);
+      await withinTest(
+        fixtureReadyBeforeSettlement(receipts, grandchildReadyPath, runPromise),
+        signal,
+      );
       grandchildPid = Number.parseInt(readText(grandchildPidPath), 10);
       expect(Number.isInteger(grandchildPid)).toBe(true);
       expect(isProcessAlive(grandchildPid)).toBe(true);
@@ -1244,7 +1229,10 @@ setInterval(() => {}, 1000);
       onTestFinished(cleanup);
 
       try {
-        await withinTest(fixtureReadyBeforeSettlement(grandchildReadyPath, runPromise), signal);
+        await withinTest(
+          fixtureReadyBeforeSettlement(receipts, grandchildReadyPath, runPromise),
+          signal,
+        );
         grandchildPid = Number.parseInt(readText(grandchildPidPath), 10);
         const parentPid = Number.parseInt(readText(parentPidPath), 10);
         expect(Number.isInteger(grandchildPid)).toBe(true);
@@ -1350,7 +1338,7 @@ await runCommand(process.execPath, [${JSON.stringify(scriptPath)}], {
           child.once("error", reject);
           child.once("close", (code, exitSignal) => resolve({ code, signal: exitSignal }));
         });
-        await withinTest(fixtureReadyBeforeSettlement(readyPath, closed), signal);
+        await withinTest(fixtureReadyBeforeSettlement(receipts, readyPath, closed), signal);
         grandchildPid = Number.parseInt(readText(grandchildPidPath), 10);
         expect(Number.isInteger(grandchildPid)).toBe(true);
         expect(isProcessAlive(grandchildPid)).toBe(true);

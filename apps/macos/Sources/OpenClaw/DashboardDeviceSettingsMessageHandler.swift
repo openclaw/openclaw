@@ -163,7 +163,7 @@ final class DashboardDeviceSettingsMessageHandler: NSObject, WKScriptMessageHand
         alert.addButton(withTitle: String(localized: "Allow")).keyEquivalent = ""
         self.consentAlert = alert
         defer { self.consentAlert = nil }
-        let response = await alert.beginSheetModal(for: window)
+        let response = await AppActivation.shared.response(to: alert, over: window)
         return !Task.isCancelled && response == .alertSecondButtonReturn
     }
 

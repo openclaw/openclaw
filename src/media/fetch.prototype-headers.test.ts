@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 import { expect, it } from "vitest";
+import * as httpFixtures from "../../test/helpers/gateway-integration-fixtures.js";
 import { readRemoteMediaBuffer } from "./fetch.js";
 
 it("readRemoteMediaBuffer preserves extensionless bytes with a prototype-named Content-Type", async () => {
@@ -8,15 +9,8 @@ it("readRemoteMediaBuffer preserves extensionless bytes with a prototype-named C
   const server = createServer((_request, response) => {
     response.writeHead(200, { "Content-Type": contentType }).end(bytes);
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
+  const origin = await httpFixtures.listenLoopback(server);
   try {
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("Expected an HTTP fixture address");
-    }
-    const origin = `http://127.0.0.1:${address.port}`;
     const result = await readRemoteMediaBuffer({
       url: `${origin}/attachment`,
       ssrfPolicy: { allowedOrigins: [origin] },
@@ -25,9 +19,6 @@ it("readRemoteMediaBuffer preserves extensionless bytes with a prototype-named C
     expect(result.contentType).toBe(contentType);
     expect(result.fileName).toBe("attachment");
   } finally {
-    server.closeAllConnections();
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
+    await httpFixtures.closeHttpServer(server);
   }
 });

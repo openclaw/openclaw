@@ -252,18 +252,9 @@ export function writeRepositoryGitHubPublicationInDatabase(
   instanceId: string,
   executionId: string,
   values: Partial<RepositoryGitHubPublicationRow>,
-  requireAction: boolean,
-  authority: { assertCustody: () => void; assertCurrent: () => void },
 ) {
   const { db } = database;
   // The execution CAS retains result custody after workspace admission ends.
-  if (requireAction) {
-    authority.assertCustody();
-    authority.assertCurrent();
-    if (!row.checkpoint_ref || !row.checkpoint_digest || !row.workspace_tree) {
-      throw new Error("GitHub publication requires its accepted checkpoint.");
-    }
-  }
   const updated = executeSqliteQueryTakeFirstSync(
     db,
     query(db)
@@ -305,10 +296,6 @@ export function writeRepositoryGitHubPublicationInDatabase(
   );
   if (!updated) {
     throw new Error("GitHub publication execution is no longer current.");
-  }
-  if (requireAction) {
-    authority.assertCustody();
-    authority.assertCurrent();
   }
   return changed(db, updated);
 }

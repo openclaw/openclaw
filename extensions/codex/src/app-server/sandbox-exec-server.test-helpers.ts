@@ -1,4 +1,6 @@
+import { ChildProcess } from "node:child_process";
 import { once } from "node:events";
+import { PassThrough } from "node:stream";
 import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
 import { vi } from "vitest";
 import type { RawData, WebSocket } from "ws";
@@ -121,6 +123,28 @@ export async function openSocket(url: string): Promise<WebSocket> {
   const socket = new websocket.WebSocket(url);
   await once(socket, "open");
   return socket;
+}
+
+export async function openSandboxSocket(sandbox: SandboxContext, initialized = true) {
+  const { ensureCodexSandboxExecServerEnvironment } = await import("./sandbox-exec-server.js");
+  const client = createClient();
+  await ensureCodexSandboxExecServerEnvironment({ client: client as never, sandbox });
+  const socket = await openSocket(execServerUrlFromClient(client));
+  await rpc(socket, "initialize", { clientName: "test" });
+  if (initialized) {
+    socket.send(JSON.stringify({ method: "initialized" }));
+  }
+  return socket;
+}
+
+export function createSandboxChild(mockKill = true) {
+  return Object.assign(new ChildProcess(), {
+    stdin: new PassThrough(),
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+    pid: 42_424,
+    ...(mockKill ? { kill: vi.fn(() => true) } : {}),
+  });
 }
 
 export function collectNotifications(

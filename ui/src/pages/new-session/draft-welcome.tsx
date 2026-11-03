@@ -13,9 +13,11 @@ type WelcomeSessions = {
   subscribe: (notify: () => void) => () => void;
 };
 
+export type DraftWelcomeOptions = Omit<ChatWelcomeProps, "composer"> & { sessionKey?: string };
+
 export function DraftWelcome(props: {
   sessions: WelcomeSessions | undefined;
-  options: Omit<ChatWelcomeProps, "composer">;
+  options: DraftWelcomeOptions;
   composer?: JSX.Element;
   assistantNameControl?: JSX.Element;
 }) {
@@ -25,7 +27,7 @@ export function DraftWelcome(props: {
     return owner ? projectOwner(owner, (current) => current.state.result) : undefined;
   });
   // Legacy render props can publish in-place edits; only selected fields gate work.
-  const options = createMemo(() => props.options, { equals: false });
+  const options = () => props.options;
   const scope = createMemo(
     () => ({
       sessionKey: options().sessionKey,

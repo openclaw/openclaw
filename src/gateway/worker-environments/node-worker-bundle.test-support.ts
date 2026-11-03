@@ -2,7 +2,12 @@ import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/clien
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
 
-export function createNodeWorkerBundleTestNode(): NodeWorkerSupervisorNodeProof {
+export function createNodeWorkerBundleTestNode(
+  overrides: Omit<Partial<NodeWorkerSupervisorNodeProof>, "workerHost"> & {
+    workerHost?: Partial<NodeWorkerSupervisorNodeProof["workerHost"]>;
+  } = {},
+): NodeWorkerSupervisorNodeProof {
+  const { workerHost, ...node } = overrides;
   return {
     nodeId: "node-1",
     connId: "conn-1",
@@ -11,7 +16,8 @@ export function createNodeWorkerBundleTestNode(): NodeWorkerSupervisorNodeProof 
     clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
     clientMode: "node",
     protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-    workerHost: { enabled: true, capacity: { total: 2, available: 2 } },
+    workerHost: { enabled: true, capacity: { total: 2, available: 2 }, ...workerHost },
     commands: [],
+    ...node,
   };
 }

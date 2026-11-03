@@ -31,12 +31,13 @@ const pluginConfig = (old: PluginEntry, addDemo = false) => ({
 });
 const jsonFile = (value: unknown) => `${JSON.stringify(value, null, 2)}\n`;
 const parsedInclude = { plugins: { $include: "./config/plugins.json5" } };
+const tokenName = "OPENCLAW_TEST_PLUGIN_TOKEN";
+const token = "old-token";
+const readFile = (path: string) => fs.readFile(path, "utf-8");
 
 async function referenceFixture(
   { suiteRootTracker, allowConfigPathWrite }: IncludeReferenceFixture,
   name: string,
-  tokenName: string,
-  token: string,
   extra: Record<string, string> = {},
 ) {
   const paths = await createPluginIncludeFixture(await suiteRootTracker.make(name));
@@ -66,15 +67,7 @@ export function registerPluginIncludeReferenceRepairTest(fixture: IncludeReferen
   const { ioMocks } = fixture;
   it("repairs invalid config through a single-file top-level plugins include", async () => {
     const { configPath, pluginsPath, authoredOldEntry, oldEntry, snapshot, writeOptions } =
-      await referenceFixture(
-        fixture,
-        "include",
-        "OPENCLAW_TEST_PLUGIN_TOKEN",
-        "plugin-token-runtime",
-        {
-          optional: "${OPTIONAL_TOKEN}",
-        },
-      );
+      await referenceFixture(fixture, "include", { optional: "${OPTIONAL_TOKEN}" });
     const previousBackupPath = `${pluginsPath}.bak`;
     await fs.writeFile(previousBackupPath, "previous backup", { mode: 0o644 });
     snapshot.valid = false;
@@ -114,14 +107,13 @@ export function registerPluginIncludeReferenceRepairTest(fixture: IncludeReferen
         },
         io: {
           ...ioMocks,
-          env: { OPENCLAW_TEST_PLUGIN_TOKEN: "plugin-token-after-read" },
+          env: { [tokenName]: "plugin-token-after-read" },
         },
       });
     } finally {
       unregister();
     }
 
-    expect(ioMocks.writeConfigFile).not.toHaveBeenCalled();
     expect(notifications).toEqual([
       expect.objectContaining({
         configPath,
@@ -131,22 +123,16 @@ export function registerPluginIncludeReferenceRepairTest(fixture: IncludeReferen
         afterWrite,
       }),
     ]);
-    await expect(fs.readFile(configPath, "utf-8")).resolves.toContain(
-      '"$include": "./config/plugins.json5"',
-    );
-    await expect(fs.readFile(`${pluginsPath}.bak`, "utf-8")).resolves.toContain('"old"');
-    await expect(fs.readFile(`${pluginsPath}.bak.1`, "utf-8")).resolves.toBe("previous backup");
+    await expect(readFile(configPath)).resolves.toContain('"$include": "./config/plugins.json5"');
+    await expect(readFile(`${pluginsPath}.bak`)).resolves.toContain('"old"');
+    await expect(readFile(`${pluginsPath}.bak.1`)).resolves.toBe("previous backup");
     if (process.platform !== "win32") {
       expect((await fs.stat(`${pluginsPath}.bak`)).mode & 0o777).toBe(0o600);
       expect((await fs.stat(`${pluginsPath}.bak.1`)).mode & 0o777).toBe(0o600);
     }
-    const persistedPlugins = JSON.parse(await fs.readFile(pluginsPath, "utf-8")) as {
-      entries?: Record<string, { config?: { token?: string; optional?: string } }>;
-      installs?: Record<string, unknown>;
-    };
-    expect(persistedPlugins.entries?.old?.config).toEqual(authoredOldEntry.config);
-    expect(persistedPlugins.entries?.demo).toEqual({ enabled: true });
-    expect(persistedPlugins.installs).toBeUndefined();
+    expect(JSON.parse(await readFile(pluginsPath))).toEqual(
+      pluginConfig(authoredOldEntry, true).plugins,
+    );
   });
 }
 
@@ -154,12 +140,7 @@ export function registerIncludeReferencePreflightTest(fixture: IncludeReferenceF
   const { ioMocks } = fixture;
   it("preflights the restored include payload with the current environment", async () => {
     const { pluginsPath, oldEntry, initialPluginsRaw, snapshot, writeOptions } =
-      await referenceFixture(
-        fixture,
-        "include-restored-preflight",
-        "OPENCLAW_TEST_INCLUDE_TOKEN",
-        "old-token",
-      );
+      await referenceFixture(fixture, "include-restored-preflight");
     const observedSources: OpenClawConfig[] = [];
 
     try {
@@ -179,13 +160,13 @@ export function registerIncludeReferencePreflightTest(fixture: IncludeReferenceF
           nextConfig: pluginConfig(oldEntry, true),
           io: {
             ...ioMocks,
-            env: { OPENCLAW_TEST_INCLUDE_TOKEN: "new-token" },
+            env: { [tokenName]: "new-token" },
           },
         }),
       ).rejects.toThrow(/active SecretRef resolution failed: stop before write/);
 
       expect(observedSources[0]?.plugins?.entries?.old?.config).toEqual({ token: "new-token" });
-      await expect(fs.readFile(pluginsPath, "utf-8")).resolves.toBe(initialPluginsRaw);
+      await expect(readFile(pluginsPath)).resolves.toBe(initialPluginsRaw);
     } finally {
       setRuntimeConfigSnapshotRefreshHandler(null);
     }

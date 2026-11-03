@@ -45,12 +45,12 @@ describe("config schema regressions", () => {
     ).toBe(false);
   });
 
-  it("round-trips the Claws Labs visibility setting", () => {
-    for (const claws of [true, false]) {
+  it("round-trips the Templates Labs visibility setting", () => {
+    for (const templates of [true, false]) {
       expect(
-        OpenClawSchema.parse({ gateway: { controlUi: { experimental: { claws } } } }).gateway
-          ?.controlUi?.experimental?.claws,
-      ).toBe(claws);
+        OpenClawSchema.parse({ gateway: { controlUi: { experimental: { templates } } } }).gateway
+          ?.controlUi?.experimental?.templates,
+      ).toBe(templates);
     }
   });
 
@@ -64,8 +64,8 @@ describe("config schema regressions", () => {
       label: "Local VNC Password File",
       help: "Absolute path to the VNC password file. Omit on macOS to enter account credentials when opening the desktop viewer.",
     });
-    expect(response.uiHints["gateway.controlUi.experimental.claws"]).toMatchObject({
-      label: "Claws",
+    expect(response.uiHints["gateway.controlUi.experimental.templates"]).toMatchObject({
+      label: "Templates",
       help: expect.stringContaining("default: false"),
     });
   });

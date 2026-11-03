@@ -10,7 +10,7 @@
   display: flex;
   align-items: center;
   /* Allow the strip to shrink inside a flex header so wide tab rows scroll
-     here instead of squeezing out sibling header controls. */
+   here instead of squeezing out sibling header controls. */
   min-width: 0;
   overflow-x: auto;
   scrollbar-width: none;
@@ -128,5 +128,100 @@
 @media (prefers-reduced-motion: reduce) {
   .tabstrip-tab.is-connecting .tabstrip-tab__icon {
     animation: none;
+  }
+}
+
+/* Desktop hosts share the main row proportions and the native dock surface.
+   The close button overlays reserved space, so the border encloses one pill. */
+.tabstrip.tabstrip--desktop {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  overflow-x: auto;
+  scrollbar-width: none;
+
+  .tabstrip-tab {
+    position: relative;
+    display: flex;
+    flex: 0 1 auto;
+    align-items: center;
+    gap: 7px;
+    height: 28px;
+    min-width: 91px;
+    max-width: 188px;
+    padding-block: 0;
+    padding-inline: 8px 28px;
+    border: 0;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--muted);
+    font-size: var(--control-ui-text-sm);
+    white-space: nowrap;
+  }
+
+  .tabstrip-tab.is-fixed {
+    padding-inline-end: 8px;
+  }
+
+  /* The close action is a sibling overlaid inside this same tab. */
+  .tabstrip-tab:is(:hover, [active]),
+  .tabstrip-tab:has(+ .tabstrip-tab__close:hover) {
+    border-radius: var(--radius-md);
+    color: var(--text);
+    background: var(--bg-hover);
+  }
+
+  .tabstrip-tab[active] {
+    box-shadow: inset 0 0 0 1px var(--border-strong);
+  }
+
+  .tabstrip-tab__icon {
+    display: inline-flex;
+    flex: none;
+    width: 16px;
+    height: 16px;
+    align-items: center;
+    justify-content: center;
+    color: inherit;
+  }
+
+  .tabstrip-tab__icon svg {
+    width: 15px;
+    height: 15px;
+    stroke-width: 1.6px;
+  }
+
+  .tabstrip-tab__close {
+    flex: 0 0 28px;
+    width: 28px;
+    min-width: 28px;
+    height: 28px;
+    margin: 0;
+    margin-inline-start: -28px;
+    z-index: 1;
+    opacity: 0;
+  }
+
+  .tabstrip-tab + .tabstrip-tab__close {
+    background: transparent;
+  }
+
+  .tabstrip-tab:is(:hover, [active]) + .tabstrip-tab__close,
+  .tabstrip-tab__close:is(:hover, :focus-visible) {
+    opacity: 1;
+    background: transparent;
+  }
+
+  .tabstrip-tab__close-box {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 12px;
+    height: 12px;
+  }
+
+  .tabstrip-tab__close svg {
+    width: 11px;
+    height: 11px;
   }
 }

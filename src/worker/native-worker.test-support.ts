@@ -1,11 +1,7 @@
-import {
-  createServer,
-  type IncomingHttpHeaders,
-  type Server,
-  type ServerResponse,
-} from "node:http";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { text } from "node:stream/consumers";
 import { expect } from "vitest";
+import * as httpFixture from "../../test/helpers/gateway-integration-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 
 export function expectNativeRequests(
@@ -13,101 +9,70 @@ export function expectNativeRequests(
   count: number,
   expected: object,
 ) {
-  expect(provider.errors).toEqual([]);
-  expect(provider.requests).toHaveLength(count);
-  for (const request of provider.requests) {
-    expect(request).toMatchObject(expected);
-  }
+  const requests = Array.from({ length: count }, () => expected);
+  expect(provider).toMatchObject({ errors: [], requests });
 }
 
 export function expectNoProxyInference(owner: {
   requests: Array<{ method: string }>;
   providerCalls: number;
 }) {
-  expect(
-    owner.requests.filter((request) => request.method.startsWith("worker.inference.")),
-  ).toEqual([]);
+  expect(owner.requests.some(({ method }) => method.startsWith("worker.inference."))).toBe(false);
   expect(owner.providerCalls).toBe(0);
 }
 
 export async function listenNativeServer(server: Server, servers: Server[]) {
   servers.push(server);
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Expected loopback TCP fixture");
-  }
-  return address.port;
+  return Number(new URL(await httpFixture.listenLoopback(server)).port);
 }
 
 export async function closeNativeServers(servers: Server[]) {
   for (const server of servers.splice(0)) {
-    server.closeAllConnections();
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
+    await httpFixture.closeHttpServer(server);
   }
 }
 
 type Reply = string | { name: string; args: object; id?: string };
+type Request = Pick<IncomingMessage, "headers" | "url"> & { body: Record<string, unknown> };
 export async function nativeProviderFixture(
   servers: Server[],
   model: string,
   reply: (request: number) => Reply | undefined,
   final: string,
 ) {
-  const requests: Array<{
-    headers: IncomingHttpHeaders;
-    body: Record<string, unknown>;
-    url?: string;
-  }> = [];
+  const requests: Request[] = [];
   const errors: unknown[] = [];
   const entered = createDeferred();
   const disconnected = createDeferred();
   let held: ServerResponse | undefined;
   const send = (response: ServerResponse, value: Reply) => {
+    const envelope = { id: "native", object: "chat.completion.chunk", created: 1, model };
+    const usage = { prompt_tokens: 10, completion_tokens: 3, total_tokens: 13 };
     const frame = (delta: object, finish: string | null = null) =>
       response.write(
         `data: ${JSON.stringify({
-          id: "native-response",
-          object: "chat.completion.chunk",
-          created: 1,
-          model,
+          ...envelope,
           choices: [{ index: 0, delta, finish_reason: finish }],
-          ...(finish
-            ? { usage: { prompt_tokens: 10, completion_tokens: 3, total_tokens: 13 } }
-            : {}),
+          ...(finish ? { usage } : {}),
         })}\n\n`,
       );
-    frame(
+    const call =
       typeof value === "string"
-        ? { role: "assistant", content: value }
+        ? undefined
         : {
-            role: "assistant",
-            tool_calls: [
-              {
-                index: 0,
-                id: value.id ?? `local-${value.name}`,
-                type: "function",
-                function: { name: value.name, arguments: JSON.stringify(value.args) },
-              },
-            ],
-          },
-    );
-    frame({}, typeof value === "string" ? "stop" : "tool_calls");
+            index: 0,
+            id: value.id ?? `local-${value.name}`,
+            type: "function",
+            function: { name: value.name, arguments: JSON.stringify(value.args) },
+          };
+    frame(call ? { role: "assistant", tool_calls: [call] } : { role: "assistant", content: value });
+    frame({}, call ? "tool_calls" : "stop");
     response.end("data: [DONE]\n\n");
   };
   const port = await listenNativeServer(
-    createServer((request, response) => {
+    createServer((req, response) => {
       void (async () => {
-        requests.push({
-          headers: request.headers,
-          body: JSON.parse(await text(request)),
-          url: request.url,
-        });
+        requests.push({ headers: req.headers, body: JSON.parse(await text(req)), url: req.url });
         response.writeHead(200, { "content-type": "text/event-stream" });
         const value = reply(requests.length);
         if (value === undefined) {

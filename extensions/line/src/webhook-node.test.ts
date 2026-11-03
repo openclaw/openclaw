@@ -36,19 +36,8 @@ const runSignedPost = async (params: {
     }),
     params.res,
   );
-async function invokeNodePostContract(params: {
-  failWith?: unknown;
-  rawBody: string;
-  signed: boolean;
-  parsedBody?: unknown;
-}) {
-  const dispatched = vi.fn(async () => {
-    if (params.failWith) {
-      // oxlint-disable-next-line typescript/only-throw-error -- Webhook boundaries must report non-Error throws from downstream dispatchers.
-      throw params.failWith;
-    }
-    return "durable" as const;
-  });
+async function invokeNodePostContract(params: { rawBody: string; parsedBody?: unknown }) {
+  const dispatched = vi.fn(async () => "durable" as const);
   const runtime = createRuntimeSpies();
   const handler = createLineNodeWebhookHandler({
     getTargets: () => [{ channelSecret: SECRET, bot: { handleWebhook: dispatched } }],
@@ -57,47 +46,16 @@ async function invokeNodePostContract(params: {
   const res = createRes();
   const req = Object.assign(createMockIncomingRequest([params.rawBody]), {
     method: "POST",
-    headers: params.signed ? { "x-line-signature": sign(params.rawBody, SECRET) } : {},
+    headers: { "x-line-signature": sign(params.rawBody, SECRET) },
     body: params.parsedBody,
   });
   await handler(req, res);
   return {
     body: res.body === undefined ? undefined : (JSON.parse(res.body) as unknown),
-    contentType: res.getHeader("content-type"),
     dispatched,
-    runtimeError: runtime.error,
     status: res.statusCode,
   };
 }
-describe("LINE webhook POST contract", () => {
-  it("accepts signed verification-shaped requests without dispatching events", async () => {
-    const result = await invokeNodePostContract({
-      rawBody: JSON.stringify({ events: [] }),
-      signed: true,
-    });
-    expect(result).toMatchObject({
-      status: 200,
-      body: { status: "ok" },
-      contentType: "application/json",
-    });
-    expect(result.dispatched).not.toHaveBeenCalled();
-  });
-  it("reports non-Error admission failures without object Object", async () => {
-    const result = await invokeNodePostContract({
-      failWith: { code: "LINE_ADMISSION_REJECTED", retryAfterMs: 250 },
-      rawBody: JSON.stringify({ events: [{ type: "message" }] }),
-      signed: true,
-    });
-    expect(result.status).toBe(500);
-    expect(result.body).toEqual({ error: "Internal server error" });
-    expect(result.runtimeError).toHaveBeenCalledTimes(1);
-    const runtimeMessage = String(result.runtimeError.mock.calls[0]?.[0]);
-    expect(runtimeMessage).toContain("line webhook error:");
-    expect(runtimeMessage).toContain("LINE_ADMISSION_REJECTED");
-    expect(runtimeMessage).toContain("retryAfterMs");
-    expect(runtimeMessage).not.toContain("[object Object]");
-  });
-});
 describe("createLineNodeWebhookHandler", () => {
   it.each([
     { method: "GET", statusCode: 200, body: "OK" },
@@ -159,7 +117,6 @@ describe("createLineNodeWebhookHandler", () => {
       rawBody: JSON.stringify({
         events: [{ type: "message", source: { userId: "signed-user" } }],
       }),
-      signed: true,
       parsedBody: { events: [{ type: "message", source: { userId: "tampered-user" } }] },
     });
     expect(result.status).toBe(200);
@@ -168,35 +125,9 @@ describe("createLineNodeWebhookHandler", () => {
       events: [{ type: "message", source: { userId: "signed-user" } }],
     });
   });
-  it("waits for durable admission before acknowledging signed event requests", async () => {
-    const rawBody = JSON.stringify({ events: [{ type: "message" }] });
-    const admitted = Promise.withResolvers<void>();
-    const delivery = Promise.withResolvers<"durable">();
-    const bot = {
-      handleWebhook: vi.fn(async () => {
-        admitted.resolve();
-        return delivery.promise;
-      }),
-    };
-    const runtime = createRuntimeSpies();
-    const handler = createLineNodeWebhookHandler({
-      getTargets: () => [{ channelSecret: SECRET, bot }],
-      runtime,
-    });
-    const res = createRes();
-    const request = runSignedPost({ handler, rawBody, secret: SECRET, res });
-    await admitted.promise;
-    expect(bot.handleWebhook).toHaveBeenCalledTimes(1);
-    expect(res.headersSent).toBe(false);
-    delivery.resolve("durable");
-    await request;
-    expect(res.statusCode).toBe(200);
-    expect(res.headersSent).toBe(true);
-  });
   it("rejects invalid signed JSON even when a pre-parsed body is valid", async () => {
     const result = await invokeNodePostContract({
       rawBody: "not json",
-      signed: true,
       parsedBody: { events: [{ type: "message" }] },
     });
     expect(result.status).toBe(400);

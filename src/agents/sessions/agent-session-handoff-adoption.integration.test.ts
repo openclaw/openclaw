@@ -36,7 +36,6 @@ import {
   registerAgentSessionLoopTestLifecycle,
   streamMocks,
 } from "./agent-session-loop-correctness.test-support.js";
-import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
 import type { AgentSession } from "./agent-session.js";
 import type { ToolDefinition } from "./extensions/types.js";
 
@@ -51,10 +50,10 @@ it("cancels a pending-acceptance steer before one follow-up reuses the session",
   const finalText = "HANDOFF-FOLLOWUP-DELIVERED";
   const settled = vi.fn();
   const acceptanceEvents: boolean[] = [];
-  const deferred = vi.fn();
-  const adopted = vi.fn();
-  const abandoned = vi.fn();
-  const lifecycleSettled = vi.fn();
+  const adoptionEvents: string[] = [];
+  const recordAdoption = (event: string) => {
+    adoptionEvents.push(event);
+  };
   const finalDelivery = vi.fn(async (_text: string) => {});
   const followupRuns: string[] = [];
   const followupOperations: string[] = [];
@@ -65,9 +64,6 @@ it("cancels a pending-acceptance steer before one follow-up reuses the session",
   replyRunTesting.resetSessionControllerForTest();
   resetRecentQueuedMessageIdDedupe();
   const steerEnqueued = createDeferred();
-  const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
-    ["agent_settled", [async () => settled()]],
-  ]);
   const yieldTool: ToolDefinition = {
     name: "yield_turn",
     label: "Yield turn",
@@ -103,12 +99,12 @@ it("cancels a pending-acceptance steer before one follow-up reuses the session",
   });
   const { session } = await createTestSession({
     customTools: [yieldTool],
-    resourceLoader: createResourceLoader(handlers),
+    extension: (api) => api.on("agent_settled", async () => settled()),
   });
   const lifecycleEvents: string[] = [];
   session.subscribe((event) => {
     lifecycleEvents.push(event.type);
-    if (event.type === "queue_update" && event.steering.includes(steerText)) {
+    if (event.type === "queue_update" && session.getSteeringMessages().includes(steerText)) {
       steerEnqueued.resolve();
     }
   });
@@ -150,10 +146,10 @@ it("cancels a pending-acceptance steer before one follow-up reuses the session",
     originatingTo: "chat:handoff-proof",
     turnAdoptionLifecycle: {
       admission: "exclusive",
-      onDeferred: () => deferred(),
-      onAdopted: async () => adopted(),
-      onAbandoned: abandoned,
-      onSettled: lifecycleSettled,
+      onDeferred: () => recordAdoption("deferred"),
+      onAdopted: async () => recordAdoption("adopted"),
+      onAbandoned: () => recordAdoption("abandoned"),
+      onSettled: () => recordAdoption("settled"),
     },
     run: {
       sessionId,
@@ -246,10 +242,7 @@ it("cancels a pending-acceptance steer before one follow-up reuses the session",
     await Promise.resolve();
 
     expect(acceptanceEvents).toEqual([false]);
-    expect(deferred).toHaveBeenCalledOnce();
-    expect(adopted).not.toHaveBeenCalled();
-    expect(abandoned).not.toHaveBeenCalled();
-    expect(lifecycleSettled).not.toHaveBeenCalled();
+    expect(adoptionEvents).toEqual(["deferred"]);
     expect(followupRuns).toEqual([]);
     expect(session.pendingMessageCount).toBe(0);
     expect(session.getSteeringMessages()).toEqual([]);
@@ -273,9 +266,7 @@ it("cancels a pending-acceptance steer before one follow-up reuses the session",
     ownerReleased.resolve();
     await vi.waitFor(() => expect(finalDelivery).toHaveBeenCalledExactlyOnceWith(finalText));
 
-    expect(adopted).toHaveBeenCalledOnce();
-    expect(abandoned).not.toHaveBeenCalled();
-    expect(lifecycleSettled).toHaveBeenCalledOnce();
+    expect(adoptionEvents).toEqual(["deferred", "adopted", "settled"]);
     expect(followupRuns).toEqual([steerText]);
     expect(followupOperations).toEqual(["queued_followup"]);
     expect(requests).toHaveLength(2);

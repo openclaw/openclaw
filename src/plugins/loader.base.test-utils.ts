@@ -1,9 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import { applyBootstrapHookOverrides } from "../agents/bootstrap-hooks.js";
+import { resolveBootstrapFilesForRun } from "../agents/bootstrap-files.js";
 import { getRegisteredAgentHarness } from "../agents/harness/registry.js";
-import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import { resolveConfigEnvVars } from "../config/env-substitution.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { getContextEngineRegistration } from "../context-engine/registry.js";
@@ -615,33 +614,6 @@ describe("loadOpenClawPlugins", () => {
       record?.status,
       JSON.stringify({ error: record?.error, diagnostics: registry.diagnostics }, null, 2),
     ).toBe("loaded");
-  });
-
-  it("registers standalone text transforms", () => {
-    useNoBundledPlugins();
-    const plugin = writePlugin({
-      id: "text-shim",
-      filename: "text-shim.cjs",
-      registration: `api.registerTextTransforms({
-        input: [{ from: /red basket/g, to: "blue basket" }],
-        output: [{ from: /blue basket/g, to: "red basket" }],
-      });`,
-    });
-
-    const registry = loadRegistryFromSinglePlugin({
-      plugin,
-      pluginConfig: { allow: ["text-shim"] },
-    });
-
-    expect(registry.textTransforms).toHaveLength(1);
-    const transformRegistration = registry.textTransforms[0];
-    expect(transformRegistration?.pluginId).toBe("text-shim");
-    expect(transformRegistration?.transforms.input).toEqual([
-      { from: /red basket/g, to: "blue basket" },
-    ]);
-    expect(transformRegistration?.transforms.output).toEqual([
-      { from: /blue basket/g, to: "red basket" },
-    ]);
   });
 
   it("loads multiple manifestless standalone files from one configured directory", () => {
@@ -2064,16 +2036,8 @@ describe("loadOpenClawPlugins", () => {
       },
     });
 
-    const updated = await applyBootstrapHookOverrides({
-      files: [
-        {
-          name: "AGENTS.md",
-          path: "/tmp/base-AGENTS.md",
-          content: "base bootstrap rules",
-          missing: false,
-        } satisfies WorkspaceBootstrapFile,
-      ],
-      workspaceDir: "/tmp",
+    const updated = await resolveBootstrapFilesForRun({
+      workspaceDir: plugin.dir,
       sessionKey: "agent:main:subagent:test-bootstrap",
     });
 

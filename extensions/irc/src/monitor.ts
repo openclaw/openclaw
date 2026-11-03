@@ -44,7 +44,7 @@ import { sanitizeIrcAssistantText } from "./outbound-base.js";
 import { resolveIrcGroupMatch, resolveIrcGroupRequireMention } from "./policy.js";
 import { createIrcReconnectBackoff } from "./reconnect-backoff.js";
 import { getIrcRuntime } from "./runtime.js";
-import type { CoreConfig, IrcInboundMessage } from "./types.js";
+import type { CoreConfig } from "./types.js";
 
 const CHANNEL_ID = "irc" as const;
 type IrcGroupPolicy = "open" | "allowlist" | "disabled";
@@ -81,8 +81,6 @@ type IrcMonitorOptions = {
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
-  onMessage?: (message: IrcInboundMessage, client: IrcClient) => void | Promise<void>;
-  ingressQueue?: NonNullable<Parameters<typeof createIrcIngressMonitor>[0]["queue"]>;
 };
 
 export async function monitorIrcProvider(
@@ -125,7 +123,6 @@ export async function monitorIrcProvider(
   const ingress: IrcIngressMonitor = createIrcIngressMonitor({
     accountId: account.accountId,
     runtime,
-    ...(opts.ingressQueue ? { queue: opts.ingressQueue } : {}),
     dispatch: async (
       message,
       turnAdoptionLifecycle: IrcIngressLifecycle,
@@ -150,10 +147,6 @@ export async function monitorIrcProvider(
         logger.warn?.(
           `[${account.accountId}] dropping replayed IRC DM after the connection changed`,
         );
-        return { kind: "completed" };
-      }
-      if (opts.onMessage) {
-        await opts.onMessage(message, activeClient);
         return { kind: "completed" };
       }
       const deliverReply = async (target: string, payload: OutboundReplyPayload) => {
@@ -435,27 +428,6 @@ export async function monitorIrcProvider(
         },
       });
 
-      const ingressState: {
-        handoff: "none" | "adopted" | "deferred" | "abandoned";
-      } = { handoff: "none" };
-      const trackedIngressLifecycle = turnAdoptionLifecycle
-        ? {
-            ...turnAdoptionLifecycle,
-            onAdopted: async () => {
-              ingressState.handoff = "adopted";
-              await turnAdoptionLifecycle.onAdopted();
-            },
-            onDeferred: () => {
-              ingressState.handoff = "deferred";
-              turnAdoptionLifecycle.onDeferred();
-            },
-            onAbandoned: async () => {
-              ingressState.handoff = "abandoned";
-              await turnAdoptionLifecycle.onAbandoned();
-            },
-          }
-        : undefined;
-
       await core.channel.inbound.dispatch({
         cfg,
         channel: CHANNEL_ID,
@@ -472,9 +444,7 @@ export async function monitorIrcProvider(
         },
         replyPipeline: {},
         replyOptions: {
-          ...(trackedIngressLifecycle
-            ? bindIngressLifecycleToReplyOptions(trackedIngressLifecycle)
-            : {}),
+          ...bindIngressLifecycleToReplyOptions(turnAdoptionLifecycle),
           skillFilter: groupMatch.groupConfig?.skills,
           disableBlockStreaming:
             typeof blockStreamingEnabled === "boolean" ? !blockStreamingEnabled : undefined,
@@ -485,22 +455,7 @@ export async function monitorIrcProvider(
           },
         },
       });
-
-      if (turnAdoptionLifecycle?.abortSignal.aborted && ingressState.handoff === "none") {
-        return {
-          kind: "failed-retryable",
-          error: turnAdoptionLifecycle.abortSignal.reason,
-        };
-      }
-      if (turnAdoptionLifecycle && ingressState.handoff === "none") {
-        // Terminal core no-dispatch/gate: settle the claim instead of leaving it
-        // watchdog-held. Reply-lane adoption remains the normal completion path.
-        await turnAdoptionLifecycle.onAdopted();
-        ingressState.handoff = "adopted";
-      }
-      return ingressState.handoff === "deferred" || ingressState.handoff === "abandoned"
-        ? { kind: "deferred" }
-        : { kind: "completed" };
+      return undefined;
     },
   });
 

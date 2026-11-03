@@ -19,6 +19,7 @@ import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import { mapArrayIfChanged } from "../shared/map-array-if-changed.js";
 import type { ProviderAuthMethod, ProviderPlugin } from "./types.js";
 
 export function resolveProviderMatch(
@@ -215,16 +216,6 @@ function normalizeAgentModelPolicyForWrite(value: unknown): unknown {
   };
 }
 
-function normalizeArray<T>(values: T[], normalize: (value: T) => T): T[] {
-  let changed = false;
-  const next = values.map((value) => {
-    const normalized = normalize(value);
-    changed ||= normalized !== value;
-    return normalized;
-  });
-  return changed ? next : values;
-}
-
 function normalizeProviderCatalogModelIdsForWrite(
   provider: string,
   providerConfig: ModelProviderConfig,
@@ -234,7 +225,7 @@ function normalizeProviderCatalogModelIdsForWrite(
     return providerConfig;
   }
 
-  const nextModels = normalizeArray(models, (model) => {
+  const nextModels = mapArrayIfChanged(models, (model) => {
     const trimmed = model.id.trim();
     const nextId = trimmed ? normalizeConfiguredProviderCatalogModelId(provider, trimmed) : trimmed;
     return nextId === model.id ? model : Object.assign({}, model, { id: nextId });
@@ -317,7 +308,7 @@ function normalizeConfigModelRefsForWrite(
 
   const nextDefaults = defaults && normalizeAgentModelFields(defaults, true);
 
-  const nextAgentsList = normalizeArray(agentsList, (agent) =>
+  const nextAgentsList = mapArrayIfChanged(agentsList, (agent) =>
     isPlainRecord(agent) ? normalizeAgentModelFields(agent, false) : agent,
   );
   if (nextDefaults === defaults && nextAgentsList === agentsList) {

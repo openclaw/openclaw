@@ -3600,7 +3600,7 @@ struct GatewayNodeSessionTests {
         let request = try #require(task.sentRequests(method: "connect").first)
         let params = try #require(request["params"] as? [String: Any])
         #expect(params["modelCatalog"] == nil)
-        #expect(params["caps"] as? [String] == ["presence-deltas"])
+        #expect(params["caps"] as? [String] == ["presence-deltas", "health-summary"])
         await gateway.disconnect()
     }
 

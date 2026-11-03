@@ -18,7 +18,6 @@ import {
   loadMatrixCredentials,
   saveBackfilledMatrixDeviceId,
   saveMatrixCredentials,
-  touchMatrixCredentials,
 } from "./credentials.js";
 
 const auth = {
@@ -35,7 +34,6 @@ const save = (value: Parameters<typeof saveMatrixCredentials>[0] = auth) =>
 const backfill = (value: Parameters<typeof saveBackfilledMatrixDeviceId>[0]) =>
   saveBackfilledMatrixDeviceId(value, {}, "default");
 const clear = () => clearMatrixCredentials({}, "default");
-const touch = () => touchMatrixCredentials({}, "default");
 
 let stateDir = "";
 
@@ -131,21 +129,6 @@ it.each([
   },
 );
 
-it("touch updates lastUsedAt while preserving createdAt", async () => {
-  vi.useFakeTimers();
-  vi.setSystemTime(new Date("2026-03-01T10:00:00.000Z"));
-  await save();
-  const initial = load();
-  expect(initial).toMatchObject({ createdAt: expect.any(String) });
-
-  vi.setSystemTime(new Date("2026-03-01T10:05:00.000Z"));
-  await touch();
-  expect(load()).toMatchObject({
-    createdAt: initial?.createdAt,
-    lastUsedAt: "2026-03-01T10:05:00.000Z",
-  });
-});
-
 it("omits an explicitly undefined device id from persisted credentials", async () => {
   const withoutDevice = { ...auth, deviceId: undefined };
   await save(withoutDevice);
@@ -195,7 +178,6 @@ it.each(["before", "during comparison"])(
     }
 
     await expect(backfill({ ...auth, deviceId: "STALE" })).resolves.toBe("skipped");
-    await touch();
 
     expect(load()).toBeNull();
     expect(raw()).toMatchObject({ kind: "revoked" });

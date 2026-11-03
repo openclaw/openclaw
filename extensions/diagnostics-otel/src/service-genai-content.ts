@@ -13,6 +13,7 @@ import type {
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  assignOtelContentAttr,
   MAX_OTEL_CONTENT_ARRAY_ITEMS,
   normalizeOtelContentValue,
   safeJsonString,
@@ -279,17 +280,6 @@ function assignJsonAttribute(
   }
 }
 
-function assignOtelContentAttribute(
-  attributes: Record<string, string | number | boolean>,
-  key: string,
-  value: unknown,
-): void {
-  const normalized = normalizeOtelContentValue(value);
-  if (normalized) {
-    attributes[key] = normalized;
-  }
-}
-
 export function assignOtelToolIdentityAttributes(
   attributes: Record<string, string | number | boolean>,
   evt: { toolCallId?: string },
@@ -333,13 +323,9 @@ export function assignOtelModelContentAttributes(
     assignJsonAttribute(attributes, "output.value", outputMessages);
     attributes["output.mime_type"] = "application/json";
   }
-  assignOtelContentAttribute(attributes, "openclaw.content.input_messages", redactedInput);
-  assignOtelContentAttribute(
-    attributes,
-    "openclaw.content.tool_definitions",
-    content?.toolDefinitions,
-  );
-  assignOtelContentAttribute(attributes, "openclaw.content.output_messages", redactedOutput);
+  assignOtelContentAttr(attributes, "openclaw.content.input_messages", redactedInput);
+  assignOtelContentAttr(attributes, "openclaw.content.tool_definitions", content?.toolDefinitions);
+  assignOtelContentAttr(attributes, "openclaw.content.output_messages", redactedOutput);
 }
 
 export function assignOtelToolContentAttributes(

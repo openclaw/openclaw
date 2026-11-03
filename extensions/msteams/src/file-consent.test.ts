@@ -192,15 +192,13 @@ describe("uploadToConsentUrl", () => {
     const backing = Buffer.from([0xfe, 0xfd, 1, 2, 3, 0xfc]);
     const buffer = backing.subarray(2, 5);
     const expectedBytes = Buffer.from([0, 0x80, 0xff]);
-    let finishResolution: () => void = () => {};
-    const resolutionReady = new Promise<void>((resolve) => {
-      finishResolution = resolve;
-    });
+    const { promise: resolutionReady, resolve: finishResolution } = Promise.withResolvers<void>();
     const resolveFn = vi.fn(async () => {
       await resolutionReady;
       return { address: "13.107.136.10" };
     });
     const mockFetch = vi.fn<typeof fetch>(async (_url, init) => {
+      expect(init?.body).toBeInstanceOf(Uint8Array);
       backing.fill(0);
       expect(Buffer.from(await new Response(init?.body).arrayBuffer())).toEqual(expectedBytes);
       return response;

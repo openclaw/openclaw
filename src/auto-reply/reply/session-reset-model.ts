@@ -10,7 +10,6 @@ import { SessionWorkStartInvalidatedError } from "../../config/sessions/lifecycl
 import {
   adoptPersistedSessionSnapshot,
   SESSION_MODEL_OVERRIDE_TRANSACTION_FIELDS,
-  sessionModelOverrideChangesApplied,
 } from "../../config/sessions/session-snapshot-merge.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { applyModelOverrideWithAuthProfileCompatibility } from "../../sessions/auth-profile-preservation.js";
@@ -30,7 +29,6 @@ export async function applyResetModelOverride(params: {
   agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
-  resetTriggered: boolean;
   bodyStripped?: string;
   sessionCtx: TemplateContext;
   sessionEntry?: SessionEntry;
@@ -42,19 +40,16 @@ export async function applyResetModelOverride(params: {
   defaultModel: string;
   aliasIndex: ModelAliasIndex;
   modelCatalog?: ModelCatalogEntry[];
-}): Promise<{ selection?: ModelDirectiveSelection; cleanedBody?: string }> {
-  if (!params.resetTriggered) {
-    return {};
-  }
+}): Promise<void> {
   const rawBody = normalizeOptionalString(params.bodyStripped);
   if (!rawBody) {
-    return {};
+    return;
   }
 
   const tokens = rawBody.split(/\s+/);
   const [first, second] = tokens;
   if (!first) {
-    return {};
+    return;
   }
 
   let catalog = params.modelCatalog;
@@ -135,7 +130,7 @@ export async function applyResetModelOverride(params: {
   }
 
   if (!selection) {
-    return {};
+    return;
   }
 
   const cleanedBody = tokens.slice(consumed).join(" ");
@@ -150,7 +145,7 @@ export async function applyResetModelOverride(params: {
   const { sessionEntryHandle, sessionStore, sessionKey, storePath } = params;
   const sessionEntry = sessionEntryHandle?.getCurrent() ?? params.sessionEntry;
   if (!sessionEntry || !sessionKey) {
-    return { selection, cleanedBody };
+    return;
   }
   const pinnedProfile = sessionEntry.authProfileOverride?.trim();
   const recordedProvider = pinnedProfile
@@ -171,7 +166,6 @@ export async function applyResetModelOverride(params: {
     recordedProvider,
   });
   let appliedEntry = nextSessionEntry;
-  let selectionApplied = true;
   if (storePath) {
     const { persistReplySessionEntry } = await import("./session-entry-persistence.js");
     const persistence = await persistReplySessionEntry({
@@ -189,13 +183,7 @@ export async function applyResetModelOverride(params: {
       throw new ModelSelectionLockedError();
     }
     appliedEntry = persistence.entry;
-    selectionApplied = sessionModelOverrideChangesApplied({
-      initial: initialSessionEntry,
-      next: nextSessionEntry,
-      current: appliedEntry,
-    });
   }
   adoptPersistedSessionSnapshot(sessionEntry, appliedEntry);
   publishReplySessionEntry({ sessionEntryHandle, sessionStore, sessionKey }, sessionEntry);
-  return { selection: selectionApplied ? selection : undefined, cleanedBody };
 }

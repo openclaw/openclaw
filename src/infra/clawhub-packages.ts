@@ -11,7 +11,7 @@ import {
 } from "./clawhub-client.js";
 import { reportClawHubInstallTelemetry } from "./clawhub-telemetry.js";
 
-export type ClawHubPackageFamily = "skill" | "code-plugin" | "bundle-plugin" | "claw";
+export type ClawHubPackageFamily = "skill" | "code-plugin" | "bundle-plugin" | "template";
 export type ClawHubPackageChannel = "official" | "community" | "private";
 export type ClawHubPackageCompatibility = ExternalPluginCompatibility;
 type ClawHubPackageHostTarget = {
@@ -150,7 +150,7 @@ export type ClawHubPackageClawPackSummary = {
   environment?: ClawHubPackageEnvironmentSummary | null;
   runtimeBundles?: unknown[];
 };
-export type ClawHubClawManifestSummary = {
+type ClawHubTemplateManifestSummary = {
   schemaVersion: 1;
   agent: { id: string; name?: string; description?: string };
   workspace: { bootstrapFiles: string[]; fileCount: number };
@@ -168,10 +168,13 @@ export type ClawHubPackageListItem = {
   channel: ClawHubPackageChannel;
   isOfficial: boolean;
   summary?: string | null;
+  icon?: string | null;
   ownerHandle?: string | null;
+  ownerOfficial?: boolean;
   createdAt: number;
   updatedAt: number;
   latestVersion?: string | null;
+  featuredAt?: number;
   capabilityTags?: string[];
   executesCode?: boolean;
   verificationTier?: string | null;
@@ -218,13 +221,14 @@ export type ClawHubPackageDetail = {
           scanStatus?: string;
         } | null;
         scanStatus?: string | null;
-        clawManifestSummary?: ClawHubClawManifestSummary | null;
+        templateManifestSummary?: ClawHubTemplateManifestSummary | null;
       })
     | null;
   owner?: {
     handle?: string | null;
     displayName?: string | null;
     image?: string | null;
+    official?: boolean;
   } | null;
 };
 
@@ -238,6 +242,7 @@ export type ClawHubPackageVersion = {
     version: string;
     createdAt: number;
     changelog: string;
+    icon?: string | null;
     distTags?: string[];
     files?: Array<{
       path: string;
@@ -251,7 +256,7 @@ export type ClawHubPackageVersion = {
     verification?: NonNullable<ClawHubPackageDetail["package"]>["verification"];
     artifact?: ClawHubPackageArtifactSummary | null;
     clawpack?: ClawHubPackageClawPackSummary;
-    clawManifestSummary?: ClawHubClawManifestSummary | null;
+    templateManifestSummary?: ClawHubTemplateManifestSummary | null;
   } | null;
 };
 
@@ -377,6 +382,8 @@ export async function listClawHubPackages(
   params: ClawHubFetchOptions & {
     family?: ClawHubPackageFamily;
     isOfficial?: boolean;
+    category?: string;
+    featured?: boolean;
     limit?: number;
     cursor?: string;
   },
@@ -389,6 +396,8 @@ export async function listClawHubPackages(
     search: {
       family: params.family,
       isOfficial: params.isOfficial === undefined ? undefined : String(params.isOfficial),
+      category: params.category,
+      featured: params.featured ? "true" : undefined,
       limit: params.limit === undefined ? undefined : String(params.limit),
       cursor: params.cursor,
     },
@@ -458,6 +467,7 @@ export async function searchClawHubPackages(
     query: string;
     family?: ClawHubPackageFamily;
     isOfficial?: boolean;
+    category?: string;
     limit?: number;
   },
 ): Promise<ClawHubPackageSearchResult[]> {
@@ -470,6 +480,7 @@ export async function searchClawHubPackages(
       q: params.query.trim(),
       family: params.family,
       isOfficial: params.isOfficial === undefined ? undefined : String(params.isOfficial),
+      category: params.category,
       limit: params.limit ? String(params.limit) : undefined,
     },
   });

@@ -21,6 +21,12 @@ type ChatCiProperties = {
   pullRequest?: ControlUiSessionPullRequest;
   sessionKey: string;
   presented: boolean;
+  inline?: boolean;
+  // Match the native menu registry without pulling renderer modules into SDK declarations.
+  controls?: {
+    readonly elements: ReadonlySet<HTMLElement>;
+    ref(this: void): (element: HTMLElement) => void;
+  };
 };
 type PluginViewProperties = {
   [Surface in keyof ControlUiSurfaceProps]: {
@@ -38,6 +44,15 @@ declare module "@solidjs/web" {
       messageActions: MessageActionDetails | null | undefined;
     }
     interface IntrinsicElements {
+      "openclaw-activity-page": HTMLAttributes<HTMLElement>;
+      "openclaw-cron-scratch-editor": HTMLAttributes<HTMLElement>;
+      "openclaw-ip-location": HTMLAttributes<HTMLElement>;
+      "openclaw-home-session": HTMLAttributes<HTMLElement>;
+      "openclaw-session-owner-chip": HTMLAttributes<HTMLElement> & {
+        size?: "row" | "header";
+        attribution?: "created" | "owned" | "archived";
+      };
+      "openclaw-elapsed-time": HTMLAttributes<HTMLElement>;
       "openclaw-chat-tool-output": HTMLAttributes<HTMLElement>;
       "openclaw-chat-sent-comments": HTMLAttributes<HTMLElement>;
       "openclaw-chat-sources": HTMLAttributes<HTMLElement>;
@@ -50,45 +65,48 @@ declare module "@solidjs/web" {
       "openclaw-chat-tool-card": HTMLAttributes<HTMLElement>;
       "openclaw-chat-tool-icon": HTMLAttributes<HTMLElement>;
       "openclaw-chat-tool-reviews": HTMLAttributes<HTMLElement>;
-      "openclaw-chat-tool-outcome-summary": HTMLAttributes<HTMLElement>;
       "openclaw-chat-tool-review-outcome": HTMLAttributes<HTMLElement>;
       "openclaw-custodian-setup-card": HTMLAttributes<HTMLElement>;
       "openclaw-agent-memory-panel": HTMLAttributes<HTMLElement>;
-      "openclaw-chat-ci-details": HTMLAttributes<HTMLElement> & ElementProperties<ChatCiProperties>;
+      "openclaw-chat-ci-details": HTMLAttributes<HTMLElement> &
+        ElementProperties<ChatCiProperties & { menuControls?: boolean }>;
       "openclaw-chat-ci-automation": HTMLAttributes<HTMLElement> &
-        ElementProperties<ChatCiProperties & { sessionId: string }>;
+        ElementProperties<ChatCiProperties & { sessionId: string; menuPresentation?: boolean }>;
+      "openclaw-panel-empty-state": HTMLAttributes<HTMLElement>;
+      "openclaw-panel-loading-skeleton": HTMLAttributes<HTMLElement> & {
+        compact?: string;
+        overlay?: string;
+      };
       "openclaw-terminal-panel": DockElementAttributes & { fullscreen?: boolean };
       "openclaw-browser-panel": DockElementAttributes;
       "openclaw-link-reader-panel": DockElementAttributes;
       "openclaw-appearance-background": HTMLAttributes<HTMLElement>;
       "openclaw-config-page": HTMLAttributes<HTMLElement>;
+      "openclaw-sidebar-update-card": HTMLAttributes<HTMLElement>;
+      "openclaw-native-chrome-setup": HTMLAttributes<HTMLElement>;
+      "openclaw-theme-brand-icon": HTMLAttributes<HTMLElement>;
+      "openclaw-mcp-app-resources": HTMLAttributes<HTMLElement>;
+      "openclaw-mcp-app-context-strip": HTMLAttributes<HTMLElement>;
+      "openclaw-mcp-app-panel": HTMLAttributes<HTMLElement>;
       "openclaw-meeting-capture-settings": HTMLAttributes<HTMLElement>;
       "openclaw-session-storage-settings": HTMLAttributes<HTMLElement>;
       "openclaw-talk-settings": HTMLAttributes<HTMLElement>;
       "openclaw-memory-settings": HTMLAttributes<HTMLElement>;
       "openclaw-memory-memories": HTMLAttributes<HTMLElement>;
       "openclaw-modal-actions": HTMLAttributes<HTMLElement>;
-      "openclaw-claws-explore": HTMLAttributes<HTMLElement> & {
+      "openclaw-templates-explore": HTMLAttributes<HTMLElement> & {
         "prop:onSelect"?: (
-          entry: import("../pages/agents-home/claws-catalog-client.ts").ClawCatalogEntry,
+          entry: import("../pages/agents-home/templates-catalog-client.ts").TemplateCatalogEntry,
         ) => void;
       };
-      "openclaw-claws-catalog-dialog": HTMLAttributes<HTMLElement> & {
-        "prop:initialPackageName"?: string;
-        "prop:pageMode"?: boolean;
-        "prop:onClose"?: () => void;
-        "prop:onAdded"?: () => void;
-        "prop:onSelectEntry"?: (
-          entry: import("../pages/agents-home/claws-catalog-client.ts").ClawCatalogEntry,
-        ) => void;
-      };
+      "openclaw-templates-catalog-dialog": HTMLAttributes<HTMLElement>;
       "openclaw-github-identity": HTMLAttributes<HTMLElement>;
       "openclaw-chat-permission-card": HTMLAttributes<HTMLElement>;
       "openclaw-chat-run-failure-notice": HTMLAttributes<HTMLElement>;
       "openclaw-chat-retry-status": HTMLAttributes<HTMLElement>;
-      "openclaw-chat-child-attention": HTMLAttributes<HTMLElement>;
       "openclaw-session-diff-menu": HTMLAttributes<HTMLElement>;
       "openclaw-mcp-servers-card": HTMLAttributes<HTMLElement>;
+      "openclaw-mcp-app-catalog": HTMLAttributes<HTMLElement> & { surface?: string };
       "openclaw-update-run-view": HTMLAttributes<HTMLElement>;
       "openclaw-plugins-page": HTMLAttributes<HTMLElement>;
       "openclaw-dashboards-page": HTMLAttributes<HTMLElement>;
@@ -155,6 +173,7 @@ declare module "@solidjs/web" {
             | "excludeIdentities"
             | "totalCount"
             | "maxVisible"
+            | "overflowInSlots"
             | "personActivity"
           >
         > & { variant?: "session" };
@@ -165,8 +184,6 @@ declare module "@solidjs/web" {
             "identity" | "user" | "markAsViewer"
           >
         > & { variant?: HTMLElementTagNameMap["openclaw-viewer-avatar"]["variant"] };
-      "openclaw-ip-location": HTMLAttributes<HTMLElementTagNameMap["openclaw-ip-location"]> &
-        ElementProperties<Pick<HTMLElementTagNameMap["openclaw-ip-location"], "ip">>;
       "openclaw-link-reader-hovercard-provider": HTMLAttributes<
         HTMLElementTagNameMap["openclaw-link-reader-hovercard-provider"]
       > &
@@ -182,14 +199,7 @@ declare module "@solidjs/web" {
             | "claimedReaders"
           >
         >;
-      "openclaw-session-owner-chip": HTMLAttributes<
-        HTMLElementTagNameMap["openclaw-session-owner-chip"]
-      > &
-        ElementProperties<Pick<HTMLElementTagNameMap["openclaw-session-owner-chip"], "owner">> & {
-          size?: HTMLElementTagNameMap["openclaw-session-owner-chip"]["size"];
-        };
       "openclaw-chat-pdf-preview": HTMLAttributes<HTMLElement>;
-      "openclaw-chat-pane-versions-menu": HTMLAttributes<HTMLElement>;
       "openclaw-chat-skill-learned-notice": HTMLAttributes<HTMLElement>;
       "openclaw-agent-row-chip": HTMLAttributes<HTMLElement> & {
         "prop:agentId"?: string;

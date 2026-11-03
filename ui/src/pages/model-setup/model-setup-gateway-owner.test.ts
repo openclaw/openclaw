@@ -5,6 +5,7 @@ import type { GatewayHelloOk } from "../../api/gateway.ts";
 import type { WizardNextResult } from "../../api/types.ts";
 import { createGatewayStoreTestStore } from "../../app/gateway-store.test-support.ts";
 import { loadSettings } from "../../app/settings.ts";
+import { sourceConfigSnapshot } from "../../lib/config/config-snapshot.test-support.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { persistFirstRunActivationReceipt } from "./first-run-activation-receipt.ts";
@@ -14,7 +15,6 @@ import {
   runningStep,
   authButton,
   mockRequests,
-  configSnapshot,
   answerWizard,
   authOption,
   activated,
@@ -83,7 +83,7 @@ it.each(ownerChanges)(
     const original = current();
     const sharedResponses = {
       "openclaw.setup.detect": () => inventory,
-      "config.get": () => configSnapshot({}, "synthetic-config"),
+      "config.get": () => sourceConfigSnapshot({}, "synthetic-config"),
       "wizard.cancel": () => ({ status: "cancelled" }),
     };
     mockRequests(original.request, {
@@ -106,7 +106,7 @@ it.each(ownerChanges)(
     if (change === "authenticated scope missing from start") {
       delete initialHello.auth!.recoveryScope;
     }
-    original.opts.onHello?.(initialHello);
+    original.testOptions.onHello?.(initialHello);
     const runtimeConfig = createRuntimeConfigCapability(gateway);
     const context = { ...fixture.context, gateway, runtimeConfig };
     const page = createPage(context);
@@ -136,7 +136,11 @@ it.each(ownerChanges)(
       }
       // Real reconnect callbacks own revision and authority changes.
       if (change.startsWith("same-client")) {
-        original.opts.onClose?.({ code: 1006, reason: "synthetic reconnect", willRetry: true });
+        original.testOptions.onClose?.({
+          code: 1006,
+          reason: "synthetic reconnect",
+          willRetry: true,
+        });
       } else {
         gateway.connect(change === "token change" ? { token: "replacement-token" } : {});
       }
@@ -168,7 +172,7 @@ it.each(ownerChanges)(
         reconnectedHello.auth!.scopes = ["operator.read"];
         replacementReceipt = receipt;
       }
-      replacement.opts.onHello?.(reconnectedHello);
+      replacement.testOptions.onHello?.(reconnectedHello);
       expect(gateway.connectionRevision).toBe(
         originalRevision + (change === "token change" ? 1 : 0),
       );
@@ -195,7 +199,7 @@ it.each(ownerChanges)(
       );
       if (authorityLost) {
         // Reauthorization must not revive a discarded wizard or replay its answer.
-        replacement.opts.onHello?.(hello());
+        replacement.testOptions.onHello?.(hello());
         await waitForElement(page, ".model-setup__recovery");
         expect(page.querySelector("openclaw-modal-dialog")).toBeNull();
         expect(sent(/^wizard\./u)).toHaveLength(0);

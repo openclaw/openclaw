@@ -12,6 +12,7 @@ import {
 } from "./device-identity-async.js";
 import type { DeviceIdentityStoreOptions } from "./device-identity-store.js";
 import { signDevicePayload, verifyDeviceSignature } from "./device-identity.js";
+import { StartupMaintenanceRequiredError } from "./startup-maintenance-required.js";
 
 async function withIdentityWorkerState(
   run: (options: DeviceIdentityStoreOptions & { path: string }, stateDir: string) => Promise<void>,
@@ -111,7 +112,9 @@ describe("device identity local worker", () => {
       const legacyPath = path.join(identityDir, "device.json.native-importing");
       await fs.mkdir(identityDir, { recursive: true });
       await fs.writeFile(legacyPath, "synthetic retired identity");
-      await expect(loadOrCreateDeviceIdentityAsync(options)).rejects.toThrow("doctor --fix");
+      await expect(loadOrCreateDeviceIdentityAsync(options)).rejects.toBeInstanceOf(
+        StartupMaintenanceRequiredError,
+      );
       await expect(fs.stat(options.path)).rejects.toMatchObject({ code: "ENOENT" });
       expect(await fs.readFile(legacyPath, "utf8")).toBe("synthetic retired identity");
     });

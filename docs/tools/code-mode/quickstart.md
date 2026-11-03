@@ -216,8 +216,6 @@ external state matters. The results store holds at most 64 values with a total e
 JSON allowance of `min(memoryLimitBytes, maxSnapshotBytes)` (10 MiB by default),
 separate from the cell inbox. New saves fail when full; existing references are
 never evicted automatically. No functions, tool handles, or permissions are saved.
-Result operations are unavailable in `restartSafe` cells because references are
-transient and deletion cannot be replayed safely.
 Automatic preservation is also disabled in headless execution. If capacity,
 the data allowance, or the output budget prevents delivering a reference, the
 original call remains completed and returns an ordinary truncation marker
@@ -262,6 +260,8 @@ JavaScript syntax errors and uncaught nested tool
 failures become failed `exec` or `wait` results. The model can read the error,
 correct its code, inspect the current state, and continue with the normal tool
 surface. A failed cell does not impose a separate recovery mode or mutation budget.
+
+Source syntax errors are detected before guest execution. Their parser-message text is bounded to 240 UTF-16 units and clipped at a Unicode code-point boundary.
 
 OpenClaw does not automatically replay a failed program. Earlier calls may have
 changed state, and a failed call may have partially applied. Inspect authoritative

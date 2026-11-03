@@ -31,6 +31,14 @@ or database migrations. Once state has migrated beyond the older release's
 supported format, the supported recovery is to restore a verified pre-update
 backup with its matching OpenClaw release.
 
+When an older Gateway service refuses newer-written config, run the newer
+OpenClaw binary or reinstall the service from that newer installation. Service
+startup ignores `OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1`, including
+values set in systemd's environment or unit drop-ins. For an intentional
+downgrade, restore the verified pre-update backup with its matching release as
+described below. The override is for intentional CLI recovery actions; it does
+not reverse migrations or bypass database compatibility checks.
+
 <Warning>
 Fresh shared-state databases created after tenant-container management was retired
 omit `fleet_cells`. Older revisions that require this table can reject them even
@@ -54,6 +62,8 @@ separate recovery mechanisms: cleanup does not manage package or Git runtime
 backups, and retained migration originals are not a full pre-update backup.
 Preserve every recovery location named in the update report until you have
 verified the installation.
+If a launcher backup cannot be restored, the update error names the affected
+launcher and the retained backup path.
 
 Launcher backups compare the link type and target, plus ownership when it can
 be preserved. Symlink permission bits do not block an update; macOS link modes
@@ -261,6 +271,13 @@ verification failure. The command still exits nonzero; recovery does not turn a
 rejected version into a successful update.
 
 Recovery reports distinguish restored package files from a healthy Gateway.
+Once the updater verifies that the target Gateway is serving, later optional
+recognized maintenance failures, such as a late restart-health report or removing
+an old CLI wrapper, remain warnings and do not trigger rollback or turn the update
+into a failure. Authority refusals, data-at-risk failures, and unclassified errors
+still block successful completion. This does not rewrite an earlier failed
+attempt when a later status check finds the Gateway healthy.
+
 A verified rollback names the version serving after recovery, including when
 an additional repair was needed. If the restored service fails its health check,
 the result records `recovery.service: "failed"`; the report says health failed
@@ -316,6 +333,15 @@ block even if the original updater has exited. Preserve the recovery snapshots
 and follow the reported process-inspection guidance before retrying repair.
 The installed updater owns this process supervision: a first update driven by
 2026.9.5 remains limited by that older parent's settlement checks.
+
+Delegated update and Doctor workers also watch their recorded parent processes.
+If an updater exits while a worker is stalled, the worker requests shutdown and
+allows ten seconds for settlement before exiting. State remains protected until
+the worker has stopped; the next CLI or Gateway start can then reclaim its dead
+maintenance owner. A surviving maintenance owner is identified by role and PID
+in the refusal, with `openclaw update status --json` for update progress. Package
+recovery still verifies the installed candidate before settling its activation
+receipt, and retains the printed repair command when recovery is unsafe.
 
 Before starting a preserved candidate, the updater checks shared and existing
 agent database schemas against the candidate's contract. If migrations remain
@@ -408,7 +434,7 @@ The failed update retains its nonzero exit code even if the agent repairs it.
 
 - For `openclaw update --channel dev` on source checkouts, the updater auto-bootstraps `pnpm` when needed. If you see a pnpm/corepack bootstrap error, install `pnpm` manually (or re-enable `corepack`) and rerun the update.
 - Check: [Troubleshooting](/gateway/troubleshooting)
-- Ask in Discord: [https://discord.gg/clawd](https://discord.gg/clawd)
+- For official OpenClaw support, visit [community.openclaw.ai](https://community.openclaw.ai/).
 
 ### Unattended repair on your own inference
 

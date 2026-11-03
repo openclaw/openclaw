@@ -12,6 +12,7 @@ import type {
 } from "../../app/context.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import { setPluginEnabled, type PluginCatalogItem } from "../../lib/plugins/index.ts";
+import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
@@ -147,24 +148,21 @@ export function createMemoryPage(params: {
       >,
   );
   const runtimeListeners = new Set<() => void>();
-  const gatewayHarness = createApplicationGateway({
-    client: createTestGatewayClient(request),
-    phase: "connected",
-    offlineStable: false,
-    pluginCapabilities: null,
-    canvasPluginSurfaceUrl: null,
-    assistantAgentId: null,
-    sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
-    hello: {
-      ...gatewayHelloForMethods(
-        [...(params.processInfo ? ["system.info"] : []), ...(params.methods ?? [])],
-        params.scopes,
-      ),
-      server: { version: "test", bootId: "memory-boot-a", connId: "memory-connection" },
-    },
-  });
+  const gatewayHarness = createApplicationGateway(
+    createApplicationGatewaySnapshot({
+      client: createTestGatewayClient(request),
+      phase: "connected",
+      pluginCapabilities: null,
+      sessionKey: "main",
+      hello: {
+        ...gatewayHelloForMethods(
+          [...(params.processInfo ? ["system.info"] : []), ...(params.methods ?? [])],
+          params.scopes,
+        ),
+        server: { version: "test", bootId: "memory-boot-a", connId: "memory-connection" },
+      },
+    }),
+  );
   const gateway = gatewayHarness.gateway;
   let mutationQueue = Promise.resolve();
   const runtimeConfig = {

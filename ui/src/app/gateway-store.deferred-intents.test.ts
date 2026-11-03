@@ -19,9 +19,21 @@ describe("Gateway deferred intents", () => {
   let windowEvents: EventTarget;
   const setScope = (scope = "account-a", ready = true) =>
     Object.assign(store.current(), { recoveryScope: scope, recoveryScopeReady: ready });
-  const hello = () => store.current().opts.onHello?.(GATEWAY_STORE_TEST_HELLO);
+  const hello = () => store.current().testOptions.onHello?.(GATEWAY_STORE_TEST_HELLO);
   const disconnect = () =>
-    store.current().opts.onClose?.({ code: 1006, reason: "network lost", willRetry: true });
+    store.current().testOptions.onClose?.({ code: 1006, reason: "network lost", willRetry: true });
+  const enqueue = (
+    calls: string[],
+    key: string,
+    options: Partial<Parameters<typeof store.gateway.defer>[0]> = {},
+  ) =>
+    store.gateway.defer({
+      key,
+      run: async () => {
+        calls.push(key);
+      },
+      ...options,
+    });
   const settle = async () => {
     for (let step = 0; step < 5; step += 1) {
       await Promise.resolve();
@@ -46,27 +58,36 @@ describe("Gateway deferred intents", () => {
     vi.unstubAllGlobals();
   });
 
+  it("preserves a lifecycle slot while replacing its value and discarding related intents", async () => {
+    const calls: string[] = [];
+    const discarded = vi.fn();
+    disconnect();
+    enqueue(calls, "lifecycle", { group: "session" });
+    enqueue(calls, "other");
+    enqueue(calls, "metadata", { group: "session", discard: discarded });
+    enqueue(calls, "lifecycle", {
+      group: "session",
+      preservePosition: true,
+      discardGroup: true,
+      run: async () => {
+        calls.push("delete");
+      },
+    });
+    expect(store.gateway.snapshot.deferredIntentCount).toBe(2);
+    expect(discarded).toHaveBeenCalledOnce();
+    hello();
+    await settle();
+    expect(calls).toEqual(["delete", "other"]);
+  });
+
   it("moves coalesced desired state to the tail and publishes reload custody until dispatch", async () => {
     const calls: string[] = [];
     const oldDiscard = vi.fn();
     const counts: number[] = [];
     store.gateway.subscribe((snapshot) => counts.push(snapshot.deferredIntentCount ?? 0));
     disconnect();
-    expect(
-      store.gateway.defer({
-        key: "label",
-        run: async () => {
-          calls.push("old");
-        },
-        discard: oldDiscard,
-      }),
-    ).toBe(true);
-    store.gateway.defer({
-      key: "icon",
-      run: async () => {
-        calls.push("icon");
-      },
-    });
+    expect(enqueue(calls, "label", { discard: oldDiscard })).toBe(true);
+    enqueue(calls, "icon");
     store.gateway.defer({
       key: "label",
       run: async (client) => {
@@ -102,7 +123,7 @@ describe("Gateway deferred intents", () => {
     hello();
     expect(run).not.toHaveBeenCalled();
     setScope("account-b");
-    store.current().opts.onRecoveryScopeChange?.();
+    store.current().testOptions.onRecoveryScopeChange?.();
     await settle();
     expect(run).not.toHaveBeenCalled();
     expect(discard).toHaveBeenCalledOnce();
@@ -161,9 +182,9 @@ describe("Gateway deferred intents", () => {
         setScope();
       } else {
         if (retirement === "retired recovery") {
-          Object.assign(store.current(), { offlineRecoveryRetired: true });
+          Object.defineProperty(store.current(), "offlineRecoveryRetired", { value: true });
         }
-        store.current().opts.onClose?.({
+        store.current().testOptions.onClose?.({
           code: 1008,
           reason: "rejected",
           willRetry: false,
@@ -216,7 +237,7 @@ describe("Gateway deferred intents", () => {
       if (transition === "connect") {
         store.gateway.connect({ token: "other" });
       } else {
-        store.current().opts.onClose?.({
+        store.current().testOptions.onClose?.({
           code: 1008,
           reason: "rejected",
           willRetry: false,

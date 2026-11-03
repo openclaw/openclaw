@@ -4,107 +4,67 @@ import type { OpenClawConfig } from "../config/config.js";
 import { stubAuditChannelPlugin } from "./audit-channel-test-helpers.js";
 import { collectChannelSecurityFindingsCore } from "./audit-channel.js";
 
-function stubDiscordPlugin(params: {
-  resolveAccount: (cfg: OpenClawConfig, accountId: string | null | undefined) => unknown;
-  inspectAccount?: (cfg: OpenClawConfig, accountId: string | null | undefined) => unknown;
-  isConfigured?: (account: unknown, cfg: OpenClawConfig) => boolean;
-}) {
-  return stubAuditChannelPlugin({
-    id: "discord",
-    label: "Discord",
-    commands: {
-      nativeCommandsAutoEnabled: true,
-      nativeSkillsAutoEnabled: true,
-    },
-    collectAuditFindings: ({ account }) => {
-      const config = (account as { config?: { guilds?: unknown } }).config ?? {};
-      const guilds =
-        config.guilds && typeof config.guilds === "object" && !Array.isArray(config.guilds)
-          ? config.guilds
-          : {};
-      if (Object.keys(guilds).length === 0) {
-        return [];
-      }
-      return [
-        {
-          checkId: "channels.discord.commands.native.no_allowlists",
-          severity: "warn" as const,
-          title: "Discord slash commands have no allowlists",
-          detail: "test stub",
-        },
-      ];
-    },
-    ...params,
-  });
-}
-
 describe("security audit channel source-config fallback discord", () => {
   it("keeps source-configured channel security findings when resolved inspection is incomplete", async () => {
+    const sourceChannel = {
+      enabled: true,
+      groupPolicy: "allowlist",
+      guilds: { "123": { channels: { general: { enabled: true } } } },
+    } satisfies NonNullable<OpenClawConfig["channels"]>["discord"];
     const sourceConfig: OpenClawConfig = {
       commands: { native: true },
       channels: {
         discord: {
-          enabled: true,
+          ...sourceChannel,
           token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
-          groupPolicy: "allowlist",
-          guilds: {
-            "123": {
-              channels: {
-                general: { enabled: true },
-              },
-            },
-          },
         },
       },
     };
     const resolvedConfig: OpenClawConfig = {
       commands: { native: true },
-      channels: {
-        discord: {
-          enabled: true,
-          groupPolicy: "allowlist",
-          guilds: {
-            "123": {
-              channels: {
-                general: { enabled: true },
-              },
-            },
-          },
-        },
-      },
+      channels: { discord: sourceChannel },
     };
 
     const findings = await collectChannelSecurityFindingsCore({
       cfg: resolvedConfig,
       sourceConfig,
       plugins: [
-        stubDiscordPlugin({
+        stubAuditChannelPlugin({
+          id: "discord",
+          label: "Discord",
+          commands: { nativeCommandsAutoEnabled: true, nativeSkillsAutoEnabled: true },
+          collectAuditFindings: ({ account }) => {
+            const config = (account as { config?: { guilds?: unknown } }).config ?? {};
+            const guilds =
+              config.guilds && typeof config.guilds === "object" && !Array.isArray(config.guilds)
+                ? config.guilds
+                : {};
+            return Object.keys(guilds).length === 0
+              ? []
+              : [
+                  {
+                    checkId: "channels.discord.commands.native.no_allowlists",
+                    severity: "warn",
+                    title: "Discord slash commands have no allowlists",
+                    detail: "test stub",
+                  },
+                ];
+          },
           inspectAccount: (cfg) => {
             const channel = cfg.channels?.discord ?? {};
             const token = channel.token;
+            const configured =
+              Boolean(token) &&
+              typeof token === "object" &&
+              !Array.isArray(token) &&
+              "source" in token;
             return {
               accountId: "default",
               enabled: true,
-              configured:
-                Boolean(token) &&
-                typeof token === "object" &&
-                !Array.isArray(token) &&
-                "source" in token,
+              configured,
               token: "",
-              tokenSource:
-                Boolean(token) &&
-                typeof token === "object" &&
-                !Array.isArray(token) &&
-                "source" in token
-                  ? "config"
-                  : "none",
-              tokenStatus:
-                Boolean(token) &&
-                typeof token === "object" &&
-                !Array.isArray(token) &&
-                "source" in token
-                  ? "configured_unavailable"
-                  : "missing",
+              tokenSource: configured ? "config" : "none",
+              tokenStatus: configured ? "configured_unavailable" : "missing",
               config: channel,
             };
           },
@@ -114,12 +74,11 @@ describe("security audit channel source-config fallback discord", () => {
       ],
     });
 
-    const finding = findings.find(
-      (entry) => entry.checkId === "channels.discord.commands.native.no_allowlists",
+    expect(findings).toContainEqual(
+      expect.objectContaining({
+        checkId: "channels.discord.commands.native.no_allowlists",
+        severity: "warn",
+      }),
     );
-    if (!finding) {
-      throw new Error("Expected Discord native command no-allowlists finding");
-    }
-    expect(finding.severity).toBe("warn");
   });
 });

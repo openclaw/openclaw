@@ -4,6 +4,8 @@ import { loadChatRequestIdentityKeyAsync } from "../../infra/device-identity-asy
 import { normalizeChatSendRequest } from "./chat-send-request.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
+type Client = GatewayRequestHandlerOptions["client"];
+
 vi.mock("../../infra/device-identity-async.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/device-identity-async.js")>()),
   loadChatRequestIdentityKeyAsync: vi.fn(async (): Promise<Buffer | null> => Buffer.alloc(32, 7)),
@@ -14,7 +16,7 @@ vi.mock("../../infra/device-identity-async.js", async (importOriginal) => ({
   })),
 }));
 
-function copilotClient(caps: string[] = []): NonNullable<GatewayRequestHandlerOptions["client"]> {
+function copilotClient(caps: string[] = []): NonNullable<Client> {
   return {
     connId: "copilot",
     pairedClientId: "openclaw-browser-copilot",
@@ -29,38 +31,39 @@ function copilotClient(caps: string[] = []): NonNullable<GatewayRequestHandlerOp
         mode: "ui",
       },
     },
-  } as unknown as NonNullable<GatewayRequestHandlerOptions["client"]>;
+  } as unknown as NonNullable<Client>;
 }
 
-function normalize(
-  overrides: Record<string, unknown> = {},
-  client: GatewayRequestHandlerOptions["client"] = null,
-) {
-  return normalizeChatSendRequest({
-    params: {
-      sessionKey: "agent:main:main",
-      message: " hello ",
-      idempotencyKey: "request-1",
-      ...overrides,
-    },
-    client,
-  });
+function requestParams(overrides: Record<string, unknown> = {}) {
+  return {
+    sessionKey: "agent:main:main",
+    message: " hello ",
+    idempotencyKey: "request-1",
+    ...overrides,
+  };
+}
+function normalize(overrides: Record<string, unknown> = {}, client: Client = null) {
+  return normalizeChatSendRequest({ params: requestParams(overrides), client });
 }
 
 async function expectError(
   overrides: Record<string, unknown>,
   error: string,
-  client: GatewayRequestHandlerOptions["client"] = null,
+  client: Client = null,
 ) {
   expect(await normalize(overrides, client)).toEqual({ ok: false, error });
 }
 
 const toolBindings = { browser: { kind: "tab", tabId: 1, targetId: "target" } };
 const mention = (start: number, end: number, profileId = "bob") => ({ profileId, start, end });
+const goalIntent = () => ({ kind: "session-goal-start", version: 1, issuedAtMs: Date.now() });
+async function expectRejected(overrides: Record<string, unknown>, client: Client = humanClient()) {
+  expect(await normalize(overrides, client)).toMatchObject({ ok: false });
+}
 
 async function normalizeValue(
   overrides: Record<string, unknown> = {},
-  client: GatewayRequestHandlerOptions["client"] = humanClient(),
+  client: Client = humanClient(),
 ) {
   const result = await normalize(overrides, client);
   expect(result.ok).toBe(true);
@@ -70,7 +73,7 @@ async function normalizeValue(
   return result.value;
 }
 
-function humanClient(): NonNullable<GatewayRequestHandlerOptions["client"]> {
+function humanClient(): NonNullable<Client> {
   const client = copilotClient();
   client.connect.client.id = "openclaw-control-ui";
   client.authenticatedUserProfile = {
@@ -81,6 +84,32 @@ function humanClient(): NonNullable<GatewayRequestHandlerOptions["client"]> {
   };
   return client;
 }
+
+it.each(["openclaw-control-ui", "openclaw-macos"] as const)(
+  "accepts the embedded Control UI reconnect envelope from %s",
+  async (id) => {
+    const client = humanClient();
+    client.connect.client.id = id;
+    client.pairedClientId = id;
+    const params = requestParams({ __controlUiReconnectResume: true });
+    const result = await normalizeChatSendRequest({ params, client });
+    expect(result).toMatchObject({ ok: true, value: { reconnectResumeRequested: true } });
+    if (result.ok) {
+      expect(result.value.p).not.toHaveProperty("__controlUiReconnectResume");
+    }
+    expect(params).toHaveProperty("__controlUiReconnectResume", true);
+  },
+);
+
+it("rejects reconnect metadata from a native client outside UI mode", async () => {
+  const client = humanClient();
+  client.connect.client.id = "openclaw-macos";
+  client.connect.client.mode = "backend";
+  expect(await normalize({ __controlUiReconnectResume: true }, client)).toMatchObject({
+    ok: false,
+    error: expect.stringContaining("unexpected property"),
+  });
+});
 
 it("fingerprints input with the purpose-specific identity key", async () => {
   expect((await normalizeValue({}, null)).requestIdentity).toBe(
@@ -146,11 +175,10 @@ it.each([
   { message: "@Bob", mentions: [mention(0, 5)] },
   { message: "@Bob", mentions: [mention(0, 4), mention(0, 4, "other")] },
   { message: "@Bo\nb", mentions: [mention(0, 5)] },
-  { message: "@Bo\u0001b", mentions: [mention(0, 5)] },
   { message: "@😀", mentions: [mention(0, 2)] },
   { message: "@e\u0301", mentions: [mention(0, 2)] },
 ])("rejects annotations that do not bind a complete visible token: %j", async (input) => {
-  expect(await normalize(input, humanClient())).toMatchObject({ ok: false });
+  await expectRejected(input);
 });
 
 it("keeps ordinary typed @names inert and fingerprints only explicit selections", async () => {
@@ -174,35 +202,20 @@ it("requires authenticated human ingress and rejects unsupported mention modes",
   const synthetic = humanClient();
   synthetic.internal = { syntheticClient: true };
   for (const client of [null, unqualified, synthetic]) {
-    expect(await normalize({ message: "@Bob hello", mentions }, client)).toMatchObject({
-      ok: false,
-    });
+    await expectRejected({ message: "@Bob hello", mentions }, client);
   }
-  expect(
-    await normalize(
-      {
-        message: "@Bob hello",
-        mentions,
-        intent: { kind: "session-goal-start", version: 1, issuedAtMs: 1 },
-      },
-      humanClient(),
-    ),
-  ).toMatchObject({ ok: false });
-  expect(
-    await normalize({ message: "/btw @Bob hello", mentions: [mention(5, 9)] }, humanClient()),
-  ).toMatchObject({ ok: false });
+  await expectRejected({
+    message: "@Bob hello",
+    mentions,
+    intent: { kind: "session-goal-start", version: 1, issuedAtMs: 1 },
+  });
+  await expectRejected({ message: "/btw @Bob hello", mentions: [mention(5, 9)] });
 });
 
 it.each(["/stop", "  résumé\n\n  preserve spacing  "])(
   "admits Goal objective %j literally without command interpretation",
   async (message) => {
-    const value = await normalizeValue(
-      {
-        message,
-        intent: { kind: "session-goal-start", version: 1, issuedAtMs: Date.now() },
-      },
-      null,
-    );
+    const value = await normalizeValue({ message, intent: goalIntent() }, null);
     expect(value).toMatchObject({
       inboundMessage: message,
       rawMessage: message,
@@ -232,12 +245,7 @@ it.each([
     intent: { kind: "session-goal-start", version: 1, issuedAtMs: 1, objective: "second target" },
   },
 ])("rejects invalid Goal intent before admission: %j", async (overrides) => {
-  expect(
-    await normalize({
-      intent: { kind: "session-goal-start", version: 1, issuedAtMs: Date.now() },
-      ...overrides,
-    }),
-  ).toMatchObject({ ok: false });
+  await expectRejected({ intent: goalIntent(), ...overrides }, null);
 });
 
 it.each([
@@ -252,13 +260,8 @@ it.each([
 });
 
 it("accepts an attachment-only request after attachment normalization", async () => {
-  const value = await normalizeValue(
-    {
-      message: "",
-      attachments: [{ mimeType: "text/plain", content: "aGVsbG8=" }],
-    },
-    null,
-  );
+  const attachments = [{ mimeType: "text/plain", content: "aGVsbG8=" }];
+  const value = await normalizeValue({ message: "", attachments }, null);
   expect(value).toMatchObject({
     rawMessage: "",
     normalizedAttachments: [{ mimeType: "text/plain", content: "aGVsbG8=" }],

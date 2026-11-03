@@ -1,20 +1,14 @@
-import {
-  isFutureDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "@openclaw/normalization-core/number-coercion";
+import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
 import { outboundMessageIdentities } from "./outbound-echo-state.js";
 
-type OutboundMessageIdentityScope = {
+export type OutboundMessageIdentity = {
   channel: string;
   accountId?: string;
   conversationId: string;
-};
-
-export type OutboundMessageIdentity = OutboundMessageIdentityScope &
-  ({ messageId: string; sourceId?: string } | { messageId?: string; sourceId: string });
+} & ({ messageId: string; sourceId?: string } | { messageId?: string; sourceId: string });
 
 const OUTBOUND_ECHO_WINDOW_MS = 30_000;
 const OUTBOUND_MESSAGE_IDENTITY_MAX_ENTRIES = 10_000;
@@ -52,13 +46,7 @@ export function recordOutboundMessageIdentity(identity: OutboundMessageIdentity)
     return;
   }
   const nowMs = Date.now();
-  const expiresAt = resolveExpiresAtMsFromDurationMs(OUTBOUND_ECHO_WINDOW_MS, { nowMs });
-  if (expiresAt === undefined) {
-    for (const key of keys) {
-      outboundMessageIdentities.delete(key);
-    }
-    return;
-  }
+  const expiresAt = nowMs + OUTBOUND_ECHO_WINDOW_MS;
   pruneExpiredEntries(nowMs);
   for (const key of keys) {
     outboundMessageIdentities.delete(key);

@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { For, createMemo } from "solid-js";
+import { For } from "solid-js";
 import {
   analyzeConfigSchema,
   type ConfigSchemaAnalysis,
@@ -62,12 +62,12 @@ export function configValueExistsAtPath(
 }
 
 export function UnsupportedPathSummary(props: { paths: string[] }) {
-  const message = createMemo(() => {
+  const message = () => {
     const marker = "__OPENCLAW_CONFIG_PATHS__";
     const key =
       props.paths.length === 1 ? "configView.formUnsafeCount" : "configView.formUnsafeCountPlural";
     return t(key, { count: String(props.paths.length), paths: marker }).split(marker);
-  });
+  };
   return (
     <span class="config-content-callout__text">
       {message()[0]}

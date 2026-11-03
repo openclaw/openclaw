@@ -3,12 +3,12 @@ import { createMemo, Show } from "solid-js";
 import { pathForRoute } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { resolveNewSessionShortcut } from "../../lib/keyboard-shortcut-contract.ts";
-import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
+import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { newSessionSearch, type NewSessionTarget } from "../../pages/new-session/location.ts";
-import { Icon } from "./icon.tsx";
+import { Icon, type IconName } from "./icon.tsx";
 import { ShortcutHint } from "./kbd.tsx";
 import "../tooltip.ts";
 
@@ -21,6 +21,7 @@ export function renderNewSessionLink(params: {
   disabledReason?: string;
   showShortcut?: boolean;
   showTooltip?: boolean;
+  icon?: IconName;
   onOpen?: (agentId: string, target?: NewSessionTarget) => void;
 }): JSX.Element {
   const disabled = () => Boolean(params.disabledReason);
@@ -43,13 +44,12 @@ export function renderNewSessionLink(params: {
           event.preventDefault();
           return;
         }
-        if (params.onOpen && shouldHandleNavigationClick(event)) {
-          event.preventDefault();
-          params.onOpen?.(params.agentId, params.target);
+        if (params.onOpen) {
+          handleNavigationClick(event, () => params.onOpen?.(params.agentId, params.target));
         }
       }}
     >
-      <Icon name="plus" />
+      <Icon name={params.icon ?? "plus"} />
     </a>
   );
   return params.showTooltip === false ? (
@@ -57,6 +57,7 @@ export function renderNewSessionLink(params: {
   ) : (
     <openclaw-tooltip
       prop:content={params.disabledReason ?? (params.showShortcut ? undefined : params.label)}
+      prop:pointerThrough={true}
     >
       <Show when={params.disabledReason == null && params.showShortcut}>
         <span slot="content">
@@ -76,6 +77,7 @@ export function ContextNewSessionAction(props: {
   agentId?: string;
   label?: string;
   showTooltip?: boolean;
+  icon?: IconName;
 }) {
   const agentId = () =>
     props.agentId ??
@@ -107,6 +109,7 @@ export function ContextNewSessionAction(props: {
       label={props.label ?? t("agentChip.newConversation")}
       showShortcut
       showTooltip={props.showTooltip}
+      icon={props.icon}
       disabledReason={disabledReason()}
       onOpen={onOpen}
     />

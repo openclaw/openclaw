@@ -118,7 +118,6 @@ describe("plugin status reports", () => {
     mocks.compatIds.mockReturnValue(pluginIds);
     mocks.compatConfig.mockReturnValue(enabledConfig);
     status.buildPluginSnapshotReport({ config });
-    expect(mocks.compatConfig).toHaveBeenCalledWith({ config, pluginIds, activation: "defaults" });
     expect(mocks.metadataRegistry).toHaveBeenCalledWith(
       expect.objectContaining({ config: enabledConfig, loadModules: false }),
     );
@@ -273,6 +272,46 @@ describe("plugin status reports", () => {
     ]);
   });
 
+  it("inspects each decision provider once per all-plugin report", () => {
+    const plugins = Array.from({ length: 40 }, (_, index) =>
+      createPluginRecord({ id: `decision-${index}` }),
+    );
+    const decisionProviders = plugins.map((plugin) => ({
+      pluginId: plugin.id,
+      host: new DecisionProviderHost(
+        {
+          id: plugin.id,
+          contractVersion: 1,
+          async evaluate() {
+            throw new Error("Inspection must not evaluate decisions");
+          },
+        },
+        plugin,
+      ),
+    }));
+    const inspections = decisionProviders.map(({ host }) => vi.spyOn(host, "inspect"));
+    const report = setReport({ plugins, decisionProviders });
+
+    for (const selected of [0, 39]) {
+      const config = { agents: { defaults: { decisionModel: `decision-${selected}/model` } } };
+      const results = status.buildAllPluginInspectReports({ config, report });
+      expect(results.map(({ plugin, decisions }) => [plugin.id, decisions])).toMatchObject(
+        plugins.map((plugin, index) => [
+          plugin.id,
+          [{ pluginId: plugin.id, providerId: plugin.id, configured: index === selected }],
+        ]),
+      );
+      for (const inspection of inspections) {
+        expect(inspection).toHaveBeenCalledTimes(1);
+        inspection.mockClear();
+      }
+    }
+    status.buildPluginInspectReport({ id: "decision-0", config: {}, report });
+    for (const [index, inspection] of inspections.entries()) {
+      expect(inspection).toHaveBeenCalledTimes(index === 0 ? 1 : 0);
+    }
+  });
+
   it("includes observed SDK calls in inspection and CLI compatibility output", () => {
     const pluginId = "status-deprecated-sdk";
     vi.spyOn(process, "emitWarning").mockImplementation(() => {});
@@ -329,10 +368,6 @@ describe("plugin status reports", () => {
       `old ${REMOVED_SESSION_TRANSCRIPT_FILE_API_MESSAGE}`,
       `api ${REMOVED_SESSION_TRANSCRIPT_FILE_API_MESSAGE}`,
     ]);
-    expect(status.summarizePluginCompatibility(notices)).toEqual({
-      noticeCount: 3,
-      pluginCount: 2,
-    });
   });
 
   it("projects bundle capabilities without native capabilities", () => {

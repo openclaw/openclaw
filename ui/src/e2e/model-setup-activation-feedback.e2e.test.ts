@@ -78,9 +78,10 @@ suite.define(() => {
         });
         await initialContext.dispose();
         expect(await gateway.getRequests("chat.startup")).toHaveLength(0);
+        expect(await gateway.getRequests("sessions.messages.subscribe")).toHaveLength(0);
         await button(page.locator(".model-setup-discovery"), "Close").click();
         await page.getByRole("button", { name: "Back to app" }).click();
-        await gateway.waitForRequest("chat.startup");
+        await gateway.waitForRequest("sessions.messages.subscribe");
         await gateway.waitForRequest("models.authStatus");
         await page.getByText(ready, { exact: true }).waitFor();
 

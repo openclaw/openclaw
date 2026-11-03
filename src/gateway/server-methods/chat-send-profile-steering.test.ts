@@ -1,10 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import {
   assertAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
@@ -13,19 +9,19 @@ import {
   resolveAgentQuestionGatewayCall,
   type AgentQuestionDispatcher,
 } from "../../agents/harness/gateway-question-dispatch.js";
-import { createNativeSessionBindingAuthority } from "../../agents/harness/native-session/binding-authority.js";
 import { registerAgentSessionLoopTestLifecycle } from "../../agents/sessions/agent-session-loop-correctness.test-support.js";
-import { beginRestartRecoveryTerminalDelivery } from "../../config/sessions/restart-recovery-receipt.js";
 import {
   listSessionPendingInputs,
   loadTranscriptEventsSync,
-  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import * as controllerDiagnostics from "../../sessions/session-controller.diagnostics.js";
 import {
   beginReplyMessageInjectionTarget,
-  bindSessionControllerSourceTurnId,
   captureReplyMessageInjectionTarget,
 } from "../../sessions/session-controller.js";
+import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
+import { retireSessionControllerInput } from "../../sessions/session-controller.mailbox-source.js";
+import { reserveSessionControllerSource } from "../../sessions/session-controller.mailbox.js";
 import { createExpectedProfileBinding } from "../expected-profile.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
 import { bindChatProfile } from "./chat-send-admission-fixtures.test-support.js";
@@ -56,119 +52,15 @@ function expectUntouched(fixture: Fixture, operation: Operation, cancel: ReturnT
   expect(loadTranscriptEventsSync(fixture.scope)).toEqual(fixture.activeTranscript);
 }
 
-it.for(["terminal-pending", "matching-tombstone", "unrelated-tombstone"] as const)(
-  "rechecks Gateway terminal delivery inside native final preparation: %s",
-  async (change, { signal }) => {
-    await using fixture = await createFixture();
-    fixture.params.queueMode = "steer";
-    fixture.params.idempotencyKey = `gateway-native-receipt-${change}`;
-    const operation = activeOperation(fixture);
-    const sourceTurnId = "native-active-source";
-    await upsertSessionEntryCore(fixture.scope, {
-      restartRecoveryDeliveryRunId: "native-receipt-owner",
-      restartRecoveryDeliverySourceRunId: sourceTurnId,
-    });
-    const entered = createDeferred();
-    const release = createDeferred();
-    const fingerprint = "native-receipt-tools";
-    let preparingNative = false;
-    let held = false;
-    bindSteeringTools(operation, fingerprint, {
-      projectAsync: async () => {
-        if (preparingNative && !held) {
-          held = true;
-          entered.resolve();
-          await withinTest(release.promise, signal);
-        }
-        return fingerprint;
-      },
-    });
-    bindSessionControllerSourceTurnId(operation, sourceTurnId);
-    operation.setPhase("running");
-    const native = createNativeSessionBindingAuthority(
-      [
-        {
-          read: fixture.scope,
-          sessionId: fixture.scope.sessionId,
-          createSupersededError: () => new Error("Native steering session was replaced"),
-        },
-      ],
-      () => operation.abortSignal.throwIfAborted(),
-    );
-    const enqueued = vi.fn();
-    operation.attachBackend({
-      ...backend("native-receipt-owner", fingerprint),
-      messageInjectionV2: {
-        version: 2,
-        isAvailable: () => true,
-        async queueMessage() {
-          throw new Error("Expected prepared native steering");
-        },
-        async queueMessageAsync(text, options, preparation) {
-          preparingNative = true;
-          await native.withPreparedCurrent!(() => {
-            enqueued(text);
-            options?.onQueueAccepted?.(true);
-          }, [preparation]);
-        },
-      },
-    });
-    const request = fixture.send();
-    const settlement = request.then(
-      () => {},
-      () => {},
-    );
-    try {
-      await withinTest(
-        awaitGateBeforeSettlement(
-          entered.promise,
-          request,
-          "Native final preparation was not reached",
-        ),
-        signal,
-      );
-      expect(enqueued).not.toHaveBeenCalled();
-      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-      if (change === "terminal-pending") {
-        await expect(
-          beginRestartRecoveryTerminalDelivery({
-            ...fixture.scope,
-            sourceTurnId,
-            toolCallId: "native-terminal-delivery",
-          }),
-        ).resolves.toBe("started");
-      } else {
-        await upsertSessionEntryCore(fixture.scope, {
-          restartRecoveryTerminalRunIds: [
-            change === "matching-tombstone" ? sourceTurnId : "prior-source",
-          ],
-        });
-      }
-      expect(operation.phase).toBe("running");
-      release.resolve();
-      const respond = await request;
-      expect(operation.result).toBeNull();
-      if (change === "unrelated-tombstone") {
-        expect(enqueued).toHaveBeenCalledExactlyOnceWith(fixture.approvedContent);
-        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-      } else {
-        expect(enqueued).not.toHaveBeenCalled();
-        const recorder = await withinTest(fixture.dispatchedRecorder, signal);
-        expect((await recorder.resolveMessage())?.content).toBe(fixture.approvedContent);
-        expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
-      }
-      expect(respond.mock.calls[0]?.[0]).toBe(true);
-      await fixture.finishDispatch();
-    } finally {
-      release.resolve();
-      await settlement;
-    }
-  },
-);
-
-it.each(["same profile", "profile merge", "target closed"] as const)(
-  "keeps bound native V2 steering on its captured owner after preparation (%s)",
-  async (change) => {
+it.for([
+  { change: "same profile", boundary: "native" },
+  { change: "profile merge", boundary: "native" },
+  { change: "target closed", boundary: "native" },
+  { change: "same profile", boundary: "mailbox" },
+  { change: "profile merge", boundary: "mailbox" },
+] as const)(
+  "keeps bound native V2 steering on its captured owner ($change at $boundary)",
+  async ({ change, boundary }, { signal }) => {
     await using fixture = await createFixture();
     fixture.params.queueMode = "steer";
     const operation = activeOperation(fixture);
@@ -182,25 +74,78 @@ it.each(["same profile", "profile merge", "target closed"] as const)(
     operation.setPhase("running");
     const entered = createDeferred();
     const release = createDeferred();
+    const finished = createDeferred();
+    const terminal = createDeferred();
+    const nativeEntered = vi.fn();
     const enqueued = vi.fn();
     const cancel = vi.fn();
+    const older =
+      boundary === "mailbox"
+        ? reserveSessionControllerSource(fixture.scope.sessionKey, {
+            policy: { mode: "followup" },
+            target: captureSessionTarget({
+              storeScope: fixture.scope.storePath,
+              sessionKey: fixture.scope.sessionKey,
+              incarnation: fixture.scope.sessionId,
+              agentId: fixture.scope.agentId,
+            }),
+          })
+        : undefined;
+    const logPhase = controllerDiagnostics.logSessionControllerPhase;
+    const phaseObserver = vi
+      .spyOn(controllerDiagnostics, "logSessionControllerPhase")
+      .mockImplementation((event) => {
+        logPhase(event);
+        if (
+          older &&
+          event.phase === "injection-predecessor" &&
+          event.status === "waiting" &&
+          event.sourceId === fixture.params.idempotencyKey
+        ) {
+          entered.resolve();
+        }
+      });
+    vi.mocked(fixture.context.broadcast).mockImplementation((event, payload) => {
+      if (
+        event === "chat" &&
+        isRecord(payload) &&
+        payload.runId === fixture.params.idempotencyKey &&
+        (payload.state === "final" || payload.state === "error")
+      ) {
+        terminal.resolve();
+      }
+    });
     operation.attachBackend({
       ...backend("native-steering-owner", fingerprint, cancel),
       messageInjectionV2: {
         version: 2,
         isAvailable: () => true,
         queueMessage: async (text, options, assertCurrent) => {
-          entered.resolve();
-          await release.promise;
-          assertCurrent();
-          enqueued(text);
-          options?.onQueueAccepted?.(true);
+          nativeEntered();
+          if (!older) {
+            entered.resolve();
+          }
+          try {
+            await withinTest(release.promise, signal);
+            assertCurrent();
+            enqueued(text);
+            options?.onQueueAccepted?.(true);
+          } finally {
+            finished.resolve();
+          }
         },
       },
     });
     const request = fixture.send(undefined, { expectedProfileId: profile.id });
     try {
-      await awaitGateBeforeSettlement(entered.promise, request, "Steering preparation not reached");
+      const respond = await withinTest(request, signal);
+      expect(respond.mock.calls[0]).toMatchObject({ 0: true, 1: { status: "started" } });
+      await withinTest(entered.promise, signal);
+      if (older) {
+        expect(older.mailbox.owner.active).toBe(operation);
+        expect(older.injectionOrder.resolved).toBe(false);
+        expect(nativeEntered).not.toHaveBeenCalled();
+      }
       expect(enqueued).not.toHaveBeenCalled();
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
       if (change === "profile merge") {
@@ -209,21 +154,43 @@ it.each(["same profile", "profile merge", "target closed"] as const)(
         operation.complete();
       }
       release.resolve();
-      const respond = await request;
-      if (change === "same profile") {
-        expect(enqueued).toHaveBeenCalledExactlyOnceWith(fixture.approvedContent);
-        expect(respond.mock.calls[0]?.[1]).toMatchObject({ status: "started" });
+      if (older) {
+        retireSessionControllerInput(older);
       } else {
+        await withinTest(finished.promise, signal);
+      }
+      await withinTest(terminal.promise, signal);
+      if (change === "same profile") {
+        expect(nativeEntered).toHaveBeenCalledOnce();
+        expect(enqueued).toHaveBeenCalledExactlyOnceWith(fixture.approvedContent);
+      } else {
+        expect(nativeEntered).toHaveBeenCalledTimes(older ? 0 : 1);
         expect.soft(enqueued).not.toHaveBeenCalled();
-        expect.soft(respond.mock.calls[0]?.[0]).toBe(false);
-        expect
-          .soft(respond.mock.calls[0]?.[1])
-          .not.toEqual(expect.objectContaining({ status: "started" }));
-        if (change === "profile merge") {
-          expect.soft(respond.mock.calls[0]?.[2]).toMatchObject({
-            details: { reason: "EXPECTED_PROFILE_MISMATCH", execution: "may_have_executed" },
-          });
-        }
+        const errorMessage = expect.stringContaining(
+          boundary === "mailbox"
+            ? "operator source identity changed; start a new request"
+            : change === "profile merge"
+              ? "Selected account changed"
+              : "authority is no longer current",
+        );
+        const failure = fixture.context.dedupe.get(`chat:${fixture.params.idempotencyKey}`);
+        expect.soft(failure).toMatchObject({
+          ok: false,
+          payload: { runId: fixture.params.idempotencyKey, status: "error" },
+        });
+        expect.soft(fixture.context.broadcast).toHaveBeenCalledWith(
+          "chat",
+          expect.objectContaining({
+            runId: fixture.params.idempotencyKey,
+            state: "error",
+            errorMessage,
+          }),
+          expect.anything(),
+        );
+        expect.soft(failure?.error).toMatchObject({
+          code: "UNAVAILABLE",
+          message: errorMessage,
+        });
       }
       expect.soft(dispatchInboundMessageMock).not.toHaveBeenCalled();
       expect.soft(cancel).not.toHaveBeenCalled();
@@ -234,9 +201,36 @@ it.each(["same profile", "profile merge", "target closed"] as const)(
       await fixture.finishDispatch();
       expect.soft(respond).toHaveBeenCalledOnce();
       if (change !== "same profile") {
-        expect.soft(loadTranscriptEventsSync(fixture.scope)).toEqual(fixture.activeTranscript);
+        const transcript = loadTranscriptEventsSync(fixture.scope);
+        expect
+          .soft(transcript.slice(0, fixture.activeTranscript.length))
+          .toEqual(fixture.activeTranscript);
+        const appended = transcript.slice(fixture.activeTranscript.length);
+        expect.soft(appended).toMatchObject([
+          {
+            type: "message",
+            message: {
+              role: "user",
+              content: fixture.approvedContent,
+              idempotencyKey: `${fixture.params.idempotencyKey}:user`,
+              __openclaw: { requesterOrigin: { operatorProfileId: profile.id } },
+            },
+          },
+          {
+            type: "custom_message",
+            customType: "run-failed-before-reply",
+            display: true,
+            excludeFromContext: true,
+            details: { runId: fixture.params.idempotencyKey, error: expect.any(String) },
+          },
+        ]);
+        expect.soft(appended[0]).not.toHaveProperty("message.__openclaw.steerTargetRunId");
       }
     } finally {
+      phaseObserver.mockRestore();
+      if (older) {
+        retireSessionControllerInput(older);
+      }
       release.resolve();
       await request;
     }

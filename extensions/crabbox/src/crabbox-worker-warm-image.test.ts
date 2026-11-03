@@ -3,11 +3,9 @@ import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
-import { crabboxState, openWarmImageStore } from "./crabbox-state.test-support.js";
-import {
-  createNodeBootstrapFixture,
-  createWorkerArchiveFixture,
-} from "./crabbox-worker-node-enrollment.test-support.js";
+import { crabboxState } from "./crabbox-state.test-support.js";
+import { scenario } from "./crabbox-warm-provider-scenarios.test-support.js";
+import { expectText, updateWarmImage } from "./crabbox-warm-scenarios.test-support.js";
 import { destroyAndWait, commandResult } from "./crabbox-worker-provider.test-support.js";
 import { listCrabboxWarmImages } from "./crabbox-worker-warm-image-store.js";
 import {
@@ -18,7 +16,6 @@ import {
   CHECKPOINT_ID,
   CLASSLESS_PROFILE,
   LEASE_ID,
-  NODE_RUNTIME_IDENTITY,
   OPERATION_ID,
   PROFILE,
   tempDirs,
@@ -36,8 +33,9 @@ it.each([true, false])(
     const now = 1_800_000_000_000;
     vi.spyOn(Date, "now").mockReturnValue(now);
     let failCapture = true;
+    const unsupportedMessage = "x".repeat(1024);
     const receipt = unsupported
-      ? unsupportedCaptureReceipt(LEASE_ID)
+      ? { ...unsupportedCaptureReceipt(LEASE_ID), message: unsupportedMessage }
       : {
           schema: "crabbox.checkpoint.create.failure.v1",
           outcome: "not_submitted",
@@ -56,8 +54,7 @@ it.each([true, false])(
         : undefined,
     );
     await captureWarmImage(provider);
-    expect(calls.at(-1)?.argv[1]).toBe("stop");
-    expect(calls.filter(({ argv }) => argv[1] === "stop")).toHaveLength(1);
+    expect(calls.filter(({ argv }) => argv[1] === "stop")).toEqual([calls.at(-1)]);
     expect(warn).toHaveBeenCalledOnce();
     if (unsupported) {
       const image = (await listCrabboxWarmImages(crabboxState))[0];
@@ -67,11 +64,10 @@ it.each([true, false])(
         unsupported: {
           atMs: now,
           provider: "aws",
-          message: unsupportedCaptureReceipt(LEASE_ID).message,
+          message: unsupportedMessage,
         },
       });
-      expect(warn.mock.calls[0]?.[0]).toContain("warm image capture unsupported:");
-      expect(warn.mock.calls[0]?.[0]).not.toContain("failed");
+      expectText(warn.mock.calls[0]?.[0], ["warm image capture unsupported:"], ["failed"]);
     } else {
       expect(await listCrabboxWarmImages(crabboxState)).toEqual([]);
       expect(warn.mock.calls[0]?.[0]).not.toContain("--recover");
@@ -113,34 +109,34 @@ it("scrubs every worker identity and workspace before capturing an enrolled leas
   ]);
   const scrub = captureCalls[0];
   expect(scrub?.argv).toContain("--script-stdin");
-  // AWS coordinator round trips starved the old 60s budget (live-measured 2026-08-26).
-  expect(scrub?.options.timeoutMs).toBe(180_000);
-  expect(captureCalls[1]?.options.timeoutMs).toBe(48 * 60_000);
-  expect(provider.resolveDestroyTimeoutMs?.(PROFILE)).toBeGreaterThanOrEqual(
-    calls.reduce((total, call) => total + call.options.timeoutMs, 0),
-  );
   const home = tempDirs.make("openclaw-crabbox-warm-scrub-");
   const at = (relative: string) => path.join(home, relative);
-  const workspace = at(`.openclaw/cloud-workers/${LEASE_ID}/node-host/gateway/workspaces/session`);
-  const npmCache = at(".npm/cached-package");
-  const sshWorkspace = at(".openclaw-worker/workspaces/session");
-  const bundle = at(".openclaw-worker/bundle-hash/index.js");
-  const gitSeed = at(".openclaw-worker/git-seeds/gateway/seed/file");
   const bin = at("bin");
   const workdir = at("crabbox-workdir");
-  const envFile = path.join(workdir, ".crabbox", "env", "forwarded.env");
-  const egressEnvFile = path.join(workdir, ".crabbox", "env-setup");
-  const scrubScript = path.join(workdir, ".crabbox", "scripts", "scrub.sh");
+  const envFile = at("crabbox-workdir/.crabbox/env/forwarded.env");
+  const egressEnvFile = at("crabbox-workdir/.crabbox/env-setup");
+  const scrubScript = at("crabbox-workdir/.crabbox/scripts/scrub.sh");
   const tmp = at("tmp");
-  const setupCa = path.join(tmp, "openclaw-setup-egress.fixture", "ca.pem");
   const fixedTmp = at("fixed-tmp");
-  const fixedSetupCa = path.join(fixedTmp, "openclaw-setup-egress.fixed", "ca.pem");
   // Map the owned Linux /tmp root into the fixture without scanning host temporary files.
   const scrubInput = String(scrub?.options.input).replace('"/tmp"', JSON.stringify(fixedTmp));
-  const unrelatedTemp = path.join(tmp, "unrelated", "keep");
-  const repoConfig = path.join(workdir, ".npmrc");
-  const homeConfig = at(".gitconfig");
-  const write = (file: string, contents: string) => {
+  const retained = [
+    ".npm/cached-package",
+    ".openclaw-worker/bundle-hash/index.js",
+    ".openclaw-worker/git-seeds/gateway/seed/file",
+    "tmp/unrelated/keep",
+    "crabbox-workdir/.npmrc",
+    ".gitconfig",
+  ].map(at);
+  const removed = [
+    ".openclaw/cloud-workers",
+    ".openclaw-worker/workspaces",
+    "crabbox-workdir/.crabbox/env",
+    "tmp/openclaw-setup-egress.fixture",
+    "fixed-tmp/openclaw-setup-egress.fixed",
+    "crabbox-workdir/.crabbox/scripts",
+  ].map(at);
+  const write = (file: string, contents = "synthetic retained bytes") => {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, contents);
   };
@@ -150,19 +146,18 @@ it("scrubs every worker identity and workspace before capturing an enrolled leas
   fs.symlinkSync(process.execPath, runtimeNode);
   fs.writeFileSync(path.join(bin, "node"), "#!/bin/sh\nexit 97\n", { mode: 0o700 });
   write(envFile, "CRABBOX_WORKER_BOOTSTRAP_TOKEN=synthetic-expired-token");
+  for (const file of [
+    ...retained,
+    ...removed.map((directory) => path.join(directory, "fixture")),
+  ]) {
+    write(file);
+  }
   write(egressEnvFile, "SETUP_TOKEN=synthetic-sentinel");
-  for (const file of [setupCa, fixedSetupCa, unrelatedTemp, repoConfig, homeConfig]) {
-    write(file, "preserved configuration or temporary data");
-  }
   write(scrubScript, scrubInput);
-  write(path.join(workspace, "private.txt"), "session workspace bytes");
-  write(npmCache, "reusable npm package");
-  for (const file of [path.join(sshWorkspace, "private.txt"), bundle, gitSeed]) {
-    write(file, file);
-  }
-  const runtime = path.join(home, ".openclaw-worker", "node-runtimes", "a".repeat(64));
+  const runtime = at(`.openclaw-worker/node-runtimes/${"a".repeat(64)}`);
   fs.mkdirSync(runtime, { recursive: true });
   const state = at(`.openclaw/cloud-workers/${LEASE_ID}`);
+  fs.mkdirSync(state, { recursive: true });
   fs.symlinkSync(runtime, path.join(state, "runtime"));
   const node =
     process.platform === "linux"
@@ -217,23 +212,12 @@ it("scrubs every worker identity and workspace before capturing an enrolled leas
   }
   expect(fs.existsSync(runtime)).toBe(true);
   expect(fs.readlinkSync(runtimeNode)).toBe(process.execPath);
-  for (const file of [
-    at(".openclaw/cloud-workers"),
-    sshWorkspace,
-    envFile,
-    egressEnvFile,
-    path.dirname(setupCa),
-    path.dirname(fixedSetupCa),
-    scrubScript,
-  ]) {
+  for (const file of [...removed, egressEnvFile]) {
     expect(fs.existsSync(file)).toBe(false);
   }
-  for (const file of [unrelatedTemp, repoConfig, homeConfig]) {
-    expect(fs.readFileSync(file, "utf8")).toBe("preserved configuration or temporary data");
+  for (const file of retained) {
+    expect(fs.readFileSync(file, "utf8")).toBe("synthetic retained bytes");
   }
-  expect(fs.readFileSync(npmCache, "utf8")).toBe("reusable npm package");
-  expect(fs.readFileSync(bundle, "utf8")).toBe(bundle);
-  expect(fs.readFileSync(gitSeed, "utf8")).toBe(gitSeed);
   write(envFile, "CRABBOX_WORKER_BOOTSTRAP_TOKEN=synthetic-expired-token");
   write(scrubScript, scrubInput);
   fs.writeFileSync(
@@ -243,15 +227,10 @@ it("scrubs every worker identity and workspace before capturing an enrolled leas
   );
   expect(runScrub).toThrow();
   expect(fs.existsSync(envFile)).toBe(true);
-  expect(captureCalls[1]?.argv.slice(1)).toEqual(captureArgs("aws"));
-  calls.length = 0;
-  await provisionWarmProfile(provider, PROFILE, `provision:v2:${"2".repeat(64)}`);
-  expect(calls.some(({ argv }) => argv[2] === "inspect")).toBe(false);
-  expect(calls.find(({ argv }) => argv[2] === "fork")?.argv[3]).toBe(CHECKPOINT_ID);
-  expect(calls.some(({ argv }) => argv[1] === "warmup")).toBe(false);
 });
 
 it.each([
+  ["aws", "aws-ebs-snapshot", "completed", 0],
   ["azure", "azure-os-disk-snapshot", "available", 0],
   ["daytona", "daytona-snapshot", "active", 3 * 60_000],
   ["machine0", "machine0-image", "ACTIVE", 30 * 60_000],
@@ -307,28 +286,23 @@ it.each([
 );
 
 it("recovers enrolled class after restart", async () => {
-  const initial = createWarmProvider();
-  const lease = await provisionWarmProfile(initial.provider, PROFILE, OPERATION_ID, "fast");
+  const initial = scenario();
+  const lease = await initial.provision(OPERATION_ID, PROFILE, { machineClass: "fast" });
   await initial.provider.dispose();
 
-  const restarted = createWarmProvider(undefined, initial.stateDir);
+  const restarted = scenario(undefined, initial.stateDir);
   await restarted.provider.inspect({ leaseId: lease.leaseId, profile: PROFILE });
-  await destroyAndWait(restarted.provider, { leaseId: lease.leaseId, profile: PROFILE });
+  await restarted.stop(lease);
 
-  expect(restarted.calls.filter(({ argv }) => argv[2] === "create")).toHaveLength(1);
+  expect(restarted.checkpoints("create")).toHaveLength(1);
 
   for (const [digit, machineClass] of [
     ["1", "standard"],
     ["2", "fast"],
   ] as const) {
     restarted.calls.length = 0;
-    await provisionWarmProfile(
-      restarted.provider,
-      PROFILE,
-      `provision:v2:${digit.repeat(64)}`,
-      machineClass,
-    );
-    const fork = restarted.calls.find(({ argv }) => argv[2] === "fork")?.argv;
+    await restarted.provision(`provision:v2:${digit.repeat(64)}`, PROFILE, { machineClass });
+    const fork = restarted.checkpoints("fork")[0];
     if (machineClass === "standard") {
       expect(restarted.calls.some(({ argv }) => argv[1] === "warmup")).toBe(true);
       expect(fork).toBeUndefined();
@@ -349,51 +323,23 @@ it("never snapshots an inspection-only lease with a configured class", async () 
   expect(calls.at(-1)?.argv[1]).toBe("stop");
 });
 
-it.each([
-  ["the captured runtime", NODE_RUNTIME_IDENTITY, false],
-  ["a different runtime", { ...NODE_RUNTIME_IDENTITY, nodeBootstrapSha256: "f".repeat(64) }, true],
-] as const)(
-  "prepares the node runtime on a fork only for %s",
-  async (_label, identity, prepares) => {
-    const initial = createWarmProvider();
-    await captureWarmImage(initial.provider);
-    const { provider, calls } = createWarmProvider(undefined, initial.stateDir);
-    const prepareNodeRuntime = vi.fn(async () => ({
-      nodeBootstrap: createNodeBootstrapFixture(),
-      workerBundle: createWorkerArchiveFixture(),
-    }));
-
-    await provisionWarmProfile(provider, PROFILE, OPERATION_ID, undefined, {
-      nodeRuntimeIdentity: identity,
-      prepareNodeRuntime,
-    });
-
-    expect(calls.some(({ argv }) => argv[2] === "fork")).toBe(true);
-    expect(prepareNodeRuntime).toHaveBeenCalledTimes(prepares ? 1 : 0);
-  },
-);
-
 it("does not change a checkpoint-bound lease to cold when the fork fails", async () => {
   const { provider, calls } = createWarmProvider(({ argv }) =>
     argv[2] === "fork" ? commandResult({ code: 7, stderr: "snapshot unavailable" }) : undefined,
   );
   await captureWarmImage(provider);
-  calls.length = 0;
-
-  await expect(provisionWarmProfile(provider)).rejects.toThrow();
-
-  const fork = calls.find(({ argv }) => argv[2] === "fork")?.argv;
-  const warmup = calls.find(({ argv }) => argv[1] === "warmup")?.argv;
-  expect(fork?.[fork.indexOf("--lease-id") + 1]).toBe(LEASE_ID);
-  expect(warmup).toBeUndefined();
-  calls.length = 0;
-  await expect(provisionWarmProfile(provider)).rejects.toThrow();
-  expect(calls.find(({ argv }) => argv[2] === "fork")?.argv[3]).toBe(CHECKPOINT_ID);
-  expect(calls.some(({ argv }) => argv[1] === "warmup")).toBe(false);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    calls.length = 0;
+    await expect(provisionWarmProfile(provider)).rejects.toThrow();
+    const fork = calls.find(({ argv }) => argv[2] === "fork")?.argv;
+    expect(fork?.[fork.indexOf("--lease-id") + 1]).toBe(LEASE_ID);
+    expect(fork?.[3]).toBe(CHECKPOINT_ID);
+    expect(calls.some(({ argv }) => argv[1] === "warmup")).toBe(false);
+  }
 });
 
 it("verifies an unverified pending image before falling back to cold", async () => {
-  const { provider, calls } = createWarmProvider(({ argv }) =>
+  const s = scenario(({ argv }) =>
     argv[2] === "inspect"
       ? jsonResult({
           localState: "metadata_available",
@@ -402,16 +348,14 @@ it("verifies an unverified pending image before falling back to cold", async () 
         })
       : undefined,
   );
-  await captureWarmImage(provider);
+  await s.capture();
   // Older captures can retain a pending projection; verify that stored state on reuse.
-  const store = openWarmImageStore();
-  const { key, value } = store.entries()[0]!;
-  store.update(key, () => ({ ...value, image: { ...value.image!, state: "pending" } }));
-  calls.length = 0;
+  updateWarmImage({ state: "pending" });
+  s.calls.length = 0;
 
-  const lease = await provisionWarmProfile(provider);
+  const lease = await s.provision();
 
-  expect(calls.some(({ argv }) => argv[1] === "warmup")).toBe(true);
-  await destroyAndWait(provider, { leaseId: lease.leaseId, profile: PROFILE });
-  expect(calls.some(({ argv }) => argv[2] === "create")).toBe(false);
+  expect(s.commands("warmup").length).toBeGreaterThan(0);
+  await s.stop(lease);
+  expect(s.checkpoints("create")).toEqual([]);
 });

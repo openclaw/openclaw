@@ -10,13 +10,6 @@ type SentMessageLookup = {
   messageId?: string;
 };
 
-type SentMessageLookupOptions = {
-  // Self-chat SQLite row IDs differ from outbound GUIDs; allow text matching after an ID miss.
-  skipIdShortCircuit?: boolean;
-  includePendingText?: boolean;
-  requireMessageIdTextMatch?: boolean;
-};
-
 export type SentMessageCache = ReturnType<typeof createSentMessageCache>;
 
 // Echo arrival observed at ~2.2s on M4 Mac Mini (SQLite poll interval is the bottleneck).
@@ -55,27 +48,28 @@ export function createSentMessageCache() {
   async function has(
     scope: string,
     lookup: SentMessageLookup,
-    options: boolean | SentMessageLookupOptions = false,
+    options: {
+      // Self-chat SQLite row IDs differ from outbound GUIDs; allow text matching after an ID miss.
+      skipIdShortCircuit?: boolean;
+      includePendingText?: boolean;
+      requireMessageIdTextMatch?: boolean;
+    } = {},
   ): Promise<boolean> {
-    const resolvedOptions =
-      typeof options === "boolean" ? { skipIdShortCircuit: options } : options;
     if (
       await hasPersistedIMessageEcho({
         scope,
         text: lookup.text,
         media: lookup.media,
         messageId: lookup.messageId,
-        skipIdShortCircuit: resolvedOptions.skipIdShortCircuit,
-        includePendingText: resolvedOptions.includePendingText,
-        requireMessageIdTextMatch: resolvedOptions.requireMessageIdTextMatch,
-        messageIdMaxAgeMs: resolvedOptions.requireMessageIdTextMatch
-          ? SENT_MESSAGE_TEXT_TTL_MS
-          : undefined,
+        skipIdShortCircuit: options.skipIdShortCircuit,
+        includePendingText: options.includePendingText,
+        requireMessageIdTextMatch: options.requireMessageIdTextMatch,
+        messageIdMaxAgeMs: options.requireMessageIdTextMatch ? SENT_MESSAGE_TEXT_TTL_MS : undefined,
       })
     ) {
       return true;
     }
-    if (resolvedOptions.requireMessageIdTextMatch) {
+    if (options.requireMessageIdTextMatch) {
       // The ID-only memory cache cannot prove that this GUID and body were sent together.
       return false;
     }
@@ -95,7 +89,7 @@ export function createSentMessageCache() {
       const hasTextOnlyMatch = hasContentOnlyMatch(text);
       const hasMediaOnlyMatch = hasContentOnlyMatch(media);
       canUseMediaFallback = hasMediaOnlyMatch;
-      if (!resolvedOptions.skipIdShortCircuit && !hasTextOnlyMatch && !hasMediaOnlyMatch) {
+      if (!options.skipIdShortCircuit && !hasTextOnlyMatch && !hasMediaOnlyMatch) {
         return false;
       }
     }

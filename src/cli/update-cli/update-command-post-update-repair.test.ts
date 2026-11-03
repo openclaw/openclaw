@@ -21,7 +21,7 @@ import {
 } from "../../infra/update-run-ledger.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { defaultRuntime } from "../../runtime.js";
-import { classifyUpdateOutcome } from "../../shared/update-outcome.js";
+import { classifyUpdateOutcome } from "../../shared/update-outcome-classification.js";
 import { writeOpenClawPackageFixture } from "./update-cli-package.test-support.js";
 import { registerUnverifiedDefinitionRecoveryTests } from "./update-command-definition-recovery.test-support.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
@@ -58,7 +58,12 @@ const mocks = vi.hoisted(() => ({
   readService: vi.fn<typeof import("../../daemon/service.js").readGatewayServiceState>(),
   execSchtasks: vi.fn<typeof import("../../daemon/schtasks-exec.js").execSchtasks>(),
 }));
-vi.mock("../../daemon/schtasks-exec.js", () => ({ execSchtasks: mocks.execSchtasks }));
+// mock-isolation: Recovery tests mutate only their synthetic Windows task, never host services.
+vi.mock("../../daemon/schtasks-exec.js", () => ({
+  execSchtasks: mocks.execSchtasks,
+  execScheduledTaskEnabledChange: (taskName: string, enabled: boolean) =>
+    mocks.execSchtasks(["/Change", "/TN", taskName, enabled ? "/ENABLE" : "/DISABLE"]),
+}));
 vi.mock("../../infra/update-repair-agent.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/update-repair-agent.js")>()),
   runUpdateRepairLoop: mocks.repair,
@@ -675,6 +680,7 @@ describe("post-activation failure settlement without inference", () => {
       const migration = receipt.startsWith("migration-");
       const localVersionOnly = receipt.startsWith("migration-local-");
       const currentCore = receipt.startsWith("current-core-") || receipt.startsWith("operator-");
+      const untouched = receipt.startsWith("operator-");
       const recovered =
         receipt === "settled" ||
         receipt === "migration-required" ||
@@ -922,25 +928,23 @@ describe("post-activation failure settlement without inference", () => {
               : path.join("control", "services.sqlite"),
           );
         }
-        expect(
-          failure.result.recovery,
-          JSON.stringify({
-            errors: vi.mocked(defaultRuntime.error).mock.calls,
-            result: failure.result,
-          }),
-        ).toMatchObject(
-          recovered
-            ? {
-                serviceRestartSafe: true,
-                service: "healthy",
-                version: mocks.version,
-              }
-            : {
-                serviceRestartSafe: false,
-                ...(receipt === "current-core-data-at-risk"
-                  ? { dataAtRisk: "unreadable-state" }
-                  : {}),
-              },
+        expect(failure.result.recovery, JSON.stringify(failure.result)).toEqual(
+          untouched
+            ? undefined
+            : expect.objectContaining(
+                recovered
+                  ? {
+                      serviceRestartSafe: true,
+                      service: "healthy",
+                      version: mocks.version,
+                    }
+                  : {
+                      serviceRestartSafe: false,
+                      ...(receipt === "current-core-data-at-risk" && {
+                        dataAtRisk: "unreadable-state",
+                      }),
+                    },
+              ),
         );
       });
       expect(mocks.restartCommand).toHaveBeenCalledTimes(recovered ? 1 : 0);
@@ -958,10 +962,8 @@ describe("post-activation failure settlement without inference", () => {
         );
       }
       const report = getUpdateRun(run.runId, { env: run.env });
-      expect(report?.verification).toMatchObject({
-        serviceRunning: recovered,
-        readyz: recovered,
-      });
+      expect(report?.verification.serviceRunning).toBe(untouched ? undefined : recovered);
+      expect(report?.verification.readyz).toBe(untouched ? undefined : recovered);
       const rendered = renderUpdateRunReport(report!).lines.join("\n");
       if (migration) {
         expect(report?.status).toBe("failed");

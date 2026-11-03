@@ -232,7 +232,7 @@ export abstract class MemorySearchOrchestration extends MemorySearchRetrieval {
               },
             );
           } else {
-            log.warn(`memory sync failed (search-bootstrap): ${String(err)}`);
+            log.warn(`memory sync failed (search-bootstrap): ${formatErrorMessage(err)}`);
           }
         }
         indexState = await readIndexState();
@@ -375,7 +375,7 @@ export abstract class MemorySearchOrchestration extends MemorySearchRetrieval {
       ) {
         const trackedSearchSync = this.syncPublishedIndexInBackground({ reason: "search" })
           .catch((err: unknown) => {
-            log.warn(`memory sync failed (search): ${String(err)}`);
+            log.warn(`memory sync failed (search): ${formatErrorMessage(err)}`);
           })
           .finally(() => {
             this.activeBackgroundSearchSyncs.delete(trackedSearchSync);
@@ -531,6 +531,11 @@ export abstract class MemorySearchOrchestration extends MemorySearchRetrieval {
         }
       }
       const hasVector = queryVec.some((v) => v !== 0);
+      if (!hasVector) {
+        log.warn(
+          `memory search: query embedding from ${semanticProvider.id} is all zeros; vector recall skipped; check the embedding service and retry`,
+        );
+      }
       const vector = hasVector
         ? await this.searchVector(
             queryVec,
@@ -557,6 +562,7 @@ export abstract class MemorySearchOrchestration extends MemorySearchRetrieval {
           results: eligible,
           temporalDecay: hybrid.temporalDecay,
           workspaceDir: this.workspaceDir,
+          extraPaths: this.settings.extraPaths,
           sessionSourceMtimes: this.loadSourceMtimes("sessions", vectorResults),
           memorySourceMtimes: this.loadSourceMtimes("memory", vectorResults),
         });
@@ -588,6 +594,7 @@ export abstract class MemorySearchOrchestration extends MemorySearchRetrieval {
         temporalDecay: hybrid.temporalDecay,
         activeProjectKeys: opts?.activeProjectKeys,
         workspaceDir: this.workspaceDir,
+        extraPaths: this.settings.extraPaths,
         // Vector enrichment runs last, so its facts win for paths in both sets.
         sessionSourceMtimes: this.loadSourceMtimes("sessions", [
           ...keywordResults,

@@ -75,6 +75,9 @@ function readDescribedSessionVisibilityRow(value: unknown): DescribedSessionVisi
     ownerSessionKey: normalizeOptionalString(value.ownerSessionKey),
     spawnedBy: normalizeOptionalString(value.spawnedBy),
     parentSessionKey: normalizeOptionalString(value.parentSessionKey),
+    childOwnerSessionKeys: Array.isArray(value.childOwnerSessionKeys)
+      ? value.childOwnerSessionKeys.filter((owner): owner is string => typeof owner === "string")
+      : undefined,
     sessionId: normalizeOptionalString(value.sessionId),
   };
 }
@@ -221,7 +224,12 @@ export async function resolveSessionToolAccess(params: {
   readConfig?: () => OpenClawConfig;
   sandboxed?: boolean;
   callGateway?: AgentToolGatewayRequestCaller;
-}): Promise<SessionVisibilityDecision & { assertCurrent?: () => void; basis?: "scoped-grant" }> {
+}): Promise<
+  SessionVisibilityDecision & {
+    assertCurrent?: () => void;
+    basis?: "scoped-grant" | "parent-lineage" | "live-controller";
+  }
+> {
   const authorizationTargetSessionKey =
     params.authorizationTargetSessionKey ?? params.targetSessionKey;
   const deny = (denial: SessionToolAccessDenied) => {
@@ -336,39 +344,66 @@ export async function resolveSessionToolAccess(params: {
     return finish(false);
   }
   const requesterOwnedAccess = check(true);
-  if (params.requesterOwned) {
-    return finish(true);
-  }
   // Ownership proof can only widen tree visibility; do not let an operational
   // lookup failure replace a deterministic self/A2A policy denial.
   if (!requesterOwnedAccess.allowed) {
     return initial.allowed ? finish(false) : deny(initial);
   }
-  if (
-    params.action === "history" &&
-    params.displayAction !== "search" &&
-    authorizationTargetSessionKey === params.targetSessionKey
-  ) {
+  if (authorizationTargetSessionKey === params.targetSessionKey) {
     try {
       const described = await (params.callGateway ?? callAgentToolGatewayRequest)<{
         session?: unknown;
       }>({
         method: "sessions.describe",
-        params: { key: params.targetSessionKey },
+        params: { key: params.targetSessionKey, agentId: params.targetAgentId },
       });
       const row = readDescribedSessionVisibilityRow(described?.session);
-      if (row?.key === params.targetSessionKey) {
-        const access = createChecker().check(row);
+      if (
+        row?.key === params.targetSessionKey &&
+        (row.agentId ?? parseAgentSessionKey(row.key)?.agentId) === params.targetAgentId &&
+        (row.childOwnerSessionKeys !== undefined ||
+          (params.action === "history" && params.displayAction !== "search"))
+      ) {
+        // Protocol-v4 Gateways published display-only empty owner arrays after
+        // recency expiry. Keep the shipped history-only lineage fallback until
+        // the next protocol break; it never grants send/search/status access.
+        const historyFallback =
+          params.action === "history" &&
+          params.displayAction !== "search" &&
+          row.childOwnerSessionKeys?.length === 0;
+        const access = createChecker().check(
+          historyFallback ? { ...row, childOwnerSessionKeys: undefined } : row,
+        );
         if (!access.allowed) {
           return deny(access);
         }
+        const relationshipOwned = row.childOwnerSessionKeys?.includes(params.requesterSessionKey);
+        const parentLineage =
+          relationshipOwned &&
+          (row.parentSessionKey ?? row.spawnedBy) === params.requesterSessionKey;
+        // Do not narrow an independently authorized peer send/watch to a temporary control grant.
+        if (initial.allowed && !parentLineage) {
+          return finish(false);
+        }
         if (row.sessionId) {
-          return { allowed: true, expectedSessionId: row.sessionId };
+          const basis = relationshipOwned
+            ? parentLineage
+              ? "parent-lineage"
+              : "live-controller"
+            : undefined;
+          return {
+            allowed: true,
+            expectedSessionId: row.sessionId,
+            ...(basis ? { basis } : {}),
+          };
         }
       }
     } catch {
       // Older or temporarily unavailable gateways keep the existing fail-closed lookup below.
     }
+  }
+  if (params.requesterOwned) {
+    return finish(true);
   }
   const ownership = await lookupRequesterSessionOwnership({
     requesterSessionKey: params.requesterSessionKey,

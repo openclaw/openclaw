@@ -1,11 +1,10 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { getEnvironmentData, setEnvironmentData } from "node:worker_threads";
 import type { ModelCatalogProvider } from "@openclaw/model-catalog-core/model-catalog-types";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { compareOpenClawVersions } from "../config/version.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { AsyncContext } from "../shared/async-context.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { VERSION } from "../version.js";
@@ -39,9 +38,8 @@ export type ActiveRemoteModelCatalog = RemoteModelCatalogMetadata & {
 };
 
 const STARTUP_SNAPSHOT_KEY = "openclaw.remoteModelCatalogStartupSnapshot";
-const remoteCatalogScope = resolveGlobalSingleton(
+const remoteCatalogScope = new AsyncContext<{ catalog: ActiveRemoteModelCatalog | null }>(
   Symbol.for("openclaw.remoteModelCatalogScope"),
-  () => new AsyncLocalStorage<{ catalog: ActiveRemoteModelCatalog | null }>(),
 );
 
 function isCompatible(bundle: RemoteModelCatalogWireBundle): boolean {
@@ -153,10 +151,9 @@ export function runOutsideRemoteModelCatalogSnapshot<T>(run: () => T): T {
   return remoteCatalogScope.exit(run);
 }
 
-/** Preparation does not change the pair visible to current readers. */
-export async function readRemoteModelCatalogUpdate(
+async function readStoredRemoteModelCatalog(
   config: OpenClawConfig,
-): Promise<ActiveRemoteModelCatalog | undefined> {
+): Promise<{ snapshot: ActiveRemoteModelCatalog; bundledGeneratedAt: number } | undefined> {
   if (!isRemoteModelCatalogRefreshEnabled(config)) {
     return undefined;
   }
@@ -170,11 +167,29 @@ export async function readRemoteModelCatalogUpdate(
     bundledGeneratedAt,
   );
   context.admission.assertCurrent();
-  return snapshot &&
-    snapshot.generatedAt > bundledGeneratedAt &&
-    isRemoteCatalogSourceActive(config, snapshot.sourceUrl)
-    ? snapshot
+  return snapshot && isRemoteCatalogSourceActive(config, snapshot.sourceUrl)
+    ? { snapshot, bundledGeneratedAt }
     : undefined;
+}
+
+/** Preparation does not change the pair visible to current readers. */
+export async function readRemoteModelCatalogUpdate(
+  config: OpenClawConfig,
+): Promise<ActiveRemoteModelCatalog | undefined> {
+  const stored = await readStoredRemoteModelCatalog(config);
+  return stored && stored.snapshot.generatedAt > stored.bundledGeneratedAt
+    ? stored.snapshot
+    : undefined;
+}
+
+/** Stored recommendations stay valid when the catalog is older than this build. */
+export async function readRemoteModelCatalogProviderRecommendations(
+  config: OpenClawConfig,
+  provider: string,
+): Promise<readonly string[] | undefined> {
+  return (await readStoredRemoteModelCatalog(config))?.snapshot.recommendations[
+    normalizeProviderId(provider)
+  ];
 }
 
 /** The prepared catalog owner commits this pair in the same turn as its rows. */

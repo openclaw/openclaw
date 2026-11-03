@@ -12,6 +12,7 @@ import {
   replaceDirectoryContents,
   stageDirectoryContents,
 } from "./mirror.js";
+import { expectFiles, writeFiles } from "./openshell-fs.test-support.js";
 
 let fixtureRoot: string;
 let source: string;
@@ -34,20 +35,6 @@ async function expectPathMissing(targetPath: string): Promise<void> {
   await expect(result).rejects.toMatchObject({ code: "ENOENT" });
 }
 
-async function writeFiles(root: string, files: Record<string, string>) {
-  for (const [name, contents] of Object.entries(files)) {
-    const file = path.join(root, name);
-    await fs.mkdir(path.dirname(file), { recursive: true });
-    await fs.writeFile(file, contents);
-  }
-}
-
-async function expectFiles(root: string, files: Record<string, string>) {
-  for (const [name, contents] of Object.entries(files)) {
-    expect(await fs.readFile(path.join(root, name), "utf8")).toBe(contents);
-  }
-}
-
 afterEach(async () => {
   await fs.rm(fixtureRoot, { recursive: true, force: true });
 });
@@ -56,13 +43,13 @@ describe("replaceDirectoryContents", () => {
   it("unlinks target hardlinks before replacing host content", async () => {
     await fs.writeFile(path.join(outside, "original.txt"), "host-only");
     await fs.link(path.join(outside, "original.txt"), path.join(target, "a.txt"));
-    await fs.writeFile(path.join(source, "a.txt"), "hello");
-    await fs.writeFile(path.join(target, "old.txt"), "stale");
+    await writeFiles(source, { "a.txt": "hello" });
+    await writeFiles(target, { "old.txt": "stale" });
 
     await replace();
 
-    expect(await fs.readFile(path.join(target, "a.txt"), "utf8")).toBe("hello");
-    expect(await fs.readFile(path.join(outside, "original.txt"), "utf8")).toBe("host-only");
+    await expectFiles(target, { "a.txt": "hello" });
+    await expectFiles(outside, { "original.txt": "host-only" });
     await expectPathMissing(path.join(target, "old.txt"));
   });
 
@@ -135,7 +122,7 @@ describe("replaceDirectoryContents", () => {
 
     await replace(DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS);
 
-    await expectPathMissing(path.join(target, "Hooks"));
+    expect(await fs.readdir(target)).not.toContain("Hooks");
     expect(await fs.readFile(path.join(target, "safe.txt"), "utf8")).toBe("ok");
     await expectFiles(target, protectedFiles);
     for (const file of Object.keys(protectedFiles)) {
