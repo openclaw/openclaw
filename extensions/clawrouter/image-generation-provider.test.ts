@@ -32,6 +32,8 @@ const authStore = {
 function catalog(model = MODEL) {
   return {
     version: "clawrouter.client-catalog.v1",
+    observedAt: new Date().toISOString(),
+    scope: { authType: "proxy_key", credentialId: "synthetic-router-id" },
     providers: [
       {
         id: "openai",
@@ -329,7 +331,7 @@ describe("registered ClawRouter image generation over HTTP", () => {
   it("uses a newly resolved key without retaining old grants", async () => {
     await generate();
     calls.length = 0;
-    inventory = { version: "clawrouter.client-catalog.v1", providers: [] };
+    inventory = { ...catalog(), providers: [] };
     const changed = {
       version: 1,
       profiles: {
@@ -496,7 +498,7 @@ describe("registered ClawRouter image generation over HTTP", () => {
         }),
       }),
     ]);
-    inventory = { version: "clawrouter.client-catalog.v1", providers: [] };
+    inventory = { ...catalog(), providers: [] };
     await expect(selected!.liveCatalog!(context)).resolves.toEqual([]);
     expect(
       calls.every((call) => call.headers.authorization === "Bearer synthetic-router-key"),

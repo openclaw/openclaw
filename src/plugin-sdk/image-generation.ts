@@ -1,4 +1,8 @@
 export {
+  buildGoogleImageGenerationBody,
+  parseGoogleImageGenerationResponse,
+} from "../image-generation/google-image.js";
+export {
   createOpenAiCompatibleImageGenerationProvider,
   type OpenAiCompatibleImageProviderRequestBody,
   type OpenAiCompatibleImageProviderRequestParams,
