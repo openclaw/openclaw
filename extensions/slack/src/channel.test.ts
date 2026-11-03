@@ -134,6 +134,41 @@ describe("slackPlugin actions", () => {
   });
 
   it.each([
+    { name: "broadcast reply", params: { threadId: "111.222", replyBroadcast: true } },
+    { name: "broadcast reply without a thread", params: { replyBroadcast: true } },
+  ])("keeps $name on the plugin action path", ({ params }) => {
+    const payload = { text: "hello" };
+    const prepared = slackPlugin.actions!.prepareSendPayload!({
+      ctx: {
+        action: "send",
+        channel: "slack",
+        cfg: {},
+        params,
+        toolContext: {},
+      },
+      to: "channel:C123",
+      payload,
+    } as never);
+    expect(prepared).toBeNull();
+  });
+
+  it("keeps a non-broadcast reply on the core send path", () => {
+    const payload = { text: "hello" };
+    const prepared = slackPlugin.actions!.prepareSendPayload!({
+      ctx: {
+        action: "send",
+        channel: "slack",
+        cfg: {},
+        params: { threadId: "111.222", replyBroadcast: false },
+        toolContext: {},
+      },
+      to: "channel:C123",
+      payload,
+    } as never);
+    expect(prepared).toBe(payload);
+  });
+
+  it.each([
     { accountId: "work", id: "U12345678", token: "xoxb-work", qualified: false },
     { accountId: "org", id: "team:T12345678:user:U12345678", token: "xoxb-org", qualified: true },
   ])("routes pairing approval through $accountId", async ({ accountId, id, token, qualified }) => {

@@ -1,0 +1,2 @@
+# Pin `replyBroadcast` sends to the Slack plugin action path so the flag survives.
+35
