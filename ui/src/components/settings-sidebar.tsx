@@ -557,9 +557,6 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
                 </div>
               )}
             </Show>
-            <div class="settings-sidebar__connection">
-              <SettingsSaveIndicator {...props.saveIndicator} />
-            </div>
             <SidebarBuildChip
               basePath={props.basePath}
               gatewayVersion={props.gatewayVersion || null}

@@ -877,7 +877,7 @@ For device and cloud sessions, the submitted prompt also starts background namin
 
 For a remote target, the Control UI creates the repository or managed-worktree session with an empty initial message and no `execNode`, dispatches it by exact `deviceId`, `autoDevice: true`, or `profileId` (plus an optional cloud machine class), waits for active placement, and then sends the first message and attachments with the same request key used by recovery to prevent duplicate sends. Explicit and automatic device dispatch require `operator.write`; cloud profile dispatch requires `operator.admin`. The composer footer chooses the new session's model and reasoning level.
 
-Model and **Effort** are separate adjacent composer controls in chat and New session, on desktop and mobile. The model picker never contains Effort or Fast-mode controls. Long model labels ellipsize to leave room for the other controls; the full name remains in the open picker and accessible label. Narrow composers, including split panes in wider windows, use compact controls so each picker stays independently clickable. Effort uses a gauge in these layouts whose needle reflects the current level, with a lightning badge when Fast mode is active. In chat, Fast mode stays in the Effort menu, or appears as the adjacent control when reasoning is unavailable. Models with neither available control omit it.
+Model and **Effort** are separate adjacent composer controls in chat and New session, on desktop and mobile. The model picker never contains Effort or Speed controls. Long model labels ellipsize to leave room for the other controls; the full name remains in the open picker and accessible label. Narrow composers, including split panes in wider windows, use compact controls so each picker stays independently clickable. The Effort control shows the effective level. Its menu marks the default level with a **Default** badge, and while the chat inherits that level the control's accessible name reads, for example, "Effort: Default (High)". Effort uses a gauge in these layouts whose needle reflects the current level, with a lightning badge when Fast or Ultrafast speed is active. In chat, **Speed** stays in the Effort menu, or appears as the adjacent control when reasoning is unavailable. Models with neither available control omit it.
 
 The model picker initially opens with the selected model’s provider section expanded and other provider sections collapsed. Closing and reopening the same picker preserves your provider expansion choices and clears the search. Reloading the page initializes provider sections from the selected model again. Search the model picker by model name, model ID, provider, or provider/model reference. Your search stays applied as the model catalog refreshes. Press **Escape** to clear a nonempty search while keeping the picker open; press it again to close the picker and return focus to its trigger.
 
@@ -971,7 +971,7 @@ For a GitHub Enterprise deployment, configure `gateway.github.host` and `gateway
 }
 ```
 
-Use the Effort menu to choose Fast Mode before creating a session. New Session persists that choice before the first local or remote turn starts.
+Use the Effort menu to choose a **Speed** before creating a session. New Session persists that choice before the first local or remote turn starts.
 
 Refreshing sessions after an initial `/think` command finishes updates chat's Effort setting.
 

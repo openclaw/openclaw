@@ -61,6 +61,9 @@ export function applyConfigSnapshot(
   const currentRevisionHash = snapshot.configRevisionHash ?? snapshot.hash ?? null;
   if (snapshot.appliedConfigHash !== undefined) {
     state.configNeedsApply = currentRevisionHash !== snapshot.appliedConfigHash;
+    if (state.configNeedsApply && Date.now() >= state.configApplyPromptAfter) {
+      state.configApplyPromptHeld = false;
+    }
   }
   const draftBaseHash = state.configDraftBaseHash ?? state.configSnapshot?.hash ?? null;
   setConfigSnapshot(state, snapshot);

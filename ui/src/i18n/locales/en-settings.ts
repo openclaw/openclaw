@@ -1260,12 +1260,12 @@ const enSettings = {
       discoverFailed: "More models could not be discovered.",
       discoverFailedFor: "Models from {providers} could not be discovered.",
       retryDiscover: "Retry",
-      thinkingHelpLabel: "About thinking defaults",
+      thinkingHelpLabel: "About effort defaults",
       thinkingHelp:
         "Sets the global default for new sessions when no session-specific thinking level is set. Choices follow the primary model's reported capabilities. A saved level stays visible if the model changes; other models map unsupported levels to their closest supported option.",
       thinkingDefaultHelp:
         "Uses the selected model's thinking policy instead of saving a global thinking override.",
-      fastModeHelpLabel: "About fast mode defaults",
+      fastModeHelpLabel: "About speed defaults",
       fastModeHelp:
         "Sets the global default for new sessions. Auto starts fast and returns to standard after the model's configured interval. On requests fast mode, Off requests standard, and Ultrafast requests the Ultrafast service tier when available. Saved preferences remain unchanged when capabilities change.",
       fastModeDefaultHelp:
@@ -2007,14 +2007,15 @@ const enSettings = {
     open: "Open",
     fileOpenedOnGateway: en.configView.fileOpenedOnGateway,
     applying: registerSettingsSidebarEnglish.catalog.configView.applying,
-    autoSaveSaving: "Saving…",
-    autoSaveSaved: "Saved",
+    autoSaveSaving: registerSettingsSidebarEnglish.catalog.configView.autoSaveSaving,
+    autoSaveSaved: registerSettingsSidebarEnglish.catalog.configView.autoSaveSaved,
     autoSavePaused: registerSettingsSidebarEnglish.catalog.configView.autoSavePaused,
     saveNow: registerSettingsSidebarEnglish.catalog.configView.saveNow,
     autoSaveFailed: registerSettingsSidebarEnglish.catalog.configView.autoSaveFailed,
     autoSaveRejected: registerSettingsSidebarEnglish.catalog.configView.autoSaveRejected,
     autoSaveRejectedHint: registerSettingsSidebarEnglish.catalog.configView.autoSaveRejectedHint,
     rejectionDetails: registerSettingsSidebarEnglish.catalog.configView.rejectionDetails,
+    rejectionDetailsHide: registerSettingsSidebarEnglish.catalog.configView.rejectionDetailsHide,
     recoveryNotRestored: en.configView.recoveryNotRestored,
     recoveryUnknown: en.configView.recoveryUnknown,
     recoveryBackup: en.configView.recoveryBackup,

@@ -501,23 +501,16 @@ openclaw-appearance-background .settings-background-preview .session-background_
   border-color: color-mix(in srgb, var(--danger) 35%, var(--border) 65%);
 }
 
-/* Lives here rather than config.css because every schema-driven surface
- * (config pages and the channel detail forms) renders the same split. */
-
-.config-advanced-disclosure {
-  margin-top: var(--space-5);
+.settings-disclosure__summary {
+  list-style: none;
 }
 
-.config-tier-groups > .config-advanced-disclosure:first-child {
-  margin-top: 0;
+.settings-disclosure__summary::-webkit-details-marker {
+  display: none;
 }
 
-.config-advanced-disclosure__summary {
-  cursor: var(--cursor-action);
-}
-
-.config-advanced-disclosure > .settings-group {
-  margin-top: var(--space-3);
+.settings-disclosure[open] > .settings-disclosure__summary .settings-disclosure__chevron {
+  transform: rotate(90deg);
 }
 
 .settings-row {
@@ -1704,10 +1697,6 @@ textarea.settings-input {
   display: contents;
 }
 
-.settings-sidebar__connection {
-  min-height: 1lh;
-}
-
 openclaw-settings-save-indicator {
   min-width: 0;
 }
@@ -1723,21 +1712,134 @@ openclaw-settings-save-indicator:empty {
   min-width: 0;
 }
 
-.settings-save-indicator--recovery,
-.settings-save-indicator--rejected {
+.settings-save-indicator--recovery {
   flex-direction: column;
   align-items: flex-start;
   white-space: pre-line;
   overflow-wrap: anywhere;
 }
 
-.settings-save-indicator--danger {
+/* The state, its reason and its way out share a line while they fit. */
+.settings-save-indicator--rejected,
+.settings-save-indicator--error {
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  overflow-wrap: anywhere;
+}
+
+.settings-save-indicator__failure {
   color: var(--danger);
+}
+
+.settings-save-indicator__reason-toggle {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: var(--cursor-action);
+}
+
+.settings-save-indicator__reason-toggle:hover {
+  color: var(--text);
+}
+
+/* In a header or the sidebar there is no room above, so it takes its own line. */
+.settings-save-indicator__reason {
+  order: 1;
+  flex-basis: 100%;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .settings-save-indicator svg {
   width: 15px;
   height: 15px;
+}
+
+.settings-save-indicator__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* Shares the page's grid cell, so nothing in the page moves when it appears. It rests
+   in the bottom gutter and lets clicks through; only its own buttons take them. */
+.settings-save-status {
+  position: relative;
+  z-index: 1;
+  grid-area: content;
+  align-self: end;
+  justify-self: center;
+  max-width: calc(100% - 32px);
+  margin-block-end: calc(16px + var(--shell-safe-area-bottom, 0px));
+  pointer-events: none;
+}
+
+.settings-save-status .settings-save-indicator {
+  position: relative;
+  width: fit-content;
+  max-width: min(420px, 100%);
+  margin-inline: auto;
+  padding: 6px 12px;
+  border-radius: var(--menu-radius);
+  background: var(--menu-surface);
+  box-shadow: var(--menu-shadow);
+  backdrop-filter: var(--menu-backdrop);
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  transition: opacity 120ms ease-out;
+
+  @starting-style {
+    opacity: 0;
+  }
+}
+
+.settings-save-status .settings-save-indicator :is(button, a) {
+  pointer-events: auto;
+}
+
+/* Opens above the status at its width, so the status keeps its shape; a long raw
+   error scrolls inside instead of covering the page. */
+.settings-save-status .settings-save-indicator__reason {
+  position: absolute;
+  inset-inline: 0;
+  bottom: calc(100% + 6px);
+  max-height: min(14lh, 40dvh);
+  overflow-y: auto;
+  padding: 8px 12px;
+  border-radius: var(--menu-radius);
+  background: var(--popover);
+  box-shadow: var(--menu-shadow);
+  color: var(--text);
+  pointer-events: auto;
+}
+
+/* Saving and Saved swap in place without changing the pill's width. */
+.settings-save-indicator--transient {
+  justify-content: center;
+  min-width: calc(8ch + 24px);
+}
+
+/* Runs for CONFIG_SAVED_NOTICE_MS: the notice is already gone when it unmounts. */
+.settings-save-indicator--saved {
+  animation: settings-save-saved 2s linear forwards;
+}
+
+@keyframes settings-save-saved {
+  85% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-save-indicator--saved {
+    animation: none;
+  }
 }
 
 .settings-sidebar__footer .sidebar-footer-build {
