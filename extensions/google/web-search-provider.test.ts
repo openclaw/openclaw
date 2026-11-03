@@ -473,16 +473,69 @@ describe("google web search provider", () => {
     const mockFetch = installGeminiFetch();
     mockFetch.mockImplementationOnce(async () => {
       controller.abort(reason);
-      return new Response(JSON.stringify(geminiAnswer("Cancelled grounded answer")));
+      return new Response(
+        JSON.stringify(
+          geminiAnswer("Cancelled grounded answer", {
+            groundingChunks: [{ web: { uri: "https://example.com/cancelled" } }],
+          }),
+        ),
+      );
     });
     const tool = createGeminiTool();
     const query = "OpenClaw late-cancel Gemini cache";
 
     await expect(tool?.execute({ query }, { signal: controller.signal })).rejects.toBe(reason);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
     await tool?.execute({ query });
 
     const postCalls = postedCalls(mockFetch);
     expect(postCalls).toHaveLength(2);
+  });
+
+  it("cancels active citation requests without starting another batch", async () => {
+    const controller = new AbortController();
+    const reason = new Error("Gemini search cancelled during citation resolution");
+    const started = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const redirects: RequestInit[] = [];
+    const body = JSON.stringify(
+      geminiAnswer("Grounded answer", {
+        groundingChunks: Array.from({ length: 25 }, (_, index) => ({
+          web: { uri: `https://example.com/source-${index}` },
+        })),
+      }),
+    );
+    const mockFetch = installGeminiResponse(body);
+    mockFetch.mockImplementation(async (_input, init) => {
+      if (init?.method !== "HEAD") {
+        return new Response(body);
+      }
+      redirects.push(init);
+      if (redirects.length === 10) {
+        started.resolve();
+      }
+      await release.promise;
+      init.signal?.throwIfAborted();
+      return new Response(null);
+    });
+    const tool = createGeminiTool();
+    const query = "OpenClaw cancel citation batch";
+    const result = expect(tool?.execute({ query }, { signal: controller.signal })).rejects.toBe(
+      reason,
+    );
+    try {
+      await started.promise;
+      controller.abort(reason);
+    } finally {
+      release.resolve();
+    }
+    await result;
+    expect(redirects).toHaveLength(10);
+    expect(redirects.every((init) => init.signal?.aborted)).toBe(true);
+
+    await tool?.execute({ query });
+    expect(postedCalls(mockFetch)).toHaveLength(2);
+    expect(redirects).toHaveLength(35);
   });
 
   it.each([
