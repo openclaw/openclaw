@@ -272,17 +272,17 @@ describe("chat pane placement", () => {
     await waitForOption("cloud:aws");
     const incompatible = option("cloud:worker-only");
     expect(incompatible?.disabled).toBe(true);
-    expect(incompatible?.title).toMatch(/compatible cloud worker|cannot use/i);
+    expect(incompatible?.title).toMatch(/compatible cloud device|can’t use/i);
     const lifecycleOnly = option("cloud:lifecycle-only");
     expect(lifecycleOnly?.disabled).toBe(true);
-    expect(lifecycleOnly?.title).toMatch(/compatible cloud worker|cannot use/i);
+    expect(lifecycleOnly?.title).toMatch(/compatible cloud device|can’t use/i);
     const compatibleSingle = option("cloud:remote-only");
     expect(compatibleSingle?.disabled).toBe(false);
     const multiMode = option("cloud:aws");
     expect(multiMode?.disabled).toBe(false);
     multiMode?.click();
     flush();
-    await selectPlacementConfiguration("Machine", "beast");
+    await selectPlacementConfiguration("Device size", "beast");
     clickButton("Move session");
     await moving;
 
@@ -376,8 +376,8 @@ describe("chat pane placement", () => {
       } else {
         const reason =
           scenario === "unsupported runtime"
-            ? "This runtime does not support paired devices"
-            : "Authorize codex.exec-server.stdio.v1 in the Gateway node command policy, or pick another device.";
+            ? "This runtime doesn’t support paired devices"
+            : "Ask an admin to allow the required command on this device, or pick another device.";
         expect(option("device:build-mac")).toMatchObject({ disabled: true, title: reason });
         if (scenario === "unsupported runtime") {
           expect(option("device:build-mac")?.textContent).toContain(reason);

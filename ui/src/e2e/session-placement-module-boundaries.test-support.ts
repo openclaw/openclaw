@@ -195,7 +195,9 @@ export function defineSessionPlacementModuleBoundaryTests(
       const currentCheckout = checkout.locator('[data-value="checkout"]');
       expect(await currentCheckout.isDisabled()).toBe(true);
       expect(await currentCheckout.getAttribute("aria-pressed")).toBe("false");
-      expect(await tooltipTitleText(currentCheckout)).toBe("Devices and cloud run in a worktree");
+      expect(await tooltipTitleText(currentCheckout)).toBe(
+        "Paired and cloud devices use a worktree",
+      );
       expect(await checkout.locator('[data-value="worktree"]').getAttribute("aria-pressed")).toBe(
         "true",
       );
@@ -257,7 +259,7 @@ export function defineSessionPlacementModuleBoundaryTests(
       await checkoutTrigger.click();
       await popoverOpen(checkout).toBe(true);
       await checkout.getByLabel("Name", { exact: true }).fill("cloud-e2e");
-      await pollLocatorText(checkoutNote).toContain("Syncs OpenClaw to the selected runner");
+      await pollLocatorText(checkoutNote).toContain("Syncs OpenClaw to the selected device");
       await page.keyboard.press("Escape");
 
       const message = "fix the cloud-only failure";
