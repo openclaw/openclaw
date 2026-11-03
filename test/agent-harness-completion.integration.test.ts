@@ -31,6 +31,7 @@ vi.mock("../src/agents/agent-harness-completion-custody.js", () => ({
   createAgentHarnessCompletionEventSink: vi.fn(),
   runWithAgentHarnessCompletionCustody: mocks.runWithCustody,
 }));
+// mock-isolation: Keep requester storage and outbound delivery inside the fixture.
 vi.mock("../src/agents/subagents/announce/subagent-announce-delivery.js", () => ({
   deliverSubagentAnnouncement: mocks.deliver,
   loadRequesterSessionEntry: mocks.loadRequester,
@@ -46,6 +47,7 @@ vi.mock(
     }),
   }),
 );
+// mock-isolation: Keep channel routing and delivery hooks inside the fixture.
 vi.mock("../src/agents/subagents/announce/subagent-announce-origin.js", () => ({
   resolveAnnounceOrigin: () => ({ channel: "test", to: "requester" }),
   resolveSubagentCompletionOrigin: mocks.resolveCompletionOrigin,
