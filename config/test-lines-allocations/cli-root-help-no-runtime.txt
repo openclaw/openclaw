@@ -1,2 +1,0 @@
-# Root-help/version entrypoint regression replaces obsolete legacy-runtime help expectations.
-55

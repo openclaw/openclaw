@@ -11,20 +11,18 @@ import { withEnvAsync } from "./test-utils/env.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
-it.each(["inert", "legacy", "manifest"] as const)(
+it.each(["inert", "legacy", "manifest", "invalid"] as const)(
   "prints root help and version without loading %s plugin runtimes",
   async (kind) => {
     const root = tempDirs.make("openclaw-help-plugins-");
     const configPath = path.join(root, "openclaw.json");
-    const pluginDir = path.join(root, "plugin");
-    fs.mkdirSync(pluginDir);
     fs.writeFileSync(
-      path.join(pluginDir, "package.json"),
+      path.join(root, "package.json"),
       JSON.stringify({ name: "help-fixture", openclaw: { extensions: ["./index.cjs"] } }),
     );
-    fs.writeFileSync(path.join(pluginDir, "index.cjs"), "module.exports = { register() {} };");
+    fs.writeFileSync(path.join(root, "index.cjs"), "module.exports = { register() {} };");
     fs.writeFileSync(
-      path.join(pluginDir, "openclaw.plugin.json"),
+      path.join(root, "openclaw.plugin.json"),
       JSON.stringify({
         id: "help-fixture",
         configSchema: { type: "object", properties: {} },
@@ -40,19 +38,16 @@ it.each(["inert", "legacy", "manifest"] as const)(
     fs.writeFileSync(
       configPath,
       JSON.stringify({
+        ...(kind === "invalid" ? { gateway: { port: "invalid" } } : {}),
         models: {
           providers: { "help-fixture": { baseUrl: "https://example.invalid", models: [] } },
         },
-        plugins: kind === "inert" ? {} : { allow: ["help-fixture"], load: { paths: [pluginDir] } },
+        plugins: kind === "inert" ? {} : { allow: ["help-fixture"], load: { paths: [root] } },
       }),
     );
     const loadRuntime = vi.spyOn(pluginLoader, "loadOpenClawPluginCliRegistry");
     const loadManifest = vi.spyOn(manifests, "loadPluginManifestRegistryCore");
-    let output = "";
-    vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
-      output += String(chunk);
-      return true;
-    });
+    const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
     await withEnvAsync(
       {
         HOME: root,
@@ -63,6 +58,7 @@ it.each(["inert", "legacy", "manifest"] as const)(
       },
       async () => {
         expect(await tryHandleRootHelpFastPath(["node", "openclaw", "--help"])).toBe(true);
+        const output = stdout.mock.calls.map(([chunk]) => String(chunk)).join("");
         expect(output).toContain("Usage: openclaw");
         expect(output.includes("fixture-command")).toBe(kind === "manifest");
         const log = vi.spyOn(console, "log").mockImplementation(() => {});
