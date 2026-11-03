@@ -34,6 +34,7 @@ import { registerNewSessionRuntimeEnglish } from "../../ui/src/i18n/locales/en-n
 import { registerSessionMenuEnglish } from "../../ui/src/i18n/locales/en-session-menu.ts";
 import { registerSettingsEnglish } from "../../ui/src/i18n/locales/en-settings.ts";
 import { registerTranscriptsEnglish } from "../../ui/src/i18n/locales/en-transcripts.ts";
+import { en } from "../../ui/src/i18n/locales/en.ts";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 
 vi.mock("../../scripts/lib/sleep.mjs", () => ({ sleep: async () => {} }));
@@ -303,6 +304,9 @@ describe("control-ui-i18n generated ownership", () => {
     expect(result.exitCode, result.stderr).toBe(0);
     const catalog: unknown = JSON.parse(result.stdout);
     const source = flattenCatalog(catalog, "en");
+    for (const [key, value] of Object.entries(en.chat.recovery)) {
+      expect(source.get("chat.recovery." + key), key).toBe(value);
+    }
     for (const fragment of [
       registerChatDetailsEnglish.catalog,
       registerChatSessionEnglish.catalog,

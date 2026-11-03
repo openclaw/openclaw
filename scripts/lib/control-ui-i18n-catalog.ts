@@ -546,6 +546,11 @@ export function loadControlUiSourceCatalog(): TranslationMap {
         ...registerChatSessionEnglish.catalog.chat,
         ...registerChatSessionOptionalEnglish.catalog.chat,
         ...registerSessionNavigationEnglish.catalog.chat,
+        // Mirror runtime registration: lazy recovery copy must retain shared leaves.
+        recovery: {
+          ...en.chat.recovery,
+          ...registerChatSessionEnglish.catalog.chat.recovery,
+        },
         workspaceConflict,
         sessionDetails,
         sessionSharing,
