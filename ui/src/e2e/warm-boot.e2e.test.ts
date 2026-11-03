@@ -731,8 +731,9 @@ suite.define(() => {
           });
         }
         await page.reload({ waitUntil: "commit" });
-        await sidebar.locator(".sidebar-footer-bar__home").waitFor();
         await sidebar.getByText("Cached only session", { exact: true }).waitFor();
+        // Cached ordinary sessions can restore; Home still needs live disclosure authority.
+        expect(await sidebar.locator(".sidebar-footer-bar__home").count()).toBe(0);
         await transcript.getByText(transcriptText, { exact: true }).waitFor();
         expect(await gateway.getRequests("sessions.list")).toEqual([]);
         expect(await gateway.getRequests("chat.startup")).toEqual([]);

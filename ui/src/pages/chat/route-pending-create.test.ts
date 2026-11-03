@@ -2,6 +2,7 @@
 import { expect, it, onTestFinished } from "vitest";
 import { INTERNAL_SESSION_PATH_PARAM } from "../../app-route-paths.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { createRouteLoaderOptions } from "../../test-helpers/route-loader-options.ts";
 import {
   createSessionRouteContext,
@@ -62,6 +63,10 @@ it.each(["admitted", "other-session"] as const)(
   "keeps Gateway resolution for a %s route",
   async (scenario) => {
     const { context, request } = createSessionRouteContext();
+    context.gateway.snapshot.hello = gatewayHelloForMethods(
+      ["sessions.resolve"],
+      ["operator.read"],
+    );
     const sessionKey = "agent:new-agent:main";
     onTestFinished(
       context.chatSubmissions.beginCreate({

@@ -1,7 +1,10 @@
 import { expect, it } from "vitest";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { openChatPanels, selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
-import { createControlUiMockSameOriginGatewayScript } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiSessionUrl,
+  createControlUiMockSameOriginGatewayScript,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { chatDelta } from "./chat-flow-fixtures.test-support.ts";
 import {
@@ -122,13 +125,15 @@ suite.define(() => {
 
   it("keeps chat and file navigation usable when returning to a file's folder", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const sessionKey = "agent:main:delivery-notes";
       const errors: string[] = [];
       page.on("pageerror", (error) => errors.push(error.message));
       await page.addInitScript({ content: createControlUiMockSameOriginGatewayScript() });
       const gateway = await installMockGateway(page, {
+        sessionKey,
         operatorScopes: ["operator.sessions.read", "operator.sessions.write"],
         sessions: [
-          createControlUiSessionRow("agent:main:main", "Delivery notes", Date.now(), {
+          createControlUiSessionRow(sessionKey, "Delivery notes", Date.now(), {
             visibility: "shared",
             sharingRole: "owner",
           }),
@@ -136,7 +141,7 @@ suite.define(() => {
         methodResponses: {
           "artifacts.list": { artifacts: [] },
           "sessions.files.list": {
-            sessionKey: "main",
+            sessionKey,
             root: "/workspace",
             files: [],
             browser: {
@@ -145,7 +150,7 @@ suite.define(() => {
             },
           },
           "sessions.files.get": {
-            sessionKey: "main",
+            sessionKey,
             root: "/workspace",
             file: {
               name: "notes.md",
@@ -167,7 +172,7 @@ suite.define(() => {
       await page.route("**/api/artifacts/download/navigation/notes", (route) =>
         route.fulfill({ body: "# Delivery notes\n", contentType: "text/markdown" }),
       );
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
       await composer.fill("Please review the delivery notes before publishing.");
       await openChatSidePanelType(page, "Files");
@@ -195,7 +200,7 @@ suite.define(() => {
       const runId = requireString(requireRecord(sent.params).idempotencyKey, "run ID");
       await gateway.emitGatewayEvent(
         "chat",
-        chatDelta(runId, "Reviewing the delivery notes.", "agent:main:main", { seq: 1 }),
+        chatDelta(runId, "Reviewing the delivery notes.", sessionKey, { seq: 1 }),
       );
       await page
         .locator(".chat-bubble.streaming", { hasText: "Reviewing the delivery notes." })

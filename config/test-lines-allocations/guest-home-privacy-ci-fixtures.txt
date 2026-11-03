@@ -1,0 +1,2 @@
+# Preserve authenticated operator Home, pre-hello ordinary-session warm reload, and restricted owned-session file navigation proof after the Home privacy boundary.
+16

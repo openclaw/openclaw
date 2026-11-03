@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { expect, it, vi } from "vitest";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { createRouteLoaderOptions } from "../../test-helpers/route-loader-options.ts";
 import { createSessionRouteContext } from "./route-resolution.test-support.ts";
 import { pages } from "./route.ts";
@@ -17,6 +18,10 @@ vi.mock("../../lib/sessions/session-message-subscriptions.runtime.ts", async (im
 
 it("preloads subscriptions without waiting or opening observers", async () => {
   const { context, request } = createSessionRouteContext();
+  context.gateway.snapshot.hello = gatewayHelloForMethods(
+    ["sessions.resolve", "sessions.messages.subscribe"],
+    ["operator.read"],
+  );
   const load = async (page: (typeof pages)[number]) => {
     const location = { pathname: `/${page.id}/roboclaw/main`, search: "", hash: "" };
     return page.loader!(
