@@ -955,8 +955,8 @@ describe("Claude session catalog", () => {
 
   it("imports a Claude Desktop custom group for its matching catalog row", async () => {
     const home = await createHome();
-    let now = Date.now();
-    vi.spyOn(Date, "now").mockImplementation(() => now);
+    let now = performance.now();
+    vi.spyOn(performance, "now").mockImplementation(() => now);
     const sessionId = "desktop-custom-group";
     await writeIndexedDesktopSession(home, sessionId);
     await writeDesktopGroupStore(home, "Release");
@@ -1195,8 +1195,8 @@ describe("Claude session catalog", () => {
     const home = await createHome();
     const watches = createClaudeCatalogWatchDriver(home);
     const sessionId = "large-colored-session";
-    let now = Date.now();
-    vi.spyOn(Date, "now").mockImplementation(() => now);
+    let now = performance.now();
+    vi.spyOn(performance, "now").mockImplementation(() => now);
     await writeProject({
       home,
       entries: [{ sessionId, summary: "Stale index title" }],
@@ -1285,7 +1285,7 @@ describe("Claude session catalog", () => {
       title: "Missing",
     });
     let now = 1_000;
-    vi.spyOn(Date, "now").mockImplementation(() => now);
+    vi.spyOn(performance, "now").mockImplementation(() => now);
     const openSpy = vi.spyOn(fs, "open");
     const first = await listPage({}, home);
     openSpy.mockClear();
@@ -1317,8 +1317,8 @@ describe("Claude session catalog", () => {
       }
       return readdir(...args);
     });
-    let now = Date.now();
-    vi.spyOn(Date, "now").mockImplementation(() => now);
+    let now = performance.now();
+    vi.spyOn(performance, "now").mockImplementation(() => now);
     expect((await listPage({}, home)).sessions).toEqual([]);
     now += 10_000;
     failOther = true;
@@ -1353,6 +1353,37 @@ describe("Claude session catalog", () => {
       sessions: [{ threadId: sessionId }],
     });
     expect(transcriptAttempts).toBe(2);
+  });
+
+  it("re-scans on TTL expiry by elapsed time even when the wall clock rolls back", async () => {
+    const home = await createHome();
+    const watches = createClaudeCatalogWatchDriver(home);
+    const sessionId = "ttl-session";
+    const transcriptPath = projectFile(home, `${sessionId}.jsonl`);
+    await writeUnindexedCliSessions(home, { [sessionId]: "Alpha" });
+    const realDateNow = Date.now.bind(Date);
+    let elapsed = 0;
+    let wallOffset = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+    vi.spyOn(Date, "now").mockImplementation(() => realDateNow() + wallOffset);
+
+    // Cache the tree snapshot and arm the watch so later calls only rescan on TTL expiry.
+    await listPage({}, home);
+    watches.arm();
+    await listPage({}, home);
+    expect((await listPage({}, home)).sessions).toMatchObject([
+      { threadId: sessionId },
+    ]);
+
+    // The watch misses the transcript deletion, so an incremental scan would leave a ghost entry.
+    await fs.rm(transcriptPath);
+
+    // The wall clock rolls back an hour while elapsed time advances past the hard scan TTL:
+    // a Date.now()-keyed deadline would appear not to have expired, but performance.now() proves it has.
+    wallOffset -= 3_600_000;
+    elapsed += 300_001;
+
+    expect((await listPage({}, home)).sessions).toEqual([]);
   });
 
   it.each(["transcript", "index"] as const)(
@@ -1394,7 +1425,7 @@ describe("Claude session catalog", () => {
         });
       }
       let now = 1_000;
-      vi.spyOn(Date, "now").mockImplementation(() => now);
+      vi.spyOn(performance, "now").mockImplementation(() => now);
       expect((await listPage({}, home)).sessions).toEqual([]);
       now += 15_001;
       expect((await listPage({}, home)).sessions).toMatchObject([
