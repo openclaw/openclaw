@@ -20,7 +20,7 @@ import type {
 import { createCatalogContextFixture } from "./capability-catalog.test-support.js";
 import { isPluginRegistryLoadInFlight, resolvePluginRegistryLoadCacheKey } from "./loader-cache.js";
 import { pluginFixtureConfig, writeFixtureJson } from "./loader-fixture-builders.test-support.js";
-import { createLazyPluginRuntime } from "./loader-module-runtime.js";
+import { createLazyPluginRuntimeOwner } from "./loader-module-runtime.js";
 import { loadOpenClawPluginsWithInternalOverrides } from "./loader-runtime-load.js";
 import { loadOpenClawPlugins, type PluginLoadOptions } from "./loader.js";
 import {
@@ -144,6 +144,9 @@ it("retains the creating cache generation when broad services initialize later",
   const owner = createPluginCache();
   const replacement = createPluginCache();
   const runtime = { events: {} } as PluginRuntime;
+  const createHostChannelInboundRuntime = vi.fn(
+    (inbound: PluginRuntime["channel"]["inbound"]) => inbound,
+  );
   const createPluginRuntime = vi.fn(() => {
     expect(getPluginCache()).toBe(owner);
     return runtime;
@@ -152,14 +155,19 @@ it("retains the creating cache generation when broad services initialize later",
     .spyOn(nativeModuleRequire, "tryNativeRequireModule")
     .mockImplementation(() => {
       expect(getPluginCache()).toBe(owner);
-      return { ok: true, moduleExport: { createPluginRuntime } };
+      return { ok: true, moduleExport: { createPluginRuntime, createHostChannelInboundRuntime } };
     });
-  const lazyRuntime = withPluginCache(owner, () => createLazyPluginRuntime({}));
+  const lazyOwner = withPluginCache(owner, () => createLazyPluginRuntimeOwner({}));
+  expect(lazyOwner.runtime.version).toEqual(expect.any(String));
   expect(loadRuntimeModule).not.toHaveBeenCalled();
+  const inbound = {} as PluginRuntime["channel"]["inbound"];
+  const channelOwner = { channelId: "fixture", isLive: () => true };
   withPluginCache(replacement, () => {
-    expect(lazyRuntime.events).toBe(runtime.events);
-    expect(lazyRuntime.events).toBe(runtime.events);
+    expect(lazyOwner.createHostChannelInboundRuntime(inbound, channelOwner)).toBe(inbound);
+    expect(lazyOwner.runtime.events).toBe(runtime.events);
+    expect(lazyOwner.runtime.events).toBe(runtime.events);
   });
+  expect(createHostChannelInboundRuntime).toHaveBeenCalledExactlyOnceWith(inbound, channelOwner);
   expect(loadRuntimeModule).toHaveBeenCalledTimes(1);
   expect(createPluginRuntime).toHaveBeenCalledTimes(1);
 });

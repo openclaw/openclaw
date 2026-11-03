@@ -15,7 +15,7 @@ import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { pluginFixtureConfig, writeFixtureJson } from "./loader-fixture-builders.test-support.js";
-import { createLazyPluginRuntime } from "./loader-module-runtime.js";
+import { createLazyPluginRuntimeOwner } from "./loader-module-runtime.js";
 import {
   loadAndActivateRootPluginRegistry,
   loadPluginRegistryHandle,
@@ -108,7 +108,7 @@ it.each([
       subagent: vi.fn(() => facets.subagent),
     };
     const registry = createEmptyPluginRegistry();
-    const runtime = createLazyPluginRuntime({
+    const runtime = createLazyPluginRuntimeOwner({
       runtimeOptions: {
         get nodes() {
           return reads.nodes();
@@ -117,7 +117,7 @@ it.each([
           return reads.subagent();
         },
       },
-    });
+    }).runtime;
     const resolveGatewayContext = getGatewayContextResolver(facets.subagent);
     bindGatewayContextResolver(runtime, resolveGatewayContext);
     bindPluginRegistryRuntime(registry, runtime);

@@ -24,7 +24,7 @@ import {
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
-import { createPluginRuntime } from "../plugins/runtime/index.js";
+import { createHostChannelInboundRuntime, createPluginRuntime } from "../plugins/runtime/index.js";
 import {
   startPluginServices,
   type PluginServicesHandle,
@@ -93,6 +93,7 @@ export async function createPluginReloadRecoveryFixture(
     createPluginRegistry({
       logger: log,
       runtime: createPluginRuntime(),
+      createHostChannelInboundRuntime,
       activateGlobalSideEffects: false,
     });
   const previous = createBuilder();

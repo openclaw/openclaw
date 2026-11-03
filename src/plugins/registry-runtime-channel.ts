@@ -1,5 +1,3 @@
-import { createHostChannelInboundEventContextBuilder } from "../channels/inbound-event/host-context-builder.js";
-import { createHostChannelIngressRuntime } from "../channels/message-access/runtime.js";
 import { assertSessionEntryPatchAuthority } from "../config/sessions/session-entry-patch-authority.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { isPluginRecordActive, revokePluginRecord } from "./registry-lifecycle.js";
@@ -11,9 +9,6 @@ import {
   getGatewayContextResolver,
 } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
-
-type BuildContextParams = Parameters<PluginRuntime["channel"]["inbound"]["buildContext"]>[0];
-type BuiltContext = ReturnType<PluginRuntime["channel"]["inbound"]["buildContext"]>;
 
 /** Channel admission belongs to the exact registered record and closes on replacement. */
 export function createRegisteredChannelRuntimeResolver(
@@ -45,6 +40,12 @@ export function createRegisteredChannelRuntimeResolver(
       !isPluginRecordActive(registry, record)
     ) {
       return channel;
+    }
+    const createHostInbound = registryParams.createHostChannelInboundRuntime;
+    if (!createHostInbound) {
+      // Refuse before replacing a live owner; an unbound trusted channel cannot
+      // silently lose its host admission and participant evidence.
+      throw new Error("Registered channel runtime requires a host inbound factory");
     }
     let closed = false;
     const ownsLiveRegistrySlot = () =>
@@ -79,24 +80,7 @@ export function createRegisteredChannelRuntimeResolver(
         closed = true;
       },
     });
-    const buildHostContext = createHostChannelInboundEventContextBuilder(
-      channel.inbound.buildContext,
-      owner,
-    );
-    function buildContext(
-      params: BuildContextParams & { resolveSupplementalMedia: true },
-    ): Promise<BuiltContext>;
-    function buildContext(params: BuildContextParams): BuiltContext;
-    function buildContext(params: BuildContextParams): BuiltContext | Promise<BuiltContext> {
-      // Audit provenance is passive: stale closures still build the message context,
-      // but only the exact live trusted owner may attach participant evidence.
-      return buildHostContext(params);
-    }
-    const inbound = {
-      ...channel.inbound,
-      ingress: createHostChannelIngressRuntime(owner),
-      buildContext,
-    };
+    const inbound = createHostInbound(channel.inbound, owner);
     const scoped = {
       ...channel,
       inbound,

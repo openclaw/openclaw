@@ -25,15 +25,17 @@ export async function withRegisteredChannelIngress<T>(
     channelAdmissionAudit: audit,
     getRuntimeConfig: () => params.config,
   } as GatewayRequestContext;
-  const [{ createPluginRegistry }, { createPluginRuntime }] = await Promise.all([
-    import("../../plugins/registry.js"),
-    import("../../plugins/runtime/index.js"),
-  ]);
+  const [{ createPluginRegistry }, { createPluginRuntime, createHostChannelInboundRuntime }] =
+    await Promise.all([
+      import("../../plugins/registry.js"),
+      import("../../plugins/runtime/index.js"),
+    ]);
   const runtime = createPluginRuntime();
   bindGatewayContextResolver(runtime.subagent, () => gateway);
   const builder = createPluginRegistry({
     logger: { info() {}, warn() {}, error() {}, debug() {} },
     runtime,
+    createHostChannelInboundRuntime,
     activateGlobalSideEffects: false,
   });
   const record = createPluginRecord({ id: params.plugin.id, origin: "bundled" });

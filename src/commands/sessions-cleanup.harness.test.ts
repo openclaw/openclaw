@@ -18,7 +18,7 @@ import {
 } from "../plugins/loader.test-fixtures.js";
 import * as nativeModule from "../plugins/native-module-require.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
-import { createPluginRuntime } from "../plugins/runtime/index.js";
+import { createHostChannelInboundRuntime, createPluginRuntime } from "../plugins/runtime/index.js";
 import { createNonExitingRuntime } from "../runtime.js";
 import {
   withOpenClawTestState,
@@ -131,7 +131,7 @@ beforeEach(() => {
   ]);
   vi.spyOn(nativeModule, "tryNativeRequireModule").mockImplementation((modulePath, options) =>
     runtimePaths.has(modulePath)
-      ? { ok: true, moduleExport: { createPluginRuntime } }
+      ? { ok: true, moduleExport: { createPluginRuntime, createHostChannelInboundRuntime } }
       : nativeLoad(modulePath, options),
   );
 });

@@ -40,7 +40,7 @@ it("preserves real host command authority and Gateway execution frames in the SD
   await probe(
     `import { bindPluginInstanceModuleLoader } from ${JSON.stringify(moduleUrl("src/plugins/plugin-instance-module-loader.ts"))};
        import { getCachedPluginModuleLoader } from ${JSON.stringify(moduleUrl("src/plugins/plugin-module-loader-cache.ts"))};
-       import { createLazyPluginRuntime } from ${JSON.stringify(moduleUrl("src/plugins/loader-module-runtime.ts"))};
+       import { createLazyPluginRuntimeOwner } from ${JSON.stringify(moduleUrl("src/plugins/loader-module-runtime.ts"))};
        import { PluginInstance } from ${JSON.stringify(moduleUrl("src/plugins/plugin-instance.ts"))};
        import { bindCommandOwnerAuthority } from ${JSON.stringify(moduleUrl("src/auto-reply/command-owner-authority.ts"))};
        import { resolveCommandAuthorization } from ${JSON.stringify(moduleUrl("src/auto-reply/command-auth.ts"))};
@@ -51,7 +51,7 @@ it("preserves real host command authority and Gateway execution frames in the SD
          bindPluginInstanceModuleLoader({ instance, origin: 'config', source: ${JSON.stringify(entry)}, rootDir: ${JSON.stringify(root)} });
          const managed = instance.loadModule(${JSON.stringify(entry)});
          const transformed = getCachedPluginModuleLoader({ modulePath: ${JSON.stringify(entry)}, importerUrl: ${JSON.stringify(moduleUrl("src/plugins/loader-module-runtime.ts"))}, tryNative: false })(${JSON.stringify(entry)});
-         const runtime = createLazyPluginRuntime({});
+         const runtime = createLazyPluginRuntimeOwner({}).runtime;
          assert.equal(runtime.channel.commands.resolveCommandAuthorizedFromAuthorizers, resolveCommandAuthorizedFromAuthorizers);
          let current = true;
          const ctx = { Provider: 'discord', SenderId: 'synthetic-admin' };

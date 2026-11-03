@@ -19,7 +19,7 @@ import {
 import { recordAcceptedSessionParticipantInput } from "../sessions/session-participant-input-recording.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
-import { createLazyPluginRuntime } from "./loader-module-runtime.js";
+import { createLazyPluginRuntimeOwner } from "./loader-module-runtime.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import {
@@ -34,13 +34,14 @@ import {
   resolveIngressForRuntime,
 } from "./registry-runtime.channel-ingress.test-support.js";
 import { createTestPluginRegistry as createRegistry } from "./registry-runtime.test-helpers.js";
+import { createPluginRegistry } from "./registry.js";
 import {
   bindGatewayContextResolver,
   getPluginRuntimeGatewayRequestScope,
   hasGatewayContextOwner,
   withPluginRuntimeRegistryScope,
 } from "./runtime/gateway-request-scope.js";
-import { createPluginRuntime } from "./runtime/index.js";
+import { createHostChannelInboundRuntime, createPluginRuntime } from "./runtime/index.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { createPluginRecord } from "./status.test-fixtures.js";
 
@@ -486,7 +487,20 @@ describe("bundled channel ingress runtime ownership", () => {
         return channel;
       },
     });
-    const registryBuilder = createRegistry(runtime);
+    const createHostInbound = vi.fn(createHostChannelInboundRuntime);
+    const registryBuilder = createPluginRegistry({
+      logger: console,
+      runtime,
+      createHostChannelInboundRuntime: createHostInbound,
+      activateGlobalSideEffects: false,
+    });
+    const aborted = createPluginRecord({ id: "deferred-channel", origin: "bundled" });
+    registryBuilder.createApi(aborted, fullRegistration).registerChannel({
+      plugin: createChannelTestPluginBase({ id: aborted.id }),
+    });
+    registryBuilder.rollbackPluginGlobalSideEffects(aborted.id, aborted);
+    expect(channelReads).toBe(0);
+    expect(createHostInbound).not.toHaveBeenCalled();
     const record = createPluginRecord({ id: "deferred-channel", origin: "bundled" });
     const api = registryBuilder.createApi(record, fullRegistration);
 
@@ -500,8 +514,13 @@ describe("bundled channel ingress runtime ownership", () => {
     );
 
     expect(channelReads).toBe(0);
+    expect(createHostInbound).not.toHaveBeenCalled();
     const registeredRuntime = registryBuilder.registry.channels[0]?.resolveChannelRuntime?.();
     expect(channelReads).toBe(1);
+    expect(createHostInbound).toHaveBeenCalledTimes(1);
+    expect(registryBuilder.registry.channels[0]?.resolveChannelRuntime?.()).toBe(registeredRuntime);
+    expect(registeredRuntime!.turn).toBe(registeredRuntime!.inbound);
+    expect(registeredRuntime!.inbound.dispatch).toBe(inbound.dispatch);
     expect(inactivePreparedApi.runtime.channel.inbound.buildContext).toBe(
       buildChannelInboundEventContext,
     );
@@ -510,6 +529,17 @@ describe("bundled channel ingress runtime ownership", () => {
       channelId: "deferred-channel",
     });
     expectIngress(registeredRuntime!.turn, ingress, "present", { channelId: "deferred-channel" });
+    const pendingIngress = await resolveIngressForRuntime(registeredRuntime!, "person-a", {
+      channelId: record.id,
+    });
+    const pendingContext = registeredRuntime!.inbound.buildContext({
+      ...contextParams({ ingress: pendingIngress, channelId: record.id }),
+      resolveSupplementalMedia: true,
+    });
+    expect(pendingContext).toBeInstanceOf(Promise);
+    registryBuilder.rollbackPluginGlobalSideEffects(record.id, record);
+    expectIngressState(await pendingContext, "unknown");
+    expect(createHostInbound).toHaveBeenCalledTimes(1);
   });
 
   it.each(["accepted", "mismatched", "builder failure"] as const)(
@@ -717,7 +747,8 @@ describe("plugin runtime hook dispatch ownership", () => {
       return { ok: true as const, runId: "hook-run" };
     });
     const builder = createRegistry(
-      createLazyPluginRuntime({ runtimeOptions: { hooks: { dispatchHookAgentTurn } } }),
+      createLazyPluginRuntimeOwner({ runtimeOptions: { hooks: { dispatchHookAgentTurn } } })
+        .runtime,
     );
     const record = createPluginRecord({ id: "trusted-mail", ...ownership });
     const api = builder.createApi(record, { config: {} });

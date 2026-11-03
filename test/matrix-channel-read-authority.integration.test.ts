@@ -16,7 +16,10 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../src/plugins/runtime.js";
-import { createPluginRuntime } from "../src/plugins/runtime/index.js";
+import {
+  createHostChannelInboundRuntime,
+  createPluginRuntime,
+} from "../src/plugins/runtime/index.js";
 import { createPluginRecord } from "../src/plugins/status.test-fixtures.js";
 import { defaultRuntime } from "../src/runtime.js";
 import { closeOpenClawStateDatabaseAsync } from "../src/state/openclaw-state-db.js";
@@ -175,6 +178,7 @@ async function createHarness(origin: RegistrationOrigin) {
   const owner = createPluginRegistry({
     logger: { info() {}, warn() {}, error() {}, debug() {} },
     runtime: createPluginRuntime(),
+    createHostChannelInboundRuntime,
     activateGlobalSideEffects: false,
   });
   const record = createPluginRecord({

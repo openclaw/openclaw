@@ -23,7 +23,7 @@ import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { resolveUserPath } from "../utils.js";
 import {
-  createLazyPluginRuntime,
+  createLazyPluginRuntimeOwner,
   runPluginRegisterSyncInRegistry,
 } from "./loader-module-runtime.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
@@ -551,7 +551,7 @@ describe("plugin registry runtime config scope", () => {
       resolvedPath: null,
       error: "fixture runtime is missing",
     });
-    const runtime = createLazyPluginRuntime({ pluginSdkResolution: "src" });
+    const runtime = createLazyPluginRuntimeOwner({ pluginSdkResolution: "src" }).runtime;
     const { api } = registered("diagnostic-plugin", { name: "Diagnostic Plugin" }, runtime);
 
     const read = () => api.runtime.channel;
@@ -622,7 +622,7 @@ describe("plugin registry runtime config scope", () => {
       .mockImplementation(() => {
         throw new Error("scoped LLM acquisition must not load the broad runtime");
       });
-    const runtime = createLazyPluginRuntime({ pluginSdkResolution: "src" });
+    const runtime = createLazyPluginRuntimeOwner({ pluginSdkResolution: "src" }).runtime;
     const { builder, api } = registered("local-service-owner", {}, runtime);
     const target = { providerId: "fixture", baseUrl: "https://provider.example.invalid" };
     setRuntimeConfigSnapshot({
@@ -661,7 +661,7 @@ describe("plugin registry runtime config scope", () => {
       .mockImplementation(() => {
         throw new Error("broad runtime should stay lazy during scoped node access");
       });
-    const runtime = createLazyPluginRuntime({ runtimeOptions: { nodes } });
+    const runtime = createLazyPluginRuntimeOwner({ runtimeOptions: { nodes } }).runtime;
     const { builder, api } = registered("google-meet", { origin: "bundled" }, runtime);
 
     await api.runtime.nodes.list({ connected: true });

@@ -249,7 +249,8 @@ it("fences late Discord STT through the model-selected plugin instance", async (
     const { createDiscordGatewayCaptureFixture, captureTarget, capturedText, lateText } =
       await loadDiscordGatewayCaptureFixture();
     const { startGatewayWithClient } = await import("../../src/gateway/test-helpers.e2e.js");
-    const { createPluginRuntime } = await import("../../src/plugins/runtime/index.js");
+    const { createHostChannelInboundRuntime, createPluginRuntime } =
+      await import("../../src/plugins/runtime/index.js");
     const { createPluginRegistry } = await import("../../src/plugins/registry.js");
     const { createPluginRecord } = await import("../../src/plugins/loader-records.js");
     const { getPluginInstance } = await import("../../src/plugins/plugin-instance-scope.js");
@@ -363,7 +364,11 @@ it("fences late Discord STT through the model-selected plugin instance", async (
       transcripts: { enabled: true },
     };
     const runtime = createPluginRuntime();
-    const registration = createPluginRegistry({ runtime, logger: console });
+    const registration = createPluginRegistry({
+      runtime,
+      createHostChannelInboundRuntime,
+      logger: console,
+    });
     const registryResources = new PluginRegistryInspectionResources(retireInspectionInstances);
     registryResources.attach(registration.registry);
     releaseFixtureRegistry = () => registryResources.release();

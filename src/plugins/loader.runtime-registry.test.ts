@@ -131,7 +131,13 @@ it("keeps host config/state/system/model policy ownership across broad runtime l
               if (!fullRuntime) {
                 throw new Error("broad runtime requested before state registration completed");
               }
-              return { ok: true, moduleExport: { createPluginRuntime: factories } };
+              return {
+                ok: true,
+                moduleExport: {
+                  createPluginRuntime: factories,
+                  createHostChannelInboundRuntime: fullRuntime.createHostChannelInboundRuntime,
+                },
+              };
             }
             return nativeLoad(modulePath, options);
           },

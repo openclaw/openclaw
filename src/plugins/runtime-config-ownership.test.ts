@@ -3,7 +3,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
-import { createLazyPluginRuntime } from "./loader-module-runtime.js";
+import { createLazyPluginRuntimeOwner } from "./loader-module-runtime.js";
 import * as sdkAlias from "./sdk-alias.js";
 
 afterEach(() => {
@@ -21,10 +21,10 @@ it("keeps the host LLM facade lazy, stable, and bound to current config", async 
   setRuntimeConfigSnapshot({
     models: { providers: { "ollama-cloud": { baseUrl, models: [] } } },
   });
-  const runtime = createLazyPluginRuntime({ pluginSdkResolution: "src" });
+  const runtime = createLazyPluginRuntimeOwner({ pluginSdkResolution: "src" }).runtime;
   expect(runtime.config.current().models?.providers?.["ollama-cloud"]?.baseUrl).toBe(baseUrl);
   const llm = runtime.llm;
-  expect(createLazyPluginRuntime({ pluginSdkResolution: "src" }).llm).not.toBe(llm);
+  expect(createLazyPluginRuntimeOwner({ pluginSdkResolution: "src" }).runtime.llm).not.toBe(llm);
   expect(Object.getOwnPropertyDescriptor(runtime, "llm")).toEqual({
     configurable: true,
     enumerable: true,
