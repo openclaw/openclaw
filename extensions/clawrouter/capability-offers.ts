@@ -28,6 +28,7 @@ export type ClawRouterCapabilityOffer = {
 
 // A declared format only enables routes whose wire contract the consumer implements.
 const UNIFIED_ROUTES: Record<string, string> = {
+  "openai.responses": "/v1/responses",
   "openai.embeddings": "/v1/embeddings",
   "openai.images_generations": "/v1/images/generations",
   "openai.audio_speech": "/v1/audio/speech",

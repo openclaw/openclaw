@@ -4,6 +4,7 @@ import {
   getCachedLiveProviderModelRows,
   loadBundledModelIdentityFactsResolver,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { XAI_TOOL_MODEL_COMPAT } from "openclaw/plugin-sdk/provider-model-shared";
 import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
@@ -69,7 +70,7 @@ type CatalogProvider = {
   routes: CatalogRoute[];
   models: unknown[];
   hostedWebSearchModels: Set<string>;
-  nativeHttpOffers: ClawRouterCapabilityOffer[];
+  httpOffers: ClawRouterCapabilityOffer[];
 };
 
 type RouteMetadata = {
@@ -105,10 +106,7 @@ function readCatalogRows(body: unknown, baseUrl: string): readonly unknown[] {
       : [];
   return providers.map((provider) => ({
     provider,
-    nativeHttpOffers: offers.filter(
-      (offer) =>
-        offer.providerId === asOptionalRecord(provider)?.id && offer.routeKind === "native",
-    ),
+    httpOffers: offers.filter((offer) => offer.providerId === asOptionalRecord(provider)?.id),
   }));
 }
 
@@ -148,7 +146,7 @@ function parseCatalogInput(value: unknown): Array<"text" | "image"> | undefined 
 
 function parseCatalogProvider(value: unknown): CatalogProvider | undefined {
   // SAFETY: readCatalogRows constructs every cached row with its parsed HTTP-offer array.
-  const envelope = value as { provider: unknown; nativeHttpOffers: ClawRouterCapabilityOffer[] };
+  const envelope = value as { provider: unknown; httpOffers: ClawRouterCapabilityOffer[] };
   const row = asOptionalRecord(envelope.provider);
   const id = normalizeOptionalString(row?.id);
   const nativeBaseUrl = normalizeOptionalString(row?.nativeBaseUrl);
@@ -179,7 +177,7 @@ function parseCatalogProvider(value: unknown): CatalogProvider | undefined {
     displayName: normalizeOptionalString(row?.displayName) ?? id,
     openaiCompatible: row?.openaiCompatible === true,
     nativeBaseUrl,
-    nativeHttpOffers: envelope.nativeHttpOffers,
+    httpOffers: envelope.httpOffers,
     routes: Array.isArray(row?.routes)
       ? row.routes.map(parseCatalogRoute).filter((route): route is CatalogRoute => Boolean(route))
       : [],
@@ -267,10 +265,26 @@ function buildRoutedModel(
   let upstreamModel: string | undefined;
   let endpoint: string | undefined;
 
+  if (
+    provider.id === "xai" &&
+    capabilities.includes("llm.responses") &&
+    !provider.httpOffers.some(
+      (offer) =>
+        offer.routeKind === "unified" &&
+        offer.model?.id === id &&
+        offer.requestFormat === "openai.responses" &&
+        offer.responseFormat === "openai.responses" &&
+        offer.methods.includes("POST"),
+    )
+  ) {
+    return undefined;
+  }
+
   const cohereChat =
     provider.id === "cohere" && capabilities.includes("llm.chat")
-      ? provider.nativeHttpOffers.find(
+      ? provider.httpOffers.find(
           (offer) =>
+            offer.routeKind === "native" &&
             offer.model?.id === id &&
             offer.requestFormat === "openai.chat_completions" &&
             offer.responseFormat === "openai.chat_completions" &&
@@ -357,6 +371,9 @@ function buildRoutedModel(
     ...nativeFacts?.compat,
     ...(provider.id === "mistral" && api === "openai-completions"
       ? { ...MISTRAL_MODEL_TRANSPORT_PATCH, supportsReasoningEffort: false }
+      : {}),
+    ...(provider.id === "xai"
+      ? { ...XAI_TOOL_MODEL_COMPAT, supportsReasoningEffort: Boolean(supportedReasoningEfforts) }
       : {}),
     ...(supportedReasoningEfforts
       ? { supportsReasoningEffort: true, supportedReasoningEfforts }

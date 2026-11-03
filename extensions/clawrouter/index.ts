@@ -162,6 +162,7 @@ function setHeaderDefault(
 const openAiServiceTier = buildProviderStreamFamilyHooks("openai-responses-service-tier");
 const mistralReplay = buildProviderReplayFamilyHooks({ family: "mistral" });
 const cohereCompatibility = buildProviderStreamFamilyHooks("cohere-compatibility");
+const xaiReasoning = buildProviderStreamFamilyHooks("xai-responses-reasoning");
 const log = createSubsystemLogger("clawrouter-stream");
 
 function wrapClawRouterProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
@@ -182,7 +183,9 @@ function wrapClawRouterProviderStream(ctx: ProviderWrapStreamFnContext): StreamF
         ? claudeStream
         : model.api === "openai-completions" && model.id.startsWith("cohere/")
           ? (cohereCompatibility.wrapStreamFn?.({ ...ctx, streamFn }) ?? streamFn)
-          : streamFn;
+          : model.api === "openai-responses" && model.id.startsWith("xai/")
+            ? (xaiReasoning.wrapStreamFn?.({ ...ctx, streamFn }) ?? streamFn)
+            : streamFn;
     const apiKey = options?.apiKey?.trim();
     const dispatchKey = apiKey && apiKey !== ENV_API_KEY_MARKER ? apiKey : undefined;
     const preparedModel = prepareClawRouterRequestModel(model);
