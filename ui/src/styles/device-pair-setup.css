@@ -235,6 +235,12 @@
   text-wrap: balance;
 }
 
+/* The inline link keeps the sentence's line height instead of a touch-sized button row. */
+.device-pair-setup__waiting .device-pair-setup__link {
+  min-height: 0;
+  line-height: inherit;
+}
+
 .device-pair-setup__state {
   display: grid;
   min-height: 250px;
