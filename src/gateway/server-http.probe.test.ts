@@ -11,6 +11,7 @@ import {
 import { isGatewayDraining } from "../process/command-queue.js";
 import {
   getActiveGatewayRootWorkCount,
+  markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import {
@@ -41,6 +42,10 @@ function probeClient(server: Parameters<typeof sendRequest>[0]) {
     async json(input: ProbeRequest, status: number, body: object, exact = false) {
       const response = await request(input);
       expect(response.res.statusCode).toBe(status);
+      if (status === 503) {
+        expect(response.setHeader).toHaveBeenCalledWith("Cache-Control", "no-store");
+        expect(response.setHeader).toHaveBeenCalledWith("Retry-After", "1");
+      }
       const assertion = expect(JSON.parse(response.getBody()));
       if (exact) {
         assertion.toEqual(body);
@@ -67,6 +72,11 @@ function probeClient(server: Parameters<typeof sendRequest>[0]) {
           "Content-Length",
           String(Buffer.byteLength(json)),
         );
+        if (status === 503) {
+          expect(response.setHeader).toHaveBeenCalledWith("Retry-After", "1");
+        } else {
+          expect(response.setHeader).not.toHaveBeenCalledWith("Retry-After", "1");
+        }
       }
     },
   };
@@ -261,7 +271,12 @@ describe("gateway probe endpoints", () => {
           ["/v1/chat/completions", "POST"],
           ["/__openclaw__/board/agent%3Amain%3Amain/status/index.html?bt=garbage", "GET"],
         ] as const) {
-          await probe.json({ path, method }, 503, { error: { code: "gateway_unavailable" } });
+          await probe.json({ path, method }, 503, {
+            error: {
+              code: "gateway_unavailable",
+              message: "Gateway is temporarily paused. Please try again shortly.",
+            },
+          });
         }
 
         expect(resumeGatewaySuspend(prepared.suspensionId)).toEqual({
@@ -271,6 +286,23 @@ describe("gateway probe endpoints", () => {
         });
 
         await probe.json("/readyz", 200, readyState([]));
+      });
+    } finally {
+      resetGatewayWorkAdmission();
+    }
+  });
+
+  it.each([
+    ["restart", "Gateway is restarting. Please try again shortly."],
+    ["stop (SIGTERM)", "Gateway is shutting down. Please try again once it is back online."],
+  ] as const)("describes %s admission without claiming an upgrade", async (reason, message) => {
+    resetGatewayWorkAdmission();
+    try {
+      await withProbeServer({ openAiChatCompletionsEnabled: true }, async (probe) => {
+        markGatewayRestartDraining(reason);
+        await probe.json({ path: "/v1/chat/completions", method: "POST" }, 503, {
+          error: { code: "gateway_unavailable", message },
+        });
       });
     } finally {
       resetGatewayWorkAdmission();
