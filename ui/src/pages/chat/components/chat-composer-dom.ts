@@ -389,7 +389,7 @@ export function adjustTextareaHeight(
   const measuredHeight = el.scrollHeight + borderHeight;
   el.style.height = `${Math.min(measuredHeight, maxHeight)}px`;
   updateTextareaOverflow(el);
-  if (state && measuredHeight > maxHeight) {
+  if (state && measuredHeight > maxHeight && !hasNativeTextareaContentSizing(el)) {
     state.cappedValue = el.value;
   }
   // Once capped, the textarea can perturb the sibling transcript without

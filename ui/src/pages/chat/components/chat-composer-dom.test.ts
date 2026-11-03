@@ -9,6 +9,30 @@ import {
 
 afterEach(() => vi.restoreAllMocks());
 
+it("returns a programmatically measured capped draft to native content sizing on input", () => {
+  vi.spyOn(CSS, "supports").mockReturnValue(true);
+  const combobox = document.createElement("div");
+  combobox.className = "agent-chat__composer-combobox";
+  const textarea = document.createElement("textarea");
+  combobox.append(textarea);
+  textarea.style.cssText = "max-height:156px;min-height:36px;line-height:24px;border:0";
+  textarea.value = "A long draft\n".repeat(3000);
+  Object.defineProperties(textarea, {
+    scrollHeight: { value: 72_000 },
+    clientHeight: { value: 156 },
+  });
+  observeTextareaOverflow(textarea);
+  try {
+    adjustTextareaHeight(textarea);
+    expect(textarea.style.height).toBe("156px");
+    textarea.value += "Still growing";
+    adjustTextareaHeight(textarea, { nativeInput: true });
+    expect(textarea.style.height).toBe("");
+  } finally {
+    disconnectTextareaOverflowObserver(textarea);
+  }
+});
+
 it.each([156, 288])("does not measure a growing draft already capped at %ipx", (cap) => {
   const textarea = document.createElement("textarea");
   textarea.style.cssText = `max-height:${cap}px;min-height:36px;line-height:24px;padding:6px;box-sizing:border-box;border:0`;
