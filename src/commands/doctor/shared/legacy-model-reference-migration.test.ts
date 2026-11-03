@@ -249,7 +249,7 @@ describe("canonical model-reference migration", () => {
     expect(warnings).toEqual([expect.stringMatching(/^Kept legacy claude-cli\/\* model refs: /)]);
   });
 
-  it.each(["defaults", "entries", "heartbeat", "subagents"])(
+  it.each(["defaults", "entries", "subagents"])(
     "preserves selected API and CLI routes without runtime pins in %s",
     (scope) => {
       const model = selection("anthropic/claude-opus-4-7", "claude-cli/claude-opus-4-7");

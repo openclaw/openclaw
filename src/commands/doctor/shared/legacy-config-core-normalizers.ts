@@ -198,7 +198,6 @@ function retainConflictingLegacyCliProviders(
   for (const [path, agent] of agentScopes(cfg.agents)) {
     for (const [suffix, owner] of [
       ["model", agent],
-      ["heartbeat.model", agent.heartbeat],
       ["subagents.model", agent.subagents],
     ] as const) {
       const selection = isRecord(owner) ? owner.model : undefined;
