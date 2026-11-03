@@ -12,18 +12,22 @@ const mocks = vi.hoisted(() => ({
   resolveProfileKey: vi.fn(() => null),
 }));
 
-vi.mock("./config-api.js", () => ({
+vi.mock("./config-api.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./config-api.js")>()),
   resolveElevenLabsApiKeyWithProfileFallback: mocks.resolveProfileKey,
 }));
-vi.mock("openclaw/plugin-sdk/provider-http", () => ({
+vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-http")>()),
   assertOkOrThrowProviderError: mocks.assertOk,
   readProviderBinaryResponse: mocks.readBinary,
 }));
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
   fetchWithSsrFGuard: mocks.fetch,
   ssrfPolicyFromHttpBaseUrlAllowedHostname: (baseUrl: string) => ({ baseUrl }),
 }));
-vi.mock("openclaw/plugin-sdk/media-store", () => ({
+vi.mock("openclaw/plugin-sdk/media-store", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-store")>()),
   resolveMediaBufferPath: mocks.resolveMediaPath,
   saveMediaBuffer: mocks.saveMedia,
 }));
@@ -35,9 +39,16 @@ const turns = [
 ];
 
 function createTool(
-  config: unknown = { talk: { providers: { elevenlabs: { apiKey: "xi-fixture-key" } } } },
+  config: unknown = {
+    tts: {
+      providers: {
+        elevenlabs: { apiKey: "xi-fixture-key", baseUrl: "https://speech.example.test" },
+      },
+    },
+  },
+  assertInvocationCurrent: () => void = vi.fn(),
 ) {
-  return createElevenLabsDialogueTool({ assertInvocationCurrent: vi.fn() } as never, () => config);
+  return createElevenLabsDialogueTool({ assertInvocationCurrent } as never, () => config);
 }
 
 describe("ElevenLabs dialogue tool", () => {
@@ -69,12 +80,14 @@ describe("ElevenLabs dialogue tool", () => {
     const request = mocks.fetch.mock.calls[0]?.[0];
 
     expect(new URL(request.url).pathname).toBe("/v1/text-to-dialogue");
+    expect(new URL(request.url).origin).toBe("https://speech.example.test");
     expect(new URL(request.url).searchParams.get("output_format")).toBe("mp3_44100_128");
     expect(request.init.method).toBe("POST");
     expect(request.init.headers).toMatchObject({
       "xi-api-key": "xi-fixture-key",
       Accept: "audio/mpeg",
     });
+    expect(request.beforeRequest).toEqual(expect.any(Function));
     expect(JSON.parse(request.init.body)).toEqual({
       inputs: [
         { text: "Hello [laughs]", voice_id: "voiceAlpha123" },
@@ -105,6 +118,27 @@ describe("ElevenLabs dialogue tool", () => {
         },
       },
     });
+  });
+
+  it("applies Talk credentials and endpoint over the configured speech provider", async () => {
+    const tool = createTool({
+      tts: {
+        providers: {
+          elevenlabs: { apiKey: "tts-fixture-key", baseUrl: "https://speech.example.test" },
+        },
+      },
+      talk: {
+        providers: {
+          elevenlabs: { apiKey: "talk-fixture-key", baseUrl: "https://talk.example.test" },
+        },
+      },
+    });
+
+    await tool.execute("call-talk-config", { turns } as never);
+    const request = mocks.fetch.mock.calls[0]?.[0];
+
+    expect(new URL(request.url).origin).toBe("https://talk.example.test");
+    expect(request.init.headers).toMatchObject({ "xi-api-key": "talk-fixture-key" });
   });
 
   it.each([
@@ -167,6 +201,42 @@ describe("ElevenLabs dialogue tool", () => {
       "invocation retired",
     );
     expect(mocks.fetch).not.toHaveBeenCalled();
+    expect(mocks.saveMedia).not.toHaveBeenCalled();
+  });
+
+  it("rechecks invocation authority after awaited request preparation and before dispatch", async () => {
+    let invocationCurrent = true;
+    const assertInvocationCurrent = vi.fn(() => {
+      if (!invocationCurrent) {
+        throw new Error("invocation retired");
+      }
+    });
+    let finishPreparation: () => void = () => {};
+    let signalPreparationStarted: () => void = () => {};
+    const preparationStarted = new Promise<void>((resolve) => {
+      signalPreparationStarted = resolve;
+    });
+    const preparation = new Promise<void>((resolve) => {
+      finishPreparation = resolve;
+    });
+    const dispatchProviderRequest = vi.fn();
+    mocks.fetch.mockImplementation(async (request) => {
+      signalPreparationStarted();
+      await preparation;
+      request.beforeRequest?.();
+      dispatchProviderRequest();
+      throw new Error("provider request should not start after invocation revocation");
+    });
+
+    const pending = createTool(undefined, assertInvocationCurrent).execute("call-revoked", {
+      turns,
+    } as never);
+    await preparationStarted;
+    invocationCurrent = false;
+    finishPreparation();
+
+    await expect(pending).rejects.toThrow("invocation retired");
+    expect(dispatchProviderRequest).not.toHaveBeenCalled();
     expect(mocks.saveMedia).not.toHaveBeenCalled();
   });
 

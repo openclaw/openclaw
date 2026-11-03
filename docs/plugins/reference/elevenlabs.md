@@ -1,5 +1,5 @@
 ---
-summary: "Adds media understanding provider support. Adds realtime transcription provider support. Adds text-to-speech provider support."
+summary: "Adds media understanding provider support. Adds realtime transcription provider support. Adds text-to-speech provider support. Adds agent-callable tools."
 read_when:
   - You are installing, configuring, or auditing the elevenlabs plugin
 title: "Elevenlabs plugin reference"
@@ -10,7 +10,7 @@ Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
 between the openclaw-plugin-reference:manual-start and
 openclaw-plugin-reference:manual-end comment markers. -->
 
-Adds media understanding provider support. Adds realtime transcription provider support. Adds text-to-speech provider support.
+Adds media understanding provider support. Adds realtime transcription provider support. Adds text-to-speech provider support. Adds agent-callable tools.
 
 ## Distribution
 
@@ -19,7 +19,7 @@ Adds media understanding provider support. Adds realtime transcription provider 
 
 ## Surface
 
-- Contracts: `mediaUnderstandingProviders`, `realtimeTranscriptionProviders`, `speechProviders`
+- Contracts: `mediaUnderstandingProviders`, `realtimeTranscriptionProviders`, `speechProviders`, `tools`
 
 ## Related docs
 

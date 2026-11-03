@@ -5,19 +5,18 @@ import {
   assertOkOrThrowProviderError,
   readProviderBinaryResponse,
 } from "openclaw/plugin-sdk/provider-http";
-import { resolveSpeechProviderApiKey } from "openclaw/plugin-sdk/speech-provider";
 import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { Type, type Static } from "typebox";
-import { resolveElevenLabsApiKeyWithProfileFallback } from "./config-api.js";
+import { Type } from "typebox";
 import {
   DEFAULT_ELEVENLABS_BASE_URL,
   isValidElevenLabsVoiceId,
   normalizeElevenLabsBaseUrl,
 } from "./shared.js";
+import { resolveElevenLabsTalkConfig } from "./speech-provider-factory.js";
 
 const ELEVENLABS_DIALOGUE_MEDIA_SUBDIR = "elevenlabs-dialogue";
 const ELEVENLABS_DIALOGUE_OUTPUT_FORMAT = "mp3_44100_128";
@@ -41,7 +40,6 @@ const elevenLabsDialogueParameters = Type.Object(
   { additionalProperties: false },
 );
 
-type ElevenLabsDialogueParams = Static<typeof elevenLabsDialogueParameters>;
 type DialogueTurn = { text: string; voiceId: string };
 
 function validateTurns(value: unknown): DialogueTurn[] {
@@ -74,23 +72,14 @@ function validateTurns(value: unknown): DialogueTurn[] {
   return turns;
 }
 
-function providerConfigFromRootConfig(config: unknown) {
+function resolveElevenLabsDialogueProviderConfig(config: unknown) {
   const root = asOptionalRecord(config);
   const talk = asOptionalRecord(root?.talk);
   const providers = asOptionalRecord(talk?.providers);
-  return { talk, provider: asOptionalRecord(providers?.elevenlabs) };
-}
-
-function resolveElevenLabsDialogueApiKey(config: unknown): string | undefined {
-  const { talk, provider } = providerConfigFromRootConfig(config);
-  return (
-    resolveSpeechProviderApiKey(
-      typeof provider?.apiKey === "string" ? provider.apiKey : undefined,
-      typeof talk?.apiKey === "string" ? talk.apiKey : undefined,
-      resolveElevenLabsApiKeyWithProfileFallback() ?? undefined,
-      process.env.XI_API_KEY,
-    ) ?? undefined
-  );
+  return resolveElevenLabsTalkConfig({
+    baseTtsConfig: asOptionalRecord(root?.tts) ?? {},
+    talkProviderConfig: asOptionalRecord(providers?.elevenlabs) ?? {},
+  });
 }
 
 async function removeUnreturnedMedia(id: string): Promise<void> {
@@ -120,18 +109,20 @@ export function createElevenLabsDialogueTool(
       };
 
       assertCurrent();
-      const turns = validateTurns((args as ElevenLabsDialogueParams).turns);
+      const turns = validateTurns(asOptionalRecord(args)?.turns);
       const config = getConfig();
-      const { provider } = providerConfigFromRootConfig(config);
-      const apiKey = resolveElevenLabsDialogueApiKey(config);
+      const providerConfig = resolveElevenLabsDialogueProviderConfig(config);
+      const apiKey = providerConfig.apiKey;
       if (!apiKey) {
         throw new Error(
-          "ElevenLabs API key missing. Configure talk.providers.elevenlabs.apiKey or ELEVENLABS_API_KEY/XI_API_KEY.",
+          "ElevenLabs API key missing. Configure tts.providers.elevenlabs.apiKey, talk.providers.elevenlabs.apiKey, or ELEVENLABS_API_KEY/XI_API_KEY.",
         );
       }
 
       const baseUrl = normalizeElevenLabsBaseUrl(
-        typeof provider?.baseUrl === "string" ? provider.baseUrl : DEFAULT_ELEVENLABS_BASE_URL,
+        typeof providerConfig.baseUrl === "string"
+          ? providerConfig.baseUrl
+          : DEFAULT_ELEVENLABS_BASE_URL,
       );
       const url = new URL(`${baseUrl}/v1/text-to-dialogue`);
       url.searchParams.set("output_format", ELEVENLABS_DIALOGUE_OUTPUT_FORMAT);
@@ -156,6 +147,7 @@ export function createElevenLabsDialogueTool(
         timeoutMs: ELEVENLABS_DIALOGUE_TIMEOUT_MS,
         policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
         auditContext: "elevenlabs.text-to-dialogue",
+        beforeRequest: assertCurrent,
       });
 
       let audioBuffer: Buffer;

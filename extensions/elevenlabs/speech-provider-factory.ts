@@ -229,6 +229,45 @@ function resolveElevenLabsApiKey(...candidates: Array<string | undefined>): stri
   );
 }
 
+type ElevenLabsTalkConfigOptions = Parameters<
+  NonNullable<SpeechProviderPlugin["resolveTalkConfig"]>
+>[0];
+
+export function resolveElevenLabsTalkConfig({
+  baseTtsConfig,
+  talkProviderConfig,
+}: Pick<ElevenLabsTalkConfigOptions, "baseTtsConfig" | "talkProviderConfig">) {
+  const base = normalizeElevenLabsProviderConfig(baseTtsConfig);
+  const talkVoiceSettings = asOptionalRecord(talkProviderConfig.voiceSettings);
+  const resolvedTalkApiKey =
+    talkProviderConfig.apiKey === undefined
+      ? resolveElevenLabsApiKey()
+      : normalizeResolvedSecretInputString({
+          value: talkProviderConfig.apiKey,
+          path: "talk.providers.elevenlabs.apiKey",
+        });
+  return {
+    ...base,
+    ...(resolvedTalkApiKey === undefined ? {} : { apiKey: resolvedTalkApiKey }),
+    ...(trimToUndefined(talkProviderConfig.baseUrl) == null
+      ? {}
+      : { baseUrl: normalizeElevenLabsBaseUrl(trimToUndefined(talkProviderConfig.baseUrl)) }),
+    ...definedSettings({
+      voiceId: trimToUndefined(talkProviderConfig.voiceId),
+      modelId: normalizeElevenLabsTtsModelId(trimToUndefined(talkProviderConfig.modelId)),
+      seed: normalizeElevenLabsSeed(talkProviderConfig.seed),
+      applyTextNormalization: normalizeApplyTextNormalization(
+        trimToUndefined(talkProviderConfig.applyTextNormalization),
+      ),
+      languageCode: normalizeLanguageCode(trimToUndefined(talkProviderConfig.languageCode)),
+    }),
+    voiceSettings: {
+      ...base.voiceSettings,
+      ...normalizeVoiceSettings(talkVoiceSettings),
+    },
+  };
+}
+
 type ElevenLabsSynthesisRequest = Pick<
   SpeechSynthesisRequest,
   "providerConfig" | "providerOverrides" | "text" | "timeoutMs"
@@ -359,37 +398,7 @@ export function buildElevenLabsSpeechProvider({
       },
       { formatErrorMessage },
     ),
-    resolveTalkConfig: ({ baseTtsConfig, talkProviderConfig }) => {
-      const base = normalizeElevenLabsProviderConfig(baseTtsConfig);
-      const talkVoiceSettings = asOptionalRecord(talkProviderConfig.voiceSettings);
-      const resolvedTalkApiKey =
-        talkProviderConfig.apiKey === undefined
-          ? resolveElevenLabsApiKey()
-          : normalizeResolvedSecretInputString({
-              value: talkProviderConfig.apiKey,
-              path: "talk.providers.elevenlabs.apiKey",
-            });
-      return {
-        ...base,
-        ...(resolvedTalkApiKey === undefined ? {} : { apiKey: resolvedTalkApiKey }),
-        ...(trimToUndefined(talkProviderConfig.baseUrl) == null
-          ? {}
-          : { baseUrl: normalizeElevenLabsBaseUrl(trimToUndefined(talkProviderConfig.baseUrl)) }),
-        ...definedSettings({
-          voiceId: trimToUndefined(talkProviderConfig.voiceId),
-          modelId: normalizeElevenLabsTtsModelId(trimToUndefined(talkProviderConfig.modelId)),
-          seed: normalizeElevenLabsSeed(talkProviderConfig.seed),
-          applyTextNormalization: normalizeApplyTextNormalization(
-            trimToUndefined(talkProviderConfig.applyTextNormalization),
-          ),
-          languageCode: normalizeLanguageCode(trimToUndefined(talkProviderConfig.languageCode)),
-        }),
-        voiceSettings: {
-          ...base.voiceSettings,
-          ...normalizeVoiceSettings(talkVoiceSettings),
-        },
-      };
-    },
+    resolveTalkConfig: resolveElevenLabsTalkConfig,
     resolveTalkOverrides: ({ params }) => {
       const normalize = trimToUndefined(params.normalize);
       const language = normalizeLowercaseStringOrEmpty(trimToUndefined(params.language));
