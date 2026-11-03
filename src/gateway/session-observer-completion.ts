@@ -1,4 +1,5 @@
 import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-selection.js";
+import { readUtilityModelSetting } from "../agents/utility-model-setting.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { emitAgentEvent, emitAgentEventForOwner } from "../infra/agent-events.js";
@@ -35,6 +36,11 @@ export function reportSessionObserverDegradation(
     useUtilityModel: "required",
   });
   const modelLabel = selection ? ` "${selection.provider}/${selection.modelId}"` : "";
+  const utility = readUtilityModelSetting(cfg, state.agentId);
+  const hasFallbacks = utility.kind !== "disabled" && utility.fallbacks.length > 0;
+  const guidance = hasFallbacks
+    ? "Configured utilityModel.fallbacks did not restore assessments; check their availability and timeouts or choose a capable utility model."
+    : "To restore assessments, choose a capable utility model or add capable utilityModel.fallbacks.";
   const notice = {
     runId: state.runId,
     sessionKey: state.sessionKey,
@@ -42,7 +48,7 @@ export function reportSessionObserverDegradation(
     stream: "notice",
     data: {
       phase: "warning",
-      message: `Session observer assessments stopped for this run after utility model${modelLabel} failed repeatedly. To restore assessments, choose a capable utility model or add capable utilityModel.fallbacks.`,
+      message: `Session observer assessments stopped for this run after utility model${modelLabel} failed repeatedly. ${guidance}`,
     },
   };
   const owner = getAgentRunContextOwnership(state.runId)?.exclusiveClaimId;
@@ -65,13 +71,13 @@ export function createSessionObserverCompletion(params: {
   completeModel: typeof defaultCompleteModel;
   isCurrent: (state: SessionObserverState) => boolean;
 }) {
-  const ensurePrepared = async (state: SessionObserverState) => {
+  const ensurePrepared = async (state: SessionObserverState, cfg: OpenClawConfig) => {
     const modelRef = state.utilityModelRef;
     if (!modelRef) {
       throw new Error("session observer utility model is unavailable");
     }
     const preparedPromise = (state.preparedPromise ??= params.prepareModel({
-      cfg: params.getConfig(),
+      cfg,
       agentId: state.agentId,
       modelRef,
       useUtilityModel: true,
@@ -91,13 +97,25 @@ export function createSessionObserverCompletion(params: {
   };
 
   return async (state: SessionObserverState, notes: readonly string[]) => {
+    const cfg = params.getConfig();
     const controller = new AbortController();
     state.activeController = controller;
-    const timeout = setTimeout(() => controller.abort(), SESSION_OBSERVER_MODEL_TIMEOUT_MS);
+    let timeout = setTimeout(() => controller.abort(), SESSION_OBSERVER_MODEL_TIMEOUT_MS);
     const ownedWork = new AsyncWorkScope();
     try {
       const execute = async () => {
-        const prepared = await ensurePrepared(state);
+        const prepared = await ensurePrepared(state, cfg);
+        const utility = readUtilityModelSetting(cfg, state.agentId);
+        const fallbackCount = utility.kind === "disabled" ? 0 : utility.fallbacks.length;
+        if (fallbackCount > 0 && !controller.signal.aborted) {
+          // Preparation has its own cap. Each candidate can then use its full
+          // timeout on either JSON attempt, with room for fallback handoffs.
+          clearTimeout(timeout);
+          timeout = setTimeout(
+            () => controller.abort(),
+            2 * (fallbackCount + 1) * SESSION_OBSERVER_MODEL_TIMEOUT_MS + 10_000,
+          );
+        }
         let lastRejectedText = "";
         for (let attempt = 0; attempt < 2; attempt += 1) {
           if (!params.isCurrent(state) || controller.signal.aborted) {
@@ -106,7 +124,7 @@ export function createSessionObserverCompletion(params: {
           const result = await params.completeModel({
             ...prepared,
             purpose: "session-observer",
-            config: params.getConfig(),
+            config: cfg,
             systemPrompt: SESSION_OBSERVER_SYSTEM_PROMPT,
             prompt: buildSessionObserverPrompt(state, notes),
             timeoutMs: SESSION_OBSERVER_MODEL_TIMEOUT_MS,
