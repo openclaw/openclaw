@@ -430,7 +430,13 @@ export async function planOpenClawModelsJson(params: {
       }) ??
       (explicitProviderIds.has(normalizedId)
         ? undefined
-        : discoveredProviderPluginIds.get(normalizedId));
+        : (discoveredProviderPluginIds.get(normalizedId) ??
+          // A generated CLI backend catalog stays with its plugin even when discovery skipped it.
+          resolvePluginModelCatalogOwnerPluginId({
+            providerId,
+            pluginMetadataSnapshot: partitionMetadataSnapshot,
+            includeCliBackends: true,
+          })));
     if (!pluginId) {
       splitRootProviders[providerId] = provider;
       continue;

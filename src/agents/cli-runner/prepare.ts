@@ -122,12 +122,11 @@ import {
 } from "./bundle-mcp-claude.js";
 import { prepareCliBundleMcpConfig, resolveCliNativeWebSearchEnabled } from "./bundle-mcp.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
-import { runCliCleanup, sequenceCliCleanups } from "./cleanup.js";
+import { runCliCleanup, sequenceCliCleanups, throwCliPreparationFailure } from "./cleanup.js";
 import { resolveBundledCliBackendAuthPolicy } from "./cli-backend-auth-policy.js";
 import { getCliLiveSessionGeneration } from "./cli-live-session-registry.js";
 import { resolveCliSessionId } from "./cli-run-recovery.js";
 import {
-  createCliRunCurrentAssertion,
   resolveCliExecutionTarget,
   retainCliPluginExecutionConsumer,
   unsupportedIsolatedCompletionError,
@@ -155,6 +154,7 @@ import {
   finalizeCliSystemPrompt,
   composeCliPromptContext,
   buildCliCurrentPrompt,
+  prepareCliPromptSources,
   prepareCliSystemPrompt,
   prepareCliTurnPromptContext,
 } from "./prompt-context.js";
@@ -166,7 +166,6 @@ import {
   loadCliSessionPromptContext,
   resolveAutoCliSessionReseedHistoryChars,
 } from "./session-history.js";
-import { resolveCliSkillsPrompt } from "./skills-prompt.js";
 import { resolveStableCliSkillAuthoring } from "./stable-skill-authoring.js";
 import { captureCliRunToolAuthority } from "./tool-authority.js";
 import {
@@ -343,12 +342,12 @@ async function prepareCliRunContextWithinReadFence(
   params.assertCurrent?.();
   params.abortSignal?.throwIfAborted();
   if (nodeClaudePlacement && params.cliToolAvailability) {
-    // Only the personal Workshop has an invocation-bound node callback adapter.
+    // Only the personal library has an invocation-bound node callback adapter.
     params = {
       ...params,
       cliToolAvailability: {
         native: params.cliToolAvailability.native,
-        openClaw: params.cliToolAvailability.openClaw.filter((name) => name === "skill_workshop"),
+        openClaw: params.cliToolAvailability.openClaw.filter((name) => name === "skill_library"),
       },
     };
   }
@@ -903,7 +902,7 @@ async function prepareCliRunContextWithinReadFence(
     });
   const bootstrapTruncationNotice = buildBootstrapPromptWarningNotice(bootstrapPromptWarning.lines);
   const nodeSkillWorkshop = nodeWorkshopEnabled
-    ? projectedTools.find((tool) => tool.name === "skill_workshop")
+    ? projectedTools.find((tool) => tool.name === "skill_library")
     : undefined;
   const promptTools = bundleMcpEnabled
     ? projectedTools
@@ -1395,40 +1394,15 @@ async function prepareCliRunContextWithinReadFence(
         `cli session reset: provider=${params.provider} reason=${invalidatedReason}`,
       );
     }
-    const openClawReferences = skipsTurnPreparation
-      ? { docsPath: null, sourcePath: null }
-      : await (
-          await import("../docs-path.js")
-        ).resolveOpenClawReferencePaths({
-          workspaceDir,
-          argv1: process.argv[1],
-          cwd,
-          moduleUrl: import.meta.url,
-        });
-    const skillPreparationParams = params;
-    const assertSkillsCurrent = skillPreparationParams.admittedRunContext
-      ? createCliRunCurrentAssertion({
-          ...skillPreparationParams,
-          admittedRunContext: skillPreparationParams.admittedRunContext,
-        })
-      : () => {
-          skillPreparationParams.assertCurrent?.();
-          skillPreparationParams.abortSignal?.throwIfAborted();
-          skillPreparationParams.preparedRunAdmission?.assertSourceCurrent();
-        };
-    const preparedSkills =
-      skipsTurnPreparation || nodeClaudePlacement || claudeSkillsPlugin.args.length > 0
-        ? { prompt: "" }
-        : await resolveCliSkillsPrompt({
-            assertCurrent: assertSkillsCurrent,
-            run: params,
-            workspaceDir,
-            executionWorkspaceDir: cwd,
-            config: params.config,
-            agentId: sessionAgentId,
-            sessionKey: params.sessionKey?.trim() || params.sessionId,
-          });
-    assertSkillsCurrent();
+    const { openClawReferences, preparedSkills } = await prepareCliPromptSources({
+      run: params,
+      workspaceDir,
+      cwd,
+      agentId: sessionAgentId,
+      skipTurnPreparation: skipsTurnPreparation,
+      skipSkills: nodeClaudePlacement || claudeSkillsPlugin.args.length > 0,
+      moduleUrl: import.meta.url,
+    });
     const { runtimeChannel, runtimeCapabilities, customInlineButtonHint, messageToolHints } =
       resolveRuntimeChannelPromptContext({
         cfg: params.config,
@@ -1793,14 +1767,8 @@ async function prepareCliRunContextWithinReadFence(
       ...(openClawHistoryPrompt ? { openClawHistoryPrompt } : {}),
     });
   } catch (err) {
-    try {
-      await runCliCleanup(params, "cli-prepare-failure", async () => {
-        await cleanupPreparedResources?.();
-      });
-    } catch (cleanupErr) {
-      cliBackendLog.warn(`cli backend cleanup after prepare failure failed: ${String(cleanupErr)}`);
-    }
-    throw err;
+    // Keep caller authority alive until the composed preparation cleanup settles.
+    return await throwCliPreparationFailure(params, err, cleanupPreparedResources);
   }
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

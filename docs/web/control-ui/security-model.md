@@ -85,6 +85,9 @@ Gateway access. Their document links remain subject to the current publication
 and visible inline-widget result checks. Responses retain `Cache-Control: no-store`
 and `Referrer-Policy: no-referrer`. Server-side representation reuse never substitutes
 for a current publication check, including before a `304` response.
+Public transcript and media responses accept matching weak ETags, validator lists,
+and `*` in `If-None-Match`. Revoked publications still return their normal denial,
+not `304`.
 
 Public transcript documents, preview cards, shared images, and the share namespace
 send `X-Robots-Tag: noindex, nofollow`; HTML reader and preview documents also

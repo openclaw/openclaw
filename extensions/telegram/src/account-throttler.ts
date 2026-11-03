@@ -405,6 +405,26 @@ function readPayload(payload: unknown): TelegramApiPayload | undefined {
   return payload && typeof payload === "object" ? (payload as TelegramApiPayload) : undefined;
 }
 
+function readMessageDeliveryResult(
+  method: string,
+  result: unknown,
+): { messageThreadId: number | undefined } | undefined {
+  if (!method.startsWith("send") && !method.startsWith("copy") && !method.startsWith("forward")) {
+    return undefined;
+  }
+  const values = Array.isArray(result) ? result : [result];
+  for (const value of values) {
+    if (
+      value !== null &&
+      typeof value === "object" &&
+      parseStrictInteger(Reflect.get(value, "message_id")) !== undefined
+    ) {
+      return { messageThreadId: parseStrictInteger(Reflect.get(value, "message_thread_id")) };
+    }
+  }
+  return undefined;
+}
+
 function resolveGroupChatKey(payload: TelegramApiPayload): string | undefined {
   const chatId = parseStrictInteger(payload.chat_id);
   return chatId !== undefined && chatId < 0 ? String(chatId) : undefined;
@@ -545,9 +565,21 @@ function createTelegramAccountThrottler(
     );
     const apiPayload = readPayload(payload);
     const groupChatKey = apiPayload ? resolveGroupChatKey(apiPayload) : undefined;
-    return replaceable || !groupChatKey
-      ? send(method, payload, signal)
-      : getScheduler(groupChatKey).withPriority(() => send(method, payload, signal));
+    const request =
+      replaceable || !groupChatKey
+        ? send(method, payload, signal)
+        : getScheduler(groupChatKey).withPriority(() => send(method, payload, signal));
+    return request.then((result) => {
+      const chatId = apiPayload?.chat_id;
+      const delivered = result.ok ? readMessageDeliveryResult(method, result.result) : undefined;
+      if (delivered && (typeof chatId === "number" || typeof chatId === "string")) {
+        chatActions.noteMessageDelivered(
+          chatId,
+          delivered.messageThreadId ?? parseStrictInteger(apiPayload?.message_thread_id),
+        );
+      }
+      return result;
+    });
   };
   return { transformer, chatActions, dispose };
 }
