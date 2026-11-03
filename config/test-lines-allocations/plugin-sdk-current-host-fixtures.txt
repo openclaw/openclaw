@@ -1,2 +1,2 @@
 # Current SDK host consumer contracts, publication recovery, canonical RPC fixtures and browser lifecycle proof; preserved upstream assertions use their actual owning boundaries.
-513
+517

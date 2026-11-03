@@ -11710,8 +11710,12 @@ describe("ci workflow guards", () => {
         groups_gzip_base64: expect.any(String),
       });
       if (eventName === "pull_request") {
+        // An unbounded infra group includes the real Node-hosted Bun child proof.
+        if (grouped) {
+          expect(row.requires_bun).toBe(true);
+        }
         for (const field of [
-          "requires_bun",
+          ...(grouped ? [] : ["requires_bun"]),
           "requires_dist",
           "requires_go",
           "requires_ripgrep",
