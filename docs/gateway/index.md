@@ -75,6 +75,11 @@ Gateway config reload watches the active config file path (resolved from profile
 - Default bind mode: `loopback`. Inside a detected container environment the effective default is `auto` (resolves to `0.0.0.0` for port-forwarding), unless Tailscale serve/funnel is active, which always forces `loopback`.
 - Auth is required by default. Shared-secret setups use `gateway.auth.token` / `gateway.auth.password` (or `OPENCLAW_GATEWAY_TOKEN` / `OPENCLAW_GATEWAY_PASSWORD`), and non-loopback reverse-proxy setups can use `gateway.auth.mode: "trusted-proxy"`.
 
+Worker startup retries transient SQLite locks while clearing stale local turn
+claims. If the lock persists after five attempts, startup stops with guidance to
+run `openclaw doctor` or `openclaw gateway status --deep`. Other storage failures
+and writes with an unknown outcome are not retried.
+
 ### Module compile cache
 
 The Gateway main thread runs without Node's on-disk module compile cache. Node

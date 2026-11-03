@@ -22,6 +22,7 @@ import type { DesktopSessionRegistry } from "./desktop/session-registry.js";
 import type { NodeWorkerSupervisorTransport } from "./node-registry-private.js";
 import type { GatewayContextResolver, GatewayRequestContext } from "./server-methods/types.js";
 import { createWorkerRuntimeInstallProgressPublisher } from "./server-worker-runtime-install-progress.js";
+import { retryGatewayWorkerStartupRecovery } from "./server-worker-startup-recovery.js";
 import type { ArtifactTransferHttpCallback } from "./worker-environments/artifact-transfer-http.js";
 import type { WorkerBundleProducer, WorkerNpmArtifact } from "./worker-environments/bundle.js";
 import {
@@ -170,14 +171,18 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
   // process are gone. Resolve their ambiguous effects before placement
   // reconciliation attempts to release the owning worker claims.
   await params.startup.placementStore.recoverWorkerSessionToolOperationsAfterRestart();
+  const workerEnvironmentLog = params.log.child("worker-environments");
   // A crashed gateway can leak local turn claims; drop them before workers re-admit turns.
-  await params.startup.placementStore.clearLocalTurnClaimsAfterRestartAsync();
+  await retryGatewayWorkerStartupRecovery({
+    operation: "Worker startup local turn-claim recovery",
+    run: () => params.startup.placementStore.clearLocalTurnClaimsAfterRestartAsync(),
+    warn: (message) => workerEnvironmentLog.warn(message),
+  });
   const placementGate = createWorkerSessionPlacementGate(params.startup.placementStore, {
     // Claims loaded before this Gateway acquired the state lock remain usable only by
     // workspace recovery. Worker authority is minted from claims created in this lifecycle.
     recoveryPlacements: await params.startup.placementStore.listAsync(),
   });
-  const workerEnvironmentLog = params.log.child("worker-environments");
   const listRetainedBundleHashes = async () =>
     listRetainedWorkerBundleHashes({
       environments: params.startup.store.list(),
