@@ -1374,9 +1374,9 @@ const startupEnglish = {
     offlineChangesDiscarded: "Offline changes discarded: {count}",
     offlineChangesReloadBlocked:
       "Offline changes are waiting to reconnect. Reloading would discard them.",
-    sessionMoveRefreshFailed: "The session move was saved, but refreshing the list failed: {error}",
+    sessionMoveRefreshFailed: "Couldn’t refresh the list. Session moved. Refresh it. {error}",
     sessionMoveUncertain:
-      "The session move could not be confirmed. Refresh and check its group before retrying. {error}",
+      "Couldn’t confirm the session move. Refresh and check its group before retrying. {error}",
     sessionOperationCompletedPreviousConnection:
       "The session operation completed on the previous connection. Check the current session list before continuing.",
     sessionOperationCompletedPreviousConnectionWithRefreshError:
@@ -1537,7 +1537,7 @@ const startupEnglish = {
       manage: "Manage saved accounts…",
     },
     mentions: {},
-    cloudWorkerFailed: "Runner failed: {error}",
+    cloudWorkerFailed: "Couldn’t use cloud device. Try again. {error}",
     errorDetails: "Error details",
     errorReplySummary: "Couldn't finish this reply. Check the conversation before trying again.",
     errorReplyTitle: "Couldn’t finish this reply",
@@ -1601,7 +1601,7 @@ const startupEnglish = {
       startingFromSnapshot: "Starting from snapshot…",
       preparingCloudEnvironment: "Preparing cloud environment…",
       savingSnapshot: "Saving snapshot…",
-      preparingContext: "Preparing this turn…",
+      preparingContext: "Preparing reply…",
       waitingForTurn: "Waiting for turn to start",
       memoryFlushing: "Saving conversation memory…",
       startingModel: "Waiting for a response",
@@ -1621,7 +1621,7 @@ const startupEnglish = {
     commandResults: {
       startingNewThread: "Starting new session...",
       resettingThread: "Resetting session...",
-      stoppingCurrentRun: "Stopping current run...",
+      stoppingCurrentRun: "Stopping reply…",
       chatHistoryCleared: "Chat history cleared.",
       emptyExport: "There are no messages to export yet.",
       exportPathUnsupported:
@@ -1666,12 +1666,12 @@ const startupEnglish = {
       merged: "Merged",
       closed: "Closed",
     },
-    usageRemaining: "Usage Remaining",
+    usageRemaining: "Usage remaining",
     view: {},
 
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
 
-    followUpModeSteer: "Steer into the active run",
+    followUpModeSteer: "Steer this reply",
 
     catalogOutputTruncated: "[Output truncated]",
     onboardingDisabled: "Disabled during setup",
@@ -1891,7 +1891,7 @@ const startupEnglish = {
       browser: "Browser",
       browserEmpty: "A shared browser for you and the agent.",
       browserUnavailableReason: {
-        permission: "You need operator.admin to use Browser.",
+        permission: "You need admin access to use Browser.",
         disconnected: "Disconnected.",
         unavailable: "Browser unavailable.",
       },

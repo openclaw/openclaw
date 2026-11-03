@@ -476,12 +476,12 @@ describe("handleChatGatewayEvent", () => {
     const label = () =>
       chatStartupStatusLabel(activeChatRunStartupStatus(state.chatRunStartup), null);
     receive(state, "status", { phase: "preparing_context", seq: 1 });
-    expect(label()).toBe("Preparing this turn…");
+    expect(label()).toBe("Preparing reply…");
     receive(state, "delta", {
       runId: "run-other",
       message: { role: "assistant", content: "Other" },
     });
-    expect(label()).toBe("Preparing this turn…");
+    expect(label()).toBe("Preparing reply…");
     receive(state, "status", { phase: "starting_model", seq: 2 });
     expect(label()).toBe("Waiting for a response");
     receive(state, "status", { phase: "preparing_context", seq: 3 });
