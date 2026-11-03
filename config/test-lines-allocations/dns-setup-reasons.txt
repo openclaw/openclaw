@@ -1,0 +1,2 @@
+# Regression tests check dns setup prints the reason for each of its four refusals instead of the generic failure.
+69
