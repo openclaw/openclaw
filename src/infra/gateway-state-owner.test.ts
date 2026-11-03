@@ -112,6 +112,9 @@ describe("Gateway state ownership", () => {
     const realpath = vi.spyOn(fs.realpathSync, "native");
     captured.assertCurrent();
     expect(realpath.mock.calls.filter(([pathname]) => pathname === databasePath)).toHaveLength(1);
+    expect(realpath.mock.calls.some(([pathname]) => pathname === path.dirname(owner.path))).toBe(
+      false,
+    );
     realpath.mockRestore();
     owner.release();
     gatewayOwner(databasePath, root);
@@ -125,6 +128,10 @@ describe("Gateway state ownership", () => {
     const captured = captureGatewayStateOwner(path.join(alias, "state", "openclaw.sqlite"))!;
     const otherRoot = directories.make("openclaw-owner-successor-");
     gatewayOwner(path.join(otherRoot, "state", "openclaw.sqlite"), otherRoot);
+    expect(() => captured.assertCurrent(databasePath)).not.toThrow();
+    expect(() => captured.assertCurrent(path.join(otherRoot, "state", "openclaw.sqlite"))).toThrow(
+      GatewayStateOwnerContentionError,
+    );
     fs.unlinkSync(alias);
     fs.symlinkSync(otherRoot, alias);
     expect(() => captured.assertCurrent()).toThrow(GatewayStateOwnerContentionError);

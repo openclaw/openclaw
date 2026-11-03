@@ -1,4 +1,5 @@
 import { performance } from "node:perf_hooks";
+import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../../agents/prepared-model-runtime-generation-scope.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { withoutGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { lookupSessionGoalOperation } from "../../config/sessions/goals-operations-read.js";
@@ -634,10 +635,12 @@ export async function handleChatSendWithStorage(
         persistBestEffort: persistGatewayUserTurnTranscriptBestEffort,
       },
     };
-    // Accepted work retains its source authority; the spawning tool and turn no longer
-    // own reply preparation while the new runtime establishes its own caller context.
-    const dispatched = withoutGatewayToolCallerIdentity(() =>
-      runOutsideOperatorToolGatewayAuthority(() => startChatDispatch(dispatch)),
+    // Accepted input owns source authority, not the spawning turn's finite plugin lease.
+    // Preserve the admitting Gateway while the child establishes its own runtime custody.
+    const dispatched = runOutsidePreparedModelRuntimePluginGenerationScope(() =>
+      withoutGatewayToolCallerIdentity(() =>
+        runOutsideOperatorToolGatewayAuthority(() => startChatDispatch(dispatch)),
+      ),
     );
     admittedCleanup.dispatched = true;
     if (codexGoalCommitted) {

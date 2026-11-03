@@ -14,6 +14,7 @@ import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { runSqliteReadOperationSync as runRead } from "../infra/sqlite-schema-facts.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import {
   createOpenClawTestState as createState,
@@ -85,6 +86,47 @@ function retain(options: Parameters<typeof retainOpenClawAgentDatabaseReadOnly>[
   }
   return result;
 }
+
+it("attributes native and cached statements on the retained read-only connection", async () => {
+  const { options } = await closedDatabase();
+  const logger = { warn: vi.fn() };
+  readAgentDb(({ db }) => {
+    const query = getNodeSqliteKysely<{ schema_meta: { agent_id: string } }>(db)
+      .selectFrom("schema_meta")
+      .select("agent_id");
+    const cached = () => executeSqliteQueryTakeFirstSync(db, query);
+    cached();
+    const native = db.prepare("SELECT agent_id FROM schema_meta");
+    for (let pass = 0; pass < 2; pass++) {
+      runSqliteReadSnapshotSync(
+        db,
+        () => {
+          expect(native.get()).toEqual({ agent_id: "main" });
+          expect(native.all()).toEqual([{ agent_id: "main" }]);
+          expect([...native.iterate()]).toEqual([{ agent_id: "main" }]);
+          expect(cached()).toEqual({ agent_id: "main" });
+        },
+        {
+          operationLabel: "sessions.transcript-hydration.cron-model",
+          slowTransactionHoldMs: 0,
+          logger,
+        },
+      );
+    }
+  }, options);
+  expect(logger.warn).toHaveBeenCalledTimes(2);
+  for (const [, metadata] of logger.warn.mock.calls) {
+    expect(metadata).toMatchObject({
+      statementTiming: {
+        count: 4,
+        statements: expect.arrayContaining([
+          expect.objectContaining({ operation: "SELECT", count: 3, rows: 3 }),
+          expect.objectContaining({ operation: "SELECT", count: 1, rows: 1 }),
+        ]),
+      },
+    });
+  }
+});
 
 it.each([false, true])(
   "reuses admission while reads observe committed writes with snapshot=%s",

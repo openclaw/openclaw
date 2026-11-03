@@ -234,6 +234,8 @@ export function renderChatPaneComposerControls(params: {
   const hasAcceptedHistory = Boolean(
     acceptedHistory && acceptedHistory.sessionId === expectedSessionId,
   );
+  // Background history refreshes must not interrupt gestures for the accepted session.
+  const historyLoading = state.chatLoading && !hasAcceptedHistory;
   const sessionReady =
     state.connected &&
     selectedSession &&
@@ -264,7 +266,7 @@ export function renderChatPaneComposerControls(params: {
               !state.connected ||
               !accountModel ||
               selectedSession?.modelSelectionLocked === true ||
-              state.chatLoading ||
+              historyLoading ||
               state.chatSending ||
               Boolean(state.chatRunId) ||
               state.chatStream !== null ||
@@ -280,8 +282,7 @@ export function renderChatPaneComposerControls(params: {
         agentDefaultModel,
         connected: state.connected,
         gatewayAvailable: Boolean(state.client),
-        // Background history refreshes must not interrupt gestures for the accepted session.
-        loading: state.chatLoading && !hasAcceptedHistory,
+        loading: historyLoading,
         modelCatalog: state.chatModelCatalog,
         modelCatalogState,
         modelOverrides: state.sessions.state.modelOverrides,
