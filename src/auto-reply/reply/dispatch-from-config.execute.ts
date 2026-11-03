@@ -29,6 +29,7 @@ import type { PrepareDispatchExecutionReadyState } from "./dispatch-from-config.
 import { requireQueuedReplyDelivery } from "./dispatch-from-config.turn-ledger.js";
 import type { PendingContinuationSettlement } from "./get-reply.types.js";
 import { bindPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
+import { ReplyDispatchDeliveryError } from "./reply-dispatch-outcome.js";
 import { REPLY_OPERATION_RUN_STATE } from "./reply-operation-run-state.js";
 
 export async function executeDispatch(state: PrepareDispatchExecutionReadyState) {
@@ -215,6 +216,10 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
               ),
               onToolResult: (payload) => {
                 if (state.replyOperationRunState.heartbeat) {
+                  // ask_user waits for an answer once its prompt is reported delivered.
+                  if (hasAskUserPayload(payload)) {
+                    return Promise.reject(new ReplyDispatchDeliveryError("cancelled"));
+                  }
                   return Promise.resolve();
                 }
                 state.getDispatchReplyOperation()?.recordActivity();

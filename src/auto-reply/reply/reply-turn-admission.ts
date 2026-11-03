@@ -660,9 +660,11 @@ export async function admitReplyTurn(
           throw error;
         }
         const activeOperation = replyRunRegistry.get(params.sessionKey);
-        if (params.kind === "visible" && activeOperation?.turnKind === "heartbeat") {
-          // Background heartbeats must yield before queue policy can steer this
-          // user turn into the heartbeat's model run and lose its visible reply.
+        if (
+          params.resetTriggered &&
+          params.kind === "visible" &&
+          activeOperation?.turnKind === "heartbeat"
+        ) {
           activeOperation.supersede();
         }
         if (params.kind === "visible" && expireVisibleStaleOperation(activeOperation)) {

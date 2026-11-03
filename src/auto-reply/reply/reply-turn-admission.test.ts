@@ -352,6 +352,17 @@ it("keeps an already-waiting follow-up behind the delivery barrier", async () =>
     owned(await admission).complete();
   }
 });
+it("lets an explicit reset supersede a running heartbeat", async () => {
+  const heartbeat = operation({ turnKind: "heartbeat" });
+  const cancel = vi.fn(() => heartbeat.complete());
+  heartbeat.attachBackend({ kind: "embedded", cancel });
+  heartbeat.setPhase("running");
+
+  const reset = owned(await admit({ resetTriggered: true }));
+  expect(cancel).toHaveBeenCalledExactlyOnceWith("superseded");
+  expect(reset.turnKind).toBe("visible");
+  reset.complete();
+});
 it("skips heartbeat turns while delivery settles", async () => {
   const active = operation();
   const barrier = createDeferred();

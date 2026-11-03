@@ -17,7 +17,7 @@ import {
   claimPendingEmbeddedAgentQuestionAnswer,
   clearActiveEmbeddedRun,
   formatEmbeddedAgentQueueFailureSummary,
-  preemptAndDrainEmbeddedHeartbeatRun,
+  waitForEmbeddedHeartbeatRunEnd,
   queueEmbeddedAgentMessageWithOutcome as queueSync,
   queueEmbeddedAgentMessageWithOutcomeAsync as queueAsync,
   queueGuardedEmbeddedAgentMessageWithOutcomeAsync as queueGuarded,
@@ -235,12 +235,29 @@ describe("embedded-agent active-run steering", () => {
 
   it("keeps handle and session waiters distinct through replacements", async () => {
     vi.useFakeTimers();
-    const preempt = vi.fn(() => true),
-      visibleAbort = vi.fn();
-    const heartbeat = start({ isAbortable: () => false, preemptByVisibleTurn: preempt });
-    const replacement = createEmbeddedRunHandle({ abort: visibleAbort });
+    const runId = "heartbeat-run";
+    const cancel = vi.fn();
+    const heartbeatOwner = createReplyOperation({
+      sessionKey,
+      sessionId,
+      turnKind: "heartbeat",
+      resetTriggered: false,
+    });
+    const heartbeat = {
+      ...createEmbeddedRunHandle({ runId, abort: cancel }),
+      kind: "embedded" as const,
+      cancel,
+    };
+    heartbeatOwner.attachBackend(heartbeat);
+    setActiveEmbeddedRun(sessionId, heartbeat, sessionKey);
+    heartbeatOwner.complete();
+    const replacement = createEmbeddedRunHandle();
     setActiveEmbeddedRun("visible", replacement);
-    const heartbeatWait = preemptAndDrainEmbeddedHeartbeatRun(sessionId, 1_000);
+    const heartbeatWait = waitForEmbeddedHeartbeatRunEnd(sessionId);
+    const waitingDm = new AbortController();
+    const cancelledWait = waitForEmbeddedHeartbeatRunEnd(sessionId, waitingDm.signal);
+    waitingDm.abort();
+    await expect(cancelledWait).rejects.toMatchObject({ name: "AbortError" });
     const sessionWait = waitForEmbeddedAgentRunEnd(sessionId, null);
     let heartbeatDrained = false,
       sessionDrained = false;
@@ -250,14 +267,12 @@ describe("embedded-agent active-run steering", () => {
     void sessionWait.then(() => {
       sessionDrained = true;
     });
-    await expect(preemptAndDrainEmbeddedHeartbeatRun("visible", 1_000)).resolves.toBe(
-      "not-heartbeat",
-    );
+    await expect(waitForEmbeddedHeartbeatRunEnd("visible")).resolves.toBe(false);
     setActiveEmbeddedRun(sessionId, replacement);
     await Promise.resolve();
     expect(heartbeatDrained).toBe(false);
     clearActiveEmbeddedRun(sessionId, heartbeat);
-    await expect(heartbeatWait).resolves.toBe("drained");
+    await expect(heartbeatWait).resolves.toBe(true);
     expect(sessionDrained).toBe(false);
     clearActiveEmbeddedRun(sessionId, replacement);
     const successor = createEmbeddedRunHandle();
@@ -267,8 +282,7 @@ describe("embedded-agent active-run steering", () => {
     expect(sessionDrained).toBe(false);
     clearActiveEmbeddedRun(sessionId, successor);
     await expect(sessionWait).resolves.toBe(true);
-    expect(preempt).toHaveBeenCalledOnce();
-    expect(visibleAbort).not.toHaveBeenCalled();
+    expect(cancel).not.toHaveBeenCalled();
   });
 
   it.each([undefined, "message_tool_only"] as const)(

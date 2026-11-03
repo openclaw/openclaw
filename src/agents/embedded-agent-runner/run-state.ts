@@ -51,8 +51,6 @@ export type EmbeddedAgentQueueHandle = {
   ) => Promise<boolean>;
   /** Cancels this run's pending user-input request before an image is queued as a later turn. */
   cancelPendingUserInput?: (resolvedBy: string) => Promise<boolean>;
-  /** Exact heartbeat owner retained after its reply-operation registration clears. */
-  readonly preemptByVisibleTurn?: () => boolean;
   queueMessage: (
     text: string,
     options?: EmbeddedAgentQueueMessageOptions,
@@ -142,6 +140,8 @@ export type EmbeddedRunToolAuthorityBinding = (registration: {
 };
 
 export type EmbeddedRunRegistration = {
+  /** A shared heartbeat can outlive its reply slot during backend cleanup. */
+  isHeartbeat: boolean;
   /** Registration-owned presentation fact; retained cleanup must not reappear after context release. */
   projectSessionActive?: boolean;
   toolAuthority?: ReturnType<EmbeddedRunToolAuthorityBinding>;

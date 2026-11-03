@@ -36,10 +36,7 @@ import {
   loadSessionUpdatesRuntime,
   routeThreadIdsMatch,
 } from "./get-reply-run-helpers.js";
-import {
-  REPLY_RUN_STILL_SHUTTING_DOWN_TEXT,
-  waitForPreparedReplyQueue,
-} from "./get-reply-run-queue.js";
+import { waitForPreparedReplyQueue } from "./get-reply-run-queue.js";
 import { buildReplyPromptEnvelope } from "./prompt-prelude.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { resolveQueueSettings } from "./queue/settings-runtime.js";
@@ -377,23 +374,20 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
   )
     ? undefined
     : rawActiveSessionIdForInterrupt;
-  const shouldPreemptHeartbeat =
-    !isRoomEvent && !context.isHeartbeat && rawActiveSessionIdForInterrupt !== undefined;
-  const heartbeatPreemption =
-    shouldPreemptHeartbeat && embeddedAgentRuntime
-      ? await embeddedAgentRuntime.preemptAndDrainEmbeddedHeartbeatRun(
-          rawActiveSessionIdForInterrupt,
-          REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
-        )
-      : "not-heartbeat";
-  if (heartbeatPreemption === "timed-out") {
-    typing.cleanup();
-    return {
-      kind: "reply",
-      reply: { text: REPLY_RUN_STILL_SHUTTING_DOWN_TEXT },
-    } as const;
+  // The visible dispatch may already own the reply slot while a heartbeat's
+  // embedded backend still owns the transcript. Wait for that backend only.
+  const waitedForHeartbeat =
+    !isRoomEvent &&
+    !context.isHeartbeat &&
+    !effectiveResetTriggered &&
+    rawActiveSessionIdForInterrupt !== undefined &&
+    (await embeddedAgentRuntime?.waitForEmbeddedHeartbeatRunEnd(
+      rawActiveSessionIdForInterrupt,
+      opts?.abortSignal,
+    ));
+  if (waitedForHeartbeat) {
+    await refreshInboundContextAfterAdmissionWait();
   }
-  const visibleTurnPreemptsHeartbeat = heartbeatPreemption === "drained";
   if (
     activeRunQueueMode === "interrupt" &&
     !isRoomEvent &&
@@ -565,13 +559,13 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     activeRunAcceptsCurrentThread &&
     !context.isHeartbeat &&
     !effectiveResetTriggered &&
-    !visibleTurnPreemptsHeartbeat &&
+    !waitedForHeartbeat &&
     !recoveryOwnerActive &&
     resolvedQueue.mode === "steer";
   const shouldFollowup =
     !effectiveResetTriggered &&
     (recoveryOwnerActive ||
-      (!visibleTurnPreemptsHeartbeat &&
+      (!waitedForHeartbeat &&
         ((isRoomEvent && isActive) ||
           resolvedQueue.mode === "steer" ||
           resolvedQueue.mode === "followup" ||

@@ -916,23 +916,17 @@ export function abortEmbeddedAgentRun(
   return replyAborted || aborted;
 }
 
-type EmbeddedHeartbeatPreemptionResult = "not-heartbeat" | "drained" | "timed-out";
-
-export async function preemptAndDrainEmbeddedHeartbeatRun(
+export async function waitForEmbeddedHeartbeatRunEnd(
   sessionId: string,
-  timeoutMs: number,
-): Promise<EmbeddedHeartbeatPreemptionResult> {
+  signal?: AbortSignal,
+): Promise<boolean> {
   const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
-  if (!handle?.preemptByVisibleTurn) {
-    return "not-heartbeat";
+  if (!handle || !ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle)?.isHeartbeat) {
+    return false;
   }
-  const drainPromise = waitForCurrentEmbeddedAgentRunEnd(sessionId, timeoutMs, handle);
-  try {
-    handle.preemptByVisibleTurn();
-  } catch (err) {
-    diag.warn(`heartbeat preemption failed: sessionId=${sessionId} err=${String(err)}`);
-  }
-  return (await drainPromise) ? "drained" : "timed-out";
+  await waitForCurrentEmbeddedAgentRunEnd(sessionId, null, handle, signal);
+  signal?.throwIfAborted();
+  return true;
 }
 
 export function isEmbeddedAgentRunActive(sessionId: string): boolean {
@@ -1279,6 +1273,7 @@ function waitForCurrentEmbeddedAgentRunEnd(
   sessionId: string,
   timeoutMs: number | null,
   handle?: EmbeddedAgentQueueHandle,
+  signal?: AbortSignal,
 ): Promise<boolean> {
   const isHandleActive = () =>
     handle ? ACTIVE_EMBEDDED_RUNS.get(sessionId) === handle : ACTIVE_EMBEDDED_RUNS.has(sessionId);
@@ -1292,34 +1287,35 @@ function waitForCurrentEmbeddedAgentRunEnd(
   diag.debug(`waiting for run end: sessionId=${sessionId} timeoutMs=${timeoutLabel}`);
   return new Promise((resolve) => {
     const waiters = EMBEDDED_RUN_WAITERS.get(sessionId) ?? new Set();
-    const waiter: EmbeddedRunWaiter = {
-      resolve,
-      handle,
+    const finish = (ended: boolean) => {
+      waiters.delete(waiter);
+      if (waiters.size === 0 && EMBEDDED_RUN_WAITERS.get(sessionId) === waiters) {
+        EMBEDDED_RUN_WAITERS.delete(sessionId);
+      }
+      if (waiter.timer) {
+        clearTimeout(waiter.timer);
+      }
+      signal?.removeEventListener("abort", onAbort);
+      resolve(ended);
     };
+    const onAbort = () => finish(false);
+    const waiter: EmbeddedRunWaiter = { resolve: finish, handle };
     if (timeoutMs !== null) {
       waiter.timer = setTimeout(
         () => {
-          waiters.delete(waiter);
-          if (waiters.size === 0) {
-            EMBEDDED_RUN_WAITERS.delete(sessionId);
-          }
           diag.warn(`wait timeout: sessionId=${sessionId} timeoutMs=${timeoutMs}`);
-          resolve(false);
+          finish(false);
         },
         resolveTimerTimeoutMs(timeoutMs, 100, 100),
       );
     }
     waiters.add(waiter);
     EMBEDDED_RUN_WAITERS.set(sessionId, waiters);
-    if (!isHandleActive()) {
-      waiters.delete(waiter);
-      if (waiters.size === 0) {
-        EMBEDDED_RUN_WAITERS.delete(sessionId);
-      }
-      if (waiter.timer) {
-        clearTimeout(waiter.timer);
-      }
-      resolve(true);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) {
+      onAbort();
+    } else if (!isHandleActive()) {
+      finish(true);
     }
   });
 }
@@ -1626,7 +1622,10 @@ export function setActiveEmbeddedRun(
   // plugin attempts. A handle's public runId alone cannot confer wait authority.
   const operationalRunInstance = caller?.operationalRunInstance;
   const runContext = handle.runId ? getAgentRunContext(handle.runId) : undefined;
+  const replyOperation = resolveActiveReplyOperationForSessionId(sessionId);
   ACTIVE_EMBEDDED_RUN_REGISTRATIONS.set(handle, {
+    isHeartbeat:
+      replyOperation?.turnKind === "heartbeat" && getAttachedBackend(replyOperation) === handle,
     projectSessionActive:
       runContext?.lifecycleGeneration === incomingLifecycleGeneration
         ? runContext.projectSessionActive

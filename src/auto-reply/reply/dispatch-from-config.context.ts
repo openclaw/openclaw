@@ -35,6 +35,7 @@ export function shouldLetSlackRoutedThreadBypassBusyReplyOperation(params: {
   return (
     isSlackDirectRoutedThreadTurn(params.ctx) &&
     params.activeOperation?.routeThreadId !== undefined &&
+    params.activeOperation.turnKind !== "heartbeat" &&
     params.routeThreadId !== undefined &&
     String(params.activeOperation.routeThreadId) !== String(params.routeThreadId)
   );

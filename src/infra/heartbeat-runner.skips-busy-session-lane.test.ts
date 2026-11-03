@@ -2,7 +2,6 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import {
   clearActiveEmbeddedRun,
   isEmbeddedAgentRunActive,
-  preemptAndDrainEmbeddedHeartbeatRun,
   setActiveEmbeddedRun,
 } from "../agents/embedded-agent-runner/runs.js";
 import {
@@ -334,10 +333,9 @@ describe("heartbeat runner busy ownership", () => {
   );
 
   it(
-    "suppresses delivery when a visible turn supersedes a finalizing heartbeat",
+    "suppresses delivery for an already superseded finalizing heartbeat",
     heartbeatCase(async ({ seed, run, replySpy }) => {
-      const sessionKey = await seed();
-      let preempt: ReturnType<typeof vi.fn<() => boolean>> | undefined;
+      await seed();
       replySpy.mockImplementationOnce(
         async (_ctx, options: InternalGetReplyOptions | undefined) => {
           const operation = options?.replyOperation;
@@ -345,26 +343,16 @@ describe("heartbeat runner busy ownership", () => {
           if (!operation || !runState) {
             throw new Error("Expected admitted heartbeat operation");
           }
-          const sessionId = operation.sessionId;
-          preempt = vi.fn(() => operation.supersede());
-          const handle = {
-            ...createEmbeddedRunHandle({ isAbortable: false }),
-            preemptByVisibleTurn: preempt,
-          };
           runState.agentTurn = "ok";
           runState.agentTurnOwner = operation;
           operation.freezeAbort();
-          setActiveEmbeddedRun(sessionId, handle, sessionKey);
-          const drained = preemptAndDrainEmbeddedHeartbeatRun(sessionId, 1_000);
-          clearActiveEmbeddedRun(sessionId, handle, sessionKey);
-          await expect(drained).resolves.toBe("drained");
+          operation.supersede();
           operation.complete();
           return { text: "Background work finished." };
         },
       );
       const telegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "123" });
       expect(await run({}, { telegram })).toEqual({ status: "skipped", reason: "preempted" });
-      expect(preempt).toHaveBeenCalledOnce();
       expect(telegram).not.toHaveBeenCalled();
     }),
   );

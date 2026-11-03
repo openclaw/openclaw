@@ -467,6 +467,10 @@ function runAgentHarnessSecretInput(
   params: RunAgentHarnessGatewayQuestionParams,
 ): Promise<string | undefined> {
   params.signal?.throwIfAborted();
+  // A heartbeat cannot present the warning that must precede a secret answer.
+  if (params.delivery.trigger === "heartbeat") {
+    return Promise.resolve(undefined);
+  }
   const sessionKey = params.sessionKey.trim();
   const answerAuthority = captureAgentQuestionAnswerAuthority(sessionKey);
   if (!sessionKey) {
@@ -519,7 +523,7 @@ type RunAgentHarnessGatewayQuestionParams = {
   runId?: string;
   timeoutMs: number;
   gatewayCall?: AgentHarnessQuestionGatewayCall | AgentQuestionDispatcher;
-  delivery: Pick<EmbeddedRunAttemptParams, "onBlockReply" | "onPartialReply"> & {
+  delivery: Pick<EmbeddedRunAttemptParams, "onBlockReply" | "onPartialReply" | "trigger"> & {
     hostCapabilities?: AgentHarnessHostCapabilities;
   };
   promptOptions?: AgentHarnessUserInputPromptOptions;

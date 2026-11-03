@@ -2,6 +2,7 @@
 import { AsyncResource } from "node:async_hooks";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import {
   clearActiveEmbeddedRun,
   setActiveEmbeddedRun,
@@ -57,10 +58,10 @@ import {
   globalBeforeAll0,
   describe0BeforeEach0,
 } from "./dispatch-from-config.test-harness.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
-import { admitReplyTurn } from "./reply-turn-admission.js";
 import { buildChannelSourceTurnId } from "./source-turn-id.js";
 import { buildTestCtx } from "./test-ctx.js";
 
@@ -113,7 +114,7 @@ describe("dispatchReplyFromConfig", () => {
     },
   );
 
-  function createActiveSlackThread(userId: string) {
+  function createActiveSlackThread(userId: string, turnKind: "visible" | "heartbeat" = "visible") {
     setNoAbort();
     const sessionKey = `agent:main:slack:direct:${userId}`;
     const sessionId = "active-session";
@@ -123,6 +124,7 @@ describe("dispatchReplyFromConfig", () => {
       sessionId,
       resetTriggered: false,
       routeThreadId: "500.000",
+      turnKind,
     });
     activeOperation.setPhase("running");
     return {
@@ -479,67 +481,52 @@ describe("dispatchReplyFromConfig", () => {
     activeOperation.complete();
   });
 
-  it("preempts a heartbeat before resolving a visible Telegram turn", async () => {
-    setNoAbort();
-    const sessionKey = "agent:main:telegram:direct:heartbeat-preemption";
-    const heartbeatAdmission = await admitReplyTurn({
+  it("answers the first Slack DM in its own turn after a shared heartbeat finishes", async () => {
+    const {
+      activeOperation: heartbeat,
+      sessionId,
       sessionKey,
-      sessionId: "heartbeat-session",
-      kind: "heartbeat",
-      resetTriggered: false,
-    });
-    expect(heartbeatAdmission.status).toBe("owned");
-    if (heartbeatAdmission.status !== "owned") {
-      return;
-    }
-    const heartbeatOperation = heartbeatAdmission.operation;
-    const cancel = vi.fn(() => heartbeatOperation.complete());
-    heartbeatOperation.attachBackend({
-      kind: "embedded",
-      cancel,
-      isStreaming: () => true,
-    });
-    heartbeatOperation.setPhase("running");
-    sessionStoreMocks.currentEntry = {
-      sessionId: "heartbeat-session",
-      updatedAt: Date.now(),
-    };
-    let heartbeatWasAbortedBeforeReply = false;
-    const replyResolver = vi.fn(async () => {
-      heartbeatWasAbortedBeforeReply = heartbeatOperation.abortSignal.aborted;
-      return { text: "visible reply" } satisfies ReplyPayload;
-    });
+      createCtx,
+    } = createActiveSlackThread("U1", "heartbeat");
+    const cancel = vi.fn(() => heartbeat.complete());
+    heartbeat.attachBackend({ kind: "embedded", cancel, isStreaming: () => true });
 
-    const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "telegram",
-        Surface: "telegram",
-        OriginatingChannel: "telegram",
-        OriginatingTo: "user:1",
-        ChatType: "direct",
-        SessionKey: sessionKey,
-        BodyForAgent: "answer this now",
-      }),
+    const waiting = createDeferred();
+    const waitForIdle = replyRunRegistry.waitForIdle.bind(replyRunRegistry);
+    const waitSpy = vi.spyOn(replyRunRegistry, "waitForIdle").mockImplementation((key, ...args) => {
+      if (key === sessionKey) {
+        waiting.resolve();
+      }
+      return waitForIdle(key, ...args);
+    });
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, options?: InternalGetReplyOptions) => {
+      expect(options?.replyOperation).toMatchObject({ sessionId, turnKind: "visible" });
+      return { text: "DM answered" };
+    });
+    const visible = dispatchReplyFromConfig({
+      ctx: createCtx({ BodyForAgent: "answer this now" }),
       cfg: automaticDirectReplyConfig,
-      dispatcher: createDispatcher(),
-      replyOptions: {
-        turnAdoptionLifecycle: {
-          onAdopted: async () => {},
-          onDeferred: vi.fn(),
-          onSettled: vi.fn(),
-        },
-      },
+      dispatcher,
       replyResolver,
     });
-
-    expect(result.queuedFinal).toBe(true);
-    expect(heartbeatWasAbortedBeforeReply).toBe(true);
-    expect(heartbeatOperation.result).toEqual({
-      kind: "aborted",
-      code: "aborted_for_supersession",
-    });
-    expect(cancel).toHaveBeenCalledWith("superseded");
-    expect(replyResolver).toHaveBeenCalledOnce();
+    try {
+      await awaitGateBeforeSettlement(
+        waiting.promise,
+        visible,
+        "DM bypassed the running heartbeat",
+      );
+      expect(cancel).not.toHaveBeenCalled();
+      expect(replyResolver).not.toHaveBeenCalled();
+      heartbeat.complete();
+      await expect(visible).resolves.toMatchObject({ queuedFinal: true });
+      expect(replyResolver).toHaveBeenCalledOnce();
+      expect(dispatcher.sendFinalReply).toHaveBeenCalledExactlyOnceWith({ text: "DM answered" });
+    } finally {
+      heartbeat.complete();
+      waitSpy.mockRestore();
+      await visible;
+    }
   });
 
   it("does not route when Provider matches OriginatingChannel (even if Surface is missing)", async () => {
