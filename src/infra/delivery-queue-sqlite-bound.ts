@@ -151,13 +151,12 @@ export function pruneDeliveryQueueTombstones(
         ),
       ),
   );
-  const ordinaryPruned = prefix ? false : pruneOrdinaryDeliveryReceipts(db, now);
-  const pruned = (result.numAffectedRows ?? 0n) > 0n || ordinaryPruned;
-  if (pruned) {
-    // Ordinary receipts include failed rows too.
+  if ((result.numAffectedRows ?? 0n) > 0n) {
+    // Ordinary receipts, failed ones included, never reach the dead-letter count.
     publishSqliteDatabaseAdmission(db, failedDeliveryQueueHealthAdmission, undefined);
   }
-  return pruned;
+  const ordinaryPruned = prefix ? false : pruneOrdinaryDeliveryReceipts(db, now);
+  return (result.numAffectedRows ?? 0n) > 0n || ordinaryPruned;
 }
 
 /** Cheap maintenance cleanup: learn the next age deadline, then skip quiet passes. */

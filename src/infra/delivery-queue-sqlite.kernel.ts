@@ -19,6 +19,7 @@ import {
   upsertBoundDeliveryQueueEntryInDatabase,
 } from "./delivery-queue-sqlite-bound.js";
 import {
+  DELIVERY_QUEUE_FAILED_RECEIPT_STATE,
   hasLiveDeliveryQueueClaim,
   inferDeliveryQueueFailureRetention,
   parseDeliveryQueueCompletionRetention,
@@ -409,6 +410,14 @@ export function countFailedDeliveryQueueEntriesInDatabase(database: OpenClawStat
         eb.fn.min<number>("failed_at").as("oldestFailedAt"),
       ])
       .where("status", "=", "failed")
+      // A failed receipt records an expected refusal, not a delivery that failed: it ages out
+      // with ordinary receipts and stays readable by id, but never raises the dead-letter warning.
+      .where((eb) =>
+        eb.or([
+          eb("recovery_state", "is", null),
+          eb("recovery_state", "!=", DELIVERY_QUEUE_FAILED_RECEIPT_STATE),
+        ]),
+      )
       .groupBy("queue_name")
       .orderBy("queue_name", "asc"),
   ).rows;

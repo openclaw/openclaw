@@ -245,9 +245,10 @@ describe("sqlite hot query plans", () => {
       } finally {
         reads.restore();
       }
-      const countPlan = explainQueryPlan(db, countSql, ["failed"]);
+      const countPlan = explainQueryPlan(db, countSql, ["failed", "failed_receipt"]);
+      // Still the failed range alone; each failed row's recovery_state comes from the table.
       expect(countPlan).toContain(
-        "SEARCH delivery_queue_entries USING COVERING INDEX idx_delivery_queue_failed (status=?)",
+        "SEARCH delivery_queue_entries USING INDEX idx_delivery_queue_failed (status=?)",
       );
       expect(countPlan).not.toContain("SCAN");
       expect(countPlan).not.toContain("USE TEMP B-TREE");
