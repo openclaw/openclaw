@@ -1,9 +1,9 @@
 // Test instrumentation rejects state access outside the shared worker home without redirecting it.
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, vi } from "vitest";
 import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
+import { resolveSqliteDatabaseFilePath } from "../infra/sqlite-database-admission.js";
 import * as statePaths from "../state/openclaw-state-db.paths.js";
 
 /** Fail before host metadata discovery can read state outside the worker's owned home. */
@@ -49,11 +49,7 @@ export function useIsolatedStateGuard(): void {
           if (location.includes("\0") || uriPath?.includes("%00")) {
             throw new Error("State isolation checks reject NUL in SQLite paths.");
           }
-          const pathname = location.startsWith("file://")
-            ? fileURLToPath(location)
-            : location.startsWith("file:")
-              ? decodeURIComponent(uriPath!)
-              : location;
+          const pathname = resolveSqliteDatabaseFilePath(location);
           assertOwnedPath(pathname);
         }
         return openDatabase(location, options);

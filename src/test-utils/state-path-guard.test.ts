@@ -8,12 +8,34 @@ import {
   resolveExistingSqliteFileUri,
   resolveImmutableSqliteFileUri,
 } from "../infra/node-sqlite.js";
+import { cleanupSessionStateForTest } from "./session-state-cleanup.js";
 import { useIsolatedStateGuard } from "./state-path-guard.js";
 
 describe("isolated state path guard", () => {
   useIsolatedStateGuard();
-  const dirs = useAutoCleanupTempDirTracker(afterEach);
-  const makeOwnedRoot = () => dirs.make("state-path-guard-", process.env.OPENCLAW_TEST_HOME);
+  const ownedRoots = new Set<string>();
+  const dirs = useAutoCleanupTempDirTracker((cleanup) =>
+    afterEach(async () => {
+      const results = await Promise.allSettled(
+        [...ownedRoots].map((rootPath) =>
+          cleanupSessionStateForTest({ stateDir: rootPath, rootPath }),
+        ),
+      );
+      const errors = results.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : [],
+      );
+      if (errors.length) {
+        throw new AggregateError(errors, "State path guard fixture cleanup failed");
+      }
+      cleanup();
+      ownedRoots.clear();
+    }),
+  );
+  const makeOwnedRoot = () => {
+    const root = dirs.make("state-path-guard-", process.env.OPENCLAW_TEST_HOME);
+    ownedRoots.add(root);
+    return root;
+  };
 
   it.each([
     { name: "filesystem path", location: (pathname: string) => pathname },
