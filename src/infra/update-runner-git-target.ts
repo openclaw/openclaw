@@ -1,14 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
-import {
-  parsePackageOpenClawSchemaVersions,
-  type OpenClawSchemaVersions,
-} from "../state/openclaw-schema-versions.js";
 import { hasErrnoCode } from "./errno.js";
 import { executeGitCommand, gitNullConfigPath, normalizeGitPathForFilesystem } from "./git-exec.js";
 import {
@@ -22,6 +16,7 @@ import { compareSemverStrings } from "./update-check.js";
 import { isFullGitObjectId, type DevUpdateTarget } from "./update-dev-target.js";
 import {
   readGitRefFetchTarget,
+  readGitTargetSchemaVersions,
   readGitUpdateFetchTarget,
   type GitFetchTarget,
 } from "./update-git-metadata.js";
@@ -292,56 +287,6 @@ export async function withGitTargetInspectionRoot<T>(
         await cleanup();
       }
     }
-  }
-}
-
-type GitTargetSchemaMetadata =
-  | {
-      status: "ok";
-      version?: string;
-      nodeEngine: string | null;
-      schemaVersions?: OpenClawSchemaVersions;
-      databaseEngines?: unknown;
-    }
-  | { status: "unreadable"; reason: string };
-
-export async function readGitTargetSchemaVersions(params: {
-  runCommand: CommandRunner;
-  root: string;
-  revision: string;
-  timeoutMs: number;
-}): Promise<GitTargetSchemaMetadata> {
-  let result: Awaited<ReturnType<CommandRunner>>;
-  try {
-    result = await params.runCommand(
-      ["git", "-C", params.root, "show", `${params.revision}:package.json`],
-      { cwd: params.root, timeoutMs: params.timeoutMs },
-    );
-  } catch (error) {
-    return { status: "unreadable", reason: String(error) };
-  }
-  if (result.code !== 0) {
-    return {
-      status: "unreadable",
-      reason: `git show ${params.revision}:package.json exited ${result.code}`,
-    };
-  }
-  try {
-    const manifest: unknown = JSON.parse(result.stdout);
-    const schemaVersions = parsePackageOpenClawSchemaVersions(manifest);
-    const version = normalizeNullableString(asNullableRecord(manifest)?.version);
-    const databaseEngines = asNullableRecord(asNullableRecord(manifest)?.openclaw)?.databaseEngines;
-    return {
-      status: "ok",
-      nodeEngine: normalizeNullableString(
-        asNullableRecord(asNullableRecord(manifest)?.engines)?.node,
-      ),
-      ...(version ? { version } : {}),
-      ...(schemaVersions ? { schemaVersions } : {}),
-      ...(databaseEngines === undefined ? {} : { databaseEngines }),
-    };
-  } catch (error) {
-    return { status: "unreadable", reason: `target package.json unparseable: ${String(error)}` };
   }
 }
 

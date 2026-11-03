@@ -354,16 +354,12 @@ function readSharedDatabaseVersion(
   shared: string,
   files: Map<string, StateDatabaseDiscovery>,
 ): Omit<UpdateStateSchemaVersion, "path"> {
-  const db = openNodeSqliteDatabase(location, { readOnly: true });
-  try {
-    collectRegisteredPaths(db, shared, files);
-    return {
-      userVersion: readSqliteUserVersion(db),
-      contentVersion: readStateSchemaContentVersion(db),
-    };
-  } finally {
-    db.close();
-  }
+  using db = openNodeSqliteDatabase(location, { readOnly: true });
+  collectRegisteredPaths(db, shared, files);
+  return {
+    userVersion: readSqliteUserVersion(db),
+    contentVersion: readStateSchemaContentVersion(db),
+  };
 }
 
 /** Discover registered stores from the same private shared-database generation used for inspection. */

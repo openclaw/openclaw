@@ -17,6 +17,7 @@ import {
 import { getUpdateDoctorConfigFailureReason } from "../../infra/update-doctor-config.js";
 import {
   readGitUpdateFetchTarget,
+  readGitTargetSchemaVersions,
   resolveGitUpdateTrackingRef,
 } from "../../infra/update-git-metadata.js";
 import type { CommandRunner as GlobalCommandRunner } from "../../infra/update-global-command-runner.js";
@@ -36,11 +37,7 @@ import {
   normalizeFallbackFailureReason,
   reportUpdateStepCompletion,
 } from "../../infra/update-runner-command.js";
-import {
-  readBranchName,
-  readGitTargetSchemaVersions,
-  selectChannelTag,
-} from "../../infra/update-runner-git-target.js";
+import { readBranchName, selectChannelTag } from "../../infra/update-runner-git-target.js";
 import { updateGitCheckout } from "../../infra/update-runner-git.js";
 import type {
   CommandRunner as UpdateRunnerCommandRunner,

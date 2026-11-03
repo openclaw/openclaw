@@ -8,7 +8,11 @@ import { formatErrorMessage } from "./errors.js";
 import { readPackageManagerSpec } from "./package-json.js";
 import { DEV_BRANCH } from "./update-channels.js";
 import { resolveDevUpdateTargetRevision, type DevUpdateTarget } from "./update-dev-target.js";
-import { resolveGitUpdateTrackingRef, type GitFetchTarget } from "./update-git-metadata.js";
+import {
+  resolveGitUpdateTrackingRef,
+  readGitTargetSchemaVersions,
+  type GitFetchTarget,
+} from "./update-git-metadata.js";
 import {
   parsePnpmPackageManagerVersion,
   resolveUpdateBuildManager,
@@ -34,7 +38,6 @@ import {
 } from "./update-runner-git-commands.js";
 import { prepareGitCandidateNodeRuntime } from "./update-runner-git-node-preflight.js";
 import { runClassifiedGitStep, runGitCleanCheckStep } from "./update-runner-git-steps.js";
-import { readGitTargetSchemaVersions } from "./update-runner-git-target.js";
 import type { CommandRunner, UpdateRunResult, UpdateRunnerOptions } from "./update-runner-types.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
