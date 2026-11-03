@@ -361,7 +361,7 @@ describe("delivery failures", () => {
 
 describe("deferred reply supersession", () => {
   it.each(["immediate", "pending", "rejected"] as const)(
-    "recovers a required reply without stealing %s delivery ownership",
+    "honors terminal silence without stealing %s delivery ownership",
     async (delivery) => {
       const markdown =
         "## Result\n\n- **Saved** the note.\n- Keep `note.md` unchanged.\n\n```text\nfirst  second\n```";
@@ -449,11 +449,7 @@ describe("deferred reply supersession", () => {
         terminalState: resolveEmbeddedRunAttemptTerminalState({ attempt, assistant }),
         settledTurnFinalizationAvailable: true,
       });
-      if (delivery === "rejected") {
-        expect(request).toContain("Tools are unavailable");
-      } else {
-        expect(request).toBeNull();
-      }
+      expect(request).toBeNull();
     },
   );
 
