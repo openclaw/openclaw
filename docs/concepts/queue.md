@@ -99,9 +99,19 @@ Per-session `/queue` options apply to queued delivery. The `debounce` option als
 
 - `debounce`: quiet window before draining queued followups or collect batches; in Codex `steer` mode, quiet window before sending batched `turn/steer`. Bare numbers are milliseconds; units `ms`, `s`, `m`, `h`, and `d` are accepted.
 - `cap`: max queued messages per session. Values below `1` are ignored.
-- `drop: "summarize"` (default): drop the oldest queued entries as needed, keep compact summaries, and inject them as a synthetic followup prompt. Each summarized entry keeps its own sender and conversation context, and summarized room events keep their room-event instructions.
+- `drop: "summarize"` (default): drop the oldest queued entries as needed, keep compact summaries, and inject them as a synthetic followup prompt. Each summarized entry keeps its own sender and conversation context.
 - `drop: "old"`: drop the oldest queued entries as needed, without preserving summaries.
 - `drop: "new"`: reject the newest message when the queue is already full.
+
+At capacity, optional ambient room events yield to user requests before these drop
+policies apply. OpenClaw discards eligible queued room events without summary or
+model replay turns; incoming room events cannot evict user requests. Among ambient
+events, `drop: "new"` keeps the existing events, while the other policies keep the
+newest. Surviving messages retain FIFO order. Active turns, protected recovery
+work, and events requiring a reply are not eligible for ambient shedding. Each
+discard is logged without message content, and its channel receipt is settled so
+durable ingress does not retry it. Recent room history remains subject to the
+channel's configured history window.
 
 Gateway followup and collect debounce windows measure elapsed time, so wall-clock corrections do not shorten or extend them.
 

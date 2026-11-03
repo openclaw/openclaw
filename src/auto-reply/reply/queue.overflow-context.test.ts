@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createQueueCase } from "./queue.case.test-support.js";
 import {
   createQueueTestRun as createRun,
@@ -8,7 +8,7 @@ import {
 installQueueRuntimeErrorSilencer();
 
 describe("followup queue overflow summary context", () => {
-  it("replays a request evicted by room events with its own sender context", async () => {
+  it("replays a request evicted by other requests with its own sender context", async () => {
     const q = createQueueCase({ mode: "followup", cap: 2 }, 3);
     const requestContext = {
       text: 'Conversation info:\n{"message_id":"101","sender":{"name":"Ada"}}',
@@ -26,8 +26,7 @@ describe("followup queue overflow summary context", () => {
           { prompt: `#${messageId} ${sender}: lunch?`, messageId },
           { senderName: sender },
         ),
-        currentInboundEventKind: "room_event",
-        currentInboundContext: { text: `[OpenClaw room event] #${messageId} ${sender}` },
+        currentInboundContext: { text: `Request #${messageId} ${sender}` },
       });
     }
     await q.drain();
@@ -39,16 +38,64 @@ describe("followup queue overflow summary context", () => {
         "Ada",
         requestContext,
       ],
-      ["#102 Grace: lunch?", "Grace", { text: "[OpenClaw room event] #102 Grace" }],
-      ["#103 Linus: lunch?", "Linus", { text: "[OpenClaw room event] #103 Linus" }],
+      ["#102 Grace: lunch?", "Grace", { text: "Request #102 Grace" }],
+      ["#103 Linus: lunch?", "Linus", { text: "Request #103 Linus" }],
     ]);
   });
 
-  it("keeps room-event framing on elided overflow summaries", async () => {
+  it.each(["summarize", "old", "new"] as const)(
+    "sheds ambient overflow before requests without replay turns with drop:%s",
+    async (dropPolicy) => {
+      const q = createQueueCase({ mode: "followup", cap: 2, dropPolicy }, 2);
+      const request = createRun({ prompt: "@bot deploy?", messageId: "request" });
+      const lifecycles = [0, 1].map(() => ({
+        onAdopted: vi.fn(),
+        onAbandoned: vi.fn(),
+        onSettled: vi.fn(),
+      }));
+      const abandoned = lifecycles.map((lifecycle) => lifecycle.onAbandoned);
+      const delivered = [vi.fn(), vi.fn()];
+      const ambient = createRun({
+        prompt: "lunch?",
+        messageId: "ambient",
+        currentInboundEventKind: "room_event",
+        turnAdoptionLifecycle: lifecycles[0],
+        deliveryCorrelations: [{ begin: () => delivered[0] }],
+        onQueueDisposition: vi.fn(),
+      });
+      q.add(request);
+      q.add(ambient);
+      q.add(createRun({ prompt: "@bot status?", messageId: "second" }));
+      const incoming = createRun({
+        ...ambient,
+        messageId: "incoming",
+        controllerInput: undefined,
+        turnAdoptionLifecycle: lifecycles[1],
+        deliveryCorrelations: [{ begin: () => delivered[1] }],
+      });
+      expect(q.add(incoming)).toBe(false);
+      await q.drain();
+      expect(q.calls.map((run) => run.prompt)).toEqual(["@bot deploy?", "@bot status?"]);
+      for (const [index, room] of [ambient, incoming].entries()) {
+        await room.controllerInput?.settlement.promise;
+        expect(room.turnAdoptionLifecycle?.onAdopted).toHaveBeenCalledOnce();
+        expect(abandoned[index]).not.toHaveBeenCalled();
+        expect(delivered[index]).toHaveBeenCalledExactlyOnceWith({
+          visibleReplySent: false,
+          failed: false,
+        });
+        expect(room.turnAdoptionLifecycle?.onSettled).toHaveBeenCalledOnce();
+      }
+    },
+  );
+  it("keeps framing on elided summaries of room events with required replies", async () => {
     const q = createQueueCase({ mode: "followup", cap: 1 }, 3);
     for (const messageId of ["201", "202", "203"]) {
       q.add({
-        ...createRun({ prompt: `#${messageId} Grace: ambient`, messageId }),
+        ...createRun(
+          { prompt: `#${messageId} Grace: ambient`, messageId },
+          { terminalReplyExpectation: "required" },
+        ),
         currentInboundEventKind: "room_event",
         currentInboundContext: { text: `[OpenClaw room event] #${messageId}` },
       });
@@ -70,5 +117,15 @@ describe("followup queue overflow summary context", () => {
       ],
       ["#203 Grace: ambient", "room_event", { text: "[OpenClaw room event] #203" }],
     ]);
+  });
+
+  it("bounds an ambient burst without summarizing the older request", async () => {
+    const q = createQueueCase({ mode: "followup", cap: 3 }, 3);
+    q.add(createRun({ prompt: "@bot deploy?" }));
+    for (let index = 0; index < 25; index++) {
+      q.add(createRun({ prompt: `room ${index}`, currentInboundEventKind: "room_event" }));
+    }
+    await q.drain();
+    expect(q.calls.map((run) => run.prompt)).toEqual(["@bot deploy?", "room 23", "room 24"]);
   });
 });
