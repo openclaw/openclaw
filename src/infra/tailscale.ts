@@ -558,6 +558,9 @@ function isPermissionDeniedError(err: unknown): boolean {
     combined.includes("not permitted") ||
     combined.includes("requires root") ||
     combined.includes("must be run as root") ||
+    // tailscale prints "401 Unauthorized: must be root, or be an operator…" after a
+    // daemon restart; without this the managed Serve recovery skips its sudo fallback.
+    combined.includes("must be root") ||
     combined.includes("must be run with sudo") ||
     combined.includes("requires sudo") ||
     combined.includes("need sudo")
