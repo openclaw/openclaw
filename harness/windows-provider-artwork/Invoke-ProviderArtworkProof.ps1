@@ -22,7 +22,9 @@ if ([bool]$BuildOnly -eq [bool]$TestsOnly) { throw 'Select exactly BuildOnly (or
 function Hash([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash }
 function Json($Value, [string]$Path) { ConvertTo-Json -InputObject $Value -Depth 16 | Set-Content -LiteralPath $Path -Encoding utf8NoBOM }
 function Git([string[]]$Arguments) {
-    $value = & git -C $Source @Arguments
+    # Function names are case-insensitive; an unqualified git call recurses here.
+    $application = Get-Command git -CommandType Application -ErrorAction Stop
+    $value = & $application.Source -C $Source @Arguments
     if ($LASTEXITCODE -ne 0) { throw 'Git source query failed. Do not change safe.directory or ownership to bypass this guard.' }
     $value
 }

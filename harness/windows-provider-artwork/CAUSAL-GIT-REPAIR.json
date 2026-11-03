@@ -1,0 +1,36 @@
+{
+  "v": 1,
+  "state": "causal-harness-repair-prepared-not-executed",
+  "failedRun": 41576920173,
+  "failedProofCommit": "e1cd82c35e18d7cb71a2b36ef7adab2097299a4a",
+  "artifactId": 13203554703,
+  "artifactBytes": 5745,
+  "failedLogSha256": "f2e7cd7484fd452f42474e1791365c02078955b767f93eb359de7a2964865c2d",
+  "observedLeaf": "Before-current-UI-build, controller line62, 2026-11-03T04:16:43Z",
+  "observedError": "The script failed due to call depth overflow.",
+  "priorProven": [
+    "old first AST gate and eight stage cases passed",
+    "runtime family2/source2.6.4 admission passed",
+    "bootstrap restore/build passed, 0 warnings/errors",
+    "source-exact stable bootstrap passed"
+  ],
+  "notReached": [
+    "Before UI restore",
+    "Before UI build",
+    "all native icon tests/captures",
+    "After"
+  ],
+  "cause": "Published function Git invoked unqualified & git. PowerShell function-name lookup is case-insensitive and functions precede external applications; the call therefore resolves to the same wrapper recursively. First Git status guard occurs before Before artifact creation or any UI restore/build. Retained artifact has no Before build output.",
+  "repair": "Keep Git helper/arguments/exit/tree/hash/trust guards; resolve Get-Command git -CommandType Application -ErrorAction Stop and invoke its Source.",
+  "newPreflight": "Extract current driver FunctionDefinitionAst Git, invoke that exact function via Function CommandInfo in a unique owned bare proof repo, rev-parse --verify the independently pinned 39-byte fixture blob. No commit or source/config mutation.",
+  "expectedSmokeBlobSha1": "23dac5b69b37a75f3a4c111044a841b8a6b76761",
+  "nativeGitWrapperSha256": "b1545c9427ade25602bfcbeba4c3758bfbaf787bcf99b77375ecd275f9e2173a",
+  "sourceTree": "6bdc3018768492e101bb12ea603a067b4e2414bd",
+  "productSourceChanged": false,
+  "currentPowerShellSmoke": "UNRUN: pwsh unavailable on child host; first CI gate required",
+  "currentUICompileAndIconProof": "UNRUN; failed run is no product-code verdict",
+  "canonicalReview": "BLOCKED in child: bound autoreview tool absent; canonical skill forbids guest host-CLI fallback. Complete frozen delta and actual assembled workflow supplied for parent bound review.",
+  "qualification": "native-icons-w5-nativegit-6bdc3018-v3",
+  "Shared": "RED-unwaived",
+  "newDispatchOrSourceCommitOrPushOrPr": "none"
+}

@@ -1,6 +1,6 @@
 {
   "v": 1,
-  "name": "windows-provider-artwork-w5-runtime2",
+  "name": "windows-provider-artwork-w5-nativegit",
   "baseCommit": "c550174d517b5e8830726cd5c32d4e132c144659",
   "candidateTree": "6bdc3018768492e101bb12ea603a067b4e2414bd",
   "baselineCaptureTree": "cf5d2abcd19544541f4f25de3023fd73804827b2",
@@ -53,6 +53,11 @@
       "sha256": "f7d88528ac41739f81684ff10c6a0842387105703b299b7a78dcfed19fc16591"
     },
     {
+      "path": "CAUSAL-GIT-REPAIR.json",
+      "bytes": 2370,
+      "sha256": "645a7515d8eb49447db6416d13e787219e70c0f46db601b9fac117c473ca61f9"
+    },
+    {
       "path": "CONTROLLER-STATIC.json",
       "bytes": 1472,
       "sha256": "816f4f1ab3852a1b4a7f0aca870f78e88c24488f5749df6bc66125f59819510f"
@@ -64,13 +69,13 @@
     },
     {
       "path": "Invoke-ProviderArtworkCI.ps1",
-      "bytes": 7275,
-      "sha256": "547c0ba7de4bd84834072a70be14a8356476688310b36a21987f2d300f97df6b"
+      "bytes": 7640,
+      "sha256": "92f96a154ed19a9eeaa0a5ea4c24c64094e165fe2691d91c19ad9e777ca08c81"
     },
     {
       "path": "Invoke-ProviderArtworkProof.ps1",
-      "bytes": 15976,
-      "sha256": "f96eb01232276383361d506bfbe05f11b694ec9d6e79e8c4f6346b63b705f3f5"
+      "bytes": 16152,
+      "sha256": "4920982a18bbab8fd38a612da5e0c4d155820f814b74b43b8292d7b363626d86"
     },
     {
       "path": "PROOF-PLAN.md",
@@ -94,8 +99,8 @@
     },
     {
       "path": "README.md",
-      "bytes": 7025,
-      "sha256": "61397a417db0e144217ef6c752d9a649d1a3abd1d97aa4face25ab4e73daecdd"
+      "bytes": 8355,
+      "sha256": "140948b4094f81e3e62dabfca50699cd51fd3933a8134e3f61ec0b749bc7ef24"
     },
     {
       "path": "REVIEW-RUNTIME2.md",
@@ -124,8 +129,8 @@
     },
     {
       "path": "Test-PacketSyntaxAndStage.ps1",
-      "bytes": 2203,
-      "sha256": "33631eea36e6934daacfb66aca48cf8f811fae10bcc32399f1bea8455dc3298f"
+      "bytes": 4539,
+      "sha256": "3fc18b1a93453f8c7e581375be194f8de0a1c98548f5ea076c4e2ad07e6fc92d"
     },
     {
       "path": "baseline-capture.patch",
@@ -189,8 +194,8 @@
     },
     {
       "path": "source-pins.json",
-      "bytes": 6506,
-      "sha256": "eaaa0038548925db92e6efe3443442a686f2341083dab4d9bd95f0894747e3d2"
+      "bytes": 6773,
+      "sha256": "62bd742aa3d50ccf5e6bc89c4cf8dd670f9ecbc3145a19498102323cd3046a8c"
     }
   ]
 }

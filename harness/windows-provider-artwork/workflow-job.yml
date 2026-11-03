@@ -5,7 +5,7 @@ windows-provider-artwork:
     github.event_name == 'workflow_dispatch' &&
     github.ref == 'refs/heads/roboclaw/local-ai-native-followups-20261102' &&
     inputs.platform == 'windows-provider-artwork' &&
-    inputs.qualification == 'native-icons-w5-runtime2-6bdc3018-v2'
+    inputs.qualification == 'native-icons-w5-nativegit-6bdc3018-v3'
   runs-on: windows-2025
   timeout-minutes: 90
   permissions:
@@ -26,7 +26,7 @@ windows-provider-artwork:
         path: proof-harness
         persist-credentials: false
         set-safe-directory: false
-    - name: First preflight - parse every PowerShell file and test canonical/lowercase stage selection
+    - name: First preflight - AST, eight stage cases and actual native Git wrapper
       run: |
         try {
           ./proof-harness/harness/windows-provider-artwork/Test-PacketSyntaxAndStage.ps1 -Receipt "$env:GITHUB_WORKSPACE/packet-preflight.json"
@@ -63,8 +63,8 @@ windows-provider-artwork:
           -AfterSource "$env:GITHUB_WORKSPACE/source-after" `
           -Artifacts "$env:GITHUB_WORKSPACE/.artifacts/native-icons-w5" `
           -AstReceipt "$env:GITHUB_WORKSPACE/packet-preflight.json" `
-          -ExpectedPayloadSha256 '57bcfdd463c22f397b4cbfe405d1368562821333ac101a27bca103b6f7184e2d' `
-          -Qualification 'native-icons-w5-runtime2-6bdc3018-v2' -ExecutionAuthorized
+          -ExpectedPayloadSha256 '25fd518a35c1373934b3bb1db4e8333418765738b6e40a2395205be8d4c223ca' `
+          -Qualification 'native-icons-w5-nativegit-6bdc3018-v3' -ExecutionAuthorized
     - name: Retain complete evidence or the real first blocking leaf
       if: always()
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
