@@ -256,9 +256,9 @@ export function createIMessageDurableIngress(options: {
     },
     start: monitor.start,
     stop: () => {
-      // stop() aborts pre-adoption work and then joins it. Waiting for idle
-      // first deadlocks a dispatch that only exits on that abort signal.
-      // Adopted debounce claims stay with stop()'s join; abort is inert after adopt.
+      // stop() aborts pre-adoption work, then joins in-flight deliveries and
+      // settlement writes. Waiting for idle first never reaches that abort.
+      // Deferred rows stay for the debouncer to abandon on its next flush.
       stopTask ??= monitor.stop();
       return stopTask;
     },
