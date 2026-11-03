@@ -4,7 +4,7 @@ import path from "node:path";
 import { normalizeScpRemoteHost } from "openclaw/plugin-sdk/host-runtime";
 import { type CommandOptions, runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { sanitizeTempFileName } from "openclaw/plugin-sdk/temp-path";
+import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
 
 const SSH_OPTIONS = [
   "-o",
@@ -22,6 +22,21 @@ const SSH_OPTIONS = [
 ] as const;
 const CLEANUP_TIMEOUT_MS = 10_000;
 const log = createSubsystemLogger("channels/imessage");
+
+function remoteFileName(localPath: string): string {
+  // SCP's remote path can pass through a shell; strip ASCII shell syntax and Unicode controls/spaces.
+  const safe = path
+    .basename(localPath)
+    .normalize("NFC")
+    .replace(/[\p{ASCII}\p{Z}\p{C}]+/gu, (segment) => segment.replace(/[^A-Za-z0-9._-]+/g, "-"));
+  const originalExt = path.extname(safe);
+  const ext = truncateUtf8Prefix(originalExt, 20);
+  const stem = truncateUtf8Prefix(
+    safe.slice(0, safe.length - originalExt.length),
+    240 - Buffer.byteLength(ext),
+  );
+  return `${/[\p{L}\p{N}\p{S}]/u.test(stem) ? stem : "attachment"}${ext}`;
+}
 
 async function runChecked(label: string, argv: string[], options: CommandOptions): Promise<void> {
   const result = await runCommandWithTimeout(argv, {
@@ -51,7 +66,7 @@ export async function withIMessageRemoteFile<T>(params: {
   }
   const token = randomUUID().replaceAll("-", "");
   const remoteDir = `/tmp/openclaw-imessage-${token}`;
-  const remotePath = `${remoteDir}/${sanitizeTempFileName(path.basename(params.localPath))}`;
+  const remotePath = `${remoteDir}/${remoteFileName(params.localPath)}`;
   const createScript = `set -eu
 umask 077
 directory=${remoteDir}
