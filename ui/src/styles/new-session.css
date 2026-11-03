@@ -91,7 +91,7 @@ openclaw-new-session-page,
   padding-inline: 8px;
   gap: 6px;
   background: var(--session-header-control-surface);
-  color: var(--accent);
+  color: var(--session-header-control-active-color);
 }
 
 .new-session-page__incognito-rail
@@ -100,12 +100,11 @@ openclaw-new-session-page,
     .new-session-page__incognito-toggle--active
   ):hover:not(:disabled) {
   background: var(--session-header-control-active-hover-bg);
-  color: var(--accent);
+  color: var(--session-header-control-active-color);
 }
 
 :is(.new-session-page__draft-toggle-label, .new-session-page__incognito-toggle-label) {
   font-size: 12px;
-  font-weight: 600;
 }
 
 html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__incognito-rail {
