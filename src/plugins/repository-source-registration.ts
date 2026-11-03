@@ -29,7 +29,7 @@ export function createRepositorySourceRegistrar(state: PluginRegistryState) {
       state.reportRegistrationError(record, `repository source already registered: ${source.id}`);
       return;
     }
-    instance.admitFactory(source.prepare, ["assertCurrent", "refresh"]);
+    instance.admitFactory(source.prepare, ["assertCurrent", "resolveBase"]);
     if (source.worker) {
       if (source.worker.restore) {
         instance.admitFactory(source.worker.restore, ["assertCurrent", "readRemoteHead"]);

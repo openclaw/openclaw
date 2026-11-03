@@ -1,3 +1,4 @@
+import type { ManagedProjectBaseV1 } from "../projects/managed-project-source.js";
 import type { RepositoryCredentialReader } from "./repository-integration.types.js";
 /** Vendor-neutral repository facts; credentials remain with the source implementation. */
 export type RepositorySourceProject = {
@@ -9,7 +10,8 @@ export type RepositorySourceProject = {
 export type RepositorySourcePreparation = {
   project: RepositorySourceProject;
   assertCurrent: () => void;
-  refresh: () => Promise<void>;
+  /** Without a ref, observe and hydrate the current remote default through source transport. */
+  resolveBase: (ref?: string) => Promise<ManagedProjectBaseV1>;
 };
 
 export type RepositoryTreeEntry = {

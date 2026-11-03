@@ -9,6 +9,7 @@ import {
   loadSessionEntry,
   loadTranscriptEventsSync,
 } from "../../config/sessions/session-accessor.js";
+import { createRepositorySourceFixture } from "../../plugins/repository-source.test-support.js";
 import { refreshProjectClone } from "../../projects/project-clone.js";
 import { registerProjectRegistry } from "../../projects/project-registry.js";
 import { registerClonedProjectRegistry } from "../../projects/project-registry.test-support.js";
@@ -16,6 +17,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
+import { createRepositorySources } from "../repository-sources.js";
 import {
   controlUiClient,
   initializeRepository,
@@ -343,5 +345,74 @@ test("sessions.create recovers a failed worktree in the same session with an exp
     expect(loadSessionEntry(target)?.sessionId).toBe(failed.sessionId);
   } finally {
     await cleanupRun(context, storePath, sessionKey);
+  }
+});
+
+test("sessions.create refreshes a reused custom source after its remote default branch changes", async () => {
+  const { root, storePath } = await workspaceFixture("custom-source-default");
+  const { publisher, upstream, projectRoot } = await cloneFixture(root);
+  const url = "https://forge.example.invalid/team/project.git";
+  await git(projectRoot, "remote", "set-url", "origin", url);
+  const project = await registerClonedProjectRegistry({
+    path: projectRoot,
+    name: "Custom source",
+    originUrl: url,
+  });
+  await fs.writeFile(path.join(publisher, "fresh.txt"), "new default branch\n");
+  await git(publisher, "add", "fresh.txt");
+  await git(publisher, "commit", "-m", "advance source default");
+  const expectedCommit = (await git(publisher, "rev-parse", "HEAD")).stdout.trim();
+  await git(publisher, "push", upstream, "HEAD:refs/heads/next");
+  await git(upstream, "symbolic-ref", "HEAD", "refs/heads/next");
+  const resolveBase = vi.fn(async (assertCurrent: () => void) => {
+    assertCurrent();
+    // This source's real transport differs from its canonical, non-routable origin.
+    const advertised = (await git(upstream, "symbolic-ref", "HEAD")).stdout.trim();
+    const branch = advertised.slice("refs/heads/".length);
+    await git(projectRoot, "fetch", upstream, `+${advertised}:refs/remotes/origin/${branch}`);
+    assertCurrent();
+    return {
+      commit: (await git(projectRoot, "rev-parse", `refs/remotes/origin/${branch}`)).stdout.trim(),
+      ref: `origin/${branch}`,
+    };
+  });
+  const source = createRepositorySourceFixture({
+    id: "custom",
+    resolve: (candidate) => (candidate === url ? { url, name: "project" } : undefined),
+    async prepare(input) {
+      input.assertCurrent();
+      return {
+        project,
+        assertCurrent: input.assertCurrent,
+        resolveBase: () => resolveBase(input.assertCurrent),
+      };
+    },
+  });
+  const lifetime = new AbortController();
+  const context = {
+    ...runContext(),
+    repositorySources: createRepositorySources(lifetime.signal, source.registry),
+  };
+  const created = await source.run(() =>
+    createRun(
+      { message: "start", projectGitUrl: url, repositorySource: source.id },
+      { ...controlUiClient, context },
+    ),
+  );
+  try {
+    await settleWorkspaceRuns(context, storePath, created.key);
+    expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+    const worktree = await managedWorktrees.findLiveByOwner("session", created.key);
+    expect(worktree).toBeDefined();
+    expect((await git(worktree!.path, "rev-parse", "HEAD")).stdout.trim()).toBe(expectedCommit);
+    expect(await fs.readFile(path.join(worktree!.path, "fresh.txt"), "utf8")).toBe(
+      "new default branch\n",
+    );
+    expect(worktree!.baseRef).toBe("origin/next");
+    expect(resolveBase).toHaveBeenCalledOnce();
+    expect(readSession(storePath, created.key)).not.toHaveProperty("pendingWorktree");
+  } finally {
+    await cleanupRun(context, storePath, created.key);
+    lifetime.abort();
   }
 });

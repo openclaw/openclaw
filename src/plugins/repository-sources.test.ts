@@ -14,7 +14,7 @@ import { bindGatewayContextResolver } from "./runtime/gateway-request-scope.js";
 const url = "https://git.example/team/project.git";
 
 it("admits only the manifest-owned source and retires retained checkout callbacks", async () => {
-  const refresh = vi.fn(async () => {});
+  const resolveBase = vi.fn(async () => ({ commit: "a".repeat(40), ref: "origin/main" }));
   const fixture = createRepositorySourceFixture({
     id: "remote",
     resolve: (candidate) => (candidate === url ? { url, name: "project" } : undefined),
@@ -23,7 +23,7 @@ it("admits only the manifest-owned source and retires retained checkout callback
       return {
         project: { id: "example-project", repoRoot: "/synthetic/project", source: "registered" },
         assertCurrent() {},
-        refresh,
+        resolveBase,
       };
     },
   });
@@ -40,8 +40,8 @@ it("admits only the manifest-owned source and retires retained checkout callback
   );
   const source = resolvePluginRepositorySource(fixture.id, url, fixture.registry);
   const prepared = await source.prepare({ agentId: "main", assertCurrent() {} });
-  await prepared.refresh();
-  expect(refresh).toHaveBeenCalledTimes(1);
+  await prepared.resolveBase();
+  expect(resolveBase).toHaveBeenCalledTimes(1);
   expect(() => resolvePluginRepositorySource("other/remote", url, fixture.registry)).toThrow(
     "unavailable",
   );
@@ -50,8 +50,8 @@ it("admits only the manifest-owned source and retires retained checkout callback
   ).toThrow("supported repository URL");
   await fixture.instance.dispose();
   expect(() => source.assertCurrent()).toThrow("reloaded or disabled");
-  await expect(prepared.refresh()).rejects.toThrow("reloaded or disabled");
-  expect(refresh).toHaveBeenCalledTimes(1);
+  await expect(prepared.resolveBase()).rejects.toThrow("reloaded or disabled");
+  expect(resolveBase).toHaveBeenCalledTimes(1);
 });
 
 it("keeps plugin clones, registration and refresh with the managed checkout owner", async () => {
@@ -97,6 +97,10 @@ it("keeps plugin clones, registration and refresh with the managed checkout owne
         options.assertCurrent?.();
       },
       refresh,
+      async resolveBase(input, options) {
+        await refresh(input, options);
+        return { commit, ref: "origin/main" };
+      },
     });
     const fixture = createRepositorySourceFixture({
       id: "remote",
@@ -109,7 +113,7 @@ it("keeps plugin clones, registration and refresh with the managed checkout owne
         return {
           project,
           assertCurrent: input.assertCurrent,
-          refresh: () => checkout.refresh(project, input),
+          resolveBase: (ref) => checkout.resolveBase(project, ref, input),
         };
       },
     });
@@ -132,10 +136,10 @@ it("keeps plugin clones, registration and refresh with the managed checkout owne
           .project.id,
       ).toBe(prepared.project.id);
       expect(clone).toHaveBeenCalledTimes(1);
-      await prepared.refresh();
+      await prepared.resolveBase();
       expect(refresh).toHaveBeenCalledTimes(1);
       await fixture.instance.dispose();
-      await expect(prepared.refresh()).rejects.toThrow("reloaded or disabled");
+      await expect(prepared.resolveBase()).rejects.toThrow("reloaded or disabled");
       expect(refresh).toHaveBeenCalledTimes(1);
     });
   });
