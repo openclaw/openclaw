@@ -171,15 +171,26 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
-Pinned main `dad1ef3a63e1`: keep both personal-account usage cases and move the
-prepared-auth and reconnect-receipt assertions outside the handler catch. The
-existing unavailable response can otherwise swallow either assertion failure.
-Keep the real admitted reconnect, authority invocation, response expectations,
-isolated state and calibrated main-thread SQL checks. Baseline, real receipt-fault
-control, candidate, focused checks, cost, fresh review and publication remain
-pending. No production behavior, fixture, import, helper or export removal is
-proposed. Any justified net test growth gets an exact separate allocation; the
-shared scalar remains unchanged.
+[192149](https://github.com/openclaw/openclaw/pull/192149), pinned main `dad1ef3a63e1`:
+keep both personal-account usage cases and check the actual prepared auth and
+reconnect receipt outside the handler catch. The existing unavailable response
+can otherwise swallow either assertion failure. Real admitted reconnect,
+authority invocation, response expectations, isolated state and calibrated
+main-thread SQL checks remain. Five added test lines receive an exact separate
+`codex-reconnect-receipt.txt` allocation; production and the shared scalar are unchanged.
+
+Untouched baseline and clean candidate pass both cases. A temporary fault in
+the actual async-connect owner corrupts only its returned receipt after the real
+worker mutation settles. The original selected reconnect case passes; the
+candidate fails at its outside-catch account-ID equality. Each control skips
+one unselected case, records one fault marker and restores owner bytes exactly.
+Clean candidate command wall time is42.54s, including28.80s compiler preparation;
+both test bodies total680ms. The real SQLite/SQL-free boundary remains necessary;
+mocked account writes cannot supply that proof. Related account-usage suites
+pass8. Focused types, typed lint, formatting, ledger MDX, whitespace and the
+exact five-line allocation ratchet pass. Fresh review, published-head proof and
+exact-head CI remain pending. No test,
+fixture, import, helper or export is removed, so no removal-scan claim is made.
 
 ## Completed source review
 
