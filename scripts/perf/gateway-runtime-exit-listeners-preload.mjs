@@ -69,7 +69,7 @@ if (process.env.OPENCLAW_EXIT_LISTENER_TRACE_DIR) {
     path.resolve(process.argv[1] ?? "") === process.env.OPENCLAW_EXIT_LISTENER_TRACE_ENTRY
   ) {
     let profiler;
-    process.on("message", async (message) => {
+    const handleMessage = async (message) => {
       if (message?.type === "exit-listeners:checkpoint") {
         try {
           if (process.env.OPENCLAW_EXIT_LISTENER_PROFILE === "1") {
@@ -110,6 +110,9 @@ if (process.env.OPENCLAW_EXIT_LISTENER_TRACE_DIR) {
           });
         }
       }
+    };
+    process.on("message", (message) => {
+      void handleMessage(message);
     });
     process.channel?.unref();
   }
