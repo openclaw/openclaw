@@ -62,3 +62,21 @@ those credentials. Exec and harness preparation consume the active snapshot's
 scrub maps, and exec excludes the recorded store names from its child environment
 projection. With no contribution or exclusion, existing identity, shell, approval
 and sandbox behavior remains unchanged.
+
+## Git co-author formatting
+
+An execution provider may also implement the synchronous, pure
+`formatGitCoauthor(input)` callback. The host supplies only verified identities
+whose profiles consent to public Git credit. `input.identity` contains the issuer,
+opaque subject, name, and an optional verified email; `input.issuer` and
+`excludeSubject` preserve an explicitly selected publication realm and author.
+Return `{ name, trailer }`, `null` to deliberately omit that identity, or
+`undefined` when this provider does not handle its issuer. Multiple providers
+claiming the same identity fail visibly instead of choosing an arbitrary author.
+
+The callback must not prepare credentials, execution environments, or network
+requests. The host owns contributor merging, ordering, bounds, consent, and
+currentness. It invokes the callback through the existing managed registration;
+retained attribution becomes stale when its plugin retires. CLI and Codex prompt
+preparation use their already selected runtime registry, without requiring a
+running Gateway service. Existing prompt placement and bytes are retained.

@@ -45,7 +45,14 @@ export type RepositoryWorkerReadLease = {
 export type RepositorySourceV1 = {
   /** Local contribution ID declared by this plugin's manifest. */
   id: string;
-  resolve: (url: string) => { url: string; name: string } | undefined;
+  resolve: (url: string) =>
+    | {
+        url: string;
+        name: string;
+        /** Read-safe presentation only; source selection never grants repository access. */
+        display?: Readonly<{ identity: string; host?: string }>;
+      }
+    | undefined;
   prepare: (input: {
     url: string;
     agentId: string;
@@ -100,6 +107,7 @@ type ResolvedRepositorySource = {
   id: string;
   name: string;
   url: string;
+  display?: NonNullable<ReturnType<RepositorySourceV1["resolve"]>>["display"];
   assertCurrent: () => void;
   prepare: (input: {
     agentId: string;

@@ -5,26 +5,15 @@ import { captureGitHubPublicationActionAuthority } from "./github-publication-re
 import type { GitHubPublicationRequesterPolicyV2 } from "./github-publication-requester.js";
 import type { PublicationSessionIdentity } from "./github-publication-session.types.js";
 import { readSharedGitHubPublication } from "./github-publication-shared-read.js";
-
-type RecordedPublication = {
-  url: string;
-  headCommit?: string;
-  publisher: {
-    agentId: string;
-    source: string;
-    profileId: string | null;
-    accountId: number;
-    login: string | null;
-  };
-};
+import type { RepositoryPublicationOwnPullRequestReader } from "./repository-session-read.types.js";
 
 /** Full-write assistance retains live action authority; ordinary readers require linked identity. */
 export function captureOwnGitHubPullRequestReader(
   profileId: string | undefined,
   getHost: () => string,
-  publication?: RecordedPublication,
+  publication?: NonNullable<RepositoryPublicationOwnPullRequestReader["publication"]>,
   assertOperatorWrite?: () => void,
-) {
+): RepositoryPublicationOwnPullRequestReader {
   const host = getHost();
   if (assertOperatorWrite) {
     const assertCurrent = () => {

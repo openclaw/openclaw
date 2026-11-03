@@ -32,7 +32,12 @@ export type RepositoryPublicationApi = Pick<
 > &
   Pick<
     RepositoryPublicationProvider,
-    "supportsOrigin" | "inspectPullRequest" | "performPullRequestAction"
+    | "supportsOrigin"
+    | "inspectPullRequest"
+    | "performPullRequestAction"
+    | "readOptionsIdentity"
+    | "preparePersonalAccountStatus"
+    | "isPublicationSuperseded"
   >;
 /** The Gateway retains accepted transaction custody independently from the current vendor service. */
 export function createWorkspacePublicationHost(params: {
@@ -45,7 +50,12 @@ export function createWorkspacePublicationHost(params: {
 }) {
   const context = captureOpenClawStateWorkerContext();
   const signal = params.scheduler.signal;
-  let current: { provider: RepositoryPublicationProvider; signal: AbortSignal } | undefined;
+  type Registration = {
+    provider: RepositoryPublicationProvider;
+    signal: AbortSignal;
+    api?: RepositoryPublicationApi;
+  };
+  let current: Registration | undefined;
   const requireProvider = () => {
     signal.throwIfAborted();
     if (!current || current.signal.aborted) {
@@ -80,6 +90,10 @@ export function createWorkspacePublicationHost(params: {
     preparePublisher: (...args) => requireProvider().preparePublisher(...args),
     bindPersonal: (...args) => requireProvider().bindPersonal(...args),
     readPersonalSelection: (...args) => requireProvider().readPersonalSelection(...args),
+    readOptionsIdentity: (...args) => requireProvider().readOptionsIdentity(...args),
+    preparePersonalAccountStatus: (...args) =>
+      requireProvider().preparePersonalAccountStatus(...args),
+    isPublicationSuperseded: (...args) => requireProvider().isPublicationSuperseded(...args),
     performPullRequestAction: (...args) => requireProvider().performPullRequestAction(...args),
     inspectPullRequest: (...args) => requireProvider().inspectPullRequest(...args),
     prepareBoundPublication: (...args) => requireProvider().prepareBoundPublication(...args),
@@ -148,6 +162,15 @@ export function createWorkspacePublicationHost(params: {
     });
   }
   return {
+    /** Look up this exact installed owner; retained API operations reject replacement. */
+    readApi(): RepositoryPublicationApi | undefined {
+      const selected = current;
+      if (signal.aborted || !selected || selected.signal.aborted || !selected.api) {
+        return undefined;
+      }
+      selected.provider.assertCurrent();
+      return selected.api;
+    },
     /** A bound tool may use this provider's host RPCs, never a later same-id replacement. */
     captureProviderAuthority(pluginId: string): (() => void) | undefined {
       const selected = current;
@@ -177,7 +200,7 @@ export function createWorkspacePublicationHost(params: {
       if (current) {
         throw new Error("A repository publisher is already installed.");
       }
-      const registration = { provider: next, signal: ownerSignal };
+      const registration: Registration = { provider: next, signal: ownerSignal };
       current = registration;
       discovery.clear();
       const stopIdentityChanges = next.subscribeWorkerIdentityChanges?.(() =>
@@ -216,12 +239,49 @@ export function createWorkspacePublicationHost(params: {
         next.assertCurrent();
         const owner = (await runtime).coordinator;
         const guard = () => {
+          signal.throwIfAborted();
           if (current !== registration || ownerSignal.aborted) {
             throw new RepositoryPublicationProviderUnavailableError();
           }
           next.assertCurrent();
         };
         const api: RepositoryPublicationApi = {
+          async readOptionsIdentity(input) {
+            guard();
+            const result = await next.readOptionsIdentity({
+              ...input,
+              assertCurrent() {
+                guard();
+                input.assertCurrent();
+              },
+            });
+            guard();
+            input.assertCurrent();
+            return result;
+          },
+          async preparePersonalAccountStatus(action) {
+            guard();
+            const prepared = await next.preparePersonalAccountStatus(action);
+            guard();
+            return {
+              status: prepared.status,
+              assertCurrent() {
+                guard();
+                prepared.assertCurrent();
+              },
+            };
+          },
+          async isPublicationSuperseded(snapshot, readPublished) {
+            guard();
+            const result = await next.isPublicationSuperseded(snapshot, async () => {
+              guard();
+              const history = await readPublished();
+              guard();
+              return history;
+            });
+            guard();
+            return result;
+          },
           supportsOrigin: (originUrl) => {
             guard();
             return next.supportsOrigin(originUrl);
@@ -290,6 +350,8 @@ export function createWorkspacePublicationHost(params: {
             return owner.latestPublishedShared(...args);
           },
         };
+        guard();
+        registration.api = api;
         return {
           api,
           uninstall: () => {

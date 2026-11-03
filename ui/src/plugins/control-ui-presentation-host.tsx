@@ -2,11 +2,14 @@ import type { JSX } from "@solidjs/web";
 import { createRoot, createSignal, merge, Show } from "solid-js";
 import type { ControlUiComponentHandle } from "../../../src/plugin-sdk/control-ui-components.js";
 import type { ControlUiPresentationHost } from "../../../src/plugin-sdk/control-ui-presentation.js";
+import type { ApplicationGateway } from "../app/gateway.ts";
+import { availableLinkPreviewReaders, availableLinkReaders } from "../app/link-reader-routing.ts";
 import {
   isStaleChunkImportError,
   retryStaleChunkReloadWhenReachable,
 } from "../app/stale-chunk-reload.ts";
 import { iconData, type IconName } from "../components/icon-data.ts";
+import "../components/link-reader-hovercard-registration.ts";
 import { ActivityPill } from "../components/solid/activity-pill.tsx";
 import { Icon } from "../components/solid/icon.tsx";
 import { LazyViewError } from "../components/solid/lazy-view-error.tsx";
@@ -18,6 +21,7 @@ import { copyToClipboard } from "../lib/clipboard.ts";
 import { formatDurationCompact } from "../lib/format-duration.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { resolveSafeExternalUrl } from "../lib/open-external-url.ts";
+import { projectGateway } from "../lib/reactive/application.ts";
 import { subscribeI18n, t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import "../components/tooltip.ts";
@@ -27,7 +31,7 @@ import { showToast } from "../lib/toast.ts";
 import { registerControlUiEnglish } from "./control-ui-english.ts";
 
 export function createControlUiPresentationHost(
-  current: () => unknown,
+  current: () => { gateway: ApplicationGateway },
   signal: AbortSignal,
 ): ControlUiPresentationHost {
   const active = () => {
@@ -117,6 +121,25 @@ export function createControlUiPresentationHost(
         </Show>
       ));
     },
+    mountLinkPreviews(container, initial) {
+      const source = current().gateway;
+      return mount(container, initial, (props) => {
+        const gateway = projectGateway(source);
+        const snapshot = () => gateway.read().snapshot;
+        return (
+          <openclaw-link-reader-hovercard-provider
+            prop:client={snapshot().client}
+            prop:readers={availableLinkPreviewReaders(snapshot())}
+            prop:claimedReaders={availableLinkReaders(snapshot())}
+            prop:previewSeeds={props.previewSeeds}
+            prop:sessionKey={props.sessionKey}
+            prop:agentId={props.agentId}
+          >
+            {props.child}
+          </openclaw-link-reader-hovercard-provider>
+        );
+      });
+    },
     mountActivityPill(container, props) {
       return mount(container, props, (read) => <ActivityPill {...read} />);
     },
@@ -142,10 +165,7 @@ export function createControlUiPresentationHost(
     formatError: formatUiError,
     formatDuration: formatDurationCompact,
     safeExternalUrl: resolveSafeExternalUrl,
-    translate(key, params) {
-      active();
-      return t(key, params);
-    },
+    translate: t,
     registerEnglish(catalog) {
       active();
       registerControlUiEnglish(catalog);

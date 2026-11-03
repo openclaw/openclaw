@@ -47,12 +47,12 @@ not generic account storage or a multi-vendor publication engine. Repository
 sources and execution-environment contributions use the independent generic
 contracts above.
 
-| Entry point                      | Responsibility                                                                                                 |
-| -------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `native-github-account-host`     | Native GitHub account records, owner-bound OAuth commits, and refresh settlement                               |
-| `native-github-publication-host` | Native receipt provenance, admitted publication installation, Git transfer effects, and prepared content facts |
-| `native-github-session-read`     | Native GitHub review admission and presentation over common session/source observations                        |
-| `dashboard`                      | A declared data binding with Board-owned grant preparation                                                     |
+| Entry point                      | Responsibility                                                                                                             |
+| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `native-github-account-host`     | Native account records, owner-bound OAuth/refresh, native realm facts and current service/environment credential selection |
+| `native-github-publication-host` | Native receipt provenance, admitted publication installation, Git transfer effects, and prepared content facts             |
+| `native-github-session-read`     | Native GitHub review admission, pure remote parsing and presentation over common session/source observations               |
+| `dashboard`                      | A declared data binding with Board-owned grant preparation and persisted legacy grant grammar                              |
 
 A publication provider supplies typed `NativeGitHubPublisherProvenance` facts:
 the recorded source, optional managed profile, and verified account ID/login.
@@ -60,11 +60,24 @@ The host records these facts in the existing native receipt fields and compares
 them directly on replay. Live account and request assertions still authorize
 every effect. The provider's `supportsOrigin(url)` answers current host policy;
 origin qualification caches physical checkout facts and reevaluates this policy
-when used, including after configuration changes.
+when used, including after configuration changes. The installed provider also
+owns display-only options identity and personal account-status preparation. The
+host consumes those facts and invokes the returned status assertion before
+responding; OAuth state and its original status-read authority stay with the
+provider. Publication receipt-status operations remain host-owned. Existing
+publication relevance checks consume host-admitted PR summaries through the same
+installed provider, preserving the session reader's disclosure checks.
+Native realm facts and the existing public-reader transport keep verified-profile
+identity independent of optional repository-plugin activation. The bridge selects
+current service or environment credentials through one native selector; it grants
+no additional authority. Repository source display hints are immutable facts and
+never authorize reads or checkout effects.
 The account bridge retains existing shutdown drain and exact refresh settlement
 contracts, including the released synchronous adapters through December 31, 2026.
 The read bridge keeps common session/source observations separate from its
-GitHub-specific own-PR binding and verified-account read capability. A bound read
+GitHub-specific own-PR binding and prepared linked-account reader capability. The
+vendor reader keeps inspection details and credentials private; the host-provided
+reader assertion retains its admitted viewer and session authority. A bound read
 service can use `runDetached` for service work that must discard the request's
 ambient context while retaining its captured service broker and lifetime.
 

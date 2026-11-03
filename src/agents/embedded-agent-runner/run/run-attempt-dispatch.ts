@@ -285,6 +285,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     params.execOverrides.mode = resolveSessionPermissionExecMode({ mode: params.permissionMode });
   }
   const { extraSystemPrompt, gitCoauthorPrompt } = await prepareAttemptSystemPromptAdditions({
+    registry: runInput.preparedModelRuntime?.pluginRegistry,
     agentId: workspaceResolution.agentId,
     authProfileId: runtime.lastProfileId,
     config: params.config,

@@ -1,17 +1,19 @@
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
 import { BoardValidationError } from "./board-layout.js";
+import {
+  GITHUB_ACTIONS_GRANT_PREFIX,
+  GitHubActionsRepositorySchema as repositorySchema,
+} from "./legacy-github-actions-grant.js";
+export {
+  GITHUB_ACTIONS_BINDING_ID,
+  GITHUB_ACTIONS_GRANT_PREFIX,
+  normalizeGitHubActionsGrant,
+} from "./legacy-github-actions-grant.js";
 
-export const GITHUB_ACTIONS_BINDING_ID = "github.actions.runs";
-export const GITHUB_ACTIONS_GRANT_PREFIX = `${GITHUB_ACTIONS_BINDING_ID}:`;
 export const GITHUB_ACTIONS_AUTHOR_GUIDANCE =
   'With a usable connected agent GitHub identity: await openclaw.data.read("github.actions.runs",{repository:"owner/repo",perPage:20}); grant capabilities.tools:["github.actions.runs:owner/repo"]. Uses the agent GitHub identity and cached server reads; direct fetch(api.github.com) is anonymous and rate limited. Identity is checked before save; reconnect in Settings if unavailable. Optional workflow (ID/filename), branch, status, created (ISO day/comparison/range), excludePullRequests=true (omits PR objects); perPage 1..30. Shares private Actions metadata with the widget/session audience; never preview or My GitHub auth. No netOrigins needed.';
 
-const repositorySchema = z
-  .string()
-  .regex(/^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9_.-]{1,100}$/u)
-  .refine((value) => ![".", ".."].includes(value.split("/")[1]!))
-  .transform((value) => value.toLowerCase());
 const day = "\\d{4}-\\d{2}-\\d{2}";
 const createdSchema = z
   .string()
@@ -63,17 +65,6 @@ const paramsSchema = z.strictObject({
   created: createdSchema.optional(),
   excludePullRequests: z.boolean().default(true),
 });
-
-export function normalizeGitHubActionsGrant(tool: string): string {
-  if (!tool.startsWith(GITHUB_ACTIONS_GRANT_PREFIX)) {
-    return tool;
-  }
-  const parsed = repositorySchema.safeParse(tool.slice(GITHUB_ACTIONS_GRANT_PREFIX.length));
-  if (!parsed.success) {
-    throw new BoardValidationError("invalid_operation", "GitHub Actions grant requires owner/repo");
-  }
-  return `${GITHUB_ACTIONS_GRANT_PREFIX}${parsed.data}`;
-}
 
 /** The same closed contract owns URL construction and the exact repository grant. */
 export function resolveGitHubActionsRequest(params: Record<string, unknown>) {

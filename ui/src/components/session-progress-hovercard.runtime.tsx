@@ -320,16 +320,22 @@ function createSessionProgressHovercard(
     if (current?.revision === revision) {
       return current;
     }
-    const focusedCardElement =
-      hovercard.card?.contains(document.activeElement) &&
-      document.activeElement instanceof HTMLElement
-        ? document.activeElement
-        : null;
-    const focusedCardIndex = focusedCardElement
-      ? hovercard.focusables().indexOf(focusedCardElement)
-      : -1;
-    const focusedHref =
-      focusedCardElement instanceof HTMLAnchorElement ? focusedCardElement.href : null;
+    let focusedCardElement: HTMLElement | null = null;
+    let focusedCardIndex = -1;
+    let focusedHref: string | null = null;
+    const captureFocus = () => {
+      focusedCardElement =
+        hovercard.card?.contains(document.activeElement) &&
+        document.activeElement instanceof HTMLElement
+          ? document.activeElement
+          : null;
+      focusedCardIndex = focusedCardElement
+        ? hovercard.focusables().indexOf(focusedCardElement)
+        : -1;
+      focusedHref =
+        focusedCardElement instanceof HTMLAnchorElement ? focusedCardElement.href : null;
+    };
+    captureFocus();
     const currentContext = applicationContext();
     const input: SessionHovercardInput = {
       row: sidebarRow,
@@ -347,7 +353,9 @@ function createSessionProgressHovercard(
       pullRequests,
       session: { sessionKey, agentId: session.agentId },
       onContentChange: (phase) => {
-        if (phase === "after" && hovercard.card) {
+        if (phase === "before") {
+          captureFocus();
+        } else if (hovercard.card) {
           commit(hovercard.card);
         }
       },

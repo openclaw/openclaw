@@ -368,24 +368,19 @@ export function createRepositoryViewerRead(params: {
             const ownReader = captureOwnGitHubPullRequestReader(actorProfile, () =>
               resolveConfiguredGitHubHost(getRuntimeConfig()),
             );
+            const assertOwnReaderCurrent = () => {
+              target.assertCurrent();
+              ownReader.assertCurrent();
+            };
             return {
               ...target,
               boundPullRequest: binding,
               viewerProfileId: actorProfile,
               ownGitHubIdentity: ownReader.identity,
-              assertCurrent() {
-                target.assertCurrent();
-                ownReader.assertCurrent();
-              },
-              async inspectBoundPullRequest() {
-                const { readOwnGitHubPullRequest } =
-                  await import("./github-publication-pr-inspect.js");
-                return await readOwnGitHubPullRequest({
-                  pullRequestUrl: binding.url,
-                  agentId: target.session.agentId,
-                  reader: ownReader,
-                  assertCurrent: target.assertCurrent,
-                });
+              assertCurrent: assertOwnReaderCurrent,
+              preparedOwnPullRequestReader: {
+                ...ownReader,
+                assertCurrent: assertOwnReaderCurrent,
               },
             };
           }

@@ -1,17 +1,23 @@
+import type { ControlUiSessionPullRequest } from "../../packages/gateway-protocol/src/control-ui-session-pull-requests.js";
 import type {
   SessionGitHubPullRequestInspectResult,
+  SessionGitHubOptionsResult,
   SessionGitHubActionParams,
   SessionGitHubActionResult,
   SessionGitHubPublicationPublished,
   SessionGitHubPublicationResult,
 } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
+import type { PersonalGitHubStatus } from "../../packages/gateway-protocol/src/schema/users.js";
 import type { SessionGitHubPullRequestBinding } from "../config/sessions/types.js";
 import type { PublicationSessionIdentity } from "./github-publication-availability.js";
 import type { GitHubPublicationRequesterV2 } from "./github-publication-requester.js";
 import type { RepositoryPublicationContentHostV1 } from "./repository-publication-content-contract.js";
 import type { RepositoryPublicationFailure } from "./repository-publication-errors.js";
 import type { RepositoryPublicationGitTransfer } from "./repository-publication-git-transfer.js";
+import type { RepositoryPublicationOwnPullRequestReader } from "./repository-session-read.types.js";
 import type { RepositoryWorkerIdentityTransfer } from "./repository-worker-identity-transfer.js";
+
+export type { RepositoryPublicationOwnPullRequestReader } from "./repository-session-read.types.js";
 
 /** Facts required by the existing native GitHub receipt backend; never credential authority. */
 export type NativeGitHubPublisherProvenance = Readonly<{
@@ -87,12 +93,6 @@ export type RepositoryPublicationPersonalAction = {
   owner: string;
   assertCurrent: () => void;
 };
-export type RepositoryPublicationOwnPullRequestReader = Awaited<
-  ReturnType<
-    typeof import("./github-publication-inspect-reader.js").captureOwnGitHubPullRequestReader
-  >
->;
-
 export type RepositoryPublicationPersonalSessionAction = RepositoryPublicationPersonalAction &
   PublicationSessionIdentity &
   Pick<GitHubPublicationRequesterV2, "version" | "signal" | "prepareSource"> & {
@@ -202,6 +202,36 @@ export type RepositoryPublicationProvider = {
       preparation?: { idempotencyKey: string; hasRequest: () => boolean };
     },
   ): Promise<RepositoryPublicationPersonalBinding>;
+  /** Display-only account facts; the provider retains all authentication state. */
+  readOptionsIdentity(
+    this: void,
+    input: { agentId: string; assertCurrent(this: void): void },
+  ): Promise<{
+    identity: {
+      source: NonNullable<SessionGitHubOptionsResult["shared"]>["source"];
+      host: string | undefined;
+      account: { accountId: number; login: string };
+      stale?: true;
+    } | null;
+    unavailableReason?: SessionGitHubOptionsResult["sharedUnavailableReason"];
+  }>;
+  /** The returned assertion retains this exact account-status read, not a later selection. */
+  preparePersonalAccountStatus(
+    this: void,
+    action: RepositoryPublicationPersonalAction,
+  ): Promise<{ status: PersonalGitHubStatus; assertCurrent(this: void): void }>;
+  isPublicationSuperseded(
+    this: void,
+    snapshot: {
+      repository: string | null;
+      branch: string;
+      sourceHeadCommit: string | null;
+      workspaceTree: string | null;
+    },
+    readPublished: () => Promise<
+      { pullRequests: readonly ControlUiSessionPullRequest[]; assertCurrent(): void } | undefined
+    >,
+  ): Promise<boolean>;
   readPersonalSelection(
     this: void,
     action: RepositoryPublicationPersonalAction,

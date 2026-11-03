@@ -36,6 +36,7 @@ it.each(["local", "sandbox"] as const)(
     api.registerExecutionEnvironment({
       id: "identity",
       prepare: () => facts,
+      formatGitCoauthor: ({ identity }) => ({ name: identity.name, trailer: "verified fixture" }),
       prepareSandbox: async () => ({
         ...facts,
         readOnlyResourceMounts: [],
@@ -55,7 +56,18 @@ it.each(["local", "sandbox"] as const)(
       "echo",
       "reviewed-command",
     ]);
+    const format = provider.formatGitCoauthor;
+    if (!format) {
+      throw new Error("Expected the registered pure formatter");
+    }
+    const credit = {
+      config: {},
+      agentId: "main",
+      identity: { issuer: "example.test", subject: "verified", name: "Fixture" },
+    };
+    expect(format(credit)).toEqual({ name: "Fixture", trailer: "verified fixture" });
     await instance.dispose();
+    expect(() => format(credit)).toThrow("reloaded or disabled");
     expect(() => launch(["echo", "retired-command"])).toThrow("reloaded or disabled");
     expect(() => provider.prepare(input)).toThrow("reloaded or disabled");
   },

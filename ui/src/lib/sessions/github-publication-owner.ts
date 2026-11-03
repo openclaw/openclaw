@@ -530,7 +530,12 @@ export class GitHubPublicationOwner {
 
   private view(presentation: Presentation): GitHubPublicationView | undefined {
     const scope = presentation.scope;
-    if (!scope || !this.presented(presentation) || !presentation.lifetime) {
+    if (
+      !scope ||
+      !this.presentations.has(presentation) ||
+      !this.owner.isCurrent() ||
+      !scope.isCurrent()
+    ) {
       return undefined;
     }
     const version = this.version;
@@ -550,7 +555,7 @@ export class GitHubPublicationOwner {
     return {
       readiness: {
         read: this.readCompletion?.promise ?? null,
-        retired: presentation.lifetime.promise,
+        retired: presentation.lifetime?.promise ?? Promise.resolve(),
       },
       activity: this.activity,
       canPublishShared: scope.canPublishShared,

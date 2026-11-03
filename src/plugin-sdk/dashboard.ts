@@ -8,3 +8,11 @@ export type {
 
 export { BoardValidationError } from "../boards/board-errors.js";
 export { BoardGatewayUnavailableError } from "../boards/board-errors.js";
+
+// Native persisted grant compatibility; request construction remains plugin-owned.
+export {
+  GITHUB_ACTIONS_BINDING_ID,
+  GITHUB_ACTIONS_GRANT_PREFIX,
+  GitHubActionsRepositorySchema,
+  normalizeGitHubActionsGrant,
+} from "../boards/legacy-github-actions-grant.js";

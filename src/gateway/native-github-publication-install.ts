@@ -159,6 +159,31 @@ export async function installRepositoryPublicationProvider(
       managedInstance.admitFactory(retained.prepare, ["assertCurrent", "refresh", "authorizeGit"]);
       return retained;
     },
+    async readOptionsIdentity(input) {
+      signal.throwIfAborted();
+      const result = await provider.readOptionsIdentity(input);
+      signal.throwIfAborted();
+      input.assertCurrent();
+      return result;
+    },
+    async preparePersonalAccountStatus(action) {
+      signal.throwIfAborted();
+      const prepared = await provider.preparePersonalAccountStatus(action);
+      signal.throwIfAborted();
+      return {
+        status: prepared.status,
+        assertCurrent() {
+          signal.throwIfAborted();
+          prepared.assertCurrent();
+        },
+      };
+    },
+    async isPublicationSuperseded(snapshot, readPublished) {
+      signal.throwIfAborted();
+      const result = await provider.isPublicationSuperseded(snapshot, readPublished);
+      signal.throwIfAborted();
+      return result;
+    },
     readPersonalSelection: (action) => {
       signal.throwIfAborted();
       return provider.readPersonalSelection(action);
@@ -245,6 +270,7 @@ export async function installRepositoryPublicationProvider(
     resolveFailure: (error) => provider.resolveFailure(error),
     isDefinitiveFailure: (error) => provider.isDefinitiveFailure(error),
   };
+  managedInstance.admitFactory(adapter.preparePersonalAccountStatus, ["assertCurrent"]);
   managedInstance.admitFactory(adapter.inspectPullRequest, [
     "assertCurrent",
     "assertSource",

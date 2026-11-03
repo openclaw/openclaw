@@ -1,5 +1,6 @@
 import { resolveGitHubHost } from "../agents/github-host-runtime.js";
 import { githubRepositoryUrl, resolveConfiguredGitHubHost } from "../agents/github-host.js";
+import { GitHubIdentityError } from "../agents/github-read-identity.js";
 import {
   resolveConfiguredGitHubToolIdentity,
   prepareGitHubPublicationIdentity,
@@ -16,7 +17,11 @@ import {
   bindPersonalGitHubPublicationSelection,
   preparePersonalGitHubPublicationSelection,
 } from "./github-personal-publication-selection.js";
-import { personalGitHubStatusAsync } from "./github-personal-status.js";
+import {
+  personalGitHubStatusAsync,
+  resolvePersonalGitHubStatus,
+  revalidatePersonalGitHubStatus,
+} from "./github-personal-status.js";
 import { RepositoryPublicationFailureError } from "./github-publication-errors.js";
 import {
   resolveGitHubPublicationFailure,
@@ -24,7 +29,10 @@ import {
   GitHubPublicationObservationUnavailableError,
 } from "./github-publication-failure.js";
 import { formatGitHubPublicationContent } from "./github-publication-format.js";
-import { prepareCurrentGitHubPublicationIdentity } from "./github-publication-identity.js";
+import {
+  prepareCurrentGitHubPublicationIdentity,
+  prepareCurrentGitHubPublicationOptionsIdentity,
+} from "./github-publication-identity.js";
 import { performGitHubPullRequestAction } from "./github-publication-pr-actions.js";
 import { inspectOwnGitHubPullRequest } from "./github-publication-pr-inspect.js";
 import { assertExistingPullRequestWriteAccess } from "./github-publication-pr-preflight.js";
@@ -34,6 +42,7 @@ import {
   findGitHubPublicationPullRequest,
   reconcileGitHubPublicationPullRequest,
 } from "./github-publication-pull-requests.js";
+import { isGitHubPublicationSuperseded } from "./github-publication-relevance.js";
 import {
   runGitHubPublicationCommand,
   requireGitHubPublicationCommand,
@@ -172,6 +181,45 @@ export function createGitHubPublicationProvider(owner: {
             },
           }),
       };
+    },
+    async readOptionsIdentity(input) {
+      const current = () => {
+        assertCurrent();
+        input.assertCurrent();
+      };
+      current();
+      try {
+        const identity = await prepareCurrentGitHubPublicationOptionsIdentity(
+          input.agentId,
+          current,
+        );
+        current();
+        return { identity };
+      } catch (error) {
+        current();
+        return {
+          identity: null,
+          unavailableReason: error instanceof GitHubIdentityError ? error.reason : "unverified",
+        };
+      }
+    },
+    async preparePersonalAccountStatus(action) {
+      assertCurrent();
+      const status = await resolvePersonalGitHubStatus(action);
+      assertCurrent();
+      return {
+        status,
+        assertCurrent() {
+          assertCurrent();
+          revalidatePersonalGitHubStatus(action, status);
+        },
+      };
+    },
+    async isPublicationSuperseded(snapshot, readPublished) {
+      assertCurrent();
+      const result = await isGitHubPublicationSuperseded(snapshot, readPublished);
+      assertCurrent();
+      return result;
     },
     async readPersonalSelection(action) {
       const status = await personalGitHubStatusAsync(action);

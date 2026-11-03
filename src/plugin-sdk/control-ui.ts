@@ -559,6 +559,7 @@ export type {
 export type { ControlUiNativeHost } from "./control-ui-native.js";
 export type {
   ControlUiPresentationHost,
+  ControlUiLinkPreviewsProps,
   ControlUiIconProps,
   ControlUiToggleProps,
   ControlUiMarqueeOptions,

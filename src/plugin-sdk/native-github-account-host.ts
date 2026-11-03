@@ -55,3 +55,13 @@ export {
 } from "../state/user-github-connections.js";
 
 export { UserGitHubConnectionAuthorityChangedError } from "../state/user-github-connections.js";
+
+// Native identity and receipt realms are independent of optional repository services.
+export {
+  GITHUB_PUBLIC_HOST,
+  resolveConfiguredGitHubHost,
+  resolveConfiguredGitHubApiBaseUrl,
+} from "../agents/github-host.js";
+
+/** Native sign-in and repository readers share the canonical service credential selector. */
+export { githubApiToken, hasConfiguredGitHubApiCredential } from "../gateway/github-public-api.js";

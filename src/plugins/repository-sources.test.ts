@@ -15,9 +15,10 @@ const url = "https://git.example/team/project.git";
 
 it("admits only the manifest-owned source and retires retained checkout callbacks", async () => {
   const resolveBase = vi.fn(async () => ({ commit: "a".repeat(40), ref: "origin/main" }));
+  const display = { identity: "team/subgroup/project", host: "git.example" };
   const fixture = createRepositorySourceFixture({
     id: "remote",
-    resolve: (candidate) => (candidate === url ? { url, name: "project" } : undefined),
+    resolve: (candidate) => (candidate === url ? { url, name: "project", display } : undefined),
     async prepare({ assertCurrent }) {
       assertCurrent();
       return {
@@ -39,6 +40,9 @@ it("admits only the manifest-owned source and retires retained checkout callback
     expect.objectContaining({ message: expect.stringContaining("declared ID") }),
   );
   const source = resolvePluginRepositorySource(fixture.id, url, fixture.registry);
+  expect(source.display).toEqual({ identity: "team/subgroup/project", host: "git.example" });
+  display.identity = "team/renamed/project";
+  expect(source.display?.identity).toBe("team/subgroup/project");
   const prepared = await source.prepare({ agentId: "main", assertCurrent() {} });
   await prepared.resolveBase();
   expect(resolveBase).toHaveBeenCalledTimes(1);

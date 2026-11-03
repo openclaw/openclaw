@@ -1,4 +1,5 @@
 import type { ControlUiComponentHandle } from "./control-ui-components.js";
+import type { ControlUiLinkReaderPreview } from "./control-ui-link-reader.js";
 export type ControlUiTranslationMap = { readonly [key: string]: string | ControlUiTranslationMap };
 export type ControlUiToggleProps = {
   checked: boolean;
@@ -96,6 +97,13 @@ export type ControlUiActivityPillProps = {
   registerButton: (button: HTMLButtonElement) => () => void;
   trailing?: HTMLElement;
 };
+/** Snapshot seeds improve display immediately; native reader admission still owns enrichment. */
+export type ControlUiLinkPreviewsProps = {
+  child: HTMLElement;
+  previewSeeds: readonly ControlUiLinkReaderPreview[];
+  sessionKey?: string;
+  agentId?: string;
+};
 export type ControlUiLazyStateProps =
   | { status: "loading" }
   | { status: "error"; error: unknown; onRetry: () => void; isCurrent: () => boolean };
@@ -106,6 +114,7 @@ export type ControlUiPresentationHost = {
   formatDuration: (ms?: number | null) => string | undefined;
   safeExternalUrl: (value: string, base: string) => string | null;
   subscribe: (listener: () => void) => () => void;
+  /** Public catalog lookup remains usable after view or activation retirement. */
   translate: (key: string, params?: Record<string, string>) => string;
   registerEnglish: (catalog: ControlUiTranslationMap) => void;
   /** Existing native loading/error presentation and guarded stale-asset recovery. */
@@ -113,6 +122,11 @@ export type ControlUiPresentationHost = {
     container: HTMLElement,
     props: ControlUiLazyStateProps,
   ) => ControlUiComponentHandle<ControlUiLazyStateProps>;
+  /** Use the host's current connection, reader catalog, cache, and hover/focus lifecycle. */
+  mountLinkPreviews: (
+    container: HTMLElement,
+    props: ControlUiLinkPreviewsProps,
+  ) => ControlUiComponentHandle<ControlUiLinkPreviewsProps>;
   mountActivityPill: (
     container: HTMLElement,
     props: ControlUiActivityPillProps,

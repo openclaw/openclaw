@@ -228,6 +228,7 @@ export async function prepareCliSystemPrompt(
   }
   await prepareActiveNodeContext(params.requesterProfileId);
   const preparedGitCoauthorPrompt = await resolveSessionGitCoauthorPrompt({
+    registry: preparedModelRuntime?.pluginRegistry,
     config: params.config,
     agentId: params.agentId,
     sessionKey: params.sessionKey,

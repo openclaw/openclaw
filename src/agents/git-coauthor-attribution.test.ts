@@ -1,8 +1,10 @@
-import { afterAll, beforeAll, expect, it } from "vitest";
+import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../packages/gateway-protocol/src/index.js";
 import { captureRuntimeConfigAsyncReader } from "../config/io.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { recordSessionParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
+import type { ExecutionEnvironmentProviderV1 } from "../plugins/execution-environment-types.js";
+import { createExecutionEnvironmentFixture } from "../plugins/execution-environment.test-support.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -13,7 +15,12 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import { resolveGitCoauthorAttribution } from "./git-coauthor-attribution.js";
+import { prepareCliSystemPrompt } from "./cli-runner/prompt-context.js";
+import {
+  resolveGitCoauthorAttribution,
+  prepareGitCoauthorAttribution,
+} from "./git-coauthor-attribution.js";
+import { resolveSessionGitCoauthorPrompt } from "./git-coauthor-prompt.js";
 
 let sharedState: OpenClawTestState;
 
@@ -264,5 +271,64 @@ it("uses current identity and consent for inherited credit without counting it t
     setCredit(later.id, true);
     expect((await read())?.logins).toEqual(["current-contributor", "later-contributor"]);
     expect(await readCredit(scope, { sessionId: "replaced-child" })).toBeUndefined();
+  });
+});
+
+it("formats current, consented contributors through a non-GitHub provider in CLI prompts without preparing execution", async () => {
+  await withSession("plugin-coauthor-format", async (scope, state) => {
+    await upsertSessionEntryCore(scope, { sessionId: "plugin-coauthor-format", updatedAt: 1 });
+    const allowed = linkedProfile("plugin-contributor", 9501);
+    const denied = linkedProfile("private-contributor", 9502);
+    participant(scope, allowed, 1);
+    participant(scope, denied, 2);
+    setCredit(denied.id, false);
+    const prepare = vi.fn(() => {
+      throw new Error("Prompt credit must not prepare execution identity");
+    });
+    const format = vi.fn<NonNullable<ExecutionEnvironmentProviderV1["formatGitCoauthor"]>>(
+      ({ identity }) =>
+        identity.issuer === "github.com"
+          ? {
+              name: identity.name,
+              trailer: `Co-authored-by: ${identity.name} (Forge) <${identity.subject}+${identity.name}@users.noreply.github.com>`,
+            }
+          : undefined,
+    );
+    const fixture = createExecutionEnvironmentFixture({
+      id: "fake-forge",
+      prepare,
+      formatGitCoauthor: format,
+    });
+    const input = { ...scope, config: {}, registry: fixture.registry };
+    const prepared = await prepareGitCoauthorAttribution(input);
+    const trailer =
+      "Co-authored-by: plugin-contributor (Forge) <9501+plugin-contributor@users.noreply.github.com>";
+    expect(prepared.attribution).toEqual({ trailers: [trailer], logins: ["plugin-contributor"] });
+    const prompt = await resolveSessionGitCoauthorPrompt(input);
+    expect(prompt).toBe(
+      `Git co-authors: add these exact trailers to every commit you make from this session.\n${trailer}`,
+    );
+    const cli = await fixture.run(() =>
+      prepareCliSystemPrompt({
+        config: {},
+        agentId: "main",
+        sessionKey: scope.sessionKey,
+        sessionId: "plugin-coauthor-format",
+        workspaceDir: state.workspaceDir,
+        tools: [],
+        modelDisplay: "fixture/local",
+      }),
+    );
+    expect(cli).toContain(prompt);
+    expect(format.mock.calls.every(([call]) => call.identity.subject === "9501")).toBe(true);
+    expect(prepare).not.toHaveBeenCalled();
+    setCredit(allowed.id, false);
+    expect(prepared.isCurrent()).toBe(false);
+    expect(await resolveGitCoauthorAttribution(input)).toBeUndefined();
+    setCredit(allowed.id, true);
+    const current = await prepareGitCoauthorAttribution(input);
+    expect(current.isCurrent()).toBe(true);
+    await fixture.instance.dispose();
+    expect(current.isCurrent()).toBe(false);
   });
 });

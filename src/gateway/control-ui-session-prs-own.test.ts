@@ -403,6 +403,16 @@ it.each(["grant", "unsubscribe"] as const)(
   async (change) => {
     await withOwnFixture(async (f, remote) => {
       await seedOwner(f);
+      const read = await f.sessionReads.createViewerRead(f.client.connId!, {
+        sessionKey,
+        allowOwnImportedPullRequest: true,
+      })?.();
+      const reader = read?.preparedOwnPullRequestReader;
+      if (!reader) {
+        throw new Error("The actual session read did not prepare its linked-account reader");
+      }
+      expect(reader.accountIds).toEqual([101]);
+      reader.assertCurrent();
       const gate = readGate();
       remote.beforeRead(gate.wait);
       try {
@@ -415,6 +425,7 @@ it.each(["grant", "unsubscribe"] as const)(
         );
         if (change === "grant") {
           await f.changeReader("grant");
+          expect(() => reader.assertCurrent()).toThrow();
         } else {
           f.subscriptions.unsubscribe(f.client.connId!);
         }
