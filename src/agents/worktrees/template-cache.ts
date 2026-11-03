@@ -24,6 +24,7 @@ import {
 import {
   setWorktreePreparationTemplate,
   startWorktreePreparationPhase,
+  timeWorktreePreparationPhase,
 } from "./preparation-timing.js";
 import {
   deleteTemplateAsync,
@@ -292,7 +293,9 @@ export async function prepareWorktreeTemplate(params: {
           if (
             hasReaders ||
             ((await worktreePathExists(existing.path)) &&
-              (await params.validate(existing, options)) &&
+              (await timeWorktreePreparationPhase("templateValidate", () =>
+                params.validate(existing, options),
+              )) &&
               (existing.contentKey === params.contentKey ||
                 (await params.refresh?.(existing, options))))
           ) {
@@ -327,7 +330,12 @@ export async function prepareWorktreeTemplate(params: {
         }
         setWorktreePreparationTemplate("cold", { reason: "template-disk-admission" });
         await params.requireSpace();
-        if (existing && !(await retireWorktreeTemplate(params.env, existing, options))) {
+        if (
+          existing &&
+          !(await timeWorktreePreparationPhase("templateRetire", () =>
+            retireWorktreeTemplate(params.env, existing, options),
+          ))
+        ) {
           return undefined;
         }
         const id = randomUUID();

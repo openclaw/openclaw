@@ -87,6 +87,7 @@ let targets = explicitTargets
       "src/infra/update-managed-service-handoff-engine.test.ts",
       "src/snapshot/postgres-generation.postgres.test.ts",
       "src/state/openclaw-state-db.postgres.test.ts",
+      "src/state/openclaw-state-db-open.postgres.test.ts",
       "src/state/openclaw-agent-db.postgres.test.ts",
       "src/state/openclaw-agent-doctor-media.postgres.test.ts",
       "src/state/openclaw-agent-db-engine.postgres.test.ts",

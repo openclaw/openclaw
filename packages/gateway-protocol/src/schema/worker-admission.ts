@@ -461,7 +461,14 @@ const WorkerLiveLifecycleTerminalCommonProperties = {
   stopReason: Type.Optional(WorkerIdentifierSchema),
   yielded: Type.Optional(Type.Literal(true)),
   timeoutPhase: Type.Optional(
-    Type.Enum(["queue", "preflight", "provider", "post_turn", "gateway_draining"]),
+    Type.Enum([
+      "queue",
+      "preflight",
+      "provider",
+      "tool_execution",
+      "post_turn",
+      "gateway_draining",
+    ]),
   ),
   providerStarted: Type.Optional(Type.Boolean()),
   aborted: Type.Optional(Type.Boolean()),

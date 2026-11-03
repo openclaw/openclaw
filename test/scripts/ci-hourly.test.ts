@@ -215,6 +215,7 @@ describe("CodeQL language selection", () => {
       actionsChanged?: string;
       javascriptChanged?: string;
       unchangedCategories?: string[];
+      scheduledProofs?: string;
     } = {},
   ) {
     return { files, expected, ...options };
@@ -229,6 +230,9 @@ describe("CodeQL language selection", () => {
     selectionCase([".github/workflows/docs.yml", "src/main.ts"]),
     selectionCase([]),
     selectionCase(undefined, undefined, { checkoutOutcome: "failure" }),
+    ...["{", "null", '{"actions":"false"}', "{}"].map((scheduledProofs) =>
+      selectionCase(undefined, undefined, { eventName: "schedule", scheduledProofs }),
+    ),
     selectionCase(undefined, undefined, { exitCode: 128 }),
     ...["schedule", "workflow_dispatch"].map((eventName) =>
       selectionCase(undefined, undefined, { eventName }),
@@ -271,21 +275,21 @@ describe("CodeQL language selection", () => {
         process: {
           env: {
             CODEQL_CHECKOUT_OUTCOME: options.checkoutOutcome ?? "success",
-            CODEQL_ACTIONS_CHANGED: options.actionsChanged,
-            ...Object.fromEntries(
-              categories
-                .slice(0, -1)
-                .map((category) => [
-                  `CODEQL_${category.toUpperCase().replaceAll("-", "_")}_CHANGED`,
-                  options.javascriptChanged,
-                ]),
-            ),
-            ...Object.fromEntries(
-              (options.unchangedCategories ?? []).map((category) => [
-                `CODEQL_${category.toUpperCase().replaceAll("-", "_")}_CHANGED`,
-                "false",
-              ]),
-            ),
+            CODEQL_SCHEDULED_PROOFS:
+              options.scheduledProofs ??
+              JSON.stringify({
+                ...Object.fromEntries(
+                  categories.map((category) => [
+                    category,
+                    (category === "actions"
+                      ? options.actionsChanged
+                      : options.javascriptChanged) !== "false",
+                  ]),
+                ),
+                ...Object.fromEntries(
+                  (options.unchangedCategories ?? []).map((category) => [category, false]),
+                ),
+              }),
           },
         },
         core: {
