@@ -6,8 +6,12 @@ import { planCronSendContinueTurn } from "./mock-openai-cron-send-continue.js";
 import { planCronTrustedOwnerTurn } from "./mock-openai-cron-trusted-owner.js";
 import { planHookAutomationsScopeTurn } from "./mock-openai-hook-automations-scope.js";
 import { planOwnerCompletionTurn } from "./mock-openai-owner-completion.js";
+import { planQaToolPlanTurn } from "./mock-openai-tool-plan.js";
 
-/** Scripted cron and hook automation turns, checked in a fixed order. */
+/**
+ * Scripted cron and hook automation turns, then a `QA tool plan:` directive,
+ * checked in a fixed order.
+ */
 export function planAutomationScenarioTurn(params: {
   prompt: string;
   input: ResponsesInputItem[];
@@ -21,6 +25,7 @@ export function planAutomationScenarioTurn(params: {
     planCronBlockedOutcomeTurn(params.prompt) ??
     planCronTrustedOwnerTurn(params) ??
     planHookAutomationsScopeTurn(params) ??
-    planOwnerCompletionTurn(params)
+    planOwnerCompletionTurn(params) ??
+    planQaToolPlanTurn(params.prompt, params.input, params.body, params.buildToolCall)
   );
 }

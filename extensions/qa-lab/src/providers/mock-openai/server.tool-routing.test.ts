@@ -926,6 +926,18 @@ describe("subagent-handoff", () => {
   });
 });
 
+it("continues cron delivery before a generic QA tool plan", async () => {
+  const plan = { calls: [{ name: "read", args: { path: "unreachable.txt" } }], reply: "wrong" };
+  const turn = await startTurn(
+    `Cron send-then-continue QA check. Delivery target: qa-recipient\nQA tool plan: ${JSON.stringify(plan)}`,
+    { tools: ["message", "write", "read"].map((name) => ({ type: "function", name })) },
+  );
+  // The plan would call read first and then reply; the cron turn keeps every step.
+  const send = outputToolCall(await turn.request(), "message");
+  const write = outputToolCall(await turn.complete(send, "sent"), "write");
+  expect(outputText(await turn.complete(write, "written"))).toBe("QA-CRON-SEND-CONTINUE-DONE");
+});
+
 it("runs a QA tool plan in order and names each result's media in the reply", async () => {
   const tools = ["image_generate", "music_generate"].map((name) => ({
     type: "function",
