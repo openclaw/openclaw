@@ -148,16 +148,19 @@ class ChatControllerHistoryCursorTest {
     runCurrent()
     assertTrue(controller.historyPaging.value.failed)
     assertFalse(controller.historyPaging.value.loading)
+    assertFalse(controller.historyPaging.value.olderComplete)
     assertEquals(listOf("c"), controller.messages.value.map { it.entryId })
     fail = false
     controller.loadHistoryPage(older = true)
     runCurrent()
+    assertTrue(controller.historyPaging.value.olderComplete)
     controller.invalidate()
     runCurrent()
     assertEquals(listOf("a", "b", "c", "d"), controller.messages.value.map { it.entryId })
     assertEquals(anchor, controller.messages.value[2].id)
     assertFalse(controller.historyPaging.value.hasOlder)
     assertFalse(controller.historyPaging.value.hasNewer)
+    assertTrue(controller.historyPaging.value.olderComplete)
     assertEquals(listOf(null, "o1", "o1", "o2", "d1"), requests)
   }
 
@@ -178,6 +181,7 @@ class ChatControllerHistoryCursorTest {
     assertEquals(listOf("a", "b"), controller.messages.value.map { it.entryId })
     assertFalse(controller.historyPaging.value.hasNewer)
     assertFalse(controller.historyPaging.value.loading)
+    assertFalse(controller.historyPaging.value.olderComplete)
   }
 
   @Test

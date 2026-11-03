@@ -7717,7 +7717,13 @@ class ChatController internal constructor(
       activeLeafEntryId = infoObject.nonBlankString("activeLeafEntryId"),
       hasActiveLeafEntryId = infoObject?.containsKey("activeLeafEntryId") == true,
       isDelta = delta,
-      olderComplete = if (delta) previousHistory?.olderComplete == true else root["hasMore"] == JsonPrimitive(false) && root.nonBlankString("olderCursor") == null,
+      olderComplete =
+        if (delta) {
+          previousHistory?.olderComplete == true
+        } else {
+          // Directional pages omit hasMore; their older cursor supplies the boundary evidence.
+          root.nonBlankString("olderCursor") == null && (directional || root["hasMore"] == JsonPrimitive(false))
+        },
     )
   }
 
