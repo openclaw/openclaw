@@ -61,6 +61,18 @@ including when the update was started by an older installed update driver.
 Stored A2UI rows do not prevent the update. Runtime readers accept only the
 current widget formats; they do not retain a compatibility renderer.
 
+## Skill library tool split
+
+Personal-library authoring moved from `skill_workshop` to its own `skill_library` tool.
+For a config without `meta.migrations.skillLibraryToolSplit: true`, Doctor (also during
+`openclaw update`) adds `skill_library` wherever a tool policy list named `skill_workshop`
+without covering `skill_library`. Where `tools.gatewayPolicy` allowed `skill_workshop`, it
+allows `skill_library` with the intersection of the `skill_workshop` actions and the
+personal-library actions; it grants nothing a missing or Workshop-only action list did not.
+Doctor then records the marker. A config write records the marker too, extending only
+policy unchanged since the previous file. Once the marker exists, tool policy is never
+changed for the split again.
+
 ## Skill Workshop plugin policy
 
 Skill Workshop ships as the bundled `skill-workshop` plugin, enabled by default.

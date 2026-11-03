@@ -116,7 +116,7 @@ function HelpTitle(params: {
               }
             }}
           >
-            <Icon name="info" />
+            <Icon name="circleQuestionMark" />
           </button>
           <div slot="content" class="settings-section__help-panel">
             <For each={params.paragraphs}>{(text) => <p>{text}</p>}</For>

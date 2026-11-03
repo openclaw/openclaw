@@ -245,7 +245,7 @@
     overflow-wrap: anywhere;
   }
 
-  /* The sparkline draws no line, so its box only pushed the totals away from the labels. */
+  /* Phones have no room for the trend beside its totals; the totals keep their single line. */
   .provider-usage__trend .oc-sparkline {
     display: none;
   }
