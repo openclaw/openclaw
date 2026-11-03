@@ -16,7 +16,8 @@ scenario:
     - music_generate runs from the run-owned fixture plugin, since no music provider gives the run a core tool of that name.
     - The first reply, delivered through the real Telegram plugin, names the plugin's image under the managed media store.
     - The second turn's final provider request carries no input_image or input_file part.
-    - Every replayed copy of the first reply in that request keeps the plugin path byte for byte.
+    - That request's channel history, replayed in the current turn's runtime context, carries the first reply with the plugin path byte for byte.
+    - The earlier assistant message in that request carries the first reply unchanged too.
   docsRefs:
     - docs/channels/telegram.md
     - docs/plugins/building-plugins.md
@@ -195,23 +196,36 @@ flow:
         - assert:
             expr: Boolean(secondRequest)
             message: no provider request carried the second prompt
-        - set: inputJson
+        - set: mockInput
           value:
-            expr: JSON.stringify(secondRequest.body?.input ?? [])
+            expr: await qaImport("./providers/mock-openai/mock-openai-input.js")
+        - set: secondInput
+          value:
+            expr: mockInput.normalizeResponsesInput(secondRequest.body?.input)
         - set: mediaParts
           value:
             expr: |-
-              inputJson.match(/"type":"input_(?:image|file)"/g) ?? []
+              JSON.stringify(secondInput).match(/"type":"input_(?:image|file)"/g) ?? []
         - assert:
             expr: "mediaParts.length === 0 && secondRequest.imageInputCount === 0"
             message:
               expr: "`the replayed plugin path became provider media: ${JSON.stringify({ mediaParts, imageInputCount: secondRequest.imageInputCount })}`"
-        - set: replayedCopies
+        - set: firstReplyText
           value:
-            expr: "inputJson.split(`${marker} plugin `).slice(1).filter((rest) => !rest.startsWith('{{media:'))"
+            expr: "`${marker} plugin ${pluginPath}`"
+        - set: history
+          value:
+            expr: "mockInput.extractCurrentRuntimeContextTexts(secondInput).join('\\n')"
         - assert:
-            # Compare in inputJson's own encoding; JSON.stringify escapes Windows separators.
-            expr: "replayedCopies.length > 0 && replayedCopies.every((rest) => rest.startsWith(JSON.stringify(pluginPath).slice(1, -1)))"
+            expr: history.includes(firstReplyText)
             message:
-              expr: "`second request did not replay the first reply with the plugin path unchanged (${pluginPath}): ${JSON.stringify(replayedCopies.map((rest) => rest.slice(0, 200)))}`"
-      detailsExpr: "JSON.stringify({ pluginPath, mediaParts: mediaParts.length, imageInputCount: secondRequest.imageInputCount, replayedCopies: replayedCopies.map((rest) => rest.slice(0, pluginPath.length + 40)) })"
+              expr: "`the current turn's channel history did not replay the first reply unchanged (${firstReplyText}): ${history.slice(-600)}`"
+        - set: assistantJson
+          value:
+            expr: "JSON.stringify(secondInput.filter((item) => item.role === 'assistant'))"
+        - assert:
+            # Compare in the JSON encoding, which escapes Windows separators.
+            expr: assistantJson.includes(JSON.stringify(firstReplyText).slice(1, -1))
+            message:
+              expr: "`the earlier assistant message did not carry the first reply unchanged (${firstReplyText}): ${assistantJson.slice(0, 600)}`"
+      detailsExpr: "JSON.stringify({ pluginPath, mediaParts: mediaParts.length, imageInputCount: secondRequest.imageInputCount, history: history.slice(Math.max(0, history.indexOf(firstReplyText) - 80), history.indexOf(firstReplyText) + firstReplyText.length) })"
