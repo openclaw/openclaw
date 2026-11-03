@@ -5,6 +5,7 @@ import {
   type PluginUiCapability,
 } from "../../../../packages/gateway-protocol/src/plugin-ui-capabilities.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import { SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { askBrandLabel } from "../../components/theme-brand-label.ts";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { formatDateMs } from "../../lib/format.ts";
@@ -43,7 +44,7 @@ function renderPluginSecurityAudit(status: string, auditUrl: string | null | und
       target="_blank"
       rel="noopener noreferrer"
     >
-      <h2>
+      <h2 class="settings-section__heading oc-settings-section-title">
         {t("pluginsPage.detailSecurity")}
         <span title={t("pluginsPage.detailSecurityAudit")}>{<Icon name="info" />}</span>
       </h2>
@@ -180,16 +181,6 @@ export function renderPluginMetadata(
   const documentation = pluginWebUrl(local?.documentationUrl ?? detail?.documentationUrl);
   const values: Array<[string, string | undefined]> = [
     [
-      t("pluginsPage.catalogDownloadsColumn"),
-      catalog?.downloads === undefined ? undefined : formatCompactCount(catalog.downloads),
-    ],
-    [
-      t("pluginsPage.detailPublished"),
-      detail?.createdAt === undefined
-        ? undefined
-        : formatDateMs(detail.createdAt, { dateStyle: "medium" }),
-    ],
-    [
       t(installedVersion ? "pluginsPage.detailInstalledVersion" : "pluginsPage.version"),
       installedVersion ?? catalog?.latestVersion,
     ],
@@ -198,6 +189,16 @@ export function renderPluginMetadata(
       detail?.updatedAt === undefined
         ? undefined
         : formatDateMs(detail.updatedAt, { dateStyle: "medium" }),
+    ],
+    [
+      t("pluginsPage.detailPublished"),
+      detail?.createdAt === undefined
+        ? undefined
+        : formatDateMs(detail.createdAt, { dateStyle: "medium" }),
+    ],
+    [
+      t("pluginsPage.catalogDownloadsColumn"),
+      catalog?.downloads === undefined ? undefined : formatCompactCount(catalog.downloads),
     ],
   ];
   const categories = catalog?.categories ?? [];
@@ -233,98 +234,119 @@ export function renderPluginMetadata(
       ) : undefined}
       {categories.length ? (
         <section class="plugin-metadata__section">
-          <h2>{t("pluginsPage.detailCategories")}</h2>
+          <h2 class="settings-section__heading oc-settings-section-title">
+            {t("pluginsPage.detailCategories")}
+          </h2>
           <div class="plugin-metadata__categories">
             <For each={categories}>{(category) => <span class="chip">{category}</span>}</For>
           </div>
         </section>
       ) : undefined}
-      {repository ? (
-        <section class="plugin-metadata__section">
-          <h2>{t("pluginsPage.detailRepository")}</h2>
-          <a
-            class="plugin-metadata__repository"
-            href={repository.href}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            {repository.github ? <Icon name="github" /> : <Icon name="externalLink" />}
-            <span>{repository.name}</span>
-          </a>
-        </section>
-      ) : undefined}
-      {documentation ? (
-        <section class="plugin-metadata__section">
-          <h2>{t("pluginsPage.detailDocumentation")}</h2>
-          <a href={documentation.href} target="_blank" rel="noopener noreferrer">
-            {t("pluginsPage.detailDocumentation")} {<Icon name="arrowUpRight" />}
-          </a>
-        </section>
+      {repository || documentation ? (
+        <ul class="plugin-metadata__links">
+          {repository ? (
+            <li>
+              <a
+                class="plugin-metadata__repository"
+                href={repository.href}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={t("pluginsPage.detailRepository")}
+              >
+                {repository.github ? <Icon name="github" /> : <Icon name="externalLink" />}
+                <span>{repository.name}</span>
+              </a>
+            </li>
+          ) : undefined}
+          {documentation ? (
+            <li>
+              <a href={documentation.href} target="_blank" rel="noopener noreferrer">
+                <span>{t("pluginsPage.detailDocumentation")}</span>
+                <Icon name="arrowUpRight" />
+              </a>
+            </li>
+          ) : undefined}
+        </ul>
       ) : undefined}
     </>
   );
 }
 
+type PluginCapabilityRow = {
+  name: string;
+  description?: string;
+  onOpen?: () => void;
+  trailing?: JSX.Element;
+  details?: JSX.Element;
+};
+
+function PluginCapabilityRowText(props: { value: PluginCapabilityRow }) {
+  return (
+    <div class="settings-row__text oc-settings-row-content">
+      <span class="settings-row__title oc-settings-row-title">{props.value.name}</span>
+      {props.value.description ? (
+        <span class="settings-row__desc oc-settings-row-description">
+          {props.value.description}
+        </span>
+      ) : undefined}
+    </div>
+  );
+}
+
+function PluginCapabilityRowControl(props: { value: PluginCapabilityRow; chevron: boolean }) {
+  return props.value.trailing || props.chevron ? (
+    <div class="settings-row__control oc-settings-row-control">
+      {props.value.trailing}
+      {props.chevron ? (
+        <span class="settings-row__chevron" aria-hidden="true">
+          <Icon name="chevronRight" />
+        </span>
+      ) : undefined}
+    </div>
+  ) : undefined;
+}
+
 export function renderPluginCapabilitySection(
   title: string,
-  values: Array<{
-    name: string;
-    description?: string;
-    onOpen?: () => void;
-    trailing?: JSX.Element;
-    details?: JSX.Element;
-  }>,
+  values: PluginCapabilityRow[],
   icon: () => JSX.Element,
 ): JSX.Element {
   return values.length ? (
-    <section class="plugin-capabilities">
-      <h2>
-        {title}
-        <span>{values.length}</span>
-      </h2>
-      <div>
+    <div class="plugin-capabilities">
+      <SettingsSection title={title} carapace>
         <For each={values}>
           {(value) => {
-            const open = value.onOpen;
-            const content = (
+            const content = (chevron: boolean) => (
               <>
                 <span class="plugin-capability__icon" aria-hidden="true">
                   {icon()}
                 </span>
-                <span class="plugin-capability__copy">
-                  <strong>{value.name}</strong>
-                  {value.description ? <span>{value.description}</span> : undefined}
-                </span>
-                {value.trailing ? (
-                  <span class="plugin-capability__trailing">{value.trailing}</span>
-                ) : undefined}
-                {open || value.details ? (
-                  <span class="plugin-capability__chevron" aria-hidden="true">
-                    {<Icon name="chevronRight" />}
-                  </span>
-                ) : undefined}
+                <PluginCapabilityRowText value={value} />
+                <PluginCapabilityRowControl value={value} chevron={chevron} />
               </>
             );
-            return (
-              <div class="plugin-capability">
-                {value.details ? (
-                  <details class="plugin-capability__disclosure">
-                    <summary>{content}</summary>
-                    <div class="plugin-capability__details">{value.details}</div>
-                  </details>
-                ) : open ? (
-                  <button type="button" onClick={open}>
-                    {content}
-                  </button>
-                ) : (
-                  <div class="plugin-capability__static">{content}</div>
-                )}
-              </div>
+            return value.details ? (
+              <details class="plugin-capability__disclosure">
+                <summary class="settings-row settings-row--nav oc-settings-row">
+                  {content(true)}
+                </summary>
+                <div class="plugin-capability__details">{value.details}</div>
+              </details>
+            ) : value.onOpen ? (
+              <button
+                type="button"
+                class="settings-row settings-row--nav oc-settings-row"
+                onClick={value.onOpen}
+              >
+                {content(true)}
+              </button>
+            ) : (
+              <div class="settings-row oc-settings-row">{content(false)}</div>
             );
           }}
         </For>
-      </div>
-    </section>
+      </SettingsSection>
+    </div>
   ) : undefined;
 }
 
@@ -446,10 +468,7 @@ export function renderPluginAskAction(onAsk?: () => void, primary = true) {
   return onAsk ? (
     <button
       type="button"
-      class={[
-        "btn oc-action",
-        { primary, "oc-action-primary": primary, "oc-action-secondary": !primary },
-      ]}
+      class={["btn oc-action", { primary, "oc-action-secondary": !primary }]}
       onClick={onAsk}
     >
       {askBrandLabel(t)}

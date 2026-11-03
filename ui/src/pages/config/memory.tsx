@@ -437,9 +437,16 @@ function SettingsTab(props: MemoryViewProps) {
 
 export function Memory(props: MemoryViewProps) {
   return (
-    <ShellLayoutBoundary traits={{ memoryPage: true, toolbarHeader: true }}>
+    <ShellLayoutBoundary
+      traits={{
+        memoryPage: true,
+        toolbarHeader: true,
+        settingsPage: true,
+        settingsWorkspace: true,
+      }}
+    >
       <section class="memory-page">
-        <section class="content-header content-header--settings content-header--page hub-page-header">
+        <section class="content-header content-header--settings content-header--page hub-page-header hub-page-header--stacked">
           <div class="hub-page-header__title">
             <h1 class="page-title">{t("tabs.memory")}</h1>
             <div class="page-subtitle">

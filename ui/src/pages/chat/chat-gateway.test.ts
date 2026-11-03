@@ -1246,7 +1246,7 @@ describe("loadChatHistory retry handling", () => {
       expect(state.chatLoading).toBe(false);
       expect(getChatHistoryLoadState(state)).toMatchObject({
         phase: "failed",
-        message: expect.stringContaining("timed out"),
+        message: expect.stringContaining("in time"),
       });
     }
     expect(request.mock.calls[1]?.[2]?.signal.aborted).toBe(true);

@@ -585,15 +585,7 @@ export async function settleUpdatePluginCohort(
         ) {
           continue;
         }
-        let currentMarker: string | null;
-        try {
-          currentMarker = await readMarker(artifact.targetPackageDir);
-        } catch (error) {
-          if (hasErrnoCode(error, "ENOENT")) {
-            continue;
-          }
-          throw error;
-        }
+        const currentMarker = await readMarker(artifact.targetPackageDir);
         if (currentMarker !== artifact.markerAfter) {
           continue;
         }

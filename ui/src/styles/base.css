@@ -21,6 +21,10 @@
   --list-row-min-height: 48px;
   --list-row-padding: var(--space-3) var(--space-4);
   --list-row-icon-size: 15px;
+  --chrome-icon-size: 14px;
+  /* Lucide draws on a 24 grid, so these strokes render at 1px at their icon size. */
+  --list-row-icon-stroke: 1.6px;
+  --chrome-icon-stroke: calc(12px / 7);
   --list-row-title-weight: 500;
   --surface-hover-amount: 6%;
   --surface-selected-amount: 8%;
@@ -305,6 +309,7 @@
   --control-ui-input-text-size: max(16px, calc(14px * var(--control-ui-text-scale)));
   --field-padding-inline: 10px;
   --field-radius: calc(10px * var(--openclaw-corner-radius-scale));
+  --composer-radius: calc(20px * var(--openclaw-corner-radius-scale));
   --field-font-size: var(--control-ui-text-sm);
   --field-bg: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
   --field-border: color-mix(in srgb, var(--border) 70%, transparent);
@@ -542,7 +547,6 @@
   .exec-approval-list.exec-approval-list,
   .login-gate__card.login-gate__card,
   .card.card,
-  .settings-group.settings-group,
   .option-card__choice.option-card__choice {
     border-radius: calc(14px * var(--openclaw-corner-radius-scale));
     corner-shape: superellipse(1.5);
@@ -577,8 +581,9 @@
     corner-shape: superellipse(1.5);
   }
 
-  .option-card.option-card {
-    border-radius: calc(20px * var(--openclaw-corner-radius-scale));
+  .option-card.option-card,
+  .settings-group.settings-group {
+    border-radius: var(--composer-radius);
     corner-shape: superellipse(1.5);
   }
 
@@ -1079,7 +1084,6 @@ a:where(
     .settings-row__value,
     .memory-page__link,
     .portals-preview__notice-url,
-    .settings-account,
     .transcripts-back,
     .chat-text a,
     .chat-thinking a,

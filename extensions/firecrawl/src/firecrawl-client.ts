@@ -621,6 +621,7 @@ export async function runFirecrawlScrape(params: {
   return {
     url: params.url,
     finalUrl:
+      normalizeFirecrawlResultUrl(metadata?.url) ??
       normalizeFirecrawlResultUrl(metadata?.sourceURL) ??
       normalizeFirecrawlResultUrl(data.url) ??
       params.url,

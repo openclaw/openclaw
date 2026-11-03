@@ -168,7 +168,7 @@ describe("session menu", () => {
     Object.assign(profiles[2]!, { mergedInto: "research:one" });
     const { context } = createSessionOwnerMenuHarness(() => ({ profiles }));
     const { menu, onAction, onClose } = await actionMenu({ context, currentOwner });
-    await waitForOwners(menu, ["Me", "Research", "Colleague", "zed@example.test"]);
+    await waitForOwners(menu, ["Me", "Research", "Colleague", profiles[1]!.id]);
     const selected = menuItem(menu, selectedLabel);
     await waitForSolid(() => expect(selected.getAttribute("role")).toBe("menuitemradio"));
     expect(selected.getAttribute("aria-checked")).toBe("true");
