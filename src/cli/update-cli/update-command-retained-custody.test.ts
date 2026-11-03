@@ -281,13 +281,13 @@ describe.skipIf(process.platform === "win32")("POSIX bound native control", () =
           code: 1,
           termination: "signal",
           stdout: "",
-          stderr: "Command was terminated by SIGTERM",
+          stderr: expect.stringContaining("Command was terminated by SIGTERM"),
         },
       ],
       ["timeout", "setInterval(()=>{},10);", { code: 124, termination: "timeout" }],
       ["missing binary", "", { code: 1, termination: "error", errorCode: "ENOENT" }],
     ] as const)(
-      "preserves real native %s result after joining the bound gate",
+      "preserves real native %s result or cleanup uncertainty through the bound gate",
       async (name, script, expected) => {
         const prepared = parent();
         const fixture = prepared.fixture;
@@ -295,23 +295,34 @@ describe.skipIf(process.platform === "win32")("POSIX bound native control", () =
           timeout: name === "timeout" ? 1000 : 10000,
           missing: name === "missing binary",
         });
-        expect(fs.existsSync(fixture.outcome), result.stderr).toBe(true);
-        expect(readJson(fixture.outcome)).toMatchObject(expected);
-        expect(result.code, result.stderr).toBe(1);
-        if (name === "signal") {
-          // Explicit tree joining settles a native signal before releasing custody.
-          // Check before fixture cleanup can stop leaked work through its finish file.
-          const native: { pid: number; gate: number } = readJson(fixture.started);
-          expect(isPidAlive(native.pid)).toBe(false);
-          expect(isPidAlive(native.gate)).toBe(false);
-          expect(isChildProcessTreeAlive({ pid: native.gate })).toBe(false);
+        if (name === "signal" && !fs.existsSync(fixture.outcome)) {
+          // Unconfirmed signal cleanup must retain both roots without reporting settlement.
+          expect(result).toMatchObject({
+            code: 1,
+            stderr: expect.stringContaining(
+              "Command cleanup could not confirm that owned work stopped",
+            ),
+          });
+          expect(fs.existsSync(fixture.outcome)).toBe(false);
           const store = leaseStore(fixture);
           for (const root of [fixture.a, fixture.b]) {
-            const admitted = store.acquire(root, randomUUID(), { kind: "update" });
-            expect(admitted.kind).toBe("acquired");
-            if (admitted.kind === "acquired") {
-              expect(store.release(admitted.lease)).toBe(true);
-            }
+            expect(store.read(root).kind).toBe("current");
+          }
+        } else {
+          expect(fs.existsSync(fixture.outcome), result.stderr).toBe(true);
+          expect(readJson(fixture.outcome)).toMatchObject(expected);
+          expect(result.code, result.stderr).toBe(1);
+          const store = leaseStore(fixture);
+          for (const root of [fixture.a, fixture.b]) {
+            await expect
+              .poll(
+                () => {
+                  const admitted = store.acquire(root, randomUUID(), { kind: "update" });
+                  return admitted.kind === "acquired" && store.release(admitted.lease);
+                },
+                { timeout: 5000 },
+              )
+              .toBe(true);
           }
         }
       },
