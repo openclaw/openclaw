@@ -1,0 +1,5 @@
+29
+# LOCAL 2026.11.8 row 109; source 6ea22226d63e33f3b1e3860355d946f6a5a9558d.
+# Expired-cron reads discover only the requested owner’s cron keys and reuse selected-entry validation, including unrelated pending canonical aliases and JSON identity/current timestamp checks. Cold payload capture remains inside the snapshot and decoding outside it.
+# Keeps distinct regression invariants; exact net LF measured at integration.
+# Scalar baseline unchanged; focused private proof retained.
