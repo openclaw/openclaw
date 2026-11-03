@@ -104,7 +104,7 @@ suite.define(() => {
       await expect.poll(() => trigger.isEnabled()).toBe(true);
       await expect.poll(() => pickerValue(primary)).toBe("openai/reconnect-draft");
       await expect.poll(() => indicator.textContent()).toContain("Save failed");
-      expect(await indicator.getByRole("status").getAttribute("aria-label")).toContain(
+      expect(await indicator.getByRole("status").textContent()).toContain(
         "The last configuration change could not be confirmed",
       );
       expect(await indicator.getByRole("button", { name: "Retry", exact: true }).isEnabled()).toBe(

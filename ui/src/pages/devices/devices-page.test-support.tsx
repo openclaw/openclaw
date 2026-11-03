@@ -296,7 +296,7 @@ export function setupDevicesPageFixtures() {
   beforeEach(() => {
     dialogs = createModalDialogTestFixture((modal) => {
       const acknowledge = modal.querySelector<HTMLButtonElement>(
-        ".exec-approval-actions button[autofocus]",
+        "openclaw-modal-actions button[autofocus]",
       );
       if (acknowledge) {
         acknowledge.click();

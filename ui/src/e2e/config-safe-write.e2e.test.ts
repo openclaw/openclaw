@@ -244,10 +244,17 @@ suite.define(() => {
       });
       await expectSaveStatus(page, "Save failed");
       expect(await endpoint.inputValue()).toBe("kept-after-failure");
-      await indicator.getByText("Show reason").click();
-      expect(await indicator.textContent()).toContain("Synthetic config file is read-only");
+      expect(await indicator.locator(".settings-save-indicator__reason").textContent()).toBe(
+        "Synthetic config file is read-only",
+      );
 
-      await button(page, "Discard draft and reload").click();
+      // Discard asks first; cancelling keeps the edit.
+      await button(page, "Discard changes").click();
+      const confirm = page.getByRole("dialog");
+      await confirm.getByRole("button", { name: "Cancel", exact: true }).click();
+      expect(await endpoint.inputValue()).toBe("kept-after-failure");
+      await button(page, "Discard changes").click();
+      await confirm.getByRole("button", { name: "Discard changes", exact: true }).click();
       await expect.poll(() => endpoint.inputValue()).toBe("before-failure");
       await expect.poll(() => indicator.textContent()).not.toContain("Save failed");
     });
@@ -544,6 +551,11 @@ suite.define(() => {
       );
       const configGetsBeforeReload = (await gateway.getRequests("config.get")).length;
       await saveIndicator.getByRole("button", { name: "Reload" }).click();
+      // Reload drops the unsaved edit, so it asks first.
+      await page
+        .getByRole("dialog")
+        .getByRole("button", { name: "Discard changes", exact: true })
+        .click();
       await expect
         .poll(async () => (await gateway.getRequests("config.get")).length)
         .toBeGreaterThan(configGetsBeforeReload);

@@ -33,7 +33,13 @@ import { CapabilityList } from "./capability-list.tsx";
 import { deviceDesktopEnvironment, DeviceEntryActions } from "./entry-actions.tsx";
 import { HostPressure, HostStats } from "./host-stats.tsx";
 import { PendingDeviceRows, PendingNode } from "./view-pending.tsx";
-import { CommandFact, DeviceFact, DeviceIdentityFacts, MetaLine } from "./view-shared.tsx";
+import {
+  CommandFact,
+  DeviceDisclosure,
+  DeviceFact,
+  DeviceIdentityFacts,
+  MetaLine,
+} from "./view-shared.tsx";
 import type { DevicesProps } from "./view.types.ts";
 
 registerEnglishCatalog(registerDevicesEnglish);
@@ -254,37 +260,6 @@ function formatInputRecency(lastInputSeconds: number): string {
   return t("devices.inventory.inputAgo", {
     time: formatTimeAgo(lastInputSeconds * 1000, { suffix: false }),
   });
-}
-
-/** One expandable device row: status at a glance, everything else on demand. */
-function DeviceDisclosure(props: {
-  deviceId?: string;
-  name: string;
-  meta: readonly string[];
-  alerts?: JSX.Element;
-  status: JSX.Element;
-  children: JSX.Element;
-}) {
-  return (
-    <details class="device-entry" data-device-id={props.deviceId}>
-      <summary class="settings-row settings-row--nav device-entry__summary">
-        <span class="settings-row__text">
-          <span class="settings-row__title">{props.name}</span>
-          <span class="device-entry__line">
-            <MetaLine parts={props.meta} />
-            {props.alerts}
-          </span>
-        </span>
-        <span class="settings-row__control">
-          <span class="device-entry__status">{props.status}</span>
-          <span class="settings-row__chevron">
-            <Icon name="chevronDown" />
-          </span>
-        </span>
-      </summary>
-      <div class="device-entry__body">{props.children}</div>
-    </details>
-  );
 }
 
 function InventoryEntry(props: {
