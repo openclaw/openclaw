@@ -57,6 +57,7 @@ const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
   "opencode",
   "opencode-go",
   "openrouter",
+  "opper",
   "qianfan",
   "qwen",
   "qwen-token-plan",

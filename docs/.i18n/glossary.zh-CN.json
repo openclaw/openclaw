@@ -92,6 +92,22 @@
     "target": "requesty"
   },
   {
+    "source": "Opper",
+    "target": "Opper"
+  },
+  {
+    "source": "Opper (European AI gateway)",
+    "target": "Opper（欧洲 AI 网关）"
+  },
+  {
+    "source": "Opper plugin reference",
+    "target": "Opper 插件参考"
+  },
+  {
+    "source": "opper",
+    "target": "opper"
+  },
+  {
     "source": "Abliteration",
     "target": "Abliteration"
   },

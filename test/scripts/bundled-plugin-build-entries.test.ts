@@ -363,6 +363,17 @@ describe("bundled plugin build entries", () => {
     }
   });
 
+  it("ships Opper provider runtime and metadata in the core package", () => {
+    expect(listBundledPluginPackArtifacts()).toEqual(
+      expect.arrayContaining([
+        "dist/extensions/opper/index.js",
+        "dist/extensions/opper/api.js",
+        "dist/extensions/opper/openclaw.plugin.json",
+        "dist/extensions/opper/package.json",
+      ]),
+    );
+  });
+
   it("ships Requesty provider runtime and metadata in the core package", () => {
     expect(listBundledPluginPackArtifacts()).toEqual(
       expect.arrayContaining([

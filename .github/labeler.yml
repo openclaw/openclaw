@@ -990,6 +990,12 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/openshell/**"
+"extensions: opper":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/opper/**"
+          - "docs/providers/opper.md"
+          - "docs/plugins/reference/opper.md"
 "extensions: parallel":
   - changed-files:
       - any-glob-to-any-file:
