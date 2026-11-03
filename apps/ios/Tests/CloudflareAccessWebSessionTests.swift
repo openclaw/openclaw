@@ -138,6 +138,28 @@ struct CloudflareAccessWebSessionTests {
         #expect(events.values.count == 4)
     }
 
+    @Test func `fencing stops pages and refuses new seeds before any cookie is deleted`() async throws {
+        let jar = CloudflareAccessWebCookieJar()
+        let origin = try CloudflareAccessOrigin(#require(URL(string: "https://gateway.example.test:8443")))
+        let events = Events()
+        let observed = jar.generation(for: origin)
+        let registered = jar.register(
+            origin,
+            unload: { events.values.append("unload") },
+            delete: { events.values.append("delete") },
+            onRetired: { events.values.append("retired") })
+        let id = try #require(registered)
+        jar.fence(origin)
+        // Revocation is visible immediately, while cookie-store cleanup is still pending.
+        #expect(events.values == ["unload", "retired"])
+        #expect(!jar.isLive(id))
+        #expect(jar.register(origin, generation: observed, delete: {}) == nil)
+        await jar.retire(origin)
+        #expect(events.values == ["unload", "retired", "delete"])
+        await jar.retire(origin)
+        #expect(events.values.count == 3)
+    }
+
     @Test func `store forget drives web cookie retirement and the snapshot falls back`() async throws {
         let jar = CloudflareAccessWebCookieJar()
         let session = try CloudflareAccessTestTokens().session()

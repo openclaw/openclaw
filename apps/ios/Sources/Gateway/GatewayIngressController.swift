@@ -93,6 +93,7 @@ final class GatewayIngressController {
     @ObservationIgnored private let saveProfileOrigin: (String, CloudflareAccessOrigin?) -> Bool
     @ObservationIgnored private let customHeaders: (String) -> [String: String]
     @ObservationIgnored private let now: () -> Date
+    @ObservationIgnored private let fenceBrowser: @MainActor (CloudflareAccessOrigin) -> Void
     @ObservationIgnored private let retireTransports: @MainActor (CloudflareAccessOrigin) async -> Void
     @ObservationIgnored private lazy var sessions = self.makeSessionStore()
 
@@ -113,6 +114,7 @@ final class GatewayIngressController {
             GatewaySettingsStore.saveGatewayAccessOrigin(stableID: $0, origin: $1)
         },
         now: @escaping () -> Date = Date.init,
+        fenceBrowser: @escaping @MainActor (CloudflareAccessOrigin) -> Void = { _ in },
         retireTransports: @escaping @MainActor (CloudflareAccessOrigin) async -> Void)
     {
         self.persistence = persistence
@@ -124,6 +126,7 @@ final class GatewayIngressController {
         self.profiles = profiles
         self.saveProfileOrigin = saveProfileOrigin
         self.now = now
+        self.fenceBrowser = fenceBrowser
         self.retireTransports = retireTransports
     }
 
@@ -143,6 +146,8 @@ final class GatewayIngressController {
             now: self.now,
             retireTransports: { [weak self] origin in
                 guard let self else { return }
+                // Revoke browser copies first: draining native requests below can take a while.
+                self.fenceBrowser(origin)
                 self.expiryTasks.removeValue(forKey: origin)?.cancel()
                 let requests = self.managedRequests[origin] ?? [:]
                 requests.values.forEach { $0.task.cancel() }

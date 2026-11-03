@@ -190,6 +190,8 @@ final class CloudflareAccessWebCookieJar {
     }
 
     private var entries: [UUID: Entry] = [:]
+    /// Fenced and unloaded, cookie deletion still pending.
+    private var retiring: [UUID: Entry] = [:]
     private var generations: [CloudflareAccessOrigin: UInt64] = [:]
 
     /// Bumped synchronously by every `retire`. Read it BEFORE reading the grant it guards.
@@ -227,19 +229,24 @@ final class CloudflareAccessWebCookieJar {
         await entry.delete()
     }
 
-    func retire(_ origin: CloudflareAccessOrigin) async {
-        // Fence and unload synchronously, before any await: later registrations are refused, and
-        // existing pages stop running now rather than after cookie-store work completes.
+    /// Synchronous half of retirement: later registrations are refused and existing pages stop running now.
+    /// Callers fence at the moment authority is revoked, before waiting on any other work.
+    func fence(_ origin: CloudflareAccessOrigin) {
         self.generations[origin, default: 0] += 1
-        let retired = self.entries.filter { $0.value.origin == origin }
-        for id in retired.keys {
+        let fenced = self.entries.filter { $0.value.origin == origin }
+        for (id, entry) in fenced {
             self.entries.removeValue(forKey: id)
-        }
-        for entry in retired.values {
+            self.retiring[id] = entry
             entry.unload()
             entry.onRetired()
         }
-        for entry in retired.values {
+    }
+
+    func retire(_ origin: CloudflareAccessOrigin) async {
+        self.fence(origin)
+        let ids = self.retiring.filter { $0.value.origin == origin }.map(\.key)
+        for id in ids {
+            guard let entry = self.retiring.removeValue(forKey: id) else { continue }
             await entry.delete()
         }
     }

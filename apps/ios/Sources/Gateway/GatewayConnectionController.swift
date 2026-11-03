@@ -42,14 +42,17 @@ final class GatewayConnectionController {
     private(set) var discoveryDebugLog: [GatewayDiscoveryModel.DebugLogEntry] = []
     private(set) var pendingTrustPrompt: TrustPrompt?
     let operatorFleet = GatewayOperatorFleet()
-    @ObservationIgnored lazy var ingress = GatewayIngressController { [weak self] origin in
-        // Browser copies of the grant retire with native transports. The jar is a singleton, so this
-        // runs for every store retirement, but the store itself only exists while the ingress controller does.
-        await CloudflareAccessWebCookieJar.shared.retire(origin)
-        guard let self else { return }
-        await self.operatorFleet.retire(origin: origin)
-        await self.appModel?.retireGatewayIngress(for: origin)
-    }
+    @ObservationIgnored lazy var ingress = GatewayIngressController(
+        // Browser copies of the grant are fenced the moment authority is revoked and deleted with the
+        // native transports. The jar is a singleton, so this runs for every store retirement, but the store
+        // itself only exists while the ingress controller does.
+        fenceBrowser: { CloudflareAccessWebCookieJar.shared.fence($0) },
+        retireTransports: { [weak self] origin in
+            await CloudflareAccessWebCookieJar.shared.retire(origin)
+            guard let self else { return }
+            await self.operatorFleet.retire(origin: origin)
+            await self.appModel?.retireGatewayIngress(for: origin)
+        })
 
     private let discovery: GatewayDiscoveryModel
     private let discoveryEnabled: Bool

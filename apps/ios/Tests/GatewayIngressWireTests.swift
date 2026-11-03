@@ -73,6 +73,7 @@ private final class IngressWireFixture {
     }
 
     func controller(
+        fence: @escaping @MainActor (CloudflareAccessOrigin) -> Void = { _ in },
         retire: @escaping @MainActor (CloudflareAccessOrigin) async -> Void = { _ in }) -> GatewayIngressController
     {
         let jwks = self.tokens.jwks
@@ -108,6 +109,7 @@ private final class IngressWireFixture {
             saveProfileOrigin: { _, origin in self.rows[0].accessOrigin = origin
                 return true
             },
+            fenceBrowser: fence,
             retireTransports: retire)
     }
 
@@ -276,7 +278,7 @@ extension GatewayIngressControllerTests {
         let previousAgent = GatewaySettingsStore.loadGatewaySelectedAgentId(stableID: fixture.stableID)
         defer { GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: fixture.stableID, agentId: previousAgent) }
         let model = NodeAppModel()
-        let ingress = fixture.controller { origin in await model.retireGatewayIngress(for: origin) }
+        let ingress = fixture.controller(retire: { origin in await model.retireGatewayIngress(for: origin) })
         let defaults = try #require(UserDefaults(suiteName: OpenClawAppGroup.identifier))
         do {
             let authorization = try #require(await ingress.prepare(
@@ -367,10 +369,19 @@ extension GatewayIngressControllerTests {
         let fixture = try IngressWireFixture(server: server)
         let model = NodeAppModel()
         let fleet = GatewayOperatorFleet()
-        let ingress = fixture.controller { origin in
-            await model.retireGatewayIngress(for: origin)
-            await fleet.retire(origin: origin)
-        }
+        let jar = CloudflareAccessWebCookieJar()
+        var mediaFinished = false
+        var mediaFinishedAtFence: Bool?
+        let ingress = fixture.controller(
+            fence: { origin in
+                mediaFinishedAtFence = mediaFinished
+                jar.fence(origin)
+            },
+            retire: { origin in
+                await jar.retire(origin)
+                await model.retireGatewayIngress(for: origin)
+                await fleet.retire(origin: origin)
+            })
         var pending: Task<OpenClawChatLoadedMedia, Error>?
         var retirement: Task<Void, Never>?
         do {
@@ -406,7 +417,8 @@ extension GatewayIngressControllerTests {
             }
 
             fixture.holdMedia = true
-            var mediaFinished = false
+            let browser = try jar.register(CloudflareAccessOrigin(fixture.route.url), delete: {})
+            let browserID = try #require(browser)
             let held = Task {
                 defer { mediaFinished = true }
                 return try await loader.load(
@@ -420,6 +432,9 @@ extension GatewayIngressControllerTests {
                 retirementFinished = true
             }
             try await waitForIngress { retirementFinished && mediaFinished }
+            // The browser copy was fenced while the native response was still held, not after it drained.
+            #expect(mediaFinishedAtFence == false)
+            #expect(!jar.isLive(browserID))
             await expectRetiredIngress(held.result)
             try await waitForIngress { server.activeConnectionCount == 0 }
             #expect(fixture.stored == nil)
