@@ -22,6 +22,7 @@ import {
   resolveTelegramPollActionGateState,
 } from "./accounts.js";
 import { TELEGRAM_MESSAGE_ACTION_MAP } from "./action-names.js";
+import { readTelegramMessageEffectId } from "./action-params.js";
 import { isTelegramInlineButtonsEnabled } from "./inline-buttons.js";
 import { rejectTelegramNativeButtonParams } from "./native-button-params.js";
 
@@ -216,7 +217,8 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
       return null;
     }
     const quoteText = readStringParam(ctx.params, "quoteText", { trim: false });
-    if (!quoteText) {
+    const messageEffectId = readTelegramMessageEffectId(ctx.params);
+    if (!quoteText && !messageEffectId) {
       return payload;
     }
     const telegramData = asNonArrayRecord(payload.channelData?.telegram);
@@ -224,7 +226,11 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
       ...payload,
       channelData: {
         ...payload.channelData,
-        telegram: { ...telegramData, quoteText },
+        telegram: {
+          ...telegramData,
+          ...(quoteText ? { quoteText } : {}),
+          ...(messageEffectId ? { messageEffectId } : {}),
+        },
       },
     };
   },

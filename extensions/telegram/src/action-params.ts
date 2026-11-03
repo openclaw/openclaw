@@ -1,6 +1,7 @@
 import {
   readPositiveIntegerParam,
   readStringOrNumberParam,
+  readStringParam,
 } from "openclaw/plugin-sdk/channel-actions";
 import {
   isRecord,
@@ -13,6 +14,7 @@ const TELEGRAM_FORUM_TOPIC_ICON_COLORS = [
 type TelegramForumTopicIconColor = (typeof TELEGRAM_FORUM_TOPIC_ICON_COLORS)[number];
 const SEND_MEDIA_FIELDS = ["mediaUrl", "media", "path", "filePath", "fileUrl"];
 const ATTACHMENT_MEDIA_FIELDS = ["media", "mediaUrl", "path", "filePath", "fileUrl", "url"];
+const TELEGRAM_MESSAGE_EFFECT_ID_RE = /^\d+$/;
 
 export function readTelegramPositiveIntegerParam(params: Record<string, unknown>, key: string) {
   return readPositiveIntegerParam(params, key, { message: `${key} must be a positive integer.` });
@@ -51,6 +53,15 @@ export function readTelegramReplyToMessageId(params: Record<string, unknown>) {
     readTelegramPositiveIntegerParam(params, "replyToMessageId") ??
     readTelegramPositiveIntegerParam(params, "replyTo")
   );
+}
+
+/** Telegram effects take the Bot API's numeric message_effect_id, not named effects. */
+export function readTelegramMessageEffectId(params: Record<string, unknown>) {
+  const effectId = readStringParam(params, "effectId") ?? readStringParam(params, "effect");
+  if (effectId !== undefined && !TELEGRAM_MESSAGE_EFFECT_ID_RE.test(effectId)) {
+    throw new Error("Telegram effectId must be a numeric message effect id.");
+  }
+  return effectId;
 }
 
 export function readTelegramSendMediaUrls(params: Record<string, unknown>) {

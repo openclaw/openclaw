@@ -480,6 +480,11 @@ describe("Telegram registered action authority and input contracts", () => {
       params: { to: "123", message: "choose", buttons: '[[{"text":"Yes","callback_data":"yes"}]]' },
       error: /native "buttons" is unsupported/,
     },
+    {
+      action: "send",
+      params: { to: "123", message: "Shipped", effectId: "confetti" },
+      error: /numeric message effect id/,
+    },
   ] as const)(
     "rejects invalid external $action input before network delivery: $error",
     async ({ action, params, error }) => {

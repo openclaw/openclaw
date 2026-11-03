@@ -4,6 +4,7 @@ import {
   createMessageReceiptFromOutboundResults,
   type MessageReceiptPartKind,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { TelegramThreadSpec } from "./bot/helpers.js";
 import {
   recordOutboundMessageForPromptContext,
@@ -33,7 +34,7 @@ import type {
   TelegramSendResult,
 } from "./send-message-types.js";
 import { recordSentMessage } from "./sent-message-cache.js";
-import { parseTelegramTarget } from "./targets.js";
+import { parseTelegramTarget, resolveTelegramTargetChatType } from "./targets.js";
 
 type PreparedTelegramOutbound = {
   chatId: string;
@@ -77,6 +78,21 @@ export function withTelegramMessageAction<T, TMessageId extends string | number 
       request,
     } as TelegramMessageActionContext<TMessageId>);
   });
+}
+
+/** Telegram plays message effects in private chats only and rejects them elsewhere. */
+export function resolveTelegramMessageEffectParams(
+  chatId: string,
+  messageEffectId: string | undefined,
+): { message_effect_id?: string } {
+  if (!messageEffectId) {
+    return {};
+  }
+  if (resolveTelegramTargetChatType(chatId) !== "direct") {
+    logVerbose("telegram message effect skipped: effects apply to private chats only");
+    return {};
+  }
+  return { message_effect_id: messageEffectId };
 }
 
 export function buildTelegramProviderDeliveryResult(params: {
