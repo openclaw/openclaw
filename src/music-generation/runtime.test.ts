@@ -71,13 +71,17 @@ it.each(["before dispatch", "rejected response", "late complete response"])(
     first.generateMusic.mockImplementation(async (request) => {
       expect(request.signal).toBe(controller.signal);
       controller.abort(reason);
-      if (phase === "rejected response") throw reason;
+      if (phase === "rejected response") {
+        throw reason;
+      }
       return {
         tracks: [{ buffer: Buffer.from("complete audio"), mimeType: "audio/mpeg" }],
         model: request.model,
       };
     });
-    if (phase === "before dispatch") controller.abort(reason);
+    if (phase === "before dispatch") {
+      controller.abort(reason);
+    }
     await expect(
       runGenerateMusic(
         { signal: controller.signal },
