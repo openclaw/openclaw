@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { FailoverError } from "../agents/failover-error.js";
+import { runUtilityCompletion } from "../agents/utility-completion.js";
 import { onAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
@@ -6,7 +8,10 @@ import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction
 import { setGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
-import { createSessionObserverCompletion } from "./session-observer-completion.js";
+import {
+  createSessionObserverCompletion,
+  reportSessionObserverDegradation,
+} from "./session-observer-completion.js";
 import type { defaultCompleteModel } from "./session-observer-model.js";
 import { observerState } from "./session-observer-state.test-support.js";
 import {
@@ -188,6 +193,83 @@ it("publishes a digest from a utility model that answers after 15s", async () =>
 
   expect(completeModel.mock.calls[0]?.[0].abortSignal?.aborted).toBe(false);
   expectBroadcast(harness, { headline: "Working", health: "on-track" });
+});
+
+it("publishes a digest when a timed-out utility primary falls back", async () => {
+  const isolated = vi
+    .fn<NonNullable<Parameters<typeof runUtilityCompletion>[1]>>()
+    .mockImplementation((params) => {
+      return new Promise((resolve, reject) => {
+        setTimeout(
+          () => {
+            if (params.abortSignal?.aborted) {
+              reject(new Error("completion cancelled"));
+            } else if (params.provider === "openai") {
+              reject(new FailoverError("Primary timed out", { reason: "timeout" }));
+            } else {
+              resolve(modelMessage({ headline: "Working", health: "on-track" }));
+            }
+          },
+          params.provider === "openai" ? 29_000 : 10_000,
+        );
+      });
+    });
+  const completeModel = vi.fn<typeof defaultCompleteModel>((params) =>
+    runUtilityCompletion(params, isolated),
+  );
+  const cfg = {
+    agents: {
+      defaults: {
+        utilityModel: { primary: "openai/gpt-test", fallbacks: ["anthropic/haiku-test"] },
+      },
+    },
+  };
+  const request = createSessionObserverCompletion({
+    getConfig: () => cfg,
+    prepareModel: vi.fn(async () => ({
+      ...preparedModel(),
+      config: cfg,
+      useUtilityModel: true as const,
+    })),
+    completeModel,
+    isCurrent: () => true,
+  });
+  const result = request(observerState(), []).then(
+    (value) => value,
+    (error: unknown) => error,
+  );
+  await vi.dynamicImportSettled();
+  await vi.advanceTimersByTimeAsync(29_000);
+  await vi.dynamicImportSettled();
+  await vi.advanceTimersByTimeAsync(10_000);
+
+  expect(await result).toMatchObject({ headline: "Working", health: "on-track" });
+  expect(isolated.mock.calls.map(([call]) => `${call.provider}/${call.model}`)).toEqual([
+    "openai/gpt-test",
+    "anthropic/haiku-test",
+  ]);
+});
+
+it("does not recommend adding fallbacks when assessment stops with one configured", () => {
+  const notices: AgentEventPayload[] = [];
+  const unsubscribe = onAgentEvent((evt) => {
+    if (evt.stream === "notice") {
+      notices.push(evt);
+    }
+  });
+  try {
+    reportSessionObserverDegradation(observerState(), new Error("timed out"), {
+      agents: {
+        defaults: {
+          utilityModel: { primary: "openai/gpt-test", fallbacks: ["anthropic/haiku-test"] },
+        },
+      },
+    });
+    expect(notices[0]?.data.message).toContain("Configured utilityModel.fallbacks");
+    expect(notices[0]?.data.message).not.toContain("add capable utilityModel.fallbacks");
+  } finally {
+    unsubscribe();
+  }
 });
 
 it("aborts stuck completions at the cap and disables the run after two failures", async () => {
