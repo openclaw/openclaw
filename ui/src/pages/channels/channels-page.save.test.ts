@@ -127,7 +127,7 @@ describe("ChannelsPage save against a file changed elsewhere", () => {
       ),
     });
     await source.runtimeConfig.refresh();
-    const request = vi.mocked(gateway.snapshot.client!.request);
+    const request = vi.spyOn(gateway.snapshot.client!, "request");
     const page = mountPage(source.context);
     await settle();
     findButton(page, ".channels-item").click();
@@ -139,12 +139,12 @@ describe("ChannelsPage save against a file changed elsewhere", () => {
       request,
       patches: () => request.mock.calls.filter(([method]) => method === "config.patch"),
       /** Another client writes the file; this page hears of it as it would from config.changed. */
-      async changeElsewhere(config: Record<string, unknown>, hash: string) {
+      changeElsewhere: async (config: Record<string, unknown>, hash: string) => {
         file = configSnapshot(config, hash);
         await source.runtimeConfig.refresh();
         await settle();
       },
-      async setFile(config: Record<string, unknown>, hash: string) {
+      setFile: async (config: Record<string, unknown>, hash: string) => {
         file = configSnapshot(config, hash);
       },
     };
@@ -232,6 +232,7 @@ describe("ChannelsPage save against a file changed elsewhere", () => {
     await waitForSolid(() => expect(patches()).toHaveLength(1));
     const params = patches()[0]![1] as { raw: string; baseHash: string; replacePaths?: string[] };
     expect(params.baseHash).toBe("h1");
+    expect(params.replacePaths).toEqual(["channels.telegram.allowFrom"]);
     expect(JSON.parse(params.raw)).toEqual({
       channels: { telegram: { dmPolicy: "pairing", allowFrom: ["111"] } },
     });
@@ -239,7 +240,7 @@ describe("ChannelsPage save against a file changed elsewhere", () => {
   });
 
   it("still saves next to a change elsewhere that the edits don't touch", async () => {
-    const { page, patches, changeElsewhere } = await openTelegram();
+    const { page, source, patches, changeElsewhere } = await openTelegram();
     await choose(page, "DM policy", "pairing");
     const elsewhere = telegram({
       allowFrom: ["111", "222", "333"],
@@ -247,12 +248,22 @@ describe("ChannelsPage save against a file changed elsewhere", () => {
       textChunkLimit: 2000,
       groups: { "-1001": { requireMention: true }, "-1003": { requireMention: true } },
     });
+    const path = ["channels", "telegram", "groups", "-1001", "requireMention"];
+    source.channels.editConfig(
+      "telegram",
+      { path, value: false },
+      channelConfigEditBase(before, path),
+    );
     await changeElsewhere(elsewhere, "h1");
     findButton(page, ".channels-detail .btn.primary").click();
     await waitForSolid(() => expect(patches()).toHaveLength(1));
     const params = patches()[0]![1] as { raw: string; baseHash: string };
     expect(params.baseHash).toBe("h1");
-    expect(JSON.parse(params.raw)).toEqual({ channels: { telegram: { dmPolicy: "pairing" } } });
+    expect(JSON.parse(params.raw)).toEqual({
+      channels: {
+        telegram: { dmPolicy: "pairing", groups: { "-1001": { requireMention: false } } },
+      },
+    });
     await waitForSolid(() => expect(text(page, ".channels-detail__status")).toBe("Saved"));
     expect(alertText(page)).toBeNull();
   });

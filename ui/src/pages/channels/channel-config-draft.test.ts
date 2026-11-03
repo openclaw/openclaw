@@ -97,31 +97,6 @@ describe("channel config draft", () => {
 });
 
 describe("channel config draft against a file that changed elsewhere", () => {
-  const groupsSchema = {
-    type: "object",
-    properties: {
-      channels: {
-        type: "object",
-        properties: {
-          telegram: {
-            type: "object",
-            properties: {
-              dmPolicy: { type: "string" },
-              textChunkLimit: { type: "number" },
-              allowFrom: { type: "array", items: { type: "string" } },
-              groups: {
-                type: "object",
-                additionalProperties: {
-                  type: "object",
-                  properties: { requireMention: { type: "boolean" } },
-                },
-              },
-            },
-          },
-        },
-      },
-    },
-  };
   const saved = (telegram: Record<string, unknown>) => ({ channels: { telegram } });
   // What the draft was made against.
   const before = saved({
@@ -146,27 +121,7 @@ describe("channel config draft against a file that changed elsewhere", () => {
   ];
   const bases = draft.map((edit) => channelConfigEditBase(before, edit.path));
 
-  it("would have dropped the other client's values, which is why Save now stops", () => {
-    // The patch the PR head sent: whole lists, missing keys as deletions.
-    expect(
-      buildChannelConfigPatch({
-        base: elsewhere.channels.telegram,
-        channelId: "telegram",
-        edits: draft,
-        schema: groupsSchema,
-      }),
-    ).toEqual({
-      patch: {
-        channels: {
-          telegram: {
-            allowFrom: ["111"],
-            dmPolicy: "pairing",
-            groups: { "-1002": { requireMention: true }, "-1003": null },
-          },
-        },
-      },
-      replacePaths: ["channels.telegram.allowFrom"],
-    });
+  it("identifies edited fields changed elsewhere before Save", () => {
     expect(findChannelConfigConflicts(bases, elsewhere)).toEqual([
       path("allowFrom"),
       path("dmPolicy"),
@@ -190,36 +145,6 @@ describe("channel config draft against a file that changed elsewhere", () => {
     expect(channelConfigEditBase(before, path("proxy", "url"))).toEqual({
       path: path("proxy", "url"),
       value: undefined,
-    });
-  });
-
-  it("saves an edit next to a change it doesn't touch, keeping that change", () => {
-    const edits: ChannelConfigEdit[] = [
-      { path: path("dmPolicy"), value: "pairing" },
-      { path: path("groups", "-1001", "requireMention"), value: false },
-    ];
-    const meanwhile = saved({
-      allowFrom: ["111", "222", "333"],
-      dmPolicy: "allowlist",
-      textChunkLimit: 2000,
-      groups: { "-1001": { requireMention: true }, "-1003": { requireMention: true } },
-    });
-    const editBases = edits.map((edit) => channelConfigEditBase(before, edit.path));
-    expect(findChannelConfigConflicts(editBases, meanwhile)).toEqual([]);
-    expect(
-      buildChannelConfigPatch({
-        base: meanwhile.channels.telegram,
-        channelId: "telegram",
-        edits,
-        schema: groupsSchema,
-      }),
-    ).toEqual({
-      patch: {
-        channels: {
-          telegram: { dmPolicy: "pairing", groups: { "-1001": { requireMention: false } } },
-        },
-      },
-      replacePaths: [],
     });
   });
 

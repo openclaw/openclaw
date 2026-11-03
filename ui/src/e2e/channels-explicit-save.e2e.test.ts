@@ -82,7 +82,12 @@ async function openChannels(page: Page) {
 
 /** Answers the unsaved-changes prompt; the dialog behind it has its own Discard and Save. */
 async function choose(page: Page, name: "Keep editing" | "Discard" | "Save") {
-  const prompt = await waitForConfirmModal(page);
+  const prompt = await waitForConfirmModal(
+    page,
+    page.locator("openclaw-modal-dialog").filter({
+      has: page.locator('dialog[open][aria-label="Unsaved changes"]'),
+    }),
+  );
   await prompt.getByRole("button", { name, exact: true }).click();
 }
 
@@ -110,6 +115,10 @@ suite.define(() => {
       const review = page.getByRole("button", { name: "Review", exact: true });
       await review.waitFor();
       expect(await writes()).toBe(0);
+      await page.getByRole("link", { name: "Channels", exact: true }).first().click();
+      const row = page.locator(".channels-item").filter({ hasText: "Telegram" }).first();
+      await expect.poll(() => row.textContent()).toContain("Unsaved changes");
+      expect(await detail.count()).toBe(0);
       await review.click();
       await token.waitFor();
       expect(await token.inputValue()).toBe(PARTIAL);
@@ -184,28 +193,6 @@ suite.define(() => {
       await gateway.waitForRequest("wizard.start");
       await page.locator(".channels-wizard").waitFor();
       expect(await detail.count()).toBe(0);
-    });
-  });
-
-  it("marks the row after a plain return, without reopening the channel", async () => {
-    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-      const { gateway, detail, token } = await openChannels(page);
-      await token.fill(PARTIAL);
-      await page.goBack();
-      await page.getByRole("button", { name: "Review", exact: true }).waitFor();
-      await page.getByRole("link", { name: "Channels", exact: true }).first().click();
-
-      const row = page.locator(".channels-item").filter({ hasText: "Telegram" }).first();
-      await expect.poll(() => row.textContent()).toContain("Unsaved changes");
-      expect(await detail.count()).toBe(0);
-
-      await row.click();
-      await token.waitFor();
-      expect(await token.inputValue()).toBe(PARTIAL);
-      await detail.getByRole("button", { name: "Close", exact: true }).click();
-      await choose(page, "Discard");
-      await expect.poll(() => row.textContent()).not.toContain("Unsaved changes");
-      expect(await gateway.getRequests("config.patch")).toHaveLength(0);
     });
   });
 
