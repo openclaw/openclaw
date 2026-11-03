@@ -158,6 +158,7 @@ function setHeaderDefault(
 }
 
 const openAiServiceTier = buildProviderStreamFamilyHooks("openai-responses-service-tier");
+const mistralReplay = buildProviderReplayFamilyHooks({ family: "mistral" });
 const log = createSubsystemLogger("clawrouter-stream");
 
 function wrapClawRouterProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
@@ -661,6 +662,9 @@ export default defineSingleProviderPluginEntry({
         wrapClawRouterProviderStream({ ...ctx, nativeWebSearchAllowedByToolPolicy: false }),
       wrapStreamFn: wrapClawRouterProviderStream,
       buildReplayPolicy: (ctx) => {
+        if (ctx.modelApi === "openai-completions" && ctx.modelId?.startsWith("mistral/")) {
+          return mistralReplay.buildReplayPolicy?.(ctx);
+        }
         if (ctx.modelApi === "anthropic-messages") {
           return anthropicReplay.buildReplayPolicy?.(ctx);
         }

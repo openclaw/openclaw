@@ -10,9 +10,15 @@
  * Acceptance: identical selected files, fewer unused source inspections, lower
  * owner CPU/allocation without a material provisioning latency regression.
  * Five-sample p95 is descriptive, not a tail gate. No model or whole-Gateway load.
+ * --fixture source|included creates a NEW synthetic repository with 62,000 files
+ * of 20,000 bytes each. Included mode tracks 12,000 and provisions 50,000 files;
+ * neither mode installs dependencies or runs a setup script. --verify-fixture
+ * checks every payload after readiness, outside timing. --acceleration enables
+ * native source templates. Alternate built --entry revisions in separate runs;
+ * --profile cpu|heap records the Gateway itself (heap includes collected objects).
  */
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
@@ -24,6 +30,12 @@ import { parseArgs } from "node:util";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.ts";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 import { stopChild } from "../lib/gateway-bench-child.ts";
+import {
+  controlGatewayProfile,
+  measureGatewayCpuUsage,
+  readGatewayCpuUsage,
+  readGatewayHeapProfile,
+} from "../lib/gateway-bench-profile.ts";
 import {
   BASE_GATEWAY_BENCH_CONFIG,
   buildGatewayBenchChildArgs,
@@ -38,9 +50,47 @@ const { values } = parseArgs({
     entry: { type: "string", default: "dist/entry.js" },
     samples: { type: "string", default: "5" },
     port: { type: "string", default: "40980" },
+    fixture: { type: "string" },
+    "verify-fixture": { type: "boolean", default: false },
+    acceleration: { type: "boolean", default: false },
+    profile: { type: "string" },
+    "state-dir": { type: "string" },
+    "skip-warmup": { type: "boolean", default: false },
+    retain: { type: "boolean", default: false },
   },
 });
 assert(values.repo && values.output, "--repo and --output are required");
+assert(!values.profile || ["cpu", "heap"].includes(values.profile));
+if (values.fixture) {
+  assert(["source", "included"].includes(values.fixture));
+  await fs.mkdir(path.resolve(values.repo));
+  const fixture = path.resolve(values.repo);
+  const git = (...args: string[]) =>
+    execFileSync(
+      "git",
+      ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", "-C", fixture, ...args],
+      { stdio: "ignore" },
+    );
+  git("init", "-b", "main");
+  git("config", "user.name", "Synthetic Fixture");
+  git("config", "user.email", "fixture@example.invalid");
+  git("config", "maintenance.auto", "false");
+  const bytes = Buffer.alloc(20_000, 120);
+  for (let directory = 0; directory < 620; directory++) {
+    const root = path.join(fixture, directory < 120 ? "source" : "prepared", String(directory));
+    await fs.mkdir(root, { recursive: true });
+    for (let file = 0; file < 100; file++) {
+      bytes.writeUInt32LE(directory * 100 + file, 0);
+      await fs.writeFile(path.join(root, `${file}.bin`), bytes);
+    }
+  }
+  if (values.fixture === "included") {
+    await fs.writeFile(path.join(fixture, ".gitignore"), "prepared/\n");
+    await fs.writeFile(path.join(fixture, ".worktreeinclude"), "prepared/**\n");
+  }
+  git("add", ".");
+  git("commit", "-m", "Synthetic 62000-file provisioning fixture");
+}
 const repo = await fs.realpath(values.repo);
 const output = path.resolve(values.output);
 const samples = Number(values.samples);
@@ -64,21 +114,26 @@ await fs.writeFile(
     ...BASE_GATEWAY_BENCH_CONFIG,
     agents: { defaults: { workspace: repo } },
     plugins: { enabled: false },
-    worktreeAcceleration: false,
+    worktreeAcceleration: values.acceleration,
     logging: { level: "info", consoleLevel: "info", file: path.join(output, "runtime.log") },
   }),
 );
 const trace = path.join(output, "git-trace.jsonl");
 const gateway = spawn(
   process.execPath,
-  buildGatewayBenchChildArgs(path.resolve(values.entry), port),
+  buildGatewayBenchChildArgs(path.resolve(values.entry), port, [
+    "--import",
+    path.resolve("scripts/tsx.mjs"),
+    "--import",
+    path.resolve("scripts/lib/gateway-bench-profile-preload.ts"),
+  ]),
   {
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["ignore", "pipe", "pipe", "ipc"],
     detached: true,
     env: createGatewayBenchEnv(path.join(output, "home"), configPath, {
       startupTrace: false,
       caseEnv: {
-        OPENCLAW_STATE_DIR: path.join(output, "state"),
+        OPENCLAW_STATE_DIR: path.resolve(values["state-dir"] ?? path.join(output, "state")),
         OPENCLAW_PROFILE: `provisioning-${port}`,
         OPENCLAW_SKIP_CHANNELS: "1",
         TMPDIR: path.join(output, "tmp"),
@@ -89,8 +144,10 @@ const gateway = spawn(
   },
 );
 const log = createWriteStream(path.join(output, "gateway.log"));
-gateway.stdout.pipe(log);
-gateway.stderr.pipe(log);
+const { stdout, stderr } = gateway;
+assert(stdout && stderr, "Gateway must expose its piped output");
+stdout.pipe(log);
+stderr.pipe(log);
 let client: ReturnType<typeof createGatewayWsClient> | undefined;
 try {
   await new Promise<void>((resolve, reject) => {
@@ -101,8 +158,8 @@ try {
         resolve();
       }
     };
-    gateway.stdout.on("data", observe);
-    gateway.stderr.on("data", observe);
+    stdout.on("data", observe);
+    stderr.on("data", observe);
     gateway.once("exit", (code) => {
       clearTimeout(timeout);
       reject(new Error(`Gateway exited ${code}`));
@@ -140,8 +197,19 @@ try {
     caps: [],
   });
   const rows = [];
-  for (let index = 0; index <= samples; index++) {
+  for (let index = values["skip-warmup"] ? 1 : 0; index <= samples; index++) {
     const loadBefore = loadavg();
+    const profile = values.profile as "cpu" | "heap" | undefined;
+    const profilePath = path.join(
+      output,
+      `sample-${index}.${profile === "cpu" ? "cpuprofile" : "heapprofile"}`,
+    );
+    if (profile) {
+      await controlGatewayProfile(gateway, profile, "start", profilePath, {
+        includeCollectedObjects: true,
+      });
+    }
+    const cpuBefore = await readGatewayCpuUsage(gateway);
     const started = performance.now();
     const record = await rpc("worktrees.create", {
       repoRoot: repo,
@@ -149,10 +217,45 @@ try {
       name: `measure-${randomUUID()}`,
     });
     const elapsedMs = performance.now() - started;
+    const cpu = measureGatewayCpuUsage(cpuBefore, await readGatewayCpuUsage(gateway));
+    if (profile) {
+      await controlGatewayProfile(gateway, profile, "stop", profilePath);
+    }
     assert(isRecord(record) && typeof record.id === "string" && typeof record.path === "string");
-    const row = { warmup: index === 0, elapsedMs, loadBefore, loadAfter: loadavg() };
+    const row = {
+      warmup: index === 0,
+      elapsedMs,
+      cpu,
+      loadBefore,
+      loadAfter: loadavg(),
+      ...(profile === "heap"
+        ? {
+            sampledAllocatedBytes: readGatewayHeapProfile(profilePath, {
+              includeCollectedObjects: true,
+            }).sampledAllocatedBytes,
+          }
+        : {}),
+    };
     rows.push(row);
     console.log(JSON.stringify(row));
+    if (values.fixture || values["verify-fixture"]) {
+      for (let directory = 0; directory < 620; directory++) {
+        const relative = path.join(directory < 120 ? "source" : "prepared", String(directory));
+        assert.equal((await fs.readdir(path.join(record.path, relative))).length, 100);
+        for (let file = 0; file < 100; file++) {
+          const target = path.join(record.path, relative, `${file}.bin`);
+          const actual = await fs.readFile(target);
+          const expected = Buffer.alloc(20_000, 120);
+          expected.writeUInt32LE(directory * 100 + file, 0);
+          assert.deepEqual(actual, expected, target);
+        }
+      }
+      console.log(JSON.stringify({ verifiedFiles: 62_000, verifiedBytes: 1_240_000_000 }));
+    }
+    if (values.retain) {
+      console.log(JSON.stringify({ retained: { id: record.id, path: record.path } }));
+      continue;
+    }
     // The task-owned fixture is disposable; snapshot failures remain in the log.
     const removed = await rpc("worktrees.remove", { id: record.id, force: true });
     console.log(JSON.stringify({ cleanup: removed }));
@@ -162,7 +265,7 @@ try {
     );
   }
   const sorted = rows
-    .slice(1)
+    .filter((row) => !row.warmup)
     .map((row) => row.elapsedMs)
     .toSorted((a, b) => a - b);
   const result = {

@@ -1,4 +1,5 @@
 import type { TranscriptsStatusResult } from "@openclaw/gateway-protocol";
+import { jsonSchemaValuesEqual } from "@openclaw/normalization-core/json-schema";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { JSX } from "@solidjs/web";
@@ -166,7 +167,7 @@ export function MeetingCaptureSettings(props: SettingsProps) {
       return;
     }
     const updatedSources = [...sources()];
-    if (index !== "new" && updatedSources[index] !== editedSource) {
+    if (index !== "new" && !jsonSchemaValuesEqual(updatedSources[index], editedSource)) {
       setEditError(t("meetingCapture.sourceChanged"));
       return;
     }

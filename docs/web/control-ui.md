@@ -48,9 +48,16 @@ breakdown and Usage page explain how to request access instead of offering a
 retry that cannot succeed. Session creation and effective tool access still
 follow their separate session scopes.
 
+When a shared session's composer is disabled for your connection, it displays
+the Gateway's reason and does not fetch a slash-command catalog. Owners and
+other participants who can compose keep their session's command menu.
+
 When the Gateway starts with `OPENCLAW_CONFIG_READONLY=1` or `OPENCLAW_NIX_MODE=1`,
 its Control UI shows **Gateway configuration is read-only.** You can inspect the
 configuration there. OpenClaw refuses changes to `openclaw.json` through the Gateway.
+Use **Dismiss** to hide the banner in this browser for this Gateway. The choice
+survives page reloads. A changed notice appears again. Dismissing the banner does
+not enable configuration changes.
 
 By default, the banner tells operators to update the configuration file or
 deployment settings for this Gateway. To direct them to your own workflow, set
@@ -77,6 +84,21 @@ Closing the palette keeps its attachment draft in memory for the same Gateway
 and account. Removing the final attachment keeps new-session mode while
 instructions remain; clearing both files and instructions restores navigation.
 Reloading or leaving the app does not preserve this in-memory draft.
+
+## Choose a session workspace
+
+Open **Workspace** on New session to choose a saved project, a recent folder, or
+a repository URL. Long lists show the search field immediately; search remains
+available from the magnifying-glass button on shorter lists and stays visible
+while you scroll.
+
+Saved repositories show a repository icon and their `org/repo` identity when the
+Gateway provides it. Search matches both that identity and the project display
+name, so repositories from different organizations are easier to distinguish.
+Selecting a repository also shows its identity in the workspace control.
+Session-only connections receive the same read-safe repository identity for
+projects they can already discover, without repository URLs, credentials, or host
+checkout paths. This label does not grant access to private repository content.
 
 ## Automatic session names
 
@@ -156,6 +178,10 @@ Earlier history is offered only when the Gateway provides a cursor or a loaded t
 GitHub item URLs and repository-qualified references such as `owner/repo#126` render as compact links. Use `PR owner/repo#126` for a pull request or `issue owner/repo#126` for an issue. References identified by keywords, such as `PR #126`, remain plain text without a repository qualifier. Project display names, the checkout, the project catalog, and other messages do not supply a destination. A standalone hash token that is also a valid hexadecimal color, such as `#126`, retains its color preview without a GitHub link.
 
 GitHub polling uses conditional requests when GitHub supplies an ETag. Unchanged responses reuse parsed metadata without downloading the body again. Reuse is bounded and isolated by API endpoint and credential; every refresh still checks GitHub and the current access rules. Authenticated `304 Not Modified` responses do not consume GitHub’s primary REST rate limit.
+
+The Gateway measures link-preview and CI check-detail cache freshness using
+elapsed time. Adjusting the host's wall clock does not shorten or extend those
+cache windows; existing connection, credential, and session access scopes still apply.
 
 The cached transcript also preserves its conversation title and selected model label when the conversation is outside the saved sidebar page. You can type in the restored draft while the Gateway reconnects. The saved model control shows “Refreshing models…” and stays disabled until live catalog data arrives. Live session metadata replaces that display projection when it arrives. Reloading a full-UUID chat link can show that scoped cache while the Gateway confirms the route. Sending and restored queued messages wait for confirmation; a deleted or moved conversation replaces the cached view with the Gateway's result.
 
@@ -507,6 +533,9 @@ Detected PDFs opened from chat file links or the Files panel use the same
 browser-native preview as PDF attachments, up to 16 MiB. Preview failures and
 larger PDFs retain **Download file**. Rendering depends on your browser's PDF
 support; the generic text and image inline-preview limit is unchanged.
+Refreshing unchanged file metadata keeps the PDF reader's page and scroll
+position. The preview still reads fresh bytes and checks file access; changed
+contents reload the document, and selecting a different source replaces it.
 
 Downloads use the session's existing file-read access, including managed repository
 workspaces. Provider-backed node workspaces whose bridge only supports whole-file
