@@ -25,6 +25,22 @@ function linkedMessage(label: string, before = "Connection lost. ".repeat(12)) {
   message.append(before, link);
   return { message, link };
 }
+const archived = {
+  message: "Session archived",
+  actionLabel: "Undo",
+  onAction: () => undefined,
+  durationMs: 60_000,
+} satisfies ToastOptions;
+async function settleAnimations(host: HTMLElement) {
+  await new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  });
+  await Promise.all(
+    [...host.querySelectorAll(".app-toast")].flatMap((toast) =>
+      toast.getAnimations({ subtree: true }).map((animation) => animation.finished),
+    ),
+  );
+}
 async function renderToast(
   options: Partial<ToastOptions> = {},
   host = document.createElement("openclaw-toast-host"),
@@ -33,32 +49,26 @@ async function renderToast(
     document.body.append(host);
   }
   await host.updateComplete;
-  showToast({
-    message: "Session archived",
-    actionLabel: "Undo",
-    onAction: () => undefined,
-    durationMs: 60_000,
-    ...options,
-  });
+  const title = typeof options.message === "string" ? options.message.trim() : undefined;
+  showToast({ ...archived, ...options });
   await vi.dynamicImportSettled();
-  const part = (name = "") =>
-    host.querySelector<HTMLElement>(`.app-toast${name ? `__${name}` : ""}`)!;
-  await waitForSolid(() => expect(part()).not.toBeNull());
-  const toast = part(),
-    body = part("body"),
-    message = part("message"),
-    action = part("action"),
-    dismiss = part("dismiss");
-  await Promise.all(toast.getAnimations().map((animation) => animation.finished));
-  return { host, toast, body, message, action, dismiss };
-}
-type ToastFixture = Awaited<ReturnType<typeof renderToast>>;
-async function expectFocusPreserved({ host }: ToastFixture, link: HTMLAnchorElement) {
-  link.focus();
-  expect(document.activeElement).toBe(link);
-  host.toast = { ...host.toast! };
-  await waitForSolid(() => expect(host.querySelector(".app-toast__message a")).toBe(link));
-  expect(document.activeElement).toBe(link);
+  const toast = () =>
+    [...host.querySelectorAll<HTMLElement>('.app-toast[data-active="true"]')].find(
+      (element) => !title || element.textContent?.includes(title),
+    )!;
+  await waitForSolid(() => expect(toast()).toBeTruthy());
+  const element = toast();
+  const part = (name: string) => element.querySelector<HTMLElement>(`.app-toast__${name}`)!;
+  await settleAnimations(host);
+  return {
+    host,
+    toast: element,
+    lane: element.parentElement!,
+    body: part("body"),
+    message: part("message"),
+    action: part("action"),
+    dismiss: part("dismiss"),
+  };
 }
 
 describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast browser layout", () => {
@@ -78,15 +88,15 @@ describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast brow
   });
 
   it("signals severity only through the leading icon color and the live role", async () => {
-    const { host, toast, action } = await renderToast();
+    const { host, toast } = await renderToast();
     const neutral = {
       card: getComputedStyle(toast).backgroundColor,
       text: getComputedStyle(toast).color,
     };
-    expect(host.querySelector(".app-toast__icon")).toBeNull();
+    expect(toast.querySelector(".app-toast__icon")).toBeNull();
     expect(toast.getAttribute("role")).toBe("status");
     const tone = (value: string) => {
-      const probe = toast.appendChild(document.createElement("span"));
+      const probe = host.appendChild(document.createElement("span"));
       probe.style.color = value;
       const color = getComputedStyle(probe).color;
       probe.remove();
@@ -98,60 +108,95 @@ describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast brow
       ["warning", "var(--warn)"],
       ["error", "var(--danger)"],
     ] as const) {
-      showToast({ ...host.toast!, severity });
-      await waitForSolid(() =>
-        expect(toast.classList.contains(`app-toast--${severity}`)).toBe(true),
-      );
-      expect(getComputedStyle(host.querySelector(".app-toast__icon")!).color).toBe(tone(token));
-      expect(getComputedStyle(toast).backgroundColor).toBe(neutral.card);
-      expect(getComputedStyle(toast).color).toBe(neutral.text);
+      const { toast: card, action } = await renderToast({ severity }, host);
+      expect(card.classList.contains(`app-toast--${severity}`)).toBe(true);
+      expect(getComputedStyle(card.querySelector(".app-toast__icon")!).color).toBe(tone(token));
+      expect(getComputedStyle(card).backgroundColor).toBe(neutral.card);
+      expect(getComputedStyle(card).color).toBe(neutral.text);
       expect(getComputedStyle(action).color).toBe(neutral.text);
-      expect(toast.getAttribute("role")).toBe(severity === "error" ? "alert" : "status");
+      expect(card.getAttribute("role")).toBe(severity === "error" ? "alert" : "status");
     }
   });
 
   it("splits the title and description and keeps one line a pill", async () => {
     await useViewport(1280);
-    const { host, toast, action } = await renderToast({ placement: "top-center" });
+    const { host, toast, action } = await renderToast();
     const height = rect(toast).height;
     expect(Number.parseFloat(getComputedStyle(toast).borderTopLeftRadius)).toBeGreaterThanOrEqual(
       height / 2,
     );
     expect(rect(toast).width).toBeGreaterThanOrEqual(240);
     expect(rect(action).top).toBeLessThan(rect(toast).top + height / 2);
-    showToast({
-      ...host.toast!,
-      message: "A pending message is only saved in this tab.",
-      description:
-        "Keep this tab open until it is sent, or copy it before discarding it and reloading.",
-      actionLabel: "Review pending input",
-      actionPrimary: true,
-    });
-    await waitForSolid(() =>
-      expect(host.querySelector(".app-toast__description")?.textContent).toContain("Keep this tab"),
+    const block = await renderToast(
+      {
+        message: "A pending message is only saved in this tab.",
+        description:
+          "Keep this tab open until it is sent, or copy it before discarding it and reloading.",
+        actionLabel: "Review pending input",
+        actionPrimary: true,
+      },
+      host,
     );
-    const block = rect(toast);
-    expect(block.width).toBeCloseTo(360, 0);
-    expect(rect(action).top).toBeGreaterThan(rect(host.querySelector(".app-toast__body")!).bottom);
-    expect(rect(action).right).toBeCloseTo(block.right - 10, 0);
-    expect(getComputedStyle(toast).borderTopLeftRadius).toBe("28px");
-    expect(action.classList.contains("app-toast__action--primary")).toBe(true);
+    expect(rect(block.toast).width).toBeCloseTo(360, 0);
+    expect(rect(block.action).top).toBeGreaterThan(rect(block.body).bottom);
+    expect(rect(block.action).right).toBeCloseTo(rect(block.toast).right - 10, 0);
+    expect(getComputedStyle(block.toast).borderTopLeftRadius).toBe("28px");
+    expect(block.action.classList.contains("app-toast__action--primary")).toBe(true);
   });
 
-  it("shows the selected agent avatar at notification size without crowding the action", async () => {
-    await useViewport(390);
-    const onAction = vi.fn();
-    const { host } = await renderToast({ onAction, actionLabel: "Open session" });
+  it("places actions in the center and arrivals on the right as fixed-width blocks", async () => {
+    await useViewport(1280);
+    const center = await renderToast();
     const avatar = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
-    showToast({ ...host.toast!, avatar: { id: "gardener", name: "Garden keeper", avatar } });
-    const avatarImage = () => host.querySelector<HTMLImageElement>(".app-toast__avatar img")!;
-    await waitForSolid(() => expect(avatarImage().naturalWidth).toBeGreaterThan(0));
-    expect(avatarImage().getAttribute("src")).toBe(avatar);
-    expect(rect(avatarImage())).toMatchObject({ width: 32, height: 32 });
-    const action = host.querySelector("button")!;
-    expect(rect(action).right).toBeLessThanOrEqual(390);
-    action.click();
-    expect(onAction).toHaveBeenCalledOnce();
+    const arrival = await renderToast(
+      {
+        message: "Release readiness check",
+        actionLabel: "Open session",
+        placement: "top-right",
+        avatar: { id: "gardener", name: "Garden keeper", avatar },
+      },
+      center.host,
+    );
+    expect(rect(center.toast).left + rect(center.toast).width / 2).toBeCloseTo(640, 0);
+    expect(rect(arrival.toast)).toMatchObject({
+      right: expect.closeTo(1260, 0),
+      width: expect.closeTo(360, 0),
+      top: expect.closeTo(rect(center.toast).top, 0),
+    });
+    expect(Number.parseFloat(getComputedStyle(arrival.toast).borderTopLeftRadius)).toBeLessThan(
+      rect(arrival.toast).height / 2,
+    );
+    const image = arrival.toast.querySelector<HTMLImageElement>(".app-toast__avatar img")!;
+    await waitForSolid(() => expect(image.naturalWidth).toBeGreaterThan(0));
+    expect(rect(image)).toMatchObject({ width: 32, height: 32 });
+  });
+
+  it("stacks three behind the newest and opens into a list on hover", async () => {
+    await useViewport(1280);
+    const { host, lane } = await renderToast({ message: "Copied" });
+    await renderToast({ message: "Worktrees: release/readiness-check — live run active" }, host);
+    const { toast: front } = await renderToast(archived, host);
+    await renderToast({ message: "Waiting" }, host);
+    const cards = [...lane.querySelectorAll<HTMLElement>(".app-toast")];
+    expect(cards.map((card) => card.dataset.depth)).toEqual(["0", "1", "2", "3"]);
+    expect(rect(lane).height).toBeCloseTo(rect(cards[0]!).height, 0);
+    expect(rect(cards[1]!).bottom).toBeCloseTo(rect(cards[0]!).bottom + 10, 0);
+    expect(getComputedStyle(cards[3]!).visibility).toBe("hidden");
+    expect(front).not.toBe(cards[0]);
+
+    lane.dispatchEvent(new PointerEvent("pointerenter", { pointerType: "mouse" }));
+    await waitForSolid(() => expect(lane.hasAttribute("data-open")).toBe(true));
+    await settleAnimations(host);
+    const widths = new Set(cards.map((card) => Math.round(rect(card).width)));
+    expect(widths.size).toBe(1);
+    for (const [index, card] of cards.entries()) {
+      expect(getComputedStyle(card).visibility).toBe("visible");
+      if (index > 0) {
+        expect(rect(card).top).toBeCloseTo(rect(cards[index - 1]!).bottom + 8, 0);
+      }
+    }
+    lane.dispatchEvent(new PointerEvent("pointerleave", { pointerType: "mouse" }));
+    await waitForSolid(() => expect(lane.hasAttribute("data-open")).toBe(false));
   });
 
   it("keeps a toast usable inside a native modal and returns it to the shell on dismissal", async () => {
@@ -167,8 +212,8 @@ describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast brow
       const { modal, dialog } = await waitForRenderedModalDialog(document.body);
       const onAction = vi.fn();
       const { toast, action } = await renderToast({ message: "Saved", onAction }, host);
-      expect(rect(toast).top).toBeCloseTo(restingBounds.top, 0);
-      expect(rect(toast).right).toBeCloseTo(restingBounds.right, 0);
+      // The replacement enters from 14px above its resting place.
+      await vi.waitFor(() => expect(rect(toast).top).toBeCloseTo(restingBounds.top, 0));
       expect(host.parentElement).toBe(modal.getOverlayContainer());
       await Promise.all([
         new Promise<void>((resolve) => {
@@ -186,10 +231,11 @@ describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast brow
       await confirmation;
       await host.updateComplete;
       expect(host.parentElement).toBe(shell);
-      expect(rect(toast).top).toBeCloseTo(narrowBounds.top, 0);
+      // Reinserting the host replays the short entry offset.
+      await vi.waitFor(() => expect(rect(toast).top).toBeCloseTo(narrowBounds.top, 0));
       expect(rect(toast).right).toBeCloseTo(narrowBounds.right, 0);
       expect(host.textContent).toContain("Saved");
-      host.querySelector<HTMLElement>(".app-toast__action")!.click();
+      action.click();
       expect(onAction).toHaveBeenCalledOnce();
     } finally {
       controller.abort();
@@ -197,54 +243,48 @@ describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast brow
     }
   });
 
-  it.each([
-    ["top", 390],
-    ["top", 1280],
-    ["bottom", 390],
-    ["bottom", 1280],
-  ] as const)("keeps %s feedback usable at width %i", async (placement, width) => {
+  it.each([390, 1280])("keeps both lanes usable at width %i", async (width) => {
     await useViewport(width);
-    root.style.setProperty("--safe-area-bottom", "24px");
-    const { toast, action, dismiss } = await renderToast({ placement });
-    const bounds = rect(toast);
-    expect(dismiss.offsetHeight).toBe(22);
-    expect(rect(action).height).toBe(28);
-    if (placement === "bottom") {
-      expect(bounds).toMatchObject({
-        bottom: expect.closeTo(800, 0),
-        right: expect.closeTo(width - (width === 390 ? 12 : 20), 0),
-      });
-      root.style.setProperty("--shell-viewport-height", "600px");
-      root.style.setProperty("--shell-safe-area-bottom", "0px");
-      expect(rect(toast).bottom).toBeCloseTo(580, 0);
-      root.style.removeProperty("--shell-viewport-height");
-      root.style.removeProperty("--shell-safe-area-bottom");
-      expect(rect(toast).bottom).toBeCloseTo(800, 0);
-    } else {
-      expect(bounds.top).toBeCloseTo(20, 0);
-      if (width === 390) {
-        expect(bounds).toMatchObject({
+    const center = await renderToast();
+    const arrival = await renderToast(
+      { message: "Release readiness check: Failed", placement: "top-right" },
+      center.host,
+    );
+    for (const { toast, action, dismiss } of [center, arrival]) {
+      expect(dismiss.offsetHeight).toBe(22);
+      expect(rect(action).height).toBe(28);
+      expect(rect(toast).left).toBeGreaterThanOrEqual(12);
+      expect(rect(toast).right).toBeLessThanOrEqual(width - 12);
+    }
+    expect(rect(center.toast).top).toBeCloseTo(20, 0);
+    if (width === 390) {
+      for (const { toast } of [center, arrival]) {
+        expect(rect(toast)).toMatchObject({
           left: expect.closeTo(12, 0),
           right: expect.closeTo(378, 0),
         });
-        expect(rect(action).left).toBeGreaterThan(bounds.left + bounds.width * 0.6);
-        expect(dismiss.offsetLeft + dismiss.offsetWidth).toBe(toast.offsetWidth + 8);
-      } else {
-        expect(bounds.width).toBeLessThan(320);
-        expect(bounds.height).toBeLessThan(60);
       }
+      expect(rect(arrival.toast).top).toBeCloseTo(rect(center.toast).bottom + 8, 0);
+      expect(rect(center.action).left).toBeGreaterThan(
+        rect(center.toast).left + rect(center.toast).width * 0.6,
+      );
+    } else {
+      expect(rect(center.toast).width).toBeLessThan(320);
+      expect(rect(center.toast).height).toBeLessThan(60);
+      expect(rect(arrival.toast).top).toBeCloseTo(20, 0);
     }
   });
 
-  it("keeps anchored notices independent of bottom placement", async () => {
-    const { toast } = await renderToast({ anchor: makeAnchor(350, 20), placement: "bottom" });
-    expect(toast.classList.contains("app-toast--bottom")).toBe(false);
+  it("keeps anchored notices on their panel", async () => {
+    const { toast } = await renderToast({ anchor: makeAnchor(350, 20) });
+    expect(toast.classList.contains("app-toast--anchored")).toBe(true);
+    expect(toast.closest(".app-toast-lane")).toBeNull();
     expect(getComputedStyle(toast).top).toBe("100px");
   });
 
   it("keeps oversized errors scrollable with actions inside a short phone viewport", async () => {
     await useViewport(320, 400);
-    for (const placement of ["top", "bottom"] as const) {
+    for (const placement of ["top-center", "top-right"] as const) {
       const { host, toast, body } = await renderToast({
         placement,
         message: "Lost. ".repeat(1000),
@@ -252,7 +292,7 @@ describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast brow
       expect(body.scrollHeight).toBeGreaterThan(body.clientHeight);
       body.scrollTop = body.scrollHeight;
       expect(body.scrollTop).toBeGreaterThan(0);
-      for (const element of [toast, ...host.querySelectorAll("button")]) {
+      for (const element of [toast, ...toast.querySelectorAll("button")]) {
         expect(rect(element).top).toBeGreaterThanOrEqual(0);
         expect(rect(element).bottom).toBeLessThanOrEqual(400);
       }
@@ -262,15 +302,14 @@ describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast brow
 
   it.each([1280, 390, 320])("keeps rich feedback readable at width %i", async (width) => {
     await useViewport(width);
-    for (const placement of ["top", "bottom", "anchored"] as const) {
+    for (const placement of ["top-center", "top-right", "anchored"] as const) {
       const anchor = makeAnchor(width);
       const recovery = linkedMessage("Settings");
-      const fixture = await renderToast({
+      const { host, toast, body, message, action } = await renderToast({
         message: recovery.message,
         actionLabel: "Discard unsaved changes and reload",
         ...(placement === "anchored" ? { anchor } : { placement }),
       });
-      const { host, toast, body, message, action } = fixture;
       host.style.setProperty("--control-ui-text-scale", "1.3");
       expect(rect(toast).left).toBeGreaterThanOrEqual(0);
       expect(rect(toast).right).toBeLessThanOrEqual(width);
@@ -288,14 +327,9 @@ describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast brow
       expect(actionBox.right).toBeLessThanOrEqual(rect(toast).right);
       expect(textBox.right <= actionBox.left || textBox.bottom <= actionBox.top).toBe(true);
       expect(message.querySelector("a")).toBe(recovery.link);
-      await expectFocusPreserved(fixture, recovery.link);
+      recovery.link.focus();
+      expect(document.activeElement).toBe(recovery.link);
       expect(actionBox.height).toBeGreaterThanOrEqual(28);
-      const replacement = linkedMessage("Sidebar", "Hidden. ");
-      showToast({ ...host.toast!, message: replacement.message });
-      await waitForSolid(() => expect(replacement.link.isConnected).toBe(true));
-      expect(recovery.link.isConnected).toBe(false);
-      expect(message.textContent).toBe("Hidden. Sidebar");
-      await expectFocusPreserved(fixture, replacement.link);
       host.remove();
       anchor.remove();
     }

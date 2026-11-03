@@ -18,7 +18,6 @@ registerEnglishCatalog(registerSettingsEnglish);
 
 export function showProfileActionError(error: unknown): void {
   showToast({
-    placement: "bottom",
     message: modelProviderErrorMessage(error),
     severity: "warning",
     durationMs: 12_000,
@@ -27,7 +26,6 @@ export function showProfileActionError(error: unknown): void {
 
 export function showProfileLogoutSuccess(warning?: string): void {
   showToast({
-    placement: "bottom",
     message: [t("modelProviders.logout.done"), warning].filter(Boolean).join(" "),
     severity: "success",
   });

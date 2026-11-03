@@ -71,7 +71,6 @@ export class PaletteReleasedStarts {
       .slice(0, Math.max(0, failed.length + 1 - MAX_FAILED_STARTS))
       .forEach((start) => this.retire(start));
     showToast({
-      fifo: true,
       message: t("palette.startFailed", { error }),
       actionLabel: t("palette.tryAgain"),
       onAction: () => this.retry(slot),
