@@ -21,6 +21,7 @@
     }
   },
   "contracts": {
+    "embeddingProviders": ["clawrouter"],
     "mediaUnderstandingProviders": ["clawrouter"],
     "imageGenerationProviders": ["clawrouter"],
     "speechProviders": ["clawrouter"],
