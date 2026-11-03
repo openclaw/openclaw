@@ -21,7 +21,7 @@ import { chatStartupStatusLabel } from "./chat-run-startup.ts";
 import { createComposerQuestions } from "./components/chat-composer-questions.ts";
 import { ChatComposer, resetChatComposerState } from "./components/chat-composer.tsx";
 import { MessageMarkdown } from "./components/chat-message-text-view.tsx";
-import { ChatPaneHeader, ChatPaneIncognitoNotice } from "./components/chat-pane-header.tsx";
+import { ChatPaneHeader } from "./components/chat-pane-header.tsx";
 import type { ChatPaneHeaderProps } from "./components/chat-pane-header.types.ts";
 import { ChatPaneMobileHeader } from "./components/chat-pane-mobile-header.tsx";
 import { ChatWorkingIndicator } from "./components/chat-working-indicator.tsx";
@@ -300,9 +300,6 @@ function PendingSessionCreateContent(
                 </button>
               }
             />
-            <Show when={view().header.incognito}>
-              <ChatPaneIncognitoNotice />
-            </Show>
           </Show>
         </div>
         <section class="chat" data-region="main" aria-busy={view().submitting ? "true" : "false"}>

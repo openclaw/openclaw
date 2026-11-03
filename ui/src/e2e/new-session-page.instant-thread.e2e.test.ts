@@ -196,9 +196,12 @@ suite.define(() => {
             header,
             page.locator(".chat-group.user .chat-bubble"),
           ]);
-          for (const selector of [".chat-pane__incognito", ".chat-pane__incognito-notice"]) {
-            expect(await page.locator(selector).isVisible()).toBe(incognito);
-          }
+          expect(await page.locator(".chat-pane__actions .chat-pane__incognito").isVisible()).toBe(
+            incognito,
+          );
+          expect(await page.locator('.agent-chat__input[data-incognito="true"]').isVisible()).toBe(
+            incognito,
+          );
           for (const [selector, target, pending] of [
             ["header", header, pendingHeader],
             [

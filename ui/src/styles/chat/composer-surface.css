@@ -289,6 +289,21 @@
     0 2px 4px rgb(0 0 0 / 6%);
 }
 
+/* Incognito belongs to the session, so it frames the whole composer: a dashed
+   edge says "this box keeps nothing" without borrowing a warning or accent
+   color. Light mode draws its resting edge as a box-shadow ring, so the ring is
+   dropped here in favor of a real dashed border in every theme and focus state. */
+:root .agent-chat__input[data-incognito="true"],
+:root
+  .agent-chat__input[data-incognito="true"]:has(
+    .agent-chat__composer-combobox > :is(textarea, input):focus
+  ) {
+  border-style: dashed;
+  /* Same edge as the /new Incognito composer, so sending keeps the frame. */
+  border-color: color-mix(in srgb, var(--text-strong) 22%, transparent);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 5%);
+}
+
 :root[data-theme-mode="light"] .agent-chat__input--dictating,
 :root[data-theme-mode="light"] .agent-chat__input--dictating:focus-within {
   border-color: transparent;

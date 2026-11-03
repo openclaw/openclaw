@@ -53,21 +53,6 @@ export function PaneHeaderView(props: ChatPaneHeaderPresentation) {
   );
 }
 
-/** Incognito limits under the session header; the pending header shows the same notice. */
-export function ChatPaneIncognitoNotice() {
-  return (
-    <aside class="chat-pane__incognito-notice" aria-label={t("sessionsView.incognitoLabel")}>
-      <span class="chat-pane__incognito-notice-icon" aria-hidden="true">
-        <Icon name="incognito" />
-      </span>
-      <div>
-        <p>{t("sessionsView.incognitoDescription")}</p>
-        <p class="chat-pane__incognito-limits">{t("sessionsView.incognitoLimits")}</p>
-      </div>
-    </aside>
-  );
-}
-
 function DetailsGlyph() {
   return (
     <StrokeIcon stroke-width="1.6" aria-hidden="true">
@@ -94,8 +79,6 @@ export function ChatPaneHeader(props: ChatPaneHeaderProps) {
     props.setDashboardControls?.(dashboardControls);
     return () => props.setDashboardControls?.(undefined);
   });
-  const incognito = () =>
-    (props.incognito ?? props.session?.incognito) || isIncognitoSessionKey(props.session?.key);
   const Details = (detailsProps: {
     placement: Parameters<typeof ChatPanePlacement>[0];
     onOpenMachine: () => void;
@@ -135,21 +118,14 @@ export function ChatPaneHeader(props: ChatPaneHeaderProps) {
       </Show>
     );
   };
-  const notice = (
-    <Show when={incognito()}>
-      <ChatPaneIncognitoNotice />
-    </Show>
-  );
   return (
     <ChatPaneMobileComposition
       header={props}
       details={Details}
-      notice={notice}
       fallback={(sessionMenu, machineName, mountedDetails) => (
         <ChatPaneHeaderChrome
           {...props}
           details={mountedDetails}
-          notice={notice}
           sessionMenu={sessionMenu}
           machineName={machineName()}
         />
@@ -162,7 +138,6 @@ export function ChatPaneHeader(props: ChatPaneHeaderProps) {
 function ChatPaneHeaderChrome(
   props: ChatPaneHeaderProps & {
     details: Element;
-    notice: Element;
     sessionMenu: Element;
     machineName?: string;
   },
@@ -208,20 +183,6 @@ function ChatPaneHeaderChrome(
                 open={props.navDrawerOpen ?? false}
                 status={props.gatewayStatus?.kind}
               />
-            </openclaw-tooltip>
-          </Show>
-          <Show when={incognito()}>
-            <openclaw-tooltip
-              prop:content={t("sessionsView.incognitoDescription")}
-              placement="bottom"
-              prop:openOnClick={true}
-            >
-              <button type="button" class="chat-pane__incognito">
-                <span aria-hidden="true">
-                  <Icon name="incognito" />
-                </span>
-                {t("sessionsView.incognitoLabel")}
-              </button>
             </openclaw-tooltip>
           </Show>
           {/* Roster mode has no session crumbs beside the agent pill; rename still edits inline. */}
@@ -420,6 +381,21 @@ function ChatPaneHeaderChrome(
               <RunningSubagents count={props.runningSubagentCount} />
             </Show>
             <Show when={props.runAction}>{(action) => <PaneSubagentStop {...action()} />}</Show>
+            <Show when={incognito()}>
+              <openclaw-tooltip
+                prop:content={t("sessionsView.incognitoDescription")}
+                placement="bottom"
+                prop:openOnClick={true}
+              >
+                <button
+                  type="button"
+                  class="btn btn--ghost btn--icon chat-icon-btn chat-pane__incognito"
+                  aria-label={t("sessionsView.incognitoLabel")}
+                >
+                  <Icon name="incognito" />
+                </button>
+              </openclaw-tooltip>
+            </Show>
             <Show when={!props.mergedChrome}>
               <Show when={props.presence}>
                 {(presence) => <PaneHeaderPresence {...presence()} />}
@@ -511,7 +487,6 @@ function ChatPaneHeaderChrome(
           <RunningSubagents count={props.runningSubagentCount} />
         </Show>
       </div>
-      {props.notice}
     </>
   );
 }
