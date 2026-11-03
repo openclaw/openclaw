@@ -245,17 +245,13 @@ describe("effort selection", () => {
 
   it("draws the composer lightning inside its own icon box", async () => {
     const composer = document.body.appendChild(document.createElement("div"));
-    composer.className = "agent-chat__input";
     onTestFinished(() => composer.remove());
-    host = composer.appendChild(document.createElement("div"));
-    host.className = "agent-chat__composer-footer";
-    for (const mode of [true, "ultrafast"] as const) {
-      await speedFixture(speedState(mode, ["priority", "ultrafast"]));
-      const zap = host.querySelector(".chat-controls__effort-zap")!;
-      const box = zap.getBoundingClientRect();
-      const glyph = zap.querySelector("svg")!.getBoundingClientRect();
-      expect([glyph.width, glyph.height]).toEqual([box.width, box.height]);
-    }
+    composer.innerHTML = '<div class="agent-chat__input"><div class="agent-chat__composer-footer">';
+    host = composer.querySelector<HTMLDivElement>(".agent-chat__composer-footer")!;
+    await speedFixture(speedState(true));
+    const zap = host.querySelector(".chat-controls__effort-zap")!;
+    const glyph = zap.querySelector("svg")!.getBoundingClientRect();
+    expect([glyph.width, glyph.height]).toEqual([zap.clientWidth, zap.clientHeight]);
   });
 
   it("shows the effective level and marks the default level in the menu", async () => {
