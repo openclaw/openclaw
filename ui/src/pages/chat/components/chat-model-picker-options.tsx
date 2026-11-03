@@ -16,7 +16,6 @@ import {
   type ChatModelPickerOptionProps,
   type ChatModelPickerTargetOptionProps,
 } from "./chat-model-picker-options.ts";
-import { handleModelOptionMouseEnter } from "./chat-model-picker-search-view.ts";
 import { ChatModelSearchContext, type ChatModelSearchRow } from "./chat-model-picker-search.ts";
 
 function ModelCooldown(props: { until: number }) {
@@ -55,6 +54,17 @@ function ModelShortcut(props: { rowKey: string }) {
 
 export function ChatModelProviderIcon(props: { provider: string }) {
   return <ProviderBrandIcon provider={props.provider} class="chat-controls__provider-icon" />;
+}
+
+export function ChatModelTargetIcon() {
+  return (
+    <span
+      class="chat-controls__provider-icon provider-brand-icon provider-brand-icon--fallback"
+      aria-hidden="true"
+    >
+      ›
+    </span>
+  );
 }
 
 type ModelPresentationProps = Omit<ChatModelPickerOptionProps, "onSelect" | "index">;
@@ -155,13 +165,14 @@ function ModelOptionButton(
       class={[
         "chat-controls__inline-select-option chat-controls__model-option",
         {
-          "chat-controls__inline-select-option--selected": props.presentation.selected,
+          "chat-controls__inline-select-option--selected":
+            props.presentation.selected && !props.presentation.needsAuth,
         },
       ]}
       data-chat-model-option={props.entry.value}
       data-chat-model-key={key()}
       data-chat-model-rank={rank()}
-      data-chat-model-highlighted={highlighted() ? "" : undefined}
+      data-chat-model-highlighted={highlighted() && !props.presentation.needsAuth ? "" : undefined}
       style={{ "--chat-model-rank": rank() }}
       data-chat-model-runtime={props.entry.agentRuntime ?? undefined}
       data-chat-model-default={props.entry.isDefault ? "true" : undefined}
@@ -194,7 +205,6 @@ function ModelOptionButton(
         Boolean(props.entry.disabled && !props.presentation.resetsPin)
       }
       data-chat-model-auth-blocked={props.presentation.needsAuth ? "" : undefined}
-      onMouseEnter={handleModelOptionMouseEnter}
       onClick={(event) => {
         props.onSelect(props.entry, event);
       }}
@@ -219,21 +229,23 @@ function ModelOptionButton(
           >
             {(until) => <ModelCooldown until={until()} />}
           </Show>
-          <Show when={props.presentation.modelMeta}>
-            <span class="chat-controls__model-option-meta">{props.presentation.modelMeta}</span>
-          </Show>
           <Show when={props.entry.supportsTools === false}>
             <span class="chat-controls__model-chat-only-info" aria-hidden="true">
               <Icon name="info" />
             </span>
           </Show>
+          <Show when={props.presentation.modelMeta}>
+            <span class="chat-controls__model-option-meta">{props.presentation.modelMeta}</span>
+          </Show>
         </span>
       </span>
       <span class="chat-controls__model-option-action">
-        <Show when={props.presentation.selected} fallback={<ModelShortcut rowKey={key()} />}>
-          <span class="chat-controls__inline-select-check" aria-hidden="true">
-            <Icon name="check" />
-          </span>
+        <Show when={!props.presentation.needsAuth}>
+          <Show when={props.presentation.selected} fallback={<ModelShortcut rowKey={key()} />}>
+            <span class="chat-controls__inline-select-check" aria-hidden="true">
+              <Icon name="check" />
+            </span>
+          </Show>
         </Show>
       </span>
     </button>
@@ -281,14 +293,13 @@ export function ChatModelPickerTargetOption(props: ChatModelPickerTargetOptionPr
       aria-selected="false"
       type="button"
       disabled={props.disabled}
-      onMouseEnter={handleModelOptionMouseEnter}
       onClick={(event) => props.onSelect(props.groupId, props.entry.value, event)}
     >
       <span
         class="chat-controls__model-option-provider chat-controls__target-icon"
         aria-hidden="true"
       >
-        <Icon name="terminal" />
+        <ChatModelTargetIcon />
       </span>
       <span class="chat-controls__model-option-copy">
         <span class="chat-controls__model-option-title">

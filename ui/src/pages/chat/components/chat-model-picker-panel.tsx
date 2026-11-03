@@ -356,6 +356,20 @@ export function ChatModelPickerPanel(panel: {
   const renderCatalogStatus = createMemo(
     () => panel.params.renderModelCatalogStatus ?? renderDirect,
   );
+  function CatalogStatus() {
+    return (
+      <>
+        {renderCatalogStatus()(() => (
+          <ChatModelCatalogState
+            state={panel.params.modelCatalogState}
+            hasOptions={modelOptions().length > 0}
+            hasSelectableOptions={state().hasSelectableModelOptions}
+            onModelSetup={onModelSetup()}
+          />
+        ))}
+      </>
+    );
+  }
   function TargetOptions(props: { group: ChatModelPickerTargetGroup }) {
     const options = createMemo(() => props.group.completion.promise);
     return (
@@ -443,8 +457,16 @@ export function ChatModelPickerPanel(panel: {
     const auth = () => panel.params.providerAuth?.get(canonicalModelAuthProviderId(props.provider));
     const authKind = () => auth()?.kind;
     const showAuth = () => Boolean(auth());
-    const authLabel = () =>
-      showAuth() ? [auth()?.label, auth()?.detail].filter(Boolean).join(" · ") : undefined;
+    const authLabel = () => (showAuth() ? auth()?.label : undefined);
+    const authHelp = () =>
+      [
+        auth()?.detail,
+        props.lead[0]?.expiryLabel
+          ? t("modelProviders.expiresIn", { time: props.lead[0]!.expiryLabel! })
+          : undefined,
+      ]
+        .filter(Boolean)
+        .join("\n");
     return (
       <section
         class="chat-controls__provider-model-group"
@@ -456,16 +478,10 @@ export function ChatModelPickerPanel(panel: {
             <span class="chat-controls__provider-label">{providerLabel()}</span>
             {showAuth() ? (
               <span class="chat-controls__auth-meta" data-auth-kind={authKind()}>
-                <openclaw-tooltip
-                  prop:content={
-                    props.lead[0]?.expiryLabel
-                      ? t("modelProviders.expiresIn", { time: props.lead[0]!.expiryLabel! })
-                      : ""
-                  }
-                >
+                <openclaw-tooltip prop:content={authHelp()}>
                   <span
                     class="chat-controls__auth-meta-label"
-                    tabindex={props.lead[0]?.expiryLabel ? 0 : undefined}
+                    tabindex={authHelp() ? 0 : undefined}
                   >
                     {authKind() === "api" ? t("modelProviders.status.apiKey") : authLabel()}
                   </span>
@@ -575,14 +591,7 @@ export function ChatModelPickerPanel(panel: {
               ) : undefined}
             </div>
           ) : undefined}
-          {renderCatalogStatus()(() => (
-            <ChatModelCatalogState
-              state={panel.params.modelCatalogState}
-              hasOptions={modelOptions().length > 0}
-              hasSelectableOptions={state().hasSelectableModelOptions}
-              onModelSetup={onModelSetup()}
-            />
-          ))}
+          {!state().hasOptions ? <CatalogStatus /> : undefined}
           {state().hasOptions ? (
             <>
               <div class="chat-controls__model-browser">
@@ -629,12 +638,6 @@ export function ChatModelPickerPanel(panel: {
                             >
                               {renderRow(`heading:target:${id()}`, () => (
                                 <div class="chat-controls__provider-heading">
-                                  <span
-                                    class="chat-controls__provider-icon chat-controls__target-icon"
-                                    aria-hidden="true"
-                                  >
-                                    <Icon name="terminal" />
-                                  </span>
                                   <span>{group().label}</span>
                                 </div>
                               ))}
@@ -661,6 +664,7 @@ export function ChatModelPickerPanel(panel: {
                   <Show when={activeAuth()}>
                     {(auth) => <ChatModelAuthState state={auth()} onSetup={onModelSetup()} />}
                   </Show>
+                  <CatalogStatus />
                 </div>
               </div>
               <ChatModelSettings

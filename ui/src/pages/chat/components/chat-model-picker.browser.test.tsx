@@ -78,6 +78,11 @@ function mountPicker(optionsReady = true) {
     await new Promise(requestAnimationFrame);
     if (picker.open) {
       await waitForModelMenu(picker);
+      if (params.modelOptions.length) {
+        await waitForSolid(() =>
+          expect(picker.querySelector("[data-chat-model-option]")).not.toBeNull(),
+        );
+      }
     }
   };
   const open = () => toggle(() => page.getByText("Alpha", { exact: true }).first().click());
@@ -443,6 +448,8 @@ it("windows a large catalog while keeping keyboard choices and accessible positi
     const clip = viewport.getBoundingClientRect();
     expect(bounds.top).toBeGreaterThanOrEqual(clip.top);
     expect(bounds.bottom).toBeLessThanOrEqual(clip.bottom);
+    const heading = container.querySelector<HTMLElement>("[data-chat-model-heading]")!;
+    expect(heading.getBoundingClientRect().top).toBe(clip.top);
     expect(rows().length).toBeLessThan(40);
   });
   search.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
@@ -464,4 +471,58 @@ it("windows a large catalog while keeping keyboard choices and accessible positi
   expect(search.getAttribute("aria-activedescendant")).toBe(rows()[0]?.id);
   search.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   expect(params.onModelSelect).toHaveBeenCalledWith("example/model-999", "main", undefined);
+});
+
+it("keeps the complete model panel above the composer", async () => {
+  await page.viewport(1280, 900);
+  container.style.cssText =
+    "position:fixed;bottom:16px;right:16px;width:min(600px, calc(100vw - 32px))";
+  const { toggle, trigger, picker, composer } = mountPicker();
+  try {
+    await toggle(async () => trigger.click());
+    const menu = picker.querySelector<HTMLElement>(".chat-controls__model-menu")!;
+    const surface = picker.querySelector<HTMLElement>(".chat-picker-overlay")!;
+    await vi.waitFor(() => {
+      const panel = menu.getBoundingClientRect();
+      const bounds = surface.getBoundingClientRect();
+      expect(bounds.bottom).toBeLessThanOrEqual(
+        composer.parentElement!.parentElement!.getBoundingClientRect().top - 8,
+      );
+      expect(panel.bottom).toBeLessThanOrEqual(bounds.bottom);
+      expect(menu.scrollHeight).toBeLessThanOrEqual(menu.clientHeight);
+      expect(option("example/beta").getBoundingClientRect().bottom).toBeLessThanOrEqual(
+        panel.bottom - 8,
+      );
+    });
+    const beta = option("example/beta");
+    const background = getComputedStyle(beta).backgroundColor;
+    const highlighted = getSearch().getAttribute("aria-activedescendant");
+    await page.getByText("Beta", { exact: true }).hover();
+    expect(getComputedStyle(beta).backgroundColor).toBe(background);
+    expect(getSearch().getAttribute("aria-activedescendant")).toBe(highlighted);
+  } finally {
+    container.removeAttribute("style");
+  }
+});
+
+it("places provider recovery below the disabled model rows", async () => {
+  const { params, update, open, picker } = mountPicker();
+  params.modelOptions = params.modelOptions.map((entry) => ({
+    ...entry,
+    disabled: true,
+    unavailableReason: "auth-failed",
+  }));
+  params.onModelSetup = vi.fn();
+  update();
+  await open();
+  await vi.waitFor(() => {
+    const state = picker.querySelector<HTMLElement>("[data-chat-model-auth-state]")!;
+    const rows = [...picker.querySelectorAll<HTMLElement>("[data-chat-model-option]")];
+    expect(state.getBoundingClientRect().top).toBeGreaterThanOrEqual(
+      Math.max(...rows.map((row) => row.getBoundingClientRect().bottom)),
+    );
+    expect(state.querySelector("button")!.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+      picker.querySelector(".chat-picker-overlay")!.getBoundingClientRect().bottom - 8,
+    );
+  });
 });

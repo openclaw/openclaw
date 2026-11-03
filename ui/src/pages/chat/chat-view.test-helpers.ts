@@ -57,7 +57,8 @@ export async function renderChatModelControls(
   if (renderProps.modelPickerOpen) {
     // The first open compiles the lazy panel under the full CI shard's load.
     await waitForSolid(
-      () => expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
+      () =>
+        expect(container.querySelector(".chat-controls__model-menu[aria-label]")).not.toBeNull(),
       { timeout: 5_000 },
     );
   }

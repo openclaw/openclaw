@@ -180,7 +180,7 @@ it("keeps Anthropic runtime choices under one provider tab", async () => {
     selectedModelValue: "anthropic/claude-opus-4-8",
     triggerModelLabel: "claude-opus-4-8",
     providerAuth: new Map<string, ModelProviderAuthLabel>([
-      ["anthropic", { kind: "subscription", label: "Claude Max" }],
+      ["anthropic", { kind: "subscription", label: "Claude Max", detail: "you@example.com" }],
     ]),
   });
   await waitForMenu(container);
@@ -335,6 +335,7 @@ it.each(["missing-auth", "auth-failed"] as const)(
         option("openai", "one", { disabled: true, unavailableReason }),
         option("openai", "two", { disabled: true, unavailableReason }),
       ],
+      selectedModelValue: "openai/one",
       modelCatalogState: { hasSnapshot: true, status: "ready" },
       onModelSetup,
       onModelSelect,
@@ -343,6 +344,11 @@ it.each(["missing-auth", "auth-failed"] as const)(
     const rows = [...container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]")];
     expect(rows).toHaveLength(2);
     expect(rows.every((row) => row.disabled)).toBe(true);
+    expect(rows[0]!.classList.contains("chat-controls__inline-select-option--selected")).toBe(
+      false,
+    );
+    expect(rows[0]!.hasAttribute("data-chat-model-highlighted")).toBe(false);
+    expect(rows[0]!.querySelector(".chat-controls__inline-select-check")).toBeNull();
     rows[0]!.click();
     expect(onModelSetup).not.toHaveBeenCalled();
     expect(onModelSelect).not.toHaveBeenCalled();
@@ -358,7 +364,7 @@ it("renders the Claude login command as code and omits the redundant empty restr
     open: true,
     modelOptions: [
       option("anthropic", "claude", {
-        agentRuntimeId: "claude-cli",
+        agentRuntime: "claude-cli",
         disabled: true,
         unavailableReason: "missing-auth",
       }),
