@@ -9,6 +9,7 @@
  * --resume measures selection and terminal settlement; model admission is counted only.
  * It reseeds four predecessor runs and eight older orphans before each measured call.
  * --markers instead marks the four eligible rows to measure graceful marker precedence.
+ * Both arms expect four resumes; --baseline-resumes 12 measures the retired orphan policy.
  * The context provides only preparation's configuration; returned admission work is
  * never invoked unless --resume is selected. Neither mode measures Gateway readiness.
  * Process CPU includes workers; sampled allocation covers only the host isolate.
@@ -38,6 +39,7 @@ const { values } = parseArgs({
     seed: { type: "boolean" },
     resume: { type: "boolean" },
     markers: { type: "boolean" },
+    "baseline-resumes": { type: "string", default: "4" },
   },
 });
 assert(values.root && values.baseline && values.output && global.gc);
@@ -49,6 +51,13 @@ const iterations = parseStrictIntegerOption({
   min: 1,
   fallback: 10,
 });
+const baselineResumes = parseStrictIntegerOption({
+  raw: values["baseline-resumes"],
+  label: "--baseline-resumes",
+  min: 1,
+  fallback: 4,
+});
+assert(baselineResumes <= 12, "--baseline-resumes cannot exceed the 12 seeded runs");
 const root = path.resolve(values.root);
 const fixture = JSON.parse(readFileSync(path.join(root, "fixture.json"), "utf8"));
 assert.equal(fixture.format, "openclaw-session-read-transactions-v1");
@@ -304,8 +313,9 @@ try {
           }).length
         : undefined;
       if (values.resume) {
-        assert.equal(resumedPerCall, arm === 0 || values.control ? 12 : 4);
-        assert.equal(settledStaleRuns, arm === 0 || values.control ? 0 : 8);
+        const expectedResumes = arm === 0 || values.control ? baselineResumes : 4;
+        assert.equal(resumedPerCall, expectedResumes);
+        assert.equal(settledStaleRuns, 12 - expectedResumes);
       }
       samples.push({
         pair,
@@ -333,6 +343,7 @@ try {
         mode: values.allocation ? "allocation" : "timing",
         control: values.control ?? false,
         iterations,
+        baselineResumes,
         coldFirstArmMs: coldMs,
         fixture,
         sourceHashes: sources.map((source) => createHash("sha256").update(source).digest("hex")),

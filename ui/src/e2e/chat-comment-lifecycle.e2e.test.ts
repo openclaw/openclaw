@@ -78,7 +78,7 @@ async function selectText(text: Locator) {
 
 async function addComment(page: Page, source: Locator, comment: string) {
   await selectText(source);
-  await button(page.getByRole("toolbar", { name: "Selection actions" }), "Add to chat").click();
+  await button(page.getByRole("toolbar", { name: "Selection actions" }), "Add to message").click();
   const editor = page.getByRole("dialog", { name: "Comment", exact: true });
   await editor.getByRole("textbox").fill(comment);
   await editor.getByRole("textbox").press("Enter");

@@ -1,6 +1,9 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { SESSION_ROWS_DELTA_PREFIX } from "../../packages/gateway-protocol/src/session-row-fields.js";
+import * as processes from "../agents/bash-process-registry.js";
+import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
+import { resetProcessRegistryForTests } from "../agents/bash-process-registry.test-support.js";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { publishSubagentRunChanges } from "../agents/subagents/registry/subagent-registry-publication.js";
@@ -53,6 +56,37 @@ import { listProjectedSessions } from "./session-utils-list.js";
 import { createRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it("reads background processes once per presentation and refreshes counts after exit", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const keys = ["agent:main:process-a", "agent:main:process-b"];
+    keys.forEach((key, i) => seedRow(key, { sessionId: `process-${i}`, updatedAt: 1 }));
+    const process = createProcessSessionFixture({ id: "running", backgrounded: true });
+    process.scopeKey = "process-0";
+    process.agentId = "main";
+    processes.addSession(process);
+    try {
+      using projection = await createTestProjection({ cfg: {}, modelCatalog: [] });
+      await projection.ensureMaterialized();
+      using reads = vi.spyOn(processes, "listRunningSessions");
+      const read = () => {
+        reads.mockClear();
+        const presenter = prepareSessionRowPublication(projection, Date.now())().getPresentation();
+        const counts = keys.map(
+          (key) => presenter.snapshot({ key, agentId: "main" }).row?.backgroundProcessCount,
+        );
+        expect(reads.mock.calls.length).toBeLessThanOrEqual(1);
+        return counts;
+      };
+      expect(read()).toEqual([1, undefined]);
+      expect(read()).toEqual([1, undefined]);
+      processes.markExited(process, 0, null, "completed");
+      expect(read()).toEqual([undefined, undefined]);
+    } finally {
+      resetProcessRegistryForTests();
+    }
+  });
+});
 
 function profileClient(profileId: string) {
   const client = sharingPolicyClient({ user: profileId });

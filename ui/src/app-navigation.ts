@@ -381,6 +381,16 @@ export function titleForRoute(routeId: NavigationRouteId, translate = t): string
   return translate(titleKey);
 }
 
+/** The title a route's own page shows, which names the actual device on the device route. */
+export function pageTitleForRoute(
+  routeId: NavigationRouteId,
+  deviceSnapshot?: NativeDeviceSettingsSnapshot | null,
+): string {
+  return routeId === "device"
+    ? t(deviceSettingsGroupLabelKey(deviceSnapshot))
+    : titleForRoute(routeId);
+}
+
 /** Window/tab title, attention leftmost because tabs truncate from the right.
  * Titles already ending in the brand skip the suffix to avoid duplication. */
 export function formatDocumentTitle(options: {
