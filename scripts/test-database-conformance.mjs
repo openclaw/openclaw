@@ -60,6 +60,7 @@ let targets = explicitTargets
       "extensions/logbook/src/postgres-store.test.ts",
       "extensions/matrix/src/matrix/account-state.postgres.test.ts",
       "extensions/team-reports/src/postgres-store.test.ts",
+      "extensions/team-reports/src/store-recovery.postgres.test.ts",
       "src/infra/postgres-sync",
       ...listDirectoryTreeStrictSync(
         fileURLToPath(new URL("../src/infra/database-engine/", import.meta.url)),

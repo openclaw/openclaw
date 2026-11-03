@@ -101,9 +101,9 @@ it("preserves collection scratch and a usable owner after an ordinary SQL failur
 it("forwards native settlement failures through the real worker backend", () => {
   const backend = createSqliteWorkerBackend(undefined, { databasePath: databasePath() });
   const close = retainClose(backend.close);
-  expect(backend.execute({ type: "listRuns", input: {} })).toEqual([]);
+  expect(backend.execute({ type: "listRuns", input: { limit: 20, filter: {} } })).toEqual([]);
   expect(() => backend.assertSettled()).not.toThrow();
   close();
-  expect(() => backend.execute({ type: "listRuns", input: {} })).toThrow();
+  expect(() => backend.execute({ type: "listRuns", input: { limit: 20, filter: {} } })).toThrow();
   expect(() => backend.assertSettled()).toThrow("Team Reports database is closed");
 });
