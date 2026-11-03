@@ -193,7 +193,10 @@ async function existingPaths(paths: readonly string[]): Promise<string[]> {
     try {
       await fs.lstat(resolved);
       existing.push(resolved);
-    } catch {
+    } catch (error) {
+      if (!isMissingPathError(error)) {
+        throw error;
+      }
       // Missing workspaces do not need preservation during destructive cleanup.
     }
   }
