@@ -93,8 +93,9 @@ export const readToolInputSchema = Type.Object({
     Type.Integer({ minimum: 0, description: "Character position within the start line; 0-based." }),
   ),
   optional: Type.Optional(
-    Type.Literal(true, {
-      description: "Missing paths return structured not_found instead of failing.",
+    Type.Boolean({
+      description:
+        "When true, missing paths return structured not_found instead of failing. When false, missing paths remain errors.",
     }),
   ),
 });
