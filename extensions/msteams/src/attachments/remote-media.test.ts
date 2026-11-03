@@ -2,7 +2,8 @@ import type { saveResponseMedia } from "openclaw/plugin-sdk/media-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const saveResponseMediaMock = vi.hoisted(() => vi.fn<typeof saveResponseMedia>());
-vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
   saveResponseMedia: saveResponseMediaMock,
 }));
 

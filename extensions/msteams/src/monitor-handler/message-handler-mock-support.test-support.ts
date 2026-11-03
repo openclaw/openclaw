@@ -17,7 +17,8 @@ beforeEach(() => {
   onIdle.mockReset();
 });
 
-vi.mock("../reply-dispatcher.js", () => ({
+vi.mock("../reply-dispatcher.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../reply-dispatcher.js")>()),
   createMSTeamsReplyDispatcher: () => ({
     dispatcherOptions: { onIdle },
     delivery: { deliver },
