@@ -1,4 +1,5 @@
 import type { TranslationMap } from "../lib/types.ts";
+import { registerChatToolLabelsEnglish } from "./en-chat-tool-labels.ts";
 import { en } from "./en.ts";
 
 const enChatToolContent = {
@@ -23,6 +24,9 @@ const enChatToolContent = {
 } satisfies TranslationMap;
 
 export const registerChatToolContentEnglish = Object.assign(
-  () => Object.assign(en.chat.toolCards, enChatToolContent.chat.toolCards),
+  () => {
+    registerChatToolLabelsEnglish();
+    Object.assign(en.chat.toolCards, enChatToolContent.chat.toolCards);
+  },
   { catalog: enChatToolContent },
 );

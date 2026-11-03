@@ -264,6 +264,8 @@ describe("resident profile display and reference catalog", () => {
       }
       const native = spyOnQueries(options);
       const current = prepared.readCurrentFacts(bindings);
+      const revision = prepared.readCurrentRevision(bindings);
+      expect(prepared.readCurrentRevision(bindings)).toBe(revision);
       expect(selected.readCurrentFacts(selectedBindings)).toEqual(current);
       expect(retained.readCurrentFacts(retainedBindings)).toEqual(current);
       const profile = {
@@ -282,6 +284,7 @@ describe("resident profile display and reference catalog", () => {
       native.mockRestore();
       setDisplayName(first.id, "Cosmetic update", options);
       linkEmail("later@example.test", first.id, options);
+      expect(prepared.readCurrentRevision(bindings)).not.toBe(revision);
       expect(prepared.readCurrentFacts().profile.emails).toEqual(
         [email, "retained@example.test", "later@example.test"].toSorted(),
       );
@@ -329,6 +332,7 @@ describe("resident profile display and reference catalog", () => {
         assignedRole: "reader",
       });
       expect(() => prepared.readCurrentFacts(bindings)).toThrow("user profile not found");
+      expect(() => prepared.readCurrentRevision(bindings)).toThrow("user profile not found");
       expect(() => selected.readCurrentFacts(selectedBindings)).toThrow("user profile not found");
       expect(retained.readCurrentFacts(retainedBindings)).toEqual(prepared.readCurrentFacts());
       expect(after).not.toHaveBeenCalled();
@@ -365,6 +369,7 @@ describe("resident profile display and reference catalog", () => {
       const [current] = await replaceStore(options, "current");
       expect(() => prepared.readCurrentFacts()).toThrow();
       expect(() => prepared.readCurrentProfile()).toThrow();
+      expect(() => prepared.readCurrentRevision()).toThrow();
       const seen = vi.fn(() => profiles.isUserProfileCatalogReady(options.path));
       releases.push(onUserProfilesChanged(seen));
       if (admission === "native") {
@@ -384,6 +389,7 @@ describe("resident profile display and reference catalog", () => {
       const missing = await prepareIdentity(prior.id, options);
       expect(() => missing.readCurrentFacts()).toThrow("user profile not found");
       expect(() => missing.readCurrentProfile()).toThrow("user profile not found");
+      expect(() => missing.readCurrentRevision()).toThrow("user profile not found");
       const native = spyOnQueries(options);
       expect(options.resolve(prior.id)).toEqual({ ok: true, value: undefined });
       expect(options.display(current.id).displayName).toBe("current");

@@ -1,8 +1,8 @@
 import { createEffect, createMemo, createSignal, isPending, onSettled } from "solid-js";
-import { currentThemeBranding, subscribeThemeBranding } from "../app/theme-branding.ts";
+import { observeDocumentRootAttributes } from "../lib/reactive/document-root-attributes.ts";
 import { createIntersectionObserver } from "../lib/reactive/observers.ts";
 import { createDocumentVisibility, createMediaQuery } from "../lib/reactive/platform.ts";
-import { projectSource } from "../lib/reactive/projection.ts";
+import { themeBrandingProjection } from "../lib/reactive/theme-branding.ts";
 import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import type { MascotAnimator } from "./mascot-animator.ts";
 import { drawMascot } from "./mascot-canvas.ts";
@@ -23,11 +23,7 @@ defineSolidBridge<Props>(
   "openclaw-mascot",
   (props, host) => {
     host.setAttribute("aria-hidden", "true");
-    const branding = projectSource(undefined, {
-      read: currentThemeBranding,
-      subscribe: (_, notify) => subscribeThemeBranding(notify),
-      equality: Object.is,
-    });
+    const branding = themeBrandingProjection;
     const [animationRequested, setAnimationRequested] = createSignal(false);
     const animation = createMemo(async () => {
       if (!animationRequested()) {
@@ -147,15 +143,15 @@ defineSolidBridge<Props>(
       },
     );
     onSettled(() => {
-      const themeObserver = new MutationObserver(() => setThemeRevision((value) => value + 1));
-      themeObserver.observe(document.documentElement, {
-        attributes: true,
-        attributeFilter: ["data-theme-mode", "data-theme-mascot"],
-      });
+      const stopTheme = observeDocumentRootAttributes(
+        document,
+        ["data-theme-mode", "data-theme-mascot"],
+        () => setThemeRevision((value) => value + 1),
+      );
       draw(performance.now() / 1_000);
       syncPlayback();
       return () => {
-        themeObserver.disconnect();
+        stopTheme();
         stopAnimation();
       };
     });

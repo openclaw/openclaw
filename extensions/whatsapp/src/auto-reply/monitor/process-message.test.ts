@@ -10,7 +10,6 @@ const {
   runMessageReceivedMock,
   shouldComputeCommandAuthorizedMock,
   trackBackgroundTaskMock,
-  buildInboundLineMock,
   shouldLogVerboseMock,
   inboundInfoMock,
   inboundDebugMock,
@@ -24,7 +23,6 @@ const {
   runMessageReceivedMock: vi.fn(async () => undefined),
   shouldComputeCommandAuthorizedMock: vi.fn(() => false),
   trackBackgroundTaskMock: vi.fn(),
-  buildInboundLineMock: vi.fn(() => "hi"),
   shouldLogVerboseMock: vi.fn(() => false),
   inboundInfoMock: vi.fn(),
   inboundDebugMock: vi.fn(),
@@ -112,11 +110,6 @@ vi.mock("./last-route.js", async (importOriginal) => ({
   trackBackgroundTask: trackBackgroundTaskMock,
 }));
 
-vi.mock("./message-line.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./message-line.js")>()),
-  buildInboundLine: buildInboundLineMock,
-}));
-
 vi.mock("./runtime-api.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./runtime-api.js")>()),
   buildHistoryContextFromEntries: () => "hi",
@@ -128,7 +121,7 @@ vi.mock("./runtime-api.js", async (importOriginal) => ({
   resolveChannelContextVisibilityMode: () => "off",
   resolveInboundSessionEnvelopeContextAsync: async () => ({
     storePath: "/tmp",
-    envelopeOptions: {},
+    envelopeOptions: { includeTimestamp: false },
     previousTimestamp: undefined,
   }),
   resolvePinnedMainDmOwnerFromAllowlist: () => null,
@@ -211,7 +204,6 @@ describe("processMessage inbound context", () => {
     runMessageReceivedMock.mockClear();
     shouldComputeCommandAuthorizedMock.mockReset().mockReturnValue(false);
     trackBackgroundTaskMock.mockClear();
-    buildInboundLineMock.mockReset().mockReturnValue("hi");
     shouldLogVerboseMock.mockReset().mockReturnValue(false);
     inboundInfoMock.mockClear();
     inboundDebugMock.mockClear();
@@ -315,14 +307,14 @@ describe("processMessage inbound context", () => {
 
   it("keeps inbound message content in agent context, not diagnostics", async () => {
     const body = "private WhatsApp message with a confidential quotation";
-    buildInboundLineMock.mockReturnValueOnce(body);
+    const combinedBody = `[WhatsApp 123@g.us] Alice (+15550002222): ${body}`;
     shouldLogVerboseMock.mockReturnValue(true);
     const info = vi.fn();
     await callProcessMessage({ msg: makeBaseMsg({ body }), replyLoggerInfo: info });
 
     expect(buildContextMock.mock.calls[0]?.[0]).toMatchObject({
       bodyForAgent: body,
-      combinedBody: body,
+      combinedBody,
       rawBody: body,
     });
     for (const calls of [
@@ -332,7 +324,9 @@ describe("processMessage inbound context", () => {
     ]) {
       expect(JSON.stringify(calls)).not.toContain(body);
     }
-    expect(inboundInfoMock).toHaveBeenCalledWith(expect.stringContaining(`${body.length} chars`));
+    expect(inboundInfoMock).toHaveBeenCalledWith(
+      expect.stringContaining(`${combinedBody.length} chars`),
+    );
   });
 
   it("passes pending history to context and clears it after dispatch", async () => {

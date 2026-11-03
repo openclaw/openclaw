@@ -1,8 +1,5 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
@@ -50,11 +47,19 @@ suite.define(() => {
       const sidebar = page.locator("openclaw-app-sidebar");
       const more = sidebar.getByRole("button", { name: "Load more sessions", exact: true });
       if (retry) {
-        await gateway.deferNext("sessions.list", { offset: limit * 2 });
+        // Child lists share these cursors; keep their competing read ahead of the roster request.
+        await gateway.deferNext("sessions.list", { offset: limit * 2, includeGlobal: true });
+        await gateway.waitForRequest("sessions.list", {
+          match: { offset: limit * 2, includeGlobal: false },
+        });
       }
       await more.click();
-      await gateway.waitForRequest("sessions.list", { match: { offset: limit } });
-      await gateway.waitForRequest("sessions.list", { match: { offset: limit * 2 } });
+      await gateway.waitForRequest("sessions.list", {
+        match: { offset: limit, includeGlobal: true },
+      });
+      await gateway.waitForRequest("sessions.list", {
+        match: { offset: limit * 2, includeGlobal: true },
+      });
       if (retry) {
         await gateway.resolveDeferred("sessions.list", {
           __mockError: { code: "UNAVAILABLE", message: "Older sessions temporarily unavailable" },
@@ -68,15 +73,6 @@ suite.define(() => {
       await sidebar.locator('[data-session-key="agent:main:thread-' + limit * 2 + '"]').waitFor();
       expect(await more.count()).toBe(0);
       expect(await sidebar.locator(".sidebar-recent-session").count()).toBe(8);
-      if (!retry && process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-        const frame = await takeControlUiScreenshotFrame(
-          page,
-          sidebar.locator(".sidebar"),
-          [sidebar.getByText("Conversation " + limit * 2, { exact: true })],
-          { elements: [sidebar.locator(".sidebar")], animations: "disabled" },
-        );
-        await writeFile(path.join(suite.artifactDir, "after.png"), frame.elements[0]!.png);
-      }
     });
   });
 });

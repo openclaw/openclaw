@@ -1,11 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasErrnoCode } from "../../infra/errno.js";
 import { spawnCommand } from "../../process/exec.js";
+import { createEnteredGate } from "../entered-gate.test-support.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import { createRemoteShellSandboxBackend } from "./remote-shell-backend.js";
 import {
@@ -56,19 +56,6 @@ function createBackend(
   );
 }
 
-function barrier() {
-  const entered = createDeferred();
-  const release = createDeferred();
-  return {
-    entered: entered.promise,
-    release: () => release.resolve(),
-    wait: async () => {
-      entered.resolve();
-      await release.promise;
-    },
-  };
-}
-
 async function createCommandCancellationFixture() {
   const workspaceDir = tempDirs.make("remote-shell-cancellation-");
   const session = {
@@ -98,8 +85,8 @@ describe("remote shell command cancellation", () => {
     async (phase) => {
       const { backend, session, createSession } = await createCommandCancellationFixture();
       const controller = new AbortController();
-      const work = barrier();
-      const disposal = barrier();
+      const work = createEnteredGate();
+      const disposal = createEnteredGate();
       const onAbort = vi.fn();
       const onComplete = vi.fn();
       const hold = async (signal?: AbortSignal) => {
@@ -207,7 +194,11 @@ async function createFixture() {
     expect((await fs.stat(protectedDir)).mode & 0o777).toBe(0o555);
     await expectText(path.join(protectedDir, "untouched"), "outside stage");
   };
-  const pausedBackend = (label: string, pause: ReturnType<typeof barrier>, readOnly = false) =>
+  const pausedBackend = (
+    label: string,
+    pause: ReturnType<typeof createEnteredGate>,
+    readOnly = false,
+  ) =>
     createTestBackend(label, async (params, upload) => {
       await upload(params);
       if (path.basename(params.remoteDir) === "agent") {
@@ -272,8 +263,8 @@ describe.runIf(process.platform === "linux" || process.platform === "darwin")(
       async (winner) => {
         const readOnlyLoser = winner === "edited";
         const fixture = await createFixture();
-        const firstGate = barrier();
-        const secondGate = barrier();
+        const firstGate = createEnteredGate();
+        const secondGate = createEnteredGate();
         const first = await fixture.pausedBackend("first", firstGate);
         const second = await fixture.pausedBackend("second", secondGate, readOnlyLoser);
         const one = run(first);

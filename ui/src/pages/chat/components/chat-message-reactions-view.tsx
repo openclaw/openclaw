@@ -42,15 +42,13 @@ const SEARCH_DEFAULTS = [
 ] as const;
 let nextPickerId = 0;
 
-type MessageReactionPickerProps = {
+export function MessageReactionPicker(props: {
   onSelect?: (emoji: string, remove: boolean) => void;
   activeEmoji: ReadonlySet<string>;
   placement: MessageReactionPlacement;
   compact?: boolean;
   class?: string;
-};
-
-export function MessageReactionPicker(props: MessageReactionPickerProps) {
+}) {
   let host!: HTMLElement;
   const [custom, setCustom] = createSignal(false);
   const [query, setQuery] = createSignal("");

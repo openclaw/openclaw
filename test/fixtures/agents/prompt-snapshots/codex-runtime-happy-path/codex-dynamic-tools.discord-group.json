@@ -217,6 +217,10 @@
             "maxItems": 50,
             "type": "array"
           },
+          "blind": {
+            "description": "Blind trial: child prompt omits its model, session ids and workspace path. Hidden subagent, context=\"isolated\".",
+            "type": "boolean"
+          },
           "cleanup": {
             "description": "Hidden session cleanup; delete snapshots and removes its managed worktree through session cleanup. visible=true always keeps the session.",
             "enum": ["delete", "keep"],
@@ -234,6 +238,11 @@
           },
           "cwd": {
             "description": "Child working directory. Workspace-contained file tools (apply_patch/file writes) resolve and contain paths against cwd; set cwd for edits outside the agent workspace. Visible paths outside configured agent workspaces require operator.admin. Mutually exclusive with projectId/projectGitUrl. With no source selector and worktree=true: inherit the same-agent parent managed repository; otherwise use the target agent workspace.",
+            "type": "string"
+          },
+          "cyberAccessProgram": {
+            "description": "Child OpenAI cyber Access (Blue=daybreak_blue, Red=daybreak_red). Omit: same-agent, same-model child keeps requester Access. Child run fails if its account/model lacks the program. Subagent only.",
+            "enum": ["standard", "daybreak_blue", "daybreak_red"],
             "type": "string"
           },
           "expectsCompletionMessage": {
@@ -375,7 +384,8 @@
             "type": "string"
           },
           "worktreeName": {
-            "description": "Managed worktree name; requires worktree=true.",
+            "description": "Managed worktree lowercase slug, 1–64 letters/digits/hyphens, starting with a letter or digit. Do not include a branch prefix such as codex/; OpenClaw supplies openclaw/. Requires worktree=true.",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
             "type": "string"
           }
         },

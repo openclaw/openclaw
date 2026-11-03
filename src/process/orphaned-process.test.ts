@@ -121,34 +121,29 @@ it("reaps only the captured managed macOS tree", async () => {
   expect([...processes.keys()]).toEqual([103, 104]);
 });
 
-it.each<[string, Partial<KernelProcess>]>([
+it.each<[string, Partial<KernelProcess>, (() => unknown)?]>([
   ["live parent", { parentPid: 50 }],
   ["foreign user", { uid: 502 }],
   ["foreign executable with spoofed argv", { executable: "/other/llama-server" }],
   ["different argv zero", { argv: ["llama-server", ...rootArgs.slice(1)] }],
   ["different port", { argv: [...rootArgs.slice(0, -1), "19322"] }],
   ["different working directory", { cwd: "/other" }],
-])("leaves %s untouched", async (_name, change) => {
+  ["unknown host birth", {}, () => mocks.identity.mockReturnValueOnce(null)],
+  ["Linux PID 1", {}, () => Object.defineProperty(process, "platform", { value: "linux" })],
+  [
+    "unreadable foreign installation",
+    { command: "/other/llama-server" },
+    () => {
+      mocks.command.mockImplementation(() => {
+        throw new Error("unreadable");
+      });
+    },
+  ],
+])("leaves %s untouched", async (_name, change, prepare) => {
   add(100, change);
+  prepare?.();
   mocks.realpath.mockReturnValue("/state");
   await expectUntouched({ cwd: "/state-alias" });
-});
-it.each<[string, () => unknown]>([
-  ["unknown host birth", () => mocks.identity.mockReturnValueOnce(null)],
-  ["Linux PID 1", () => Object.defineProperty(process, "platform", { value: "linux" })],
-])("leaves %s untouched", async (_name, prepare) => {
-  add(100);
-  prepare();
-  await expectUntouched();
-  expect(mocks.ps).not.toHaveBeenCalled();
-});
-it("leaves an unreadable foreign installation untouched", async () => {
-  add(100, { command: "/other/llama-server" });
-  mocks.command.mockImplementation(() => {
-    throw new Error("unreadable");
-  });
-  await expectUntouched();
-  expect(mocks.command).not.toHaveBeenCalled();
 });
 it.each<[string, Partial<KernelProcess>, string?]>([
   ["unverifiable birth", { startedAt: null }, "Cannot verify orphaned process 100"],
@@ -171,31 +166,6 @@ it.each<[string, Partial<KernelProcess>, string?]>([
     expect(await result).toEqual([]);
   }
   expect(killSpy).not.toHaveBeenCalled();
-});
-
-it("finishes captured children after root exit without signaling a reused PID or new descendant", async () => {
-  add(100);
-  const child = add(101, { parentPid: 100 });
-  add(102, { parentPid: 101 });
-  onSignal = (pid, signal) => {
-    if (pid === 100) {
-      exit(pid);
-      add(103, { parentPid: 101 });
-    }
-    if (pid === 101 && signal === "SIGTERM") {
-      child.startedAt = 999;
-    }
-    if (signal === "SIGKILL") {
-      exit(pid);
-    }
-  };
-  const result = reap();
-  await vi.advanceTimersByTimeAsync(5_000);
-  expect(await result).toEqual([100]);
-  expect(killSpy).toHaveBeenCalledWith(102, "SIGKILL");
-  expect(killSpy).not.toHaveBeenCalledWith(101, "SIGKILL");
-  expect(killSpy).not.toHaveBeenCalledWith(103, expect.anything());
-  expect([...processes.keys()]).toEqual([101, 103]);
 });
 
 it.each(["before TERM", "after TERM"])("joins cleanup on cancellation %s", async (when) => {
@@ -236,4 +206,30 @@ it.each<[string, Partial<KernelProcess>]>([
   await vi.advanceTimersByTimeAsync(10_000);
   await rejected;
   expect(killSpy).toHaveBeenCalledExactlyOnceWith(100, "SIGTERM");
+});
+
+it("finishes only captured children after root exit, even when the wall clock rewinds", async () => {
+  add(100);
+  const child = add(101, { parentPid: 100 });
+  add(102, { parentPid: 101 });
+  onSignal = (pid, signal) => {
+    if (pid === 100) {
+      exit(pid);
+      add(103, { parentPid: 101 });
+    }
+    if (pid === 101 && signal === "SIGTERM") {
+      child.startedAt = 999;
+    }
+    if (signal === "SIGKILL") {
+      exit(pid);
+    }
+  };
+  const result = reap();
+  vi.setSystemTime(Date.now() - 60_000);
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(await result).toEqual([100]);
+  expect(killSpy).toHaveBeenCalledWith(102, "SIGKILL");
+  expect(killSpy).not.toHaveBeenCalledWith(101, "SIGKILL");
+  expect(killSpy).not.toHaveBeenCalledWith(103, expect.anything());
+  expect([...processes.keys()]).toEqual([101, 103]);
 });

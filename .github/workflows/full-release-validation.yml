@@ -81,6 +81,7 @@ on:
           - plugin-prerelease
           - install-smoke
           - cross-os
+          - windows-node
           - live-e2e
           - package
           - qa-parity
@@ -173,7 +174,7 @@ env:
   FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT: "1"
   FULL_RELEASE_EXECUTION_PLAN_RESTORE_CONTRACT: "1"
   FULL_RELEASE_LANE_INPUTS_CONTRACT: "1"
-  FULL_RELEASE_ARTIFACT_RECOVERY_CONTRACT: "1"
+  FULL_RELEASE_ARTIFACT_RECOVERY_CONTRACT: "2"
   CHILD_EVIDENCE_REUSE: ${{ inputs.reuse_evidence && inputs.rerun_group == 'all' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-ci/')) }}
 
 jobs:
@@ -336,7 +337,8 @@ jobs:
               --qualification-inputs-json "$QUALIFICATION_INPUTS_JSON" --candidate-sha "$CANDIDATE_SHA")
           fi
           identity="$(
-            node workflow/scripts/release-tooling-identity.mjs resolve "${admission_args[@]}" \
+            node workflow/scripts/release-tooling-identity.mjs resolve \
+              ${admission_args[@]+"${admission_args[@]}"} \
               --repository "$GITHUB_REPOSITORY" \
               --workflow-contract "$WORKFLOW_CONTRACT" \
               --workflow-ref "$WORKFLOW_REF" \
@@ -436,7 +438,7 @@ jobs:
           plugin_required=false
           [[ "$RERUN_GROUP" =~ ^(all|plugin-prerelease)$ ]] && plugin_required=true
           release_artifact_required=false
-          if [[ "$RERUN_GROUP" =~ ^(all|cross-os)$ &&
+          if [[ "$RERUN_GROUP" =~ ^(all|cross-os|windows-node)$ &&
                 -z "${RELEASE_PACKAGE_SPEC// }" ]]; then
             release_artifact_required=true
           elif [[ "$RERUN_GROUP" =~ ^(all|package)$ &&
@@ -913,7 +915,7 @@ jobs:
             else
               echo "- Plugin prerelease: skipped by rerun group"
             fi
-            if [[ "$RERUN_GROUP" == "all" || "$RERUN_GROUP" == "install-smoke" || "$RERUN_GROUP" == "cross-os" || "$RERUN_GROUP" == "live-e2e" || "$RERUN_GROUP" == "package" || "$RERUN_GROUP" == "qa-parity" || "$RERUN_GROUP" == "qa-live" ]]; then
+            if [[ "$RERUN_GROUP" == "all" || "$RERUN_GROUP" == "install-smoke" || "$RERUN_GROUP" == "cross-os" || "$RERUN_GROUP" == "windows-node" || "$RERUN_GROUP" == "live-e2e" || "$RERUN_GROUP" == "package" || "$RERUN_GROUP" == "qa-parity" || "$RERUN_GROUP" == "qa-live" ]]; then
               echo "- Release/live/Docker/package/QA: \`OpenClaw Release Checks\`"
             else
               echo "- Release/live/Docker/package/QA: skipped by rerun group"
@@ -1078,6 +1080,7 @@ jobs:
         id: find
         env:
           GH_TOKEN: ${{ github.token }}
+          OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/workflow/scripts/release-ci-summary.mjs', github.workspace) }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
           TARGET_VERSION: ${{ needs.resolve_target.outputs.target_version }}
           VALIDATION_PURPOSE: ${{ needs.resolve_target.outputs.validation_purpose }}
@@ -1207,7 +1210,7 @@ jobs:
           SOURCE_ADMISSION_JSON: ${{ needs.resolve_target.outputs.source_admission_json }}
           QUALIFICATION_INPUTS_JSON: ${{ toJSON(inputs) }}
           PLUGIN_NPM_REQUIRED: ${{ needs.resolve_target.outputs.plugin_npm_preflight_required }}
-          OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: ${{ fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/workflow/scripts/release-ci-summary.mjs', github.workspace) }}
+          OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/workflow/scripts/release-ci-summary.mjs', github.workspace) }}
         run: node workflow/scripts/full-release-artifacts.mjs reuse
 
       - name: Summarize evidence reuse
@@ -1781,7 +1784,7 @@ jobs:
   release_checks_candidate:
     name: Run release checks candidate validation
     needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse, candidate_acquisition]
-    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && (needs.resolve_target.outputs.release_candidate_artifact_required != 'true' || (needs.candidate_acquisition.result == 'success' && needs.candidate_acquisition.outputs.state == 'ready')) && (contains(fromJSON('["all","cross-os","package"]'), inputs.rerun_group) || (inputs.rerun_group == 'live-e2e' && needs.resolve_target.outputs.live_suite_filter == '')) && needs.evidence_reuse.outputs.reuse != 'true' }}
+    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && (needs.resolve_target.outputs.release_candidate_artifact_required != 'true' || (needs.candidate_acquisition.result == 'success' && needs.candidate_acquisition.outputs.state == 'ready')) && (contains(fromJSON('["all","cross-os","windows-node","package"]'), inputs.rerun_group) || (inputs.rerun_group == 'live-e2e' && needs.resolve_target.outputs.live_suite_filter == '')) && needs.evidence_reuse.outputs.reuse != 'true' }}
     runs-on: *linux_runner_small
     timeout-minutes: 15
     outputs:
@@ -2194,6 +2197,10 @@ jobs:
       [
         resolve_target,
         evidence_reuse,
+        prepare_npm_package,
+        qualify_npm_package,
+        prepare_plugin_npm,
+        prepare_docker_release,
         candidate_acquisition,
         normal_ci,
         plugin_prerelease_independent,
@@ -2272,7 +2279,7 @@ jobs:
         if: github.run_attempt == 1
         env:
           GH_TOKEN: ${{ github.token }}
-          OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: ${{ fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/scripts/release-ci-summary.mjs', github.workspace) }}
+          OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/scripts/release-ci-summary.mjs', github.workspace) }}
           SOURCE_ADMISSION_JSON: ${{ needs.resolve_target.outputs.source_admission_json }}
           TARGET_CONTEXT_REF: ${{ inputs.target_context_ref || inputs.ref }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
@@ -2332,6 +2339,11 @@ jobs:
           CANDIDATE_ACQUISITION_RESULT: ${{ needs.candidate_acquisition.result }}
           CANDIDATE_EVIDENCE_JSON: ${{ needs.candidate_acquisition.outputs.binding_json }}
           CANDIDATE_REQUEST_JSON: ${{ needs.resolve_target.outputs.candidate_request_json }}
+          NPM_PREPARATION_RESULT: ${{ needs.prepare_npm_package.result }}
+          NPM_QUALIFICATION_RESULT: ${{ needs.qualify_npm_package.result }}
+          PLUGIN_NPM_REQUIRED: ${{ needs.resolve_target.outputs.plugin_npm_preflight_required }}
+          PLUGIN_NPM_PREPARATION_RESULT: ${{ needs.prepare_plugin_npm.result }}
+          DOCKER_PREPARATION_RESULT: ${{ needs.prepare_docker_release.result }}
           FULL_RELEASE_RESTORE_PLAN: ${{ github.run_attempt != 1 }}
           FULL_RELEASE_EXECUTION_PLAN_PATH: ${{ github.workspace }}/full-release-execution-plan/full-release-execution-plan.json
           PUBLICATION_ADMISSION_PATH: ${{ runner.temp }}/full-release-publication-admission/publication-admission.json
@@ -2367,6 +2379,11 @@ jobs:
               --arg candidateAcquisitionResult "$CANDIDATE_ACQUISITION_RESULT" \
               --argjson candidateEvidence "${CANDIDATE_EVIDENCE_JSON:-null}" \
               --argjson candidateRequestInput "$CANDIDATE_REQUEST_JSON" \
+              --arg npmPreparationResult "$NPM_PREPARATION_RESULT" \
+              --arg npmQualificationResult "$NPM_QUALIFICATION_RESULT" \
+              --arg pluginNpmPreflightRequired "$PLUGIN_NPM_REQUIRED" \
+              --arg pluginNpmPreparationResult "$PLUGIN_NPM_PREPARATION_RESULT" \
+              --arg dockerPreparationResult "$DOCKER_PREPARATION_RESULT" \
               --arg normalCiResult "$NORMAL_CI_RESULT" \
               --arg normalCiRunId "$NORMAL_CI_RUN_ID" \
               --arg normalCiRunAttempt "$NORMAL_CI_RUN_ATTEMPT" \
@@ -2429,6 +2446,11 @@ jobs:
                 candidateAcquisitionResult: $candidateAcquisitionResult,
                 candidateEvidence: $candidateEvidence,
                 candidateRequestInput: $candidateRequestInput,
+                npmPreparationResult: $npmPreparationResult,
+                npmQualificationResult: $npmQualificationResult,
+                pluginNpmPreflightRequired: $pluginNpmPreflightRequired,
+                pluginNpmPreparationResult: $pluginNpmPreparationResult,
+                dockerPreparationResult: $dockerPreparationResult,
                 children: {
                   normalCi: {result: $normalCiResult, runId: $normalCiRunId, runAttempt: $normalCiRunAttempt, url: $normalCiUrl},
                   pluginPrereleaseIndependent: {result: $pluginPrereleaseIndependentResult, runId: $pluginPrereleaseIndependentRunId, runAttempt: $pluginPrereleaseIndependentRunAttempt, url: $pluginPrereleaseIndependentUrl},
@@ -2465,7 +2487,7 @@ jobs:
         id: plan
         env:
           GH_TOKEN: ${{ github.token }}
-          OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: ${{ fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/scripts/release-ci-summary.mjs', github.workspace) }}
+          OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/scripts/release-ci-summary.mjs', github.workspace) }}
           SOURCE_ADMISSION_JSON: ${{ needs.resolve_target.outputs.source_admission_json }}
           TARGET_CONTEXT_REF: ${{ inputs.target_context_ref || inputs.ref }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
@@ -2520,12 +2542,20 @@ jobs:
 
   release_decision:
     name: Release Decision
-    needs: [resolve_target, release_execution_plan]
+    needs:
+      [
+        resolve_target,
+        prepare_npm_package,
+        qualify_npm_package,
+        prepare_plugin_npm,
+        prepare_docker_release,
+        release_execution_plan,
+      ]
     if: always()
     runs-on: *linux_runner_small
     timeout-minutes: 720
     env:
-      RELEASE_STATE_SCRIPT: &release_state_script ${{ fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/full-release-validation-state.mjs', github.workspace) || format('{0}/scripts/full-release-validation-state.mjs', github.workspace) }}
+      RELEASE_STATE_SCRIPT: &release_state_script ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/full-release-validation-state.mjs', github.workspace) || format('{0}/scripts/full-release-validation-state.mjs', github.workspace) }}
     outputs:
       state: ${{ steps.state.outputs.state }}
     steps:
@@ -2556,11 +2586,15 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
-          OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: ${{ fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/scripts/release-ci-summary.mjs', github.workspace) }}
+          OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/scripts/release-ci-summary.mjs', github.workspace) }}
           FAIL_FAST: ${{ inputs.fail_fast }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
+          NPM_PREPARATION_RESULT: ${{ needs.prepare_npm_package.result }}
+          NPM_QUALIFICATION_RESULT: ${{ needs.qualify_npm_package.result }}
+          PLUGIN_NPM_PREPARATION_RESULT: ${{ needs.prepare_plugin_npm.result }}
+          DOCKER_PREPARATION_RESULT: ${{ needs.prepare_docker_release.result }}
           FULL_RELEASE_STATE_MODE: decision
           FULL_RELEASE_EXECUTION_PLAN_PATH: ${{ runner.temp }}/full-release-execution-plan/full-release-execution-plan.json
           FULL_RELEASE_STATE_PATH: ${{ runner.temp }}/full-release-decision/full-release-decision.json
@@ -2590,7 +2624,15 @@ jobs:
 
   diagnostic_drain:
     name: Diagnostic Drain
-    needs: [resolve_target, release_execution_plan]
+    needs:
+      [
+        resolve_target,
+        prepare_npm_package,
+        qualify_npm_package,
+        prepare_plugin_npm,
+        prepare_docker_release,
+        release_execution_plan,
+      ]
     if: always()
     runs-on: *linux_runner_small
     timeout-minutes: 720
@@ -2637,6 +2679,10 @@ jobs:
           RELEASE_PROFILE: ${{ inputs.release_profile }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
+          NPM_PREPARATION_RESULT: ${{ needs.prepare_npm_package.result }}
+          NPM_QUALIFICATION_RESULT: ${{ needs.qualify_npm_package.result }}
+          PLUGIN_NPM_PREPARATION_RESULT: ${{ needs.prepare_plugin_npm.result }}
+          DOCKER_PREPARATION_RESULT: ${{ needs.prepare_docker_release.result }}
           FULL_RELEASE_STATE_MODE: drain
           FULL_RELEASE_EXECUTION_PLAN_PATH: ${{ runner.temp }}/full-release-execution-plan/full-release-execution-plan.json
           FULL_RELEASE_STATE_PATH: ${{ runner.temp }}/full-release-diagnostics/full-release-diagnostic-manifest.json
@@ -2715,6 +2761,10 @@ jobs:
     timeout-minutes: 10
     env:
       RELEASE_STATE_SCRIPT: *release_state_script
+      NPM_PREPARATION_RESULT: ${{ needs.prepare_npm_package.result }}
+      NPM_QUALIFICATION_RESULT: ${{ needs.qualify_npm_package.result }}
+      PLUGIN_NPM_PREPARATION_RESULT: ${{ needs.prepare_plugin_npm.result }}
+      DOCKER_PREPARATION_RESULT: ${{ needs.prepare_docker_release.result }}
     steps:
       - name: Require qualified publication artifacts
         if: inputs.rerun_group == 'all'
@@ -2908,7 +2958,9 @@ jobs:
         if: ${{ success() }}
         env:
           GH_TOKEN: ${{ github.token }}
+          OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/scripts/release-ci-summary.mjs', github.workspace) }}
           TARGET_REF: ${{ startsWith(github.ref, 'refs/heads/release-ci/') && needs.resolve_target.outputs.sha || inputs.ref }}
+          TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
           RUN_RELEASE_SOAK: ${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}

@@ -1,14 +1,14 @@
 import path from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import type { WorkshopChange } from "./changes.kernel.js";
+import { workshopPluginConfig } from "./config.test-support.js";
 import type { WorkshopMutationContext } from "./library.js";
-import { assertSkillReviewRunSucceeded, postWorkshopChangeNotice } from "./review-outcome.js";
+import { postWorkshopChangeNotice } from "./review-outcome.js";
 import {
   undoWorkshopReview,
   WorkshopReviewNotFoundError as NotFound,
@@ -57,13 +57,9 @@ const { feed, record, library } = vi.hoisted(() => {
             .slice(0, limit),
       ),
       listWorkshopArchive: vi.fn(async () => [
-        { name: "deploy", versions: [{ id: "v-before-review" }, { id: "v-after-first-patch" }] },
+        { name: "deploy", versions: [{ id: "v-before-review" }] },
       ]),
-      listWorkshopSkills: vi.fn(async () =>
-        [...new Map(changes.map(({ skillName, action }) => [skillName, action]))]
-          .filter(([, action]) => action !== "archive")
-          .map(([name]) => ({ name })),
-      ),
+      listWorkshopSkills: vi.fn(async () => [{ name: "release" }]),
       restoreWorkshopSkill: vi.fn(mutate("restore")),
       archiveWorkshopSkill: vi.fn(mutate("archive")),
     },
@@ -95,39 +91,6 @@ vi.mock("../../infra/system-events.js", async (importOriginal) => ({
   enqueueSystemEvent: mocks.enqueue,
 }));
 
-describe("assertSkillReviewRunSucceeded", () => {
-  type Result = Parameters<typeof assertSkillReviewRunSucceeded>[0];
-  const review = (meta: Omit<Result["meta"], "durationMs">, payloads?: Result["payloads"]) =>
-    expect(() => assertSkillReviewRunSucceeded({ meta: { durationMs: 1, ...meta }, payloads }));
-  it("does not fail a review whose tool calls were denied or errored", () => {
-    const warning = setReplyPayloadMetadata(
-      { isError: true, text: "⚠️ skill_workshop failed: View it first." },
-      { toolErrorWarning: { toolName: "skill_workshop" } },
-    );
-    review(
-      {
-        toolSummary: {
-          calls: 3,
-          tools: ["sessions_yield", "skill_workshop"],
-          failures: 1,
-          unresolvedError: { toolName: "skill_workshop" },
-        },
-      },
-      [warning],
-    ).not.toThrow();
-  });
-
-  it("fails on model or runtime errors", () => {
-    review({ error: { kind: "retry_limit", message: "model retries exhausted" } }).toThrow(
-      "model retries exhausted",
-    );
-    review({}, [{ isError: true, text: "LLM request failed: 529 overloaded" }]).toThrow(
-      "529 overloaded",
-    );
-    review({ aborted: true }).toThrow("aborted");
-  });
-});
-
 describe("postWorkshopChangeNotice", () => {
   const dirs = useSessionStoreTempDirs(afterAll, "workshop-notice-");
   const change = (overrides: Partial<WorkshopChange>): WorkshopChange => ({
@@ -152,9 +115,9 @@ describe("postWorkshopChangeNotice", () => {
   });
   const reviewId = "0b6a4a52-1f43-4f0e-9d55-3c1d8e1f7a10";
   const runId = `skill-workshop-review:${reviewId}`;
-  const channelNotices: OpenClawConfig = {
-    skills: { workshop: { autonomous: { channelNotices: true } } },
-  };
+  const channelNotices: OpenClawConfig = workshopPluginConfig({
+    autonomous: { channelNotices: true },
+  });
   const reviewChanges = (
     summary = "first pass",
     lastEdit: Partial<WorkshopChange> = { summary: "typo" },
@@ -165,13 +128,17 @@ describe("postWorkshopChangeNotice", () => {
     change({ skillName: "notes", createdAtMs: 4, ...lastEdit }),
   ];
   const marker = (includeRelease = false) => ({
-    kind: "skill-workshop-change",
-    agentId: "main",
-    runId,
-    skills: [
-      { name: "budget", action: "updated", summary: "reconciled" },
-      ...(includeRelease ? [{ name: "notes", action: "created", summary: "drafting" }] : []),
-    ],
+    kind: "plugin-notice",
+    pluginId: "skill-workshop",
+    type: "skills-changed",
+    data: {
+      agentId: "main",
+      runId,
+      skills: [
+        { name: "budget", action: "updated", summary: "reconciled" },
+        ...(includeRelease ? [{ name: "notes", action: "created", summary: "drafting" }] : []),
+      ],
+    },
   });
   const expectNoNotice = () => {
     expect(mocks.send).not.toHaveBeenCalled();
@@ -239,13 +206,20 @@ describe("postWorkshopChangeNotice", () => {
             presentation: { blocks: [{ type: "buttons", buttons: [button] }] },
           },
         ],
-        mirror: expect.objectContaining({ sessionKey }),
+        session: expect.objectContaining({ key: sessionKey }),
+        deliveryIntentId: expect.stringMatching(
+          /^plugin-notice:skill-workshop:skill-workshop-notice:/,
+        ),
       }),
       undefined,
       undefined,
       generation(sessionKey),
     );
-    expect(mocks.append).not.toHaveBeenCalled();
+    // The session records its own notice once, with the marker the Control UI renders.
+    expect(mocks.append).toHaveBeenCalledOnce();
+    expect(mocks.append).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey, deliveryMirror: marker(true) }),
+    );
     expect(mocks.enqueue).toHaveBeenCalledTimes(1);
     expect(mocks.enqueue).toHaveBeenCalledWith(
       expect.stringContaining("skill_workshop action=restore name=budget version=v1;"),
@@ -288,7 +262,6 @@ describe("postWorkshopChangeNotice", () => {
   });
 
   it.each([
-    ["reset", { ...sessionEntry, lifecycleRevision: "reset-revision" }],
     ["replacement", { ...sessionEntry, sessionId: "replacement-session" }],
     ["deletion", undefined],
   ])("leaves a conversation untouched after %s", async (_change, entry) => {
@@ -303,7 +276,7 @@ describe("postWorkshopChangeNotice", () => {
       mocks.entry.mockReturnValueOnce({ ...sessionEntry, lifecycleRevision: "reset-revision" });
       return { deliveryContext: { channel: "telegram", to: "42" } };
     });
-    await post([change({})]);
+    await post([change({})], undefined, channelNotices);
     expectNoNotice();
   });
 

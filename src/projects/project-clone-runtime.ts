@@ -32,6 +32,31 @@ type ProjectCloneOptions = {
 };
 const PROJECT_FETCH_TIMEOUT_MS = 60_000;
 const PROJECT_REF_INVENTORY_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
+const PROJECT_MAINTENANCE_CONFIG = [
+  ["maintenance.auto", "false"],
+  ["gc.auto", "0"],
+  ["pack.threads", "1"],
+  ["pack.windowMemory", "64m"],
+] as const;
+
+/** The checkout lifecycle owner adopts existing managed clones before reuse. */
+export async function configureProjectCheckoutMaintenance(
+  target: string,
+  options: ProjectCloneOptions,
+): Promise<void> {
+  for (const [key, value] of PROJECT_MAINTENANCE_CONFIG) {
+    requireGitCommandOutput(
+      "git config managed maintenance",
+      await runProjectCheckoutGit({ target }, options, [
+        "config",
+        "--local",
+        "--replace-all",
+        key,
+        value,
+      ]),
+    );
+  }
+}
 
 export class ProjectCloneError extends Error {
   constructor(
@@ -179,7 +204,18 @@ export async function cloneProjectCheckout(
       const attempt = await runProjectGitCommand(() =>
         withGitProcessOperation("project.clone", () =>
           runCommandWithTimeout(
-            ["git", "clone", "--no-recurse-submodules", "--", input.url, input.target],
+            [
+              "git",
+              "clone",
+              ...PROJECT_MAINTENANCE_CONFIG.flatMap(([key, value]) => [
+                "--config",
+                `${key}=${value}`,
+              ]),
+              "--no-recurse-submodules",
+              "--",
+              input.url,
+              input.target,
+            ],
             {
               env: commandEnv,
               timeoutMs,

@@ -132,7 +132,7 @@ export function ConfirmDialogView(props: {
                 skipRequested = event.currentTarget.checked;
               }}
             />
-            <span>{t("common.dontAskAgain")}</span>
+            <span>{initialOptions.skipPreference.label ?? t("common.dontAskAgain")}</span>
           </label>
         ) : undefined}
         <openclaw-modal-actions

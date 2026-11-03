@@ -210,6 +210,7 @@ data class GatewayErrorDetails(
   val recommendedNextStep: String?,
   val pauseReconnect: Boolean? = null,
   val reason: String? = null,
+  val method: String? = null,
   val requestId: String? = null,
   val retryable: Boolean = false,
   val clientMinProtocol: Int? = null,
@@ -377,7 +378,19 @@ class GatewaySession(
     val code: String,
     val message: String,
     val details: GatewayErrorDetails? = null,
+    val retryable: Boolean = false,
   ) {
+    /** Only the method-bound startup refusal proves this chat send did no handler work. */
+    fun startupRetryDelayMs(method: String): Long? {
+      if (
+        method != "chat.send" || code != "UNAVAILABLE" || !retryable ||
+        details?.reason != "startup-sidecars" || details.method != method
+      ) {
+        return null
+      }
+      return (details.retryAfterMs ?: 500).coerceIn(100, 2_000).toLong()
+    }
+
     fun missingScopeDetails(): GatewayMissingScopeErrorDetails? {
       val details = details ?: return null
       val missingScope = details.missingScope?.trim().orEmpty()
@@ -457,6 +470,23 @@ class GatewaySession(
       timeoutMs: Long = 15_000,
       withEnqueue: (() -> Unit) -> Unit = { it() },
     ): String = requestImpl(method, paramsJson, timeoutMs, withEnqueue)
+
+    /** Voice retains its original input while startup refuses admission on this socket. */
+    suspend fun requestAwaitingStartup(
+      method: String,
+      paramsJson: String?,
+      timeoutMs: Long = 15_000,
+      withEnqueue: (() -> Unit) -> Unit = { it() },
+    ): String {
+      while (true) {
+        try {
+          return request(method, paramsJson, timeoutMs, withEnqueue)
+        } catch (error: GatewayRequestRejected) {
+          val retryDelayMs = error.gatewayError.startupRetryDelayMs(method) ?: throw error
+          delay(retryDelayMs)
+        }
+      }
+    }
   }
 
   private val json =
@@ -826,6 +856,19 @@ class GatewaySession(
     return GatewayLoadedImage(bytes = loaded.bytes, mimeType = loaded.mimeType)
   }
 
+  /** [basePath] is the accepted Control UI mount; null uses the socket's context path. */
+  internal suspend fun loadInboundImage(
+    expectedEndpointStableId: String?,
+    basePath: String?,
+    sessionKey: String,
+    agentId: String?,
+    source: String,
+  ): GatewayLoadedImage? {
+    val conn = readyConnection(expectedEndpointStableId) ?: return null
+    val image = conn.loadInboundImage(basePath, sessionKey, agentId, source, guardRequestEnqueue(conn) { it() })
+    return synchronized(lifecycleLock) { image.takeIf { currentConnection === conn && conn.isReady() } }
+  }
+
   internal suspend fun loadSourceFavicon(
     expectedEndpointStableId: String,
     config: GatewaySourcePreviewConfig,
@@ -1085,7 +1128,7 @@ class GatewaySession(
     private var connectRequestId: String? = null
     val tlsConfig: GatewayTlsConfig? = buildGatewayTlsConfig(target.tls)
     private val client: OkHttpClient = buildClient()
-    private val sourceFaviconLoader by lazy { GatewaySourceFaviconLoader(client) }
+    private val imageLoader by lazy { GatewayImageLoader(client) }
     private var controlUiReadCredentials: List<String> = emptyList()
     private val listener = Listener()
     private var socket: WebSocket? = null
@@ -1239,10 +1282,28 @@ class GatewaySession(
       hostname: String,
       withEnqueue: (() -> Unit) -> Unit,
     ): GatewayLoadedImage? =
-      sourceFaviconLoader.load(
+      imageLoader.loadFavicon(
         gatewayUrl = "${if (tlsConfig != null) "https" else "http"}://${formatGatewayAuthority(target.endpoint.host, target.endpoint.port)}",
         basePath = config.basePath,
         hostname = hostname,
+        headers = mediaTransportHeaders(),
+        credentials = controlUiReadCredentials,
+        withEnqueue = withEnqueue,
+      )
+
+    suspend fun loadInboundImage(
+      basePath: String?,
+      sessionKey: String,
+      agentId: String?,
+      source: String,
+      withEnqueue: (() -> Unit) -> Unit,
+    ): GatewayLoadedImage? =
+      imageLoader.loadInboundImage(
+        gatewayUrl = "${if (tlsConfig != null) "https" else "http"}://${formatGatewayAuthority(target.endpoint.host, target.endpoint.port)}",
+        basePath = basePath ?: target.endpoint.contextPath,
+        source = source,
+        sessionKey = sessionKey,
+        agentId = agentId,
         headers = mediaTransportHeaders(),
         credentials = controlUiReadCredentials,
         withEnqueue = withEnqueue,
@@ -2038,6 +2099,7 @@ class GatewaySession(
                 recommendedNextStep = it["recommendedNextStep"].asStringOrNull(),
                 pauseReconnect = it["pauseReconnect"].asBooleanOrNull(),
                 reason = it["reason"].asStringOrNull(),
+                method = it["method"].asStringOrNull(),
                 requestId = normalizeGatewayApprovalRequestId(it["requestId"].asStringOrNull()),
                 retryable = it["retryable"].asBooleanOrNull() == true || wireError.retryable == true,
                 retryAfterMs = frame["error"].asObjectOrNull()?.get("retryAfterMs").asIntOrNull(),
@@ -2050,7 +2112,7 @@ class GatewaySession(
                 requiredScopes = it["requiredScopes"].asStringList(),
               )
             }
-          ErrorShape(wireError.code, wireError.message, details)
+          ErrorShape(wireError.code, wireError.message, details, retryable = wireError.retryable == true)
         }
       pending.remove(id)?.complete(RpcResult(response.ok, payloadJson, error))
     }

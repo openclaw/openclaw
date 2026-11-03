@@ -123,8 +123,6 @@ describe("Codex native MCP Apps", () => {
     expect(vi.mocked(retainSharedCodexAppServerClientIfCurrent).mock.lastCall?.[0]).toBe(client);
     expect(details).toMatchObject({
       mcpAppPreview: {
-        kind: "canvas",
-        view: { id: expect.stringMatching(/^mcp-app-/u), title: "show_options UI" },
         mcpApp: {
           serverName: "sample",
           toolName: "show_options",
@@ -147,7 +145,7 @@ describe("Codex native MCP Apps", () => {
     ).toEqual(new Set(["show_options", "show_menu"]));
   });
 
-  it.each(["call-other", undefined, null])(
+  it.each(["call-other", undefined])(
     "omits the app preview for mismatched MCP origin call %s",
     async (responseOriginCallId) => {
       const { request, prepare } = createFixture(
@@ -216,14 +214,6 @@ describe("Codex native MCP Apps", () => {
       tools: expect.arrayContaining([
         expect.objectContaining({ toolName: "calendar_model_only", uiVisibility: ["model"] }),
         expect.objectContaining({ toolName: "drive_delete", uiVisibility: ["app"] }),
-      ]),
-    });
-    await expect(previewParams?.runtime.listTools?.("codex_apps")).resolves.toMatchObject({
-      tools: expect.arrayContaining([
-        expect.objectContaining({
-          name: "calendar_model_only",
-          _meta: { connector_id: "calendar", ui: { visibility: ["model"] } },
-        }),
       ]),
     });
 

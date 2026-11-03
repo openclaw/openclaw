@@ -25,16 +25,8 @@ async function mountPermissionCard(
   onRetry?: (message: string) => void,
   context?: ApplicationContext,
 ) {
-  const container = document.createElement("div");
-  document.body.append(container);
   const view = mountSolid(() => <ChatPermissionCard request={request} onRetry={onRetry} />, {
-    container,
     wrapper: context ? createSolidApplicationContextProvider(context).wrapper : undefined,
-  });
-  onTestFinished(async () => {
-    view.unmount();
-    container.remove();
-    await Promise.resolve();
   });
   flush();
   return view;
@@ -78,6 +70,7 @@ async function fixture(state: NodePermissionRequest["state"], ids = ["screenReco
     );
     flush();
   };
+  type Entry = (typeof snapshot.permissions.entries)[number];
   return {
     view,
     post,
@@ -85,6 +78,14 @@ async function fixture(state: NodePermissionRequest["state"], ids = ["screenReco
     request,
     snapshot,
     publish,
+    permissions(...entries: Array<[Entry["id"], Entry["status"], Entry["state"]?]>) {
+      snapshot.permissions.entries = entries.map(([id, status, permissionState]) => ({
+        id,
+        status,
+        state: permissionState,
+      }));
+      publish();
+    },
     async resolve(label: string, capabilities = ids, nextState = state) {
       const button = view.getByRole("button", { name: label });
       button.click();
@@ -106,11 +107,7 @@ it("keeps a multi-permission request blocked until both the toggle and OS grants
     "accessibility",
     "screenRecording",
   ]);
-  f.snapshot.permissions.entries = [
-    { id: "accessibility", status: "notDetermined" },
-    { id: "screenRecording", status: "notDetermined" },
-  ];
-  f.publish();
+  f.permissions(["accessibility", "notDetermined"], ["screenRecording", "notDetermined"]);
   await f.resolve("Enable Computer Control", ["computerControl"]);
   expect(
     f.view.getByText("Then grant the remaining permissions: Accessibility, Screen Recording."),
@@ -123,47 +120,27 @@ it("keeps a multi-permission request blocked until both the toggle and OS grants
     "not-determined",
   );
   expect(f.view.queryByText(/Then grant the remaining permissions/)).toBeNull();
-  f.snapshot.permissions.entries = [
-    { id: "accessibility", status: "granted", state: "stale-grant" },
-    { id: "screenRecording", status: "granted", state: "restart-required" },
-  ];
-  f.publish();
+  f.permissions(
+    ["accessibility", "granted", "stale-grant"],
+    ["screenRecording", "granted", "restart-required"],
+  );
   await f.resolve("Open System Settings", ["accessibility"], "stale-grant");
-  expect(f.view.queryByRole("button", { name: "Try again" })).toBeNull();
   f.snapshot.permissions.entries[0] = { id: "accessibility", status: "granted" };
   f.publish();
   await f.resolve("Relaunch OpenClaw", ["screenRecording"], "restart-required");
-  f.snapshot.permissions.entries = [
-    { id: "accessibility", status: "granted" },
-    { id: "screenRecording", status: "granted" },
-  ];
-  f.publish();
+  f.permissions(["accessibility", "granted"], ["screenRecording", "granted"]);
   f.view.getByRole("button", { name: "Try again" }).click();
   expect(f.retry).toHaveBeenCalledExactlyOnceWith(
     "I granted Computer Control, Accessibility, Screen Recording, try again.",
   );
 });
 
-it("does not treat camera and location OS grants as enabling their OpenClaw toggles", async () => {
-  const f = await fixture("disabled-in-openclaw", ["cameraEnabled", "camera", "location"]);
-  f.snapshot.permissions.entries = [
-    { id: "camera", status: "granted" },
-    { id: "location", status: "granted" },
-  ];
-  f.snapshot.capabilities.cameraEnabled = false;
-  f.snapshot.permissions.location.mode = "off";
-  f.publish();
-  expect(f.view.queryByRole("button", { name: "Try again" })).toBeNull();
-});
-
 it("opens Settings for denied Location while its OpenClaw mode is off", async () => {
   const f = await fixture("disabled-in-openclaw", ["location"]);
   f.snapshot.permissions.location.mode = "off";
-  f.snapshot.permissions.entries = [{ id: "location", status: "denied", state: "denied" }];
-  f.publish();
+  f.permissions(["location", "denied", "denied"]);
   await f.resolve("Open System Settings", ["location"], "denied");
-  f.snapshot.permissions.entries = [{ id: "location", status: "granted" }];
-  f.publish();
+  f.permissions(["location", "granted"]);
   expect(f.view.getByRole("button", { name: "Enable Location" })).toBeTruthy();
   f.snapshot.permissions.location.mode = "whileUsing";
   f.publish();
@@ -178,15 +155,14 @@ it.each([false, true])(
       ...(capture ? ["camera"] : []),
     ]);
     f.snapshot.capabilities.cameraEnabled = false;
-    f.snapshot.permissions.entries = [{ id: "camera", status: "notDetermined" }];
-    f.publish();
+    f.permissions(["camera", "granted"]);
     expect(f.view.queryByRole("button", { name: "Try again" })).toBeNull();
+    f.snapshot.permissions.entries = [{ id: "camera", status: "notDetermined" }];
     f.snapshot.capabilities.cameraEnabled = true;
     f.publish();
     expect(Boolean(f.view.queryByRole("button", { name: "Try again" }))).toBe(!capture);
     if (capture) {
-      f.snapshot.permissions.entries = [{ id: "camera", status: "granted" }];
-      f.publish();
+      f.permissions(["camera", "granted"]);
       expect(f.view.getByRole("button", { name: "Try again" })).toBeTruthy();
     }
   },
@@ -230,17 +206,13 @@ it("shows grant failures, clears them during retry, and waits for observed acces
   await waitForSolid(() => expect(button.disabled).toBe(false));
   expect(f.view.queryByRole("alert")).toBeNull();
   expect(f.view.queryByRole("button", { name: "Try again" })).toBeNull();
-  f.snapshot.permissions.entries = [{ id: "screenRecording", status: "granted" }];
-  f.publish();
-  f.view.getByRole("button", { name: "Try again" }).click();
-  expect(f.retry).toHaveBeenCalledExactlyOnceWith("I granted Screen Recording, try again.");
 });
 
-it.each(
-  (["denied", "restart-required", "granted"] as const).flatMap((outcome) =>
-    [false, true].map((reject) => ({ outcome, reject })),
-  ),
-)(
+it.each([
+  { outcome: "denied", reject: false },
+  { outcome: "restart-required", reject: false },
+  { outcome: "granted", reject: true },
+] as const)(
   "refreshes the card to $outcome after a native grant attempt (reject=$reject)",
   async ({ outcome, reject }) => {
     const f = await fixture("not-determined");

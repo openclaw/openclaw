@@ -1,4 +1,5 @@
 /* @vitest-environment jsdom */
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import * as payloadStore from "../../lib/chat/outbox-payload-store.runtime.ts";
@@ -51,4 +52,44 @@ it("admits an ordinary queued attachment while another selected pane is private"
     update: { attachmentPayload: expect.anything() },
   });
   expect(write).toHaveBeenCalledTimes(1);
+});
+
+it("copies a duplicated tab's attachment without pausing its original pending submission", async () => {
+  const gatewayUrl = "ws://duplicate-outbox.test";
+  const host = makeChatHost({ requestHandlers: {}, settings: { gatewayUrl } });
+  const recoveryScope = expectDefined(host.client?.recoveryScope, "account recovery scope");
+  const blob = new Blob(["copied attachment"], { type: "text/plain" });
+  const metadata = { mimeType: blob.type, fileName: "queued.txt", sizeBytes: blob.size };
+  const source = await payloadStore.writeOutboxPayload(
+    { gatewayOwner: gatewayUrl, recoveryScope, tabId: "source-tab", queueId: "original-input" },
+    [{ ...metadata, blob }],
+  );
+  if (source.status !== "ready") {
+    throw new Error("Source attachment was not stored");
+  }
+  const original: ChatQueueItem = {
+    id: "original-input",
+    text: "Keep the original submission",
+    createdAt: 1,
+    sendRunId: "original-run",
+    sendAttempts: 1,
+    sendState: "waiting-reconnect",
+    attachmentPayload: source.value,
+    attachments: [{ id: "original-attachment", ...metadata }],
+  };
+
+  const result = await prepareOutboxPayload(host, original);
+
+  if (result.status !== "ready") {
+    throw new Error("Duplicated attachment was not prepared");
+  }
+  expect({ ...original, ...result.update }).toMatchObject({
+    id: "original-input",
+    sendRunId: "original-run",
+    sendAttempts: 1,
+    sendState: "waiting-reconnect",
+    attachments: [{ ...metadata, dataUrl: `data:${blob.type};base64,Y29waWVkIGF0dGFjaG1lbnQ=` }],
+  });
+  expect(result.update.attachmentPayload?.key).not.toBe(source.value.key);
+  expect(result.update.attachmentPayload?.tabId).not.toBe("source-tab");
 });

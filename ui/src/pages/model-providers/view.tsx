@@ -1,6 +1,6 @@
 import { createMemo, createSignal, For, Show } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
-import { Icon } from "../../components/solid/icon.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
   LearnMoreLink,
   SettingsEmpty,
@@ -128,7 +128,7 @@ function ModelReadiness(props: ModelProvidersViewProps) {
 
 function renderProviderNoticeRow(text: string) {
   return (
-    <div class="settings-row">
+    <div class="settings-row" role="alert">
       <div class="settings-row__text">
         <span class="settings-row__desc provider-usage__error">{text}</span>
       </div>
@@ -183,11 +183,11 @@ function ProviderAccess(props: ModelProvidersViewProps) {
   // values from page revalidation.
   const routeQuery = createMemo(() => props.providerQuery ?? "");
   const [search, setSearch] = createSignal(() => routeQuery());
-  const query = () => search().trim().toLocaleLowerCase();
+  const query = () => search().trim().toLocaleLowerCase().normalize("NFC");
   const matchingCards = createMemo(() =>
     props.cards.filter((card) =>
       [card.id, card.displayName, ...card.credentialProviderIds].some((value) =>
-        value.toLocaleLowerCase().includes(query()),
+        value.toLocaleLowerCase().normalize("NFC").includes(query()),
       ),
     ),
   );
@@ -222,19 +222,21 @@ function ProviderAccess(props: ModelProvidersViewProps) {
         />
       </label>
       <div class="model-providers__provider-list">
-        {props.error ? (
-          <SettingsGroup>
-            {renderProviderNoticeRow(props.error)}
-            <button
-              type="button"
-              class="btn btn--sm"
-              disabled={props.refreshing}
-              onClick={() => props.onRefresh()}
-            >
-              {t("common.retry")}
-            </button>
-          </SettingsGroup>
-        ) : undefined}
+        <Show when={props.error}>
+          {(error) => (
+            <SettingsGroup>
+              {renderProviderNoticeRow(error())}
+              <button
+                type="button"
+                class="btn btn--sm"
+                disabled={props.refreshing}
+                onClick={() => props.onRefresh()}
+              >
+                {t("common.retry")}
+              </button>
+            </SettingsGroup>
+          )}
+        </Show>
         {props.providerUsageFailed ? (
           <SettingsGroup>
             {renderProviderNoticeRow(t("usage.providerUsage.unavailable"))}
@@ -264,14 +266,16 @@ function ProviderAccess(props: ModelProvidersViewProps) {
               </SettingsGroup>
             </Show>
             <Show when={unconnected().length > 0}>
-              <h3 class="provider-list__title">{t("modelProviders.row.notConnected")}</h3>
-              <SettingsGroup carapace>
-                <ul class="provider-list provider-list--quiet">
-                  <For each={unconnected()} keyed={(card) => card.id}>
-                    {(card) => <UnconnectedProviderRow {...props} card={card()} />}
-                  </For>
-                </ul>
-              </SettingsGroup>
+              <section class="settings-section provider-list__section">
+                <h3 class="settings-section__heading">{t("modelProviders.row.notConnected")}</h3>
+                <SettingsGroup carapace>
+                  <ul class="provider-list provider-list--quiet">
+                    <For each={unconnected()} keyed={(card) => card.id}>
+                      {(card) => <UnconnectedProviderRow {...props} card={card()} />}
+                    </For>
+                  </ul>
+                </SettingsGroup>
+              </section>
             </Show>
           </>
         )}
@@ -294,17 +298,13 @@ function ProviderAccess(props: ModelProvidersViewProps) {
             {t("modelProviders.viewUsage")}
           </button>
           {props.providerScope}
-          <openclaw-tooltip prop:content={refreshTooltip()}>
-            <button
-              type="button"
-              class="btn btn--icon btn--ghost btn--xs model-providers__refresh-button"
-              aria-label={refreshLabel()}
-              disabled={props.refreshing}
-              onClick={() => props.onRefresh()}
-            >
-              <Icon name="refresh" />
-            </button>
-          </openclaw-tooltip>
+          <RefreshButton
+            class="model-providers__refresh-button"
+            label={refreshLabel()}
+            tooltip={refreshTooltip()}
+            busy={props.refreshing}
+            onClick={() => props.onRefresh()}
+          />
         </>
       }
     >

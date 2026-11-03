@@ -185,6 +185,7 @@ export async function prepareGatewayKernelState(params: {
     workerEnvironmentStartup && workerPlacementModule
       ? workerPlacementModule.createGatewayGitHubPublicationRuntime({
           placements: workerEnvironmentStartup.placementStore,
+          ...(workerEnvironmentService ? { environments: workerEnvironmentService } : {}),
           getCommittedRuntimeConfig,
           warn: (message) => log.warn(message),
         })
@@ -438,7 +439,7 @@ export async function prepareGatewayKernelState(params: {
     current: undefined,
   };
   // Internal principals belong to this server generation and become usable only after bind.
-  // Closing flips this first so delayed recovery/channel work cannot enter a retired context.
+  // Closing flips this first so delayed channel work cannot enter a retired context.
 
   const { createChannelManager } = await startupTrace.measure(
     "gateway.channel-manager-import",
@@ -464,7 +465,10 @@ export async function prepareGatewayKernelState(params: {
   channelManager.setAutostartSuppression(opts.channelAutostartSuppression ?? null);
   const sidecarStartup = opts.sidecarStartup ?? "start";
   const isGatewayStartupPending = () =>
-    (!startupState.dispatchReady || !startupState.sidecarsReady) && !lifecycle.closePreludeStarted;
+    (!startupState.dispatchReady ||
+      !startupState.sidecarsReady ||
+      unavailableGatewayMethods.size > 0) &&
+    !lifecycle.closePreludeStarted;
   const startupCheckerDeps = {
     startedAt: serverStartedAt,
     getStartupPending: isGatewayStartupPending,
@@ -485,7 +489,6 @@ export async function prepareGatewayKernelState(params: {
       );
     },
     getPluginReloadStatus: params.getPluginReloadStatus,
-    // Recovery releases this same admission gate before readiness can admit fresh chat.
     isChatSendAvailable: () => !unavailableGatewayMethods.has("chat.send"),
     shouldSkipChannelReadiness: isChannelStartupSuppressedByEnvironment,
   });

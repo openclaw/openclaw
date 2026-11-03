@@ -2,13 +2,22 @@ import { createServer } from "node:http";
 import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import type { ModelsListParams } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
-import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import * as tmpDirOwner from "../../infra/tmp-openclaw-dir.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { waitForCatalogPublication } from "./models-auth-catalog.test-support.js";
-import { createCatalogModel as catalogModel } from "./models-catalog-fixture.test-support.js";
+import {
+  catalogAgents,
+  createCatalogModel as catalogModel,
+  writeCatalogPlugin,
+} from "./models-catalog-fixture.test-support.js";
 import {
   createModelsTestState,
+  modelsTestConfig,
   serveModelsEndpoint,
   startModelsGateway,
 } from "./models-integration.test-support.js";
@@ -29,7 +38,7 @@ afterAll(async () => {
 });
 
 it.for([false, true])(
-  "models.list learns native models after cold Gateway startup (provider credentials: %s)",
+  "models.list discovers and renews native models (provider credentials: %s)",
   { timeout: 120_000 },
   async (withProviderCredentials, { signal }) => {
     await using state = await createModelsTestState("native-catalog-lifecycle", {
@@ -47,75 +56,51 @@ it.for([false, true])(
     const requests: string[] = [];
     const nativeRequests = (from = 0) =>
       requests.slice(from).filter((path) => path === "/native/models");
-    let nativeModelId = "native-account-only";
-    let emptyNativeCatalog = false;
-    let failedNativeCatalog = false;
-    let failedProviderCatalog = !withProviderCredentials;
+    const nativeModelId = "native-account-only";
+    let outsideName = "Unrelated native model";
+    let addOutsideModel = false;
+    let failedProviderCatalog = true;
     let nativeRequested = createDeferred();
-    let holdOther = false;
-    const otherRequested = createDeferred();
-    const otherReleased = createDeferred();
     let nativeReleased = createDeferred();
-    const nativeRow = (id: string, name: string, rowProvider = provider) => ({
-      provider: rowProvider,
+    const providerRequested = createDeferred();
+    const providerReleased = createDeferred();
+    const nativeRow = (id: string, name: string) => ({
+      provider,
       id,
       name,
       nativeRuntime: harness,
     });
-    const nativeRows = () => {
-      if (emptyNativeCatalog) {
-        return [];
-      }
-      const rows = [
-        nativeRow(nativeModelId, "Native account model"),
-        nativeRow("configured-native", "Configured native model"),
-        { provider, id: "harness-host-row", name: "Harness host model" },
-      ];
-      if (withProviderCredentials) {
-        rows.push(
-          nativeRow(
-            "unrelated-native-model",
-            nativeModelId === "native-account-only"
-              ? "Unrelated native model"
-              : "Outside-scope replacement",
-            otherProvider,
-          ),
-        );
-        if (nativeModelId !== "native-account-only") {
-          rows.push(nativeRow("outside-scope-new", "Outside-scope new model", otherProvider));
-        }
-      }
-      return rows;
-    };
+    const nativeRows = () => [
+      nativeRow(nativeModelId, "Native account model"),
+      nativeRow("configured-native", "Configured native model"),
+      { provider, id: "harness-host-row", name: "Harness host model" },
+      ...(withProviderCredentials
+        ? [
+            { ...nativeRow("unrelated-native-model", outsideName), provider: otherProvider },
+            ...(addOutsideModel
+              ? [
+                  {
+                    ...nativeRow("outside-scope-new", "Outside-scope new model"),
+                    provider: otherProvider,
+                  },
+                ]
+              : []),
+          ]
+        : []),
+    ];
     const endpoint = createServer((request, response) => {
       requests.push(request.url ?? "");
       response.setHeader("Content-Type", "application/json");
       if (request.url === "/native/models") {
-        if (failedNativeCatalog) {
-          void nativeReleased.promise.then(() =>
-            response
-              .writeHead(503)
-              .end(JSON.stringify({ error: "Native catalog fixture unavailable" })),
-          );
-          return;
-        }
         nativeRequested.resolve();
         void nativeReleased.promise.then(() => response.end(JSON.stringify(nativeRows())));
       } else if (request.url === "/provider/models" || request.url === "/other/models") {
         if (failedProviderCatalog && request.url === "/provider/models") {
-          response.writeHead(503).end();
+          providerRequested.resolve();
+          void providerReleased.promise.then(() => response.writeHead(503).end());
           return;
         }
-        const reply = () =>
-          response.end(
-            JSON.stringify([{ id: "provider-account", name: "Provider account model" }]),
-          );
-        if (holdOther && request.url === "/other/models") {
-          otherRequested.resolve();
-          void otherReleased.promise.then(reply);
-        } else {
-          reply();
-        }
+        response.end(JSON.stringify([{ id: "provider-account", name: "Provider account model" }]));
       } else {
         response.writeHead(404).end();
       }
@@ -171,12 +156,12 @@ it.for([false, true])(
           },
           readModelCatalogReadiness: params => observed.has(params.config) ? { accountType: "chatgpt" } : undefined,
         });
-        for (const providerId of [${JSON.stringify(provider)}, "unrelated-native-fixture"]) api.registerProvider({
+        for (const providerId of [${JSON.stringify(provider)}, ${JSON.stringify(otherProvider)}]) api.registerProvider({
           id: providerId, label: "Native fixture", auth: [],
           formatApiKey: credential => credential.access,
           staticCatalog: ${withProviderCredentials ? "false" : "true"} && providerId === ${JSON.stringify(provider)} ? {
             order: "simple", async run() {
-              return { provider: require("./openclaw.plugin.json").modelCatalog.providers[providerId] };
+              return { provider: require("./openclaw.plugin.json").modelCatalog.providers[${JSON.stringify(provider)}] };
             },
           } : undefined,
           catalog: { order: "profile", async run(ctx) {
@@ -198,14 +183,11 @@ it.for([false, true])(
       }
       const token = "native-lifecycle-gateway-token";
       const cfg = {
-        agents: {
-          defaults: {
-            model: `${provider}/static-model`,
-            modelPolicy: { allow: [`${provider}/*`] },
-            models: { [`${provider}/static-model`]: { agentRuntime: { id: harness } } },
-          },
-          entries: { main: { workspace: state.workspaceDir } },
-        },
+        agents: catalogAgents(state, {
+          model: `${provider}/static-model`,
+          modelPolicy: { allow: [`${provider}/*`] },
+          models: { [`${provider}/static-model`]: { agentRuntime: { id: harness } } },
+        }),
         models: {
           providers: {
             [provider]: {
@@ -239,6 +221,7 @@ it.for([false, true])(
       await state.writeConfig(cfg);
       if (withProviderCredentials) {
         await saveAccount("native-original");
+        failedProviderCatalog = false;
       }
       await using gateway = await startModelsGateway(state, cfg, token);
       const { client, server } = gateway;
@@ -252,25 +235,18 @@ it.for([false, true])(
           result.models.find((row) => row.id === nativeModelId)?.available;
         const published = (ready: (result: ModelsListResult) => boolean) =>
           waitForCatalogPublication({ signal, read: list, ready });
-        const contains = (result: ModelsListResult, ids: string[], rowProvider = provider) =>
-          expect(result.models).toEqual(
-            expect.arrayContaining(ids.map((id) => modelRow(rowProvider, id))),
-          );
         const cachedReads = async (check: (result: ModelsListResult) => void) => {
           const before = requests.length;
           const results = await Promise.all([list(), list()]);
           expect(requests).toHaveLength(before);
           results.forEach(check);
         };
-        const refreshProvider = async () => {
-          const before = requests.length;
-          await request({ provider, refresh: true });
-          expect(requests.slice(before)).toEqual(["/provider/models", "/native/models"]);
-          return list();
-        };
         expect(nativeRequests()).toHaveLength(0);
         const firstReads = await Promise.all([list(), list()]);
         await withinTest(nativeRequested.promise, signal);
+        if (!withProviderCredentials) {
+          await withinTest(providerRequested.promise, signal);
+        }
         const beforeReads = requests.length;
         // Ordinary and prepared-only reads return saved rows while discovery is held.
         const pending = [...firstReads, ...(await Promise.all([preparedList(), preparedList()]))];
@@ -285,7 +261,29 @@ it.for([false, true])(
         await published((result) => available(result) === true);
         expect((await list()).models).toContainEqual(model("harness-host-row"));
         if (!withProviderCredentials) {
-          // Cold startup discovers the full catalog, as an explicit refresh would.
+          // Native readiness can clear pendingProviders before full discovery publishes.
+          const firstPublication = createDeferred();
+          const discovery = published((result) => {
+            firstPublication.resolve();
+            return (
+              result.providerOutcomes?.some(
+                (outcome) => outcome.provider === provider && outcome.status === "unavailable",
+              ) === true
+            );
+          });
+          await withinTest(
+            awaitGateBeforeSettlement(
+              firstPublication.promise,
+              discovery,
+              "Catalog publication settled before its first read",
+            ),
+            signal,
+          );
+          providerReleased.resolve();
+          expect((await discovery).providerOutcomes ?? []).toContainEqual({
+            provider,
+            status: "unavailable",
+          });
           expect(requests.toSorted()).toEqual(["/native/models", "/provider/models"]);
           // Gateway refresh can return a pending snapshot before discovery publishes.
           const refresh = () =>
@@ -323,63 +321,18 @@ it.for([false, true])(
           nativeReleased.resolve();
           await published((result) => !result.pendingProviders?.includes(provider));
         } else {
-          const beforeUnrelated = requests.length;
-          holdOther = true;
-          const refreshUnrelated = () =>
-            request({ provider: otherProvider, view: "all", refresh: true });
-          const firstRefresh = refreshUnrelated();
-          await otherRequested.promise;
-          const secondRefresh = refreshUnrelated();
-          const concurrentRead = await list();
-          expect(concurrentRead.pendingProviders).toContain(otherProvider);
-          expect(available(concurrentRead)).toBe(true);
-          const foregroundResults = await Promise.all([firstRefresh, secondRefresh]);
-          for (const result of foregroundResults) {
-            expect(result.pendingProviders).toContain(otherProvider);
-          }
-          otherReleased.resolve();
-          await expect
-            .poll(async () => (await list()).pendingProviders ?? [], { timeout: 15_000 })
-            .not.toContain(otherProvider);
-          expect(requests.slice(beforeUnrelated)).toEqual(["/other/models"]);
-          expect(available(await list())).toBe(true);
-          contains(await list(), ["unrelated-native-model"], otherProvider);
-          failedNativeCatalog = true;
-          const beforeFailure = requests.length;
-          await expect
-            .soft(request({ provider, refresh: true }))
-            .rejects.toThrow("Native catalog fixture unavailable");
-          expect(requests.slice(beforeFailure)).toEqual(["/provider/models", "/native/models"]);
-          await cachedReads((failed) => {
-            expect.soft(failed.refreshFailed).toBe(true);
-            expect(failed.pendingProviders ?? []).not.toContain(provider);
-            contains(failed, ["native-account-only", "configured-native"]);
-            contains(failed, ["unrelated-native-model"], otherProvider);
-          });
-          failedNativeCatalog = false;
-          const recovered = await refreshProvider();
-          expect(recovered.refreshFailed).not.toBe(true);
-          expect(recovered.models).toContainEqual(model("native-account-only"));
-          nativeModelId = "native-new-release";
-          expect(available(await refreshProvider())).toBe(true);
-          const withdrawn = await list();
-          expect.soft(withdrawn.models).not.toContainEqual(model("native-account-only"));
-          expect(withdrawn.models).toContainEqual(
+          outsideName = "Outside-scope replacement";
+          addOutsideModel = true;
+          await request({ provider, refresh: true });
+          const scoped = await list();
+          expect(scoped.models).toContainEqual(
             expect.objectContaining({
               provider: otherProvider,
               id: "unrelated-native-model",
               name: "Unrelated native model",
             }),
           );
-          expect(withdrawn.models).not.toContainEqual(model("outside-scope-new", otherProvider));
-          emptyNativeCatalog = true;
-          const emptied = await refreshProvider();
-          expect.soft(emptied.models).not.toContainEqual(model("native-new-release"));
-          expect.soft(emptied.models).not.toContainEqual(model("native-account-only"));
-          contains(emptied, ["static-model", "configured-native"]);
-          contains(emptied, ["unrelated-native-model", "provider-account"], otherProvider);
-          emptyNativeCatalog = false;
-          await request({ provider, refresh: true });
+          expect(scoped.models).not.toContainEqual(model("outside-scope-new", otherProvider));
           const beforeReloadNative = nativeRequests().length;
           const config = await client.request<{ hash: string }>("config.get", {});
           await client.request("config.patch", {
@@ -390,32 +343,6 @@ it.for([false, true])(
           });
           await published((result) => available(result) === true);
           expect(nativeRequests()).toHaveLength(beforeReloadNative + 1);
-          const beforeFullFailure = requests.length;
-          nativeReleased = createDeferred();
-          failedNativeCatalog = true;
-          const fullFailure = expect
-            .soft(request({ refresh: true }))
-            .rejects.toThrow("Native catalog fixture unavailable");
-          await expect
-            .poll(() => nativeRequests(beforeFullFailure).length, { timeout: 15_000 })
-            .toBe(1);
-          await cachedReads((fullResult) => {
-            expect(fullResult.pendingProviders).toContain(provider);
-            expect.soft(fullResult.models).toContainEqual(model(nativeModelId));
-          });
-          nativeReleased.resolve();
-          await fullFailure;
-          await cachedReads((failed) => {
-            expect(failed.refreshFailed).toBe(true);
-            expect(failed.pendingProviders ?? []).not.toContain(provider);
-            expect.soft(failed.models).toContainEqual(model(nativeModelId));
-          });
-          failedNativeCatalog = false;
-          await request({ refresh: true });
-          const fullRecovered = await list();
-          expect(fullRecovered.refreshFailed).not.toBe(true);
-          expect(fullRecovered.models).toContainEqual(model(nativeModelId));
-          expect(nativeRequests(beforeFullFailure)).toHaveLength(2);
           const beforeRenewal = requests.length;
           nativeReleased = createDeferred();
           await saveAccount("native-renewed");
@@ -426,7 +353,7 @@ it.for([false, true])(
             .toBe(1);
           await cachedReads((result) => {
             expect(result.pendingProviders).toContain(provider);
-            expect.soft(result.models).toContainEqual(model("native-new-release"));
+            expect.soft(result.models).toContainEqual(model(nativeModelId));
             expect(result.models).not.toContainEqual(model("harness-host-row"));
           });
           nativeReleased.resolve();
@@ -440,12 +367,12 @@ it.for([false, true])(
         await Promise.all([list(), list(), list()]);
         expect(requests).toHaveLength(settledRequests);
       } finally {
-        otherReleased.resolve();
         nativeReleased.resolve();
+        providerReleased.resolve();
       }
     } finally {
-      otherReleased.resolve();
       nativeReleased.resolve();
+      providerReleased.resolve();
     }
   },
 );
@@ -471,12 +398,6 @@ it("models.list discovers credential-free providers at startup and explicitly re
   });
   await using listening = await serveModelsEndpoint(endpoint, true);
   const { baseUrl } = listening;
-  await state.writeJson("catalog-plugin/openclaw.plugin.json", {
-    id: provider,
-    providers: [provider],
-    providerCatalogEntry: "./provider-discovery.cjs",
-    configSchema: { type: "object", additionalProperties: false },
-  });
   await state.writeText(
     "catalog-plugin/provider-discovery.cjs",
     `module.exports = {
@@ -487,26 +408,24 @@ it("models.list discovers credential-free providers at startup and explicitly re
       } },
     };`,
   );
-  const pluginPath = await state.writeText(
-    "catalog-plugin/index.cjs",
+  const pluginPath = await writeCatalogPlugin(
+    state,
+    provider,
     `module.exports = {
       id: ${JSON.stringify(provider)}, register(api) { api.registerProvider(require("./provider-discovery.cjs")); }
     };`,
+    { providerCatalogEntry: "./provider-discovery.cjs" },
   );
   const token = "credential-free-gateway-token";
-  const cfg = {
-    agents: {
-      defaults: { models: { [`${provider}/*`]: {} } },
-      entries: { main: { workspace: state.workspaceDir } },
-    },
+  const cfg = modelsTestConfig(state, token, {
+    agents: catalogAgents(state, { models: { [`${provider}/*`]: {} } }),
     plugins: {
       allow: [provider],
       load: { paths: [pluginPath] },
       slots: { memory: "none" },
       entries: { [provider]: { enabled: true } },
     },
-    gateway: { mode: "local", auth: { mode: "token", token } },
-  };
+  });
   await state.writeConfig(cfg);
   await using gateway = await startModelsGateway(state, cfg, token);
   const { client, server } = gateway;

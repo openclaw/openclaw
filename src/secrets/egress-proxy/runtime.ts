@@ -66,8 +66,6 @@ export async function startGatewaySecretEgressProxy(params: {
             "secret egress TLS certificate unavailable; check OpenSSL and the system clock, then retry",
             event,
           );
-        } else if (event.kind === "refused") {
-          log.info("secret egress request", event);
         } else {
           log.debug("secret egress request", event);
         }

@@ -72,6 +72,42 @@ afterEach(async () => {
 });
 
 describe("subagent maintenance protection", () => {
+  it("does not revisit settled live facts while capturing current protection", async () => {
+    const pending = createRun();
+    const rows = new Map([[pending.runId, pending]]);
+    let settledFactReads = 0;
+    for (let index = 0; index < 200; index++) {
+      const settled = createRun({
+        runId: `settled-${index}`,
+        childSessionKey: `agent:main:subagent:settled-${index}`,
+      });
+      Object.defineProperty(settled, "cleanupCompletedAt", {
+        enumerable: true,
+        get() {
+          settledFactReads++;
+          return 3;
+        },
+      });
+      rows.set(settled.runId, settled);
+      subagentRuns.set(settled.runId, settled);
+    }
+    saveSubagentRegistryToSqlite(rows);
+    const prepared = await prepareSessionMaintenancePreservation(storePath);
+    try {
+      settledFactReads = 0;
+      expect(prepared.capture().providerKeys).toEqual([pending.childSessionKey]);
+      expect(prepared.capture().providerKeys).toEqual([pending.childSessionKey]);
+      expect(settledFactReads).toBe(0);
+      // A live replacement vetoes durable protection, and deleting it exposes durable facts again.
+      subagentRuns.set(pending.runId, { ...pending, cleanupCompletedAt: 4 });
+      expect(prepared.capture().providerKeys).toEqual([]);
+      subagentRuns.delete(pending.runId);
+      expect(prepared.capture().providerKeys).toEqual([pending.childSessionKey]);
+    } finally {
+      prepared.dispose();
+    }
+  });
+
   it("loads protection once without decoding retained task and reply text", async () => {
     const publicRun = createRun();
     const privateRun = createRun({
@@ -126,6 +162,14 @@ describe("subagent maintenance protection", () => {
     const payload = (patch: Record<string, unknown>) => JSON.stringify({ ...run, ...patch });
     const active = payload({ execution: { status: "running" } });
     const done = payload({ cleanupCompletedAt: 3, delivery: { status: "delivered" } });
+    const suspended = (suspendedAt?: unknown) =>
+      payload({
+        expectsCompletionMessage: undefined,
+        delivery: { status: "suspended", suspendedAt },
+      });
+    const afterCleanup = (patch: Record<string, unknown>) =>
+      payload({ cleanupCompletedAt: 3, ...patch });
+    const privateEnvelope = (value: string) => `${value.slice(0, -1)},"completionTarget":"parent"}`;
     const cases: Array<[string, string, boolean]> = [
       ["active", active, true],
       ["cleanup completed", payload({ cleanupCompletedAt: 3 }), false],
@@ -134,47 +178,25 @@ describe("subagent maintenance protection", () => {
       ["in progress", payload({ delivery: { status: "in_progress" } }), true],
       ["no completion expected", payload({ expectsCompletionMessage: false }), false],
       ["pending without expectation", payload({ expectsCompletionMessage: undefined }), true],
-      [
-        "suspended",
-        payload({
-          expectsCompletionMessage: undefined,
-          delivery: { status: "suspended", suspendedAt: 0 },
-        }),
-        true,
-      ],
-      [
-        "suspended without timestamp",
-        payload({ expectsCompletionMessage: undefined, delivery: { status: "suspended" } }),
-        false,
-      ],
-      [
-        "suspended string timestamp",
-        payload({
-          expectsCompletionMessage: undefined,
-          delivery: { status: "suspended", suspendedAt: "1" },
-        }),
-        false,
-      ],
+      ["suspended", suspended(0), true],
+      ["suspended without timestamp", suspended(), false],
+      ["suspended string timestamp", suspended("1"), false],
       [
         "kill reconciliation after cleanup",
-        payload({ cleanupCompletedAt: 3, killReconciliation: { killedAt: 0 } }),
+        afterCleanup({ killReconciliation: { killedAt: 0 } }),
         true,
       ],
       [
         "invalid kill reconciliation",
-        payload({ cleanupCompletedAt: 3, killReconciliation: { killedAt: "0" } }),
+        afterCleanup({ killReconciliation: { killedAt: "0" } }),
         false,
       ],
       [
         "kill intent after cleanup",
-        payload({ cleanupCompletedAt: 3, killIntent: { requestedAt: 0, reason: " stop " } }),
+        afterCleanup({ killIntent: { requestedAt: 0, reason: " stop " } }),
         true,
       ],
-      [
-        "invalid kill intent",
-        payload({ cleanupCompletedAt: 3, killIntent: { requestedAt: 0, reason: " " } }),
-        false,
-      ],
+      ["invalid kill intent", afterCleanup({ killIntent: { requestedAt: 0, reason: " " } }), false],
       [
         "duplicate execution",
         payload({}).replace('"execution":', '"execution":{"status":"invalid"},"execution":'),
@@ -182,12 +204,12 @@ describe("subagent maintenance protection", () => {
       ],
       [
         "last private envelope completed",
-        `{"parentCompletion":${active.slice(0, -1)},"completionTarget":"parent"},"parentCompletion":${done.slice(0, -1)},"completionTarget":"parent"}}`,
+        `{"parentCompletion":${privateEnvelope(active)},"parentCompletion":${privateEnvelope(done)}}`,
         false,
       ],
       [
         "last private envelope active",
-        `{"parentCompletion":${done.slice(0, -1)},"completionTarget":"parent"},"parentCompletion":${active.slice(0, -1)},"completionTarget":"parent"}}`,
+        `{"parentCompletion":${privateEnvelope(done)},"parentCompletion":${privateEnvelope(active)}}`,
         true,
       ],
       ["literal NUL", active + "\u0000invalid", false],

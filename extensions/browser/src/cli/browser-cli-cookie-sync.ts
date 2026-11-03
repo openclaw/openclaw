@@ -30,19 +30,9 @@ type CookieSyncOptions = {
   watch?: boolean;
 };
 
-type CookieSyncSummary = {
-  browser: string;
-  systemProfile: string;
-  into: string;
-  gateway: string;
-  total: number;
-  pushed: number;
-  skipped: number;
-  failed: number;
-  domains: string[];
-};
-
-function formatCookieSyncSummary(summary: CookieSyncSummary): string {
+function formatCookieSyncSummary(
+  summary: Awaited<ReturnType<typeof pushSystemProfileCookies>>,
+): string {
   const domains = summary.domains.length > 0 ? summary.domains.join(",") : "none";
   return (
     `cookie sync ${summary.browser}/${summary.systemProfile} -> ${summary.into} ` +
@@ -57,7 +47,7 @@ async function pushSystemProfileCookies(params: {
   domains: readonly string[];
   signal?: AbortSignal;
   readSecret?: KeychainSecretReader;
-}): Promise<CookieSyncSummary> {
+}) {
   const source = await readSystemProfileCookies(
     {
       browser: params.options.browser,

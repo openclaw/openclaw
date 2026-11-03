@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { WorktreeGcProgress } from "../agents/worktrees/gc-progress.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
+import type { WorktreeWarmPoolRequest } from "../agents/worktrees/template-registry.js";
 import type { ManagedWorktreeGcResult } from "../agents/worktrees/types.js";
 import {
   getRuntimeConfigSnapshot,
@@ -20,6 +21,11 @@ import {
   requestGatewayWorktreeMaintenance,
   startWorktreeMaintenance,
 } from "./worktree-maintenance.js";
+
+// mock-isolation: Scheduler fixtures have no shared-state broker; CAS sweep behavior has worker tests.
+vi.mock("./worker-environments/local-workspace-gc.js", () => ({
+  sweepLocalWorkspaceManifests: vi.fn(async () => {}),
+}));
 
 function completedResult(): ManagedWorktreeGcResult {
   return { ...new WorktreeGcProgress().result, limitsSatisfied: true };
@@ -51,8 +57,8 @@ function maintenanceFixture(config: OpenClawConfig = {}) {
       pending.push(running);
       return running;
     },
-    hold(repeat = false) {
-      const held = holdGc(repeat);
+    hold(repeat = false, onRun = () => {}) {
+      const held = holdGc(repeat, onRun);
       release = () => held.release.resolve(completedResult());
       return held;
     },
@@ -77,10 +83,11 @@ function maintenanceFixture(config: OpenClawConfig = {}) {
   };
 }
 
-function holdGc(repeat = false) {
+function holdGc(repeat = false, onRun = () => {}) {
   const entered = createDeferred<NonNullable<Parameters<typeof managedWorktrees.gc>[0]>>();
   const release = createDeferred<ManagedWorktreeGcResult>();
   const implementation = (params: NonNullable<Parameters<typeof managedWorktrees.gc>[0]> = {}) => {
+    onRun();
     entered.resolve(params);
     return release.promise;
   };
@@ -97,20 +104,131 @@ function awaitCleanup<T>(entered: Promise<T>, running: Promise<void> | void) {
   return awaitGateBeforeSettlement(entered, Promise.resolve(running), "cleanup never started");
 }
 
+function warmPoolDemand() {
+  let notify: (request: WorktreeWarmPoolRequest) => void = () => {};
+  const unregister = vi.fn();
+  vi.spyOn(managedWorktrees, "onWarmPoolNeeded").mockImplementation((listener) => {
+    notify = listener;
+    return unregister;
+  });
+  return {
+    unregister,
+    notify(cacheKey: string, sourceCommit = cacheKey) {
+      notify({
+        sourceOnly: true,
+        template: {
+          cacheKey,
+          sourceCommit,
+          id: cacheKey,
+          repoRoot: "/synthetic/repo",
+          commonDir: "/synthetic/repo/.git",
+          worktreeRoot: "/synthetic/worktrees",
+          path: `/synthetic/worktrees/.templates/${cacheKey}`,
+          backend: "btrfs",
+          contentKey: sourceCommit,
+          status: "ready",
+          createdAt: 1,
+          lastUsedAt: 1,
+        },
+      });
+    },
+  };
+}
+
 afterEach(() => {
   resetConfigRuntimeState();
   resetGatewayWorkAdmission();
   vi.restoreAllMocks();
 });
 
-it("coalesces archive notifications into cleanup under the maintenance context", async () => {
+it("refills serially in maintenance context, coalescing bounded latest repository demand", async () => {
+  await using fixture = maintenanceFixture();
+  const demand = warmPoolDemand();
+  const context = new AsyncLocalStorage<string>();
+  const observed: Array<[string, string | undefined]> = [];
+  const entered = createDeferred();
+  const release = createDeferred();
+  vi.spyOn(managedWorktrees, "prewarm").mockImplementation(async (request) => {
+    observed.push([request.template.sourceCommit, context.getStore()]);
+    if (observed.length === 1) {
+      entered.resolve();
+      await release.promise;
+    }
+  });
+  context.run("maintenance", () => fixture.start());
+  context.run("request", () => {
+    for (let index = 0; index < 33; index++) {
+      demand.notify(String(index));
+    }
+    demand.notify("0", "latest");
+  });
+  const running = fixture.run();
+  try {
+    await awaitCleanup(entered.promise, running);
+    expect(observed).toEqual([["latest", "maintenance"]]);
+    demand.notify("0", "consumed-again");
+  } finally {
+    release.resolve();
+  }
+  await running;
+  expect(observed).toEqual([
+    ["latest", "maintenance"],
+    ...Array.from({ length: 31 }, (_, index) => [String(index + 1), "maintenance"]),
+    ["consumed-again", "maintenance"],
+  ]);
+  expect(fixture.onError).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("queue is full"));
+});
+
+it.each(["stop", "configuration"])("withdraws refill authority on %s", async (change) => {
+  const config: OpenClawConfig = {};
+  await using fixture = maintenanceFixture(config);
+  const demand = warmPoolDemand();
+  const entered = createDeferred<Parameters<typeof managedWorktrees.prewarm>[1]>();
+  const release = createDeferred();
+  const prewarm = vi
+    .spyOn(managedWorktrees, "prewarm")
+    .mockImplementation(async (_request, guard) => {
+      entered.resolve(guard);
+      await release.promise;
+      guard.commitGuard?.();
+    });
+  const owner = fixture.start();
+  demand.notify("first");
+  const running = fixture.run();
+  const guard = await awaitCleanup(entered.promise, running);
+  let stopped = false;
+  let stopping: Promise<void> | undefined;
+  try {
+    if (change === "stop") {
+      stopping = owner.stop().then(() => {
+        stopped = true;
+      });
+      fixture.track(stopping);
+      expect(guard.signal?.aborted).toBe(true);
+      expect(demand.unregister).toHaveBeenCalledOnce();
+    } else {
+      config.worktreeAcceleration = false;
+    }
+    demand.notify("second");
+    expect(() => guard.commitGuard?.()).toThrow(/stopping|configuration changed/);
+    await Promise.resolve();
+    expect(stopped).toBe(false);
+  } finally {
+    release.resolve();
+  }
+  await running;
+  await stopping;
+  expect(prewarm).toHaveBeenCalledOnce();
+  expect(fixture.onError).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("refill failed"));
+});
+
+it("coalesces archives in the maintenance context and sweeps again after in-flight commits", async () => {
   await using fixture = maintenanceFixture();
   const { clock, getRuntimeConfig, start } = fixture;
   const context = new AsyncLocalStorage<string>();
   const observed: Array<string | undefined> = [];
-  const gc = vi.spyOn(managedWorktrees, "gc").mockImplementation(async () => {
+  const { entered, release, gc } = fixture.hold(false, () => {
     observed.push(context.getStore());
-    return completedResult();
   });
   context.run("maintenance", start);
   context.run("archive-request", () => {
@@ -118,18 +236,9 @@ it("coalesces archive notifications into cleanup under the maintenance context",
     notifyGatewayWorktreeArchive(getRuntimeConfig);
   });
   expect(gc).not.toHaveBeenCalled();
-  await context.run("host-wake", () => clock.advanceBy(0));
-  expect(observed).toEqual(["maintenance"]);
-});
-
-it("sweeps again after archive commits during cleanup without overlapping passes", async () => {
-  await using fixture = maintenanceFixture();
-  const { clock, getRuntimeConfig, start } = fixture;
-  const { entered, release, gc } = fixture.hold();
-  start();
-  notifyGatewayWorktreeArchive(getRuntimeConfig);
-  const running = fixture.run();
+  const running = context.run("host-wake", () => fixture.run());
   await awaitCleanup(entered.promise, running);
+  expect(observed).toEqual(["maintenance"]);
   notifyGatewayWorktreeArchive(getRuntimeConfig);
   notifyGatewayWorktreeArchive(getRuntimeConfig);
   await clock.advanceBy(0);

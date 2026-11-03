@@ -1,12 +1,10 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { buildMentionRegexes, matchesMentionPatterns } from "openclaw/plugin-sdk/channel-inbound";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../runtime-api.js";
 import { createAccount, createRuntimeEnv } from "./inbound-media.test-fixtures.js";
@@ -22,9 +20,7 @@ vi.mock("./room-info.js", async (importOriginal) => ({
   resolveNextcloudTalkRoomKind: vi.fn(async () => "group"),
 }));
 
-afterEach(() => {
-  vi.restoreAllMocks();
-});
+afterEach(() => vi.restoreAllMocks());
 
 it.each([
   { caption: "{mention-user1} inspect {file}", mentioned: true },
@@ -33,73 +29,72 @@ it.each([
   { caption: "{file}", mentioned: false },
 ])(
   "gates durable caption $caption without treating file metadata as mentions",
-  async ({ caption, mentioned }) => {
-    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "nextcloud-mentions-"));
-    const core = createPluginRuntimeMock();
-    core.channel.mentions.buildMentionRegexes = buildMentionRegexes;
-    core.channel.mentions.matchesMentionPatterns = matchesMentionPatterns;
-    setNextcloudTalkRuntime(core as unknown as PluginRuntime);
-    const account = createAccount({
-      baseUrl: "https://nextcloud.example",
-      secret: "fixture",
-      config: {
-        groupPolicy: "open",
-        mediaAllowFrom: [],
-        rooms: { "redacted-room-token": { requireMention: true } },
-      },
-    });
-    const config = {
-      messages: { groupChat: { mentionPatterns: ["@bert\\b"] } },
-      channels: { "nextcloud-talk": account.config },
-    } as CoreConfig;
-    const runtime = createRuntimeEnv();
-    const queue = createChannelIngressQueueForTests<NextcloudTalkIngressPayload>({
-      channelId: "nextcloud-talk",
-      accountId: "default",
-      stateDir: directory,
-    });
-    const deliver = vi.fn<Parameters<typeof createNextcloudTalkWebhookSpool>[0]["deliver"]>(
-      (message, lifecycle) =>
-        handleNextcloudTalkInbound({
-          message,
-          account,
-          config,
-          runtime,
-          turnAdoptionLifecycle: lifecycle,
-        }),
-    );
-    const spool = createNextcloudTalkWebhookSpool({
-      accountId: "default",
-      queue,
-      deliver,
-      runtime,
-      legacyReplayStore: null,
-      pollIntervalMs: 60_000,
-    });
-    try {
-      const envelope = JSON.parse(createFileSharedActivityBody());
-      const content = JSON.parse(envelope.object.content);
-      content.message = caption;
-      content.parameters["mention-user1"] = { type: "user", id: "bert", name: "bert" };
-      // These values must not manufacture a mention when absent from the caption.
-      content.parameters.actor.name = "bert";
-      content.parameters.file.name = "bert.pdf";
-      envelope.object.content = JSON.stringify(content);
-      expect(await spool.receive(JSON.stringify(envelope))).toBe("accepted");
-      await spool.waitForIdle();
-      expect(deliver).toHaveBeenCalledTimes(1);
-      expect(runtime.error).not.toHaveBeenCalled();
-      expect(core.channel.inbound.dispatch).toHaveBeenCalledTimes(mentioned ? 1 : 0);
-      expect(core.channel.media.saveRemoteMedia).not.toHaveBeenCalled();
-      if (mentioned) {
-        expect(vi.mocked(core.channel.inbound.buildContext).mock.calls[0]?.[0]).toMatchObject({
-          access: { mentions: { wasMentioned: true } },
-        });
+  ({ caption, mentioned }) =>
+    withTempDir("nextcloud-mentions-", async (directory) => {
+      const core = createPluginRuntimeMock();
+      core.channel.mentions.buildMentionRegexes = buildMentionRegexes;
+      core.channel.mentions.matchesMentionPatterns = matchesMentionPatterns;
+      setNextcloudTalkRuntime(core as unknown as PluginRuntime);
+      const account = createAccount({
+        baseUrl: "https://nextcloud.example",
+        secret: "fixture",
+        config: {
+          groupPolicy: "open",
+          mediaAllowFrom: [],
+          rooms: { "redacted-room-token": { requireMention: true } },
+        },
+      });
+      const config = {
+        messages: { groupChat: { mentionPatterns: ["@bert\\b"] } },
+        channels: { "nextcloud-talk": account.config },
+      } as CoreConfig;
+      const runtime = createRuntimeEnv();
+      const queue = createChannelIngressQueueForTests<NextcloudTalkIngressPayload>({
+        channelId: "nextcloud-talk",
+        accountId: "default",
+        stateDir: directory,
+      });
+      const deliver = vi.fn<Parameters<typeof createNextcloudTalkWebhookSpool>[0]["deliver"]>(
+        (message, lifecycle) =>
+          handleNextcloudTalkInbound({
+            message,
+            account,
+            config,
+            runtime,
+            turnAdoptionLifecycle: lifecycle,
+          }),
+      );
+      const spool = createNextcloudTalkWebhookSpool({
+        accountId: "default",
+        queue,
+        deliver,
+        runtime,
+        legacyReplayStore: null,
+        pollIntervalMs: 60_000,
+      });
+      try {
+        const envelope = JSON.parse(createFileSharedActivityBody());
+        const content = JSON.parse(envelope.object.content);
+        content.message = caption;
+        content.parameters["mention-user1"] = { type: "user", id: "bert", name: "bert" };
+        // These values must not manufacture a mention when absent from the caption.
+        content.parameters.actor.name = "bert";
+        content.parameters.file.name = "bert.pdf";
+        envelope.object.content = JSON.stringify(content);
+        expect(await spool.receive(JSON.stringify(envelope))).toBe("accepted");
+        await spool.waitForIdle();
+        expect(deliver).toHaveBeenCalledTimes(1);
+        expect(runtime.error).not.toHaveBeenCalled();
+        expect(core.channel.inbound.dispatch).toHaveBeenCalledTimes(mentioned ? 1 : 0);
+        expect(core.channel.media.saveRemoteMedia).not.toHaveBeenCalled();
+        if (mentioned) {
+          expect(vi.mocked(core.channel.inbound.buildContext).mock.calls[0]?.[0]).toMatchObject({
+            access: { mentions: { wasMentioned: true } },
+          });
+        }
+      } finally {
+        await spool.stop();
+        closeOpenClawStateDatabaseForTest();
       }
-    } finally {
-      await spool.stop();
-      closeOpenClawStateDatabaseForTest();
-      await fs.rm(directory, { recursive: true, force: true });
-    }
-  },
+    }),
 );

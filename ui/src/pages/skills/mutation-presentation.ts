@@ -4,6 +4,7 @@ import {
   createMemo,
   createOptimistic,
   createOptimisticStore,
+  createSignal,
   onSettled,
   refresh,
 } from "solid-js";
@@ -35,6 +36,10 @@ export function createSkillsMutationPresentation(deps: {
     const [saving, setSaving] = createOptimistic(false);
     return { ...scope, rows, setRows, saving, setSaving };
   });
+  const [toggle, setToggle] = createSignal<{
+    view: ReturnType<typeof presentation>;
+    intent: { skillKey: string; operation: SkillsState["skillOperation"] };
+  } | null>(null);
   const presentMutation = action(function* (
     view: ReturnType<typeof presentation>,
     pending: Promise<void>,
@@ -75,19 +80,34 @@ export function createSkillsMutationPresentation(deps: {
   return {
     rows: () => presentation().rows,
     saving: () => presentation().saving(),
+    toggle: () => {
+      const current = toggle();
+      return current?.view === presentation() ? current.intent : null;
+    },
     retire() {
       lifetime.resolve();
       lifetime = Promise.withResolvers<void>();
+      setToggle(null);
     },
     async run(task: () => Promise<void>, expected?: { skillKey: string; enabled: boolean }) {
       const view = presentation();
       const retired = lifetime.promise;
+      let intent: ReturnType<typeof toggle> = null;
       try {
         const previous = deps.state.skillOperation;
         const pending = task();
         if (deps.state.skillOperation === previous) {
           await pending;
           return;
+        }
+        if (expected && isCurrent(view, retired)) {
+          // The owner admitted this toggle synchronously. Present its saving state
+          // before the deferred optimistic action, including its inventory refresh.
+          intent = {
+            view,
+            intent: { skillKey: expected.skillKey, operation: deps.state.skillOperation },
+          };
+          setToggle(intent);
         }
         // Let owner publication and any just-opened dialog settle before joining.
         // Retirement can dispose an owned caller before that callback fires.
@@ -103,6 +123,8 @@ export function createSkillsMutationPresentation(deps: {
         if (isCurrent(view, retired)) {
           deps.state.skillsError = formatUiError(error);
         }
+      } finally {
+        setToggle((current) => (current === intent ? null : current));
       }
     },
   };

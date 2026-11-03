@@ -1,9 +1,32 @@
 /** Identity and execution metadata for heartbeat tasks migrated into cron. */
 import { createHash } from "node:crypto";
+import type { DefaultProactiveJobReceipt } from "../cron/proactive-job-receipt.types.js";
 import type { CronStoredJob as CronJob } from "../cron/types.js";
 import type { DoctorCronJob } from "./doctor-heartbeat-jobs.js";
+import { migrateHeartbeatPrompt } from "./doctor-heartbeat-legacy.js";
 
 const HEARTBEAT_TASK_DECLARATION_PREFIX = "heartbeat-task:";
+export const MIGRATED_HEARTBEAT_TASK_DESCRIPTION =
+  "Migrated from heartbeat monitor scratch by openclaw doctor.";
+
+/** Cutover receipts prove origin; the definition timestamp excludes later edits. */
+export function resolveHeartbeatTaskPromptRepair(
+  job: DoctorCronJob,
+  receipt: DefaultProactiveJobReceipt | undefined,
+  definitionUpdatedAtMs: number | undefined,
+): string | undefined {
+  if (
+    !receipt?.convertedJobIds?.includes(job.id) ||
+    job.description !== MIGRATED_HEARTBEAT_TASK_DESCRIPTION ||
+    job.createdAtMs !== definitionUpdatedAtMs ||
+    job.state.runningAtMs !== undefined ||
+    job.payload.kind !== "agentTurn"
+  ) {
+    return undefined;
+  }
+  const message = migrateHeartbeatPrompt(job.payload.message);
+  return message === job.payload.message ? undefined : message;
+}
 
 /** Whether a declaration key belongs to the doctor-owned heartbeat-task namespace. */
 function isHeartbeatTaskDeclarationKey(declarationKey: string | undefined): boolean {

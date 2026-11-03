@@ -413,6 +413,60 @@ openclaw config set plugins.entries.acpx.config.probeAgent claude
 With the default hybrid reload mode, this change automatically reloads the plugin.
 Run `/acp doctor` to check the updated backend.
 
+<a id="agent-process-environment" />
+
+### Agent process environment
+
+By default, ACP agents, their command probes, and the terminals they open
+inherit the whole Gateway environment, including the Gateway's own credentials.
+Two optional plugin settings narrow what they inherit. Both are unset by
+default, which keeps that behavior unchanged.
+
+- `agentProcessEnvAllow`: when set, children inherit only process essentials
+  (`PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LANGUAGE`, `TZ`,
+  `TMPDIR`, `TMP`, `TEMP`, every `LC_*` and `XDG_*`, plus the Windows system
+  and profile variables on Windows) and the listed names. An empty list keeps
+  essentials only.
+- `agentProcessEnvBlock`: names children do not inherit.
+
+They apply in this order: the allowlist first, then the blocklist removes names
+from the result, then explicit grants apply last and always win. Explicit grants
+are `ACPX_AUTH_*` variables, credentials the runtime injects for an agent, and
+variables OpenClaw sets itself (such as the default `TOKIO_WORKER_THREADS`
+cap). Names are case-sensitive except on Windows, and must not contain `=` or
+whitespace.
+
+Example that keeps OpenClaw's own credentials away from ACP agents while they
+still inherit everything else:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "acpx": {
+        "config": {
+          "agentProcessEnvBlock": [
+            "OPENCLAW_GATEWAY_TOKEN",
+            "OPENCLAW_HOOK_TOKEN",
+            "OP_CONNECT_TOKEN",
+            "ANTHROPIC_API_KEY",
+            "OPENAI_API_KEY"
+          ]
+        }
+      }
+    }
+  }
+}
+```
+
+Block a provider key only when the ACP agent does not need it: an agent that
+authenticates with that key can no longer start. MCP servers the agent launches,
+including the OpenClaw tool bridges, normally inherit the agent's environment
+too. With an allowlist, also list what they need, such as `OPENCLAW_STATE_DIR`
+or `OPENCLAW_CONFIG_PATH` when the Gateway uses them, and any variable your
+config references. New settings apply to agents started after the plugin
+reloads.
+
 ## Permission configuration
 
 ACP sessions run without an interactive TTY for file-write and shell-exec

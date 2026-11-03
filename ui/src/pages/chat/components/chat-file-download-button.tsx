@@ -1,12 +1,15 @@
 import { action, createOptimistic, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../components/tooltip.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import { downloadBlobFile } from "../../../lib/download.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { showToast } from "../../../lib/toast.ts";
 import type { FileReaderDownload } from "./chat-sidebar-content-types.ts";
+
+registerEnglishCatalog(registerChatComposerEnglish);
 
 registerFilePreviewEnglish();
 

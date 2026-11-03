@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { getRuntimeConfigSnapshot } from "../../../../src/config/config.js";
 import {
   loadSessionEntry,
   replaceSessionEntry,
@@ -293,10 +292,6 @@ describe("Gateway automation session routing", () => {
           clientDisplayName: "vitest-gateway-heartbeat-session-routing-restarted",
         });
         await gateway.server.startupSettled;
-        const runtimeConfig = getRuntimeConfigSnapshot();
-        if (!runtimeConfig) {
-          throw new Error("gateway runtime config snapshot was not initialized");
-        }
         const client = gateway.client;
         const queueEvent = async (sessionKey: string, text: string) => {
           await expect(

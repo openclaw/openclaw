@@ -1,9 +1,10 @@
 import { createMemo } from "@solidjs/signals";
 import type { JSX } from "@solidjs/web";
-import { Match, onSettled, Switch } from "solid-js";
+import { For, Match, onSettled, Switch } from "solid-js";
 import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
+import { observeResize } from "../../lib/reactive/observers.ts";
 import { createTabFocus } from "../../lib/tabs.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import type { LinkFaviconFetcher } from "../../pages/chat/link-favicon-cache.ts";
@@ -21,72 +22,22 @@ registerEnglishCatalog(registerBrowserEnglish);
 export type BrowserPanelDock = "bottom" | "right";
 type ControllerProps = { controller: BrowserPanel };
 
-function HeaderActions(
-  props: ControllerProps & {
-    dock: BrowserPanelDock;
-    onDockChange: (dock: BrowserPanelDock) => void;
-    onClose: () => void;
-  },
-) {
-  const activeUrl = createMemo(
-    () =>
-      props.controller.native.activeTab?.url ||
-      props.controller.view?.metrics?.url ||
-      props.controller.view?.url ||
-      props.controller.urlDraft,
-  );
-  return (
-    <div class="rail-header__actions bp-actions">
-      <span class="bp-dock-modes" role="group" aria-label={t("browser.title")}>
-        <openclaw-tooltip
-          prop:content={t(props.dock === "bottom" ? "browser.dockRight" : "browser.dockBottom")}
-        >
-          <PanelIconButton
-            class="rail-header__action bp-icon"
-            label={t(props.dock === "bottom" ? "browser.dockRight" : "browser.dockBottom")}
-            icon={<Icon name={props.dock === "bottom" ? "panelRightOpen" : "panelBottomOpen"} />}
-            onClick={() => props.onDockChange(props.dock === "bottom" ? "right" : "bottom")}
-          />
-        </openclaw-tooltip>
-      </span>
-      <PanelIconButton
-        class="rail-header__action bp-icon"
-        label={t("browser.openExternal")}
-        icon={<Icon name="externalLink" />}
-        newTab
-        disabled={!activeUrl()}
-        onClick={() => props.controller.openExternal()}
-      />
-      <PanelIconButton
-        class="rail-header__action bp-icon"
-        label={t("browser.close")}
-        icon={<Icon name="x" />}
-        onClick={() => props.onClose()}
-      />
-    </div>
-  );
-}
-
 function AnnotateBar(props: ControllerProps) {
   return (
     <div class="bp-annotatebar">
       <span class="bp-annotatebar__hint">{t("browser.annotateHint")}</span>
-      <button
-        class="bp-btn"
-        type="button"
-        disabled={props.controller.strokes.length === 0}
-        onClick={() => props.controller.input.undoStroke()}
-      >
-        {t("browser.annotateUndo")}
-      </button>
-      <button
-        class="bp-btn"
-        type="button"
-        disabled={props.controller.strokes.length === 0}
-        onClick={() => props.controller.input.clearStrokes()}
-      >
-        {t("browser.annotateClear")}
-      </button>
+      <For each={["undoStroke", "clearStrokes"] as const}>
+        {(action) => (
+          <button
+            class="bp-btn"
+            type="button"
+            disabled={props.controller.strokes.length === 0}
+            onClick={() => props.controller.input[action]()}
+          >
+            {t(action === "undoStroke" ? "browser.annotateUndo" : "browser.annotateClear")}
+          </button>
+        )}
+      </For>
       <button
         class="bp-btn"
         type="button"
@@ -191,13 +142,13 @@ function ViewportContent(
       </Match>
       <Match when={props.emptyError}>
         <PanelEmptyState
-          presentation="desktop"
+          presentation={props.mobilePresentation ? "mobile" : "desktop"}
           icon={<Icon name="globe" />}
           heading={t("browser.loadFailed")}
           description={props.controller.errorText!}
           action={
             <button
-              class="bp-btn bp-empty-action"
+              class="btn"
               type="button"
               disabled={props.controller.loading}
               onClick={() => void props.controller.retryEmptyError()}
@@ -222,14 +173,14 @@ function ViewportContent(
         }
       >
         <PanelEmptyState
-          presentation={props.mobilePresentation ? undefined : "desktop"}
+          presentation={props.mobilePresentation ? "mobile" : "desktop"}
           icon={<Icon name="globe" />}
           heading={t("chat.sidePanel.browser")}
           description={t("browser.notRunning")}
           action={
             props.controller.host.fixedTab ? undefined : (
               <button
-                class={["bp-btn", { "bp-empty-action": !props.mobilePresentation }]}
+                class="btn"
                 type="button"
                 onClick={() => void props.controller.startBrowserNow()}
               >
@@ -246,7 +197,7 @@ function ViewportContent(
           </div>
         ) : (
           <PanelEmptyState
-            presentation="desktop"
+            presentation={props.mobilePresentation ? "mobile" : "desktop"}
             icon={<Icon name="globe" />}
             heading={t("chat.sidePanel.browser")}
             description={props.controller.unavailableTabText!}
@@ -254,11 +205,11 @@ function ViewportContent(
         )}
       </Match>
       <Match when={!props.controller.view && props.controller.loading}>
-        <PanelLoadingSkeleton variant="browser" label={t("browser.loading")} />
+        <PanelLoadingSkeleton variant="browser-viewport" label={t("browser.loading")} />
       </Match>
       <Match when={!props.controller.view}>
         <PanelEmptyState
-          presentation={props.mobilePresentation ? undefined : "desktop"}
+          presentation={props.mobilePresentation ? "mobile" : "desktop"}
           icon={<Icon name="globe" />}
           heading={t("chat.sidePanel.browser")}
           description={t("chat.sidePanel.browserEmpty")}
@@ -335,20 +286,19 @@ export function BrowserPanelChrome(
   onSettled(() => {
     const controller = props.controller;
     const viewport = controller.input.elements.viewport!;
-    const observer =
+    const stopResize =
       typeof ResizeObserver === "function"
-        ? new ResizeObserver(([entry]) => {
+        ? observeResize([viewport], ([entry]) => {
             if (entry) {
               controller.handleViewportResize(entry.contentRect.width, entry.contentRect.height);
             }
           })
         : undefined;
-    observer?.observe(viewport);
     // SAFETY: Native wheel events are WheelEvents; cancel local scrolling before they bubble.
     const handleWheel = (event: Event) => remoteInput()?.handleWheel(event as WheelEvent);
     const stopWheel = listen(viewport, "wheel", handleWheel, { passive: false });
     return () => {
-      observer?.disconnect();
+      stopResize?.();
       stopWheel();
     };
   });
@@ -398,6 +348,46 @@ export function BrowserPanelChrome(
     !props.controller.native.activeTab &&
     !props.controller.view &&
     Boolean(props.controller.errorText);
+  function HeaderActions() {
+    const activeUrl = createMemo(
+      () =>
+        props.controller.native.activeTab?.url ||
+        props.controller.view?.metrics?.url ||
+        props.controller.view?.url ||
+        props.controller.urlDraft,
+    );
+    return (
+      <div class="rail-header__actions bp-actions">
+        <span class="bp-dock-modes" role="group" aria-label={t("browser.title")}>
+          <openclaw-tooltip
+            prop:content={t(props.dock === "bottom" ? "browser.dockRight" : "browser.dockBottom")}
+          >
+            <PanelIconButton
+              class="rail-header__action bp-icon"
+              label={t(props.dock === "bottom" ? "browser.dockRight" : "browser.dockBottom")}
+              icon={<Icon name={props.dock === "bottom" ? "panelRightOpen" : "panelBottomOpen"} />}
+              onClick={() => props.onDockChange(props.dock === "bottom" ? "right" : "bottom")}
+            />
+          </openclaw-tooltip>
+        </span>
+        <PanelIconButton
+          class="rail-header__action bp-icon"
+          label={t("browser.openExternal")}
+          icon={<Icon name="externalLink" />}
+          newTab
+          disabled={!activeUrl()}
+          onClick={() => props.controller.openExternal()}
+        />
+        <PanelIconButton
+          class="rail-header__action bp-icon"
+          label={t("browser.close")}
+          icon={<Icon name="x" />}
+          onClick={() => props.onClose()}
+        />
+      </div>
+    );
+  }
+
   return (
     <section
       class={["bp", `bp--${props.embedded ? "embedded" : props.dock}`]}
@@ -414,14 +404,7 @@ export function BrowserPanelChrome(
       {rendersTabStrip() ? (
         <header class="rail-header bp-header">
           <BrowserTabs />
-          {!props.embedded ? (
-            <HeaderActions
-              controller={props.controller}
-              dock={props.dock}
-              onDockChange={props.onDockChange}
-              onClose={props.onClose}
-            />
-          ) : null}
+          {!props.embedded ? <HeaderActions /> : null}
         </header>
       ) : null}
       <BrowserToolbar

@@ -1,4 +1,4 @@
-import { copyFile, rm } from "node:fs/promises";
+import { rm } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext, Page, Video } from "playwright";
 import { afterEach, expect, it } from "vitest";
@@ -134,9 +134,9 @@ async function closeRecordedSurface(surface: ApprovalSurface, targetName: string
   if (!video || !surface.rawVideoDir) {
     return;
   }
-  const rawVideoPath = await video.path();
-  await copyFile(rawVideoPath, path.join(suite.artifactDir, targetName));
+  await video.saveAs(path.join(suite.artifactDir, targetName));
   // Remove raw footage only after the retained named copy succeeds.
+  await video.delete();
   await rm(surface.rawVideoDir, { force: true, recursive: true });
 }
 
@@ -240,7 +240,7 @@ async function expectMobilePendingLayout(page: Page): Promise<void> {
   expect(metrics.documentOverflow).toBeLessThanOrEqual(0);
   expect(metrics.left).toBeGreaterThanOrEqual(0);
   expect(metrics.rightOverflow).toBeLessThanOrEqual(0);
-  expect(metrics.previewOverflow).toBeGreaterThanOrEqual(0);
+  expect(metrics.previewOverflow).toBeLessThanOrEqual(0);
   expect(metrics.backLinkGap).toBeGreaterThanOrEqual(10);
 }
 
@@ -353,7 +353,7 @@ suite.define(() => {
     }
   });
 
-  it("renders plugin identity as chips with a severity accent", async () => {
+  it("renders plugin identity as chips with severity in the status badge", async () => {
     const pending = pendingPluginApproval("");
     const surface = await createSurface({ pending, viewport: DESKTOP_VIEWPORT });
 
@@ -367,6 +367,9 @@ suite.define(() => {
       "danger",
       { plugin: ["codex"], tool: ["workspace.exec"], agent: ["main"] },
       [],
+    );
+    expect(await surface.page.locator(".approval-page__status .sr-only").textContent()).toBe(
+      "Critical ",
     );
     await captureProof(surface.page, "after-pending-plugin.png");
     expect(surface.pageErrors).toEqual([]);

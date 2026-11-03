@@ -1,5 +1,6 @@
 use ed25519_dalek::{Signer, SigningKey};
 use futures_util::{SinkExt, StreamExt};
+use openclaw_gateway_client::protocol::PROTOCOL_VERSION;
 use openclaw_node_host::{
     AuthenticatedSidecarChannel, CancellationToken, CommandRuntime, ConnectAuth, HandlerError,
     NodeClient, NodeClientConfig, NodeConnectOptions, NodeIdentity, NodeProtocolVersion,
@@ -108,7 +109,7 @@ async fn serve_public_runtime_authority(listener: TcpListener, handler_entered: 
     send_json(
         &mut socket,
         json!({"type":"res","id":connect["id"],"ok":true,
-            "payload":{"type":"hello-ok","protocol":4,
+            "payload":{"type":"hello-ok","protocol":PROTOCOL_VERSION,
                 "auth":{"deviceToken":"issued-device-token"}}}),
     )
     .await;
@@ -179,7 +180,7 @@ async fn runtime_rejects_buffered_invocation_after_session_retirement_is_request
         send_json(
             &mut socket,
             json!({"type":"res","id":connect["id"],"ok":true,
-                "payload":{"type":"hello-ok","protocol":4}}),
+                "payload":{"type":"hello-ok","protocol":PROTOCOL_VERSION}}),
         )
         .await;
         send_json(
@@ -264,7 +265,7 @@ async fn wire_cancellation_during_admission_prevents_handler_construction() {
         send_json(
             &mut socket,
             json!({"type":"res","id":connect["id"],"ok":true,
-                "payload":{"type":"hello-ok","protocol":4}}),
+                "payload":{"type":"hello-ok","protocol":PROTOCOL_VERSION}}),
         )
         .await;
         send_json(
@@ -385,7 +386,7 @@ async fn sidecar_bridge_preserves_authority_through_the_public_runtime() {
         send_json(
             &mut socket,
             json!({"type":"res","id":connect["id"],"ok":true,
-                "payload":{"type":"hello-ok","protocol":4}}),
+                "payload":{"type":"hello-ok","protocol":PROTOCOL_VERSION}}),
         )
         .await;
 
@@ -569,98 +570,100 @@ fn sidecar_offer(role: SidecarPeerRole) -> SidecarProtocolOffer {
 
 #[tokio::test]
 async fn node_protocol_fallback_uses_fresh_legacy_connect_material_and_recovers_to_v4() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let server = tokio::spawn(async move {
-        let (mut current, current_connect) =
-            accept_node_connect(&listener, "nonce-v4", 1_700_000_000_123).await;
-        assert_current_connect(&current_connect, "nonce-v4");
-        send_json(
-            &mut current,
-            json!({
-                "type":"res", "id":current_connect["id"], "ok":false,
-                "error":{
-                    "code":"INVALID_REQUEST",
-                    "message":"protocol mismatch",
-                    "details":{"expectedProtocol":3}
-                }
-            }),
-        )
-        .await;
+    for server_protocol in [3, 4] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut current, current_connect) =
+                accept_node_connect(&listener, "nonce-v4", 1_700_000_000_123).await;
+            assert_current_connect(&current_connect, "nonce-v4");
+            send_json(
+                &mut current,
+                json!({
+                    "type":"res", "id":current_connect["id"], "ok":false,
+                    "error":{
+                        "code":"INVALID_REQUEST",
+                        "message":"protocol mismatch",
+                        "details":{"expectedProtocol":3}
+                    }
+                }),
+            )
+            .await;
 
-        let (mut legacy, legacy_connect) =
-            accept_node_connect(&listener, "nonce-v3", 1_700_000_000_456).await;
-        assert_legacy_connect(&legacy_connect, "nonce-v3");
-        assert_ne!(
-            current_connect["params"]["device"]["signature"],
-            legacy_connect["params"]["device"]["signature"]
-        );
-        send_json(
-            &mut legacy,
-            json!({
-                "type":"res", "id":legacy_connect["id"], "ok":true,
-                "payload":{"type":"hello-ok","protocol":3}
-            }),
-        )
-        .await;
-        send_json(
-            &mut legacy,
-            json!({
-                "type":"event", "event":"node.invoke.request",
-                "payload":{
-                    "id":"invoke-v3",
-                    "nodeId":"node-1",
-                    "command":"example.status",
-                    "paramsJSON":"{\"verbose\":true}"
+            let (mut previous, previous_connect) =
+                accept_node_connect(&listener, "nonce-v3", 1_700_000_000_456).await;
+            assert_previous_connect(&previous_connect, "nonce-v3");
+            assert_ne!(
+                current_connect["params"]["device"]["signature"],
+                previous_connect["params"]["device"]["signature"]
+            );
+            send_json(
+                &mut previous,
+                json!({
+                    "type":"res", "id":previous_connect["id"], "ok":true,
+                    "payload":{"type":"hello-ok","protocol":server_protocol}
+                }),
+            )
+            .await;
+            send_json(
+                &mut previous,
+                json!({
+                    "type":"event", "event":"node.invoke.request",
+                    "payload":{
+                        "id":"invoke-v3",
+                        "nodeId":"node-1",
+                        "command":"example.status",
+                        "paramsJSON":"{\"verbose\":true}"
+                    }
+                }),
+            )
+            .await;
+            while let Some(Ok(message)) = previous.next().await {
+                if matches!(message, Message::Close(_)) {
+                    break;
                 }
-            }),
-        )
-        .await;
-        while let Some(Ok(message)) = legacy.next().await {
-            if matches!(message, Message::Close(_)) {
-                break;
             }
-        }
 
-        let (mut upgraded, upgraded_connect) =
-            accept_node_connect(&listener, "nonce-v4-again", 1_700_000_000_789).await;
-        assert_current_connect(&upgraded_connect, "nonce-v4-again");
-        send_json(
-            &mut upgraded,
-            json!({
-                "type":"res", "id":upgraded_connect["id"], "ok":true,
-                "payload":{"type":"hello-ok","protocol":4}
-            }),
-        )
-        .await;
-    });
+            let (mut upgraded, upgraded_connect) =
+                accept_node_connect(&listener, "nonce-v4-again", 1_700_000_000_789).await;
+            assert_current_connect(&upgraded_connect, "nonce-v4-again");
+            send_json(
+                &mut upgraded,
+                json!({
+                    "type":"res", "id":upgraded_connect["id"], "ok":true,
+                    "payload":{"type":"hello-ok","protocol":PROTOCOL_VERSION}
+                }),
+            )
+            .await;
+        });
 
-    let connect = || {
-        NodeClient::connect(
-            NodeClientConfig::new(format!("ws://{address}")),
-            |_challenge| async move {
-                Ok::<_, std::io::Error>(
-                    NodeConnectOptions::new("test", "macos")
-                        .device_family("Mac")
-                        .command("example.status")
-                        .activate()
-                        .identity(openclaw_node_host::NodeIdentity::from_secret_bytes([7; 32])),
-                )
-            },
-        )
-    };
-    let legacy = connect().await.unwrap();
-    assert_eq!(legacy.protocol(), NodeProtocolVersion::V3);
-    assert_eq!(
-        legacy.next_invocation().await.unwrap().params,
-        json!({"verbose":true})
-    );
-    legacy.close().await;
+        let connect = || {
+            NodeClient::connect(
+                NodeClientConfig::new(format!("ws://{address}")),
+                |_challenge| async move {
+                    Ok::<_, std::io::Error>(
+                        NodeConnectOptions::new("test", "macos")
+                            .device_family("Mac")
+                            .command("example.status")
+                            .activate()
+                            .identity(openclaw_node_host::NodeIdentity::from_secret_bytes([7; 32])),
+                    )
+                },
+            )
+        };
+        let previous = connect().await.unwrap();
+        assert_eq!(previous.protocol(), NodeProtocolVersion::V3);
+        assert_eq!(
+            previous.next_invocation().await.unwrap().params,
+            json!({"verbose":true})
+        );
+        previous.close().await;
 
-    let current = connect().await.unwrap();
-    assert_eq!(current.protocol(), NodeProtocolVersion::V4);
-    current.close().await;
-    server.await.unwrap();
+        let current = connect().await.unwrap();
+        assert_eq!(current.protocol(), NodeProtocolVersion::V4);
+        current.close().await;
+        server.await.unwrap();
+    }
 }
 
 #[tokio::test]
@@ -726,7 +729,7 @@ async fn duplex_input_overflow_forces_a_terminal_failure() {
         send_json(
             &mut socket,
             json!({"type":"res","id":connect["id"],"ok":true,
-                "payload":{"type":"hello-ok","protocol":4}}),
+                "payload":{"type":"hello-ok","protocol":PROTOCOL_VERSION}}),
         )
         .await;
         send_json(
@@ -782,7 +785,7 @@ async fn direct_dispatch_rejects_duplex_without_running_an_event_loop() {
         send_json(
             &mut socket,
             json!({"type":"res","id":connect["id"],"ok":true,
-                "payload":{"type":"hello-ok","protocol":4}}),
+                "payload":{"type":"hello-ok","protocol":PROTOCOL_VERSION}}),
         )
         .await;
         send_json(
@@ -860,7 +863,7 @@ async fn runtime_enforces_the_manifest_of_each_connection() {
             send_json(
                 &mut socket,
                 json!({"type":"res","id":connect["id"],"ok":true,
-                    "payload":{"type":"hello-ok","protocol":4}}),
+                    "payload":{"type":"hello-ok","protocol":PROTOCOL_VERSION}}),
             )
             .await;
 
@@ -966,7 +969,7 @@ async fn serve_duplex_runtime(listener: TcpListener, fixture: Value) {
     send_json(
         &mut socket,
         json!({"type":"res", "id":connect["id"], "ok":true,
-            "payload":{"type":"hello-ok","protocol":4}}),
+            "payload":{"type":"hello-ok","protocol":PROTOCOL_VERSION}}),
     )
     .await;
     send_json(
@@ -1064,14 +1067,16 @@ fn assert_current_connect(connect: &Value, nonce: &str) {
     assert_eq!(connect["params"]["maxProtocol"], 4);
     assert_eq!(connect["params"]["client"]["platform"], "macos");
     assert_eq!(connect["params"]["client"]["deviceFamily"], "Mac");
+    assert_eq!(connect["params"]["commands"], json!(["example.status"]));
     assert_eq!(connect["params"]["device"]["nonce"], nonce);
 }
 
-fn assert_legacy_connect(connect: &Value, nonce: &str) {
+fn assert_previous_connect(connect: &Value, nonce: &str) {
     assert_eq!(connect["params"]["minProtocol"], 3);
     assert_eq!(connect["params"]["maxProtocol"], 3);
     assert_eq!(connect["params"]["client"]["platform"], "darwin");
     assert!(connect["params"]["client"].get("deviceFamily").is_none());
+    assert_eq!(connect["params"]["commands"], json!(["example.status"]));
     assert!(connect["params"]["client"].get("modelIdentifier").is_none());
     assert_eq!(connect["params"]["device"]["nonce"], nonce);
 }
@@ -1096,88 +1101,135 @@ fn lifecycle_fixture() -> Value {
     .expect("valid node invocation lifecycle fixture")
 }
 
-#[tokio::test]
-async fn native_signed_connect_preserves_product_fields_and_rejects_invalid_node_manifests() {
-    let signed = json!({"minProtocol":4,"maxProtocol":4,"role":"node","scopes":[],
+fn native_signed_connect_params() -> Value {
+    json!({"minProtocol":4,"maxProtocol":4,"role":"node","scopes":[],
         "client":{"id":"openclaw-macos","mode":"node","platform":"macOS","version":"test"},
         "commands":["system.notify","computer.act"],"computerUse":{"test":"native-authority"},
         "device":{"id":"native-device","signature":"unchanged-signature","nonce":"native-nonce"},
-        "auth":{"token":"fixture-token"}});
+        "auth":{"token":"fixture-token"}})
+}
+
+async fn connect_native_signed(
+    params: Value,
+    server_protocol: u32,
+    rejected: bool,
+) -> Result<NodeSession, Box<openclaw_node_host::ClientError>> {
+    let expected = params.clone();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (tcp, _) = listener.accept().await.unwrap();
+        let mut socket = accept_async(tcp).await.unwrap();
+        send_json(
+            &mut socket,
+            json!({"type":"event","event":"connect.challenge",
+            "payload":{"nonce":"native-nonce","ts":1}}),
+        )
+        .await;
+        if rejected {
+            let next = socket.next().await;
+            assert!(
+                !matches!(next, Some(Ok(Message::Text(_)))),
+                "invalid manifest was sent to Gateway"
+            );
+        } else {
+            let connect = receive_json(&mut socket).await;
+            assert_eq!(connect["params"], expected);
+            send_json(
+                &mut socket,
+                json!({"type":"res","id":connect["id"],"ok":true,
+                "payload":{"type":"hello-ok","protocol":server_protocol}}),
+            )
+            .await;
+        }
+    });
+    let connected = NodeClient::connect_signed(
+        openclaw_gateway_client::GatewayClientConfig::new(format!("ws://{address}")).unwrap(),
+        move |challenge| async move {
+            assert_eq!(challenge.nonce, "native-nonce");
+            Ok::<_, io::Error>(params)
+        },
+    )
+    .await;
+    server.await.unwrap();
+    connected.map_err(Box::new)
+}
+
+#[tokio::test]
+async fn native_signed_connect_preserves_product_fields() {
     for invalid in [
         None,
+        Some("previous"),
+        Some("previous-server"),
+        Some("range"),
         Some("omitted"),
         Some("empty"),
-        Some("role"),
-        Some("mode"),
-        Some("protocol"),
-        Some("duplicate"),
-        Some("command"),
     ] {
-        let mut params = signed.clone();
-        let rejected = !matches!(invalid, None | Some("omitted" | "empty"));
+        let mut params = native_signed_connect_params();
         match invalid {
+            Some("previous" | "previous-server") => {
+                params["minProtocol"] = json!(3);
+                params["maxProtocol"] = json!(3);
+            }
+            Some("range") => params["minProtocol"] = json!(3),
             Some("omitted") => {
                 params.as_object_mut().unwrap().remove("commands");
             }
             Some("empty") => params["commands"] = json!([]),
-            Some("role") => params["role"] = json!("operator"),
-            Some("mode") => params["client"]["mode"] = json!("operator"),
-            Some("protocol") => params["maxProtocol"] = json!(5),
-            Some("duplicate") => params["commands"] = json!(["system.notify", "system.notify"]),
-            Some("command") => params["commands"] = json!(["system.notify "]),
             _ => {}
         }
-        let expected = params.clone();
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move {
-            let (tcp, _) = listener.accept().await.unwrap();
-            let mut socket = accept_async(tcp).await.unwrap();
-            send_json(
-                &mut socket,
-                json!({"type":"event","event":"connect.challenge",
-                "payload":{"nonce":"native-nonce","ts":1}}),
-            )
-            .await;
-            if rejected {
-                let next = socket.next().await;
-                assert!(
-                    !matches!(next, Some(Ok(Message::Text(_)))),
-                    "invalid manifest was sent to Gateway"
-                );
-            } else {
-                let connect = receive_json(&mut socket).await;
-                assert_eq!(connect["params"], expected);
-                send_json(
-                    &mut socket,
-                    json!({"type":"res","id":connect["id"],"ok":true,
-                    "payload":{"type":"hello-ok","protocol":4}}),
-                )
-                .await;
-            }
-        });
-        let connected = NodeClient::connect_signed(
-            openclaw_gateway_client::GatewayClientConfig::new(format!("ws://{address}")).unwrap(),
-            move |challenge| async move {
-                assert_eq!(challenge.nonce, "native-nonce");
-                Ok::<_, io::Error>(params)
-            },
-        )
-        .await;
-        if rejected {
-            assert!(connected.is_err());
+        let server_protocol = if invalid == Some("previous-server") {
+            3
         } else {
-            let session = connected.unwrap();
-            let expected_commands = if invalid.is_none() {
-                vec!["computer.act", "system.notify"]
+            4
+        };
+        let session = connect_native_signed(params, server_protocol, false)
+            .await
+            .unwrap();
+        assert_eq!(
+            session.protocol(),
+            if matches!(invalid, Some("previous" | "previous-server")) {
+                NodeProtocolVersion::V3
             } else {
-                vec![]
-            };
-            assert_eq!(
-                session.command_names().collect::<Vec<_>>(),
-                expected_commands
-            );
+                NodeProtocolVersion::V4
+            }
+        );
+        let expected_commands = if matches!(
+            invalid,
+            None | Some("previous" | "previous-server" | "range")
+        ) {
+            vec!["computer.act", "system.notify"]
+        } else {
+            vec![]
+        };
+        assert_eq!(
+            session.command_names().collect::<Vec<_>>(),
+            expected_commands
+        );
+    }
+}
+
+#[tokio::test]
+async fn native_signed_connect_rejects_invalid_node_manifests() {
+    for invalid in [
+        "role",
+        "mode",
+        "retired-protocol",
+        "future-protocol",
+        "duplicate",
+        "command",
+    ] {
+        let mut params = native_signed_connect_params();
+        match invalid {
+            "role" => params["role"] = json!("operator"),
+            "mode" => params["client"]["mode"] = json!("operator"),
+            "retired-protocol" => params["minProtocol"] = json!(2),
+            "future-protocol" => params["maxProtocol"] = json!(5),
+            "duplicate" => params["commands"] = json!(["system.notify", "system.notify"]),
+            "command" => params["commands"] = json!(["system.notify "]),
+            _ => unreachable!(),
         }
-        server.await.unwrap();
+        let connected = connect_native_signed(params, 4, true).await;
+        assert!(connected.is_err());
     }
 }

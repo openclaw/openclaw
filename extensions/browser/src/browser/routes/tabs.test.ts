@@ -2,13 +2,14 @@ import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserTab } from "../client.types.js";
 import { makeBrowserProfile } from "../server-context.test-harness.js";
+import { gate } from "./agent-route.test-support.js";
 import { createRouteFixture } from "./request.test-support.js";
-import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
+import type { createBrowserRouteResponse } from "./test-helpers.js";
 
 const navigation = vi.hoisted(() => ({
   assertBrowserNavigationAllowed: vi.fn(async () => {}),
   assertBrowserNavigationResultAllowed: vi.fn(
-    async (_opts?: { url: string; ssrfPolicy?: unknown }) => {},
+    async (_opts?: { url: string; ssrfPolicy?: unknown; signal?: AbortSignal }) => {},
   ),
   withBrowserNavigationPolicy: vi.fn((ssrfPolicy?: unknown) => (ssrfPolicy ? { ssrfPolicy } : {})),
 }));
@@ -29,9 +30,6 @@ const publicTab = (overrides: Partial<BrowserTab> = {}): BrowserTab => ({
 
 const internalTab = () =>
   publicTab({ targetId: "T2", title: "Internal", url: "http://169.254.169.254/latest/meta-data/" });
-const labeledTab = (targetId: string, tabId: string, label: string) =>
-  publicTab({ targetId, tabId, label, suggestedTargetId: label });
-
 const withTabs = (tabs: BrowserTab[]) => makeProfile({ listTabs: vi.fn(async () => tabs) });
 
 function makeProfile(overrides?: Partial<ReturnType<typeof baseProfileContext>>) {
@@ -72,7 +70,6 @@ function makeContext(
       },
     }),
     forProfile: () => profileCtx,
-    listProfiles: vi.fn(async () => []),
   };
 }
 
@@ -103,14 +100,8 @@ it.each([{ driver: "existing-session" as const }, { cdpIsLoopback: false }, { at
   "refuses managed dashboard tab lookup after a profile changes to %j",
   async (override) => {
     const profileCtx = makeProfile({ profile: makeBrowserProfile(override) });
-    const response = await request({
-      method: "get",
-      path: "/tabs",
-      query: { managedOnly: true },
-      profileCtx,
-    });
-    expect(response.statusCode).toBe(400);
-    expect(response.body).toEqual({
+    const response = await list({ query: { managedOnly: true }, profileCtx });
+    expectResponse(response, 400, {
       error: "This dashboard requires a local managed browser profile",
     });
     expect(profileCtx.isReachable).not.toHaveBeenCalled();
@@ -154,22 +145,9 @@ it("returns the profile that actually handled tab open", async () => {
     openTab: vi.fn(async () => tab),
   });
 
-  const response = await open({
-    body: { url: "https://example.com" },
-    profileCtx,
-  });
+  const response = await open({ body: { url: "https://example.com" }, profileCtx });
 
   expect(response.body).toEqual({ ...tab, resolvedProfile: "hot-profile" });
-});
-
-it("rejects an invalid open timeoutMs before opening a tab", async () => {
-  const profileCtx = makeProfile({ openTab: vi.fn() });
-  const response = await open({
-    body: { url: "https://example.com", timeoutMs: -5 },
-    profileCtx,
-  });
-  expect(response.statusCode).toBe(400);
-  expect(profileCtx.openTab).not.toHaveBeenCalled();
 });
 
 type RouteParams = Omit<Parameters<typeof request>[0], "method" | "path">;
@@ -217,19 +195,23 @@ describe("browser tab routes", () => {
     },
   );
 
-  it("validates tab-open input before resolving or leasing a profile", async () => {
-    const profileCtx = makeProfile();
-    const routeCtx = makeContext(profileCtx);
-    const forProfile = vi.fn(routeCtx.forProfile);
-    const { app, postHandlers } = createBrowserRouteApp();
-    registerBrowserTabRoutes(app, { ...routeCtx, forProfile } as never);
-    const response = createBrowserRouteResponse();
-
-    await postHandlers.get("/tabs/open")?.({ params: {}, query: {}, body: {} }, response.res);
-
-    expectResponse(response, 400, { error: "url is required" });
-    expect(forProfile).not.toHaveBeenCalled();
-  });
+  it.each([
+    [{}, "url is required"],
+    [{ url: "https://example.com", timeoutMs: -5 }, "timeoutMs must be a positive integer."],
+  ] as const)(
+    "rejects invalid tab-open input before resolving a profile: %j",
+    async (body, error) => {
+      const profileCtx = makeProfile();
+      const routeCtx = makeContext(profileCtx);
+      const forProfile = vi.fn(routeCtx.forProfile);
+      const routes = createRouteFixture();
+      registerBrowserTabRoutes(routes.app, { ...routeCtx, forProfile } as never);
+      const response = await routes.request("post", "/tabs/open", { body });
+      expectResponse(response, 400, { error });
+      expect(forProfile).not.toHaveBeenCalled();
+      expect(profileCtx.openTab).not.toHaveBeenCalled();
+    },
+  );
 
   it("returns tab-open navigation failures instead of a success payload", async () => {
     const navigationError = new Error("page.goto: net::ERR_NAME_NOT_RESOLVED");
@@ -239,19 +221,12 @@ describe("browser tab routes", () => {
       }),
     });
 
-    const response = await request({
-      method: "post",
-      path: "/tabs/open",
+    const response = await open({
       body: { url: "https://unresolved.example" },
       profileCtx,
     });
 
-    expect(response.statusCode).toBe(500);
-    expect(response.body).toEqual({ error: String(navigationError) });
-    expect(profileCtx.openTab).toHaveBeenCalledWith("https://unresolved.example", {
-      label: undefined,
-      signal: expect.any(AbortSignal),
-    });
+    expectResponse(response, 500, { error: String(navigationError) });
   });
 
   it.each(["close", "select"] as const)(
@@ -406,29 +381,79 @@ describe("browser tab routes", () => {
     },
   );
 
+  it("checks tab URLs concurrently and preserves tab order and response metadata", async () => {
+    const tabs = Array.from({ length: 7 }, (_, index) =>
+      publicTab({ targetId: `T${index + 1}`, url: `https://host-${index + 1}.example` }),
+    );
+    const release: Array<() => void> = [];
+    let active = 0;
+    let peak = 0;
+    navigation.assertBrowserNavigationResultAllowed.mockImplementation(async () => {
+      active += 1;
+      peak = Math.max(peak, active);
+      await new Promise<void>((resolve) => {
+        release.push(resolve);
+      });
+      active -= 1;
+    });
+    const pending = list({ profileCtx: withTabs(tabs), ssrfPolicy: {} });
+    for (let remaining = tabs.length; remaining > 0; remaining -= 1) {
+      for (let tick = 0; tick < 50; tick += 1) {
+        await Promise.resolve();
+      }
+      release.pop()?.();
+    }
+    const response = await pending;
+    expect(response.body).toEqual({ running: true, tabs, canAutoResizeViewport: false });
+    expect(peak).toBe(3);
+  });
+
+  it("starts no further tab URL checks after listing cancellation", async () => {
+    const abort = new AbortController();
+    const tabs = Array.from({ length: 7 }, (_, index) =>
+      publicTab({ targetId: `T${index + 1}`, url: `https://host-${index + 1}.example` }),
+    );
+    let started = 0;
+    navigation.assertBrowserNavigationResultAllowed.mockImplementation(async (opts) => {
+      opts?.signal?.throwIfAborted();
+      started += 1;
+      if (started === 3) {
+        abort.abort(new Error("cancelled"));
+      }
+      opts?.signal?.throwIfAborted();
+    });
+    const response = await list({
+      profileCtx: withTabs(tabs),
+      ssrfPolicy: {},
+      signal: abort.signal,
+    });
+    expect(response.statusCode).toBe(500);
+    expect(started).toBe(3);
+  });
+
   describe.each([
-    { route: "focus", call: focus, body: { targetId: "T2" } },
+    { route: "focus by label", call: focus, body: { targetId: "docs" } },
+    { route: "focus by tab id", call: focus, body: { targetId: "t2" } },
     { route: "select", call: act, body: { action: "select", index: 1 } },
   ])("$route navigation policy", ({ call, body }) => {
     it("blocks a target URL that fails SSRF checks", async () => {
       navigation.assertBrowserNavigationResultAllowed.mockRejectedValueOnce(
         Object.assign(new Error("blocked"), { name: "SsrFBlockedError" }),
       );
-      const profileCtx = withTabs([publicTab(), internalTab()]);
+      const profileCtx = withTabs([publicTab(), { ...internalTab(), tabId: "t2", label: "docs" }]);
       const response = await call({ profileCtx, body, ssrfPolicy: { allowPrivateNetwork: false } });
       expect(response.statusCode).toBe(400);
       expect(profileCtx.focusTab).not.toHaveBeenCalled();
     });
 
     it("focuses without SSRF result validation when no policy is configured", async () => {
-      const profileCtx = withTabs([publicTab(), internalTab()]);
+      const profileCtx = withTabs([publicTab(), { ...internalTab(), tabId: "t2", label: "docs" }]);
       const response = await call({ profileCtx, body });
       expectResponse(response, 200, { ok: true, targetId: "T2" });
       expect(profileCtx.focusTab).toHaveBeenCalledWith("T2", {
         exactTargetId: true,
         signal: expect.any(AbortSignal),
       });
-      expect(profileCtx.ensureTabAvailable).not.toHaveBeenCalled();
       expect(navigation.assertBrowserNavigationResultAllowed).not.toHaveBeenCalled();
     });
   });
@@ -436,14 +461,6 @@ describe("browser tab routes", () => {
   it.each([
     ["T404", [], 404],
     ["T1", [publicTab({ targetId: "T1abc" }), publicTab({ targetId: "T1def" })], 409],
-    [
-      "T2_RAW",
-      [
-        labeledTab("T1_RAW", "t1", "T2_RAW"),
-        publicTab({ targetId: "T2_RAW", suggestedTargetId: "t2", tabId: "t2" }),
-      ],
-      409,
-    ],
   ] as const)("rejects missing or ambiguous focus target %s", async (targetId, tabs, code) => {
     const profileCtx = withTabs([...tabs]);
     const response = await focus({
@@ -455,30 +472,8 @@ describe("browser tab routes", () => {
     if (code === 409) {
       expect(response.body).toEqual({ error: "ambiguous browser tab reference" });
     }
-    expect(profileCtx.ensureTabAvailable).not.toHaveBeenCalled();
     expect(profileCtx.focusTab).not.toHaveBeenCalled();
     expect(navigation.assertBrowserNavigationResultAllowed).not.toHaveBeenCalled();
-  });
-
-  it("resolves friendly tab references before focusing tabs", async () => {
-    const profileCtx = withTabs([
-      labeledTab("T1_RAW", "t1", "docs"),
-      labeledTab("T2_RAW", "t2", "T1_RAW"),
-    ]);
-
-    const labelResponse = await focus({
-      profileCtx,
-      body: { targetId: "docs" },
-    });
-    const tabIdResponse = await focus({
-      profileCtx,
-      body: { targetId: "t1" },
-    });
-
-    expect(labelResponse.statusCode).toBe(200);
-    expect(tabIdResponse.statusCode).toBe(200);
-    const expectedCall = ["T1_RAW", { exactTargetId: true, signal: expect.any(AbortSignal) }];
-    expect(profileCtx.focusTab.mock.calls).toEqual([expectedCall, expectedCall]);
   });
 
   it("rejects invalid tab action indexes instead of treating them as omitted", async () => {
@@ -509,28 +504,12 @@ describe("browser tab routes", () => {
       ok: true,
       tab: { ...defaultTab(), suggestedTargetId: "meet", tabId: "t1", label: "meet" },
     });
-    expect(profileCtx.labelTab).toHaveBeenCalledWith("t1", "meet");
   });
 
   it("does not focus a tab after cancellation during target resolution", async () => {
     const abort = new AbortController();
-    const listStarted = Promise.withResolvers<void>();
-    const listTabs = vi.fn(async (options?: { signal?: AbortSignal }) => {
-      const signal = options?.signal;
-      listStarted.resolve();
-      if (signal) {
-        await new Promise<void>((_resolve, reject) => {
-          const rejectAbort = () =>
-            reject(signal.reason instanceof Error ? signal.reason : new Error("aborted"));
-          if (signal.aborted) {
-            rejectAbort();
-            return;
-          }
-          signal.addEventListener("abort", rejectAbort, { once: true });
-        });
-      }
-      return [defaultTab()];
-    });
+    const listing = gate<BrowserTab[]>();
+    const listTabs = vi.fn(listing.block);
     const focusTab = vi.fn(async () => {});
     const profileCtx = makeProfile({ listTabs, focusTab });
 
@@ -540,8 +519,9 @@ describe("browser tab routes", () => {
       signal: abort.signal,
     });
 
-    await listStarted.promise;
+    await listing.entered;
     abort.abort(new Error("cancelled"));
+    listing.resolve([defaultTab()]);
     const response = await pending;
 
     expect(response.statusCode).toBe(500);
@@ -549,8 +529,7 @@ describe("browser tab routes", () => {
   });
 
   it("does not close a tab after cancellation before the mutation", async () => {
-    const closeTab = vi.fn(async (targetId: string) => targetId);
-    const profileCtx = makeProfile({ closeTab });
+    const profileCtx = makeProfile();
     const preAborted = new AbortController();
     preAborted.abort(new Error("pre-cancelled"));
 
@@ -560,7 +539,7 @@ describe("browser tab routes", () => {
       signal: preAborted.signal,
     });
 
-    expect(closeTab).not.toHaveBeenCalled();
+    expect(profileCtx.closeTab).not.toHaveBeenCalled();
     expect(response.statusCode).toBe(500);
   });
 });

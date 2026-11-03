@@ -115,7 +115,9 @@ export function AgentCrumb(
 function SessionTitle(props: ChatPaneHeaderProps) {
   return (
     <>
-      <SessionColorDot value={props.catalog ? props.catalogColor : props.session?.color} />
+      <SessionColorDot
+        value={props.catalog ? props.catalogColor : (props.sessionColor ?? props.session?.color)}
+      />
       <span class="chat-pane__session-title-text">
         <Show
           when={
@@ -201,7 +203,7 @@ function SessionRenameInput(props: ChatPaneHeaderProps) {
 
 let nextWorkspaceMenuId = 0;
 
-function ProjectCrumb(props: ChatPaneHeaderProps) {
+export function ProjectCrumb(props: ChatPaneHeaderProps) {
   const overflow = useScrollState(true, false);
   const id = `chat-workspace-${++nextWorkspaceMenuId}`;
   const copied = () => props.copiedAction === "copy-path" || props.copiedAction === "copy-branch";

@@ -332,10 +332,6 @@ describe("OpenClaw shell source initialization", () => {
     };
     shell.activeSessionKey = "agent:old:main";
     shell.commandPaletteTarget = { owner: trigger, onSlashCommand: vi.fn() };
-    shell.settingsPreloadTimers.set(
-      trigger,
-      globalThis.setTimeout(() => undefined, 60_000),
-    );
 
     shell.disconnect();
 
@@ -346,7 +342,6 @@ describe("OpenClaw shell source initialization", () => {
       activeSessionKey: "",
       commandPaletteTarget: undefined,
     });
-    expect(shell.settingsPreloadTimers.size).toBe(0);
   });
 
   it("initializes replacement capabilities even when the Gateway client is unchanged", () => {
@@ -362,7 +357,7 @@ describe("OpenClaw shell source initialization", () => {
     const createRuntimeConfig = () =>
       ({
         state: { client, connected: true },
-        ensureLoaded: vi.fn(() => Promise.resolve()),
+        ensureDisplayLoaded: vi.fn(() => Promise.resolve()),
       }) as unknown as ApplicationContext["runtimeConfig"];
     const firstAgents = createAgents();
     const secondAgents = createAgents();
@@ -378,15 +373,15 @@ describe("OpenClaw shell source initialization", () => {
 
     expect(firstAgents.ensureList).toHaveBeenCalledOnce();
     expect(secondAgents.ensureList).toHaveBeenCalledOnce();
-    expect(firstRuntimeConfig.ensureLoaded).toHaveBeenCalledOnce();
-    expect(secondRuntimeConfig.ensureLoaded).toHaveBeenCalledOnce();
+    expect(firstRuntimeConfig.ensureDisplayLoaded).toHaveBeenCalledOnce();
+    expect(secondRuntimeConfig.ensureDisplayLoaded).toHaveBeenCalledOnce();
 
     shell.disconnect();
     shell.ensureAgentsList(snapshot, secondAgents);
     void shell.shellGateway.ensureRuntimeConfig(snapshot, secondRuntimeConfig);
 
     expect(secondAgents.ensureList).toHaveBeenCalledTimes(2);
-    expect(secondRuntimeConfig.ensureLoaded).toHaveBeenCalledTimes(2);
+    expect(secondRuntimeConfig.ensureDisplayLoaded).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -796,6 +791,44 @@ describe("OpenClaw shell keyboard shortcuts", () => {
       expect(openPalette).toHaveBeenCalledOnce();
       expect(readLazyShellAction()).toEqual({ eventType: SHELL_APPROVALS_OPEN_EVENT });
     });
+  });
+
+  it("ignores agent UI commands before native mobile navigation or panel delivery", () => {
+    Object.assign(window, {
+      __OPENCLAW_NATIVE_EMBED__: { platform: "android", formFactor: "phone" },
+    });
+    onTestFinished(() => {
+      Reflect.deleteProperty(window, "__OPENCLAW_NATIVE_EMBED__");
+    });
+    const update = vi.fn();
+    const setSessionKey = vi.fn();
+    const navigate = vi.fn();
+    const panelEvent = vi.fn();
+    window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, panelEvent);
+    onTestFinished(() => window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, panelEvent));
+    const shell = testShell({
+      navigation: { update },
+      gateway: { setSessionKey, snapshot: { hello: null } },
+      navigate,
+    });
+    for (const command of [
+      { kind: "sidebar", visible: true },
+      ...["browser", "desktop", "terminal", "portal", "plugin"].map((panel) => ({
+        kind: "panel",
+        panel,
+        open: true,
+      })),
+      { kind: "split", direction: "right", sessionKey: "agent:main:other" },
+    ]) {
+      shell.handleGatewayEvent({
+        event: "ui.command",
+        payload: { command, sessionKey: "agent:main:other" },
+      });
+    }
+    expect(update).not.toHaveBeenCalled();
+    expect(setSessionKey).not.toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalled();
+    expect(panelEvent).not.toHaveBeenCalled();
   });
 
   it("routes UI commands to navigation, panels, and chat fallback", () => {

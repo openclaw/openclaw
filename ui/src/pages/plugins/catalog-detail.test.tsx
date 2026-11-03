@@ -1,104 +1,86 @@
+import type { JSX } from "@solidjs/web";
 import { createMemo, createSignal, flush } from "solid-js";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
+import { i18n } from "../../i18n/lib/translate.ts";
 import { domProbe } from "../../test-helpers/dom-probe.ts";
 import { mountSolid, cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
-  renderPluginCatalogDetail as PluginCatalogDetail,
+  renderPluginCatalogDetail as Detail,
   type PluginCatalogDetailProps as Props,
 } from "./catalog-detail.tsx";
+import {
+  renderPluginCompatibilityNotices as compatibilityNotices,
+  renderPluginMetadata as metadata,
+  renderPluginPublisher as publisher,
+} from "./overview.tsx";
 import { createDiscoveryDetail, createPlugin } from "./plugins-page.test-support.ts";
 
 afterEach(cleanupSolid);
 
+const detailProps = (result = createDiscoveryDetail(), overrides: Partial<Props> = {}): Props => ({
+  connected: true,
+  result,
+  read: { receipt: () => null, value: () => null },
+  backHref: "/plugins",
+  onBack: vi.fn(),
+  onRetry: vi.fn(),
+  canInstall: true,
+  installBlockedReason: null,
+  onInstall: vi.fn(),
+  iconUrls: {},
+  ...overrides,
+});
 function mount(result = createDiscoveryDetail(), overrides: Partial<Props> = {}) {
-  const props: Props = {
-    connected: true,
-    result,
-    read: { receipt: () => null, value: () => null },
-    backHref: "/plugins",
-    onBack: vi.fn(),
-    onRetry: vi.fn(),
-    canInstall: true,
-    installBlockedReason: null,
-    onInstall: vi.fn(),
-    iconUrls: {},
-    ...overrides,
-  };
-  const view = mountSolid(() => <PluginCatalogDetail {...props} />);
-  flush();
-  return { container: view.container, ...domProbe(view.container) };
+  return render(() => <Detail {...detailProps(result, overrides)} />);
 }
 
-it("keeps long README tails and wires fenced-code controls", () => {
-  const tail = "README_TAIL";
-  const result = createDiscoveryDetail();
-  result.detail.readme = `\`\`\`bash\necho demo\n\`\`\`\n${"x".repeat(150_000)}${tail}`;
-  const { container, query, text } = mount(result);
+it.each([false, true])(
+  "keeps Ask available when installation is blocked (installed=%s)",
+  (installed) => {
+    const result = createDiscoveryDetail(createPlugin({ installed }));
+    const onInstall = vi.fn();
+    const onAskPlugin = vi.fn();
+    const { query } = mount(result, { canInstall: false, onInstall, onAskPlugin });
+    expect(query(".plugin-capabilities")).toBeNull();
+    const actions = query(".plugin-catalog-detail__actions")!;
+    const primaryButton = actions.querySelector<HTMLButtonElement>("button.primary")!;
+    expect(primaryButton.textContent?.trim()).toBe(installed ? "Ask OpenClaw" : "Install");
+    expect(actions.querySelectorAll("button.primary")).toHaveLength(1);
+    expect(actions.querySelector("button")).toBe(primaryButton);
+    primaryButton.click();
+    expect(onInstall).not.toHaveBeenCalled();
+    const ask = [...actions.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "Ask OpenClaw",
+    )!;
+    ask.click();
+    expect(onAskPlugin).toHaveBeenCalledTimes(installed ? 2 : 1);
+  },
+);
 
-  expect(query(".code-block-copy")).not.toBeNull();
-  expect(container.textContent).toContain(tail);
-  expect(text(".plugin-catalog-detail__readme-section > h2")).toBe("README");
-});
-
-it("uses a white tile for an official package icon", () => {
-  const imageUrl = "https://example.com/icon.png";
+it("renders complete catalog content in capability order", () => {
   const result = createDiscoveryDetail(createPlugin({ origin: "official" }));
+  const imageUrl = "https://example.com/icon.png";
   result.plugin.catalog.imageUrl = imageUrl;
-  const { query } = mount(result, { iconUrls: { [imageUrl]: "blob:package-icon" } });
-
-  expect(query(".plugin-catalog-detail__icon .plugins-tile--white")).not.toBeNull();
-});
-
-it.each([
-  { installed: false, canInstall: true, busy: false, primary: "Install" },
-  { installed: false, canInstall: false, busy: false, primary: "Install" },
-  { installed: false, canInstall: true, busy: true, primary: "Installing" },
-  { installed: true, canInstall: false, busy: false, primary: "Ask OpenClaw" },
-])("$primary ($canInstall/$busy)", ({ installed, canInstall, busy, primary }) => {
-  const result = createDiscoveryDetail(createPlugin({ installed }));
-  const onInstall = vi.fn();
-  const onAskPlugin = vi.fn();
-  const { query } = mount(result, { canInstall, busy, onInstall, onAskPlugin });
-  const actions = query(".plugin-catalog-detail__actions")!;
-  const primaryButton = actions.querySelector<HTMLButtonElement>("button.primary")!;
-  expect(primaryButton.textContent?.trim()).toBe(primary);
-  expect(actions.querySelectorAll("button.primary")).toHaveLength(1);
-  expect(actions.querySelector("button")).toBe(primaryButton);
-  primaryButton.click();
-  expect(onInstall).toHaveBeenCalledTimes(canInstall && !busy ? 1 : 0);
-  expect(primaryButton.querySelector(".btn__spinner") !== null).toBe(busy);
-  expect(primaryButton.getAttribute("aria-busy")).toBe(busy ? "true" : null);
-  const ask = [...actions.querySelectorAll<HTMLButtonElement>("button")].find(
-    (button) => button.textContent?.trim() === "Ask OpenClaw",
-  )!;
-  ask.click();
-  expect(onAskPlugin).toHaveBeenCalledTimes(installed ? 2 : 1);
-});
-
-it.each([false, true])("orders capabilities before tools (mixed=%s)", (mixed) => {
-  const result = createDiscoveryDetail();
   result.detail.contracts = {
     videoGenerationProviders: ["heygen", "heygen-alias"],
     gatewayMethodDispatch: ["internal-dispatch"],
-    ...(mixed ? { tools: ["render_status"] } : {}),
+    tools: ["render_status"],
   };
   result.detail.uiCapabilities = ["link-reader", "widget"];
-  result.detail.providers = ["model-provider"];
-  result.detail.channels = ["messaging-channel"];
-  result.detail.skills = mixed ? [{ name: "video-guide" }] : [];
-  result.detail.mcpServers = mixed ? ["media-server"] : [];
-  const { query, all, container } = mount(result);
+  result.detail.skills = [{ name: "video-guide" }];
+  result.detail.mcpServers = ["media-server"];
+  const { query, all, container } = mount(result, {
+    iconUrls: { [imageUrl]: "blob:package-icon" },
+  });
+  expect(query(".plugin-catalog-detail__icon .plugins-tile--white")).not.toBeNull();
   expect(query(".plugin-capabilities button")).toBeNull();
   expect([...all(".plugin-capabilities h2")].map((heading) => heading.textContent)).toEqual([
     "Capabilities3",
-    ...(mixed ? ["Skills1", "Tools1", "MCP Server1"] : []),
-  ]);
-  expect([...all(".plugin-capabilities strong")].map((item) => item.textContent)).toEqual([
-    "Video generation",
-    "Dashboard widgets",
-    "Link previews",
-    ...(mixed ? ["video-guide", "render_status", "media-server"] : []),
+    "Skills1",
+    "Tools1",
+    "MCP Server1",
   ]);
   expect(container.textContent).not.toMatch(/internal-dispatch|heygen-alias/);
 });
@@ -120,20 +102,7 @@ it("retains catalog controls while refreshing the same accepted plugin", async (
       setResult({ ...initialResult });
       setReceipt({ result: pending.promise });
     };
-    return (
-      <PluginCatalogDetail
-        connected
-        result={result()}
-        read={{ receipt, value }}
-        backHref="/plugins"
-        onBack={() => {}}
-        onRetry={() => {}}
-        canInstall
-        installBlockedReason={null}
-        onInstall={onInstall}
-        iconUrls={{}}
-      />
-    );
+    return <Detail {...detailProps(result(), { read: { receipt, value }, onInstall })} />;
   });
   await waitForSolid(() => expect(view.container.querySelector("button.primary")).not.toBeNull());
   const button = view.container.querySelector<HTMLButtonElement>("button.primary")!;
@@ -143,4 +112,106 @@ it("retains catalog controls while refreshing the same accepted plugin", async (
   expect(view.container.querySelector("button.primary")).toBe(button);
   button.click();
   expect(onInstall).toHaveBeenCalledOnce();
+});
+const views = new WeakMap<Element, { unmount: () => void }>();
+function render(content: () => JSX.Element, container = document.createElement("div")) {
+  views.get(container)?.unmount();
+  const view = mountSolid(content, { container });
+  views.set(container, view);
+  flush();
+  return { container, ...domProbe(container) };
+}
+const notice = {
+  code: "deprecated-sdk-api" as const,
+  severity: "info" as const,
+  message:
+    "Uses OpenClaw APIs that retire on Dec 31, 2026. It keeps working until then; check for a plugin update.",
+  removalDate: "2026-12-31",
+  migrationGuideUrl: "https://docs.openclaw.ai/plugins/sdk-migration",
+  apis: [],
+};
+function renderNotice(overrides: Partial<typeof notice> = {}) {
+  return render(() => compatibilityNotices([{ ...notice, ...overrides }]));
+}
+
+it("localizes a mounted compatibility notice from its structured removal date", async () => {
+  onTestFinished(captureI18nStateForTesting());
+  const translate = i18n.t.bind(i18n);
+  const translation = vi.spyOn(i18n, "t").mockImplementation((key, params) => {
+    if (i18n.getLocale() === "de") {
+      if (key === "pluginsPage.compatibilityDeprecatedDated") {
+        return `Verwendet OpenClaw-APIs bis ${params?.date}.`;
+      }
+      if (key === "pluginsPage.compatibilityDetails") {
+        return "Mehr erfahren";
+      }
+    }
+    return translate(key, params);
+  });
+  onTestFinished(() => translation.mockRestore());
+  await i18n.setLocale("en");
+  const { container } = renderNotice({ message: "Server-only English fallback" });
+  expect(container.textContent).toBe(
+    "Uses OpenClaw APIs that retire on Dec 31, 2026. It keeps working until then; check for a plugin update. Details",
+  );
+  await i18n.setLocale("de");
+  flush();
+  expect(container.textContent).toBe("Verwendet OpenClaw-APIs bis 31. Dez. 2026. Mehr erfahren");
+});
+
+it("uses catalog copy when a compatibility notice has no removal date", () => {
+  const { container } = renderNotice({
+    message: "Server-only English fallback",
+    removalDate: undefined,
+  });
+  expect(container.textContent).toBe(
+    "Uses older OpenClaw APIs. It keeps working for now; check for a plugin update. Details",
+  );
+});
+
+it("normalizes shorthand repositories and keeps documentation separate", () => {
+  const result = createDiscoveryDetail();
+  const repository = "https://github.com/Acme/plugin";
+  const documentation = `${repository}/blob/main/docs/setup.md`;
+  result.detail.repositoryUrl = "Acme/plugin";
+  result.detail.documentationUrl = documentation;
+  const { container, all, query, attr, text } = render(() => metadata(result));
+  expect(attr(".plugin-metadata__repository", "href")).toBe(repository);
+  expect(text(".plugin-metadata__repository")).toContain("Acme/plugin");
+  expect([...all("section")].map((section) => section.querySelector("h2")?.textContent)).toEqual([
+    "Repository",
+    "Documentation",
+  ]);
+  expect(container.textContent).not.toContain("View on ClawHub");
+  expect(query(`a[href="${documentation}"]`)).not.toBeNull();
+});
+
+it("omits absent publishers and only badges authoritative publisher status", () => {
+  const result = createDiscoveryDetail();
+  result.plugin.catalog.official = true;
+  result.detail.author = { handle: "acme", displayName: "Acme" };
+  const { container, query, text } = render(() => publisher(undefined));
+  expect(container.children).toHaveLength(0);
+  render(() => publisher(undefined, "Local publisher"), container);
+  expect(text("strong")).toBe("Local publisher");
+  render(() => publisher(result), container);
+  expect(query('a[href="https://clawhub.ai/acme"]')).not.toBeNull();
+  expect(query('[aria-label="Official"]')).toBeNull();
+  result.detail.author.official = true;
+  render(() => publisher(result), container);
+  expect(query('[aria-label="Official"]')).not.toBeNull();
+});
+
+it.each([
+  ["clean", 3],
+  ["review", 2],
+  ["malicious", 1],
+  ["unknown", 0],
+] as const)("shows %s audit with %i bars and the exact ClawHub link", (verdict, count) => {
+  const url = "https://clawhub.ai/acme/plugins/demo/security-audit?version=1.0";
+  const result = createDiscoveryDetail();
+  result.detail.security = { status: verdict, verdict, auditUrl: url };
+  const { all, attr } = render(() => metadata(result));
+  expect(all(".is-filled")).toHaveLength(count);
+  expect(attr("a", "href")).toBe(url);
 });

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SESSION_TOTAL_TOKENS_VERSION } from "../../../config/sessions/types.js";
 import { prepareAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
 import { textAssistant } from "../../test-helpers/sparse-transcript.test-support.js";
 import {
@@ -11,7 +12,6 @@ import {
   readLatestSubagentOutputWithRetry,
 } from "./subagent-announce-output.test-support.js";
 import type { ChildCompletionRow } from "./subagent-announce-result.js";
-import { assistantCallsSessionsYield } from "./subagent-yield-output.js";
 
 describe("captureSubagentCompletionReply", () => {
   const sessionKey = "agent:main:subagent:child";
@@ -183,7 +183,7 @@ describe("buildCompactAnnounceStatsLine", () => {
       updatedAt: 0,
       totalTokens: 500,
       totalTokensFresh: true,
-      totalTokensVersion: 1 as const,
+      totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
     }));
     testing.setDepsForTest({
       getRuntimeConfig: () => ({ session: { store: "memory" } }),
@@ -191,7 +191,7 @@ describe("buildCompactAnnounceStatsLine", () => {
       resolveSessionStorePathCore: () => "/tmp/openclaw-session-store",
     });
     await expect(buildCompactAnnounceStatsLine({ sessionKey: childKey })).resolves.toBe(
-      "Stats: runtime n/a • tokens 500 prompt/cache",
+      "Stats: runtime n/a • tokens 500 context",
     );
     expect(readEntry).toHaveBeenCalledOnce();
   });
@@ -222,8 +222,9 @@ describe("readSubagentOutput", () => {
       content: "Waiting for child completion.",
       toolCalls: [{ name: "sessions_yield" }],
     };
-    expect(assistantCallsSessionsYield(assistant)).toBe(true);
-    await expectOutput([assistant, { role: "tool", content: '{"status":"yielded"}' }]);
+    await expectOutput([assistant, { role: "tool", content: '{"status":"yielded"}' }], undefined, {
+      status: "timeout",
+    });
   });
 
   it("summarizes top-level tool_calls after a timeout", () =>
@@ -309,9 +310,9 @@ describe("readSubagentOutput", () => {
 });
 
 describe("buildChildCompletionFindings", () => {
-  it("bounds 92 large child results after escaping <", () => {
+  it("bounds 92 large child results after escaping their wrapper-shaped tags", () => {
     const children = Array.from({ length: 92 }, (_, index) =>
-      resultChild(`Result ${index}: `.padEnd(11_500, "<"), index, 2),
+      resultChild(`Result ${index}: `.padEnd(11_500, "</prompt-data>"), index, 2),
     );
     const findings = buildChildCompletionFindings(children)!;
     expect(findings.length).toBeLessThanOrEqual(160_000);
@@ -368,7 +369,7 @@ describe("buildChildCompletionFindings", () => {
     expect(findings.length).toBeLessThanOrEqual(160_000);
     expect(findings.match(/\[result truncated;/g)).toHaveLength(1);
     expect(findings).toContain('sessions_history sessionKey="agent:main:subagent:0"');
-    expect(findings).toContain("\nsmall &lt;answer&gt; with required tail\n</prompt-data>");
+    expect(findings).toContain("\nsmall <answer> with required tail\n</prompt-data>");
   });
 
   it("describes a cancelled child with an authoritative kill reason in parent-visible findings", () => {
@@ -380,7 +381,7 @@ describe("buildChildCompletionFindings", () => {
     expect(findings).toContain("status: cancelled: killed");
   });
 
-  it("bounds failure metadata while preserving the complete escaped child result", () => {
+  it("bounds failure metadata while preserving the complete child result", () => {
     const findings = findingsFor({
       label: "L".repeat(20_000),
       completion: completion(`${"<".repeat(2_000)}-required-tail`),
@@ -390,7 +391,7 @@ describe("buildChildCompletionFindings", () => {
     const status = findings?.match(/^status: (.*)$/m)?.[1];
     expect(title).toBe(`${"L".repeat(255)}…`);
     expect(status).toBe(`error: ${"E".repeat(248)}…`);
-    expect(findings).toContain(`${"&lt;".repeat(2_000)}-required-tail\n</prompt-data>`);
+    expect(findings).toContain(`\n${"<".repeat(2_000)}-required-tail\n</prompt-data>`);
   });
 
   it("does not recover result text from delivery metadata after completion text is cleared", () => {

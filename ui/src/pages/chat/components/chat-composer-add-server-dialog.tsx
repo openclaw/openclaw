@@ -2,12 +2,12 @@ import { Show } from "solid-js";
 import type { McpServerForm } from "../../../components/mcp-server-form.ts";
 import { McpServersForm } from "../../../components/mcp-servers-form.tsx";
 import { SettingsSegmented } from "../../../components/solid/settings-ui.tsx";
-import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { registerChatComposerMenuEnglish } from "../../../i18n/locales/en-chat-composer-menu.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 
-registerEnglishCatalog(registerChatComposerEnglish);
+registerEnglishCatalog(registerChatComposerMenuEnglish);
 
-export type ComposerAddServerDialogProps = {
+export function ComposerAddServerDialog(props: {
   open: boolean;
   busy: boolean;
   scope: "session" | "everywhere";
@@ -17,9 +17,7 @@ export type ComposerAddServerDialogProps = {
   onScopeChange: (scope: "session" | "everywhere") => void;
   onCancel: () => void;
   onSubmit: (form: McpServerForm) => void;
-};
-
-export function ComposerAddServerDialog(props: ComposerAddServerDialogProps) {
+}) {
   let nameInput!: HTMLInputElement;
   return (
     <Show when={props.open}>

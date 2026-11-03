@@ -2,6 +2,7 @@ import { performance } from "node:perf_hooks";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import { createMainThreadStallMonitor, getMainThreadTaskName } from "../infra/main-thread-stall.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -39,6 +40,8 @@ it.each([0, 7])(
       }
       return readPreparedSessionRows(projection, () => true, queries, consume);
     };
+    const monitor = createMainThreadStallMonitor();
+    const tasks = new Set<string | undefined>();
     const published: string[] = [];
     const labels = new Map<string, string | undefined>();
     let atIo = -1;
@@ -52,6 +55,7 @@ it.each([0, 7])(
     });
     const work = keys.map((key) =>
       withPreparedSessionEventRow(projection, key, "main", () => {
+        tasks.add(getMainThreadTaskName());
         published.push(key);
         labels.set(key, projection.snapshot({ key, agentId: "main" }).row?.label);
         now += cost;
@@ -70,11 +74,13 @@ it.each([0, 7])(
       await drainSessionEventPublications(projection);
       expect(published).toEqual([...keys.slice(1), keys[0]]);
       expect(preparations).toBeLessThanOrEqual(keys.length * 2);
+      expect(tasks).toEqual(new Set(["gateway:session-event"]));
     } finally {
       held.resolve();
       await vi.runAllTimersAsync();
       await settled;
       projection.dispose();
+      monitor.stop();
       clock.mockRestore();
       vi.useRealTimers();
     }

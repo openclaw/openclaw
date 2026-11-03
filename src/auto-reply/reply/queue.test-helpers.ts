@@ -4,6 +4,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { deferSessionControllerClaimBeforeExecution } from "../../sessions/session-controller.mailbox-claim.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
+import type { InternalFollowupRun } from "./queue/types.js";
 
 const slackRoute = { originatingChannel: "slack", originatingTo: "channel:A" };
 
@@ -27,6 +28,27 @@ export function createQueueTestRun(
       timeoutMs: 10_000,
       blockReplyBreak: "text_end",
       ...execution,
+    },
+  };
+}
+
+export function createOffloadedImageQueueRun(prompt: string, index: number): InternalFollowupRun {
+  return {
+    ...createQueueTestRun({ prompt, originatingChannel: "slack", originatingTo: "channel:A" }),
+    currentTurnImagesPrepared: true,
+    images: [],
+    imageOrder: ["offloaded"],
+    media: [
+      { path: `/tmp/offloaded-${index}.png`, contentType: "image/png" },
+      {
+        path: `/tmp/missing-${index}.png`,
+        contentType: "image/png",
+        hydrationSuppressed: true,
+      },
+    ],
+    mediaImageLayout: {
+      slots: [{ kind: "offloaded", factIndex: 0 }],
+      suppressedFactIndexes: [1],
     },
   };
 }

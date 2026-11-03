@@ -99,6 +99,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
   private agentSelectionSource: ApplicationContext["agentSelection"] | undefined;
   private agentSelectionIntentRevision: number | undefined;
   private sessionsSource: SessionCapability | null = null;
+  private observedCanonicalListError: string | null | undefined;
   private filteredSessionScope: string | null = null;
   private unsubscribeFilteredSessions: (() => void) | null = null;
   childSessionScope = {};
@@ -446,6 +447,10 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
 
   private readonly updateSessions = (sessions: SessionCapability) => {
     const snapshot = sessions.state;
+    const listError = sessions.canonicalListError;
+    const listErrorChanged = listError !== this.observedCanonicalListError;
+    // Observe hidden failures too, so a later filter change cannot replay them.
+    this.observedCanonicalListError = listError;
     if (sessions.presentation.resultCached) {
       return;
     }
@@ -467,7 +472,9 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
       this.clearSessionCache();
     }
     publishSidebarSessionList(this, { ...snapshot, ...presentation });
-    publishSidebarSessionError(this, snapshot.error, "list");
+    if (listErrorChanged) {
+      publishSidebarSessionError(this, listError, "list");
+    }
     this.requestSessionDataUpdate();
   };
 
@@ -479,6 +486,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
       this.retireFilteredSessions();
       this.clearSessionCache();
       this.sessionsSource = sessions;
+      this.observedCanonicalListError = undefined;
     }
     this.updateSessions(sessions);
     if (this.context.gateway.snapshot.phase === "connected") {

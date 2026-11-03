@@ -1,5 +1,5 @@
 // Test fixtures for successful media-understanding decisions.
-import type { MediaUnderstandingDecision } from "../media-understanding/types.js";
+import type { MediaUnderstandingDecision } from "../../packages/media-understanding-common/src/types.js";
 
 function createSuccessfulMediaDecision(
   capability: "audio" | "image" | "video",

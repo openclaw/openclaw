@@ -32,58 +32,48 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
-it("bounds concurrent source file reads while preserving sorted output", async ({ signal }) => {
-  const names = Array.from({ length: 9 }, (_, index) => `file-${index}.ts`);
+it("bounds reads, refills the pool, and returns sorted content despite a held first read", async ({
+  signal,
+}) => {
+  const names = ["a.ts", "b.ts", "c.ts", "d.ts"];
   const fixture = await sourceFixture(Object.fromEntries(names.map((name) => [name, "source"])));
-
-  let activeFiles = 0;
-  let maxActiveFiles = 0;
-  const reads = names.map((name) => ({
-    name,
-    started: createDeferred(),
-    release: createDeferred(),
-    completed: createDeferred(),
-  }));
-  const releaseReads = () => reads.forEach((read) => read.release.resolve());
-
+  const held = createDeferred();
+  const refilled = createDeferred();
+  let active = 0;
+  let maximum = 0;
+  const release = () => held.resolve();
   signal.throwIfAborted();
-  signal.addEventListener("abort", releaseReads, { once: true });
+  signal.addEventListener("abort", release, { once: true });
   const scan = (pendingScan = fixture({
-    maxConcurrentReads: 3,
-    statFile: (filePath) => {
-      activeFiles += 1;
-      maxActiveFiles = Math.max(maxActiveFiles, activeFiles);
-      return stat(filePath);
+    maxConcurrentReads: 2,
+    statFile: (file) => {
+      maximum = Math.max(maximum, ++active);
+      return stat(file);
     },
-    readFile: async (filePath) => {
-      const read = reads.find((entry) => entry.name === path.basename(filePath))!;
-      read.started.resolve();
-      await read.release.promise;
-      activeFiles -= 1;
-      read.completed.resolve();
-      return `content:${read.name}`;
+    readFile: async (file) => {
+      const name = path.basename(file);
+      if (name === names[0]) {
+        await held.promise;
+      }
+      active--;
+      if (name === names.at(-1)) {
+        refilled.resolve();
+      }
+      return `content:${name}`;
     },
   }));
-
   try {
-    for (let offset = 0; offset < reads.length; offset += 3) {
-      const batch = reads.slice(offset, offset + 3);
-      await Promise.all(batch.map((read) => read.started.promise));
-      signal.throwIfAborted();
-      expect(activeFiles).toBe(3);
-      // Complete each admitted batch backwards so completion order cannot stand in for file order.
-      for (const read of batch.toReversed()) {
-        read.release.resolve();
-        await read.completed.promise;
-      }
-    }
+    await refilled.promise;
+    signal.throwIfAborted();
+    expect(maximum).toBe(2);
+    expect(active).toBe(1);
+    release();
     const files = await scan;
-    expect(maxActiveFiles).toBe(3);
     expect(files.map((file) => file.relativeFile)).toEqual(names.map((name) => `src/${name}`));
     expect(files.map((file) => file.content)).toEqual(names.map((name) => `content:${name}`));
   } finally {
-    signal.removeEventListener("abort", releaseReads);
-    releaseReads();
+    signal.removeEventListener("abort", release);
+    release();
     await scan;
   }
 });

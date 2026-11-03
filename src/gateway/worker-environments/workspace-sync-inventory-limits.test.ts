@@ -48,6 +48,7 @@ it.each([
       : [];
     // Keep real descriptors and hashing; resize only after inventory, at open.
     const prelude = String.raw`{
+      Date.now = () => ${Date.now() + 60_000};
       const io = require("node:fs");
       const sizes = new Map(${JSON.stringify([
         [first, firstSize],

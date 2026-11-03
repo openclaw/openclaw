@@ -1,9 +1,14 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { canonicalizePath } from "../../agents/utils/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { workshopPluginConfig } from "../../skills/workshop/config.test-support.js";
 import { WorkshopReviewNotFoundError } from "../../skills/workshop/review-undo.js";
-import { resolveWorkshopSkillsDir } from "../../skills/workshop/skills-root.js";
+import {
+  resolveWorkshopDraftsDir,
+  resolveWorkshopSkillsDir,
+} from "../../skills/workshop/skills-root.js";
 import { skillsRetiredHandlers } from "./skills-retired.js";
 import { skillsWorkshopHandlers } from "./skills-workshop.js";
 import { callGatewayHandler } from "./skills.test-helpers.js";
@@ -24,8 +29,8 @@ vi.mock("../../skills/workshop/library.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../skills/workshop/library.js")>()),
   ...library,
 }));
-vi.mock("../../skills/workshop/skill-usage.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../skills/workshop/skill-usage.js")>()),
+vi.mock("../../skills/runtime/skill-usage.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../skills/runtime/skill-usage.js")>()),
   readSkillUsage,
 }));
 vi.mock("../../skills/workshop/review-undo.js", async (importOriginal) => ({
@@ -35,7 +40,7 @@ vi.mock("../../skills/workshop/review-undo.js", async (importOriginal) => ({
 
 const config: OpenClawConfig = {
   agents: { entries: { ops: {} } },
-  skills: { workshop: { autonomous: { mode: "off" } } },
+  ...workshopPluginConfig({ autonomous: { mode: "off" } }),
 };
 const context = { getRuntimeConfig: () => config };
 const call = (method: string, params: Record<string, unknown>) =>
@@ -79,6 +84,7 @@ describe("skills.workshop gateway methods", () => {
         { name: "unused", ...summary },
       ],
       archived,
+      drafts: [],
     });
   });
 
@@ -128,6 +134,29 @@ describe("skills.workshop gateway methods", () => {
       }),
     ).rejects.toThrow("Gateway requester authority changed");
   });
+
+  it.each(["skills.workshop.applyDraft", "skills.workshop.discardDraft"])(
+    "refuses %s for a requester whose authority is gone and keeps the draft",
+    async (method) => {
+      const draftDir = path.join(resolveWorkshopDraftsDir(config, "ops"), "deploy-notes-1a2b3c4d");
+      const draftFile = path.join(draftDir, "SKILL.md");
+      await fs.mkdir(draftDir, { recursive: true });
+      await fs.writeFile(draftFile, "---\nname: deploy-notes\ndescription: d\n---\n\n1. Step.\n");
+      try {
+        await expect(
+          callGatewayHandler(
+            skillsWorkshopHandlers,
+            method,
+            { name: "deploy-notes", draftId: "deploy-notes-1a2b3c4d" },
+            { client: { invalidated: true } as never, context },
+          ),
+        ).rejects.toThrow("Gateway requester authority changed");
+        expect(await fs.readFile(draftFile, "utf8")).toContain("1. Step.");
+      } finally {
+        await fs.rm(draftDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("returns library refusals and unknown agents as invalid requests", async () => {
     const missingSkill = 'Skill "ghost" does not exist.';

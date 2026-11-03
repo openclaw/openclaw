@@ -1,12 +1,58 @@
 import activeMemoryPresentation from "../../../../extensions/active-memory/control-ui.presentation.json" with { type: "json" };
 import memoryWikiPresentation from "../../../../extensions/memory-wiki/control-ui.presentation.json" with { type: "json" };
 import type { TranslationMap } from "../lib/types.ts";
+import { registerPreferencesEnglish } from "./en-preferences.ts";
+import { registerSettingsSidebarEnglish } from "./en-settings-sidebar.ts";
 import { en } from "./en.ts";
 
 // Settings copy loads with its lazy page or search, not the startup shell.
 const enSettings = {
+  languages: {
+    en: "English",
+    zhCN: "简体中文 (Simplified Chinese)",
+    zhTW: "繁體中文 (Traditional Chinese)",
+    ptBR: "Português (Brazilian Portuguese)",
+    de: "Deutsch (German)",
+    es: "Español (Spanish)",
+    jaJP: "日本語 (Japanese)",
+    ko: "한국어 (Korean)",
+    fr: "Français (French)",
+    hi: "हिन्दी (Hindi)",
+    ar: "العربية (Arabic)",
+    it: "Italiano (Italian)",
+    tr: "Türkçe (Turkish)",
+    uk: "Українська (Ukrainian)",
+    id: "Bahasa Indonesia (Indonesian)",
+    pl: "Polski (Polish)",
+    th: "ไทย (Thai)",
+    vi: "Tiếng Việt (Vietnamese)",
+    nl: "Nederlands (Dutch)",
+    fa: "فارسی (Persian)",
+    ru: "Русский (Russian)",
+    sv: "Svenska (Swedish)",
+    ca: "Català (Catalan)",
+  },
+  chat: {
+    sendShortcut: "Send shortcut",
+    sendShortcutHint:
+      "Desktop only. On mobile, Enter adds a new line; use the Send button to send.",
+    sendShortcutEnter: "Enter",
+    followUpMode: "Follow-ups while the agent is working",
+    followUpModeQueue: "Queue until the run ends",
+    followUpModeServer: "Server default ({mode})",
+    followUpModeLoading: "loading…",
+    followUpModeOverriding: "Overriding server default ({mode})",
+    followUpModeReset: "Reset to server default",
+    catalogOpenTarget: "Open external sessions in",
+    catalogOpenTargetViewer: "OpenClaw viewer",
+    catalogOpenTargetTerminal: "Terminal",
+    sidebar: {
+      hiddenSessionSections: "Hidden session sections",
+      showSessionSection: "Show",
+    },
+  },
   agents: {
-    createdBy: "Created by {id}",
+    createdBy: registerSettingsSidebarEnglish.catalog.agents.createdBy,
     defaults: {
       title: "Agent defaults",
       description: "Defaults every agent inherits unless overridden.",
@@ -384,6 +430,52 @@ const enSettings = {
     },
   },
   configForm: {
+    redactedPlaceholder: "[redacted - click reveal to view]",
+    sectionHelp: "Help for {section}",
+    advancedDivider: "Advanced",
+    advancedSettings: "Advanced settings",
+    hideValue: en.configForm.hideValue,
+    revealValue: en.configForm.revealValue,
+    disableStreamToReveal: "Disable stream mode to reveal value",
+    storedSecretNotRevealable: "This editor cannot reveal the stored value.",
+    unsupportedType: "Unsupported type: {type}. Use Raw mode.",
+    structuredSecretRaw: "Structured value (SecretRef) - use Raw mode to edit",
+    structuredSecretFile: "Structured value (SecretRef) - edit the config file directly",
+    defaultValue: en.configForm.defaultValue,
+    select: "Select...",
+    required: "Required",
+    enumOn: "On",
+    enumOff: "Off",
+    enumAuto: "Auto",
+    nullValue: "null",
+    jsonValue: "JSON value",
+    invalidJson: "Enter valid JSON before leaving this field.",
+    invalidString: "Enter a value that matches this setting's constraints.",
+    invalidNumber: "Enter a value within the allowed range and step.",
+    draftRejected: "This setting could not be saved. Your draft is still here.",
+    unsupportedArray: "Unsupported array schema. Use Raw mode.",
+    itemCountOne: "{count} item",
+    itemCount: "{count} items",
+    add: "Add",
+    noItems: 'No items yet. Click "Add" to create one.',
+    removeItem: "Remove item",
+    customEntries: "Custom entries",
+    addEntry: "Add Entry",
+    key: "Key",
+    removeEntry: "Remove entry",
+    removeEntryKey: "Remove entry: {key}",
+    renameRejected: "Rename not applied. The original key was kept. {reason}",
+    renameDuplicateKey: "This key is already in use.",
+    renameInvalidKey: "Choose a key that matches this setting's constraints.",
+    renameChangeRejected:
+      "The containing setting did not accept this rename. Review its documentation and constraints before trying another name.",
+    renameRedactedBlocked:
+      "This entry holds a stored secret. Add the new key with its value, then remove this one.",
+    schemaUnavailable: "Schema unavailable.",
+    unsupportedSchema: "Unsupported schema. Use Raw.",
+    unsupportedNode: "Unsupported schema node. Use Raw mode.",
+    noSettingsMatch: 'No settings match "{query}"',
+    noSettingsInSection: "No settings in this section",
     sections: {
       env: {
         label: "Environment Variables",
@@ -527,7 +619,7 @@ const enSettings = {
     otherAgent: "Other Agent",
     title: "Tool access",
     subtitle:
-      "Choose tools for this agent. Full selects tools; it does not grant Full Access execution permissions.",
+      "Choose tools for this agent. Full selects tools; it does not grant Full access execution permissions.",
     enabledSummary: "{enabled}/{total} enabled.",
     enableAll: "Enable All",
     disableAll: "Disable All",
@@ -943,6 +1035,7 @@ const enSettings = {
   modelProviders: {
     title: "Configured providers",
     configureModels: "Model setup",
+    actionNamed: "{action}: {name}",
     login: {
       action: "Connect provider",
       title: "Connect a provider",
@@ -998,10 +1091,16 @@ const enSettings = {
       missing: "Not signed in",
       apiKey: "API key",
       denied: "Credentials rejected",
+      signInAgain: "Sign in again",
+      signInUnavailable: "Sign-in unavailable",
+      managedExternally: "Managed externally",
       configured: "Credentials configured",
       modelsUnavailable: "Models unavailable",
     },
     expiresIn: "Credential expires in {time}",
+    accessTokenExpiresIn: "Access token expires in {time}",
+    accessTokenExpired: "Access token expired",
+    accessTokenExpiryHelp: "Access-token expiry alone does not mean you need to sign in again.",
     models: "{count} models",
     modelOne: "1 model",
     modelsAvailable: "{available} of {count} models available",
@@ -1128,6 +1227,7 @@ const enSettings = {
       primary: "Model",
       utility: "Utility Model",
       utilityHelpLabel: "About the utility model",
+      decisionHelpLabel: "About the decision model",
       utilityHelpPurpose:
         "Handles short background tasks such as generated titles, progress narration, and session summaries.",
       utilityHelpAutomatic:
@@ -1145,6 +1245,7 @@ const enSettings = {
       noModels: "Configure a chat provider to select a primary, utility, or fallback model.",
       discoveringMore: "Discovering more models…",
       discoverFailed: "More models could not be discovered.",
+      discoverFailedFor: "Models from {providers} could not be discovered.",
       retryDiscover: "Retry",
       thinkingHelpLabel: "About thinking defaults",
       thinkingHelp:
@@ -1540,16 +1641,8 @@ const enSettings = {
     themeRemoved: "Custom theme removed.",
   },
   configView: {
-    form: "Form",
-    raw: "Raw",
-    formUnsafeTitle: "Form view can't safely edit some fields",
-    rawTitle: "Edit raw JSON/JSON5 config",
-    rawUnavailableTitle: "Raw mode unavailable for this snapshot",
-    rawDiscard: "Discard",
-    rawDraftPendingFormTitle:
-      "Unsaved raw config edits — save or discard them before switching to Form.",
-    rawDiffUnavailable: "Changes detected (JSON diff not available)",
-    rawConfig: "Raw config (JSON/JSON5)",
+    adminRequired: en.configView.adminRequired,
+    channelSettings: "Channel settings",
     categories: {
       core: "Core",
       ai: "Agent Defaults",
@@ -1652,6 +1745,9 @@ const enSettings = {
       xl: "XL",
       xxl: "XXL",
     },
+    profileSyncedHint: "Saved to your profile — follows you on every device.",
+    syncedHint: "Synced across your devices through the gateway.",
+    syncPendingHint: "Waiting to sync through the gateway.",
     notifications: {
       title: "Push notifications",
       nativeTitle: "Notifications",
@@ -1859,6 +1955,99 @@ const enSettings = {
       collapseTaskProgressHint:
         "On desktop, start task progress collapsed. It can expand when the response finishes if you are at the end of the chat. A manual close keeps it collapsed for that session. On mobile, task progress always starts collapsed and only opens when you open it manually.",
     },
+    sidebarPrefs: {
+      title: "Sidebar",
+      hint: "Choose what appears while sessions are running.",
+      liveActivity: "Show live agent activity in sidebar",
+      liveActivityHint: "Show the latest assistant or tool activity beneath running sessions.",
+      deleteConfirm: "Confirm before deleting sessions",
+      deleteConfirmHint:
+        "Applies to sidebar deletes. Stopping cloud workers and removing preserved worktrees always ask.",
+    },
+    sessionObserver: {
+      title: "Session observer",
+      hint: "Summarize long-running sessions with a small utility model.",
+      toggle: "Session observer",
+      toggleHint: "Generate live status digests for subscribed Control UI sessions.",
+      resolvedModel: "Resolved small model",
+      modelAuto: "auto ({model})",
+      modelConfigured: "configured ({model})",
+      modelDisabled: "disabled",
+      modelUnavailable: "unavailable (no small model)",
+      modelPicker: "Small model",
+      modelPickerHint: "Used for observer digests and other short utility tasks.",
+      modelCatalogUnavailable: "Explicit model catalog unavailable",
+      auto: "Auto (provider default)",
+      disabled: "Disabled",
+      toggleNote: "Update the Control UI session observer",
+      modelNote: "Update the default utility model",
+    },
+    connection: {
+      title: "Connection",
+      gateway: "Gateway",
+      status: "Status",
+      assistant: "Assistant",
+    },
+    root: "<root>",
+    itemCount: "[{count} item]",
+    itemCountPlural: "[{count} items]",
+    open: "Open",
+    fileOpenedOnGateway: en.configView.fileOpenedOnGateway,
+    applying: registerSettingsSidebarEnglish.catalog.configView.applying,
+    autoSaveSaving: "Saving…",
+    autoSaveSaved: "Saved",
+    autoSavePaused: registerSettingsSidebarEnglish.catalog.configView.autoSavePaused,
+    saveNow: registerSettingsSidebarEnglish.catalog.configView.saveNow,
+    autoSaveFailed: registerSettingsSidebarEnglish.catalog.configView.autoSaveFailed,
+    autoSaveRejected: registerSettingsSidebarEnglish.catalog.configView.autoSaveRejected,
+    autoSaveRejectedHint: registerSettingsSidebarEnglish.catalog.configView.autoSaveRejectedHint,
+    rejectionDetails: registerSettingsSidebarEnglish.catalog.configView.rejectionDetails,
+    recoveryNotRestored: en.configView.recoveryNotRestored,
+    recoveryUnknown: en.configView.recoveryUnknown,
+    recoveryBackup: en.configView.recoveryBackup,
+    recoveryReload: registerSettingsSidebarEnglish.catalog.configView.recoveryReload,
+    discardUnconfirmed: en.configView.discardUnconfirmed,
+    writeGatewayChanged: en.configView.writeGatewayChanged,
+    writeUnconfirmed: en.configView.writeUnconfirmed,
+    autoSaveConflict: registerSettingsSidebarEnglish.catalog.configView.autoSaveConflict,
+    retry: registerSettingsSidebarEnglish.catalog.configView.retry,
+    applyChanges: registerSettingsSidebarEnglish.catalog.configView.applyChanges,
+    reloadBlocked: en.configView.reloadBlocked,
+    rawDraftBlocksApply: en.configView.rawDraftBlocksApply,
+    rawDraftBlocksFormEdit: en.configView.rawDraftBlocksFormEdit,
+    rawDraftUnverified: en.configView.rawDraftUnverified,
+    invalidConfig: "Your configuration is invalid. Some settings may not work as expected.",
+    dismissWarning: "Don't remind again",
+    viewPendingChangesRaw: "View pending changes",
+    hideEnvValues: "Hide env values",
+    revealEnvValues: "Reveal env values",
+    peek: "Peek",
+    loadingSchema: "Loading schema…",
+    formUnsafeCount: "1 setting in this config can only be edited as text: {paths}",
+    formUnsafeCountPlural: "{count} settings in this config can only be edited as text: {paths}",
+    formUnsafeMore: "+{count} more",
+    openRawEditor: "Open Raw editor",
+    secretCount: "{count} secret",
+    secretCountPlural: "{count} secrets",
+    redacted: "redacted",
+    visible: "visible",
+    revealSensitive: "Reveal sensitive values",
+    hideSensitive: "Hide sensitive values",
+    toggleRawRedaction: "Toggle raw config redaction",
+    sensitiveHidden:
+      "{count} sensitive value hidden. Use the reveal button above to edit the raw config.",
+    sensitiveHiddenPlural:
+      "{count} sensitive values hidden. Use the reveal button above to edit the raw config.",
+    form: "Form",
+    raw: "Raw",
+    formUnsafeTitle: "Form view can't safely edit some fields",
+    rawTitle: "Edit raw JSON/JSON5 config",
+    rawUnavailableTitle: "Raw mode unavailable for this snapshot",
+    rawDiscard: "Discard",
+    rawDraftPendingFormTitle:
+      "Unsaved raw config edits — save or discard them before switching to Form.",
+    rawDiffUnavailable: "Changes detected (JSON diff not available)",
+    rawConfig: "Raw config (JSON/JSON5)",
     sessionSources: {
       title: "Session sources",
       hint: "Choose which coding apps show their existing conversations in the sidebar.",
@@ -1873,15 +2062,6 @@ const enSettings = {
       unavailable:
         "Session source settings are unavailable. Reconnect or reload Settings to try again.",
       managePlugins: "Manage plugins",
-    },
-    sidebarPrefs: {
-      title: "Sidebar",
-      hint: "Choose what appears while sessions are running.",
-      liveActivity: "Show live agent activity in sidebar",
-      liveActivityHint: "Show the latest assistant or tool activity beneath running sessions.",
-      deleteConfirm: "Confirm before deleting sessions",
-      deleteConfirmHint:
-        "Applies to sidebar deletes. Stopping cloud workers and removing preserved worktrees always ask.",
     },
     sessionStorage: {
       title: "Session storage",
@@ -1921,30 +2101,6 @@ const enSettings = {
       runHint: "Run one background batch using the saved, applied policy.",
       runStarted: "Background batch started. You can leave this page while it runs.",
       runCompleted: "Batch completed. {count} transcripts archived.",
-    },
-    sessionObserver: {
-      title: "Session observer",
-      hint: "Summarize long-running sessions with a small utility model.",
-      toggle: "Session observer",
-      toggleHint: "Generate live status digests for subscribed Control UI sessions.",
-      resolvedModel: "Resolved small model",
-      modelAuto: "auto ({model})",
-      modelConfigured: "configured ({model})",
-      modelDisabled: "disabled",
-      modelUnavailable: "unavailable (no small model)",
-      modelPicker: "Small model",
-      modelPickerHint: "Used for observer digests and other short utility tasks.",
-      modelCatalogUnavailable: "Explicit model catalog unavailable",
-      auto: "Auto (provider default)",
-      disabled: "Disabled",
-      toggleNote: "Update the Control UI session observer",
-      modelNote: "Update the default utility model",
-    },
-    connection: {
-      title: "Connection",
-      gateway: "Gateway",
-      status: "Status",
-      assistant: "Assistant",
     },
   },
   memoryPage: {
@@ -2100,7 +2256,10 @@ export const registerSettingsEnglish = Object.assign(
     Object.assign(en.channels, enSettings.channels);
     Object.assign(en.agentTools, enSettings.agentTools);
     Object.assign(en.talkPage, enSettings.talkPage);
-    Object.assign(en.configForm.sections, enSettings.configForm.sections);
+    const { sections, ...configForm } = enSettings.configForm;
+    Object.assign(en.configForm, configForm);
+    Object.assign(en.configForm.sections, sections);
+    registerPreferencesEnglish();
     en.memoryPage = enSettings.memoryPage;
     en.modelProviders = enSettings.modelProviders;
     en.searchPage = enSettings.searchPage;
@@ -2110,6 +2269,10 @@ export const registerSettingsEnglish = Object.assign(
     Object.assign(en.configPage, enSettings.configPage);
     Object.assign(en.configView, enSettings.configView);
     Object.assign(en.updates, enSettings.updates);
+    Object.assign(en.languages, enSettings.languages);
+    const { sidebar, ...chat } = enSettings.chat;
+    Object.assign(en.chat, chat);
+    Object.assign(en.chat.sidebar, sidebar);
   },
   { catalog: enSettings },
 );

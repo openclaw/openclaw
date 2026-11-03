@@ -1,19 +1,14 @@
 /* @vitest-environment jsdom */
 
-import { createComponent, createMemo, createSignal } from "solid-js";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { GatewayRequestHandler } from "../../test-helpers/gateway-client.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
-import { createChatViewFrame } from "./chat-view-frame.ts";
-import { createTestTranscript } from "./chat-view.test-helpers.ts";
-import { createComposerQuestions } from "./components/chat-composer-questions.ts";
-import { ChatThread } from "./components/chat-thread-view.tsx";
+import { createTestTranscript, renderChatPropsInto } from "./chat-view.test-helpers.ts";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
@@ -71,63 +66,42 @@ describe("mounted pane run settlement", () => {
     };
     const terminalDescriptor = createDeferred<{ session: GatewaySessionRow }>();
     let delayDescriptor = false;
+    const history = () => ({
+      messages: [prompt],
+      sessionInfo: running,
+      sessionId: running.sessionId,
+      inFlightRun: { runId, text: "Preparing the image.", startedAt },
+    });
     const { sessions, mount, emitGatewayEvent } = createMountedPanes([running], "main", undefined, {
       "sessions.describe": () =>
         delayDescriptor ? terminalDescriptor.promise : { session: running },
-      "chat.startup": () => ({
-        messages: [prompt],
-        sessionInfo: running,
-        sessionId: running.sessionId,
-        inFlightRun: { runId, text: "Preparing the image.", startedAt },
-      }),
-      "chat.history": () => ({
-        messages: [prompt],
-        sessionInfo: running,
-        sessionId: running.sessionId,
-        inFlightRun: { runId, text: "Preparing the image.", startedAt },
-      }),
+      "chat.startup": history,
+      "chat.history": history,
     });
     await sessions.refresh({ agentId: "main", force: true });
     const pane = mount(running.key);
     await refreshPane(pane);
     const transcript = createTestTranscript(pane.presentationId);
-    const readProps = () => {
-      const chat = pane.render().layout?.primary.chat;
-      if (!chat) {
-        throw new Error("Expected the mounted chat pane");
-      }
-      return { ...chat, transcript, presented: true, transcriptVisible: true };
-    };
-    const [props, setProps] = createSignal(readProps());
-    const view = mountSolid(() => {
-      const questions = createComposerQuestions(pane.presentationId, props);
-      const frame = createMemo(() =>
-        createChatViewFrame(props(), () => undefined, questions.source()!.asyncQuestions),
-      );
-      return createComponent(ChatThread, {
-        get props() {
-          return frame().threadProps;
+    const container = document.createElement("div");
+    const draw = () =>
+      renderChatPropsInto(
+        container,
+        {
+          ...expectDefined(pane.render().layout?.primary.chat, "mounted chat pane"),
+          transcript,
+          presented: true,
+          transcriptVisible: true,
         },
-        transcript,
-      });
-    });
-    const draw = () => {
-      setProps(readProps());
-      flush();
-      transcript.update();
-      flush();
-    };
+        pane.context,
+      );
     onTestFinished(() => {
       vi.useRealTimers();
       terminalDescriptor.resolve({ session: done });
-      view.unmount();
-      transcript.dispose();
     });
-    transcript.start();
     draw();
     await flushDeferredRowPrune();
     expect(pane.state.chatRunId).toBe(runId);
-    expect(view.container.querySelector(".chat-working-indicator")).not.toBeNull();
+    expect(container.querySelector(".chat-working-indicator")).not.toBeNull();
 
     // History's terminal-persistence view can be active without an exact run set.
     const observation = sessions.observeRow({ key: running.key, agentId: "main" }, () => {});
@@ -146,25 +120,26 @@ describe("mounted pane run settlement", () => {
       state: "final",
       message: finalMessage,
     });
+    await vi.waitFor(() => expect(pane.state.chatRunId).toBeNull());
     draw();
     expect(pane.state.chatRunId).toBeNull();
-    expect(view.container.querySelector(".chat-working-indicator")).toBeNull();
-    const bubble = requireElement(view.container, '[data-entry-id="managed-media-answer"]');
-    expect(view.container.querySelector(".chat-turn-recap")).toBeNull();
+    expect(container.querySelector(".chat-working-indicator")).toBeNull();
+    const bubble = requireElement(container, '[data-entry-id="managed-media-answer"]');
+    expect(container.querySelector(".chat-turn-recap")).toBeNull();
 
     await vi.advanceTimersByTimeAsync(5_001);
     draw();
     expect(pane.state.chatRunId).toBeNull();
-    expect(view.container.querySelector(".chat-working-indicator")).not.toBeNull();
-    expect(view.container.querySelector(".chat-turn-recap")).toBeNull();
+    expect(container.querySelector(".chat-working-indicator")).not.toBeNull();
+    expect(container.querySelector(".chat-turn-recap")).toBeNull();
 
     terminalDescriptor.resolve({ session: done });
     await descriptorRead;
     draw();
-    expect(view.container.querySelector('[data-entry-id="managed-media-answer"]')).toBe(bubble);
-    expect(view.container.querySelector(".chat-working-indicator")).toBeNull();
+    expect(container.querySelector('[data-entry-id="managed-media-answer"]')).toBe(bubble);
+    expect(container.querySelector(".chat-working-indicator")).toBeNull();
     expect(
-      requireElement(view.container, ".chat-group.assistant .chat-turn-recap").textContent,
+      requireElement(container, ".chat-group.assistant .chat-turn-recap").textContent,
     ).toContain("Done in 1 second");
   });
 

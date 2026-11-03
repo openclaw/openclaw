@@ -84,11 +84,14 @@ it.each([
 );
 
 it.each([
-  [{ profile: "coding" }, ["update.run"]],
-  [{ profile: "full" }, ["config.get", "config.schema.lookup", "update.run"]],
+  [{ profile: "coding" }, ["update.run", "restart", "update.cleanup"]],
+  [
+    { profile: "full" },
+    ["config.get", "config.schema.lookup", "update.run", "restart", "update.cleanup"],
+  ],
   [
     { profile: "messaging", alsoAllow: ["gateway"] },
-    ["config.get", "config.schema.lookup", "update.run"],
+    ["config.get", "config.schema.lookup", "update.run", "restart", "update.cleanup"],
   ],
 ] satisfies Array<[OpenClawConfig["tools"], string[]]>)(
   "limits gateway actions to the skill dispatch policy: %j",

@@ -9,6 +9,7 @@ import type {
 } from "@mistralai/mistralai/models/components";
 import { ReasoningEffort$inboundSchema } from "@mistralai/mistralai/models/components/reasoningeffort.js";
 import { Chat } from "@mistralai/mistralai/sdk/chat";
+import { omitNullRequestHeaders } from "@openclaw/llm-core";
 import { appendAssistantThinking } from "@openclaw/llm-core/event-stream";
 import { getAiTransportHost } from "../host.js";
 import { isImageWithMediaPayload } from "../media-payload.js";
@@ -16,9 +17,11 @@ import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
 import { createAssistantOutput } from "../transports/assistant-output.js";
 import {
+  awaitProviderLifecycleCallback,
   assignTransportErrorDetails,
   finalizeTerminalToolCallArguments,
   finalizeTransportStream,
+  mergeTransportHeaders,
   notifyProviderHttpResponse,
 } from "../transports/transport-stream-shared.js";
 import type {
@@ -187,18 +190,27 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
           content: sanitizeSurrogates(stripSystemPromptCacheBoundary(context.systemPrompt)),
         });
       }
-      const nextPayload = await options?.onPayload?.(payload, model);
+      const nextPayload = await awaitProviderLifecycleCallback(
+        options?.onPayload ? () => options.onPayload?.(payload, model) : undefined,
+        options?.signal,
+      );
       if (nextPayload !== undefined) {
         payload = nextPayload as ChatCompletionStreamRequest;
       }
-      const headers = { ...model.headers, ...options?.headers };
+      const headers = mergeTransportHeaders(model.headers, options?.headers) ?? {};
       // Mistral infrastructure uses `x-affinity` for KV-cache reuse (prefix caching).
       // Respect explicit caller-provided header values.
       if (resolveMistralPromptCacheKey(options) && options?.sessionId) {
-        headers["x-affinity"] ||= options.sessionId;
+        const affinityHeader = Object.keys(headers).find(
+          (name) => name.toLowerCase() === "x-affinity",
+        );
+        // Null suppresses affinity; an empty string keeps the existing session default.
+        if (!affinityHeader || headers[affinityHeader] === "") {
+          headers[affinityHeader ?? "x-affinity"] = options.sessionId;
+        }
       }
       const mistralStream = await chat.stream(payload, {
-        headers,
+        headers: omitNullRequestHeaders(headers),
         signal: options?.signal,
       });
       if (mistralResponse && mistralResponse !== reportedResponse) {

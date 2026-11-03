@@ -1,6 +1,5 @@
 /* Carapace data marks (sparkline, meter, usage rows) adapted from openclaw/carapace
  * at 5463792; roles resolve through carapace-control-ui.css. */
-@import "./carapace-control-ui.css";
 
 .oc-sparkline {
   display: block;
@@ -23,7 +22,7 @@
   height: 0.375rem;
   overflow: hidden;
   border-radius: var(--oc-radius-round);
-  background: var(--oc-surface-interactive);
+  background: var(--surface-selected);
 }
 
 .oc-inspector-meter span {
@@ -225,4 +224,29 @@
 .provider-usage__trend .oc-sparkline {
   flex: none;
   width: 7.5rem;
+}
+
+/* Phones: plan windows stay inside their card and long summaries wrap beside their label. */
+@media (max-width: 640px) {
+  .provider-usage,
+  .provider-usage__group {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .provider-usage__rows {
+    grid-template-columns: max-content minmax(0, 1fr);
+  }
+
+  .provider-usage__row > span:empty {
+    display: none;
+  }
+
+  .provider-usage__row .oc-menu-panel-usage-value {
+    overflow-wrap: anywhere;
+  }
+
+  /* The sparkline draws no line, so its box only pushed the totals away from the labels. */
+  .provider-usage__trend .oc-sparkline {
+    display: none;
+  }
 }

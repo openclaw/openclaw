@@ -21,6 +21,8 @@ import type { createSessionRowProvenance } from "../../lib/sessions/session-row-
 import type { CurrentWorkChange } from "./current-work.ts";
 
 export const ACTIVITY_TIME_FILTERS = ["24h", "7d", "30d", "all"] as const;
+/** Phone layouts rearrange controls and rows; matches the settings control sizing breakpoint. */
+export const ACTIVITY_PHONE_QUERY = "(max-width: 640px)";
 export type ActivityTimeFilter = (typeof ACTIVITY_TIME_FILTERS)[number];
 
 export const TIME_LABELS: Record<ActivityTimeFilter, string> = {
@@ -30,18 +32,11 @@ export const TIME_LABELS: Record<ActivityTimeFilter, string> = {
   all: "activityFeed.timeAll",
 };
 
-export type SessionActivityFilters = {
-  personId: string | null;
-  query: string;
-  time: ActivityTimeFilter;
-};
+export type SessionActivityFilters = ReturnType<typeof parseSessionActivityFilters>;
 
 const DEFAULT_ACTIVITY_TIME_FILTER: ActivityTimeFilter = "7d";
 
-export function parseSessionActivityFilters(
-  search: string,
-  pathPersonId?: string | null,
-): SessionActivityFilters {
+export function parseSessionActivityFilters(search: string, pathPersonId?: string | null) {
   const params = new URLSearchParams(search);
   const rawTime = params.get("time");
   return {

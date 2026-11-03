@@ -123,7 +123,20 @@ kubectl exec -n openclaw deploy/openclaw -- rm /home/node/.openclaw/openclaw.jso
 kubectl rollout restart -n openclaw deploy/openclaw
 ```
 
+Keep `openclaw.json.last-good` and the `openclaw.json.bak*` backups when reseeding.
+A valid replacement does not need a `meta` block: `openclaw doctor --fix` keeps
+it, and the Gateway promotes it to last-good after it starts successfully.
+Truncated or invalid configs still use backup recovery. If recovery replaces a
+file, the warning names the saved `openclaw.json.clobbered.*` original and explains
+how to copy it back after correcting the reported problem.
+
 Deployments created from the previous template applied ConfigMap edits on every pod start (and discarded any config changes made through OpenClaw). If you relied on that flow, use the reseed commands above after ConfigMap edits.
+
+### Temporary storage
+
+The init container prepares a sticky-protected `gateway-tmp` directory (mode `1777`) on the `emptyDir` volume and mounts it at `/tmp` with `subPath`. Keep this layout when customizing the temp volume: filesystem safety checks reject group- or world-writable ancestors without sticky protection, even when `/tmp/openclaw` itself is private. Setting `fsGroup` alone does not add the sticky bit.
+
+The volume must be writable by the init container, which must share the Gateway's effective UID to create and chmod the directory. The recipe uses UID/GID and `fsGroup` 1000. On platforms that assign arbitrary UIDs, adapt these security contexts together. Preparation failures stop initialization and appear in `kubectl logs -n openclaw deploy/openclaw -c init-config`.
 
 ### Add providers
 

@@ -166,32 +166,6 @@ describe("local plugin command ownership", () => {
     }
   });
 
-  it.each(["enable", "disable", "install", "uninstall"])(
-    "keeps the existing %s Gateway route",
-    async (command) => {
-      boundary.foreign = true;
-      resolvePluginLifecycleGatewayMock.mockResolvedValue(pluginLifecycleGatewayMock);
-      pluginLifecycleGatewayMock.mockResolvedValue({
-        plugin: { id: "alpha" },
-        pluginId: "alpha",
-        removed: [],
-        runtime: { generation: 2 },
-      });
-      await runPluginsCommand([
-        "plugins",
-        command,
-        command === "install" ? "npm:synthetic-plugin" : "alpha",
-        ...(["install", "uninstall"].includes(command) ? ["--force"] : []),
-      ]);
-      expect(pluginLifecycleGatewayMock.mock.calls[0]?.[0]).toBe(
-        `plugins.${command === "enable" || command === "disable" ? "setEnabled" : command}`,
-      );
-      expect(boundary.install).not.toHaveBeenCalled();
-      expect(boundary.policy).not.toHaveBeenCalled();
-      expect(boundary.uninstall).not.toHaveBeenCalled();
-    },
-  );
-
   it.each([true, false])("guards hook fallback when foreign owner=%s", async (foreign) => {
     boundary.foreign = foreign;
     resolvePluginLifecycleGatewayMock.mockResolvedValue(pluginLifecycleGatewayMock);

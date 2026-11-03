@@ -1,7 +1,8 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { interrupted as personalReview } from "../../pages/chat/chat-github-publication.test-support.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
@@ -80,17 +81,12 @@ describe("session pull-request state", () => {
 
   it("retires pull-request state when a session is deleted", async () => {
     const key = "agent:main:deleted-pr";
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.delete") {
-        return { ok: true, deleted: true };
-      }
-      if (method === "sessions.list") {
-        return sessionsResult([], 2);
-      }
-      throw new Error(`Unexpected request: ${method}`);
+    const request = sessionRequest({
+      "sessions.delete": () => ({ ok: true, deleted: true }),
+      "sessions.list": () => sessionsResult([], 2),
     });
     const sessions = createTestSessionCapability(
-      createGatewayHarness({ request } as unknown as GatewayBrowserClient).gateway,
+      createGatewayHarness(createTestGatewayClient(request)).gateway,
     );
     const epoch = sessions.capturePullRequestEpoch(key);
     sessions.setPullRequestSummary(key, { numbers: [111532], state: "open" }, epoch);
@@ -273,10 +269,11 @@ describe("application-owned publication custody", () => {
       const { binding, view, response, original } = await pending(session);
       const deletion = createDeferred<{ deleted: boolean }>();
       request.mockImplementationOnce(() => deletion.promise);
-      const removal = sessions.delete(session.key, { expectedSessionId: session.sessionId }).then(
-        (value) => ({ value, error: null }),
-        (error: unknown) => ({ value: null, error }),
-      );
+      const removal = sessions.delete(session.key, { expectedSessionId: session.sessionId });
+      const settled =
+        outcome === "rejected"
+          ? expect(removal).rejects.toEqual(new Error("Deletion failed"))
+          : expect(removal).resolves.toEqual({ deleted: outcome === "confirmed" });
       expect(sessions.deletionState(session.key)).toBe("pending");
       response.reject(new Error("Publication response lost"));
       // Let the publication response settle while the independent deletion is still pending.
@@ -292,12 +289,7 @@ describe("application-owned publication custody", () => {
       } else {
         deletion.resolve({ deleted: outcome === "confirmed" });
       }
-      const settled = await removal;
-      if (outcome === "rejected") {
-        expect(settled.error).toEqual(new Error("Deletion failed"));
-      } else {
-        expect(settled.value).toEqual({ deleted: outcome === "confirmed" });
-      }
+      await settled;
       const returned = attach(session);
       if (outcome === "confirmed") {
         expect(returned.view()).toBeUndefined();
@@ -333,11 +325,17 @@ describe("application-owned publication custody", () => {
     expect(request).toHaveBeenCalledTimes(3);
   });
 
-  it.each(["unknown", "published"] as const)(
-    "keeps a late %s outcome after every presentation detaches",
+  it.each(["unknown", "published", "replacement"] as const)(
+    "retains an operation through presentation replacement: %s",
     async (outcome) => {
       const { attach, request, sessions, pending } = publicationHarness();
       const { binding: first, view: ready, response, original } = await pending();
+      let returned: GitHubPublicationBinding | undefined;
+      if (outcome === "replacement") {
+        response.reject(new Error("Response lost"));
+        await publicationSettled(first);
+        returned = attach();
+      }
       first.detach();
       void ready.onPublish?.();
       void ready.onRefresh();
@@ -347,12 +345,12 @@ describe("application-owned publication custody", () => {
       await sessions.list();
       if (outcome === "unknown") {
         response.reject(new Error("Response lost"));
-      } else {
+      } else if (outcome === "published") {
         response.resolve(publishedResult);
       }
-      const returned = attach();
+      returned ??= attach();
       const view = await publicationSettled(returned);
-      if (outcome === "unknown") {
+      if (outcome !== "published") {
         expect(view).toMatchObject({
           locked: true,
           selection: { source: "shared", expected: sharedPublisher },
@@ -437,20 +435,6 @@ describe("application-owned publication custody", () => {
       expect(publicationCalls(request)).toHaveLength(1);
     },
   );
-
-  it("lets a replacement presentation observe the same operation without reviving detached callbacks", async () => {
-    const { attach, request } = publicationHarness();
-    const first = attach();
-    const unknown = await publishAndSettle(first);
-    const other = attach();
-    first.detach();
-    void unknown.onPublish?.();
-    expect(publicationCalls(request)).toHaveLength(1);
-    await publishAndSettle(other);
-    const calls = publicationCalls(request);
-    expect(calls).toHaveLength(2);
-    expect(calls[1]).toEqual(calls[0]);
-  });
 });
 
 it("does not apply another agent's global-session permission event to a retained publication", async () => {
@@ -550,17 +534,17 @@ describe("shared publication event ownership", () => {
     async (change) => {
       const fixture = publicationHarness();
       const incidental = change === "incidental branch";
-      const original: GatewaySessionRow = {
-        ...fixture.row("publication"),
-        ...(change === "repository" || incidental
-          ? { repositoryWorkspaceId: "repository-one" }
-          : {}),
-        ...(change !== "repository"
-          ? {
-              worktree: { id: "worktree-one", branch: "feature/one", repoRoot: "/workspace/demo" },
-            }
-          : {}),
-      };
+      const original = fixture.row("publication");
+      if (change === "repository" || incidental) {
+        original.repositoryWorkspaceId = "repository-one";
+      }
+      if (change !== "repository") {
+        original.worktree = {
+          id: "worktree-one",
+          branch: "feature/one",
+          repoRoot: "/workspace/demo",
+        };
+      }
       const binding = await fixture.ready(original);
       if (!incidental) {
         fixture.request.mockResolvedValueOnce(acceptedResult);
@@ -569,11 +553,8 @@ describe("shared publication event ownership", () => {
       if (incidental) {
         expect(pending.locked).toBe(true);
       }
-      const replacement: GatewaySessionRow = {
-        ...original,
-        ...(original.worktree ? { worktree: { ...original.worktree } } : {}),
-        updatedAt: 2,
-      };
+      const replacement = structuredClone(original);
+      replacement.updatedAt = 2;
       if (change === "worktree") {
         replacement.worktree!.id = "worktree-two";
       } else if (change === "repository") {

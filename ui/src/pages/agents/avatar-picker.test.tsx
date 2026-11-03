@@ -147,6 +147,22 @@ it.each(["mode change", "disposal"])("retires generation on %s", async (reason) 
   expect(view.props.onSelect).not.toHaveBeenCalled();
 });
 
+it.each(["unusable", "too-detailed"] as const)(
+  "shows %s image results without publishing a generated avatar",
+  async (reason) => {
+    const view = mount();
+    vi.mocked(avatarImage.svgToAvatarDataUrl).mockResolvedValue({ ok: false, reason });
+    await view.finish();
+    await waitForFast(() =>
+      expect(view.query('[role="alert"]')?.textContent).toContain(
+        reason === "too-detailed" ? "too detailed" : "That image can't be used",
+      ),
+    );
+    expect(view.props.onSelect).not.toHaveBeenCalled();
+    expect(view.query(".avatar-picker__candidate")).toBeNull();
+  },
+);
+
 it("shows generation failures without changing the selected avatar", async () => {
   const view = mount("Explorer", new Error("No model"));
   await waitForFast(() => expect(view.query('[role="alert"]')?.textContent).toContain("No model"));
