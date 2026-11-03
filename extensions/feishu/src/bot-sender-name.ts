@@ -29,6 +29,8 @@ const FEISHU_USER_LOOKUP_UNAUTHORIZED_CODE = 41050;
 const SENDER_NAME_TTL_MS = 10 * 60 * 1000;
 const SENDER_NAME_NEGATIVE_TTL_MS = 30 * 60 * 1000;
 const SENDER_NAME_CACHE_MAX_SIZE = 500;
+// Process-local freshness only: entries never leave this map, so their
+// windows are measured on elapsed time and survive wall-clock corrections.
 const senderNameCache = new Map<string, SenderNameCacheEntry>();
 
 function extractPermissionError(feishuErr: FeishuApiError | null): FeishuPermissionError | null {
@@ -69,7 +71,7 @@ export async function resolveFeishuSenderName(params: {
 
   const cacheKey = `${account.accountId}:${normalizedSenderId}`;
   const cached = senderNameCache.get(cacheKey);
-  if (cached && cached.expireAt > Date.now()) {
+  if (cached && cached.expireAt > performance.now()) {
     return cached.kind === "resolved" ? { name: cached.name } : {};
   }
   if (cached) {
@@ -94,7 +96,7 @@ export async function resolveFeishuSenderName(params: {
       writeSenderNameCache(cacheKey, {
         kind: "resolved",
         name,
-        expireAt: Date.now() + SENDER_NAME_TTL_MS,
+        expireAt: performance.now() + SENDER_NAME_TTL_MS,
       });
       return { name };
     }
@@ -116,7 +118,7 @@ export async function resolveFeishuSenderName(params: {
       // so later messages avoid repeating the same failing API request and SDK log.
       writeSenderNameCache(cacheKey, {
         kind: "unavailable",
-        expireAt: Date.now() + SENDER_NAME_NEGATIVE_TTL_MS,
+        expireAt: performance.now() + SENDER_NAME_NEGATIVE_TTL_MS,
       });
       return {};
     }
