@@ -1008,10 +1008,6 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   opacity: var(--sidebar-toolbar-action-opacity, 0.55);
 }
 
-.sidebar-session-toolbar .sidebar-recent-sessions__label-text {
-  flex: 0 0 auto;
-}
-
 .sidebar-session-toolbar__button:hover,
 .sidebar-session-toolbar__button:focus-visible,
 .sidebar-session-toolbar__button[aria-haspopup][aria-expanded="true"] {
@@ -2386,9 +2382,16 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 .sidebar-panel-header__title {
   margin-inline-end: auto;
   padding-inline-start: 4px;
+}
+
+/* Every sidebar panel title shares one type style, including the Sessions owner
+   picker, whose button host would otherwise reset the inherited letter spacing. */
+.sidebar-panel-header__title,
+.sidebar-session-owner-filter .picker-select__label {
   color: var(--text-strong);
   font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 550;
+  letter-spacing: -0.01em;
 }
 
 .sidebar--rail

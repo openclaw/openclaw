@@ -256,7 +256,11 @@ export function listSessionCatalogEntries(params: {
   return agentIds.flatMap((agentId) => {
     const entries = params.sessionEntries
       ? params.sessionEntries.entriesForAgent(agentId)
-      : params.runtime.agent.session.listSessionEntries({ agentId, readOnly: true });
+      : params.runtime.agent.session.listSessionEntries({
+          agentId,
+          readOnly: true,
+          projection: "list",
+        });
     return entries.map((entry) => Object.assign({}, entry, { agentId }));
   });
 }

@@ -46,7 +46,7 @@ async function expectQuietDefault(row: Locator) {
 async function expectDefaultInfo(row: Locator, explanation: string) {
   const info = row
     .locator(".settings-row__title")
-    .getByRole("button", { name: /^About (thinking|fast mode) defaults$/u });
+    .getByRole("button", { name: /^About (effort|speed) defaults$/u });
   await info.waitFor();
   await expect.poll(() => info.locator("svg").count()).toBe(1);
   const tooltip = info.locator("..");
@@ -180,8 +180,8 @@ suite.define(() => {
       expect((await page.goto(`${suite.server.baseUrl}settings/model-providers`))?.status()).toBe(
         200,
       );
-      const thinkingRow = settingsRow(page, "Thinking");
-      const fastModeRow = settingsRow(page, "Fast Mode");
+      const thinkingRow = settingsRow(page, "Effort");
+      const fastModeRow = settingsRow(page, "Speed");
       await radio(thinkingRow, "High").waitFor();
       expect(await radio(thinkingRow, "High").isChecked()).toBe(true);
       await expectDefaultInfo(thinkingRow, thinkingDefaultExplanation);
@@ -207,8 +207,8 @@ suite.define(() => {
       expect(await page.getByText("Defaults saved.", { exact: true }).count()).toBe(0);
 
       expect((await page.reload())?.status()).toBe(200);
-      const reloadedThinkingRow = settingsRow(page, "Thinking");
-      const reloadedFastModeRow = settingsRow(page, "Fast Mode");
+      const reloadedThinkingRow = settingsRow(page, "Effort");
+      const reloadedFastModeRow = settingsRow(page, "Speed");
       await expectDefaultInfo(reloadedThinkingRow, thinkingDefaultExplanation);
       await expectDefaultInfo(reloadedFastModeRow, fastModeDefaultExplanation);
       expect(await radio(reloadedThinkingRow, /^Default/u).isChecked()).toBe(true);

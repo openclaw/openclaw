@@ -157,6 +157,7 @@ packages/normalization-core/src/utf16-slice.ts
 packages/plugin-package-contract/package.json
 packages/plugin-package-contract/src/categories.ts
 packages/plugin-package-contract/src/index.ts
+packages/plugin-package-contract/src/recommended-prompts.ts
 packages/retry/package.json
 packages/retry/src/index.ts
 packages/session-url-contract/package.json
@@ -808,6 +809,7 @@ src/config/sessions/transcript-store-identity.ts
 src/config/sessions/transcript-target-binding.ts
 src/config/sessions/version.ts
 src/config/shell-env-expected-keys.ts
+src/config/skill-library-tool-split-migration.ts
 src/config/skill-workshop-plugin-migration.ts
 src/config/source-value-projection.ts
 src/config/state-dir.ts
@@ -1166,6 +1168,7 @@ src/infra/private-directory-creation.ts
 src/infra/private-mode.ts
 src/infra/private-store-file.ts
 src/infra/process-env.ts
+src/infra/process-exit-cleanup.ts
 src/infra/prototype-keys.ts
 src/infra/restart-stale-pids.ts
 src/infra/retry-attempt-errors.ts
@@ -1393,15 +1396,21 @@ src/infra/update-rehearsal-paths.ts
 src/infra/update-result-claim.ts
 src/infra/update-result-payload.ts
 src/infra/update-run-activation.ts
+src/infra/restart-sentinel-store.ts
+src/infra/update-run-activity.ts
+src/infra/update-run-admission.read.ts
+src/infra/update-run-admission.types.ts
 src/infra/update-run-admission.ts
 src/infra/update-run-codec.ts
 src/infra/update-run-gateway-stop.ts
 src/infra/update-run-legacy-expiry.ts
 src/infra/update-run-limits.ts
 src/infra/update-run-driver-schema.ts
+src/infra/update-run-driver.ts
 src/infra/update-run-read-admission.ts
 src/infra/update-run-read.kernel.ts
 src/infra/update-run-record.ts
+src/infra/update-run-reconciliation.read.ts
 src/infra/update-run-recovery-keys.ts
 src/infra/update-run-recovery-native-schema.ts
 src/infra/update-run-recovery-package-schema.ts
@@ -2879,6 +2888,7 @@ src/process/spawn-broker/worker-sender.ts
 src/process/spawn-broker/worker.ts
 src/state/openclaw-agent-schema-inspection.worker.ts
 src/state/openclaw-state-ownership.worker.ts
+src/state/openclaw-state-db-removal-exclusion.ts
 src/infra/schema-migration-diagnostics.ts
 src/canvas/wrap.ts
 src/plugin-sdk/widget-html.ts

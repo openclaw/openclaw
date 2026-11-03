@@ -4,7 +4,7 @@ import { parseArgs } from "node:util";
 import { adaptiveCostMarkdown, estimateAdaptiveCosts } from "./lib/ci-adaptive-costs.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 
-export function main(args = process.argv.slice(2)) {
+function main(args = process.argv.slice(2)) {
   const { values } = parseArgs({
     args,
     options: {
