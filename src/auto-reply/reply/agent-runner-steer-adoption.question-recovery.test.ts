@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { QuestionWaitAnswerResult } from "../../../packages/gateway-protocol/src/index.js";
 import {
   awaitGateBeforeSettlement,
@@ -32,6 +32,7 @@ import {
   attachSteerBackend,
   createSteerParams,
 } from "./agent-runner-steer-adoption.test-support.js";
+import { MessageInjectionWithdrawnError } from "./message-injection-authority.js";
 import { enqueueFollowupRun, type FollowupRun } from "./queue.js";
 import { clearSessionQueues } from "./queue/cleanup.js";
 import { getExistingFollowupQueue } from "./queue/state.js";
@@ -318,11 +319,14 @@ describe("question response custody through reply adoption", () => {
     },
   );
 
-  it.for(["accepted", "rejected", "indeterminate"] as const)(
-    "injects the next native steer after an early ACK and keeps the first ahead through a %s outcome",
+  it.for(["accepted", "rejected", "indeterminate", "withdrawn"] as const)(
+    "settles older steering without replaying younger accepted input: %s",
     async (outcome, { signal }) => {
       const key = "agent:main:steer-outcome-" + outcome;
       const first = createQueueTestRun({ prompt: "first", messageId: "first" });
+      const abandoned = vi.fn();
+      const followup = vi.fn(async (_run: FollowupRun) => {});
+      onTestFinished(() => void clearSessionQueues([key]));
       const wait = (gate: PromiseLike<unknown>, work: PromiseLike<unknown>, message: string) =>
         withinTest(awaitGateBeforeSettlement(gate, work, message), signal);
       await withQuestionCreator(key, first, async (operation, fingerprint) => {
@@ -336,9 +340,7 @@ describe("question response custody through reply adoption", () => {
           onDeferred: () => secondParked.resolve(),
           onAdopted: async () => {},
         };
-        const abandoned = vi.fn();
         first.turnAdoptionLifecycle = { onAdopted: async () => {}, onAbandoned: abandoned };
-        const followup = vi.fn(async (_run: FollowupRun) => {});
         const queueMessage = vi.fn((message: string, options: QueueOptions) => {
           if (message === "first") {
             options?.onQueueAccepted?.(true);
@@ -367,10 +369,8 @@ describe("question response custody through reply adoption", () => {
             secondSteer,
             "second steer ended before backend injection",
           );
-          // A native ACK is final FIFO placement: the owner holds the first input ahead
-          // of the next and never replays it. Its commit can depend on later input.
+          // Native acceptance releases the next input; commit can depend on later input.
           expect(queueMessage.mock.calls.map(([message]) => message)).toEqual(["first", "second"]);
-          expect(first.controllerInput?.injection?.accepted).toBe(true);
           expect(first.controllerInput?.phase).toBe("injecting");
           await expect(secondSteer).resolves.toBe("handled");
           expect(first.controllerInput?.phase).toBe("injecting");
@@ -380,25 +380,32 @@ describe("question response custody through reply adoption", () => {
             nativeOutcome.reject(
               outcome === "indeterminate"
                 ? new QuestionAnswerUnconfirmedError("native input outcome unknown")
-                : new Error("native queue rejected after acceptance"),
+                : outcome === "withdrawn"
+                  ? new MessageInjectionWithdrawnError("exact input removed at delivery deadline")
+                  : new Error("native queue rejected after acceptance"),
             );
           }
           await Promise.all([firstSteer, secondSteer]);
-          await Promise.all(
-            [first, second].map((run) =>
-              captureSessionControllerSourceSettlement(run.controllerInput!),
-            ),
-          );
+          await captureSessionControllerSourceSettlement(second.controllerInput!);
           expect(queueMessage.mock.calls.map(([message]) => message)).toEqual(["first", "second"]);
           expectNotCalled(followup, abandoned);
-          expect(first.controllerInput?.phase).toBe("consumed");
           expect(second.controllerInput?.phase).toBe("consumed");
+          expect(getExistingFollowupQueue(key)?.items.map((run) => run.messageId) ?? []).toEqual(
+            outcome === "withdrawn" ? ["first"] : [],
+          );
+          operation.complete();
         } finally {
           nativeOutcome.resolve();
           await Promise.allSettled([firstSteer, secondSteer]);
-          clearSessionQueues([key]);
         }
       });
+      // The creator retains execution custody until its callback returns.
+      await withinTest(captureSessionControllerSourceSettlement(first.controllerInput!), signal);
+      expect(followup.mock.calls.map(([run]) => run)).toEqual(
+        outcome === "withdrawn" ? [first] : [],
+      );
+      expect(abandoned).not.toHaveBeenCalled();
+      expect(first.controllerInput?.phase).toBe("consumed");
     },
   );
 

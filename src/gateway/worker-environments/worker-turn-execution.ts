@@ -76,7 +76,6 @@ export async function executeWorkerTurn(
   },
 ) {
   const { placement, turn: input } = params;
-  const backend = "cloud-worker";
   await using preparedRuntime = await acquireAgentRunPreparedModelRuntime(
     {
       config: input.config ?? {},
@@ -86,97 +85,97 @@ export async function executeWorkerTurn(
     },
     { pluginGeneration: input.pluginGeneration, abortSignal: input.abortSignal },
   );
-  params.assertRunCurrent();
-  input.abortSignal?.throwIfAborted();
-  const turn = { ...input, config: preparedRuntime.snapshot.config };
-  const modelRef = assertSupportedTurn(turn);
-  const { environment, bootstrapReceipt } = requireCurrentWorkerTurnEnvironment({
-    environments: params.environments,
-    placement,
-  });
-  const inferencePlacement = workerInferencePlacement(environment);
-  if (inferencePlacement === "worker") {
-    const policy = createModelVisibilityPolicy({
-      cfg: turn.config ?? {},
-      catalog: [],
-      defaultProvider: modelRef.provider,
-      agentId: placement.agentId,
+  return await preparedRuntime.run(async () => {
+    const backend = "cloud-worker";
+    const runPrepared = <T>(run: () => T): T =>
+      preparedRuntime.run(() => withPluginRuntimeGenerationScope(preparedRuntime.snapshot, run));
+    params.assertRunCurrent();
+    input.abortSignal?.throwIfAborted();
+    const turn = { ...input, config: preparedRuntime.snapshot.config };
+    const modelRef = assertSupportedTurn(turn);
+    const { environment, bootstrapReceipt } = requireCurrentWorkerTurnEnvironment({
+      environments: params.environments,
+      placement,
     });
-    if (!policy.allows(modelRef)) {
-      throw new Error(
-        `Worker-local inference cannot use ${modelRef.provider}/${modelRef.model} for agent ` +
-          `${placement.agentId}. Allow that model in the agent model policy or choose an allowed model.`,
-      );
+    const inferencePlacement = workerInferencePlacement(environment);
+    if (inferencePlacement === "worker") {
+      const policy = createModelVisibilityPolicy({
+        cfg: turn.config ?? {},
+        catalog: [],
+        defaultProvider: modelRef.provider,
+        agentId: placement.agentId,
+      });
+      if (!policy.allows(modelRef)) {
+        throw new Error(
+          `Worker-local inference cannot use ${modelRef.provider}/${modelRef.model} for agent ` +
+            `${placement.agentId}. Allow that model in the agent model policy or choose an allowed model.`,
+        );
+      }
+      if (!environment.nodeDeviceId) {
+        throw new Error(
+          "Worker-local inference requires a paired device profile. Set " +
+            "cloudWorkers.profiles.<id>.settings.device to a connected node.",
+        );
+      }
+      if (!bootstrapReceipt.protocolFeatures.includes(WORKER_LOCAL_INFERENCE_PROTOCOL_FEATURE)) {
+        throw new Error(
+          `Worker-local inference is unavailable on paired device ${environment.nodeDeviceId}. ` +
+            "Update and restart its OpenClaw node host, use a non-Windows host with " +
+            'nodeHost.workerRuns.isolation set to "none", and configure a compatible ' +
+            "models.providers model with a usable node-local credential.",
+        );
+      }
     }
-    if (!environment.nodeDeviceId) {
-      throw new Error(
-        "Worker-local inference requires a paired device profile. Set " +
-          "cloudWorkers.profiles.<id>.settings.device to a connected node.",
-      );
-    }
-    if (!bootstrapReceipt.protocolFeatures.includes(WORKER_LOCAL_INFERENCE_PROTOCOL_FEATURE)) {
-      throw new Error(
-        `Worker-local inference is unavailable on paired device ${environment.nodeDeviceId}. ` +
-          "Update and restart its OpenClaw node host, use a non-Windows host with " +
-          'nodeHost.workerRuns.isolation set to "none", and configure a compatible ' +
-          "models.providers model with a usable node-local credential.",
-      );
-    }
-  }
-  params.assertRunCurrent();
-  turn.abortSignal?.throwIfAborted();
-  // Keep credential discovery independent of the brokered publication request tool.
-  readGitHubPublicationFact(placement);
+    params.assertRunCurrent();
+    turn.abortSignal?.throwIfAborted();
+    // Keep credential discovery independent of the brokered publication request tool.
+    readGitHubPublicationFact(placement);
 
-  const startedAt = Date.now();
-  await turn.onExecutionStarted?.({ lifecycleGeneration: turn.lifecycleGeneration, backend });
-  params.assertRunCurrent();
-  turn.abortSignal?.throwIfAborted();
-  turn.onExecutionPhase?.({ phase: "runner_entered", backend });
-  const transcriptTarget = resolveWorkerTurnTranscriptTarget(turn);
-  const recorder = turn.userTurnTranscriptRecorder;
-  let blocked = false;
-  const { assertTurnInputCurrent, assertSourceCurrent, assertContextCurrent } =
-    captureWorkerTurnInputAuthority({
-      transcriptTarget,
-      recorder,
-      signal: turn.abortSignal,
-      assertRunCurrent: params.assertRunCurrent,
-      isBlocked: () => blocked,
-    });
-  assertContextCurrent();
-  if (recorder?.hasRuntimePersistencePending()) {
-    await recorder.waitForRuntimePersistence();
+    const startedAt = Date.now();
+    await turn.onExecutionStarted?.({ lifecycleGeneration: turn.lifecycleGeneration, backend });
+    params.assertRunCurrent();
+    turn.abortSignal?.throwIfAborted();
+    turn.onExecutionPhase?.({ phase: "runner_entered", backend });
+    const transcriptTarget = resolveWorkerTurnTranscriptTarget(turn);
+    const recorder = turn.userTurnTranscriptRecorder;
+    let blocked = false;
+    const { assertTurnInputCurrent, assertSourceCurrent, assertContextCurrent } =
+      captureWorkerTurnInputAuthority({
+        transcriptTarget,
+        recorder,
+        signal: turn.abortSignal,
+        assertRunCurrent: params.assertRunCurrent,
+        isBlocked: () => blocked,
+      });
     assertContextCurrent();
-  }
-  const inputContext = {
-    turn,
-    cwd: params.workspace.kind === "local" ? params.workspace.path : placement.remoteWorkspaceDir,
-    transcriptTarget,
-    identity: placement,
-    modelRef,
-    startedAt,
-    assertCurrent: assertContextCurrent,
-    assertSourceCurrent,
-    onBlocked: () => {
-      blocked = true;
-    },
-  };
-  const workerAdmission = bootstrapReceipt.protocolFeatures.includes(
-    WORKER_TURN_ADMISSION_PROTOCOL_FEATURE,
-  );
-  let blockedResult = workerAdmission
-    ? undefined
-    : await withPluginRuntimeGenerationScope(preparedRuntime.snapshot, () =>
-        gateWorkerTurnInput(inputContext),
-      );
-  if (blockedResult) {
-    await releaseClaimIfOwned(params.placements, params.turnClaim);
-    return blockedResult;
-  }
-  await using contextEngineAdmission = await withPluginRuntimeGenerationScope(
-    preparedRuntime.snapshot,
-    () =>
+    if (recorder?.hasRuntimePersistencePending()) {
+      await recorder.waitForRuntimePersistence();
+      assertContextCurrent();
+    }
+    const inputContext = {
+      turn,
+      cwd: params.workspace.kind === "local" ? params.workspace.path : placement.remoteWorkspaceDir,
+      transcriptTarget,
+      identity: placement,
+      modelRef,
+      startedAt,
+      assertCurrent: assertContextCurrent,
+      assertSourceCurrent,
+      onBlocked: () => {
+        blocked = true;
+      },
+    };
+    const workerAdmission = bootstrapReceipt.protocolFeatures.includes(
+      WORKER_TURN_ADMISSION_PROTOCOL_FEATURE,
+    );
+    let blockedResult = workerAdmission
+      ? undefined
+      : await runPrepared(() => gateWorkerTurnInput(inputContext));
+    if (blockedResult) {
+      await releaseClaimIfOwned(params.placements, params.turnClaim);
+      return blockedResult;
+    }
+    await using contextEngineAdmission = await runPrepared(() =>
       admitEmbeddedContextEngine(
         {
           runParams: turn,
@@ -188,523 +187,524 @@ export async function executeWorkerTurn(
           contextEngineHostCapabilities: WORKER_CONTEXT_ENGINE_HOST.capabilities,
         },
       ),
-  );
-  assertContextCurrent();
-  const context = await readWorkerTurnInputContext(inputContext, workerAdmission);
-  const { manager, history, userMessageAlreadyPersisted } = context;
-  let baseLeafId = context.baseLeafId;
+    );
+    assertContextCurrent();
+    const context = await readWorkerTurnInputContext(inputContext, workerAdmission);
+    const { manager, history, userMessageAlreadyPersisted } = context;
+    let baseLeafId = context.baseLeafId;
 
-  const { model, reasoning, transcriptPolicy, inference } = await prepareWorkerTurnModel({
-    target: transcriptTarget,
-    modelRef,
-    runtimeSnapshot: preparedRuntime.snapshot,
-    inferencePlacement,
-    turn,
-    assertCurrent: assertContextCurrent,
-  });
+    const { model, reasoning, transcriptPolicy, inference } = await prepareWorkerTurnModel({
+      target: transcriptTarget,
+      modelRef,
+      runtimeSnapshot: preparedRuntime.snapshot,
+      inferencePlacement,
+      turn,
+      assertCurrent: assertContextCurrent,
+    });
 
-  assertContextCurrent();
-  const credential = await waitForTurnOperation({
-    start: () => params.environments.acquireTurnCredential(params.turnClaim),
-    ...(turn.abortSignal ? { signal: turn.abortSignal } : {}),
-    timeoutMs: turn.timeoutMs,
-  });
-  const tunnel = await waitForTurnOperation({
-    start: () =>
-      params.environments.startTunnel({
-        environmentId: placement.environmentId,
-        ownerEpoch: placement.activeOwnerEpoch,
-      }),
-    ...(turn.abortSignal ? { signal: turn.abortSignal } : {}),
-    timeoutMs: turn.timeoutMs,
-  });
-  if (!tunnel.launchTurn) {
-    throw new Error("Worker tunnel does not support worker turns");
-  }
-  assertContextCurrent();
-  await recoverWorkspaceBeforeTurn({ ...params, turn, tunnel, signal: turn.abortSignal });
-  assertContextCurrent();
-  const portalAvailable =
-    Boolean(environment.nodeDeviceId) &&
-    environment.sshEndpoint === null &&
-    (await params.environments.supportsNodePortal?.(
-      placement.environmentId,
-      placement.activeOwnerEpoch,
-    )) === true;
-  const launchToolNames = await tunnel.readLaunchToolNames();
-  const desktop = await prepareWorkerDesktopLaunchPlan({
-    desktop: environment.desktop,
-    protocolFeatures: bootstrapReceipt.protocolFeatures,
-    prepareComputer: () => params.environments.prepareComputer?.(params.turnClaim),
-    turn,
-  });
-  const { browser, computer, preparedComputer } = desktop;
-  const {
-    authProfileStoreSource,
-    capabilityProfile,
-    policy: toolPolicy,
-    exec,
-    execUnavailable,
-    presentation,
-    installedSkills,
-  } = await resolveWorkerToolAuthority({
-    modelRef,
-    model,
-    placement,
-    turn,
-    // Retained skill tools run in RPC callbacks outside this turn's async context.
-    assertCurrent: assertSourceCurrent,
-    computerAvailable: Boolean(computer),
-  });
-  const {
-    admittedRunContext,
-    operationalRunInstance,
-    runtimeIdentity,
-    assertActive,
-    takeFinishingOutcome,
-  } = await prepareWorkerAgentRuntimeIdentity({
-    ...params,
-    agentId: placement.agentId,
-    runtimeInstanceId: placement.environmentId,
-    sessionKey: placement.sessionKey,
-    sessionTarget: transcriptTarget,
-    promptCacheContext: {
-      boundaryCount: manager.getBoundaryCount(),
-      promptCacheKey: turn.promptCacheKey,
-      fastMode: turn.fastMode,
-      fastModeStartedAtMs: turn.fastModeStartedAtMs,
-      fastModeAutoOnSeconds: turn.fastModeAutoOnSeconds,
-    },
-    assertSourceCurrent,
-  });
-  assertActive();
-  const authority = runtimeIdentity.approvalAuthority;
-  const authorityAbort = new AbortController();
-  const signal = turn.abortSignal
-    ? AbortSignal.any([turn.abortSignal, authorityAbort.signal])
-    : authorityAbort.signal;
-  const cancel = () => authorityAbort.abort(new Error("Worker turn authority closed"));
-  // Keep exact closure wired through transfer and launch dispatch, including awaited
-  // node readiness. The workspace/tunnel lifetime alone outlives this admitted turn.
-  const stopWatchingRun = registerAgentRunDelegatedAuthorityClosedHandler((closed) => {
-    if (closed === authority) {
-      cancel();
+    assertContextCurrent();
+    const credential = await waitForTurnOperation({
+      start: () => params.environments.acquireTurnCredential(params.turnClaim),
+      ...(turn.abortSignal ? { signal: turn.abortSignal } : {}),
+      timeoutMs: turn.timeoutMs,
+    });
+    const tunnel = await waitForTurnOperation({
+      start: () =>
+        params.environments.startTunnel({
+          environmentId: placement.environmentId,
+          ownerEpoch: placement.activeOwnerEpoch,
+        }),
+      ...(turn.abortSignal ? { signal: turn.abortSignal } : {}),
+      timeoutMs: turn.timeoutMs,
+    });
+    if (!tunnel.launchTurn) {
+      throw new Error("Worker tunnel does not support worker turns");
     }
-  });
-  const stopWatchingClaim = params.placements.registerTurnClaimClosedHandler((closed) => {
-    if (closed.owner.kind === "worker" && sameWorkerSessionTurnClaim(closed, params.turnClaim)) {
-      cancel();
-    }
-  });
-  let toolRuntime: WorkerGatewayToolRuntime | undefined;
-  const toolIdentity = {
-    sessionId: placement.sessionId,
-    runId: turn.runId,
-    environmentId: placement.environmentId,
-    ownerEpoch: placement.activeOwnerEpoch,
-    turnClaim: params.turnClaim,
-  };
-  const assertToolSurfaceCurrent = () => {
-    if (!toolRuntime || getWorkerTurnToolSurface(toolIdentity) !== toolRuntime) {
-      throw new Error("Worker tool surface owner changed");
-    }
-  };
-  let githubGrant: Awaited<ReturnType<typeof bindWorkerGitHubTurn>>;
-  try {
-    const isAuthorized = () => {
-      try {
-        assertActive();
-        signal.throwIfAborted();
-        const current = params.environments.get(placement.environmentId);
-        return isWorkerEnvironmentAttachedTo(current, placement);
-      } catch {
-        return false;
+    assertContextCurrent();
+    await recoverWorkspaceBeforeTurn({ ...params, turn, tunnel, signal: turn.abortSignal });
+    assertContextCurrent();
+    const portalAvailable =
+      Boolean(environment.nodeDeviceId) &&
+      environment.sshEndpoint === null &&
+      (await params.environments.supportsNodePortal?.(
+        placement.environmentId,
+        placement.activeOwnerEpoch,
+      )) === true;
+    const launchToolNames = await tunnel.readLaunchToolNames();
+    const desktop = await prepareWorkerDesktopLaunchPlan({
+      desktop: environment.desktop,
+      protocolFeatures: bootstrapReceipt.protocolFeatures,
+      prepareComputer: () => params.environments.prepareComputer?.(params.turnClaim),
+      turn,
+    });
+    const { browser, computer, preparedComputer } = desktop;
+    const {
+      authProfileStoreSource,
+      capabilityProfile,
+      policy: toolPolicy,
+      exec,
+      execUnavailable,
+      presentation,
+      installedSkills,
+    } = await resolveWorkerToolAuthority({
+      modelRef,
+      model,
+      placement,
+      turn,
+      // Retained skill tools run in RPC callbacks outside this turn's async context.
+      assertCurrent: assertSourceCurrent,
+      computerAvailable: Boolean(computer),
+    });
+    const {
+      admittedRunContext,
+      operationalRunInstance,
+      runtimeIdentity,
+      assertActive,
+      takeFinishingOutcome,
+    } = await prepareWorkerAgentRuntimeIdentity({
+      ...params,
+      agentId: placement.agentId,
+      runtimeInstanceId: placement.environmentId,
+      sessionKey: placement.sessionKey,
+      sessionTarget: transcriptTarget,
+      promptCacheContext: {
+        boundaryCount: manager.getBoundaryCount(),
+        promptCacheKey: turn.promptCacheKey,
+        fastMode: turn.fastMode,
+        fastModeStartedAtMs: turn.fastModeStartedAtMs,
+        fastModeAutoOnSeconds: turn.fastModeAutoOnSeconds,
+      },
+      assertSourceCurrent,
+    });
+    assertActive();
+    const authority = runtimeIdentity.approvalAuthority;
+    const authorityAbort = new AbortController();
+    const signal = turn.abortSignal
+      ? AbortSignal.any([turn.abortSignal, authorityAbort.signal])
+      : authorityAbort.signal;
+    const cancel = () => authorityAbort.abort(new Error("Worker turn authority closed"));
+    // Keep exact closure wired through transfer and launch dispatch, including awaited
+    // node readiness. The workspace/tunnel lifetime alone outlives this admitted turn.
+    const stopWatchingRun = registerAgentRunDelegatedAuthorityClosedHandler((closed) => {
+      if (closed === authority) {
+        cancel();
+      }
+    });
+    const stopWatchingClaim = params.placements.registerTurnClaimClosedHandler((closed) => {
+      if (closed.owner.kind === "worker" && sameWorkerSessionTurnClaim(closed, params.turnClaim)) {
+        cancel();
+      }
+    });
+    let toolRuntime: WorkerGatewayToolRuntime | undefined;
+    const toolIdentity = {
+      sessionId: placement.sessionId,
+      runId: turn.runId,
+      environmentId: placement.environmentId,
+      ownerEpoch: placement.activeOwnerEpoch,
+      turnClaim: params.turnClaim,
+    };
+    const assertToolSurfaceCurrent = () => {
+      if (!toolRuntime || getWorkerTurnToolSurface(toolIdentity) !== toolRuntime) {
+        throw new Error("Worker tool surface owner changed");
       }
     };
-    const skillWorkshop = turn.skillLibraryAuthoring
-      ? createLibrarySkillWorkshopTool({ ...turn.skillLibraryAuthoring, defaultTarget: "personal" })
-      : undefined;
-    toolRuntime = createWorkerGatewayToolRuntime({
-      assertCurrent: assertToolSurfaceCurrent,
-      signal,
-      prepare: async (identity) => {
-        const additionalInheritedToolNamesRef: string[] = [];
-        const placementTools = createWorkerPlacementTools({
-          ...turn,
-          ...placement,
-          policy: toolPolicy,
-          cwd: placement.remoteWorkspaceDir,
-          containmentRoot: placement.remoteWorkspaceDir,
-          execAuthority: execUnavailable ? undefined : exec,
-          sessionId: turn.sessionId,
-        });
-        placementTools.push(...desktop.tools);
-        const availablePlacementTools = new Set(placementTools.map((tool) => tool.name));
-        const tools = await withPluginRuntimeGenerationScope(preparedRuntime.snapshot, () =>
-          params.environments.createGatewayTools?.({
-            identity,
-            inheritedToolPolicySource: capabilityProfile.policy.inheritedToolPolicySource,
-            inheritedToolDenylist: capabilityProfile.policy.inheritedToolPolicyForSpawn?.deny,
-            delegatedToolPolicyActive: Boolean(capabilityProfile.policy.delegatedToolPolicy),
-            skillWorkshop,
-            portalAvailable,
-            prepareTools: async (adapters) => {
-              const prepared = await createOpenClawCodingToolsInternalAsync(
-                {
-                  ...turn,
-                  authProfileStoreSource,
-                  agentId: placement.agentId,
-                  conversationCapabilityProfile: capabilityProfile,
-                  preparedModelRuntime: preparedRuntime.snapshot,
-                  installedSkills,
-                  githubPublicationAvailable: true,
-                  additionalInheritedToolNamesRef,
-                  cronCreatorAuthorityUnavailableReason: undefined,
-                  runSessionKey: placement.sessionKey,
-                  sessionKey: turn.sandboxSessionKey ?? placement.sessionKey,
-                  policyAgentId: turn.sandboxAgentId ?? turn.agentId,
-                  operationalRunInstance,
-                  sessionPermissionPolicy: turn.permissionMode
-                    ? { mode: turn.permissionMode, root: turn.workspaceDir }
-                    : undefined,
-                  modelProvider: modelRef.provider,
-                  modelId: modelRef.model,
-                  modelContextWindowTokens: toolPolicy.modelContextWindowTokens,
-                  runtimeToolAllowlist: turn.toolsAllow,
-                  skillWorkshop: undefined,
-                  computerTransport: null,
-                },
-                undefined,
-                undefined,
-                { tools: [...placementTools, ...adapters], policy: toolPolicy },
-                { assertCurrent: assertToolSurfaceCurrent, signal },
-              );
-              if (turn.disableTools || turn.modelRun || turn.promptMode === "none") {
-                additionalInheritedToolNamesRef.length = 0;
-                return [];
-              }
-              return applyEmbeddedAttemptToolsAllow(prepared, turn.toolsAllow).filter((tool) => {
-                const location = getAgentToolExecutionLocation(tool);
-                const reason =
-                  location.kind === "gateway"
-                    ? location.unavailableReason
-                    : !availablePlacementTools.has(tool.name) ||
-                        !launchToolNames.includes(tool.name)
-                      ? "the placement has no available execution capability"
-                      : undefined;
-                if (reason) {
-                  logInfo(`Worker tool ${tool.name} withheld: ${reason}.`);
-                }
-                return !reason;
-              });
-            },
-          }),
-        );
-        if (!tools) {
-          throw new Error("Gateway tool surface is unavailable");
+    let githubGrant: Awaited<ReturnType<typeof bindWorkerGitHubTurn>>;
+    try {
+      const isAuthorized = () => {
+        try {
+          assertActive();
+          signal.throwIfAborted();
+          const current = params.environments.get(placement.environmentId);
+          return isWorkerEnvironmentAttachedTo(current, placement);
+        } catch {
+          return false;
         }
-        assertToolSurfaceCurrent();
-        return {
-          policy: toolPolicy,
-          presentation,
-          additionalInheritedToolNames: applyEmbeddedAttemptToolsAllow(
-            additionalInheritedToolNamesRef.map((name) => ({ name })),
-            turn.toolsAllow,
-          ).map((tool) => tool.name),
-          tools: tools.map((tool) =>
-            copyAgentToolMetadata(tool, {
-              ...tool,
-              execute: (...args) =>
-                withPluginRuntimeGenerationScope(preparedRuntime.snapshot, () =>
-                  tool.execute(...args),
-                ),
+      };
+      const skillWorkshop = turn.skillLibraryAuthoring
+        ? createLibrarySkillWorkshopTool({
+            ...turn.skillLibraryAuthoring,
+            defaultTarget: "personal",
+          })
+        : undefined;
+      toolRuntime = createWorkerGatewayToolRuntime({
+        assertCurrent: assertToolSurfaceCurrent,
+        signal,
+        prepare: async (identity) => {
+          const additionalInheritedToolNamesRef: string[] = [];
+          const placementTools = createWorkerPlacementTools({
+            ...turn,
+            ...placement,
+            policy: toolPolicy,
+            cwd: placement.remoteWorkspaceDir,
+            containmentRoot: placement.remoteWorkspaceDir,
+            execAuthority: execUnavailable ? undefined : exec,
+            sessionId: turn.sessionId,
+          });
+          placementTools.push(...desktop.tools);
+          const availablePlacementTools = new Set(placementTools.map((tool) => tool.name));
+          const tools = await runPrepared(() =>
+            params.environments.createGatewayTools?.({
+              identity,
+              inheritedToolPolicySource: capabilityProfile.policy.inheritedToolPolicySource,
+              inheritedToolDenylist: capabilityProfile.policy.inheritedToolPolicyForSpawn?.deny,
+              delegatedToolPolicyActive: Boolean(capabilityProfile.policy.delegatedToolPolicy),
+              skillWorkshop,
+              portalAvailable,
+              prepareTools: async (adapters) => {
+                const prepared = await createOpenClawCodingToolsInternalAsync(
+                  {
+                    ...turn,
+                    authProfileStoreSource,
+                    agentId: placement.agentId,
+                    conversationCapabilityProfile: capabilityProfile,
+                    preparedModelRuntime: preparedRuntime.snapshot,
+                    installedSkills,
+                    githubPublicationAvailable: true,
+                    additionalInheritedToolNamesRef,
+                    cronCreatorAuthorityUnavailableReason: undefined,
+                    runSessionKey: placement.sessionKey,
+                    sessionKey: turn.sandboxSessionKey ?? placement.sessionKey,
+                    policyAgentId: turn.sandboxAgentId ?? turn.agentId,
+                    operationalRunInstance,
+                    sessionPermissionPolicy: turn.permissionMode
+                      ? { mode: turn.permissionMode, root: turn.workspaceDir }
+                      : undefined,
+                    modelProvider: modelRef.provider,
+                    modelId: modelRef.model,
+                    modelContextWindowTokens: toolPolicy.modelContextWindowTokens,
+                    runtimeToolAllowlist: turn.toolsAllow,
+                    skillWorkshop: undefined,
+                    computerTransport: null,
+                  },
+                  undefined,
+                  undefined,
+                  { tools: [...placementTools, ...adapters], policy: toolPolicy },
+                  { assertCurrent: assertToolSurfaceCurrent, signal },
+                );
+                if (turn.disableTools || turn.modelRun || turn.promptMode === "none") {
+                  additionalInheritedToolNamesRef.length = 0;
+                  return [];
+                }
+                return applyEmbeddedAttemptToolsAllow(prepared, turn.toolsAllow).filter((tool) => {
+                  const location = getAgentToolExecutionLocation(tool);
+                  const reason =
+                    location.kind === "gateway"
+                      ? location.unavailableReason
+                      : !availablePlacementTools.has(tool.name) ||
+                          !launchToolNames.includes(tool.name)
+                        ? "the placement has no available execution capability"
+                        : undefined;
+                  if (reason) {
+                    logInfo(`Worker tool ${tool.name} withheld: ${reason}.`);
+                  }
+                  return !reason;
+                });
+              },
             }),
-          ),
-        };
-      },
-    });
-    const prepareReplyMedia = createWorkerReplyMedia({
-      turn,
-      remoteWorkspaceDir: placement.remoteWorkspaceDir,
-      tunnel,
-      assertCurrent: assertActive,
-      signal,
-    });
-    const assertInputAdmitted = bindWorkerTurnCapabilities(params.placements, params.turnClaim, {
-      execApproval: prepareWorkerExecApproval({ exec, turn, manager, signal, placement }),
-      toolSurface: toolRuntime,
-      prepareReplyMedia,
-      inference,
-      admitTurn: workerAdmission
-        ? (request, assertCurrent, recordApproval) =>
-            admitTurn(request, assertCurrent, recordApproval)
-        : undefined,
-    });
-    const connectionIdentity = {
-      ...toolIdentity,
-      credentialHash: credential.deliveryId,
-      bundleHash: bootstrapReceipt.bundleHash,
-      rpcSetVersion: credential.rpcSetVersion,
-      protocolFeatures: bootstrapReceipt.protocolFeatures,
-      credentialExpiresAtMs: credential.expiresAtMs,
-    };
-    const surface = await toolRuntime.getSurface(connectionIdentity);
-    const promptPreparation = {
-      turn: { ...turn, thinkLevel: turn.thinkLevel ?? reasoning ?? "off", admittedRunContext },
-      agentId: placement.agentId,
-      workspaceDir: placement.remoteWorkspaceDir,
-      preparedModelRuntime: preparedRuntime.snapshot,
-      model,
-      surface,
-      toolRuntime,
-      identity: connectionIdentity,
-      manager,
-      transcriptPolicy,
-      history,
-      contextEngine: contextEngineAdmission.contextEngine,
-      contextEnginePluginId:
-        contextEngineAdmission.contextEngineLogicalTurnLease.effectiveEnginePluginId,
-      assertCurrent: assertActive,
-    };
-    const promptContext = await withPluginRuntimeGenerationScope(preparedRuntime.snapshot, () =>
-      prepareWorkerTurnPrompt(promptPreparation),
-    );
-    const allowedToolNames = surface.tools.map((tool) => tool.definition.name);
-    await params.placements.authorizeWorkerTurnTools(
-      params.turnClaim,
-      allowedToolNames,
-      assertTurnInputCurrent,
-    );
-    if (allowedToolNames.includes("computer")) {
-      preparedComputer?.bind(operationalRunInstance, {
-        authority: runtimeIdentity.approvalAuthority,
+          );
+          if (!tools) {
+            throw new Error("Gateway tool surface is unavailable");
+          }
+          assertToolSurfaceCurrent();
+          return {
+            policy: toolPolicy,
+            presentation,
+            additionalInheritedToolNames: applyEmbeddedAttemptToolsAllow(
+              additionalInheritedToolNamesRef.map((name) => ({ name })),
+              turn.toolsAllow,
+            ).map((tool) => tool.name),
+            tools: tools.map((tool) =>
+              copyAgentToolMetadata(tool, {
+                ...tool,
+                execute: (...args) => runPrepared(() => tool.execute(...args)),
+              }),
+            ),
+          };
+        },
+      });
+      const prepareReplyMedia = createWorkerReplyMedia({
+        turn,
+        remoteWorkspaceDir: placement.remoteWorkspaceDir,
+        tunnel,
+        assertCurrent: assertActive,
+        signal,
+      });
+      const assertInputAdmitted = bindWorkerTurnCapabilities(params.placements, params.turnClaim, {
+        execApproval: prepareWorkerExecApproval({ exec, turn, manager, signal, placement }),
+        toolSurface: toolRuntime,
+        prepareReplyMedia,
+        inference: inference ? (...args) => runPrepared(() => inference(...args)) : undefined,
+        admitTurn: workerAdmission
+          ? (request, assertCurrent, recordApproval) =>
+              admitTurn(request, assertCurrent, recordApproval)
+          : undefined,
+      });
+      const connectionIdentity = {
+        ...toolIdentity,
+        credentialHash: credential.deliveryId,
+        bundleHash: bootstrapReceipt.bundleHash,
+        rpcSetVersion: credential.rpcSetVersion,
+        protocolFeatures: bootstrapReceipt.protocolFeatures,
+        credentialExpiresAtMs: credential.expiresAtMs,
+      };
+      const surface = await toolRuntime.getSurface(connectionIdentity);
+      const promptPreparation = {
+        turn: { ...turn, thinkLevel: turn.thinkLevel ?? reasoning ?? "off", admittedRunContext },
+        agentId: placement.agentId,
+        workspaceDir: placement.remoteWorkspaceDir,
+        preparedModelRuntime: preparedRuntime.snapshot,
+        model,
+        surface,
+        toolRuntime,
+        identity: connectionIdentity,
+        manager,
+        transcriptPolicy,
+        history,
+        contextEngine: contextEngineAdmission.contextEngine,
+        contextEnginePluginId:
+          contextEngineAdmission.contextEngineLogicalTurnLease.effectiveEnginePluginId,
+        assertCurrent: assertActive,
+      };
+      const promptContext = await runPrepared(() => prepareWorkerTurnPrompt(promptPreparation));
+      const allowedToolNames = surface.tools.map((tool) => tool.definition.name);
+      await params.placements.authorizeWorkerTurnTools(
+        params.turnClaim,
+        allowedToolNames,
+        assertTurnInputCurrent,
+      );
+      if (allowedToolNames.includes("computer")) {
+        preparedComputer?.bind(operationalRunInstance, {
+          authority: runtimeIdentity.approvalAuthority,
+          assertCurrent: assertActive,
+        });
+      }
+      const media = await prepareWorkerTurnMedia({
+        turn: { ...turn, prompt: promptContext.prompt },
+        history: promptContext.history,
+        workspace: params.workspace,
+        remoteWorkspaceDir: placement.remoteWorkspaceDir,
+        tunnel,
+        isAuthorized,
+        signal,
+      });
+      const skillResources = await prepareSkillResourceDelivery(
+        turn.skillsSnapshot,
+        () => {
+          if (!isAuthorized()) {
+            throw new Error("Worker turn lost authority before skill resource delivery.");
+          }
+        },
+        turn.explicitSkillSelections,
+        turn.workspaceDir,
+      );
+      if (
+        skillResources &&
+        !bootstrapReceipt.protocolFeatures.includes(SKILL_RESOURCE_PROTOCOL_FEATURE)
+      ) {
+        throw new StaleWorkerBuildError();
+      }
+      const persistInput = async () => {
+        assertWorkerTurnInputAdmitted(connectionIdentity);
+        baseLeafId = await persistWorkerTurnInput({
+          ...inputContext,
+          manager,
+          media,
+          assertRunCurrent: assertActive,
+          isAuthorized,
+          workerAdmission,
+          userMessageAlreadyPersisted,
+          baseLeafId,
+        });
+        return baseLeafId;
+      };
+      const admitTurn = createWorkerTurnInputAdmission({
+        ...inputContext,
+        assertCurrent: assertActive,
+        runtime: preparedRuntime.snapshot,
+        preparedInput: media,
+        persist: persistInput,
+        onBlockedResult: (result) => {
+          blockedResult = result;
+        },
+      });
+      if (!workerAdmission) {
+        await persistInput();
+      }
+      const promptMessages = promptContext.runtimeContext ? 2 : 1;
+      const initialMessagePlan = windowInitialMessages(media.history, promptMessages);
+      if (initialMessagePlan.kind === "provider-replay-unavailable") {
+        const details = initialMessagePlan.details;
+        emitProviderReplayRejected(
+          turn.config,
+          "bytes" in details ? details : { count: details.messageCount, reason: details.reason },
+        );
+        throw new WorkerTurnExecutionError(WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE);
+      }
+      // Project the wire handshake; the receipt also carries storage-only provenance.
+      const { bundleHash, openclawVersion, protocolFeatures } = bootstrapReceipt;
+      githubGrant = await bindWorkerGitHubTurn({
+        session: placement,
+        fact: readGitHubPublicationFact(placement),
+        sessionTarget: transcriptTarget,
+        store: params.placements,
+        claim: params.turnClaim,
+        protocolFeatures: bootstrapReceipt.protocolFeatures,
+        signal,
         assertCurrent: assertActive,
       });
-    }
-    const media = await prepareWorkerTurnMedia({
-      turn: { ...turn, prompt: promptContext.prompt },
-      history: promptContext.history,
-      workspace: params.workspace,
-      remoteWorkspaceDir: placement.remoteWorkspaceDir,
-      tunnel,
-      isAuthorized,
-      signal,
-    });
-    const skillResources = await prepareSkillResourceDelivery(
-      turn.skillsSnapshot,
-      () => {
-        if (!isAuthorized()) {
-          throw new Error("Worker turn lost authority before skill resource delivery.");
-        }
-      },
-      turn.explicitSkillSelections,
-      turn.workspaceDir,
-    );
-    if (
-      skillResources &&
-      !bootstrapReceipt.protocolFeatures.includes(SKILL_RESOURCE_PROTOCOL_FEATURE)
-    ) {
-      throw new StaleWorkerBuildError();
-    }
-    const persistInput = async () => {
-      assertWorkerTurnInputAdmitted(connectionIdentity);
-      baseLeafId = await persistWorkerTurnInput({
-        ...inputContext,
-        manager,
-        media,
-        assertRunCurrent: assertActive,
-        isAuthorized,
-        workerAdmission,
-        userMessageAlreadyPersisted,
-        baseLeafId,
+      const launchPlan = await fitLaunchDescriptorWithRuntimeIdentity({
+        runtimeIdentity,
+        measure: (plan) => tunnel.measureLaunchTurn(plan, params.turnClaim),
+        messages: initialMessagePlan.messages,
+        build: (agentRuntimeIdentityToken, windowedMessages) =>
+          parseWorkerLaunchPlan({
+            version: 4,
+            admission: {
+              environmentId: placement.environmentId,
+              credential: credential.credential,
+              sessionId: placement.sessionId,
+              ownerEpoch: placement.activeOwnerEpoch,
+              rpcSetVersion: credential.rpcSetVersion,
+              handshake: { bundleHash, openclawVersion, protocolFeatures },
+            },
+            assignment: {
+              agentId: placement.agentId,
+              operationalRunInstance,
+              agentRuntimeIdentityToken,
+              runId: turn.runId,
+              turnId: randomUUID(),
+              prompt: media.prompt,
+              suppressPromptTranscript: true,
+              workspaceDir: placement.remoteWorkspaceDir,
+              ...(githubGrant ? { github: githubGrant.binding } : {}),
+              ...(skillResources ? { skillResources } : {}),
+              ...(turn.permissionMode
+                ? {
+                    permissionMode: turn.permissionMode,
+                    workerContainmentRoot: placement.remoteWorkspaceDir,
+                  }
+                : {}),
+              modelRef,
+              ...(inferencePlacement === "worker" ? { inference: "runtime-local" } : {}),
+              inferenceOptions: reasoning ? { reasoning } : {},
+              systemPrompt: promptContext.systemPromptText,
+              runtimeContext: promptContext.runtimeContext,
+              inHistorySystemUpdates: promptContext.inHistorySystemUpdates,
+              includeEmptySnapshots: promptContext.includeEmptySnapshots,
+              initialMessages: windowedMessages,
+              transcript: {
+                baseLeafId,
+                nextSeq: (placement.lastTranscriptAckCursor ?? 0) + 1,
+              },
+              liveEvents: {
+                ackedSeq: placement.lastLiveEventAckCursor ?? 0,
+                nextSeq: (placement.lastLiveEventAckCursor ?? 0) + 1,
+              },
+              toolAuthority: {
+                exec,
+                allowedToolNames: surface.tools
+                  .filter((tool) => tool.execution === "placement")
+                  .map((tool) => tool.definition.name),
+              },
+              ...(browser && allowedToolNames.includes("browser") ? { browser } : {}),
+              ...(computer && allowedToolNames.includes("computer") ? { computer } : {}),
+            },
+          }),
       });
-      return baseLeafId;
-    };
-    const admitTurn = createWorkerTurnInputAdmission({
-      ...inputContext,
-      assertCurrent: assertActive,
-      runtime: preparedRuntime.snapshot,
-      preparedInput: media,
-      persist: persistInput,
-      onBlockedResult: (result) => {
-        blockedResult = result;
-      },
-    });
-    if (!workerAdmission) {
-      await persistInput();
-    }
-    const promptMessages = promptContext.runtimeContext ? 2 : 1;
-    const initialMessagePlan = windowInitialMessages(media.history, promptMessages);
-    if (initialMessagePlan.kind === "provider-replay-unavailable") {
-      const details = initialMessagePlan.details;
-      emitProviderReplayRejected(
-        turn.config,
-        "bytes" in details ? details : { count: details.messageCount, reason: details.reason },
-      );
-      throw new WorkerTurnExecutionError(WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE);
-    }
-    // Project the wire handshake; the receipt also carries storage-only provenance.
-    const { bundleHash, openclawVersion, protocolFeatures } = bootstrapReceipt;
-    githubGrant = await bindWorkerGitHubTurn({
-      session: placement,
-      fact: readGitHubPublicationFact(placement),
-      sessionTarget: transcriptTarget,
-      store: params.placements,
-      claim: params.turnClaim,
-      protocolFeatures: bootstrapReceipt.protocolFeatures,
-      signal,
-      assertCurrent: assertActive,
-    });
-    const launchPlan = await fitLaunchDescriptorWithRuntimeIdentity({
-      runtimeIdentity,
-      measure: (plan) => tunnel.measureLaunchTurn(plan, params.turnClaim),
-      messages: initialMessagePlan.messages,
-      build: (agentRuntimeIdentityToken, windowedMessages) =>
-        parseWorkerLaunchPlan({
-          version: 4,
-          admission: {
-            environmentId: placement.environmentId,
-            credential: credential.credential,
-            sessionId: placement.sessionId,
-            ownerEpoch: placement.activeOwnerEpoch,
-            rpcSetVersion: credential.rpcSetVersion,
-            handshake: { bundleHash, openclawVersion, protocolFeatures },
-          },
-          assignment: {
-            agentId: placement.agentId,
-            operationalRunInstance,
-            agentRuntimeIdentityToken,
-            runId: turn.runId,
-            turnId: randomUUID(),
-            prompt: media.prompt,
-            suppressPromptTranscript: true,
-            workspaceDir: placement.remoteWorkspaceDir,
-            ...(githubGrant ? { github: githubGrant.binding } : {}),
-            ...(skillResources ? { skillResources } : {}),
-            ...(turn.permissionMode
-              ? {
-                  permissionMode: turn.permissionMode,
-                  workerContainmentRoot: placement.remoteWorkspaceDir,
-                }
-              : {}),
-            modelRef,
-            ...(inferencePlacement === "worker" ? { inference: "runtime-local" } : {}),
-            inferenceOptions: reasoning ? { reasoning } : {},
-            systemPrompt: promptContext.systemPromptText,
-            runtimeContext: promptContext.runtimeContext,
-            inHistorySystemUpdates: promptContext.inHistorySystemUpdates,
-            includeEmptySnapshots: promptContext.includeEmptySnapshots,
-            initialMessages: windowedMessages,
-            transcript: {
-              baseLeafId,
-              nextSeq: (placement.lastTranscriptAckCursor ?? 0) + 1,
-            },
-            liveEvents: {
-              ackedSeq: placement.lastLiveEventAckCursor ?? 0,
-              nextSeq: (placement.lastLiveEventAckCursor ?? 0) + 1,
-            },
-            toolAuthority: {
-              exec,
-              allowedToolNames: surface.tools
-                .filter((tool) => tool.execution === "placement")
-                .map((tool) => tool.definition.name),
-            },
-            ...(browser && allowedToolNames.includes("browser") ? { browser } : {}),
-            ...(computer && allowedToolNames.includes("computer") ? { computer } : {}),
-          },
-        }),
-    });
-    if (launchPlan.kind === "provider-replay-unavailable") {
-      emitProviderReplayRejected(turn.config, {
-        bytes: launchPlan.bytes,
-        limitBytes: launchPlan.limitBytes,
-        reason: launchPlan.reason,
-      });
-      throw new WorkerTurnExecutionError(
-        skillResources
-          ? "The selected skills and conversation exceed this worker transport limit. Detach some session skills or start a shorter session, then retry."
-          : WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE,
-      );
-    }
-    if (!isAuthorized()) {
-      throw new Error("Worker turn authority changed while preparing its launch");
-    }
-    if (!workerAdmission) {
-      recorder?.markSentToProvider?.();
-    }
-    turn.onExecutionPhase?.({ phase: "attempt_dispatch", backend });
-    const handoffAbort = new AbortController();
-    let handoffPending: Promise<void> | undefined;
-    let dispatchReady = false;
-    const onDispatchReady = () => {
-      if (dispatchReady) {
-        return;
+      if (launchPlan.kind === "provider-replay-unavailable") {
+        emitProviderReplayRejected(turn.config, {
+          bytes: launchPlan.bytes,
+          limitBytes: launchPlan.limitBytes,
+          reason: launchPlan.reason,
+        });
+        throw new WorkerTurnExecutionError(
+          skillResources
+            ? "The selected skills and conversation exceed this worker transport limit. Detach some session skills or start a shorter session, then retry."
+            : WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE,
+        );
       }
-      dispatchReady = true;
-      params.onHandoff(
-        environment.nodeDeviceId && environment.sshEndpoint === null
-          ? { requiresTerminalReceipt: true }
-          : undefined,
-      );
-      turn.onExecutionPhase?.({ phase: "process_spawned", backend });
-      handoffPending = (async () => {
-        try {
-          if (!(await params.environments.acknowledgeCredentialDelivery(credential))) {
+      if (!isAuthorized()) {
+        throw new Error("Worker turn authority changed while preparing its launch");
+      }
+      if (!workerAdmission) {
+        recorder?.markSentToProvider?.();
+      }
+      turn.onExecutionPhase?.({ phase: "attempt_dispatch", backend });
+      const handoffAbort = new AbortController();
+      let handoffPending: Promise<void> | undefined;
+      let dispatchReady = false;
+      const onDispatchReady = () => {
+        if (dispatchReady) {
+          return;
+        }
+        dispatchReady = true;
+        params.onHandoff(
+          environment.nodeDeviceId && environment.sshEndpoint === null
+            ? { requiresTerminalReceipt: true }
+            : undefined,
+        );
+        turn.onExecutionPhase?.({ phase: "process_spawned", backend });
+        handoffPending = (async () => {
+          try {
+            if (!(await params.environments.acknowledgeCredentialDelivery(credential))) {
+              handoffAbort.abort(
+                new Error("Cloud worker credential owner changed during process handoff"),
+              );
+            }
+          } catch (error) {
             handoffAbort.abort(
-              new Error("Cloud worker credential owner changed during process handoff"),
+              new Error("Cloud worker credential handoff failed", { cause: error }),
             );
           }
-        } catch (error) {
-          handoffAbort.abort(new Error("Cloud worker credential handoff failed", { cause: error }));
-        }
-      })();
-    };
-    let processResult: Awaited<ReturnType<NonNullable<typeof tunnel.launchTurn>>>;
-    try {
-      processResult = await tunnel.launchTurn({
-        assertCurrent: githubGrant?.assertCurrent ?? assertActive,
-        plan: launchPlan.plan,
-        turnClaim: params.turnClaim,
-        timeoutMs: turn.timeoutMs,
-        credentialExpiresAtMs: credential.expiresAtMs,
-        signal: AbortSignal.any([githubGrant?.signal ?? signal, handoffAbort.signal]),
-        onDispatchReady,
+        })();
+      };
+      let processResult: Awaited<ReturnType<NonNullable<typeof tunnel.launchTurn>>>;
+      try {
+        processResult = await tunnel.launchTurn({
+          assertCurrent: githubGrant?.assertCurrent ?? assertActive,
+          plan: launchPlan.plan,
+          turnClaim: params.turnClaim,
+          timeoutMs: turn.timeoutMs,
+          credentialExpiresAtMs: credential.expiresAtMs,
+          signal: AbortSignal.any([githubGrant?.signal ?? signal, handoffAbort.signal]),
+          onDispatchReady,
+        });
+      } finally {
+        await handoffPending;
+      }
+      // Node launches return only after the exact launch journal receipt is terminal,
+      // including any admission re-arms. Transport failures never reach this fact.
+      if (environment.nodeDeviceId && environment.sshEndpoint === null) {
+        params.onTerminal();
+      }
+      handoffAbort.signal.throwIfAborted();
+      if (!dispatchReady) {
+        throw new Error("Cloud worker launch completed before transport dispatch");
+      }
+      if (blockedResult) {
+        await releaseClaimIfOwned(params.placements, params.turnClaim);
+        return blockedResult;
+      }
+      return await finalizeWorkerTurnResult({
+        ...params,
+        turn,
+        transcriptTarget,
+        tunnel,
+        processResult,
+        assertInputAdmitted,
+        modelRef,
+        baseLeafId,
+        promptContext,
+        prepareReplyMedia,
+        takeFinishingOutcome: () => takeFinishingOutcome(credential.deliveryId),
+        signal,
+        startedAt,
       });
     } finally {
-      await handoffPending;
+      await githubGrant?.revoke();
+      await toolRuntime?.close();
+      stopWatchingClaim();
+      stopWatchingRun();
     }
-    // Node launches return only after the exact launch journal receipt is terminal,
-    // including any admission re-arms. Transport failures never reach this fact.
-    if (environment.nodeDeviceId && environment.sshEndpoint === null) {
-      params.onTerminal();
-    }
-    handoffAbort.signal.throwIfAborted();
-    if (!dispatchReady) {
-      throw new Error("Cloud worker launch completed before transport dispatch");
-    }
-    if (blockedResult) {
-      await releaseClaimIfOwned(params.placements, params.turnClaim);
-      return blockedResult;
-    }
-    return await finalizeWorkerTurnResult({
-      ...params,
-      turn,
-      transcriptTarget,
-      tunnel,
-      processResult,
-      assertInputAdmitted,
-      modelRef,
-      baseLeafId,
-      promptContext,
-      prepareReplyMedia,
-      takeFinishingOutcome: () => takeFinishingOutcome(credential.deliveryId),
-      signal,
-      startedAt,
-    });
-  } finally {
-    await githubGrant?.revoke();
-    await toolRuntime?.close();
-    stopWatchingClaim();
-    stopWatchingRun();
-  }
+  });
 }

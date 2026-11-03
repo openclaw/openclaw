@@ -184,13 +184,16 @@ export async function runAgentHarnessSettledTurnFinalization(
       },
       builtIn,
     );
+    const { withPreparedEmbeddedRunToolAuthority } = await import("./tool-authority.runtime.js");
     const result = await runAgentHarnessOperation(harness, params, () =>
       runWithAgentRingZeroTools([], () =>
-        runAgentHarnessLifecycleFinalization(harness, attemptParams, () => {
-          assertHarnessModelPolicySupport(harness, params);
-          modelExecution?.assertCurrent();
-          return finalizeSettledTurn({ attempt: attemptParams, settledAttempt });
-        }),
+        withPreparedEmbeddedRunToolAuthority(internalParams, attemptParams, undefined, (prepared) =>
+          runAgentHarnessLifecycleFinalization(harness, prepared, () => {
+            assertHarnessModelPolicySupport(harness, params);
+            modelExecution?.assertCurrent();
+            return finalizeSettledTurn({ attempt: prepared, settledAttempt });
+          }),
+        ),
       ),
     );
     modelExecution?.assertCurrent();

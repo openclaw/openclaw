@@ -70,7 +70,11 @@ it.each(["_scriptName", "import.meta.url"])(
     const policy = resolveBundledPluginReloadSource(plugin);
     const artifact = withPluginSourceCaptureDirectory(captures, () =>
       capturePluginGenerationArtifact(
-        ...bundledPluginCaptureInputs(plugin, entry, policy, false, false),
+        ...bundledPluginCaptureInputs({
+          rootDir: plugin,
+          source: entry,
+          bundledReloadSource: policy,
+        }),
         (run) => run(),
         undefined,
         undefined,
@@ -110,7 +114,11 @@ it("leaves absolute host imports outside a captured dependency's package untouch
   const policy = resolveBundledPluginReloadSource(plugin);
   const artifact = withPluginSourceCaptureDirectory(captures, () =>
     capturePluginGenerationArtifact(
-      ...bundledPluginCaptureInputs(plugin, entry, policy, false, false),
+      ...bundledPluginCaptureInputs({
+        rootDir: plugin,
+        source: entry,
+        bundledReloadSource: policy,
+      }),
       (run) => run(),
       undefined,
       undefined,

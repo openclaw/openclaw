@@ -1,7 +1,7 @@
 import type { Virtualizer } from "@tanstack/virtual-core";
+import { fnv1aUtf16 } from "../../../../../src/shared/fnv1a.js";
 import { CONTROL_UI_BUILD_INFO } from "../../../build-info.ts";
 import { i18n } from "../../../i18n/index.ts";
-import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import { getExpandedToolCards, getExpandedUserMessages } from "../chat-thread.ts";
 import type { ChatWidgetLayout } from "../session-message-cache.ts";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
@@ -40,6 +40,8 @@ export function unscaledBorderBox(element: HTMLElement, style = getComputedStyle
 /** The native scroll range changes only at these viewport and content writes. */
 export class TranscriptLayoutOwner {
   ready = false;
+  /** Row-column offset held back from scrollTop while iOS momentum is running. */
+  rowShift = 0;
   private rowGeometry: readonly TranscriptRowGeometry[] = [];
   rowLayout?: ChatWidgetLayout;
   private rowPresentation = "";
@@ -376,7 +378,9 @@ export class TranscriptLayoutOwner {
       : style.paddingBottom;
   }
 
-  commitRange(element: HTMLElement, height: number): void {
+  commitRange(element: HTMLElement, rangeHeight: number): void {
+    // The shifted column starts above its header; the native end stays where the rows end.
+    const height = rangeHeight - this.rowShift;
     const previous = this.rangeHeights.get(element);
     if (previous === height) {
       return;

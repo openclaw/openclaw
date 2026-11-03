@@ -35,6 +35,10 @@ import {
   snapshotStructuredInput,
 } from "../agents/harness/structured-input.js";
 import type { SandboxFsBridge } from "../agents/sandbox/fs-bridge.js";
+import {
+  buildSkillWorkshopPromptSection as buildCoreSkillWorkshopPromptSection,
+  SKILL_WORKSHOP_TOOL_NAME as CORE_SKILL_WORKSHOP_TOOL_NAME,
+} from "../agents/skill-workshop-prompt.js";
 import { createToolPolicyMatcher } from "../agents/tool-policy-match.js";
 import { expandToolGroups } from "../agents/tool-policy-shared.js";
 import {
@@ -307,8 +311,10 @@ export {
 } from "../agents/embedded-agent-tool-results.js";
 export {
   formatToolExecutionErrorMessage,
-  isToolResultError,
   resolveToolExecutionErrorKind,
+} from "../agents/tool-execution-error.js";
+export {
+  isToolResultError,
   resolveToolResultFailureKind,
   type ToolResultFailureKind,
 } from "../agents/tool-result-error.js";
@@ -341,10 +347,17 @@ export const agentHarnessStructuredInput = Object.freeze({
   run: runStructuredInput,
   snapshot: snapshotStructuredInput,
 });
-export {
-  buildSkillWorkshopPromptSection,
-  SKILL_WORKSHOP_TOOL_NAME,
-} from "../agents/skill-workshop-prompt.js";
+export { listToolPromptGuidance } from "../agents/tool-prompt-guidance.js";
+/**
+ * @deprecated Pass the run's callable tool names to listToolPromptGuidance; it includes
+ * this section while `skill_workshop` is callable.
+ */
+export const SKILL_WORKSHOP_TOOL_NAME = CORE_SKILL_WORKSHOP_TOOL_NAME;
+/**
+ * @deprecated Pass the run's callable tool names to listToolPromptGuidance; it includes
+ * this section while `skill_workshop` is callable.
+ */
+export const buildSkillWorkshopPromptSection = buildCoreSkillWorkshopPromptSection;
 export {
   buildDelegationGuidanceSection,
   resolveMainSessionDelegationMode,

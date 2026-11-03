@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { For, Show, createMemo } from "solid-js";
+import { For, Show, createMemo, createSignal } from "solid-js";
 import { copyWithPathPatch } from "../lib/config-form-utils.ts";
 import { getLocale, t } from "../lib/reactive/i18n.ts";
 import {
@@ -100,13 +100,18 @@ type CollectionProps = {
 };
 
 export function ConfigObject(props: CollectionProps): JSX.Element {
-  const object = createMemo(() => resolveConfigObjectFields(props.params));
+  const object = createMemo(() => resolveConfigObjectFields(props.params), { lazy: true });
   // Native details owns user toggles; refresh its default only when the depth policy changes.
   const initiallyOpen = createMemo(() => props.params.path.length <= 2);
-  const meta = createMemo(() => {
-    getLocale();
-    return resolveFieldMeta(props.params.path, props.params.schema, props.params.hints);
-  });
+  // Keep editors after first opening so closing a disclosure preserves drafts and focus targets.
+  const [hasOpened, setHasOpened] = createSignal(false);
+  const meta = createMemo(
+    () => {
+      getLocale();
+      return resolveFieldMeta(props.params.path, props.params.schema, props.params.hints);
+    },
+    { lazy: true },
+  );
   const fields = () => (
     <>
       <For each={object().fields} keyed={(field) => String(field.path.at(-1))}>
@@ -124,7 +129,15 @@ export function ConfigObject(props: CollectionProps): JSX.Element {
       when={props.params.path.length !== 1 && props.params.showLabel !== false}
       fallback={fields()}
     >
-      <details class="cfg-object cfg-block" open={initiallyOpen()}>
+      <details
+        class="cfg-object cfg-block"
+        open={initiallyOpen()}
+        onToggle={(event) => {
+          if (event.currentTarget.open) {
+            setHasOpened(true);
+          }
+        }}
+      >
         <summary class="settings-row cfg-object__summary">
           <div class="settings-row__text">
             <span class="settings-row__title">{meta().label}</span>
@@ -138,7 +151,9 @@ export function ConfigObject(props: CollectionProps): JSX.Element {
             </span>
           </div>
         </summary>
-        <div class="settings-subrows">{fields()}</div>
+        <Show when={initiallyOpen() || hasOpened()}>
+          <div class="settings-subrows">{fields()}</div>
+        </Show>
       </details>
     </Show>
   );

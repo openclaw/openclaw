@@ -3,6 +3,8 @@ import timersPromises from "node:timers/promises";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
+import { createTelegramNativeMessageLedger } from "./live-transports/telegram/native-message-ledger.js";
+import type { TelegramUserbotUpdate } from "./live-transports/telegram/userbot-driver.runtime.js";
 import { waitForQaTransportCondition } from "./qa-transport.js";
 import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
 
@@ -10,6 +12,9 @@ async function runRecoveryFlow(
   options: {
     initiallyRecovered?: boolean;
     duplicate?: boolean;
+    duplicateFallback?: boolean;
+    /** Live Telegram sends the no-partial failure fallback without a reply target. */
+    threadedFallback?: boolean;
     replacement?: boolean;
     delayTerminal?: boolean;
     /** Crabline-style drivers expose bus outbound messages without a native reader. */
@@ -21,8 +26,10 @@ async function runRecoveryFlow(
   const terminal = `${marker}\n\n⚠️ Synthetic provider request failed.`;
   let currentId = "";
   let nextId = 10;
-  type Row = { chatId: number; messageId: number; text: string; busId: string };
-  const messages = new Map<string, Row[]>();
+  const chatId = -100123;
+  // The real native ledger owns current-inbound correlation for the live reader.
+  const ledger = createTelegramNativeMessageLedger();
+  const messages = new Map<string, Array<{ update: TelegramUserbotUpdate; busId: string }>>();
   const polls = new Map<string, number>();
   const gatewayCall = vi.fn(async () => {
     const count = (polls.get(currentId) ?? 0) + 1;
@@ -31,13 +38,24 @@ async function runRecoveryFlow(
       return { sessions: count === 1 ? [] : [{ key: "session-under-test", hasActiveRun: true }] };
     }
     const rows = messages.get(currentId)!;
-    const text = rows[0]!.text.includes(marker)
+    const row = rows[0]!;
+    const text = row.update.text.includes(marker)
       ? terminal
       : "⚠️ Synthetic provider request failed.";
-    const busId = options.replacement
-      ? state.addOutboundMessage({ to: "group:telegram-partial-failure-room", text }).id
-      : state.editMessage({ messageId: rows[0]!.busId, text }).id;
-    rows[0] = { ...rows[0]!, ...(options.replacement ? { messageId: 999 } : {}), text, busId };
+    if (options.replacement) {
+      const update = { ...row.update, messageId: 999, text };
+      const busId = state.addOutboundMessage({
+        to: "group:telegram-partial-failure-room",
+        text,
+      }).id;
+      ledger.record(busId, { observer: 0, chatId, messageId: 999 }, update);
+      rows[0] = { update, busId };
+    } else {
+      const update = { ...row.update, kind: "edit" as const, text };
+      state.editMessage({ messageId: row.busId, text });
+      ledger.edit(ledger.bus(0, chatId, row.update.messageId)!, update);
+      rows[0] = { ...row, update };
+    }
     return { sessions: [{ key: "session-under-test", hasActiveRun: false }] };
   });
   const transport = {
@@ -47,6 +65,7 @@ async function runRecoveryFlow(
     buildAgentDelivery: () => ({ channel: "telegram", replyTo: "-100123" }),
     reset: async () => {
       state.reset();
+      ledger.reset();
       messages.clear();
     },
     sendInbound: async (input: Parameters<typeof state.addInboundMessage>[0]) => {
@@ -58,16 +77,29 @@ async function runRecoveryFlow(
           ? terminal
           : marker
         : "⚠️ Synthetic provider request failed.";
-      const rows = Array.from({ length: options.duplicate && partialCase ? 2 : 1 }, () => ({
-        chatId: -100123,
-        messageId: nextId++,
-        text,
-        busId: state.addOutboundMessage({
+      const inboundMessageId = nextId++;
+      ledger.record(inbound.id, { observer: 0, chatId, messageId: inboundMessageId });
+      const threaded = partialCase || options.threadedFallback === true;
+      const count = (partialCase ? options.duplicate : options.duplicateFallback) ? 2 : 1;
+      const rows = Array.from({ length: count }, () => {
+        const update: TelegramUserbotUpdate = {
+          kind: "message",
+          chatId,
+          messageId: nextId++,
+          senderId: 200,
+          timestamp: 0,
+          text,
+          entities: [],
+          ...(threaded ? { replyToMessageId: inboundMessageId } : {}),
+        };
+        const busId = state.addOutboundMessage({
           to: "group:telegram-partial-failure-room",
           text,
-          replyToId: inbound.id,
-        }).id,
-      }));
+          ...(threaded ? { replyToId: inbound.id } : {}),
+        }).id;
+        ledger.record(busId, { observer: 0, chatId, messageId: update.messageId }, update);
+        return { update, busId };
+      });
       messages.set(inbound.id, rows);
       return inbound;
     },
@@ -82,8 +114,7 @@ async function runRecoveryFlow(
       ...(options.busOnly
         ? {}
         : {
-            readTelegramMessages: (id: string) =>
-              (messages.get(id) ?? []).map(({ busId: _busId, ...row }) => row),
+            readTelegramMessages: (id: string) => ledger.readUpdates(id),
           }),
       waitForCondition: (check: () => unknown) =>
         waitForQaTransportCondition(
@@ -139,6 +170,20 @@ describe("Telegram recovery scenario native observations", () => {
       expect(gatewayCall).toHaveBeenCalledTimes(6);
     },
   );
+
+  it.each([false, true])(
+    "accepts one fallback for the current inbound (threaded by Telegram: %s)",
+    async (threadedFallback) => {
+      const { result } = await runRecoveryFlow({ threadedFallback });
+      expect(result.status).toBe("pass");
+    },
+  );
+
+  it("rejects two unthreaded fallbacks for the current inbound", async () => {
+    await expect(runRecoveryFlow({ duplicateFallback: true })).rejects.toThrow(
+      "expected one correlated Telegram fallback",
+    );
+  });
 
   it("rejects two native replies even when both contain recovery text", async () => {
     await expect(runRecoveryFlow({ initiallyRecovered: true, duplicate: true })).rejects.toThrow(

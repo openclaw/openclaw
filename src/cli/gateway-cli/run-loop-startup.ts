@@ -1,7 +1,9 @@
 import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { markGatewayRestartTrace } from "../../gateway/restart-trace.js";
 import type { GatewayServerOptions, GatewayStartupOperation } from "../../gateway/server-public.js";
+import type { GatewayInstallationReplacement } from "../../gateway/stale-install.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { GatewayBootLifecycleCompletion } from "../../infra/gateway-boot-lifecycle.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import type { GatewayOwnerSupervisor } from "../../infra/gateway-owner-lease.types.js";
 import type { GatewayRestartEmitter } from "../../infra/restart.js";
@@ -50,6 +52,7 @@ export type GatewayRunLoopStartOptions = Pick<
   | "startupStartedAt"
   | "hostLifecycle"
   | "startupOperation"
+  | "exitAfterStartupFailure"
   | "gatewayStateOwner"
 > & { requestHotReloadRecovery?: GatewayRestartEmitter };
 
@@ -71,6 +74,14 @@ export function createGatewayRestartRecovery(
     | { controller: AbortController; settled: ReturnType<GatewayRestartStartupFailureHandler> }
     | undefined;
   return {
+    reportInstallationReplacement(
+      replacement: GatewayInstallationReplacement,
+    ): GatewayBootLifecycleCompletion {
+      logger.error(
+        `${replacement.message} Cannot continue in this process. Run: ${formatCliCommand(supervisor ? "openclaw gateway restart" : "openclaw gateway run")}`,
+      );
+      return { outcome: "planned_restart", reason: "gateway.installation_replaced" };
+    },
     reportStartupFailure(error: unknown, retryFailed: boolean) {
       const stack = error instanceof Error && error.stack ? `\n${error.stack}` : "";
       logger.error(

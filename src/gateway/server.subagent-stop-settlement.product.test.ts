@@ -1,4 +1,5 @@
 // Prove subagent Stop settlement through public Gateway admission and HTTP control.
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
@@ -7,7 +8,7 @@ import type {
   runEmbeddedAgent as runEmbeddedAgentType,
 } from "../agents/embedded-agent.js";
 import { resetSubagentRegistryForTests } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
-import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
+import { captureGatewayRootWorkReleaseObserver } from "../process/gateway-work-admission.js";
 import { SESSION_CONTROLLER_DRAIN_TIMEOUT_MS } from "../sessions/session-controller.lifecycle.js";
 import {
   completedEmbeddedRun,
@@ -29,7 +30,8 @@ afterEach(async () => {
 });
 
 it("bounds public child Stop when the accepted agent source never settles", async () => {
-  const childStarted = createDeferred<Parameters<typeof runEmbeddedAgentType>[0]>();
+  const childStarted = createDeferred<ReturnType<typeof captureGatewayRootWorkReleaseObserver>>();
+  const childRootReleased = vi.fn();
   const childCancelled = createDeferred();
   const finishChild = createDeferred<EmbeddedAgentRunResult>();
   const harness = await createNaturalSubagentStopHarness({
@@ -37,7 +39,7 @@ it("bounds public child Stop when the accepted agent source never settles", asyn
     runEmbeddedAgent,
     runChild: async (params) => {
       params.abortSignal?.addEventListener("abort", () => childCancelled.resolve(), { once: true });
-      childStarted.resolve(params);
+      childStarted.resolve(captureGatewayRootWorkReleaseObserver());
       return await finishChild.promise;
     },
   });
@@ -46,8 +48,7 @@ it("bounds public child Stop when the accepted agent source never settles", asyn
     async () => {
       await harness.start();
       const receipt = await harness.spawn();
-      await childStarted.promise;
-      const rootsBeforeStop = getActiveGatewayRootWorkCount();
+      expectDefined(await childStarted.promise, "admitted child root")(childRootReleased);
       vi.useFakeTimers({ toFake: ["setTimeout"] });
       stopResponse = harness.stop(receipt.childSessionKey);
       await expect(
@@ -64,16 +65,13 @@ it("bounds public child Stop when the accepted agent source never settles", asyn
         ok: false,
         error: { message: expect.stringMatching(/cleanup remains pending/i) },
       });
-      expect(getActiveGatewayRootWorkCount()).toBe(rootsBeforeStop);
+      expect(childRootReleased).not.toHaveBeenCalled();
     },
     () => finishChild.resolve(completedEmbeddedRun),
-    async () => {
-      if (stopResponse) {
-        await stopResponse.catch(() => undefined);
-      }
-    },
+    () => stopResponse?.catch(() => undefined),
     () => harness.disconnect(),
     () => harness.close(),
+    () => expect(childRootReleased).toHaveBeenCalledExactlyOnceWith("settled"),
     () => harness.state.cleanup(),
   );
 });

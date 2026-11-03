@@ -71,6 +71,7 @@ const LAZY_RUNTIME_PROPERTIES = {
   webSearch: true,
   modelConfig: true,
   capabilities: true,
+  skills: true,
 } satisfies Record<keyof PluginRuntime, true>;
 
 export function runPluginRegisterSyncInRegistry(
@@ -123,6 +124,7 @@ export function createDeferredGatewaySubagentRuntime(
     },
     complete: (...args) => runtime.subagent.complete(...args),
     forkSession: (...args) => runtime.subagent.forkSession(...args),
+    runForkedTurn: (params) => runtime.subagent.runForkedTurn(params),
     run: (...args) => runtime.subagent.run(...args),
     waitForRun: (...args) => runtime.subagent.waitForRun(...args),
     getSessionMessages: (...args) => runtime.subagent.getSessionMessages(...args),

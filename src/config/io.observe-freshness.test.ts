@@ -4,8 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { deserialize } from "node:v8";
 import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { describe, expect, it, vi } from "vitest";
 import {
   executeSqliteQueryTakeFirstSync,
   executeSqliteQuerySync,
@@ -36,6 +35,7 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import * as worker from "../state/openclaw-state-worker-store.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import {
   captureConfigHealthStateStore as captureHealth,
   readConfigHealthStateFromStore as readHealth,
@@ -50,14 +50,7 @@ import { createConfigHealthFingerprint } from "./io.observe-state.js";
 import { observeConfigSnapshot, observeConfigSnapshotSync } from "./io.observe.js";
 import { hashConfigRaw, normalizeConfigIoDeps } from "./io.read-helpers.js";
 
-const directories = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    vi.restoreAllMocks();
-    await closeDatabase();
-    closeOpenClawStateDatabaseForTest();
-    cleanup();
-  }),
-);
+const directories = useStateDatabaseTempDirs();
 
 function createHealthFixture(home: string, warn = vi.fn(), stateSubdir = "") {
   const configPath = path.join(home, "openclaw.json");

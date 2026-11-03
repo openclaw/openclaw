@@ -74,14 +74,20 @@ export function pluginCacheRootFor(
 }
 
 /** Select source roots for a fresh capture or a recovered bundled generation. */
-export function bundledPluginCaptureInputs(
-  rootDir: string,
-  source: string,
-  policy: BundledPluginReloadSource | undefined,
-  recovering: boolean,
-  standalone: boolean | undefined,
-): [string, string | string[] | undefined] {
-  const root = policy && !recovering ? policy.hostRoot : rootDir;
+export function bundledPluginCaptureInputs({
+  rootDir,
+  source,
+  bundledReloadSource: policy,
+  recoverySourceMap,
+  standalone,
+}: {
+  rootDir: string;
+  source: string;
+  bundledReloadSource?: BundledPluginReloadSource;
+  recoverySourceMap?: unknown;
+  standalone?: boolean;
+}): [string, string | string[] | undefined] {
+  const root = policy && !recoverySourceMap ? policy.hostRoot : rootDir;
   const entries = policy
     ? policy.ownedPaths.map((relative) => path.join(root, relative))
     : standalone

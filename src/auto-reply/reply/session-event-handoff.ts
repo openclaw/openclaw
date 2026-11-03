@@ -1,12 +1,17 @@
+import { setTimeout as delay } from "node:timers/promises";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { prepareAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
 import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
 import { resolveAgentRunErrorLifecycleFields } from "../../agents/run-termination.js";
-import { getRuntimeConfigSnapshotMetadata } from "../../config/runtime-snapshot.js";
 import type { SessionEntryCreationOperation } from "../../config/sessions/session-accessor.sqlite-entry-cache.types.js";
+import {
+  composeSessionSourceAssertion,
+  createDynamicSessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import { SessionWorkStartError } from "../../config/sessions/session-work-start.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-store.js";
 import { resolveCronRunToolsAllow } from "../../cron/tools-allow.js";
+import { hasInternalHookListeners } from "../../hooks/internal-hooks.js";
 import { execRequestAbortSignal } from "../../infra/exec-request-context.js";
 import type { SourceDeliveryOutcome } from "../../infra/outbound/source-delivery-plan.types.js";
 import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
@@ -18,6 +23,7 @@ import type { ReplyOperation } from "../../sessions/session-controller.contracts
 import { isCurrentSessionControllerOperation } from "../../sessions/session-controller.identity.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { createLazyRuntimeNamedExport } from "../../shared/lazy-runtime.js";
 import type { ReplyPayload } from "../../shared/reply-payload.types.js";
 import { readAgentDeletionJournalStatusInWorker } from "../../state/agent-deletion-journal.read.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
@@ -41,7 +47,10 @@ import type {
   SessionEventReceipt,
 } from "./session-event-contract.js";
 import { prepareSessionEventDelivery } from "./session-event-delivery.js";
-import { narrowSessionEventSettings } from "./session-event-policy.js";
+import {
+  captureSessionEventConfigPolicy,
+  narrowSessionEventSettings,
+} from "./session-event-policy.js";
 import {
   assertSessionEventTargetCurrent,
   assertSessionEventSettingsCurrent,
@@ -57,6 +66,12 @@ export { combineSessionEventTargetsForHost } from "./session-event-target.js";
 export type { SessionEventReceipt, SessionEventTarget } from "./session-event-contract.js";
 
 const log = createSubsystemLogger("session-events");
+
+// The loader exposes this synchronous facade; enter auth/plugin preparation only in admitted async work.
+const loadGenerationReadmission = createLazyRuntimeNamedExport(
+  () => import("./queue/drain-admission-scope.js"),
+  "runOutsideAdmittedGenerationScopes",
+);
 
 /** Policy publications an accepted occurrence may outlive before it settles as failed. */
 const MAX_CONFIG_READMISSION_ATTEMPTS = 2;
@@ -78,8 +93,10 @@ function enqueueSessionEventAttempt(
   acceptanceAssertion?.();
   options.assertCurrent?.();
   options.expectedTarget?.assertCurrent?.();
-  const { cfg, configPublication, agentId, sessionKey, env, storePath, operatorAuthority } =
-    prepareSessionEventInput(text, options);
+  const { cfg, agentId, sessionKey, env, storePath, operatorAuthority } = prepareSessionEventInput(
+    text,
+    options,
+  );
   const cleanupContinuation = prepareCronRunContinuationCleanup(sessionKey, storePath, env);
   let target = options.expectedTarget;
   let generationLease: Awaited<ReturnType<typeof prepareSessionEventTargetForHost>> | undefined;
@@ -120,9 +137,11 @@ function enqueueSessionEventAttempt(
   let deferred = false;
   const automationAdmission: ScheduledAutomationAdmission = { admissionDeferred: false };
   let adopted = false;
-  // A policy publication rejected this occurrence's stale-config execution; finish()
-  // re-admits it under the current policy when it never started.
-  let configPublicationChanged = false;
+  const configPolicy = captureSessionEventConfigPolicy(
+    cfg,
+    agentId,
+    options.scheduledAutomation?.job,
+  );
   // Queue-owner abandonment (lifecycle cleanup) stays terminal.
   let abandoned = false;
   // The live re-admission attempt; receipt.cancel forwards to it once it exists.
@@ -130,6 +149,7 @@ function enqueueSessionEventAttempt(
   let operation: ReplyOperation | undefined;
   let inputRecorder: UserTurnTranscriptRecorder | undefined;
   let delivered = false;
+  let conversationResultCommitted: true | undefined;
   let deliveryAttempted = false;
   let deliveryAmbiguous = false;
   let deliveryError: string | undefined;
@@ -184,18 +204,35 @@ function enqueueSessionEventAttempt(
       generationLease?.assertCurrent();
     }
   };
-  const assertEffectCurrent = () => {
-    assertCurrent();
-    if (
-      getSessionEventRuntimeConfig() !== cfg ||
-      getRuntimeConfigSnapshotMetadata() !== configPublication
-    ) {
-      // The dispatched run holds the config captured at enqueue; it must never execute
-      // under a superseded policy. finish() re-admits an unstarted occurrence instead.
-      configPublicationChanged = true;
-      throw new Error("Session event configuration changed; retry under the current policy");
-    }
-  };
+  Object.assign(assertCurrent, {
+    prepareSessionSourceEffect: () =>
+      composeSessionSourceAssertion(
+        [
+          operatorAuthority?.assertCurrent,
+          accepted ? undefined : acceptanceAssertion,
+          options.assertCurrent,
+          options.expectedTarget?.assertCurrent,
+          options.scheduledAutomation?.assertCurrent,
+          createDynamicSessionSourceAssertion(
+            () => generationLease?.assertCurrent,
+            () => {
+              throw new Error("Session event destination authority changed");
+            },
+          ),
+        ],
+        (assertSources) => {
+          assertSources();
+          assertCurrent();
+        },
+      ).prepareSessionSourceEffect(),
+  });
+  const assertEffectCurrent = composeSessionSourceAssertion([assertCurrent], (assertSource) => {
+    assertSource();
+    configPolicy.assertCurrent(getSessionEventRuntimeConfig(), [
+      route?.channel,
+      target?.deliveryContext?.channel,
+    ]);
+  });
   const accept = () => {
     if (accepted || settlement === "finished") {
       return;
@@ -254,7 +291,9 @@ function enqueueSessionEventAttempt(
       signal: startSignal,
       prepareCurrent,
       admission: automationAdmission,
-      onReady: runId ? start : undefined,
+      // Registered bootstrap hooks can perform arbitrary work before native preparation
+      // reports activity. Conservatively consume custody even if bootstrap is later skipped.
+      onReady: runId && hasInternalHookListeners("agent", "bootstrap") ? start : undefined,
     });
   };
   const finish = () => {
@@ -269,7 +308,6 @@ function enqueueSessionEventAttempt(
       } catch (error) {
         failure ??= error instanceof Error ? error : String(error);
       }
-      settlement = "finished";
       // Submitting custody ends at the first acceptance; a pre-acceptance re-admission
       // carries the still-live assertion so revoked ingress rejects the retry.
       const pendingAcceptanceAssertion = accepted ? undefined : acceptanceAssertion;
@@ -277,10 +315,21 @@ function enqueueSessionEventAttempt(
       // Producers never retry, so a policy publication that rejected an unstarted
       // occurrence re-admits it under the current policy instead of destroying it.
       // Stop, abort and abandonment still settle terminally.
-      const configChangeRetention =
-        configPublicationChanged && !started && !deliveryAttempted && !signal.aborted && !abandoned;
+      const retainForConfigChange = () =>
+        configPolicy.changed && !started && !deliveryAttempted && !signal.aborted && !abandoned;
       const attempt = readmissionAttempt;
-      const canReadmit = configChangeRetention && attempt < MAX_CONFIG_READMISSION_ATTEMPTS;
+      if (retainForConfigChange() && attempt < MAX_CONFIG_READMISSION_ATTEMPTS) {
+        // Reuse this occurrence's bounded readmission, yielding before fresh authority.
+        await delay(100 * 2 ** readmissionAttempt, undefined, { signal }).catch(
+          (error: unknown) => {
+            if (!signal.aborted) {
+              throw error;
+            }
+          },
+        );
+      }
+      settlement = "finished";
+      const canReadmit = retainForConfigChange() && attempt < MAX_CONFIG_READMISSION_ATTEMPTS;
       const status = signal.aborted ? "cancelled" : failure ? "failed" : "completed";
       if (status === "failed" && !canReadmit) {
         log.error("session event execution failed", {
@@ -359,6 +408,7 @@ function enqueueSessionEventAttempt(
           resolveAgentRunErrorLifecycleFields(failure, operation?.abortSignal ?? signal)
             .stopReason === "restart",
         delivered,
+        conversationResultCommitted,
         deliveryAttempted,
         deliveryAmbiguous,
         deliveryError,
@@ -395,7 +445,11 @@ function enqueueSessionEventAttempt(
     if (kind === "final" && payload.text) {
       summary ??= truncateUtf16Safe(payload.text, 2000);
     }
-    if (options.deliver === false || target?.deliver === false) {
+    if (
+      options.deliver === false ||
+      target?.deliver === false ||
+      (options.suppressErrorDelivery && payload.isError === true)
+    ) {
       return;
     }
     if (kind === "final" && sourceDeliveryOutcome?.satisfiesSourceDelivery) {
@@ -439,251 +493,265 @@ function enqueueSessionEventAttempt(
   // Completion outlives the producer's request scope and transcript writer.
   // Keep detached work through settlement; explicit request/Stop signals above
   // still cancel the occurrence and join its native execution owner.
+  const execute = async () => {
+    await readAgentDeletionJournalStatusInWorker(agentId, { env }, signal);
+    isDeletionBlocked = prepareAgentDeletionBlocked(agentId, { env });
+    assertOwnerCurrent();
+    const { dispatchInboundMessageWithRoutedChannelDispatcher } = await import("../dispatch.js");
+    const { prepareSessionGenerationFacts } =
+      await import("../../config/sessions/session-delivery-generation.js");
+    target ??= await captureSessionEventTargetForHost(agentId, sessionKey, {
+      env,
+      assertCurrent: options.assertCurrent,
+      assertCaptureCurrent: assertOwnerCurrent,
+    });
+    assertSessionEventTargetCurrent(target);
+    if (!target.sessionId && !options.createIfMissing) {
+      throw new Error("Session event origin is missing; start fresh authorized work instead");
+    }
+    generationLease = await prepareSessionEventTargetForHost(target, {
+      createIfMissing: options.createIfMissing,
+      assertAcceptanceCurrent: assertOwnerCurrent,
+    });
+    settings ??= target.settings;
+    route ??= structuredClone(target.deliveryContext);
+    await prepareCurrent();
+    checkedSettings = generationLease.readSessionSettings();
+    settings = narrowSessionEventSettings(settings, checkedSettings);
+    const promptText = options.scheduledAutomation?.preparePrompt
+      ? await options.scheduledAutomation.preparePrompt(cfg)
+      : eventText;
+    assertEffectCurrent();
+    const ctx = buildSessionEventContext({
+      cfg,
+      agentId,
+      sessionKey,
+      text: promptText,
+      options,
+      readmissionAttempt,
+      occurrenceId,
+      deliveryContext: route,
+      target,
+      assertCurrent,
+    });
+    const result = await dispatchInboundMessageWithRoutedChannelDispatcher({
+      cfg: { ...cfg, session: { ...cfg.session, store: storePath } },
+      ctx,
+      dispatcherOptions: {
+        deliver: (payload, info) => deliver(payload, info.kind),
+        onError: (error) => {
+          failure ??= error instanceof Error ? error : String(error);
+        },
+        onSkip: (_payload, info) => {
+          if (info.kind === "final") {
+            deliverySuppressionReason = info.reason;
+          }
+        },
+      },
+      replyOptions: {
+        onModelSelected: options.scheduledAutomation
+          ? (selection) => {
+              configPolicy.selectModel(selection);
+              assertEffectCurrent();
+            }
+          : undefined,
+        sessionPrincipalTurn:
+          !options.scheduledAutomation &&
+          !isCronSessionKey(sessionKey) &&
+          !hasSessionEventOriginatingCaller(target),
+        scheduledAutomation: options.scheduledAutomation,
+        ...resolveScheduledSessionReplyOptions(options.scheduledAutomation),
+        operatorAuthority: options.scheduledAutomation?.operatorAuthority ?? operatorAuthority,
+        admittedSessionSettings: settings,
+        toolsAllow,
+        onDeliberateSilentTerminalReply: () => {
+          deliverySuppressionReason = "silent";
+        },
+        abortSignal: signal,
+        expectedExistingSessionId: target.sessionId || undefined,
+        pinExpectedExistingSession: Boolean(target.sessionId),
+        onSessionPrepared: (binding) => {
+          if (binding.sessionKey === sessionKey) {
+            preparedBinding = binding;
+          }
+        },
+        queueModeOverride: "followup",
+        suppressTyping: true,
+        typingPolicy: "system_event",
+        onReplyOperationAdmitted: (owned) => {
+          operation = owned;
+        },
+        internalEventExecution: {
+          prepareInput: async (recorder) => {
+            inputRecorder = recorder;
+            if (
+              !recorder.stageApproved ||
+              !(await recorder.stageApproved({
+                runId: occurrenceId,
+                assertCurrent,
+                // Only this live policy retry can reclaim its cancelled attempt.
+                retryCancelled: readmissionAttempt > 0,
+              }))
+            ) {
+              throw new Error("Session event input was not durably admitted");
+            }
+          },
+          execRequestOwners,
+          deliver: options.deliver === false || target.deliver === false ? false : undefined,
+          assertCurrent: assertEffectCurrent,
+          ...(target.sessionId === "" && options.createIfMissing
+            ? {
+                bindSessionCreation: (creation: SessionEntryCreationOperation) => {
+                  assertOwnerCurrent();
+                  if (!generationLease) {
+                    throw new Error("Session event lost its original generation owner");
+                  }
+                  const assertCreationCurrent = generationLease.bindCreation(creation);
+                  const assertNoticeCreationCurrent =
+                    options.scheduledAutomation?.bindSessionCreation?.(creation);
+                  return () => {
+                    assertOwnerCurrent();
+                    assertCreationCurrent();
+                    assertNoticeCreationCurrent?.();
+                  };
+                },
+              }
+            : {}),
+          onFailed: (error) => {
+            failure ??= error instanceof Error ? error : String(error);
+          },
+          onSuppressed: (reason) => {
+            deliverySuppressionReason = reason === "silent" ? "silent" : undefined;
+            if (reason === "aborted") {
+              failure ??= "Session event execution was aborted";
+            }
+          },
+          beforeStart: () => prepareStart(),
+          ...(options.scheduledAutomation ? { beforeScheduledStart: prepareStart } : {}),
+          onStarted: start,
+          onTerminal: async (runId, outcome, deliveryEvidence) => {
+            const terminal = await settleSessionEventTurn({
+              automation: options.scheduledAutomation,
+              config: { ...cfg, session: { ...cfg.session, store: storePath } },
+              agentId,
+              sessionKey,
+              binding: preparedBinding ?? target,
+              runStartedAt: occurrence.ts,
+              signal,
+              assertCurrent: assertEffectCurrent,
+              onFailure: (error) => {
+                failure ??= error;
+              },
+              runId,
+              deliveryEvidence,
+              prepareCurrent,
+              outcome,
+            });
+            summary = terminal.summary ?? summary;
+            nextCheckMs = terminal.nextCheckMs;
+            sourceDeliveryOutcome = terminal.sourceDeliveryOutcome;
+            automationResult = terminal.automationResult;
+            conversationResultCommitted = terminal.conversationResultCommitted;
+            delivered ||= sourceDeliveryOutcome?.satisfiesSourceDelivery === true;
+          },
+        },
+        onQueuedFollowupReplyBatch: async (batch) => {
+          if (batch.completion.kind === "failed") {
+            failure ??= batch.completion.error;
+          } else if (batch.completion.kind === "aborted") {
+            failure ??= "Session event execution was aborted";
+          }
+          try {
+            for (const payload of batch.payloads) {
+              await deliver(payload, batch.completion.kind === "progress" ? "block" : "final");
+            }
+          } catch (error) {
+            failure ??= error instanceof Error ? error : String(error);
+            throw error;
+          }
+        },
+        turnAdoptionLifecycle: {
+          admission: "exclusive",
+          abortSignal: signal,
+          onDeferred: () => {
+            assertCurrent();
+            deferred = true;
+            options.scheduledAutomation?.onLaneWait?.({ waiting: true });
+            return true;
+          },
+          onAdopted: async () => {
+            adopted = true;
+            options.scheduledAutomation?.onLaneWait?.({ waiting: false });
+            if (!operation) {
+              throw new Error("Session event has no admitted reply owner");
+            }
+            // The normal owner may create a previously absent session or
+            // rotate through compaction during admission. Adopt only its
+            // published binding while that exact reply operation is live.
+            if (
+              preparedBinding &&
+              !generationLease?.isCreationAdopted() &&
+              preparedBinding.sessionId === operation.sessionId &&
+              (target?.sessionId !== preparedBinding.sessionId ||
+                target?.lifecycleRevision !== preparedBinding.lifecycleRevision)
+            ) {
+              generationLease?.release();
+              generationLease = undefined;
+              generationLease = await prepareSessionGenerationFacts({
+                agentId,
+                storePath,
+                sessionKey,
+                sessionId: preparedBinding.sessionId,
+                lifecycleRevision: preparedBinding.lifecycleRevision ?? null,
+              });
+            }
+            await prepareCurrent();
+            await options.onAdopted?.();
+            assertCurrent();
+            accept();
+          },
+          onAbandoned: () => {
+            // A stale-policy rejection before adoption also ends as abandonment;
+            // only abandonment without that rejection (Stop, cleanup) is terminal.
+            abandoned ||= !configPolicy.changed;
+            failure ??= "Session event was abandoned before execution";
+          },
+          onSettled: () => {
+            if (deferred) {
+              finish();
+            }
+          },
+        },
+      },
+    });
+    if (result.deferredToActiveRun) {
+      // onDeferred precedes queue insertion; only the dispatch result proves acceptance.
+      accept();
+    } else {
+      if (!started) {
+        failure ??= "Session event was not admitted; retry against the current session";
+      }
+      finish();
+    }
+    await settled;
+  };
+  const settleExecutionFailure = (error: unknown) => {
+    // Preserve the execution failure if terminal cleanup also rejects admission.
+    failure ??= error instanceof Error ? error : String(error);
+    finish();
+    return settled.then(() => undefined);
+  };
   void runWithoutOwnedSessionTranscriptWrites(() =>
     runWithGatewayDetachedWorkContinuation(async () => {
       admissionStarted = true;
-      await readAgentDeletionJournalStatusInWorker(agentId, { env }, signal);
-      isDeletionBlocked = prepareAgentDeletionBlocked(agentId, { env });
-      assertOwnerCurrent();
-      const { dispatchInboundMessageWithRoutedChannelDispatcher } = await import("../dispatch.js");
-      const { prepareSessionGenerationFacts } =
-        await import("../../config/sessions/session-delivery-generation.js");
-      target ??= await captureSessionEventTargetForHost(agentId, sessionKey, {
-        env,
-        assertCurrent: options.assertCurrent,
-        assertCaptureCurrent: assertOwnerCurrent,
-      });
-      assertSessionEventTargetCurrent(target);
-      if (!target.sessionId && !options.createIfMissing) {
-        throw new Error("Session event origin is missing; start fresh authorized work instead");
-      }
-      generationLease = await prepareSessionEventTargetForHost(target, {
-        createIfMissing: options.createIfMissing,
-        assertAcceptanceCurrent: assertOwnerCurrent,
-      });
-      settings ??= target.settings;
-      route ??= structuredClone(target.deliveryContext);
-      await prepareCurrent();
-      checkedSettings = generationLease.readSessionSettings();
-      settings = narrowSessionEventSettings(settings, checkedSettings);
-      const promptText = options.scheduledAutomation?.preparePrompt
-        ? await options.scheduledAutomation.preparePrompt(cfg)
-        : eventText;
-      assertEffectCurrent();
-      const ctx = buildSessionEventContext({
-        cfg,
-        agentId,
-        sessionKey,
-        text: promptText,
-        options,
-        readmissionAttempt,
-        occurrenceId,
-        deliveryContext: route,
-        target,
-        assertCurrent,
-      });
-      const result = await dispatchInboundMessageWithRoutedChannelDispatcher({
-        cfg: { ...cfg, session: { ...cfg.session, store: storePath } },
-        ctx,
-        dispatcherOptions: {
-          deliver: (payload, info) => deliver(payload, info.kind),
-          onError: (error) => {
-            failure ??= error instanceof Error ? error : String(error);
-          },
-          onSkip: (_payload, info) => {
-            if (info.kind === "final") {
-              deliverySuppressionReason = info.reason;
-            }
-          },
-        },
-        replyOptions: {
-          sessionPrincipalTurn:
-            !options.scheduledAutomation &&
-            !isCronSessionKey(sessionKey) &&
-            !hasSessionEventOriginatingCaller(target),
-          scheduledAutomation: options.scheduledAutomation,
-          ...resolveScheduledSessionReplyOptions(options.scheduledAutomation),
-          operatorAuthority: options.scheduledAutomation?.operatorAuthority ?? operatorAuthority,
-          admittedSessionSettings: settings,
-          toolsAllow,
-          onDeliberateSilentTerminalReply: () => {
-            deliverySuppressionReason = "silent";
-          },
-          abortSignal: signal,
-          expectedExistingSessionId: target.sessionId || undefined,
-          pinExpectedExistingSession: Boolean(target.sessionId),
-          onSessionPrepared: (binding) => {
-            if (binding.sessionKey === sessionKey) {
-              preparedBinding = binding;
-            }
-          },
-          queueModeOverride: "followup",
-          suppressTyping: true,
-          typingPolicy: "system_event",
-          onReplyOperationAdmitted: (owned) => {
-            operation = owned;
-          },
-          internalEventExecution: {
-            prepareInput: async (recorder) => {
-              inputRecorder = recorder;
-              if (
-                !recorder.stageApproved ||
-                !(await recorder.stageApproved({
-                  runId: occurrenceId,
-                  assertCurrent,
-                  // Only this live policy retry can reclaim its cancelled attempt.
-                  retryCancelled: readmissionAttempt > 0,
-                }))
-              ) {
-                throw new Error("Session event input was not durably admitted");
-              }
-            },
-            execRequestOwners,
-            deliver: options.deliver === false || target.deliver === false ? false : undefined,
-            assertCurrent: assertEffectCurrent,
-            ...(target.sessionId === "" && options.createIfMissing
-              ? {
-                  bindSessionCreation: (creation: SessionEntryCreationOperation) => {
-                    assertOwnerCurrent();
-                    if (!generationLease) {
-                      throw new Error("Session event lost its original generation owner");
-                    }
-                    const assertCreationCurrent = generationLease.bindCreation(creation);
-                    const assertNoticeCreationCurrent =
-                      options.scheduledAutomation?.bindSessionCreation?.(creation);
-                    return () => {
-                      assertOwnerCurrent();
-                      assertCreationCurrent();
-                      assertNoticeCreationCurrent?.();
-                    };
-                  },
-                }
-              : {}),
-            onFailed: (error) => {
-              failure ??= error instanceof Error ? error : String(error);
-            },
-            onSuppressed: (reason) => {
-              deliverySuppressionReason = reason === "silent" ? "silent" : undefined;
-              if (reason === "aborted") {
-                failure ??= "Session event execution was aborted";
-              }
-            },
-            beforeStart: () => prepareStart(),
-            ...(options.scheduledAutomation ? { beforeScheduledStart: prepareStart } : {}),
-            onStarted: start,
-            onTerminal: async (runId, outcome, deliveryEvidence) => {
-              const terminal = await settleSessionEventTurn({
-                automation: options.scheduledAutomation,
-                config: { ...cfg, session: { ...cfg.session, store: storePath } },
-                agentId,
-                sessionKey,
-                binding: preparedBinding ?? target,
-                runStartedAt: occurrence.ts,
-                signal,
-                assertCurrent: assertEffectCurrent,
-                onFailure: (error) => {
-                  failure ??= error;
-                },
-                runId,
-                deliveryEvidence,
-                prepareCurrent,
-                outcome,
-              });
-              summary = terminal.summary ?? summary;
-              nextCheckMs = terminal.nextCheckMs;
-              sourceDeliveryOutcome = terminal.sourceDeliveryOutcome;
-              automationResult = terminal.automationResult;
-              delivered ||= sourceDeliveryOutcome?.satisfiesSourceDelivery === true;
-            },
-          },
-          onQueuedFollowupReplyBatch: async (batch) => {
-            if (batch.completion.kind === "failed") {
-              failure ??= batch.completion.error;
-            } else if (batch.completion.kind === "aborted") {
-              failure ??= "Session event execution was aborted";
-            }
-            try {
-              for (const payload of batch.payloads) {
-                await deliver(payload, batch.completion.kind === "progress" ? "block" : "final");
-              }
-            } catch (error) {
-              failure ??= error instanceof Error ? error : String(error);
-              throw error;
-            }
-          },
-          turnAdoptionLifecycle: {
-            admission: "exclusive",
-            abortSignal: signal,
-            onDeferred: () => {
-              assertCurrent();
-              deferred = true;
-              options.scheduledAutomation?.onLaneWait?.({ waiting: true });
-              return true;
-            },
-            onAdopted: async () => {
-              adopted = true;
-              options.scheduledAutomation?.onLaneWait?.({ waiting: false });
-              if (!operation) {
-                throw new Error("Session event has no admitted reply owner");
-              }
-              // The normal owner may create a previously absent session or
-              // rotate through compaction during admission. Adopt only its
-              // published binding while that exact reply operation is live.
-              if (
-                preparedBinding &&
-                !generationLease?.isCreationAdopted() &&
-                preparedBinding.sessionId === operation.sessionId &&
-                (target?.sessionId !== preparedBinding.sessionId ||
-                  target?.lifecycleRevision !== preparedBinding.lifecycleRevision)
-              ) {
-                generationLease?.release();
-                generationLease = undefined;
-                generationLease = await prepareSessionGenerationFacts({
-                  agentId,
-                  storePath,
-                  sessionKey,
-                  sessionId: preparedBinding.sessionId,
-                  lifecycleRevision: preparedBinding.lifecycleRevision ?? null,
-                });
-              }
-              await prepareCurrent();
-              await options.onAdopted?.();
-              assertCurrent();
-              accept();
-            },
-            onAbandoned: () => {
-              // A stale-policy rejection before adoption also ends as abandonment;
-              // only abandonment without that rejection (Stop, cleanup) is terminal.
-              abandoned ||= !configPublicationChanged;
-              failure ??= "Session event was abandoned before execution";
-            },
-            onSettled: () => {
-              if (deferred) {
-                finish();
-              }
-            },
-          },
-        },
-      });
-      if (result.deferredToActiveRun) {
-        // onDeferred precedes queue insertion; only the dispatch result proves acceptance.
-        accept();
-      } else {
-        if (!started) {
-          failure ??= "Session event was not admitted; retry against the current session";
-        }
-        finish();
-      }
-      await settled;
+      const runOutsideAdmittedGenerationScopes = await loadGenerationReadmission();
+      return runOutsideAdmittedGenerationScopes(() =>
+        execute()
+          .catch(settleExecutionFailure)
+          .finally(() => generationLease?.release()),
+      );
     }, "session:event"),
-  )
-    .catch((error: unknown) => {
-      // Preserve the execution failure if terminal cleanup also rejects admission.
-      failure ??= error instanceof Error ? error : String(error);
-      finish();
-      return settled.then(() => undefined);
-    })
-    .finally(() => generationLease?.release());
+  ).catch(settleExecutionFailure);
   return {
     id: occurrenceId,
     cancel: () => {

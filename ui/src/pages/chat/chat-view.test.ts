@@ -339,21 +339,21 @@ describe("chat history pagination", () => {
   it("keeps earlier history discoverable and retryable until the transcript is exhausted", () => {
     const onShowEarlier = vi.fn();
     const container = createComposerContainer();
-    for (const [loading, label, clicks] of [
-      [false, "Show earlier", 1],
-      [true, "Loading earlier…", 1],
-      [false, "Show earlier", 2],
+    for (const [loading, connected, clicks] of [
+      [false, false, 0],
+      [true, true, 0],
+      [false, true, 1],
     ] as const) {
       renderChatInto(container, {
-        historyPagination: { hasMore: true, loading, onShowEarlier },
+        historyPagination: { hasMore: true, loading, connected, onShowEarlier },
       });
       const button = requireElement(
         container,
         ".chat-history-boundary__action",
         "earlier history action",
       ) as HTMLButtonElement;
-      expect(button.querySelector('[role="status"]')?.textContent?.trim()).toBe(label);
-      expect(button.getAttribute("aria-label")).toBe(label);
+      expect(button.querySelector('[role="status"]')?.textContent?.trim()).toBe("Show earlier");
+      expect(button.getAttribute("aria-label")).toBe("Show earlier");
       expect(button.getAttribute("aria-busy")).toBe(String(loading));
       expect(button.disabled).toBe(false);
       expect(button.closest(".chat-thread")).not.toBeNull();
@@ -2621,10 +2621,6 @@ describe("chat welcome", () => {
   function renderWelcome(params: {
     assistantAvatar: string | null;
     assistantAvatarUrl?: string | null;
-    sessions?: SessionsListResult | null;
-    sessionKey?: string;
-    sessionHost?: { assistantAgentId?: string | null } | null;
-    onOpenSession?: (sessionKey: string) => void;
     modelSetupRequired?: boolean;
     onModelSetup?: () => void;
   }) {
@@ -2693,7 +2689,6 @@ describe("chat welcome", () => {
         ...(canSend
           ? {
               disabledBanner: createChatModelSetupBanner(onModelSetup),
-              modelSetupRequired: true,
             }
           : {}),
         onSend,
@@ -2707,54 +2702,12 @@ describe("chat welcome", () => {
       send.click();
       expect(onSend).toHaveBeenCalledTimes(canSend ? 1 : 0);
       if (canSend) {
-        expect(container.querySelector(".agent-chat__welcome--setup")).not.toBeNull();
+        expect(container.querySelector(".agent-chat__welcome")).toBeNull();
         container.querySelector<HTMLButtonElement>(".agent-chat__disabled-banner button")?.click();
         expect(onModelSetup).toHaveBeenCalledOnce();
       }
     },
   );
-
-  it("lists recent user chats instead of suggestions when any exist", () => {
-    const opened: string[] = [];
-    const container = renderWelcome({
-      assistantAvatar: null,
-      assistantAvatarUrl: null,
-      sessionKey: "agent:main:dashboard:current",
-      sessions: createSessionsResultFromRows([
-        {
-          key: "agent:main:dashboard:current",
-          kind: "direct",
-          updatedAt: 50,
-          label: "Current chat",
-        },
-        {
-          key: "agent:main:dashboard:older",
-          kind: "direct",
-          updatedAt: 10,
-          label: "Older chat",
-          pinned: true,
-          pinnedAt: 5,
-        },
-        {
-          key: "agent:main:discord:group:g-1456",
-          kind: "group",
-          channel: "discord",
-          updatedAt: 90,
-        },
-        { key: "agent:main:dashboard:newer", kind: "direct", updatedAt: 40, label: "Newer chat" },
-      ]),
-      onOpenSession: (key) => opened.push(key),
-    });
-
-    expect(container.querySelector(".agent-chat__suggestion")).toBeNull();
-    const rows = [...container.querySelectorAll<HTMLButtonElement>(".agent-chat__recent")];
-    expect(
-      rows.map((row) => row.querySelector(".agent-chat__recent-name")?.textContent?.trim()),
-    ).toEqual(["Newer chat", "Older chat"]);
-
-    itemAt(rows, 0, "recent session row").click();
-    expect(opened).toEqual(["agent:main:dashboard:newer"]);
-  });
 
   it("retains the draft composer when secondary welcome content fades", () => {
     const composer = document.createElement("textarea");

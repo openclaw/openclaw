@@ -1,25 +1,20 @@
+import {
+  CONTROL_PLANE_WRITE,
+  OBSERVATION,
+  OWN_SESSION_WRITE,
+  PORTAL_SESSION_WRITE,
+  PROFILE_DEPENDENT,
+  PROFILE_STARTUP,
+  SESSION_METADATA_READ,
+  SESSION_WRITE,
+  SIDECAR_CONTROL_PLANE_WRITE,
+  UNADVERTISED,
+  UNADVERTISED_OBSERVATION,
+} from "./core-descriptor-options.js";
 import type { CoreGatewayMethodSpecRow } from "./core-descriptor-types.js";
 import { cronListShareKey, modelsListShareKey, operatorReadShareKey } from "./read-share-keys.js";
 
 // Canonical append-only method table; derived lookup and dispatch policy lives in core-method-policy.ts.
-const CONTROL_PLANE_WRITE = { controlPlaneWrite: true } as const;
-const SIDECAR_CONTROL_PLANE_WRITE = { startup: true, controlPlaneWrite: true } as const;
-const UNADVERTISED = { advertise: false } as const;
-const PROFILE_DEPENDENT = { profileAccess: "required" } as const;
-const PROFILE_STARTUP = { startup: true, ...PROFILE_DEPENDENT } as const;
-const SESSION_METADATA_READ = {
-  shareKey: operatorReadShareKey,
-  shareMaxAgeMs: 1_000,
-  shareInvalidationEvents: ["sessions.changed", "chat.metadata.changed"],
-} as const;
-const OBSERVATION = { lifetime: "observation" } as const;
-const UNADVERTISED_OBSERVATION = { ...UNADVERTISED, ...OBSERVATION } as const;
-const SESSION_WRITE = { sessionAccess: { mode: "write" } } as const;
-const OWN_SESSION_WRITE = { sessionAccess: { mode: "write", allowOwnSessionScope: true } } as const;
-const PORTAL_SESSION_WRITE = {
-  sessionAccess: { mode: "write", allowOwnSessionScope: true, requiredTool: "portal" },
-} as const;
-
 // This is the canonical core method policy table: every core handler must appear here so
 // listing, authorization, startup availability, and write throttling stay in sync.
 export const CORE_GATEWAY_METHOD_SPECS = [
@@ -240,7 +235,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["sessions.viewers.set", "sessions-subscriptions", "operator.read", "2026.7"],
   ["sessions.preview", "sessions-read", "operator.read", "<=2026.7"],
   ["sessions.describe", "sessions-read", "operator.read", "<=2026.7", { lifetime: "observation" }],
-  ["sessions.branches.list", "sessions-rewind", "operator.read", "<=2026.7"],
+  ["sessions.branches.list", "sessions-rewind", "operator.read", "<=2026.7", OBSERVATION],
   ["sessions.branches.switch", "sessions-rewind", "operator.admin", "<=2026.7"],
   ["sessions.rewind", "sessions-rewind", "operator.admin", "<=2026.7"],
   ["sessions.fork", "sessions-rewind", "operator.write", "<=2026.7"],
@@ -633,6 +628,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["diagnostics.heapProfile", "diagnostics", "operator.admin", "2026.9"],
   ["desktop.release", "environments", "operator.admin", "2026.9", { startup: true }],
   ["mcp.authLogin", "mcp-auth-login", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  ["mcp.authLogout", "mcp-auth-logout", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
   ["environments.session.status", "environments", "operator.read", "2026.9"],
   ["environments.session.create", "environments", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
   ["environments.session.destroy", "environments", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
@@ -749,4 +745,15 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["diagnostics.capabilities", "diagnostics", "operator.read", "2026.10"],
   ["cron.bind", "cron", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
   ["talk.client.say", "talk", "operator.talk", "2026.10"],
+  [
+    "sessions.github.readiness",
+    "sessions-github",
+    "operator.read",
+    "2026.10",
+    { startup: true, ...OBSERVATION },
+  ],
+  ["sessions.files.preview", "sessions-files", "operator.read", "2026.10"],
+  ["sessions.files.preview.release", "sessions-files", "operator.read", "2026.10"],
+  ["users.channelIdentity", "users", "operator.sessions.read", "2026.10", PROFILE_DEPENDENT],
+  ["sessions.groups.create", "sessions-groups", "operator.write", "2026.10"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

@@ -25,6 +25,7 @@ import {
   capturePluginGenerationArtifact,
   type PluginGenerationArtifact,
 } from "./plugin-generation-artifact.js";
+import { getPluginGenerationMetrics } from "./plugin-generation-metrics.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
 import {
   registerPluginInstanceModuleResolver,
@@ -290,6 +291,10 @@ export function bindPluginInstanceModuleLoader(input: PluginInstanceModuleLoader
     retainedNativeEsmOwners.set(params.instance, retained);
   }
   const reusedArtifact = retained?.artifact;
+  const metrics = getPluginGenerationMetrics();
+  if (reusedArtifact && metrics) {
+    metrics.captureReuse++;
+  }
   let artifact: PluginGenerationArtifact;
   try {
     params.preparedArtifact?.attachModuleSource(moduleSource);
@@ -297,13 +302,7 @@ export function bindPluginInstanceModuleLoader(input: PluginInstanceModuleLoader
       reusedArtifact ??
       params.preparedArtifact?.artifact ??
       capturePluginGenerationArtifact(
-        ...bundledPluginCaptureInputs(
-          params.rootDir,
-          params.source,
-          params.bundledReloadSource,
-          Boolean(params.recoverySourceMap),
-          params.standalone,
-        ),
+        ...bundledPluginCaptureInputs(params),
         retained ? retainedNativeEsmExecution(retained) : (run) => params.instance.run(run),
         moduleSource,
         params.nativeRecovery,
