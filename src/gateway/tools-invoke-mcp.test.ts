@@ -17,6 +17,7 @@ const runtime = vi.hoisted(() => ({
   materialize: vi.fn(),
   retire: vi.fn(async () => true),
   disposeMaterialized: vi.fn(async () => undefined),
+  extraCoreToolNames: [] as string[],
 }));
 
 // mock-isolation: Each case supplies its own runtime config without touching disk state.
@@ -25,13 +26,12 @@ vi.mock("../config/config.js", () => ({ getRuntimeConfig: () => runtime.cfg }));
 vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => runtime.cfg }));
 // mock-isolation: Core tools stay inert; only configured MCP resolution is exercised.
 vi.mock("../agents/openclaw-tools.js", () => ({
-  createOpenClawToolsAsync: async () => [
-    {
-      name: "session_status",
+  createOpenClawToolsAsync: async () =>
+    ["session_status", ...runtime.extraCoreToolNames].map((name) => ({
+      name,
       parameters: { type: "object", properties: {} },
       execute: runtime.coreExecute,
-    },
-  ],
+    })),
 }));
 // mock-isolation: Tool construction helpers stay inert outside the invocation path.
 vi.mock("../agents/agent-tools.js", () => ({ resolveToolLoopDetectionConfig: () => ({}) }));
@@ -50,9 +50,9 @@ vi.mock("../agents/agent-bundle-mcp-tools.js", () => ({
 }));
 
 // Mirrors materialization: an MCP tool is a bundle-mcp plugin tool with MCP metadata.
-function createMcpTool(toolName: string): AnyAgentTool {
+function createMcpTool(toolName: string, name = `granola__${toolName}`): AnyAgentTool {
   const tool = {
-    name: `granola__${toolName}`,
+    name,
     label: toolName,
     description: toolName,
     parameters: { type: "object", properties: {} },
@@ -86,6 +86,7 @@ const storeOverrides = async (toolOverrides: SessionToolOverrides | undefined) =
 beforeEach(() => {
   vi.clearAllMocks();
   runtime.diagnostics = undefined;
+  runtime.extraCoreToolNames = [];
   runtime.cfg = {
     agents: { entries: { main: {} } },
     mcp: {
@@ -172,6 +173,31 @@ describe("tools.invoke configured MCP tools", () => {
         error: { type: "tool_error", message: "MCP server unavailable" },
       });
       expect(runtime.retire).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("invokes the collision-suffixed name that discovery advertises", async () => {
+    await withToolsInvokeTestState({ label: "mcp-invoke-collision" }, async () => {
+      runtime.extraCoreToolNames = ["granola__list_meetings"];
+      runtime.materialize.mockImplementationOnce(
+        async ({ reservedToolNames }: { reservedToolNames: readonly string[] }) => ({
+          tools: [
+            createMcpTool(
+              "list_meetings",
+              reservedToolNames.includes("granola__list_meetings")
+                ? "granola__list_meetings-2"
+                : "granola__list_meetings",
+            ),
+          ],
+          dispose: runtime.disposeMaterialized,
+        }),
+      );
+
+      const outcome = await invoke("granola__list_meetings-2");
+
+      expect(outcome).toMatchObject({ ok: true, source: "mcp" });
+      expect(runtime.mcpExecute).toHaveBeenCalledOnce();
+      expect(runtime.coreExecute).not.toHaveBeenCalled();
     });
   });
 

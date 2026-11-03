@@ -497,21 +497,7 @@ async function invokeGatewayToolWithSignal(
     sessionEntry,
     sessionWorkspace,
   );
-  // Only a configured server owning the `server__tool` prefix connects, after session authorization.
-  const mcpTools = await acquireInvocationMcpTools({
-    toolName,
-    knownCoreTool,
-    cfg: params.cfg,
-    workspaceDir: sessionWorkspace,
-    agentId: selectedAgentId,
-    session: { key: sessionKey, entry: sessionEntry },
-    signal: params.signal,
-  });
-  if (mcpTools) {
-    params.disposals.push(mcpTools.dispose);
-    sessionChecks.push(mcpTools.assertCurrent);
-  }
-  const resolveTools = (disablePluginTools: boolean) =>
+  const resolveTools = (disablePluginTools: boolean, bundledTools?: readonly AnyAgentTool[]) =>
     resolveGatewayScopedTools({
       cfg: params.cfg,
       sessionKey,
@@ -534,15 +520,27 @@ async function invokeGatewayToolWithSignal(
       assertInputCommitAllowed,
       disablePluginTools,
       gatewayRequestedTools,
-      bundledTools: mcpTools?.tools,
+      bundledTools,
     });
 
   let { agentId, tools, workspaceDir } = await resolveTools(knownCoreTool);
   if (knownCoreTool && !tools.some((candidate) => candidate.name === toolName)) {
     ({ agentId, tools, workspaceDir } = await resolveTools(false));
   }
-  // MCP App views opened by this call keep only the tools this caller's policy admitted.
-  mcpTools?.restrictAppTools?.(tools.filter((candidate) => getPluginToolMeta(candidate)?.mcp));
+  const mcpTools = await acquireInvocationMcpTools({
+    toolName,
+    cfg: params.cfg,
+    workspaceDir: sessionWorkspace,
+    agentId: selectedAgentId,
+    session: { key: sessionKey, entry: sessionEntry },
+    reservedToolNames: tools.map((candidate) => candidate.name),
+    owner: { disposals: params.disposals, sessionChecks },
+    signal: params.signal,
+  });
+  if (mcpTools) {
+    ({ agentId, tools, workspaceDir } = await resolveTools(false, mcpTools.tools));
+    mcpTools.restrictAppTools?.(tools.filter((candidate) => getPluginToolMeta(candidate)?.mcp));
+  }
   const requestedAgentId = normalizeOptionalString(params.input.agentId);
   if (requestedAgentId && agentId && selectedAgentId !== agentId) {
     return failure(

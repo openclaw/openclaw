@@ -39,28 +39,29 @@ async function prepareSessionMcpOverridesCheck(params: AcquireInvocationMcpTools
   return { assertCurrent, release: facts.release };
 }
 
-/** Materialized tools from one private MCP runtime; the caller must `dispose` it. */
+/** Materialized tools from one private MCP runtime, whose disposal and policy check the owner holds. */
 export type InvocationMcpTools = {
   tools: readonly AnyAgentTool[];
   /** Why the owning server listed no tools, when acquisition, connection, or listing failed. */
   unavailable?: string;
   /** Binds MCP App views opened by this call to the caller's final tool surface. */
   restrictAppTools?: (tools: readonly AnyAgentTool[]) => void;
-  /** Rejects once the session's MCP overrides change; run before every effect. */
-  assertCurrent: () => void;
-  /** Never rejects; cleanup failures are logged. */
-  dispose: () => Promise<void>;
 };
 
 type AcquireInvocationMcpToolsParams = {
   toolName: string;
-  /** Core tool names never resolve to an MCP server. */
-  knownCoreTool: boolean;
+  /**
+   * Gateway tool names already resolved for this caller. A requested name among them never
+   * connects MCP; MCP names colliding with them get the suffixes tools.effective advertises.
+   */
+  reservedToolNames: readonly string[];
   cfg: OpenClawConfig;
   workspaceDir: string;
   agentId: string;
   /** The selected session, whose MCP overrides disable servers and deny tools. */
   session: { key: string; entry: { toolOverrides?: SessionMcpOverrides } | undefined };
+  /** Invocation-owned lists that receive this runtime's disposal and its session-policy check. */
+  owner: { disposals: Array<() => Promise<void>>; sessionChecks: Array<() => void> };
   /** Request cancellation; aborts pending discovery and retires the runtime. */
   signal: AbortSignal;
 };
@@ -102,7 +103,10 @@ function resolveOtherServerDenials(params: AcquireInvocationMcpToolsParams): str
 export async function acquireInvocationMcpTools(
   params: AcquireInvocationMcpToolsParams,
 ): Promise<InvocationMcpTools | undefined> {
-  if (params.knownCoreTool || !params.toolName.includes(TOOL_NAME_SEPARATOR)) {
+  if (
+    params.reservedToolNames.includes(params.toolName) ||
+    !params.toolName.includes(TOOL_NAME_SEPARATOR)
+  ) {
     return undefined;
   }
   const otherServerDenials = resolveOtherServerDenials(params);
@@ -141,7 +145,11 @@ export async function acquireInvocationMcpTools(
         toolOverrides: params.session.entry?.toolOverrides,
         toolDenylist: otherServerDenials,
       });
-      return await mcp.materializeBundleMcpToolsForRun({ ...lease, agentId: params.agentId });
+      return await mcp.materializeBundleMcpToolsForRun({
+        ...lease,
+        agentId: params.agentId,
+        reservedToolNames: params.reservedToolNames,
+      });
     });
     // Retirement closes transports first, so an abandoned call cannot outlive its request.
     const dispose = async () => {
@@ -155,26 +163,23 @@ export async function acquireInvocationMcpTools(
       await dispose();
       signal.throwIfAborted();
     }
+    // The owner retires the runtime (never rejecting; cleanup failures are logged) and rejects
+    // effects once the session's MCP overrides change.
+    params.owner.disposals.push(dispose);
+    params.owner.sessionChecks.push(sessionPolicy.assertCurrent);
     return {
       tools: materialized.tools,
       unavailable: materialized.diagnostics
         ?.map(({ serverName, message }) => `MCP server "${serverName}" is unavailable: ${message}`)
         .join("; "),
       restrictAppTools: materialized.restrictAppTools,
-      assertCurrent: sessionPolicy.assertCurrent,
-      dispose,
     };
   } catch (error) {
     sessionPolicy.release();
     await (abortRetirement ?? retire());
     signal.throwIfAborted();
     logWarn(`tools-invoke: MCP runtime unavailable for ${params.toolName}: ${String(error)}`);
-    return {
-      tools: [],
-      unavailable: "MCP server unavailable",
-      assertCurrent: () => undefined,
-      dispose: async () => undefined,
-    };
+    return { tools: [], unavailable: "MCP server unavailable" };
   } finally {
     signal.removeEventListener("abort", onAbort);
     await abortRetirement;
