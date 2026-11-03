@@ -276,7 +276,9 @@ afterEach(() => {
   resetGeneratedMediaTaskActivityForTests();
 });
 afterAll(async () => {
-  if (prepared) await discardPreparedPluginGeneration(prepared.pluginGeneration);
+  if (prepared) {
+    await discardPreparedPluginGeneration(prepared.pluginGeneration);
+  }
   await acquired?.release();
   clearPluginMetadataLifecycleCaches();
   resetPluginLoaderTestStateForTest();
@@ -408,14 +410,18 @@ it.each([
   "HTTP error",
   "transport uncertainty",
 ])("never buys another provider attempt after %s", async (failure) => {
-  if (failure === "text-only")
+  if (failure === "text-only") {
     output = {
       candidates: [{ finishReason: "STOP", content: { parts: [{ text: "lyrics only" }] } }],
     };
-  if (failure === "malformed JSON") output = '{"candidates":';
-  if (failure === "ambiguous")
+  }
+  if (failure === "malformed JSON") {
+    output = '{"candidates":';
+  }
+  if (failure === "ambiguous") {
     output = { candidates: [...payload(mp3).candidates, ...payload(mp3).candidates] };
-  if (failure === "bad base64")
+  }
+  if (failure === "bad base64") {
     output = {
       candidates: [
         {
@@ -424,8 +430,13 @@ it.each([
         },
       ],
     };
-  if (failure === "HTTP error") status = 502;
-  if (failure === "transport uncertainty") hold = "disconnect";
+  }
+  if (failure === "HTTP error") {
+    status = 502;
+  }
+  if (failure === "transport uncertainty") {
+    hold = "disconnect";
+  }
   await expect(execute()).rejects.toThrow();
   expect(posts()).toHaveLength(1);
   expect(alternateCalls).toBe(0);
@@ -436,8 +447,12 @@ it.each(["before", "headers", "body", "after EOF"] as const)(
   async (phase) => {
     const controller = new AbortController();
     const reason = new Error("caller cancelled music");
-    if (phase === "before") controller.abort(reason);
-    if (phase === "headers" || phase === "body") hold = phase;
+    if (phase === "before") {
+      controller.abort(reason);
+    }
+    if (phase === "headers" || phase === "body") {
+      hold = phase;
+    }
     if (phase === "after EOF") {
       const save = mediaStore.saveMediaBuffer;
       vi.spyOn(mediaStore, "saveMediaBuffer").mockImplementation(async (...args) => {
@@ -460,7 +475,9 @@ it.each(["before", "headers", "body", "after EOF"] as const)(
     await rejected;
     expect(posts()).toHaveLength(phase === "before" ? 0 : 1);
     expect(alternateCalls).toBe(0);
-    if (phase === "after EOF") expect(completed).toBe(1); // No compensating upstream request/refund claim.
+    if (phase === "after EOF") {
+      expect(completed).toBe(1); // No compensating upstream request/refund claim.
+    }
   },
 );
 
@@ -472,16 +489,24 @@ it.each([
   "mixed capability",
   "wrong path",
 ])("denies a %s offer before music POST", async (failure) => {
-  if (failure === "stale") inventory.observedAt = new Date(Date.now() - 61_000).toISOString();
-  if (failure === "foreign scope") inventory.scope.authType = "admin";
-  if (failure === "wrong upstream")
+  if (failure === "stale") {
+    inventory.observedAt = new Date(Date.now() - 61_000).toISOString();
+  }
+  if (failure === "foreign scope") {
+    inventory.scope.authType = "admin";
+  }
+  if (failure === "wrong upstream") {
     inventory.providers[0]!.models[0]!.upstream = "lyria-3-pro-preview";
-  if (failure === "wrong format")
+  }
+  if (failure === "wrong format") {
     inventory.providers[0]!.routes[0]!.requestFormat = "google.generate_content";
-  if (failure === "mixed capability")
+  }
+  if (failure === "mixed capability") {
     inventory.providers[0]!.models[0]!.capabilities.push("llm.generate");
-  if (failure === "wrong path")
+  }
+  if (failure === "wrong path") {
     inventory.providers[0]!.routes[0]!.path = "/v1beta/models/${model}:streamGenerateContent";
+  }
   await expect(execute({ model: `clawrouter/${CLIP}` })).rejects.toThrow();
   expect(posts()).toHaveLength(0);
 });

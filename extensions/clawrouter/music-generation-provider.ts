@@ -85,7 +85,9 @@ export async function listClawRouterMusicModelCatalog(
   ctx: UnifiedModelCatalogProviderContext,
 ): Promise<UnifiedModelCatalogEntry[]> {
   const selected = ctx.resolveProviderAuth("clawrouter");
-  if (!selected.apiKey && !selected.discoveryApiKey && !selected.profileId) return [];
+  if (!selected.apiKey && !selected.discoveryApiKey && !selected.profileId) {
+    return [];
+  }
   const auth = await resolveApiKeyForProvider({
     provider: "clawrouter",
     cfg: ctx.config,
@@ -94,7 +96,9 @@ export async function listClawRouterMusicModelCatalog(
     signal: ctx.signal,
     ...(selected.profileId ? { profileId: selected.profileId, lockedProfile: true } : {}),
   });
-  if (!auth.apiKey) return [];
+  if (!auth.apiKey) {
+    return [];
+  }
   const offers = await fetchClawRouterCapabilityOffers({
     context: contextFor({ cfg: ctx.config }, auth.apiKey),
     timeoutMs: () => ctx.timeoutMs ?? 5_000,
@@ -104,7 +108,9 @@ export async function listClawRouterMusicModelCatalog(
   const seen = new Set<string>();
   return offers.filter(eligible).flatMap((offer) => {
     const model = String(offer.model!.id);
-    if (seen.has(model)) return [];
+    if (seen.has(model)) {
+      return [];
+    }
     seen.add(model);
     return [
       {
@@ -121,9 +127,12 @@ export async function listClawRouterMusicModelCatalog(
 }
 
 function prepareBody(req: MusicGenerationRequest) {
-  if (!MODELS.has(req.model)) throw new Error("Select a qualified ClawRouter Lyria music offer.");
-  if (req.durationSeconds !== undefined)
+  if (!MODELS.has(req.model)) {
+    throw new Error("Select a qualified ClawRouter Lyria music offer.");
+  }
+  if (req.durationSeconds !== undefined) {
     throw new Error("Lyria does not accept a duration override.");
+  }
   if (
     req.format &&
     !(
@@ -205,8 +214,9 @@ function readMusic(payload: unknown, model: string) {
     audio++;
     parsedParts.push({ inlineData: { data: inline.data, mimeType } });
   }
-  if (audio !== 1)
+  if (audio !== 1) {
     throw new Error("ClawRouter music requires exactly one final audio track; do not replay it.");
+  }
   const result = parseGoogleMusicGenerationResponse({
     response: { candidates: [{ content: { parts: parsedParts } }] },
   });
@@ -241,8 +251,9 @@ export function buildClawRouterMusicGenerationProvider(): MusicGenerationProvide
         modelId: req.model,
         signal: req.signal,
       });
-      if (!auth.apiKey)
+      if (!auth.apiKey) {
         throw new Error("ClawRouter proxy key missing; native Google credentials are not used.");
+      }
       const context = contextFor(req, auth.apiKey);
       const offers = await fetchClawRouterCapabilityOffers({
         context,
@@ -252,15 +263,17 @@ export function buildClawRouterMusicGenerationProvider(): MusicGenerationProvide
       });
       const qualified = offers.filter((offer) => eligible(offer) && offer.model?.id === req.model);
       const selected = qualified.find((offer) => offer.routeKind === "native") ?? qualified[0];
-      if (!selected)
+      if (!selected) {
         throw new Error("ClawRouter music offer is absent or unsupported for this proxy key.");
+      }
       const wire = JSON.stringify(
         selected.routeKind === "manifest"
           ? { body, pathParams: { model: selected.model!.upstream } }
           : body,
       );
-      if (Buffer.byteLength(wire) > JSON_LIMIT)
+      if (Buffer.byteLength(wire) > JSON_LIMIT) {
         throw new Error("ClawRouter music request exceeds 8 MiB.");
+      }
       const headers = new Headers(context.headers);
       headers.set("Content-Type", "application/json");
       req.signal?.throwIfAborted();
@@ -269,9 +282,9 @@ export function buildClawRouterMusicGenerationProvider(): MusicGenerationProvide
         const { response, release } = await fetchWithSsrFGuard({
           url: selected.url,
           init: { method: "POST", headers, body: wire, signal: req.signal },
-          fetchImpl: (input, init) => {
+          beforeRequest: () => {
+            req.signal?.throwIfAborted();
             attempted = true;
-            return fetch(input, init);
           },
           timeoutMs: timeoutMs(),
           maxRedirects: 0,
@@ -324,7 +337,9 @@ export function buildClawRouterMusicGenerationProvider(): MusicGenerationProvide
           cause instanceof Error
             ? cause
             : new Error("ClawRouter music operation failed", { cause });
-        if (attempted) recordModelFallbackStop(error);
+        if (attempted) {
+          recordModelFallbackStop(error);
+        }
         throw error;
       }
     },
