@@ -129,6 +129,8 @@ export async function prepareNodeHostRuntime(params?: {
   env?: NodeJS.ProcessEnv;
   /** The embedded app worker never advertises native agent runs. */
   enableAgentRuns?: boolean;
+  /** This transport delivers Gateway permission changes to the worker MCP client. */
+  receivesLocalMcpPolicy?: true;
   /** Process-scoped worker hosting for environment-managed disposable nodes. */
   forceWorkerRuns?: boolean;
   /** Disposable cloud nodes expose computer control only through the private carrier. */
@@ -260,8 +262,8 @@ export async function prepareNodeHostRuntime(params?: {
   const subprocessWorkers =
     workerRunsEnabled && config.nodeHost?.workerRuns?.isolation !== "container";
   const localMcpEnabled =
+    params?.receivesLocalMcpPolicy === true &&
     subprocessWorkers &&
-    !commandAllowlist &&
     listEnabledNodeHostMcpServers(config.nodeHost?.mcp?.servers).length > 0;
   const nativeInferenceSnapshot =
     subprocessWorkers && platform !== "win32"

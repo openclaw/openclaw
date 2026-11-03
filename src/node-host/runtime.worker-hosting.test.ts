@@ -119,7 +119,9 @@ describe("node-host worker manifest", () => {
         },
       },
       env: { PATH: "/usr/bin" },
+      receivesLocalMcpPolicy: true,
     });
+    expect(prepared.localMcpEnabled).toBe(true);
     const ready = createDeferred();
     const runtime = prepared.start({ client, onInventoryChanged: () => ready.resolve() });
     try {
