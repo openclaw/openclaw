@@ -15,6 +15,7 @@ import { runSqliteIntegrityOperationInWorker } from "./sqlite-integrity-operatio
 import { SqliteIntegrityWorkerInterruptedError } from "./sqlite-integrity-worker-error.js";
 import {
   assertSqliteIntegrityInWorker,
+  runSqliteIntegrityCheckInWorkerSync,
   withSqliteIntegrityWorkerScope,
 } from "./sqlite-integrity-worker.js";
 import { sqliteIntegrityCheckSteps, type SqliteIntegrityCheckTiming } from "./sqlite-integrity.js";
@@ -96,6 +97,47 @@ function expectElapsed(value: unknown) {
 
 describe("SQLite integrity child", () => {
   afterEach(() => vi.restoreAllMocks());
+  it.each(["payload", "schema_meta"])(
+    "preserves schema-only migration scope with damage in %s",
+    (damagedTable) => {
+      let fragmentationOffset = 0;
+      const { source } = fixture(
+        "schema-scope",
+        `CREATE TABLE schema_meta(value INTEGER); INSERT INTO schema_meta VALUES (1);
+         CREATE TABLE payload(value INTEGER); INSERT INTO payload VALUES (1);`,
+        (database) => {
+          const root = Number(
+            database.prepare("SELECT rootpage FROM sqlite_schema WHERE name = ?").get(damagedTable)
+              ?.rootpage,
+          );
+          const pageSize = Number(database.prepare("PRAGMA page_size").get()?.page_size);
+          fragmentationOffset = (root - 1) * pageSize + 7;
+        },
+      );
+      const bytes = fs.readFileSync(source);
+      bytes[fragmentationOffset] = 1;
+      fs.writeFileSync(source, bytes);
+      using database = openNodeSqliteDatabase(source);
+      const check = {
+        database,
+        databaseLabel: source,
+        check: "quick" as const,
+        schemaOnly: true as const,
+        tables: ["schema_meta"],
+      };
+      const run = () => runSqliteIntegrityCheckInWorkerSync(check);
+      if (damagedTable === "schema_meta") {
+        expect(run).toThrow(/Fragmentation of 0 bytes reported as 1/);
+      } else {
+        expect(run).not.toThrow();
+      }
+      expect(readSqliteDatabaseIntegrityVerification(database)).toBeUndefined();
+      expect(() => runSqliteIntegrityCheckInWorkerSync({ ...check, check: "full" })).toThrow(
+        /Fragmentation of 0 bytes reported as 1/,
+      );
+    },
+  );
+
   it("does not publish a quick worker result as full integrity verification", async () => {
     const source = path.join(tempDirs.make("openclaw-integrity-receipt-"), "source.sqlite");
     using database = openNodeSqliteDatabase(source);

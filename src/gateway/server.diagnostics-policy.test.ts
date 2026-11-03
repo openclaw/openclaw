@@ -106,14 +106,15 @@ it("owns diagnostic dispatch and heartbeat across initial disable, enable, disab
   vi.spyOn(Date, "now").mockImplementation(clock.clock.now);
 
   kernel.configureDiagnostics({ diagnostics: { enabled: true } });
-  await tick({ webhook: 1, heartbeat: 1, pressure: 3, worker: 1, messages: 1 });
-
-  kernel.configureDiagnostics({ diagnostics: { enabled: false } });
+  // Enabled diagnostics sample pressure in both the heartbeat and pressure job.
   await tick({ webhook: 1, heartbeat: 1, pressure: 4, worker: 1, messages: 1 });
 
+  kernel.configureDiagnostics({ diagnostics: { enabled: false } });
+  await tick({ webhook: 1, heartbeat: 1, pressure: 5, worker: 1, messages: 1 });
+
   kernel.configureDiagnostics({});
-  await tick({ heartbeat: 2, pressure: 5 });
+  await tick({ heartbeat: 2, pressure: 7 });
   await kernel.closeOnStartupFailure();
   kernel.configureDiagnostics({ diagnostics: { enabled: true } });
-  await tick({ heartbeat: 2, pressure: 5 });
+  await tick({ heartbeat: 2, pressure: 7 });
 }, 60_000);

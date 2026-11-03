@@ -528,7 +528,7 @@ it("loads optional chat copy with its view while keeping admission errors synchr
   registerEnglishCatalog(registerChatSessionEnglish);
   await manager.setLocale("de");
   expect(manager.t("chat.composer.menu.offlineBlocked")).toBe(
-    "Connect to the gateway to change session capabilities.",
+    "Reconnect to change tools for this chat.",
   );
   expect(manager.t("chat.workspaceFiles.showFiles")).toBe("Show session files");
   expect(manager.t("chat.workspaceFiles.search")).toBe("chat.workspaceFiles.search");

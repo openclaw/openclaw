@@ -3,6 +3,7 @@ import { createMemo, createSignal, onSettled } from "solid-js";
 import { pathForAgentPanel } from "../../app-route-paths.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { hasOperatorAdminAccess, hasOperatorReadAccess } from "../../app/operator-access.ts";
+import { SettingsDetailsRow } from "../../components/solid/settings-disclosure.tsx";
 import { SettingsSectionHelp } from "../../components/solid/settings-section-help.tsx";
 import {
   SettingsRow,
@@ -361,7 +362,9 @@ export function GitHubConnections() {
             {setupFor("personal")}
           </div>
           <div data-github-connection="system">
-            <SettingsRow
+            <SettingsDetailsRow
+              detailsLabel={t("githubConnections.details")}
+              hasDetails={Boolean(view().systemIdentity)}
               title={t("githubConnections.system")}
               description={meta(
                 <GitHubHealth
@@ -385,7 +388,9 @@ export function GitHubConnections() {
                   <SettingsValue value={t("githubConnections.adminManaged")} />
                 )
               }
-            />
+            >
+              <GitHubDetails identity={view().systemIdentity} />
+            </SettingsDetailsRow>
             {setupFor("system")}
           </div>
           {view().canAdmin && view().agentId ? (
@@ -429,7 +434,6 @@ export function GitHubConnections() {
               </button>
             }
           />
-          <GitHubDetails identity={view().systemIdentity} />
         </SettingsSection>
       </div>
     </openclaw-github-connections>

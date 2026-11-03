@@ -286,9 +286,18 @@ def require_exclusive_screenshot_simulator!(udid, diagnostics)
 end
 
 def delete_watch_screenshot_runtime!(runtime)
+  retained_asset = nil
   2.times do |attempt|
-    images = JSON.parse(sh("xcrun", "simctl", "runtime", "list", "-j", log: false)).values
-      .select { |image| image["runtimeIdentifier"] == runtime }
+    deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 120
+    images = loop do
+      observed = JSON.parse(sh("xcrun", "simctl", "runtime", "list", "-j", log: false)).values
+        .select { |image| image["runtimeIdentifier"] == runtime }
+      # An empty inventory after scan-and-mount does not prove a partially
+      # deleted MobileAsset is gone. Wait for Apple's re-registration first.
+      break observed unless observed.none? { |image| image["state"] != "Deleting" } && retained_asset && File.exist?(retained_asset)
+      UI.user_error!("#{runtime} did not re-register before runtime repair; its MobileAsset is still present.") if Process.clock_gettime(Process::CLOCK_MONOTONIC) >= deadline
+      sleep(2)
+    end
     report_watch_runtime_images(runtime, images)
     # CoreSimulator can retain a deleting registration beside its replacement.
     images.reject! { |image| image["state"] == "Deleting" }
@@ -306,6 +315,7 @@ def delete_watch_screenshot_runtime!(runtime)
     end
 
     # Apple removed the registration, so re-scan and resolve its new image ID.
+    retained_asset = images.first.fetch("path")
     UI.important("Watch runtime asset reclamation was incomplete; re-registering before one more targeted deletion.")
     sh("xcrun", "simctl", "runtime", "scan-and-mount")
   end
@@ -321,6 +331,13 @@ end
 def repair_watch_screenshot_runtime!(runtime, staged_image: nil)
   version = runtime ? runtime.split(".watchOS-").last.tr("-", ".") : sh("xcrun", "--sdk", "watchsimulator", "--show-sdk-version").strip
   runtime ||= "com.apple.CoreSimulator.SimRuntime.watchOS-#{version.tr(".", "-")}"
+  unless staged_image
+    # An unavailable runtime can still have its downloaded DMG. Preserve it before
+    # deletion; downloading it again can register aliases sharing the same asset.
+    images = JSON.parse(sh("xcrun", "simctl", "runtime", "list", "-j", log: false)).values
+    staged_image = fallback_watch_runtime_image(images.reject { |image| image["state"] == "Deleting" }, runtime)
+    staged_image = nil if staged_image && Dir[File.join(staged_image.fetch("path"), "Restore", "*.dmg")].empty?
+  end
   unless staged_image
     delete_watch_screenshot_runtime!(runtime)
     sh("xcodebuild", "-downloadPlatform", "watchOS", "-buildVersion", version)

@@ -26,7 +26,6 @@
   min-width: 0;
 }
 
-.device-entry__heading,
 .personal-instructions__actions,
 .active-filters {
   display: flex;
@@ -508,6 +507,17 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   line-height: 1.45;
 }
 
+.settings-sidebar__empty--search {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.settings-sidebar__empty--search p {
+  margin: 0;
+}
+
 /* Loading skeleton reuses __nav/__group/__item geometry; only the fills are placeholders. */
 .settings-sidebar__loading-search {
   display: block;
@@ -966,7 +976,6 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   flex: 0 0 auto;
   align-items: flex-start;
   margin: 8px;
-  border-color: color-mix(in srgb, var(--danger) 22%, var(--border));
   box-shadow: var(--shadow-sm);
 }
 
@@ -1006,10 +1015,6 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 
 .sidebar-session-toolbar__button:not(:disabled, [aria-disabled="true"]) {
   opacity: var(--sidebar-toolbar-action-opacity, 0.55);
-}
-
-.sidebar-session-toolbar .sidebar-recent-sessions__label-text {
-  flex: 0 0 auto;
 }
 
 .sidebar-session-toolbar__button:hover,
@@ -2386,9 +2391,16 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 .sidebar-panel-header__title {
   margin-inline-end: auto;
   padding-inline-start: 4px;
+}
+
+/* Every sidebar panel title shares one type style, including the Sessions owner
+   picker, whose button host would otherwise reset the inherited letter spacing. */
+.sidebar-panel-header__title,
+.sidebar-session-owner-filter .picker-select__label {
   color: var(--text-strong);
   font-size: calc(13px * var(--control-ui-text-scale));
   font-weight: 550;
+  letter-spacing: -0.01em;
 }
 
 .sidebar--rail
@@ -3796,8 +3808,11 @@ html.openclaw-native-web-chrome
   color: var(--muted);
 }
 
-.page-meta,
-.dreaming-header-controls {
+.page-subtitle .learn-more-link {
+  white-space: nowrap;
+}
+
+.page-meta {
   display: flex;
   align-items: center;
   gap: 8px;
