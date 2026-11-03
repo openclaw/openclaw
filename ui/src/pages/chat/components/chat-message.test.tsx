@@ -15,6 +15,10 @@ import {
 } from "./chat-message.test-support.ts";
 
 const harness = createChatMessageHarness();
+it("labels unnamed agent replies with the localized product noun", () => {
+  harness.renderAssistantMessage(createAssistantMessage("Ready"), { assistantName: undefined });
+  expect(harness.elementText(".chat-sender-name")).toBe("Agent");
+});
 const {
   render,
   renderStreamGroup,

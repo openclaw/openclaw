@@ -209,8 +209,8 @@ draft. Other printable keys still type into the composer; editing an answer fiel
 collapsed questions, and disabled controls keep their existing keyboard behavior.
 
 Saved split panes keep their conversation and arrangement. If an older saved pane
-does not identify its agent, it shows **Choose a conversation** instead of opening
-another agent's history. Select that pane, then choose **Home** or a conversation
+does not identify its agent, it shows **Choose a session** instead of opening
+another agent's history. Select that pane, then choose **Home** or a session
 in the sidebar. Home works even when you are already on its route; the other
 panes stay unchanged.
 
@@ -371,7 +371,7 @@ Double-click selections stay inside the message where they started, including
 when you drag on the second click. Ordinary drag selection and Select All can
 still span multiple messages.
 
-Highlight text and choose **Add to chat** to attach a comment to the main
+Highlight text and choose **Add to message** to attach a comment to the main
 composer. The optional comment field starts on one line, grows to five lines,
 then scrolls internally. Confirm or press Enter to save; Shift+Enter adds a line.
 Saving keeps your existing draft and does not send a message.
