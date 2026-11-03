@@ -78,8 +78,12 @@ function fixture() {
       retain: () => retained,
     },
   };
-  return { handler, options: options as Options, policies, services, retained };
+  return { api, handler, options: options as Options, policies, services, retained };
 }
+
+it("exposes the autofill tool by default once the feature is enabled", () => {
+  expect(vi.mocked(fixture().api.registerTool).mock.calls[0]![1]).not.toHaveProperty("optional");
+});
 
 it("requires current real Control UI admin and admitted session access before hydrating", async () => {
   const f = fixture();

@@ -399,8 +399,8 @@ reserves that profile before browser launch. Do not modify extension files while
 the profile is running. Use this profile for the Gateway owner's browser only;
 it must not contain another person's signed-in extension state.
 
-The tool
-is optional; allow `onepassword_autofill` in your agent's tool policy when needed.
+Enabling the feature also gives the agent the `onepassword_autofill` tool; no
+separate tool-policy allow is needed. Its actions stay limited to the Gateway owner.
 Restart the Gateway after enabling the feature. No OAuth client secret goes in
 OpenClaw configuration.
 

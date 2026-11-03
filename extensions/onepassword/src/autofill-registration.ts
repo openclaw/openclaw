@@ -189,8 +189,9 @@ export function registerAutofill(api: OpenClawPluginApi, resolveConfig: () => un
       create: (context) => createAutofillTool(service, context, api.inlineView),
     },
     {
+      // agenticAutofill.enabled is the opt-in: the tool is registered only when
+      // it is true, so a second tool-policy allow would only hide the feature.
       name: "onepassword_autofill",
-      optional: true,
       workspaceAccess: false,
     },
   );
