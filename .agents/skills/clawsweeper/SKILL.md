@@ -272,6 +272,9 @@ prose.
 
 ## Monitoring
 
+Distinguish intake success from an active review using the
+[review-admission guidance](../../../docs/reference/pull-request-review-flow.md#clawsweeper).
+
 Receiver workflows:
 
 ```bash
