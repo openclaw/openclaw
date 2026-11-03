@@ -353,6 +353,7 @@ vi.mock("./custody/custody-store.js", async (importOriginal) =>
     await importOriginal(),
   ),
 );
+// mock-isolation: The helper returns the real authority module with every export kept, adding in-flight counting.
 vi.mock("./work-recipient-authority.js", async (importOriginal) =>
   (
     await import("./work-dispatch-flow-mock.test-support.js")

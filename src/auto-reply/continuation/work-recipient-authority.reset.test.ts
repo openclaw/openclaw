@@ -238,35 +238,27 @@ describe("a kept continue_work wake is bound to its recipient authority", () => 
     },
   );
 
-  it.each(Object.keys(handovers))(
-    "%s after a same-owner reset refuses the bound wake at its due time",
-    async (handover) => {
-      await withSession(async (scope) => {
-        const { recordId, dueAt } = await elect();
-        await resetSession("reset");
-        await handovers[handover]!(scope);
+  // Bound, or elected before the binding existed; refused at the due wake or, after a restart, at
+  // replay. The same-owner reset first keeps it, so the handover is what refuses it.
+  it.each(
+    (["bound", "unbound"] as const).flatMap((shape) =>
+      Object.keys(handovers).flatMap((handover) =>
+        (["wake", "replay"] as const).map((stage) => [shape, handover, stage] as const),
+      ),
+    ),
+  )("a kept %s wake is refused after %s at the %s", async (shape, handover, stage) => {
+    await withSession(async (scope) => {
+      const { recordId, dueAt } = await (shape === "bound" ? elect() : electUnbound());
+      await resetSession("reset");
+      await handovers[handover]!(scope);
 
-        vi.setSystemTime(dueAt + 1);
-        await dispatchPendingContinuationWork({ sessionKey: KEY });
-        await expectRefused(recordId, "wake");
-      });
-    },
-  );
-
-  it.each(Object.keys(handovers))(
-    "%s while the Gateway is down refuses the bound wake at replay",
-    async (handover) => {
-      await withSession(async (scope) => {
-        const { recordId, dueAt } = await elect();
-        await resetSession("reset");
-        await handovers[handover]!(scope);
-
-        vi.setSystemTime(dueAt + 1);
-        await restartAndBoot();
-        await expectRefused(recordId, "replay");
-      });
-    },
-  );
+      vi.setSystemTime(dueAt + 1);
+      await (stage === "wake"
+        ? dispatchPendingContinuationWork({ sessionKey: KEY })
+        : restartAndBoot());
+      await expectRefused(recordId, stage);
+    });
+  });
 
   it("the Gateway delete still cancels the wake, and a recreated session gets none", async () => {
     await withSession(async (scope) => {
@@ -297,25 +289,6 @@ describe("a kept continue_work wake elected before the binding existed", () => {
       await dispatchPendingContinuationWork({ sessionKey: KEY });
       expect(wakeTurns()).toHaveLength(1);
       expect(await readWork(recordId)).toMatchObject({ status: "succeeded" });
-    });
-  });
-
-  it.each(
-    Object.keys(handovers).flatMap((handover) => [
-      [handover, "wake"],
-      [handover, "replay"],
-    ]),
-  )("%s after its election fences it at the %s", async (handover, stage) => {
-    await withSession(async (scope) => {
-      const { recordId, dueAt } = await electUnbound();
-      await resetSession("reset");
-      await handovers[handover]!(scope);
-
-      vi.setSystemTime(dueAt + 1);
-      await (stage === "wake"
-        ? dispatchPendingContinuationWork({ sessionKey: KEY })
-        : restartAndBoot());
-      await expectRefused(recordId, stage);
     });
   });
 
