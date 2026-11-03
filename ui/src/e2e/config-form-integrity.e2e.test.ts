@@ -277,14 +277,13 @@ suite.define(() => {
 
       const status = page.locator("openclaw-settings-save-indicator").getByRole("status");
       await expect.poll(() => status.textContent()).toContain("Settings not applied");
-      // Opening the reason blurs the edited field without resubmitting its rejected value.
-      await status.getByText("Show reason", { exact: true }).click();
+      // The reason is in view; clicking it blurs the edited field without resubmitting it.
       await status
         .getByText(
           `invalid config: models.providers.${providerId}.models.#4.name: Invalid model name`,
           { exact: true },
         )
-        .waitFor();
+        .click();
       expect(await gateway.getRequests("config.set")).toHaveLength(1);
       expect(await status.ariaSnapshot()).toContain(
         `models.providers.${providerId}.models.#4.name`,
@@ -302,7 +301,11 @@ suite.define(() => {
         );
       }
 
-      await status.getByRole("button", { name: "Discard draft and reload", exact: true }).click();
+      await status.getByRole("button", { name: "Discard changes", exact: true }).click();
+      await page
+        .getByRole("dialog")
+        .getByRole("button", { name: "Discard changes", exact: true })
+        .click();
       await status.waitFor({ state: "hidden" });
       expect(await panel.getByRole("textbox", { name: "Model name" }).nth(3).inputValue()).toBe("");
       await page.getByRole("button", { name: "Raw", exact: true }).click();

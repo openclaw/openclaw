@@ -672,6 +672,169 @@ describe("Skills discovery lifecycle", () => {
     page.querySelector<HTMLButtonElement>('[aria-label="Skill settings"]')!.click();
     expect(context.navigate).toHaveBeenCalledWith("skill-settings", { search: "?agent=research" });
   });
+  it.each([
+    {
+      outcome: "success",
+      install: () => Promise.resolve({ message: "Installed @alice/calendar" }),
+      role: "status",
+      text: "Installed @alice/calendar",
+      action: "Installed",
+      disabled: true,
+    },
+    {
+      outcome: "failure",
+      install: () => Promise.reject(new Error("ClawHub download failed")),
+      role: "alert",
+      text: "ClawHub download failed",
+      action: "Install Calendar",
+      disabled: false,
+    },
+  ])(
+    "shows the install $outcome in the open ClawHub dialog",
+    async ({ install, role, text, action, disabled }) => {
+      onTestFinished(installDialogPolyfill());
+      const admitted = deferred();
+      const request = vi.fn(async (method: string) => {
+        if (method === "skills.search") {
+          return { results: [] };
+        }
+        if (method === "skills.library.list") {
+          return { ...personalLibrary, defaultTarget: "workspace" };
+        }
+        if (method === "skills.status") {
+          return { skills: [] };
+        }
+        if (method === "skills.detail") {
+          return {
+            skill: { slug: "calendar", displayName: "Calendar", createdAt: 1, updatedAt: 2 },
+          };
+        }
+        if (method === "skills.install") {
+          await admitted.promise;
+          return install();
+        }
+        throw new Error(`Unexpected method: ${method}`);
+      });
+      const { page, publishRouteData } = mountSkills(request);
+      publishRouteData({ clawhubRef: "@alice/calendar" });
+      const actionButton = () =>
+        page.querySelector<HTMLButtonElement>(".skill-reader-dialog__actions button");
+      await waitForFast(() => expect(actionButton()?.textContent).toBe("Install Calendar"));
+
+      actionButton()!.click();
+      await waitForFast(() => expect(actionButton()?.textContent).toBe("Installing…"));
+      expect(page.querySelector(".skill-reader-dialog__notice")).toBeNull();
+
+      admitted.resolve();
+      await waitForFast(() => expect(actionButton()?.textContent).toBe(action));
+      const notice = page.querySelector(".skill-reader-dialog .skill-reader-dialog__notice");
+      expect(notice?.getAttribute("role")).toBe(role);
+      expect(notice?.textContent).toBe(text);
+      expect(actionButton()?.disabled).toBe(disabled);
+    },
+  );
+  it.each(["refresh", "route", "mine", "unchanged"] as const)(
+    "retires workspace install feedback for %s without blocking the next action",
+    async (next) => {
+      onTestFinished(installDialogPolyfill());
+      let report = {
+        workspaceDir: "/workspace",
+        managedSkillsDir: "/managed",
+        skills: [
+          createSkill({
+            name: "Calendar",
+            primaryEnv: undefined,
+            clawhub: {
+              status: "linked",
+              valid: true,
+              registry: "https://clawhub.ai",
+              ownerHandle: "alice",
+              slug: "calendar",
+              installedVersion: "1.0.0",
+              installedAt: 1,
+              originPath: "/workspace/skills/calendar/.clawhub/origin.json",
+              lockPath: "/workspace/.clawhub/lock.json",
+            },
+          }),
+        ],
+      };
+      const request = vi.fn(async (method: string) => {
+        if (method === "skills.library.list") {
+          return { ...personalLibrary, defaultTarget: "workspace" };
+        }
+        if (method === "skills.status") {
+          return report;
+        }
+        if (method === "skills.securityVerdicts") {
+          return { items: [] };
+        }
+        if (method === "skills.detail") {
+          return {
+            skill: { slug: "calendar", displayName: "Calendar", createdAt: 1, updatedAt: 2 },
+          };
+        }
+        if (method === "skills.install") {
+          return { message: "Installed @alice/calendar" };
+        }
+        throw new Error("Unexpected method: " + method);
+      });
+      const { page, publishRouteData } = mountSkills(request, "settings");
+      publishRouteData({ clawhubRef: "@alice/calendar" });
+      const action = () =>
+        page.querySelector<HTMLButtonElement>(".skill-reader-dialog__actions button");
+      await waitForFast(() => expect(action()?.textContent).toBe("Install Calendar"));
+      action()!.click();
+      await waitForFast(() => expect(action()?.textContent).toBe("Installed"));
+      expect(action()?.disabled).toBe(true);
+
+      if (next === "unchanged") {
+        publishRouteData({ clawhubRef: "@alice/calendar", report });
+        await waitForFast(() => expect(action()?.textContent).toBe("Installed"));
+        expect(action()?.disabled).toBe(true);
+        expect(page.querySelector(".skill-reader-dialog__notice")?.textContent).toContain(
+          "Installed",
+        );
+        return;
+      }
+      if (next === "mine") {
+        page.querySelector<HTMLButtonElement>('.skill-reader-dialog [aria-label="Close"]')!.click();
+        await waitForFast(() => expect(action()).toBeNull());
+        page.querySelector<HTMLInputElement>('input[type="radio"][value="mine"]')!.click();
+        // The same installed inventory must not disable a different destination.
+        publishRouteData({ clawhubRef: "@alice/calendar", report });
+      } else {
+        // Model a supported external removal through the next accepted inventory, not a CLI deletion.
+        report = { ...report, skills: [] };
+        if (next === "route") {
+          publishRouteData({ clawhubRef: "@alice/calendar", report });
+        } else {
+          [...page.querySelectorAll<HTMLButtonElement>("button")]
+            .find((button) => button.getAttribute("aria-label") === "Refresh")!
+            .click();
+        }
+      }
+      await waitForFast(() =>
+        expect(action()?.textContent).toBe(next === "mine" ? "Import skill" : "Install Calendar"),
+      );
+      expect(action()?.disabled).toBe(false);
+      expect(page.querySelector(".skill-reader-dialog__notice")).toBeNull();
+      action()!.click();
+      if (next === "mine") {
+        await waitForFast(() =>
+          expect(page.querySelector('input[name="library-import-slug"]')).not.toBeNull(),
+        );
+        expect(request.mock.calls.filter(([method]) => method === "skills.install")).toHaveLength(
+          1,
+        );
+      } else {
+        await waitForFast(() =>
+          expect(request.mock.calls.filter(([method]) => method === "skills.install")).toHaveLength(
+            2,
+          ),
+        );
+      }
+    },
+  );
   it("keeps Settings scope independent of discovery and rejects an older route snapshot", async () => {
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "skills.library.list") {

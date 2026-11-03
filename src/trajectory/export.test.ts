@@ -7,7 +7,10 @@ import type { Message } from "openclaw/plugin-sdk/llm";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { createReadTool } from "../agents/sessions/tools/read.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  listSessionEntriesReadOnly,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import {
   resolveSqliteReadScope,
   toDatabaseOptions,
@@ -182,6 +185,38 @@ afterAll(async () => {
 });
 
 describe("exportTrajectoryBundle", () => {
+  it.each(["agent:main:session-1", "session-1", " agent:main:session-1 "])(
+    "resolves legacy marker metadata without decoding saved session prompts (%s)",
+    async (sessionKey) => {
+      const { tmpDir, sessionTarget } = exportPaths();
+      const prompt = "trajectory-listing-saved-prompt".repeat(128);
+      for (const storedKey of [sessionTarget.sessionKey, "agent:main:unrelated"]) {
+        await replaceSessionEntry(
+          { ...sessionTarget, sessionKey: storedKey },
+          {
+            sessionId:
+              storedKey === sessionTarget.sessionKey ? sessionTarget.sessionId : "unrelated",
+            updatedAt: 1,
+            skillsSnapshot: { prompt, skills: [] },
+          },
+        );
+      }
+      await replaceTranscriptEvents(sessionTarget, simpleSessionEntries(tmpDir));
+      listSessionEntriesReadOnly({ ...sessionTarget, projection: "list" });
+      const parses = vi.spyOn(JSON, "parse");
+      try {
+        const bundle = await exportFrom(tmpDir, {
+          sessionFile: formatSqliteSessionFileMarker(sessionTarget),
+          sessionKey,
+        });
+        expect(eventTypes(bundle.events)).toEqual(["user.message", "assistant.message"]);
+        expect(parses.mock.calls.filter(([text]) => text.includes(prompt))).toHaveLength(0);
+      } finally {
+        parses.mockRestore();
+      }
+    },
+  );
+
   it.each([
     {
       name: "different session",

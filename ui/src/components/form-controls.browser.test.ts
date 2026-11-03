@@ -407,7 +407,7 @@ describeBrowserLayout("form controls and app chrome styles", () => {
         );
 
       const desktop = await measure();
-      expect(desktop.map((row) => row.selectWidth)).toEqual([340, 340]);
+      expect(desktop.map((row) => row.selectWidth)).toEqual([220, 220]);
       expect(desktop.every((row) => row.selectTop === row.buttonTop)).toBe(true);
 
       await page.setViewportSize({ width: 390, height: 800 });
