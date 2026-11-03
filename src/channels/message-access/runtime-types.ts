@@ -265,6 +265,7 @@ export type ChannelIngressResolverMessageParams = Omit<
   | "accessGroupMatchedAllowFromEntry"
   | "readStoreAllowFrom"
   | "useDefaultPairingStore"
+  | "throwOnStoreReadError"
   | "event"
   | "policy"
   | "command"
