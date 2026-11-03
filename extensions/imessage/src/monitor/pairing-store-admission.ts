@@ -65,6 +65,7 @@ async function isIMessagePairingStoreRequired(
       kind: "direct",
       id: normalizeIMessageHandle(sender),
     },
+    // SAFETY: open/allowlist/disabled already returned above; the remaining policy is pairing.
     dmPolicy: dmPolicy as "open" | "allowlist" | "disabled" | "pairing",
     allowFrom,
     command: false,
