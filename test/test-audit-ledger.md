@@ -158,20 +158,23 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 Pinned main d7ae066af2cb: repair the existing cross-agent denial fixture
 in `openclaw-tools.subagents.sessions-spawn.allowlist.test.ts` by configuring
 both the allowed alpha and denied beta agents. An unconfigured beta can hide
-an allowlist regression behind registry exclusion. Retain all eight physical
-declarations/nine authored cases and every assertion, including the separate
+an allowlist regression behind registry exclusion. Retain all seven physical
+declarations/eight authored cases and every assertion, including the separate
 unconfigured-target case. Production and shared test-line scalar stay unchanged.
 
 The selected spawn request, admission and target-policy owners, determining
-fixture support and causal history are source-qualified. Official untouched,
-actual owner-fault, clean-candidate and published proof remain pending. The fault
-will admit configured targets outside an explicit allowlist while preserving
-registry exclusions; exact owner/test restoration is required before clean proof.
+fixture support and causal history are source-qualified. Official untouched
+baseline and clean candidate pass all8 without skips. An actual owner fault
+admits configured targets outside an explicit allowlist while preserving registry
+exclusions: original8 pass; the candidate fails only the existing forbidden
+status assertion, with7 other passes. Temporary owner/test bytes are restored
+exactly before the clean run.
 
 No removal scan applies: every original assertion and declaration is retained.
-Focused checks, normal hooks, fresh review and exact-head CI remain pending.
-The scope is the real local spawn request/admission path with downstream runtime,
-registry and Gateway doubles; no live model, process or Gateway verdict is claimed.
+Focused checks, normal hooks, fresh review and published proof are recorded
+separately. The scope is the real local spawn request/admission path with
+downstream runtime, registry and Gateway doubles; no live model, process
+or Gateway verdict is claimed.
 
 ## Completed source review
 
