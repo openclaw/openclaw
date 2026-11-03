@@ -50,6 +50,11 @@ import {
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import { createCliRuntimeModelAuthEvaluator } from "./model-auth-availability.cli-runtime.js";
 import { createRuntimeCredentialOverlay } from "./model-auth-availability.runtime-overlay.js";
+import {
+  type AuthTarget,
+  modeAllowed,
+  normalizeModelIdForProvider,
+} from "./model-auth-availability.target.js";
 import type {
   ModelAuthAvailability,
   ModelAuthAvailabilityEvidence,
@@ -135,9 +140,6 @@ type CreateModelAuthAvailabilityResolverParams = {
   ) => ReadonlySet<string> | undefined;
 };
 
-type AuthTarget = ModelAuthAvailabilityRef & {
-  authRequirement?: ProviderModelRouteAuthRequirement;
-};
 type AuthSourceEvaluation = Pick<
   ModelAuthAvailabilityEvaluation,
   | "availability"
@@ -147,39 +149,6 @@ type AuthSourceEvaluation = Pick<
   | "unavailableReason"
   | "unavailableUntil"
 >;
-
-function modeAllowed(
-  provider: string,
-  target: AuthTarget,
-  mode: string | undefined,
-  authFlow?: string,
-): boolean {
-  const policy = resolveProviderModelAuthPolicy({
-    provider,
-    mode,
-    authFlow,
-    api: target.api ?? undefined,
-    baseUrl: typeof target.baseUrl === "string" ? target.baseUrl : undefined,
-  });
-  return (
-    policy.compatible &&
-    (!target.authRequirement || policy.authRequirement === target.authRequirement)
-  );
-}
-
-function normalizeModelIdForProvider(provider: string, modelId: string): string | undefined {
-  const trimmed = splitTrailingAuthProfile(modelId).model;
-  if (!trimmed) {
-    return undefined;
-  }
-  const slash = trimmed.indexOf("/");
-  if (slash <= 0) {
-    return trimmed;
-  }
-  return normalizeProviderIdForAuth(trimmed.slice(0, slash)) === provider
-    ? trimmed.slice(slash + 1).trim() || undefined
-    : undefined;
-}
 
 /** Builds one snapshot-scoped read-only auth evaluator. */
 export function createModelAuthAvailabilityResolver(

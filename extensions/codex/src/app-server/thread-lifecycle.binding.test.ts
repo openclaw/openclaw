@@ -54,6 +54,10 @@ import {
 } from "./shared-client.js";
 import { createClientHarness } from "./test-support.js";
 import { fingerprintEnvironmentSelection } from "./thread-fingerprints.js";
+import {
+  createNetworkProxyThreadLifecycleAppServerOptions,
+  createThreadLifecycleAppServerOptions,
+} from "./thread-lifecycle-options.test-support.js";
 import { registerThreadPolicyRefreshTests } from "./thread-lifecycle-policy-refresh.test-support.js";
 import { registerRequiredRootThreadPolicyTests } from "./thread-lifecycle-rooted.test-support.js";
 import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle-run.js";
@@ -149,56 +153,6 @@ function retainThread(
     undefined,
     binding.liveThreadConfigFingerprint,
   );
-}
-
-function createThreadLifecycleAppServerOptions(): LifecycleInput["appServer"] {
-  return {
-    start: {
-      transport: "stdio",
-      command: "codex",
-      args: ["app-server"],
-      headers: {},
-    },
-    requestTimeoutMs: 60_000,
-    approvalPolicy: "never",
-    approvalsReviewer: "user",
-    sandbox: "workspace-write",
-    codeModeOnly: false,
-    loopDetectionPreToolUseRelay: true,
-    connectionClass: "local-loopback",
-  };
-}
-
-function createNetworkProxyThreadLifecycleAppServerOptions() {
-  const configPatch = {
-    "features.network_proxy.enabled": true,
-    default_permissions: "openclaw-network",
-    permissions: {
-      "openclaw-network": {
-        filesystem: {
-          ":minimal": "read",
-          ":project_roots": {
-            ".": "write",
-          },
-        },
-        network: {
-          enabled: true,
-          domains: {
-            "api.openai.com": "allow",
-          },
-          proxy_url: "http://127.0.0.1:3128",
-        },
-      },
-    },
-  };
-  return {
-    ...createThreadLifecycleAppServerOptions(),
-    networkProxy: {
-      profileName: "openclaw-network",
-      configFingerprint: "test-network-proxy",
-      configPatch,
-    },
-  };
 }
 
 function createPaths() {

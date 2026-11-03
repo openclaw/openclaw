@@ -46,6 +46,7 @@ import {
   codexDynamicToolsFingerprint,
   codexLegacyDynamicToolsFingerprint,
 } from "./thread-fingerprints.js";
+import { createThreadLifecycleAppServerOptions } from "./thread-lifecycle-options.test-support.js";
 import {
   createLeasedCodexLifecycleHarness,
   createThreadRequestAppServerOptions as createAppServerOptions,
@@ -378,26 +379,6 @@ function createThreadLifecycleParams(
     authProfileStore: { version: 1, profiles: {} },
     modelRegistry: {} as never,
   } as EmbeddedRunAttemptParams;
-}
-
-function createThreadLifecycleAppServerOptions(): Parameters<
-  typeof startOrResumeThread
->[0]["appServer"] {
-  return {
-    start: {
-      transport: "stdio",
-      command: "codex",
-      args: ["app-server"],
-      headers: {},
-    },
-    codeModeOnly: false,
-    loopDetectionPreToolUseRelay: true,
-    requestTimeoutMs: 60_000,
-    approvalPolicy: "never",
-    approvalsReviewer: "user",
-    sandbox: "workspace-write",
-    connectionClass: "local-loopback",
-  };
 }
 
 function createProvisionalPluginThreadConfigProvider(appId: string) {
