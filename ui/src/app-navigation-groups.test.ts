@@ -9,7 +9,7 @@ import {
 import type { NativeDeviceSettingsCapability as Device } from "./app/native-device-settings.ts";
 import { getStaticCommandPaletteCatalogItems } from "./components/command-palette-catalog-search.ts";
 import {
-  settingsBackTarget,
+  settingsParentTarget,
   settingsNavigationOwnerRoute,
   settingsParentRoute,
 } from "./lib/settings-navigation.ts";
@@ -141,25 +141,25 @@ it("sends the phone Back one level up from settings subpages", () => {
     search,
     hash: "",
   });
-  expect(settingsBackTarget("appearance", at("/settings/appearance"))).toBeNull();
-  expect(settingsBackTarget("plugin-settings", at("/settings/plugins"))).toBeNull();
-  expect(settingsBackTarget("ai-agents", at("/settings/ai-agents"))).toEqual(
+  expect(settingsParentTarget("appearance", at("/settings/appearance"))).toBeNull();
+  expect(settingsParentTarget("plugin-settings", at("/settings/plugins"))).toBeNull();
+  expect(settingsParentTarget("ai-agents", at("/settings/ai-agents"))).toEqual(
     target("agents", "/settings/agents"),
   );
-  expect(settingsBackTarget("lobsterdex", at("/ui/settings/lobsterdex"), "/ui")).toEqual(
+  expect(settingsParentTarget("lobsterdex", at("/ui/settings/lobsterdex"), "/ui")).toEqual(
     target("appearance", "/ui/settings/appearance"),
   );
-  expect(settingsBackTarget("plugin-settings", at("/settings/plugins/fixture"))).toEqual(
+  expect(settingsParentTarget("plugin-settings", at("/settings/plugins/fixture"))).toEqual(
     target("plugin-settings", "/settings/plugins"),
   );
   expect(
-    settingsBackTarget(
+    settingsParentTarget(
       "plugin-settings",
       at("/settings/plugins/fixture", "?view=settings&from=plugins"),
     ),
   ).toEqual(target("plugin-settings", "/settings/plugins/fixture", "?from=plugins"));
   expect(
-    settingsBackTarget("plugin-settings", at("/settings/plugins/fixture", "?from=plugins")),
+    settingsParentTarget("plugin-settings", at("/settings/plugins/fixture", "?from=plugins")),
   ).toEqual(target("plugins", "/plugins"));
 });
 

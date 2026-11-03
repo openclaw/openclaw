@@ -42,6 +42,33 @@ suite.define(() => {
     });
   });
 
+  it.each([390, 1440])("keeps Escape on the same plugin parent as Back at %ipx", async (width) => {
+    await suite.withPage({ viewport: { width, height: 900 } }, async ({ page }) => {
+      await installMockGateway(page, {
+        operatorScopes: ["operator.read", "operator.admin"],
+        methodResponses: pluginResponses(),
+      });
+      await page.goto(`${suite.server.baseUrl}settings/plugins`);
+      const search = page.getByRole("searchbox", { name: "Search installed plugins", exact: true });
+      await search.fill("Workboard");
+      await page.locator('a[href="/settings/plugins/workboard"]').click();
+      await page
+        .locator(".plugin-catalog-detail__actions")
+        .getByRole("link", { name: "Settings", exact: true })
+        .click();
+      await page.locator(".plugin-editor").waitFor();
+      await page.keyboard.press("Escape");
+      await expect
+        .poll(() => new URL(page.url()).pathname + new URL(page.url()).search)
+        .toBe("/settings/plugins/workboard");
+      await page.getByRole("heading", { level: 1, name: "Workboard", exact: true }).waitFor();
+      await page.keyboard.press("Escape");
+      await search.waitFor();
+      expect(await search.inputValue()).toBe("Workboard");
+      expect(await page.locator("article[data-plugin-id]").count()).toBe(1);
+    });
+  });
+
   it("keeps the desktop chrome unchanged", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       await installMockGateway(page, { operatorScopes: ["operator.read", "operator.admin"] });

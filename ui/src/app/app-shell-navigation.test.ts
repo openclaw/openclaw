@@ -10,6 +10,37 @@ import { ShellNavigationOwner, type ShellNavigationHost } from "./app-shell-navi
 import { createBrowserHistory } from "./browser.ts";
 import type { ApplicationContext } from "./context.ts";
 
+it.each([
+  ["?view=settings&from=plugins", "/settings/plugins/workboard", "?from=plugins"],
+  ["?from=plugins", "/plugins", ""],
+])("preserves the location-aware settings parent for %s", (search, pathname, parentSearch) => {
+  const shell = new ShellNavigationOwner({
+    context: null,
+    routeState: {
+      routeId: "plugin-settings",
+      location: { pathname: "/settings/plugins/workboard", search, hash: "" },
+    },
+    activeSessionKey: "",
+    lastWorkspaceLocation: null,
+    custodianMinimizeRequestId: 0,
+    pendingSettingsAgentId: null,
+    settingsAgentReturnLocation: null,
+    settingsAgentReturnRoute: null,
+    settingsAgentSelectionOverride: false,
+    settingsAgentOverrideAwaitingRouteRestore: false,
+    settingsSearchQuery: "",
+    closeNavDrawer: vi.fn(),
+    ensureAgentsList: vi.fn(),
+  });
+  const navigate = vi.spyOn(shell, "navigate").mockImplementation(() => {});
+  shell.leaveSettingsLevel();
+  expect(navigate).toHaveBeenCalledWith(pathname === "/plugins" ? "plugins" : "plugin-settings", {
+    pathname,
+    search: parentSearch,
+    hash: "",
+  });
+});
+
 it.each(["palette", "/settings/general", "/config"])(
   "round-trips %s to workspace",
   async (entry) => {

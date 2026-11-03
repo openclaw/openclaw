@@ -10,7 +10,7 @@ import type { SettingsSidebarFallbackProps } from "../components/settings-sideba
 import { resolveGatewayStatus } from "../lib/gateway-status.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
-import { settingsBackTarget } from "../lib/settings-navigation.ts";
+import { settingsParentTarget } from "../lib/settings-navigation.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.tsx";
 import { isTemplatesAvailable } from "../pages/templates/availability.ts";
@@ -163,7 +163,7 @@ export function readShellView(host: ShellViewHost) {
     });
   const backTarget =
     floatingHeader && settingsTakeover
-      ? settingsBackTarget(activeRoute, host.routeState.location, context.basePath)
+      ? settingsParentTarget(activeRoute, host.routeState.location, context.basePath)
       : null;
   const floatingBack = backTarget
     ? () => {
