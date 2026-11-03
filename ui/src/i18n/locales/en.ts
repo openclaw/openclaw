@@ -967,8 +967,11 @@ const startupEnglish = {
     title: "Terminal",
     toggle: "Toggle terminal",
     open: "Open terminal",
-    startCancelled: "Terminal start was cancelled. Try again.",
-    unavailable: "The terminal is not available on this gateway.",
+    startCancelled: "Couldn’t start the terminal. Try again.",
+    unavailable: "The terminal is unavailable.",
+    deliveryFailed:
+      "Couldn’t confirm input delivery. Check the terminal before reconnecting and trying again.",
+    inputPaused: "Couldn’t send input while disconnected. Reconnect to try again.",
   },
   browser: {
     nativeTab: {},

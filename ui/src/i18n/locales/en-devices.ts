@@ -50,7 +50,7 @@ const enDevices = {
       approvedAccessLabel: "Approved access",
       desktopOpenWindow: "Open this desktop in a new window",
       desktopEnableHint:
-        "Desktop sharing starts enabled on desktop nodes. In the desktop app on that node, check the Desktop sharing switch under Settings. Approve any pending desktop capability request here, and check that Gateway policy does not deny desktop.stream. The node needs Screen Sharing or an authenticated local VNC server.",
+        "Desktop sharing starts enabled on desktop devices. In the desktop app on the device, check the Desktop sharing switch under Settings. Approve any pending desktop access request here, and ask an admin to check the desktop policy. The device needs Screen Sharing or an authenticated local VNC server.",
       uptime: "up {time}",
       loadFact: "Load",
       memoryFact: "Memory",
