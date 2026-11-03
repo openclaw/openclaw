@@ -117,11 +117,14 @@ async function withRecipient(
   });
 }
 
-/** The real producer; `afterWrite` runs once the durable row exists, before the event is queued. */
+/**
+ * The real producer; `afterWrite` runs once the durable row exists, before the event is queued.
+ * `ambient` omits the state dir, as the announce producer does.
+ */
 async function produce(
   scope: Scope,
   authority: SessionRecipientAuthority,
-  afterWrite?: () => unknown,
+  { afterWrite, ambient }: { afterWrite?: () => unknown; ambient?: boolean } = {},
 ) {
   const written: string[] = [];
   const outcome = await enqueueContinuationReturnDeliveries(
@@ -132,7 +135,7 @@ async function produce(
       recipientAuthorities: new Map([[scope.sessionKey, authority]]),
       wakeRecipients: true,
       ownerAgentId: "main",
-      stateDir: scope.env.OPENCLAW_STATE_DIR,
+      ...(ambient ? {} : { stateDir: scope.env.OPENCLAW_STATE_DIR }),
     },
     {
       enqueueSessionDelivery: async (...args) => {
@@ -209,7 +212,9 @@ describe("a continuation return whose recipient authority advanced", () => {
         if (beforeWrite) {
           await advance();
         }
-        const produced = await produce(scope, authority, beforeWrite ? undefined : advance);
+        const produced = await produce(scope, authority, {
+          afterWrite: beforeWrite ? undefined : advance,
+        });
         id = produced.id;
         expect(produced.outcome).toMatchObject({
           deliveryIds: [],
@@ -269,27 +274,35 @@ describe("a continuation return whose recipient authority advanced", () => {
     },
   );
 
-  it("stays adopted when it changes after a turn adopted it and the sweep re-drives its row", async () => {
-    await withRecipient(async (scope, authority) => {
-      const { id } = await produce(scope, authority);
-      const queueContext = captureContinuationQueueContext(scope.env.OPENCLAW_STATE_DIR);
-      const afterAdoption = async () => {
-        await transitions["owner change"]!(scope);
-        // The in-process sweep keeps live adoption claims; only startup recovery drops them.
-        await drainPendingSessionDelivery({
-          id: id!,
-          queueContext,
-          bypassBackoff: true,
-          logLabel: "sweep",
-          log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-          deliver: (entry, context) =>
-            deliverQueuedSessionDelivery({ deps: {}, entry, ...context }),
-        });
-      };
+  it.each(["an explicit state dir", "the ambient state dir, written non-canonically"])(
+    "stays adopted when it changes after a turn adopted it and the sweep re-drives its row, with %s",
+    async (stateDirForm) => {
+      await withRecipient(async (scope, authority) => {
+        const ambient = stateDirForm !== "an explicit state dir";
+        if (ambient) {
+          // The same directory as the queue's resolved one, spelled differently.
+          vi.stubEnv("OPENCLAW_STATE_DIR", `${scope.env.OPENCLAW_STATE_DIR}/`);
+        }
+        const { id } = await produce(scope, authority, { ambient });
+        const queueContext = captureContinuationQueueContext(scope.env.OPENCLAW_STATE_DIR);
+        const afterAdoption = async () => {
+          await transitions["owner change"]!(scope);
+          // The in-process sweep keeps live adoption claims; only startup recovery drops them.
+          await drainPendingSessionDelivery({
+            id: id!,
+            queueContext,
+            bypassBackoff: true,
+            logLabel: "sweep",
+            log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+            deliver: (entry, context) =>
+              deliverQueuedSessionDelivery({ deps: {}, entry, ...context }),
+          });
+        };
 
-      expect(await nextTurn(scope, { afterAdoption })).toContain("delegate result");
-      expect(await receiptStatus(scope, id!)).toBe("completed");
-      expect(refusalLines()).toEqual([]);
-    });
-  });
+        expect(await nextTurn(scope, { afterAdoption })).toContain("delegate result");
+        expect(await receiptStatus(scope, id!)).toBe("completed");
+        expect(refusalLines()).toEqual([]);
+      });
+    },
+  );
 });

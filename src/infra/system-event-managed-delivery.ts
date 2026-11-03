@@ -3,6 +3,7 @@
 // authority it was produced for. system-events.ts owns the queue and calls these at enqueue,
 // consume and restore; only restore rewrites the queue entry it is handed.
 import type { SessionRecipientAuthority } from "../config/sessions/session-recipient-authority-types.js";
+import { resolveStateDir } from "../config/state-dir.js";
 import { normalizeDiagnosticTraceparent } from "./diagnostic-trace-context.js";
 import {
   isDeliveryAdoptionClaimed,
@@ -69,9 +70,14 @@ export function resolveSessionDeliveryAckStateDir(
   if (!options.sessionDeliveryAckId) {
     return undefined;
   }
-  // Explicit and ambient paths can name the same durable row across restart.
-  // Normalize before dedupe so concurrent recovery cannot create two prompt slots.
-  return options.sessionDeliveryAckStateDir ?? process.env.OPENCLAW_STATE_DIR;
+  // Explicit and ambient paths can name the same durable row across restart. Normalize to the
+  // state dir the queue's worker context resolves, so a stored event, its adoption claim and a
+  // replay's lookup share one key: one prompt slot, and replay sees a turn adopting the row.
+  return resolveStateDir(
+    options.sessionDeliveryAckStateDir
+      ? { ...process.env, OPENCLAW_STATE_DIR: options.sessionDeliveryAckStateDir }
+      : process.env,
+  );
 }
 
 /** Managed fields of a new event. A keyed replacement never defers its ack to turn adoption. */

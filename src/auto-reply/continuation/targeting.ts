@@ -15,6 +15,7 @@ import {
   hasQueuedSystemEventDelivery,
   removeSystemEvents,
 } from "../../infra/system-event-managed-delivery-queue.js";
+import { resolveSessionDeliveryAckStateDir } from "../../infra/system-event-managed-delivery.js";
 import { enqueueSystemEventRaw as enqueueSystemEvent } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
@@ -304,6 +305,11 @@ export async function enqueueContinuationReturnDeliveries(
       payload,
       captureContinuationQueueContext(params.stateDir),
     );
+    // The row's identity on its queued copy, normalized as claims and replay key it.
+    const ackStateDir = resolveSessionDeliveryAckStateDir({
+      sessionDeliveryAckId: deliveryId,
+      sessionDeliveryAckStateDir: params.stateDir,
+    });
     const enqueued = await withAuthority((current) => {
       if (!current) {
         return { kind: "stale" as const };
@@ -319,7 +325,7 @@ export async function enqueueContinuationReturnDeliveries(
         ...(params.deliveryContext ? { deliveryContext: params.deliveryContext } : {}),
         ...(params.traceparent ? { traceparent: params.traceparent } : {}),
         sessionDeliveryAckId: deliveryId,
-        ...(params.stateDir ? { sessionDeliveryAckStateDir: params.stateDir } : {}),
+        ...(ackStateDir ? { sessionDeliveryAckStateDir: ackStateDir } : {}),
         ...(recipientAuthority ? { recipientAuthority } : {}),
         sessionDeliveryAwaitsTurnAdoption: true,
       };
@@ -355,7 +361,7 @@ export async function enqueueContinuationReturnDeliveries(
           sessionKey,
           (event) =>
             event.sessionDeliveryAckId === deliveryId &&
-            event.sessionDeliveryAckStateDir === params.stateDir,
+            event.sessionDeliveryAckStateDir === ackStateDir,
         );
       }
       return current;
