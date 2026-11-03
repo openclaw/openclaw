@@ -35,6 +35,17 @@ export function ChatModelProviderIcon(props: { provider: string }) {
   return <ProviderBrandIcon provider={props.provider} class="chat-controls__provider-icon" />;
 }
 
+export function ChatModelTargetIcon() {
+  return (
+    <span
+      class="chat-controls__provider-icon provider-brand-icon provider-brand-icon--fallback"
+      aria-hidden="true"
+    >
+      ›
+    </span>
+  );
+}
+
 type ModelPresentationProps = Omit<ChatModelPickerOptionProps, "onSelect" | "index">;
 
 function optionNeedsAuth(entry: ModelPresentationProps["entry"]) {
@@ -258,7 +269,7 @@ export function ChatModelPickerTargetOption(props: ChatModelPickerTargetOptionPr
         class="chat-controls__model-option-provider chat-controls__target-icon"
         aria-hidden="true"
       >
-        <Icon name="terminal" />
+        <ChatModelTargetIcon />
       </span>
       <span class="chat-controls__model-option-copy">
         <span class="chat-controls__model-option-title">

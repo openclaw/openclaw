@@ -4,7 +4,7 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { createMediaQuery } from "../../../lib/reactive/platform.ts";
 import { createTabList } from "../../../lib/tabs.ts";
-import { ChatModelProviderIcon } from "./chat-model-picker-options.tsx";
+import { ChatModelProviderIcon, ChatModelTargetIcon } from "./chat-model-picker-options.tsx";
 import { loadModelProviderOrder, saveModelProviderOrder } from "./model-provider-order.ts";
 
 export function ChatModelProviderRail(props: {
@@ -149,7 +149,7 @@ export function ChatModelProviderRail(props: {
               {item().draggable ? (
                 <ChatModelProviderIcon provider={item().id} />
               ) : (
-                <span aria-hidden="true">›</span>
+                <ChatModelTargetIcon />
               )}
             </button>
           )}

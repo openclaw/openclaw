@@ -2796,6 +2796,11 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   display: inline-flex;
 }
 
+.chat-controls__model-option-provider.chat-controls__target-icon {
+  display: inline-flex;
+  visibility: visible;
+}
+
 .chat-controls__model-option-action {
   display: inline-flex;
   align-items: center;
@@ -4519,6 +4524,11 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   .chat-controls__model-option-action kbd {
     display: none;
   }
+}
+
+.chat-controls__model-menu .chat-controls__provider-settings svg {
+  width: 14px;
+  height: 14px;
 }
 
 .chat-controls__model-virtual-row[data-chat-model-heading] {
