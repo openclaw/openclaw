@@ -251,13 +251,24 @@ function formatConsoleMetaValue(value: unknown): string | undefined {
     return undefined;
   }
   if (typeof value === "string") {
-    return /\s|=/.test(value) || value.length === 0 ? JSON.stringify(value) : value;
+    return /[\s=\p{Cc}]/u.test(value) || value.length === 0
+      ? stringifyConsoleMetaValue(value)
+      : value;
   }
   if (value === null || typeof value === "number" || typeof value === "boolean") {
     return String(value);
   }
   // Redaction returned parsed JSON, so anything left is a plain array or object.
-  return JSON.stringify(value);
+  return stringifyConsoleMetaValue(value);
+}
+
+// JSON escapes C0 controls but not DEL/C1; escape those too so field values,
+// often peer-supplied, cannot drive the terminal.
+function stringifyConsoleMetaValue(value: unknown): string {
+  return JSON.stringify(value).replace(
+    /[\u007f-\u009f]/gu,
+    (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
 }
 
 /** Preserve native error diagnostics before any sink reduces non-enumerable fields to `{}`. */
