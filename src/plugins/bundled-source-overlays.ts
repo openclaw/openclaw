@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { decodeMountInfoPath } from "@openclaw/normalization-core/mountinfo-path";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { buildLegacyBundledRootPath } from "./bundled-load-path-aliases.js";
 import {
   pluginCacheExistsSync,
@@ -112,4 +113,26 @@ export function listBundledSourceOverlayDirs(params: {
     overlayDirs.push(sourceDir);
   }
   return overlayDirs.toSorted((left, right) => left.localeCompare(right));
+}
+
+// Vitest-only: bundled plugins whose checkout source runs instead of their built artifact.
+// A Gateway prefers built bundled artifacts, which import the built host; a test's in-process
+// Gateway runs from source, so a plugin that needs that Gateway's bindings must run from source
+// too. Test helpers add plugin directory names here; outside Vitest the set is never read.
+const vitestSourcePreferredBundledPlugins = resolveGlobalSingleton(
+  Symbol.for("openclaw.vitestSourcePreferredBundledPlugins"),
+  () => new Set<string>(),
+);
+
+/** Vitest-only: run these bundled plugins (by directory name) from checkout source. */
+export function preferBundledPluginSourceForVitest(pluginDirNames: readonly string[]): void {
+  for (const name of pluginDirNames) {
+    vitestSourcePreferredBundledPlugins.add(name);
+  }
+}
+
+export function isVitestSourcePreferredBundledPlugin(rootDir: string): boolean {
+  return (
+    Boolean(process.env.VITEST) && vitestSourcePreferredBundledPlugins.has(path.basename(rootDir))
+  );
 }

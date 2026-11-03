@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import {
   assertStableProviderPrefix,
   snapshotProviderPrefix,
@@ -13,7 +13,8 @@ import {
 } from "../../test/helpers/openai-responses-sse.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { setTestEnvValue } from "../test-utils/env.js";
+import { shareCoreWithWorkshopPluginForTest } from "../skills/test-support/workshop-plugin.test-support.js";
+import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { isRecord } from "../utils.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -43,7 +44,6 @@ const OTHER_PLUGIN_ID = "skill-authoring-other";
 // Declares no agentSkillsDir, so it has no skills root to author.
 const NOROOT_PLUGIN_ID = "skill-authoring-noroot";
 const NOROOT_TOOL = "noroot_skill_write";
-const WORKSHOP_ROOT_PLUGIN_ID = "workshop-root-fixture";
 const SKILL_NAME = "proof-learned";
 const REVOKED_SKILL = "proof-revoked";
 const SKILL_DESCRIPTION = "PROOF_SKILL_DESCRIPTION use when proving plugin skill authoring";
@@ -227,6 +227,9 @@ function skillRefreshShape(
   };
 }
 
+// The Gateway loads the bundled skill-workshop plugin; it must share this test's core.
+beforeAll(shareCoreWithWorkshopPluginForTest);
+
 it(
   "lets a loaded plugin author a skill that the next turn discovers, refusing an escape and a revoked write",
   { timeout: 120_000 },
@@ -263,13 +266,10 @@ it(
       { agentSkillsDir: "other-skills" },
       `export default { id: ${JSON.stringify(OTHER_PLUGIN_ID)}, register() {} };\n`,
     );
-    // Bundled plugins are off in this harness; this fixture contributes the bundled Skill
-    // Workshop manifest's `workshop-skills` folder so core Workshop skills load as in production.
-    await writePlugin(
-      WORKSHOP_ROOT_PLUGIN_ID,
-      { agentSkillsDir: "workshop-skills" },
-      `export default { id: ${JSON.stringify(WORKSHOP_ROOT_PLUGIN_ID)}, register() {} };\n`,
-    );
+    // The bundled skill-workshop plugin owns skill_workshop and its `workshop-skills` folder;
+    // this harness turns bundled plugins off, so enable just the checkout's bundled tree.
+    deleteTestEnvValue("OPENCLAW_DISABLE_BUNDLED_PLUGINS");
+    setTestEnvValue("OPENCLAW_BUNDLED_PLUGINS_DIR", path.resolve("extensions"));
     await writePlugin(
       NOROOT_PLUGIN_ID,
       { contracts: { tools: [NOROOT_TOOL] } },
@@ -377,7 +377,7 @@ it(
           },
           entries: { main: {} },
         },
-        plugins: { allow: [PLUGIN_ID, OTHER_PLUGIN_ID, NOROOT_PLUGIN_ID, WORKSHOP_ROOT_PLUGIN_ID] },
+        plugins: { allow: [PLUGIN_ID, OTHER_PLUGIN_ID, NOROOT_PLUGIN_ID, "skill-workshop"] },
         tools: {
           profile: "full",
           alsoAllow: [TOOL, NOROOT_TOOL, "skill_workshop"],
@@ -525,7 +525,8 @@ it(
         await expect(
           fs.stat(path.join(agentDir, "proof-skills", REVOKED_SKILL)),
         ).rejects.toMatchObject({ code: "ENOENT" });
-        // Core Workshop keeps its own source; the revoked write added no event.
+        // Workshop is a plugin author too (accepted cutover change); the revoked write added no
+        // event.
         const allEvents = (await fs.readFile(eventsFile, "utf8"))
           .trim()
           .split("\n")
@@ -533,7 +534,7 @@ it(
         expect(allEvents.map(({ name, source, pluginId }) => ({ name, source, pluginId }))).toEqual(
           [
             { name: SKILL_NAME, source: "plugin", pluginId: PLUGIN_ID },
-            { name: WORKSHOP_SKILL, source: "workshop", pluginId: undefined },
+            { name: WORKSHOP_SKILL, source: "plugin", pluginId: "skill-workshop" },
           ],
         );
       } finally {

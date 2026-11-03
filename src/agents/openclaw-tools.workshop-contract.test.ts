@@ -53,7 +53,7 @@ beforeEach(async () => {
   };
   await state.writeConfig(config);
   setRuntimeConfigSnapshot(config);
-  resetWorkshopPlugin = activateWorkshopPluginForTest(config).reset;
+  resetWorkshopPlugin = (await activateWorkshopPluginForTest(config)).reset;
   root = path.join(state.agentDir(), "workshop-skills");
 });
 afterEach(async () => {

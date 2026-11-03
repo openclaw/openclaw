@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import type { ServerResponse } from "node:http";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { resolveAgentSkillsRoot } from "../skills/loading/skill-paths.js";
+import { shareCoreWithWorkshopPluginForTest } from "../skills/test-support/workshop-plugin.test-support.js";
 import { createExperienceReviewCandidate } from "../skills/test-support/workshop-review-candidate.test-support.js";
 import { listWorkshopChanges } from "../skills/workshop-changes/changes.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -77,6 +78,9 @@ async function runLoadedWorkshopReview(candidate: {
     }),
   );
 }
+
+// The Gateway loads the bundled skill-workshop plugin; it must share this test's core.
+beforeAll(shareCoreWithWorkshopPluginForTest);
 
 describe("Gateway automatic Workshop learning", () => {
   it(

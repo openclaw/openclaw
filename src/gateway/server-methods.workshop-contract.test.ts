@@ -10,6 +10,7 @@ import {
 } from "../plugins/runtime.js";
 import { closeSkillsWatchers } from "../skills/runtime/refresh.js";
 import { workshopPluginConfig } from "../skills/test-support/workshop-config.test-support.js";
+import { shareCoreWithWorkshopPluginForTest } from "../skills/test-support/workshop-plugin.test-support.js";
 import { historicalWorkshopChangesSchema } from "../skills/test-support/workshop-schema.test-support.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
@@ -75,6 +76,7 @@ beforeEach(async () => {
   };
   await state.writeConfig(config);
   // The skills.workshop.* methods belong to the bundled skill-workshop plugin.
+  await shareCoreWithWorkshopPluginForTest();
   registry = loadOpenClawPlugins({ config, cache: false, activate: true });
   root = path.join(state.agentDir("ops"), "workshop-skills");
   await fs.mkdir(path.join(root, "deploy-notes"), { recursive: true });

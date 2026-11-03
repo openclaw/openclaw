@@ -38,7 +38,7 @@ let resetPlugins: (() => void) | undefined;
 beforeEach(async () => {
   state = await createOpenClawTestState({ layout: "home" });
   // The skill-workshop plugin contributes Workshop's /learn guidance and subcommands.
-  ({ registry, reset: resetPlugins } = activateWorkshopPluginForTest());
+  ({ registry, reset: resetPlugins } = await activateWorkshopPluginForTest());
 });
 
 afterEach(async () => {

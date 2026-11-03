@@ -4,8 +4,8 @@ import { buildAgentSystemPrompt } from "./system-prompt.js";
 
 // The skill-workshop plugin registers the Workshop section as its tool's prompt guidance.
 let resetPlugins: (() => void) | undefined;
-beforeAll(() => {
-  resetPlugins = activateWorkshopPluginForTest().reset;
+beforeAll(async () => {
+  resetPlugins = (await activateWorkshopPluginForTest()).reset;
 });
 afterAll(() => resetPlugins?.());
 

@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
+import { shareVitestModuleGraphWithBundledPlugin } from "../../plugins/test-helpers/vitest-plugin-host-graph.js";
 
 /** The config with the bundled skill-workshop plugin enabled; Vitest runs with plugins off. */
 export function withWorkshopPlugin(config: OpenClawConfig = {}): OpenClawConfig {
@@ -16,15 +17,21 @@ export function withWorkshopPlugin(config: OpenClawConfig = {}): OpenClawConfig 
   };
 }
 
+/** Gives the skill-workshop plugin the real loader loads this test's core module graph. */
+export async function shareCoreWithWorkshopPluginForTest(): Promise<void> {
+  await shareVitestModuleGraphWithBundledPlugin("skill-workshop");
+}
+
 /**
  * Loads and activates the bundled skill-workshop plugin through the real loader, so its tool,
  * prompt guidance, hooks, /learn contribution, CLI and Gateway methods serve the test like a
  * Gateway's startup load does. Call the returned reset in afterEach/afterAll.
  */
-export function activateWorkshopPluginForTest(config: OpenClawConfig = {}): {
+export async function activateWorkshopPluginForTest(config: OpenClawConfig = {}): Promise<{
   registry: PluginRegistry;
   reset: () => void;
-} {
+}> {
+  await shareCoreWithWorkshopPluginForTest();
   const registry = loadOpenClawPlugins({
     config: withWorkshopPlugin(config),
     onlyPluginIds: ["skill-workshop"],
