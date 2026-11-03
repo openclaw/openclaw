@@ -425,8 +425,75 @@ describe("SessionParticipationTracker", () => {
 });
 
 describe("failed run recovery actions", () => {
+  const emptyComposer = () => ({
+    chatMessages: [],
+    chatMessage: "",
+    chatAttachments: [],
+    chatMentions: [],
+    chatReplyTarget: null,
+    chatGoalDraftMode: null,
+  });
+  it("rewinds only the current failed input and never submits an unchanged retry", async () => {
+    const state: Parameters<typeof createChatPaneRunRecoveryActions>[0] = {
+      ...emptyComposer(),
+      sessionKey: "session-a",
+      connected: true,
+      chatRunId: null,
+      chatSending: false,
+      handleSendChat: vi.fn(),
+      chatMessages: [
+        { role: "user", content: [], __openclaw: { id: "user-a", seq: 1, runId: "run-a" } },
+      ],
+    };
+    const rewind = vi.fn(async () => true);
+    const actions = createChatPaneRunRecoveryActions(state, {
+      canSend: true,
+      isCurrent: () => true,
+      latestFailedRunId: () => "run-a",
+      onRewindMessage: rewind,
+    });
+    expect(await actions.onEditRun?.("old-run")).toBe(false);
+    expect(await actions.onEditRun?.("run-a")).toBe(true);
+    expect(rewind).toHaveBeenCalledExactlyOnceWith("user-a");
+    expect(state.handleSendChat).not.toHaveBeenCalled();
+    state.chatMessages.push({ role: "user", __openclaw: { id: "user-b", seq: 2, runId: "run-b" } });
+    expect(await actions.onEditRun?.("run-a")).toBe(false);
+    expect(rewind).toHaveBeenCalledOnce();
+  });
+
+  it("preserves a pre-existing or newly typed draft without mutating history", async () => {
+    const state: Parameters<typeof createChatPaneRunRecoveryActions>[0] = {
+      ...emptyComposer(),
+      sessionKey: "session-a",
+      connected: true,
+      chatRunId: null,
+      chatSending: false,
+      handleSendChat: vi.fn(),
+      chatMessages: [
+        { role: "user", content: [], __openclaw: { id: "user-a", seq: 1, runId: "run-a" } },
+      ],
+    };
+    const rewind = vi.fn(async () => true);
+    const options = {
+      canSend: true,
+      isCurrent: () => true,
+      latestFailedRunId: () => "run-a",
+      onRewindMessage: rewind,
+    };
+    const actions = createChatPaneRunRecoveryActions(state, options);
+    state.chatMessage = "Keep this unsent draft";
+    state.chatAttachments = [
+      { id: "draft-image", mimeType: "image/png", dataUrl: "data:image/png;base64,YQ==" },
+    ];
+    expect(createChatPaneRunRecoveryActions(state, options).editRunDisabledReason).toBeTruthy();
+    expect(await actions.onEditRun?.("run-a")).toBe(false);
+    expect(state.chatMessage).toBe("Keep this unsent draft");
+    expect(state.chatAttachments.map((image) => image.id)).toEqual(["draft-image"]);
+    expect(rewind).not.toHaveBeenCalled();
+  });
   it("continues once from the current failed run without replaying the original prompt", () => {
     const state = {
+      ...emptyComposer(),
       sessionKey: "session-a",
       connected: true,
       chatRunId: null as string | null,
@@ -453,6 +520,7 @@ describe("failed run recovery actions", () => {
   });
   it("does not expose actions without their capabilities", () => {
     const state = {
+      ...emptyComposer(),
       sessionKey: "session-a",
       connected: true,
       chatRunId: null,

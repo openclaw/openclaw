@@ -6,6 +6,7 @@ import { Popover, type PopoverHandle } from "../../../components/solid/popover.t
 import { t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { createScrollStateRef } from "../../../lib/reactive/scroll-state.ts";
+import { openChatRewindConfirmation } from "./chat-message-confirmation-view.tsx";
 
 let nextPanelId = 0;
 
@@ -24,6 +25,8 @@ export function ChatRunFailureNotice(props: {
   summary: string;
   repeatCount?: number;
   onRetry?: () => void;
+  onEdit?: () => Promise<void>;
+  editDisabledReason?: string;
 }) {
   const panelId = `chat-run-failure-${++nextPanelId}`;
   const [line, setLine] = createSignal<HTMLElement>();
@@ -133,6 +136,27 @@ export function ChatRunFailureNotice(props: {
             </span>
           </div>
         </Popover>
+        <Show when={props.onEdit}>
+          <span class="chat-confirm-wrap">
+            <openclaw-tooltip
+              prop:content={props.editDisabledReason ?? t("chat.recovery.editMessage")}
+            >
+              <button
+                type="button"
+                class="btn btn--sm"
+                disabled={Boolean(props.editDisabledReason)}
+                onClick={(event) =>
+                  openChatRewindConfirmation(event.currentTarget, () => {
+                    void props.onEdit?.();
+                  })
+                }
+              >
+                <Icon name="pencil" />
+                {t("chat.recovery.editMessage")}
+              </button>
+            </openclaw-tooltip>
+          </span>
+        </Show>
         <Show when={props.onRetry}>
           <button
             type="button"

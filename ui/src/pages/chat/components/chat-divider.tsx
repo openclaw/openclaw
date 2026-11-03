@@ -25,7 +25,14 @@ export type ChatNoticeProps = {
   modelCatalog?: ModelCatalogEntry[];
   recovery?: Pick<
     ChatThreadProps,
-    "failureActionsRunId" | "runActive" | "runWorking" | "onRetryRun" | "onDismissPendingInput"
+    | "failureActionsRunId"
+    | "runActive"
+    | "runWorking"
+    | "onRetryRun"
+    | "onEditRun"
+    | "editRunDisabledReason"
+    | "onFocusComposer"
+    | "onDismissPendingInput"
   >;
 };
 

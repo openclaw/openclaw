@@ -155,6 +155,8 @@ export type ChatThreadProps = Omit<
     startupLabel?: string;
     retryAt?: number;
     onRetryRun?: (runId: string) => void;
+    onEditRun?: (runId: string) => Promise<boolean>;
+    editRunDisabledReason?: string;
     failureActionsRunId?: string;
     onDismissPendingInput?: (inputId: string) => void;
     waitingApproval?: boolean;
