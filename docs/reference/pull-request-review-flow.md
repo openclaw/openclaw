@@ -94,8 +94,8 @@ not need to add labels themselves.
 ## ClawSweeper
 
 ClawSweeper is the AI-assisted review and maintenance bot for OpenClaw
-repositories. It can review PRs, evaluate proof, leave durable review comments,
-and help maintainers with guarded repair or automerge flows.
+repositories. It can review PRs, evaluate proof, and leave durable review comments.
+Repair and automerge commands are retired.
 
 A positive ClawSweeper result is supporting evidence, not maintainer approval.
 Maintainers still decide whether and when a PR is ready to merge.
@@ -115,8 +115,7 @@ the current head. Intake can return `deduped: true` with
 consumed. That refusal occurs before allocating a new queue revision.
 Check for a separate active request instead of treating this response as a queued review.
 
-Maintainers can also queue
-review, repair, or automerge flows with labels or commands. When the selected
+Maintainers can also request a review with commands. When the selected
 route, a maintainer, or the user requires another hosted review, complete the branch,
 PR description, and proof first. Request it with one new PR comment:
 
@@ -235,7 +234,7 @@ local investigation does not authorize a CI exception.
 ## When automation stays quiet
 
 Automation may stay quiet when a maintainer is already handling the item, a
-review or repair request is still queued, the event is routine, or the
+review request is still queued, the event is routine, or the
 ClawSweeper lane is not configured for the requested action.
 
 It may also avoid action when a trusted workflow would need to run untrusted
