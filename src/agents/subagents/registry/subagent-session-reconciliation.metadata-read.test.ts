@@ -166,14 +166,14 @@ it("reads subagent lifecycle and policy metadata without decoding unrelated sess
         "invalid persisted session row requires repair",
       );
 
-      expect(
-        await getSubagentDepthFromSessionStoreInWorker(childSessionKey, { cfg: params.cfg }),
-      ).toBe(1);
-      expect(
-        await withPreparedSessionCapabilityRead(() =>
+      await expect(
+        getSubagentDepthFromSessionStoreInWorker(childSessionKey, { cfg: params.cfg }),
+      ).rejects.toThrow("invalid persisted session row requires repair");
+      await expect(
+        withPreparedSessionCapabilityRead(() =>
           resolvePersistedSubagentToolPolicyEnvelope(childSessionKey, { cfg: params.cfg }),
         ),
-      ).toBeUndefined();
+      ).rejects.toThrow("invalid persisted session row requires repair");
 
       for (const [requested, stored, matches] of [
         ["Agent:MAIN:telegram:group:ROOM", "agent:main:telegram:group:room", true],
