@@ -226,6 +226,33 @@ it("retries a declined recovery once readiness changes", async () => {
   }
 });
 
+it("waits through a Gateway suspension and loads the route automatically", async () => {
+  vi.useFakeTimers();
+  const read = vi
+    .fn((): TestData => ({ label: "ready" }))
+    .mockImplementationOnce(() => {
+      throw new GatewayProtocolRequestError({
+        code: "UNAVAILABLE",
+        message: "sessions.resolve unavailable",
+        retryable: true,
+        retryAfterMs: 1_000,
+        details: { method: "sessions.resolve", reason: "gateway-suspending" },
+      });
+    });
+  const router = routes.router(routes.page("first", module("first"), read));
+  const retryContext = { label: "test" };
+  const outlet = mountRouterOutlet({ router, retryContext });
+  await router.navigate("first", retryContext).catch(() => undefined);
+  await settleRouterOutlet(outlet);
+  expect(outlet.querySelector(".agent-startup-state")).not.toBeNull();
+  expect(outlet.textContent).not.toContain("sessions.resolve unavailable");
+  await vi.advanceTimersByTimeAsync(1_000);
+  await settleRouterOutlet(outlet);
+  expect(read).toHaveBeenCalledTimes(2);
+  expect(outlet.querySelector('[data-route="first"]')?.textContent).toBe("ready");
+  expect(outlet.querySelector(".agent-startup-state")).toBeNull();
+});
+
 it.each(["navigation", "disconnect", "offline", "context"] as const)(
   "retires startup retries on %s without reviving the old route",
   async (boundary) => {
