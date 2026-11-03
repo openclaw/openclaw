@@ -4,9 +4,10 @@ import type {
 } from "../packages/gateway-protocol/src/schema/web-search.ts";
 
 /** One managed route and one provider that still needs a key, shaped like `webSearch.status`. */
-export function buildSearchMocks(): {
+export function buildSearchMocks(configHash: string): {
   "webSearch.status": WebSearchStatusResult;
   "webSearch.test": WebSearchTestResult;
+  "plugins.credentials.inspect": { baseHash: string; credential: { kind: "missing" } };
 } {
   return {
     "webSearch.status": {
@@ -32,6 +33,12 @@ export function buildSearchMocks(): {
           requiresCredential: true,
           credentialSource: "missing",
           configPath: ["plugins", "entries", "brave", "config", "webSearch"],
+          credentialPath: "plugins.entries.brave.config.webSearch.apiKey",
+          credential: {
+            path: ["plugins", "entries", "brave", "config", "webSearch", "apiKey"],
+            label: "Brave Search API key",
+            envVars: ["BRAVE_API_KEY"],
+          },
           docsUrl: "https://docs.openclaw.ai/tools/brave-search",
           signupUrl: "https://brave.com/search/api/",
         },
@@ -50,6 +57,7 @@ export function buildSearchMocks(): {
         },
       ],
     },
+    "plugins.credentials.inspect": { baseHash: configHash, credential: { kind: "missing" } },
     "webSearch.test": {
       provider: "parallel-free",
       latencyMs: 642,

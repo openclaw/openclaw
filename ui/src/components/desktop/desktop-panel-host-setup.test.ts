@@ -148,7 +148,9 @@ describe("Desktop host setup guidance", () => {
     expect(panel.textContent).toContain(
       "The desktop server may be reachable from other devices on your network.",
     );
-    expect(panel.textContent).toContain("A Gateway administrator can enable desktop access.");
+    expect(panel.textContent).toContain(
+      "Only admins can enable desktop access. Ask an admin for access.",
+    );
     expect(panel.textContent).not.toContain(UNAVAILABLE);
     expect(button(ENABLE)?.disabled).toBe(true);
     expect(button("Check again")).toBeDefined();

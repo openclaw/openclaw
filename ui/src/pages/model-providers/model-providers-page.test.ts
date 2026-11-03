@@ -386,7 +386,7 @@ describe("ModelProvidersPage agent scope", () => {
       await updatePickers(page.renderRoot);
       const fallback = [...page.querySelectorAll<SelectPicker>("openclaw-select-picker")].find(
         (select) =>
-          select.querySelector('[role="listbox"]')?.getAttribute("aria-label") === "Fallback Model",
+          select.querySelector('[role="listbox"]')?.getAttribute("aria-label") === "Fallback model",
       );
       expect(fallback).toBeDefined();
       expect(page.querySelector(".model-providers__defaults")?.textContent).toContain(
@@ -969,5 +969,6 @@ it("applies provider navigation without replacing an edited search during revali
   page.routeData = { ...routeData, provider: "minimax-portal" };
   await waitForSolid(() => expect(search()?.value).toBe("minimax"));
   page.routeData = { ...routeData, provider: "" };
-  await waitForSolid(() => expect(search()?.value).toBe(""));
+  // Setup with nothing connected and nothing typed has no list to filter.
+  await waitForSolid(() => expect(search()?.value ?? "").toBe(""));
 });

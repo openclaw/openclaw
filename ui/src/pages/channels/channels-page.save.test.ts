@@ -6,7 +6,7 @@ import type { JsonSchema } from "../../components/config-form.shared.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { channelConfigEditBase } from "./channel-config-draft.ts";
+import { editChannelField } from "./channel-config-draft.ts";
 import {
   channelSnapshot,
   createContext,
@@ -166,11 +166,7 @@ describe("ChannelsPage save against a file changed elsewhere", () => {
     value: unknown,
   ) {
     const path = ["channels", "telegram", key];
-    const saved = source.runtimeConfig.state.configSnapshot?.sourceConfig as Record<
-      string,
-      unknown
-    >;
-    source.channels.editConfig("telegram", { path, value }, channelConfigEditBase(saved, path));
+    editChannelField(source.channels, source.runtimeConfig.state, "telegram", { path, value });
   }
 
   /** The message of what this channel's Save reported, without its buttons. */
@@ -206,7 +202,7 @@ describe("ChannelsPage save against a file changed elsewhere", () => {
     );
     expect(patches()).toHaveLength(0);
     expect(source.channels.state.configEdits.telegram).toHaveLength(3);
-    expect(text(page, ".channels-detail__status")).toBe("Unsaved changes");
+    expect(text(page, ".channels-detail__footer .channels-detail__status")).toBe("Unsaved changes");
 
     profileButton(page, "Reload").click();
     await waitForSolid(() => expect(source.channels.state.configEdits.telegram).toBeUndefined());
@@ -236,7 +232,9 @@ describe("ChannelsPage save against a file changed elsewhere", () => {
     expect(JSON.parse(params.raw)).toEqual({
       channels: { telegram: { dmPolicy: "pairing", allowFrom: ["111"] } },
     });
-    await waitForSolid(() => expect(text(page, ".channels-detail__status")).toBe("Saved"));
+    await waitForSolid(() =>
+      expect(text(page, ".channels-detail__footer .channels-detail__status")).toBe("Saved"),
+    );
   });
 
   it("still saves next to a change elsewhere that the edits don't touch", async () => {
@@ -249,11 +247,10 @@ describe("ChannelsPage save against a file changed elsewhere", () => {
       groups: { "-1001": { requireMention: true }, "-1003": { requireMention: true } },
     });
     const path = ["channels", "telegram", "groups", "-1001", "requireMention"];
-    source.channels.editConfig(
-      "telegram",
-      { path, value: false },
-      channelConfigEditBase(before, path),
-    );
+    editChannelField(source.channels, source.runtimeConfig.state, "telegram", {
+      path,
+      value: false,
+    });
     await changeElsewhere(elsewhere, "h1");
     findButton(page, ".channels-detail .btn.primary").click();
     await waitForSolid(() => expect(patches()).toHaveLength(1));
@@ -264,7 +261,9 @@ describe("ChannelsPage save against a file changed elsewhere", () => {
         telegram: { dmPolicy: "pairing", groups: { "-1001": { requireMention: false } } },
       },
     });
-    await waitForSolid(() => expect(text(page, ".channels-detail__status")).toBe("Saved"));
+    await waitForSolid(() =>
+      expect(text(page, ".channels-detail__footer .channels-detail__status")).toBe("Saved"),
+    );
     expect(alertText(page)).toBeNull();
   });
 
@@ -291,7 +290,7 @@ describe("ChannelsPage save against a file changed elsewhere", () => {
       }
       gateway.emit({ phase: "connected" });
       await waitForSolid(() => {
-        expect(text(page, ".channels-detail__status")).toBe(status);
+        expect(text(page, ".channels-detail__footer .channels-detail__status")).toBe(status);
         expect(alertText(page)).toBe(alert);
       });
       expect(patches()).toHaveLength(1);

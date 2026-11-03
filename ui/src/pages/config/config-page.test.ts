@@ -244,7 +244,7 @@ it("renders Web Push registration publications and dispatches Unsubscribe withou
   });
   const { container } = mountConfigPage(context, { pageId: "notifications" });
   expect(container.textContent).toContain("Checking");
-  expect(container.textContent).toContain("Not requested");
+  expect(buttonNamed(container, "Enable notifications").disabled).toBe(false);
 
   snapshot.loading = true;
   publishConfigSource(webPush);
@@ -270,7 +270,7 @@ it("renders Web Push registration publications and dispatches Unsubscribe withou
   snapshot.loading = false;
   snapshot.preferences = { durableIdentity: true, user, device, effective: { ...user, ...device } };
   publishConfigSource(webPush);
-  expect(container.textContent).toContain("Granted");
+  expect(buttonNamed(container, "Send test").disabled).toBe(false);
   expect(container.textContent).toContain("Subscribed");
   expect(container.textContent).not.toContain("Checking");
   expect(
@@ -411,11 +411,9 @@ it("uses the committed snapshot for both display and reset while the form draft 
 
   const themeSection = await waitForSolid(() => {
     const section = container.querySelector<HTMLElement>("#settings-appearance-theme");
-    expect(section?.textContent).toContain("Default: Claw");
+    expect(section?.textContent).toContain("Synced across your devices");
     return section!;
   });
-  expect(themeSection?.textContent).toContain("Synced across your devices");
-  expect(themeSection?.textContent).not.toContain("Default: Knot");
   expect(themeSection?.textContent).not.toContain("Stored in this browser only");
 
   themeSection?.querySelector<HTMLButtonElement>(".settings-theme-card--claw")?.click();
@@ -699,12 +697,12 @@ it("publishes the running Gateway's auth mode as it changes", () => {
     runtimeConfig: { state: { connected: false } },
   });
   const view = mountConfigPage(context, { pageId: "security" });
-  const auth = () => view.container.querySelector(".settings-row__control")?.textContent?.trim();
-  expect(auth()).toBe("Unknown");
+  const mode = () => view.container.querySelector(".settings-row__control")?.textContent?.trim();
+  expect(mode()).toBe("Unknown");
 
   Object.assign(context.gateway.snapshot, { hello: { snapshot: { authMode: "password" } } });
   publishConfigSource(context.runtimeConfig);
-  expect(auth()).toBe("Password");
+  expect(mode()).toBe("Password");
 });
 
 it.each([
@@ -916,7 +914,7 @@ it("loads replacement sources and clears sensitive reveal state", async () => {
   viewState.revealedSensitivePaths.add("gateway.auth.token");
   state.configProps().onViewStateChange();
   flush();
-  Object.assign(context, { runtimeConfig: second });
+  completeConfigContext(Object.assign(context, { runtimeConfig: second }));
   publishConfigSource(context.gateway);
   await waitForSolid(() => expect(second.ensureSchemaLoaded).toHaveBeenCalledOnce());
 

@@ -389,3 +389,37 @@ openclaw-modal-dialog.drawer--floating > .oc-modal-dialog {
     height: 100%;
   }
 }
+
+/* Facts inside a dialog: a label and its value, with no tiles or rules between them. */
+.oc-dialog__rows {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.oc-dialog__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-width: 0;
+  min-height: var(--menu-item-height);
+  font-size: var(--control-ui-text-sm);
+}
+
+.oc-dialog__row > :last-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: end;
+}
+
+.oc-dialog__row-label {
+  flex: none;
+  color: var(--muted);
+}
+
+.oc-dialog__row-note {
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  overflow-wrap: anywhere;
+}
