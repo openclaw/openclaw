@@ -3544,7 +3544,7 @@
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt","kind":"ui-call","surface":"android","id":"native.android.85a217117489aba1","source":"Review"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt","kind":"ui-call","surface":"android","id":"native.android.0bfaa59ac90e15f8","source":"Review actions that need your attention."},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt","kind":"ui-call","surface":"android","id":"native.android.e0e35d051b04ee0f","source":"Running Since"},
-    {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt","kind":"ui-call","surface":"android","id":"native.android.b2767fced234bed5","source":"Runs on-device while OpenClaw is visible."},
+    {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt","kind":"ui-call","surface":"android","id":"native.android.1d659df0221b8335","source":"Runs on-device, including in the background while the node service has microphone access."},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt","kind":"ui-call","surface":"android","id":"native.android.ba607ff66dca474c","source":"Runtime"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt","kind":"ui-call","surface":"android","id":"native.android.7947283f16d31c86","source":"Save"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt","kind":"ui-call","surface":"android","id":"native.android.e969a0ab93b51f8c","source":"Save & Connect"},
