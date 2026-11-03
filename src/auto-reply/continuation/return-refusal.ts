@@ -12,7 +12,7 @@ import {
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 
-export type ContinuationReturnRefusalReason = "recipient-authority-changed";
+type ContinuationReturnRefusalReason = "recipient-authority-changed";
 export type ContinuationReturnRefusalStage = "enqueue" | "replay" | "wake" | "prompt-drain";
 
 const log = createSubsystemLogger("continuation/return-refused");
