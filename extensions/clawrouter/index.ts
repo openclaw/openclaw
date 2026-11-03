@@ -42,6 +42,7 @@ import { containsAsciiControlCharacter } from "openclaw/plugin-sdk/string-normal
 import { clawrouterMediaUnderstandingProvider } from "./audio-transcription.js";
 import { normalizeClawRouterApiBaseUrl, normalizeClawRouterRootUrl } from "./base-url.js";
 import { buildClawRouterDecisionProvider } from "./decision-provider.js";
+import { clawrouterEmbeddingProvider } from "./embedding-provider.js";
 import { buildClawRouterImageGenerationProvider } from "./image-generation-provider.js";
 import { listClawRouterImageModelCatalog } from "./image-model-catalog.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
@@ -158,6 +159,8 @@ function setHeaderDefault(
 }
 
 const openAiServiceTier = buildProviderStreamFamilyHooks("openai-responses-service-tier");
+const mistralReplay = buildProviderReplayFamilyHooks({ family: "mistral" });
+const cohereCompatibility = buildProviderStreamFamilyHooks("cohere-compatibility");
 const log = createSubsystemLogger("clawrouter-stream");
 
 function wrapClawRouterProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
@@ -173,7 +176,12 @@ function wrapClawRouterProviderStream(ctx: ProviderWrapStreamFnContext): StreamF
     );
   });
   const routedStream: StreamFn = (model, context, options) => {
-    const underlying = model.api === "anthropic-messages" ? claudeStream : streamFn;
+    const underlying =
+      model.api === "anthropic-messages"
+        ? claudeStream
+        : model.api === "openai-completions" && model.id.startsWith("cohere/")
+          ? (cohereCompatibility.wrapStreamFn?.({ ...ctx, streamFn }) ?? streamFn)
+          : streamFn;
     const apiKey = options?.apiKey?.trim();
     const dispatchKey = apiKey && apiKey !== ENV_API_KEY_MARKER ? apiKey : undefined;
     const preparedModel = prepareClawRouterRequestModel(model);
@@ -446,6 +454,7 @@ export default defineSingleProviderPluginEntry({
   manifest,
   register(api) {
     api.registerSpeechProvider(buildClawRouterSpeechProvider);
+    api.registerEmbeddingProvider(clawrouterEmbeddingProvider);
     api.registerMediaUnderstandingProvider(clawrouterMediaUnderstandingProvider);
     api.registerDecisionProvider(buildClawRouterDecisionProvider());
     api.registerImageGenerationProvider(buildClawRouterImageGenerationProvider());
@@ -661,6 +670,9 @@ export default defineSingleProviderPluginEntry({
         wrapClawRouterProviderStream({ ...ctx, nativeWebSearchAllowedByToolPolicy: false }),
       wrapStreamFn: wrapClawRouterProviderStream,
       buildReplayPolicy: (ctx) => {
+        if (ctx.modelApi === "openai-completions" && ctx.modelId?.startsWith("mistral/")) {
+          return mistralReplay.buildReplayPolicy?.(ctx);
+        }
         if (ctx.modelApi === "anthropic-messages") {
           return anthropicReplay.buildReplayPolicy?.(ctx);
         }

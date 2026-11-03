@@ -6,10 +6,10 @@ const enPreferences = {
   quickSettings: {
     language: "Language",
     model: {
-      title: "Model & Thinking",
+      title: "Model & Effort",
       model: "Model",
-      thinking: "Thinking",
-      fastMode: "Fast Mode",
+      thinking: "Effort",
+      fastMode: "Speed",
       default: "Default",
       modelPolicy: "Model policy",
       thinkingLevels: {

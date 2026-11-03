@@ -11,7 +11,6 @@ import { stopChildProcess } from "../../../test/helpers/stop-child-process.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createConfigIO } from "../../config/config.js";
 import { hashConfigRaw } from "../../config/io.read-helpers.js";
-import { resolveGatewayLockDir } from "../../config/paths.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { FILE_LOCK_TIMEOUT_ERROR_CODE, withFileLock } from "../../infra/file-lock.js";
 import { runPackagePostInstallVerification } from "../../infra/package-update-verification-step.js";
@@ -370,8 +369,11 @@ it.for([
     }
     const stateDir = serviceStateDir;
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    // Keep state writable while proving rollback leaves read-only config untouched.
+    const configDir = change === "readonly-config" ? dirs.make("rollback-config-") : stateDir;
     const { configPath, includePath, includeTarget, authored, originalRaw } =
-      writeDoctorRollbackConfig(stateDir, change);
+      writeDoctorRollbackConfig(configDir, change);
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
     const configSnapshot = await createConfigIO({
       env: process.env,
       pluginValidation: "skip",
@@ -572,8 +574,7 @@ it.for([
       });
     }
     if (change === "readonly-config") {
-      fs.mkdirSync(resolveGatewayLockDir(stateDir), { recursive: true, mode: 0o700 });
-      fs.chmodSync(stateDir, 0o500);
+      fs.chmodSync(configDir, 0o500);
     }
     let outcome: Awaited<ReturnType<typeof rollbackFailedUpdate>>;
     try {
@@ -611,8 +612,8 @@ it.for([
     } finally {
       await finishWriter?.();
       if (change === "readonly-config") {
-        const mode = fs.statSync(stateDir).mode & 0o777;
-        fs.chmodSync(stateDir, 0o700);
+        const mode = fs.statSync(configDir).mode & 0o777;
+        fs.chmodSync(configDir, 0o700);
         expect(mode).toBe(0o500);
       }
     }
