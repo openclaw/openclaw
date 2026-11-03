@@ -18,7 +18,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
-import { captureRuntimeConfigAsyncReader } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader, readBestEffortConfig } from "../config/config.js";
 import { resolveGatewayPort } from "../config/paths.js";
 import { CLAWHUB_TRUST_ERROR_CODE } from "../infra/clawhub-install-trust.js";
 import {
@@ -88,7 +88,7 @@ function isClawHubSkillBlockedCliFailure(result: { code?: string; warning?: stri
 
 type ResolveSkillsWorkspaceOptions = {
   agentId?: string;
-  skipPluginValidation?: boolean;
+  bestEffort?: boolean;
 };
 
 type ResolvedSkillsWorkspace = Awaited<ReturnType<typeof resolveSkillsWorkspace>>;
@@ -152,9 +152,9 @@ function normalizeExplicitAgentId(agentId?: string): string | undefined {
 
 async function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions) {
   // Prefer explicit --agent, then infer from cwd, then fall back to configured default agent.
-  const config = await captureRuntimeConfigAsyncReader(
-    options?.skipPluginValidation ? { skipPluginValidation: true } : undefined,
-  )();
+  const config = options?.bestEffort
+    ? await readBestEffortConfig({ observe: false, skipPluginValidation: true })
+    : await captureRuntimeConfigAsyncReader()();
   const explicitAgentId = normalizeExplicitAgentId(options?.agentId);
   const inferredAgentId = explicitAgentId
     ? undefined
@@ -171,7 +171,7 @@ async function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions) {
 }
 
 async function loadSkillsStatusReport(agentId: string | undefined): Promise<SkillStatusReport> {
-  const resolved = await resolveSkillsWorkspace({ agentId, skipPluginValidation: true });
+  const resolved = await resolveSkillsWorkspace({ agentId, bestEffort: true });
   try {
     return await callSkillsGateway<SkillStatusReport>({
       config: resolved.config,

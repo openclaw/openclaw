@@ -15,6 +15,7 @@ import { clampThinkingLevel } from "../model-utils.js";
 import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
 import { googleFlashSupportsMinimalThinking } from "../transports/google-thinking-level.js";
 import {
+  awaitProviderLifecycleCallback,
   failTransportStream,
   notifyProviderStreamOpened,
   transportAbortError,
@@ -76,7 +77,10 @@ export async function runGoogleGenerateContentLifecycle<T extends GoogleApiType>
   try {
     const client = params.createClient();
     let requestParams = params.buildParams();
-    const nextParams = await options?.onPayload?.(requestParams, model);
+    const nextParams = await awaitProviderLifecycleCallback(
+      options?.onPayload ? () => options.onPayload?.(requestParams, model) : undefined,
+      options?.signal,
+    );
     if (nextParams !== undefined) {
       requestParams = nextParams as GenerateContentParameters;
     }

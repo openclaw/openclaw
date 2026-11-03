@@ -230,10 +230,14 @@ export function renderChatPaneComposerControls(params: {
           ...settingsPreview,
         }
       : selectedSession;
+  const acceptedHistory = getAcceptedChatHistorySession(state);
+  const hasAcceptedHistory = Boolean(
+    acceptedHistory && acceptedHistory.sessionId === expectedSessionId,
+  );
   const sessionReady =
     state.connected &&
     selectedSession &&
-    (!state.sessions.state.resultCached || getAcceptedChatHistorySession(state));
+    (!state.sessions.state.resultCached || hasAcceptedHistory);
   const snapshot =
     sessionReady && state.chatModelCatalogInitialized
       ? undefined
@@ -276,7 +280,8 @@ export function renderChatPaneComposerControls(params: {
         agentDefaultModel,
         connected: state.connected,
         gatewayAvailable: Boolean(state.client),
-        loading: state.chatLoading,
+        // Background history refreshes must not interrupt gestures for the accepted session.
+        loading: state.chatLoading && !hasAcceptedHistory,
         modelCatalog: state.chatModelCatalog,
         modelCatalogState,
         modelOverrides: state.sessions.state.modelOverrides,
@@ -418,9 +423,7 @@ export function renderChatPaneComposerControls(params: {
             throw new Error("Session capability is unavailable");
           }
           if (patched.listRefreshError && ownsOutcome()) {
-            state.chatError = state.lastError = t("chat.permissionControls.refreshFailed", {
-              error: patched.listRefreshError,
-            });
+            state.chatError = state.lastError = t("chat.permissionControls.refreshFailed");
           }
         } catch (error) {
           if (!ownsRoute() || !ownsOutcome()) {

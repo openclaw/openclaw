@@ -4,6 +4,7 @@ import {
 } from "../../../config/sessions/session-actor-storage-binding.js";
 import { captureSessionEntrySourceAssertion } from "../../../config/sessions/session-entry-source-authority.js";
 import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
+import { withSessionTranscriptHydrationCaller } from "../../../config/sessions/session-transcript-hydration-caller.js";
 import { sameSessionTranscriptStorePath } from "../../../config/sessions/transcript-store-identity.js";
 import {
   withOwnedSessionTranscriptWrites,
@@ -157,6 +158,13 @@ async function executeRecoveryCompaction(
 ) {
   const { runParams } = input;
   const activeSession = owner.session;
+  const requestAdmission = runParams.userTurnTranscriptRecorder?.getAdmissionReceipt();
+  const requestFromEntryId =
+    requestAdmission?.agentId === input.sessionAgentId &&
+    requestAdmission.sessionKey === input.resolvedSessionKey &&
+    sameSessionTranscriptStorePath(requestAdmission.storePath, activeSession.target?.storePath)
+      ? requestAdmission.entryId
+      : undefined;
   const promptCacheIdentity = {
     ...runParams,
     sessionId: activeSession.id,
@@ -247,6 +255,7 @@ async function executeRecoveryCompaction(
             if (backendParams.runtimeContext) {
               attachCompactionAccountingRecorder(backendParams.runtimeContext, {
                 requestBudget: input.state.compactionRequestBudget,
+                requestFromEntryId,
                 pendingRequestState:
                   recovery.trigger === "timeout_recovery" ? undefined : "unresolved",
                 memoryTranscript: owner.sessionManager
@@ -506,10 +515,12 @@ export function createEmbeddedRunCompactionRuntime(input: {
       memoryManager ??
       (detached
         ? undefined
-        : await SessionManager.openAsync(
-            owner.session.target,
-            params.workspaceDir,
-            resolveEmbeddedSessionContextLimits({ contextTokenBudget }),
+        : await withSessionTranscriptHydrationCaller("compaction", () =>
+            SessionManager.openAsync(
+              owner.session.target,
+              params.workspaceDir,
+              resolveEmbeddedSessionContextLimits({ contextTokenBudget }),
+            ),
           ));
     owner.assertActive();
     return {

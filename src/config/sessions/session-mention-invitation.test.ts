@@ -198,13 +198,14 @@ it("does not grant access when a message hook removes the selected token", async
 });
 
 it.each(["commit", "rollback"] as const)(
-  "releases invitation callbacks and completes all admissions after %s",
+  "releases invitation callbacks and closes admissions after %s",
   async (outcome) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const f = fixture();
       replaceSessionEntrySync(f.scope, f.entry);
       const create = admission.createSqliteWorkerOperationAdmission;
       const owners: ReturnType<typeof create>[] = [];
+      const transactionOwners = new Set<ReturnType<typeof create>>();
       let current = true;
       let prepared = 0;
       const failure = new Error("Invitation authority changed");
@@ -214,6 +215,9 @@ it.each(["commit", "rollback"] as const)(
         .mockImplementation((admit, attachment, prepare) => {
           const owner = create(
             (request, grant) => {
+              if (request.stage === "transaction" || request.stage === "commit") {
+                transactionOwners.add(owner);
+              }
               if (request.stage === "commit" && outcome === "rollback") {
                 current = false;
               }
@@ -267,8 +271,12 @@ it.each(["commit", "rollback"] as const)(
       expect(prepared).toBe(1);
       expect(owners.length).toBeGreaterThan(0);
       for (const owner of owners) {
-        expect(owner.settlement?.kind).toBe("completed");
         expect(() => owner.observeRequests(() => {})).toThrow("closed");
+      }
+      // File-admission relays close without native work; only transaction owners publish settlement.
+      expect(transactionOwners.size).toBeGreaterThan(0);
+      for (const owner of transactionOwners) {
+        expect(owner.settlement?.kind).toBe("completed");
       }
       const control = new WeakRef({});
       await nextTurn();

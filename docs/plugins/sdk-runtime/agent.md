@@ -446,6 +446,24 @@ Each `SessionTranscriptMessageEntry` contains:
 
     `resolveThinkingPolicy(...)` returns the provider/model's supported thinking levels and optional default. Provider plugins own the model-specific profile through their thinking hooks, so tool plugins should call this runtime helper instead of importing or duplicating provider lists.
 
+    `explainToolAvailability({ agentId?, sessionKey?, toolNames, pluginId? })` explains whether named tools reach an agent or one session. It replays the same final tool-policy composition that agent runs use, with the current runtime config. Pass `pluginId` for tools your plugin owns, so plugin-ID and `group:plugins` policy entries match; omit it for core tools.
+
+    ```typescript
+    const report = await api.runtime.agent.explainToolAvailability({
+      sessionKey,
+      toolNames: ["memory_save"],
+      pluginId: "my-memory",
+    });
+    for (const tool of report.tools) {
+      if (!tool.available) {
+        // tool.block: { stage, source?, detail, fix }
+        console.warn(`${tool.name} hidden at ${tool.block.stage}: ${tool.block.detail} ${tool.block.fix}`);
+      }
+    }
+    ```
+
+    The result is `{ agentId, sandbox: { mode, source, sandboxed? }, tools }`. Each blocked tool names one stage: `deny` (an explicit deny entry, which wins over earlier exclusions), `harness` (the harness or CLI backend does not expose OpenClaw tools), `model` (the model has no tool support), `sandbox` (sandbox tool policy), `profile`, `provider-policy` (`tools.byProvider`), `allowlist`, or `session` (group, sender, subagent, or inherited policy). `source` names the config path that removed the tool, and `fix` gives a generic remedy. An agent query (no `sessionKey`) covers configured policy only; a session query adds that session's model, harness, and sandbox, and matches group and account tool policy through the session's delivery route. Plugin manifest tool-profile grants apply as they do for real runs. `sandbox.mode` and `sandbox.source` report the agent's sandbox setting, so a plugin whose tool factory refuses sandboxed runs can explain that gate in its own words. The call is read-only and does not grant access.
+
     `normalizeThinkingLevel(...)` converts user text such as `on`, `x-high`, or `extra high` to the standard stored level before checking it against the resolved policy.
 
     `resolveSessionCatalogCreateTarget(...)` is the supported synchronous policy interface for trusted native plugins that implement `SessionCatalogProvider.resolveCreateSession`. It selects the first candidate model routed to the requested runtime and allowed for the requested or default agent. It returns `undefined` when no candidate satisfies both policies. Use this helper instead of importing or duplicating core model-selection policy in a plugin.

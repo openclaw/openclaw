@@ -117,6 +117,7 @@ function createUnavailableSubagentRuntime(): PluginRuntime["subagent"] {
   return {
     complete: unavailable,
     forkSession: unavailable,
+    runForkedTurn: unavailable,
     run: unavailable,
     waitForRun: unavailable,
     getSessionMessages: unavailable,
@@ -303,7 +304,7 @@ export const createPluginRuntime: PluginRuntimeFactory = (
   _options = {},
   base = createRuntimeBase(),
 ) => {
-  const agent = createRuntimeAgent();
+  const agent = createRuntimeAgent(base.config);
   let modelAuth = _options.modelAuth;
   let modelConfig = _options.modelConfig;
   const runtime: PluginRuntime = {

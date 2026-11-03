@@ -15,9 +15,11 @@ import { repairAuthProfileMigration } from "../commands/doctor/auth-profile-repa
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { stateNativeProcessEntrypoints } from "../state/native-process-runtime.test-support.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
+  openOpenClawStateDatabaseForDoctor,
   repairOpenClawStateDatabaseIndexesForDoctor,
   repairOpenClawStateDatabaseReadabilityForDoctor,
 } from "../state/openclaw-state-db.js";
@@ -43,6 +45,7 @@ import {
   getUpdateDoctorMigrationSource,
   hasUpdateDoctorMigrationCapture,
   runUpdateSqliteMigration,
+  runUpdateSqliteMigrationAsync,
   runWithDoctorMigrationBackup,
   runWithUpdateDoctorMigrationCapture,
 } from "./update-doctor-migration-attribution.js";
@@ -118,6 +121,97 @@ it.each([
   });
   expect(warnings).toEqual([]);
   expect(receipt).toMatchObject({ unchanged: true, fromGenerations: generations });
+});
+
+it.each([
+  "complete",
+  "cancel before mutation",
+  "lose authority before mutation",
+  "cancel after commit",
+] as const)("settles awaited native migration observations (%s)", async (outcome) => {
+  const { pathname, env } = fixture("source.sqlite", "INSERT INTO retained VALUES (7);");
+  const generations = readUpdateDatabaseGenerations([pathname]);
+  const controller = new AbortController();
+  const failure = new Error(outcome);
+  let current = true;
+  let observations = 0;
+  const { receipt } = await withCapture(
+    env,
+    generations,
+    async () => {
+      using database = new DatabaseSync(pathname);
+      const inspections = await import("./update-candidate-state.inspection.js");
+      const read = inspections.readUpdateSqliteDatabaseGenerationPairIsolated;
+      const observer = vi
+        .spyOn(inspections, "readUpdateSqliteDatabaseGenerationPairIsolated")
+        .mockImplementation(async (...args) => {
+          observations += 1;
+          expect(database.isTransaction).toBe(false);
+          if (observations === 2) {
+            expect(database.prepare("PRAGMA locking_mode").get()?.locking_mode).toBe("exclusive");
+          }
+          const observed = await read(...args);
+          if (observations === 1) {
+            if (outcome === "cancel before mutation") {
+              controller.abort(failure);
+            }
+            if (outcome === "lose authority before mutation") {
+              current = false;
+            }
+          } else if (outcome === "cancel after commit") {
+            controller.abort(failure);
+          }
+          return observed;
+        });
+      const synchronous = vi.spyOn(sqliteReadOnlyWorker, "runSqliteReadOnlyWorkerSync");
+      let serviced = false;
+      const immediate = setImmediate(() => {
+        serviced = true;
+      });
+      const mutate = vi.fn(() => {
+        expect(serviced).toBe(true);
+        expect(getUpdateDoctorMigrationSource(pathname)?.path).toBe(pathname);
+        database.exec("INSERT INTO retained VALUES (8);");
+      });
+      try {
+        const migration = sqliteReadOnlyWorker.withSqliteReadOnlyWorkerScope(
+          () => runUpdateSqliteMigrationAsync(database, pathname, mutate),
+          { signal: controller.signal, deadlineOwnedByCaller: false },
+        );
+        if (outcome === "complete") {
+          await expect(migration).resolves.toBeUndefined();
+        } else {
+          await expect(migration).rejects.toBe(failure);
+        }
+        expect(mutate).toHaveBeenCalledTimes(
+          outcome === "complete" || outcome === "cancel after commit" ? 1 : 0,
+        );
+        expect(observations).toBe(
+          outcome === "complete" || outcome === "cancel after commit" ? 2 : 1,
+        );
+        expect(synchronous).not.toHaveBeenCalled();
+        expect(database.isTransaction).toBe(false);
+        expect(database.prepare("PRAGMA locking_mode").get()?.locking_mode).toBe("normal");
+        expect(database.prepare("SELECT value FROM retained ORDER BY value").all()).toEqual(
+          outcome === "complete" || outcome === "cancel after commit"
+            ? [{ value: 7 }, { value: 8 }]
+            : [{ value: 7 }],
+        );
+      } finally {
+        clearImmediate(immediate);
+        current = true;
+        observer.mockRestore();
+        synchronous.mockRestore();
+      }
+    },
+    undefined,
+    () => {
+      if (!current) {
+        throw failure;
+      }
+    },
+  );
+  expect(receipt?.unchanged).toBe(outcome === "complete");
 });
 
 it.each(["already exclusive", "retain exclusive"])(
@@ -299,6 +393,7 @@ async function withCapture(
   generations: ReturnType<typeof readUpdateDatabaseGenerations>,
   operation: () => Promise<void>,
   assertDatabaseAccess?: (requested: string) => void,
+  assertOwnerCurrent: () => void = () => {},
 ) {
   const warnings: string[] = [];
   const capture = createUpdateDoctorDatabaseWriteCapture(generations, {
@@ -308,7 +403,7 @@ async function withCapture(
   })!;
   const scope = createOpenClawDatabaseMaintenanceScope({
     schemaMaintenance: true,
-    assertOwnerCurrent() {},
+    assertOwnerCurrent,
     assertDatabaseAccess: assertDatabaseAccess ?? (() => {}),
   });
   try {
@@ -364,7 +459,7 @@ it.each(["native", "worker"] as const)(
           repairOpenClawStateDatabaseIndexesForDoctor,
           repairOpenClawStateDatabaseReadabilityForDoctor,
         ]) {
-          expect(repair({ env }).warnings).toEqual([]);
+          expect((await repair({ env })).warnings).toEqual([]);
         }
         const preflight = await runDoctorConfigPreflight({
           retiredStateAdmitted: true,
@@ -452,26 +547,136 @@ it.each(["native", "worker"] as const)(
     }),
 );
 
-it("attributes a captured absent shared store and its new credential companion during bootstrap", async () => {
-  const { root, pathname, env } = fixture(path.join("state", "openclaw.sqlite"));
-  const localPath = path.join(root, "client", "credentials.sqlite");
-  const generations = readUpdateDatabaseGenerations([pathname, localPath]);
-  const { receipt, warnings } = await withCapture(
-    env,
-    generations,
-    async () => {
-      openOpenClawStateDatabase({ env });
+it.each(["source observation", "returned acquisition", "revoked authority"] as const)(
+  "retires a refused cold Doctor writer before admitting its successor (%s)",
+  async (boundary) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      writeConfigMachineState(
+        "async-open-proof",
+        { retained: "synthetic payload" },
+        { env: state.env },
+      );
+      const pathname = openOpenClawStateDatabase({ env: state.env }).path;
       await closeOpenClawStateDatabaseAsync();
-    },
-    (requested) =>
-      expect(requested).toBe(path.join(env.OPENCLAW_STATE_DIR!, "state/openclaw.sqlite")),
-  );
-  expect(warnings).toEqual([]);
-  expect(receipt).toMatchObject({
-    unchanged: true,
-    generations: { [pathname]: expect.any(String), [localPath]: expect.any(String) },
-  });
-});
+      const generations = readUpdateDatabaseGenerations([
+        pathname,
+        state.statePath("client", "credentials.sqlite"),
+      ]);
+      const controller = new AbortController();
+      const interrupted = new Error(`cold writer refused at ${boundary}`);
+      let current = true;
+      const { receipt } = await withCapture(
+        state.env,
+        generations,
+        async () => {
+          const inspections = await import("./update-candidate-state.inspection.js");
+          const read = inspections.readUpdateSqliteDatabaseGenerationPairIsolated;
+          const native = await import("../state/openclaw-state-db-open.js");
+          const acquire = native.openUnpublishedStateDatabaseAsync;
+          let acquired: Awaited<ReturnType<typeof acquire>> | undefined;
+          let stopped = false;
+          const observer = vi
+            .spyOn(inspections, "readUpdateSqliteDatabaseGenerationPairIsolated")
+            .mockImplementation(async (...args) => {
+              const result = await read(...args);
+              if (boundary === "source observation" && !stopped && args[0].includes(pathname)) {
+                stopped = true;
+                controller.abort(interrupted);
+              }
+              return result;
+            });
+          const nativeOpen = vi
+            .spyOn(native, "openUnpublishedStateDatabaseAsync")
+            .mockImplementation(async (...args) => {
+              const opened = await acquire(...args);
+              acquired = opened;
+              if (!stopped && boundary !== "source observation") {
+                stopped = true;
+                if (boundary === "revoked authority") {
+                  current = false;
+                } else {
+                  controller.abort(interrupted);
+                }
+              }
+              return opened;
+            });
+          const synchronous = vi.spyOn(sqliteReadOnlyWorker, "runSqliteReadOnlyWorkerSync");
+          try {
+            await expect(
+              sqliteReadOnlyWorker.withSqliteReadOnlyWorkerScope(
+                () => openOpenClawStateDatabaseForDoctor({ env: state.env, path: pathname }),
+                { signal: controller.signal, deadlineOwnedByCaller: false },
+              ),
+            ).rejects.toBe(interrupted);
+            if (boundary !== "source observation") {
+              expect(acquired).toBeDefined();
+              expect(acquired?.db.isOpen).toBe(false);
+            }
+            current = true;
+            expect(
+              openClawStateDatabaseCache.getOpenClawStateDatabaseIfOpenAtPath(pathname),
+            ).toBeUndefined();
+            const opened = await sqliteReadOnlyWorker.withSqliteReadOnlyWorkerScope(() =>
+              openOpenClawStateDatabaseForDoctor({ env: state.env, path: pathname }),
+            );
+            expect(
+              opened.db
+                .prepare(
+                  "SELECT value_json FROM config_machine_state WHERE state_key='async-open-proof'",
+                )
+                .get(),
+            ).toEqual({ value_json: '{"retained":"synthetic payload"}' });
+            const acquisitions = observer.mock.calls.length;
+            expect(openOpenClawStateDatabase({ env: state.env, path: pathname })).toBe(opened);
+            expect(observer).toHaveBeenCalledTimes(acquisitions);
+            expect(synchronous).not.toHaveBeenCalled();
+          } finally {
+            current = true;
+            observer.mockRestore();
+            nativeOpen.mockRestore();
+            synchronous.mockRestore();
+            await closeOpenClawStateDatabaseAsync();
+          }
+        },
+        undefined,
+        () => {
+          if (!current) {
+            throw interrupted;
+          }
+        },
+      );
+      expect(receipt?.unchanged).toBe(boundary !== "source observation");
+    });
+  },
+);
+
+it.each(["SDK sync", "Doctor async"] as const)(
+  "attributes a captured absent shared store and its new credential companion during bootstrap (%s)",
+  async (reader) => {
+    const { root, pathname, env } = fixture(path.join("state", "openclaw.sqlite"));
+    const localPath = path.join(root, "client", "credentials.sqlite");
+    const generations = readUpdateDatabaseGenerations([pathname, localPath]);
+    const { receipt, warnings } = await withCapture(
+      env,
+      generations,
+      async () => {
+        if (reader === "Doctor async") {
+          await openOpenClawStateDatabaseForDoctor({ env });
+        } else {
+          openOpenClawStateDatabase({ env });
+        }
+        await closeOpenClawStateDatabaseAsync();
+      },
+      (requested) =>
+        expect(requested).toBe(path.join(env.OPENCLAW_STATE_DIR!, "state/openclaw.sqlite")),
+    );
+    expect(warnings).toEqual([]);
+    expect(receipt).toMatchObject({
+      unchanged: true,
+      generations: { [pathname]: expect.any(String), [localPath]: expect.any(String) },
+    });
+  },
+);
 
 it.each(["captured-generation", null, undefined])(
   "backs up only an uncaptured relocated source (%s)",
