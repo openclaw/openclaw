@@ -21,7 +21,9 @@ const privateValue = "private-action-content";
 function expectRequestId(line: string, requestId: string) {
   expect(requestId).not.toBe("");
   const loggedId = line.match(/(?:^|\s)id=(\S+)/)?.[1] ?? "";
-  if (loggedId === requestId) return;
+  if (loggedId === requestId) {
+    return;
+  }
   expect(loggedId.length).toBeLessThanOrEqual(24);
   const parts = loggedId.split("…");
   expect(parts).toHaveLength(2);
@@ -116,8 +118,9 @@ it("keeps registered session-action attribution in WS diagnostics outside authen
       const frames = (id: string) =>
         messages.mock.calls.flatMap((args: unknown[]) => {
           const [event, data] = args;
-          if (event !== "message" || (typeof data !== "string" && !Buffer.isBuffer(data)))
+          if (event !== "message" || (typeof data !== "string" && !Buffer.isBuffer(data))) {
             return [];
+          }
           const frame = JSON.parse(data.toString()) as Record<string, unknown>;
           return frame.type === "res" && frame.id === id ? [frame] : [];
         });
@@ -242,15 +245,20 @@ it("keeps registered session-action attribution in WS diagnostics outside authen
       try {
         await acquisition;
       } catch (error) {
-        if (error !== reportedAcquisitionError) throw error;
+        if (error !== reportedAcquisitionError) {
+          throw error;
+        }
       }
     },
     () => globals.sessionActionAttributionGate?.release.resolve(),
     () => gateway && disconnectGatewayClient(gateway.client),
     () => gateway?.server.close({ reason: "session action attribution proof complete" }),
     () => {
-      if (previousGate) globals.sessionActionAttributionGate = previousGate;
-      else delete globals.sessionActionAttributionGate;
+      if (previousGate) {
+        globals.sessionActionAttributionGate = previousGate;
+      } else {
+        delete globals.sessionActionAttributionGate;
+      }
       loggingState.rawConsole = previousConsole;
       setVerbose(false);
       setGatewayWsLogStyle("auto");
