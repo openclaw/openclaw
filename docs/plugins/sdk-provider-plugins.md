@@ -762,6 +762,12 @@ the generic response wait after one second and clears it on cancellation or
 with request-correlated evidence can call `report("slot")`. Any backend probes
 must be bounded by that request's lifetime; do not add an always-on polling loop.
 
+A native transport that runs `onPayload` itself should call
+`applyProviderPayloadHook(options, payload, model)` from
+`openclaw/plugin-sdk/provider-stream-shared`. It returns the hook's replacement, or the
+original payload when the hook returns `undefined`, and stops waiting when the request
+signal aborts, so a cancelled turn settles without dispatching the request.
+
 ## Next steps
 
 - [Channel Plugins](/plugins/sdk-channel-plugins) - if your plugin also provides a channel

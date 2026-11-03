@@ -33,7 +33,11 @@ function response(events: readonly unknown[], cancel = vi.fn(), open = false) {
     { headers: { "content-type": "text/event-stream" } },
   );
 }
-async function startStream(signal: AbortSignal, id = "gemini-2.5-pro") {
+async function startStream(
+  signal: AbortSignal,
+  id = "gemini-2.5-pro",
+  onPayload?: () => Promise<undefined>,
+) {
   const model = makeProviderModel("google-generative-ai", "google", id, {
     baseUrl: "https://generativelanguage.googleapis.com/v1beta",
   });
@@ -46,7 +50,7 @@ async function startStream(signal: AbortSignal, id = "gemini-2.5-pro") {
   return streamFn(
     model,
     { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
-    { apiKey: "fixture-key-1", signal },
+    { apiKey: "fixture-key-1", signal, onPayload },
   );
 }
 async function advanceResponse(ms: number, id: string, expected: object = completedResponse) {
@@ -91,6 +95,20 @@ describe("Google stream lifecycle", () => {
     guardedFetch.mockResolvedValueOnce(response(events, cancel, true));
     await advanceResponse(1, "gemini-3.1-pro-preview", expected);
     expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("aborts before dispatch while the payload hook is pending", async () => {
+    const controller = new AbortController();
+    const hookStarted = Promise.withResolvers<void>();
+    const stream = await startStream(controller.signal, undefined, () => {
+      hookStarted.resolve();
+      return new Promise<undefined>(() => {});
+    });
+    await hookStarted.promise;
+    controller.abort();
+
+    await expect(stream.result()).resolves.toMatchObject({ stopReason: "aborted" });
+    expect(guardedFetch).not.toHaveBeenCalled();
   });
 
   it("rotates keys on the first provider frame's quota status", async () => {

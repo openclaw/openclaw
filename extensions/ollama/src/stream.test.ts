@@ -487,6 +487,23 @@ describe("createOllamaStreamFn thinking events", () => {
     });
   });
 
+  it("aborts before dispatch while the payload hook is pending", async () => {
+    const controller = new AbortController();
+    const hookStarted = Promise.withResolvers<void>();
+    const stream = startMockStream([], {
+      signal: controller.signal,
+      onPayload: () => {
+        hookStarted.resolve();
+        return new Promise<undefined>(() => {});
+      },
+    });
+    await hookStarted.promise;
+    controller.abort();
+
+    expect((await readEvents(stream)).at(-1)).toMatchObject({ type: "error", reason: "aborted" });
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
+
   it.each([
     [undefined, undefined, 12, 6],
     [77, 19, 77, 19, 0, 96],

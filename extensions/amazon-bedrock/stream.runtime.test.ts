@@ -84,6 +84,25 @@ it("destroys the client after an aborted Bedrock request", async () => {
   expectDestroyedClient(send, destroy);
 });
 
+it("aborts before send while the payload hook is pending", async () => {
+  const controller = new AbortController();
+  const hookStarted = createDeferred<void>();
+  const send = vi.spyOn(BedrockRuntimeClient.prototype, "send");
+
+  const result = streamBedrockForTest(bedrockModel({}), userContext(), {
+    signal: controller.signal,
+    onPayload: () => {
+      hookStarted.resolve();
+      return new Promise<undefined>(() => {});
+    },
+  }).result();
+  await hookStarted.promise;
+  controller.abort();
+
+  await expect(result).resolves.toMatchObject({ stopReason: "aborted" });
+  expect(send).not.toHaveBeenCalled();
+});
+
 it.each([
   { label: "text", delta: { text: "ready" }, endEvent: "text_end" },
   {

@@ -1,0 +1,2 @@
+# Extension transport cancellation during an unfinished payload hook (Bedrock, Ollama, Google, Radius, Apple FM).
+70

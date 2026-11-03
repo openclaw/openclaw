@@ -102,3 +102,16 @@ it("does not publish a tool call after cancellation during native inference", as
   const stream = await run(model, context, { signal: abort.signal });
   expect(await stream.result()).toMatchObject({ stopReason: "aborted", content: [] });
 });
+
+it("does not start native inference after cancellation during payload preparation", async () => {
+  const abort = new AbortController();
+  const stream = await run(model, context, {
+    signal: abort.signal,
+    onPayload: () => {
+      abort.abort();
+      return new Promise<undefined>(() => {});
+    },
+  });
+  expect(await stream.result()).toMatchObject({ stopReason: "aborted" });
+  expect(native.run).not.toHaveBeenCalled();
+});
