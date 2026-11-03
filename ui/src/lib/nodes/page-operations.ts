@@ -84,7 +84,8 @@ type ExecApprovalsState = NodesRequestState & {
   execApprovalsDirty: boolean;
   execApprovalsSnapshot: ExecApprovalsSnapshot | null;
   execApprovalsForm: ExecApprovalsFile | null;
-  execApprovalsSelectedAgent: string | null;
+  execApprovalsError: string | null;
+  execApprovalsSavedNotice: boolean;
   lastError: string | null;
 };
 
@@ -111,7 +112,8 @@ export function createInitialDevicesState(
     execApprovalsDirty: false,
     execApprovalsSnapshot: null,
     execApprovalsForm: null,
-    execApprovalsSelectedAgent: null,
+    execApprovalsError: null,
+    execApprovalsSavedNotice: false,
   };
 }
 
@@ -484,12 +486,12 @@ export async function loadExecApprovals(
     return;
   }
   state.execApprovalsLoading = true;
-  state.lastError = null;
+  state.execApprovalsError = null;
   const generation = state.requestGeneration;
   try {
     const rpc = resolveExecApprovalsRpc(target);
     if (!rpc) {
-      state.lastError = "Select a node before loading exec approvals.";
+      state.execApprovalsError = "Select a node before loading exec approvals.";
       return;
     }
     const res = await client.request<ExecApprovalsSnapshot>(rpc.method, rpc.params);
@@ -498,7 +500,7 @@ export async function loadExecApprovals(
     }
   } catch (err) {
     if (isCurrentNodesRequest(state, client, generation)) {
-      state.lastError = formatUiError(err);
+      state.execApprovalsError = formatUiError(err);
     }
   } finally {
     if (isCurrentNodesRequest(state, client, generation)) {
@@ -537,34 +539,37 @@ export async function saveExecApprovals(
     return;
   }
   state.execApprovalsSaving = true;
-  state.lastError = null;
+  state.execApprovalsSavedNotice = false;
+  state.execApprovalsError = null;
   const generation = state.requestGeneration;
   try {
     if (isNativeExecApprovalsSnapshot(state.execApprovalsSnapshot)) {
-      state.lastError =
+      state.execApprovalsError =
         "Host-native node approvals are read-only here; use the companion app or approvals set --node.";
       return;
     }
     const baseHash = state.execApprovalsSnapshot?.hash;
     if (!baseHash) {
-      state.lastError = "Exec approvals hash missing; reload and retry.";
+      state.execApprovalsError = "Exec approvals hash missing; reload and retry.";
       return;
     }
     const file = state.execApprovalsForm ?? state.execApprovalsSnapshot?.file ?? {};
     const rpc = resolveExecApprovalsRpc(target, { file, baseHash });
     if (!rpc) {
-      state.lastError = "Select a node before saving exec approvals.";
+      state.execApprovalsError = "Select a node before saving exec approvals.";
       return;
     }
     await client.request(rpc.method, rpc.params);
     if (!isCurrentNodesRequest(state, client, generation)) {
       return;
     }
+    // Set together, so the row holding the Save a person just pressed stays mounted.
     state.execApprovalsDirty = false;
+    state.execApprovalsSavedNotice = true;
     await loadExecApprovals(state, target);
   } catch (err) {
     if (isCurrentNodesRequest(state, client, generation)) {
-      state.lastError = formatUiError(err);
+      state.execApprovalsError = formatUiError(err);
     }
   } finally {
     if (isCurrentNodesRequest(state, client, generation)) {
@@ -580,13 +585,14 @@ function mutateExecApprovalsForm(
   mode: "copy-set" | "copy-remove",
 ) {
   if (isNativeExecApprovalsSnapshot(state.execApprovalsSnapshot)) {
-    state.lastError = "Host-native node approvals are read-only here.";
+    state.execApprovalsError = "Host-native node approvals are read-only here.";
     return;
   }
   const base = state.execApprovalsForm ?? state.execApprovalsSnapshot?.file ?? {};
   const next = copyWithPathPatch(base, path, value, mode);
   state.execApprovalsForm = (next.ok ? asOptionalRecord(next.value) : undefined) ?? base;
   state.execApprovalsDirty = true;
+  state.execApprovalsSavedNotice = false;
 }
 
 export function updateExecApprovalsFormValue(

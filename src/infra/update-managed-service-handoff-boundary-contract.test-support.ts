@@ -4,6 +4,8 @@ import type { UpdateRunRecord } from "./update-run-record.js";
 export type ManagedServiceBoundaryOptions = ManagedServiceManagerBoundaryOptions & {
   updaterStopped?: "native" | "legacy";
   interruptedUpdate?: "before" | "prepared" | "publishing" | "after" | "risk";
+  /** The killed updater reserved a cohort for this run or another; risk fails its repair. */
+  pluginCohort?: "own" | "foreign" | "risk";
   trigger?: "cli" | "api" | "campaign";
   origin?: UpdateRunRecord["origin"];
   controlDisconnect?: "transferred" | "unarmed" | "dead-parent";

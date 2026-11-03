@@ -9,7 +9,10 @@ import type { BeamStoredSession, BeamUpload } from "./types.js";
 import { BEAM_MAX_SESSIONS, BEAM_RETENTION_MS } from "./types.js";
 
 type BeamSessionSummary = Readonly<
-  Pick<BeamStoredSession, "beamId" | "title" | "source" | "completed" | "createdAt" | "receivedAt">
+  Pick<
+    BeamStoredSession,
+    "beamId" | "title" | "source" | "completed" | "createdAt" | "receivedAt" | "publisherProfileId"
+  >
 >;
 
 export type BeamStore = {
@@ -58,6 +61,7 @@ export function createBeamStore(runtime: PluginRuntime): BeamStore {
           completed: value.completed,
           createdAt: value.createdAt,
           receivedAt: value.receivedAt,
+          publisherProfileId: value.publisherProfileId,
         },
         expiresAt,
       }));

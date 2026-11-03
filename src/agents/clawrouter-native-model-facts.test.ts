@@ -1,6 +1,8 @@
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { streamSimple } from "../llm/stream.js";
+import type { Model } from "../llm/types.js";
 import { registerSingleProviderPlugin } from "../plugin-sdk/plugin-test-runtime.js";
 import { clearLiveCatalogCacheForTests } from "../plugin-sdk/provider-catalog-live-runtime.js";
 import { loadPluginManifest } from "../plugins/manifest.js";
@@ -10,15 +12,24 @@ import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-sur
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { catalogProvider } from "./clawrouter-catalog.test-support.js";
 import { isCodeModeEngagedForModel, resolveCodeModeConfig } from "./code-mode-runtime.js";
+import {
+  makeInMemorySessionManager,
+  makeModelSnapshotEntry,
+} from "./embedded-agent-runner.sanitize-session-history.test-harness.js";
 import { createEmptyPreparedModelRuntimeFixture } from "./embedded-agent-runner/model.fixture.test-support.js";
 import {
   createEmptyAgentDiscoveryStores,
   resolveModelAsync,
 } from "./embedded-agent-runner/model.js";
 import { createPreparedConfiguredRuntimeModelLookup } from "./embedded-agent-runner/model.static-id.js";
+import { sanitizeSessionHistory } from "./embedded-agent-runner/replay-history.js";
 import { resolveImageCompressionModelPolicy } from "./image-compression-policy.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
+import type { AgentMessage } from "./runtime/index.js";
+import { convertToLlm } from "./sessions/messages.js";
 import { ModelRegistry } from "./sessions/model-registry.js";
+import { resolveTranscriptPolicy } from "./transcript-policy.js";
+import { makeZeroUsageSnapshot } from "./usage.js";
 
 afterEach(() => {
   clearLiveCatalogCacheForTests();
@@ -175,5 +186,185 @@ it("resolves routed GPT and Claude models with the native runtime decisions", as
     expect(new Set(catalogRequests)).toEqual(
       new Set(["https://clawrouter.openclaw.ai/v1/catalog"]),
     );
+  });
+});
+
+// Exercise the runner's actual model-switch cleanup and the actual Chat serializer.
+it("replays prior-provider tool history with the same strict9 IDs as native Mistral", async () => {
+  await withOpenClawTestState({ label: "clawrouter-mistral-replay" }, async (state) => {
+    const entry = await loadBundledPluginFacade<{
+      default: Parameters<typeof registerSingleProviderPlugin>[0];
+    }>({ pluginId: "clawrouter", artifactBasename: "index.js" });
+    const router = await registerSingleProviderPlugin(entry.default);
+    const nativeEntry = await loadBundledPluginFacade<{
+      default: Parameters<typeof registerSingleProviderPlugin>[0];
+    }>({ pluginId: "mistral", artifactBasename: "index.js" });
+    const native = await registerSingleProviderPlugin(nativeEntry.default);
+    const requests: Array<{ body: Record<string, unknown>; authorization: string | null }> = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const request = new Request(input, init);
+      if (request.url.endsWith("/v1/catalog")) {
+        return Response.json({
+          providers: [
+            {
+              ...catalogProvider("mistral", ["mistral-large-latest"], "llm.chat"),
+              openaiCompatible: true,
+            },
+          ],
+        });
+      }
+      requests.push({
+        body: (await request.json()) as Record<string, unknown>,
+        authorization: request.headers.get("authorization"),
+      });
+      return Response.json(
+        { error: { message: "synthetic end of request capture" } },
+        { status: 400 },
+      );
+    });
+    const credential = "synthetic-router-replay-key";
+    const config = {
+      models: { providers: { clawrouter: { apiKey: credential } } },
+    } as unknown as OpenClawConfig;
+    const catalog = await router.catalog?.run({
+      config,
+      env: {},
+      agentDir: state.agentDir(),
+      workspaceDir: state.workspaceDir,
+      resolveProviderAuth: () => ({
+        apiKey: credential,
+        discoveryApiKey: credential,
+        mode: "api_key",
+        source: "profile",
+      }),
+      resolveProviderApiKey: () => ({ apiKey: credential, discoveryApiKey: credential }),
+    });
+    if (!catalog || !("provider" in catalog) || !catalog.provider) {
+      throw new Error("missing router catalog");
+    }
+    const row = catalog.provider.models[0];
+    if (!row || row.api !== "openai-completions") {
+      throw new Error("missing routed Mistral");
+    }
+    const callIds = [
+      "call_previous_provider_shared_prefix_one|fc_one",
+      "call_previous_provider_shared_prefix_two|fc_two",
+    ];
+    const history: AgentMessage[] = [
+      { role: "user", content: "look up both records", timestamp: 1 },
+      {
+        role: "assistant",
+        api: "openai-responses",
+        provider: "openai",
+        model: "gpt-6-luna",
+        content: callIds.map((id, index) => ({
+          type: "toolCall",
+          id,
+          name: "lookup",
+          arguments: { index },
+        })),
+        usage: makeZeroUsageSnapshot(),
+        stopReason: "toolUse",
+        timestamp: 2,
+      },
+      ...callIds.map((toolCallId, index): AgentMessage => ({
+        role: "toolResult",
+        toolCallId,
+        toolName: "lookup",
+        content: [{ type: "text", text: `record ${index}` }],
+        isError: false,
+        timestamp: 3 + index,
+      })),
+    ];
+    for (const [providerId, plugin] of [
+      ["clawrouter", router],
+      ["mistral", native],
+    ] as const) {
+      const model: Model = {
+        ...row,
+        provider: providerId,
+        api: row.api,
+        input: ["text"],
+        id: providerId === "clawrouter" ? row.id : "mistral-large-latest",
+        baseUrl: catalog.provider.baseUrl,
+      };
+      const sessionManager = makeInMemorySessionManager([
+        makeModelSnapshotEntry({
+          timestamp: 0,
+          provider: "openai",
+          modelApi: "openai-responses",
+          modelId: "gpt-6-luna",
+        }),
+      ]);
+      const policy = resolveTranscriptPolicy({
+        provider: providerId,
+        modelId: model.id,
+        modelApi: model.api,
+        model,
+        runtimeHandle: { provider: providerId, plugin },
+      });
+      const params = {
+        provider: providerId,
+        modelId: model.id,
+        modelApi: model.api,
+        model,
+        policy,
+        config,
+        env: {},
+        workspaceDir: state.workspaceDir,
+        sessionId: "mistral-replay",
+        sessionManager,
+      };
+      const replay = await sanitizeSessionHistory({ ...params, messages: history });
+      expect(await sanitizeSessionHistory({ ...params, messages: replay })).toEqual(replay);
+      expect(sessionManager.getEntries()).toHaveLength(2);
+      const stream =
+        plugin.wrapStreamFn?.({
+          provider: providerId,
+          modelId: model.id,
+          streamFn: streamSimple,
+        }) ?? streamSimple;
+      await (
+        await stream(
+          model,
+          {
+            messages: convertToLlm(replay),
+            tools: [
+              {
+                name: "lookup",
+                description: "Look up a synthetic record",
+                parameters: { type: "object", properties: { index: { type: "integer" } } },
+              },
+            ],
+          },
+          { apiKey: credential },
+        )
+      ).result();
+    }
+    expect(requests).toHaveLength(2);
+    expect(requests.map(({ authorization }) => authorization)).toEqual([
+      `Bearer ${credential}`,
+      `Bearer ${credential}`,
+    ]);
+    const [routedRequest, nativeRequest] = requests;
+    if (!routedRequest || !nativeRequest) {
+      throw new Error("missing routed or native request");
+    }
+    expect(routedRequest.body.messages).toEqual(nativeRequest.body.messages);
+    const messages = routedRequest.body.messages as Array<{
+      role: string;
+      tool_calls?: Array<{ id: string }>;
+      tool_call_id?: string;
+    }>;
+    const ids = messages.flatMap((message) => message.tool_calls?.map(({ id }) => id) ?? []);
+    expect(ids).toHaveLength(2);
+    expect(new Set(ids).size).toBe(2);
+    for (const id of ids) {
+      expect(id).toMatch(/^[a-zA-Z0-9]{9}$/);
+    }
+    expect(
+      messages.filter(({ role }) => role === "tool").map(({ tool_call_id }) => tool_call_id),
+    ).toEqual(ids);
+    expect(history[1]).toMatchObject({ content: callIds.map((id) => ({ id })) });
   });
 });

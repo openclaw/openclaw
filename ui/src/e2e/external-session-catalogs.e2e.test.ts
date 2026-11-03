@@ -83,6 +83,50 @@ function makeCatalog(
 }
 
 suite.define(() => {
+  it("opens a Visitor owned Beam cold link without shared catalog privileges", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 720 } }, async ({ page }) => {
+      const fullId = "a".repeat(32);
+      const gateway = await installMockGateway(page, {
+        operatorScopes: ["operator.sessions.write"],
+        featureMethods: [...featureMethods, "beam.owned.list", "beam.owned.read"],
+        methodResponses: {
+          "sessions.catalog.list": { catalogs: [] },
+          "beam.owned.list": {
+            catalogs: [
+              makeCatalog(
+                "beam",
+                "Beam",
+                fullId,
+                "Owned synthetic Beam",
+                { hostId: "gateway", label: "Beamed sessions", kind: "gateway" },
+                { shareRoute: SHARE_ROUTE },
+              ),
+            ],
+          },
+          "beam.owned.read": {
+            hostId: "gateway",
+            label: "Owned synthetic Beam",
+            threadId: fullId,
+            items: [
+              { type: "userMessage", text: "My synthetic published question." },
+              { type: "agentMessage", text: "My owned Beam is readable without operator.read." },
+            ],
+          },
+        },
+      });
+      await page.goto(new URL("beam/owned-synthetic-beam-aaaaaaaaaaaa", suite.server.baseUrl).href);
+      await exactText(page, "My owned Beam is readable without operator.read.").waitFor();
+      expect(await page.locator(`${visiblePane} textarea`).isDisabled()).toBe(true);
+      expect((await gateway.getRequests("beam.owned.list")).length).toBeGreaterThan(0);
+      expect((await gateway.getRequests("beam.owned.read")).at(-1)?.params).toMatchObject({
+        catalogId: "beam",
+        threadId: fullId,
+      });
+      expect(await gateway.getRequests("sessions.catalog.read")).toHaveLength(0);
+      await page.reload();
+      await exactText(page, "My owned Beam is readable without operator.read.").waitFor();
+    });
+  });
   it.each(["Riley"])(
     "keeps external transcript authors independent of viewer %s",
     async (viewer) => {

@@ -53,6 +53,40 @@ backup.
 
 ## Update implementation contract
 
+During captured SQLite migrations, candidate Doctor reads current update authority
+through private snapshots. It does not retain an independent WAL reader that can
+block its own next migration's exclusive lock. Exec approvals policy, local socket
+credentials, and verified rollback attribution retain their existing checks. This
+repair requires the candidate Doctor; the installed updater needs no change.
+
+Gateway cleanup preserves retired managed npm plugin generations referenced by
+absolute or home-relative paths in startup or current configuration. This keeps
+explicit executable pins working after an update without rewriting their settings.
+Removing a startup reference allows reclamation after a Gateway restart; current
+references protect their files on each cleanup pass. The candidate Gateway must
+contain this fix. It does not restore generations already deleted or discover
+references supplied only through environment variables, relative paths, or external
+symlinks. An incidental path-valued setting can conservatively retain extra files.
+
+The candidate macOS app's narrow credential Doctor also completes pending local
+service-runtime intent migration before native startup selects a Gateway. This
+prevents an absent migration receipt from preserving the old seed after credential
+cutover advances shared state. The daemon migration owner keeps explicit pins and
+conflict refusals; preparation does not seed a runtime or start a service. Retry
+also reconciles intent when credential cutover already completed. The candidate
+must contain this fix; older installed updaters are unchanged.
+
+After draining database readers and writers, candidate Doctor inspects SQLite
+reclamation mode without copying databases whose WAL is empty or absent and whose
+rollback journal is absent. Immutable reads preserve source artifacts; databases
+with recovery content retain the private snapshot path. Conversion still uses the
+existing maintenance, space, and integrity checks. This requires the candidate
+Doctor; the installed updater needs no new protocol.
+
+Synchronous integrity workers preserve the migration owner's selected schema-only
+check, matching the asynchronous worker path. Explicit full verification keeps
+its full coverage; the candidate must contain this transport fix.
+
 Candidate Doctor prepares its read-only SQLite inspection snapshots asynchronously,
 including lease and auth inspection and captured session repair planning. Cancellation
 joins the snapshot child and its cleanup. Snapshot allocation checks the destination's
@@ -213,9 +247,14 @@ bookkeeping available while the installed package is missing. An untouched
 publication preparation is retired and the verified original Gateway restored;
 an interrupted publication completes the recorded candidate, runs post-core
 repair as the same update's continuation, then restarts and verifies the managed
-Gateway. Update history records rollback, success with recovery, or an actionable
-failure. Lost ownership, named data risk, and unverifiable runtime identity still
-keep the Gateway stopped. The helper that starts the update must contain this
+Gateway. A plugin cohort that the killed updater reserved for this update is
+settled by that continuation before Doctor runs; after a restored original,
+the original runtime settles it before the Gateway restarts. If that settlement
+fails, the original Gateway still restarts and update history names
+`openclaw update repair` before the next update. The helper never settles a cohort
+that belongs to another update. Update history records rollback, success with
+recovery, or an actionable failure. Lost ownership, named data risk, and
+unverifiable runtime identity still keep the Gateway stopped. The helper that starts the update must contain this
 change; staging a newer candidate cannot repair an older helper.
 
 During overlapping Gateway restarts, config recovery reads health facts through

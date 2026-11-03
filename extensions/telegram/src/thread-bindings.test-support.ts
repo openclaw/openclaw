@@ -14,13 +14,26 @@ import {
 } from "./thread-bindings-store.js";
 import { createTelegramThreadBindingManager } from "./thread-bindings.js";
 
-const acpHost = vi.hoisted(() => ({ read: vi.fn() }));
+const acpHost = vi.hoisted(() => ({
+  read: vi.fn(),
+  classify:
+    vi.fn<
+      typeof import("openclaw/plugin-sdk/thread-bindings-session-runtime").resolveThreadBindingTargetKind
+    >(),
+}));
 
+// Cleanup owns its public ACP reader independently of target classification.
 vi.mock("openclaw/plugin-sdk/acp-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/acp-runtime")>();
   acpHost.read.mockImplementation(actual.readAcpSessionEntryAsync);
   return { ...actual, readAcpSessionEntryAsync: acpHost.read };
 });
+
+// Adapter-isolation cases override this operation, not the classifier's private reader.
+vi.mock("openclaw/plugin-sdk/thread-bindings-session-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/thread-bindings-session-runtime")>()),
+  resolveThreadBindingTargetKind: acpHost.classify,
+}));
 
 export { acpHost };
 
@@ -52,6 +65,11 @@ export function useTelegramThreadBindingsFixture() {
   };
   beforeEach(async () => {
     acpHost.read.mockReset();
+    acpHost.classify.mockReset();
+    const bindings = await vi.importActual<
+      typeof import("openclaw/plugin-sdk/thread-bindings-session-runtime")
+    >("openclaw/plugin-sdk/thread-bindings-session-runtime");
+    acpHost.classify.mockImplementation(bindings.resolveThreadBindingTargetKind);
     const acpRuntime = await vi.importActual<typeof import("openclaw/plugin-sdk/acp-runtime")>(
       "openclaw/plugin-sdk/acp-runtime",
     );
@@ -85,7 +103,9 @@ export function useTelegramThreadBindingsFixture() {
     installStore,
     storedBindings: async () => (await store.entries()).map((entry) => entry.value),
     createManager: async (
-      params: Omit<Parameters<typeof createTelegramThreadBindingManager>[0], "cfg">,
+      params: Omit<Parameters<typeof createTelegramThreadBindingManager>[0], "cfg"> & {
+        cfg?: OpenClawConfig;
+      },
     ) => {
       const manager = await createTelegramThreadBindingManager({
         cfg: TELEGRAM_THREAD_BINDINGS_TEST_CFG,

@@ -1,6 +1,7 @@
 import { isSettingsNavigationRoute } from "../app-navigation.ts";
 import {
   isSessionRouteId,
+  pathForRoute,
   pluginSlugCandidate,
   pluginTabSlugFromPath,
   sameRouteLocation,
@@ -22,6 +23,7 @@ import {
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
 } from "../lib/sessions/session-key.ts";
+import { settingsParentRoute } from "../lib/settings-navigation.ts";
 import { newSessionSearch, type NewSessionTarget } from "../pages/new-session/location.ts";
 import { selectApplicationSession } from "./agent-selection.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
@@ -326,6 +328,21 @@ export class ShellNavigationOwner {
 
   openNewSession(agentId: string, target?: NewSessionTarget): void {
     this.navigate("new-session", { search: newSessionSearch(agentId, target) });
+  }
+
+  /** Escape: one level up from a subpage, out of Settings from a top-level section. */
+  leaveSettingsLevel(): void {
+    const { routeId, location } = this.host.routeState;
+    const basePath = this.host.context?.basePath ?? "";
+    const parent =
+      routeId && isRouteId(routeId)
+        ? settingsParentRoute(routeId, location?.pathname, basePath)
+        : null;
+    if (parent) {
+      this.navigate(parent, { pathname: pathForRoute(parent, basePath), search: "", hash: "" });
+      return;
+    }
+    this.exitSettings();
   }
 
   exitSettings(): void {
