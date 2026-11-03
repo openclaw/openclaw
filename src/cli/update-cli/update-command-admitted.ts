@@ -83,10 +83,10 @@ export async function runAdmittedUpdate(
           prepared.controlPlaneUpdateSentinelMeta?.completionOwner === "gateway-restart" ||
           undefined,
         installKind: prepared.installKind,
-        onAdmitted: async (run) => {
-          admittedRun = run;
-          run.executorFence = initializedFence;
-          await registerRun(run);
+        onAdmitted: async (admitted) => {
+          admittedRun = admitted;
+          admitted.executorFence = initializedFence;
+          await registerRun(admitted);
         },
       });
       deadline =

@@ -88,9 +88,13 @@ vi.mock(import("../../infra/update-runner-git-recovery.js"), async (original) =>
   readCurrentGitUpdateRecovery: mocks.readGitRecovery,
 }));
 
-vi.mock("../../runtime.js", () => ({
-  defaultRuntime: { error: mocks.runtimeError },
-}));
+vi.mock(import("../../runtime.js"), async (original) => {
+  const actual = await original();
+  return {
+    ...actual,
+    defaultRuntime: { ...actual.defaultRuntime, error: mocks.runtimeError },
+  };
+});
 
 vi.mock(import("./schema-preflight.js"), async (original) => ({
   ...(await original()),
