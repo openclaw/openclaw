@@ -190,9 +190,9 @@ it.skipIf(process.platform !== "linux").each([false, true])(
           expect(paths).toHaveLength(4);
           // Stands in for a worker pool's cached reader, which only the shared reader close releases.
           using retained = new DatabaseSync(paths[1]!, { readOnly: true });
-          unregister = registerAgentDatabaseReaderCloser(() => {
-            if (closeFails) {
-              throw new Error("synthetic reader close failure");
+          unregister = registerAgentDatabaseReaderCloser((candidates) => {
+            if (closeFails || !candidates.some((candidate) => candidate.path === paths[1])) {
+              throw new Error(closeFails ? "synthetic reader close failure" : "unselected reader");
             }
             retained.close();
           });
