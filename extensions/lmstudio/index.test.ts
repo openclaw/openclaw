@@ -32,6 +32,19 @@ vi.mock("./src/models.fetch.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./src/models.fetch.js")>()),
   fetchLmstudioModels: fetchLmstudioModelsMock,
   discoverLmstudioModels: discoverLmstudioModelsMock,
+  discoverLmstudioDynamicModels: (
+    allowPrivateNetwork: boolean | undefined,
+    baseUrl: string,
+    apiKey: string,
+    headers?: Record<string, string>,
+  ) =>
+    discoverLmstudioModelsMock({
+      baseUrl,
+      apiKey,
+      headers,
+      allowPrivateNetwork,
+      quiet: true,
+    }),
 }));
 
 function required<T>(value: T | undefined): T {
@@ -205,6 +218,7 @@ describe("lmstudio plugin", () => {
       baseUrl,
       apiKey: "",
       headers: { Authorization: "Bearer first-profile" },
+      allowPrivateNetwork: undefined,
       quiet: true,
     });
   });
