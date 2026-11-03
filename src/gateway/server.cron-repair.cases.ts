@@ -111,14 +111,14 @@ export function registerCronRepairCases(
       expect(control.error).toMatchObject({ message: "CLI backend returned an empty response." });
 
       cronIsolatedRun.mockResolvedValue({ status: "error", error: "temporary upstream outage" });
-      const job = makeCronJob("silent repair", {
+      const repairJob = makeCronJob("silent repair", {
         sessionTarget: "isolated",
         payload: { kind: "agentTurn", message: "Inspect the upstream service." },
         owner: { agentId: "main", sessionKey: ownerSessionKey },
         delivery: { mode: "none" },
         failureAlert: { after: 2, mode: "announce" },
       });
-      const jobId = expectCronJobIdFromResponse(await request("cron.add", job));
+      const jobId = expectCronJobIdFromResponse(await request("cron.add", repairJob));
       await run(jobId);
       await run(jobId);
       expect(await withinTest(repairOutcome.promise, signal)).toMatchObject({
