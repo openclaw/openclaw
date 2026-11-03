@@ -55,8 +55,7 @@ describe("Markdown hex colors", () => {
   });
 
   it("keeps unresolved item references plain while preserving numeric colors", () => {
-    const source =
-      "PR #126; issue **#1234**; pull request #123456; fixes #12345678; color #126126.";
+    const source = "PR #126; issue **#1234**; pull request #123456; fixes #12345678; hex #126126.";
     for (const fragment of [
       htmlFragment(toSanitizedMarkdownHtml(source)),
       htmlFragment(toStreamingMarkdownParts(source).join("")),
