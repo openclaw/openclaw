@@ -36,7 +36,7 @@ async function readTimelineAtReady(port: number, timelinePath: string): Promise<
     try {
       const response = await fetch(`http://127.0.0.1:${port}/readyz`);
       if (response.ok) {
-        return await fs.readFile(timelinePath, "utf8");
+        return readFileSync(timelinePath, "utf8");
       }
     } catch {
       // The HTTP listener comes up before the readiness boundary.
