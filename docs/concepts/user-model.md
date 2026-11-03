@@ -61,6 +61,8 @@ Git worktree. For manual host-side editing, obtain the durable profile ID from t
 Gateway's authenticated profile/People data; do not use a display name, GitHub
 login, email, or a profile ID pasted into a message. This uses existing session
 ownership and creation records; no schema or configuration change is needed.
+Worktree sessions load that same saved personal file, not a copy committed in the
+worktree. Shared bootstrap files still come from the session's selected workspace.
 
 Each session selects **one personal `USER.md`**: the assigned human owner's file
 first, otherwise the authenticated human creator's file. An agent or system
