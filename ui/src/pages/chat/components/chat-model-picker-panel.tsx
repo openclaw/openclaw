@@ -443,8 +443,7 @@ export function ChatModelPickerPanel(panel: {
     const auth = () => panel.params.providerAuth?.get(canonicalModelAuthProviderId(props.provider));
     const authKind = () => auth()?.kind;
     const showAuth = () => Boolean(auth());
-    const authLabel = () =>
-      showAuth() ? [auth()?.label, auth()?.detail].filter(Boolean).join(" · ") : undefined;
+    const authLabel = () => (showAuth() ? auth()?.label : undefined);
     return (
       <section
         class="chat-controls__provider-model-group"

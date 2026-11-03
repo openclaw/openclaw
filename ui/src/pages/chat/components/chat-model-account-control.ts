@@ -117,7 +117,7 @@ export function renderChatModelAccountControl(params: {
   const selectedProfile = profiles.find((profile) => profile.profileId === currentId);
   const selectedLabel = selectedProfile?.displayName || selection.label;
   const selectedIdentity = [
-    ...new Set([selectedProfile?.email, selectedLabel].filter(Boolean)),
+    ...new Set([selectedLabel, selectedProfile?.email].filter(Boolean)),
   ].join(" · ");
   const description = (account: UserModelAccount | undefined) =>
     email(account?.authProfileId) ??
@@ -131,15 +131,22 @@ export function renderChatModelAccountControl(params: {
       ? account.authProfileId
       : undefined);
   const windowsFor = (profileId: string | undefined): UsageWindow[] => {
-    if (!profileId) {return [];}
+    if (!profileId) {
+      return [];
+    }
     const profile = profiles.find((candidate) => candidate.profileId === profileId);
-    if (!profile || profile.type === "api_key") {return [];}
+    if (!profile || profile.type === "api_key") {
+      return [];
+    }
     const usage = params.modelAuthStatusResult?.providers.find((candidate) => {
       if (
         canonicalModelAuthProviderId(candidate.provider) !== canonicalModelAuthProviderId(provider)
-      )
-        {return false;}
-      if (candidate.usage?.accountEmail) {return candidate.usage.accountEmail === profile.email;}
+      ) {
+        return false;
+      }
+      if (candidate.usage?.accountEmail) {
+        return candidate.usage.accountEmail === profile.email;
+      }
       // A provider-only snapshot identifies an account only when there is one login.
       return (
         candidate.profiles.filter((entry) => entry.type === "oauth" || entry.type === "token")

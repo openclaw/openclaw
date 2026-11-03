@@ -465,3 +465,29 @@ it("windows a large catalog while keeping keyboard choices and accessible positi
   search.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   expect(params.onModelSelect).toHaveBeenCalledWith("example/model-999", "main", undefined);
 });
+
+it("keeps the complete model panel above the composer", async () => {
+  await page.viewport(1280, 900);
+  container.style.cssText =
+    "position:fixed;bottom:16px;right:16px;width:min(600px, calc(100vw - 32px))";
+  const { toggle, trigger, picker, composer } = mountPicker();
+  try {
+    await toggle(async () => trigger.click());
+    const menu = picker.querySelector<HTMLElement>(".chat-controls__model-menu")!;
+    const surface = picker.querySelector<HTMLElement>(".chat-picker-overlay")!;
+    await vi.waitFor(() => {
+      const panel = menu.getBoundingClientRect();
+      const bounds = surface.getBoundingClientRect();
+      expect(bounds.bottom).toBeLessThanOrEqual(
+        composer.parentElement!.parentElement!.getBoundingClientRect().top - 8,
+      );
+      expect(panel.bottom).toBeLessThanOrEqual(bounds.bottom);
+      expect(menu.scrollHeight).toBeLessThanOrEqual(menu.clientHeight);
+      expect(option("example/beta").getBoundingClientRect().bottom).toBeLessThanOrEqual(
+        panel.bottom - 8,
+      );
+    });
+  } finally {
+    container.removeAttribute("style");
+  }
+});
