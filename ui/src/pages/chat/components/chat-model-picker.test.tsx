@@ -180,7 +180,7 @@ it("keeps Anthropic runtime choices under one provider tab", async () => {
     selectedModelValue: "anthropic/claude-opus-4-8",
     triggerModelLabel: "claude-opus-4-8",
     providerAuth: new Map<string, ModelProviderAuthLabel>([
-      ["anthropic", { kind: "subscription", label: "Claude Max" }],
+      ["anthropic", { kind: "subscription", label: "Claude Max", detail: "you@example.com" }],
     ]),
   });
   await waitForMenu(container);

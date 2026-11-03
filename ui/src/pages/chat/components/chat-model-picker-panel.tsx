@@ -450,8 +450,7 @@ export function ChatModelPickerPanel(panel: {
           )
         ),
     );
-    const authLabel = () =>
-      showAuth() ? [auth()?.label, auth()?.detail].filter(Boolean).join(" · ") : undefined;
+    const authLabel = () => (showAuth() ? auth()?.label : undefined);
     return (
       <section
         class="chat-controls__provider-model-group"

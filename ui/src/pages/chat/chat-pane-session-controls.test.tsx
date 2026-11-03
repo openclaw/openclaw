@@ -262,6 +262,9 @@ describe("chat account selection", () => {
         ],
       },
     );
+    expect(view.container.querySelector("[data-chat-account-group-toggle]")?.textContent).toContain(
+      "Personal · personal@example.com",
+    );
     view.open();
     await vi.waitFor(() => expect(view.container.querySelector('[role="alert"]')).not.toBeNull());
     expect(
