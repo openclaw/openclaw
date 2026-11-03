@@ -152,6 +152,74 @@ describe("provider usage auth boundary", () => {
     expect(auths).toEqual([]);
   });
 
+  it("keeps an environment candidate ahead of a config profile binding", async () => {
+    // Env credentials are selected ahead of config; a config binding must not replace them.
+    seed(
+      { "minimax:manual": { type: "api_key", provider: "minimax", key: "saved-minimax-secret" } },
+      { minimax: ["minimax:manual"] },
+    );
+    resolveKey.mockResolvedValue({ apiKey: "saved-minimax-secret", provider: "minimax" });
+    let candidates: string[] | undefined;
+    resolvePlugin.mockImplementationOnce(async ({ context }) => {
+      candidates = await context.resolveApiKeyCandidatesFromConfigAndStore?.({});
+      return candidates?.[0] ? { token: candidates[0] } : undefined;
+    });
+
+    const auths = await resolveProviderAuths({
+      providers: ["minimax"],
+      env: { MINIMAX_CODE_PLAN_KEY: "working-env-key" },
+      config: {
+        models: {
+          providers: {
+            minimax: {
+              baseUrl: "https://api.minimaxi.com",
+              apiKey: "minimax:manual",
+              models: [],
+            },
+          },
+        },
+      },
+      agentDir: "/tmp/openclaw-agent",
+    });
+
+    expect(candidates?.[0]).toBe("working-env-key");
+    expect(auths).toEqual([{ provider: "minimax", token: "working-env-key" }]);
+  });
+
+  it("does not release another provider's secret to a fixed usage endpoint", async () => {
+    // Inference entries may share a proxy baseUrl; the usage endpoint is fixed per provider,
+    // so that exception must not authorize sending openai's secret to minimax's usage fetch.
+    seed({ "openai:manual": { type: "api_key", provider: "openai", key: "openai-secret" } }, {});
+    resolveKey.mockResolvedValue({ apiKey: "openai-secret", provider: "openai" });
+    let candidates: string[] | undefined;
+    resolvePlugin.mockImplementationOnce(async ({ context }) => {
+      candidates = await context.resolveApiKeyCandidatesFromConfigAndStore?.({});
+      return candidates?.[0] ? { token: candidates[0] } : undefined;
+    });
+
+    const auths = await resolveProviderAuths({
+      providers: ["minimax"],
+      env: {},
+      config: {
+        models: {
+          providers: {
+            minimax: {
+              baseUrl: "https://proxy.example/v1",
+              apiKey: "openai:manual",
+              models: [],
+            },
+            openai: { baseUrl: "https://proxy.example/v1", models: [] },
+          },
+        },
+      },
+      agentDir: "/tmp/openclaw-agent",
+    });
+
+    expect(candidates ?? []).not.toContain("openai-secret");
+    expect(candidates?.[0]).not.toBe("openai:manual");
+    expect(auths).toEqual([]);
+  });
+
   it("does not return an ineligible legacy binding's raw token", async () => {
     // Profile order excludes the expired token; the legacy synchronous path must agree.
     seed(

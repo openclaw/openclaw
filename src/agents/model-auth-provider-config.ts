@@ -386,6 +386,8 @@ function canUseProfileAsProviderEntryApiKey(params: {
   authAliasLookupParams?: ProviderAuthAliasLookupParams;
   provider: string;
   credential: AuthProfileCredential;
+  /** Inference-only exception; a fixed credential destination must opt out. */
+  allowSharedBaseUrl?: boolean;
 }): boolean {
   if (!isBearerProfileCredential(params.credential)) {
     return false;
@@ -396,11 +398,19 @@ function canUseProfileAsProviderEntryApiKey(params: {
   // Split-provider entries may intentionally point at the same upstream endpoint
   // with different profile ids. Require a matching configured base URL before
   // allowing a bearer profile to cross provider ids.
-  return providerEntriesShareBaseUrl({
-    cfg: params.cfg,
-    provider: params.provider,
-    credentialProvider: params.credential.provider,
-  });
+  //
+  // That exception is inference-only: a caller that transmits the credential to a
+  // fixed destination (usage and billing endpoints ignore these base URLs) must opt
+  // out, because two inference entries sharing a proxy URL says nothing about who
+  // receives the credential at the provider's own endpoint.
+  return (
+    params.allowSharedBaseUrl !== false &&
+    providerEntriesShareBaseUrl({
+      cfg: params.cfg,
+      provider: params.provider,
+      credentialProvider: params.credential.provider,
+    })
+  );
 }
 
 /** Classifies a provider entry apiKey as literal/profile/marker before resolving secrets. */
@@ -410,6 +420,9 @@ export function resolveProviderEntryApiKeyProfileReference(params: {
   authAliasLookupParams?: ProviderAuthAliasLookupParams;
   provider: string;
   store: AuthProfileStore;
+  /** Fixed-destination callers (usage, billing) pass false: a shared inference base URL
+   *  does not authorize releasing the credential to another provider's endpoint. */
+  allowSharedBaseUrlCredentials?: boolean;
 }): ProviderEntryApiKeyProfileReference {
   const { providerConfig, ref } = resolveProviderConfigSecretInput(
     params.cfg,
@@ -440,6 +453,7 @@ export function resolveProviderEntryApiKeyProfileReference(params: {
           authAliasLookupParams: params.authAliasLookupParams,
           provider: params.provider,
           credential,
+          allowSharedBaseUrl: params.allowSharedBaseUrlCredentials,
         })
       ? "provider-binding"
       : undefined;
@@ -468,6 +482,8 @@ export async function resolveProviderEntryApiKeyBinding(params: {
   agentDir?: string;
   secretSentinels?: boolean;
   signal?: AbortSignal;
+  /** See resolveProviderEntryApiKeyProfileReference. */
+  allowSharedBaseUrlCredentials?: boolean;
 }): Promise<ProviderEntryApiKeyBindingResolution> {
   params.signal?.throwIfAborted();
   const reference = resolveProviderEntryApiKeyProfileReference(params);
