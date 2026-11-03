@@ -207,7 +207,7 @@ export async function prepareMcpAppExtensionRuntime(options: GatewayRequestHandl
       return preparing;
     };
     const failures: unknown[] = [];
-    const settle = async (operation: () => unknown | Promise<unknown>) => {
+    const settle = async (operation: () => unknown) => {
       try {
         await operation();
       } catch (error) {
