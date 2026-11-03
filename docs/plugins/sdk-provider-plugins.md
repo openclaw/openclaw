@@ -859,3 +859,12 @@ results with the native plugin's untrusted-content marking and result metadata.
 The native plugins and ClawRouter use the same codecs. Callers own credentials,
 endpoint admission, SSRF policy, cancellation, response limits and caching; a
 codec does not grant permission to execute an offer or establish its billing.
+
+The same family exports `buildResponsesSearchRequest`, `buildResponsesSearchPayload`,
+`requireResponsesSearchTextAndCitations` and
+`requireResponsesSearchTextCitationsAndInline`, with `ResponsesSearchResponse`.
+Native xAI tools and ClawRouter share this Responses text/citation codec. The
+request builder preserves the caller's qualified model, effort and tools and
+sets `store:false`; it does not authorize those inputs. Callers own terminal
+status, byte limits and billing. Inline offsets are opt-in and must have a
+qualified unit/mapping contract; ClawRouter does not enable them.

@@ -1,10 +1,13 @@
+import {
+  buildResponsesSearchPayload,
+  requireResponsesSearchTextCitationsAndInline,
+  type ResponsesSearchResponse,
+} from "openclaw/plugin-sdk/provider-web-search";
 import { XAI_DEFAULT_MODEL_ID } from "../model-definitions.js";
 import {
   requestXaiResponsesTool,
   resolveXaiToolDefaultReasoningEffort,
-  requireXaiResponseTextCitationsAndInline,
 } from "./responses-tool-shared.js";
-import { buildXaiWebSearchPayload, type XaiWebSearchResponse } from "./web-search-shared.js";
 
 export const XAI_DEFAULT_X_SEARCH_MODEL = XAI_DEFAULT_MODEL_ID;
 const XAI_X_SEARCH_MAX_CONTENT_CHARS = 20_000;
@@ -37,12 +40,12 @@ export function buildXaiXSearchPayload(params: {
   tookMs: number;
   content: string;
   citations: string[];
-  inlineCitations?: XaiWebSearchResponse["inline_citations"];
+  inlineCitations?: ResponsesSearchResponse["inline_citations"];
   truncated?: boolean;
   options?: XaiXSearchOptions;
 }): Record<string, unknown> {
   return {
-    ...buildXaiWebSearchPayload({ ...params, provider: "xai", source: "x_search" }),
+    ...buildResponsesSearchPayload({ ...params, provider: "xai", source: "x_search" }),
     ...(params.options?.allowedXHandles?.length
       ? { allowedXHandles: params.options.allowedXHandles }
       : {}),
@@ -76,7 +79,7 @@ export async function requestXaiXSearch(params: {
       errorLabel: "xAI X search failed",
     },
     (data) =>
-      requireXaiResponseTextCitationsAndInline(
+      requireResponsesSearchTextCitationsAndInline(
         data,
         "xAI X search failed",
         params.inlineCitations,
