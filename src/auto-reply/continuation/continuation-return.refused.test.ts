@@ -140,7 +140,7 @@ async function produce(
     beforeWrite,
     afterWrite,
     ambient,
-  }: { beforeWrite?: () => unknown; afterWrite?: () => unknown; ambient?: boolean } = {},
+  }: { beforeWrite?: () => unknown; afterWrite?: (id: string) => unknown; ambient?: boolean } = {},
 ) {
   const written: string[] = [];
   const outcome = await enqueueContinuationReturnDeliveries(
@@ -157,7 +157,7 @@ async function produce(
       enqueueSessionDelivery: async (...args) => {
         await beforeWrite?.();
         written.push(await enqueueSessionDelivery(...args));
-        await afterWrite?.();
+        await afterWrite?.(written.at(-1)!);
         return written.at(-1)!;
       },
       enqueueSystemEvent: enqueueSystemEventRaw,
@@ -271,25 +271,22 @@ describe("a continuation return whose recipient authority advanced", () => {
     async (window) => {
       await withRecipient(async (scope, authority) => {
         // The duplicate reads authority before the change and writes after the refusal settled.
-        let reachedWrite!: () => void;
-        let releaseWrite!: () => void;
-        const atWrite = new Promise<void>((resolve) => (reachedWrite = resolve));
-        const released = new Promise<void>((resolve) => (releaseWrite = resolve));
-        let id: string | undefined;
+        const atWrite = Promise.withResolvers<void>();
+        const released = Promise.withResolvers<void>();
         let statusAtWrite: string | undefined;
         const duplicate = produce(scope, authority, {
           beforeWrite: () => {
-            reachedWrite();
-            return released;
+            atWrite.resolve();
+            return released.promise;
           },
-          afterWrite: async () => {
-            statusAtWrite = await receiptStatus(scope, id!);
+          afterWrite: async (written) => {
+            statusAtWrite = await receiptStatus(scope, written);
           },
         });
-        await atWrite;
-        ({ id } = await produce(scope, authority, {
+        await atWrite.promise;
+        const { id } = await produce(scope, authority, {
           afterWrite: transitionTo("owner change", scope),
-        }));
+        });
         if (window === "after") {
           expect(await receiptStatus(scope, id!)).toBe("failed");
           // Past the 30-day bound, the maintenance sweep removes the receipt and frees the id.
@@ -301,7 +298,7 @@ describe("a continuation return whose recipient authority advanced", () => {
           await pruneExpiredDeliveryQueueTombstones(scope.env.OPENCLAW_STATE_DIR);
           expect(await receiptStatus(scope, id!)).toBeUndefined();
         }
-        releaseWrite();
+        released.resolve();
         const { outcome } = await duplicate;
 
         // Inside the window the receipt fences the write; after it, the write lands and is refused.

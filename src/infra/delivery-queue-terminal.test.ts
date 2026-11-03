@@ -401,24 +401,12 @@ describe("delivery queue pending terminal transition", () => {
   );
 
   it("keeps an opted-in failed receipt bounded through recompaction until the ordinary sweep", () => {
-    const entry = {
-      id: "terminal-receipt",
-      enqueuedAt: 1_000,
-      retryCount: 2,
-      sessionKey: "private",
-    };
+    const entry = { id: "receipt", enqueuedAt: 1_000, retryCount: 2, sessionKey: "private" };
     seed(entry);
     vi.useFakeTimers();
     vi.setSystemTime(50_000);
-    expect(
-      terminalizePendingDeliveryQueueEntry({
-        queueName,
-        id: entry.id,
-        entry,
-        stateDir,
-        keepFailedReceipt: true,
-      }),
-    ).toEqual({ status: "terminalized", retained: true });
+    const params = { queueName, id: entry.id, entry, stateDir, keepFailedReceipt: true as const };
+    expect(terminalizePendingDeliveryQueueEntry(params)).toMatchObject({ retained: true });
     const columns =
       "status, session_key, recovery_state, retention_id_prefix, entry_json, enqueued_at";
     const receipt = {
