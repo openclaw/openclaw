@@ -11,7 +11,9 @@ import { requireApiKey, resolveApiKeyForProvider } from "openclaw/plugin-sdk/pro
 import {
   createProviderOperationDeadline,
   createProviderOperationTimeoutResolver,
+  sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
+import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";
 import { fetchWithRuntimeDispatcher } from "openclaw/plugin-sdk/runtime-fetch";
 import { normalizeClawRouterRootUrl } from "./base-url.js";
 import {
@@ -194,6 +196,7 @@ export const clawrouterMediaUnderstandingProvider: MediaUnderstandingProvider = 
         }
       }
       const configured = context.cfg.models?.providers?.clawrouter;
+      const configuredRequest = sanitizeConfiguredModelProviderRequest(configured?.request);
       const http = resolveClawRouterCapabilityHttpContext(
         {
           ...context.cfg,
@@ -207,9 +210,12 @@ export const clawrouterMediaUnderstandingProvider: MediaUnderstandingProvider = 
                 models: configured?.models ?? [],
                 headers: context.headers ?? configured?.headers,
                 request: {
-                  ...configured?.request,
+                  ...configuredRequest,
                   ...context.request,
-                  headers: { ...configured?.request?.headers, ...context.request?.headers },
+                  headers: omitNullRequestHeaders({
+                    ...configuredRequest?.headers,
+                    ...context.request?.headers,
+                  }),
                 },
               },
             },
