@@ -498,6 +498,26 @@ describe("release fast lane label", () => {
 });
 
 describe("ci workflow guards", () => {
+  it("shares main screenshot input caches with restore-only store validation", () => {
+    const source = readCiWorkflow().jobs["ios-screenshot-capture"].steps;
+    const validation = readWorkflow(".github/workflows/ios-store-release.yml").jobs.screenshots
+      .steps;
+    for (const name of ["Restore Watch RTC build inputs", "Restore screenshot source packages"]) {
+      const producer = requiredWorkflowStep(source, name);
+      const consumer = requiredWorkflowStep(validation, name);
+      expect(consumer.uses).toBe(producer.uses);
+      expect(consumer.with).toEqual(producer.with);
+      expect(consumer["continue-on-error"]).toBe(true);
+      expect(consumer["timeout-minutes"]).toBe(3);
+    }
+    expect(requiredWorkflowStep(validation, "Identify iOS native cache inputs").run).toBe(
+      requiredWorkflowStep(source, "Identify iOS native cache inputs").run,
+    );
+    expect(
+      validation.some((step: WorkflowStep) => step.uses?.startsWith("actions/cache/save@")),
+    ).toBe(false);
+  });
+
   const ci = readCiWorkflow();
   function ciValue(
     job: string,
