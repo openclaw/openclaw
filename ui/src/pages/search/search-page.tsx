@@ -226,7 +226,7 @@ export function SearchPage() {
         if (!current()) {
           return;
         }
-        const status = await scope.client.request<unknown>("webSearch.status", selected);
+        const status = await scope.client.request("webSearch.status", selected);
         if (current()) {
           if (!isSearchStatus(status)) {
             throw new UserFacingError(t("searchPage.statusNotReady"));
