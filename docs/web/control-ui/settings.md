@@ -101,6 +101,10 @@ After the Gateway applies the change, reload the browser page or reconnect to pi
 
 ## Personal identity
 
+**Settings → Profile → Your access** shows your current permissions. To request broader access, use **Admin access**; an admin must approve this device separately.
+
+**Personal instructions** keeps your preferences in your personal `USER.md`, separate from the shared workspace file. A missing profile asks you to sign in. If you’re already signed in but lack permission to view your own sessions, ask an admin for access instead. Your unsaved draft stays private when your profile or access changes.
+
 Authenticated people have a durable Gateway profile with a display name, avatar, linked emails, and optional verified GitHub identity. Open **Settings → Profile → Identity** to update the editable fields. The profile follows the authenticated person across browsers; clearing browser site data does not delete it.
 
 Profile photos load through authenticated Gateway routes in the online roster, person cards, and chat. Paired browsers use their approved read scopes. When the Mac app connects through an SSH tunnel to a trusted-proxy Gateway, image requests can use the connection's saved password if its paired credential is rejected. Credentials stay in request headers; profiles without an available image show initials.

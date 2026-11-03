@@ -264,14 +264,10 @@ suite.define(() => {
             expect(pending[0]?.scopes).toContain("operator.admin");
             expect((await auth()).scopes).not.toContain("operator.admin");
             await adminClient.request("device.pair.approve", { requestId: pending[0]!.requestId });
-            await access
-              .getByText("You have permission to manage this server.", { exact: true })
-              .waitFor();
+            await access.getByText("You have admin access.", { exact: true }).waitFor();
             expect((await auth()).scopes).toContain("operator.admin");
             await page.reload();
-            await access
-              .getByText("You have permission to manage this server.", { exact: true })
-              .waitFor();
+            await access.getByText("You have admin access.", { exact: true }).waitFor();
             const reloadedAuth = await auth();
             expect(reloadedAuth.scopes).toContain("operator.admin");
             expect(

@@ -54,6 +54,15 @@ class PersonalInstructionsState {
     return this.file !== null && this.draft !== this.file.content;
   }
 
+  get unavailableMessage() {
+    const snapshot = this.context.gateway.snapshot;
+    return snapshot.phase !== "connected"
+      ? t("profilePage.personalInstructions.offline")
+      : !this.multipleProfiles || !snapshot.selfUser?.id
+        ? t("profilePage.personalInstructions.signIn")
+        : t("profilePage.personalInstructions.accessRequired");
+  }
+
   dispose() {
     this.client = null;
     this.available = false;
@@ -351,7 +360,7 @@ export function PersonalInstructions(props: { hidden?: boolean }) {
           >
             <Show
               when={view().available}
-              fallback={<SettingsEmpty message={t("profilePage.personalInstructions.signIn")} />}
+              fallback={<SettingsEmpty message={view().unavailableMessage} />}
             >
               <Show
                 when={view().agents.length}

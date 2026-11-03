@@ -155,11 +155,31 @@ it.each([
     await idle(element);
     expect(request).not.toHaveBeenCalled();
     expect(textarea(element)).toBeNull();
+    if (signedIn === false) {
+      expect(element.textContent).toContain(
+        "Sign in with your personal profile to edit your instructions.",
+      );
+      expect(element.textContent).not.toContain("operator.");
+    }
     if (!multipleProfiles) {
       expect(element.textContent?.trim()).toBe("");
     }
   },
 );
+
+it("asks a signed-in person for access instead of another sign-in", async () => {
+  const request = vi.fn();
+  const { element } = mount(request, true, true, []);
+  await waitForSolid(() => {
+    expect(element.textContent).toContain(
+      "You need permission to view your own sessions to edit your instructions.",
+    );
+  });
+  expect(element.textContent).not.toContain("Sign in");
+  expect(element.textContent).not.toContain("operator.");
+  expect(textarea(element)).toBeNull();
+  expect(request).not.toHaveBeenCalled();
+});
 
 it("preserves a conflicting draft, confirms reload, and keeps it when reload fails", async () => {
   const request = replies(
