@@ -187,7 +187,7 @@ suite.define(() => {
       await composer.press("Enter");
       await expect
         .poll(() => page.getByRole("log").textContent())
-        .toContain('Unsupported thinking level "high" for this model.');
+        .toContain("Couldn’t use thinking level “high” with this model.");
       const after = await call<SessionsListResult>("sessions.list", { agentId: "main", limit: 50 });
       expect(after.sessions.find((row) => row.key === key)).toMatchObject({
         modelProvider: "thinking-fixture",
