@@ -110,7 +110,10 @@ export const deprecatedBarrelPluginSdkEntrypoints = pluginSdkSubpaths.filter((en
 export const supportedBundledFacadeSdkEntrypoints = [] as const;
 
 /** Plugin-owned surfaces intentionally public and documented for third-party plugins. */
-export const publicPluginOwnedSdkEntrypoints = ["memory-core-host-engine-foundation"] as const;
+export const publicPluginOwnedSdkEntrypoints = [
+  "browser-extension-host",
+  "memory-core-host-engine-foundation",
+] as const;
 
 /**
  * Build tsdown entry source paths for plugin SDK entrypoints.

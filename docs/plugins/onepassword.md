@@ -357,9 +357,10 @@ without returning their values to OpenClaw or the model. It does not use `op` or
 change the existing SecretRef and curated-secret features above.
 
 **Integration status:** the browser adapter is wired through the managed browser
-extension host. Sensitive approval-link delivery remains intentionally unsupported;
-normal chat delivery is not used because it mirrors links into model-visible
-history. Enabling this preview alone does not provide working approval delivery.
+extension host. Approval links are delivered through a private card in the
+**OpenClaw Control UI**, not ordinary chat messages. Open the originating
+conversation on a computer with the Nightly 1Password app to approve; other
+channels do not deliver the private link.
 
 ### Setup and consent
 
@@ -451,8 +452,8 @@ reconstruct it.
 Selecting the approval button records when it opened and starts one Gateway-owned
 status checker. The card updates automatically while waiting and shows the prompt's
 two-minute countdown. **Open again** reopens the same prompt without starting another
-checker or extending the deadline. If the app is not installed on this computer,
-select **1Password isn’t on this computer** for the next step.
+checker or extending the deadline. The card shows this recovery text:
+**Nothing opened? Open this chat on a computer with the 1Password app.**
 Explicitly telling the agent that you opened or approved the prompt remains a
 fallback. There are no checks for five seconds; checks then run every two seconds to 30 seconds, every five
 seconds to one minute, and every ten seconds to two minutes, then stop. Rate
