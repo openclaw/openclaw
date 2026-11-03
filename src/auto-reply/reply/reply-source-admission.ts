@@ -16,6 +16,7 @@ import { bindCommandOwnerAuthority } from "../command-owner-authority.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { completeFollowupRunLifecycle } from "./queue/lifecycle.js";
 import type { FollowupRun } from "./queue/types.js";
+import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
 
 /** Acquire original input custody before maintenance or a provider can consume it. */
 export async function prepareReplySourceAdmission(params: {
@@ -78,6 +79,30 @@ export async function prepareReplySourceAdmission(params: {
   } catch (error) {
     await release?.();
     throw error;
+  }
+}
+
+/** Required preflight can invoke models and tools before the reply runner exists. */
+export async function admitReplyMaintenance(
+  turn: Pick<AdmittedFollowupTurn, "runId" | "queued" | "operation">,
+  sessionKey: string | undefined,
+  assertCurrent: () => void,
+): Promise<void> {
+  const execution = turn.queued.run.internalEventExecution;
+  await execution?.beforeScheduledStart?.(turn.runId);
+  assertCurrent();
+  // Maintenance owns the occurrence before effects, preventing pre-execution policy replay.
+  execution?.onStarted(turn.runId);
+  const automation = turn.queued.run.scheduledAutomation;
+  if (automation && sessionKey) {
+    automation.onExecutionStarted?.({
+      runId: turn.runId,
+      sessionId: turn.operation.sessionId,
+      sessionKey,
+      provider: turn.queued.run.provider,
+      model: turn.queued.run.model,
+    });
+    automation.onExecutionPhase?.({ jobId: automation.job.id, phase: "context_engine" });
   }
 }
 
