@@ -26,6 +26,68 @@ function digest(value: unknown) {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
+type GraphConfiguration = { files: string[]; settings: unknown };
+
+function graphInputs(root: string, configuration: GraphConfiguration, env: NodeJS.ProcessEnv) {
+  try {
+    const files = [...new Set(configuration.files)]
+      .toSorted()
+      .map((file) => [path.relative(root, file).split(path.sep).join("/"), readBounded(file)]);
+    const settings = JSON.stringify(configuration.settings, (_key, value: unknown) => {
+      if (
+        typeof value === "function" ||
+        typeof value === "symbol" ||
+        (typeof value === "number" && !Number.isFinite(value))
+      ) {
+        throw new Error("Graph inputs contain an unsupported value");
+      }
+      if (value instanceof RegExp) {
+        return { source: value.source, flags: value.flags };
+      }
+      if (
+        value !== null &&
+        typeof value === "object" &&
+        !Array.isArray(value) &&
+        ![Object.prototype, null].includes(Object.getPrototypeOf(value))
+      ) {
+        throw new Error("Graph inputs contain an unsupported object");
+      }
+      return typeof value === "string" ? value.replaceAll(root, "<repository>") : value;
+    });
+    if (settings === undefined) {
+      return null;
+    }
+    const serialized = JSON.stringify([files, settings]);
+    if (Buffer.byteLength(serialized) > MAX_BYTES) {
+      throw new Error("Graph inputs exceed the byte limit");
+    }
+    return {
+      version: 1,
+      profile: "unit-fast",
+      configDigest: createHash("sha256").update(serialized).digest("hex"),
+      environmentDigest: digest([
+        [
+          ...semanticEnv,
+          "CI",
+          "GITHUB_ACTIONS",
+          "OPENCLAW_TEST_WORKERS",
+          "NODE_ENV",
+          "TZ",
+          "LANG",
+          "LC_ALL",
+        ].map((key) => [key, env[key] ?? null]),
+        process.version,
+        process.versions.bun ?? null,
+        process.platform,
+        process.arch,
+      ]),
+    };
+  } catch {
+    // Unknown graph inputs must not discard otherwise usable exact-run observations.
+    return null;
+  }
+}
+
 // The reporter supplies native callbacks, not lines that tests can print to stdout.
 // This is an optional exchange artifact; failure must not change the test outcome.
 export function createCiTestObservationCapture(options: {
@@ -33,6 +95,7 @@ export function createCiTestObservationCapture(options: {
   cacheDirectory: string;
   configFiles: string[];
   configuration: unknown;
+  graphConfiguration?: GraphConfiguration;
   env?: NodeJS.ProcessEnv;
 }) {
   // Test code may change process.env; retain the invocation's original identity.
@@ -47,7 +110,11 @@ export function createCiTestObservationCapture(options: {
   let disabled = false;
   let captureMs = 0;
   let preExecution:
-    | { recordedAt: string; observations: ReturnType<typeof collectTestObservations> }
+    | {
+        recordedAt: string;
+        observations: ReturnType<typeof collectTestObservations>;
+        graphInputs: ReturnType<typeof graphInputs>;
+      }
     | undefined;
   const warn = () => console.warn("[adaptive-ci] observation export unavailable; tests unchanged");
 
@@ -111,6 +178,9 @@ export function createCiTestObservationCapture(options: {
           preExecution = {
             recordedAt: new Date().toISOString(),
             observations,
+            graphInputs: options.graphConfiguration
+              ? graphInputs(root, options.graphConfiguration, env)
+              : null,
           };
         }
         if (!preExecution) {
