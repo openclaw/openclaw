@@ -449,7 +449,7 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): JSX.
   const confirm = (
     <button
       type="button"
-      class="btn primary oc-action oc-action-primary"
+      class="btn primary"
       disabled={confirmUnavailable() && !props.mutationBlockedReason}
       aria-disabled={!props.canMutate ? "true" : undefined}
       onClick={() => {

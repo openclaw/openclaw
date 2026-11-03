@@ -17,8 +17,6 @@ import {
   SettingsPage,
   SettingsRow,
   SettingsSegmented,
-  SettingsStatus,
-  SettingsValue,
 } from "../../components/solid/settings-ui.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -566,30 +564,6 @@ export function AppearanceSection(props: ConfigProps) {
       <SidebarPreferencesSection {...props} sectionRef={(element) => (sidebar = element)} />
       <SessionSources {...props} sectionRef={(element) => (sessionSources = element)} />
       <LobsterPetSection {...props} />
-      <section id={APPEARANCE_SETTINGS_TARGET_IDS.connection} class="settings-section">
-        <SettingsSectionHeader title={t("configView.connection.title")} />
-        <div class="settings-group">
-          <SettingsRow
-            title={t("configView.connection.gateway")}
-            control={<SettingsValue value={props.gatewayUrl || "-"} mono />}
-          />
-          <SettingsRow
-            title={t("configView.connection.status")}
-            control={
-              <SettingsStatus
-                kind={props.connected ? "ok" : "muted"}
-                label={props.connected ? t("common.connected") : t("common.offline")}
-              />
-            }
-          />
-          {props.assistantName ? (
-            <SettingsRow
-              title={t("configView.connection.assistant")}
-              control={<SettingsValue value={props.assistantName} />}
-            />
-          ) : undefined}
-        </div>
-      </section>
     </SettingsPage>
   );
 }

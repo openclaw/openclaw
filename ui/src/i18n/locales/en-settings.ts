@@ -192,7 +192,6 @@ const enSettings = {
     channels: {
       title: "Channels",
       subtitle: "Gateway-wide channel status snapshot.",
-      lastRefresh: "Last refresh: {time}",
       loadHint: "Load channels to see live status.",
       empty: "No channels found.",
       connectedCount: "{connected}/{total} connected",
@@ -262,6 +261,8 @@ const enSettings = {
       stateRunning: "Running",
       stateConfigured: "Configured",
       stateAttention: "Needs attention",
+      stateNotConfigured: "Not configured",
+      details: "Details",
       setUp: "Set up",
       guidedSetup: "Guided step-by-step setup",
       openDetails: "Open details",
@@ -1638,6 +1639,8 @@ const enSettings = {
       triggerWordsUnavailable: "Voice wake trigger editing is not enabled on this Gateway.",
       triggerWordsError: "Could not save trigger words: {error}",
       triggerWordsLoadError: "Could not load trigger words: {error}",
+      triggerWordsSaveFailed: "Could not save trigger words.",
+      triggerWordsLoadFailed: "Could not load trigger words.",
       triggerWordsDisconnected:
         "Trigger words have not been saved. Your edits are retained. Reconnect to this Gateway, then retry.",
       saved: "Saved",
@@ -1978,7 +1981,6 @@ const enSettings = {
       title: "Connection",
       gateway: "Gateway",
       status: "Status",
-      assistant: "Assistant",
     },
     root: "<root>",
     itemCount: "[{count} item]",

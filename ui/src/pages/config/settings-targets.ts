@@ -435,14 +435,11 @@ export const SETTINGS_SEARCH_TARGETS = {
     ],
     aliases: "voice audio input dictation dictate",
   },
-  appearanceConnection: {
-    ...appearanceSettingsRouteTarget(APPEARANCE_SETTINGS_TARGET_IDS.connection),
+  gatewayConnection: {
+    routeId: "connection",
     labelKey: "configView.connection.title",
-    searchKeys: [
-      "configView.connection.gateway",
-      "configView.connection.status",
-      "configView.connection.assistant",
-    ],
+    hash: "",
+    searchKeys: ["configView.connection.gateway", "configView.connection.status"],
     aliases: "version",
   },
   notifications: {

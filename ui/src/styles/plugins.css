@@ -877,7 +877,6 @@ openclaw-plugins-page
   width: max-content;
   max-width: 100%;
   align-self: flex-start;
-  --track-color: transparent;
   --indicator-color: transparent;
 }
 
@@ -917,6 +916,13 @@ openclaw-plugins-page
   color: inherit;
   text-align: left;
   text-decoration: none;
+}
+
+/* The phone header's Back already goes up a level. The settings editor keeps its
+   breadcrumb: nothing else there names the plugin. */
+.shell--settings.shell--floating-header
+  :is(.plugin-catalog-detail > .plugins-settings-breadcrumb, .plugins-settings-back) {
+  display: none;
 }
 
 .plugins-settings-breadcrumb {
@@ -1344,7 +1350,7 @@ openclaw-plugins-page
 }
 .plugin-tool-preview__parameters h3 {
   margin: 0 0 12px;
-  font-size: var(--control-ui-text-base);
+  font-size: var(--control-ui-text-md);
 }
 .plugin-tool-preview__parameters dl {
   display: grid;
