@@ -116,6 +116,8 @@ async function runGatewayCronFailureRepair(
         source: "cron_failure_repair",
         contextKey: `cron-failure-repair:${request.repairId}`,
         expectedTarget: target,
+        // The scheduler's repair brief permits silence; public provenance does not grant it.
+        replyExpectation: "optional",
         // Only the agent's authored reply reaches the chat; the next alert owns escalation.
         suppressErrorDelivery: true,
       });

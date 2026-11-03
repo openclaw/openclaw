@@ -89,3 +89,14 @@ it.each([
   expect(budget).toBe(30_000 - elapsed);
   expect(budget).toBeGreaterThan(0);
 });
+
+it("passes replyExpectation: optional to enqueueSessionEventForHost", async () => {
+  await runRepairAndCaptureBudget({ elapsed: 1, wall: 1_700_000_000_001 });
+  expect(mocks.enqueueSessionEventForHost).toHaveBeenCalledWith(
+    "repair the failing cron",
+    expect.objectContaining({
+      source: "cron_failure_repair",
+      replyExpectation: "optional",
+    }),
+  );
+});

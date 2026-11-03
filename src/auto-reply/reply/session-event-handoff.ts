@@ -549,6 +549,7 @@ function enqueueSessionEventAttempt(
         },
       },
       replyOptions: {
+        replyExpectation: options.replyExpectation,
         onModelSelected: options.scheduledAutomation
           ? (selection) => {
               configPolicy.selectModel(selection);

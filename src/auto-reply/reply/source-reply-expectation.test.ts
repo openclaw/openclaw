@@ -56,3 +56,25 @@ describe("exec completion reply expectation", () => {
     expect(resolveSourceReplyExpectation({ ctx: turn, cfg: {} })).toBe(expected);
   });
 });
+
+describe("cron failure repair reply expectation", () => {
+  const cronRepair = { kind: "internal_system", sourceTool: "cron_failure_repair" } as const;
+  it("honors explicit replyExpectation: optional for cron failure repair turn on webchat", () => {
+    expect(
+      resolveSourceReplyExpectation({
+        ctx: { Provider: "webchat", InputProvenance: cronRepair },
+        cfg: {},
+        replyExpectation: "optional",
+      }),
+    ).toBe("optional");
+  });
+
+  it("defaults ungranted public provenance to result-required on webchat", () => {
+    expect(
+      resolveSourceReplyExpectation({
+        ctx: { Provider: "webchat", InputProvenance: cronRepair },
+        cfg: {},
+      }),
+    ).toBe("result-required");
+  });
+});
