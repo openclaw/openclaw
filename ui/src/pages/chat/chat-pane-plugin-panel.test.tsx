@@ -3,6 +3,7 @@ import { expect, it, vi } from "vitest";
 import type { ControlUiViewContext } from "../../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { PRESENTATION_CHANGED_EVENT, type PresentationValue } from "../../lib/presentation.ts";
+import { createInertViewHost } from "../../plugins/control-ui-view.test-support.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
@@ -29,7 +30,7 @@ it("retains the plugin panel while parking and reveals it with current pane prop
     key: "fixture/notes",
     pluginId: "fixture",
     value: { mount },
-    host: { signal, sessions: {}, agents: {}, navigation: {}, ui: {}, components: {} },
+    host: createInertViewHost(signal),
     signal,
   };
   // SAFETY: PluginView only reads this registry, lifecycle signal, and error reporter.

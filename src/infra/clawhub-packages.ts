@@ -11,7 +11,7 @@ import {
 } from "./clawhub-client.js";
 import { reportClawHubInstallTelemetry } from "./clawhub-telemetry.js";
 
-export type ClawHubPackageFamily = "skill" | "code-plugin" | "bundle-plugin" | "claw";
+export type ClawHubPackageFamily = "skill" | "code-plugin" | "bundle-plugin" | "template";
 export type ClawHubPackageChannel = "official" | "community" | "private";
 export type ClawHubPackageCompatibility = ExternalPluginCompatibility;
 type ClawHubPackageHostTarget = {
@@ -150,7 +150,7 @@ export type ClawHubPackageClawPackSummary = {
   environment?: ClawHubPackageEnvironmentSummary | null;
   runtimeBundles?: unknown[];
 };
-type ClawHubClawManifestSummary = {
+type ClawHubTemplateManifestSummary = {
   schemaVersion: 1;
   agent: { id: string; name?: string; description?: string };
   workspace: { bootstrapFiles: string[]; fileCount: number };
@@ -168,6 +168,7 @@ export type ClawHubPackageListItem = {
   channel: ClawHubPackageChannel;
   isOfficial: boolean;
   summary?: string | null;
+  icon?: string | null;
   ownerHandle?: string | null;
   ownerOfficial?: boolean;
   createdAt: number;
@@ -220,7 +221,7 @@ export type ClawHubPackageDetail = {
           scanStatus?: string;
         } | null;
         scanStatus?: string | null;
-        clawManifestSummary?: ClawHubClawManifestSummary | null;
+        templateManifestSummary?: ClawHubTemplateManifestSummary | null;
       })
     | null;
   owner?: {
@@ -241,6 +242,7 @@ export type ClawHubPackageVersion = {
     version: string;
     createdAt: number;
     changelog: string;
+    icon?: string | null;
     distTags?: string[];
     files?: Array<{
       path: string;
@@ -254,7 +256,7 @@ export type ClawHubPackageVersion = {
     verification?: NonNullable<ClawHubPackageDetail["package"]>["verification"];
     artifact?: ClawHubPackageArtifactSummary | null;
     clawpack?: ClawHubPackageClawPackSummary;
-    clawManifestSummary?: ClawHubClawManifestSummary | null;
+    templateManifestSummary?: ClawHubTemplateManifestSummary | null;
   } | null;
 };
 

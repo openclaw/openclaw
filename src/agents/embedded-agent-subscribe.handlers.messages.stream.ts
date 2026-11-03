@@ -10,13 +10,19 @@ import {
   createStreamingDirectiveAccumulator,
   splitTrailingDirective,
 } from "../auto-reply/reply/streaming-directives.js";
+import { readAutomationDisplayState } from "../infra/agent-run-registry.automation.js";
 import type { AssistantMessage } from "../llm/types.js";
 import {
   parseAssistantTextSignature,
   readAssistantTextBlocksForPhase,
 } from "../shared/chat-message-content.js";
 import { toolCallXmlTextFilter } from "../shared/text/assistant-visible-text.js";
-import { trimTextPreservingCode } from "../shared/text/text-projection.js";
+import {
+  canReuseMarkdownOwnershipForAppend,
+  findCodeOwnership,
+} from "../shared/text/code-regions.js";
+import { downgradedToolCallTextFilter } from "../shared/text/downgraded-tool-call-text.js";
+import { createTextProjection, trimTextPreservingCode } from "../shared/text/text-projection.js";
 import {
   findDirectiveCodePrefix,
   type StreamDirectiveCodePrefix,
@@ -267,8 +273,13 @@ export function shouldSuppressDeterministicApprovalOutput(
 
 export function shouldSuppressSourceReplyOutput(
   ctx: Pick<EmbeddedAgentSubscribeContext, "params" | "state">,
+  assistant = ctx.state.lastAssistant,
 ): boolean {
   return (
+    // Scheduled text remains provisional until cron publishes the settled result.
+    (readAutomationDisplayState(ctx.params.runId) !== "ordinary" &&
+      assistant?.stopReason !== "error" &&
+      assistant?.stopReason !== "aborted") ||
     ctx.state.sourceReplyDeliveryState === "delivered" ||
     (ctx.params.sourceReplyDeliveryMode === "message_tool_only" &&
       (ctx.state.messageToolOnlySourceReplyDelivered ||
@@ -295,31 +306,77 @@ export function resolveAssistantTextChunk(params: {
   if (content.startsWith(accumulatedText)) {
     return content.slice(accumulatedText.length);
   }
-  return accumulatedText.includes(content) ? "" : content;
+  return "";
 }
 
 export function createStreamingReplyResolver(): StreamingReplyResolver {
+  const rawProjection = createTextProjection([
+    downgradedToolCallTextFilter(),
+    toolCallXmlTextFilter({ stripFunctionCallsXmlPayloads: true }, true),
+  ]);
   let directiveCodePrefix: StreamDirectiveCodePrefix | undefined;
   let hasDirectiveMarker = false;
   let previousChar = "";
+  // A stripped directive (media line, audio/reply tag) leaves the raw visible prefix longer than
+  // the cleaned text, so the append paths below cannot prove an append and every delta re-parses
+  // the whole reply. Track the exact source the canonical parse consumed so a byte-exact,
+  // directive-free append can reuse its result instead.
+  let settledDirectiveSource: string | undefined;
+  let settledDirectiveText = "";
+  let settledDirectiveTail = false;
+  // A removed inline directive can retroactively own surrounding whitespace, so a prefix that
+  // removed a marker stays on the canonical parse.
+  let settledDirectiveMarked = false;
+  // An invalid media reference rewrites its notice in place as the line grows, so those replies
+  // keep the canonical parse.
+  let settledDirectiveNotice = false;
+  // Canonical identity can extend only while Markdown ownership remains unchanged.
+  let literalMarkerSource: string | undefined;
+  let literalMarkerOwnership: Parameters<typeof canReuseMarkdownOwnershipForAppend>[2];
   return (params) => {
+    let preparedRawText = params.next;
+    let ownershipDelta = params.appendDelta;
     if (params.rawDirectiveSource !== undefined) {
-      const appended = params.rawDirectiveDelta ?? params.rawDirectiveSource;
-      if (params.rawDirectiveDelta === undefined) {
-        directiveCodePrefix = undefined;
-        hasDirectiveMarker = false;
-        previousChar = "";
-      }
-      if ((previousChar + appended).includes("[[")) {
-        hasDirectiveMarker = true;
-        directiveCodePrefix = undefined;
-      }
-      if (appended) {
-        previousChar = appended.slice(-1);
-      }
+      // Directive parsing needs pre-trim coordinates, independently of the visible projection.
+      const projected =
+        params.rawDirectiveDelta === undefined
+          ? rawProjection.replace(params.rawDirectiveSource)
+          : rawProjection.append(params.rawDirectiveDelta, params.rawDirectiveSource);
+      preparedRawText = projected.text;
+      ownershipDelta = projected.delta;
+      // Untrimmed sources answer to their own trim owner, so the settled clean prefix does not
+      // apply to them.
+      settledDirectiveSource = undefined;
     }
-    if (params.appendDelta === null) {
+    if (ownershipDelta === null) {
+      hasDirectiveMarker = false;
+      previousChar = "";
+    }
+    const appended = ownershipDelta ?? preparedRawText;
+    if ((previousChar + appended).includes("[[")) {
+      hasDirectiveMarker = true;
+      // A fresh marker is unproven until the canonical parse covers it.
+      literalMarkerSource = undefined;
       directiveCodePrefix = undefined;
+    }
+    if (appended) {
+      previousChar = appended.slice(-1);
+    }
+    if (params.appendDelta === null || ownershipDelta === null) {
+      directiveCodePrefix = undefined;
+      settledDirectiveSource = undefined;
+      literalMarkerSource = undefined;
+    }
+    if (literalMarkerSource !== undefined) {
+      literalMarkerSource =
+        ownershipDelta !== null &&
+        canReuseMarkdownOwnershipForAppend(
+          literalMarkerSource,
+          ownershipDelta,
+          (literalMarkerOwnership ??= findCodeOwnership(literalMarkerSource)),
+        )
+          ? preparedRawText
+          : undefined;
     }
     if (!params.parsedStreamDirectives && params.evtType === "text_delta") {
       if (params.rawDirectiveSource?.length !== directiveCodePrefix?.checkedRawLength) {
@@ -349,7 +406,7 @@ export function createStreamingReplyResolver(): StreamingReplyResolver {
       params.parsedStreamDirectives.text === params.visibleDelta &&
       params.appendDelta !== null &&
       params.previousText === params.previousCleaned &&
-      (directiveCodePrefix || !hasDirectiveMarker)
+      (directiveCodePrefix || !hasDirectiveMarker || literalMarkerSource !== undefined)
     ) {
       // Visibility and trim owners already prepared this exact append.
       text = params.next;
@@ -393,26 +450,77 @@ export function createStreamingReplyResolver(): StreamingReplyResolver {
       }
     }
 
+    if (
+      text === undefined &&
+      params.rawDirectiveSource === undefined &&
+      params.evtType !== "text_end" &&
+      params.appendDelta !== null &&
+      params.parsedStreamDirectives &&
+      !hasReplyDirectiveMetadata(params.parsedStreamDirectives) &&
+      settledDirectiveSource !== undefined &&
+      !settledDirectiveTail &&
+      (!settledDirectiveMarked || literalMarkerSource !== undefined) &&
+      !settledDirectiveNotice &&
+      params.next.length === settledDirectiveSource.length + params.appendDelta.length &&
+      params.next.endsWith(params.appendDelta) &&
+      !params.appendDelta.includes("[[") &&
+      !params.appendDelta.endsWith("[") &&
+      !/(?:^|[\r\n])[^\S\r\n]*MEDIA:/iu.test(
+        settledDirectiveSource.slice(-1) + params.appendDelta,
+      ) &&
+      !/(?:^|[\r\n])[\t ]*(?:M|ME|MED|MEDI|MEDIA)$/iu.test(
+        settledDirectiveSource.slice(-1) + params.appendDelta,
+      )
+    ) {
+      // The visible text grew by exactly the reported delta and the new bytes cannot start or
+      // complete a directive, so every directive the cleaned prefix already removed stays removed.
+      text = settledDirectiveText + params.appendDelta;
+      delta = params.appendDelta;
+      isAppend = true;
+    }
+
     if (text === undefined) {
       directiveCodePrefix = undefined;
       audioDirectiveCount = 0;
       const source =
-        params.rawDirectiveSource === undefined
-          ? params.next
+        params.rawDirectiveSource === undefined || params.evtType !== "text_end"
+          ? preparedRawText
           : toolCallXmlTextFilter(
               { stripFunctionCallsXmlPayloads: true },
               params.evtType !== "text_end",
             ).transform(stripDowngradedToolCallText(params.rawDirectiveSource));
-      const parsed = parseReplyDirectives(
-        params.evtType === "text_end" ? source : splitTrailingDirective(source).text,
-        {
-          onAudioDirective: () => {
-            audioDirectiveCount += 1;
-          },
+      const split = params.evtType === "text_end" ? undefined : splitTrailingDirective(source);
+      const parsed = parseReplyDirectives(split ? split.text : source, {
+        onAudioDirective: () => {
+          audioDirectiveCount += 1;
         },
-      );
+      });
       text =
         params.rawDirectiveSource === undefined ? parsed.text : trimTextPreservingCode(parsed.text);
+      // Record the settled prefix this parse produced: the exact source it consumed, its cleaned
+      // text, and whether an incomplete directive tail was held back from both.
+      settledDirectiveSource =
+        params.rawDirectiveSource === undefined && params.evtType !== "text_end"
+          ? preparedRawText
+          : undefined;
+      settledDirectiveText = text;
+      settledDirectiveTail = Boolean(split?.tail);
+      settledDirectiveMarked =
+        settledDirectiveSource !== undefined && preparedRawText.includes("[[");
+      settledDirectiveNotice = Boolean(parsed.mediaFailures?.length);
+      // Identity proves every `[[...]]` in this prefix is literal prose, so later appends that the
+      // directive owner reports as plain text can extend it. A held tail, a stripped directive, a
+      // media notice, or reply metadata all mean the marker changed the text and the proof fails.
+      literalMarkerOwnership = undefined;
+      literalMarkerSource =
+        source.includes("[[") &&
+        parsed.text === source &&
+        !split?.tail &&
+        !parsed.mediaFailures?.length &&
+        !parsed.mediaUrls?.length &&
+        !hasReplyDirectiveMetadata(parsed)
+          ? source
+          : undefined;
       if (
         params.evtType !== "text_end" &&
         params.appendDelta !== null &&
@@ -438,6 +546,11 @@ export function createStreamingReplyResolver(): StreamingReplyResolver {
           audioAsVoice: audioDirectiveCount > params.previousAudioDirectiveCount,
         };
       }
+    } else if (params.rawDirectiveSource === undefined && params.evtType !== "text_end") {
+      // The appended text above is byte-exact, so it can seed the same settled prefix.
+      settledDirectiveSource = params.next;
+      settledDirectiveText = text;
+      settledDirectiveTail = false;
     }
     const replace = Boolean(
       !isAppend && params.previousCleaned && !text.startsWith(params.previousCleaned),

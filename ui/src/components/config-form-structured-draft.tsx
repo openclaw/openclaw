@@ -1,8 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { createMemo, createSignal, Show } from "solid-js";
+import { copyWithPathPatch } from "../lib/config-form-utils.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { copyWithPathPatch } from "./config-form-copy-on-write.ts";
 import type { ConfigFormStructuredDraftProps } from "./config-form-structured-draft.ts";
 import { isSupportedConfigValueValid } from "./config-form.constraints.ts";
 import { configFieldId, schemaType } from "./config-form.shared.ts";

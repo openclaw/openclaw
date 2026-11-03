@@ -288,7 +288,7 @@ Generated JSON Schema is a build artifact, not committed to the repo. During the
 2. Register the method in `src/gateway/server-methods-list.ts` or the event in `src/gateway/events.ts`.
 3. Update `src/gateway/method-scopes.ts` when the new RPC needs operator or node scope classification.
 4. Run `pnpm protocol:check`.
-5. Commit the regenerated Swift models.
+5. Commit the schema and generator source changes together. Generated JSON, Swift, and Kotlin outputs stay in ignored build directories and are not committed.
 
 ## Related
 

@@ -3,7 +3,10 @@ import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { isChildProcessTreeAlive } from "../process/child-process-tree.js";
 import { executeSqliteQuerySync } from "./kysely-sync.js";
-import type { createManagedHandoffBootIdentityReader } from "./update-managed-service-handoff-boot.js";
+import {
+  predatesCurrentBoot,
+  type createManagedHandoffBootIdentityReader,
+} from "./update-managed-service-handoff-boot.js";
 import { readCancelledUpdateFamily } from "./update-managed-service-handoff-cancellation.js";
 import {
   managedCommandCustody,
@@ -298,8 +301,6 @@ export async function prepareManagedHandoffRepair(
   } catch {
     // Missing boot evidence must not bypass the normal liveness checks.
   }
-  // Windows already reports its boot start as the identity; other platforms use opaque tokens.
-  const bootStartedAt = boot?.platform === "win32" ? Date.parse(boot.identity) : Number.NaN;
   const familyExited = (lease: ManagedHandoffLease) => {
     const lifetime = lease.action.kind === "triage" ? lease.action.lifetime : undefined;
     if (
@@ -312,8 +313,7 @@ export async function prepareManagedHandoffRepair(
         boot.identity !== lifetime.boot.identity
       );
     }
-    // A durable legacy write predating boot proves exit; allow five minutes of clock skew.
-    return lease.updatedAt < bootStartedAt - 5 * 60_000;
+    return predatesCurrentBoot(lease.updatedAt, boot);
   };
   const metadata = withDatabase(true, (db) =>
     readManagedHandoffRepairMetadata(db, previous, (operation) => store.transact(db, operation)),
@@ -349,9 +349,8 @@ export async function prepareManagedHandoffRepair(
       env,
       metadata?.facts.runIds[0],
     );
-    // An interrupted cancelled-custody claim existed only after that family's grace
-    // elapsed. Count from the cancelled source, not the claim; the claim's own
-    // process and the census remain checked.
+    // A resumed claim retains the cancelled family's activity and census scope;
+    // its own process identity is checked too.
     let facts = await inspectManagedHandoffRepairFacts(
       sourceLease.version === 4 ? sourceLease : previous,
       sourceLease.version === 4
@@ -359,11 +358,18 @@ export async function prepareManagedHandoffRepair(
         : discovered,
       metadata?.facts,
       familyExited(previous),
+      processState,
     );
     const retainedChildren = children.filter((child) => child.key !== previous.key);
     for (const child of retainedChildren) {
       const childFacts = await readManagedHandoffRepairFacts(child, env);
-      facts = await inspectManagedHandoffRepairFacts(child, childFacts, facts, familyExited(child));
+      facts = await inspectManagedHandoffRepairFacts(
+        child,
+        childFacts,
+        facts,
+        familyExited(child),
+        processState,
+      );
     }
     // Keep the original child key with its existing recovery metadata after
     // promoting an orphan to the installation's exclusive repair claim.
@@ -464,11 +470,15 @@ async function prepareCancelledCustodyRepair(
       artifactPaths: [
         ...new Set([...discovered.artifactPaths, ...family.map((lease) => lease.key)]),
       ],
+      installationRoots: family.map((lease) => lease.key),
       drivers: [
         ...(discovered.drivers ?? []),
         ...family.flatMap((lease) => [lease.helper, lease.executor]),
       ],
     },
+    undefined,
+    false,
+    processState,
   );
   facts.timeoutMs = Math.max(facts.timeoutMs ?? 0, timeoutMs ?? 0) || null;
   const retired = family.filter((lease) => lease.key !== origin.key);

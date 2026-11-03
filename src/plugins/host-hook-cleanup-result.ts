@@ -1,3 +1,4 @@
+import { throwSettledAggregate } from "../infra/error-graph-internal.js";
 import type {
   PluginHostCleanupFailure,
   PluginHostCleanupResult,
@@ -9,12 +10,7 @@ export function summarizePluginRetirementResults(
   results: readonly PromiseSettledResult<PluginHostCleanupResult>[],
   message: string,
 ): PluginHostCleanupResult {
-  const failures = results.flatMap((result) =>
-    result.status === "rejected" ? [result.reason] : [],
-  );
-  if (failures.length) {
-    throw new AggregateError(failures, message);
-  }
+  throwSettledAggregate(results, message);
   const completed = results.flatMap((result) =>
     result.status === "fulfilled" ? [result.value] : [],
   );

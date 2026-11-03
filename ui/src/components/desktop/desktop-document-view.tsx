@@ -62,7 +62,7 @@ export function DesktopDocumentView(props: DesktopDocumentViewOptions) {
                 )}
                 aria-pressed={props.controlling ? "true" : "false"}
                 disabled={props.state !== "connected"}
-                onClick={props.onControlToggle}
+                onClick={() => props.onControlToggle()}
               >
                 <span class="desktop-touch-action__icon" aria-hidden="true">
                   <Icon name={props.controlling ? "hand" : "eye"} />
@@ -91,7 +91,7 @@ export function DesktopDocumentView(props: DesktopDocumentViewOptions) {
                 class="desktop-touch-action"
                 type="button"
                 aria-label={t("desktop.back")}
-                onClick={props.onClose}
+                onClick={() => props.onClose()}
               >
                 <span class="desktop-touch-action__icon" aria-hidden="true">
                   <Icon name="arrowLeft" />

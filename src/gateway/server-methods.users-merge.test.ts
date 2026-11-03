@@ -34,6 +34,7 @@ import {
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createExpectedProfileBinding } from "./expected-profile.js";
 import { resolveOperatorRolePolicyForProfile } from "./operator-role-policy.js";
+import { createAdminMemberRoleConfig } from "./operator-role.test-support.js";
 import { authorizationClient } from "./server-methods.authorization.test-support.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./server-methods/types.js";
@@ -42,17 +43,7 @@ import {
   registerGatewayPolicyResponse,
 } from "./server/ws-policy-close.js";
 
-const cfg: OpenClawConfig = {
-  gateway: {
-    roles: {
-      default: "member",
-      definitions: {
-        admin: { scopes: ["operator.admin"], agents: "*", sessions: { others: "write" } },
-        member: { scopes: ["operator.read"], agents: [], sessions: { others: "none" } },
-      },
-    },
-  },
-};
+const cfg: OpenClawConfig = createAdminMemberRoleConfig();
 
 afterEach(() => vi.restoreAllMocks());
 

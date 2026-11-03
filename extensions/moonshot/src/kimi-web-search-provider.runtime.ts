@@ -60,11 +60,6 @@ function resolveKimiBaseUrl(kimi?: KimiConfig, openClawConfig?: OpenClawConfig):
   return DEFAULT_KIMI_BASE_URL;
 }
 
-function normalizeKimiResultDate(value: unknown): string | undefined {
-  const date = normalizeOptionalString(value);
-  return date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : undefined;
-}
-
 export async function executeKimiWebSearchProviderTool(
   ctx: { config?: OpenClawConfig; searchConfig?: SearchConfigRecord },
   args: Record<string, unknown>,
@@ -137,12 +132,13 @@ export async function executeKimiWebSearchProviderTool(
         const title = normalizeOptionalString(result.title);
         const url = normalizeOptionalString(result.url) ?? "";
         const description = normalizeOptionalString(result.snippet);
+        const date = normalizeOptionalString(result.date);
         return {
           title: title ? wrapWebContent(title, "web_search") : "",
           url,
           description: description ? wrapWebContent(description, "web_search") : "",
           // Provider metadata is page-controlled text; keep only values that cannot carry prose.
-          published: normalizeKimiResultDate(result.date),
+          published: date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : undefined,
           siteName: resolveSiteName(url) || undefined,
         };
       });

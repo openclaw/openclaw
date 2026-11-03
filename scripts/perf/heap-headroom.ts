@@ -139,7 +139,7 @@ for (let round = 0; round < rounds; round++) {
   exportMs.push((performance.now() - start) / iterations);
 }
 const exportCpuUsage = process.cpuUsage(exportCpu);
-const rendered = store.render();
+const rendered = store.render().toString();
 assert(!rendered.includes("openclaw_prometheus_series_dropped_total"), "Series overflow");
 const series = rendered.split("\n").filter((line: string) => line && !line.startsWith("#"));
 assert(series.some((line: string) => line.startsWith("openclaw_worker_heap_used_bytes")));

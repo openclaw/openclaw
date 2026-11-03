@@ -1,13 +1,13 @@
-import { createMemo, onCleanup } from "solid-js";
+import { createMemo, Errored, lazy, Loading, onSettled } from "solid-js";
 import type {
   PluginsSkillsReadParams,
   PluginsSkillsReadResult,
 } from "../../../../packages/gateway-protocol/src/schema/plugin-skills.ts";
+import "../../components/modal-dialog.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
-import { registerFilePreviewEnglish } from "../../i18n/locales/en-file-preview.ts";
-import "../../components/file-preview-modal-registration.ts";
+import { SettingsLoadingSkeleton } from "../../components/solid/settings-ui.tsx";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
-import { formatUiError } from "../../lib/format-error.ts";
+import { formatUiError, UserFacingError } from "../../lib/format-error.ts";
 import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import "./custom-elements.ts";
@@ -15,17 +15,18 @@ import { renderPluginCapabilitySection as PluginCapabilitySection } from "./over
 import { showPluginToolPreview, type PluginToolPreview } from "./tool-preview.tsx";
 import "./skill-preview.css";
 
-registerEnglishCatalog(registerFilePreviewEnglish);
 registerEnglishCatalog(registerPluginManagementEnglish);
+
+const FilePreviewModal = lazy(() => import("../../components/file-preview-modal.tsx"), {
+  export: "FilePreviewModal",
+});
 
 export type PluginSkillPreviewState = {
   request: PluginsSkillsReadParams;
-  loading: boolean;
-  error: string | null;
+  inventoryRequest: Promise<void>;
   result: PluginsSkillsReadResult | null;
   activePath: string;
-  pendingPaths: Set<string>;
-  fileErrors: Map<string, string>;
+  fileRequests: Map<string, { promise: Promise<void>; resolve: () => void; active: boolean }>;
 };
 
 export function createPluginPreview(
@@ -34,10 +35,17 @@ export function createPluginPreview(
 ) {
   let active: PluginSkillPreviewState | null = null;
   let toolAbort = new AbortController();
-  onCleanup(() => {
+  let releaseInventory = () => {};
+  const retire = () => {
+    // Release presentation even when a retired transport read remains pending.
+    releaseInventory();
+    for (const request of active?.fileRequests.values() ?? []) {
+      request.resolve();
+    }
     toolAbort.abort();
     active = null;
-  });
+  };
+  onSettled(() => retire);
   const preview = {
     get state() {
       return active;
@@ -45,18 +53,20 @@ export function createPluginPreview(
     async open(request: PluginsSkillsReadParams): Promise<void> {
       preview.close();
       const connection = gateway.capture();
+      const receipt = Promise.withResolvers<void>();
+      releaseInventory = receipt.resolve;
+      void receipt.promise.catch(() => {});
       const state: PluginSkillPreviewState = {
         request: { ...request },
-        loading: Boolean(connection),
-        error: connection ? null : t("pluginsPage.connectToManage"),
+        inventoryRequest: receipt.promise,
         result: null,
         activePath: "SKILL.md",
-        pendingPaths: new Set(),
-        fileErrors: new Map(),
+        fileRequests: new Map(),
       };
       active = state;
       onChange();
       if (!connection) {
+        receipt.reject(new UserFacingError(t("pluginsPage.connectToManage")));
         return;
       }
       const current = () => active === state && gateway.isCurrent(connection);
@@ -74,13 +84,13 @@ export function createPluginPreview(
         }
       } catch (error) {
         if (current()) {
-          state.error = formatUiError(error);
+          receipt.reject(new UserFacingError(formatUiError(error), { cause: error }));
         }
       } finally {
         if (current()) {
-          state.loading = false;
           onChange();
         }
+        receipt.resolve();
       }
     },
 
@@ -105,19 +115,23 @@ export function createPluginPreview(
       state.activePath = path;
       onChange();
       if (
-        state.pendingPaths.has(path) ||
+        state.fileRequests.get(path)?.active ||
         (file.status !== "deferred" && file.status !== "unavailable")
       ) {
         return;
       }
+      const receipt = Promise.withResolvers<void>();
+      void receipt.promise.catch(() => {});
+      const request = { promise: receipt.promise, resolve: receipt.resolve, active: true };
+      state.fileRequests.set(path, request);
+      onChange();
       const connection = gateway.capture();
       if (!connection) {
-        state.fileErrors.set(path, t("pluginsPage.connectToManage"));
+        request.active = false;
+        receipt.reject(new UserFacingError(t("pluginsPage.connectToManage")));
         return;
       }
       const current = () => active === state && gateway.isCurrent(connection);
-      state.pendingPaths.add(path);
-      state.fileErrors.delete(path);
       try {
         const result = await connection.client.request<PluginsSkillsReadResult>(
           "plugins.skills.read",
@@ -143,22 +157,25 @@ export function createPluginPreview(
             candidate.path === path ? selected : candidate,
           ),
         };
+        if (selected.status === "unavailable") {
+          throw new UserFacingError(t("filePreview.bundle.unavailable"));
+        }
       } catch (error) {
         if (current()) {
-          state.fileErrors.set(path, formatUiError(error));
+          receipt.reject(new UserFacingError(formatUiError(error), { cause: error }));
         }
       } finally {
         if (current()) {
-          state.pendingPaths.delete(path);
+          request.active = false;
           onChange();
         }
+        receipt.resolve();
       }
     },
     /** Dismissal, route changes and connection changes retire outstanding reads. */
     close(this: void): void {
-      toolAbort.abort();
+      retire();
       toolAbort = new AbortController();
-      active = null;
       onChange();
     },
   };
@@ -181,15 +198,28 @@ export function PluginSkillPreview(props: {
             ? t(`filePreview.bundle.${file.status}`)
             : undefined,
       })) ?? [],
+    { lazy: true },
   );
-  const fileError = createMemo(() => {
+  const readInventory = createMemo(() => state()?.inventoryRequest ?? null);
+  const fileRequest = () => {
     const current = state();
-    const file = current?.result?.files.find((entry) => entry.path === current.activePath);
-    return (
-      current?.fileErrors.get(current.activePath) ??
-      (file?.status === "unavailable" ? t("filePreview.bundle.unavailable") : "")
-    );
-  });
+    return current?.fileRequests.get(current.activePath)?.promise ?? current?.inventoryRequest;
+  };
+  const readFile = createMemo(
+    () => {
+      const current = state();
+      const request = current?.fileRequests.get(current.activePath)?.promise;
+      if (request) {
+        return request;
+      }
+      const file = current?.result?.files.find((entry) => entry.path === current.activePath);
+      if (file?.status === "unavailable") {
+        throw new UserFacingError(t("filePreview.bundle.unavailable"));
+      }
+      return current?.inventoryRequest ?? null;
+    },
+    { lazy: true },
+  );
   const incomplete = createMemo(() => {
     const result = state()?.result;
     return (
@@ -201,25 +231,66 @@ export function PluginSkillPreview(props: {
   return (
     <>
       {props.state && (
-        <openclaw-file-preview-modal
-          prop:label={props.state.request.skillName}
-          prop:files={files()}
-          prop:directories={props.state.result?.directories ?? []}
-          prop:activePath={props.state.activePath}
-          layout="document"
-          prop:loading={props.state.loading}
-          prop:fileLoading={props.state.pendingPaths.has(props.state.activePath)}
-          prop:error={
-            props.state.error ??
-            (props.state.pendingPaths.has(props.state.activePath) ? "" : fileError())
-          }
-          prop:notice={incomplete() ? t("filePreview.bundle.incomplete") : ""}
-          onFile-preview-select={(event: CustomEvent<string>) =>
-            void props.preview.select(event.detail)
-          }
-          onFile-preview-retry={() => props.preview.retry()}
-          onFile-preview-close={() => props.preview.close()}
-        />
+        <Errored
+          fallback={(error, reset) => (
+            <openclaw-modal-dialog
+              label={props.state?.request.skillName ?? t("pluginsPage.detailTabs.skills")}
+              onModal-cancel={() => props.preview.close()}
+            >
+              <p role="alert">{formatUiError(error())}</p>
+              <openclaw-modal-actions>
+                <button
+                  type="button"
+                  class="btn oc-action oc-action-secondary"
+                  onClick={() => props.preview.close()}
+                >
+                  {t("common.close")}
+                </button>
+                <button type="button" class="btn oc-action oc-action-primary" onClick={reset}>
+                  {t("pluginsPage.tryAgain")}
+                </button>
+              </openclaw-modal-actions>
+            </openclaw-modal-dialog>
+          )}
+        >
+          <Loading
+            fallback={
+              <openclaw-modal-dialog
+                label={props.state?.request.skillName ?? t("pluginsPage.detailTabs.skills")}
+                onModal-cancel={() => props.preview.close()}
+              >
+                <SettingsLoadingSkeleton rows={5} />
+                <openclaw-modal-actions>
+                  <button
+                    type="button"
+                    class="btn oc-action oc-action-secondary"
+                    onClick={() => props.preview.close()}
+                  >
+                    {t("common.close")}
+                  </button>
+                </openclaw-modal-actions>
+              </openclaw-modal-dialog>
+            }
+          >
+            <FilePreviewModal
+              label={props.state.request.skillName}
+              files={files()}
+              directories={props.state.result?.directories ?? []}
+              activePath={props.state.activePath}
+              layout="document"
+              readInventory={readInventory}
+              inventoryRequest={() => props.state?.inventoryRequest}
+              readFile={readFile}
+              fileRequest={fileRequest}
+              notice={incomplete() ? t("filePreview.bundle.incomplete") : ""}
+              onFile-preview-select={(event: CustomEvent<string>) =>
+                void props.preview.select(event.detail)
+              }
+              onFile-preview-retry={() => props.preview.retry()}
+              onFile-preview-close={() => props.preview.close()}
+            />
+          </Loading>
+        </Errored>
       )}
     </>
   );

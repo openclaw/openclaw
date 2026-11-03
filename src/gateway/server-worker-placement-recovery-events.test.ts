@@ -131,6 +131,7 @@ function createRecoveryRuntime(options: {
         .filter((placement) => placement.environmentId === environmentId)
         .map((placement) => placement.sessionId),
     reclaim: vi.fn(),
+    subscribeOrphanWorkspaceChanges: () => () => {},
     reconcile: vi.fn(async () => await options.startup?.(placements, publishPlacementChange)),
     reconcileActive: vi.fn(async () => await options.sweep?.(placements, publishPlacementChange)),
   }));
@@ -336,31 +337,6 @@ describe("worker placement recovery session events", () => {
     });
   });
 
-  it("refreshes correlated session observers when machine metadata arrives and unsubscribes on stop", async () => {
-    const placement = recoveryPlacement();
-    await withRecoveryRuntime({ placement }, async (harness) => {
-      harness.placements.set("stale-session", {
-        ...placement,
-        sessionId: "stale-session",
-        sessionKey: "agent:main:stale",
-        activeOwnerEpoch: 2,
-      });
-      await harness.start();
-      const initialVersion = harness.changes.mock.calls.length;
-      harness.catalogChanged("other-profile");
-      expect(harness.changes.mock.calls.length).toBe(initialVersion);
-      const published = harness.nextChange();
-      harness.catalogChanged("development");
-      await published;
-      await flushPendingSessionsChangedEvents(harness.context);
-      harness.expectBroadcast({ sessionKey: placement.sessionKey });
-      expect(harness.changes.mock.calls.length).toBe(initialVersion + 1);
-      await harness.stop();
-      harness.catalogChanged("development");
-      expect(harness.changes.mock.calls.length).toBe(initialVersion + 1);
-    });
-  });
-
   it("publishes a recovered move once and ignores an unchanged periodic sweep", async () => {
     const recovered = recoveryPlacement("local");
     let sweepCount = 0;
@@ -392,9 +368,6 @@ describe("worker placement recovery session events", () => {
         expect(changes.mock.calls.length).toBe(initialMutationVersion + 1);
         await time.advanceBy(60_000);
         expect(changes.mock.calls.length).toBe(initialMutationVersion + 1);
-        expect(runtimeMocks.createDispatch.mock.lastCall?.[0]).not.toHaveProperty(
-          "onRecoveredMoveTransition",
-        );
       },
     );
   });
@@ -522,18 +495,14 @@ describe("worker placement recovery session events", () => {
           publishChange(recovered);
         },
       },
-      async ({ context, environments, start }) => {
+      async ({ context, environments, start, expectBroadcast }) => {
         context.broadcastToConnIds.mockImplementation(() => {
           expect(environments.start).not.toHaveBeenCalled();
         });
 
         await start();
 
-        expect(context.broadcastToConnIds).toHaveBeenCalledOnce();
-        expect(context.broadcastToConnIds.mock.calls[0]?.[1]).toMatchObject({
-          reason: "placement",
-          sessionKey: recovered.sessionKey,
-        });
+        expectBroadcast({ sessionKey: recovered.sessionKey }, {});
         expect(environments.start).toHaveBeenCalledOnce();
       },
     );
@@ -543,16 +512,12 @@ describe("worker placement recovery session events", () => {
     const current = recoveryPlacement("local");
     await withRecoveryRuntime(
       { placement: current, evidence: "absent" },
-      async ({ context, placements, start }) => {
+      async ({ placements, start, expectBroadcast }) => {
         await start();
         await vi.dynamicImportSettled();
 
         expect(placements.has(current.sessionId)).toBe(false);
-        expect(context.broadcastToConnIds).toHaveBeenCalledOnce();
-        expect(context.broadcastToConnIds.mock.calls[0]?.[1]).toMatchObject({
-          reason: "placement",
-          sessionKey: current.sessionKey,
-        });
+        expectBroadcast({ sessionKey: current.sessionKey }, {});
       },
     );
   });

@@ -59,24 +59,6 @@ function copySchemaMeta(
   return to;
 }
 
-// Google requires enum entries as strings even when the declared schema type is numeric or
-// boolean. Keep the type intact so tool argument generation and runtime validation still agree.
-function cleanGeminiEnumValues(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const values = value
-    .filter(
-      (entry) =>
-        typeof entry === "string" ||
-        typeof entry === "boolean" ||
-        (typeof entry === "number" && Number.isFinite(entry)),
-    )
-    .map(String);
-  const unique = [...new Set(values)];
-  return unique.length > 0 ? unique : undefined;
-}
-
 function tryFlattenLiteralAnyOf(variants: unknown[]): { type: string; enum: unknown[] } | null {
   if (variants.length === 0) {
     return null;
@@ -141,36 +123,6 @@ function tryResolveLocalRef(ref: string, defs: SchemaDefs | undefined): unknown 
     return undefined;
   }
   return defs[table].get(name);
-}
-
-function simplifyUnionVariants(params: { obj: Record<string, unknown>; variants: unknown[] }):
-  | {
-      kind: "simplified";
-      value: unknown;
-    }
-  | {
-      kind: "variants";
-      value: unknown[];
-    } {
-  const { obj, variants } = params;
-
-  const nonNullVariants = variants.filter((variant) => !isNullSchema(variant));
-  const stripped = nonNullVariants.length !== variants.length;
-
-  const flattened = tryFlattenLiteralAnyOf(nonNullVariants);
-  if (flattened) {
-    return { kind: "simplified", value: copySchemaMeta(obj, flattened) };
-  }
-
-  if (stripped && nonNullVariants.length === 1) {
-    const lone = nonNullVariants[0];
-    return {
-      kind: "simplified",
-      value: isRecord(lone) ? copySchemaMeta(obj, { ...lone }) : lone,
-    };
-  }
-
-  return { kind: "variants", value: stripped ? nonNullVariants : variants };
 }
 
 // Gemini rejects object schemas whose `required` entries do not exist in `properties`.
@@ -254,11 +206,17 @@ function cleanSchemaForGeminiWithDefs(
     for (const key of ["anyOf", "oneOf"] as const) {
       const variants = unions[key];
       if (variants) {
-        const simplified = simplifyUnionVariants({ obj, variants });
-        if (simplified.kind === "simplified") {
-          return simplified.value;
+        const nonNullVariants = variants.filter((variant) => !isNullSchema(variant));
+        const stripped = nonNullVariants.length !== variants.length;
+        const flattened = tryFlattenLiteralAnyOf(nonNullVariants);
+        if (flattened) {
+          return copySchemaMeta(obj, flattened);
         }
-        unions[key] = simplified.value;
+        if (stripped && nonNullVariants.length === 1) {
+          const lone = nonNullVariants[0];
+          return isRecord(lone) ? copySchemaMeta(obj, { ...lone }) : lone;
+        }
+        unions[key] = stripped ? nonNullVariants : variants;
       }
     }
 
@@ -270,9 +228,21 @@ function cleanSchemaForGeminiWithDefs(
       }
 
       if (key === "const" || key === "enum") {
-        const enumValues = cleanGeminiEnumValues(key === "const" ? [value] : value);
-        if (enumValues) {
-          cleaned.enum = enumValues;
+        // Google requires string enum entries without changing the declared schema type.
+        const enumInput = key === "const" ? [value] : value;
+        if (Array.isArray(enumInput)) {
+          const values = enumInput
+            .filter(
+              (entry) =>
+                typeof entry === "string" ||
+                typeof entry === "boolean" ||
+                (typeof entry === "number" && Number.isFinite(entry)),
+            )
+            .map(String);
+          const unique = [...new Set(values)];
+          if (unique.length > 0) {
+            cleaned.enum = unique;
+          }
         }
         continue;
       }
@@ -286,8 +256,11 @@ function cleanSchemaForGeminiWithDefs(
         continue;
       }
       if (key === "type" && isStringArray(value)) {
-        const types = value.filter((entry) => entry !== "null");
-        cleaned.type = types.length === 1 ? types[0] : types;
+        // Gemini needs one type; use the same representative choice as union flattening.
+        const type = value.find((entry) => entry !== "null");
+        if (type) {
+          cleaned.type = type;
+        }
         continue;
       }
 
@@ -328,7 +301,7 @@ function cleanSchemaForGeminiWithDefs(
 
 /**
  * Last-resort flattening for anyOf/oneOf arrays that could not be simplified
- * by `simplifyUnionVariants`. Picks a representative type so the schema is
+ * by the initial union pass. Picks a representative type so the schema is
  * accepted by Google's restricted JSON Schema validation.
  */
 function flattenUnionFallback(

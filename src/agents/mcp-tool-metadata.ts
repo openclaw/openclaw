@@ -62,14 +62,14 @@ export function normalizeMcpToolCatalog(
           tool.outputSchema,
         );
         resultValidators.set(toolName, (result) => {
-          if (result.structuredContent === undefined && result.isError !== true) {
+          if (result.isError === true) {
+            return;
+          }
+          if (result.structuredContent === undefined) {
             throw new ProtocolError(
               ProtocolErrorCode.InvalidRequest,
               `Tool ${toolName} has an output schema but did not return structured content`,
             );
-          }
-          if (result.structuredContent === undefined) {
-            return;
           }
           const validation = validator(result.structuredContent);
           if (!validation.valid) {

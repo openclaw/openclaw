@@ -1,13 +1,10 @@
-import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SkillLibraryEntry } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
+import { expect, it, vi } from "vitest";
+import type {
+  SkillLibraryEntry,
+  SkillLibraryFile,
+} from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import type { SkillLibraryAuthoringCapability } from "../../skills/library/authoring.js";
-import { applyCodeModeCatalog } from "../code-mode.js";
-import {
-  createCodeModeHarness,
-  resetCodeModeTestState,
-  runUntilCompleted,
-} from "../code-mode.test-support.js";
+import { resultText } from "../code-mode.test-support.js";
 import { createLibrarySkillWorkshopTool } from "./skill-workshop-tool-library.js";
 
 const entry: SkillLibraryEntry = {
@@ -27,6 +24,12 @@ const entry: SkillLibraryEntry = {
   canEdit: true,
 };
 const content = "# Release guide\nCheck the release candidate before publishing.\n";
+const privateBytes = "UNSELECTED_SUPPORT_BYTES";
+const file = (name: string, bytes = privateBytes): SkillLibraryFile => ({
+  path: `references/${name}.txt`,
+  content: bytes,
+});
+const readResult = (files: SkillLibraryFile[]) => ({ entry, content, files, revisions: [] });
 
 function libraryTool(invoke: SkillLibraryAuthoringCapability["invoke"]) {
   return createLibrarySkillWorkshopTool({
@@ -38,126 +41,82 @@ function libraryTool(invoke: SkillLibraryAuthoringCapability["invoke"]) {
   });
 }
 
-afterEach(resetCodeModeTestState);
-
-describe("personal Skill Workshop results", () => {
-  it("lets Code Mode discover a personal skill and read its whole guidance", async () => {
-    const entries = Array.from({ length: 21 }, (_, index) => ({
-      ...entry,
-      skillId: index === 0 ? entry.skillId : String(index),
-    }));
-    const tool = libraryTool(async ({ action, skillId }) => {
-      if (action === "list") {
-        return {
-          entries,
-          profileId: "owner",
-          multipleProfiles: true,
-          defaultTarget: "personal",
-          canManageWorkspace: false,
-          defaultSelectionLimit: 20,
-        };
-      }
-      expect(skillId).toBe(entry.skillId);
+it("lists a bounded personal library and reads the selected skill's whole guidance", async () => {
+  const entries = Array.from({ length: 21 }, (_, index) => ({
+    ...entry,
+    skillId: index === 0 ? entry.skillId : String(index),
+  }));
+  const tool = libraryTool(async ({ action, skillId }) => {
+    if (action === "list") {
       return {
-        entry,
-        content,
-        files: [{ path: "references/private.txt", content: "UNSELECTED_SUPPORT_BYTES" }],
-        revisions: [{ revision: entry.revision, createdAt: 1 }],
+        entries,
+        profileId: "owner",
+        multipleProfiles: true,
+        defaultTarget: "personal",
+        canManageWorkspace: false,
+        defaultSelectionLimit: 20,
       };
-    });
-    const h = createCodeModeHarness();
-    applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, tool] });
-
-    const result = await runUntilCompleted({
-      execTool: expectDefined(h.tools[0], "exec"),
-      waitTool: expectDefined(h.tools[1], "wait"),
-      code: `
-        const [workshop] = await catalog.search("skill_workshop");
-        const listed = await workshop({ action: "list", target: "personal" });
-        const read = await workshop({
-          action: "read", target: "personal", skill_id: listed.entries[0].skillId
-        });
-        return { listed, read };
-      `,
-    });
-
-    expect(result.status, JSON.stringify(result)).toBe("completed");
-    expect(result.value).toMatchObject({
-      listed: {
-        entries: entries.slice(0, 20).map(({ skillId }) => ({
-          skillId,
-          slug: "release-guide",
-          canEdit: true,
-        })),
-        omitted: 1,
-      },
-      read: {
-        skillId: entry.skillId,
-        revision: entry.revision,
-        artifactPath: "SKILL.md",
-        content,
-        contentIncluded: true,
-        supportFiles: [{ path: "references/private.txt", executable: false }],
-        omittedFiles: 0,
-      },
-    });
-    expect(JSON.stringify(result.value)).not.toContain("UNSELECTED_SUPPORT_BYTES");
-    expect(JSON.stringify(result.value)).not.toContain(entry.ownerLabel);
-    expect(result.value).not.toHaveProperty("listed.profileId");
+    }
+    expect(skillId).toBe(entry.skillId);
+    return readResult([file("private")]);
   });
-
-  it.each([
-    { name: "text at the limit", bytes: Buffer.from("x".repeat(16000)), included: true },
-    {
-      name: "oversized text",
-      bytes: Buffer.from("x".repeat(16001)),
-      included: false,
-      reason: "too-large",
+  const listed = await tool.execute("list", { action: "list", target: "personal" });
+  const read = await tool.execute("read", { action: "read", skill_id: entry.skillId });
+  const value = { listed: listed.details, read: read.details };
+  expect(value).toMatchObject({
+    listed: {
+      entries: entries
+        .slice(0, 20)
+        .map(({ skillId }) => ({ skillId, slug: "release-guide", canEdit: true })),
+      omitted: 1,
     },
-    { name: "binary", bytes: Buffer.from([0, 255, 128]), included: false, reason: "binary" },
-  ])(
-    "preserves whole-artifact limits for $name in both result surfaces",
-    async ({ bytes, included, reason }) => {
-      const tool = libraryTool(async () => ({
-        entry,
-        content,
-        files: [
-          {
-            path: "references/selected.txt",
-            content: bytes.toString("base64"),
-            encoding: "base64",
-            executable: true,
-          },
-          ...Array.from({ length: 32 }, (_, index) => ({
-            path: `references/other-${index}.txt`,
-            content: "UNSELECTED_SUPPORT_BYTES",
-          })),
-        ],
-        revisions: [],
-      }));
-      const result = await tool.execute("read", {
-        action: "read",
-        skill_id: entry.skillId,
-        artifact_path: "references/selected.txt",
-      });
-      expect(result.details).toMatchObject({
-        artifactPath: "references/selected.txt",
-        contentIncluded: included,
-        ...(included ? { content: bytes.toString("utf8") } : { omissionReason: reason }),
-        supportFiles: expect.arrayContaining([
-          { path: "references/selected.txt", executable: true },
-        ]),
-        omittedFiles: 1,
-      });
-      expect(result.details).toHaveProperty("supportFiles.length", 32);
-      const text = result.content.find((block) => block.type === "text");
-      expect(text?.type).toBe("text");
-      expect(JSON.parse(text!.text)).toEqual(result.details);
-      expect(JSON.stringify(result)).not.toContain("UNSELECTED_SUPPORT_BYTES");
-      if (!included) {
-        expect(result.details).not.toHaveProperty("content", expect.any(String));
-        expect(JSON.stringify(result)).not.toContain(bytes.toString("base64"));
-      }
+    read: {
+      skillId: entry.skillId,
+      revision: entry.revision,
+      artifactPath: "SKILL.md",
+      content,
+      contentIncluded: true,
+      supportFiles: [{ path: "references/private.txt", executable: false }],
+      omittedFiles: 0,
     },
-  );
+  });
+  expect(JSON.stringify(value)).not.toContain(privateBytes);
+  expect(JSON.stringify(value)).not.toContain(entry.ownerLabel);
+  expect(value).not.toHaveProperty("listed.profileId");
 });
+
+it.each([
+  [Buffer.from("x".repeat(16000)), true, undefined],
+  [Buffer.from("x".repeat(16001)), false, "too-large"],
+  [Buffer.from([0, 255, 128]), false, "binary"],
+] as const)(
+  "bounds whole artifacts in both result surfaces (%#)",
+  async (bytes, included, reason) => {
+    const selected: SkillLibraryFile = {
+      ...file("selected", bytes.toString("base64")),
+      encoding: "base64",
+      executable: true,
+    };
+    const files = [selected, ...Array.from({ length: 32 }, (_, index) => file(`other-${index}`))];
+    const tool = libraryTool(async () => readResult(files));
+    const result = await tool.execute("read", {
+      action: "read",
+      skill_id: entry.skillId,
+      artifact_path: selected.path,
+    });
+    expect(result.details).toMatchObject({
+      artifactPath: selected.path,
+      contentIncluded: included,
+      ...(included ? { content: bytes.toString("utf8") } : { omissionReason: reason }),
+      supportFiles: expect.arrayContaining([{ path: selected.path, executable: true }]),
+      omittedFiles: 1,
+    });
+    expect(result.details).toHaveProperty("supportFiles.length", 32);
+    expect(JSON.parse(resultText(result))).toEqual(result.details);
+    expect(JSON.stringify(result)).not.toContain(privateBytes);
+    if (!included) {
+      expect(result.details).not.toHaveProperty("content", expect.any(String));
+      expect(JSON.stringify(result)).not.toContain(bytes.toString("base64"));
+    }
+  },
+);

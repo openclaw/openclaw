@@ -96,6 +96,44 @@ function readToolMessage(id = "call_1", reasoningContent?: string) {
 }
 
 describe("Qwen streams", () => {
+  it.each([
+    "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    "https://coding.dashscope.aliyuncs.com/v1",
+    "https://coding-intl.dashscope.aliyuncs.com/v1",
+  ])("translates thinking for a custom provider on %s", (baseUrl) => {
+    const captured = captureProviderPayload(
+      createModel("qwen3.8-flash", { provider: "custom-dashscope", baseUrl }),
+      "medium",
+      { messages: [], thinking: { type: "enabled" } },
+    );
+    expect(captured).toStrictEqual({
+      messages: [],
+      enable_thinking: true,
+      reasoning_effort: "medium",
+    });
+  });
+
+  it.each([
+    "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+    "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+  ])("applies Token Plan constraints for a custom provider on %s", (baseUrl) => {
+    const captured = captureProviderPayload(
+      createModel("deepseek-v4-pro", { provider: "custom-dashscope", baseUrl }),
+      "medium",
+      { messages: [], thinking: { type: "enabled" } },
+    );
+    expect(captured).toStrictEqual({
+      messages: [],
+      enable_thinking: true,
+      reasoning_effort: "high",
+    });
+  });
+
+  it("does not apply Qwen payload policy to an unrelated custom endpoint", () => {
+    expect(wrap(createModel("qwen3.8-flash", { provider: "custom-provider" }))).toBeUndefined();
+  });
+
   it("uses the runtime model qwen-chat-template format when the wrapper context omits it", () => {
     const payload = { chat_template_kwargs: { enable_thinking: true }, enable_thinking: true };
     const stream: StreamFn = (model, _context, options) => {

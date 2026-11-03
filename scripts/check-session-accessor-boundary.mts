@@ -106,7 +106,6 @@ const migratedSessionAccessorFiles = new Set([
 const migratedBundledPluginSessionAccessorFiles = new Set([
   "extensions/codex/src/conversation-binding.ts",
   "extensions/discord/src/monitor/native-command-model-picker-ui.ts",
-  "extensions/discord/src/monitor/native-command-model-picker-apply.ts",
   "extensions/discord/src/monitor/thread-session-close.ts",
   "extensions/feishu/src/reasoning-preview.ts",
   "extensions/memory-core/src/dreaming-phases.ts",
@@ -137,9 +136,6 @@ const migratedSessionAccessorWriteFiles = new Set([
   "src/agents/embedded-agent-subscribe.handlers.compaction.runtime.ts",
   "src/agents/embedded-agent-runner/run/attempt.ts",
   "src/agents/live-model-switch.ts",
-  "src/agents/main-session-recovery/main-session-restart-recovery-checkpoint.ts",
-  "src/agents/main-session-recovery/main-session-restart-recovery-marking.ts",
-  "src/agents/main-session-recovery/main-session-restart-recovery-store.ts",
   "src/agents/session-suspension.ts",
   "src/auto-reply/reply/abort.ts",
   "src/agents/subagents/registry/subagent-control.ts",
@@ -186,7 +182,6 @@ const migratedTranscriptWriterFiles = new Set([
 const migratedSessionLifecycleCleanupFiles = new Set([
   "src/config/sessions/cleanup-service.ts",
   "src/cron/session-reaper.ts",
-  "src/infra/heartbeat-runner.ts",
 ]);
 
 export const readOnlyGatewaySessionAccessorFiles = new Set([

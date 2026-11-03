@@ -60,7 +60,7 @@ export function registerNativeDispatchAbortCases(
     });
     const origin = new AbortController();
     const cfg = createDispatchConfig();
-    const prepared = prepareReplySourceInput(ctx, cfg, { abortSignal: origin.signal });
+    const prepared = await prepareReplySourceInput(ctx, cfg, { abortSignal: origin.signal });
     if (!prepared.input) {
       throw new Error("missing native source");
     }

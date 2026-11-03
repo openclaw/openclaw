@@ -57,14 +57,3 @@ export async function writeOutputAsset(params: {
     size: params.buffer.byteLength,
   };
 }
-
-export async function readInputFiles(
-  files: string[],
-): Promise<Array<{ path: string; buffer: Buffer }>> {
-  return await Promise.all(
-    files.map(async (filePath) => ({
-      path: path.resolve(filePath),
-      buffer: await fs.readFile(path.resolve(filePath)),
-    })),
-  );
-}

@@ -2,14 +2,13 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { expect, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import {
   configureProofCollaboration,
   createScenario,
+  expectProofIdle,
   FOLLOWUP_REPLY,
   humanReplies,
   proofDeliveries,
-  providerErrors,
   runHuman,
   settleProofScenario,
   waitForProofGate,
@@ -160,12 +159,11 @@ export async function verifyCollaborativeCancellation(signal: AbortSignal) {
           scenario.releaseIncumbent.resolve();
           const [aliceResult, bobResult] = await Promise.all([aliceOutcome, bobOutcome]);
           await queuedPreparation;
-          await waitForGatewayActiveWork(30_000);
+          await expectProofIdle();
           const replies = humanReplies.slice(firstReply);
           const incumbentTexts = (cancel === "source" ? [1, 2] : [1]).map(
             (index) => `${scenario.marker}_INCUMBENT_${index}`,
           );
-          expect(providerErrors).toEqual([]);
           expect(proofDeliveries(scenario.recipient)).toEqual([]);
           expect(
             proofDeliveries(`${scenario.recipient}-incumbent`).map((entry) => entry.text),

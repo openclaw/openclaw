@@ -50,7 +50,7 @@ describe("resolveExistingPathsWithinRoot", () => {
   }
 
   it("rejects traversal outside the upload root", async () => {
-    await fs.writeFile(path.join(fixture.baseDir, "outside.txt"), "nope", "utf8");
+    await writeFixtureFile(path.join(fixture.baseDir, "outside.txt"), "nope");
     expectInvalidResult(
       await resolveWithinUploads("../outside.txt"),
       "must stay within uploads directory",
@@ -66,10 +66,8 @@ describe("resolveExistingPathsWithinRoot", () => {
     "rejects symlink escapes outside upload root",
     async () => {
       const { baseDir, uploadsDir } = fixture;
-      const outsidePath = path.join(baseDir, "secret.txt");
-      await fs.writeFile(outsidePath, "secret", "utf8");
-      const symlinkPath = path.join(uploadsDir, "leak.txt");
-      await fs.symlink(outsidePath, symlinkPath);
+      const outsidePath = await writeFixtureFile(path.join(baseDir, "secret.txt"), "secret");
+      await fs.symlink(outsidePath, path.join(uploadsDir, "leak.txt"));
 
       expectInvalidResult(await resolveWithinUploads("leak.txt"), "regular non-symlink file");
     },
@@ -80,8 +78,7 @@ describe("resolveExistingPathsWithinRoot", () => {
     async () => {
       const { baseDir, uploadsDir } = fixture;
       const outsideDir = path.join(baseDir, "outside");
-      await fs.mkdir(outsideDir, { recursive: true });
-      await fs.writeFile(path.join(outsideDir, "secret.txt"), "secret", "utf8");
+      await writeFixtureFile(path.join(outsideDir, "secret.txt"), "secret");
       await fs.symlink(outsideDir, path.join(uploadsDir, "alias"));
 
       expect(await resolveWithinUploads("alias/secret.txt")).toEqual({
@@ -100,13 +97,14 @@ describe("resolveExistingPathsWithinRoot", () => {
       await fs.mkdir(canonicalUploadsDir, { recursive: true });
       await fs.symlink(canonicalUploadsDir, aliasedUploadsDir);
 
-      const outsideDir = path.join(baseDir, "outside");
-      await fs.mkdir(outsideDir, { recursive: true });
-      const outsideFile = path.join(outsideDir, "secret.txt");
-      await fs.writeFile(outsideFile, "secret", "utf8");
-
-      const result = await resolveWithinUploads(await fs.realpath(outsideFile), aliasedUploadsDir);
-      expectInvalidResult(result, "must stay within uploads directory");
+      const outsideFile = await writeFixtureFile(
+        path.join(baseDir, "outside/secret.txt"),
+        "secret",
+      );
+      expectInvalidResult(
+        await resolveWithinUploads(outsideFile, aliasedUploadsDir),
+        "must stay within uploads directory",
+      );
     },
   );
 });
@@ -176,9 +174,7 @@ function registerUploadPathCases(resolver: UploadPathResolver, cases: UploadPath
       vi.resetModules();
       const resolve = (await import("./paths.js"))[resolver];
       const prepared = await prepareUploadPathCase(fixture, scenario);
-      const result = await resolve({
-        requestedPaths: prepared.requestedPaths,
-      });
+      const result = await resolve({ requestedPaths: prepared.requestedPaths });
       if (expectedError) {
         expect(result).toEqual({ ok: false, error: expect.stringContaining(expectedError) });
         return;

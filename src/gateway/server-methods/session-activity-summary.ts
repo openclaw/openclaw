@@ -18,6 +18,7 @@ import {
 import { authorizeIncognitoSessionTarget } from "../session-sharing.js";
 import { withGatewaySessionStoreTarget } from "../session-utils-store-lookup.js";
 import { resolveCanonicalSessionEntryFromStoreKeys } from "../session-utils-store.js";
+import { respondError } from "./response.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
 
@@ -28,11 +29,7 @@ export const sessionActivitySummaryHandlers: GatewayRequestHandlers = {
     async ({ params, client, context, respond }) => {
       const service = context.sessionActivitySummaries;
       if (!service) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, "Activity recaps are unavailable."),
-        );
+        respondError(respond, ErrorCodes.UNAVAILABLE, "Activity recaps are unavailable.");
         return;
       }
       const cfg = context.getRuntimeConfig();
@@ -115,14 +112,9 @@ export const sessionActivitySummaryHandlers: GatewayRequestHandlers = {
             !selected.entry ||
             selected.entry.sessionId !== target.entry.sessionId ||
             selected.entry.lifecycleRevision !== target.entry.lifecycleRevision ||
-            (hasOperatorBoundary(client, currentCfg) &&
-              sharing.entryFilter?.(target.canonicalKey, target.entry) === false)
+            (hasOperatorBoundary(client, currentCfg) && !sharing.canReadTarget(target))
           ) {
-            respond(
-              false,
-              undefined,
-              errorShape(ErrorCodes.INVALID_REQUEST, "Session is unavailable."),
-            );
+            respondError(respond, ErrorCodes.INVALID_REQUEST, "Session is unavailable.");
             return;
           }
           const error =
@@ -170,9 +162,7 @@ export const sessionActivitySummaryHandlers: GatewayRequestHandlers = {
             : errorShape(ErrorCodes.INVALID_REQUEST, "Session is unavailable.");
           if (
             error ||
-            (target &&
-              hasOperatorBoundary(client, currentCfg) &&
-              sharing.entryFilter?.(target.canonicalKey, target.entry) === false)
+            (target && hasOperatorBoundary(client, currentCfg) && !sharing.canReadTarget(target))
           ) {
             respond(
               false,

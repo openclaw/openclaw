@@ -74,7 +74,9 @@ it("counts in-flight reads against the send's frame budget", () => {
   expect(rejected.defaultPrevented).toBe(false);
   expect(state.chatAttachments).toEqual([]);
   expect(showToast).toHaveBeenCalledExactlyOnceWith({
-    message: "Too large to send: annotated-page.png",
+    message: "File too large. Try a smaller file.",
+    placement: "top-center",
+    severity: "error",
   });
 
   expect(receiveBrowserAnnotation(state, true, capture(), 0, replaceAttachments)).toBe(true);

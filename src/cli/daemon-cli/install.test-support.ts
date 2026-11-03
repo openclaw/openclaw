@@ -146,7 +146,7 @@ export function setupInstallTests() {
   beforeEach(() => {
     pinSnapshotMock.mockReset().mockReturnValue({ revision: "empty", stored: false });
     pinMigrationMock.mockReset().mockResolvedValue(undefined);
-    runExecMock.mockReset().mockResolvedValue(nodeProbeOutput("26.8.1"));
+    runExecMock.mockReset().mockResolvedValue(nodeProbeOutput("26.12.1"));
     resolveGatewayPortMock.mockClear();
     mockSystemAccountHome();
     replaceConfigFileMock.mockReset();

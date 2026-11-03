@@ -27,8 +27,15 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { pluginBackupPlanInput } from "../backup-resource-plan.test-support.js";
 import { createBackupSqliteSnapshotPlan } from "../backup-sqlite-snapshot.js";
 import { resolveClientCredentialStorePath } from "../client-credential-paths.js";
+import { readClientCredentialReceipt } from "../client-credential-readiness.js";
+import { readClientCredentialFileIdentity } from "../client-credential-receipt.js";
+import {
+  capturePortClientCredentialBinding,
+  rebindPortedClientCredentials,
+} from "../client-credential-restore.js";
 import { openClientCredentialCustody } from "../client-credential-store.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import * as snapshotSource from "../sqlite-snapshot-source.js";
@@ -142,16 +149,7 @@ it.skipIf(!connection)(
           stateDir: state.stateDir,
         });
         const resources = () =>
-          createBackupResourcePlan({
-            stateDir: state.stateDir,
-            configPaths: [],
-            oauthDirs: [],
-            workspaceDirs: [],
-            excludedWorkspaceDirs: [],
-            agentRoots: [],
-            pluginResources: inventory.resources,
-            pluginRoots: inventory.pluginRoots,
-          });
+          createBackupResourcePlan(pluginBackupPlanInput(state.stateDir, inventory));
         const snapshotPlan = async (name: string, selected = resources()) => {
           const selectedResources = await selected;
           const tempDir = state.path(name);
@@ -333,6 +331,13 @@ it.skipIf(!connection)(
           const sharedStoreId = randomUUID();
           const sharedNamespace = `backup_state_${sharedStoreId.replaceAll("-", "")}`;
           namespaces.add(sharedNamespace);
+          const sharedFile = readClientCredentialFileIdentity(sharedPath);
+          assert(sharedFile);
+          const credentialBinding = capturePortClientCredentialBinding({
+            env: state.env,
+            sourcePath: sharedPath,
+            sourceFile: sharedFile,
+          });
           {
             using source = openNodeSqliteDatabase(sharedPath, {
               readOnly: true,
@@ -348,6 +353,26 @@ it.skipIf(!connection)(
           }
           await fs.rename(sharedPath, state.path("source-state.sqlite"));
           writePortAnchor(sharedPath, sharedStoreId, sharedNamespace);
+          rebindPortedClientCredentials({
+            env: state.env,
+            binding: credentialBinding,
+            sharedPath,
+            sqliteSnapshotPath: state.path("source-state.sqlite"),
+            engine: "postgres",
+            storeId: sharedStoreId,
+            assertCurrent() {},
+          });
+          {
+            using credentials = openClientCredentialCustody(state.env);
+            assert(credentials);
+            expect(readClientCredentialReceipt(credentials.database)).toMatchObject({
+              phase: "complete",
+              receipt: {
+                source: { kind: "canonical", engine: "postgres", identity: sharedStoreId },
+                sharedFile: readClientCredentialFileIdentity(sharedPath),
+              },
+            });
+          }
           // Reverse the mixture: state is PostgreSQL while the plugin remains SQLite.
           const retainedAnchor = state.path("workboard-pg.sqlite");
           await fs.rename(anchorPath, retainedAnchor);

@@ -117,6 +117,7 @@ describe("device pairing approval provenance", () => {
     const bootstrapApproved = await approveBootstrapDevicePairing(
       bootstrapRequest.request.requestId,
       { roles: ["node"], scopes: [] },
+      {},
       baseDir,
     );
     expect(bootstrapApproved?.status === "approved" && bootstrapApproved.device.approvedVia).toBe(

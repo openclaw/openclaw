@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { assert, describe, expect, it } from "vitest";
 import {
   parseCardsJson,
   parseObservationSegments,
@@ -67,55 +67,66 @@ describe("parseCardsJson", () => {
     appSites: { primary: "github.com" },
     ...overrides,
   });
-  const parse = (raw: string) => parseCardsJson({ raw, day: DAY });
+  const parse = (...cards: ReturnType<typeof card>[]) =>
+    parseCardsJson({ raw: JSON.stringify(cards), day: DAY });
   const overlap = (firstEnd: string, secondEnd = "11:00:00") =>
-    parse(
-      JSON.stringify([
-        card({ endTime: firstEnd }),
-        card({ startTime: "10:30:00", endTime: secondEnd, title: "Second" }),
-      ]),
-    );
+    parse(card({ endTime: firstEnd }), card({ startTime: "10:30:00", endTime: secondEnd }));
 
   it("maps unknown categories to other", () => {
-    expect(parse(JSON.stringify([card({ category: "quantum-vibes" })]))).toMatchObject({
+    expect(parse(card({ category: "quantum-vibes" }))).toMatchObject({
       ok: true,
       drafts: [{ category: "other" }],
     });
   });
 
-  it("trims sub-minute overlaps and rejects large ones", () => {
+  it("trims sub-minute overlaps", () => {
     expect(overlap("10:30:30")).toMatchObject({
       ok: true,
       drafts: [{ endMs: dayMs("10:30:30") }, { startMs: dayMs("10:30:30") }],
     });
-
-    expectError(overlap("10:45:00"), "overlap");
   });
 
-  it("rejects an overlap that would leave no duration for a card", () => {
-    expectError(overlap("10:30:30", "10:30:30"), "endTime");
+  it.each([
+    [() => overlap("10:45:00"), "overlap"],
+    [() => overlap("10:30:30", "10:30:30"), "endTime"],
+    [() => parse(card({ startTime: "13:05 pm" })), "startTime"],
+  ] as const)("reports actionable card errors: %s", (parseInvalid, error) => {
+    expectError(parseInvalid(), error);
   });
 
-  it("reports actionable errors for the correction round-trip", () => {
-    expectError(parse(JSON.stringify([card({ startTime: "13:05 pm" })])), "startTime");
+  it("orders model cards before validating revision coverage", () => {
+    const result = parse(card({ startTime: "10:30:00", endTime: "11:00:00" }), card());
+    assert(result.ok);
+    expect(coverage(result.drafts)).toEqual({ ok: true });
   });
 });
 
-it.each<[string, number[], number, boolean, number[] | null, number]>([
-  ["elapsed boundary", [0, 30, 60, 900], 901_000, false, [1, 2, 3], 900_000],
-  ["capture gap", [0, 30, 400], 60_000, false, [1, 2], 30_001],
-  ["pending window", [0, 30], 60_000, false, null, 0],
-  ["forced window", [0, 30], 60_000, true, [1, 2], 30_001],
-])("selectBatchFrames: %s", (_name, offsets, now, force, ids, end) => {
-  const t0 = dayMs("10:00:00");
-  const selection = selectBatchFrames({
+function select(offsets: number[], now: number, force = false, t0 = dayMs("10:00:00")) {
+  return selectBatchFrames({
     frames: offsets.map((seconds, i) => ({ id: i + 1, capturedAtMs: t0 + seconds * 1000 })),
     windowMs: 900_000,
     nowMs: t0 + now,
     force,
   });
-  expect(selection).toEqual(
-    ids ? expect.objectContaining({ frameIds: ids, endMs: t0 + end }) : null,
+}
+type SelectionCase = [string, number[], number, boolean, number[] | null, number, number?];
+it.each<SelectionCase>([
+  ["elapsed boundary", [0, 30, 60, 900], 901_000, false, [1, 2, 3], 900_000],
+  ["capture gap", [0, 30, 400], 60_000, false, [1, 2], 30_001],
+  ["pending window", [0, 30], 60_000, false, null, 0],
+  ["forced window", [0, 30], 60_000, true, [1, 2], 30_001],
+  ...["2026-07-03", "2026-03-08", "2026-11-01"].map((day): SelectionCase => [
+    `midnight ${day}`,
+    [0, 30, 60],
+    60_000,
+    false,
+    [1, 2],
+    30_001,
+    new Date(`${day}T23:59:00`).getTime(),
+  ]),
+])("selectBatchFrames: %s", (_name, offsets, now, force, ids, end, t0 = dayMs("10:00:00")) => {
+  expect(select(offsets, now, force, t0)).toEqual(
+    ids ? { frameIds: ids, startMs: t0, endMs: t0 + end } : null,
   );
 });
 
@@ -124,32 +135,16 @@ const span = ([start, end]: Span) => ({
   startMs: dayMs("10:00:00") + start * 60_000,
   endMs: dayMs("10:00:00") + end * 60_000,
 });
-it.each<[Span[], Span[], string | null]>([
-  [
-    [[30, 60]],
-    [
-      [0, 30],
-      [30, 60],
-    ],
-    "not covered",
-  ],
-  [[[-60, 60]], [[0, 60]], "outside the revision window"],
-  [
-    [
-      [0, 29],
-      [30.5, 60],
-    ],
-    [[0, 60]],
-    null,
-  ],
+const coverageWindow = { windowStartMs: dayMs("10:00:00"), windowEndMs: dayMs("11:00:00") };
+type Intervals = ReturnType<typeof span>[];
+const coverage = (drafts: Intervals, requiredSpans = [span([0, 60])]) =>
+  validateCardCoverage({ drafts, requiredSpans, ...coverageWindow });
+it.each<[Intervals, Intervals, string | null]>([
+  [[span([30, 60])], [span([0, 30]), span([30, 60])], "not covered"],
+  [[span([-60, 60])], [span([0, 60])], "outside the revision window"],
+  [[span([0, 29]), span([30.5, 60])], [span([0, 60])], null],
 ])("validates card coverage: %j over %j", (drafts, required, error) => {
-  const result = validateCardCoverage({
-    drafts: drafts.map(span),
-    requiredSpans: required.map(span),
-    windowStartMs: dayMs("10:00:00"),
-    windowEndMs: dayMs("11:00:00"),
-  });
-  expect(result).toMatchObject(
+  expect(coverage(drafts, required)).toMatchObject(
     error ? { ok: false, error: expect.stringContaining(error) } : { ok: true },
   );
 });

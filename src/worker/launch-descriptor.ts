@@ -92,6 +92,8 @@ const WorkspacePath = AbsoluteHostPath.refine(
   (value) => value.trim() === value && value.length <= 4_096 && !value.includes("\0"),
 );
 const ExecAuthorityFields = {
+  mode: z.enum(["deny", "allowlist", "ask", "auto", "full"]).optional(),
+  strictInlineEval: z.boolean().optional(),
   security: z.enum(["deny", "allowlist", "full"]),
   ask: z.enum(["off", "on-miss", "always"]),
   // Host-specific approvals and default safe bins are not portable.

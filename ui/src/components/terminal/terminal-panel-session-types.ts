@@ -9,6 +9,13 @@ import type { TerminalPanelUpload } from "./terminal-panel-upload.ts";
 import type { StartupInputBuffer } from "./terminal-startup-input.ts";
 import type { TerminalTabReadinessState } from "./terminal-tab-readiness.ts";
 
+export type TerminalStagedInput = {
+  text: string;
+  attachments: { name: string; path: string }[];
+};
+
+export type TerminalSessionListOptions = { preserveError?: boolean };
+
 export type TerminalPanelSessionTab = TerminalPanelTab &
   TerminalTabReadinessState & {
     gatewaySessionId: string;
@@ -17,6 +24,8 @@ export type TerminalPanelSessionTab = TerminalPanelTab &
     controller: GhosttyTerminalController;
     shell: string;
     host: HTMLDivElement;
+    /** Unsent presentation data follows this session through a native handoff. */
+    stagedInput?: TerminalStagedInput;
     pendingOpen?: TerminalPanelOpenAction;
     /** Retires only the queued intent that booted this placeholder. */
     cancelPendingIntent?: () => void;
@@ -28,6 +37,8 @@ export type TerminalRouteTarget = { sessionId: string } | { catalog: CatalogSess
 
 export type TerminalInputs = {
   gatewayConnected: boolean;
+  /** Native mobile presentation supplied by the chat host, never pane width. */
+  mobile: boolean;
   client: TerminalGatewayClient | null;
   agentId: string | null;
   sessionKey: string | null;

@@ -89,7 +89,6 @@ export type ToolSearchToolContext = {
   catalogRef?: ToolSearchCatalogRef;
   abortSignal?: AbortSignal;
   executeTool?: ToolSearchCatalogToolExecutor;
-  forceRestartSafeTools?: boolean;
   /** Set when the run executes only these tools; swarm globals gate on `sessions_spawn`. */
   toolExecutionAllow?: readonly string[];
   codeModeSkills?: Readonly<AgentToolSurfacePresentation["skills"]>;
@@ -106,6 +105,8 @@ export type ToolSearchCatalogEntry = {
   description: string;
   /** Recorded when the catalog owner also exposes this tool in the native surface. */
   directVisible?: boolean;
+  /** Its bare name also belongs to an eligible tool kept direct outside the catalog. */
+  requiresExactId?: boolean;
   parameters?: unknown;
   outputSchema?: TSchema;
   tool: CatalogTool;
@@ -141,6 +142,7 @@ export type ToolSearchCatalogApplyResult = {
 };
 
 export type ToolSearchCatalogCompactionParams = {
+  config?: OpenClawConfig;
   tools: AnyAgentTool[];
   enabled: boolean;
   catalogRef?: ToolSearchCatalogRef;
@@ -149,4 +151,5 @@ export type ToolSearchCatalogCompactionParams = {
   isVisibleControlTool: (tool: AnyAgentTool) => boolean;
   isVisibleCatalogTool?: (tool: AnyAgentTool) => boolean;
   shouldCatalogTool?: (tool: AnyAgentTool) => boolean;
+  selection?: Pick<ToolSearchConfig, "include" | "exclude">;
 };

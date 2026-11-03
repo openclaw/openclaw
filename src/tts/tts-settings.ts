@@ -4,11 +4,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../packages/normalization-core/src/string-coerce.js";
-import {
-  getRuntimeConfigSnapshot,
-  getRuntimeConfigSourceSnapshot,
-  selectApplicableRuntimeConfig,
-} from "../config/runtime-snapshot.js";
+import { selectLiveRuntimeConfig } from "../config/runtime-snapshot.js";
 import type {
   OpenClawConfig,
   ResolvedTtsPersona,
@@ -19,12 +15,12 @@ import type {
 } from "../config/types.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { normalizeSpeechProviderId } from "./provider-registry-core.js";
-import type { SpeechProviderConfig } from "./provider-types.js";
 import { withSpeakerSelectionCompat } from "./speaker.js";
 import { normalizeTtsAutoMode } from "./tts-auto-mode.js";
 import {
   isTtsConfigReservedKey,
   readTtsPrefs,
+  readTtsPrefsAsync,
   resolveEffectiveTtsConfig,
   resolveTtsAutoModeFromPrefs,
   resolveTtsPrefsPathValue,
@@ -33,10 +29,11 @@ import {
 } from "./tts-config.js";
 import { DEFAULT_MAX_TEXT_LENGTH } from "./tts-limits.js";
 import type { PreparedTtsPreferences } from "./tts-preferences.js";
+import type { SpeechProviderConfig } from "./tts-runtime-types.js";
 import type { ResolvedTtsConfig, ResolvedTtsModelOverrides } from "./tts-types.js";
 
 export type { ResolvedTtsConfig, ResolvedTtsModelOverrides };
-export { readTtsPrefs, type TtsUserPrefs } from "./tts-config.js";
+export { readTtsPrefs, readTtsPrefsAsync, type TtsUserPrefs } from "./tts-config.js";
 
 export const DEFAULT_TTS_TIMEOUT_MS = 30_000;
 const DEFAULT_TTS_MAX_LENGTH = 1500;
@@ -75,16 +72,6 @@ export function resolveModelOverridePolicy(
     allowNormalization: enabled && (overrides?.allowNormalization ?? true),
     allowSeed: enabled && (overrides?.allowSeed ?? true),
   };
-}
-
-export function resolveTtsRuntimeConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return (
-    selectApplicableRuntimeConfig({
-      inputConfig: cfg,
-      runtimeConfig: getRuntimeConfigSnapshot(),
-      runtimeSourceConfig: getRuntimeConfigSourceSnapshot(),
-    }) ?? cfg
-  );
 }
 
 export function asProviderConfig(value: unknown): SpeechProviderConfig {
@@ -142,7 +129,7 @@ export function resolveTtsConfig(
   cfgInput: OpenClawConfig,
   contextOrAgentId?: string | TtsConfigResolutionContext,
 ): ResolvedTtsConfig {
-  const cfg = resolveTtsRuntimeConfig(cfgInput);
+  const cfg = selectLiveRuntimeConfig(cfgInput);
   const raw: TtsConfig = resolveEffectiveTtsConfig(cfg, contextOrAgentId);
   const providerSource = raw.provider ? "config" : "default";
   const timeoutMs = raw.timeoutMs ?? DEFAULT_TTS_TIMEOUT_MS;
@@ -252,33 +239,38 @@ export type TtsProviderPreference = {
   source: "prefs" | "persona" | "config";
 };
 
-type ResolvedTtsSettingsSnapshot = {
-  autoMode: TtsAutoMode;
-  config: ResolvedTtsConfig;
-  maxLength: number;
-  persona?: ResolvedTtsPersona;
-  personaId?: string;
-  preferredProvider?: TtsProvider;
-  providerPreference?: TtsProviderPreference;
-  prefsPath: string;
-  summarize: boolean;
-};
-
-export function resolveTtsSettingsSnapshot(params: {
+type TtsSettingsSnapshotParams = {
   cfg: OpenClawConfig;
   preparedTtsPreferences?: PreparedTtsPreferences;
   sessionAuto?: string;
   agentId?: string;
   channelId?: string;
   accountId?: string;
-}): ResolvedTtsSettingsSnapshot {
-  const config = resolveTtsConfig(params.cfg, {
-    agentId: params.agentId,
-    channelId: params.channelId,
-    accountId: params.accountId,
-  });
+};
+
+export function resolveTtsSettingsSnapshot(params: TtsSettingsSnapshotParams) {
+  const config = resolveTtsConfig(params.cfg, params);
   const prefsPath = resolveTtsPrefsPath(config, params.preparedTtsPreferences);
-  const prefs = readTtsPrefs(prefsPath);
+  return projectTtsSettingsSnapshot(params.sessionAuto, config, prefsPath, readTtsPrefs(prefsPath));
+}
+
+export async function resolveTtsSettingsSnapshotAsync(params: TtsSettingsSnapshotParams) {
+  const config = resolveTtsConfig(params.cfg, params);
+  const prefsPath = await resolveTtsPrefsPathAsync(config, params.preparedTtsPreferences);
+  return projectTtsSettingsSnapshot(
+    params.sessionAuto,
+    config,
+    prefsPath,
+    await readTtsPrefsAsync(prefsPath),
+  );
+}
+
+function projectTtsSettingsSnapshot(
+  sessionAuto: string | undefined,
+  config: ResolvedTtsConfig,
+  prefsPath: string,
+  prefs: TtsUserPrefs,
+) {
   const personaId = resolveTtsPersonaIdFromPrefs(config, prefs);
   const persona = personaId ? config.personas[personaId] : undefined;
   const prefsProvider = normalizeConfiguredSpeechProviderId(prefs.tts?.provider);
@@ -293,7 +285,7 @@ export function resolveTtsSettingsSnapshot(params: {
         : undefined;
   return {
     autoMode:
-      normalizeTtsAutoMode(params.sessionAuto) ?? resolveTtsAutoModeFromPrefs(prefs) ?? config.auto,
+      normalizeTtsAutoMode(sessionAuto) ?? resolveTtsAutoModeFromPrefs(prefs) ?? config.auto,
     config,
     maxLength: prefs.tts?.maxLength ?? DEFAULT_TTS_MAX_LENGTH,
     ...(persona ? { persona } : {}),
@@ -331,15 +323,24 @@ export function buildTtsSystemPromptHint(
         "api.runtime.tts.buildSystemPromptHintAsync (bundled callers can also pass awaited prepareTtsPreferences())",
     });
   }
-  const settings = resolveTtsSettingsSnapshot({
-    cfg,
-    agentId,
-    preparedTtsPreferences: options?.preparedTtsPreferences,
-  });
+  return renderTtsSystemPromptHint(
+    resolveTtsSettingsSnapshot({
+      cfg,
+      agentId,
+      preparedTtsPreferences: options?.preparedTtsPreferences,
+    }),
+    options?.messageToolOnly,
+  );
+}
+
+function renderTtsSystemPromptHint(
+  settings: ReturnType<typeof resolveTtsSettingsSnapshot>,
+  messageToolOnly?: boolean,
+): string | undefined {
   if (settings.autoMode === "off") {
     return undefined;
   }
-  const structured = options?.messageToolOnly === true;
+  const structured = messageToolOnly === true;
   const autoHint =
     settings.autoMode === "inbound"
       ? "Only use TTS when the user's last message includes audio/voice."
@@ -372,11 +373,14 @@ export async function buildTtsSystemPromptHintAsync(
   agentId?: string,
   options?: { messageToolOnly?: boolean; preparedTtsPreferences?: PreparedTtsPreferences },
 ): Promise<string | undefined> {
-  const preparedTtsPreferences = await prepareTtsPreferencesForConfig(
-    resolveTtsConfig(cfg, agentId),
-    options?.preparedTtsPreferences,
+  return renderTtsSystemPromptHint(
+    await resolveTtsSettingsSnapshotAsync({
+      cfg,
+      agentId,
+      preparedTtsPreferences: options?.preparedTtsPreferences,
+    }),
+    options?.messageToolOnly,
   );
-  return buildTtsSystemPromptHint(cfg, agentId, { ...options, preparedTtsPreferences });
 }
 
 export function isTtsEnabled(
@@ -401,7 +405,7 @@ export function listTtsPersonas(config: ResolvedTtsConfig): ResolvedTtsPersona[]
 export async function resolveTtsPersonaList(cfg: OpenClawConfig) {
   const config = resolveTtsConfig(cfg);
   const prefsPath = await resolveTtsPrefsPathAsync(config);
-  const active = getTtsPersona(config, prefsPath);
+  const active = resolveTtsPersonaFromPrefs(config, await readTtsPrefsAsync(prefsPath));
   return {
     active: active?.id ?? null,
     personas: listTtsPersonas(config).map((persona) => ({

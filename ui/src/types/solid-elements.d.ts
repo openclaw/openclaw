@@ -21,6 +21,12 @@ type ChatCiProperties = {
   pullRequest?: ControlUiSessionPullRequest;
   sessionKey: string;
   presented: boolean;
+  inline?: boolean;
+  // Match the native menu registry without pulling renderer modules into SDK declarations.
+  controls?: {
+    readonly elements: ReadonlySet<HTMLElement>;
+    ref(this: void): (element: HTMLElement) => void;
+  };
 };
 type PluginViewProperties = {
   [Surface in keyof ControlUiSurfaceProps]: {
@@ -38,6 +44,8 @@ declare module "@solidjs/web" {
       messageActions: MessageActionDetails | null | undefined;
     }
     interface IntrinsicElements {
+      "openclaw-activity-page": HTMLAttributes<HTMLElement>;
+      "openclaw-cron-scratch-editor": HTMLAttributes<HTMLElement>;
       "openclaw-ip-location": HTMLAttributes<HTMLElement>;
       "openclaw-home-session": HTMLAttributes<HTMLElement>;
       "openclaw-session-owner-chip": HTMLAttributes<HTMLElement> & {
@@ -57,13 +65,13 @@ declare module "@solidjs/web" {
       "openclaw-chat-tool-card": HTMLAttributes<HTMLElement>;
       "openclaw-chat-tool-icon": HTMLAttributes<HTMLElement>;
       "openclaw-chat-tool-reviews": HTMLAttributes<HTMLElement>;
-      "openclaw-chat-tool-outcome-summary": HTMLAttributes<HTMLElement>;
       "openclaw-chat-tool-review-outcome": HTMLAttributes<HTMLElement>;
       "openclaw-custodian-setup-card": HTMLAttributes<HTMLElement>;
       "openclaw-agent-memory-panel": HTMLAttributes<HTMLElement>;
-      "openclaw-chat-ci-details": HTMLAttributes<HTMLElement> & ElementProperties<ChatCiProperties>;
+      "openclaw-chat-ci-details": HTMLAttributes<HTMLElement> &
+        ElementProperties<ChatCiProperties & { menuControls?: boolean }>;
       "openclaw-chat-ci-automation": HTMLAttributes<HTMLElement> &
-        ElementProperties<ChatCiProperties & { sessionId: string }>;
+        ElementProperties<ChatCiProperties & { sessionId: string; menuPresentation?: boolean }>;
       "openclaw-panel-empty-state": HTMLAttributes<HTMLElement>;
       "openclaw-panel-loading-skeleton": HTMLAttributes<HTMLElement> & {
         compact?: string;
@@ -86,25 +94,16 @@ declare module "@solidjs/web" {
       "openclaw-memory-settings": HTMLAttributes<HTMLElement>;
       "openclaw-memory-memories": HTMLAttributes<HTMLElement>;
       "openclaw-modal-actions": HTMLAttributes<HTMLElement>;
-      "openclaw-claws-explore": HTMLAttributes<HTMLElement> & {
+      "openclaw-templates-explore": HTMLAttributes<HTMLElement> & {
         "prop:onSelect"?: (
-          entry: import("../pages/agents-home/claws-catalog-client.ts").ClawCatalogEntry,
+          entry: import("../pages/agents-home/templates-catalog-client.ts").TemplateCatalogEntry,
         ) => void;
       };
-      "openclaw-claws-catalog-dialog": HTMLAttributes<HTMLElement> & {
-        "prop:initialPackageName"?: string;
-        "prop:pageMode"?: boolean;
-        "prop:onClose"?: () => void;
-        "prop:onAdded"?: () => void;
-        "prop:onSelectEntry"?: (
-          entry: import("../pages/agents-home/claws-catalog-client.ts").ClawCatalogEntry,
-        ) => void;
-      };
+      "openclaw-templates-catalog-dialog": HTMLAttributes<HTMLElement>;
       "openclaw-github-identity": HTMLAttributes<HTMLElement>;
       "openclaw-chat-permission-card": HTMLAttributes<HTMLElement>;
       "openclaw-chat-run-failure-notice": HTMLAttributes<HTMLElement>;
       "openclaw-chat-retry-status": HTMLAttributes<HTMLElement>;
-      "openclaw-chat-child-attention": HTMLAttributes<HTMLElement>;
       "openclaw-session-diff-menu": HTMLAttributes<HTMLElement>;
       "openclaw-mcp-servers-card": HTMLAttributes<HTMLElement>;
       "openclaw-mcp-app-catalog": HTMLAttributes<HTMLElement> & { surface?: string };
@@ -174,6 +173,7 @@ declare module "@solidjs/web" {
             | "excludeIdentities"
             | "totalCount"
             | "maxVisible"
+            | "overflowInSlots"
             | "personActivity"
           >
         > & { variant?: "session" };

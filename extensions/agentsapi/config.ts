@@ -4,7 +4,7 @@ import type { AgentToolParam, EnvironmentParam } from "openai/resources/beta/age
 import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { z } from "zod";
 
-export const DEFAULT_NATIVE_TOOLS = [
+const DEFAULT_NATIVE_TOOLS = [
   { type: "web_search", mode: "live" },
   { type: "programmatic_tool_calling", enabled: true },
 ] satisfies AgentToolParam[];

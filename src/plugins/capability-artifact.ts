@@ -118,8 +118,9 @@ function resolvePluginArtifactManifests(
   });
   const error = registry.diagnostics.find((diagnostic) => diagnostic.level === "error");
   if (error || registry.plugins.length === 0) {
+    const failure = error ?? registry.diagnostics.find((diagnostic) => diagnostic.level === "warn");
     throw new Error(
-      error?.message ?? `Plugin artifact has no valid plugin manifest: ${artifactRoot}`,
+      failure?.message ?? `Plugin artifact has no valid plugin manifest: ${artifactRoot}`,
     );
   }
   return registry.plugins;
@@ -137,6 +138,11 @@ export function inspectPluginCapabilityArtifact(
     return {
       manifest: manifests[0],
       manifests,
+      contextEngineIdsByPlugin: Object.fromEntries(
+        manifests.flatMap((manifest) =>
+          manifest.contextEngineIds ? [[manifest.id, [...manifest.contextEngineIds]]] : [],
+        ),
+      ),
       declared: mergePluginDeclaredSurfaces(
         manifests.map(
           (manifest) => buildPluginCapabilitySummary({ manifest, origin: "global" }).declared,

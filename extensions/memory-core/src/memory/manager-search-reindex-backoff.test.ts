@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
@@ -23,8 +25,15 @@ describe("memory search reindex backoff", () => {
   function clock() {
     const time = { now: Date.now() };
     vi.spyOn(Date, "now").mockImplementation(() => time.now);
+    vi.spyOn(performance, "now").mockImplementation(() => time.now);
     return time;
   }
+  // Rebuilds reuse published vectors for unchanged chunks; failing rebuilds need new input.
+  const reviseMemory = (revision: string) =>
+    fs.writeFile(
+      path.join(fixture.paths.memory, "2026-01-12.md"),
+      `# Log\nZebra memory line, ${revision} revision.`,
+    );
   function failEmbedding(message: string) {
     const embedding = vi.fn(async () => {});
     fixture.provider.beforeEmbedBatch = embedding;
@@ -36,6 +45,7 @@ describe("memory search reindex backoff", () => {
     const manager = await baseline(provider);
     const fields = manager as unknown as { awaitManagerIdle(): Promise<void> };
     memoryIndexFixtureWriter(manager).exec(oldChunking);
+    await reviseMemory("first");
     const time = clock();
     const embedding = failEmbedding("full rebuild failed");
     await expect(manager.sync({ force: true })).rejects.toThrow("full rebuild failed");
@@ -66,6 +76,7 @@ describe("memory search reindex backoff", () => {
     time.now += 1_800_000;
     await searchPublished();
     expect(manager.status().lastSyncError).toBeUndefined();
+    await reviseMemory("second");
     fixture.provider.embedBatchPermanentFailure = new Error("next rebuild failed");
     await expect(manager.sync({ force: true })).rejects.toThrow("next rebuild failed");
     const attempts = embedding.mock.calls.length;
@@ -82,6 +93,7 @@ describe("memory search reindex backoff", () => {
           ? "DELETE FROM memory_index_meta WHERE key = 'memory_index_meta_v1'"
           : oldChunking,
       );
+      await reviseMemory("repair");
       const time = clock();
       const embedding = failEmbedding("identity rebuild failed");
       for (let attempt = 0; attempt < 2; attempt++) {

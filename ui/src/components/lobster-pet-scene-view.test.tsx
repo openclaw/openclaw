@@ -3,7 +3,7 @@ import { createComponent, createSignal } from "solid-js";
 import { expect, it } from "vitest";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
-import { createLobsterPetLook } from "./lobster-pet-look.ts";
+import { createLobsterPetLook } from "./lobster-pet-identity.ts";
 import { LobsterPetScene, type LobsterPetSceneProps } from "./lobster-pet-scene-view.tsx";
 
 it("hides a shed floor shell when resized controls consume its lane", () => {

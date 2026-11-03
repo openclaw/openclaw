@@ -29,6 +29,7 @@ import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js"
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { projectSessionMessagePayload } from "../session-transcript-message.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import { createWorkerConnectionIdentity } from "./connection-identity.test-support.js";
 import { readWorkerSessionPlacementProjectionInDatabase } from "./placement-read-projection.js";
 import { placementTurnOwner, type WorkerSessionPlacementIdentity } from "./placement-record.js";
 import {
@@ -294,18 +295,12 @@ async function bindFinishingOwner() {
       () => abort.signal.throwIfAborted(),
     );
   const { takeFinishingOutcome: take } = await bind();
-  const identity: WorkerConnectionIdentity = {
+  const identity: WorkerConnectionIdentity = createWorkerConnectionIdentity(claim, {
     environmentId: active.environmentId,
     credentialHash: "finishing-credential-hash",
-    bundleHash: "a".repeat(64),
-    sessionId: claim.sessionId,
-    runId: claim.runId,
-    turnClaim: claim,
     ownerEpoch: active.activeOwnerEpoch,
-    rpcSetVersion: 1,
-    protocolFeatures: [],
     credentialExpiresAtMs: Date.now() + 60_000,
-  };
+  });
   const request = {
     runEpoch: identity.ownerEpoch,
     lastAckedSeq: 0,
@@ -594,18 +589,12 @@ it("lets an unaudited admitted worker complete the exact turn that closes its ow
     await getWorkerTurnExecutionIdentityCapability(store, claim)?.run((owner) => {
       expect(owner.executionIdentityToken).toBeUndefined();
     });
-    const identity: WorkerConnectionIdentity = {
+    const identity: WorkerConnectionIdentity = createWorkerConnectionIdentity(claim, {
       environmentId: active.environmentId,
       credentialHash: "worker-terminal-continuation",
-      bundleHash: "a".repeat(64),
-      sessionId: claim.sessionId,
-      runId: claim.runId,
-      turnClaim: claim,
       ownerEpoch: active.activeOwnerEpoch,
-      rpcSetVersion: 1,
-      protocolFeatures: [],
       credentialExpiresAtMs: Date.now() + 60_000,
-    };
+    });
 
     await expect(
       runWorkerTurnAdmissionContinuation(identity, async () => {
@@ -633,18 +622,12 @@ it.each(["root admission", "wrong generation"] as const)(
     });
     const instance = createOperationalRunInstanceRef(claim.runId);
     const authority = claimAgentRunDelegatedAuthority(instance);
-    const identity: WorkerConnectionIdentity = {
+    const identity: WorkerConnectionIdentity = createWorkerConnectionIdentity(claim, {
       environmentId: active.environmentId,
       credentialHash: "worker-media-publication",
-      bundleHash: "a".repeat(64),
-      sessionId: claim.sessionId,
-      runId: claim.runId,
-      turnClaim: claim,
       ownerEpoch: active.activeOwnerEpoch,
-      rpcSetVersion: 1,
-      protocolFeatures: [],
       credentialExpiresAtMs: Date.now() + 60_000,
-    };
+    });
     const text = "Prepared\nMEDIA:./owned.png\nMEDIA:./unowned.png";
     const prepare = vi.fn(
       (message: ReturnType<typeof makeAgentAssistantMessage>, sourceText: string | undefined) => {

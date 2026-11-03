@@ -89,6 +89,7 @@ suite.define(() => {
     expect(await terminalPage.count()).toBe(0);
     expect(await gateway.getRequests("terminal.close")).toHaveLength(0);
     await page.keyboard.press("Control+Backquote");
+    await dock.locator(".tp-session.is-current").click();
     await dock.locator(".tp-host canvas").waitFor();
     expect(await gateway.getRequests("terminal.open")).toHaveLength(1);
     const terminalTab = page.locator('[data-region-header="side"] .tabstrip-tab.is-live');

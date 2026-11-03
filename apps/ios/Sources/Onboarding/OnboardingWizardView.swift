@@ -17,6 +17,7 @@ struct OnboardingWizardView: View {
     @Environment(NodeAppModel.self) private var appModel: NodeAppModel
     @Environment(GatewayConnectionController.self) private var gatewayController: GatewayConnectionController
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @AppStorage("node.instanceId") private var instanceId: String = UUID().uuidString
     @AppStorage("gateway.discovery.domain") private var discoveryDomain: String = ""
     @AppStorage("onboarding.developerMode") private var developerModeEnabled: Bool = false
@@ -144,6 +145,15 @@ struct OnboardingWizardView: View {
                     self.successStep
                 default:
                     Form {
+                        if self.dynamicTypeSize.isAccessibilitySize {
+                            Section {
+                                self.stepHeading
+                                    .frame(maxWidth: .infinity)
+                                    .multilineTextAlignment(.center)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .listRowBackground(Color.clear)
+                            }
+                        }
                         switch self.step {
                         case .mode:
                             self.modeStep
@@ -161,19 +171,19 @@ struct OnboardingWizardView: View {
                     .scrollDismissesKeyboard(.interactively)
                 }
             }
-            .navigationTitle(self.isFullScreenStep ? "" : self.step.title)
+            .navigationTitle(self.isFullScreenStep || self.dynamicTypeSize.isAccessibilitySize ? "" : self.step.title)
             .navigationBarTitleDisplayMode(.inline)
             .tint(OpenClawBrand.activationPrimaryAction)
             .toolbar {
-                if !self.isFullScreenStep {
+                if !self.isFullScreenStep, self.dynamicTypeSize.isAccessibilitySize {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("Back", systemImage: "chevron.left", action: self.navigateBack)
+                            .labelStyle(.iconOnly)
+                    }
+                }
+                if !self.isFullScreenStep, !self.dynamicTypeSize.isAccessibilitySize {
                     ToolbarItem(placement: .principal) {
-                        VStack(spacing: 2) {
-                            Text(self.step.title)
-                                .font(OpenClawType.headline)
-                            Text(self.step.manualProgressTitle)
-                                .font(OpenClawType.caption2)
-                                .foregroundStyle(.secondary)
-                        }
+                        self.stepHeading
                     }
                 }
             }
@@ -182,9 +192,11 @@ struct OnboardingWizardView: View {
             self.keyboardDismissControl
         }
         .overlay(alignment: .topLeading) {
-            self.leadingChromeButton
-                .padding(.leading, 16)
-                .padding(.top, 10)
+            if self.isFullScreenStep || !self.dynamicTypeSize.isAccessibilitySize {
+                self.leadingChromeButton
+                    .padding(.leading, 16)
+                    .padding(.top, 10)
+            }
         }
         .gatewayTrustPromptAlert()
         .alert("QR Scanner Unavailable", isPresented: Binding(
@@ -519,7 +531,7 @@ struct OnboardingWizardView: View {
 
     private var developerConnectSection: some View {
         Section {
-            self.onboardingTextField("Host", text: self.manualHostBinding, focusedField: .manualHost)
+            self.manualHostFieldRows
             self.onboardingTextField("Port", text: self.manualPortTextBinding, focusedField: .manualPort)
                 .keyboardType(.numberPad)
             ManualGatewaySecurityRows(presentation: self.manualTransport, useTLS: self.manualTLSBinding)
@@ -655,9 +667,26 @@ extension OnboardingWizardView {
         return "Gateway Status"
     }
 
+    private var stepHeading: some View {
+        VStack(spacing: 2) {
+            Text(self.step.title)
+                .font(OpenClawType.headline)
+                .accessibilityAddTraits(.isHeader)
+            Text(self.step.manualProgressTitle)
+                .font(OpenClawType.caption2)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var setupCodeLayout: AnyLayout {
+        self.dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12))
+            : AnyLayout(HStackLayout(spacing: 12))
+    }
+
     private var setupCodeSection: some View {
         Section {
-            HStack(spacing: 12) {
+            self.setupCodeLayout {
                 self.onboardingTextField("Enter setup code", text: self.$setupCode, focusedField: .setupCode)
                     .lineLimit(1)
                     .submitLabel(.go)
@@ -707,7 +736,7 @@ extension OnboardingWizardView {
 
     private func manualConnectionFieldsSection(title: LocalizedStringKey) -> some View {
         Section {
-            self.onboardingTextField("Host", text: self.manualHostBinding, focusedField: .manualHost)
+            self.manualHostFieldRows
             self.onboardingTextField("Port", text: self.manualPortTextBinding, focusedField: .manualPort)
                 .keyboardType(.numberPad)
             ManualGatewaySecurityRows(presentation: self.manualTransport, useTLS: self.manualTLSBinding)
@@ -729,6 +758,16 @@ extension OnboardingWizardView {
         } header: {
             Text(title)
                 .font(OpenClawType.footnoteSemiBold)
+        }
+    }
+
+    @ViewBuilder
+    private var manualHostFieldRows: some View {
+        self.onboardingTextField("Host", text: self.manualHostBinding, focusedField: .manualHost)
+        if let hostIssue = self.manualHostIssue {
+            Text(hostIssue)
+                .font(OpenClawType.footnote)
+                .foregroundStyle(OpenClawBrand.warn)
         }
     }
 
@@ -813,9 +852,7 @@ extension OnboardingWizardView {
                     .font(OpenClawType.subheadSemiBold)
             }
         }
-        .font(OpenClawType.subheadSemiBold)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .contentShape(Rectangle())
+        .buttonStyle(OpenClawPrimaryActionButtonStyle())
         .disabled(!self.canConnectManual || self.connectingGateway != nil)
     }
 
@@ -1178,7 +1215,11 @@ extension OnboardingWizardView {
 
     private var canConnectManual: Bool {
         let host = self.manualHost.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !host.isEmpty && self.resolvedManualPort(host: host) != nil
+        return !host.isEmpty && self.manualHostIssue == nil && self.resolvedManualPort(host: host) != nil
+    }
+
+    private var manualHostIssue: String? {
+        GatewayConnectionController.manualHostValidationMessage(host: self.manualHost)
     }
 
     private func initializeState() {

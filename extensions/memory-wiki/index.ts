@@ -177,7 +177,6 @@ export default definePluginEntry({
     api.registerMemoryCorpusSupplement(createWikiCorpusSupplement({ resolveConfig, getAppConfig }));
     registerMemoryWikiGatewayMethods({
       api,
-      config,
       getAppConfig,
       resolveConfig,
       resolveSourceSyncSignal: () => sourceSyncAbortController?.signal,

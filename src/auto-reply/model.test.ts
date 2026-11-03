@@ -4,6 +4,7 @@ import { extractModelDirective } from "./model.js";
 describe("extractModelDirective", () => {
   it.each([
     ["-s opus", undefined, undefined, "opus"],
+    ['"openrouter/free"', "openrouter/free", undefined, ""],
     ["--runtime codex", undefined, "codex", ""],
     ["runtime=codex", undefined, "codex", ""],
     ["harness=codex", undefined, "codex", ""],

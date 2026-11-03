@@ -31,21 +31,6 @@ function useTailscaleSudoFixture(mode: "password" | "conflict") {
   process.env.OPENCLAW_TEST_TAILSCALE_SUDO_FIXTURE_MODE = mode;
 }
 
-function expectExecCall(
-  exec: ReturnType<typeof vi.fn>,
-  callNumber: number,
-  command: string,
-  args: readonly string[],
-  options?: Record<string, unknown>,
-) {
-  expect(exec).toHaveBeenNthCalledWith(
-    callNumber,
-    command,
-    args,
-    ...(options ? [expect.objectContaining(options)] : []),
-  );
-}
-
 const jsonReply = (value: unknown) => ({ stdout: JSON.stringify(value) });
 const whois = (LoginName: string) => jsonReply({ UserProfile: { LoginName } });
 
@@ -73,8 +58,7 @@ describe("tailscale helpers", () => {
 
   it("falls back to IP when DNS missing", async () => {
     const exec = vi.fn().mockResolvedValue(jsonReply({ Self: { TailscaleIPs: ["100.2.2.2"] } }));
-    const host = await getTailnetHostname(exec);
-    expect(host).toBe("100.2.2.2");
+    await expect(getTailnetHostname(exec)).resolves.toBe("100.2.2.2");
   });
 
   it.each([
@@ -110,18 +94,13 @@ describe("tailscale helpers", () => {
 
     const hostPromise = getTailnetHostnameAfterServe(exec);
     await vi.runAllTimersAsync();
-    const host = await hostPromise;
-
-    expect(host).toBe("retry.tailnet.ts.net");
+    await expect(hostPromise).resolves.toBe("retry.tailnet.ts.net");
     expect(exec).toHaveBeenCalledTimes(2);
-    expectExecCall(exec, 1, tailscaleBin, ["status", "--json"], {
-      timeoutMs: 5000,
-      logOutput: false,
-    });
-    expectExecCall(exec, 2, tailscaleBin, ["status", "--json"], {
-      timeoutMs: 5000,
-      logOutput: false,
-    });
+    expect(exec).toHaveBeenCalledWith(
+      tailscaleBin,
+      ["status", "--json"],
+      expect.objectContaining({ timeoutMs: 5000, logOutput: false }),
+    );
   });
 
   it("does not retry malformed post-Serve status JSON", async () => {
@@ -203,8 +182,6 @@ describe("tailscale helpers", () => {
 
   describe("waitForTailscaleBackendReady", () => {
     const status = (BackendState: string) => ({ ...jsonReply({ BackendState }), stderr: "" });
-    const statusArgs = ["status", "--json"];
-    const execOptions = { timeoutMs: 5000, logOutput: false };
 
     // Connect-failure wording as emitted by the tailscale CLI (cmd/tailscale/cli/diag.go),
     // which differs by platform and by whether a tailscaled process was found.
@@ -228,7 +205,7 @@ describe("tailscale helpers", () => {
 
     it("hands over to the route claim once the deadline passes", async () => {
       let now = 0;
-      vi.spyOn(Date, "now").mockImplementation(() => (now += 45_000));
+      vi.spyOn(performance, "now").mockImplementation(() => (now += 45_000));
       const exec = vi.spyOn(processExec, "runExec").mockResolvedValue(status("NoState"));
       const info = vi.fn();
       vi.mocked(sleep).mockResolvedValueOnce(undefined);
@@ -240,23 +217,22 @@ describe("tailscale helpers", () => {
       });
 
       expect(exec.mock.calls.length).toBeGreaterThan(1);
-      expectExecCall(exec, 1, tailscaleBin, ["-n", "sudo", ...statusArgs], execOptions);
+      expect(exec).toHaveBeenNthCalledWith(
+        1,
+        tailscaleBin,
+        ["-n", "sudo", "status", "--json"],
+        expect.objectContaining({ timeoutMs: 5000, logOutput: false }),
+      );
       expect(info).toHaveBeenCalledTimes(1);
     });
   });
 
-  describe.runIf(process.platform !== "win32")("sudo fallback diagnostics", () => {
-    it.each([
-      [
-        "password",
-        18791,
-        /sudo: a password is required[\s\S]*sudo tailscale set --operator=\$USER/,
-      ],
-      ["conflict", 18789, "ownership OpenClaw cannot prove; it was not modified"],
-    ] as const)("preserves %s diagnostics", async (mode, port, diagnostic) => {
-      useTailscaleSudoFixture(mode);
-      await expect(claimTailscaleRoute("serve", port, port, vi.fn())).rejects.toThrow(diagnostic);
-    });
+  it.runIf(process.platform !== "win32").each([
+    ["password", 18791, /sudo: a password is required[\s\S]*sudo tailscale set --operator=\$USER/],
+    ["conflict", 18789, "ownership OpenClaw cannot prove; it was not modified"],
+  ] as const)("preserves %s diagnostics", async (mode, port, diagnostic) => {
+    useTailscaleSudoFixture(mode);
+    await expect(claimTailscaleRoute("serve", port, port, vi.fn())).rejects.toThrow(diagnostic);
   });
 
   it.runIf(process.platform !== "win32")(
@@ -318,24 +294,26 @@ describe("tailscale helpers", () => {
     ["http://127.0.0.1:18789", false, false],
   ] as const)("validates Funnel proxy %s (allowed: %s)", async (proxy, allowed, expected) => {
     const host = "device.tailnet.ts.net:443";
-    const exec = vi.fn().mockResolvedValue({
+    vi.spyOn(processExec, "runExec").mockResolvedValue({
       stdout: `warning: stale state\n${JSON.stringify({
         AllowFunnel: { [host]: allowed },
         Web: { [host]: { Handlers: { "/": { Proxy: proxy } } } },
       })}\n`,
+      stderr: "",
     });
 
-    await expect(hasTailscaleFunnelRouteForPort(18789, exec)).resolves.toBe(expected);
+    await expect(hasTailscaleFunnelRouteForPort(18789)).resolves.toBe(expected);
   });
 
   it("hasTailscaleFunnelRouteForPort preserves malformed status parse failures", async () => {
-    const exec = vi.fn().mockResolvedValue({ stdout: "warning: stale state\n{not json}\n" });
-    await expect(hasTailscaleFunnelRouteForPort(18789, exec)).rejects.toThrow(SyntaxError);
+    const stdout = "warning: stale state\n{not json}\n";
+    vi.spyOn(processExec, "runExec").mockResolvedValue({ stdout, stderr: "" });
+    await expect(hasTailscaleFunnelRouteForPort(18789)).rejects.toThrow(SyntaxError);
   });
 
   it("hasTailscaleFunnelRouteForPort preserves status command failures", async () => {
     const failure = new Error("tailscale status unavailable");
-    const exec = vi.fn().mockRejectedValue(failure);
-    await expect(hasTailscaleFunnelRouteForPort(18789, exec)).rejects.toBe(failure);
+    vi.spyOn(processExec, "runExec").mockRejectedValue(failure);
+    await expect(hasTailscaleFunnelRouteForPort(18789)).rejects.toBe(failure);
   });
 });

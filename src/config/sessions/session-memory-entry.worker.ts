@@ -1,9 +1,10 @@
+import { channel as diagnosticsChannel } from "node:diagnostics_channel";
 import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
 import { projectSessionEntryRecord } from "../../../packages/memory-host-sdk/src/host/session-entry-projection.js";
 import {
-  buildSessionEntryInProcess,
+  renderSessionEntrySnapshot,
   readSessionEntryResetRecallCutoff,
-} from "../../../packages/memory-host-sdk/src/host/session-files.js";
+} from "../../../packages/memory-host-sdk/src/host/session-entry-render.js";
 import { LruCache } from "../../infra/lru-cache.js";
 import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
@@ -19,7 +20,7 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { readTranscriptStatsBatchFromDatabase } from "./session-accessor.sqlite-transcript-stats.js";
-import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
+import { SessionTranscriptColdError } from "./session-transcript-cold-error.js";
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import type {
   SessionEntryWorkerInput,
@@ -37,6 +38,7 @@ const snapshots = new LruCache<Snapshot>(16, {
   maxBytes: 8 * 1024 * 1024,
   sizeOf: (snapshot) => snapshot.stats.sizeBytes,
 });
+diagnosticsChannel("openclaw.memory.critical").subscribe(() => snapshots.clear());
 const MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024;
 
 /** The export worker retains projected rows; transcript rewrite identity replaces the prefix. */
@@ -152,7 +154,7 @@ async function prepareSessionMemoryEntries(
         } else {
           retainSnapshot(snapshotKey(request), snapshot);
           const entry = snapshot
-            ? await buildSessionEntryInProcess(request.absPath, request.options, snapshot)
+            ? await renderSessionEntrySnapshot(request.absPath, request.options, snapshot)
             : null;
           value = {
             entry,

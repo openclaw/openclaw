@@ -1,4 +1,13 @@
-import { createMemo, For, onSettled } from "solid-js";
+import {
+  action,
+  createMemo,
+  createOptimistic,
+  Errored,
+  For,
+  Loading,
+  onSettled,
+  Show,
+} from "solid-js";
 import { BUILTIN_THEMES } from "../../../../packages/gateway-protocol/src/theme.ts";
 import { controlUiAccentInk } from "../../app/accent-contrast.ts";
 import {
@@ -16,7 +25,9 @@ import {
   SettingsStatus,
   SettingsValue,
 } from "../../components/solid/settings-ui.tsx";
+import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { createIntersectionObserver } from "../../lib/reactive/observers.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { AppearanceBackground } from "./appearance-background.tsx";
 import { APPEARANCE_SETTINGS_TARGET_IDS } from "./route-data.ts";
@@ -30,6 +41,7 @@ import {
   SidebarPreferencesSection,
 } from "./view-appearance-preferences.tsx";
 import { Typography } from "./view-appearance-typography.tsx";
+import { ConfigReadStatus } from "./view-readiness.tsx";
 import { TabIconSection } from "./view-tab-icon.tsx";
 import type { ConfigProps } from "./view-types.ts";
 const TEXT_SCALE_LABELS: Record<TextScaleStop, string> = {
@@ -86,24 +98,58 @@ const ACCENT_PRESETS = [
    mirrored from the base.css theme blocks). The custom card only has real
    colors while active — its chips read the live CSS variables — so it falls
    back to the download icon otherwise. */
-function renderThemeCardVisual(id: ThemeName, activeTheme: ThemeName) {
-  if ((id === "custom" || id.includes("/")) && activeTheme !== id) {
-    return (
-      <span class="settings-theme-card__icon" aria-hidden="true">
-        <Icon name="download" />
-      </span>
-    );
-  }
+function ThemeCardVisual(props: { id: ThemeName; activeTheme: ThemeName }) {
   return (
-    <span class="settings-theme-card__palette" aria-hidden="true">
-      <span class="settings-theme-card__chip settings-theme-card__chip--accent" />
-      <span class="settings-theme-card__chip settings-theme-card__chip--accent-2" />
-      <span class="settings-theme-card__chip settings-theme-card__chip--bg" />
-    </span>
+    <Show
+      when={(props.id !== "custom" && !props.id.includes("/")) || props.activeTheme === props.id}
+      fallback={
+        <span class="settings-theme-card__icon" aria-hidden="true">
+          <Icon name="download" />
+        </span>
+      }
+    >
+      <span class="settings-theme-card__palette" aria-hidden="true">
+        <span class="settings-theme-card__chip settings-theme-card__chip--accent" />
+        <span class="settings-theme-card__chip settings-theme-card__chip--accent-2" />
+        <span class="settings-theme-card__chip settings-theme-card__chip--bg" />
+      </span>
+    </Show>
   );
 }
 export function AppearanceSection(props: ConfigProps) {
   let customThemeImportInput: HTMLInputElement | undefined;
+  let sidebar!: HTMLElement;
+  let sessionSources!: HTMLElement;
+  createIntersectionObserver(
+    () => [sidebar, sessionSources],
+    (entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        props.onAppearanceDataNeeded?.();
+      }
+    },
+    { rootMargin: "400px 0px" },
+  );
+  const [importing, setImporting] = createOptimistic(false, { equals: false });
+  // Pending work belongs to the action; terminal receipts feed the error region.
+  const importResult = createMemo(() => props.customThemeImportCompletion);
+  const presentImport = action(function* (completion: Promise<void>) {
+    setImporting(true);
+    yield completion;
+  });
+  function importTheme() {
+    const completion = props.onImportCustomTheme();
+    if (completion) {
+      // Commit synchronous admission before starting the pending frame.
+      onSettled(() => {
+        // The same receipt reports failures through the inline error boundary.
+        void presentImport(completion).catch(() => undefined);
+      });
+    }
+  }
+  const importMessage = () => {
+    importResult();
+    return props.customThemeImportMessage;
+  };
   let focusFrame = 0;
   const showCustomThemeImport = () =>
     props.hasCustomTheme || props.customThemeImportExpanded === true;
@@ -238,14 +284,38 @@ export function AppearanceSection(props: ConfigProps) {
             })}
           </p>
         ) : undefined}
-        {props.themeCatalog?.error ? (
-          <p class="settings-status settings-status--error" role="alert">
-            {props.themeCatalog.error}{" "}
-            <button type="button" class="btn btn--sm" onClick={() => props.onRetryThemeCatalog?.()}>
-              {t("common.retry")}
-            </button>
-          </p>
-        ) : undefined}
+        <Show when={props.themeCatalog?.read ?? props.themeCatalog} keyed>
+          {(initialCatalog) => {
+            const catalog = createMemo(() =>
+              "result" in initialCatalog ? initialCatalog.result : initialCatalog,
+            );
+            const status = () => {
+              const error = catalog()?.error;
+              if (error) {
+                throw new Error(error);
+              }
+              return undefined;
+            };
+            return (
+              <Errored
+                fallback={(error) => (
+                  <p class="settings-status settings-status--error" role="alert">
+                    {formatUiError(error())}{" "}
+                    <button
+                      type="button"
+                      class="btn btn--sm"
+                      onClick={() => props.onRetryThemeCatalog?.()}
+                    >
+                      {t("common.retry")}
+                    </button>
+                  </p>
+                )}
+              >
+                <Loading fallback={undefined}>{status()}</Loading>
+              </Errored>
+            );
+          }}
+        </Show>
         <div class="settings-group">
           <div class="settings-row settings-row--stacked">
             <div class="settings-theme-grid">
@@ -280,7 +350,7 @@ export function AppearanceSection(props: ConfigProps) {
                       }
                     }}
                   >
-                    {renderThemeCardVisual(opt().id, presentedTheme().id)}
+                    <ThemeCardVisual id={opt().id} activeTheme={presentedTheme().id} />
                     <span class="settings-theme-card__label">{opt().label}</span>
                   </button>
                 )}
@@ -328,7 +398,10 @@ export function AppearanceSection(props: ConfigProps) {
           />
           <div class="settings-row settings-row--stacked">
             {showCustomThemeImport() ? (
-              <div class="settings-theme-import">
+              <div
+                class="settings-theme-import"
+                onFocusIn={() => props.onCustomThemeImportFocus?.()}
+              >
                 <div class="settings-theme-import__copy">
                   <div class="settings-theme-import__title">
                     {t("configView.appearance.importFromTweakcn")}
@@ -345,6 +418,7 @@ export function AppearanceSection(props: ConfigProps) {
                 >
                   {t("configView.appearance.browseTweakcn")} <Icon name="externalLink" />
                 </a>
+                <ConfigReadStatus config={props} />
                 <label class="settings-theme-import__field">
                   <span class="settings-theme-import__label">
                     {t("configView.appearance.themeLink")}
@@ -369,11 +443,13 @@ export function AppearanceSection(props: ConfigProps) {
                   <button
                     class="btn btn--sm primary"
                     disabled={
-                      props.customThemeImportBusy || props.customThemeImportUrl.trim().length === 0
+                      importing() ||
+                      (props.connected && (!props.configLoaded || props.loading)) ||
+                      props.customThemeImportUrl.trim().length === 0
                     }
-                    onClick={() => props.onImportCustomTheme()}
+                    onClick={importTheme}
                   >
-                    {props.customThemeImportBusy
+                    {importing()
                       ? t("common.importing")
                       : props.hasCustomTheme
                         ? t("configView.appearance.replace", {
@@ -399,17 +475,32 @@ export function AppearanceSection(props: ConfigProps) {
                     </span>
                   </div>
                 ) : undefined}
-                {props.customThemeImportMessage ? (
-                  <div
-                    class={[
-                      "settings-theme-import__message",
-                      `settings-theme-import__message--${props.customThemeImportMessage.kind}`,
-                    ]}
-                    role={props.customThemeImportMessage.kind === "error" ? "alert" : "status"}
-                  >
-                    {props.customThemeImportMessage.text}
-                  </div>
-                ) : undefined}
+                <Errored
+                  fallback={(error) => (
+                    <div
+                      class="settings-theme-import__message settings-theme-import__message--error"
+                      role="alert"
+                    >
+                      {formatUiError(error())}
+                    </div>
+                  )}
+                >
+                  <Loading>
+                    <Show when={importMessage()}>
+                      {(message) => (
+                        <div
+                          class={[
+                            "settings-theme-import__message",
+                            `settings-theme-import__message--${message().kind}`,
+                          ]}
+                          role={message().kind === "error" ? "alert" : "status"}
+                        >
+                          {message().text}
+                        </div>
+                      )}
+                    </Show>
+                  </Loading>
+                </Errored>
               </div>
             ) : (
               <p class="settings-theme-import__inline-hint">
@@ -542,8 +633,10 @@ export function AppearanceSection(props: ConfigProps) {
           </div>
         </div>
       </section>
-      <SidebarPreferencesSection {...props} /> <LobsterPetSection {...props} />
-      <ChatPreferencesSection {...props} /> <SessionSources {...props} />
+      <SidebarPreferencesSection {...props} sectionRef={(element) => (sidebar = element)} />
+      <LobsterPetSection {...props} />
+      <ChatPreferencesSection {...props} />
+      <SessionSources {...props} sectionRef={(element) => (sessionSources = element)} />
       <section id={APPEARANCE_SETTINGS_TARGET_IDS.connection} class="settings-section">
         <SettingsSectionHeader title={t("configView.connection.title")} />
         <div class="settings-group">

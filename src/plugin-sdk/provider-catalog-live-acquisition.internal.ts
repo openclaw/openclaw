@@ -6,6 +6,7 @@ import { cancelUnreadResponseBody } from "../infra/http-body.js";
 import { retainSafeHeadersForCrossOriginRedirect } from "../infra/net/redirect-headers.js";
 import {
   getProviderCatalogDiscoveryBudget,
+  resolveProviderCatalogDiscoveryTimeoutMs,
   withProviderCatalogDiscoveryBudget,
 } from "../plugins/provider-catalog-expiry.js";
 import {
@@ -327,7 +328,7 @@ export async function fetchLiveProviderModelRows(
   const fetchGuard = params.fetchGuard ?? fetchWithSsrFGuard;
   const budget = getProviderCatalogDiscoveryBudget();
   const timeoutMs = Math.min(
-    params.timeoutMs ?? budget?.timeoutMs ?? 5_000,
+    resolveProviderCatalogDiscoveryTimeoutMs(params.providerId, params.timeoutMs),
     budget ? budget.deadlineMs - performance.now() : Infinity,
   );
   const startedAt = performance.now();
@@ -393,7 +394,7 @@ export async function getCachedLiveProviderModelRows(
   params: CachedLiveProviderModelRowsParams,
 ): Promise<readonly unknown[]> {
   return await withProviderCatalogDiscoveryBudget(
-    params.timeoutMs ?? getProviderCatalogDiscoveryBudget()?.timeoutMs ?? 5_000,
+    resolveProviderCatalogDiscoveryTimeoutMs(params.providerId, params.timeoutMs),
     () =>
       getCachedLiveCatalogValue({
         keyParts: params.cacheKeyParts ?? [

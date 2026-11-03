@@ -134,15 +134,12 @@ describe("Telegram registered action authority and input contracts", () => {
           expect(requests.map(({ method }) => method)).toEqual(["getChat", testCase.method]);
         } else {
           await pending.catch(() => undefined);
-          const requestDescription = `Observed Telegram endpoints: ${requests.map(({ method }) => method).join(", ")}`;
           if (testCase.action === "react") {
-            await expect(pending, requestDescription).resolves.toMatchObject({
+            await expect(pending).resolves.toMatchObject({
               details: { ok: false, reason: "error", hint: "Reaction failed. Do not retry." },
             });
           } else {
-            await expect(pending, requestDescription).rejects.toThrow(
-              "Telegram action owner retired",
-            );
+            await expect(pending).rejects.toThrow("Telegram action owner retired");
           }
           expect(requests.map(({ method }) => method)).toEqual(["getChat"]);
         }
@@ -201,6 +198,19 @@ describe("Telegram registered action authority and input contracts", () => {
     });
   });
 
+  it.each([
+    ["after a lost delete response", [{ resetConnection: true } as const]],
+    ["when it is already gone", []],
+  ])("reports a delete as done %s", async (_case, before) => {
+    rejections.push(...before, "Bad Request: message to delete not found");
+    const params = { chatId: "telegram:-1001:topic:77", messageId: 456 };
+    const result = await invoke("delete", params, trusted);
+    expect(result.details).toEqual({ ok: true, deleted: true });
+    expect(requests.map(({ method }) => method)).toEqual(
+      Array.from({ length: before.length + 1 }, () => "deleteMessage"),
+    );
+  });
+
   it.each(["77"])(
     "binds a topicless reaction to trusted topic %s without borrowing another chat",
     async (thread) => {
@@ -228,7 +238,7 @@ describe("Telegram registered action authority and input contracts", () => {
 
   it("rejects conflicting host authority, including threadless and missing-origin invocations", async () => {
     const params = { chatId: "-1001:topic:77", messageId: 456 };
-    const contexts: Partial<ChannelMessageActionContext>[] = [
+    for (const context of [
       { ...trusted, requesterAccountId: "other" },
       { ...trusted, requesterAccountId: " !!! " },
       { ...trusted, toolContext: { ...trusted.toolContext, currentChannelProvider: "slack" } },
@@ -238,8 +248,7 @@ describe("Telegram registered action authority and input contracts", () => {
         toolContext: { ...trusted.toolContext, currentMessagingTarget: "-1002:topic:77" },
       },
       { conversationReadOrigin: undefined },
-    ];
-    for (const context of contexts) {
+    ] satisfies Partial<ChannelMessageActionContext>[]) {
       await expect(invoke("delete", params, context)).rejects.toThrow(/provider-observed binding/);
     }
     await expect(

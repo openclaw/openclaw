@@ -9,11 +9,13 @@ import { canReactToSession } from "../../app/operator-access.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
-import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
+import { scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
 import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
+import { projectChatMessageReactions } from "./chat-message-reactions-snapshot.ts";
 import { ChatPaneSharingActions } from "./chat-pane-sharing-actions.ts";
-import { selectedChatSessionRow } from "./chat-state-route.ts";
+import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
+import { cacheChatSessionSnapshot, readChatSessionSnapshot } from "./session-message-cache.ts";
 
 type PendingReaction = {
   messageId: string;
@@ -29,6 +31,7 @@ export abstract class ChatPaneReactions extends ChatPaneSharingActions {
   private reactionGeneration = 0;
   private reactionReadUpdates: Map<string, MessageReactionSummary[]> | undefined;
   private reactionServer = new Map<string, MessageReactionSummary[]>();
+  private reactionHydrated = false;
   private readonly reactionPending = new Map<string, PendingReaction>();
   private readonly reactionRevisions = new Map<string, number>();
   private readonly reactionWrites = new Map<string, symbol>();
@@ -40,6 +43,7 @@ export abstract class ChatPaneReactions extends ChatPaneSharingActions {
     this.reactionReadGeneration = -1;
     this.collaboration.reactions = new Map();
     this.reactionServer = new Map();
+    this.reactionHydrated = false;
     this.reactionPending.clear();
     this.reactionReadUpdates = undefined;
     this.reactionRevisions.clear();
@@ -53,7 +57,6 @@ export abstract class ChatPaneReactions extends ChatPaneSharingActions {
       canReactToSession(this.context.gateway.snapshot, selectedChatSessionRow(state), {
         archived: this.isCurrentSessionArchived(state),
         catalog: Boolean(parseCatalogSessionKey(state.sessionKey)),
-        allowDeferred: true,
       }),
     );
   }
@@ -76,6 +79,24 @@ export abstract class ChatPaneReactions extends ChatPaneSharingActions {
       this.resetSessionReactions();
       this.reactionTarget = target;
       this.reactionOwner = owner;
+    }
+    if (
+      available &&
+      !this.reactionHydrated &&
+      this.ownsChatSnapshot({ sessionKey: state.sessionKey })
+    ) {
+      const snapshot = readChatSessionSnapshot(state.chatMessagesBySession, state, {
+        sessionKey: state.sessionKey,
+      });
+      if (snapshot?.sessionId === sessionId && snapshot.messageReactions) {
+        this.reactionHydrated = true;
+        // Events received while storage opens outrank the saved display facts.
+        this.reactionServer = new Map([
+          ...Object.entries(snapshot.messageReactions),
+          ...this.reactionServer,
+        ]);
+        this.publishReactions();
+      }
     }
     if (!available || !scope || this.reactionReadGeneration === scope.generation) {
       return;
@@ -100,6 +121,7 @@ export abstract class ChatPaneReactions extends ChatPaneSharingActions {
           return;
         }
         // Events committed after the list began outrank its older snapshot.
+        this.reactionHydrated = true;
         this.reactionServer = new Map([...Object.entries(result.reactions), ...updates]);
         this.publishReactions();
       })
@@ -167,6 +189,42 @@ export abstract class ChatPaneReactions extends ChatPaneSharingActions {
       reactions.set(pending.messageId, summaries);
     }
     this.collaboration.reactions = reactions;
+    this.cacheSessionReactions();
+  }
+
+  protected cacheSessionReactions(): void {
+    const state = this.state;
+    if (
+      !state ||
+      !this.reactionHydrated ||
+      this.reactionOwner !== gatewayPresentationScope(this.context.gateway)
+    ) {
+      return;
+    }
+    const target = { sessionKey: state.sessionKey };
+    if (!this.ownsChatSnapshot(target)) {
+      return;
+    }
+    const snapshot = readChatSessionSnapshot(state.chatMessagesBySession, state, target);
+    if (
+      !snapshot ||
+      snapshot.sessionId !== (selectedChatSessionRow(state)?.sessionId ?? state.currentSessionId)
+    ) {
+      return;
+    }
+    // Pending offline writes remain presentation-only until the Gateway accepts them.
+    const messageReactions = projectChatMessageReactions(snapshot.messages, this.reactionServer);
+    const entries = Object.entries(messageReactions);
+    if (
+      entries.length === Object.keys(snapshot.messageReactions ?? {}).length &&
+      entries.every(([id, summaries]) => snapshot.messageReactions?.[id] === summaries)
+    ) {
+      return;
+    }
+    cacheChatSessionSnapshot(state.chatMessagesBySession, state, target, {
+      ...snapshot,
+      messageReactions,
+    });
   }
 
   protected readonly handleMessageReaction = (
@@ -277,7 +335,15 @@ export abstract class ChatPaneReactions extends ChatPaneSharingActions {
       // Install the replacement before the queue discards its superseded intent.
       this.reactionPending.set(key, pending);
       this.publishReactions();
-      if (!context.gateway.defer({ key, run, discard })) {
+      const agentId = resolveChatAgentId(state);
+      if (
+        !context.gateway.defer({
+          key,
+          group: `sessions.lifecycle:${agentId}:${sessionKey}`,
+          run,
+          discard,
+        })
+      ) {
         discard();
       }
       return;

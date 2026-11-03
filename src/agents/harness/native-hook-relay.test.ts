@@ -36,7 +36,6 @@ import { invokeNativeHookRelayBridge } from "./native-hook-relay-client.js";
 import * as nativeHookRelayStore from "./native-hook-relay-store.js";
 import type { NativeHookRelayBridgeRecord } from "./native-hook-relay-store.js";
 import {
-  registerOwnedNativeHookRelay,
   testing,
   buildNativeHookRelayCommand,
   hasNativeHookRelayInvocation,
@@ -47,31 +46,14 @@ import {
 import {
   clearNativeHookRelaysForTests,
   createNativeHookRelayPermissionRequestFixture as createPermissionRequestFixture,
+  registerTestNativeHookRelay as registerRelay,
+  registerOwnedTestNativeHookRelay as registerOwnedRelay,
 } from "./native-hook-relay.test-support.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-native-relay-policy-");
 
 const NATIVE_HOOK_RELAY_EXEC_PREFIX = process.platform === "win32" ? "" : "exec ";
 
-function registerRelay(overrides: Partial<Parameters<typeof registerNativeHookRelay>[0]> = {}) {
-  return registerNativeHookRelay({
-    provider: "codex",
-    sessionId: "session-1",
-    runId: "run-1",
-    ...overrides,
-  });
-}
-
-function registerOwnedRelay(
-  overrides: Partial<Parameters<typeof registerOwnedNativeHookRelay>[0]> = {},
-) {
-  return registerOwnedNativeHookRelay({
-    provider: "codex",
-    sessionId: "session-1",
-    runId: "run-1",
-    ...overrides,
-  });
-}
 function invokeRelay(
   relayId: string,
   event: Parameters<typeof invokeNativeHookRelay>[0]["event"],
@@ -192,12 +174,11 @@ function openDeferredNativeHookRelayBridgeRequest(
 } {
   const body = JSON.stringify(payload);
   let settled = false;
-  let resolveResponse!: (value: Record<string, unknown>) => void;
-  let rejectResponse!: (error: unknown) => void;
-  const response = new Promise<Record<string, unknown>>((resolve, reject) => {
-    resolveResponse = resolve;
-    rejectResponse = reject;
-  });
+  const {
+    promise: response,
+    resolve: resolveResponse,
+    reject: rejectResponse,
+  } = createDeferredCore<Record<string, unknown>>();
   const req = httpRequest(
     {
       hostname: record.hostname,

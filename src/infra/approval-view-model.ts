@@ -22,10 +22,7 @@ import {
 } from "./exec-approvals.js";
 import { resolveCanonicalPluginApprovalRequestAllowedDecisions } from "./plugin-approval-canonical-decisions.js";
 import type { PluginApprovalRequest } from "./plugin-approvals.js";
-import {
-  SYSTEM_AGENT_APPROVAL_DECISIONS,
-  type SystemAgentApprovalRequest,
-} from "./system-agent-approvals.js";
+import { SYSTEM_AGENT_APPROVAL_DECISIONS } from "./system-agent-approvals.js";
 
 type ApprovalPhase = "pending" | "resolved" | "expired";
 
@@ -64,10 +61,45 @@ function buildPluginMetadata(request: PluginApprovalRequest): ApprovalMetadataVi
   return metadata;
 }
 
-function buildExecViewBase<TPhase extends ApprovalPhase>(
-  request: ExecApprovalRequest,
+function buildApprovalViewBase<TPhase extends ApprovalPhase>(
+  request: ApprovalRequest,
   phase: TPhase,
-): ExecApprovalViewBase & { phase: TPhase } {
+): (ExecApprovalViewBase | PluginApprovalViewBase | SystemAgentApprovalViewBase) & {
+  phase: TPhase;
+} {
+  if (request.approvalKind === "system-agent") {
+    return {
+      approvalId: request.id,
+      approvalKind: "system-agent",
+      phase,
+      title: phase === "pending" ? "OpenClaw change requires approval" : "OpenClaw change",
+      description: request.request.description,
+      metadata: request.request.agentId ? [{ label: "Agent", value: request.request.agentId }] : [],
+      agentId: request.request.agentId ?? null,
+      commandText: request.request.description,
+      commandPreview: request.request.description,
+      cwd: null,
+      host: "gateway",
+      nodeId: null,
+      sessionKey: request.request.sessionKey ?? null,
+      operationSummary: request.request.description,
+    };
+  }
+  if (request.approvalKind === "plugin") {
+    return {
+      approvalId: request.id,
+      approvalKind: "plugin",
+      phase,
+      title: request.request.title,
+      description: request.request.description ?? null,
+      metadata: buildPluginMetadata(request),
+      agentId: request.request.agentId ?? null,
+      pluginId: request.request.pluginId ?? null,
+      ...(request.request.scope ? { scope: request.request.scope } : {}),
+      toolName: request.request.toolName ?? null,
+      severity: request.request.severity ?? "warning",
+    };
+  }
   const { commandText, commandPreview } = resolveExecApprovalCommandDisplay(request.request);
   return {
     approvalId: request.id,
@@ -89,62 +121,6 @@ function buildExecViewBase<TPhase extends ApprovalPhase>(
     ...(request.request.scope ? { scope: request.request.scope } : {}),
     sessionKey: request.request.sessionKey ?? null,
   };
-}
-
-function buildPluginViewBase<TPhase extends ApprovalPhase>(
-  request: PluginApprovalRequest,
-  phase: TPhase,
-): PluginApprovalViewBase & { phase: TPhase } {
-  return {
-    approvalId: request.id,
-    approvalKind: "plugin",
-    phase,
-    title: request.request.title,
-    description: request.request.description ?? null,
-    metadata: buildPluginMetadata(request),
-    agentId: request.request.agentId ?? null,
-    pluginId: request.request.pluginId ?? null,
-    ...(request.request.scope ? { scope: request.request.scope } : {}),
-    toolName: request.request.toolName ?? null,
-    severity: request.request.severity ?? "warning",
-  };
-}
-
-function buildSystemAgentViewBase<TPhase extends ApprovalPhase>(
-  request: SystemAgentApprovalRequest,
-  phase: TPhase,
-): SystemAgentApprovalViewBase & { phase: TPhase } {
-  return {
-    approvalId: request.id,
-    approvalKind: "system-agent",
-    phase,
-    title: phase === "pending" ? "OpenClaw change requires approval" : "OpenClaw change",
-    description: request.request.description,
-    metadata: request.request.agentId ? [{ label: "Agent", value: request.request.agentId }] : [],
-    agentId: request.request.agentId ?? null,
-    commandText: request.request.description,
-    commandPreview: request.request.description,
-    cwd: null,
-    host: "gateway",
-    nodeId: null,
-    sessionKey: request.request.sessionKey ?? null,
-    operationSummary: request.request.description,
-  };
-}
-
-function buildApprovalViewBase<TPhase extends ApprovalPhase>(
-  request: ApprovalRequest,
-  phase: TPhase,
-): (ExecApprovalViewBase | PluginApprovalViewBase | SystemAgentApprovalViewBase) & {
-  phase: TPhase;
-} {
-  if (request.approvalKind === "system-agent") {
-    return buildSystemAgentViewBase(request, phase);
-  }
-  if (request.approvalKind === "plugin") {
-    return buildPluginViewBase(request, phase);
-  }
-  return buildExecViewBase(request, phase);
 }
 
 /** Builds the presentation model for an unresolved approval. */

@@ -1,10 +1,13 @@
 import { Type, type TProperties } from "typebox";
+import { AutomationResultSchema } from "../../../packages/gateway-protocol/src/schema/cron-automation-result.js";
 import {
   CronAddJobResultSchema,
   CronAddResultSchema,
   CronDeliveryPreviewSchema,
   CronJobSchema,
   CronRunLogEntrySchema,
+  CronScratchGetResultSchema,
+  CronScratchSetResultSchema,
 } from "../../../packages/gateway-protocol/src/schema/cron.js";
 import { CronStreamApprovalEndedSchema } from "../../cron/stream-approval-outcome.js";
 import { defineToolOutputSchema } from "../schema/tool-output-schema.js";
@@ -54,6 +57,9 @@ const CompactCronJobSchema = closedObject({
   lastRunStatus: Type.Union([...job.lastRunStatus.anyOf, Type.Null()]),
   lastRunError: nullableString,
   runningAtMs: job.state.properties.runningAtMs,
+  lastDurationMs: job.state.properties.lastDurationMs,
+  lastTriggerEvalAtMs: job.state.properties.lastTriggerEvalAtMs,
+  lastMeaningfulResult: job.state.properties.lastMeaningfulResult,
   autoDisabled: job.state.properties.autoDisabled,
   lastDelivered: job.lastDelivered,
   lastDeliveryStatus: job.lastDeliveryStatus,
@@ -206,6 +212,13 @@ export const CronToolOutputSchema = defineToolOutputSchema({
       ok: Type.Literal(true),
       delayMs: Type.Number({ exclusiveMinimum: 0 }),
     }),
+    scratch_get: CronScratchGetResultSchema,
+    scratch_set: CronScratchSetResultSchema,
+    record_result: Type.Union(
+      AutomationResultSchema.anyOf.map((schema) =>
+        closedObject({ ok: Type.Literal(true), ...schema.properties }),
+      ),
+    ),
     wake: Type.Union([
       closedObject({ ok: Type.Literal(true) }),
       closedObject({

@@ -7,7 +7,7 @@ import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { resolveChannelAccounts } from "../../lib/channels/index.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
-import "../../components/modal-dialog.ts";
+import "../../components/modal-dialog.tsx";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { ChannelSettingsSlot } from "./channel-settings-presentation.tsx";

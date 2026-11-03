@@ -40,7 +40,13 @@ export function parseUserGitHubConnection(raw: string): UserGitHubConnection {
   if (!result.success) {
     throw new PersonalGitHubStateError();
   }
-  const record = result.data;
+  return registerUserGitHubConnectionSecrets(result.data);
+}
+
+/** Worker replies are validated already; each receiving process still registers their secrets. */
+export function registerUserGitHubConnectionSecrets(
+  record: UserGitHubConnection,
+): UserGitHubConnection {
   if (record.pending?.kind === "device") {
     registerSecretValueForRedaction(record.pending.deviceCode);
     if (record.pending.candidate) {

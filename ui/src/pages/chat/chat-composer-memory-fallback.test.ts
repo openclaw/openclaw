@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
 import {
@@ -8,7 +8,11 @@ import {
   registerChatAttachmentPayload,
 } from "./attachment-payload-store.ts";
 import { retainChatComposerMemoryFallback } from "./chat-composer-memory-fallback.ts";
-import type { ChatComposerMemoryFallback, ChatPageHost } from "./chat-state-host.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
+
+const scope = { sessionKey: "global", agentId: "main" } as const;
+const scopeKey = storedChatOutboxScopeKey(scope);
+const bareGlobalKey = storedChatOutboxScopeKey({ sessionKey: "global" });
 
 function storedAttachment(id: string, mimeType = "image/png"): ChatAttachment {
   return registerChatAttachmentPayload({
@@ -19,89 +23,52 @@ function storedAttachment(id: string, mimeType = "image/png"): ChatAttachment {
 }
 
 function globalHost(
-  fallbacks: Record<string, ChatComposerMemoryFallback>,
+  sibling: ChatAttachment,
+  winning: ChatAttachment[] = [],
   attachments: ChatAttachment[] = [],
 ): ChatPageHost {
   return {
     agentsList: { defaultId: "main", mainKey: "main" },
     assistantAgentId: "main",
     chatAttachments: attachments,
-    chatComposerFallbackByScope: fallbacks,
+    chatComposerFallbackByScope: {
+      [bareGlobalKey]: {
+        awaitingDefaults: true,
+        message: "older sibling draft",
+        attachments: [sibling],
+        storageFailed: true,
+        sequence: 1,
+      },
+      [scopeKey]: {
+        message: "newest draft",
+        attachments: [...winning],
+        storageFailed: true,
+        sequence: 2,
+      },
+    },
     hello: null,
     sessionKey: "global",
     settings: { gatewayUrl: "ws://example.test" },
   } as unknown as ChatPageHost;
 }
 
-describe("chat composer memory fallback adoption", () => {
-  it("releases losing sibling fallback payloads when adoption drops them", () => {
-    const losing = storedAttachment("losing-sibling-attachment");
-    const winning = storedAttachment("winning-attachment");
-    const scope = { sessionKey: "global", agentId: "main" } as const;
-    const scopeKey = storedChatOutboxScopeKey(scope);
-    const bareGlobalKey = storedChatOutboxScopeKey({ sessionKey: "global" });
-    const host = globalHost({
-      [bareGlobalKey]: {
-        awaitingDefaults: true,
-        message: "older sibling draft",
-        attachments: [losing],
-        storageFailed: true,
-        sequence: 1,
-      },
-      [scopeKey]: {
+it.each([false, true])(
+  "adopts the newest fallback and releases only unowned payloads (live: %s)",
+  (live) => {
+    const sibling = storedAttachment("sibling");
+    const winning = live ? [] : [storedAttachment("winning")];
+    const host = globalHost(sibling, winning, live ? [sibling] : []);
+    expect(
+      retainChatComposerMemoryFallback(host, scope, {
         message: "newest draft",
-        attachments: [winning],
-        storageFailed: true,
-        sequence: 2,
-      },
-    });
-
-    const ownership = retainChatComposerMemoryFallback(host, scope, {
-      message: "newest draft",
-      attachments: [winning],
-    });
-
-    expect(ownership).toEqual({ sequence: 2 });
+        attachments: winning,
+      }),
+    ).toEqual({ sequence: 2 });
     expect(Object.keys(host.chatComposerFallbackByScope)).toEqual([scopeKey]);
-    // The losing sibling was dropped for good: its payload-store entry must be
-    // released with it, while the adopted fallback's payload stays available.
-    expect(getChatAttachmentDataUrl({ id: losing.id, mimeType: losing.mimeType })).toBeNull();
-    expect(getChatAttachmentDataUrl({ id: winning.id, mimeType: winning.mimeType })).toBe(
-      "data:image/png;base64,winning-attachment",
-    );
-  });
-
-  it("keeps payloads shared with the live composer when a sibling is dropped", () => {
-    const shared = storedAttachment("shared-with-composer");
-    const scope = { sessionKey: "global", agentId: "main" } as const;
-    const scopeKey = storedChatOutboxScopeKey(scope);
-    const bareGlobalKey = storedChatOutboxScopeKey({ sessionKey: "global" });
-    const host = globalHost(
-      {
-        [bareGlobalKey]: {
-          awaitingDefaults: true,
-          message: "older sibling draft",
-          attachments: [shared],
-          storageFailed: true,
-          sequence: 1,
-        },
-        [scopeKey]: {
-          message: "newest draft",
-          attachments: [],
-          storageFailed: true,
-          sequence: 2,
-        },
-      },
-      [shared],
-    );
-
-    retainChatComposerMemoryFallback(host, scope, {
-      message: "newest draft",
-      attachments: [],
-    });
-
-    expect(getChatAttachmentDataUrl({ id: shared.id, mimeType: shared.mimeType })).toBe(
-      "data:image/png;base64,shared-with-composer",
-    );
-  });
-});
+    for (const attachment of [sibling, ...winning]) {
+      expect(getChatAttachmentDataUrl({ id: attachment.id, mimeType: attachment.mimeType })).toBe(
+        live || attachment !== sibling ? `data:image/png;base64,${attachment.id}` : null,
+      );
+    }
+  },
+);

@@ -30,6 +30,8 @@ function createHarness() {
   harnesses.push(harness);
   vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(harness.client);
   return Object.assign(harness, {
+    pending: (...args: Parameters<typeof harness.client.request>) =>
+      harness.client.request(...args).catch((error: unknown) => error),
     release: () => releaseLeasedSharedCodexAppServerClient(harness.client),
     retire: () => retireSharedCodexAppServerClientIfCurrent(harness.client),
     frame: (method: string, start = 0) => waitForHarnessRequest(harness, method, start),
@@ -76,9 +78,7 @@ it("fork timeout preserves a peer through the exact late response", async () => 
   expect(await acquire()).toBe(old.client);
   const peer = old.client.request("turn/start", { threadId: "peer" }, { timeoutMs: 5_000 });
   const peerFrame = await old.frame("turn/start");
-  const startup = old.client
-    .request(method, { threadId: "abandoned" }, { timeoutMs: 100 })
-    .catch((error: unknown) => error);
+  const startup = old.pending(method, { threadId: "abandoned" }, { timeoutMs: 100 });
   const frame = await old.frame(method);
   expect(await startup).toMatchObject({ reason: "timed out", mayHaveWritten: true });
   expect(old.stdinDestroyed).toBe(false);
@@ -107,13 +107,11 @@ it.each(["response", "rpc error", "overload", "exit"])(
     await acquire();
     const controller = new AbortController();
     const assertCurrent = vi.fn();
-    const startup = harness.client
-      .request(
-        "thread/resume",
-        { threadId: "abandoned" },
-        { signal: controller.signal, assertCurrent },
-      )
-      .catch((error: unknown) => error);
+    const startup = harness.pending(
+      "thread/resume",
+      { threadId: "abandoned" },
+      { signal: controller.signal, assertCurrent },
+    );
     const frame = await harness.frame("thread/resume");
     controller.abort();
     expect(await startup).toMatchObject({ reason: "aborted", mayHaveWritten: true });
@@ -142,9 +140,7 @@ it("keeps a pending claimant through retirement and cannot retire its replacemen
   const replacement = createHarness();
   await acquire();
   const controller = new AbortController();
-  const startup = old.client
-    .request("thread/start", {}, { signal: controller.signal })
-    .catch((error: unknown) => error);
+  const startup = old.pending("thread/start", {}, { signal: controller.signal });
   const frame = await old.frame("thread/start");
   const pendingAcquire = acquire(() => controller.abort());
   expect(await startup).toMatchObject({ reason: "aborted", mayHaveWritten: true });
@@ -167,9 +163,7 @@ it("keeps a pending claimant through retirement and cannot retire its replacemen
 it("preserves confirmed overload rejection when the response beats an expired timer", async () => {
   const harness = createHarness();
   await acquire();
-  const startup = harness.client
-    .request("thread/start", {}, { timeoutMs: 1_000 })
-    .catch((error: unknown) => error);
+  const startup = harness.pending("thread/start", {}, { timeoutMs: 1_000 });
   const frame = await harness.frame("thread/start");
   // Advance elapsed time past the deadline without running the timer callback.
   const now = vi.spyOn(performance, "now").mockReturnValue(performance.now() + 2_000);

@@ -1,11 +1,10 @@
-import { createMemo, createSignal, merge, onCleanup, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, merge, onSettled, Show } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import type { SessionCreatedActor } from "../lib/session-owner.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { activateMenuShortcut } from "./menu-shortcut-activation.ts";
 import {
-  EMPTY_SESSION_MENU_DATA,
   SessionMenuActions,
   type SessionManagementAction,
   type SessionMenuData,
@@ -14,6 +13,7 @@ import {
   compactSessionMenuViewForValue,
   type CompactSessionMenuView,
 } from "./session-menu-compact.ts";
+import { EMPTY_SESSION_MENU_DATA } from "./session-menu-data.ts";
 import { SessionMenuShortcut, useSessionMenuEntries } from "./session-menu-view.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { pointMenuTriggerAttributes } from "./solid/menu-trigger.tsx";
@@ -27,7 +27,6 @@ import {
 
 /** Only resolved local worktree destinations are offered by the menu host. */
 export type SessionMenuWork = {
-  loading: boolean;
   pullRequestUrl: string | null;
   worktreePath: string | null;
 };
@@ -47,7 +46,6 @@ type SessionMenuProps = {
   copyMarkdownAllowed: boolean;
   splitAllowed: boolean;
   selectionCount: number;
-  lastActive: string;
   anchor: { x: number; y: number };
   trigger: HTMLElement | null;
   disabled: boolean;
@@ -95,17 +93,14 @@ function SessionMenuContent(
     }
   };
   const actions = new SessionMenuActions(
-    {
-      get updateComplete() {
-        return host.updateComplete;
-      },
-      focusCurrentView() {
+    () => {
+      void host.updateComplete.then(() => {
         if (compactView() === "icon") {
           view.appearance.focusFirst();
         } else {
           menu?.focusFirst();
         }
-      },
+      });
     },
     readState,
     (action) => props.onAction(action),
@@ -119,7 +114,7 @@ function SessionMenuContent(
   };
   let stopShortcut: (() => void) | undefined;
   let stopAfterHide: (() => void) | undefined;
-  onCleanup(() => {
+  onSettled(() => () => {
     stopShortcut?.();
     stopAfterHide?.();
   });
@@ -145,21 +140,11 @@ function SessionMenuContent(
   const primaryDivider = separator("primary-divider");
   const prDivider = separator("pr-divider");
   const advancedDivider = separator("advanced-divider");
-  const lastActive: MenuEntry = {
-    kind: "content",
-    id: "last-active",
-    content: (
-      <div class="session-menu__info">
-        {t("sessionsView.lastActive", { time: props.lastActive })}
-      </div>
-    ),
-  };
   const items = createMemo((): MenuEntry[] => {
     if (props.compact && compactView() !== "root") {
       return view.compact(compactView());
     }
     return [
-      ...(!batch() && props.lastActive ? [lastActive] : []),
       ...view.primary(),
       primaryDivider,
       ...view.organization(),
@@ -335,7 +320,6 @@ export const SessionMenu = defineSolidBridge<SessionMenuProps>(
       copyMarkdownAllowed: { default: false, attribute: false },
       splitAllowed: { default: false, attribute: false },
       selectionCount: { default: 1, attribute: false },
-      lastActive: { default: "", attribute: false },
       anchor: { default: { x: 0, y: 0 }, attribute: false },
       trigger: { default: null, attribute: false },
       disabled: { default: false, attribute: false },

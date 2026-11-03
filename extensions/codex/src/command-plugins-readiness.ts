@@ -39,7 +39,6 @@ type CodexHostedAppsSupport =
   | "unknown";
 
 export type CodexPluginReadiness = {
-  configKey: string;
   commandId: string;
   openClawEnabled: boolean;
   agentId: string;
@@ -142,7 +141,6 @@ export async function readCodexPluginReadiness(params: {
     );
   }
   const result: CodexPluginReadiness = {
-    configKey,
     commandId: `${identity.pluginName}@${identity.marketplaceName}`,
     openClawEnabled: current.enabled === true && entry.enabled !== false,
     agentId: context.agentId,

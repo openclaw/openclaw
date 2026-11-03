@@ -12,6 +12,14 @@ import { readSqliteDatabaseBloat } from "./doctor-db-bloat.read.js";
 vi.mock("../state/openclaw-agent-db-registry-listing.js", () => ({
   readRegisteredAgentDatabases: () => [],
 }));
+vi.mock("../state/openclaw-state-db-readonly.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../state/openclaw-state-db-readonly.js")>();
+  return {
+    ...actual,
+    // This file isolates size admission; the real registry snapshot runs in the worker test.
+    withOpenClawStateDatabaseReadSnapshot: async (operation: () => Promise<unknown>) => operation(),
+  };
+});
 
 afterEach(() => vi.restoreAllMocks());
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -28,14 +36,12 @@ it.each([
   { size: BLOAT_MIN_FILE_BYTES, preparations: 1 },
 ])(
   "prepares $preparations snapshots at the $size-byte reporting boundary",
-  ({ size, preparations }) => {
+  async ({ size, preparations }) => {
     const pathname = createSizedFile(size);
-    const prepare = vi
-      .spyOn(snapshots, "prepareSqliteReadOnlyLocationSync")
-      .mockImplementation(() => {
-        throw new Error("controlled preparation failure");
-      });
-    expect(readSqliteDatabaseBloat({ path: pathname, env: {} })).toEqual([]);
+    const prepare = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockImplementation(() => {
+      throw new Error("controlled preparation failure");
+    });
+    expect(await readSqliteDatabaseBloat({ path: pathname, env: {} })).toEqual([]);
     expect(prepare).toHaveBeenCalledTimes(preparations);
   },
 );
@@ -52,13 +58,11 @@ it("skips a small main file with a large live WAL without changing source artifa
     expect(fs.statSync(`${pathname}-wal`).size).toBeGreaterThan(BLOAT_MIN_FILE_BYTES);
     const family = [pathname, `${pathname}-wal`, `${pathname}-shm`];
     const before = await Promise.all(family.map((member) => sha256File(member)));
-    const prepare = vi
-      .spyOn(snapshots, "prepareSqliteReadOnlyLocationSync")
-      .mockImplementation(() => {
-        throw new Error("unexpected snapshot preparation");
-      });
+    const prepare = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockImplementation(() => {
+      throw new Error("unexpected snapshot preparation");
+    });
 
-    expect(readSqliteDatabaseBloat({ path: pathname, env: {} })).toEqual([]);
+    expect(await readSqliteDatabaseBloat({ path: pathname, env: {} })).toEqual([]);
     expect(prepare).not.toHaveBeenCalled();
     expect(await Promise.all(family.map((member) => sha256File(member)))).toEqual(before);
   } finally {
@@ -69,19 +73,30 @@ it("skips a small main file with a large live WAL without changing source artifa
 it.each([
   { error: new Error("unavailable read"), cleanup: false },
   { error: new SqliteSnapshotCleanupError("incomplete cleanup"), cleanup: true },
-])("preserves cleanup failure=$cleanup without opening SQLite", ({ error, cleanup }) => {
-  const prepare = vi
-    .spyOn(snapshots, "prepareSqliteReadOnlyLocationSync")
-    .mockImplementation(() => {
-      throw error;
-    });
+])("preserves cleanup failure=$cleanup without opening SQLite", async ({ error, cleanup }) => {
+  const prepare = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockImplementation(() => {
+    throw error;
+  });
   // The reporting-size file reaches preparation; the controlled failure prevents a database open.
   const pathname = createSizedFile(BLOAT_MIN_FILE_BYTES);
   const read = () => readSqliteDatabaseBloat({ path: pathname, env: {} });
   if (cleanup) {
-    expect(read).toThrow(error);
+    await expect(read()).rejects.toThrow(error);
   } else {
-    expect(read()).toEqual([]);
+    expect(await read()).toEqual([]);
   }
   expect(prepare).toHaveBeenCalledOnce();
+});
+
+it("cancels database-size preparation instead of swallowing the aborted inspection", async () => {
+  const controller = new AbortController();
+  const reason = new Error("Doctor inspection cancelled");
+  vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockImplementation(() => {
+    controller.abort(reason);
+    throw reason;
+  });
+  const pathname = createSizedFile(BLOAT_MIN_FILE_BYTES);
+  await expect(
+    readSqliteDatabaseBloat({ path: pathname, env: {}, signal: controller.signal }),
+  ).rejects.toThrow(reason);
 });

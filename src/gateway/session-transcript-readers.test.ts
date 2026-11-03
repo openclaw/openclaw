@@ -1,19 +1,17 @@
 import fs from "node:fs";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { zstdCompressSync } from "node:zlib";
+import { describe, expect, test } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../config/runtime-snapshot.js";
 import { persistSessionTranscriptTurn } from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
-import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { readChatHistoryPageKernel } from "./chat-history-page-kernel.js";
+import { readChatHistoryMessageId } from "./session-history-tail.js";
+import { ArchivedTranscriptReader } from "./session-transcript-archive-reader.js";
 import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
+  transcriptMessage as event,
+  useTranscriptFixture,
+} from "./session-transcript-fixtures.test-support.js";
 import { visitSessionMessagesAsync } from "./session-transcript-native.test-support.js";
 import {
   readRecentSessionMessagesWithStatsAsync as readRecent,
@@ -25,50 +23,12 @@ import {
   readSessionMessagesPageWithStatsAsync as readPage,
   readSessionMessagesWithSourceAsync as readSource,
 } from "./session-transcript-readers.js";
+import * as readers from "./session-transcript-readers.js";
 import { readLatestSessionUsageFromTranscriptAsync as readUsage } from "./session-transcript-usage.js";
 
 describe("session transcript reader facade", () => {
-  let tempDir: string;
-  let storePath: string;
-  let state: OpenClawTestState;
-
-  beforeEach(async () => {
-    state = await createOpenClawTestState({ prefix: "transcript-readers-", layout: "state-only" });
-    setRuntimeConfigSnapshot({});
-    tempDir = state.stateDir;
-    storePath = path.join(tempDir, "sessions.json");
-  });
-
-  afterEach(async () => {
-    await state.cleanup();
-    clearRuntimeConfigSnapshot();
-  });
-
-  function scopeFor(sessionId: string) {
-    return { agentId: "main", sessionId, sessionKey: `agent:main:${sessionId}`, storePath };
-  }
-  function database() {
-    return openOpenClawAgentDatabase({
-      agentId: "main",
-      path: path.join(tempDir, "openclaw-agent.sqlite"),
-    });
-  }
-  function event(
-    id: string,
-    parentId: string | null,
-    message: Record<string, unknown>,
-    fields = {},
-  ) {
-    return { type: "message", id, parentId, ...fields, message };
-  }
-  async function writeTranscript(sessionId: string, events: unknown[]) {
-    const scope = scopeFor(sessionId);
-    await replaceTranscriptEvents(scope, [
-      { type: "session", version: 3, id: sessionId },
-      ...events,
-    ]);
-    return scope;
-  }
+  const fixture = useTranscriptFixture("transcript-readers-");
+  const { scopeFor, database, writeTranscript } = fixture;
 
   function chain(count: number, prefix: string, content: (index: number) => string) {
     return Array.from({ length: count }, (_, index) =>
@@ -79,7 +39,7 @@ describe("session transcript reader facade", () => {
     );
   }
   function writeArtifact(sessionId: string, message: Record<string, unknown>, suffix = "") {
-    const file = path.join(tempDir, `${sessionId}.jsonl${suffix}`);
+    const file = fixture.path(`${sessionId}.jsonl${suffix}`);
     const header = JSON.stringify({ type: "session", version: 1, id: sessionId });
     fs.writeFileSync(file, `${header}\n${JSON.stringify({ message })}\n`, "utf8");
     return file;
@@ -286,15 +246,25 @@ describe("session transcript reader facade", () => {
     await expectHistoryOverflow(readAround(scope, { messageId: "oversized", maxMessages: 1 }));
   });
 
-  test("refuses unbounded anchor windows and caps payloads before decoding", async () => {
+  test("bounds unbounded anchor windows and caps payloads before decoding", async () => {
     const sessionId = "reader-anchor-page-bytes";
     const scope = await writeTranscript(
       sessionId,
       chain(3, "large", () => "a".repeat(3 * 1024 * 1024)),
     );
-    await expect(readAround(scope, { messageId: "large-1", maxMessages: 3 })).rejects.toThrow(
-      "Transcript history page exceeds the 8388608-byte limit; request a smaller limit",
-    );
+    // Earlier-history paging anchors on older windows; an oversized window must still page.
+    const older = await readAround(scope, {
+      messageId: "large-2",
+      maxMessages: 3,
+      direction: "older",
+    });
+    expect(older.messages).toMatchObject([
+      { __openclaw: { id: "large-1" } },
+      { __openclaw: { id: "large-2" } },
+    ]);
+    expect(
+      (await readAround(scope, { messageId: "large-1", maxMessages: 3 })).messages,
+    ).toMatchObject([{ __openclaw: { id: "large-0" } }, { __openclaw: { id: "large-1" } }]);
     const db = database();
     // Preserve recorded sizes while poisoning excluded payloads: a late cap would parse this.
     db.db
@@ -307,9 +277,79 @@ describe("session transcript reader facade", () => {
       maxMessages: 3,
       maxBytes: 4 * 1024 * 1024,
     });
-    expect(page.messages).toMatchObject([{ __openclaw: { id: "large-2" } }]);
+    expect(page.messages).toMatchObject([{ __openclaw: { id: "large-1" } }]);
     expect(page.hasOverreadContext).toBe(false);
   });
+
+  test.each([false, true])(
+    "pages adjacent 5 MiB messages in both directions (historical=%s)",
+    async (historical) => {
+      const ids = ["large-0", "large-1", "large-2"];
+      const events: unknown[] = chain(3, "large", () => "a".repeat(5 * 1024 * 1024));
+      if (historical) {
+        events.push({
+          type: "reset",
+          id: "reset",
+          parentId: "large-2",
+          timestamp: "2026-10-01T00:00:00.000Z",
+        });
+        ids.push("reset");
+      }
+      const scope = await writeTranscript("anchor-walk", events);
+      const params = {
+        entry: undefined,
+        provider: undefined,
+        sessionId: scope.sessionId,
+        storePath: scope.storePath,
+        sessionAgentId: scope.agentId,
+        canonicalKey: scope.sessionKey,
+        max: 3,
+        maxHistoryBytes: 8 * 1024 * 1024,
+        effectiveMaxChars: 100,
+        offset: undefined,
+        messageId: "large-1",
+      };
+      const jump = await readChatHistoryPageKernel(params, { readers });
+      expect(jump.messages.map(readChatHistoryMessageId)).toContain("large-1");
+      for (const direction of ["older", "newer"] as const) {
+        const expected = direction === "older" ? ids.toReversed() : ids;
+        // A closing reset uses the current interval; start older traversal at its preceding message.
+        const traversal = historical && direction === "older" ? expected.slice(1) : expected;
+        let messageId = traversal[0]!;
+        const seen = [messageId];
+        for (let index = 1; index < traversal.length; index++) {
+          const page = await readChatHistoryPageKernel(
+            {
+              ...params,
+              messageId,
+              pageCursor: {
+                sessionId: scope.sessionId,
+                source: jump.anchor!.source,
+                messageId,
+                direction,
+              },
+            },
+            { readers },
+          );
+          expect(page.windowReset).not.toBe(true);
+          const actual = page.messages.map(readChatHistoryMessageId);
+          if (direction === "older") {
+            actual.reverse();
+          }
+          expect(actual.length).toBeGreaterThan(0);
+          seen.push(...actual.filter((id): id is string => id !== undefined));
+          messageId =
+            direction === "older" ? page.anchor!.oldestMessageId! : page.anchor!.newestMessageId!;
+          const hasMore = direction === "older" ? page.anchor!.hasOlder : page.anchor!.hasNewer;
+          expect(hasMore).toBe(seen.length < traversal.length);
+          if (!hasMore) {
+            break;
+          }
+        }
+        expect(seen).toEqual(traversal);
+      }
+    },
+  );
 
   test("acquires messages incrementally and releases the cursor after visitor failure", async () => {
     const sessionId = "reader-stream-visitor";
@@ -379,6 +419,33 @@ describe("session transcript reader facade", () => {
     ).resolves.toMatchObject({ messages: [{ content: "retained archive" }] });
   });
 
+  test("surfaces archive expansion failures during discovery and exact archive reads", async () => {
+    const sessionId = "reader-expanding-archive";
+    const scope = scopeFor(sessionId);
+    const archivePath = fixture.path(`${sessionId}.jsonl.reset.2026-07-12T18-00-00.000Z.zst`);
+    fs.writeFileSync(
+      archivePath,
+      zstdCompressSync(
+        Buffer.from(
+          `${JSON.stringify({ type: "session", id: sessionId })}\n${JSON.stringify(
+            event("large", null, { role: "user", content: "x".repeat(2 * 1024 * 1024) }),
+          )}\n`,
+        ),
+      ),
+    );
+
+    await expect(
+      readRecent(scope, { maxMessages: 1, allowResetArchiveFallback: true }),
+    ).rejects.toThrow(/Session archive .* exceeds .* decompressed bytes/);
+    await expect(
+      new ArchivedTranscriptReader({ ...scope, exactArchivePath: archivePath }).readAroundId({
+        messageId: "large",
+        maxMessages: 1,
+        maxBytes: 1024,
+      }),
+    ).rejects.toThrow(/Session archive .* exceeds .* decompressed bytes/);
+  });
+
   test.each(["artifact", "sqlite"] as const)(
     "reads usage from %s storage with a placeholder store path",
     async (storage) => {
@@ -391,7 +458,7 @@ describe("session transcript reader facade", () => {
             agentId: "main",
             sessionId,
             sessionKey,
-            storePath: path.join(tempDir, "agents", "main", "sessions", "sessions.json"),
+            storePath: fixture.path("agents", "main", "sessions", "sessions.json"),
           },
           { messages: [{ message }], updateMode: "file-only" },
         );

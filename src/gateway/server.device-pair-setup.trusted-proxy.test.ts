@@ -13,6 +13,7 @@ import {
   loadDeviceIdentity,
   openTrackedWs,
 } from "./device-authz.test-helpers.js";
+import { browserProxyAuth } from "./server.auth.test-helpers.js";
 import {
   connectOk,
   connectReq,
@@ -46,14 +47,7 @@ const HANDOFF_SCOPES = [
 ];
 
 test.each(["mobile", "node"] as const)("trusted-proxy %s pairing", async (profile) => {
-  const auth = {
-    mode: "trusted-proxy" as const,
-    trustedProxy: {
-      userHeader: "x-forwarded-user",
-      requiredHeaders: ["x-forwarded-proto"],
-      allowLoopback: true,
-    },
-  };
+  const auth = browserProxyAuth();
   testState.gatewayAuth = auth;
   await replaceConfigFile({
     nextConfig: {

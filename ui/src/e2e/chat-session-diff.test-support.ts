@@ -17,11 +17,6 @@ export function diffResponse(
   };
 }
 
-export async function setDiffView(page: Page, view: "Split" | "Unified") {
-  await page.locator(".session-diff").getByRole("button", { name: "Change view options" }).click();
-  await page.getByRole("menuitem", { name: `Switch to ${view} Diff` }).click();
-}
-
 export function singleFileDiff(
   path: string,
   patch: string,

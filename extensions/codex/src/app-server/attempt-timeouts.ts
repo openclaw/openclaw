@@ -1,4 +1,4 @@
-import { addTimerTimeoutGraceMs, resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import type { CodexAppServerClient } from "./client.js";
 import { codexPrewriteRejectionCause } from "./rpc-error.js";
@@ -124,10 +124,4 @@ export function resolveCodexStartupTimeoutMs(params: {
     timeoutFloorMs,
     params.timeoutMs === undefined ? requestBudgetMs : Math.min(turnTimeoutMs, requestBudgetMs),
   );
-}
-
-export function resolveCodexGatewayTimeoutWithGraceMs(timeoutMs: number, graceMs = 10_000): number {
-  const timeout = resolveTimerTimeoutMs(timeoutMs, 1);
-  const grace = resolveTimerTimeoutMs(graceMs, 0, 0);
-  return addTimerTimeoutGraceMs(timeout, grace) ?? timeout;
 }

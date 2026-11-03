@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   filterCodexDynamicTools,
   resolveCodexDynamicToolsLoading,
@@ -42,16 +42,14 @@ it.each([
 ])("filters $name from the dynamic tool profile", (testCase) => {
   const tools = names(testCase.input).map((name) => ({ name }));
   const config = { codexDynamicToolsExclude: testCase.excludes };
-  const env = testCase.privateQa
-    ? { OPENCLAW_BUILD_PRIVATE_QA: "1", OPENCLAW_QA_FORCE_RUNTIME: "codex" }
-    : undefined;
+  vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", testCase.privateQa ? "1" : undefined);
+  vi.stubEnv("OPENCLAW_QA_FORCE_RUNTIME", testCase.privateQa ? "codex" : undefined);
   const filtered = filterCodexDynamicTools(tools, config, {
-    env,
     disabledNativeSurface:
       testCase.preserveShell === undefined ? undefined : { preserveShell: testCase.preserveShell },
   });
   expect(filtered.map((tool) => tool.name)).toEqual(names(testCase.expected));
   if (testCase.privateQa) {
-    expect(resolveCodexDynamicToolsLoading({}, env)).toBe("direct");
+    expect(resolveCodexDynamicToolsLoading({})).toBe("direct");
   }
 });

@@ -3,7 +3,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { getPluginRuntimeEntrySource } from "./plugin-runtime-artifact-binding.js";
-import { getSharedPluginCodeReloadWarning } from "./plugin-shared-module-loader.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { getActivePluginRegistryVersion } from "./runtime.js";
 
@@ -33,6 +32,8 @@ export class PluginRuntimeApplicationError extends Error {
       pluginIds: string[];
       phase: "prepare" | "drain" | "activate" | "dispose";
       committed: boolean;
+      /** The failed replacement also could not restore model/reply publication. */
+      runtimeRestorationFailed?: true;
     },
     options?: ErrorOptions,
   ) {
@@ -92,12 +93,12 @@ export function createPluginRuntimeApplication(params: {
       params.reloadPluginIds?.has(record.id) &&
       record.enabled &&
       record.status === "loaded" &&
-      instance
+      instance &&
+      record.origin === "bundled"
     ) {
-      const warning = getSharedPluginCodeReloadWarning(instance);
-      if (warning) {
-        restartWarnings.add(warning);
-      }
+      restartWarnings.add(
+        "Bundled plugin code is owned by the running Gateway. Restart the Gateway to load updated code; rebuild first when using compiled output.",
+      );
     }
   }
   const warnings = [...restartWarnings, ...params.warnings];

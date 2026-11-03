@@ -38,11 +38,10 @@ const MAX_CACHED_MESSAGES = 100;
 async function fetchChannelHistory(
   api: { scry: (path: string) => Promise<unknown> },
   channelNest: string,
-  count = 50,
   runtime?: RuntimeEnv,
 ): Promise<TlonHistoryEntry[]> {
   try {
-    const scryPath = `/channels/v4/${channelNest}/posts/newest/${count}/outline.json`;
+    const scryPath = `/channels/v4/${channelNest}/posts/newest/50/outline.json`;
     runtime?.log?.(`[tlon] Fetching history: ${scryPath}`);
 
     const data: unknown = await api.scry(scryPath);
@@ -91,19 +90,16 @@ export function createChannelHistoryCache() {
     async getChannelHistory(
       api: { scry: (path: string) => Promise<unknown> },
       channelNest: string,
-      count = 50,
       runtime?: RuntimeEnv,
     ): Promise<TlonHistoryEntry[]> {
       const cache = messageCache.get(channelNest) ?? [];
-      if (cache.length >= count) {
+      if (cache.length >= 50) {
         runtime?.log?.(`[tlon] Using cached messages (${cache.length} available)`);
-        return cache.slice(0, count);
+        return cache.slice(0, 50);
       }
 
-      runtime?.log?.(
-        `[tlon] Cache has ${cache.length} messages, need ${count}, fetching from scry...`,
-      );
-      return await fetchChannelHistory(api, channelNest, count, runtime);
+      runtime?.log?.(`[tlon] Cache has ${cache.length} messages, need 50, fetching from scry...`);
+      return await fetchChannelHistory(api, channelNest, runtime);
     },
   };
 }
@@ -134,7 +130,6 @@ export async function fetchThreadHistory(
   api: { scry: (path: string) => Promise<unknown> },
   channelNest: string,
   parentId: string,
-  count = 50,
   runtime?: RuntimeEnv,
 ): Promise<TlonHistoryEntry[]> {
   try {
@@ -144,7 +139,7 @@ export async function fetchThreadHistory(
       `[tlon] Thread history - parentId: ${parentId} -> formatted: ${formattedParentId}`,
     );
 
-    const scryPath = `/channels/v4/${channelNest}/posts/post/id/${formattedParentId}/replies/newest/${count}.json`;
+    const scryPath = `/channels/v4/${channelNest}/posts/post/id/${formattedParentId}/replies/newest/20.json`;
     runtime?.log?.(`[tlon] Fetching thread history: ${scryPath}`);
 
     const data: unknown = await api.scry(scryPath);

@@ -1,12 +1,10 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import * as nativeAnchor from "../../config/sessions/session-accessor.sqlite-transcript-anchor.js";
+import * as nativeAnchor from "../../config/sessions/session-accessor.sqlite-transcript-admitted-read.js";
 import * as transcriptAnchor from "../../config/sessions/session-transcript-anchor-read.js";
-import {
-  runWithoutOwnedSessionTranscriptWrites,
-  withSessionTranscriptWriteAssertion,
-} from "../../config/sessions/transcript-write-context.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-store.js";
+import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { recordRunSkillUsage } from "../../skills/runtime/run-usage.js";
 import { scheduleSkillExperienceReview } from "../../skills/workshop/experience-review-default.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -25,11 +23,12 @@ import {
   awaitAgentHarnessAgentEndHook,
   runAgentHarnessAgentEndHook,
 } from "./lifecycle-hook-helpers.js";
+import { bindAgentHarnessHookMessages, takeHookMessageLoader } from "./lifecycle-hook-messages.js";
 
 // mock-isolation: Capture workshop scheduling without running background experience reviews.
 vi.mock("../../skills/workshop/experience-review-default.js", () => ({
   scheduleSkillExperienceReview: vi.fn(),
-  scheduleUnusedWorkshopSkillArchive: vi.fn(),
+  scheduleDailyWorkshopMaintenance: vi.fn(),
 }));
 
 vi.mock("./lifecycle-hook-helpers.js", () => ({
@@ -53,7 +52,7 @@ const reviewSource = {
 };
 function sideEffectParams(): Parameters<typeof runAgentEndSideEffects>[0] {
   return {
-    skillExperienceReviewSource: reviewSource,
+    completedTurnSource: reviewSource,
     event: { messages: [], success: true },
     ctx: {
       runId: "run-1",
@@ -99,7 +98,7 @@ it("schedules an append receipt without rereading it and refuses a revoked write
     const params = {
       ...sideEffectParams(),
       [completedTurnMessageAnchor]: captureCompletedTurnMessageAnchor(manager, appended.entryId),
-      skillExperienceReviewSource: { ...target, entryId: appended.entryId },
+      completedTurnSource: { ...target, entryId: appended.entryId },
     } satisfies Parameters<typeof runAgentEndSideEffectsAsync>[0];
     await runAgentEndSideEffectsAsync(params);
     expect(mockExperienceReview).toHaveBeenCalledExactlyOnceWith(
@@ -150,7 +149,9 @@ it.each(["sdk", "bundled"] as const)(
     expect(mockRunAgentEndHook).toHaveBeenCalledTimes(1);
     expect(mockExperienceReview).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
-        usedSkills: [{ name: "release-runbook", source: "workspace", activation: "read" }],
+        event: expect.objectContaining({
+          skillsUsed: [{ name: "release-runbook", source: "workspace", activation: "read" }],
+        }),
         source: reviewSource,
       }),
     );
@@ -171,12 +172,75 @@ it.each(["scheduling", "anchor read", "CLI context"])(
     }
     const params = sideEffectParams();
     if (phase === "CLI context") {
-      delete params.skillExperienceReviewSource;
+      delete params.completedTurnSource;
       params.ctx = { runId: "run-1", workspaceDir: "/workspace" };
     }
     await awaitAgentEndSideEffects(params);
 
     expect(mockExperienceReview).toHaveBeenCalledTimes(phase === "scheduling" ? 1 : 0);
     expect(mockAwaitAgentEndHook).toHaveBeenCalledTimes(1);
+    // A turn whose anchor could not be read gives hooks no completed turn to fork.
+    expect(mockAwaitAgentEndHook.mock.calls[0]?.[0].ctx.completedTurn).toEqual(
+      phase === "scheduling" ? { sessionId: "session-1", entryId: "completed-message" } : undefined,
+    );
   },
 );
+
+it("gives plugin hooks the run's skills, iterations and tool names, keeping the message loader", async () => {
+  recordRunSkillUsage({ runId: "run-1", name: "deploy", source: "workspace", activation: "read" });
+  const loadMessages = async () => [{ role: "assistant", content: "full" }];
+  const params = sideEffectParams();
+  params.event = bindAgentHarnessHookMessages(
+    { ...params.event, modelIterations: 3 },
+    loadMessages,
+  );
+  params.ctx = { ...params.ctx, toolNames: ["read", "skill_workshop"] };
+
+  await awaitAgentEndSideEffects(params);
+
+  const hook = mockAwaitAgentEndHook.mock.calls[0]?.[0];
+  expect(hook?.event).toMatchObject({
+    modelIterations: 3,
+    skillsUsed: [{ name: "deploy", source: "workspace", activation: "read" }],
+  });
+  expect(hook?.ctx.toolNames).toEqual(["read", "skill_workshop"]);
+  expect(hook?.ctx.completedTurn).toEqual({ sessionId: "session-1", entryId: "completed-message" });
+  // Hooks still hydrate the full transcript evidence bound by the runtime.
+  expect(takeHookMessageLoader(hook!.event)).toBe(loadMessages);
+  expect(mockExperienceReview.mock.calls[0]?.[0].event).toBe(hook?.event);
+});
+
+it("leaves an unknown model-call count off the plugin event", async () => {
+  const params = sideEffectParams();
+  params.event = { ...params.event, modelIterations: undefined };
+
+  await awaitAgentEndSideEffects(params);
+
+  expect(mockAwaitAgentEndHook.mock.calls[0]?.[0].event).not.toHaveProperty("modelIterations");
+});
+
+it("maps the retired SDK context fields onto their public replacements", async () => {
+  const params = sideEffectParams();
+  params.ctx = { ...params.ctx, modelIterations: 4, skillWorkshopAvailable: true };
+
+  await awaitAgentEndSideEffects(params);
+
+  const hook = mockAwaitAgentEndHook.mock.calls[0]?.[0];
+  expect(hook?.event.modelIterations).toBe(4);
+  expect(hook?.ctx.toolNames).toEqual(["skill_workshop"]);
+  expect(hook?.ctx).not.toHaveProperty("modelIterations");
+  expect(hook?.ctx).not.toHaveProperty("skillWorkshopAvailable");
+});
+
+it("accepts the retired review source as the completed turn", async () => {
+  const { completedTurnSource, ...params } = sideEffectParams();
+
+  await awaitAgentEndSideEffects({ ...params, skillExperienceReviewSource: completedTurnSource });
+
+  const hook = mockAwaitAgentEndHook.mock.calls[0]?.[0];
+  expect(hook?.ctx.completedTurn).toEqual({ sessionId: "session-1", entryId: "completed-message" });
+  expect(hook).not.toHaveProperty("skillExperienceReviewSource");
+  expect(mockExperienceReview).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ source: reviewSource }),
+  );
+});

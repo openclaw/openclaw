@@ -5,8 +5,10 @@ import type {
   ChatSelectionAnnotation,
   ChatSelectionSource,
 } from "../../../lib/chat/chat-types.ts";
+import { formatUiError } from "../../../lib/format-error.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
+import { showToast } from "../../../lib/toast.ts";
 import { releaseDisplacedChatAttachmentPayloads } from "../attachment-payload-store.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { currentAttachments } from "./chat-attachment-draft.ts";
@@ -26,7 +28,8 @@ export function currentChatComments(attachments: readonly ChatAttachment[], sess
   );
 }
 
-type ChatCommentControllerProps = {
+/** Owns comment mutations even when plugins or history errors replace the transcript. */
+export function ChatCommentController(view: {
   props: ChatAttachmentControlsProps;
   disabled: boolean;
   sessionKey: string;
@@ -35,10 +38,7 @@ type ChatCommentControllerProps = {
   onFocusComposer?: () => void;
   visiblePin?: (id: string) => HTMLElement | undefined;
   resolveSourceRange?: (source: ChatSelectionSource) => Range | undefined;
-};
-
-/** Owns comment mutations even when plugins or history errors replace the transcript. */
-export function ChatCommentController(view: ChatCommentControllerProps) {
+}) {
   const host = document.createElement("openclaw-chat-comment-controller");
   host.style.display = "contents";
   let root: HTMLElement | null = null;
@@ -107,7 +107,7 @@ export function ChatCommentController(view: ChatCommentControllerProps) {
       deleteComment(attachment.id, detail.focusDelete);
     } else if (detail?.action === "edit" && event.target instanceof HTMLElement) {
       // Opening must not queue a transcript scroll that would dismiss the editor.
-      editComment(attachment, visiblePin(attachment.id) ?? detail.anchor ?? event.target);
+      void editComment(attachment, visiblePin(attachment.id) ?? detail.anchor ?? event.target);
     }
   };
 
@@ -164,75 +164,102 @@ export function ChatCommentController(view: ChatCommentControllerProps) {
     }
   };
 
-  function editComment(attachment: CommentAttachment, anchor: HTMLElement) {
+  async function editComment(attachment: CommentAttachment, anchor: HTMLElement) {
     const signal = view.props.readSignal;
     if (!canChange(signal)) {
       return;
     }
     retireEditor();
-    editorOwner = new AbortController();
+    const owner = new AbortController();
+    editorOwner = owner;
     editingId = attachment.id;
     editorAnchor = anchor;
-    positionEditor = showChatAnnotationEditor({
-      paneId: view.paneId,
-      anchorRect: anchor.getBoundingClientRect(),
-      anchorElement: anchor,
-      sourceRange: view.resolveSourceRange?.(attachment.selectionAnnotation),
-      comment: attachment.selectionAnnotation.comment,
-      expanded: true,
-      readSignal: editorOwner.signal,
-      onSave: (comment) => {
-        if (!canChange(signal)) {
-          return true;
-        }
-        const current = currentAttachments(view.props);
-        const selected = current.find((item) => item.id === attachment.id);
-        if (!selected?.selectionAnnotation) {
-          return true;
-        }
-        const replacement = createChatSelectionAttachment(
-          { ...selected.selectionAnnotation, comment },
-          view.props,
-          stagedAttachmentBytes(
-            view.props,
-            current.filter((item) => item.id !== attachment.id),
-          ),
-        );
-        if (!replacement) {
-          return false;
-        }
-        if (
-          !changeAttachments(
-            current,
-            current.map((item) => (item.id === attachment.id ? replacement : item)),
-          )
-        ) {
-          return false;
-        }
-        retireEditor();
-        focusFrame = requestAnimationFrame(() => {
-          focusFrame = undefined;
-          if (canChange(signal)) {
-            const target = visiblePin(replacement.id) ?? (anchor.isConnected ? anchor : null);
-            if (target) {
-              focusWithoutTooltip(target);
-            } else {
-              focusComposer();
+    const paneId = view.paneId;
+    const sessionKey = view.sessionKey;
+    const sourceRange = view.resolveSourceRange?.(attachment.selectionAnnotation);
+    try {
+      const position = await showChatAnnotationEditor(
+        {
+          paneId,
+          anchorRect: anchor.getBoundingClientRect(),
+          anchorElement: anchor,
+          sourceRange,
+          comment: attachment.selectionAnnotation.comment,
+          expanded: true,
+          readSignal: owner.signal,
+          onSave: (comment) => {
+            if (!canChange(signal)) {
+              return true;
             }
-          }
-        });
-        return true;
-      },
-      onDelete: () => {
-        if (canChange(signal)) {
-          deleteComment(attachment.id);
-        }
-      },
-      onCancel: () => {
+            const current = currentAttachments(view.props);
+            const selected = current.find((item) => item.id === attachment.id);
+            if (!selected?.selectionAnnotation) {
+              return true;
+            }
+            const replacement = createChatSelectionAttachment(
+              { ...selected.selectionAnnotation, comment },
+              view.props,
+              stagedAttachmentBytes(
+                view.props,
+                current.filter((item) => item.id !== attachment.id),
+              ),
+            );
+            if (!replacement) {
+              return false;
+            }
+            if (
+              !changeAttachments(
+                current,
+                current.map((item) => (item.id === attachment.id ? replacement : item)),
+              )
+            ) {
+              return false;
+            }
+            retireEditor();
+            focusFrame = requestAnimationFrame(() => {
+              focusFrame = undefined;
+              if (canChange(signal)) {
+                const target = visiblePin(replacement.id) ?? (anchor.isConnected ? anchor : null);
+                if (target) {
+                  focusWithoutTooltip(target);
+                } else {
+                  focusComposer();
+                }
+              }
+            });
+            return true;
+          },
+          onDelete: () => {
+            if (canChange(signal)) {
+              deleteComment(attachment.id);
+            }
+          },
+          onCancel: () => {
+            retireEditor();
+            focusWithoutTooltip(anchor);
+          },
+        },
+        () =>
+          !owner.signal.aborted &&
+          canChange(signal) &&
+          view.sessionKey === sessionKey &&
+          anchor.isConnected,
+      );
+      if (editorOwner !== owner) {
+        return;
+      }
+      if (!position) {
         retireEditor();
-        focusWithoutTooltip(anchor);
-      },
-    });
+        return;
+      }
+      positionEditor = position;
+    } catch (error) {
+      if (editorOwner === owner && canChange(signal)) {
+        retireEditor();
+        showToast({ message: formatUiError(error) });
+      }
+      return;
+    }
     if (root) {
       editorObserver ??= new MutationObserver(syncEditorAnchor);
       editorObserver.observe(root, { childList: true, subtree: true, attributes: true });

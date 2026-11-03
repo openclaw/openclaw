@@ -8,13 +8,14 @@ import {
   PreparedModelRuntimeOwnerNotPublishedError,
   PreparedModelRuntimePluginGenerationRetiredError,
 } from "../../agents/prepared-model-runtime.errors.js";
+import { makeProviderModelFixture } from "../../agents/test-helpers/provider-model-fixture.js";
+import { createRuntimeLlmUsageFixture } from "../../agents/test-helpers/usage-fixtures.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginEntryConfig } from "../../config/types.plugins.js";
 import { AsyncWorkScopeClosedError } from "../../shared/async-work-scope.js";
 import { PluginInventoryRetiredError } from "../plugin-instance-error.js";
 import { withPluginRuntimePluginScope } from "./gateway-request-scope.js";
 import { createRuntimeLlm } from "./runtime-llm.runtime.js";
-import type { RuntimeLogger } from "./types-core.js";
 
 const hoisted = vi.hoisted(() => ({
   acquireSimpleCompletionModelForAgent:
@@ -23,12 +24,23 @@ const hoisted = vi.hoisted(() => ({
     >(),
   completeWithPreparedSimpleCompletionModel: vi.fn(),
   resolveSimpleCompletionSelectionForAgent: vi.fn(),
+  logger: {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  },
 }));
 
 vi.mock("../../agents/simple-completion-runtime.js", () => ({
   acquireSimpleCompletionModelForAgent: hoisted.acquireSimpleCompletionModelForAgent,
   completeWithPreparedSimpleCompletionModel: hoisted.completeWithPreparedSimpleCompletionModel,
   resolveSimpleCompletionSelectionForAgent: hoisted.resolveSimpleCompletionSelectionForAgent,
+}));
+
+vi.mock(import("./runtime-logging.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  writeRuntimeLog: (_logger, level, message, meta) => hoisted.logger[level](message, meta),
 }));
 
 const cfg = {
@@ -56,32 +68,19 @@ function createPreparedModel(
       modelId,
       agentDir: "/tmp/openclaw-agent",
     },
-    model: {
+    model: makeProviderModelFixture({
       provider: "openai",
       id: modelId,
-      name: modelId,
       api: "openai",
       baseUrl: "https://fixture.invalid/v1",
-      input: ["text"],
-      reasoning: false,
       contextWindow: 128_000,
-      maxTokens: 4096,
       cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0.2 },
-    },
+    }),
     auth: {
       apiKey: "test-api-key",
       source: "test",
       mode: "api-key",
     },
-  };
-}
-
-function createLogger(): RuntimeLogger {
-  return {
-    debug: vi.fn(),
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
   };
 }
 
@@ -127,7 +126,7 @@ function expectSingleLogPayload(
   return payloadRecord;
 }
 
-function primeCompletionMocks() {
+function primeCompletionMocks(usage = createRuntimeLlmUsageFixture()) {
   hoisted.acquireSimpleCompletionModelForAgent.mockResolvedValue(createPreparedModel());
   hoisted.resolveSimpleCompletionSelectionForAgent.mockImplementation(
     (params: { modelRef?: string; agentId: string }) => {
@@ -150,14 +149,7 @@ function primeCompletionMocks() {
     content: [{ type: "text", text: "done" }],
     responseModel: "gpt-5.5-2026-08-01",
     stopReason: "stop",
-    usage: {
-      input: 11,
-      output: 7,
-      cacheRead: 5,
-      cacheWrite: 2,
-      total: 25,
-      cost: { total: 0.0042 },
-    },
+    usage,
   });
 }
 
@@ -166,6 +158,7 @@ describe("runtime.llm.complete", () => {
     hoisted.acquireSimpleCompletionModelForAgent.mockReset();
     hoisted.completeWithPreparedSimpleCompletionModel.mockReset();
     hoisted.resolveSimpleCompletionSelectionForAgent.mockReset();
+    Object.values(hoisted.logger).forEach((method) => method.mockClear());
     primeCompletionMocks();
   });
 
@@ -481,89 +474,95 @@ describe("runtime.llm.complete", () => {
     expect(hoisted.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
   });
 
-  it("uses runtime-scoped config and the host preparation/dispatch path", async () => {
-    const logger = createLogger();
-    const llm = createRuntimeLlm({
-      getConfig: () => cfg,
-      logger,
-      authority: {
-        caller: { kind: "host", id: "runtime-test" },
-        allowComplete: true,
-      },
-    });
+  it.each([0.0042, 0])(
+    "preserves billed cost %s through host dispatch and logging",
+    async (costUsd) => {
+      const usage = {
+        ...createRuntimeLlmUsageFixture(),
+        cost: { total: costUsd, totalOrigin: "provider-billed" },
+      };
+      primeCompletionMocks(usage);
+      const logger = hoisted.logger;
+      const llm = createRuntimeLlm({
+        getConfig: () => cfg,
+        authority: {
+          caller: { kind: "host", id: "runtime-test" },
+          allowComplete: true,
+        },
+      });
 
-    const result = await llm.complete({
-      messages: [
-        { role: "system", content: "Be terse." },
-        { role: "user", content: "Ping" },
-      ],
-      temperature: 0.2,
-      maxTokens: 64,
-      reasoning: "ultra",
-      responseFormat: {
-        type: "json_schema",
-        json_schema: { name: "test_result", strict: true, schema: { type: "object" } },
-      },
-      purpose: "test-purpose",
-    });
-
-    expectSingleCallFirstArg(hoisted.acquireSimpleCompletionModelForAgent, {
-      cfg,
-      agentId: "main",
-    });
-    const completionArg = expectSingleCallFirstArg(
-      hoisted.completeWithPreparedSimpleCompletionModel,
-      {
-        cfg,
-      },
-    );
-    const context = requireRecord(completionArg.context, "completion context");
-    expect(context.systemPrompt).toBe("Be terse.");
-    const [message] = requireArray(context.messages, "completion messages");
-    expectFields(requireRecord(message, "completion message"), {
-      role: "user",
-      content: "Ping",
-    });
-    expectFields(requireRecord(completionArg.options, "completion options"), {
-      maxTokens: 64,
-      temperature: 0.2,
-      reasoning: "ultra",
-      responseFormat: {
-        type: "json_schema",
-        json_schema: { name: "test_result", strict: true, schema: { type: "object" } },
-      },
-    });
-    expectFields(requireRecord(result, "completion result"), {
-      text: "done",
-      provider: "openai",
-      model: "gpt-5.5",
-      responseModel: "gpt-5.5-2026-08-01",
-      stopReason: "stop",
-    });
-    expectFields(requireRecord(result.usage, "completion usage"), {
-      inputTokens: 11,
-      outputTokens: 7,
-      cacheReadTokens: 5,
-      cacheWriteTokens: 2,
-      totalTokens: 25,
-      costUsd: 0.0042,
-    });
-    const logPayload = expectSingleLogPayload(
-      logger.info as unknown as MockCalls,
-      "plugin llm completion",
-      {
-        caller: { kind: "host", id: "runtime-test" },
+      const result = await llm.complete({
+        messages: [
+          { role: "system", content: "Be terse." },
+          { role: "user", content: "Ping" },
+        ],
+        temperature: 0.2,
+        maxTokens: 64,
+        reasoning: "ultra",
+        responseFormat: {
+          type: "json_schema",
+          json_schema: { name: "test_result", strict: true, schema: { type: "object" } },
+        },
         purpose: "test-purpose",
-      },
-    );
-    expectFields(requireRecord(logPayload.usage, "log usage"), { costUsd: 0.0042 });
-  });
+      });
+
+      expectSingleCallFirstArg(hoisted.acquireSimpleCompletionModelForAgent, {
+        cfg,
+        agentId: "main",
+      });
+      const completionArg = expectSingleCallFirstArg(
+        hoisted.completeWithPreparedSimpleCompletionModel,
+        {
+          cfg,
+        },
+      );
+      const context = requireRecord(completionArg.context, "completion context");
+      expect(context.systemPrompt).toBe("Be terse.");
+      const [message] = requireArray(context.messages, "completion messages");
+      expectFields(requireRecord(message, "completion message"), {
+        role: "user",
+        content: "Ping",
+      });
+      expectFields(requireRecord(completionArg.options, "completion options"), {
+        maxTokens: 64,
+        temperature: 0.2,
+        reasoning: "ultra",
+        responseFormat: {
+          type: "json_schema",
+          json_schema: { name: "test_result", strict: true, schema: { type: "object" } },
+        },
+      });
+      expectFields(requireRecord(result, "completion result"), {
+        text: "done",
+        provider: "openai",
+        model: "gpt-5.5",
+        responseModel: "gpt-5.5-2026-08-01",
+        stopReason: "stop",
+      });
+      expectFields(requireRecord(result.usage, "completion usage"), {
+        inputTokens: 11,
+        outputTokens: 7,
+        cacheReadTokens: 5,
+        cacheWriteTokens: 2,
+        totalTokens: 25,
+        costUsd,
+      });
+      const logPayload = expectSingleLogPayload(
+        logger.info as unknown as MockCalls,
+        "plugin llm completion",
+        {
+          caller: { kind: "host", id: "runtime-test" },
+          purpose: "test-purpose",
+        },
+      );
+      expectFields(requireRecord(logPayload.usage, "log usage"), { costUsd });
+    },
+  );
 
   it("uses scoped plugin identity and ignores caller-shaped spoofing input", async () => {
-    const logger = createLogger();
+    const logger = hoisted.logger;
     const llm = createRuntimeLlm({
       getConfig: () => cfg,
-      logger,
       authority: {
         caller: { kind: "host", id: "ignored-host" },
         allowComplete: true,
@@ -716,10 +715,9 @@ describe("runtime.llm.complete", () => {
   );
 
   it("denies completions when runtime authority disables the capability", async () => {
-    const logger = createLogger();
+    const logger = hoisted.logger;
     const llm = createRuntimeLlm({
       getConfig: () => cfg,
-      logger,
       authority: {
         allowComplete: false,
         denyReason: "not trusted",

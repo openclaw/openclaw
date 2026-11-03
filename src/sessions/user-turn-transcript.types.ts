@@ -1,4 +1,5 @@
 import type { HumanMention } from "@openclaw/gateway-protocol";
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import type { AgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.types.js";
 import type { RequesterOrigin } from "../agents/requester-origin.js";
@@ -9,15 +10,17 @@ import type {
   SessionTranscriptTurnMutation,
   SessionTranscriptTurnMutationResult,
 } from "../config/sessions/goals-operations.types.js";
-import type { SessionInputLifecycleAdmission } from "../config/sessions/restart-resume.js";
+import type { SessionInputLifecycleAdmission } from "../config/sessions/session-input-lifecycle.js";
 import type { SessionMessageRewriteResult } from "../config/sessions/session-message-rewrite.types.js";
 import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type {
   SessionTranscriptTurnExpectedState,
   SessionTranscriptTurnLifecyclePatch,
 } from "../config/sessions/session-transcript-turn-lifecycle.types.js";
-import type { TranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
-import type { TranscriptTurnAdmission } from "../config/sessions/transcript-turn-admission.js";
+import type {
+  TranscriptEntryAnchor,
+  TranscriptTurnAdmission,
+} from "../config/sessions/transcript-entry-anchor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { MediaFactInput } from "../media/media-facts.js";
@@ -50,6 +53,20 @@ export type PersistedUserTurnMessage = Extract<AgentMessage, { role: "user" }> &
   provenance?: InputProvenance;
   __openclaw?: Record<string, unknown> & {
     humanMentions?: readonly HumanMention[];
+    /** Accepted delivery intent; readmission still checks the sender's current authority. */
+    chatSendDelivery?: {
+      deliver?: boolean;
+      originatingChannel?: string;
+      originatingTo?: string;
+      originatingAccountId?: string;
+      originatingThreadId?: string;
+    };
+    chatSendRuntime?: {
+      thinking?: string;
+      fastMode?: FastMode;
+      fastAutoOnSeconds?: number;
+      timeoutMs?: number;
+    };
     requesterOrigin?: RequesterOrigin;
   };
 };
@@ -227,7 +244,7 @@ export type UserTurnTranscriptRecorder = {
   /** Durable input custody leaves the active transcript unchanged until execution owns it. */
   stageApproved?: (options: {
     runId: string;
-    retryInterrupted?: boolean;
+    retryCancelled?: boolean;
     storageTarget?: UserTurnPersistenceOptions["storageTarget"];
     lifecycleAdmission?: SessionInputLifecycleAdmission;
     assertCurrent: () => void;
@@ -243,6 +260,7 @@ export type UserTurnTranscriptRecorder = {
   ) => Promise<AgentRunTerminalOutcome | undefined>;
   getPendingInputMessage?: () => PersistedUserTurnMessage | undefined;
   isPendingInputConsumed?: () => boolean;
+  validateCommittedReplay?: () => Promise<void>;
   withPendingInput?: <T>(run: () => T) => T;
   withPendingInputCurrent?: <T>(run: () => T) => Promise<Awaited<T>>;
   assertPendingInputLifetimeCurrent?: () => void;

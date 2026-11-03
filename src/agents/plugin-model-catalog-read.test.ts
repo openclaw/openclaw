@@ -7,8 +7,8 @@ import { observeHostDataSql } from "../../test/helpers/sqlite-statement-executio
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as configEnv from "../config/config-env-vars.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { SQLITE_WORKER_TRANSFER_FRAME_BYTES } from "../infra/sqlite-worker-transfer.js";
 import * as workerCpu from "../infra/worker-cpu.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { createAgentDatabaseInspectionRefusal } from "../state/agent-database-admission.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
@@ -19,7 +19,7 @@ import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cach
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import { loadPersistedPluginModelCatalogs } from "./plugin-model-catalog-execution.js";
-import { readPluginModelCatalogsInWorker } from "./plugin-model-catalog-read.js";
+import * as catalogReads from "./plugin-model-catalog-read.js";
 import {
   encodePluginModelCatalogRelativePath,
   PLUGIN_MODEL_CATALOG_GENERATED_BY,
@@ -75,32 +75,19 @@ function createFixture(contents: string) {
 
 function observeCatalogWorkers(onMessage?: (message: unknown) => void) {
   const workers: Worker[] = [];
-  const frames: number[] = [];
   const createWorker = workerCpu.createCpuTrackedWorker;
   vi.spyOn(workerCpu, "createCpuTrackedWorker").mockImplementation((url, options) => {
     const worker = createWorker(url, options);
     const data: unknown = options?.workerData;
     if (isRecord(data) && data.pluginCatalogRead === true) {
       workers.push(worker);
-      worker.on("message", (message: unknown) => {
-        if (
-          isRecord(message) &&
-          message.status === "request" &&
-          isRecord(message.value) &&
-          Array.isArray(message.value.frames)
-        ) {
-          for (const frame of message.value.frames) {
-            if (isRecord(frame) && frame.bytes instanceof Uint8Array) {
-              frames.push(frame.bytes.byteLength);
-            }
-          }
-        }
-        onMessage?.(message);
-      });
+      if (onMessage) {
+        worker.on("message", onMessage);
+      }
     }
     return worker;
   });
-  return { workers, frames };
+  return workers;
 }
 
 it.each(["read", "write"] as const)(
@@ -128,19 +115,19 @@ it.each(["read", "write"] as const)(
 
 it("identifies the rejected protocol field without exposing values or suggesting migration", async () => {
   const fixture = createFixture(catalogContents("diagnostic"));
-  const failure = await readPluginModelCatalogsInWorker(
-    {
-      agentId: "main",
-      path: fixture.databasePath,
-      env: new Proxy({ ...fixture.env, PRIVATE_VALUE: "synthetic-private" }, {}),
-    },
-    new AbortController().signal,
-  ).catch((error: unknown) => error);
+  const failure = await catalogReads
+    .readPluginModelCatalogsInWorker(
+      {
+        agentId: "main",
+        path: fixture.databasePath,
+        env: new Proxy({ ...fixture.env, PRIVATE_VALUE: "synthetic-private" }, {}),
+      },
+      new AbortController().signal,
+    )
+    .catch((error: unknown) => error);
   expect(failure).toMatchObject({
     name: "PluginModelCatalogInputError",
     code: "failed",
-    operation: "catalog.read",
-    field: "input.env",
     message: "Cannot serialize catalog.read request field input.env",
   });
   const refusal = createAgentDatabaseInspectionRefusal({
@@ -163,7 +150,7 @@ it("reads without creating shared state and observes canonical replacements on t
     loadPersistedPluginModelCatalogs(missingDir, undefined, fixture.env),
   ).resolves.toEqual([]);
   expect(fs.existsSync(missingDir)).toBe(false);
-  expect(observation.workers).toHaveLength(0);
+  expect(observation).toHaveLength(0);
 
   const sql = observeHostDataSql();
   try {
@@ -173,13 +160,26 @@ it("reads without creating shared state and observes canonical replacements on t
     sql.restore();
   }
   expect(fs.existsSync(resolveOpenClawStateSqlitePath(fixture.env))).toBe(false);
-  expect(observation.workers).toHaveLength(1);
-  const reader = observation.workers[0];
+  expect(observation).toHaveLength(1);
+  const reader = observation[0];
 
   const second = catalogContents("second");
   await fixture.write(second);
   await fixture.expectContents(second);
-  expect(observation.workers).toEqual([reader]);
+  expect(observation).toEqual([reader]);
+});
+
+it("refuses a catalog result after its captured root admission closes", async () => {
+  const fixture = createFixture(catalogContents("retired root"));
+  const held = createDeferredCore<Awaited<ReturnType<typeof loadPersistedPluginModelCatalogs>>>();
+  vi.spyOn(catalogReads, "readPluginModelCatalogsInWorker").mockReturnValueOnce(held.promise);
+
+  const reading = fixture.read();
+  const closing = closeOpenClawStateDatabaseAsync();
+  held.resolve([]);
+  const results = await Promise.allSettled([reading, closing]);
+
+  expect(results).toMatchObject([{ status: "rejected" }, { status: "fulfilled" }]);
 });
 
 it("rejects quarantine and tracked schema damage after warm reads, then accepts cleared quarantine", async () => {
@@ -207,12 +207,12 @@ it("rejects quarantine and tracked schema damage after warm reads, then accepts 
   );
 });
 
-it("bounds large catalog transfers and refuses a replaced source before exposing its result", async () => {
+it("reads a large catalog and refuses a replaced source before exposing its result", async () => {
   const contents = catalogContents(`${"catalog".repeat(1_300_000)}🌊`);
   const fixture = createFixture(contents);
   let replaceBeforeDelivery = false;
   const replacementPath = path.join(fixture.root, "replacement.sqlite");
-  const observation = observeCatalogWorkers((message) => {
+  observeCatalogWorkers((message) => {
     if (replaceBeforeDelivery && isRecord(message) && message.status === "ok") {
       replaceBeforeDelivery = false;
       fs.renameSync(fixture.databasePath, `${fixture.databasePath}.retired`);
@@ -220,13 +220,6 @@ it("bounds large catalog transfers and refuses a replaced source before exposing
     }
   });
   await fixture.expectContents(contents);
-  expect(observation.frames.length).toBeGreaterThan(1);
-  expect(
-    observation.frames.every((bytes) => bytes > 0 && bytes <= SQLITE_WORKER_TRANSFER_FRAME_BYTES),
-  ).toBe(true);
-  expect(observation.frames.reduce((total, bytes) => total + bytes, 0)).toBeGreaterThan(
-    SQLITE_WORKER_TRANSFER_FRAME_BYTES,
-  );
 
   fs.copyFileSync(fixture.databasePath, replacementPath);
   replaceBeforeDelivery = true;

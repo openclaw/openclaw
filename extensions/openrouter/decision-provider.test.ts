@@ -52,7 +52,7 @@ function context(config: Config = {}): DecisionProviderContextV2 {
     config,
     auth: { apiKey: "synthetic-prepared-token", mode: "api-key", profileId: "openrouter:fixture" },
     signal: new AbortController().signal,
-    deadlineMonotonicMs: performance.now() + 5000,
+    deadlineMonotonicMs: Number.POSITIVE_INFINITY,
     isAdmissible: () => true,
   };
 }
@@ -295,9 +295,7 @@ it("rejects unsupported native inputs, parameters and absent credentials before 
   await unavailable("unsupported-input", ctx);
   await unavailable("credentials-unavailable", { ...context(), auth: { mode: "api-key" } });
   const configured = context();
-  configured.config.agents = {
-    defaults: { models: modelParams({ max_tokens: 100 }) },
-  };
+  configured.config.agents = { defaults: { models: modelParams({ max_tokens: 100 }) } };
   await unavailable("unsupported-input", configured);
   expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
 });

@@ -10,20 +10,24 @@ import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { withConfigWriteLock } from "../config/write-lock.js";
 import { discoverBackupDatabasePaths } from "../infra/backup-sqlite-snapshot.js";
+import {
+  resolveClientCredentialStorePath,
+  resolveStateClientCredentialEnvironment,
+} from "../infra/client-credential-paths.js";
 import { capturePortClientCredentialBinding } from "../infra/client-credential-restore.js";
 import { resolveDatabaseEngineInput } from "../infra/database-engine/config.js";
 import { getDatabaseEngineInput } from "../infra/database-engine/context.js";
 import {
   runDatabasePortTask,
   type DatabasePortInspection,
-  DatabasePortError,
 } from "../infra/database-engine/port-command.worker.js";
-import { databasePortProviders } from "../infra/database-engine/port-provider.js";
+import { postgresStoreNamespace } from "../infra/database-engine/postgres-schema.js";
 import {
   resolveDatabaseFamilyEngines,
   type DatabaseEngineId,
 } from "../infra/database-engine/registry.js";
 import {
+  assertDatabasePortPlatformSupported,
   assertDatabasePortRecoveryAllowed,
   databasePortManifestPath,
   prepareDatabasePortDirectory,
@@ -35,7 +39,6 @@ import {
 import { hasActiveGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { createVerifiedSqliteSnapshot } from "../infra/sqlite-snapshot.js";
 import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
-import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
   assertDatabaseArtifact,
   captureDatabaseArtifact,
@@ -59,13 +62,17 @@ import {
   privatePaths,
   record,
   refuse,
-  revise,
+  refuseFailure,
   readDatabasePortConfigSnapshot,
   stagePath,
   storeAt,
   storeDirectory,
 } from "./doctor-database-port-context.js";
-import { assertDatabasePortPluginMigrationsComplete } from "./doctor-database-port-migrations.js";
+import { rebuildPortedAgentMemory } from "./doctor-database-port-memory.js";
+import {
+  assertDatabasePortPluginMigrationsComplete,
+  inspectDatabasePortSources,
+} from "./doctor-database-port-migrations.js";
 import {
   assertOriginal,
   loadDatabasePortStateReceipt,
@@ -74,10 +81,12 @@ import {
   withDatabasePortConfigStateReceipt,
 } from "./doctor-database-port-publication.js";
 import {
+  assertLocalCredentialPortCompanion,
   prepareSharedStatePortSource,
   selectDatabasePortEngine,
   withDatabasePortStateOwner,
 } from "./doctor-database-port-state.js";
+import { withDatabasePortWorkingCopy } from "./doctor-database-port-working.js";
 
 export type DatabasePortOptions = {
   family?: DatabasePortFamily;
@@ -115,30 +124,34 @@ async function preflight(ctx: Context, options: DatabasePortOptions) {
     to,
     family: ctx.family,
   });
-  if (!ctx.family || ctx.family === "state") {
-    await prepareSharedStatePortSource(ctx, from, to, options.dryRun);
+  const sources = await inspectDatabasePortSources(ctx, config, from, to);
+  let all = sources.all;
+  const owner = sources.owner;
+  if (
+    (!ctx.family || ctx.family === "state") &&
+    (await prepareSharedStatePortSource(ctx, from, to, options.dryRun))
+  ) {
+    all = await discoverBackupDatabasePaths({ stateDir: ctx.stateDir, config, env: ctx.env });
   }
-  const context = { stateDir: ctx.stateDir, config, env: ctx.env };
-  const plugins = resolvePluginMetadataSnapshot(context);
-  const families = await Promise.all(
-    databasePortProviders.map(async (provider) => ({
-      id: provider.id,
-      roots: await provider.resolveRoots({ ...context, plugins }),
-    })),
-  );
-  privatePaths(
-    ctx,
-    families.flatMap((family) => family.roots),
-  );
-  const all = await discoverBackupDatabasePaths({ stateDir: ctx.stateDir, config, env: ctx.env });
-  const owner = (file: string) =>
-    families.find((family) =>
-      family.roots.some((root) => file === root || file.startsWith(`${root}${path.sep}`)),
-    )?.id;
-  const stores = all.filter((file) => owner(file) && (!ctx.family || owner(file) === ctx.family));
+  const selected = all.filter((file) => owner(file) && (!ctx.family || owner(file) === ctx.family));
+  const localCompanions = new Map<string, string>();
+  for (const file of selected) {
+    const env =
+      owner(file) === "state"
+        ? resolveStateClientCredentialEnvironment({ path: file, env: ctx.env })
+        : undefined;
+    if (env) {
+      const local = resolveClientCredentialStorePath(env);
+      if (all.includes(local)) {
+        localCompanions.set(local, file);
+      }
+    }
+  }
+  const stores = selected.filter((file) => !localCompanions.has(file));
   const outOfScope: { path: string; engine: DatabaseEngineId }[] = [];
   const inspected = new Map<string, DatabasePortInspection>();
-  for (const file of all) {
+  // Admit the shared target before its exact local companion can leave the portable set.
+  for (const file of all.filter((candidate) => !localCompanions.has(candidate))) {
     ctx.target = file;
     privatePaths(ctx, [file]);
     if (!stores.includes(file)) {
@@ -167,6 +180,10 @@ async function preflight(ctx: Context, options: DatabasePortOptions) {
       refuse(ctx, `${facts.engine} store with ${from} config`, "matching physical/config engines");
     }
     inspected.set(file, facts);
+  }
+  for (const [file, sharedPath] of localCompanions) {
+    assertLocalCredentialPortCompanion(ctx, file, sharedPath, inspected.get(sharedPath)?.family);
+    outOfScope.push({ path: file, engine: "sqlite" });
   }
   capacity(
     ctx,
@@ -219,6 +236,15 @@ async function captureOriginals(ctx: Context, facts: Awaited<ReturnType<typeof p
     ctx.assertCurrent();
     const directory = storeDirectory(ctx, index);
     fs.mkdirSync(directory, { mode: 0o700 });
+    if (info.notes?.length) {
+      const inspection = path.join(directory, "inspection.json");
+      writeDatabasePortArtifact(
+        inspection,
+        `${JSON.stringify({ notes: info.notes })}\n`,
+        ctx.assertCurrent,
+      );
+      artifacts.push(await captureDatabaseArtifact(inspection));
+    }
     const stat = fs.lstatSync(file, { bigint: true }),
       original = await captureDatabaseArtifact(file);
     let image = path.join(directory, "original.sqlite"),
@@ -270,37 +296,39 @@ async function captureOriginals(ctx: Context, facts: Awaited<ReturnType<typeof p
           : {
               engine: "postgres",
               anchorPath: file,
-              namespace: `port_${randomUUID().replaceAll("-", "")}`,
+              namespace: postgresStoreNamespace(
+                ctx.engineSelection.postgres!.schemaPrefix,
+                info.family,
+                storeId,
+              ),
             },
       originalCapture: await captureDatabaseArtifact(anchor),
       verification: null,
     });
+    const credentialEnv =
+      info.family === "state"
+        ? resolveStateClientCredentialEnvironment({ path: file, env: ctx.env })
+        : undefined;
+    if (credentialEnv) {
+      const credentialBinding = capturePortClientCredentialBinding({
+        env: credentialEnv,
+        sourcePath: anchor,
+        sourceFile: { path: original.path, dev: String(stat.dev), ino: String(stat.ino) },
+      });
+      const bindingFile = path.join(directory, "client-credential-binding.json");
+      writeDatabasePortArtifact(
+        bindingFile,
+        `${JSON.stringify(credentialBinding)}\n`,
+        ctx.assertCurrent,
+      );
+      artifacts.push(await captureDatabaseArtifact(bindingFile));
+    }
   }
   for (const [index, input] of facts.configInputs.entries()) {
     await assertDatabaseArtifact(input);
     const file = path.join(ctx.directory, `config-${index}.json`);
     writeDatabasePortArtifact(file, fs.readFileSync(input.path), ctx.assertCurrent);
     artifacts.push(await captureDatabaseArtifact(file));
-  }
-  const sharedIndex = targets.findIndex(
-    (target) => livePath(target) === path.join(ctx.stateDir, "state", "openclaw.sqlite"),
-  );
-  const sharedInput = ctx.inputs.stores[sharedIndex];
-  const credentialBinding = sharedInput
-    ? capturePortClientCredentialBinding({
-        env: ctx.env,
-        sourcePath: targets[sharedIndex]!.originalCapture.path,
-        sourceFile: { path: sharedInput.original.path, dev: sharedInput.dev, ino: sharedInput.ino },
-      })
-    : undefined;
-  if (credentialBinding !== undefined) {
-    const bindingFile = path.join(ctx.directory, "client-credential-binding.json");
-    writeDatabasePortArtifact(
-      bindingFile,
-      `${JSON.stringify(credentialBinding)}\n`,
-      ctx.assertCurrent,
-    );
-    artifacts.push(await captureDatabaseArtifact(bindingFile));
   }
   const inputFile = path.join(ctx.directory, "inputs.json");
   writeDatabasePortArtifact(inputFile, `${JSON.stringify(ctx.inputs)}\n`, ctx.assertCurrent);
@@ -327,27 +355,6 @@ async function captureOriginals(ctx: Context, facts: Awaited<ReturnType<typeof p
   );
 }
 
-async function privateMigrate(ctx: Context, index: number, config: OpenClawConfig) {
-  ctx.phase = "private migrate";
-  const prefix = path.join(storeDirectory(ctx, index), "working-");
-  const recorded = manifest(ctx).artifacts.find((file) => file.path.startsWith(prefix));
-  const file = recorded?.path ?? `${prefix}${randomUUID()}.sqlite`;
-  if (recorded) {
-    await assertDatabaseArtifact(recorded);
-    return file;
-  }
-  await createVerifiedSqliteSnapshot({
-    sourcePath: storeAt(ctx, index).input.image,
-    targetPath: file,
-    preserveRowIds: true,
-  });
-  await runDatabasePortTask({ operation: "migrate", sourcePath: file, config }, ctx);
-  syncDatabasePortPath(file);
-  syncDatabasePortPath(path.dirname(file));
-  manifest(ctx).artifacts.push(await captureDatabaseArtifact(file));
-  revise(ctx);
-  return file;
-}
 async function stageMaterialize(ctx: Context, index: number, config: OpenClawConfig) {
   const current = manifest(ctx),
     { target } = storeAt(ctx, index);
@@ -355,40 +362,47 @@ async function stageMaterialize(ctx: Context, index: number, config: OpenClawCon
   if (target.verification) {
     return;
   }
-  const working = await privateMigrate(ctx, index, config);
-  ctx.phase = "stage/materialize";
-  const result = await runDatabasePortTask(
-    {
-      operation: "stage",
-      sourcePath: working,
-      targetPath: stagePath(ctx, index),
-      to: current.direction.to,
-      storeId: target.storeId,
-      namespace: target.intended.engine === "postgres" ? target.intended.namespace : "",
-      config: postgresConfig(config),
-      resume: true,
-      sourceVerification:
-        current.direction.from === "postgres"
-          ? JSON.parse(
-              fs.readFileSync(
-                path.join(storeDirectory(ctx, index), "postgres/manifest.json"),
-                "utf8",
-              ),
-            ).verification
-          : undefined,
-    },
-    ctx,
-  );
-  const proof = result.verification;
-  target.verification = {
-    contentHash: digest(proof.tables),
-    allocationHash: digest(proof.allocations),
-    catalogHash: result.descriptorHash,
-    rowCount: Object.values(proof.tables).reduce((sum, table) => sum + table.rows, 0),
-    ownerAdmitted: true,
-  };
-  current.artifacts.push(await captureDatabaseArtifact(stagePath(ctx, index)));
-  await record(ctx, path.join(storeDirectory(ctx, index), "verification.json"), proof);
+  await withDatabasePortWorkingCopy(ctx, index, config, async (working) => {
+    ctx.phase = "stage/materialize";
+    const result = await runDatabasePortTask(
+      {
+        operation: "stage",
+        sourcePath: working,
+        targetPath: stagePath(ctx, index),
+        to: current.direction.to,
+        storeId: target.storeId,
+        namespace: target.intended.engine === "postgres" ? target.intended.namespace : "",
+        config: postgresConfig(config),
+        resume: true,
+        sourceVerification:
+          current.direction.from === "postgres"
+            ? JSON.parse(
+                fs.readFileSync(
+                  path.join(storeDirectory(ctx, index), "postgres/manifest.json"),
+                  "utf8",
+                ),
+              ).verification
+            : undefined,
+      },
+      ctx,
+    );
+    const proof = result.verification;
+    if (result.plannerStatistics) {
+      (ctx.plannerStatistics ??= []).push({
+        path: livePath(target),
+        result: result.plannerStatistics,
+      });
+    }
+    target.verification = {
+      contentHash: digest(proof.tables),
+      allocationHash: digest(proof.allocations),
+      catalogHash: result.descriptorHash,
+      rowCount: Object.values(proof.tables).reduce((sum, table) => sum + table.rows, 0),
+      ownerAdmitted: true,
+    };
+    current.artifacts.push(await captureDatabaseArtifact(stagePath(ctx, index)));
+    await record(ctx, path.join(storeDirectory(ctx, index), "verification.json"), proof);
+  });
 }
 async function classifyConfig(ctx: Context) {
   const current = await readDatabasePortConfigSnapshot(ctx),
@@ -586,8 +600,7 @@ async function loadRecovery(ctx: Context) {
     ctx.inputs.stores.length !== saved.targets.length ||
     saved.targets.some((target, index) => {
       const file = ctx.inputs?.stores[index]?.original.path;
-      // Configured and retained agents can live outside the state root. The
-      // verified private input must still name its manifest-bound target.
+      // Agents can live outside the state root; require the manifest-bound private input.
       return !file || file !== livePath(target);
     })
   ) {
@@ -597,13 +610,13 @@ async function loadRecovery(ctx: Context) {
 }
 
 export async function doctorDatabasePort(options: DatabasePortOptions) {
-  const stateDir = path.resolve(resolveStateDir()),
-    configPath = path.resolve(resolveConfigPath());
+  assertDatabasePortPlatformSupported();
+  const stateDir = path.resolve(resolveStateDir());
   const ctx: Context = {
     family:
       options.family === undefined ? undefined : databasePortFamilySchema.parse(options.family),
     stateDir,
-    configPath,
+    configPath: path.resolve(resolveConfigPath()),
     env: process.env,
     engineSelection: { effectiveEngines: resolveDatabaseFamilyEngines({}) },
     assertCurrent: () => {},
@@ -613,7 +626,7 @@ export async function doctorDatabasePort(options: DatabasePortOptions) {
     prepared: [],
   };
   try {
-    privatePaths(ctx, [stateDir, configPath]);
+    privatePaths(ctx, [stateDir, ctx.configPath]);
     if (!options.resume && !options.rollback) {
       assertPortSelection(
         (await readDatabasePortConfigSnapshot(ctx)).snapshot.config,
@@ -634,7 +647,7 @@ export async function doctorDatabasePort(options: DatabasePortOptions) {
           action: options.rollback ? ("rollback" as const) : ("resume" as const),
         }
       : undefined;
-    return await withDatabasePortStateOwner(ctx, recovery, async () => {
+    const result = await withDatabasePortStateOwner(ctx, recovery, async () => {
       if (recovery) {
         ctx.manifest = assertDatabasePortRecoveryAllowed(ctx.stateDir, recovery);
         await loadRecovery(ctx);
@@ -651,6 +664,9 @@ export async function doctorDatabasePort(options: DatabasePortOptions) {
           to: facts.to,
           stores: facts.stores,
           migrations: facts.migrations,
+          notes: [...facts.inspected].flatMap(([file, info]) =>
+            (info.notes ?? []).map((note) => `${file}: ${note}`),
+          ),
           remainingSqlite: facts.outOfScope
             .filter((store) => store.engine === "sqlite")
             .map((store) => store.path),
@@ -664,16 +680,12 @@ export async function doctorDatabasePort(options: DatabasePortOptions) {
       await captureOriginals(ctx, facts);
       return await resume(ctx);
     });
+    const memoryRebuilds =
+      ctx.manifest?.outcome === "ported" && (!ctx.family || ctx.family === "agent")
+        ? await rebuildPortedAgentMemory({ stateDir, stores: result.stores })
+        : undefined;
+    return memoryRebuilds ? { ...result, memoryRebuilds } : result;
   } catch (error) {
-    if (error instanceof DatabasePortError) {
-      throw error;
-    }
-    // Untrusted driver/config messages may contain a DSN or row payload.
-    const parsed = z.object({ code: z.string().regex(/^[A-Z0-9_]+$/) }).safeParse(error);
-    return refuse(
-      ctx,
-      parsed.success ? parsed.data.code : "validation or I/O failure",
-      "successful verified phase; preserve the recovery directory",
-    );
+    return refuseFailure(ctx, error);
   }
 }

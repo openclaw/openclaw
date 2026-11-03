@@ -218,9 +218,12 @@ export function resolvePinnedClientMetadata(params: {
       pairedRuntimeIdentity.platform !== pairedPlatform &&
       claimedPlatform === pairedRuntimeIdentity.platform &&
       claimedDeviceFamily === normalizeDeviceMetadataForAuth(pairedRuntimeIdentity.deviceFamily));
-  const isNodeHostUsingMacAppPlatformPin =
-    params.clientId === GATEWAY_CLIENT_IDS.NODE_HOST &&
-    params.clientMode === GATEWAY_CLIENT_MODES.NODE &&
+  const isRuntimeUsingMacAppPlatformPin =
+    ((params.clientId === GATEWAY_CLIENT_IDS.NODE_HOST &&
+      params.clientMode === GATEWAY_CLIENT_MODES.NODE) ||
+      (params.clientId === GATEWAY_CLIENT_IDS.CLI &&
+        (params.clientMode === GATEWAY_CLIENT_MODES.CLI ||
+          params.clientMode === GATEWAY_CLIENT_MODES.PROBE))) &&
     (claimedPlatform === "darwin" || claimedPlatform === "macos") &&
     /^macos \d+(?:\.\d+){0,2}$/.test(pairedPlatform);
   const claimedNativeAppPlatformFamily = resolveNativeAppPlatformFamily(
@@ -244,12 +247,12 @@ export function resolvePinnedClientMetadata(params: {
     hasPinnedPlatform &&
     claimedPlatform !== pairedPlatform &&
     !isRuntimePlatformPin &&
-    !isNodeHostUsingMacAppPlatformPin &&
+    !isRuntimeUsingMacAppPlatformPin &&
     !isNativeAppPlatformVersionRefresh;
   const deviceFamilyMismatch = hasPinnedDeviceFamily && claimedDeviceFamily !== pairedDeviceFamily;
   const pinnedPlatform = isRuntimePlatformPin
     ? pairedRuntimeIdentity.platform
-    : claimedPlatform === pairedPlatform || isNodeHostUsingMacAppPlatformPin
+    : claimedPlatform === pairedPlatform || isRuntimeUsingMacAppPlatformPin
       ? params.pairedPlatform
       : isNativeAppPlatformVersionRefresh
         ? params.claimedPlatform

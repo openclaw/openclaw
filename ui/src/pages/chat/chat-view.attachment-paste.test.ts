@@ -6,6 +6,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.ts";
 import { createApplicationConfigCapability } from "../../app/config.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import * as toast from "../../lib/toast.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
@@ -224,6 +225,7 @@ describe("chat attachment reading", () => {
   it.each(["uploads disabled", "session aborted"] as const)(
     "rejects an in-flight read after %s",
     async (outcome) => {
+      const notify = vi.spyOn(toast, "showToast").mockReturnValue(true);
       const base = createApplicationConfigCapability({ resourceBasePath: "" });
       const uploadConfig = { ...base, current: { ...base.current, uploadsEnabled: true } };
       const readers = deferFileReaders();
@@ -265,14 +267,21 @@ describe("chat attachment reading", () => {
         );
         await Promise.resolve();
         const failed = renderChatView(props);
-        expect(failed.querySelectorAll(".chat-attachment-thumb--error")).toHaveLength(1);
+        expect(failed.querySelectorAll(".chat-attachment-thumb")).toHaveLength(0);
+        expect(failed.querySelector(".chat-attachment-failures")).toBeNull();
         expect(getComposerTextarea(failed).value).toBe(props.draft);
-        expect(
-          failed.querySelector(".chat-attachment-error")?.getAttribute("aria-label"),
-        ).toContain("proof.png");
+        expect(notify).toHaveBeenCalledExactlyOnceWith({
+          message: "File and image uploads are disabled.",
+          placement: "top-center",
+          severity: "error",
+        });
       }
       expect(reads.pendingReads).toBe(0);
+      expect(reads.project([])).toHaveLength(0);
       expect(onAttachmentsChange).not.toHaveBeenCalled();
+      if (aborted) {
+        expect(notify).not.toHaveBeenCalled();
+      }
     },
   );
 
@@ -312,12 +321,14 @@ describe("chat attachment reading", () => {
     attachFile(container, file, "clipboard");
 
     expect(readers).toHaveLength(1);
-    expect(reads.pendingReads).toBe(1);
     const status = container.querySelector(".chat-attachments-status");
     expect(status?.textContent).toContain("Preparing 1 attachment");
-    expect(container.querySelectorAll('.chat-attachment-thumb[aria-busy="true"]')).toHaveLength(1);
+    await waitForFast(() =>
+      expect(container.querySelectorAll('.chat-attachment-thumb[aria-busy="true"]')).toHaveLength(
+        1,
+      ),
+    );
     const pendingTile = container.querySelector(".chat-attachment-thumb");
-    expect(status?.querySelector(".btn__spinner")).toBeNull();
     expect(status?.getAttribute("role")).toBe("status");
     expect(status?.classList.contains("sr-only")).toBe(true);
     expect(getComposerTextarea(container).disabled).toBe(false);
@@ -335,13 +346,6 @@ describe("chat attachment reading", () => {
     expect(onSend).not.toHaveBeenCalled();
 
     const reader = expectDefined(readers[0], "deferred attachment reader");
-    reader.dispatchEvent(
-      new ProgressEvent("progress", { lengthComputable: true, loaded: 1, total: 2 }),
-    );
-    expect(container.querySelector(".chat-attachment-thumb")).toBe(pendingTile);
-    expect(
-      pendingTile?.querySelector<HTMLElement>(".chat-attachment-loading > span")?.style.transform,
-    ).toBe("scaleX(0.5)");
     finishRead(reader, `data:image/png;base64,${btoa("attachment proof")}`, true);
 
     await waitForFast(() => {

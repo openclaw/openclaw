@@ -12,7 +12,6 @@ import {
   ChromeMcpReconnectRequiredError,
   type ChromeMcpCallOptions,
   type ChromeMcpOptionsInput,
-  type ChromeMcpOperationOptions,
   type ChromeMcpRoutingState,
   type ChromeMcpSession,
   type ChromeMcpSessionLease,
@@ -46,39 +45,6 @@ export function getChromeMcpRoutingState(session: ChromeMcpSession): ChromeMcpRo
     nextSnapshotRefId: 1,
   };
   return session.routing;
-}
-
-async function withChromeMcpOperationLock<T>(
-  session: ChromeMcpSession,
-  options: ChromeMcpOperationOptions,
-  operation: () => Promise<T>,
-): Promise<T> {
-  const signal = options.signal;
-  if (signal?.aborted) {
-    throw signal.reason ?? new Error("aborted");
-  }
-
-  const timeoutMs = options.timeoutMs;
-  const release = await getChromeMcpRoutingState(session).operationPermits.acquire({
-    signal,
-    deadlineAtMs: timeoutMs !== undefined && timeoutMs > 0 ? Date.now() + timeoutMs : undefined,
-  });
-  if (!release) {
-    if (signal?.aborted) {
-      throw toErrorObject(signal.reason ?? new Error("aborted"), "Chrome MCP operation cancelled");
-    }
-    throw new Error(
-      `Chrome MCP operation timed out after ${timeoutMs}ms while waiting for another operation.`,
-    );
-  }
-  try {
-    if (signal?.aborted) {
-      throw signal.reason ?? new Error("aborted");
-    }
-    return await operation();
-  } finally {
-    release();
-  }
 }
 
 /** UID-only MCP actions cannot distinguish collisions between renderer documents. */
@@ -265,7 +231,30 @@ export async function withChromeMcpLease<T>(
     options,
   );
   try {
-    return await withChromeMcpOperationLock(lease.session, options, async () => {
+    const signal = options.signal;
+    if (signal?.aborted) {
+      throw signal.reason ?? new Error("aborted");
+    }
+    const timeoutMs = options.timeoutMs;
+    const release = await getChromeMcpRoutingState(lease.session).operationPermits.acquire({
+      signal,
+      deadlineAtMs: timeoutMs !== undefined && timeoutMs > 0 ? Date.now() + timeoutMs : undefined,
+    });
+    if (!release) {
+      if (signal?.aborted) {
+        throw toErrorObject(
+          signal.reason ?? new Error("aborted"),
+          "Chrome MCP operation cancelled",
+        );
+      }
+      throw new Error(
+        `Chrome MCP operation timed out after ${timeoutMs}ms while waiting for another operation.`,
+      );
+    }
+    try {
+      if (signal?.aborted) {
+        throw signal.reason ?? new Error("aborted");
+      }
       if (
         !lease.temporary &&
         (!lease.owner.isCurrent(lease.session) || lease.session.transport.pid === null)
@@ -286,7 +275,9 @@ export async function withChromeMcpLease<T>(
             extractStructuredPages(await call("list_pages", {}, callOptions)),
           ),
       });
-    });
+    } finally {
+      release();
+    }
   } finally {
     await lease.release();
   }

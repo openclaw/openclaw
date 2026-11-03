@@ -430,6 +430,10 @@ Boundaries:
 
 ## Metadata-upgrade auto-approval
 
+On an already-paired Mac, the CLI and probe can use `macos` or `darwin`
+alongside the native app's versioned macOS label without re-pairing. The pinned
+device family must still match.
+
 When an already-paired device reconnects with only non-sensitive metadata
 changes (for example display name or client platform hints), OpenClaw treats
 that as a `metadata-upgrade`. Silent auto-approval is narrow: it applies only
