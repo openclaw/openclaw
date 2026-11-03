@@ -3,7 +3,9 @@
 // Revocations published to Discovery. The allowlist keeps current state only, so the
 // upgrade drops that history, records who approved each owner device and starts every
 // inactivity clock at the upgrade. Records from before granted capabilities were stored
-// take each owner device's caps from its stored certificate.
+// take each owner device's caps from its stored certificate. Records from before owner
+// reset was removed (OCF-319) drop the root epoch, root history, rotations and freeze:
+// a claw's root never changes now.
 import {
   fingerprint,
   type AuthorityState,
@@ -17,10 +19,14 @@ import type { StoredClaw } from "./claw-store.js";
 
 // The pre-allowlist shapes this upgrade reads.
 type LegacyOwnerDevice = { cert: SignedStatement<"OwnerDeviceCert">; chain_fps?: KeyFingerprint[] };
-type LegacyAuthority = Omit<AuthorityState, "owner_devices" | "members"> & {
+type LegacyAuthority = Omit<AuthorityState, "anchor" | "owner_devices" | "members"> & {
+  anchor: AuthorityState["anchor"] & { root_epoch?: number };
   owner_devices: Record<KeyFingerprint, LegacyOwnerDevice & Partial<OwnerDeviceRecord>>;
   members: Record<string, Omit<MemberRecord, "last_seen"> & Partial<MemberRecord>>;
   revoked?: KeyFingerprint[];
+  root_history?: unknown;
+  rotation_seen?: unknown;
+  frozen?: boolean;
 };
 type LegacyClaw = Omit<StoredClaw, "authority"> & {
   authority: LegacyAuthority | null;
@@ -29,8 +35,8 @@ type LegacyClaw = Omit<StoredClaw, "authority"> & {
 };
 
 /**
- * True when `record` was written before the allowlist model, or before owner devices carried
- * their granted caps, and must be upgraded.
+ * True when `record` was written before the allowlist model, before owner devices carried
+ * their granted caps, or before root epochs were removed, and must be upgraded.
  */
 export function needsAllowlistUpgrade(record: StoredClaw): boolean {
   // SAFETY: a stored record is either current or the legacy shape; only optional fields differ.
@@ -41,6 +47,10 @@ export function needsAllowlistUpgrade(record: StoredClaw): boolean {
     (legacy.binding !== null && "chain" in legacy.binding) ||
     (legacy.authority !== null &&
       ("revoked" in legacy.authority ||
+        "root_history" in legacy.authority ||
+        "rotation_seen" in legacy.authority ||
+        "frozen" in legacy.authority ||
+        "root_epoch" in legacy.authority.anchor ||
         Object.values(legacy.authority.owner_devices).some(
           (device) =>
             device.approved_by === undefined || device.caps === undefined || "chain" in device.cert,
@@ -98,8 +108,8 @@ function upgradeMembers(authority: LegacyAuthority, now: number): AuthorityState
 }
 
 /**
- * Upgrades a pre-allowlist record. The result republishes to Discovery (a snapshot without
- * `revoked`, and the descriptor's binding without `chain`).
+ * Upgrades a legacy record. The result republishes to Discovery (a snapshot without
+ * `revoked`, and a descriptor without `rotations` whose binding has no `chain`).
  */
 export async function upgradeToAllowlist(record: StoredClaw, now: number): Promise<StoredClaw> {
   // SAFETY: a stored record is either current or the legacy shape; only optional fields differ.
@@ -108,9 +118,16 @@ export async function upgradeToAllowlist(record: StoredClaw, now: number): Promi
   const { published_revocations: _published, ...discovery } = legacy.discovery;
   let authority: AuthorityState | null = null;
   if (legacy.authority) {
-    const { revoked: _revoked, ...state } = legacy.authority;
+    const {
+      revoked: _revoked,
+      root_history: _history,
+      rotation_seen: _rotations,
+      frozen: _frozen,
+      ...state
+    } = legacy.authority;
     authority = {
       ...state,
+      anchor: { root_pub: legacy.authority.anchor.root_pub },
       owner_devices: await upgradeOwnerDevices(legacy.authority, now),
       members: upgradeMembers(legacy.authority, now),
     };

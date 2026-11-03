@@ -5,12 +5,12 @@ import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { showOwnerDevicesDialog } from "./owner-devices-dialog.tsx";
 
 // Empty owner-device state avoids keys and exercises the production dialog gate.
-describe("owner key regeneration placement", () => {
+describe("Your devices actions", () => {
   afterEach(() => {
     cleanupSolid();
   });
   it.each(["local_operator", "tunnel", null])(
-    "is loopback-only inside Your devices (%s)",
+    "offers no owner reset on any channel (%s)",
     async (channel) => {
       const request = vi.fn(async (method: string) =>
         method === "openclawId.people" ? { link: { linked: true, ownerDevices: [] } } : { channel },
@@ -32,9 +32,7 @@ describe("owner key regeneration placement", () => {
           (button) => button.textContent?.trim() === "Approve a new device",
         ),
       ).toBe(false);
-      expect(document.body.textContent?.includes("Reset owner access")).toBe(
-        channel === "local_operator",
-      );
+      expect(document.body.textContent).not.toContain("Reset owner access");
       const close = Array.from(document.querySelectorAll("button")).find(
         (button) => button.textContent?.trim() === "Close",
       );

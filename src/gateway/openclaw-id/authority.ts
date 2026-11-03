@@ -12,9 +12,7 @@ import {
   linkClaw,
   nextInactivityDrop,
   nextOwnerExpiry,
-  nextRootEpoch,
   recordSeen,
-  regenerateOwnerKey as regenerateOwnerKeyState,
   randomBytes,
   bytesToHex,
   submitRedemption,
@@ -28,8 +26,8 @@ import {
   type KeyFingerprint,
   parseStatement,
   registerInvite,
+  ROOT_EPOCH,
   type OwnerCapability,
-  type OwnerKeyRegenerationPreparation,
   type SignedStatement,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 import { notifyListeners, registerListener } from "../../shared/listeners.js";
@@ -55,7 +53,7 @@ export type LinkPreparation = {
   k_srv: IrohEndpointKey;
   k_gw: Ed25519PublicKey;
   binding_seq: 1;
-  root_epoch: 1;
+  root_epoch: typeof ROOT_EPOCH;
 };
 
 /** The owner-signed result of the local link ceremony. */
@@ -63,34 +61,15 @@ export type LinkCommit = {
   root_pub: Ed25519PublicKey;
   /** MembershipChange { op: add_owner_device, cert: OwnerDeviceCert(D1) }, seq 1, signed by R. */
   owner_device: unknown;
-  /** ServerBinding(seq 1, epoch 1), signed by R. */
+  /** ServerBinding(seq 1), signed by R. */
   binding: unknown;
 };
 
-/** The regenerating device's result: new root R', its own enrollment and the new binding. */
-export type OwnerKeyRegeneration = {
-  root_pub: Ed25519PublicKey;
-  /** MembershipChange { op: add_owner_device } at the next seq, signed by R' alone. */
-  owner_device: unknown;
-  /** ServerBinding(binding_seq + 1, new epoch) for the same claw and keys, signed by R'. */
-  binding: unknown;
-};
-
-// True for a statement that parses as a RootRotation.
-function isRootRotation(input: unknown): boolean {
-  return parseStatement(input, "RootRotation").ok;
-}
-
-/**
- * A refused write: a stable code the UI matches, and detail for logs. `events` are
- * side effects the refusal itself requires (the conflicting-rotation owner alert);
- * the state change behind them is already committed.
- */
+/** A refused write: a stable code the UI matches, and detail for logs. */
 export type AuthorityRefusal = {
   ok: false;
   code: string;
   detail: string;
-  events?: AuthorityEvent[];
 };
 
 /** Accepted write and the effects to perform. */
@@ -101,9 +80,6 @@ export type AuthorityAccepted = {
 };
 
 const nowSeconds = () => Math.floor(Date.now() / 1000);
-
-const regenerationNeedsLoopback =
-  "owner-key regeneration needs direct loopback on the running Gateway";
 
 /** Who sent a mailbox redemption, as asserted by OpenClaw ID. */
 export type RedemptionSender = {
@@ -311,13 +287,13 @@ export function createOpenClawIdAuthority(
           k_srv: params.kSrv,
           k_gw: params.kGw,
           binding_seq: 1,
-          root_epoch: 1,
+          root_epoch: ROOT_EPOCH,
         };
       });
     },
 
     /**
-     * Pins fp(R) at epoch 1, admits owner device D1 and stores the ServerBinding.
+     * Pins R for good, admits owner device D1 and stores the ServerBinding.
      * Only over direct loopback: relayed traffic never runs a root ceremony.
      */
     commitLink(
@@ -349,7 +325,7 @@ export function createOpenClawIdAuthority(
           added.state,
           input.binding,
           current,
-          { ...expected, bindingSeq: 1, rootEpoch: 1 },
+          { ...expected, bindingSeq: 1 },
           now,
         );
         if (!binding.ok) {
@@ -364,98 +340,12 @@ export function createOpenClawIdAuthority(
       });
     },
 
-    /**
-     * What the regenerating device signs for: the claw's current keys, the next
-     * binding seq, the new root epoch and the seq of its own enrollment. Direct loopback only.
-     */
-    prepareRegeneration(
-      channel: Channel | undefined,
-    ): Promise<OwnerKeyRegenerationPreparation | AuthorityRefusal> {
-      return serialize(async () => {
-        if (channel !== "local_operator") {
-          return { ok: false, code: "not_local_operator", detail: regenerationNeedsLoopback };
-        }
-        const current = await load();
-        if (!current?.authority || !current.binding) {
-          return { ok: false, code: "not_linked", detail: "this claw is not linked" };
-        }
-        const binding = current.binding.body;
-        return {
-          claw_id: current.claw_id,
-          hostname: binding.hostname,
-          k_srv: binding.k_srv,
-          k_gw: binding.k_gw,
-          binding_seq: binding.binding_seq + 1,
-          root_epoch: nextRootEpoch(current.authority),
-          seq: current.authority.seq + 1,
-        };
-      });
-    },
-
-    /**
-     * Regenerates the owner key: pins R' in a new epoch (clearing a freeze), drops
-     * every older owner certificate, enrolls the regenerating device and stores the
-     * new binding. The events end the old devices' sessions and tokens and republish.
-     * Only over direct loopback: relayed traffic can never regenerate the owner key.
-     */
-    regenerateOwnerKey(
-      input: OwnerKeyRegeneration,
-      channel: Channel | undefined,
-    ): Promise<AuthorityAccepted | AuthorityRefusal> {
-      return serialize(async () => {
-        if (channel !== "local_operator") {
-          return { ok: false, code: "not_local_operator", detail: regenerationNeedsLoopback };
-        }
-        const current = await load();
-        if (!current?.authority || !current.binding) {
-          return { ok: false, code: "not_linked", detail: "this claw is not linked" };
-        }
-        const now = nowSeconds();
-        const result = await regenerateOwnerKeyState(
-          current.authority,
-          { root_pub: input.root_pub, owner_device: input.owner_device },
-          { channel, now },
-        );
-        if (!result.ok) {
-          return { ok: false, code: result.code, detail: result.detail };
-        }
-        const previous = current.binding.body;
-        const binding = await verifyBinding(
-          result.state,
-          input.binding,
-          current,
-          {
-            kSrv: previous.k_srv,
-            kGw: previous.k_gw,
-            bindingSeq: previous.binding_seq + 1,
-            rootEpoch: result.state.anchor.root_epoch,
-          },
-          now,
-        );
-        if (!binding.ok) {
-          return binding;
-        }
-        await commit({ ...current, authority: result.state, binding: binding.statement });
-        return { ok: true, status: "applied", events: result.events };
-      });
-    },
-
     /** Applies an owner-signed statement that arrived on `channel`. */
     submit(input: unknown, channel: Channel): Promise<AuthorityAccepted | AuthorityRefusal> {
       return serialize(async () => {
         const stored = await load();
         if (!stored?.authority) {
           return { ok: false, code: "not_linked", detail: "this claw is not linked" };
-        }
-        // On direct loopback the owner key is regenerated, never rotated by statement:
-        // a rotation alone would leave the binding signed by the old root. Remote
-        // rotations still reach the protocol rules, which refuse them and detect conflicts.
-        if (channel === "local_operator" && isRootRotation(input)) {
-          return {
-            ok: false,
-            code: "unsupported",
-            detail: "regenerate the owner key instead of submitting a RootRotation",
-          };
         }
         const now = nowSeconds();
         // Expired redemptions are consumed first, so a late approval cannot admit anyone.
@@ -464,16 +354,6 @@ export function createOpenClawIdAuthority(
           now,
         );
         const result = await submitStatement(current.authority, input, { channel, now });
-        if (!result.ok && result.persist) {
-          // A refusal with a security transition (the conflict freeze) still commits it.
-          await commit({ ...current, authority: result.state });
-          return {
-            ok: false,
-            code: result.code,
-            detail: result.detail,
-            events: [...expiry, ...result.events],
-          };
-        }
         if (!result.ok) {
           if (expiry.length > 0) {
             await commit(current);
@@ -647,7 +527,6 @@ export function createOpenClawIdAuthority(
         claw_id: state.claw_id,
         seq: state.seq,
         root_pub: state.anchor.root_pub,
-        root_epoch: state.anchor.root_epoch,
         binding: current.binding,
         owner_devices: owners.map((device): OwnerDeviceView => ({
           cert: device.cert,
@@ -680,7 +559,7 @@ export function createOpenClawIdAuthority(
       }
       const isOwner = Object.values(state.owner_devices).some(
         (device) =>
-          isOwnerDeviceActive(state, device, now) && device.cert.body.peer_keys.includes(peerKey),
+          isOwnerDeviceActive(device, now) && device.cert.body.peer_keys.includes(peerKey),
       );
       if (isOwner) {
         return { kind: "owner", peerKey };
@@ -768,10 +647,7 @@ export function createOpenClawIdAuthority(
       const now = nowSeconds();
       const expired = new Set<IrohEndpointKey>();
       for (const device of Object.values(state.owner_devices)) {
-        if (
-          device.cert.body.root_epoch === state.anchor.root_epoch &&
-          !isOwnerDeviceActive(state, device, now)
-        ) {
+        if (!isOwnerDeviceActive(device, now)) {
           device.cert.body.peer_keys.forEach((key) => expired.add(key));
         }
       }

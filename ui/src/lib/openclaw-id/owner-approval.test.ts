@@ -63,7 +63,6 @@ async function setup(refuse = false, invalid?: "sender" | "expired" | "commitmen
     ownerDeviceCertBody({
       device_pub: formatEd25519PublicKey(d.publicKey),
       label: "local",
-      root_epoch: 1,
       now: ts,
     }),
     root,
@@ -135,13 +134,7 @@ async function setup(refuse = false, invalid?: "sender" | "expired" | "commitmen
         // The claw lists the approving device D; it is the only owner it accepts.
         const owners = (key: string) => (key === cert.body.device_pub ? cert.body.caps : undefined);
         expect(
-          (
-            await verifyOwnerStatement(
-              submitted,
-              { root_pub: rootPub, root_epoch: 1 },
-              { now: ts, owners },
-            )
-          ).ok,
+          (await verifyOwnerStatement(submitted, { root_pub: rootPub }, { now: ts, owners })).ok,
         ).toBe(true);
         return { status: "applied" };
       }
@@ -152,7 +145,6 @@ async function setup(refuse = false, invalid?: "sender" | "expired" | "commitmen
             linked: true,
             clawId,
             rootPub,
-            rootEpoch: 1,
             seq: 1,
             ownerDevices: [
               {

@@ -63,13 +63,8 @@ export type InviteRecord = {
 /** The Gateway's membership state for one claw. */
 export type AuthorityState = {
   claw_id: string;
+  /** The root R pinned at linking. It never changes for a claw (owner reset is OCF-319). */
   anchor: TrustAnchor;
-  /** Root public key per epoch (for detecting conflicting rotations). */
-  root_history: Record<number, Ed25519PublicKey>;
-  /** Signature of the accepted rotation into each epoch. */
-  rotation_seen: Record<number, string>;
-  /** Remote root changes frozen after conflicting rotations, until the local operator resolves it. */
-  frozen: boolean;
   /** Monotonic membership seq; a MembershipChange must carry seq + 1. */
   seq: number;
   /** The owner allowlist, by fingerprint of the device key D. */
@@ -85,7 +80,7 @@ export type AuthorityEvent =
   | { type: "cancel_runs"; account_id: string }
   | {
       type: "notify_owners";
-      event: "kit_used" | "redemption_pending" | "redemption_resolved" | "rotation_conflict";
+      event: "kit_used" | "redemption_pending" | "redemption_resolved";
       ref: string;
     }
   | { type: "publish_snapshot" };
@@ -96,8 +91,6 @@ export type AuthorityErrorCode =
   | "not_direct"
   | "not_local_operator"
   | "seq_conflict"
-  | "frozen"
-  | "root_reused"
   | "invite_unknown"
   | "invite_used"
   | "invite_not_pending"
@@ -105,12 +98,7 @@ export type AuthorityErrorCode =
   | "limit_reached"
   | "unsupported";
 
-/**
- * Result of a write. A refusal leaves the state unchanged unless `persist` is true:
- * then the statement is still refused, but `state` carries a security transition
- * (the conflicting-rotation freeze) that the Gateway must persist, and `events` the
- * side effects it must perform, before it reports the refusal.
- */
+/** Result of a write. A refusal leaves the state unchanged and asks for no side effects. */
 export type AuthorityResult =
   | { ok: true; status: "applied" | "pending"; state: AuthorityState; events: AuthorityEvent[] }
   | {
@@ -119,7 +107,6 @@ export type AuthorityResult =
       detail: string;
       state: AuthorityState;
       events: AuthorityEvent[];
-      persist?: true;
     };
 
 /** Builds a refusal that changes nothing. */
@@ -129,19 +116,6 @@ export function refuse(
   detail: string,
 ): AuthorityResult {
   return { ok: false, code, detail, state, events: [] };
-}
-
-/**
- * Builds a refusal that still moves the claw into a safer state (`next`) and asks
- * for side effects. The Gateway persists `next` and performs `events`.
- */
-export function refuseWithTransition(
-  next: AuthorityState,
-  code: AuthorityErrorCode,
-  detail: string,
-  events: AuthorityEvent[],
-): AuthorityResult {
-  return { ok: false, code, detail, state: next, events, persist: true };
 }
 
 /** Tolerated clock skew for a certificate's `issued_at`, as in statement verification. */
@@ -165,7 +139,7 @@ export function certificateWindowError(
 }
 
 /**
- * "Make reachable" (spec section 4): pin fp(R) and epoch 1. Only over direct loopback,
+ * "Make reachable" (spec section 4): pin R for good. Only over direct loopback,
  * never over the tunnel, even though tunnel traffic reaches the Gateway on loopback.
  */
 export function linkClaw(
@@ -179,10 +153,7 @@ export function linkClaw(
     ok: true,
     state: {
       claw_id: input.claw_id,
-      anchor: { root_pub: input.root_pub, root_epoch: 1 },
-      root_history: { 1: input.root_pub },
-      rotation_seen: {},
-      frozen: false,
+      anchor: { root_pub: input.root_pub },
       seq: 0,
       owner_devices: {},
       members: {},
@@ -192,40 +163,16 @@ export function linkClaw(
 }
 
 /**
- * The epoch a re-pinned or regenerated root starts: one past every epoch this claw
- * has seen, so a certificate from any earlier root can never become current again.
+ * True when an owner device's certificate is, at `now`, within its validity window.
+ * Listed devices are the allowlist; nothing else is consulted.
  */
-export function nextRootEpoch(state: AuthorityState): number {
-  return Math.max(state.anchor.root_epoch, ...Object.keys(state.root_history).map(Number)) + 1;
-}
-
-/** Every tunnel key certified by an owner device the claw knows, in any epoch. */
-export function ownerDevicePeerKeys(state: AuthorityState): IrohEndpointKey[] {
-  return [
-    ...new Set(Object.values(state.owner_devices).flatMap((record) => record.cert.body.peer_keys)),
-  ];
-}
-
-/**
- * True when an owner device's certificate is in the current epoch and, at `now`, within
- * its validity window. Listed devices are the allowlist; nothing else is consulted.
- */
-export function isOwnerDeviceActive(
-  state: AuthorityState,
-  record: OwnerDeviceRecord,
-  now: UnixSeconds,
-): boolean {
-  return (
-    record.cert.body.root_epoch === state.anchor.root_epoch &&
-    certificateWindowError(record.cert.body, now) === null
-  );
+export function isOwnerDeviceActive(record: OwnerDeviceRecord, now: UnixSeconds): boolean {
+  return certificateWindowError(record.cert.body, now) === null;
 }
 
 /** Owner devices active at `now`. */
 export function activeOwnerDevices(state: AuthorityState, now: UnixSeconds): OwnerDeviceRecord[] {
-  return Object.values(state.owner_devices).filter((record) =>
-    isOwnerDeviceActive(state, record, now),
-  );
+  return Object.values(state.owner_devices).filter((record) => isOwnerDeviceActive(record, now));
 }
 
 /** The current owner set as a verifier lookup: an active device's capabilities, by key. */

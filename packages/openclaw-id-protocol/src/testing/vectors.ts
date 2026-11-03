@@ -16,11 +16,12 @@ import {
 import { deriveRootSeed, encodeKit } from "../kit.js";
 import { signingInput, signStatement } from "../statements/envelope.js";
 import type { ClawPin } from "../statements/pin.js";
-import type {
-  OwnerCapability,
-  SignedStatement,
-  StatementBodies,
-  StatementType,
+import {
+  ROOT_EPOCH,
+  type OwnerCapability,
+  type SignedStatement,
+  type StatementBodies,
+  type StatementType,
 } from "../statements/types.js";
 import type { TrustAnchor, VerifyErrorCode } from "../statements/verify.js";
 
@@ -34,7 +35,7 @@ export const VECTOR_CLAW_ID = "0123456789abcdef0123456789abcdef";
 export const VECTOR_HOST = "studio-k7x2q.crabd.me";
 
 /** Which verifier a vector exercises. */
-export type VectorVerifier = "owner" | "rotation" | "snapshot" | "redemption";
+export type VectorVerifier = "owner" | "snapshot" | "redemption";
 
 /** One statement vector. */
 export type StatementVector = {
@@ -64,7 +65,6 @@ export type PinVector = {
   pin: ClawPin;
   evidence: {
     root_pub: Ed25519PublicKey;
-    rotations: SignedStatement<"RootRotation">[];
     binding: SignedStatement<"ServerBinding">;
   };
   expected: { ok: true; pin: ClawPin } | { ok: false; error: VerifyErrorCode };
@@ -174,7 +174,7 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
     "manage_members",
   ];
 
-  const certBody = (name: KeyName, caps = allCaps, epoch = 1, expiresAt: number | null = null) => ({
+  const certBody = (name: KeyName, caps = allCaps, expiresAt: number | null = null) => ({
     device_pub: pub(name),
     peer_keys: [iroh(name)],
     label: name,
@@ -182,7 +182,7 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
     caps,
     issued_at: VECTOR_ISSUED_AT,
     expires_at: expiresAt,
-    root_epoch: epoch,
+    root_epoch: ROOT_EPOCH,
   });
 
   // The claw's owner allowlist: device-1 (approved by R), device-2 (approved by device-1) and
@@ -196,13 +196,13 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
     { device_pub: pub("device-3"), caps: limitedCaps },
   ];
 
-  const bindingBody = (seq: number, server: KeyName = "server", host = VECTOR_HOST, epoch = 1) => ({
+  const bindingBody = (seq: number, server: KeyName = "server", host = VECTOR_HOST) => ({
     claw_id: VECTOR_CLAW_ID,
     hostname: host,
     k_srv: iroh(server),
     k_gw: pub("gateway"),
     binding_seq: seq,
-    root_epoch: epoch,
+    root_epoch: ROOT_EPOCH,
     issued_at: VECTOR_ISSUED_AT,
   });
   const binding1 = await signStatement("ServerBinding", bindingBody(1), root);
@@ -245,30 +245,10 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
       target_fp: keys["device-3"]!.fp,
       target_kind: "owner_device",
       reason: "lost",
-      root_epoch: 1,
+      root_epoch: ROOT_EPOCH,
       issued_at: VECTOR_ISSUED_AT,
     },
     signers["device-2"],
-  );
-  const rotation = await signStatement(
-    "RootRotation",
-    { old_root_fp: rootFp, new_root_pub: pub("root-2"), new_epoch: 2, issued_at: VECTOR_ISSUED_AT },
-    root,
-  );
-  const rotationConflict = await signStatement(
-    "RootRotation",
-    {
-      old_root_fp: rootFp,
-      new_root_pub: pub("mallory"),
-      new_epoch: 2,
-      issued_at: VECTOR_ISSUED_AT,
-    },
-    root,
-  );
-  const bindingEpoch2 = await signStatement(
-    "ServerBinding",
-    bindingBody(3, "server-2", VECTOR_HOST, 2),
-    signers["root-2"],
   );
   const snapshot = await signStatement(
     "MembershipSnapshot",
@@ -311,6 +291,12 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
     bindingBody(9, "server-2"),
     signers["device-1"],
   );
+  // A claw's root never changes: a binding from any other root fails the pin, at any seq.
+  const newRootBinding = await signStatement(
+    "ServerBinding",
+    bindingBody(3, "server-2"),
+    signers["root-2"],
+  );
   const tampered = { ...binding1, body: { ...binding1.body, k_srv: iroh("mallory") } };
   // Signature over the same body under another type's domain must not verify (domain separation).
   const crossType = {
@@ -331,11 +317,6 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
     certBody("device-5"),
     signers["device-3"],
   );
-  const oldEpochRevocation = await signStatement(
-    "Revocation",
-    { ...revocation.body },
-    signers["device-2"],
-  );
   const forgedSnapshot = await signStatement(
     "MembershipSnapshot",
     { ...snapshot.body },
@@ -347,22 +328,11 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
     signers.mallory,
   );
 
-  const anchor: TrustAnchor = { root_pub: rootPub, root_epoch: 1 };
-  const epoch2Anchor: TrustAnchor = { root_pub: pub("root-2"), root_epoch: 2 };
-  const freshPin: ClawPin = { claw_id: null, root_fp: rootFp, root_epoch: 0, binding_seq: 0 };
-  const seenPin: ClawPin = {
-    claw_id: VECTOR_CLAW_ID,
-    root_fp: rootFp,
-    root_epoch: 1,
-    binding_seq: 2,
-  };
-  const evidence = (
-    binding: SignedStatement<"ServerBinding">,
-    rotations: SignedStatement<"RootRotation">[] = [],
-    rootKey = rootPub,
-  ) => ({
+  const anchor: TrustAnchor = { root_pub: rootPub };
+  const freshPin: ClawPin = { claw_id: null, root_fp: rootFp, binding_seq: 0 };
+  const seenPin: ClawPin = { claw_id: VECTOR_CLAW_ID, root_fp: rootFp, binding_seq: 2 };
+  const evidence = (binding: SignedStatement<"ServerBinding">, rootKey = rootPub) => ({
     root_pub: rootKey,
-    rotations,
     binding,
   });
 
@@ -391,7 +361,6 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
       vector("owner device-2 signs invite", "owner", invite),
       vector("owner device-1 adds member", "owner", change),
       vector("owner device-2 revokes device-3", "owner", revocation),
-      vector("root rotates to root-2 (epoch 2)", "rotation", rotation),
       vector("gateway signs membership snapshot", "snapshot", snapshot),
       vector("invitee signs redemption request", "redemption", redemption),
     ],
@@ -462,20 +431,6 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
         statement: strangerRedemption,
         expected_error: "wrong_signer",
       },
-      {
-        name: "old root rotates again after handing over to root-2",
-        verifier: "rotation",
-        statement: rotationConflict,
-        anchor: epoch2Anchor,
-        expected_error: "wrong_signer",
-      },
-      {
-        name: "revocation from the old root epoch after rotation",
-        verifier: "owner",
-        statement: oldEpochRevocation,
-        anchor: epoch2Anchor,
-        expected_error: "wrong_epoch",
-      },
     ],
     pins: [
       {
@@ -485,7 +440,7 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
         evidence: evidence(binding1),
         expected: {
           ok: true,
-          pin: { claw_id: VECTOR_CLAW_ID, root_fp: rootFp, root_epoch: 1, binding_seq: 1 },
+          pin: { claw_id: VECTOR_CLAW_ID, root_fp: rootFp, binding_seq: 1 },
         },
       },
       {
@@ -513,7 +468,7 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
         name: "substituted root public key",
         host: VECTOR_HOST,
         pin: seenPin,
-        evidence: evidence(malloryBinding, [], pub("mallory")),
+        evidence: evidence(malloryBinding, pub("mallory")),
         expected: { ok: false, error: "root_mismatch" },
       },
       {
@@ -524,33 +479,11 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
         expected: { ok: false, error: "host_mismatch" },
       },
       {
-        name: "rotation to epoch 2 then epoch-2 binding",
+        name: "a new root with a binding it signed (the root never changes)",
         host: VECTOR_HOST,
         pin: seenPin,
-        evidence: evidence(bindingEpoch2, [rotation], pub("root-2")),
-        expected: {
-          ok: true,
-          pin: {
-            claw_id: VECTOR_CLAW_ID,
-            root_fp: keys["root-2"]!.fp,
-            root_epoch: 2,
-            binding_seq: 3,
-          },
-        },
-      },
-      {
-        name: "epoch-1 binding after the pin moved to epoch 2",
-        host: VECTOR_HOST,
-        pin: { ...seenPin, root_fp: keys["root-2"]!.fp, root_epoch: 2 },
-        evidence: evidence(binding2, [], pub("root-2")),
-        expected: { ok: false, error: "wrong_epoch" },
-      },
-      {
-        name: "conflicting rotations out of epoch 1",
-        host: VECTOR_HOST,
-        pin: seenPin,
-        evidence: evidence(bindingEpoch2, [rotation, rotationConflict], pub("root-2")),
-        expected: { ok: false, error: "conflicting_rotation" },
+        evidence: evidence(newRootBinding, pub("root-2")),
+        expected: { ok: false, error: "root_mismatch" },
       },
     ],
   };

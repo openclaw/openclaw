@@ -20,9 +20,6 @@ export type OpenClawIdStatusResult = {
     clawId?: string;
     hostname?: string;
     rootPub?: string;
-    rootEpoch?: number;
-    /** Conflicting owner-key changes arrived; owner-key regeneration on loopback resolves it. */
-    frozen?: boolean;
   };
   /** How this browser reaches the Gateway: only `local_operator` may link or sign in. */
   channel: "local_operator" | "tunnel" | null;

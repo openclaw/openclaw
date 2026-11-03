@@ -259,7 +259,7 @@ describe("publication retry (OCF-313)", () => {
     expect(claw.authority.current()?.discovery.publish_pending).toBe(true);
   });
 
-  it("adopts a failed direct publication (linking, regeneration) and retries it with backoff", async () => {
+  it("adopts a failed direct publication (linking) and retries it with backoff", async () => {
     const { claw, discovery, retry, advance, outcomes } = await registeredClaw();
     await retry.start();
     await claw.authority.submit(await kitEnrollment(claw, 1), "mailbox");

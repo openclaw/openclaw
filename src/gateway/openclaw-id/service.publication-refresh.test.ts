@@ -11,12 +11,7 @@ import {
   signStatement,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 import { createOpenClawIdAuthority } from "./authority.js";
-import {
-  memoryStore,
-  nowSeconds,
-  regenerationFor,
-  TEST_K_SRV,
-} from "./openclaw-id.test-support.js";
+import { memoryStore, nowSeconds, TEST_K_SRV } from "./openclaw-id.test-support.js";
 import { PUBLICATION_REFRESH_MS } from "./publication-retry.js";
 import { createOpenClawIdService, type OpenClawIdService } from "./service.js";
 
@@ -165,7 +160,6 @@ describe("service publication refresh scheduling", () => {
           scenario === "wrong root"
             ? "ed25519:" + "00".repeat(32)
             : committed.authority!.anchor.root_pub,
-        rotations: [],
         published_at: nowSeconds(),
         binding:
           scenario === "wrong binding"
@@ -228,20 +222,6 @@ describe("service publication refresh scheduling", () => {
       }
     },
   );
-
-  it("arms after successful owner-key regeneration", async () => {
-    await commitLink();
-    const prep = await service.prepareRegeneration("local_operator");
-    if ("ok" in prep) {
-      throw new Error(prep.detail);
-    }
-    const { input } = await regenerationFor(prep);
-    expect(await service.regenerateOwnerKey("local_operator", input)).toMatchObject({
-      ok: true,
-      publication: { state: "published" },
-    });
-    await expectArmed();
-  });
 
   it("arms at startup and again after direct publication", async () => {
     await commitLink();

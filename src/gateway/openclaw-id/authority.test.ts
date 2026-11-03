@@ -115,7 +115,7 @@ describe("OpenClaw ID membership authority: linking", () => {
     });
     expect(result).toMatchObject({ ok: true, status: "applied" });
     const record = store.writes.at(-1)!;
-    expect(record.authority?.anchor).toEqual({ root_pub: ceremony.rootPub, root_epoch: 1 });
+    expect(record.authority?.anchor).toEqual({ root_pub: ceremony.rootPub });
     expect(record.authority?.seq).toBe(1);
     expect(record.binding?.body.k_srv).toBe(K_SRV);
     expect(await authority.admittedPeerKeys()).toEqual({ seq: 1, admitted: [ceremony.peerKey] });

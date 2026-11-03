@@ -1,7 +1,7 @@
 // Owner notices (spec sections 6 and 8): when the authority reports
 // `notify_owners`, the Gateway mails a hint to every owner device through
-// Discovery: a pending invite redemption, a resolved one, a recovery kit used
-// to enroll a device, or conflicting root rotations. A notice carries only the
+// Discovery: a pending invite redemption, a resolved one, or a recovery kit used
+// to enroll a device. A notice carries only the
 // event and a reference (invite id or key fingerprint) and is never authority:
 // owner devices confirm at the Gateway directly before acting.
 import type { AuthorityEvent } from "../../../packages/openclaw-id-protocol/src/index.js";

@@ -108,18 +108,8 @@ it.each([undefined, false])(
       publish: vi.fn(),
       submitStatement: vi.fn(),
       registerInvite: vi.fn(),
-      prepareRegeneration: vi.fn(),
-      regenerateOwnerKey: vi.fn(),
     };
-    for (const action of [
-      "publish",
-      "submit",
-      "register_invite",
-      "prepare_regeneration",
-      "regenerate",
-      "account_begin",
-      "device_mail",
-    ]) {
+    for (const action of ["publish", "submit", "register_invite", "account_begin", "device_mail"]) {
       const respond = vi.fn();
       await openclawIdHandlers["openclawId.authority"]!({
         params: { action },

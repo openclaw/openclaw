@@ -1,9 +1,10 @@
 // Owner device certificate bodies as an approver issues them (owner-key spec section 3).
-// A certificate has no expiry unless the person approving the device enters one; the
-// only way to end every owner key at once is owner-key regeneration at the Gateway.
+// A certificate has no expiry unless the person approving the device enters one; a
+// device stops being an owner when it is removed from the claw's allowlist.
 import type { Ed25519PublicKey, IrohEndpointKey } from "../keys.js";
 import {
   OWNER_CAPABILITIES,
+  ROOT_EPOCH,
   type OwnerCapability,
   type OwnerDeviceCertBody,
   type UnixSeconds,
@@ -15,7 +16,6 @@ export type OwnerDeviceApproval = {
   /** The device's iroh keys W; empty for a browser that reaches the Gateway on loopback. */
   peer_keys?: IrohEndpointKey[];
   label: string;
-  root_epoch: number;
   /** Defaults to every owner capability; never more than the issuer holds. */
   caps?: OwnerCapability[];
   /** Issue time, Unix seconds. */
@@ -41,6 +41,6 @@ export function ownerDeviceCertBody(approval: OwnerDeviceApproval): OwnerDeviceC
     caps: [...(approval.caps ?? OWNER_CAPABILITIES)],
     issued_at: approval.now,
     expires_at: expiresAt,
-    root_epoch: approval.root_epoch,
+    root_epoch: ROOT_EPOCH,
   };
 }

@@ -11,7 +11,6 @@ import {
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { registerOpenClawIdDialogsEnglish } from "../../i18n/locales/en-openclaw-id-dialogs.ts";
 import { registerOpenClawIdEnglish } from "../../i18n/locales/en-openclaw-id.ts";
-import { openClawIdAccount } from "../../lib/openclaw-id/account.ts";
 import {
   approverOf,
   devicesApprovedBy,
@@ -23,17 +22,11 @@ import type {
   OpenClawIdOwnerDevice,
   OpenClawIdPeopleLink,
 } from "../../lib/openclaw-id/types.ts";
-import {
-  openClawIdUiError,
-  openClawIdErrorToast,
-  type OpenClawIdUiError,
-} from "../../lib/openclaw-id/ui-error.ts";
+import { openClawIdUiError, type OpenClawIdUiError } from "../../lib/openclaw-id/ui-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { showToast } from "../../lib/toast.ts";
 import { withPromiseModalHost } from "../promise-modal-host.ts";
 import { OpenClawIdErrorMessage } from "./error-message.tsx";
 import { showOwnerApprovalDialog } from "./owner-approval-dialog.tsx";
-import { showRegenerateOwnerKeyDialog } from "./regenerate-owner-key-dialog.tsx";
 
 registerEnglishCatalog(registerOpenClawIdDialogsEnglish);
 registerEnglishCatalog(registerOpenClawIdEnglish);
@@ -171,16 +164,6 @@ export function showOwnerDevicesDialog(params: { client: GatewayBrowserClient })
           await refresh();
         }
       };
-      // Close this dialog before opening regeneration so modal focus has one owner.
-      const regenerate = () => {
-        modal.finish(undefined);
-        void showRegenerateOwnerKeyDialog({
-          client: params.client,
-          signedIn: openClawIdAccount(),
-        }).catch((failure: unknown) =>
-          showToast({ message: openClawIdErrorToast(failure, "reset") }),
-        );
-      };
       void refresh();
       const devices = () => link()?.ownerDevices ?? [];
       return (
@@ -248,17 +231,7 @@ export function showOwnerDevicesDialog(params: { client: GatewayBrowserClient })
                 </div>
               )}
             </Show>
-            <Show when={localOperator() && link()?.frozen}>
-              <div class="callout danger" role="alert">
-                {t("openclawId.frozenAlert")}
-              </div>
-            </Show>
             <openclaw-modal-actions class="exec-approval-actions">
-              <Show when={localOperator()}>
-                <button type="button" class="btn" disabled={busy()} onClick={regenerate}>
-                  {t("openclawId.regenerateOwnerKey")}
-                </button>
-              </Show>
               <button
                 type="button"
                 class="btn primary"

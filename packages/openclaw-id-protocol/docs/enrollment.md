@@ -22,63 +22,33 @@ must perform (`disconnect`, `invalidate_tokens`, `cancel_runs`, `notify_owners`,
 
 ### Write rules
 
-| Write                                             | Function                                   | Allowed channels       | Notes                                                                       |
-| ------------------------------------------------- | ------------------------------------------ | ---------------------- | --------------------------------------------------------------------------- |
-| Link claw (pin fp(R), epoch 1)                    | `linkClaw`                                 | local_operator         | spec 4                                                                      |
-| Re-pin a new root (lost kit, conflict resolution) | `repinRoot`                                | local_operator         | spec 8.2 option A, 8.3; clears a freeze                                     |
-| Regenerate the owner key                          | `regenerateOwnerKey`                       | local_operator         | re-pins R', drops older owner devices, enrolls the regenerating device      |
-| MembershipChange by an owner device               | `submitStatement`                          | tunnel, local_operator | `seq` must be current + 1                                                   |
-| MembershipChange signed by R (kit enrollment)     | `submitStatement`                          | any, incl. mailbox     | `add_owner_device` via mailbox emits `notify_owners: kit_used`              |
-| Revocation                                        | `submitStatement`                          | any                    | deletes the key and every owner device it approved (no history kept)        |
-| RootRotation                                      | `submitStatement`                          | local_operator         | refused elsewhere even when validly signed; a conflicting one still freezes |
-| InviteCap + proof key                             | `registerInvite`                           | tunnel, local_operator | `secret_hash` must equal SHA-256(proof key)                                 |
-| InviteRedemption                                  | `submitRedemption`                         | any (normally mailbox) | becomes **pending**, reserves the invite, admits nothing                    |
-| Approve redemption                                | `submitStatement` (`add` with `invite_id`) | tunnel, local_operator | must match the pending account and peer key; role <= invite role            |
-| Deny redemption                                   | `submitStatement` (`deny_invite`)          | tunnel, local_operator | consumes the invite                                                         |
+| Write                                         | Function                                   | Allowed channels       | Notes                                                                |
+| --------------------------------------------- | ------------------------------------------ | ---------------------- | -------------------------------------------------------------------- |
+| Link claw (pin R for good)                    | `linkClaw`                                 | local_operator         | spec 4                                                               |
+| MembershipChange by an owner device           | `submitStatement`                          | tunnel, local_operator | `seq` must be current + 1                                            |
+| MembershipChange signed by R (kit enrollment) | `submitStatement`                          | any, incl. mailbox     | `add_owner_device` via mailbox emits `notify_owners: kit_used`       |
+| Revocation                                    | `submitStatement`                          | any                    | deletes the key and every owner device it approved (no history kept) |
+| InviteCap + proof key                         | `registerInvite`                           | tunnel, local_operator | `secret_hash` must equal SHA-256(proof key)                          |
+| InviteRedemption                              | `submitRedemption`                         | any (normally mailbox) | becomes **pending**, reserves the invite, admits nothing             |
+| Approve redemption                            | `submitStatement` (`add` with `invite_id`) | tunnel, local_operator | must match the pending account and peer key; role <= invite role     |
+| Deny redemption                               | `submitStatement` (`deny_invite`)          | tunnel, local_operator | consumes the invite                                                  |
 
 Root supremacy: an R-signed statement is accepted wherever a device-signed one is, plus over
-the mailbox. The exception is RootRotation: changing the root needs the local operator.
-When the state is frozen, root-signed writes are refused except from the local operator.
+the mailbox. A refusal leaves the state unchanged and has no events.
 
-The conflicting rotation itself is refused (`conflicting_rotation`), but the refusal has
-`persist: true`: its `state` is frozen and its `events` carry the `rotation_conflict` owner
-notice. The Gateway persists that state and performs those events before it reports the
-refusal. Every other refusal leaves the state unchanged and has no events.
+### Owner reset is out of scope (OCF-319)
 
-### Owner-key regeneration (decision 2026-10-31, OCF-319)
+A claw's root R never changes in this version. There is no root rotation, no owner-key
+regeneration, no root epoch and no frozen state: `root_epoch` stays in OwnerDeviceCert,
+ServerBinding and Revocation as the constant 1 (`ROOT_EPOCH`), so statements signed before
+this change still verify, and any other value is `malformed`. A lost recovery kit means
+unlinking and relinking the claw. Owner reset is being redesigned as a machine-local reset
+vouched for by the Gateway key (OCF-319); it will reuse the `local_operator` channel and the
+`not_local_operator` refusal that linking uses.
 
 Owner device certificates have **no expiry unless the person approving the device enters
-one** (`expires_at: null`). The only way to end every owner key at once is to **regenerate
-the owner key**, and that needs actual access to the running Gateway: the local operator on
-authenticated direct loopback. Tunnel traffic (relayed or direct path), the mailbox and LAN
-clients can never regenerate the owner key or rotate the root, even with a valid signature
-from the current root.
-
-`regenerateOwnerKey(state, { root_pub, owner_device }, context)`:
-
-1. Refuses anything but `local_operator` (`not_local_operator`) and a root this claw has
-   used in any epoch (`root_reused`). `owner_device` must be `MembershipChange
-   add_owner_device` at seq + 1, signed by R' alone (`target_mismatch`).
-2. Pins R' in a new epoch, one past every epoch the claw has seen (`nextRootEpoch`), and
-   clears a conflicting-rotation freeze. This is how a frozen claw is unfrozen.
-3. Drops every owner device of earlier epochs and enrolls the regenerating device as the first
-   owner device under R'. Members and invites are kept.
-4. Events: `disconnect` and `invalidate_tokens` for every old owner device key, and
-   `publish_snapshot`.
-
-The regenerating browser generates the new kit secret S and R' itself, shows the new recovery
-kit once and signs (`signOwnerKeyRegeneration`) its own enrollment and a new ServerBinding
-(binding_seq + 1, the new epoch, the same claw id, hostname, K_srv and K_gw). The Gateway
-receives public keys and signed statements only. The old kit stops working. The Gateway
-exposes this as `openclawId.authority` `prepare_regeneration` and `regenerate`; it
-persists the new state and binding, closes the old devices' sessions, revokes their
-tunnel-bound tokens, pushes the new admission list to the tunnel child and republishes.
-
-A RootRotation statement is never accepted by the Gateway's `submit`: from the tunnel or the
-mailbox the protocol refuses it, and on loopback the Gateway answers `unsupported` because a
-rotation alone would leave the binding signed by the old root. A conflicting rotation (a
-different rotation into an epoch the claw already moved past, signed by that epoch's previous
-root) is still detected from every channel and freezes the claw.
+one** (`expires_at: null`). A device stops being an owner when it is removed from the claw's
+allowlist.
 
 `ownerDeviceCertBody` is the certificate builder approvers use: `expires_at` defaults to
 null, and an explicit expiry must be after the issue time. Approval UIs (SAS approval, owner
@@ -87,8 +57,8 @@ devices) offer the expiry as an optional field.
 ### Admission
 
 `isAdmitted(state, peerKey, now)` is what the tunnel child asks for every connection: the
-key belongs to a listed member or to a listed owner device active at `now` (certificate in
-the current epoch, issued no later than `now` plus 300 seconds of clock skew and not expired).
+key belongs to a listed member or to a listed owner device active at `now` (certificate
+issued no later than `now` plus 300 seconds of clock skew and not expired).
 Enrollment refuses a certificate outside its window (`expired`, `not_yet_valid`). An owner
 device stays active when its approver expires or is dropped for inactivity; only an explicit
 revocation removes the devices it approved. `recordSeen` and `dropInactive` maintain the
@@ -100,9 +70,7 @@ snapshot cannot keep a removed key admitted (G4).
 `snapshotBody(state, bindingSeq, now)` builds the MembershipSnapshot the Gateway signs with
 K_gw for Discovery (relay admission, listings).
 
-Not modeled here (Gateway work): pending-redemption expiry after 7 days, holding mailbox
-items from an older root epoch until an owner device confirms them directly (spec 8.4), and
-persistence.
+Not modeled here (Gateway work): pending-redemption expiry after 7 days, and persistence.
 
 ## Invites (spec 6.3)
 
@@ -123,14 +91,14 @@ persistence.
 
 | Step | Message                                                                          | Function                                      |
 | ---- | -------------------------------------------------------------------------------- | --------------------------------------------- |
-| 1    | N -> E `start` {request_id, claw_id, device_pub, peer_key, label, commit}        | `sasCommitment(eph_N, start)` = SHA-256(eph_N |                                                          | JCS(start))                   |
+| 1    | N -> E `start` {request_id, claw_id, device_pub, peer_key, label, commit}        | `sasCommitment(eph_N, start)` = SHA-256(eph_N |                                                   | JCS(start))                   |
 | 2    | E -> N `accept` {eph_E, device_pub(D_E)}                                         |                                               |
 | 3    | N -> E `key` {eph_N}                                                             | E: `verifySasCommitment`                      |
 | 4    | both: ss = X25519, T = SHA-256(JCS({start, commit, eph_e, eph_n, device_pub_e})) | `sasSharedSecret`, `sasTranscript`            |
-| 5    | both show 6 digits: HKDF(ss, info `openclaw/sas/v1`                              |                                               | hex(T)) mod 10^6                                         | `sasCode`                     |
+| 5    | both show 6 digits: HKDF(ss, info `openclaw/sas/v1`                              |                                               | hex(T)) mod 10^6                                  | `sasCode`                     |
 | 6    | user confirms "matches" on both screens                                          |                                               |
 | 7    | E -> Gateway (direct): MembershipChange `add_owner_device`                       | authority                                     |
-| 8    | E -> N: AES-256-GCM under HKDF(ss, `openclaw/sas-mac/v1`                         |                                               | hex(T)) of {R pub, binding, epoch, OwnerDeviceCert(D_N)} | `sealHandoff` / `openHandoff` |
+| 8    | E -> N: AES-256-GCM under HKDF(ss, `openclaw/sas-mac/v1`                         |                                               | hex(T)) of {R pub, binding, OwnerDeviceCert(D_N)} | `sealHandoff` / `openHandoff` |
 | 9    | N verifies the binding under R and the binding host, pins, connects              | `verifyBindingForPin`                         |
 
 Why the commitment matters: a relay in the middle must fix the key it gives E (inside the
@@ -178,7 +146,7 @@ Manual verification on an existing claw:
    numbers on both screens and approve. The new browser must reach the Control UI on its own.
 5. For a test browser, revoke its named device from the original browser's **Your devices**
    afterward. Confirm that its remote connection ends. Do not revoke the original device,
-   regenerate the owner key, reset the profile, or paste a recovery kit to make this test pass.
+   reset the profile, or paste a recovery kit to make this test pass.
 
 ## Kit enrollment (spec 6.2)
 

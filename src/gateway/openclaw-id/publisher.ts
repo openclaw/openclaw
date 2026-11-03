@@ -81,7 +81,6 @@ export function buildDescriptor(
     transport: "iroh",
     relay_url: relayUrl,
     root_pub: record.authority.anchor.root_pub,
-    rotations: [],
     binding: record.binding,
     published_at: now,
   };

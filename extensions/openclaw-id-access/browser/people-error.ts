@@ -36,16 +36,11 @@ const MESSAGES: Readonly<Record<string, string>> = {
     "This claw has reached its limit for people or devices. Remove one to add another.",
   not_yet_valid:
     "This access approval is not valid yet. Check the date and time on your device and the computer running this claw.",
-  frozen:
-    "Conflicting ownership changes paused remote ownership updates. Reset owner access on the computer that runs this claw to continue.",
-  conflicting_rotation:
-    "Conflicting ownership changes paused remote ownership updates. Reset owner access on the computer that runs this claw to continue.",
 };
 
 const VERIFICATION_CODES = new Set([
   "bad_signature",
   "wrong_signer",
-  "wrong_epoch",
   "root_mismatch",
   "wrong_claw",
   "host_mismatch",

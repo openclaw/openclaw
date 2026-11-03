@@ -3,8 +3,6 @@ import { en } from "./en.ts";
 
 const enOpenClawId = {
   openclawId: {
-    errorRecoveryReused:
-      "This recovery kit was already used for an earlier owner reset. Create a new recovery kit.",
     errorApprovalSignIn: "Sign in with OpenClaw ID to approve another browser.",
     errorApprovalBrowser:
       "This browser cannot approve another browser. Use a different approved owner browser or your recovery kit.",
@@ -51,7 +49,6 @@ const enOpenClawId = {
     errorConflict:
       "The saved setup or access details conflict with this request. Refresh and review them before trying again.",
     errorRequest: "The request could not be accepted. Check the details you entered and try again.",
-    errorResetLocal: "Reset owner access from the computer that runs this claw.",
     errorSignInLocal: "Sign in from OpenClaw on the computer that runs this claw.",
     errorLinkCodeUnavailable: "Could not get a link code. Try again shortly.",
     errorUnavailable: "Could not finish remote access setup. Try again shortly.",
@@ -60,8 +57,6 @@ const enOpenClawId = {
     error_signIn: "Sign-in did not finish. Try again.",
     error_linkCode:
       "Could not prepare setup automatically. Get a link code from Add a claw and paste it below.",
-    error_reset:
-      "Could not confirm that owner access was reset. Keep your new recovery kit and check Your devices before trying again.",
     error_devices: "Could not load your devices. Close this dialog and try again.",
     error_remove:
       "Could not confirm that access was removed. Check Your devices before trying again.",
@@ -106,9 +101,6 @@ const enOpenClawId = {
     makeReachable: "Turn on remote access",
     roleOperator: "Operator",
     roleViewer: "Viewer",
-    regenerateOwnerKey: "Reset owner access",
-    frozenAlert:
-      "Conflicting ownership changes paused remote ownership updates. Reset owner access on this computer to continue.",
   },
 } satisfies TranslationMap;
 

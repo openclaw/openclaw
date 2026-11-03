@@ -8,7 +8,6 @@ import type {
   Channel,
   Ed25519PublicKey,
   IrohEndpointKey,
-  OwnerKeyRegenerationPreparation,
   MemberRole,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 import type { GatewayOpenClawIdConfig } from "../../config/types.gateway.js";
@@ -21,7 +20,6 @@ import type {
   LinkCommit,
   LinkPreparation,
   OpenClawIdAuthority,
-  OwnerKeyRegeneration,
 } from "./authority.js";
 import { clawOriginOfRecord, setOpenClawIdClawOriginResolver } from "./claw-origin.js";
 import type { StoredClaw } from "./claw-store.js";
@@ -229,18 +227,15 @@ export function createOpenClawIdService(params: {
     await (events ? applyEvents(events) : pushMembership());
   };
 
-  // Accepted writes, and refusals that carry a security transition, have side effects.
-  // An accepted removal also reports what it cut.
+  // Accepted writes have side effects; an accepted removal also reports what it cut.
   const applyResult = async <T extends AuthorityAccepted | AuthorityRefusal>(
     result: T,
   ): Promise<T | (T & { removal: OpenClawIdRemovalSummary })> => {
-    if (result.ok || (result.events?.length ?? 0) > 0) {
-      const removal = await applyEvents(result.events ?? []);
-      if (result.ok && removal) {
-        return { ...result, removal };
-      }
+    if (!result.ok) {
+      return result;
     }
-    return result;
+    const removal = await applyEvents(result.events);
+    return removal ? { ...result, removal } : result;
   };
 
   const reconcile = async () => {
@@ -612,9 +607,6 @@ export function createOpenClawIdService(params: {
       clawId: record?.claw_id,
       hostname: record?.hostname ?? undefined,
       rootPub: state?.anchor.root_pub,
-      rootEpoch: state?.anchor.root_epoch,
-      // Conflicting root rotations: remote root changes wait for owner-key regeneration.
-      frozen: state?.frozen ?? false,
       seq: state?.seq,
       ownerDevices: state ? describeOwnerDevices(state, Math.floor(Date.now() / 1000)) : [],
       members: state ? await describeMembers(state.members, record?.invite_reports) : [],
@@ -670,8 +662,7 @@ export function createOpenClawIdService(params: {
 
     /**
      * What any admitted client may read about the link: whether the claw is linked,
-     * its address and pinned owner key (both public), and whether conflicting owner-key
-     * changes froze it. No people, devices, activity
+     * its address and pinned owner key (both public). No people, devices, activity
      * or publication account; those are owner-only (`linkStatus`).
      */
     async linkSummary() {
@@ -688,9 +679,6 @@ export function createOpenClawIdService(params: {
         clawId: record.claw_id,
         hostname: record.hostname ?? undefined,
         rootPub: state.anchor.root_pub,
-        rootEpoch: state.anchor.root_epoch,
-        // Conflicting root rotations: the local operator resolves them by regenerating.
-        frozen: state.frozen ?? false,
       };
     },
 
@@ -753,37 +741,6 @@ export function createOpenClawIdService(params: {
       await pushMembership();
       const publication = await publicationRetry
         .publishDirect(() => publish(enrollmentCode))
-        .catch((error: unknown) => {
-          params.log.warn(`openclaw-id: publication failed: ${String(error)}`);
-          return undefined;
-        });
-      await publicationRetry.adopt(publication);
-      return { ...result, ...(publication ? { publication } : {}) };
-    },
-
-    /** Step 1 of owner-key regeneration: what the new root signs. Direct loopback only. */
-    async prepareRegeneration(
-      channel: Channel | undefined,
-    ): Promise<OwnerKeyRegenerationPreparation | AuthorityRefusal> {
-      return await (await getAuthority()).prepareRegeneration(channel);
-    },
-
-    /**
-     * Step 2: pin the new root and enroll the regenerating device, then end every
-     * old owner device's sessions and tokens, push the admission list to the
-     * tunnel child and republish.
-     */
-    async regenerateOwnerKey(
-      channel: Channel | undefined,
-      input: OwnerKeyRegeneration,
-    ): Promise<(AuthorityAccepted & { publication?: PublishOutcome }) | AuthorityRefusal> {
-      const result = await (await getAuthority()).regenerateOwnerKey(input, channel);
-      if (!result.ok) {
-        return result;
-      }
-      await applyEvents(result.events.filter((event) => event.type !== "publish_snapshot"));
-      const publication = await publicationRetry
-        .publishDirect(() => publish())
         .catch((error: unknown) => {
           params.log.warn(`openclaw-id: publication failed: ${String(error)}`);
           return undefined;

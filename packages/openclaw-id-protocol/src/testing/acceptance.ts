@@ -115,21 +115,19 @@ export const SPEC_11_ACCEPTANCE: readonly AcceptanceCase[] = [
       {
         name: "id-e2e: kit enrollment notifies every online owner device",
         owner: "control-ui",
-        asserts: "each owner device shows the kit-used notice and offers a kit rotation",
+        asserts: "each owner device shows the kit-used notice",
       },
     ],
   },
   {
     id: 9,
-    title:
-      "conflicting root rotations freeze remote changes until the local operator resolves them",
+    title: "a claw's root never changes: no statement or descriptor replaces the pinned root",
     protocol: true,
     integration: [
       {
-        name: "id-e2e: local operator resolves conflicting rotations",
-        owner: "gateway",
-        asserts:
-          "frozen state survives a Gateway restart; the local-operator re-pin over direct loopback clears it",
+        name: "id-e2e: a descriptor naming a new root is refused by the loader",
+        owner: "loader",
+        asserts: "Discovery serves a binding signed by another root: no socket, pin unchanged",
       },
     ],
   },

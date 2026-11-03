@@ -66,8 +66,7 @@ export async function applyMailboxMessage(
 
 /**
  * Long-polls the mailbox until stopped; acknowledges what it applied. `onEffects`
- * receives the side effects of accepted writes and of refusals that carry them
- * (a conflicting rotation's freeze alert). `onRefused` sees each refusal with
+ * receives the side effects of accepted writes. `onRefused` sees each refusal with
  * its message, so the Gateway can react (a stale seq means Discovery's mirror is
  * behind). `onConnected` runs on the first successful read and after each
  * recovery from a failed read: Discovery is reachable again.
@@ -110,8 +109,8 @@ export function startMailboxReader(params: {
                   params.log.warn(`openclaw-id: mailbox refusal handling failed: ${String(error)}`),
                 );
             }
-            if (result.ok || (result.events?.length ?? 0) > 0) {
-              await params.onEffects(result.events ?? []);
+            if (result.ok) {
+              await params.onEffects(result.events);
             }
           }
         }

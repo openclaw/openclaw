@@ -211,7 +211,7 @@ export function createPublicationRetry(params: PublicationRetryParams) {
 
     /**
      * Takes over after a publication the caller ran directly to report its outcome
-     * (linking, owner-key regeneration): a failure stays pending durably, and a
+     * (linking): a failure stays pending durably, and a
      * transient one is retried with backoff.
      */
     async adopt(outcome: PublishOutcome | undefined): Promise<void> {

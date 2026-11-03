@@ -60,7 +60,7 @@ export function createOpenClawIdConnectionAccess(params: {
       const state = owner.current()?.authority;
       return state
         ? Object.values(state.owner_devices).filter((device) =>
-            isOwnerDeviceActive(state, device, Math.floor(Date.now() / 1000)),
+            isOwnerDeviceActive(device, Math.floor(Date.now() / 1000)),
           ).length
         : 0;
     },

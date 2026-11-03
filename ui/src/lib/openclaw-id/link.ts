@@ -9,12 +9,10 @@ import {
   formatEd25519PublicKey,
   generateKitSecret,
   OWNER_CAPABILITIES,
-  signOwnerKeyRegeneration,
+  ROOT_EPOCH,
   signStatement,
   type Ed25519PublicKey,
   type IrohEndpointKey,
-  type OwnerKeyRegenerationPreparation,
-  type OwnerKeyRegenerationStatements,
   type SignedStatement,
   type StatementSigner,
 } from "../../../../packages/openclaw-id-protocol/src/index.ts";
@@ -26,7 +24,7 @@ export type OpenClawIdLinkPreparation = {
   k_srv: IrohEndpointKey;
   k_gw: Ed25519PublicKey;
   binding_seq: 1;
-  root_epoch: 1;
+  root_epoch: typeof ROOT_EPOCH;
 };
 
 /** A freshly generated recovery kit, shown once. */
@@ -65,7 +63,7 @@ export function createOpenClawIdCeremony() {
 
     /**
      * Signs, with R, owner device D1's certificate (as MembershipChange
-     * add_owner_device, seq 1) and ServerBinding(seq 1, epoch 1).
+     * add_owner_device, seq 1) and ServerBinding(seq 1).
      */
     async sign(
       prep: OpenClawIdLinkPreparation,
@@ -87,7 +85,7 @@ export function createOpenClawIdCeremony() {
           caps: [...OWNER_CAPABILITIES],
           issued_at: now,
           expires_at: null,
-          root_epoch: 1,
+          root_epoch: ROOT_EPOCH,
         },
         root,
       );
@@ -104,39 +102,12 @@ export function createOpenClawIdCeremony() {
           k_srv: prep.k_srv,
           k_gw: prep.k_gw,
           binding_seq: prep.binding_seq,
-          root_epoch: prep.root_epoch,
+          root_epoch: ROOT_EPOCH,
           issued_at: now,
         },
         root,
       );
       return { rootPub: formatEd25519PublicKey(root.publicKey), ownerDevice, binding };
-    },
-
-    /**
-     * Owner-key regeneration (OCF-319): signs, with the new root R', this browser's
-     * certificate for the new epoch (no expiry unless `expiresAt` is given) and the
-     * new ServerBinding. Only these public statements go to the Gateway.
-     */
-    async signRegeneration(
-      prep: OwnerKeyRegenerationPreparation,
-      device: StatementSigner,
-      deviceLabel: string,
-      expiresAt: number | null,
-    ): Promise<OwnerKeyRegenerationStatements> {
-      if (!root) {
-        throw new Error("create the recovery kit first");
-      }
-      return await signOwnerKeyRegeneration({
-        preparation: prep,
-        root,
-        device: {
-          device_pub: formatEd25519PublicKey(device.publicKey),
-          // This origin reaches the Gateway on loopback; it has no tunnel peer key.
-          peer_keys: [],
-          label: deviceLabel,
-        },
-        expiresAt,
-      });
     },
 
     /** Wipes S and drops R (the non-extractable key can only be dereferenced). */

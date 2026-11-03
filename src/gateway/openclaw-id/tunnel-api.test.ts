@@ -77,7 +77,8 @@ describe("OpenClaw ID tunnel API", () => {
     const { call } = await tunnelApi(claw);
     const { status, body } = await call(claw.w1, "GET", "membership");
     expect(status).toBe(200);
-    expect(body).toMatchObject({ claw_id: claw.clawId, seq: 1, root_epoch: 1 });
+    expect(body).toMatchObject({ claw_id: claw.clawId, seq: 1 });
+    expect(body).not.toHaveProperty("root_epoch");
     expect(body.binding.type).toBe("ServerBinding");
     expect(body.owner_devices).toEqual([
       { cert: claw.cert, caps: claw.cert.body.caps, approved_by: "root" },

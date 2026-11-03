@@ -1,5 +1,5 @@
 // Signature and authority verification for signed statements.
-import { fingerprint, type Ed25519PublicKey } from "../keys.js";
+import type { Ed25519PublicKey } from "../keys.js";
 import { hasValidSignature } from "./envelope.js";
 import type {
   OwnerCapability,
@@ -9,8 +9,8 @@ import type {
   UnixSeconds,
 } from "./types.js";
 
-/** The pinned owner root a verifier trusts: R's public key and the current root epoch. */
-export type TrustAnchor = { root_pub: Ed25519PublicKey; root_epoch: number };
+/** The pinned owner root a verifier trusts: R's public key, fixed for the claw's lifetime. */
+export type TrustAnchor = { root_pub: Ed25519PublicKey };
 
 /**
  * The claw's current owner devices, as only its Gateway knows them: the capabilities of
@@ -41,12 +41,10 @@ export type VerifyErrorCode =
   | "bad_signature"
   | "wrong_signer"
   | "not_an_owner"
-  | "wrong_epoch"
   | "missing_capability"
   | "caps_escalation"
   | "not_yet_valid"
   | "root_mismatch"
-  | "conflicting_rotation"
   | "wrong_claw"
   | "host_mismatch"
   | "rollback"
@@ -100,14 +98,8 @@ function requiredCapability(
   return REQUIRED_CAPABILITY[statement.type];
 }
 
-function statementEpoch(statement: SignedStatement<OwnerSignedType>): number | null {
-  // SAFETY: every owner-signed body type either has a numeric root_epoch or none.
-  const body = statement.body as { root_epoch?: number };
-  return typeof body.root_epoch === "number" ? body.root_epoch : null;
-}
-
 /**
- * Verifies a statement that R or an owner device signs: signature, epoch, and authority.
+ * Verifies a statement that R or an owner device signs: signature and authority.
  * R may sign anything. An owner device must be one of the claw's current owner devices
  * (`options.owners`) holding the capability the statement type needs; an OwnerDeviceCert it
  * signs may not grant caps it lacks. A ServerBinding verifies only when R signed it.
@@ -119,13 +111,6 @@ export async function verifyOwnerStatement<T extends OwnerSignedType>(
 ): Promise<VerifyResult<T>> {
   if (!(await hasValidSignature(statement))) {
     return failure("bad_signature", "envelope signature does not verify");
-  }
-  const epoch = statementEpoch(statement);
-  if (epoch !== null && epoch !== anchor.root_epoch) {
-    return failure(
-      "wrong_epoch",
-      `statement is from root epoch ${epoch}, pinned epoch is ${anchor.root_epoch}`,
-    );
   }
   if (statement.signer === anchor.root_pub) {
     return { ok: true, statement, authority: { kind: "root" } };
@@ -154,29 +139,6 @@ export async function verifyOwnerStatement<T extends OwnerSignedType>(
     ok: true,
     statement,
     authority: { kind: "owner_device", device_pub: statement.signer, caps: [...caps] },
-  };
-}
-
-/** Verifies a RootRotation against the current anchor and returns the next anchor. */
-export async function verifyRootRotation(
-  statement: SignedStatement<"RootRotation">,
-  anchor: TrustAnchor,
-): Promise<{ ok: true; anchor: TrustAnchor } | VerifyFailure> {
-  if (statement.signer !== anchor.root_pub) {
-    return failure("wrong_signer", "a root rotation must be signed by the current R alone");
-  }
-  if (!(await hasValidSignature(statement))) {
-    return failure("bad_signature", "envelope signature does not verify");
-  }
-  if (statement.body.old_root_fp !== (await fingerprint(anchor.root_pub))) {
-    return failure("root_mismatch", "old_root_fp is not the current root");
-  }
-  if (statement.body.new_epoch !== anchor.root_epoch + 1) {
-    return failure("wrong_epoch", "new_epoch must be the current epoch + 1");
-  }
-  return {
-    ok: true,
-    anchor: { root_pub: statement.body.new_root_pub, root_epoch: statement.body.new_epoch },
   };
 }
 

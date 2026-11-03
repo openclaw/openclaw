@@ -8,7 +8,6 @@ export const STATEMENT_TYPES = [
   "InviteCap",
   "MembershipChange",
   "Revocation",
-  "RootRotation",
   "MembershipSnapshot",
   "InviteRedemption",
 ] as const;
@@ -18,6 +17,13 @@ export type StatementType = (typeof STATEMENT_TYPES)[number];
 
 /** Unix time in whole seconds. */
 export type UnixSeconds = number;
+
+/**
+ * The only root epoch in v1-draft. A claw's root never changes (owner reset is out of scope;
+ * see OCF-319), so `root_epoch` is a constant: statements carry it, and anything else is
+ * malformed.
+ */
+export const ROOT_EPOCH = 1;
 
 /** Capabilities an owner device certificate grants. A certificate never grants more than its approver holds. */
 export const OWNER_CAPABILITIES = ["approve_device", "bind", "invite", "manage_members"] as const;
@@ -49,8 +55,9 @@ export type OwnerDeviceCertBody = {
   scope: "owner";
   caps: OwnerCapability[];
   issued_at: UnixSeconds;
-  /** null = valid until removed or the root rotates. */
+  /** null = valid until removed. */
   expires_at: UnixSeconds | null;
+  /** Always {@link ROOT_EPOCH}; anything else is malformed. */
   root_epoch: number;
 };
 
@@ -62,6 +69,7 @@ export type ServerBindingBody = {
   k_gw: Ed25519PublicKey;
   /** Monotonic per claw; clients refuse a lower value than they have seen. */
   binding_seq: number;
+  /** Always {@link ROOT_EPOCH}; anything else is malformed. */
   root_epoch: number;
   issued_at: UnixSeconds;
 };
@@ -135,15 +143,8 @@ export type RevocationBody = {
   target_fp: KeyFingerprint;
   target_kind: RevocationKind;
   reason: string;
+  /** Always {@link ROOT_EPOCH}; anything else is malformed. */
   root_epoch: number;
-  issued_at: UnixSeconds;
-};
-
-/** Hands owner authority from R to R' (signed by the old R). */
-export type RootRotationBody = {
-  old_root_fp: KeyFingerprint;
-  new_root_pub: Ed25519PublicKey;
-  new_epoch: number;
   issued_at: UnixSeconds;
 };
 
@@ -191,7 +192,6 @@ export type StatementBodies = {
   InviteCap: InviteCapBody;
   MembershipChange: MembershipChangeBody;
   Revocation: RevocationBody;
-  RootRotation: RootRotationBody;
   MembershipSnapshot: MembershipSnapshotBody;
   InviteRedemption: InviteRedemptionBody;
 };

@@ -12,11 +12,10 @@ import {
   generateKitSecret,
   inviteSecretHash,
   OWNER_CAPABILITIES,
+  ROOT_EPOCH,
   randomBytes,
-  signOwnerKeyRegeneration,
   signStatement,
   type IrohEndpointKey,
-  type OwnerKeyRegenerationPreparation,
   type MailboxMessage,
   type MembershipTarget,
   type StatementSigner,
@@ -75,7 +74,7 @@ export async function linkedClaw(store = memoryStore()) {
       caps: [...OWNER_CAPABILITIES],
       issued_at: nowSeconds(),
       expires_at: null,
-      root_epoch: 1,
+      root_epoch: ROOT_EPOCH,
     },
     root,
   );
@@ -144,37 +143,6 @@ export function serviceFor(
   });
   service.bindEffects(async () => effects);
   return { service, effects, log };
-}
-
-/**
- * Owner-key regeneration as the loopback browser signs it: a fresh kit root R', the
- * browser's own enrollment and the new binding, with an optional explicit expiry.
- */
-export async function regenerationFor(
-  prep: OwnerKeyRegenerationPreparation,
-  options: { expiresAt?: number | null; peerKeys?: IrohEndpointKey[] } = {},
-) {
-  const root = await deriveRootSigner(generateKitSecret());
-  const browser = await generateEd25519Signer();
-  const statements = await signOwnerKeyRegeneration({
-    preparation: prep,
-    root,
-    device: {
-      device_pub: formatEd25519PublicKey(browser.publicKey),
-      peer_keys: options.peerKeys ?? [],
-      label: "loopback",
-    },
-    expiresAt: options.expiresAt,
-  });
-  return {
-    root,
-    browser,
-    input: {
-      root_pub: statements.rootPub,
-      owner_device: statements.ownerDevice,
-      binding: statements.binding,
-    },
-  };
 }
 
 /** An InviteCap signed by D1 for `email`, with its proof key and link secret. */

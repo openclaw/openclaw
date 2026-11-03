@@ -6,6 +6,7 @@
 import {
   fingerprint,
   formatEd25519PublicKey,
+  ROOT_EPOCH,
   signStatement,
   type Ed25519PublicKey,
   type SignedStatement,
@@ -89,7 +90,7 @@ export async function signOwnerDeviceRevocation(
       target_fp: await fingerprint(target.devicePub as Ed25519PublicKey),
       target_kind: "owner_device",
       reason: "revoked from the Control UI",
-      root_epoch: link.rootEpoch ?? 1,
+      root_epoch: ROOT_EPOCH,
       issued_at: Math.floor(Date.now() / 1000),
     },
     signer,

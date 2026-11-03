@@ -341,7 +341,6 @@ export function createOwnerApproval(client: GatewayBrowserClient, onRequest: () 
             peer_keys: [a.start.peer_key as `iroh:${string}`],
             label: a.start.label,
             caps: own.cert.body.caps,
-            root_epoch: ctx.link.rootEpoch!,
             now: now(),
             expires_at: expiresAt,
           }),
@@ -367,9 +366,7 @@ export function createOwnerApproval(client: GatewayBrowserClient, onRequest: () 
         requireLive();
         const handoff = {
           root_pub: ctx.link.rootPub,
-          rotations: [],
           binding: ctx.binding,
-          root_epoch: ctx.link.rootEpoch,
           cert,
         };
         const sealed = await sealHandoff(a.secret, a.transcript, handoff as unknown as JsonValue);

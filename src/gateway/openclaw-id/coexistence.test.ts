@@ -9,7 +9,7 @@ import {
 } from "../ingress-attribution.js";
 import { openclawIdHandlers } from "../server-methods/openclaw-id.js";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
-import { linkedClaw, regenerationFor, serviceFor } from "./openclaw-id.test-support.js";
+import { linkedClaw, serviceFor } from "./openclaw-id.test-support.js";
 
 const proxy = { userHeader: "custom-user", requiredHeaders: ["custom-proof"], allowLoopback: true };
 
@@ -45,11 +45,7 @@ describe("OpenClaw ID coexistence", () => {
   it("admits Access and Serve users without granting local ceremonies or People", async () => {
     const claw = await linkedClaw();
     const { service } = serviceFor(claw.authority);
-    const prep = await claw.authority.prepareRegeneration("local_operator");
-    if ("ok" in prep) {
-      throw new Error(prep.detail);
-    }
-    const regeneration = await regenerationFor(prep);
+    const rootPub = claw.authority.current()?.authority?.anchor.root_pub;
     const signedChange = await claw.sign({ op: "remove", account_id: "nobody" });
     for (const kind of ["access", "serve", "tailnet"] as const) {
       const { req, ingress, client } = classify(kind);
@@ -68,25 +64,16 @@ describe("OpenClaw ID coexistence", () => {
       ).toMatchObject({ ok: true });
       const requests: Array<[string, Record<string, unknown>]> = [
         ["openclawId.people", {}],
-        ...["account_begin", "check_name", "prepare", "prepare_regeneration"].map(
+        ...["account_begin", "check_name", "prepare"].map(
           (action): [string, Record<string, unknown>] => ["openclawId.authority", { action }],
         ),
         [
           "openclawId.authority",
           {
-            action: "regenerate",
-            rootPub: regeneration.input.root_pub,
-            ownerDevice: regeneration.input.owner_device,
-            binding: regeneration.input.binding,
-          },
-        ],
-        [
-          "openclawId.authority",
-          {
             action: "commit",
-            rootPub: regeneration.input.root_pub,
-            ownerDevice: regeneration.input.owner_device,
-            binding: regeneration.input.binding,
+            rootPub,
+            ownerDevice: await claw.sign({ op: "add_owner_device", cert: claw.cert }),
+            binding: signedChange,
           },
         ],
         ["openclawId.authority", { action: "submit", statement: signedChange }],
@@ -106,7 +93,7 @@ describe("OpenClaw ID coexistence", () => {
         } as unknown as GatewayRequestHandlerOptions);
         expect(accepted, `${kind}: ${method} ${JSON.stringify(params.action)}`).toBe(false);
       }
-      expect(claw.authority.current()?.authority?.anchor.root_epoch).toBe(1);
+      expect(claw.authority.current()?.authority?.anchor.root_pub).toBe(rootPub);
     }
     expect(classify("direct").client.internal.isLocalClient).toBe(true);
   });

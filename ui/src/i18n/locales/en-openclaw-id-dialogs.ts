@@ -85,20 +85,8 @@ const enOpenClawIdDialogs = {
     publicationStopped:
       "Remote access setup could not finish. Check this claw’s remote access settings on the computer that runs it.",
     securityDetails: "Security details",
-    regenTitle: "Reset owner access",
-    regenDescription: "Replace your recovery kit and reset which browsers can manage this claw.",
-    regenBody: "You get a new recovery kit. Only this browser keeps owner access to this claw.",
-    regenConsequences:
-      "Your other owner browsers disconnect now, and your old recovery kit stops working. Members keep their access.",
     regenExpiry: "End this browser's owner access after (days)",
     regenExpiryHint: "Leave empty for no expiry.",
-    regenConfirm: "Create new recovery kit",
-    regenKitBody:
-      "Save this new kit now. It appears only once. When you reset access, your old kit stops working.",
-    regenReplace: "Reset owner access",
-    regenWorking: "Resetting owner access…",
-    regenDone:
-      "Owner access is reset. Only this browser can manage the claw as you. Keep your new recovery kit safe.",
   },
 } satisfies TranslationMap;
 

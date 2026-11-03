@@ -26,18 +26,18 @@ endpoint key held by the tunnel child, sidecar -> tunnel child process, DERP -> 
 1. **The Gateway is the membership authority. Discovery is a mirror and a mailbox.** Nothing
    Discovery stores or returns is trusted because Discovery returned it: every
    security-relevant fact is a signed statement that the consumer verifies against its own
-   pin (fp(R), claw_id, binding_seq, root_epoch).
+   pin (fp(R), claw_id, binding_seq).
 2. **Discovery cannot forge an accepted statement.** It holds no owner key, no Gateway key
    (K_gw) and no device key. It can withhold, delay, replay or reorder; it cannot add a member,
-   an owner device, an invite, an approval, a binding or a rotation.
+   an owner device, an invite, an approval or a binding.
 3. **No credential before verification.** A client opens a tunnel only to the K_srv of a
    ServerBinding it has verified against its pin, and releases stored tokens only after that.
 4. **Approvals travel directly.** Membership changes and invite approvals reach the Gateway
    over the tunnel or direct loopback, never through the mailbox. The mailbox carries only
    requests and root-signed statements (kit enrollment, revocation).
-5. **Only the running Gateway changes the root.** Owner-key regeneration (a new root and
-   epoch, which ends every owner certificate) needs the local operator on direct loopback.
-   Certificates have no expiry unless one is entered explicitly (enrollment.md).
+5. **A claw's root never changes.** R is pinned at linking, only by the local operator on
+   direct loopback, and nothing replaces it: owner reset is out of scope for this version
+   (OCF-319). Certificates have no expiry unless one is entered explicitly (enrollment.md).
 
 ## Layout
 

@@ -1,4 +1,14 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import {
+  fingerprint,
+  formatEd25519PublicKey,
+  formatIrohEndpointKey,
+  generateEd25519Signer,
+  OWNER_CAPABILITIES,
+  randomBytes,
+  ROOT_EPOCH,
+  signStatement,
+} from "../../../packages/openclaw-id-protocol/src/index.js";
 import { notifyGatewayWorkMetricsChanged } from "../../infra/gateway-work-metrics-events.js";
 import {
   controllerSource,
@@ -13,13 +23,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { GatewayClientRegistry } from "../server/client-registry.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
 import { applyMailboxMessage } from "./mailbox-reader.js";
-import {
-  linkedClaw,
-  ownerInvite,
-  redemptionMail,
-  regenerationFor,
-  serviceFor,
-} from "./openclaw-id.test-support.js";
+import { linkedClaw, ownerInvite, redemptionMail, serviceFor } from "./openclaw-id.test-support.js";
 import { startOpenClawIdPeopleEvents } from "./people-events.js";
 
 // Transport-shaped clients; admission/membership is the real persisted authority.
@@ -124,15 +128,21 @@ describe("OpenClaw ID People invalidations", () => {
     const disconnected = h.next();
     h.clients.delete(member);
     expect((await disconnected).ids).toEqual(["local", "owner"]);
-    // A prepared guard must see later root regeneration, not its preparation snapshot.
+    // A prepared guard must see the owner's later removal, not its preparation snapshot.
     const prepared = await h.service.prepareOwnerClientCheck("tunnel", h.claw.w1);
-    const prep = await h.claw.authority.prepareRegeneration("local_operator");
-    if ("ok" in prep) {
-      throw new Error(prep.detail);
-    }
-    const regeneration = await regenerationFor(prep);
+    const removal = await signStatement(
+      "Revocation",
+      {
+        target_fp: await fingerprint(h.claw.cert.body.device_pub),
+        target_kind: "owner_device",
+        reason: "lost",
+        root_epoch: ROOT_EPOCH,
+        issued_at: Math.floor(Date.now() / 1000),
+      },
+      h.claw.root,
+    );
     const changed = h.next();
-    await h.claw.authority.regenerateOwnerKey(regeneration.input, "local_operator");
+    await h.claw.authority.submit(removal, "local_operator");
     expect(prepared()).toBe(false);
     expect((await changed).ids).toEqual(["local"]);
   });
@@ -271,21 +281,33 @@ describe("OpenClaw ID People invalidations", () => {
       true,
     );
     // Certificate display expiry must also invalidate while no tunnel runtime is running.
-    const prep = await h.claw.authority.prepareRegeneration("local_operator");
-    if ("ok" in prep) {
-      throw new Error(prep.detail);
-    }
-    const regeneration = await regenerationFor(prep, {
-      expiresAt: Math.floor(Date.now() / 1000) + 60,
-    });
-    const regenerated = h.next();
-    await h.claw.authority.regenerateOwnerKey(regeneration.input, "local_operator");
-    await regenerated;
-    expect(await h.service.ownerDeviceCount()).toBe(1);
+    const laptop = await generateEd25519Signer();
+    const issuedAt = Math.floor(Date.now() / 1000);
+    const expiring = await signStatement(
+      "OwnerDeviceCert",
+      {
+        device_pub: formatEd25519PublicKey(laptop.publicKey),
+        peer_keys: [formatIrohEndpointKey(randomBytes(32))],
+        label: "laptop",
+        scope: "owner",
+        caps: [...OWNER_CAPABILITIES],
+        issued_at: issuedAt,
+        expires_at: issuedAt + 60,
+        root_epoch: ROOT_EPOCH,
+      },
+      h.claw.root,
+    );
+    const added = h.next();
+    await h.claw.authority.submit(
+      await h.claw.sign({ op: "add_owner_device", cert: expiring }, h.claw.root),
+      "local_operator",
+    );
+    await added;
+    expect(await h.service.ownerDeviceCount()).toBe(2);
     const ownerExpired = h.next();
     await vi.advanceTimersByTimeAsync(60_000);
     await ownerExpired;
-    expect(await h.service.ownerDeviceCount()).toBe(0);
+    expect(await h.service.ownerDeviceCount()).toBe(1);
     h.events.stop();
     await h.service.stop();
     const calls = h.broadcast.mock.calls.length;

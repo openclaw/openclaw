@@ -53,15 +53,14 @@ export type Invite = {
 };
 
 /**
- * The claw's link state: `openclawId.status` returns only linked, clawId, hostname,
- * rootPub and rootEpoch; `openclawId.people` (owner only) returns all of it.
+ * The claw's link state: `openclawId.status` returns only linked, clawId, hostname and
+ * rootPub; `openclawId.people` (owner only) returns all of it.
  */
 export type Link = {
   linked: boolean;
   clawId?: string;
   hostname?: string;
   rootPub?: string;
-  rootEpoch?: number;
   seq?: number;
   ownerDevices?: OwnerDevice[];
   members?: Member[];

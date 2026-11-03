@@ -1,6 +1,6 @@
 // Spec section 11 acceptance tests 1, 2, 6, 7 and 10 (client and transport side).
 import { describe, expect, it } from "vitest";
-import { repinRoot, submitRedemption } from "../authority/apply.js";
+import { submitRedemption } from "../authority/apply.js";
 import { linkClaw } from "../authority/state.js";
 import { descriptorEvidence, type ClawDescriptor } from "../discovery/descriptor.js";
 import {
@@ -30,14 +30,12 @@ async function setup() {
     transport: "iroh",
     relay_url: "https://relay.example.test/",
     root_pub: world.rootPub,
-    rotations: [],
     binding: world.binding,
     published_at: WORLD_NOW,
   };
   const pin: ClawPin = {
     claw_id: world.state.claw_id,
     root_fp: await fingerprint(world.rootPub),
-    root_epoch: 1,
     binding_seq: 1,
   };
   return { world, descriptor, pin };
@@ -150,7 +148,7 @@ describe(acceptanceTitle(2), () => {
 });
 
 describe(acceptanceTitle(6), () => {
-  it("refuses binding_seq below the pinned seq, and an older root epoch", async () => {
+  it("refuses binding_seq below the pinned seq", async () => {
     const { world, descriptor, pin } = await setup();
     const seen = { ...pin, binding_seq: 2 };
     await expect(
@@ -164,33 +162,20 @@ describe(acceptanceTitle(6), () => {
     await expect(
       verifyBindingForPin(descriptorEvidence({ ...descriptor, binding: later }), seen, context),
     ).resolves.toMatchObject({ ok: true });
-    await expect(
-      verifyBindingForPin(descriptorEvidence(descriptor), { ...pin, root_epoch: 2 }, context),
-    ).resolves.toMatchObject({
-      ok: false,
-      code: "wrong_epoch",
-    });
   });
 });
 
 describe(acceptanceTitle(7), () => {
-  it("refuses linking and re-pinning unless the channel is direct loopback", async () => {
+  it("refuses linking unless the channel is direct loopback", async () => {
     const { world } = await setup();
+    for (const channel of ["tunnel", "mailbox"] as const) {
+      expect(
+        linkClaw({ claw_id: world.state.claw_id, root_pub: world.mallory.pub }, channel),
+      ).toEqual({ ok: false, code: "not_local_operator" });
+    }
     expect(
-      linkClaw({ claw_id: world.state.claw_id, root_pub: world.mallory.pub }, "tunnel"),
-    ).toEqual({ ok: false, code: "not_local_operator" });
-    expect(repinRoot(world.state, world.mallory.pub, "tunnel")).toMatchObject({
-      ok: false,
-      code: "not_local_operator",
-    });
-    expect(repinRoot(world.state, world.mallory.pub, "mailbox")).toMatchObject({
-      ok: false,
-      code: "not_local_operator",
-    });
-    expect(repinRoot(world.state, world.mallory.pub, "local_operator")).toMatchObject({
-      ok: true,
-      state: { anchor: { root_epoch: 2 } },
-    });
+      linkClaw({ claw_id: world.state.claw_id, root_pub: world.mallory.pub }, "local_operator"),
+    ).toMatchObject({ ok: true, state: { anchor: { root_pub: world.mallory.pub } } });
   });
 });
 

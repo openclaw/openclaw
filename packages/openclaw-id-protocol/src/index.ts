@@ -12,5 +12,4 @@ export * from "./freshness/index.js";
 export * from "./invites.js";
 export * from "./enrollment/sas.js";
 export * from "./enrollment/owner-cert.js";
-export * from "./enrollment/regeneration.js";
 export * from "./authority/index.js";

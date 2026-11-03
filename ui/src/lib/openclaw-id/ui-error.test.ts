@@ -25,17 +25,14 @@ describe("OpenClaw ID display errors", () => {
     expect(result.detail).toBe("internal diagnostic");
   });
 
-  it("keeps local-only instructions specific to sign-in, setup and reset", () => {
+  it("keeps local-only instructions specific to sign-in and setup", () => {
     const error = refusal("not_local_operator");
     expect(openClawIdUiError(error, "signIn").message).toMatch(/^Sign in on the computer/);
     expect(openClawIdUiError(error, "setup").message).toMatch(/^To turn on remote access/);
-    expect(openClawIdUiError(error, "reset").message).toMatch(
-      /^Reset owner access from the computer/,
-    );
   });
 
   it("does not infer causes or success from arbitrary prose or shared codes", () => {
-    expect(openClawIdUiError(new Error("issuer_invalid: all fine"), "reset").message).toContain(
+    expect(openClawIdUiError(new Error("issuer_invalid: all fine"), "remove").message).toContain(
       "Could not confirm",
     );
     expect(openClawIdUiError(refusal("malformed", "certificate expired")).message).toContain(

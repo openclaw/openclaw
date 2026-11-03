@@ -44,7 +44,6 @@ describe("People error copy", () => {
     for (const code of [
       "bad_signature",
       "wrong_signer",
-      "wrong_epoch",
       "root_mismatch",
       "wrong_claw",
       "host_mismatch",
@@ -68,9 +67,6 @@ describe("People error copy", () => {
     );
     expect(peopleError(refusal("missing_capability"), "update", unchanged).message).toContain(
       "approved owner browser",
-    );
-    expect(peopleError(refusal("frozen"), "update", unchanged).message).toContain(
-      "paused remote ownership updates",
     );
   });
 

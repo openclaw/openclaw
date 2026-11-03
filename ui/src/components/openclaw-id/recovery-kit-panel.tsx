@@ -1,4 +1,4 @@
-// The recovery kit as Make reachable and Regenerate owner key show it once: the kit
+// The recovery kit as Make reachable shows it once: the kit
 // code and its facts, save options (download, print/PDF, copy) and
 // the "saved" toggle. A save action that succeeds counts as saved.
 import { createSignal, Show } from "solid-js";

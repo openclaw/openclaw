@@ -11,7 +11,7 @@ import {
  */
 export function describeOwnerDevices(state: AuthorityState, now: number) {
   return Object.entries(state.owner_devices)
-    .filter(([, device]) => isOwnerDeviceActive(state, device, now))
+    .filter(([, device]) => isOwnerDeviceActive(device, now))
     .map(([deviceFp, device]) => ({
       devicePub: device.cert.body.device_pub,
       deviceFp,

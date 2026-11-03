@@ -14,8 +14,7 @@ a signed statement that the consumer verifies against its own state:
 
 | Data Discovery serves                      | Signed by                          | Verified by                                             | Against                                                     |
 | ------------------------------------------ | ---------------------------------- | ------------------------------------------------------- | ----------------------------------------------------------- |
-| ServerBinding (in the descriptor)          | R or an owner device (`bind`)      | loader / transport hook                                 | the client pin {fp(R), claw_id, binding_seq, root_epoch}    |
-| RootRotation (in the descriptor)           | old R                              | loader, Gateway                                         | pinned fp(R) and epoch                                      |
+| ServerBinding (in the descriptor)          | R or an owner device (`bind`)      | loader / transport hook                                 | the client pin {fp(R), claw_id, binding_seq}                |
 | MembershipSnapshot                         | K_gw                               | relay admission (Discovery itself), clients for listing | K_gw of the verified binding                                |
 | InviteRedemption (mailbox)                 | invitee's D_I + invite proof       | Gateway                                                 | registered invite (proof key, expiry, audience, single use) |
 | R-signed statements, Revocations (mailbox) | R / owner device                   | Gateway                                                 | pinned root and the claw's current owner devices            |
@@ -88,11 +87,12 @@ rollback").
 
 ```json
 { "v": 1, "claw_id": "<32 hex>", "transport": "iroh", "relay_url": "https://.../",
-  "root_pub": "ed25519:<hex>", "rotations": [<RootRotation>...], "binding": <ServerBinding>,
+  "root_pub": "ed25519:<hex>", "binding": <ServerBinding>,
   "published_at": 1793318400 }
 ```
 
 - No `endpointId`: the client dials `binding.body.k_srv` after `verifyBindingForPin`.
+- No `rotations`: a claw's root never changes (owner reset is out of scope, OCF-319).
 - `relay_url` must be https (http only for localhost testbeds). It is a hint.
 - Unknown fields are rejected. On publish, Discovery runs `checkDescriptorConsistency`
   (binding verifies under the descriptor's own root) and refuses a lower binding_seq; neither
@@ -135,13 +135,13 @@ Binding grants nothing at any claw: admission comes from the Gateway's membershi
 Store-and-forward of messages for one claw. Recipients: `gateway`, `owners` (every owner
 device in the latest snapshot), or one device fingerprint (`fp:<hex>`). Payload kinds:
 
-| kind                | Sent by                   | To          | Reader's check                                                                                                       |
-| ------------------- | ------------------------- | ----------- | -------------------------------------------------------------------------------------------------------------------- |
-| `invite_redemption` | invitee                   | gateway     | `InviteRedemption` self-signature + invite proof; result is only a **pending** redemption                            |
-| `root_statement`    | a device holding the kit  | gateway     | R-signed statements under the pinned root; held for direct confirmation when older than the current epoch (spec 8.4) |
-| `revocation`        | owner device              | gateway     | signer must be R or a current owner device of the claw                                                               |
-| `enrollment`        | new device / owner device | fp / owners | SAS protocol (below)                                                                                                 |
-| `notice`            | Gateway                   | owners / fp | none: a hint; the device confirms at the Gateway directly                                                            |
+| kind                | Sent by                   | To          | Reader's check                                                                            |
+| ------------------- | ------------------------- | ----------- | ----------------------------------------------------------------------------------------- |
+| `invite_redemption` | invitee                   | gateway     | `InviteRedemption` self-signature + invite proof; result is only a **pending** redemption |
+| `root_statement`    | a device holding the kit  | gateway     | R-signed statements under the pinned root                                                 |
+| `revocation`        | owner device              | gateway     | signer must be R or a current owner device of the claw                                    |
+| `enrollment`        | new device / owner device | fp / owners | SAS protocol (below)                                                                      |
+| `notice`            | Gateway                   | owners / fp | none: a hint; the device confirms at the Gateway directly                                 |
 
 Notice events are `MAILBOX_NOTICE_EVENTS`. `seq_conflict` goes only to the one device fingerprint
 whose `root_statement` the Gateway refused for a stale seq (`noticeRecipientAllowed`); its `ref` is
@@ -157,13 +157,13 @@ account and per source address (`rate_limited` with `retry_after`).
 
 Enrollment `data` per step (spec 6.1; messages are relayed verbatim):
 
-| step     | data                                                                                                                  |
-| -------- | --------------------------------------------------------------------------------------------------------------------- |
-| `start`  | `{ claw_id, device_pub, peer_key, label, commit }` - commit = hex SHA-256(eph_N                                       |     | JCS(start fields)) |
-| `accept` | `{ eph_pub, device_pub }` - E's X25519 ephemeral key (hex) and D_E                                                    |
-| `key`    | `{ eph_pub }` - N's X25519 ephemeral key; E checks the commitment                                                     |
-| `sealed` | `{ nonce, ciphertext }` - AEAD under HKDF(ss, `openclaw/sas-mac/v1`) of {R pub, binding, epoch, OwnerDeviceCert(D_N)} |
-| `abort`  | `{ reason }`                                                                                                          |
+| step     | data                                                                                                           |
+| -------- | -------------------------------------------------------------------------------------------------------------- |
+| `start`  | `{ claw_id, device_pub, peer_key, label, commit }` - commit = hex SHA-256(eph_N                                |     | JCS(start fields)) |
+| `accept` | `{ eph_pub, device_pub }` - E's X25519 ephemeral key (hex) and D_E                                             |
+| `key`    | `{ eph_pub }` - N's X25519 ephemeral key; E checks the commitment                                              |
+| `sealed` | `{ nonce, ciphertext }` - AEAD under HKDF(ss, `openclaw/sas-mac/v1`) of {R pub, binding, OwnerDeviceCert(D_N)} |
+| `abort`  | `{ reason }`                                                                                                   |
 
 ### Relay admission (`POST /iroh/admit`)
 

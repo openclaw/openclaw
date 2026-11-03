@@ -1,4 +1,4 @@
-// The ServerBinding check of the root ceremonies (link and owner-key regeneration).
+// The ServerBinding check of the link ceremony.
 import {
   parseStatement,
   verifyOwnerStatement,
@@ -10,17 +10,16 @@ import {
 import type { AuthorityRefusal } from "./authority.js";
 import type { StoredClaw } from "./claw-store.js";
 
-/** Expected binding fields: the claw's keys, and the binding seq and epoch to sign for. */
+/** Expected binding fields: the claw's keys and the binding seq to sign for. */
 export type ExpectedBinding = {
   kSrv: IrohEndpointKey;
   kGw: Ed25519PublicKey;
   bindingSeq: number;
-  rootEpoch: number;
 };
 
 /**
- * Verifies a binding under the new anchor (signed by R) and that it names exactly this
- * claw, at the expected binding seq and root epoch.
+ * Verifies a binding under the anchor (signed by R) and that it names exactly this
+ * claw, at the expected binding seq.
  */
 export async function verifyBinding(
   state: AuthorityState,
@@ -43,8 +42,7 @@ export async function verifyBinding(
     body.hostname !== record.hostname ||
     body.k_srv !== expected.kSrv ||
     body.k_gw !== expected.kGw ||
-    body.binding_seq !== expected.bindingSeq ||
-    body.root_epoch !== expected.rootEpoch
+    body.binding_seq !== expected.bindingSeq
   ) {
     return { ok: false, code: "target_mismatch", detail: "binding does not name this claw's keys" };
   }

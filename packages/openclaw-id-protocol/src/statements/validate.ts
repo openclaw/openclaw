@@ -13,6 +13,7 @@ import {
   MEMBERSHIP_OPS,
   OWNER_CAPABILITIES,
   REVOCATION_KINDS,
+  ROOT_EPOCH,
   STATEMENT_TYPES,
   type SignedStatement,
   type StatementType,
@@ -63,6 +64,7 @@ const positive: Check = predicate(
   (v) => typeof v === "number" && Number.isSafeInteger(v) && v >= 1,
   "expected integer >= 1",
 );
+const rootEpoch: Check = predicate((v) => v === ROOT_EPOCH, `expected ${ROOT_EPOCH}`);
 const nonNegative: Check = predicate(
   (v) => typeof v === "number" && Number.isSafeInteger(v) && v >= 0,
   "expected integer >= 0",
@@ -152,7 +154,7 @@ const ownerDeviceCertBody = object({
   caps: list(oneOf(OWNER_CAPABILITIES)),
   issued_at: seconds,
   expires_at: nullable(seconds),
-  root_epoch: positive,
+  root_epoch: rootEpoch,
 });
 
 // Envelope check for one statement type.
@@ -178,7 +180,7 @@ const BODIES: Record<StatementType, Check> = {
     k_srv: irohKey,
     k_gw: ed25519Key,
     binding_seq: positive,
-    root_epoch: positive,
+    root_epoch: rootEpoch,
     issued_at: seconds,
   }),
   InviteCap: object({
@@ -221,13 +223,7 @@ const BODIES: Record<StatementType, Check> = {
     target_fp: keyFp,
     target_kind: oneOf(REVOCATION_KINDS),
     reason: text,
-    root_epoch: positive,
-    issued_at: seconds,
-  }),
-  RootRotation: object({
-    old_root_fp: keyFp,
-    new_root_pub: ed25519Key,
-    new_epoch: positive,
+    root_epoch: rootEpoch,
     issued_at: seconds,
   }),
   MembershipSnapshot: object({

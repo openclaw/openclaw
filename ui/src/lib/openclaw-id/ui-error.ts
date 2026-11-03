@@ -9,7 +9,6 @@ export type OpenClawIdErrorContext =
   | "setup"
   | "signIn"
   | "linkCode"
-  | "reset"
   | "devices"
   | "remove"
   | "approval"
@@ -36,7 +35,6 @@ const CODE_KEYS: Record<string, string> = {
   wrong_claw: "errorVerification",
   root_mismatch: "errorVerification",
   wrong_signer: "errorVerification",
-  wrong_epoch: "errorVerification",
   host_mismatch: "errorVerification",
   rollback: "errorVerification",
   bad_proof: "errorVerification",
@@ -45,8 +43,6 @@ const CODE_KEYS: Record<string, string> = {
   limit_reached: "errorLimitReached",
   caps_escalation: "errorCapsEscalation",
   missing_capability: "errorNotOwner",
-  conflicting_rotation: "frozenAlert",
-  root_reused: "errorRecoveryReused",
   bad_signature: "errorVerification",
   invalid_statement: "errorVerification",
   unauthorized: "errorNotOwner",
@@ -58,7 +54,6 @@ const CODE_KEYS: Record<string, string> = {
   invite_not_pending: "errorNotPending",
   invite_unknown: "errorNotPending",
   invite_used: "errorNotPending",
-  frozen: "frozenAlert",
   name_taken: "errorNameTaken",
   tunnel_not_running: "errorRemoteNotReady",
   conflict: "errorConflict",
@@ -91,12 +86,7 @@ export function openClawIdUiError(
   const code = errorCode(error);
   let key = code && Object.hasOwn(CODE_KEYS, code) ? CODE_KEYS[code] : undefined;
   if (code === "not_local_operator") {
-    key =
-      context === "reset"
-        ? "errorResetLocal"
-        : context === "signIn"
-          ? "signInLocalOnly"
-          : "makeReachableLocalOnly";
+    key = context === "signIn" ? "signInLocalOnly" : "makeReachableLocalOnly";
   }
   if (code === "unconfigured") {
     key = context === "signIn" ? "signInUnconfigured" : "needsLoaderDomain";

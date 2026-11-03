@@ -332,10 +332,8 @@ Labs only switches the feature on or off. Everything else lives outside Labs:
   **Remove access** for a browser. The confirmation lists any other devices that
   will also lose access. They disconnect immediately; use another approved owner
   browser or your recovery kit to restore access.
-- **Reset owner access**, inside **Your devices** on the computer running the claw:
-  create and save a new recovery kit, then confirm the reset. Only this browser
-  keeps owner access, other owner browsers disconnect, and the old recovery kit
-  stops working. Members keep their access.
+- There is no owner reset in this version: a claw keeps the recovery kit it was
+  linked with, so store the kit safely.
 
 ### Sign in with OpenClaw ID
 

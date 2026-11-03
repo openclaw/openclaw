@@ -21,10 +21,8 @@ export type ClawDescriptor = {
   transport: "iroh";
   /** Untrusted routing hint: the relay K_srv is homed on. */
   relay_url: string;
-  /** Current owner root public key (clients check it against their pinned fingerprint). */
+  /** The claw's owner root public key (clients check it against their pinned fingerprint). */
   root_pub: Ed25519PublicKey;
-  /** Root rotations, oldest first. */
-  rotations: SignedStatement<"RootRotation">[];
   /** Current ServerBinding, signed by R. */
   binding: SignedStatement<"ServerBinding">;
   published_at: UnixSeconds;
@@ -41,7 +39,6 @@ const DESCRIPTOR_FIELDS = new Set([
   "transport",
   "relay_url",
   "root_pub",
-  "rotations",
   "binding",
   "published_at",
 ]);
@@ -96,15 +93,6 @@ export function parseClawDescriptor(value: unknown): DescriptorParse {
   if (binding.statement.body.claw_id !== record.claw_id) {
     return { ok: false, detail: "binding is for another claw" };
   }
-  if (!Array.isArray(record.rotations) || record.rotations.length > 64) {
-    return { ok: false, detail: "rotations must be a list" };
-  }
-  for (const rotation of record.rotations) {
-    const parsed = parseStatement(rotation, "RootRotation");
-    if (!parsed.ok) {
-      return { ok: false, detail: `rotation: ${parsed.detail}` };
-    }
-  }
   // SAFETY: every ClawDescriptor field was validated above and unknown fields were rejected.
   return { ok: true, descriptor: value as ClawDescriptor };
 }
@@ -113,23 +101,18 @@ export function parseClawDescriptor(value: unknown): DescriptorParse {
 export function descriptorEvidence(descriptor: ClawDescriptor): BindingEvidence {
   return {
     root_pub: descriptor.root_pub,
-    rotations: descriptor.rotations,
     binding: descriptor.binding,
   };
 }
 
 /**
  * Discovery-side consistency check on publish: the binding verifies under the
- * descriptor's own root at the binding's epoch. This catches Gateway bugs early; it is
+ * descriptor's own root. This catches Gateway bugs early; it is
  * not a security check (Discovery pins nothing) and clients verify again against their pin.
  */
 export async function checkDescriptorConsistency(
   descriptor: ClawDescriptor,
   options: VerifyOptions,
 ): Promise<VerifyResult<"ServerBinding">> {
-  return verifyOwnerStatement(
-    descriptor.binding,
-    { root_pub: descriptor.root_pub, root_epoch: descriptor.binding.body.root_epoch },
-    options,
-  );
+  return verifyOwnerStatement(descriptor.binding, { root_pub: descriptor.root_pub }, options);
 }

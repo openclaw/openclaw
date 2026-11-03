@@ -1,11 +1,9 @@
 // Regressions for the ClawSweeper review of the protocol package (openclaw/openclaw#191469):
-// the root-write freeze covers invite registration, untrusted signatures and strings never
-// throw, owner-device removal tears down the tunnel key W (not only D), and envelopes carry
-// no nested certificate chains.
+// untrusted signatures and strings never throw, owner-device removal tears down the tunnel key
+// W (not only D), and envelopes carry no nested certificate chains.
 import { describe, expect, it } from "vitest";
-import { registerInvite, submitStatement } from "./authority/apply.js";
+import { submitStatement } from "./authority/apply.js";
 import { signDiscoveryRequest, verifyDiscoveryRequest } from "./discovery/request-signing.js";
-import { generateInviteSecret, deriveInviteProofKey, inviteSecretHash } from "./invites.js";
 import { fingerprint } from "./keys.js";
 import { hasValidSignature, signStatement } from "./statements/envelope.js";
 import { parseStatement } from "./statements/validate.js";
@@ -13,45 +11,7 @@ import { buildWorld, signChange, worldKey, WORLD_NOW } from "./testing/world.js"
 
 const tunnel = { channel: "tunnel" as const, now: WORLD_NOW };
 
-// A root-signed InviteCap for the world claw with its proof key.
-async function rootInvite(world: Awaited<ReturnType<typeof buildWorld>>) {
-  const { invite_id, secret } = generateInviteSecret();
-  const proofKey = await deriveInviteProofKey(secret);
-  const cap = await signStatement(
-    "InviteCap",
-    {
-      claw_id: world.state.claw_id,
-      invite_id,
-      role: "viewer",
-      audience: { kind: "email", value: "bob@example.com" },
-      label: "Bob",
-      created_at: WORLD_NOW - 10,
-      expires_at: WORLD_NOW + 86400,
-      single_use: true,
-      secret_hash: await inviteSecretHash(proofKey),
-    },
-    world.root,
-  );
-  return { cap, proofKey };
-}
-
 describe("ClawSweeper review regressions", () => {
-  it("refuses a root-signed invite over the tunnel while frozen; loopback still works", async () => {
-    const world = await buildWorld();
-    const frozen = { ...world.state, frozen: true };
-    const { cap, proofKey } = await rootInvite(world);
-    await expect(registerInvite(frozen, cap, proofKey, tunnel)).resolves.toMatchObject({
-      ok: false,
-      code: "frozen",
-    });
-    await expect(
-      registerInvite(frozen, cap, proofKey, { channel: "mailbox", now: WORLD_NOW }),
-    ).resolves.toMatchObject({ ok: false });
-    await expect(
-      registerInvite(frozen, cap, proofKey, { channel: "local_operator", now: WORLD_NOW }),
-    ).resolves.toMatchObject({ ok: true });
-  });
-
   it("answers a noncanonical base64url request signature with unauthorized, not a throw", async () => {
     const world = await buildWorld();
     const parts = { method: "GET", path: "/v1/claws", body: new Uint8Array() };
