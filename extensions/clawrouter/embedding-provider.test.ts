@@ -165,7 +165,7 @@ describe("registered ClawRouter memory embeddings", () => {
   });
 
   it("does not forward a router credential to a remote override or fall back upstream", async () => {
-    options.config.models!.providers!.clawrouter.apiKey = "synthetic-router-key";
+    options.config.models!.providers!.clawrouter!.apiKey = "synthetic-router-key";
     options.remote = { baseUrl: "https://another-router.example/v1" };
     const { provider } = await adapter().create(options);
     await expect(provider!.embed("private text")).rejects.toThrow("credentials are not configured");

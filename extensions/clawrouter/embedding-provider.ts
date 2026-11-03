@@ -10,7 +10,7 @@ import {
   resolveRemoteEmbeddingClient,
   sanitizeEmbeddingCacheHeaders,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";
+import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import { mergeSsrFPolicies } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeClawRouterApiBaseUrl } from "./base-url.js";
@@ -28,7 +28,15 @@ function indexIdentity(options: EmbeddingProviderCreateOptions) {
   const baseUrl = normalizeClawRouterApiBaseUrl(options.remote?.baseUrl ?? configured?.baseUrl);
   const headers = {
     ...(embeddingProviderOwnsDestination({ baseUrl, providerBaseUrl })
-      ? omitNullRequestHeaders(configured?.headers)
+      ? Object.fromEntries(
+          Object.entries(configured?.headers ?? {}).flatMap(([name, value]) => {
+            const header = normalizeResolvedSecretInputString({
+              value,
+              path: `models.providers.clawrouter.headers.${name}`,
+            });
+            return header === undefined ? [] : [[name, header]];
+          }),
+        )
       : {}),
     ...options.remote?.headers,
   };
@@ -84,7 +92,7 @@ export const clawrouterEmbeddingProvider: EmbeddingProviderAdapter = {
       const client = await resolveRemoteEmbeddingClient({
         provider: "clawrouter",
         options,
-        defaultBaseUrl: normalizeClawRouterApiBaseUrl(),
+        defaultBaseUrl: normalizeClawRouterApiBaseUrl(undefined),
         normalizeModel: () => model,
       });
       const headers = new Headers(client.headers);
