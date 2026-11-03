@@ -8,7 +8,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { packageManager } from "../package.json";
+import packageJson from "../package.json" with { type: "json" };
 import {
   commitArgs,
   createContentGuardFixture,
@@ -25,7 +25,7 @@ afterEach(() => cleanupTempDirs(tempDirs));
 let dir: string;
 const write = (name: string, text: string) => writeFileSync(path.join(dir, name), text);
 const writeScripts = (scripts: Record<string, string>) =>
-  write("package.json", JSON.stringify({ packageManager, scripts }));
+  write("package.json", JSON.stringify({ packageManager: packageJson.packageManager, scripts }));
 
 // Real guard, real freshness selector and a real `node` check runner; only the
 // checker is a fixture that echoes working-tree bytes like markdownlint's MD051 context.
