@@ -109,7 +109,7 @@ export function mergeIMessageGroupAllowFromWithLegacyChatTargets(params: {
   return uniqueStrings([...params.groupAllowFrom, ...legacyChatTargets]);
 }
 
-const imessageIngressIdentity = defineStableChannelIngressIdentity({
+export const imessageIngressIdentity = defineStableChannelIngressIdentity({
   key: "imessage-sender",
   normalizeEntry: normalizeIMessageHandleEntry,
   normalizeSubject: normalizeIMessageHandle,
@@ -315,7 +315,7 @@ export async function resolveIMessageInboundDecision(params: {
   allowLegacyConversationAllowFromForGroup?: boolean;
   groupPolicy: string;
   dmPolicy: string;
-  readStoreAllowFrom: () => Promise<string[]>;
+  readStoreAllowFrom?: () => Promise<string[]>;
   historyLimit: number;
   groupHistories: Map<string, HistoryEntry[]>;
   echoCache?: IMessageEchoCache;
@@ -447,13 +447,12 @@ export async function resolveIMessageInboundDecision(params: {
     sender,
     chatId,
   });
-  let storeAllowFrom: Promise<string[]> | undefined;
-  const ingressResolver = getIMessageRuntime().channel.inbound.ingress.createResolver({
-    channelId: "imessage",
-    accountId: params.accountId,
+  const ingressResolver = await (
+    await import("./pairing-store-admission.js")
+  ).createIMessageDecisionIngressResolver({
+    ...params,
     identity: imessageIngressIdentity,
-    cfg: params.cfg,
-    readStoreAllowFrom: () => (storeAllowFrom ??= params.readStoreAllowFrom()),
+    createResolver: getIMessageRuntime().channel.inbound.ingress.createResolver,
   });
   const resolveChannelIngress = (contextBinding?: ChannelIngressContextBinding) =>
     ingressResolver.message({
