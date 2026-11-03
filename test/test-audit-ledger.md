@@ -162,15 +162,17 @@ including constructor/prototype filtering, temperature and global-object checks.
 Production and shared test-line scalar stay unchanged; no net test-line change.
 
 The complete selected suite, filtering owners, determining caller functions and
-causal fixture/sanitizer history are source-qualified. Official untouched, actual
-owner-fault, clean-candidate and published proof remain pending. The fault will
-allow only the own `__proto__` key through the real key filter; exact owner/test
-restoration is required before clean proof.
+causal fixture/sanitizer history are source-qualified. Untouched official
+baseline and clean candidate pass all48 without skips. An actual owner fault
+allows only the own `__proto__` key through the real filter: original48 pass;
+the candidate fails only the existing own-key assertion, with47 other passes.
+Temporary owner/test bytes are restored exactly before the clean run.
 
 No removal scan applies: every original assertion and declaration is retained.
-Focused checks, normal hooks, fresh review and exact-head CI remain pending.
-The scope is local prepared-extra-params filtering with injected provider hooks;
-no native provider, model, Gateway or live-authority verdict is claimed.
+Focused checks, normal hooks, fresh review and published proof are recorded
+separately. The scope is local prepared-extra-params filtering with injected
+provider hooks; no native provider, model, Gateway or live-authority verdict
+is claimed.
 
 ## Completed source review
 
