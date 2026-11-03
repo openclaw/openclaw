@@ -107,14 +107,33 @@ async function createContainerSandboxBackend(
       const engineTarget =
         podmanTarget ??
         (dockerTarget ? dockerPersistentTargetToEngineTarget(dockerTarget) : undefined);
-      const run = (command: SandboxBackendCommandParams, assertCommandCurrent?: () => void) =>
-        runContainerSandboxShellCommand({
-          engine: boundEngine,
-          containerName: containerId,
-          engineTarget,
-          ...command,
-          assertCurrent: assertCommandCurrent,
-        });
+      const run = async (
+        command: SandboxBackendCommandParams,
+        assertCommandCurrent?: () => void,
+      ) => {
+        if (boundEngine.id === "docker") {
+          await validateSandboxContainerEngineTarget(boundEngine, engineTarget);
+        }
+        assertCommandCurrent?.();
+        return execContainerRaw(
+          boundEngine,
+          [
+            "exec",
+            "-i",
+            containerId,
+            "sh",
+            "-c",
+            command.script,
+            "openclaw-sandbox-fs",
+            ...(command.args ?? []),
+          ],
+          {
+            input: command.stdin,
+            allowFailure: command.allowFailure,
+            signal: command.signal,
+          },
+        );
+      };
       const handle: SandboxBackendHandle = {
         id: boundEngine.id,
         runtimeId: containerName,
@@ -128,7 +147,9 @@ async function createContainerSandboxBackend(
           readOnlyResourceMounts: true,
         },
         async buildExecSpec({ command, workdir, env: requestedEnv, usePty, stdin }) {
-          await validateSandboxContainerEngineTarget(boundEngine, engineTarget);
+          if (boundEngine.id === "docker") {
+            await validateSandboxContainerEngineTarget(boundEngine, engineTarget);
+          }
           const identity = githubIdentity;
           const githubProfileDir = identity?.localIdentityEnv.GH_CONFIG_DIR;
           const externalCommandShell =
@@ -373,36 +394,6 @@ export async function createPodmanSandboxBackend(
     operatorAuthority,
     githubIdentity,
   );
-}
-
-async function runContainerSandboxShellCommand(
-  params: {
-    engine: SandboxContainerEngine;
-    containerName: string;
-    engineTarget?: SandboxContainerEngineTarget;
-    assertCurrent?: () => void;
-  } & SandboxBackendCommandParams,
-) {
-  await validateSandboxContainerEngineTarget(params.engine, params.engineTarget);
-  const dockerArgs = [
-    "exec",
-    "-i",
-    params.containerName,
-    "sh",
-    "-c",
-    params.script,
-    "openclaw-sandbox-fs",
-  ];
-  if (params.args?.length) {
-    dockerArgs.push(...params.args);
-  }
-  // The engine-target probe above can outlive the admitted workspace owner.
-  params.assertCurrent?.();
-  return execContainerRaw(params.engine, dockerArgs, {
-    input: params.stdin,
-    allowFailure: params.allowFailure,
-    signal: params.signal,
-  });
 }
 
 function createContainerSandboxBackendManager(
