@@ -498,7 +498,56 @@ describe("release fast lane label", () => {
 });
 
 describe("ci workflow guards", () => {
+  it("shares main screenshot input caches with restore-only store validation", () => {
+    const source = readCiWorkflow().jobs["ios-screenshot-capture"].steps;
+    const validation = readWorkflow(".github/workflows/ios-store-release.yml").jobs.screenshots
+      .steps;
+    for (const name of ["Restore Watch RTC build inputs", "Restore screenshot source packages"]) {
+      const producer = requiredWorkflowStep(source, name);
+      const consumer = requiredWorkflowStep(validation, name);
+      expect(consumer.uses).toBe(producer.uses);
+      expect(consumer.with).toEqual(producer.with);
+      expect(consumer["continue-on-error"]).toBe(true);
+      expect(consumer["timeout-minutes"]).toBe(3);
+    }
+    expect(requiredWorkflowStep(validation, "Identify iOS native cache inputs").run).toBe(
+      requiredWorkflowStep(source, "Identify iOS native cache inputs").run,
+    );
+    expect(
+      validation.some((step: WorkflowStep) => step.uses?.startsWith("actions/cache/save@")),
+    ).toBe(false);
+  });
+
   const ci = readCiWorkflow();
+  it("limits observation uploads to the sampled current-target CI cohort", () => {
+    const job = ci.jobs["checks-node-core-test-nondist-shard"];
+    const upload = requiredWorkflowStep(job.steps, "Upload adaptive CI observations");
+    const run = requiredWorkflowStep(job.steps, "Run Node test shard");
+    for (const [eventName, repository, frozen, runId, expected] of [
+      ["schedule", "openclaw/openclaw", "false", 101, true],
+      ["pull_request", "openclaw/openclaw", "false", 100, true],
+      ["pull_request", "openclaw/openclaw", "false", 101, false],
+      ["schedule", "openclaw/openclaw", "true", 100, false],
+      ["schedule", "example/fork", "false", 100, false],
+      ["push", "openclaw/openclaw", "false", 100, false],
+    ] as const) {
+      const context = {
+        eventName,
+        repository,
+        runId,
+        runAttempt: 1,
+        preflightOutputs: { frozen_target: frozen },
+      };
+      expect(evaluateWorkflowCondition(upload.if, context)).toBe(expected);
+      expect(
+        Boolean(evaluateWorkflowExpression(run.env.OPENCLAW_CI_TEST_OBSERVATIONS_DIR, context)),
+      ).toBe(expected);
+    }
+    expect(upload["continue-on-error"]).toBe(true);
+    expect(upload.with.path).toBe("${{ runner.temp }}/ci-test-observations/*/observations.json");
+    expect(upload.with["retention-days"]).toBe(7);
+  });
+
   function ciValue(
     job: string,
     property: "runs-on" | "timeout-minutes",
