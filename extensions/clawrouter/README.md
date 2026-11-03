@@ -138,3 +138,16 @@ endpoints. Custom dimensions, task-specific input types and multimodal inputs fa
 explicitly. Remote destination overrides retain the memory transport's separate
 credential requirement; upstream OpenAI keys are never a fallback. A router
 deployment that declares endpoint formats for the offered route is required.
+
+## Web search
+
+Set `tools.web.search.provider` to `clawrouter` to use the configured ClawRouter
+credential. Each search resolves that credential and refreshes its catalog before
+dispatch. The first supported format is `tavily.search`, through an eligible
+native or manifest offer with matching declared request and response formats.
+Model-less offers are supported. The adapter does not infer `/v1/search`, use
+upstream Tavily credentials, or execute undeclared formats. A router deployment
+that includes endpoint format declarations for the selected offer is required.
+
+Queries accept `query` and `count` (1–10). Catalog and search responses are bounded,
+cancellation is propagated, and result text is marked as untrusted web content.
