@@ -179,9 +179,28 @@ describe("browser pairing", () => {
     expect(pair.onState).toHaveBeenLastCalledWith({ kind: "failed", reason: "busy" });
   });
 
+  it("waits past the start deadline for the Gateway's answer", async () => {
+    // Approval extends the request on the Gateway; a suspended tab wakes up after the
+    // deadline it was first given and must still collect.
+    const fetchMock = stubReplies(
+      json({ ...started, expiresAtMs: Date.now() + 1_000 }),
+      json({ status: "pending" }),
+      json(approved),
+    );
+    const pair = session();
+    await pair.start("ws://gateway.example");
+    await vi.advanceTimersByTimeAsync(2_100);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(pair.onApproved).toHaveBeenCalledWith("bootstrap", "ws://gateway.example");
+  });
+
   it("offers pairing only for the Gateway serving this page", () => {
-    expect(canPairBrowserWithGateway(gatewayUrl)).toBe(true);
-    expect(canPairBrowserWithGateway("wss://other.example")).toBe(false);
-    expect(canPairBrowserWithGateway("")).toBe(false);
+    expect(canPairBrowserWithGateway(gatewayUrl, "")).toBe(true);
+    expect(canPairBrowserWithGateway(`${gatewayUrl}/team/`, "/team")).toBe(true);
+    // Same host, different mount: another Gateway issues the approval.
+    expect(canPairBrowserWithGateway(`${gatewayUrl}/other`, "/team")).toBe(false);
+    expect(canPairBrowserWithGateway(gatewayUrl, "/team")).toBe(false);
+    expect(canPairBrowserWithGateway("wss://other.example", "")).toBe(false);
+    expect(canPairBrowserWithGateway("", "")).toBe(false);
   });
 });

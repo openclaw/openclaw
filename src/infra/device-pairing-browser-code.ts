@@ -2,6 +2,7 @@
 import { randomInt, randomUUID } from "node:crypto";
 import { buildBrowserPairCode } from "../shared/browser-pair.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
+import { withDevicePairingLock } from "./device-pairing-lock.js";
 import { executeDevicePairingMutation } from "./device-pairing-worker.js";
 
 const BROWSER_PAIR_REQUEST_TTL_MS = 10 * 60 * 1000;
@@ -73,8 +74,14 @@ export async function decideBrowserPairRequest(
   },
 ) {
   const { context, assertCurrent, ...input } = params;
-  return await executeDevicePairingMutation(
-    { type: "devicePairing.decideBrowserRequest", input: { ...input, nowMs: Date.now() } },
-    { context, assertCurrent },
+  // Read the clock once the lock is held: an approval queued before expiry must not
+  // issue a credential after it.
+  return await withDevicePairingLock(
+    async () =>
+      await executeDevicePairingMutation(
+        { type: "devicePairing.decideBrowserRequest", input: { ...input, nowMs: Date.now() } },
+        { context, assertCurrent },
+      ),
+    "devicePairing.decideBrowserRequest",
   );
 }

@@ -1,5 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { revokeDeviceBootstrapToken } from "../infra/device-bootstrap.js";
 import { signDevicePayload } from "../infra/device-identity.js";
@@ -208,6 +208,31 @@ describe("browser device-code pairing", () => {
     const { requestId, code } = await start(newBrowser());
     setExpiry(requestId, Date.now() - 1);
     expect((await decide(code, requestId)).error?.message).toContain("expired");
+  });
+
+  it("does not issue a credential when the request expires while approval waits for the lock", async () => {
+    const browser = newBrowser();
+    const { requestId, code } = await start(browser);
+    const expiresAtMs = Date.now() + 60_000;
+    setExpiry(requestId, expiresAtMs);
+    const held = Promise.withResolvers<void>();
+    const locked = Promise.withResolvers<void>();
+    const holder = withDevicePairingLock(async () => {
+      locked.resolve();
+      await held.promise;
+    }, "browser-pair-expiry-test");
+    await locked.promise;
+    // Queued before expiry; the clock passes the deadline before the lock is released.
+    const approval = decideBrowserPairRequest({ code, requestId, decision: "approve" });
+    const clock = vi.spyOn(Date, "now").mockReturnValue(expiresAtMs + 1);
+    try {
+      held.resolve();
+      await holder;
+      expect(await approval).toEqual({ status: "expired" });
+    } finally {
+      clock.mockRestore();
+    }
+    expect(readFinalEffect(requestId).request).toBeUndefined();
   });
 
   it("reports a host rejection to the browser and spends the code", async () => {

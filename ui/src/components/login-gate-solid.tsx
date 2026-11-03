@@ -232,7 +232,7 @@ function LoginForm(
 
 function BrowserPairSlot(props: ViewProps) {
   return (
-    <Show when={canPairBrowserWithGateway(props.model.gatewayUrl)}>
+    <Show when={canPairBrowserWithGateway(props.model.gatewayUrl, props.model.resourceBasePath)}>
       <LoginGateBrowserPairLink onOpen={props.openPairCard} />
     </Show>
   );
@@ -583,7 +583,10 @@ function LoginGateContent(model: () => LoginGateProps, host: LoginGateElement): 
           <span class="login-gate__brand-name">{branding().brandName}</span>
         </header>
         <Show
-          when={pairCardOpen() && canPairBrowserWithGateway(model().gatewayUrl)}
+          when={
+            pairCardOpen() &&
+            canPairBrowserWithGateway(model().gatewayUrl, model().resourceBasePath)
+          }
           fallback={
             <Show
               when={feedback()?.placement === "status" ? feedback() : null}

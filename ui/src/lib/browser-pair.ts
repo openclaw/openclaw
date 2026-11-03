@@ -7,6 +7,7 @@ import {
   formatBrowserPairDeviceId,
   type BrowserPairAction,
 } from "../../../src/shared/browser-pair.js";
+import { normalizeBasePath } from "../app-route-paths.ts";
 import { loadOrCreateDeviceIdentity, signDevicePayload } from "./nodes/index.ts";
 
 const BROWSER_PAIR_POLL_INTERVAL_MS = 2_000;
@@ -42,10 +43,17 @@ async function postBrowserPair(params: {
   });
 }
 
-/** Whether this document can reach the Gateway's same-origin pairing route. */
-export function canPairBrowserWithGateway(gatewayUrl: string): boolean {
+/**
+ * Whether the selected Gateway is the one serving this page's pairing route. Pairing
+ * posts to the page's base path while redemption dials the selected URL, so Gateways
+ * mounted under different paths on one host are different issuers.
+ */
+export function canPairBrowserWithGateway(gatewayUrl: string, basePath: string): boolean {
   const parsed = URL.parse(gatewayUrl);
-  return parsed?.host === window.location.host;
+  return (
+    parsed?.host === window.location.host &&
+    normalizeBasePath(parsed.pathname) === normalizeBasePath(basePath)
+  );
 }
 
 export function createBrowserPairSession(params: {
@@ -74,18 +82,14 @@ export function createBrowserPairSession(params: {
     gatewayUrl: string,
     identity: Identity,
     requestId: string,
-    expiresAtMs: number,
   ): Promise<void> => {
     const fail = (reason: BrowserPairFailure) => {
       if (current === attempt) {
         params.onState({ kind: "failed", reason });
       }
     };
-    if (Date.now() >= expiresAtMs) {
-      fail("expired");
-      return;
-    }
-    // A network drop or a rate limit does not end the attempt; the request outlives both.
+    // A network drop, a rate limit, or a suspended tab does not end the attempt. Only the
+    // Gateway decides expiry: approval extends the request past the deadline it started with.
     const result = await postBrowserPair({
       basePath: params.basePath,
       action: "collect",
@@ -104,9 +108,7 @@ export function createBrowserPairSession(params: {
       return;
     }
     // SAFETY: Same-origin reply from the Gateway that ships with this UI; unknown statuses keep polling.
-    const body = result?.body as
-      | { status?: string; bootstrapToken?: string; expiresAtMs?: number }
-      | undefined;
+    const body = result?.body as { status?: string; bootstrapToken?: string } | undefined;
     if (body?.status === "approved" && body.bootstrapToken) {
       // The login gate owns connection progress and errors from here.
       params.onState({ kind: "idle" });
@@ -122,7 +124,7 @@ export function createBrowserPairSession(params: {
       return;
     }
     timer = setTimeout(
-      () => void poll(current, gatewayUrl, identity, requestId, expiresAtMs),
+      () => void poll(current, gatewayUrl, identity, requestId),
       BROWSER_PAIR_POLL_INTERVAL_MS,
     );
   };
@@ -148,7 +150,7 @@ export function createBrowserPairSession(params: {
       }).catch(() => null);
       const started: unknown = response?.ok ? await response.json().catch(() => null) : null;
       // SAFETY: A 2xx from this route is the shape the Gateway shipped with this UI returns.
-      const body = started as { requestId: string; code: string; expiresAtMs: number } | null;
+      const body = started as { requestId: string; code: string } | null;
       if (current !== attempt) {
         return;
       }
@@ -162,7 +164,7 @@ export function createBrowserPairSession(params: {
         code: formatBrowserPairCode(body.code),
         browserId: formatBrowserPairDeviceId(identity.deviceId),
       });
-      void poll(current, gatewayUrl, identity, body.requestId, body.expiresAtMs);
+      void poll(current, gatewayUrl, identity, body.requestId);
     },
     cancel,
     /** An approval is only valid for its issuer, so a new target ends the attempt. */
