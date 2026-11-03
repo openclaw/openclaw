@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { createConfigIO } from "../config/io.factory.js";
@@ -412,15 +413,11 @@ async function assertStartupStateReady(params: {
     undefined,
     () => admissionMetrics,
   );
-  const [
-    { assertSessionStoreMigrationComplete },
-    { resolveAllAgentSessionStoreCandidateTargetsSync },
-  ] = await measureDoctorConfigPreflightStep("admission.session-runtime-import", () =>
-    Promise.all([
-      import("../config/sessions/startup-migration.js"),
-      import("../config/sessions/targets.js"),
-    ]),
-  );
+  const { resolveAllAgentSessionStoreCandidateTargetsSync } =
+    await measureDoctorConfigPreflightStep(
+      "admission.session-runtime-import",
+      () => import("../config/sessions/targets.js"),
+    );
   const targets = await measureDoctorConfigPreflightStep(
     "admission.session-targets",
     () =>
@@ -435,7 +432,19 @@ async function assertStartupStateReady(params: {
   );
   await measureDoctorConfigPreflightStep(
     "admission.session-readiness",
-    () => assertSessionStoreMigrationComplete({ ...params, targets }),
+    async () => {
+      // Clean profiles do not need the legacy source inspector and its schema graph.
+      if (
+        !targets.some(({ storePath }) => !storePath.endsWith(".sqlite") && fs.existsSync(storePath))
+      ) {
+        return;
+      }
+      const { assertSessionStoreMigrationComplete } = await measureDoctorConfigPreflightStep(
+        "admission.session-migration-runtime-import",
+        () => import("../config/sessions/startup-migration.js"),
+      );
+      assertSessionStoreMigrationComplete({ ...params, targets });
+    },
     undefined,
     () => ({ targetCount: targets.length }),
   );

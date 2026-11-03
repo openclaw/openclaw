@@ -131,10 +131,15 @@ export function startGatewayRssSampling(child: Pick<ChildProcess, "pid">) {
     }
     return maxRssMb;
   };
-  sample();
-  const timer = setInterval(sample, 100);
-  timer.unref?.();
-  return { sample, stop: () => clearInterval(timer) };
+  let timer: ReturnType<typeof setTimeout>;
+  const tick = () => {
+    sample();
+    // PowerShell can take longer than the interval; leave time for probe I/O.
+    timer = setTimeout(tick, 100);
+    timer.unref?.();
+  };
+  tick();
+  return { sample, stop: () => clearTimeout(timer) };
 }
 
 export function parseProcessRssKb(raw: string): number | null {

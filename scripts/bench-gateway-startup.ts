@@ -73,6 +73,7 @@ import {
   writePluginFixtures,
   waitForInitialProbe as waitForProbe,
 } from "./lib/gateway-bench-runtime.ts";
+import { summarizeGatewayModuleLoads } from "./lib/gateway-startup-module-counts.mjs";
 import { selectSlowStartupTraceDurations } from "./lib/gateway-startup-trace-ranking.js";
 import { createGatewayWsClient } from "./lib/gateway-ws-client.ts";
 
@@ -135,6 +136,8 @@ type GatewaySample = {
   healthz: InitialProbeResult;
   heapProfilePath?: string;
   snapshotCounts?: { directories: number; files: number; bytes: number; processes: number };
+  moduleCounts?: ReturnType<typeof summarizeGatewayModuleLoads>;
+  moduleCountsAtHttpListen?: ReturnType<typeof summarizeGatewayModuleLoads>;
   httpListenLogLine: string | null;
   httpListenLogMs: number | null;
   hostLoadBefore: number[];
@@ -175,6 +178,7 @@ type CliOptions = GatewayBenchRuntimeOptions & {
   fixtureRoot?: string;
   seedOnly: boolean;
   snapshotCounts: boolean;
+  moduleCounts: boolean;
   agentDatabaseMib: number;
   agentGateDelayMs: number;
   startAt?: number;
@@ -196,6 +200,7 @@ const BOOLEAN_FLAGS = new Set([
   "--seed-only",
   "--team-scale",
   "--snapshot-counts",
+  "--module-counts",
   "--exit-listeners",
   "--assert-exit-listeners",
 ]);
@@ -612,6 +617,7 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
     fixtureRoot: flags.get("--fixture-root")?.[0],
     seedOnly: flags.has("--seed-only"),
     snapshotCounts: flags.has("--snapshot-counts"),
+    moduleCounts: flags.has("--module-counts"),
     agentDatabaseMib: parseNonNegativeInt(
       flags.get("--agent-database-mib")?.[0],
       512,
@@ -654,6 +660,7 @@ Options:
   --help, -h           Show this text
   --fixture-root <path> Prepared teamBoot or slowAgentDatabase fixture (requires --runs 1 --warmup 0)
   --snapshot-counts   Count private SQLite staging directories/bytes and retain full Gateway output
+  --module-counts     Count loaded module files at listener log and completion (diagnostic pass)
   --seed-only         Create a new --fixture-root without launching a Gateway
   --bundled-plugin-fixture <path> Synthetic plugins/models/tools/channels/secrets config for teamBoot
   --plugin-migration-fixture <status> Seed a pending or deferred config-only teamBoot obligation
@@ -2000,6 +2007,7 @@ async function runGatewaySample(
     heapProfDir?: string;
     exitListeners?: boolean;
     snapshotCounts?: boolean;
+    moduleCounts?: boolean;
     sampleIndex: number;
     timeoutMs: number;
     fixtureRoot?: string;
@@ -2064,6 +2072,15 @@ async function runGatewaySample(
       env.NODE_OPTIONS = `${env.NODE_OPTIONS ?? ""} --import=${observer}`.trim();
     }
     const agentRecoveryMs: Record<string, number> = {};
+    const moduleCountPath = options.moduleCounts
+      ? path.join(root, "module-counts.jsonl")
+      : undefined;
+    if (moduleCountPath) {
+      writeFileSync(moduleCountPath, "");
+      env.OPENCLAW_BENCH_MODULE_COUNTS = moduleCountPath;
+      const observer = new URL("./lib/gateway-startup-module-counts.mjs", import.meta.url).href;
+      env.NODE_OPTIONS = `${env.NODE_OPTIONS ?? ""} --import=${observer}`.trim();
+    }
     const integrityGateMs: Record<string, number> = {};
     let agentDatabaseAdmissionErrors = 0;
     let pluginMigrationWarnings = 0;
@@ -2092,6 +2109,7 @@ async function runGatewaySample(
     let gatewayReadyLogMs: number | null = null;
     let httpListenLogLine: string | null = null;
     let httpListenLogMs: number | null = null;
+    let moduleCountsAtHttpListen: ReturnType<typeof summarizeGatewayModuleLoads> | undefined;
     let childExited = false;
     let heapProfilePath: string | undefined;
     let child: ChildProcess | undefined;
@@ -2174,6 +2192,11 @@ async function runGatewaySample(
         if (readyLogKind === "http-listen" && httpListenLogMs == null) {
           httpListenLogMs = nowMs;
           httpListenLogLine = line;
+          if (moduleCountPath) {
+            moduleCountsAtHttpListen = summarizeGatewayModuleLoads(
+              readFileSync(moduleCountPath, "utf8"),
+            );
+          }
         }
         if (readyLogKind === "gateway-ready" && gatewayReadyLogMs == null) {
           gatewayReadyLogMs = nowMs;
@@ -2329,6 +2352,9 @@ async function runGatewaySample(
             )
           : undefined;
       const shutdownStartedAt = performance.now();
+      const moduleCounts = moduleCountPath
+        ? summarizeGatewayModuleLoads(readFileSync(moduleCountPath, "utf8"))
+        : undefined;
       let shutdownForced = false;
       const exit = await stopChild(startedChild, {
         ...(options.benchCase.id === "teamBoot" ? { teardownGraceMs: 30_000 } : {}),
@@ -2354,6 +2380,8 @@ async function runGatewaySample(
             .map((line) => JSON.parse(line))
         : [];
       return {
+        ...(moduleCounts ? { moduleCounts } : {}),
+        ...(moduleCountsAtHttpListen ? { moduleCountsAtHttpListen } : {}),
         ...(snapshotCountPath
           ? {
               snapshotCounts: {
@@ -2431,6 +2459,7 @@ async function runCase(
     heapProfDir?: string;
     exitListeners?: boolean;
     snapshotCounts?: boolean;
+    moduleCounts?: boolean;
     runs: number;
     timeoutMs: number;
     warmup: number;
