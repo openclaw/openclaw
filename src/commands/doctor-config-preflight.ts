@@ -216,6 +216,7 @@ async function runDoctorConfigPreflightOperation(
       cfg: automaticConfigRepair?.config ?? baseConfig,
       env: process.env,
       retainedPluginIds: pluginMigrations.retainedPluginIds(),
+      deferPackageRepair: options.deferPluginPackageRepair,
       measure: options.measure,
       snapshotRead: { ...configSnapshotRead, snapshot },
       readRefreshedSnapshot: () => readConfigSnapshotForPreflight(false),

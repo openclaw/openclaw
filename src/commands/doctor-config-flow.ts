@@ -33,6 +33,7 @@ import {
 } from "./doctor-config-analysis.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
+import { resolveDoctorRepairMode } from "./doctor-repair-mode.js";
 import { createWorkspaceAliasMigrationRepair } from "./doctor-workspace-alias.js";
 import { createDoctorChangesPanelSink } from "./doctor/changes-panel-sink.js";
 import { cronCodexRuntimePolicyTargetKey } from "./doctor/cron/store-migration.js";
@@ -79,7 +80,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   prompter?: DoctorPrompter;
 }) {
   await using preparingResources = new AsyncDisposableStack();
-  const shouldRepair = params.options.repair === true || params.options.yes === true;
+  const { shouldRepair, nonInteractive } = resolveDoctorRepairMode(params.options);
   const preflight = await withProgress(
     {
       label: "Checking OpenClaw state…",
@@ -94,6 +95,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
         invocationPurpose: "doctor",
         repairPrefixedConfig: shouldRepair,
         doctorOnlyStateMigrations: shouldRepair,
+        deferPluginPackageRepair: nonInteractive && !shouldRepair,
         preparePluginMetadataSnapshot: true,
         agentDatabaseMigrationDiscovery: params.agentDatabaseMigrationDiscovery,
         beforeWorkspaceStateMigration: createWorkspaceAliasMigrationRepair(

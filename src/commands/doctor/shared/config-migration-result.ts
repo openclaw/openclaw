@@ -30,6 +30,8 @@ export type DoctorConfigPreflightOptions = {
   preparePluginMetadataSnapshot?: boolean;
   /** Enable migrations that may retire security-sensitive stores only during explicit repair. */
   doctorOnlyStateMigrations?: boolean;
+  /** Unattended diagnostics inspect plugin packages without downloading or replacing them. */
+  deferPluginPackageRepair?: boolean;
 };
 
 export type DoctorConfigPreflightResult = {
