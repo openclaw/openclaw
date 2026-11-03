@@ -199,8 +199,8 @@ suite.define(() => {
       expect(response?.status()).toBe(200);
 
       const panel = page.locator("#config-section-panel");
-      const enabledRow = settingsRow(page, "Enabled");
-      const modeRow = settingsRow(page, "Mode");
+      const enabledRow = settingsRow(page, "Enabled").first();
+      const modeRow = settingsRow(page, "Mode").first();
       const payloadRow = settingsRow(page, "Payload");
       const retriesRow = settingsRow(page, "Retries");
       const tagsBlock = panel.locator(".cfg-array").filter({ hasText: "Tags" });

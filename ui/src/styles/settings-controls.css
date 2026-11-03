@@ -285,7 +285,6 @@ select.settings-select {
 @media (max-width: 640px) {
   :root {
     --settings-touch-control-height: var(--settings-control-height);
-    --logs-toolbar-height: var(--settings-control-height);
     --row-action-size: 32px;
   }
 

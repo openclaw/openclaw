@@ -366,7 +366,15 @@ it("keeps text and level filters active as quiet polls append rows", async () =>
   filter.dispatchEvent(new Event("input", { bubbles: true }));
   flush();
   page.expectRows(["alpha info", "alpha error"]);
-  page.query(".log-chip.info input")!.click();
+  page.query('[aria-controls="logs-levels:content"]')!.click();
+  flush();
+  await vi.waitFor(() => {
+    const item = [...document.querySelectorAll<HTMLElement>('[role="menuitemcheckbox"]')].find(
+      (candidate) => candidate.textContent?.trim() === "info",
+    );
+    expect(item).toBeTruthy();
+    item!.click();
+  });
   flush();
   page.expectRows(["alpha error"]);
   await poll();

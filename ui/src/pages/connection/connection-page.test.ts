@@ -240,7 +240,7 @@ it.each([
     const { page } = await mount(gateway);
     const forget = () => findButton(page, "Forget this browser");
     const confirm = () =>
-      document.querySelector<HTMLButtonElement>(".exec-approval-actions button.danger");
+      document.querySelector<HTMLButtonElement>("openclaw-modal-actions button.danger");
     const openConfirmation = async () => {
       forget()?.click();
       await waitForPage(() => expect(confirm()).not.toBeNull());
@@ -248,12 +248,12 @@ it.each([
     expect(forget()).toBeDefined();
     await openConfirmation();
     document
-      .querySelector<HTMLButtonElement>(".exec-approval-actions button:not(.danger)")
+      .querySelector<HTMLButtonElement>("openclaw-modal-actions button:not(.danger)")
       ?.click();
-    await waitForPage(() => expect(document.querySelector(".exec-approval-actions")).toBeNull());
+    await waitForPage(() => expect(document.querySelector("openclaw-modal-actions")).toBeNull());
     expect(gateway.forgetDeviceToken).not.toHaveBeenCalled();
     await openConfirmation();
-    expect(document.querySelector(".exec-approval-sub")?.textContent).toContain(
+    expect(document.querySelector(".oc-dialog__description")?.textContent).toContain(
       "gateway.example.test",
     );
     if (stale) {
@@ -261,7 +261,7 @@ it.each([
     }
     confirm()?.click();
     if (stale) {
-      await waitForPage(() => expect(document.querySelector(".exec-approval-actions")).toBeNull());
+      await waitForPage(() => expect(document.querySelector("openclaw-modal-actions")).toBeNull());
       expect(gateway.forgetDeviceToken).not.toHaveBeenCalled();
       return;
     }
