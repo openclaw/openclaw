@@ -1,9 +1,5 @@
 import type { PluginCapabilityCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
-import {
-  createProviderOperationDeadline,
-  createProviderOperationTimeoutResolver,
-} from "openclaw/plugin-sdk/provider-http";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type { SpeechProviderPlugin, SpeechSynthesisRequest } from "openclaw/plugin-sdk/speech";
 import {
@@ -17,10 +13,6 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeClawRouterApiBaseUrl } from "./base-url.js";
-import {
-  fetchClawRouterCapabilityOffers,
-  resolveClawRouterCapabilityHttpContext,
-} from "./capability-offers.js";
 
 const MODEL = "openai/tts-1";
 const VOICES = OPENAI_TTS_VOICES;
@@ -109,6 +101,7 @@ export function buildClawRouterSpeechProvider(
     if (!auth.apiKey) {
       throw new Error("Configure a ClawRouter API key for speech");
     }
+    const { resolveClawRouterCapabilityHttpContext } = await import("./capability-offers.js");
     return resolveClawRouterCapabilityHttpContext(
       {
         ...cfg,
@@ -130,6 +123,12 @@ export function buildClawRouterSpeechProvider(
   }
 
   async function synthesize(req: SpeechSynthesisRequest, telephony = false) {
+    const {
+      createProviderOperationDeadline,
+      createProviderOperationTimeoutResolver,
+      assertOkOrThrowProviderError,
+      readProviderBinaryResponse,
+    } = await import("openclaw/plugin-sdk/provider-http");
     const remaining = createProviderOperationTimeoutResolver({
       deadline: createProviderOperationDeadline({
         timeoutMs: req.timeoutMs,
@@ -164,8 +163,6 @@ export function buildClawRouterSpeechProvider(
     if (!req.text.trim() || Array.from(req.text).length > 4096) {
       throw new Error("ClawRouter speech requires 1-4096 characters");
     }
-    const { assertOkOrThrowProviderError, readProviderBinaryResponse } =
-      await import("openclaw/plugin-sdk/provider-http");
     const { mergeSsrFPolicies } = await import("openclaw/plugin-sdk/ssrf-runtime");
     const { resolveGeneratedMediaMaxBytes } =
       await import("openclaw/plugin-sdk/media-generation-runtime");
@@ -173,6 +170,7 @@ export function buildClawRouterSpeechProvider(
       ...req.providerConfig,
       model: config.model,
     });
+    const { fetchClawRouterCapabilityOffers } = await import("./capability-offers.js");
     const offers = await fetchClawRouterCapabilityOffers({ context: http, timeoutMs: remaining });
     const offer = offers.find(
       (candidate) =>

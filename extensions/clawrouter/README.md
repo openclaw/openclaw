@@ -131,8 +131,9 @@ diarization, other response formats/models, and realtime transcription remain
 outside this adapter.
 
 Speech request construction and frozen OpenAI model/voice facts are shared with
-the native OpenAI plugin. Native auth, proxy capture and custom endpoint behavior
-remain in that plugin. The frozen speech SDK has no caller abort signal; deadlines
+the native OpenAI plugin. The shared payload helper is an internal bundled-provider construction helper,
+not a new typed public SDK API. Native auth, proxy capture and custom endpoint
+behavior remain in the OpenAI plugin. The frozen speech SDK has no caller abort signal; deadlines
 bound requests, but this bridge does not claim caller cancellation support.
 
 ## Memory embeddings
