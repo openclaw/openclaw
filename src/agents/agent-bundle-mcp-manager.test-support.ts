@@ -6,6 +6,7 @@ import {
   bindFixtureIdentity,
   fixtureCatalog,
   fixtureRuntime,
+  withFixtureLeases,
 } from "./agent-bundle-mcp-fixture.test-support.js";
 import {
   acquireSessionMcpRuntime,
@@ -21,6 +22,7 @@ import {
 } from "./agent-bundle-mcp-runtime-shared.js";
 import type {
   SessionMcpRuntime,
+  McpToolCatalog,
   SessionMcpRuntimeManager as RuntimeManager,
 } from "./agent-bundle-mcp-types.js";
 
@@ -160,6 +162,28 @@ export function makeManagedRuntime(
   serverName?: string,
 ): SessionMcpRuntime {
   return bindFixtureIdentity(makeRuntime(tools, serverName), params);
+}
+
+export function makeManagerRuntime(
+  params: Parameters<CreateSessionMcpRuntime>[0],
+  catalog: McpToolCatalog = { version: 1, generatedAt: 0, servers: {}, tools: [] },
+  overrides: Partial<SessionMcpRuntime> = {},
+): SessionMcpRuntime {
+  return withFixtureLeases(
+    fixtureRuntime(() => catalog, {
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      workspaceDir: params.workspaceDir,
+      agentDir: params.agentDir,
+      requesterScope: params.requesterScope,
+      requesterConnect: params.requesterConnect,
+      configFingerprint: params.configFingerprint ?? "fixture",
+      joinCleanup: async () => {},
+      dispose: vi.fn(async () => {}),
+      ...overrides,
+    }),
+    true,
+  );
 }
 
 export type SessionMcpRuntimeManager = ReturnType<typeof createSessionMcpRuntimeManager>;

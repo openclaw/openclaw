@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 import {
   externalContentStamp,
+  nativeWebSearchCodecs,
   buildSearchCacheKey,
   DEFAULT_SEARCH_COUNT,
   mergeScopedSearchConfig,
@@ -18,20 +19,16 @@ import {
   resolveProviderWebSearchPluginConfig,
   resolveSearchCacheTtlMs,
   resolveSearchTimeoutSeconds,
-  resolveSiteName,
   type SearchConfigRecord,
   withTrustedWebSearchEndpoint,
-  wrapWebContent,
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
-  asOptionalObjectRecord,
   asOptionalRecord,
   isRecord,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-  normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const EXA_SEARCH_ENDPOINT = "https://api.exa.ai/search";
@@ -43,13 +40,6 @@ const EXA_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 // same way other bundled providers do (16 MiB) so a misbehaving or hostile
 // endpoint cannot stream an unbounded body into memory before we parse it.
 const EXA_SEARCH_JSON_MAX_BYTES = 16 * 1024 * 1024;
-
-type ExaConfig = {
-  apiKey?: string;
-  baseUrl?: string;
-};
-
-type ExaFreshness = (typeof EXA_FRESHNESS_VALUES)[number];
 
 type ExaTextContentsOption = boolean | { maxCharacters?: number };
 type ExaHighlightsContentsOption =
@@ -68,59 +58,12 @@ type ExaContentsArgs = {
   summary?: ExaSummaryContentsOption;
 };
 
-async function readExaSearchResults(response: Response) {
-  const bytes = await readResponseWithLimit(response, EXA_SEARCH_JSON_MAX_BYTES, {
-    onOverflow: ({ maxBytes: maxBytesLocal }) =>
-      new Error(`Exa API response exceeds ${maxBytesLocal} bytes`),
-  });
-  try {
-    const payload: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
-    const results = asOptionalObjectRecord(payload)?.results;
-    return Array.isArray(results) ? results.filter(isRecord) : [];
-  } catch (cause) {
-    throw new Error("Exa API returned malformed JSON", { cause });
-  }
-}
-
-function normalizeExaFreshness(value: string | undefined): ExaFreshness | undefined {
-  const trimmed = normalizeOptionalLowercaseString(value);
-  return EXA_FRESHNESS_VALUES.find((freshness) => freshness === trimmed);
-}
-
-function invalidBaseUrlPayload(value: string) {
+function invalidBaseUrlPayload() {
   return {
     error: "invalid_base_url",
-    message: `plugins.entries.exa.config.webSearch.baseUrl must be a valid http(s) URL. Got: ${value}`,
+    message: "plugins.entries.exa.config.webSearch.baseUrl must be a valid http(s) URL.",
     docs: "https://docs.openclaw.ai/tools/exa-search",
   };
-}
-
-function resolveExaSearchEndpoint(
-  exa?: ExaConfig,
-): { endpoint: string } | { error: string; message: string; docs: string } {
-  const configured = normalizeOptionalString(exa?.baseUrl);
-  if (!configured) {
-    return { endpoint: EXA_SEARCH_ENDPOINT };
-  }
-
-  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(configured) && !/^https?:\/\//i.test(configured)) {
-    return invalidBaseUrlPayload(configured);
-  }
-  const candidate = /^https?:\/\//i.test(configured) ? configured : `https://${configured}`;
-  let parsed: URL;
-  try {
-    parsed = new URL(candidate);
-  } catch {
-    return invalidBaseUrlPayload(configured);
-  }
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    return invalidBaseUrlPayload(configured);
-  }
-
-  const pathname = parsed.pathname.replace(/\/+$/, "");
-  parsed.pathname = pathname.endsWith("/search") ? pathname : `${pathname}/search`;
-  parsed.hash = "";
-  return { endpoint: parsed.toString() };
 }
 
 function invalidContentsPayload(message: string) {
@@ -129,109 +72,6 @@ function invalidContentsPayload(message: string) {
     message,
     docs: "https://docs.openclaw.ai/tools/web",
   };
-}
-
-function parseExaContents(
-  rawContents: unknown,
-): { value?: ExaContentsArgs } | { error: string; message: string; docs: string } {
-  if (rawContents === undefined) {
-    return { value: undefined };
-  }
-  if (!isRecord(rawContents)) {
-    return invalidContentsPayload(
-      "contents must be an object with optional text, highlights, and summary fields.",
-    );
-  }
-
-  const raw = rawContents;
-  const allowedKeys = new Set(["text", "highlights", "summary"]);
-  for (const key of Object.keys(raw)) {
-    if (!allowedKeys.has(key)) {
-      return invalidContentsPayload(
-        `contents has unknown field "${key}". Only "text", "highlights", and "summary" are allowed.`,
-      );
-    }
-  }
-
-  const parsed: ExaContentsArgs = {};
-  const fieldsBySection = {
-    text: ["maxCharacters"],
-    highlights: ["maxCharacters", "query", "numSentences", "highlightsPerUrl"],
-    summary: ["query"],
-  } as const;
-
-  for (const section of ["text", "highlights", "summary"] as const) {
-    if (!(section in raw)) {
-      continue;
-    }
-    const value = raw[section];
-    if (typeof value === "boolean") {
-      parsed[section] = value;
-      continue;
-    }
-    if (!isRecord(value)) {
-      return invalidContentsPayload(`contents.${section} must be a boolean or an object.`);
-    }
-
-    const option = value;
-    const fields: readonly string[] = fieldsBySection[section];
-    for (const key of Object.keys(option)) {
-      if (!fields.includes(key)) {
-        const allowed =
-          section === "highlights"
-            ? 'Allowed fields are "maxCharacters", "query", "numSentences", and "highlightsPerUrl".'
-            : `Only "${fields[0]}" is allowed.`;
-        return invalidContentsPayload(`contents.${section} has unknown field "${key}". ${allowed}`);
-      }
-    }
-
-    for (const field of fields) {
-      if (
-        field !== "query" &&
-        field in option &&
-        !(typeof option[field] === "number" && Number.isInteger(option[field]) && option[field] > 0)
-      ) {
-        return invalidContentsPayload(`contents.${section}.${field} must be a positive integer.`);
-      }
-    }
-    if (section !== "text" && "query" in option && typeof option.query !== "string") {
-      return invalidContentsPayload(`contents.${section}.query must be a string.`);
-    }
-
-    const normalized: Record<string, unknown> = {};
-    for (const field of fields) {
-      if (field in option) {
-        normalized[field] = option[field];
-      }
-    }
-    Object.assign(parsed, { [section]: normalized });
-  }
-
-  return { value: parsed };
-}
-
-function resolveFreshnessStartDate(freshness: ExaFreshness): string {
-  const now = new Date();
-  if (freshness === "day") {
-    now.setUTCDate(now.getUTCDate() - 1);
-    return now.toISOString();
-  }
-  if (freshness === "week") {
-    now.setUTCDate(now.getUTCDate() - 7);
-    return now.toISOString();
-  }
-  if (freshness === "month") {
-    const currentDay = now.getUTCDate();
-    now.setUTCDate(1);
-    now.setUTCMonth(now.getUTCMonth() - 1);
-    const lastDayOfTargetMonth = new Date(
-      Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0),
-    ).getUTCDate();
-    now.setUTCDate(Math.min(currentDay, lastDayOfTargetMonth));
-    return now.toISOString();
-  }
-  now.setUTCFullYear(now.getUTCFullYear() - 1);
-  return now.toISOString();
 }
 
 export async function executeExaWebSearchProviderTool(
@@ -258,11 +98,27 @@ export async function executeExaWebSearchProviderTool(
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }
-  const endpointResult = resolveExaSearchEndpoint(exaConfig);
-  if ("error" in endpointResult) {
-    return endpointResult;
+  let endpoint = EXA_SEARCH_ENDPOINT;
+  const configured = normalizeOptionalString(exaConfig?.baseUrl);
+  if (configured) {
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(configured) && !/^https?:\/\//i.test(configured)) {
+      return invalidBaseUrlPayload();
+    }
+    const candidate = /^https?:\/\//i.test(configured) ? configured : `https://${configured}`;
+    let parsed: URL;
+    try {
+      parsed = new URL(candidate);
+    } catch {
+      return invalidBaseUrlPayload();
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return invalidBaseUrlPayload();
+    }
+    const pathname = parsed.pathname.replace(/\/+$/, "");
+    parsed.pathname = pathname.endsWith("/search") ? pathname : `${pathname}/search`;
+    parsed.hash = "";
+    endpoint = parsed.toString();
   }
-  const endpoint = endpointResult.endpoint;
 
   const query = readStringParam(args, "query", { required: true });
   const rawType = readStringParam(args, "type");
@@ -273,7 +129,8 @@ export async function executeExaWebSearchProviderTool(
       message: `count must be an integer from 1 to ${EXA_MAX_SEARCH_COUNT}.`,
     }) ?? searchConfig?.maxResults;
   const rawFreshness = readStringParam(args, "freshness");
-  const freshness = normalizeExaFreshness(rawFreshness);
+  const normalizedFreshness = normalizeOptionalLowercaseString(rawFreshness);
+  const freshness = EXA_FRESHNESS_VALUES.find((value) => value === normalizedFreshness);
   if (rawFreshness && !freshness) {
     return {
       error: "invalid_freshness",
@@ -304,14 +161,78 @@ export async function executeExaWebSearchProviderTool(
   }
   const { dateAfter, dateBefore } = parsedDateRange;
 
-  const parsedContents = parseExaContents(args.contents);
-  if ("error" in parsedContents) {
-    return parsedContents;
+  const parsedContents: ExaContentsArgs = {};
+  const rawContents = args.contents;
+  if (rawContents !== undefined) {
+    if (!isRecord(rawContents)) {
+      return invalidContentsPayload(
+        "contents must be an object with optional text, highlights, and summary fields.",
+      );
+    }
+    const allowedKeys = new Set(["text", "highlights", "summary"]);
+    for (const key of Object.keys(rawContents)) {
+      if (!allowedKeys.has(key)) {
+        return invalidContentsPayload(
+          `contents has unknown field "${key}". Only "text", "highlights", and "summary" are allowed.`,
+        );
+      }
+    }
+    const fieldsBySection = {
+      text: ["maxCharacters"],
+      highlights: ["maxCharacters", "query", "numSentences", "highlightsPerUrl"],
+      summary: ["query"],
+    } as const;
+    for (const section of ["text", "highlights", "summary"] as const) {
+      if (!(section in rawContents)) {
+        continue;
+      }
+      const value = rawContents[section];
+      if (typeof value === "boolean") {
+        parsedContents[section] = value;
+        continue;
+      }
+      if (!isRecord(value)) {
+        return invalidContentsPayload(`contents.${section} must be a boolean or an object.`);
+      }
+      const option = value;
+      const fields: readonly string[] = fieldsBySection[section];
+      for (const key of Object.keys(option)) {
+        if (!fields.includes(key)) {
+          const allowed =
+            section === "highlights"
+              ? 'Allowed fields are "maxCharacters", "query", "numSentences", and "highlightsPerUrl".'
+              : `Only "${fields[0]}" is allowed.`;
+          return invalidContentsPayload(
+            `contents.${section} has unknown field "${key}". ${allowed}`,
+          );
+        }
+      }
+      for (const field of fields) {
+        if (
+          field !== "query" &&
+          field in option &&
+          !(
+            typeof option[field] === "number" &&
+            Number.isInteger(option[field]) &&
+            option[field] > 0
+          )
+        ) {
+          return invalidContentsPayload(`contents.${section}.${field} must be a positive integer.`);
+        }
+      }
+      if (section !== "text" && "query" in option && typeof option.query !== "string") {
+        return invalidContentsPayload(`contents.${section}.query must be a string.`);
+      }
+      const normalized: Record<string, unknown> = {};
+      for (const field of fields) {
+        if (field in option) {
+          normalized[field] = option[field];
+        }
+      }
+      Object.assign(parsedContents, { [section]: normalized });
+    }
   }
-  const contents =
-    parsedContents.value && Object.keys(parsedContents.value).length > 0
-      ? parsedContents.value
-      : undefined;
+  const contents = Object.keys(parsedContents).length > 0 ? parsedContents : undefined;
 
   const resolvedCount = Math.min(
     EXA_MAX_SEARCH_COUNT,
@@ -338,8 +259,7 @@ export async function executeExaWebSearchProviderTool(
   const start = Date.now();
   const timeoutSeconds = resolveSearchTimeoutSeconds(searchConfig);
   const body: Record<string, unknown> = {
-    query,
-    numResults: resolvedCount,
+    ...nativeWebSearchCodecs["exa.search"].request(endpoint, query, resolvedCount).body,
     type,
     contents: contents ?? { highlights: true },
   };
@@ -347,7 +267,23 @@ export async function executeExaWebSearchProviderTool(
   if (dateAfter) {
     body.startPublishedDate = dateAfter;
   } else if (freshness) {
-    body.startPublishedDate = resolveFreshnessStartDate(freshness);
+    const now = new Date();
+    if (freshness === "day") {
+      now.setUTCDate(now.getUTCDate() - 1);
+    } else if (freshness === "week") {
+      now.setUTCDate(now.getUTCDate() - 7);
+    } else if (freshness === "month") {
+      const currentDay = now.getUTCDate();
+      now.setUTCDate(1);
+      now.setUTCMonth(now.getUTCMonth() - 1);
+      const lastDayOfTargetMonth = new Date(
+        Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0),
+      ).getUTCDate();
+      now.setUTCDate(Math.min(currentDay, lastDayOfTargetMonth));
+    } else {
+      now.setUTCFullYear(now.getUTCFullYear() - 1);
+    }
+    body.startPublishedDate = now.toISOString();
   }
   if (dateBefore) {
     body.endPublishedDate = dateBefore;
@@ -383,7 +319,18 @@ export async function executeExaWebSearchProviderTool(
           { status: res.status },
         );
       }
-      return (await readExaSearchResults(res)).slice(0, resolvedCount);
+      const bytes = await readResponseWithLimit(res, EXA_SEARCH_JSON_MAX_BYTES, {
+        onOverflow: ({ maxBytes: maxBytesLocal }) =>
+          new Error(`Exa API response exceeds ${maxBytesLocal} bytes`),
+      });
+      try {
+        const payload: unknown = JSON.parse(
+          new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+        );
+        return nativeWebSearchCodecs["exa.search"].results(payload, resolvedCount);
+      } catch (cause) {
+        throw new Error("Exa API returned malformed JSON", { cause });
+      }
     },
   );
 
@@ -394,36 +341,7 @@ export async function executeExaWebSearchProviderTool(
     count: results.length,
     tookMs: Date.now() - start,
     externalContent: externalContentStamp("exa"),
-    results: results.map((entry) => {
-      const title = typeof entry.title === "string" ? entry.title : "";
-      const url = typeof entry.url === "string" ? entry.url : "";
-      const description =
-        normalizeTrimmedStringList(entry.highlights).join("\n") ||
-        normalizeOptionalString(entry.summary) ||
-        normalizeOptionalString(entry.text) ||
-        "";
-      const summary = normalizeOptionalString(entry.summary) ?? "";
-      const highlightScores = Array.isArray(entry.highlightScores)
-        ? entry.highlightScores.filter(
-            (score): score is number => typeof score === "number" && Number.isFinite(score),
-          )
-        : [];
-      const published =
-        typeof entry.publishedDate === "string" && entry.publishedDate
-          ? entry.publishedDate
-          : undefined;
-      return Object.assign(
-        {
-          title: title ? wrapWebContent(title, `web_search`) : ``,
-          url,
-          description: description ? wrapWebContent(description, `web_search`) : ``,
-          published,
-          siteName: resolveSiteName(url) || undefined,
-        },
-        summary ? { summary: wrapWebContent(summary, `web_search`) } : {},
-        highlightScores.length > 0 ? { highlightScores } : {},
-      );
-    }),
+    results,
   };
 
   writeCachedSearchPayload(cacheKey, payload, cacheTtlMs);

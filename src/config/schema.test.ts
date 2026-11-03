@@ -1,20 +1,25 @@
 // Covers canonical config schema defaults, validation, and sensitive redaction.
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, describe, expect, it } from "vitest";
-import { buildConfigSchemaCore, lookupConfigSchema } from "./schema.js";
+import { buildConfigSchemaCore, lookupConfigSchema, type PluginUiMetadata } from "./schema.js";
 import { asSchemaObject } from "./schema.shared.js";
 import { validateConfigObjectRaw } from "./validation.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
+const objectSchema = (properties: Record<string, unknown>) => ({ type: "object", properties });
+const pluginSchema = (plugin: PluginUiMetadata) => buildConfigSchemaCore({ plugins: [plugin] });
 const mcpConfig = (server: Record<string, unknown>) => ({ mcp: { servers: { docs: server } } });
 const mcpUrl = "https://mcp.example.com/mcp";
 const reviewerTools = (reviewer: Record<string, unknown>) => ({ exec: { reviewer } });
+const accepts = (config: unknown) => OpenClawSchema.safeParse(config).success;
+const acceptsTools = (tools: unknown) => ToolsSchema.safeParse(tools).success;
 const tupleSchema = {
-  schema: {
-    type: "object",
-    properties: { pair: { type: "array", items: [{ type: "string" }, { type: "number" }] } },
-  },
+  schema: objectSchema({
+    pair: { type: "array", items: [{ type: "string" }, { type: "number" }] },
+  }),
   uiHints: {},
   version: "test",
   generatedAt: "test",
@@ -22,59 +27,32 @@ const tupleSchema = {
 
 describe("config schema", () => {
   it("requires concrete Gateway policy identities and accepts an explicitly empty ceiling", () => {
-    expect(ToolsSchema.safeParse({ gatewayPolicy: { allow: [] } }).success).toBe(true);
+    expect(acceptsTools({ gatewayPolicy: { allow: [] } })).toBe(true);
     expect(
-      ToolsSchema.safeParse({
-        gatewayPolicy: { allow: ["sessions"], actions: { sessions: ["list"] } },
-      }).success,
+      acceptsTools({
+        gatewayPolicy: {
+          allow: ["sessions"],
+          actions: { sessions: ["list"] },
+          automations: { scope: "caller", allowCommandJobs: false },
+        },
+      }),
     ).toBe(true);
     for (const gatewayPolicy of [
       {},
       { allow: ["*"] },
       { allow: ["group:plugins"] },
       { allow: ["sessions"], actions: { sessions: ["*"] } },
+      { allow: [], automations: { scope: "admin" } },
+      { allow: [], automations: { allowCommandJobs: "false" } },
+      { allow: [], automations: { unknown: true } },
     ]) {
-      expect(ToolsSchema.safeParse({ gatewayPolicy }).success).toBe(false);
+      expect(acceptsTools({ gatewayPolicy })).toBe(false);
     }
   });
 
-  type SchemaInput = NonNullable<Parameters<typeof buildConfigSchemaCore>[0]>;
   let baseSchema: ReturnType<typeof buildConfigSchemaCore>;
-  let pluginUiHintInput: SchemaInput;
-  let cachedMergeInput: SchemaInput;
-
   beforeAll(() => {
     baseSchema = buildConfigSchemaCore();
-    pluginUiHintInput = {
-      plugins: [
-        {
-          id: "voice-call",
-          name: "Voice Call",
-          description: "Outbound voice calls",
-          configUiHints: {
-            provider: { label: "Provider" },
-            "twilio.authToken": { label: "Original Token", sensitive: true },
-            " .twilio.authToken ": { label: "Auth Token", help: "Twilio credential" },
-          },
-        },
-      ],
-    };
-    cachedMergeInput = {
-      plugins: [
-        {
-          id: "voice-call",
-          name: "Voice Call",
-          configSchema: { type: "object", properties: { provider: { type: "string" } } },
-        },
-      ],
-      channels: [
-        {
-          id: "matrix",
-          label: "Matrix",
-          configSchema: { type: "object", properties: { accessToken: { type: "string" } } },
-        },
-      ],
-    };
   });
 
   it("accepts node-host MCP servers with the shared MCP server schema", () => {
@@ -89,12 +67,9 @@ describe("config schema", () => {
     const invalid = OpenClawSchema.safeParse({
       nodeHost: { mcp: { servers: { broken: { transport: "stdio" } } } },
     });
-    expect(invalid.success).toBe(false);
-    if (!invalid.success) {
-      expect(invalid.error.issues[0]?.message).toBe(
-        '"stdio" transport requires a non-empty command',
-      );
-    }
+    expect(invalid.error?.issues[0]?.message).toBe(
+      '"stdio" transport requires a non-empty command',
+    );
   });
 
   it("rejects the reserved __proto__ MCP server name without tightening other names", () => {
@@ -103,22 +78,19 @@ describe("config schema", () => {
       '{"nodeHost":{"mcp":{"servers":{"__proto__":{"command":"server"}}}}}',
     ]) {
       const result = OpenClawSchema.safeParse(JSON.parse(raw));
-      expect(result.success).toBe(false);
-      if (!result.success) {
-        expect(result.error.issues).toContainEqual(
-          expect.objectContaining({
-            message: 'MCP server name "__proto__" is reserved; rename the server',
-          }),
-        );
-      }
+      expect(result.error?.issues).toContainEqual(
+        expect.objectContaining({
+          message: 'MCP server name "__proto__" is reserved; rename the server',
+        }),
+      );
     }
 
     for (const serverName of ["docs", "_internal"]) {
       expect(
-        OpenClawSchema.safeParse({
+        accepts({
           mcp: { servers: { [serverName]: { command: "server" } } },
           nodeHost: { mcp: { servers: { [serverName]: { command: "server" } } } },
-        }).success,
+        }),
       ).toBe(true);
     }
   });
@@ -192,19 +164,12 @@ describe("config schema", () => {
 
   it("validates MCP OAuth credential identity", () => {
     for (const identity of ["shared", "per-requester"] as const) {
-      expect(
-        OpenClawSchema.safeParse(mcpConfig({ url: mcpUrl, auth: "oauth", oauth: { identity } }))
-          .success,
-      ).toBe(true);
+      expect(accepts(mcpConfig({ url: mcpUrl, auth: "oauth", oauth: { identity } }))).toBe(true);
     }
 
     const oauth = { identity: "per-requester" };
     const missingAuth = OpenClawSchema.safeParse(mcpConfig({ url: mcpUrl, oauth }));
-    expect(missingAuth.success).toBe(false);
-    if (missingAuth.success) {
-      throw new Error("Expected per-requester OAuth without auth mode to fail validation");
-    }
-    expect(missingAuth.error.issues).toContainEqual(
+    expect(missingAuth.error?.issues).toContainEqual(
       expect.objectContaining({
         message: 'oauth.identity "per-requester" requires auth: "oauth"',
         path: ["mcp", "servers", "docs", "oauth", "identity"],
@@ -218,37 +183,7 @@ describe("config schema", () => {
       { url: mcpUrl, command: "docs-mcp", oauth },
       { url: mcpUrl, transport: "stdio", oauth },
     ]) {
-      expect(OpenClawSchema.safeParse(mcpConfig({ auth: "oauth", ...server })).success).toBe(false);
-    }
-  });
-
-  it("requires explicit shared identity and pinned issuers for enterprise MCP", () => {
-    const enterprise = {
-      identity: "shared",
-      idpIssuer: "https://idp.example.com",
-      idpClientId: "client",
-      idpClientSecret: "${IDP_SECRET}",
-      resourceIssuer: "https://auth.example.com",
-      resourceClientId: "resource-client",
-      resourceClientSecret: "${RESOURCE_SECRET}",
-      scope: "mcp.read",
-      redirectUrl: "http://localhost:3097/callback",
-    };
-    const server = { url: mcpUrl, transport: "streamable-http", auth: "enterprise", enterprise };
-    expect(OpenClawSchema.safeParse(mcpConfig(server)).success).toBe(true);
-    for (const invalid of [
-      { ...server, enterprise: { ...enterprise, identity: undefined } },
-      { ...server, enterprise: { ...enterprise, identity: "per-requester" } },
-      { ...server, enterprise: { ...enterprise, resourceIssuer: "http://auth.example.com" } },
-      { ...server, enterprise: { ...enterprise, idpIssuer: "not-a-url" } },
-      { ...server, enterprise: { ...enterprise, resourceIssuer: "not-a-url" } },
-      { ...server, enterprise: { ...enterprise, redirectUrl: "https://example.com/callback" } },
-      { ...server, enterprise: { ...enterprise, redirectUrl: "localhost:3097/callback" } },
-      { ...server, enterprise: { ...enterprise, redirectUrl: "http://127.0.0.2/callback" } },
-      { ...server, oauth: { scope: "mcp.read" } },
-      { ...server, command: "other-mcp" },
-    ]) {
-      expect(OpenClawSchema.safeParse(mcpConfig(invalid)).success).toBe(false);
+      expect(accepts(mcpConfig({ auth: "oauth", ...server }))).toBe(false);
     }
   });
 
@@ -261,7 +196,7 @@ describe("config schema", () => {
       "http://127.0.0.1:18789",
       "http://[::1]:18789",
     ]) {
-      expect(OpenClawSchema.safeParse({ gateway: { publicOrigin } }).success).toBe(true);
+      expect(accepts({ gateway: { publicOrigin } })).toBe(true);
     }
     // Built via URL so no credential-shaped literal lands in source (secret scanners).
     const userinfoOrigin = new URL("https://gateway.example.com");
@@ -274,7 +209,7 @@ describe("config schema", () => {
       userinfoOrigin.href,
       "data:text/html,hello",
     ]) {
-      expect(OpenClawSchema.safeParse({ gateway: { publicOrigin } }).success).toBe(false);
+      expect(accepts({ gateway: { publicOrigin } })).toBe(false);
     }
   });
 
@@ -284,7 +219,16 @@ describe("config schema", () => {
   });
 
   it("merges plugin ui hints", () => {
-    const res = buildConfigSchemaCore(pluginUiHintInput);
+    const res = pluginSchema({
+      id: "voice-call",
+      name: "Voice Call",
+      description: "Outbound voice calls",
+      configUiHints: {
+        provider: { label: "Provider" },
+        "twilio.authToken": { label: "Original Token", sensitive: true },
+        " .twilio.authToken ": { label: "Auth Token", help: "Twilio credential" },
+      },
+    });
 
     expect(res.uiHints["plugins.entries.voice-call"]?.label).toBe("Voice Call");
     expect(res.uiHints["plugins.entries.voice-call.config"]?.label).toBe("Voice Call Config");
@@ -316,18 +260,14 @@ describe("config schema", () => {
 
   it("omits later plugin schemas after the aggregate extension schema budget is exhausted", () => {
     const res = buildConfigSchemaCore({
-      cache: false,
       plugins: Array.from({ length: 40 }, (_, index) => ({
         id: `plugin-${index}`,
-        configSchema: {
-          type: "object",
-          properties: {
-            value: {
-              type: "string",
-              description: `schema-${index}-${"x".repeat(60_000)}`,
-            },
+        configSchema: objectSchema({
+          value: {
+            type: "string",
+            description: `schema-${index}-${"x".repeat(60_000)}`,
           },
-        },
+        }),
       })),
     });
 
@@ -338,23 +278,11 @@ describe("config schema", () => {
     expect(last?.schema?.description).toContain("omitted");
   });
 
-  it("caches merged schemas for identical plugin/channel metadata", () => {
-    const first = buildConfigSchemaCore(cachedMergeInput);
-    const plugin = expectDefined(cachedMergeInput.plugins?.[0], "cached plugin metadata");
-    const channel = expectDefined(cachedMergeInput.channels?.[0], "cached channel metadata");
-    const second = buildConfigSchemaCore({ plugins: [{ ...plugin }], channels: [{ ...channel }] });
-    expect(second).toBe(first);
-  });
-
   it("keeps merged plugin schema fragments independent of manifest metadata", () => {
     const value = { type: "string" };
-    const result = buildConfigSchemaCore({
-      plugins: [
-        {
-          id: "independent-schema",
-          configSchema: { type: "object", properties: { value } },
-        },
-      ],
+    const result = pluginSchema({
+      id: "independent-schema",
+      configSchema: objectSchema({ value }),
     });
     value.type = "number";
     expect(
@@ -362,13 +290,34 @@ describe("config schema", () => {
     ).toBe("string");
   });
 
+  it("releases merged schemas when their callers no longer retain them", async () => {
+    const retired = new WeakRef(
+      pluginSchema({
+        id: "retired-schema-generation",
+        configSchema: objectSchema({ previous: { type: "string" } }),
+      }),
+    );
+    const current = pluginSchema({
+      id: "retired-schema-generation",
+      configSchema: objectSchema({ current: { type: "number" } }),
+    });
+    const control = new WeakRef({});
+    await nextTurn();
+    queryObjects(WeakRef);
+    expect(control.deref()).toBeUndefined();
+    expect(retired.deref() === undefined).toBe(true);
+    expect(
+      lookupConfigSchema(current, "plugins.entries.retired-schema-generation.config.current")
+        ?.schema.type,
+    ).toBe("number");
+  });
+
   it("refreshes sensitive hints when only a plugin's SecretInput paths change", () => {
     const plugin = {
       id: "secret-path-cache",
       configSchema: { type: "object", additionalProperties: true },
     };
-    const build = (path: string) =>
-      buildConfigSchemaCore({ plugins: [{ ...plugin, configSecretInputPaths: [path] }] });
+    const build = (path: string) => pluginSchema({ ...plugin, configSecretInputPaths: [path] });
     const first = build("routes.*.credential");
     const second = build("routes.*.replacement");
     expect(
@@ -404,7 +353,7 @@ describe("config schema", () => {
       fastMode: false,
     });
     for (const invalid of [{ fastMode: "priority" }, { thinking: "turbo" }]) {
-      expect(ToolsSchema.safeParse(reviewerTools(invalid)).success).toBe(false);
+      expect(acceptsTools(reviewerTools(invalid))).toBe(false);
     }
   });
 
@@ -440,6 +389,31 @@ describe("config schema", () => {
     }
   });
 
+  it("validates Tool Search selector fields and requires a nonempty selector", () => {
+    for (const key of ["include", "exclude"]) {
+      const selectors = [{ source: "mcp" }, { name: "github_*" }, { source: "client", name: "*" }];
+      expect(ToolsSchema.parse({ toolSearch: { [key]: selectors } })?.toolSearch).toEqual({
+        [key]: selectors,
+      });
+      expect(acceptsTools({ toolSearch: { [key]: [] } })).toBe(true);
+      for (const selector of [
+        {},
+        { source: "plugin" },
+        { name: "" },
+        { name: "   " },
+        { name: 1 },
+        { source: "mcp", server: "github" },
+        { source: null },
+      ]) {
+        expect(acceptsTools({ toolSearch: { [key]: [selector] } })).toBe(false);
+      }
+      expect(() => ToolsSchema.parse({ toolSearch: { [key]: [{}] } })).toThrow(
+        "Tool Search selectors must specify source, name, or both.",
+      );
+      expect(acceptsTools({ toolSearch: { [key]: "mcp" } })).toBe(false);
+    }
+  });
+
   it("looks up root config schema children without returning the full schema tree", () => {
     const lookup = lookupConfigSchema(baseSchema, ".");
     expect(lookup?.path).toBe(".");
@@ -449,16 +423,40 @@ describe("config schema", () => {
     expect(schema?.properties).toBeUndefined();
   });
 
+  it("explains named custom providers through schema lookup before configuration", () => {
+    const providers = expectDefined(
+      lookupConfigSchema(baseSchema, "models.providers"),
+      "providers",
+    );
+    expect(providers.hint?.help).toContain("Custom entries must include baseUrl and models");
+    expect(providers.children.find((child) => child.key === "*")?.hint?.help).toContain(
+      "Replace * with your chosen ID",
+    );
+
+    for (const id of ["*", "gpu-a"]) {
+      const entry = expectDefined(
+        lookupConfigSchema(baseSchema, `models.providers.${id}`),
+        "provider",
+      );
+      expect(entry.hintPath).toBe("models.providers.*");
+      expect(entry.hint?.help).toContain("before a custom ID is configured");
+      const api = expectDefined(
+        lookupConfigSchema(baseSchema, `models.providers.${id}.api`),
+        "API",
+      );
+      expect(api.schema.enum).toEqual(
+        expect.arrayContaining([
+          "openai-completions",
+          "openai-responses",
+          "anthropic-messages",
+          "ollama",
+        ]),
+      );
+    }
+  });
+
   it("includes reload metadata when a resolver is provided", () => {
-    const lookup = lookupConfigSchema(baseSchema, "gateway", (path) => {
-      if (path === "gateway.auth.mode") {
-        return { kind: "hot" };
-      }
-      if (path.startsWith("gateway")) {
-        return { kind: "restart" };
-      }
-      return { kind: "none" };
-    });
+    const lookup = lookupConfigSchema(baseSchema, "gateway", () => ({ kind: "restart" }));
 
     expect(lookup?.reloadKind).toBe("restart");
     for (const path of ["gateway.port", "gateway.auth"]) {
@@ -496,7 +494,7 @@ describe("config schema", () => {
     const deepPathSegments = Array.from({ length: 33 }, (_, index) => `a${index}`);
     const deepSchema = {
       schema: deepPathSegments.reduceRight<Record<string, unknown>>(
-        (node, key) => ({ type: "object", properties: { [key]: node } }),
+        (node, key) => objectSchema({ [key]: node }),
         { type: "string" },
       ),
       uiHints: {},

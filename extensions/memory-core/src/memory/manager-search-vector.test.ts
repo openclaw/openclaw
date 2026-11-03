@@ -4,6 +4,8 @@ import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
   decodeMemoryEmbedding,
+  ensureSqliteLibrarySelected,
+  openNodeSqliteDatabase,
   truncateUtf16Safe,
 } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
 import {
@@ -94,12 +96,29 @@ describe("searchVector sqlite-vec KNN", () => {
     return db;
   }
 
+  async function createVectorDb() {
+    ensureSqliteLibrarySelected();
+    const db = openNodeSqliteDatabase(":memory:", { allowExtension: true });
+    try {
+      const loaded = await loadSqliteVecExtension({ db });
+      expect(loaded.ok, loaded.error).toBe(true);
+      ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: false });
+      db.exec(`CREATE VIRTUAL TABLE memory_index_chunks_vec USING vec0(
+        id TEXT PRIMARY KEY, embedding FLOAT[2]
+      )`);
+      return db;
+    } catch (error) {
+      db.close();
+      throw error;
+    }
+  }
+
   function insertFallbackChunk(
     db: DatabaseSync,
     id: string,
     vector: number[],
     model = "target-model",
-    source: "memory" | "sessions" = "memory",
+    source: "memory" | "sessions" | "invalid" = "memory",
   ) {
     db.prepare(`INSERT INTO memory_index_chunks
       (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
@@ -124,74 +143,162 @@ describe("searchVector sqlite-vec KNN", () => {
       `);
   }
 
+  function insertVectorChunk(
+    db: DatabaseSync,
+    id: string,
+    vector: [number, number] = [1, 0],
+    model = "target-model",
+    source: "memory" | "sessions" | "invalid" = "memory",
+  ) {
+    insertFallbackChunk(db, id, vector, model, source);
+    db.prepare("INSERT INTO memory_index_chunks_vec (id, embedding) VALUES (?, ?)").run(
+      id,
+      vectorToBlob(vector),
+    );
+  }
+
+  function observeVisits(db: DatabaseSync, chunks = false) {
+    const visits = { chunk: 0, vector: 0 };
+    for (const name of chunks ? (["chunk", "vector"] as const) : (["vector"] as const)) {
+      db.function(`visit_${name}`, { varargs: true }, () => ++visits[name]);
+    }
+    db.exec(`CREATE TEMP VIEW observed_vectors AS
+      SELECT id, embedding, distance, k FROM main.memory_index_chunks_vec WHERE visit_vector(id)`);
+    if (chunks) {
+      db.exec(`CREATE TEMP VIEW memory_index_chunks AS
+        SELECT * FROM main.memory_index_chunks WHERE visit_chunk(id)`);
+    }
+    return visits;
+  }
+
+  const queryKnn = (db: DatabaseSync, limit: number, vectorTable?: string) =>
+    runVectorKnnQuery(db, {
+      vectorTable,
+      providerModels: ["target-model"],
+      queryVec: [1, 0],
+      limit,
+      snippetMaxChars: 20,
+      sourceFilter: { sql: "", params: [] },
+    });
+
+  it("runs KNN before chunk lookup even when planner statistics favor chunks", async () => {
+    using db = await createVectorDb();
+    db.exec("BEGIN");
+    for (let index = 0; index < 100; index++) {
+      insertVectorChunk(db, `chunk-${index}`);
+    }
+    db.exec("COMMIT; ANALYZE");
+    // Deliberately make the chunks table look cheaper to scan.
+    db.exec(
+      "UPDATE sqlite_stat1 SET stat = '1 1' WHERE tbl = 'memory_index_chunks'; ANALYZE sqlite_schema",
+    );
+    const visits = observeVisits(db);
+    const result = await queryKnn(db, 5, "observed_vectors");
+    expect(result.fallbackScanRequired).toBe(false);
+    expect(result.rows).toHaveLength(5);
+    expect(visits.vector).toBe(40);
+  });
+
+  it("rejects an invalid native row before underfill counts", async () => {
+    using db = await createVectorDb();
+    // SQLite accepts this source; the native result boundary must reject it.
+    insertVectorChunk(db, "invalid", [1, 0], "target-model", "invalid");
+    using prepare = vi.spyOn(db, "prepare");
+    await expect(queryKnn(db, 2)).rejects.toThrow(
+      "memory vector KNN query returned an invalid row",
+    );
+    expect(
+      prepare.mock.calls.filter(([statement]) => statement.startsWith("SELECT COUNT(*)")),
+    ).toHaveLength(0);
+  });
+
+  it("stops counting after fallback is decided without enumerating the remaining rows", async () => {
+    using db = await createVectorDb();
+    db.exec("BEGIN");
+    for (let index = 0; index < 6000; index++) {
+      insertVectorChunk(
+        db,
+        `chunk-${index}`,
+        index < 1000 ? [0, 1] : [1, 0],
+        index < 1000 ? "target-model" : "other",
+      );
+    }
+    db.exec("COMMIT");
+    const visits = observeVisits(db, true);
+    expect(await queryKnn(db, 2, "observed_vectors")).toEqual({
+      rows: [],
+      fallbackScanRequired: true,
+    });
+    expect(visits.chunk).toBeGreaterThan(0);
+    expect(visits.vector).toBeGreaterThan(0);
+    expect(visits.chunk).toBeLessThanOrEqual(4114);
+    expect(visits.vector).toBeLessThanOrEqual(8209);
+  });
+
   it.each([9_007_199_254_740_993n])(
     "scans the full signed rowid domain across sparse unsafe-integer batch boundaries from %s",
     async (firstHighRowid) => {
-      const db = createFallbackDb();
-      try {
-        // Four low identities put an unsafe odd rowid at the first batch boundary;
-        // the two starting values exercise both Number rounding directions.
-        const highRows = Array.from(
-          { length: 252 },
-          (_, index) => firstHighRowid + BigInt(index) * 2n,
-        );
-        const boundary = highRows.at(-1)!;
-        const rowids = [
-          -9_223_372_036_854_775_808n,
-          -9_007_199_254_740_993n,
-          -1n,
-          0n,
-          ...highRows,
-          boundary + 1n,
-          boundary + 2n,
-          boundary + 1_000_000n,
-          9_223_372_036_854_775_807n,
-        ];
-        const winnerIndex = 256;
-        const runnerUpIndex = rowids.length - 1;
-        const ids = rowids.map((_, index) => `row-${index}`);
-        const insert = db.prepare(`INSERT INTO memory_index_chunks
+      using db = createFallbackDb();
+      // Four low identities put an unsafe odd rowid at the first batch boundary;
+      // the two starting values exercise both Number rounding directions.
+      const highRows = Array.from(
+        { length: 252 },
+        (_, index) => firstHighRowid + BigInt(index) * 2n,
+      );
+      const boundary = highRows.at(-1)!;
+      const rowids = [
+        -9_223_372_036_854_775_808n,
+        -9_007_199_254_740_993n,
+        -1n,
+        0n,
+        ...highRows,
+        boundary + 1n,
+        boundary + 2n,
+        boundary + 1_000_000n,
+        9_223_372_036_854_775_807n,
+      ];
+      const winnerIndex = 256;
+      const runnerUpIndex = rowids.length - 1;
+      const ids = rowids.map((_, index) => `row-${index}`);
+      const insert = db.prepare(`INSERT INTO memory_index_chunks
           (chunk_rowid, id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
           VALUES (?, ?, 'memory/boundary.md', 'memory', 1, 2, 'hash', 'target-model', 'boundary body', ?, 1)`);
-        insert.setReadBigInts(true);
-        for (const [index, rowid] of rowids.entries()) {
-          const vector =
-            index === winnerIndex ? [1, 0] : index === runnerUpIndex ? [0.8, 0.6] : [0, 1];
-          insert.run(rowid, ids[index]!, encodeMemoryEmbedding(vector));
-        }
+      insert.setReadBigInts(true);
+      for (const [index, rowid] of rowids.entries()) {
+        const vector =
+          index === winnerIndex ? [1, 0] : index === runnerUpIndex ? [0.8, 0.6] : [0, 1];
+        insert.run(rowid, ids[index]!, encodeMemoryEmbedding(vector));
+      }
 
-        const scanned: string[] = [];
-        db.function("observe_embedding", (id, embedding) => {
-          scanned.push(String(id));
-          if (scanned.length > rowids.length) {
-            throw new Error("Fallback cursor repeated an already-scanned row");
-          }
-          return embedding;
-        });
-        db.exec(`
+      const scanned: string[] = [];
+      db.function("observe_embedding", (id, embedding) => {
+        scanned.push(String(id));
+        if (scanned.length > rowids.length) {
+          throw new Error("Fallback cursor repeated an already-scanned row");
+        }
+        return embedding;
+      });
+      db.exec(`
           ALTER TABLE memory_index_chunks RENAME TO observed_chunks;
           CREATE VIEW memory_index_chunks AS
             SELECT chunk_rowid AS rowid, id, path, source, start_line, end_line, model, text,
                    observe_embedding(id, embedding) AS embedding FROM observed_chunks;
         `);
 
-        const results = await search(db, { limit: rowids.length });
-        expect(scanned).toEqual(ids);
-        expect(results.map((result) => result.id)).toEqual([
-          ids[winnerIndex],
-          ids[runnerUpIndex],
-          ...ids.filter((_, index) => index !== winnerIndex && index !== runnerUpIndex),
-        ]);
-        expect(results[0]?.score).toBe(1);
-        expect(results[1]?.score).toBeCloseTo(0.8);
-        expect(
-          results.every(
-            (result) => typeof result.startLine === "number" && typeof result.endLine === "number",
-          ),
-        ).toBe(true);
-      } finally {
-        db.close();
-      }
+      const results = await search(db, { limit: rowids.length });
+      expect(scanned).toEqual(ids);
+      expect(results.map((result) => result.id)).toEqual([
+        ids[winnerIndex],
+        ids[runnerUpIndex],
+        ...ids.filter((_, index) => index !== winnerIndex && index !== runnerUpIndex),
+      ]);
+      expect(results[0]?.score).toBe(1);
+      expect(results[1]?.score).toBeCloseTo(0.8);
+      expect(
+        results.every(
+          (result) => typeof result.startLine === "number" && typeof result.endLine === "number",
+        ),
+      ).toBe(true);
     },
   );
 
@@ -479,29 +586,8 @@ describe("searchVector sqlite-vec KNN", () => {
   });
 
   it("falls back when filters hide matches beyond sqlite-vec's KNN cap", async () => {
-    using db = new DatabaseSync(":memory:", { allowExtension: true });
-    const loaded = await loadSqliteVecExtension({ db });
-    expect(loaded.ok, loaded.error).toBe(true);
-    ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: false });
-    db.exec(`
-        CREATE VIRTUAL TABLE memory_index_chunks_vec USING vec0(
-          id TEXT PRIMARY KEY,
-          embedding FLOAT[2]
-        );
-      `);
-
-    const insertVector = db.prepare(
-      "INSERT INTO memory_index_chunks_vec (id, embedding) VALUES (?, ?)",
-    );
-    const addChunk = (
-      id: string,
-      vector: [number, number],
-      model = "target-model",
-      source: "memory" | "sessions" = "memory",
-    ) => {
-      insertFallbackChunk(db, id, vector, model, source);
-      insertVector.run(id, vectorToBlob(vector));
-    };
+    using db = await createVectorDb();
+    const addChunk = insertVectorChunk.bind(null, db);
 
     for (let i = 0; i < 20; i += 1) {
       addChunk(`other-${i}`, [1, 0], "other-model");

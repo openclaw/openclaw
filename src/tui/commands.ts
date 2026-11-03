@@ -31,11 +31,6 @@ const USAGE_COMMAND_VALUES = [
   "default",
 ];
 
-type ParsedCommand = {
-  name: string;
-  args: string;
-};
-
 export function isTuiBtwCommand(text: string): boolean {
   return /^\/(?:btw|side)(?::|\s|$)/i.test(text.trim());
 }
@@ -233,7 +228,7 @@ function appendSlashCommand(
   commands.push({ name: normalizedName, description, getArgumentCompletions });
 }
 
-export function parseCommand(input: string): ParsedCommand {
+export function parseCommand(input: string) {
   const sharedCommand = resolveTextCommand(input);
   if (sharedCommand) {
     return {

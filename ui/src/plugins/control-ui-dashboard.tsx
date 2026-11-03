@@ -1,8 +1,19 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
-import { Errored, Loading, Show, createMemo, createStore, isPending, onCleanup } from "solid-js";
+import {
+  Errored,
+  Loading,
+  Show,
+  children,
+  createMemo,
+  createStore,
+  isPending,
+  lazy,
+  onCleanup,
+} from "solid-js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { Icon } from "../components/solid/icon.tsx";
+import { registerPluginManagementEnglish } from "../i18n/locales/en-plugin-management.ts";
 import {
   acquireBoardProviderForSession,
   boardExists,
@@ -11,11 +22,17 @@ import {
 } from "../lib/board/provider.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { useOptionalApplication } from "../lib/reactive/context.ts";
-import { t } from "../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { observeSolidBridgeProperties } from "./control-ui-properties.ts";
 import "./control-ui-dashboard.css";
+
+registerEnglishCatalog(registerPluginManagementEnglish);
+
+const DashboardBoard = lazy(() => import("./control-ui-dashboard-board.tsx"), {
+  export: "PluginSessionDashboardBoard",
+});
 
 export type PluginSessionDashboardProps = {
   session: BoardGetParams | null;
@@ -32,7 +49,6 @@ function PluginSessionDashboardContent(
 ) {
   const context = useOptionalApplication();
   const gateway = context ? projectGateway(context.gateway) : undefined;
-  const boardView = createMemo(() => import("../components/board/board-view.tsx"));
   const scope = createMemo(
     () => {
       gateway?.revision();
@@ -152,6 +168,15 @@ function PluginSessionDashboardContent(
       ? { ...current, session, snapshot: state.snapshot }
       : null;
   });
+  const content = children(() => (
+    <DashboardBoard
+      board={board()}
+      active={presentation.expanded && props.presented}
+      activeTabId={presentation.activeTabId}
+      canMutate={props.connected && props.canMutate}
+      canGrant={props.connected && props.canGrant}
+    />
+  ));
   return (
     <section class="plugin-session-dashboard">
       <button
@@ -181,7 +206,7 @@ function PluginSessionDashboardContent(
               return failure instanceof Error ? failure.message : String(failure);
             };
             return (
-              <Show when={!isPending(() => boardView())}>
+              <Show when={!isPending(() => content())}>
                 <p role="alert">{message()}</p>
                 <button type="button" onClick={reset}>
                   {t("common.retry")}
@@ -190,33 +215,7 @@ function PluginSessionDashboardContent(
             );
           }}
         >
-          <Loading>
-            <Show when={boardView().BoardView} keyed>
-              {(BoardView) => (
-                <Show
-                  when={board()}
-                  fallback={
-                    <p class="plugin-session-dashboard__empty">{t("pluginUi.dashboardEmpty")}</p>
-                  }
-                >
-                  {(current) => (
-                    <BoardView
-                      active={presentation.expanded && props.presented}
-                      session={current().session}
-                      snapshot={current().snapshot}
-                      activeTabId={presentation.activeTabId}
-                      widgetFrameUrl={(name: string, revision: number) =>
-                        current().lease.provider.widgetFrameUrl(name, revision)
-                      }
-                      callbacks={current().callbacks}
-                      canMutate={props.connected && props.canMutate}
-                      canGrant={props.connected && props.canGrant}
-                    />
-                  )}
-                </Show>
-              )}
-            </Show>
-          </Loading>
+          <Loading>{content()}</Loading>
         </Errored>
       </div>
       <Show when={!presentation.expanded && presentation.initialized && !board()}>

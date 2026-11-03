@@ -264,31 +264,27 @@ export function main(
       ? compareRatchetSets(baseline, allowedBaseline, compareStrings).added
       : [];
 
-    if (
-      reportRatchetFailures([
-        {
-          entries: allRules,
-          title: "All-rule lint disables are forbidden; name only the required rules:",
-        },
-      ])
-    ) {
-      return 1;
-    }
-
-    if (
-      reportLimitViolations([
-        ...added.map((file) => ({
-          file,
-          title: "New max-lines suppressions are forbidden; split these files:",
-          message: "Remove the new max-lines suppression and split the file.",
-        })),
-        ...expanded.map((file) => ({
-          file: BASELINE_PATH,
-          title: "The max-lines baseline may only shrink; remove these entries:",
-          message: file,
-        })),
-      ])
-    ) {
+    // The baseline must describe the tree in CI too: advisory drift on main turns every
+    // later local run red. Only baseline growth follows the limit severity policy.
+    const unlisted = reportRatchetFailures([
+      {
+        entries: allRules,
+        title: "All-rule lint disables are forbidden; name only the required rules:",
+      },
+      {
+        entries: added,
+        title:
+          "New max-lines suppressions are forbidden; split these files (renames move their baseline entry):",
+      },
+    ]);
+    const grown = reportLimitViolations(
+      expanded.map((file) => ({
+        file: BASELINE_PATH,
+        title: "The max-lines baseline may only shrink; remove these entries:",
+        message: file,
+      })),
+    );
+    if (unlisted || grown) {
       return 1;
     }
 
@@ -301,13 +297,12 @@ export function main(
       return 0;
     }
     if (
-      reportLimitViolations(
-        stale.map((file) => ({
-          file: BASELINE_PATH,
+      reportRatchetFailures([
+        {
+          entries: stale,
           title: "Remove stale max-lines baseline entries (or run with --prune):",
-          message: file,
-        })),
-      )
+        },
+      ])
     ) {
       return 1;
     }

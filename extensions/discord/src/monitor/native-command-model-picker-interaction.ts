@@ -3,7 +3,6 @@ import {
   buildCommandTextFromArgs,
   findCommandByNativeName,
   listChatCommands,
-  type ChatCommandDefinition,
   type CommandArgs,
 } from "openclaw/plugin-sdk/command-auth-native";
 import {
@@ -34,7 +33,6 @@ import {
   loadDiscordModelPickerData,
   parseDiscordModelPickerData,
   resolveDiscordModelPickerPageForModel,
-  type DiscordModelPickerState,
 } from "./model-picker.state.js";
 import {
   renderDiscordModelPickerModelsView,
@@ -77,64 +75,6 @@ function resolveRuntimeToken(
 function resolveSelectedBucket(interaction: BaseComponentInteraction): string | undefined {
   const raw = resolveModelPickerSelectionValue(interaction)?.toLowerCase();
   return raw && raw !== "all" ? raw : undefined;
-}
-
-function resolveSubmittedModelRef(params: {
-  data: Awaited<ReturnType<typeof loadDiscordModelPickerData>>;
-  parsed: DiscordModelPickerState;
-  quickModels: string[];
-  requireModelToken: boolean;
-}): string | null {
-  if (params.parsed.action === "reset") {
-    return `${params.data.resolvedDefault.provider}/${params.data.resolvedDefault.model}`;
-  }
-  if (params.parsed.modelToken) {
-    return resolveDiscordModelPickerModelRefByToken(params.data, params.parsed.modelToken);
-  }
-  if (params.parsed.action === "quick" || params.parsed.view === "recents") {
-    if (params.requireModelToken) {
-      return null;
-    }
-    const models =
-      params.parsed.action === "quick"
-        ? params.quickModels
-        : getDiscordModelPickerRecentModelRefs(params.data, params.quickModels);
-    const slot = params.parsed.recentSlot ?? 0;
-    return slot >= 1 ? (models[slot - 1] ?? null) : null;
-  }
-
-  const provider = params.parsed.provider;
-  const selectedModel = resolveDiscordModelPickerModelSelection({
-    data: params.data,
-    provider: provider ?? "",
-    modelIndex: params.parsed.modelIndex,
-    modelToken: params.parsed.modelToken,
-    requireModelToken: params.requireModelToken,
-  });
-  return provider && selectedModel ? `${provider}/${selectedModel}` : null;
-}
-
-function buildDiscordModelPickerSelectionCommand(params: {
-  modelRef: string;
-  runtime?: string;
-}): { command: ChatCommandDefinition; args: CommandArgs; prompt: string } | null {
-  const commandDefinition =
-    findCommandByNativeName("model", "discord") ??
-    listChatCommands().find((entry) => entry.key === "model");
-  if (!commandDefinition) {
-    return null;
-  }
-  const commandArgs: CommandArgs = {
-    values: {
-      model: params.modelRef,
-    },
-    raw: params.runtime ? `${params.modelRef} --runtime ${params.runtime}` : params.modelRef,
-  };
-  return {
-    command: commandDefinition,
-    args: commandArgs,
-    prompt: buildCommandTextFromArgs(commandDefinition, commandArgs),
-  };
 }
 
 function listDiscordModelPickerProviderModels(
@@ -451,12 +391,36 @@ async function handleDiscordModelPickerInteraction(
   }
 
   if (parsed.action === "submit" || parsed.action === "reset" || parsed.action === "quick") {
-    const modelRef = resolveSubmittedModelRef({
-      data: pickerData,
-      parsed,
-      quickModels,
-      requireModelToken,
-    });
+    const resolveSubmittedModelRef = (): string | null => {
+      if (parsed.action === "reset") {
+        return `${pickerData.resolvedDefault.provider}/${pickerData.resolvedDefault.model}`;
+      }
+      if (parsed.modelToken) {
+        return resolveDiscordModelPickerModelRefByToken(pickerData, parsed.modelToken);
+      }
+      if (parsed.action === "quick" || parsed.view === "recents") {
+        if (requireModelToken) {
+          return null;
+        }
+        const models =
+          parsed.action === "quick"
+            ? quickModels
+            : getDiscordModelPickerRecentModelRefs(pickerData, quickModels);
+        const slot = parsed.recentSlot ?? 0;
+        return slot >= 1 ? (models[slot - 1] ?? null) : null;
+      }
+
+      const provider = parsed.provider;
+      const selectedModel = resolveDiscordModelPickerModelSelection({
+        data: pickerData,
+        provider: provider ?? "",
+        modelIndex: parsed.modelIndex,
+        modelToken: parsed.modelToken,
+        requireModelToken,
+      });
+      return provider && selectedModel ? `${provider}/${selectedModel}` : null;
+    };
+    const modelRef = resolveSubmittedModelRef();
     const parsedModelRef = modelRef ? splitDiscordModelRef(modelRef) : null;
     if (
       !parsedModelRef ||
@@ -491,14 +455,18 @@ async function handleDiscordModelPickerInteraction(
       );
       return;
     }
-    const selectionCommand = buildDiscordModelPickerSelectionCommand({
-      modelRef: resolvedModelRef,
-      runtime: selectedRuntime,
-    });
-    if (!selectionCommand) {
+    const commandDefinition =
+      findCommandByNativeName("model", "discord") ??
+      listChatCommands().find((entry) => entry.key === "model");
+    if (!commandDefinition) {
       await showNotice("Sorry, /model is unavailable right now.");
       return;
     }
+    const commandArgs: CommandArgs = {
+      values: { model: resolvedModelRef },
+      raw: selectedRuntime ? `${resolvedModelRef} --runtime ${selectedRuntime}` : resolvedModelRef,
+    };
+    const prompt = buildCommandTextFromArgs(commandDefinition, commandArgs);
 
     const updateResult = await showNotice(`Applying model change to ${resolvedModelRef}...`, false);
     if (updateResult === null) {
@@ -517,9 +485,9 @@ async function handleDiscordModelPickerInteraction(
           params.dispatchCommandInteraction({
             readPolicy: ctx.readPolicy,
             interaction,
-            prompt: selectionCommand.prompt,
-            command: selectionCommand.command,
-            commandArgs: selectionCommand.args,
+            prompt,
+            command: commandDefinition,
+            commandArgs,
             cfg,
             discordConfig: ctx.discordConfig,
             accountId: ctx.accountId,
@@ -589,7 +557,7 @@ async function handleDiscordModelPickerInteraction(
       }),
     );
     if (delivered !== null) {
-      await recordReply(selectionCommand.prompt, noticeMessage, "selection");
+      await recordReply(prompt, noticeMessage, "selection");
     }
     return;
   }

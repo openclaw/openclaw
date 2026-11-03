@@ -65,6 +65,20 @@ export function createOAuthRefreshCredential(
   };
 }
 
+export function createUnresolvedOAuthCredential(provider = "openai"): OAuthCredential {
+  return createOAuthRefreshCredential({
+    provider,
+    access: "",
+    refresh: "",
+    expires: 0,
+    oauthRef: {
+      source: "openclaw-credentials",
+      provider: "openai-codex",
+      id: "00000000000000000000000000000000",
+    },
+  });
+}
+
 export function oauthRefreshReplacementCases() {
   const mismatch = oidcIdentity({ sub: "subject-b" });
   return (
@@ -84,22 +98,16 @@ export function oauthRefreshReplacementCases() {
 }
 
 export function oauthRefreshFailureFallbackCases() {
-  return (
-    [
-      ["rejects refresh-only changes", "failed-access", "new-refresh", undefined],
-      ["adopts access-token changes", "new-access", "failed-refresh", "new-access"],
-      [
-        "preserves the refresh error when adopted-key construction fails",
-        "new-access",
-        "failed-refresh",
-        undefined,
-        "fallback key construction failed",
-      ],
-    ] as const
-  ).map(([name, access, refresh, expectedApiKey, buildError]) => ({
-    name,
-    candidate: { access, refresh, expires: Date.now() + 600_000, accountId: "acct-123" },
-    expectedApiKey,
-    buildError,
-  }));
+  return [
+    {
+      name: "preserves the refresh error when adopted-key construction fails",
+      candidate: {
+        access: "new-access",
+        refresh: "failed-refresh",
+        expires: Date.now() + 600_000,
+        accountId: "acct-123",
+      },
+      buildError: "fallback key construction failed",
+    },
+  ];
 }

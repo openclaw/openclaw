@@ -42,14 +42,18 @@ export async function prepareGitCandidateNodeRuntime(
   root: string,
   env: NodeJS.ProcessEnv = process.env,
   mode: "package-tooling" | "current-runtime" = "package-tooling",
+  inspectedNodeEngine?: string | null,
 ): Promise<{ env: NodeJS.ProcessEnv; step?: never } | { step: UpdateStepResult; env?: never }> {
   const startedAt = Date.now();
-  const manifest = asNullableRecord(
-    await tryReadJson<unknown>(path.join(root, "package.json"), {
-      maxBytes: MAX_PACKAGE_JSON_BYTES,
-    }),
-  );
-  const engine = normalizeNullableString(asNullableRecord(manifest?.engines)?.node);
+  let engine = inspectedNodeEngine;
+  if (engine === undefined) {
+    const manifest = asNullableRecord(
+      await tryReadJson<unknown>(path.join(root, "package.json"), {
+        maxBytes: MAX_PACKAGE_JSON_BYTES,
+      }),
+    );
+    engine = normalizeNullableString(asNullableRecord(manifest?.engines)?.node);
+  }
   const acceptNodeVersion = (version: string | null) =>
     nodeVersionSatisfiesEngine(version, engine) !== false;
   let currentVersion = process.versions.node;

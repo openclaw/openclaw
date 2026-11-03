@@ -1,6 +1,5 @@
 import { expect, it } from "vitest";
-import { createEmptyCostUsageTotals } from "../../../src/infra/session-cost-usage-totals.js";
-import { buildAggregatesFromSessions } from "../pages/usage/view.test-support.ts";
+import { buildAggregatesFromSessions, usageTotals } from "../pages/usage/view.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installUsageOverviewGateway as installMockGateway } from "./usage-overview-fixture.test-support.ts";
 
@@ -19,13 +18,7 @@ suite.define(() => {
         serviceWorkers: "block",
       },
       async ({ page }) => {
-        const totals = {
-          ...createEmptyCostUsageTotals(),
-          input: 100,
-          totalTokens: 100,
-          totalCost: 1,
-          inputCost: 1,
-        };
+        const totals = usageTotals(100, 1);
         const sessions = (date: string) => ({
           updatedAt: Date.now(),
           startDate: date,

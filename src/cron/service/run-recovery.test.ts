@@ -6,6 +6,7 @@ import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-c
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { cronRunLogEntryToDetail } from "../run-history-detail.js";
 import { projectCronRunHistoryPage } from "../run-history.js";
+import type { CronRunLogEntry } from "../run-log-types.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
 import { loadCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
@@ -18,6 +19,7 @@ import { recoverCronRuns } from "./run-recovery.js";
 import { makeCronRecoveryState } from "./run-recovery.test-support.js";
 import { createCronServiceState } from "./state.js";
 import { ensureLoaded } from "./store.js";
+import { authorCronRunCompletion } from "./timer-job-runner.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-run-recovery-" });
 const now = 1_800_000_000_000;
@@ -121,7 +123,10 @@ async function record(
   store: Awaited<ReturnType<typeof recoveryStore>>,
   receipt: CronRunReceiptHandle,
   entry: {
-    status: "ok";
+    status: "ok" | "error";
+    error?: string;
+    provider?: string;
+    errorReason?: CronRunLogEntry["errorReason"];
     delivered?: boolean;
     deliveryStatus?: "delivered";
     nextRunAtMs?: number;
@@ -137,7 +142,7 @@ async function record(
       agentId: receipt.agentId,
       startedAt: now,
       endedAt: now + 500,
-      status: "succeeded",
+      status: entry.status === "ok" ? "succeeded" : "failed",
       detail: cronRunLogEntryToDetail(
         {
           ts: now + 500,
@@ -145,7 +150,7 @@ async function record(
           action: "finished",
           runAtMs: now,
           durationMs: 500,
-          completionStatus: "succeeded",
+          completionStatus: entry.status === "ok" ? "succeeded" : "failed",
           ...entry,
         },
         { storeKey: store.storeKey, triggerEval },
@@ -204,7 +209,6 @@ describe("worker-owned startup recovery", () => {
         nowMs: () => now + 1_000,
         log: logger,
         enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         runIsolatedAgentJob: vi.fn(),
         runCommandJob,
         onEvent,
@@ -232,7 +236,6 @@ describe("worker-owned startup recovery", () => {
         expect(recovered.state.autoDisabled).toBeUndefined();
         expect(recovered.state.failureAlertIncident).toBeUndefined();
         expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
-        expect(state.deps.requestHeartbeat).not.toHaveBeenCalled();
         expect(runCommandJob).not.toHaveBeenCalled();
         expect(onEvent.mock.calls.filter(([event]) => event.action === "finished")).toHaveLength(1);
         stop(state);
@@ -314,6 +317,75 @@ describe("worker-owned startup recovery", () => {
       expect(await store.history()).toHaveLength(1);
     },
   );
+
+  it.each([undefined, "timeout"] as const)(
+    "restores the recorded failure reason %s without changing history or replaying notices",
+    async (errorReason) => {
+      const entry = job("recorded-failure", { failureAlert: { after: 1, cooldownMs: 0 } });
+      const store = await recoveryStore([entry]);
+      const receipt = await activateManual(store, entry);
+      await record(store, receipt, {
+        status: "error",
+        error: "internal_error from provider",
+        provider: "anthropic",
+        errorReason,
+        nextRunAtMs: now + 60_000,
+      });
+      const before = await store.history();
+      const outcome = await store.recover();
+      expect(outcome.jobs[0]?.state.lastErrorReason).toBe(errorReason);
+      expect(outcome.jobs[0]?.state.nextRunAtMs).toBe(now + 60_000);
+      expect(outcome.notifications).toEqual([]);
+      expect(await store.history()).toEqual(before);
+      expect(
+        openOpenClawStateDatabase()
+          .db.prepare("SELECT status FROM cron_run_receipts WHERE receipt_id = ?")
+          .get(receipt.receiptId),
+      ).toMatchObject({ status: "error" });
+    },
+  );
+
+  it("settles a recorded timeout receipt after restart without recording the outcome twice", async () => {
+    const entry = job("recorded-pending-timeout");
+    const store = await recoveryStore([entry]);
+    const receipt = await activateManual(store, entry);
+    await executeOpenClawStateWorker(store.context, {
+      type: "cron.finalizeRuns",
+      input: {
+        storeKey: store.storeKey,
+        snapshot: {
+          nowMs: now + 500,
+          outcomes: [
+            authorCronRunCompletion(entry, {
+              jobId: entry.id,
+              job: entry,
+              runReceipt: receipt,
+              executionPending: true,
+              status: "error" as const,
+              error: "cron: job execution timed out",
+              errorReason: "timeout" as const,
+              startedAt: now,
+              endedAt: now + 500,
+            }),
+          ],
+        },
+      },
+    });
+    const beforeJob = (await loadCronStore(store.storePath)).jobs[0];
+    const beforeHistory = await store.history();
+    expect(beforeHistory).toHaveLength(1);
+    const result = await store.recover();
+    expect(result.interruptedRuns).toEqual([]);
+    expect((await loadCronStore(store.storePath)).jobs[0]).toEqual(beforeJob);
+    expect(await store.history()).toEqual(beforeHistory);
+    expect(
+      openOpenClawStateDatabase()
+        .db.prepare("SELECT status FROM cron_run_receipts WHERE receipt_id = ?")
+        .get(receipt.receiptId),
+    ).toMatchObject({ status: "error" });
+    await store.recover();
+    expect(await store.history()).toEqual(beforeHistory);
+  });
 
   it("restores a recorded result and primary delivery before one-shot deletion", async () => {
     const entry = job("complete", {

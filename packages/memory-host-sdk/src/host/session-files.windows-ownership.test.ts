@@ -1,19 +1,9 @@
-// Memory transcript owners follow filesystem casing without crossing agents.
 import fsSync from "node:fs";
 import path from "node:path";
-import {
-  captureRuntimeConfigAsyncReader,
-  clearConfigCache,
-  clearRuntimeConfigSnapshot,
-} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { captureRuntimeConfigAsyncReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { upsertSessionEntryCore } from "../../../../src/config/sessions/session-accessor.js";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawAgentDatabasesForTest,
-} from "../../../../src/plugin-sdk/sqlite-runtime-testing.js";
-import { closeOpenClawStateDatabaseForTest } from "../../../../src/state/openclaw-state-db.js";
-import { createTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { withOpenClawTestState } from "../../../../src/test-utils/openclaw-test-state.js";
 import {
   extractAgentIdFromSessionsDir,
   resolveSessionTranscriptsDirForAgent,
@@ -68,45 +58,31 @@ describe("memory session directory ownership", () => {
   });
 
   it("preserves canonical SQLite session identity on Windows", async () => {
-    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    const tempDirs = createTempDirTracker();
-    const tmpDir = fsSync.realpathSync.native(tempDirs.make("session-windows-ownership-"));
-    try {
-      vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
-      vi.stubEnv("OPENCLAW_CONFIG_PATH", undefined);
-      clearRuntimeConfigSnapshot();
-      clearConfigCache();
-      await captureRuntimeConfigAsyncReader()();
+    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+      const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      try {
+        await captureRuntimeConfigAsyncReader()();
+        const sessionsDir = state.sessionsDir();
+        const storePath = path.join(sessionsDir, "sessions.json");
+        const sessionKey = "agent:main:chat:windows-transcript";
+        fsSync.mkdirSync(sessionsDir, { recursive: true });
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey, storePath },
+          { sessionId: "active", updatedAt: 1 },
+        );
 
-      const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
-      const storePath = path.join(sessionsDir, "sessions.json");
-      const sessionKey = "agent:main:chat:windows-transcript";
-      fsSync.mkdirSync(sessionsDir, { recursive: true });
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey, storePath },
-        { sessionId: "active", updatedAt: 1 },
-      );
-
-      await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toContainEqual(
-        expect.objectContaining({
-          agentId: "main",
-          sessionFile: sessionKey,
-          sessionId: "active",
-          transcriptSource: "sqlite",
-        }),
-      );
-    } finally {
-      platform.mockRestore();
-      // Agent close releases leases through shared state; close agent handles first while the
-      // fixture env is active, then close shared state before removing the Windows-owned directory.
-      await closeOpenClawAgentDatabasesAsync(tmpDir);
-      closeOpenClawAgentDatabasesForTest();
-      closeOpenClawStateDatabaseForTest();
-      vi.unstubAllEnvs();
-      clearRuntimeConfigSnapshot();
-      clearConfigCache();
-      tempDirs.cleanup();
-    }
+        await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toContainEqual(
+          expect.objectContaining({
+            agentId: "main",
+            sessionFile: sessionKey,
+            sessionId: "active",
+            transcriptSource: "sqlite",
+          }),
+        );
+      } finally {
+        platform.mockRestore();
+      }
+    });
   });
 
   it.each(["bad owner", " Main"])(

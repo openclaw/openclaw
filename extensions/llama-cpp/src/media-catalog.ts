@@ -4,8 +4,6 @@ import { resolveLlamaCppDiskBudget, resolveLlamaCppMemoryBudget } from "./model-
 const GIB = 1024 ** 3;
 
 export type LlamaCppMediaArtifact = {
-  repository: string;
-  revision: string;
   filename: string;
   source: string;
   fileName: string;
@@ -37,8 +35,6 @@ function artifact(
   expectedSha256: string,
 ): LlamaCppMediaArtifact {
   return {
-    repository,
-    revision,
     filename,
     source: `hf:${repository}/${filename}#${revision}`,
     fileName: `hf_${repository.replaceAll("/", "_")}_${revision}_${filename}`,

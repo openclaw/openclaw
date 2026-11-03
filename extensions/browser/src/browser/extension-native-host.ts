@@ -58,13 +58,9 @@ export function parseBrowserNativeHostOrigins(argv: string[]): {
   return { expectedOrigins, callerOrigin };
 }
 
-async function validateNativeManifest(params: {
-  manifestPath: string;
-  launcherPath: string;
-  callerOrigin: string;
-  expectedOrigins: string[];
-  stateDir?: string;
-}): Promise<void> {
+async function validateNativeManifest(
+  params: Parameters<typeof runBrowserNativeHost>[0],
+): Promise<void> {
   const manifestFile = await readPrivateNativeHostFile(params.manifestPath, false);
   const { realPath: launcherPath } = await readPrivateNativeHostFile(params.launcherPath, true);
   const managedRoot = path.resolve(

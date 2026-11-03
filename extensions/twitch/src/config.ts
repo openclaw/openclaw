@@ -99,7 +99,6 @@ export function resolveTwitchAccountContext(cfg: OpenClawConfig, accountId?: str
   return {
     accountId: resolvedAccountId,
     account,
-    tokenResolution,
     configured: account ? isAccountConfigured(account, tokenResolution.token) : false,
     availableAccountIds: listAccountIds(cfg),
   };

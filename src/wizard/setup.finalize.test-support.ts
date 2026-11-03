@@ -2,10 +2,10 @@
 import { expect, vi } from "vitest";
 import type { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 
-export function createRuntimeProbeResult(bunVersion = "1.4.3") {
+export function createRuntimeProbeResult(bunVersion: string | null = "1.4.4") {
   return {
     stdout: JSON.stringify({
-      nodeVersion: "26.8.1",
+      nodeVersion: "26.12.1",
       bunVersion,
       sqliteVersion: "3.53.4",
       sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },

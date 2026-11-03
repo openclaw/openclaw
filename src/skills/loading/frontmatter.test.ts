@@ -21,56 +21,39 @@ describe("resolveSkillManifestMetadata install validation", () => {
     return resolveSkillManifestMetadata({ metadata: JSON.stringify({ openclaw: { install } }) })
       ?.install;
   }
-
-  it("accepts safe install specs", () => {
-    const install = resolveInstall(
-      { kind: "brew", formula: "python@3.12" },
-      { kind: "node", package: "@scope/pkg@1.2.3" },
-      { kind: "go", module: "example.com/tool/cmd@v1.2.3" },
-      { kind: "uv", package: "uvicorn[standard]==0.31.0" },
-      { kind: "download", url: "https://example.com/tool.tar.gz" },
-    );
-    expect(install).toEqual([
-      { kind: "brew", formula: "python@3.12" },
-      { kind: "node", package: "@scope/pkg@1.2.3" },
-      { kind: "go", module: "example.com/tool/cmd@v1.2.3" },
-      { kind: "uv", package: "uvicorn[standard]==0.31.0" },
-      { kind: "download", url: "https://example.com/tool.tar.gz" },
-    ]);
+  const download = (sha256: unknown) => ({
+    kind: "download",
+    url: "https://example.com/runtime.tar.bz2",
+    sha256,
   });
 
-  it.each([
-    { kind: "brew", formula: "wget --HEAD" },
-    { kind: "node", package: "file:../malicious" },
-    { kind: "go", module: "https://evil.example/mod" },
-    { kind: "download", url: "file:///tmp/payload.tgz" },
-  ])("drops unsafe $kind install specs", (spec) => {
-    expect(resolveInstall(spec)).toBeUndefined();
+  const targets: Array<[kind: string, field: string, safe: string, unsafe?: string]> = [
+    ["brew", "formula", "python@3.12", "wget --HEAD"],
+    ["node", "package", "@scope/pkg@1.2.3", "file:../malicious"],
+    ["go", "module", "example.com/tool/cmd@v1.2.3", "https://evil.example/mod"],
+    ["uv", "package", "uvicorn[standard]==0.31.0"],
+    ["download", "url", "https://example.com/tool.tar.gz", "file:///tmp/payload.tgz"],
+  ];
+  it("accepts all safe install specs together", () => {
+    const specs = targets.map(([kind, field, safe]) => ({ kind, [field]: safe }));
+    expect(resolveInstall(...specs)).toEqual(specs);
   });
+  it.each(targets.filter((target) => target[3]))(
+    "rejects unsafe %s targets",
+    (kind, field, _safe, unsafe) => {
+      expect(resolveInstall({ kind, [field]: unsafe })).toBeUndefined();
+    },
+  );
 
   it("normalizes a download installer's optional SHA-256 digest", () => {
     const sha256 = "a".repeat(64);
-    const install = resolveInstall({
-      kind: "download",
-      url: "https://example.com/runtime.tar.bz2",
-      sha256: ` ${sha256.toUpperCase()} `,
-    });
-
-    expect(install).toEqual([
-      { kind: "download", url: "https://example.com/runtime.tar.bz2", sha256 },
-    ]);
+    expect(resolveInstall(download(` ${sha256.toUpperCase()} `))).toEqual([download(sha256)]);
   });
 
   it.each(["g".repeat(64), 123])(
     "drops a download installer declaring an invalid SHA-256 digest (%j)",
     (sha256) => {
-      const install = resolveInstall({
-        kind: "download",
-        url: "https://example.com/runtime.tar.bz2",
-        sha256,
-      });
-
-      expect(install).toBeUndefined();
+      expect(resolveInstall(download(sha256))).toBeUndefined();
     },
   );
 
@@ -83,8 +66,7 @@ metadata:
   openclaw:
     homepage: https://link.com/agents
     requires:
-      bins:
-        - link-cli
+      bins: [link-cli]
     install:
       - kind: node
         package: "@stripe/link-cli"
@@ -93,14 +75,12 @@ user-invocable: true
 ---
 `);
 
-    const metadata = resolveSkillManifestMetadata(frontmatter);
-
     expect(frontmatter).toMatchObject({
       name: "create-payment-credential",
       description: expect.stringContaining("one-time-use payment credentials"),
     });
     expect(resolveSkillInvocationPolicy(frontmatter).userInvocable).toBe(true);
-    expect(metadata).toEqual({
+    expect(resolveSkillManifestMetadata(frontmatter)).toEqual({
       homepage: "https://link.com/agents",
       requires: { bins: ["link-cli"], anyBins: [], env: [], config: [] },
       install: [{ kind: "node", package: "@stripe/link-cli", bins: ["link-cli"] }],

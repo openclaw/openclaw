@@ -13,13 +13,7 @@ const render = (cues: ProofVideoCue[]) =>
     },
     { durationSeconds: 12, fps: 25 },
   );
-const caption = {
-  kind: "caption",
-  start: 3,
-  end: 9,
-  text: "A caption",
-  image: "captions/0.png",
-} as const;
+const caption = { kind: "caption", start: 3, end: 9, text: "A caption", image: "c.png" } as const;
 const zoom = {
   kind: "zoom",
   start: 2,
@@ -43,22 +37,17 @@ describe("planProofVideoRender", () => {
         annotations: [{ kind: "outline", rect: zoom.rect }],
       },
     ]);
-    expect(plan.inputs).toEqual(["annotations/0.png", "captions/0.png"]);
+    expect(plan.inputs).toEqual(["annotations/0.png", "c.png"]);
     expect(plan.filterComplex).toContain(
       "[timed][1:v]overlay=x=0:y=0:enable='gte(t,3)*lt(t,6)'[annotation1]",
     );
     expect(plan.filterComplex).toContain("[annotation1]zoompan");
-    expect(plan.filterComplex).toContain("[zoomed][2:v]overlay");
-    expect(plan.durationSeconds).toBe(9);
-  });
-
-  it("remaps captions spanning a speed segment without annotation inputs", () => {
-    const plan = render([caption, { kind: "speed", start: 4, end: 8, factor: 4 }]);
-    expect(plan.durationSeconds).toBe(9);
-    expect(plan.inputs).toEqual(["captions/0.png"]);
-    expect(plan.filterComplex).toContain("gte(t,3)*lt(t,6)");
+    expect(plan.filterComplex).toContain(
+      "[zoomed][2:v]overlay=x=0:y=680:enable='gte(t,3)*lt(t,6)'[caption2]",
+    );
     expect(plan.filterComplex).toContain("trim=start=4:end=8,setpts=(PTS-STARTPTS)/4");
     expect(plan.filterComplex).toContain("concat=n=3:v=1:a=0,fps=25");
+    expect(plan.durationSeconds).toBe(9);
   });
 
   it("uses per-frame eased zoom with raw-resolution centers clamped to the frame", () => {

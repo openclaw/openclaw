@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  applyProcessEnvKeys,
   mergeProcessEnv,
   resolveDiagnosticProcessEnv,
   resolveEnvironmentValue,
@@ -8,26 +9,36 @@ import {
 const routingEnv = (keys: string) =>
   Object.fromEntries(keys.split(" ").map((key) => [key, `/fixture/${key}`]));
 
+it("applies only selected environment keys, preserving empty values and absence", () => {
+  vi.stubEnv("OPENCLAW_TEST_APPLY_ENV_EMPTY", "previous");
+  vi.stubEnv("OPENCLAW_TEST_APPLY_ENV_ABSENT", "previous");
+  vi.stubEnv("OPENCLAW_TEST_APPLY_ENV_OUTSIDE", "retained");
+  try {
+    applyProcessEnvKeys(
+      new Set(["OPENCLAW_TEST_APPLY_ENV_EMPTY", "OPENCLAW_TEST_APPLY_ENV_ABSENT"]),
+      {
+        OPENCLAW_TEST_APPLY_ENV_EMPTY: "",
+        OPENCLAW_TEST_APPLY_ENV_OUTSIDE: "not selected",
+      },
+    );
+    expect(process.env.OPENCLAW_TEST_APPLY_ENV_EMPTY).toBe("");
+    expect(process.env.OPENCLAW_TEST_APPLY_ENV_ABSENT).toBeUndefined();
+    expect(process.env.OPENCLAW_TEST_APPLY_ENV_OUTSIDE).toBe("retained");
+  } finally {
+    vi.unstubAllEnvs();
+  }
+});
+
 describe("resolveEnvironmentValue", () => {
-  it("preserves exact POSIX keys and the existing Path fallback", () => {
-    const env = { PATH: "exact", Path: "fallback", path: "lowercase" };
-
-    expect(resolveEnvironmentValue(env, "PATH", "linux")).toBe("exact");
-    expect(resolveEnvironmentValue({ Path: "fallback" }, "PATH", "linux")).toBe("fallback");
-    expect(resolveEnvironmentValue({ path: "lowercase" }, "PATH", "linux")).toBeUndefined();
-  });
-
-  it("reads arbitrary Windows key casing with child_process precedence", () => {
-    const env = { path: "lowercase", Path: "lexical-first", pAtHeXt: ".MiXeD" };
-
-    expect(resolveEnvironmentValue(env, "PATH", "win32")).toBe("lexical-first");
-    expect(resolveEnvironmentValue(env, "PATHEXT", "win32")).toBe(".MiXeD");
-  });
-
-  it("does not fall through a lexically preferred undefined Windows key", () => {
-    expect(
-      resolveEnvironmentValue({ PATH: undefined, Path: "later" }, "PATH", "win32"),
-    ).toBeUndefined();
+  it.each([
+    ["linux", { PATH: "exact", Path: "fallback", path: "lowercase" }, "PATH", "exact"],
+    ["linux", { Path: "fallback" }, "PATH", "fallback"],
+    ["linux", { path: "lowercase" }, "PATH", undefined],
+    ["win32", { path: "lowercase", Path: "lexical-first" }, "PATH", "lexical-first"],
+    ["win32", { pAtHeXt: ".MiXeD" }, "PATHEXT", ".MiXeD"],
+    ["win32", { PATH: undefined, Path: "later" }, "PATH", undefined],
+  ] as const)("resolves %s %j %s to %s", (platform, env, key, expected) => {
+    expect(resolveEnvironmentValue(env, key, platform)).toBe(expected);
   });
 });
 
@@ -93,30 +104,22 @@ describe("resolveDiagnosticProcessEnv", () => {
     [
       "linux",
       "PATH Path HOME USER LOGNAME TMPDIR LANG LANGUAGE TZ LC_ALL LC_CTYPE LC_MESSAGES LC_COLLATE LC_MONETARY LC_NUMERIC LC_TIME",
-      {
-        path: "/unexpected",
-        LC_UNKNOWN_CATEGORY: "synthetic",
-        NEUTRAL_FLAG: "synthetic",
-        NODE_OPTIONS: "--no-warnings",
-        PSModulePath: "/fixture/modules",
-        OPENAI_API_KEY: "synthetic",
-      },
+      "path LC_UNKNOWN_CATEGORY NEUTRAL_FLAG NODE_OPTIONS PSModulePath OPENAI_API_KEY",
     ],
     [
       "win32",
       "Path systemRoot windir comSpec pathExt systemDrive userProfile homeDrive homePath userName userDomain temp tmp appData localAppData programData allUsersProfile programFiles programFiles(x86) programW6432 commonProgramFiles commonProgramFiles(x86) commonProgramW6432 PSModuleAnalysisCachePath",
-      {
-        PSModulePath: "C:\\ExtraModules",
-        OPENCLAW_GATEWAY_TOKEN: "synthetic",
-        https_proxy: "http://proxy.invalid",
-      },
+      "PSModulePath OPENCLAW_GATEWAY_TOKEN https_proxy",
     ],
   ] as const)(
     "preserves only native %s routing, with original values and casing",
     (platform, keys, rejected) => {
       const native = routingEnv(keys);
       expect(
-        resolveDiagnosticProcessEnv(Object.freeze({ ...native, ...rejected }), platform),
+        resolveDiagnosticProcessEnv(
+          Object.freeze({ ...native, ...routingEnv(rejected) }),
+          platform,
+        ),
       ).toEqual(native);
     },
   );

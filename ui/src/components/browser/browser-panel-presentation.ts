@@ -72,6 +72,19 @@ export function createBrowserPanelPresentation(
     changes = new Set();
     updatePresentation(changed);
   });
+  let stopToggle: (() => void) | undefined;
+  function syncToggleListener(): void {
+    if (lifecycle.active() && !element.embedded) {
+      stopToggle ??= listen(window, BROWSER_PANEL_TOGGLE_EVENT, (event) => {
+        if (!element.embedded) {
+          handleToggleRequest(event);
+        }
+      });
+    } else {
+      stopToggle?.();
+      stopToggle = undefined;
+    }
+  }
   const publish = lifecycle.publish;
   const dockLayout = createDockLayout({
     notify: publish,
@@ -333,6 +346,10 @@ export function createBrowserPanelPresentation(
     },
     subscribe: lifecycle.subscribe,
     inputsChanged(key: keyof BrowserPanelInputs) {
+      // Property setters are synchronous; do not leave a gap before the next Solid commit.
+      if (key === "embedded") {
+        syncToggleListener();
+      }
       changes.add(key);
       publish();
     },
@@ -341,13 +358,7 @@ export function createBrowserPanelPresentation(
       const stopNative = browser.native.mount();
       lifecycle.connect();
       dockLayout.connect();
-      const stops = [
-        listen(window, BROWSER_PANEL_TOGGLE_EVENT, (event) => {
-          if (!element.embedded) {
-            handleToggleRequest(event);
-          }
-        }),
-      ];
+      syncToggleListener();
       // A takeover already owning the viewport suppresses the restored dock first.
       dockLayout.setSuppressed(element.suppressed);
       if (!element.embedded && dockLayout.open) {
@@ -359,7 +370,7 @@ export function createBrowserPanelPresentation(
       return () =>
         lifecycle.dispose(() => {
           browser.suspendView();
-          stops.forEach((stop) => stop());
+          syncToggleListener();
           dockLayout.dispose();
           stopNative?.();
         });

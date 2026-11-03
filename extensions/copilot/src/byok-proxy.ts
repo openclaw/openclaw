@@ -16,8 +16,6 @@ type CopilotByokProxyHandle = {
   provider: ResolvedCopilotProvider;
 };
 
-type ProviderConfig = NonNullable<ResolvedCopilotProvider["provider"]>;
-
 export async function createCopilotByokProxy(
   resolvedProvider: ResolvedCopilotProvider,
 ): Promise<CopilotByokProxyHandle | undefined> {
@@ -37,7 +35,7 @@ export async function createCopilotByokProxy(
   // in an SDK provider header and validate it before accepting request bytes.
   const acceptsAzureSdkPaths = providerConfig.type === "azure";
   const proxyCredentialHeader = acceptsAzureSdkPaths
-    ? createProxyCredentialHeaderName(providerConfig.headers)
+    ? `${PROXY_CREDENTIAL_HEADER_PREFIX}${randomBytes(12).toString("hex")}`
     : undefined;
   const bearerToken = providerConfig.bearerToken?.trim();
   const upstreamBearerAuthorization = bearerToken ? `Bearer ${bearerToken}` : undefined;
@@ -200,15 +198,6 @@ async function readBody(req: IncomingMessage): Promise<Buffer<ArrayBuffer> | und
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
   return chunks.length > 0 ? Buffer.concat(chunks) : undefined;
-}
-
-function createProxyCredentialHeaderName(headers: ProviderConfig["headers"]): string {
-  for (;;) {
-    const name = `${PROXY_CREDENTIAL_HEADER_PREFIX}${randomBytes(12).toString("hex")}`;
-    if (!headers || !hasHeader(headers, name)) {
-      return name;
-    }
-  }
 }
 
 function buildProxyRequestHeaders(

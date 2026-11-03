@@ -2,6 +2,7 @@ import { Type } from "typebox";
 import { afterEach, expect, it, vi } from "vitest";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/users.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
+import { catalogTool } from "../../agents/agent-bundle-mcp-fixture.test-support.js";
 import type { SessionMcpRuntime } from "../../agents/agent-bundle-mcp-types.js";
 import { fetchMcpAppView, getMcpAppViewLease } from "../../agents/mcp-ui-resource.js";
 import { testing as mcpUiResourceTesting } from "../../agents/mcp-ui-resource.test-support.js";
@@ -159,13 +160,10 @@ it.for([
           generatedAt: 0,
           servers: {},
           tools: [
-            {
-              serverName: "server",
-              safeServerName: "server",
-              toolName: "refresh",
+            catalogTool("server", "refresh", {
               inputSchema: Type.Object({}),
               fallbackDescription: "synthetic refresh",
-            },
+            }),
           ],
         }),
         readResource: async () => ({
@@ -230,11 +228,12 @@ it.for([
       };
       await appView("source", sourceWidget);
       const sourceView = views[0]!;
+      const pinInput = {
+        name: "destination",
+        content: { kind: "mcp-app", viewId: sourceView.view.viewId },
+      };
       if (sharedSecret) {
-        const pinned = await invoke("board.widget.put", {
-          name: "destination",
-          content: { kind: "mcp-app", viewId: sourceView.view.viewId },
-        });
+        const pinned = await invoke("board.widget.put", pinInput);
         expect(pinned.mock.calls[0]?.[2]).toBeUndefined();
         expect(pinned.mock.calls[0]?.[0]).toBe(true);
         expect(await boardStore.readWidgetMcpApp(target, "destination")).toBeDefined();
@@ -251,12 +250,7 @@ it.for([
         expect(control.mock.calls[0]?.[0]).toBe(true);
         const before = await boardStore.getSnapshot(target);
         board.broadcast.mockClear();
-        const rejected = await invoke(
-          "board.widget.put",
-          { name: "destination", content: { kind: "mcp-app", viewId: sourceView.view.viewId } },
-          undefined,
-          bob,
-        );
+        const rejected = await invoke("board.widget.put", pinInput, undefined, bob);
         expect(rejected.mock.calls[0]?.[0]).toBe(false);
         expect(rejected.mock.calls[0]?.[2]?.message).toContain("expired or is not authorized");
         expect(await boardStore.getSnapshot(target)).toEqual(before);
@@ -300,14 +294,7 @@ it.for([
       let pin: ReturnType<typeof invoke> | undefined;
       let destinationBefore: ReturnType<typeof boardStore.readWidgetMcpApp> | undefined;
       try {
-        pin = invoke(
-          "board.widget.put",
-          {
-            name: "destination",
-            content: { kind: "mcp-app", viewId: sourceView.view.viewId },
-          },
-          controller.signal,
-        );
+        pin = invoke("board.widget.put", pinInput, controller.signal);
         await waitForPinGate(putEntered.promise, "pin skipped source preflight");
         expect(put).toHaveBeenCalledOnce();
         if (revoke) {

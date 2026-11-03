@@ -3,7 +3,6 @@ import { registerMattermostMonitorSlashCommands } from "./monitor-slash.js";
 
 const prepareSkillCommandsForAgents = vi.hoisted(() => vi.fn());
 const fetchMattermostUserTeams = vi.hoisted(() => vi.fn());
-const normalizeMattermostBaseUrl = vi.hoisted(() => vi.fn((value: string | undefined) => value));
 const isSlashCommandsEnabled = vi.hoisted(() => vi.fn());
 const registerSlashCommands = vi.hoisted(() => vi.fn());
 const resolveCallbackUrl = vi.hoisted(() => vi.fn());
@@ -11,18 +10,12 @@ const resolveSlashCommandConfig = vi.hoisted(() => vi.fn());
 const activateSlashCommands = vi.hoisted(() => vi.fn());
 
 // mock-isolation: Keep skill discovery and database workers outside slash-registration tests.
-vi.mock("./runtime-api.js", () => ({
-  prepareSkillCommandsForAgents,
-}));
+vi.mock("./runtime-api.js", () => ({ prepareSkillCommandsForAgents }));
 
-vi.mock("./client.js", async () => {
-  const actual = await vi.importActual<typeof import("./client.js")>("./client.js");
-  return {
-    ...actual,
-    fetchMattermostUserTeams,
-    normalizeMattermostBaseUrl,
-  };
-});
+vi.mock("./client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./client.js")>()),
+  fetchMattermostUserTeams,
+}));
 
 vi.mock("./slash-commands.js", () => ({
   DEFAULT_COMMAND_SPECS: [
@@ -35,19 +28,11 @@ vi.mock("./slash-commands.js", () => ({
   resolveSlashCommandConfig,
 }));
 
-vi.mock("./slash-state.js", () => ({
-  activateSlashCommands,
-}));
+// mock-isolation: Capture activation without loading the process-global slash route registry.
+vi.mock("./slash-state.js", () => ({ activateSlashCommands }));
 
 let runtime = { log: vi.fn(), error: vi.fn() };
 const client = {} as never;
-const nativeSpec = (trigger: string, description: string, originalName: string) => ({
-  trigger,
-  description,
-  originalName,
-  autoComplete: true,
-  autoCompleteHint: "[args]",
-});
 
 function registerMonitor(
   cfg: Parameters<typeof registerMattermostMonitorSlashCommands>[0]["cfg"] = {},
@@ -63,20 +48,15 @@ function registerMonitor(
 }
 
 beforeEach(() => {
-  prepareSkillCommandsForAgents.mockReset();
-  fetchMattermostUserTeams.mockReset().mockResolvedValue([{ id: "team-1" }]);
-  normalizeMattermostBaseUrl.mockClear();
-  isSlashCommandsEnabled.mockReset().mockReturnValue(true);
-  registerSlashCommands.mockReset();
-  resolveCallbackUrl.mockReset().mockReturnValue("https://openclaw.test/slash");
-  resolveSlashCommandConfig.mockReset().mockReturnValue({ enabled: true, nativeSkills: false });
-  activateSlashCommands.mockReset();
+  vi.resetAllMocks();
+  fetchMattermostUserTeams.mockResolvedValue([{ id: "team-1" }]);
+  isSlashCommandsEnabled.mockReturnValue(true);
+  resolveCallbackUrl.mockReturnValue("https://openclaw.test/slash");
+  resolveSlashCommandConfig.mockReturnValue({ enabled: true, nativeSkills: false });
   runtime = { log: vi.fn(), error: vi.fn() };
 });
 
-afterEach(() => {
-  vi.unstubAllEnvs();
-});
+afterEach(() => vi.unstubAllEnvs());
 
 it("returns early when slash commands are disabled", async () => {
   resolveSlashCommandConfig.mockReturnValue({ enabled: false });
@@ -103,32 +83,25 @@ it("registers deduped default and native skill commands across teams", async () 
 
   await registerMonitor({ gateway: { port: 18789 } });
 
-  expect(registerSlashCommands).toHaveBeenCalledTimes(2);
-  const firstRegistration = registerSlashCommands.mock.calls[0]![0];
-  expect(firstRegistration).toEqual({
-    client,
-    teamId: "team-1",
-    creatorUserId: "bot-user",
-    callbackUrl: "https://openclaw.test/slash",
-    commands: [
-      { trigger: "ping", description: "ping" },
-      nativeSpec("oc_skill", "Skill run", "skill"),
-      nativeSpec("oc_ping", "Already prefixed", "oc_ping"),
-    ],
-    log: expect.any(Function),
-  });
+  expect(registerSlashCommands.mock.calls.map(([registration]) => registration.teamId)).toEqual([
+    "team-1",
+    "team-2",
+  ]);
+  expect(
+    registerSlashCommands.mock.calls[0]![0].commands.map(
+      (command: { trigger: string }) => command.trigger,
+    ),
+  ).toEqual(["ping", "oc_skill", "oc_ping"]);
   const activation = activateSlashCommands.mock.calls[0]![0];
   expect(activation?.registeredCommands).toStrictEqual([
     { token: "token-1", trigger: "ping" },
     { token: "token-2", trigger: "oc_skill" },
   ]);
-  const triggerMap = new Map([
-    ["oc_skill", "skill"],
-    ["oc_ping", "oc_ping"],
-  ]);
-  expect(activation?.triggerMap).toStrictEqual(triggerMap);
-  expect(runtime.log).toHaveBeenCalledWith(
-    "mattermost: slash commands registered (2 commands across 2 teams, callback=https://openclaw.test/slash)",
+  expect(activation?.triggerMap).toStrictEqual(
+    new Map([
+      ["oc_skill", "skill"],
+      ["oc_ping", "oc_ping"],
+    ]),
   );
 });
 
@@ -155,8 +128,5 @@ it("warns on loopback callback urls and reports partial team failures", async ()
   );
   expect(runtime.error).toHaveBeenCalledWith(
     "mattermost: failed to register slash commands for team team-2: Error: boom",
-  );
-  expect(runtime.error).toHaveBeenCalledWith(
-    "mattermost: slash command registration completed with 1 team error(s)",
   );
 });

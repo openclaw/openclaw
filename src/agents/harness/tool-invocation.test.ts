@@ -1,6 +1,13 @@
 import { Type } from "typebox";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { AgentToolResult } from "../../../packages/agent-core/src/types.js";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../../plugins/hook-runner-global.js";
+import type { PluginHookAfterToolCallEvent } from "../../plugins/hook-types.js";
+import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
+import { runAgentHarnessAfterToolCallHook } from "./hook-helpers.js";
 import { createAgentHarnessToolExecutionBoundaryRegistry } from "./tool-execution.js";
 import { runAgentHarnessToolInvocation } from "./tool-invocation.js";
 import {
@@ -11,6 +18,8 @@ import {
 
 const call = { toolCallId: "call-1", toolName: "exec", threadId: "thread-1", turnId: "turn-1" };
 type Middleware = Parameters<typeof runAgentHarnessToolInvocation>[0]["applyMiddleware"];
+
+afterEach(resetGlobalHookRunner);
 
 it.each([
   ["failed output", { status: "failed", exitCode: 1 }, { command: "false" }, true, false],
@@ -76,6 +85,77 @@ it("snapshots executed arguments before result middleware can mutate them", asyn
   expect(execution.boundary.executionStarted).toBe(true);
   expect(telemetry.successfulCronAdds).toBe(1);
 });
+
+it.each([false, true])(
+  "retains nested execution arguments through executor, middleware, and hook mutations (prepare=%s)",
+  async (prepare) => {
+    const args = { request: { path: "original" } };
+    const boundaries = createAgentHarnessToolExecutionBoundaryRegistry();
+    const result = textToolResult("ok", {});
+    let hookMutationCompleted = false;
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "after_tool_call",
+          handler: (event) => {
+            const { params } = event as PluginHookAfterToolCallEvent;
+            (params.request as typeof args.request).path = "hook";
+            hookMutationCompleted = true;
+          },
+        },
+      ]),
+    );
+    const execution = await runAgentHarnessToolInvocation({
+      tool: {
+        name: "exec",
+        label: "exec",
+        description: "Execute a tool.",
+        parameters: Type.Object({}),
+        execute: async (_id, input: typeof args) => {
+          input.request.path = "executor";
+          return result;
+        },
+      },
+      call: { ...call, arguments: args },
+      ...(prepare
+        ? {
+            prepareArguments: () => {
+              args.request.path = "prepared";
+              return args;
+            },
+          }
+        : {}),
+      signal: new AbortController().signal,
+      boundaries,
+      retainExecutionSnapshot: true,
+      applyMiddleware: async (event) => {
+        (event.args.request as typeof args.request).path = "middleware";
+        return event.result;
+      },
+      onResult: async (value) => {
+        await runAgentHarnessAfterToolCallHook({
+          toolName: call.toolName,
+          toolCallId: call.toolCallId,
+          startArgs: value.executedArguments,
+          result: value.result,
+        });
+        return value;
+      },
+      onError: ({ error }) => {
+        throw error;
+      },
+    });
+    const expected = { request: { path: prepare ? "prepared" : "original" } };
+    expect(hookMutationCompleted).toBe(true);
+    expect(args.request.path).toBe("executor");
+    expect(execution.executedArguments).toEqual(expected);
+    expect(boundaries.consume(call.toolCallId)).toEqual({
+      executedArguments: expected,
+      executionStarted: true,
+    });
+    expect(boundaries.consume(call.toolCallId)).toBeUndefined();
+  },
+);
 
 function invokeTool(
   result: AgentToolResult<unknown>,

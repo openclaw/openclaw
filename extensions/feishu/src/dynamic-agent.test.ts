@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
 import type { FeishuConfig } from "./types.js";
@@ -16,29 +16,36 @@ afterEach(async () => {
   await fs.promises.rm(tempRoot, { recursive: true, force: true });
 });
 
-function createRuntime(
-  currentCfg: OpenClawConfig,
-  persistedCfg?: OpenClawConfig,
-  mutationCfg?: OpenClawConfig,
+async function scenario(
+  cfg = createConfig(),
+  options: {
+    request?: OpenClawConfig;
+    mutation?: OpenClawConfig;
+    persisted?: OpenClawConfig;
+    call?: Parameters<typeof createAgent>[2];
+  } = {},
 ) {
-  let runtimeCfg = structuredClone(currentCfg);
+  let runtimeCfg = structuredClone(cfg);
   const commitConfig = vi.fn();
   const mutateConfigFile = vi.fn(
     async (params: {
       mutate: (draft: OpenClawConfig, context: { snapshot: never; previousHash: null }) => unknown;
     }) => {
-      const draft = structuredClone(mutationCfg ?? runtimeCfg);
+      const draft = structuredClone(options.mutation ?? runtimeCfg);
       const result = await params.mutate(draft, { snapshot: {} as never, previousHash: null });
       runtimeCfg = draft;
       commitConfig();
-      return { nextConfig: persistedCfg ?? runtimeCfg, result };
+      return { nextConfig: options.persisted ?? runtimeCfg, result };
     },
   );
-  const config = { mutateConfigFile, current: vi.fn(() => runtimeCfg) };
+  const runtime = {
+    config: { mutateConfigFile, current: () => runtimeCfg },
+  } as unknown as PluginRuntime;
   return {
-    runtime: { config } as unknown as PluginRuntime,
+    runtime,
     commitConfig,
     mutateConfigFile,
+    result: await createAgent(options.request ?? cfg, runtime, options.call),
   };
 }
 
@@ -71,12 +78,10 @@ function createConfig(
   };
 }
 
-function existingAgent() {
-  return {
-    workspace: path.join(tempRoot, "existing-workspace"),
-    agentDir: path.join(tempRoot, "existing-agent"),
-  };
-}
+const existingAgent = () => ({
+  workspace: path.join(tempRoot, "existing-workspace"),
+  agentDir: path.join(tempRoot, "existing-agent"),
+});
 
 function binding(agentId: string, accountId?: string, sender = "ou_sender") {
   return {
@@ -113,208 +118,145 @@ function createAgent(
   });
 }
 
-describe("maybeCreateDynamicAgent", () => {
-  it.each(["config writes disabled", "ingress denied"])(
-    "creates no state with %s",
-    async (policy) => {
-      const cfg = createConfig(policy === "config writes disabled" ? { configWrites: false } : {});
-      const { runtime, mutateConfigFile } = createRuntime(cfg);
-      const result = await createAgent(cfg, runtime, {
-        canCreateForConfig: async () => policy !== "ingress denied",
-      });
-
-      expect(result).toEqual({ created: false, updatedCfg: cfg });
-      expect(mutateConfigFile).not.toHaveBeenCalled();
-      await expectNoDirectories();
-    },
+it.each([
+  ["config writes disabled", 0, 0],
+  ["ingress denied", 0, 1],
+  ["ingress revoked inside lock", 1, 2],
+  ["non-peer route added inside lock", 1, 1],
+  ["dynamic agent limit reached inside lock", 1, 1],
+] as const)("creates no state with %s", async (policy, mutations, admissions) => {
+  const cfg = createConfig(
+    policy === "config writes disabled"
+      ? { configWrites: false }
+      : policy === "dynamic agent limit reached inside lock"
+        ? { dynamicAgentCreation: { ...createDynamicConfig(), maxAgents: 1 } }
+        : {},
   );
-
-  it("rechecks current ingress inside the config mutation lock", async () => {
-    const cfg = createConfig();
-    const { runtime, commitConfig, mutateConfigFile } = createRuntime(cfg);
-    const canCreateForConfig = vi
-      .fn<(cfg: OpenClawConfig) => Promise<boolean>>()
-      .mockResolvedValueOnce(true)
-      .mockResolvedValueOnce(false);
-
-    const result = await createAgent(cfg, runtime, { canCreateForConfig });
-
-    expect(result.created).toBe(false);
-    expect(canCreateForConfig).toHaveBeenCalledTimes(2);
-    expect(mutateConfigFile).toHaveBeenCalledTimes(1);
-    expect(commitConfig).not.toHaveBeenCalled();
-    expect(result.updatedCfg.agents?.entries).toEqual({ main: {} });
-    expect(result.updatedCfg.bindings).toEqual([]);
-    await expectNoDirectories();
+  const mutation: OpenClawConfig = {
+    ...cfg,
+    ...(policy === "non-peer route added inside lock"
+      ? { bindings: [{ agentId: "main", match: { channel: "feishu", accountId: "default" } }] }
+      : policy === "dynamic agent limit reached inside lock"
+        ? { agents: createCanonicalAgentRoster({ "feishu-ou_existing": {}, unrelated: {} }) }
+        : {}),
+  };
+  const canCreateForConfig = vi
+    .fn<(cfg: OpenClawConfig) => Promise<boolean>>()
+    .mockResolvedValueOnce(policy !== "ingress denied")
+    .mockResolvedValue(policy !== "ingress revoked inside lock");
+  const { result, commitConfig, mutateConfigFile } = await scenario(cfg, {
+    mutation,
+    call: { canCreateForConfig },
   });
+  expect(result).toEqual({ created: false, updatedCfg: mutation });
+  expect(canCreateForConfig).toHaveBeenCalledTimes(admissions);
+  expect(mutateConfigFile).toHaveBeenCalledTimes(mutations);
+  expect(commitConfig).not.toHaveBeenCalled();
+  await expectNoDirectories();
+});
 
-  it.each(["non-peer route", "dynamic agent limit"])(
-    "honors %s added before the mutation lock",
-    async (change) => {
-      const cfg = createConfig(
-        change === "dynamic agent limit"
-          ? { dynamicAgentCreation: { ...createDynamicConfig(), maxAgents: 1 } }
-          : {},
-      );
-      const mutationCfg: OpenClawConfig = {
-        ...cfg,
-        ...(change === "non-peer route"
-          ? {
-              bindings: [
-                {
-                  agentId: "main",
-                  match: { channel: "feishu", accountId: "default" },
-                },
-              ],
-            }
-          : { agents: createCanonicalAgentRoster({ "feishu-ou_existing": {}, unrelated: {} }) }),
-      };
-      const { runtime, commitConfig, mutateConfigFile } = createRuntime(
-        cfg,
-        undefined,
-        mutationCfg,
-      );
+it("scopes bindings to the normalized account id", async () => {
+  const { result } = await scenario(createConfig(), { call: { accountId: "Ops Team" } });
+  const agentId = result.updatedCfg.bindings?.[0]?.agentId ?? "";
 
-      const result = await createAgent(cfg, runtime);
+  expect(result.created).toBe(true);
+  expect(agentId).toMatch(/^feishu-ops-team-[a-f0-9]{32}$/);
+  expect(result.updatedCfg.agents?.entries).toHaveProperty(agentId);
+  expect(result.updatedCfg.bindings).toEqual([binding(agentId, "ops-team")]);
+});
 
-      expect(result).toEqual({ created: false, updatedCfg: mutationCfg });
-      expect(mutateConfigFile).toHaveBeenCalledTimes(1);
-      expect(commitConfig).not.toHaveBeenCalled();
-      await expectNoDirectories();
-    },
+it("keeps named-account dynamic agent ids bounded and sender-unique", async () => {
+  const accountId = "a".repeat(64);
+  const { result: first, runtime } = await scenario(createConfig(), {
+    call: { accountId, senderOpenId: "ou_sender_one_with_a_shared_long_prefix" },
+  });
+  const second = await createAgent(first.updatedCfg, runtime, {
+    accountId,
+    senderOpenId: "ou_sender_two_with_a_shared_long_prefix",
+  });
+  const firstAgentId = first.updatedCfg.bindings?.[0]?.agentId ?? "";
+  const secondAgentId = second.updatedCfg.bindings?.at(-1)?.agentId ?? "";
+
+  expect([firstAgentId.length, secondAgentId.length]).toEqual([52, 52]);
+  expect(firstAgentId).not.toBe(secondAgentId);
+  expect(Object.keys(second.updatedCfg.agents?.entries ?? {})).toEqual([
+    "main",
+    firstAgentId,
+    secondAgentId,
+  ]);
+});
+
+it("uses the current maxAgents limit instead of stale request policy", async () => {
+  const cfg = createConfig(
+    { dynamicAgentCreation: { ...createDynamicConfig(), maxAgents: 1 } },
+    { "feishu-ou_existing": existingAgent() },
   );
-
-  it("scopes bindings to the normalized account id", async () => {
-    const cfg = createConfig();
-    const { runtime } = createRuntime(cfg);
-
-    const result = await createAgent(cfg, runtime, { accountId: "Ops Team" });
-    const agentId = result.updatedCfg.bindings?.[0]?.agentId ?? "";
-
-    expect(result.created).toBe(true);
-    expect(agentId).toMatch(/^feishu-ops-team-[a-f0-9]{32}$/);
-    expect(result.updatedCfg.agents?.entries).toHaveProperty(agentId);
-    expect(result.updatedCfg.bindings).toEqual([binding(agentId, "ops-team")]);
+  const { result, mutateConfigFile } = await scenario(cfg, {
+    request: {
+      ...createConfig({ dynamicAgentCreation: { ...createDynamicConfig(), maxAgents: 2 } }),
+      agents: cfg.agents,
+    },
   });
 
-  it("keeps named-account dynamic agent ids bounded and sender-unique", async () => {
-    const accountId = "a".repeat(64);
-    const cfg = createConfig();
-    const { runtime } = createRuntime(cfg);
+  expect(result.created).toBe(false);
+  expect(mutateConfigFile).not.toHaveBeenCalled();
+});
 
-    const first = await createAgent(cfg, runtime, {
-      accountId,
-      senderOpenId: "ou_sender_one_with_a_shared_long_prefix",
-    });
-    const second = await createAgent(first.updatedCfg, runtime, {
-      accountId,
-      senderOpenId: "ou_sender_two_with_a_shared_long_prefix",
-    });
-    const firstAgentId = first.updatedCfg.bindings?.[0]?.agentId ?? "";
-    const secondAgentId = second.updatedCfg.bindings?.at(-1)?.agentId ?? "";
+it("adds only the missing binding for an agent found in the cloned mutation roster", async () => {
+  const mutationCfg = createConfig({}, { "feishu-ou_sender": existingAgent() });
+  const { result, commitConfig } = await scenario(createConfig(), { mutation: mutationCfg });
 
-    expect(firstAgentId).toHaveLength(52);
-    expect(secondAgentId).toHaveLength(52);
-    expect(firstAgentId).not.toBe(secondAgentId);
-    expect(Object.keys(second.updatedCfg.agents?.entries ?? {})).toEqual([
-      "main",
-      firstAgentId,
-      secondAgentId,
-    ]);
+  expect(result.created).toBe(true);
+  expect(commitConfig).toHaveBeenCalledTimes(1);
+  expect(result.updatedCfg.agents).toEqual(mutationCfg.agents);
+  expect(result.updatedCfg.bindings).toEqual([binding("feishu-ou_sender", "default")]);
+  await expectNoDirectories();
+});
+
+it("preserves concurrent runtime config when creating from a stale request snapshot", async () => {
+  const currentCfg = {
+    ...createConfig({}, { "feishu-ou_existing": existingAgent() }),
+    bindings: [binding("feishu-ou_existing", undefined, "ou_existing")],
+  } as OpenClawConfig;
+  const { result } = await scenario(currentCfg, {
+    request: { agents: createCanonicalAgentRoster(), bindings: [] },
   });
 
-  it("uses the current maxAgents limit instead of stale request policy", async () => {
-    const cfg = createConfig(
-      { dynamicAgentCreation: { ...createDynamicConfig(), maxAgents: 1 } },
-      { "feishu-ou_existing": existingAgent() },
-    );
-    const { runtime, mutateConfigFile } = createRuntime(cfg);
+  expect(result.updatedCfg.agents?.entries).toEqual({
+    ...currentCfg.agents?.entries,
+    "feishu-ou_sender": {
+      workspace: path.join(tempRoot, "workspace-feishu-ou_sender"),
+      agentDir: path.join(tempRoot, "agent-feishu-ou_sender"),
+    },
+  });
+  expect(result.updatedCfg.agents).not.toHaveProperty("list");
+  expect(result.updatedCfg.bindings).toEqual([
+    ...currentCfg.bindings!,
+    binding("feishu-ou_sender", "default"),
+  ]);
+});
 
-    const result = await createAgent(
-      {
-        ...createConfig({ dynamicAgentCreation: { ...createDynamicConfig(), maxAgents: 2 } }),
-        agents: cfg.agents,
-      },
-      runtime,
-    );
-
-    expect(result.created).toBe(false);
-    expect(mutateConfigFile).not.toHaveBeenCalled();
+it("returns refreshed runtime config instead of the persisted source config", async () => {
+  const currentCfg = createConfig({ appSecret: "resolved-secret" });
+  const { result } = await scenario(currentCfg, {
+    persisted: { channels: { feishu: { appSecret: { source: "env", id: "FEISHU_APP_SECRET" } } } },
   });
 
-  it("adds only the missing binding for an agent found in the cloned mutation roster", async () => {
-    const cfg = createConfig();
-    const mutationCfg = createConfig({}, { "feishu-ou_sender": existingAgent() });
-    const { runtime, commitConfig } = createRuntime(cfg, undefined, mutationCfg);
+  expect(result.updatedCfg.channels?.feishu?.appSecret).toBe("resolved-secret");
+  expect(result.updatedCfg.bindings).toHaveLength(1);
+});
 
-    const result = await createAgent(cfg, runtime);
-
-    expect(result.created).toBe(true);
-    expect(commitConfig).toHaveBeenCalledTimes(1);
-    expect(result.updatedCfg.agents).toEqual(mutationCfg.agents);
-    expect(result.updatedCfg.agents).not.toHaveProperty("list");
-    expect(result.updatedCfg.bindings).toEqual([binding("feishu-ou_sender", "default")]);
-    await expectNoDirectories();
+it("returns runtime current binding even when config writes are disabled", async () => {
+  const currentCfg = {
+    channels: { feishu: { configWrites: false } },
+    agents: createCanonicalAgentRoster({ "feishu-ou_sender": existingAgent() }),
+    bindings: [binding("feishu-ou_sender")],
+  } as OpenClawConfig;
+  const { result, mutateConfigFile } = await scenario(currentCfg, {
+    request: { agents: createCanonicalAgentRoster(), bindings: [] },
   });
 
-  it("preserves concurrent runtime config when creating from a stale request snapshot", async () => {
-    const currentCfg = {
-      ...createConfig({}, { "feishu-ou_existing": existingAgent() }),
-      bindings: [binding("feishu-ou_existing", undefined, "ou_existing")],
-    } as OpenClawConfig;
-    const { runtime, mutateConfigFile } = createRuntime(currentCfg);
-
-    const result = await createAgent(
-      { agents: createCanonicalAgentRoster(), bindings: [] },
-      runtime,
-    );
-
-    expect(mutateConfigFile).toHaveBeenCalledWith({
-      base: "runtime",
-      afterWrite: { mode: "auto" },
-      mutate: expect.any(Function),
-    });
-    expect(result.updatedCfg.agents?.entries).toEqual({
-      ...currentCfg.agents?.entries,
-      "feishu-ou_sender": {
-        workspace: path.join(tempRoot, "workspace-feishu-ou_sender"),
-        agentDir: path.join(tempRoot, "agent-feishu-ou_sender"),
-      },
-    });
-    expect(result.updatedCfg.agents).not.toHaveProperty("list");
-    expect(result.updatedCfg.bindings).toEqual([
-      ...currentCfg.bindings!,
-      binding("feishu-ou_sender", "default"),
-    ]);
-  });
-
-  it("returns refreshed runtime config instead of the persisted source config", async () => {
-    const currentCfg = createConfig({ appSecret: "resolved-secret" });
-    const appSecret = { source: "env", id: "FEISHU_APP_SECRET" };
-    const persistedCfg: OpenClawConfig = { channels: { feishu: { appSecret } } };
-    const { runtime } = createRuntime(currentCfg, persistedCfg);
-
-    const result = await createAgent(currentCfg, runtime);
-
-    expect(result.updatedCfg.channels?.feishu?.appSecret).toBe("resolved-secret");
-    expect(result.updatedCfg.bindings).toHaveLength(1);
-  });
-
-  it("returns runtime current binding even when config writes are disabled", async () => {
-    const currentCfg = {
-      channels: { feishu: { configWrites: false } },
-      agents: createCanonicalAgentRoster({ "feishu-ou_sender": existingAgent() }),
-      bindings: [binding("feishu-ou_sender")],
-    } as OpenClawConfig;
-    const { runtime, mutateConfigFile } = createRuntime(currentCfg);
-
-    const result = await createAgent(
-      { agents: createCanonicalAgentRoster(), bindings: [] },
-      runtime,
-    );
-
-    expect(result.created).toBe(false);
-    expect(result.updatedCfg).toStrictEqual(currentCfg);
-    expect(mutateConfigFile).not.toHaveBeenCalled();
-  });
+  expect(result.created).toBe(false);
+  expect(result.updatedCfg).toStrictEqual(currentCfg);
+  expect(mutateConfigFile).not.toHaveBeenCalled();
 });

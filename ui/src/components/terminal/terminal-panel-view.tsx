@@ -1,5 +1,6 @@
 import { For, Show, createMemo } from "solid-js";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerTerminalEnglish } from "../../i18n/locales/en-terminal.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { createTabFocus } from "../../lib/tabs.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { DockResizer } from "../dock-layout-solid.tsx";
@@ -11,6 +12,8 @@ import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
 import { terminalPanelTabIcon, terminalPanelHostedTabs } from "./terminal-panel-tabs.tsx";
 import { Actions, SessionMenu, TerminalRail } from "./terminal-panel-view-chrome.tsx";
 import type { TerminalPanelViewState } from "./terminal-panel-view-types.ts";
+
+registerEnglishCatalog(registerTerminalEnglish);
 
 function UploadLayer(props: { state: TerminalPanelViewState }) {
   const progress = createMemo(() => props.state.upload.progress());
@@ -277,6 +280,9 @@ export function TerminalPanelView(props: { view: () => TerminalPanelViewState })
             </Show>
             <Show when={!props.view().activeId && !props.view().connecting && !props.view().error}>
               <PanelEmptyState
+                presentation={
+                  props.view().embedded ? (props.view().mobile ? "mobile" : "desktop") : undefined
+                }
                 heading={t("chat.sidePanel.terminal")}
                 description={t("chat.sidePanel.terminalEmpty")}
                 icon={<Icon name="terminal" />}

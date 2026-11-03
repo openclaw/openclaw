@@ -1,4 +1,4 @@
-import { onTestFinished } from "vitest";
+import { onTestFinished, vi } from "vitest";
 import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credential-modes.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../../agents/auth-profiles.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
@@ -14,21 +14,43 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   type PreparedGatewayModelCatalogSnapshot,
   registerGatewayModelCatalogPrivateAccess,
 } from "../server-model-catalog-auth.js";
 import { buildModelsListResult } from "./models-list-result.js";
-import type { GatewayRequestContext } from "./types.js";
+import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
-export const WITHOUT_OPENAI_ENV_AUTH = {
-  CODEX_API_KEY: undefined,
-  CODEX_HOME: "/__openclaw_models_list_test__/codex",
-  OPENAI_API_KEY: undefined,
-  OPENAI_BASE_URL: undefined,
-  OPENAI_OAUTH_TOKEN: undefined,
-  CHATGPT_OAUTH_TOKEN: undefined,
-} as const;
+export function withModelsListState<T>(
+  run: Parameters<typeof withOpenClawTestState<T>>[1],
+  options: Parameters<typeof withOpenClawTestState>[0] = {},
+) {
+  return withOpenClawTestState({ layout: "state-only", prefix: "models-list-", ...options }, run);
+}
+
+export const modelAuthStore = (
+  profiles: AuthProfileStore["profiles"],
+  usageStats?: AuthProfileStore["usageStats"],
+): AuthProfileStore => ({ version: 1, profiles, ...(usageStats ? { usageStats } : {}) });
+
+export async function requestModelsList(
+  context: GatewayRequestContext,
+  params: Record<string, unknown>,
+  client: GatewayClient | null = null,
+) {
+  const { modelsHandlers } = await import("./models.js");
+  const respond = vi.fn<RespondFn>();
+  await modelsHandlers["models.list"]!({
+    req: { type: "req", id: "models-list", method: "models.list", params },
+    client,
+    context,
+    params,
+    respond,
+    isWebchatConnect: () => false,
+  });
+  return respond;
+}
 
 export function catalogEntry(id: string, api: ModelCatalogEntry["api"]): ModelCatalogEntry {
   return { id, name: id, provider: "openai", api };

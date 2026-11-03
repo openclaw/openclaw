@@ -63,7 +63,7 @@ describe("registerNodesCli plugin registration", () => {
     });
   });
 
-  it("documents the supported system.which parameter shape", async () => {
+  it("documents current pairing and system.which command syntax", async () => {
     const program = await registerWithArgv("--help");
     const nodesCommand = program.commands.find((command) => command.name() === "nodes");
     const output: string[] = [];
@@ -77,5 +77,7 @@ describe("registerNodesCli plugin registration", () => {
 
     expect(help).toContain(`--params '{"bins":["uname"]}'`);
     expect(help).not.toContain(`--params '{"name":"uname"}'`);
+    expect(help).toContain("openclaw nodes pending");
+    expect(help).not.toContain("openclaw nodes pairing pending");
   });
 });

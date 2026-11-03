@@ -3,6 +3,15 @@ import { en } from "./en.ts";
 
 // Recovery copy follows the lazy login and plugin views; the loader label stays eager.
 const enLogin = {
+  connection: {
+    help: {
+      title: "How to connect",
+      step1: "Start the gateway on your host machine:",
+      step2: "Get a tokenized dashboard URL:",
+      step3: "Paste the Gateway URL and secret above, or open that URL directly.",
+      docsLink: "Read the docs →",
+    },
+  },
   login: {
     unsupportedBrowser: {
       title: "Update your browser to use OpenClaw",
@@ -66,7 +75,8 @@ const enLogin = {
           "Ask a Gateway administrator to assign your profile a role, or to grant or restore your access.",
         stepFindProfile:
           "Administrators can find your profile with openclaw users list --json, then assign a role with users.setRole.",
-        stepReconnect: "This page reconnects on its own once access is granted.",
+        stepReconnect:
+          "Sign in as a different user, or choose Connect after an administrator grants access.",
       },
       authRequired: {
         title: "This Gateway expects its token",
@@ -183,6 +193,7 @@ const enLogin = {
 
 export const registerLoginEnglish = Object.assign(
   () => {
+    Object.assign(en.connection.help, enLogin.connection.help);
     Object.assign(en.login, enLogin.login);
   },
   { catalog: enLogin },

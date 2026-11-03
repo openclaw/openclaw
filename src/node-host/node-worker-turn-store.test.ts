@@ -145,6 +145,67 @@ describe("node worker turn journal", () => {
     expect(finished).toEqual(await f.turns.get(f.next.launchId));
   });
 
+  it.each(["completed", "failed", "interrupted", "cancelled"] satisfies NodeWorkerTerminalState[])(
+    "returns the settled postimage without rereading when a predecessor leaves its owner %s",
+    async (state) => {
+      const f = await fixture();
+      await f.start();
+      const completed = await f.finish();
+      await f.turns.claim({ claim: f.next, ...f.owner, nowMs: NOW_MS + 2 });
+      const database = openOpenClawStateDatabase({ env: f.env });
+      const predecessor = new DatabaseSync(database.path);
+      try {
+        predecessor
+          .prepare(
+            "UPDATE node_worker_launches SET state = ?, result_json = ?, error_text = ?, completed_at_ms = ?, updated_at_ms = ? WHERE launch_id = ?",
+          )
+          .run(
+            state,
+            state === "completed" ? "{}" : null,
+            state === "completed" ? null : "predecessor cleanup",
+            NOW_MS + 1,
+            NOW_MS + 1,
+            f.first.launchId,
+          );
+      } finally {
+        predecessor.close();
+      }
+      const kernel = new NodeWorkerTurnKernel({ database, env: f.env });
+      const admission = vi
+        .spyOn(operationAdmission, "requestSqliteWorkerOperationAdmission")
+        .mockImplementation(() => {});
+      const reads = trackSqliteStatementExecutions(
+        requireNativeSqliteDatabase(database.db),
+        ["receipt"],
+        (sql) =>
+          sql.startsWith("select ") &&
+          (sql.includes('from "node_worker_turns"') || sql.includes('from "node_worker_launches"'))
+            ? "receipt"
+            : null,
+      );
+      let settled;
+      try {
+        settled = kernel.get(f.next.launchId);
+        expect(settled).toMatchObject({
+          state: state === "completed" ? "interrupted" : state,
+          resultJson: null,
+          errorText:
+            state === "completed"
+              ? "node worker stopped before its turn completed"
+              : "predecessor cleanup",
+          completedAtMs: NOW_MS + 2,
+          updatedAtMs: NOW_MS + 2,
+        });
+        expect.soft(reads.counts.receipt).toBe(2);
+      } finally {
+        reads.restore();
+        admission.mockRestore();
+      }
+      expect(await f.turns.get(f.next.launchId)).toEqual(settled);
+      expect(await f.turns.get(f.first.launchId)).toEqual(completed);
+    },
+  );
+
   it("reads and replays durable receipts after supervisor shutdown without restarting recovery", async () => {
     const unexpected = () => {
       throw new Error("Process work is outside this receipt-only fixture");

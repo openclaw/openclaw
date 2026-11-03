@@ -1,0 +1,55 @@
+import { t } from "../../i18n/index.ts";
+import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
+import { scopedAgentIdForSession } from "../../lib/sessions/navigation.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
+import type { ChatExportResult } from "./export.ts";
+
+type ChatExportHost = Pick<
+  ChatPageHost,
+  | "client"
+  | "connected"
+  | "sessionKey"
+  | "currentSessionId"
+  | "connectionEpoch"
+  | "assistantName"
+  | "hello"
+> &
+  Parameters<typeof scopedAgentIdForSession>[0];
+
+export async function exportCurrentChat(
+  host: ChatExportHost,
+  isOwnerCurrent: () => boolean,
+): Promise<ChatExportResult> {
+  const { client, sessionKey, currentSessionId, connectionEpoch, assistantName, hello } = host;
+  const agentId = scopedAgentIdForSession(host, sessionKey);
+  const access = readSessionMethodAccess(
+    { client, hello, phase: host.connected ? "connected" : "offline" },
+    { method: "chat.history", requiredScope: "operator.read", sessionScope: true },
+  );
+  if (!access.allowed || !client) {
+    throw new Error(access.allowed ? t("sessionsView.actionRequiresConnection") : access.reason);
+  }
+  const isCurrent = () =>
+    isOwnerCurrent() &&
+    host.connected &&
+    host.client === client &&
+    host.connectionEpoch === connectionEpoch &&
+    host.hello === hello &&
+    host.sessionKey === sessionKey &&
+    host.currentSessionId === currentSessionId &&
+    scopedAgentIdForSession(host, sessionKey) === agentId;
+  const { exportCapturedChat } = await import("./chat-export.runtime.ts");
+  if (!isCurrent()) {
+    throw new Error(t("sessionsView.copyTranscriptChanged"));
+  }
+  return exportCapturedChat(
+    {
+      client,
+      sessionKey,
+      sessionId: currentSessionId,
+      agentId,
+      isCurrent,
+    },
+    assistantName,
+  );
+}

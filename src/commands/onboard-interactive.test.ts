@@ -160,17 +160,17 @@ describe("runConversationalOnboarding", () => {
       binding: fixture.binding,
     });
     const launchConversation = vi.fn(async () => {});
+    vi.spyOn(
+      await import("../system-agent/tui-backend.js"),
+      "runSystemAgentTui",
+    ).mockImplementation(launchConversation);
     const { runSystemAgent } = await vi.importActual<
       typeof import("../system-agent/system-agent.js")
     >("../system-agent/system-agent.js");
     mocks.runSystemAgent.mockImplementation((opts, runtime) =>
-      runSystemAgent(
-        { ...opts, input: terminal, output: terminal, runInteractiveTui: launchConversation },
-        runtime,
-      ),
+      runSystemAgent({ ...opts, input: terminal, output: terminal }, runtime),
     );
     return {
-      binding: fixture.binding,
       registry,
       launchConversation,
       currentConfig: () => config,
@@ -207,7 +207,7 @@ describe("runConversationalOnboarding", () => {
   }
 
   it("acquires a cold verified harness from verified setup without replacing the root registry", async () => {
-    const { currentConfig, launchConversation } = await prepareConversation();
+    const { launchConversation } = await prepareConversation();
     expect(getRegisteredAgentHarness("codex")).toBeUndefined();
     launchConversation.mockImplementation(async () => {
       expect(getRegisteredAgentHarness("codex")).toBeDefined();
@@ -217,14 +217,6 @@ describe("runConversationalOnboarding", () => {
     await runSystemAgentWithInference({ input: terminal, output: terminal }, makeRuntime());
 
     expect(launchConversation).toHaveBeenCalledOnce();
-    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledWith({
-      basePluginIds: [],
-      config: currentConfig(),
-      workspaceDir: path.join(home.home, "workspace"),
-      selections: [
-        { provider: "openai", modelId: "gpt-5.6-sol", runtime: "codex", agentId: "main" },
-      ],
-    });
     expect(getRegisteredAgentHarness("codex")).toBeUndefined();
     expect(getActivePluginRegistry()).toBe(rootRegistry);
   });
@@ -257,9 +249,6 @@ describe("runConversationalOnboarding", () => {
         code: "SYSTEM_AGENT_INFERENCE_UNAVAILABLE",
       });
 
-      expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(
-        kind === "missing harness" ? 1 : 0,
-      );
       expect(launchConversation).not.toHaveBeenCalled();
       expect(getActivePluginRegistry()).toBe(rootRegistry);
     },

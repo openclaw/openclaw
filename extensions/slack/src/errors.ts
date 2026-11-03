@@ -1,5 +1,9 @@
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeOptionalString,
+  normalizeTrimmedStringList,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const NO_ERROR_DETAIL = "no error detail";
 const MAX_ERROR_CAUSE_DEPTH = 32;
@@ -20,6 +24,34 @@ export function getSlackWebApiErrorData(error: unknown): SlackWebApiErrorData | 
   // SAFETY: Slack attaches data to Error; the object check and consumer coercers validate its fields.
   const data = (error as Error & { data?: SlackWebApiErrorData }).data;
   return data && typeof data === "object" ? data : undefined;
+}
+
+export function enrichSlackWebApiError(err: unknown): unknown {
+  if (!(err instanceof Error)) {
+    return err;
+  }
+  const data = getSlackWebApiErrorData(err);
+  const code = normalizeOptionalString(data?.error);
+  if (!code) {
+    return err;
+  }
+  const details: string[] = [];
+  const needed = normalizeOptionalString(data?.needed);
+  if (needed) {
+    details.push(`needed: ${needed}`);
+  }
+  const scopes = normalizeTrimmedStringList(data?.response_metadata?.scopes);
+  if (scopes.length) {
+    details.push(`granted: ${scopes.join(", ")}`);
+  }
+  const acceptedScopes = normalizeTrimmedStringList(data?.response_metadata?.acceptedScopes);
+  if (acceptedScopes.length) {
+    details.push(`accepted: ${acceptedScopes.join(", ")}`);
+  }
+  const message = `${err.message || `An API error occurred: ${code}`}${
+    details.length ? ` (${details.join("; ")})` : ""
+  }`;
+  return message === err.message ? err : new Error(message);
 }
 
 function addStringDetail(details: string[], label: string, value: unknown) {

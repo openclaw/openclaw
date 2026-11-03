@@ -4,6 +4,7 @@ import type { ConfigSnapshot } from "../../api/types.ts";
 import { createPatchServer, expectCalls, loadedConfig } from "./config-suite.test-support.ts";
 import {
   createConfigServerMock,
+  createDeferredSetServerMock,
   CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS,
 } from "./config-test-harness.ts";
 
@@ -63,6 +64,74 @@ it.each([
   },
 );
 
+it("replays own map keys after an acknowledgement without losing canonical siblings", async () => {
+  vi.useFakeTimers();
+  const keys = ["constructor", "prototype", "__proto__"];
+  const aliases = Object.fromEntries(keys.map((key) => [key, "before"]));
+  const { request, submissions, firstSet } = createDeferredSetServerMock({
+    count: 1,
+    aliases,
+    canonical: "retained",
+  });
+  const { runtimeConfig } = await loadedConfig(request);
+  runtimeConfig.patchForm(["aliases"], aliases);
+  await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+  expect(submissions).toHaveLength(1);
+  for (const key of keys) {
+    runtimeConfig.patchForm(["aliases", key], "edited");
+  }
+  await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+  expect(submissions).toHaveLength(1);
+  firstSet.resolve({});
+  await vi.advanceTimersByTimeAsync(0);
+  expect(submissions).toHaveLength(2);
+  expect(submissions[1]?.baseHash).toBe("hash-2");
+  expect(JSON.parse(submissions[1]!.raw)).toEqual({
+    count: 1,
+    aliases: Object.fromEntries(keys.map((key) => [key, "edited"])),
+    canonical: "retained",
+  });
+  expect(runtimeConfig.state.configFormDirty).toBe(false);
+});
+
+it.each(["raw", "form"] as const)(
+  "keeps a newer %s edit when discard waits for a pending autosave",
+  async (mode) => {
+    vi.useFakeTimers();
+    const { request, submissions, firstSet } = createDeferredSetServerMock();
+    const { runtimeConfig } = await loadedConfig(request, true);
+    runtimeConfig.patchForm(["count"], 2);
+    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+    runtimeConfig.setRaw('{"count":3}');
+    const discard = runtimeConfig.discardDraft();
+    if (mode === "raw") {
+      runtimeConfig.setRaw('{"count":4}');
+    } else {
+      runtimeConfig.patchForm(["count"], 4);
+      // The newer form debounce expires while discard still holds autosave.
+      await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+    }
+    firstSet.resolve({});
+    await discard;
+
+    expect(JSON.parse(runtimeConfig.state.configRaw)).toEqual({ count: 4 });
+    expect(runtimeConfig.state.configFormDirty).toBe(true);
+    expect(runtimeConfig.state.configFormMode).toBe(mode);
+    expect(submissions).toHaveLength(1);
+    if (mode === "raw") {
+      await expect(runtimeConfig.save()).resolves.toBe(true);
+    } else {
+      await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+      expect(runtimeConfig.state.configFormDirty).toBe(false);
+    }
+    const saved = submissions[1];
+    if (!saved) {
+      throw new Error("The newer draft was not saved");
+    }
+    expect(JSON.parse(saved.raw)).toEqual({ count: 4 });
+  },
+);
+
 it("keeps the restart-needed banner when reverting an acknowledged autosave draft", async () => {
   vi.useFakeTimers();
   const server = createConfigServerMock();
@@ -83,6 +152,13 @@ it("keeps a failed first load retryable after a raw draft is reverted", async ()
   runtimeConfig.setRaw('{"count":9}');
   runtimeConfig.setRaw(runtimeConfig.state.configRawOriginal);
   expect(state).toMatchObject({ configSnapshot: null, configFormDirty: false });
-  await runtimeConfig.ensureLoaded();
+  // A failed read waits out its retry delay before an ensure repeats it.
+  vi.useFakeTimers({ toFake: ["Date"] });
+  try {
+    vi.setSystemTime(Date.now() + 5_000);
+    await runtimeConfig.ensureLoaded();
+  } finally {
+    vi.useRealTimers();
+  }
   expect(runtimeConfig.state.configForm).toEqual({ count: 1 });
 });

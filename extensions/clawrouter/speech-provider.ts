@@ -2,7 +2,12 @@ import type { PluginCapabilityCatalogContext } from "openclaw/plugin-sdk/plugin-
 import type { AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type { SpeechProviderPlugin, SpeechSynthesisRequest } from "openclaw/plugin-sdk/speech";
-import { createSpeechDirectiveParser } from "openclaw/plugin-sdk/speech-provider";
+import {
+  buildOpenAiSpeechRequestBody,
+  createSpeechDirectiveParser,
+  OPENAI_TTS_MODELS,
+  OPENAI_TTS_VOICES,
+} from "openclaw/plugin-sdk/speech-provider";
 import {
   asOptionalRecord,
   normalizeOptionalString,
@@ -10,7 +15,7 @@ import {
 import { normalizeClawRouterApiBaseUrl } from "./base-url.js";
 
 const MODEL = "openai/tts-1";
-const VOICES = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"];
+const VOICES = OPENAI_TTS_VOICES;
 const FORMATS = new Set(["mp3", "opus", "aac", "flac", "wav", "pcm"]);
 
 function readVoice(raw: Record<string, unknown>) {
@@ -30,6 +35,7 @@ function readConfig(raw: Record<string, unknown>, path: string) {
     model: normalizeOptionalString(raw.model ?? raw.modelId) ?? MODEL,
     voice: readVoice(raw) ?? "alloy",
     speed: raw.speed,
+    instructions: normalizeOptionalString(raw.instructions),
     responseFormat,
     // An explicit profile is terminal; it must not fall back to an env or inline key.
     profileId: normalizeOptionalString(raw.profileId),
@@ -43,12 +49,9 @@ function ttsConfig(raw: Record<string, unknown>) {
   );
 }
 
-type Context = Pick<
-  PluginCapabilityCatalogContext,
-  "resolveApiKeyForProvider" | "fetchWithSsrFGuard"
->;
-
-export function buildClawRouterSpeechProvider(context: Context): SpeechProviderPlugin {
+export function buildClawRouterSpeechProvider(
+  context: Pick<PluginCapabilityCatalogContext, "resolveApiKeyForProvider" | "fetchWithSsrFGuard">,
+): SpeechProviderPlugin {
   async function resolveAuth(cfg: SpeechSynthesisRequest["cfg"], raw: Record<string, unknown>) {
     const config = readConfig(raw, "tts.providers.clawrouter");
     const baseUrl = normalizeClawRouterApiBaseUrl(
@@ -98,17 +101,41 @@ export function buildClawRouterSpeechProvider(context: Context): SpeechProviderP
     if (!auth.apiKey) {
       throw new Error("Configure a ClawRouter API key for speech");
     }
-    return {
-      baseUrl,
-      headers: {
-        Authorization: "Bearer " + auth.apiKey,
-        "Content-Type": "application/json",
-        "X-ClawRouter-Client": "openclaw",
+    const { resolveClawRouterCapabilityHttpContext } = await import("./capability-offers.js");
+    return resolveClawRouterCapabilityHttpContext(
+      {
+        ...cfg,
+        models: {
+          ...cfg.models,
+          providers: {
+            ...cfg.models?.providers,
+            clawrouter: {
+              ...cfg.models?.providers?.clawrouter,
+              baseUrl,
+              models: cfg.models?.providers?.clawrouter?.models ?? [],
+            },
+          },
+        },
       },
-    };
+      auth.apiKey,
+      "audio",
+    );
   }
 
   async function synthesize(req: SpeechSynthesisRequest, telephony = false) {
+    const {
+      createProviderOperationDeadline,
+      createProviderOperationTimeoutResolver,
+      assertOkOrThrowProviderError,
+      readProviderBinaryResponse,
+    } = await import("openclaw/plugin-sdk/provider-http");
+    const remaining = createProviderOperationTimeoutResolver({
+      deadline: createProviderOperationDeadline({
+        timeoutMs: req.timeoutMs,
+        label: "ClawRouter speech",
+      }),
+      defaultTimeoutMs: req.timeoutMs,
+    });
     const base = readConfig(req.providerConfig, "tts.providers.clawrouter");
     const overrides = req.providerOverrides ?? {};
     const config = {
@@ -117,11 +144,12 @@ export function buildClawRouterSpeechProvider(context: Context): SpeechProviderP
       voice: readVoice(overrides) ?? base.voice,
       speed: overrides.speed ?? base.speed,
     };
-    if (config.model !== MODEL) {
-      throw new Error("ClawRouter speech supports only openai/tts-1");
+    const upstream = config.model.startsWith("openai/") ? config.model.slice("openai/".length) : "";
+    if (!OPENAI_TTS_MODELS.some((model) => model === upstream)) {
+      throw new Error("ClawRouter speech requires a qualified OpenAI speech model");
     }
-    if (!VOICES.includes(config.voice)) {
-      throw new Error("Invalid ClawRouter tts-1 voice");
+    if (!VOICES.some((voice) => voice === config.voice)) {
+      throw new Error("Invalid ClawRouter OpenAI speech voice");
     }
     if (
       config.speed !== undefined &&
@@ -135,34 +163,56 @@ export function buildClawRouterSpeechProvider(context: Context): SpeechProviderP
     if (!req.text.trim() || Array.from(req.text).length > 4096) {
       throw new Error("ClawRouter speech requires 1-4096 characters");
     }
-    const { assertOkOrThrowProviderError, readProviderBinaryResponse } =
-      await import("openclaw/plugin-sdk/provider-http");
-    const { ssrfPolicyFromHttpBaseUrlAllowedHostname } =
-      await import("openclaw/plugin-sdk/ssrf-runtime");
+    const { mergeSsrFPolicies } = await import("openclaw/plugin-sdk/ssrf-runtime");
     const { resolveGeneratedMediaMaxBytes } =
       await import("openclaw/plugin-sdk/media-generation-runtime");
-    const { baseUrl, headers } = await resolveAuth(req.cfg, {
+    const http = await resolveAuth(req.cfg, {
       ...req.providerConfig,
       model: config.model,
     });
+    const { fetchClawRouterCapabilityOffers } = await import("./capability-offers.js");
+    const offers = await fetchClawRouterCapabilityOffers({ context: http, timeoutMs: remaining });
+    const offer = offers.find(
+      (candidate) =>
+        candidate.providerId === "openai" &&
+        candidate.model?.id === config.model &&
+        candidate.model.upstream === upstream &&
+        Array.isArray(candidate.model.capabilities) &&
+        candidate.model.capabilities.includes("audio.speech") &&
+        candidate.methods.includes("POST") &&
+        candidate.requestFormat === "openai.audio_speech" &&
+        candidate.responseFormat === "audio.binary",
+    );
+    if (!offer) {
+      throw new Error("Selected ClawRouter speech model has no eligible supported offer");
+    }
+    const headers = new Headers(http.headers);
+    headers.set("Content-Type", "application/json");
+    headers.set("Accept", "audio/*, application/octet-stream");
     const responseFormat = telephony
       ? "pcm"
       : (config.responseFormat ?? (req.target === "voice-note" ? "opus" : "mp3"));
+    const body = buildOpenAiSpeechRequestBody({
+      model: offer.routeKind === "unified" ? config.model : upstream,
+      text: req.text,
+      voice: config.voice,
+      responseFormat,
+      speed: typeof config.speed === "number" ? config.speed : undefined,
+      instructions: upstream.startsWith("gpt-4o-mini-tts") ? config.instructions : undefined,
+    });
     const { response, release } = await context.fetchWithSsrFGuard({
-      url: baseUrl + "/audio/speech",
-      timeoutMs: req.timeoutMs,
+      url: offer.url,
+      timeoutMs: remaining(),
       init: {
         method: "POST",
         headers,
-        body: JSON.stringify({
-          model: MODEL,
-          input: req.text,
-          voice: config.voice,
-          response_format: responseFormat,
-          ...(config.speed === undefined ? {} : { speed: config.speed }),
-        }),
+        body: JSON.stringify(offer.routeKind === "manifest" ? { body } : body),
       },
-      policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
+      policy: mergeSsrFPolicies(
+        http.ssrfPolicy,
+        http.allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined,
+      ),
+      dispatcherPolicy: http.dispatcherPolicy,
       auditContext: "clawrouter.speech",
     });
     try {
@@ -175,6 +225,7 @@ export function buildClawRouterSpeechProvider(context: Context): SpeechProviderP
         "audio",
         {
           maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
+          timeoutMs: remaining,
           onOverflow: () => new Error("ClawRouter speech audio response exceeds configured limit"),
         },
       );

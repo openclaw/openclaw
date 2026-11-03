@@ -1,9 +1,9 @@
-import type { postJsonRequest } from "openclaw/plugin-sdk/provider-http";
+import type { postJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { afterEach, expect, it, vi } from "vitest";
 import { buildPixVerseVideoGenerationProvider } from "./video-generation-provider.js";
 
-const { postJsonRequestMock } = vi.hoisted(() => ({
-  postJsonRequestMock: vi.fn<typeof postJsonRequest>(),
+const { postJsonResponseMock } = vi.hoisted(() => ({
+  postJsonResponseMock: vi.fn<typeof postJsonResponse>(),
 }));
 
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (importOriginal) => ({
@@ -13,7 +13,7 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (importOriginal) => (
 
 vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-http")>()),
-  postJsonRequest: postJsonRequestMock,
+  postJsonResponse: postJsonResponseMock,
 }));
 
 afterEach(() => vi.restoreAllMocks());
@@ -21,11 +21,7 @@ afterEach(() => vi.restoreAllMocks());
 it.each([false, true])(
   "honors private polling policy without a proxy override (allowed: %s)",
   async (allowPrivateNetwork) => {
-    postJsonRequestMock.mockResolvedValue({
-      response: Response.json({ ErrCode: 0, Resp: { video_id: 4242 } }),
-      finalUrl: "http://127.0.0.1:9/video/text/generate",
-      release: async () => {},
-    });
+    postJsonResponseMock.mockResolvedValue({ ErrCode: 0, Resp: { video_id: 4242 } });
     const intercepted = new Error("synthetic poll intercepted before network");
     const fetchMock = vi.spyOn(globalThis, "fetch").mockRejectedValue(intercepted);
 

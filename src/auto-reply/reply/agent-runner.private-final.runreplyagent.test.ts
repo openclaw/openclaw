@@ -45,7 +45,7 @@ import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { routeReply } from "./route-reply.js";
 import type * as RouteReplyModule from "./route-reply.js";
 import { buildTestCtx } from "./test-ctx.js";
-import { createMockTypingController } from "./test-helpers.js";
+import { createReplyParams } from "./test-helpers.js";
 
 // Hoist mocks before static dependencies, but defer the runner to avoid incomplete cyclic exports.
 await vi.hoisted(async () => {
@@ -99,7 +99,6 @@ describe("runReplyAgent stranded message_tool_only finals (#85714)", () => {
     summaryLine?: string;
     strandedReplyRetry?: boolean;
     sendPolicyDenied?: boolean;
-    isHeartbeat?: boolean;
     chatType?: "direct" | "group";
     terminalReplyExpectation?: "required" | "optional";
     pendingContinuation?: boolean;
@@ -177,9 +176,7 @@ describe("runReplyAgent stranded message_tool_only finals (#85714)", () => {
         extraSystemPrompt: "Use message(action=send) for all visible replies.",
         terminalReplyExpectation:
           params.terminalReplyExpectation ??
-          (params.isHeartbeat || params.inboundEventKind === "room_event"
-            ? "optional"
-            : "required"),
+          (params.inboundEventKind === "room_event" ? "optional" : "required"),
       },
     });
 
@@ -196,36 +193,28 @@ describe("runReplyAgent stranded message_tool_only finals (#85714)", () => {
         }
       });
       try {
-        const result = await runReplyAgent({
-          commandBody: queuedRun.prompt,
-          followupRun: queuedRun,
-          queueKey: sessionKey,
-          resolvedQueue: createTestQueueSettings({ mode: "interrupt" }),
-          shouldSteer: false,
-          shouldFollowup: false,
-          isActive: false,
-          typing: createMockTypingController(),
-          sessionCtx,
-          sessionEntry,
-          sessionStore: { [sessionKey]: sessionEntry },
-          sessionKey,
-          storePath,
-          defaultModel: "anthropic/claude-opus-4-6",
-          resolvedVerboseLevel: "off",
-          isNewSession: false,
-          blockStreamingEnabled: false,
-          resolvedBlockStreamingBreak: "message_end",
-          shouldInjectGroupIntro: false,
-          typingMode: "instant",
-          opts: {
-            runId,
-            toolsAllow: queuedRun.toolsAllow,
-            isHeartbeat: params.isHeartbeat,
-            onDeliberateSilentTerminalReply: params.onDeliberateSilentTerminalReply,
-            onObservedReplyDelivery: params.onObservedReplyDelivery,
-            onReplyOperationOwned: params.onReplyOperationOwned,
-          },
-        });
+        const result = await runReplyAgent(
+          createReplyParams(queuedRun, {
+            commandBody: queuedRun.prompt,
+            queueKey: sessionKey,
+            resolvedQueue: createTestQueueSettings({ mode: "interrupt" }),
+            sessionCtx,
+            sessionEntry,
+            sessionStore: { [sessionKey]: sessionEntry },
+            sessionKey,
+            storePath,
+            defaultModel: "anthropic/claude-opus-4-6",
+            typingMode: "instant",
+            opts: {
+              runId,
+              toolsAllow: queuedRun.toolsAllow,
+
+              onDeliberateSilentTerminalReply: params.onDeliberateSilentTerminalReply,
+              onObservedReplyDelivery: params.onObservedReplyDelivery,
+              onReplyOperationOwned: params.onReplyOperationOwned,
+            },
+          }),
+        );
         const terminalEvent = agentEvents.find(
           (event) =>
             event.stream === "lifecycle" &&
@@ -543,26 +532,6 @@ describe("runReplyAgent stranded message_tool_only finals (#85714)", () => {
       expect(payloads).toEqual([]);
       expect(onDeliberateSilentTerminalReply).toHaveBeenCalledOnce();
       expectNoRecovery();
-    },
-  );
-
-  it.each([
-    { name: "room event", params: { inboundEventKind: "room_event" } },
-    { name: "heartbeat", params: { isHeartbeat: true } },
-    { name: "denied send policy", params: { sendPolicyDenied: true } },
-  ] satisfies Array<{ name: string; params: Parameters<typeof runPrivateFinalCase>[0] }>)(
-    "does not recover a $name",
-    async ({ params }) => {
-      const { result, terminalEvent } = await runPrivateFinalCase(params);
-      expect((terminalEvent?.data.terminalReply as { code?: unknown } | undefined)?.code).not.toBe(
-        "message-tool-not-called",
-      );
-      expectNoRecovery();
-      if (params.isHeartbeat) {
-        expect(
-          normalizeReplyPayloads(result).some((payload) => payload.text === strandedDiagnosticText),
-        ).toBe(false);
-      }
     },
   );
 

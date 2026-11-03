@@ -4,6 +4,7 @@ import { escapeXml } from "../shared/xml.js";
 import { buildScheduledTaskXml } from "./schtasks-xml.js";
 import { auditGatewayServiceConfig } from "./service-audit.js";
 import { fixture, native } from "./service-definition-backup.test-support.js";
+import { nativeExit } from "./systemd-exec.test-support.js";
 
 type Fixture = Awaited<ReturnType<typeof fixture>>;
 function expectOnlyDrift(
@@ -99,6 +100,34 @@ it.each(["omitted by Windows", "omitted in backup"])(
   },
 );
 
+it("ignores the scheduler engine value while still reporting changed launcher arguments", async () => {
+  const f = await fixture("win32");
+  const xml = taskXml(f).replace(
+    "</Settings>",
+    "<UseUnifiedSchedulingEngine>true</UseUnifiedSchedulingEngine></Settings>",
+  );
+  expectOnlyDrift(await auditXml(f, xml));
+  expectOnlyDrift(await auditXml(f, xml.replace("</Arguments>", " --verbose</Arguments>")), {
+    kind: "unknown-edit",
+    key: "Actions.Exec.Command",
+  });
+});
+
+it("rejects a scheduler engine change during task publication", async () => {
+  const f = await fixture("win32");
+  const expectedXml = f.task();
+  await f.capture.hooks.taskPrepared(expectedXml);
+  f.setTask(
+    expectedXml.replace(
+      "</Settings>",
+      "<UseUnifiedSchedulingEngine>true</UseUnifiedSchedulingEngine></Settings>",
+    ),
+  );
+  await expect(f.capture.hooks.taskWritten(expectedXml)).rejects.toThrow(
+    "Settings.UseUnifiedSchedulingEngine",
+  );
+});
+
 it.each([
   { kind: "same SID", account: "WIN-TEST\\operator", sid: "S-1-5-21-1-2-3-1001" },
   { kind: "different SID", account: "WIN-TEST\\other-private", sid: "S-1-5-21-1-2-3-1002" },
@@ -109,12 +138,7 @@ it.each([
   const xml = taskXml(f)
     .replace("<UserId>operator</UserId>", `<UserId>${account}</UserId>`)
     .replace("<UserId>operator</UserId>", `<UserId>${expectedSid}</UserId>`);
-  const identity = {
-    code: 0,
-    stdout: `${expectedSid}\n`,
-    stderr: "",
-    termination: "exit" as const,
-  };
+  const identity = nativeExit(`${expectedSid}\n`);
   native.identity.mockResolvedValueOnce(identity).mockResolvedValue({
     ...identity,
     code: sid ? 0 : 1,

@@ -30,10 +30,7 @@ import {
   normalizeDeepInfraModelRef,
 } from "./media-models.js";
 import type { DeepInfraSurfaceModel } from "./media-models.js";
-import {
-  buildDeepInfraVideoModelCapabilities,
-  resolveDeepInfraVideoModelCapabilities,
-} from "./surface-model-catalogs.js";
+import { buildDeepInfraVideoModelCapabilities } from "./surface-model-catalogs.js";
 
 // Per-poll request budget; the total operation budget comes from req.timeoutMs.
 const DEFAULT_HTTP_TIMEOUT_MS = 60_000;
@@ -42,11 +39,9 @@ const MAX_POLL_ATTEMPTS = 120;
 
 // /v1/openai/videos is async: POST returns a job, GET /{id} polls until the
 // job succeeds or fails, then the result contains downloadable video URLs.
-type DeepInfraVideoStatus = "queued" | "processing" | "succeeded" | "failed";
-
 type DeepInfraVideoJob = {
   id?: string;
-  status?: DeepInfraVideoStatus;
+  status?: "queued" | "processing" | "succeeded" | "failed";
   model?: string | null;
   data?: Array<{ url?: unknown } | null> | null;
   error?: string | null;
@@ -109,7 +104,6 @@ export function buildDeepInfraVideoGenerationProvider(options?: {
     label: "DeepInfra",
     defaultModel,
     models: ids,
-    resolveModelCapabilities: resolveDeepInfraVideoModelCapabilities,
     isConfiguredAsync: (ctx) => isProviderApiKeyConfiguredAsync({ provider: "deepinfra", ...ctx }),
     capabilities: {
       ...capabilities,

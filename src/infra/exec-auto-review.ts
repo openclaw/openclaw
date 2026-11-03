@@ -56,6 +56,8 @@ export type ExecAutoReviewTranscript = {
 export type ExecAutoReviewInput = {
   transcript?: ExecAutoReviewTranscript;
   command: string;
+  /** Exact prepared shell command when execution is on another host. */
+  executionCommand?: string;
   argv?: readonly string[];
   resolvedPath?: string | null;
   cwd?: string | null;

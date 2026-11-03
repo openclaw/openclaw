@@ -264,6 +264,7 @@ export function projectSessionModelCatalog(
   models: ModelChoice[],
   config: OpenClawConfig,
   ownership: AgentHarnessSessionRuntimeOwnership | undefined,
+  availability: "hidden" | "admitted" = "hidden",
 ): ModelChoice[] {
   const requiredWorker = resolveRequiredWorkerInferenceProfileId(readParams, config);
   const nativeAuth = ownership?.auth === "native";
@@ -301,6 +302,7 @@ export function projectSessionModelCatalog(
       unavailableUntil: _until,
       ...available
     } = model;
-    return available;
+    // Gateway hides host-auth status; requester catalogs need explicit admission evidence.
+    return availability === "admitted" ? { ...available, available: true } : available;
   });
 }

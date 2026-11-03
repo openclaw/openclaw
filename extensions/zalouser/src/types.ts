@@ -51,7 +51,6 @@ export type ZaloInboundMessage = {
   quotedGlobalMsgId?: string;
   quotedBody?: string;
   eventMessage?: ZaloEventMessage;
-  raw: unknown;
 };
 
 export type ZcaUserInfo = ZcaFriend;
@@ -76,7 +75,6 @@ export type ZaloSendOptions = ZaloSendHandoff & {
 };
 
 export type ZaloGroupContext = {
-  groupId: string;
   name?: string;
   members?: string[];
 };

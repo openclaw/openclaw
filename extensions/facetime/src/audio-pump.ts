@@ -269,10 +269,8 @@ export function startFaceTimeAudioPump(params: {
     });
   };
   const cancelDrainTimer = () => {
-    if (drainTimer) {
-      clearTimeout(drainTimer);
-      drainTimer = undefined;
-    }
+    clearTimeout(drainTimer);
+    drainTimer = undefined;
   };
   const spawnOutput = () => {
     // Playback stays out of the capture helper: an in-process AVAudioEngine can

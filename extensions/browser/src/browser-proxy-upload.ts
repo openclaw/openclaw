@@ -174,7 +174,6 @@ function decodeUploadFile(file: BrowserProxyUploadFile, totalBytes: number): Buf
   if (buffer.toString("base64") !== file.contentBase64) {
     throw new Error("INVALID_REQUEST: invalid browser proxy upload encoding");
   }
-  assertBrowserProxyFileBytesWithinLimits(buffer.byteLength, totalBytes + buffer.byteLength);
   return buffer;
 }
 

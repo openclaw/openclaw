@@ -1,6 +1,6 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { createMemo, createSignal, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, Errored, Loading, onSettled, Show } from "solid-js";
 import { resolveControlUiAuthToken } from "../../../app/control-ui-auth.ts";
 import {
   isBrowserDashboardAvailable,
@@ -13,10 +13,11 @@ import {
 } from "../../../components/browser/browser-client.ts";
 import { BrowserPanelHost } from "../../../components/browser/browser-panel.ts";
 import { registerBrowserEnglish } from "../../../i18n/locales/en-browser.ts";
-import { formatUiError } from "../../format-error.ts";
+import { formatUiError, UserFacingError } from "../../format-error.ts";
 import { projectGateway } from "../../reactive/application.ts";
 import { useOptionalApplication } from "../../reactive/context.ts";
 import { t } from "../../reactive/i18n.ts";
+import { projectMutableSource } from "../../reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../solid-bridge.ts";
 import type { BoardWidget } from "../types.ts";
 import "./browser.css";
@@ -48,73 +49,78 @@ function BrowserDashboardWidgetContent(
     <Show when={scope()} keyed>
       {(binding) => {
         let dashboard: BrowserDashboard | undefined;
-        let error: unknown;
+        // A failed activation waits for explicit retry or a dashboard event.
+        let failed = false;
+        // Command admission stays synchronous across user and event-driven requests.
         let pending = false;
         let refreshNeeded = false;
         let connected = true;
-        const [revision, setRevision] = createSignal(0);
-        const publish = () => setRevision((value) => value + 1);
-        const state = createMemo(() => {
-          revision();
-          return { dashboard, error, pending };
-        });
-        async function request(action: "open" | "resume" | "stop" | "inspect"): Promise<void> {
+        const isCurrent = () => connected && host.isConnected && scope() === binding;
+        const state = projectMutableSource(null, () => ({ dashboard, pending }));
+        const [completion, setCompletion] = createSignal<Promise<void>>();
+        async function request(operation: "open" | "resume" | "stop" | "inspect"): Promise<void> {
           const snapshot = context?.gateway.snapshot;
-          const instanceId = props.widget?.instanceId;
+          const widget = props.widget;
+          const instanceId = widget?.instanceId;
           if (
             !snapshot ||
             !snapshot.client ||
+            !isCurrent() ||
             snapshot.client !== binding.client ||
             !isBrowserDashboardAvailable(snapshot) ||
-            !props.widget ||
+            !widget ||
             pending
           ) {
             return;
           }
           const client = snapshot.client;
-          if (!instanceId) {
-            error = new Error(t("browser.dashboardMissingIdentity"));
-            publish();
-            return;
-          }
-          if (action === "inspect") {
+          if (operation === "inspect") {
             refreshNeeded = false;
           }
           pending = true;
-          error = undefined;
-          publish();
-          try {
-            const result = await requestBrowserDashboard(
-              client,
-              {
-                ...props.session,
-                name: props.widget.name,
-                instanceId,
-                ...(!isBrowserPanelAvailable(snapshot) ? { sessionScoped: true } : {}),
-              },
-              action,
-            );
-            if (connected && host.isConnected && client === context?.gateway.snapshot.client) {
-              dashboard = result;
-            }
-          } catch (failure) {
-            if (connected && host.isConnected) {
-              error = failure;
-            }
-          } finally {
-            if (connected && host.isConnected) {
-              pending = false;
-              publish();
-              if (refreshNeeded && props.active) {
-                void request("inspect");
-              } else {
-                activate();
+          failed = false;
+          const task = (async () => {
+            try {
+              if (!instanceId) {
+                throw new Error(t("browser.dashboardMissingIdentity"));
+              }
+              const result = await requestBrowserDashboard(
+                client,
+                {
+                  ...props.session,
+                  name: widget.name,
+                  instanceId,
+                  ...(!isBrowserPanelAvailable(snapshot) ? { sessionScoped: true } : {}),
+                },
+                operation,
+              );
+              if (isCurrent() && client === context?.gateway.snapshot.client) {
+                dashboard = result;
+              }
+            } catch (failure) {
+              if (isCurrent()) {
+                failed = true;
+                throw new UserFacingError(formatUiError(failure), { cause: failure });
+              }
+            } finally {
+              if (isCurrent()) {
+                pending = false;
+                state.publish();
+                if (refreshNeeded && props.active) {
+                  void request("inspect");
+                } else {
+                  activate();
+                }
               }
             }
-          }
+          })();
+          void setCompletion(task);
+          state.publish();
+          // Consume the task even if its error slot has been disposed.
+          await task.catch(() => undefined);
         }
         function activate() {
-          if (props.active && available() && !pending && !error) {
+          if (props.active && available() && !pending && !failed) {
             if (refreshNeeded) {
               void request("inspect");
             } else if (!dashboard || (!dashboard.paused && !dashboard.browserTab)) {
@@ -137,15 +143,71 @@ function BrowserDashboardWidgetContent(
               void request("inspect");
             }
           });
+          activate();
           return () => {
             connected = false;
             unsubscribe?.();
           };
         });
+        const ready = createMemo(() => completion()?.then(() => null) ?? null);
         const tab = () => {
-          const value = state().dashboard;
+          const value = state.read().dashboard;
           return value?.browserTab && !value.paused ? value : undefined;
         };
+        const Status = () => (
+          <p class="board-browser__notice" role="status">
+            {t(
+              state.read().dashboard?.stopping
+                ? "browser.dashboardStopping"
+                : state.read().dashboard?.paused
+                  ? "browser.dashboardStopped"
+                  : "browser.loading",
+            )}
+          </p>
+        );
+        function Footer(footer: { dashboard?: BrowserDashboard; pending: boolean }) {
+          return (
+            <div class="board-browser__footer">
+              <span>
+                {t(sessionScoped() ? "browser.dashboardSessionShared" : "browser.dashboardShared")}
+              </span>
+              <div>
+                <button
+                  type="button"
+                  class="btn btn--small"
+                  disabled={footer.pending}
+                  onClick={() =>
+                    void request(
+                      footer.dashboard?.stopping
+                        ? "stop"
+                        : footer.dashboard?.paused
+                          ? "resume"
+                          : "open",
+                    )
+                  }
+                >
+                  {t(
+                    footer.dashboard?.stopping
+                      ? "browser.dashboardRetryStop"
+                      : footer.dashboard?.paused
+                        ? "browser.dashboardResume"
+                        : "browser.dashboardReconnect",
+                  )}
+                </button>
+                <Show when={footer.dashboard?.browserTab && !footer.dashboard.paused}>
+                  <button
+                    type="button"
+                    class="btn btn--small"
+                    disabled={footer.pending}
+                    onClick={() => void request("stop")}
+                  >
+                    {t("browser.dashboardStop")}
+                  </button>
+                </Show>
+              </div>
+            </div>
+          );
+        }
         return (
           <>
             <Show when={props.active && available()}>
@@ -154,7 +216,7 @@ function BrowserDashboardWidgetContent(
                 return null;
               }}
             </Show>
-            <Show when={props.active || state().dashboard}>
+            <Show when={props.active || state.read().dashboard}>
               <Show
                 when={context && available()}
                 fallback={<p class="board-browser__notice">{t("browser.dashboardUnavailable")}</p>}
@@ -164,97 +226,59 @@ function BrowserDashboardWidgetContent(
                     <Show
                       when={tab()}
                       fallback={
-                        <Show
-                          when={state().error}
-                          fallback={
-                            <p class="board-browser__notice" role="status">
-                              {t(
-                                state().dashboard?.stopping
-                                  ? "browser.dashboardStopping"
-                                  : state().dashboard?.paused
-                                    ? "browser.dashboardStopped"
-                                    : "browser.loading",
-                              )}
-                            </p>
-                          }
-                        >
-                          <BoardWidgetError
-                            error={state().error}
-                            onRetry={() => void request("open")}
-                          />
-                        </Show>
+                        <Loading on={completion()} fallback={<Status />}>
+                          <Errored
+                            fallback={(caughtError) => (
+                              <BoardWidgetError
+                                error={caughtError()}
+                                onRetry={() => void request("open")}
+                              />
+                            )}
+                          >
+                            {ready()}
+                            <Status />
+                          </Errored>
+                        </Loading>
                       }
                     >
-                      <BrowserPanelHost
-                        embedded
-                        client={gateway?.read().snapshot.client ?? null}
-                        available={available()}
-                        remoteAvailable={available()}
-                        presented={props.active}
-                        sessionKey={tab()!.sessionKey}
-                        fixedTab={tab()!.browserTab}
-                        dashboardTarget={{
-                          ...props.session,
-                          name: tab()!.name,
-                          instanceId: tab()!.instanceId,
-                          ...(sessionScoped() ? { sessionScoped: true } : {}),
-                        }}
-                        resourceBasePath={context?.resourceBasePath ?? ""}
-                        authToken={resolveControlUiAuthToken({
-                          hello: gateway?.read().snapshot.hello ?? null,
-                          password: context?.gateway.connection.password ?? "",
-                          settings: { token: context?.gateway.connection.token ?? "" },
-                        })}
-                      />
+                      {(resolvedDashboard) => (
+                        <BrowserPanelHost
+                          embedded
+                          client={gateway?.read().snapshot.client ?? null}
+                          available={available()}
+                          remoteAvailable={available()}
+                          presented={props.active}
+                          sessionKey={resolvedDashboard().sessionKey}
+                          fixedTab={resolvedDashboard().browserTab}
+                          dashboardTarget={{
+                            ...props.session,
+                            name: resolvedDashboard().name,
+                            instanceId: resolvedDashboard().instanceId,
+                            ...(sessionScoped() ? { sessionScoped: true } : {}),
+                          }}
+                          resourceBasePath={context?.resourceBasePath ?? ""}
+                          authToken={resolveControlUiAuthToken({
+                            hello: gateway?.read().snapshot.hello ?? null,
+                            password: context?.gateway.connection.password ?? "",
+                            settings: { token: context?.gateway.connection.token ?? "" },
+                          })}
+                        />
+                      )}
                     </Show>
                   </div>
-                  <div class="board-browser__footer">
-                    <span>
-                      {t(
-                        sessionScoped()
-                          ? "browser.dashboardSessionShared"
-                          : "browser.dashboardShared",
-                      )}
-                    </span>
-                    <div>
-                      <button
-                        type="button"
-                        class="btn btn--small"
-                        disabled={state().pending}
-                        onClick={() =>
-                          void request(
-                            state().dashboard?.stopping
-                              ? "stop"
-                              : state().dashboard?.paused
-                                ? "resume"
-                                : "open",
-                          )
-                        }
-                      >
-                        {t(
-                          state().dashboard?.stopping
-                            ? "browser.dashboardRetryStop"
-                            : state().dashboard?.paused
-                              ? "browser.dashboardResume"
-                              : "browser.dashboardReconnect",
+                  <Footer dashboard={state.read().dashboard} pending={state.read().pending} />
+                  <Show when={tab()}>
+                    <Loading on={completion()}>
+                      <Errored
+                        fallback={(caughtError) => (
+                          <p role="alert" class="board-browser__error">
+                            {formatUiError(caughtError())}
+                          </p>
                         )}
-                      </button>
-                      <Show when={tab()}>
-                        <button
-                          type="button"
-                          class="btn btn--small"
-                          disabled={state().pending}
-                          onClick={() => void request("stop")}
-                        >
-                          {t("browser.dashboardStop")}
-                        </button>
-                      </Show>
-                    </div>
-                  </div>
-                  <Show when={state().error && state().dashboard?.browserTab}>
-                    <p role="alert" class="board-browser__error">
-                      {formatUiError(state().error)}
-                    </p>
+                      >
+                        {ready()}
+                      </Errored>
+                    </Loading>
                   </Show>
                 </div>
               </Show>

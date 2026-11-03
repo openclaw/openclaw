@@ -79,11 +79,12 @@ suite.define(() => {
         },
       });
       await page.goto(suite.server.baseUrl + "settings/about");
-      const name = page.locator(".about-hero__name");
+      const name = page.locator(".about-identity__name");
       await expect.poll(() => name.textContent()).toBe("Northstar");
-      const hero = page.locator(".about-hero");
-      await hero.locator("openclaw-theme-brand-icon img").waitFor();
-      expect(await hero.locator(".about-hero__clawd, a").count()).toBe(0);
+      const identity = page.locator(".about-identity");
+      await identity.locator("openclaw-theme-brand-icon img").waitFor();
+      expect(await identity.locator(".about-identity__clawd").count()).toBe(0);
+      expect(await page.locator("openclaw-about-page nav").count()).toBe(0);
       expect(await page.title()).toBe("About — Northstar");
       await page.getByRole("link", { name: "Ask Northstar", exact: true }).waitFor();
       await page.goto(suite.server.baseUrl + "settings/appearance");
@@ -137,7 +138,7 @@ suite.define(() => {
       await expect.poll(() => indicator.count()).toBe(0);
       await page
         .locator(".chat-working-indicator__status")
-        .getByText("Waiting for turn to start…", { exact: true })
+        .getByText("Working…", { exact: true })
         .waitFor();
     });
   });

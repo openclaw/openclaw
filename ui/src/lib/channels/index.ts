@@ -19,13 +19,10 @@ import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "../gateway-errors.ts";
+import { listen } from "../reactive/listener.ts";
 
 type ChannelGatewayClient = {
   request<T = unknown>(method: string, params?: unknown): Promise<T>;
-};
-
-type ChannelLogoutResult = {
-  cleared: boolean;
 };
 
 type ChannelGatewaySnapshot = {
@@ -36,34 +33,40 @@ type ChannelGatewaySnapshot = {
   } | null;
 };
 
-type ChannelGateway = {
-  readonly snapshot: ChannelGatewaySnapshot;
-  subscribe: (listener: (snapshot: ChannelGatewaySnapshot) => void) => () => void;
-  subscribeEvents: (listener: GatewayEventListener) => () => void;
-};
-
 /** One admitted read; retirement settles even when the transport never responds. */
-export type ChannelPairingRead = {
+export type ChannelRead = {
   readonly completion: Promise<string | null>;
 };
 
+export type ChannelConfigEdit = { path: Array<string | number>; value: unknown };
+/** The saved value at an edited path when the edit was made; Save compares it with the file. */
+export type ChannelConfigBase = { path: Array<string | number>; value: unknown };
+
 export type ChannelsState = {
+  /** Unsaved form edits per channel. They stay out of the shared config draft, so
+      nothing can autosave them and another page's write cannot carry them along. */
+  configEdits: Readonly<Record<string, readonly ChannelConfigEdit[]>>;
+  /** What each edited path held when first edited, per channel. */
+  configEditBases: Readonly<Record<string, readonly ChannelConfigBase[]>>;
+  /** The Gateway those edits were made against. */
+  configEditsScope: number | null;
   client: ChannelGatewayClient | null;
   connected: boolean;
   channelsLoading: boolean;
   channelsLoadingProbe?: boolean | null;
   channelsRefreshSeq?: number;
   channelsSnapshot: ChannelsStatusSnapshot | null;
+  channelsRead: ChannelRead | null;
   channelsError: string | null;
   channelsLastSuccess: number | null;
   pairingLoading: boolean;
   pairingRefreshSeq: number;
   pairingSnapshot: ChannelsPairingListResult | null;
-  pairingRead: ChannelPairingRead | null;
+  pairingRead: ChannelRead | null;
   /** Admitted mutation failure; read failures belong to their completion receipt. */
   pairingError: string | null;
   pairingLastSuccess: number | null;
-  pairingBusyRequestId: string | null;
+  pairingBusy: { requestId: string; action: "approve" | "dismiss" } | null;
   whatsappLoginMessage: string | null;
   whatsappLoginQrDataUrl: string | null;
   whatsappLoginSessionKey: string | null;
@@ -178,14 +181,23 @@ function channelSnapshotAllowsScope(
   });
 }
 
-function createInitialChannelsState(snapshot: ChannelGatewaySnapshot): ChannelsState {
-  return {
-    client: snapshot.client ?? null,
-    connected: snapshot.phase === "connected",
+export function createChannelCapability(gateway: {
+  readonly snapshot: ChannelGatewaySnapshot;
+  subscribe: (listener: (snapshot: ChannelGatewaySnapshot) => void) => () => void;
+  subscribeEvents: (listener: GatewayEventListener) => () => void;
+}) {
+  const initialSnapshot = gateway.snapshot;
+  const state: ChannelsState = {
+    configEdits: {},
+    configEditBases: {},
+    configEditsScope: null,
+    client: initialSnapshot.client ?? null,
+    connected: initialSnapshot.phase === "connected",
     channelsLoading: false,
     channelsLoadingProbe: null,
     channelsRefreshSeq: 0,
     channelsSnapshot: null,
+    channelsRead: null,
     channelsError: null,
     channelsLastSuccess: null,
     pairingLoading: false,
@@ -194,28 +206,13 @@ function createInitialChannelsState(snapshot: ChannelGatewaySnapshot): ChannelsS
     pairingRead: null,
     pairingError: null,
     pairingLastSuccess: null,
-    pairingBusyRequestId: null,
+    pairingBusy: null,
     whatsappLoginMessage: null,
     whatsappLoginQrDataUrl: null,
     whatsappLoginSessionKey: null,
     whatsappLoginConnected: null,
     whatsappBusy: false,
   };
-}
-
-function removePairingRequestFromSnapshot(state: ChannelsState, requestId: string): void {
-  const snapshot = state.pairingSnapshot;
-  if (!snapshot || !snapshot.requests.some((request) => request.requestId === requestId)) {
-    return;
-  }
-  state.pairingSnapshot = {
-    ...snapshot,
-    requests: snapshot.requests.filter((request) => request.requestId !== requestId),
-  };
-}
-
-export function createChannelCapability(gateway: ChannelGateway) {
-  const state = createInitialChannelsState(gateway.snapshot);
   const lifecycle = { whatsappEpoch: 0, pairingEpoch: 0 };
   let settlePairingRead: ((error: string | null) => void) | undefined;
 
@@ -234,7 +231,7 @@ export function createChannelCapability(gateway: ChannelGateway) {
       !client ||
       !state.connected ||
       state.pairingLoading ||
-      (state.pairingBusyRequestId && !options.duringMutation)
+      (state.pairingBusy && !options.duringMutation)
     ) {
       return;
     }
@@ -268,10 +265,11 @@ export function createChannelCapability(gateway: ChannelGateway) {
 
   async function mutateChannelPairing<T>(
     requestId: string,
+    action: NonNullable<ChannelsState["pairingBusy"]>["action"],
     request: (client: ChannelGatewayClient) => Promise<T>,
   ): Promise<{ result: T } | null> {
     const client = state.client;
-    if (!client || !state.connected || state.pairingBusyRequestId) {
+    if (!client || !state.connected || state.pairingBusy) {
       return null;
     }
     const pairingEpoch = lifecycle.pairingEpoch;
@@ -279,9 +277,9 @@ export function createChannelCapability(gateway: ChannelGateway) {
       state.connected &&
       state.client === client &&
       lifecycle.pairingEpoch === pairingEpoch &&
-      state.pairingBusyRequestId === requestId;
+      state.pairingBusy?.requestId === requestId;
     invalidatePairingRefresh();
-    state.pairingBusyRequestId = requestId;
+    state.pairingBusy = { requestId, action };
     state.pairingRead = null;
     state.pairingError = null;
     try {
@@ -289,7 +287,13 @@ export function createChannelCapability(gateway: ChannelGateway) {
       if (!isCurrent()) {
         return null;
       }
-      removePairingRequestFromSnapshot(state, requestId);
+      const pairingSnapshot = state.pairingSnapshot;
+      if (pairingSnapshot?.requests.some((row) => row.requestId === requestId)) {
+        state.pairingSnapshot = {
+          ...pairingSnapshot,
+          requests: pairingSnapshot.requests.filter((row) => row.requestId !== requestId),
+        };
+      }
       invalidatePairingRefresh();
       await loadChannelPairing({ duringMutation: true });
       return isCurrent() ? { result } : null;
@@ -300,7 +304,7 @@ export function createChannelCapability(gateway: ChannelGateway) {
       return null;
     } finally {
       if (isCurrent()) {
-        state.pairingBusyRequestId = null;
+        state.pairingBusy = null;
       }
     }
   }
@@ -401,7 +405,9 @@ export function createChannelCapability(gateway: ChannelGateway) {
   function logoutWhatsApp(accountId?: string) {
     return runWhatsAppRequest(
       (client) =>
-        client.request<ChannelLogoutResult>("channels.logout", {
+        client.request<{
+          cleared: boolean;
+        }>("channels.logout", {
           channel: "whatsapp",
           ...(accountId ? { accountId } : {}),
         }),
@@ -424,6 +430,13 @@ export function createChannelCapability(gateway: ChannelGateway) {
   let currentWhatsAppAdminAccess = channelSnapshotAllowsScope(gateway.snapshot, "operator.admin");
   let disposed = false;
   let channelsInvalidated = false;
+  let settleChannelRead: ((error: string | null) => void) | undefined;
+
+  function retireChannelRead() {
+    settleChannelRead?.(null);
+    settleChannelRead = undefined;
+    state.channelsRead = null;
+  }
 
   const publish = () => {
     if (disposed) {
@@ -461,6 +474,10 @@ export function createChannelCapability(gateway: ChannelGateway) {
     if (!probe) {
       channelsInvalidated = false;
     }
+    retireChannelRead();
+    const { promise, resolve } = Promise.withResolvers<string | null>();
+    settleChannelRead = resolve;
+    state.channelsRead = { completion: promise };
     try {
       const res = await client.request<ChannelsStatusSnapshot | null>("channels.status", {
         probe,
@@ -486,8 +503,9 @@ export function createChannelCapability(gateway: ChannelGateway) {
       if (isCurrent()) {
         state.channelsLoading = false;
         state.channelsLoadingProbe = null;
+        resolve(state.channelsError);
         if (channelsInvalidated) {
-          await loadChannels(false);
+          await refreshChannels();
         }
       }
     }
@@ -522,6 +540,7 @@ export function createChannelCapability(gateway: ChannelGateway) {
     state.client = snapshot.client;
     state.connected = connected;
     if (clientChanged || connectionChanged || channelReadAccessChanged) {
+      retireChannelRead();
       channelsInvalidated = false;
       state.channelsLoading = false;
       state.channelsLoadingProbe = null;
@@ -551,10 +570,20 @@ export function createChannelCapability(gateway: ChannelGateway) {
         state.pairingLastSuccess = null;
       }
       invalidatePairingRefresh();
-      state.pairingBusyRequestId = null;
+      state.pairingBusy = null;
     }
     publish();
   });
+  let configReview: string | null = null;
+  const stopBeforeUnload =
+    typeof window === "undefined"
+      ? undefined
+      : listen(window, "beforeunload", (event) => {
+          if (Object.keys(state.configEdits).length > 0) {
+            event.preventDefault();
+            event.returnValue = "";
+          }
+        });
   const stopEvents = gateway.subscribeEvents((event) => {
     if (
       event.event !== "config.changed" ||
@@ -573,21 +602,79 @@ export function createChannelCapability(gateway: ChannelGateway) {
       return state;
     },
     refresh: refreshChannels,
+    /** Review reopens this channel on the page; a plain return shows the list instead. */
+    requestConfigReview(channelId: string) {
+      configReview = channelId;
+      publish();
+    },
+    takeConfigReview() {
+      const channelId = configReview;
+      configReview = null;
+      return channelId;
+    },
+    /** A different Gateway never inherits edits made against the previous one. */
+    syncConfigEditsScope(scope: number) {
+      if (state.configEditsScope !== scope) {
+        state.configEditsScope = scope;
+        if (Object.keys(state.configEdits).length > 0) {
+          state.configEdits = {};
+          state.configEditBases = {};
+          publish();
+        }
+      }
+    },
+    /** The first edit at a path keeps its base: later edits there never saw a newer value. */
+    editConfig(channelId: string, edit: ChannelConfigEdit, base?: ChannelConfigBase) {
+      const bases = state.configEditBases[channelId] ?? [];
+      const key = base ? JSON.stringify(base.path) : null;
+      state.configEdits = {
+        ...state.configEdits,
+        [channelId]: [...(state.configEdits[channelId] ?? []), edit],
+      };
+      if (base && !bases.some((entry) => JSON.stringify(entry.path) === key)) {
+        state.configEditBases = { ...state.configEditBases, [channelId]: [...bases, base] };
+      }
+      publish();
+    },
+    replaceConfigEdits(
+      channelId: string,
+      edits: readonly ChannelConfigEdit[],
+      bases: readonly ChannelConfigBase[],
+    ) {
+      const { [channelId]: _edits, ...otherEdits } = state.configEdits;
+      const { [channelId]: _bases, ...otherBases } = state.configEditBases;
+      state.configEdits = edits.length > 0 ? { ...otherEdits, [channelId]: edits } : otherEdits;
+      state.configEditBases = edits.length > 0 ? { ...otherBases, [channelId]: bases } : otherBases;
+      publish();
+    },
+    /** Drops the edits to one field, leaving what's saved in place. */
+    restoreConfigField(channelId: string, path: ChannelConfigEdit["path"]) {
+      const key = JSON.stringify(path);
+      const { [channelId]: edits = [], ...others } = state.configEdits;
+      const remaining = edits.filter((edit) => JSON.stringify(edit.path) !== key);
+      state.configEdits = remaining.length > 0 ? { ...others, [channelId]: remaining } : others;
+      publish();
+    },
+    discardConfigEdits(channelId: string) {
+      const { [channelId]: _discarded, ...remaining } = state.configEdits;
+      const { [channelId]: _bases, ...remainingBases } = state.configEditBases;
+      state.configEdits = remaining;
+      state.configEditBases = remainingBases;
+      publish();
+    },
     refreshPairing: (): Promise<void> => run(() => loadChannelPairing()),
-    approvePairing: async (
+    approvePairing: (
       params: Required<Extract<ChannelsPairingApproveParams, { requestId: string }>>,
-    ) => {
-      const mutation = await run(() =>
-        mutateChannelPairing(params.requestId, (client) =>
+    ) =>
+      run(() =>
+        mutateChannelPairing(params.requestId, "approve", (client) =>
           client.request<ChannelsPairingApproveResult>("channels.pairing.approve", params),
         ),
-      );
-      return mutation ? mutation.result : null;
-    },
+      ).then((mutation) => mutation?.result ?? null),
     dismissPairing: async (params: ChannelsPairingDismissParams) =>
       Boolean(
         await run(() =>
-          mutateChannelPairing(params.requestId, (client) =>
+          mutateChannelPairing(params.requestId, "dismiss", (client) =>
             client.request("channels.pairing.dismiss", params),
           ),
         ),
@@ -602,15 +689,17 @@ export function createChannelCapability(gateway: ChannelGateway) {
         return;
       }
       disposed = true;
+      retireChannelRead();
       channelsInvalidated = false;
       state.channelsRefreshSeq = (state.channelsRefreshSeq ?? 0) + 1;
       lifecycle.whatsappEpoch += 1;
       lifecycle.pairingEpoch += 1;
       invalidatePairingRefresh();
-      state.pairingBusyRequestId = null;
+      state.pairingBusy = null;
       state.whatsappBusy = false;
       stopGateway();
       stopEvents();
+      stopBeforeUnload?.();
       listeners.clear();
     },
   };

@@ -701,7 +701,7 @@ export function createDesktopPanel(
           },
           onControlToggle: () => void connectEnvironment(currentId, !controlling),
           onTakeControl: () => void connectEnvironment(currentId, true),
-          onLaunch: (app) => void controls.launcher.launch(app),
+          onLaunch: (app) => controls.launcher.launch(app),
           onClose: closePanel,
           onDocumentClose: () => host.onDocumentClose?.(),
           focusTarget: () => ({

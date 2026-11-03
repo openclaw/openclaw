@@ -17,6 +17,7 @@ export class PlaceBrowserState {
   listing: FsListDirResult | null = null;
   draft = "";
   loading = false;
+  readCompletion: Promise<string | null> | null = null;
   error: string | null = null;
   activeIndex = -1;
   private token = 0;
@@ -34,8 +35,10 @@ export class PlaceBrowserState {
     this.activeIndex = -1;
     this.error = null;
     this.loading = true;
+    const completion = this.load(path, mode, this.token);
+    this.readCompletion = completion;
     this.changed();
-    return this.load(path, mode, this.token);
+    return completion.then(() => {});
   }
 
   setDraft(value: string) {
@@ -48,10 +51,12 @@ export class PlaceBrowserState {
     if (split && this.loading) {
       const requestId = this.token;
       // Mark loading before the debounce so an unloaded directory never flashes "no matches".
-      this.timer = globalThis.setTimeout(() => {
-        this.timer = undefined;
-        void this.load(split.directory, "typing", requestId);
-      }, PICKER_INPUT_DEBOUNCE_MS);
+      this.readCompletion = new Promise((resolve) => {
+        this.timer = globalThis.setTimeout(() => {
+          this.timer = undefined;
+          void this.load(split.directory, "typing", requestId).then(resolve);
+        }, PICKER_INPUT_DEBOUNCE_MS);
+      });
     }
     this.changed();
   }
@@ -129,18 +134,19 @@ export class PlaceBrowserState {
     this.token += 1;
     globalThis.clearTimeout(this.timer);
     this.timer = undefined;
+    this.readCompletion = null;
   }
 
   private async load(
     path: string | undefined,
     mode: "initial" | "navigation" | "typing",
     requestId: number,
-  ) {
+  ): Promise<string | null> {
     const draftAtRequest = this.draft;
     try {
       const listing = await this.listDirectory(path);
       if (requestId !== this.token) {
-        return;
+        return null;
       }
       this.listing = listing;
       if (mode !== "typing" && this.draft === draftAtRequest) {
@@ -152,14 +158,14 @@ export class PlaceBrowserState {
       this.onListing?.(listing);
     } catch (error) {
       if (requestId !== this.token) {
-        return;
+        return null;
       }
       // Typed directories may be incomplete; only explicit navigation reports a hard failure.
       if (mode === "initial" && path && isMissingFolderError(error)) {
         this.draft = "";
-        await this.load(undefined, "navigation", requestId);
+        return await this.load(undefined, "navigation", requestId);
       } else if (mode !== "typing") {
-        this.error = readMissingScopeError(error)?.missingScope
+        return readMissingScopeError(error)?.missingScope
           ? t("newSession.browseRequiresAdmin")
           : t("newSession.browserLoadFailed");
       }
@@ -169,5 +175,6 @@ export class PlaceBrowserState {
         this.changed();
       }
     }
+    return null;
   }
 }

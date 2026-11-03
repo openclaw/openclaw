@@ -204,11 +204,9 @@ async function prepareStartupConfig(
     const {
       HISTORICAL_WEBHOOK_CHANNELS,
       prepareUnwrittenWebhookCompletion,
-      readUnwrittenWebhookCompletion,
+      readWebhookCompletion,
     } = await import("./doctor/shared/legacy-webhook-pins.js");
-    const webhookCompletion =
-      read.snapshot.sourceConfig.meta?.migrations?.webhookListeners ??
-      (await readUnwrittenWebhookCompletion(env));
+    const webhookCompletion = await readWebhookCompletion(read.snapshot.sourceConfig, env);
     const pendingWebhookChannels =
       webhookCompletion === true
         ? []
@@ -260,7 +258,16 @@ async function prepareStartupConfig(
       read.pluginMetadataSnapshot
         ? getPluginMetadataSnapshotCache(read.pluginMetadataSnapshot)
         : getPluginCache(),
-      () => refreshStartupPluginQuarantine({ cfg: read.snapshot.sourceConfig, env, measure }),
+      () =>
+        refreshStartupPluginQuarantine({
+          cfg: read.snapshot.sourceConfig,
+          env,
+          measure,
+          beforePersistentEffect: async () => {
+            await beforeStatePreparation(read.snapshot);
+            assertLeaseCurrent();
+          },
+        }),
     );
     setActiveDegradedPlugins(verification.quarantinedPlugins);
     recordStartupMigrationWarnings([

@@ -29,12 +29,9 @@ for credential topology. A smoke-test artifact with ad-hoc signing proves no
 release readiness. Real publish reuses the successful notarized preflight and
 validation for the same tag/source SHA.
 
-Start the macOS validate and preflight lanes right after the tag push, before
-core npm moves `latest`. The preflight's `pnpm release:check` requires npm
-`latest` and `beta` in the tag's update compatibility inventory, and the tag
-cannot record its own version. If `latest` flips first, record the new version
-on `release/YYYY.M.PATCH` and preflight with that `source_ref`. The real publish
-reuses the preflight and does not rerun the check.
+Start the macOS validate and preflight lanes as soon as the tag and exact source
+are available. Follow the [validation owner](validation.md) for prerequisites;
+the real publish reuses the successful preflight and validation.
 
 The real publish (`openclaw-macos-publish.yml` in `openclaw/releases`) attaches
 assets to the GitHub release whether it is still a draft or public. Let the
@@ -141,6 +138,11 @@ timeout, and readback failures must remain visibly degraded. The mirror and
 post-build publisher share serialization; Linux builds use a separate queue.
 Each write revalidates the active executing writer and original parent attempt
 after preparatory reads, including after a deletion and before its replacement.
+
+Public readback of API-confirmed metadata allows up to 120 seconds of scheduled
+backoff for GitHub CDN convergence. Downloads and API checks add their own time.
+Bundles and assets without an API digest remain fail-fast. On exhaustion, retry
+readback, not uploads or builds.
 
 Verify both canonical and legacy endpoints after publication, including when a
 newer Gateway release appeared during the Linux build. If canonical metadata is

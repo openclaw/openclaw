@@ -76,7 +76,7 @@ async function sendMatrixQaImageAttachment(context: MatrixQaScenarioContext, men
     since: startSince,
     timeoutMs: context.timeoutMs,
   });
-  return { attachmentEvent, client, driverEventId, roomId, startSince, triggerBody };
+  return { attachmentEvent, client, driverEventId, roomId };
 }
 
 export async function runImageUnderstandingAttachmentScenario(context: MatrixQaScenarioContext) {

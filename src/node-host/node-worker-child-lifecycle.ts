@@ -1,3 +1,4 @@
+import { throwSettledAggregate } from "../infra/error-graph-internal.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { WorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
@@ -64,22 +65,7 @@ export class NodeWorkerChildLifecycle {
   private readonly processObservations = new NodeWorkerProcessObservations();
 
   observeProcesses(input: NodeWorkerProcessInput, signal?: AbortSignal) {
-    const owner = [...this.owners.values()].find(
-      (entry) =>
-        entry.binding.environmentId === input.environmentId &&
-        entry.binding.gatewayNamespace === input.gatewayNamespace,
-    );
-    if (!owner || owner.state !== "running" || this.options.isClosed()) {
-      throw new Error(
-        "Retained worker process observation unavailable; start a new turn and retry.",
-      );
-    }
-    return this.processObservations.request(
-      owner,
-      input,
-      () => !this.options.isClosed() && this.owners.get(owner.launchId) === owner,
-      signal,
-    );
+    return this.processObservations.observe(input, signal, this.owners, this.options);
   }
 
   constructor(private readonly options: NodeWorkerChildLifecycleOptions) {
@@ -129,12 +115,7 @@ export class NodeWorkerChildLifecycle {
           : [],
       ),
     );
-    const errors = results.flatMap((result) =>
-      result.status === "rejected" ? [result.reason] : [],
-    );
-    if (errors.length) {
-      throw new AggregateError(errors, "node worker idle cleanup failed");
-    }
+    throwSettledAggregate(results, "node worker idle cleanup failed");
   }
 
   /** Starts one physical owner behind the durable journal gate, independent of turn reuse. */
@@ -152,6 +133,7 @@ export class NodeWorkerChildLifecycle {
     const sensitiveValues = nodeWorkerLaunchSecrets(
       params.descriptor,
       this.options.nativeInferenceSnapshot,
+      this.options.managedIdentityTransport,
     );
     const scrubber = createNodeWorkerCredentialScrubber(sensitiveValues);
     // Turn cancellation can beat the child's admission retry deadline. Retain the
@@ -384,7 +366,11 @@ export class NodeWorkerChildLifecycle {
       await this.stopChild(active, signal.aborted ? "cancelled" : "interrupted");
       return (await this.options.turns.get(claim.launchId)) ?? admitted.receipt;
     }
-    const secrets = nodeWorkerLaunchSecrets(descriptor, this.options.nativeInferenceSnapshot);
+    const secrets = nodeWorkerLaunchSecrets(
+      descriptor,
+      this.options.nativeInferenceSnapshot,
+      this.options.managedIdentityTransport,
+    );
     for (const value of secrets) {
       registerSecretValueForRedaction(value);
     }
@@ -566,7 +552,7 @@ export class NodeWorkerChildLifecycle {
         throw new Error("node worker returned a result outside its active turn");
       }
       // Publish this operation before finish can invoke a reentrant cancellation.
-      const settling = Promise.resolve()
+      await (turn.settling = Promise.resolve()
         .then(async () => {
           const receipt = await this.options.turns.finish({
             expected: turn.claim,
@@ -588,12 +574,8 @@ export class NodeWorkerChildLifecycle {
           turn.settle();
         })
         .finally(() => {
-          if (turn.settling === settling) {
-            turn.settling = undefined;
-          }
-        });
-      turn.settling = settling;
-      await settling;
+          turn.settling = undefined;
+        }));
     } else if (active.turn || active.retention?.turnId !== frame.turnId) {
       return;
     }

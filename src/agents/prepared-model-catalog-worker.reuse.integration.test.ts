@@ -264,7 +264,7 @@ module.exports = { id: ${JSON.stringify(provider)}, register(api) {
         .slice(before)
         .map((entry) => entry.provider)
         .toSorted(),
-    ).toEqual(index === 0 ? [PROVIDER_ID, ...providerIds].toSorted() : []);
+    ).toEqual(index === 0 ? providerIds.toSorted() : []);
     const expanded = registrations();
     const footprint = readCatalogCaptureFootprint(captureRoot);
     // Retired capture files disappear even if native ESM payloads remain cached.
@@ -276,12 +276,12 @@ module.exports = { id: ${JSON.stringify(provider)}, register(api) {
   const retained = JSON.parse(fs.readFileSync(path.join(fixture.root, "retention.json"), "utf8"));
   const retainedShape = {
     controlCollected: true,
-    captured: 2,
+    captured: 1,
     currentExportAlive: true,
     registries: 1,
   };
   expect(retained).toMatchObject(retainedShape);
-  // The auth-only base is replaced once. Engines may collect the retired native export.
+  // Scope growth keeps the auth-only base registration and its native export.
   expect(retained.nativeExports).toBeGreaterThanOrEqual(1);
   expect(retained.nativeExports).toBeLessThanOrEqual(retained.captured);
   const warmedRegistrations = registrations();
@@ -326,7 +326,7 @@ module.exports = { id: ${JSON.stringify(provider)}, register(api) {
   for (const sample of heap) {
     // Engines may collect the retired ESM payload; the current capture must remain usable.
     expect(sample.payloads).toBeGreaterThanOrEqual(1);
-    expect(sample.payloads).toBeLessThanOrEqual(2);
+    expect(sample.payloads).toBe(1);
     expect(sample.currentPayload).toEqual({
       filename: currentFilename,
       row: 99_999,

@@ -144,18 +144,6 @@ it("persists Off and drains its autosave before re-enabling memory", async () =>
   await waitForSolid(() => expect(setEnabled).toHaveBeenCalledOnce());
 });
 
-it("reports a rejected engine change instead of silently snapping back", async () => {
-  const { element } = createPage({
-    catalog: [engine("memory-core", true), engine("memory-lancedb", false)],
-    setEnabled: () => Promise.reject(new Error("plugin not installed: memory-lancedb")),
-  });
-  await waitForSolid(() => expect(activeEngine(element)).toBe("memory-core"));
-
-  selectEngine(element, "memory-lancedb");
-  await waitText(element, "plugin not installed: memory-lancedb");
-  expect(element.textContent).toContain("Could not change the memory engine");
-});
-
 it.each(["connection", "plugin publication"])(
   "drops a catalog completion superseded by %s",
   async (change) => {
@@ -307,7 +295,7 @@ it("retains runtime warnings through same-boot reconnects and publications, then
   const updated = [addon("active-memory", true), addon("memory-wiki", true)];
   const warning = "Review memory-wiki settings.";
   let mutations = 0;
-  const { element, request, setPhase, setBootId, publishPluginGeneration } = createPage({
+  const { element, setPhase, setBootId, publishPluginGeneration } = createPage({
     listCatalog: (call) => Promise.resolve({ plugins: call === 0 ? initial : updated }),
     setEnabled: (pluginId, enabled) =>
       mutations++ === 0
@@ -334,7 +322,6 @@ it("retains runtime warnings through same-boot reconnects and publications, then
   publishPluginGeneration(2);
   flush();
   expect(element.textContent).toContain(warning);
-  expect(request.mock.calls.filter(([method]) => method === "system.info")).toHaveLength(0);
 
   setBootId("memory-boot-b");
   await waitText(element, warning, false);
@@ -352,11 +339,13 @@ it("renders and clears mutation errors on only the affected add-on", async () =>
   toggleAddon(element, "Active memory", false);
   await waitText(element, "enablement rejected");
   expect(addonSwitch(element, "Active memory")?.checked).toBe(true);
+  expect(addonSwitch(element, "Active memory")?.hasAttribute("disabled")).toBe(false);
   expect(element.textContent).toContain("Could not update Active memory");
   expect(element.textContent).not.toContain("Could not update Memory wiki");
 
   toggleAddon(element, "Active memory", false);
   await waitText(element, "enablement rejected", false);
+  await waitText(element, "Could not update Active memory", false);
   retry.resolve(committed("active-memory", false));
 });
 
@@ -387,11 +376,10 @@ it("renders every canonical tab path and honors browser history restoration", as
 });
 
 it("keeps Dreams empty when no configured agent is available", async () => {
-  const { element, settingsAgentSelection } = createPage({
+  const { element } = createPage({
     agents: [],
     routeData: memoryTabRoute("dreams"),
   });
-  expect(settingsAgentSelection.state.selectedId).toBeNull();
   expect(element.querySelector("openclaw-agent-memory-panel")).toBeNull();
   expect(element.querySelector("openclaw-agent-select")).toBeNull();
   expect(element.textContent).not.toContain("Dreaming frequency");

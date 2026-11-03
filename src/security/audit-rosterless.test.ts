@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
+import type { OpenClawConfigWithLegacyRoster as Config } from "../config/legacy.roster.js";
 
 vi.unmock("../agents/agent-scope-config.js");
 
@@ -17,20 +17,23 @@ function rosterFinding(detail?: string) {
 describe("security audit rosterless configs", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  function makeAuditPaths(label: string) {
-    const rootDir = tempDirs.make(`openclaw-audit-${label}-`);
+  function audit(
+    options: Parameters<typeof runSecurityAuditCore>[0],
+    rootDir = tempDirs.make("openclaw-audit-roster-"),
+  ) {
     const stateDir = path.join(rootDir, "state");
     const workspaceDir = path.join(rootDir, "workspace");
     fs.mkdirSync(stateDir, { recursive: true });
     fs.mkdirSync(workspaceDir, { recursive: true });
-    return {
+    return runSecurityAuditCore({
       stateDir,
       workspaceDir,
       configPath: path.join(stateDir, "openclaw.json"),
       env: {},
       includeFilesystem: true,
-      includeChannelSecurity: false,
-    };
+      plugins: [],
+      ...options,
+    });
   }
 
   function makeEscapingWorkspace(rootDir: string, name: string) {
@@ -48,60 +51,44 @@ describe("security audit rosterless configs", () => {
     return workspaceDir;
   }
 
-  it("uses the explicit audit workspace without resolving a missing roster default", async () => {
-    await expect(
-      runSecurityAuditCore({ ...makeAuditPaths("rosterless"), config: {} }),
-    ).resolves.toEqual(expect.objectContaining({ findings: expect.any(Array) }));
-  });
-
-  it("distinguishes an authored empty roster from an absent pre-roster source", async () => {
-    const baseOptions = {
-      ...makeAuditPaths("authored-empty-roster"),
-      config: { agents: { entries: { main: {} } } },
-    };
-
-    const sourceConfig = { agents: { entries: {} } };
-    const authoredEmpty = await runSecurityAuditCore({ ...baseOptions, sourceConfig });
-    expect(authoredEmpty.findings).toContainEqual(rosterFinding("found 0"));
-
-    const absent = await runSecurityAuditCore({ ...baseOptions, sourceConfig: {} });
-    expect(absent.findings).not.toContainEqual(rosterFinding());
-  });
-
-  it("still reports a legacy default marker on an explicit roster", async () => {
-    const config: OpenClawConfigWithLegacyRoster = {
-      agents: { ownership: "explicit", entries: { alpha: { default: true }, beta: {} } },
-    };
-    const report = await runSecurityAuditCore({
-      ...makeAuditPaths("explicit-roster-with-default"),
-      config,
-    });
-
-    expect(report.findings).toContainEqual(rosterFinding("Expected no"));
+  const main = { agents: { entries: { main: {} } } };
+  it.each<[Config, Config | undefined, string?]>([
+    [{}, undefined],
+    [main, { agents: { entries: {} } }, "found 0"],
+    [main, {}],
+    [
+      { agents: { ownership: "explicit", entries: { alpha: { default: true }, beta: {} } } },
+      undefined,
+      "Expected no",
+    ],
+  ])("audits roster %j with source %j", async (config, sourceConfig, detail) => {
+    const { findings } = await audit({ config, sourceConfig });
+    if (detail) {
+      expect(findings).toContainEqual(rosterFinding(detail));
+    } else {
+      expect(findings).not.toContainEqual(rosterFinding());
+    }
   });
 
   it("scans every explicit fleet workspace without fabricating a legacy default workspace", async () => {
     const rootDir = tempDirs.make("openclaw-audit-explicit-workspaces-");
-    const stateDir = path.join(rootDir, "state");
     const unusedDefaultsWorkspace = makeEscapingWorkspace(rootDir, "unused-defaults");
     const alphaWorkspace = makeEscapingWorkspace(rootDir, "alpha");
     const betaWorkspace = makeEscapingWorkspace(rootDir, "beta");
-    fs.mkdirSync(stateDir, { recursive: true });
-
-    const report = await runSecurityAuditCore({
-      config: {
-        agents: {
-          ownership: "explicit",
-          defaults: { workspace: unusedDefaultsWorkspace },
-          entries: { alpha: { workspace: alphaWorkspace }, beta: { workspace: betaWorkspace } },
+    const report = await audit(
+      {
+        config: {
+          agents: {
+            ownership: "explicit",
+            defaults: { workspace: unusedDefaultsWorkspace },
+            entries: { alpha: { workspace: alphaWorkspace }, beta: { workspace: betaWorkspace } },
+          },
         },
+        workspaceDir: undefined,
+        env: { HOME: rootDir },
       },
-      stateDir,
-      configPath: path.join(stateDir, "openclaw.json"),
-      env: { HOME: rootDir },
-      includeFilesystem: true,
-      includeChannelSecurity: false,
-    });
+      rootDir,
+    );
 
     const finding = report.findings.find(
       (candidate) => candidate.checkId === "skills.workspace.symlink_escape",

@@ -130,7 +130,6 @@ test("prepares a complete stale source UI before publishing its shared root", as
 
 test.each([
   ["matching", undefined, "source", "bundled"],
-  ["dev", "dev", "source", "bundled"],
   ["configured", "custom-build", "configured", "resolved"],
   ["macOS", undefined, "mac", "resolved"],
   ["unchanged", "2026.9.1-runtime-a", "source", "failed"],
@@ -157,12 +156,11 @@ test.each([
     const { lifecycle, warn } = createLifecycle(
       location === "configured" ? fixture.selectedRoot : undefined,
     );
-    expect(lifecycle.state).toMatchObject({
-      kind: failed ? "preparing" : expected,
-      ...(!failed && { path: fixture.selectedRoot }),
-    });
+    const root = lifecycle.state;
+    expect(root.kind).toBe(failed ? "preparing" : expected);
     await lifecycle.start();
     await lifecycle.stop();
+    expect(lifecycle.state).toBe(root);
     expect(fixture.build).toHaveBeenCalledTimes(kind === "unchanged" ? 1 : 0);
     if (failed) {
       expect(lifecycle.state).toEqual({ kind: "failed" });
@@ -172,6 +170,16 @@ test.each([
         expect(warn).toHaveBeenCalledWith(expect.stringContaining(message));
       }
     } else {
+      expect(root).toMatchObject({
+        kind: expected,
+        path: fixture.selectedRoot,
+        realPath: fixture.selectedRoot,
+      });
+      if (expected === "bundled") {
+        expect(root).toHaveProperty("publicAssetBuildId", assetId(buildId ?? fixture.buildId));
+      } else {
+        expect(root).not.toHaveProperty("publicAssetBuildId");
+      }
       expect(warn).not.toHaveBeenCalled();
     }
   },

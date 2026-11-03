@@ -1,7 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/server";
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import { z } from "zod";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { throwIfSettledRejected } from "../infra/error-graph-internal.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { VERSION } from "../version.js";
@@ -19,18 +18,9 @@ type OpenClawMcpServeOptions = {
   gatewayUrl?: string;
   gatewayToken?: string;
   gatewayPassword?: string;
-  config?: OpenClawConfig;
   claudeChannelMode?: ClaudeChannelMode;
   verbose?: boolean;
 };
-
-async function resolveMcpConfig(config: OpenClawConfig | undefined): Promise<OpenClawConfig> {
-  if (config) {
-    return config;
-  }
-  const { captureRuntimeConfigAsyncReader } = await import("../config/config.js");
-  return await captureRuntimeConfigAsyncReader()();
-}
 
 function getChannelMcpCapabilities(claudeChannelMode: ClaudeChannelMode) {
   if (claudeChannelMode === "off") {
@@ -46,7 +36,8 @@ function getChannelMcpCapabilities(claudeChannelMode: ClaudeChannelMode) {
 
 /** Serve the channel MCP server over stdio until transport or process shutdown. */
 export async function serveOpenClawChannelMcp(opts: OpenClawMcpServeOptions = {}): Promise<void> {
-  const cfg = await resolveMcpConfig(opts.config);
+  const { captureRuntimeConfigAsyncReader } = await import("../config/config.js");
+  const cfg = await captureRuntimeConfigAsyncReader()();
   const claudeChannelMode = opts.claudeChannelMode ?? "auto";
   const capabilities = getChannelMcpCapabilities(claudeChannelMode);
   const server = new McpServer(

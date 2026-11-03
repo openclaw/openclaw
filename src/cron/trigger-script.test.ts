@@ -23,7 +23,7 @@ function completed(value: unknown, output: unknown[] = []): CodeModeHeadlessResu
 function createPreparedRuntime(config: OpenClawConfig, tools?: AnyAgentTool[]) {
   const context = { config, agentId: "main", sessionKey: "cron:test:trigger" };
   const tool = wrapToolWithBeforeToolCallHook(makeTool("probe", vi.fn()), context);
-  return { createTools: async () => tools ?? [tool], context };
+  return { createTools: async () => tools ?? [tool], context, scheduledToolPolicy: undefined };
 }
 
 function makeTool(name: string, execute: AnyAgentTool["execute"]): AnyAgentTool {

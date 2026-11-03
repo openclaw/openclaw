@@ -7,10 +7,9 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
 import { loadSubagentRegistryFromSqlite } from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
-import { registerSubagentRun } from "../../agents/subagents/registry/subagent-registry.js";
 import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { isSameSubagentRunOwner } from "../../agents/subagents/registry/subagent-run-generation.js";
-import { enqueueSwarmRun, releaseSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
+import { releaseSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { loadExactSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
@@ -69,27 +68,10 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
       ["active", activeKey],
       ["ended", endedKey],
     ] as const) {
-      storePath = await writeSubagentSessionEntry({
-        stateDir: fixture.stateDir,
-        agentId: "main",
-        sessionKey: childSessionKey,
-        defaultSessionId: `${runId}-session`,
-        lifecycleRevision: "original",
-      });
-      await registerSubagentRun({
+      storePath = await fixture.seedRun({
         runId,
         childSessionKey,
-        childAgentId: "main",
-        sessionEntry: loadExactSessionEntryReadOnly({ storePath, sessionKey: childSessionKey })
-          ?.entry,
-        requesterSessionKey: parentKey,
-        requesterAgentId: "main",
-        requesterDisplayKey: parentKey,
-        requesterTurnRunId: "parent",
-        task: runId,
-        cleanup: "keep",
-        collect: true,
-        expectsCompletionMessage: false,
+        lifecycleRevision: "original",
       });
       // Running fixture turns need real ownership so cold lifecycle setup cannot
       // let the registry sweeper mistake them for lost executions.
@@ -209,35 +191,19 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
           },
         });
       }
-      await writeSubagentSessionEntry({
-        stateDir: fixture.stateDir,
-        agentId: "main",
-        sessionKey: grandchildKey,
-        defaultSessionId: "grandchild-session",
-      });
-      await registerSubagentRun({
+      await fixture.seedRun({
         runId: "grandchild",
         childSessionKey: grandchildKey,
-        childAgentId: "main",
-        sessionEntry: loadExactSessionEntryReadOnly({ storePath, sessionKey: grandchildKey })
-          ?.entry,
         requesterSessionKey: endedKey,
-        requesterAgentId: "main",
-        requesterDisplayKey: endedKey,
         requesterTurnRunId: "new-turn",
         task: "grandchild",
-        cleanup: "keep",
-        collect: true,
         queued: true,
-        expectsCompletionMessage: false,
       });
-      enqueueSwarmRun({
+      fixture.queueRun({
         groupId: "late",
         runId: "grandchild",
-        maxConcurrent: 1,
         activeRunIds: ["capacity"],
         start: dispatch,
-        onStartFailure: () => true,
       });
       resume.resolve();
       resumeEndedMutation.resolve();
@@ -281,30 +247,13 @@ it.each(["child", "ancestor"])(
     const healthyKey = "agent:main:subagent:healthy";
     const ancestorKey = "agent:broken:subagent:ancestor";
     if (faultOwner === "ancestor") {
-      const ancestorStore = await writeSubagentSessionEntry({
-        stateDir: fixture.stateDir,
-        agentId: "broken",
-        sessionKey: ancestorKey,
-        defaultSessionId: "ancestor-session",
-        lifecycleRevision: "original-ancestor",
-      });
-      await registerSubagentRun({
+      await fixture.seedRun({
         runId: "ancestor",
         childSessionKey: ancestorKey,
         childAgentId: "broken",
-        sessionEntry: loadExactSessionEntryReadOnly({
-          storePath: ancestorStore,
-          sessionKey: ancestorKey,
-        })?.entry,
-        requesterSessionKey: parentKey,
-        requesterAgentId: "main",
-        requesterDisplayKey: parentKey,
-        requesterTurnRunId: "parent",
         task: "ancestor",
-        cleanup: "keep",
-        collect: true,
         queued: true,
-        expectsCompletionMessage: false,
+        lifecycleRevision: "original-ancestor",
       });
     }
     const storePath = await writeSubagentSessionEntry({
@@ -319,30 +268,15 @@ it.each(["child", "ancestor"])(
       ["healthy", healthyKey],
     ] as const) {
       const childAgentId = runId === "bad" ? childAgent : "main";
-      const childStore = await writeSubagentSessionEntry({
-        stateDir: fixture.stateDir,
-        agentId: childAgentId,
-        sessionKey: childSessionKey,
-        defaultSessionId: `${runId}-session`,
-        lifecycleRevision: "original-child",
-      });
-      await registerSubagentRun({
+      await fixture.seedRun({
         runId,
         childSessionKey,
         childAgentId,
-        sessionEntry: loadExactSessionEntryReadOnly({
-          storePath: childStore,
-          sessionKey: childSessionKey,
-        })?.entry,
         requesterSessionKey: faultOwner === "ancestor" && runId === "bad" ? ancestorKey : parentKey,
-        requesterAgentId: faultOwner === "ancestor" && runId === "bad" ? "broken" : "main",
         requesterDisplayKey: parentKey,
-        requesterTurnRunId: "parent",
-        task: runId,
-        cleanup: "keep",
-        collect: true,
+        requesterAgentId: faultOwner === "ancestor" && runId === "bad" ? "broken" : "main",
         queued: true,
-        expectsCompletionMessage: false,
+        lifecycleRevision: "original-child",
       });
     }
     const database = listOpenClawAgentDatabasesForTest().find(
@@ -373,14 +307,12 @@ it.each(["child", "ancestor"])(
       ["healthy", healthyDispatch],
       ["survivor", survivorDispatch],
     ] as const) {
-      enqueueSwarmRun({
+      fixture.queueRun({
         groupId: "read-failure",
         runId,
-        maxConcurrent: 1,
         // Keep these reservations queued while Stop prepares its session snapshot.
         activeRunIds: [capacityOwner],
         start,
-        onStartFailure: () => true,
       });
     }
     try {

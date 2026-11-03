@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterAll, afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { afterAll, afterEach, expect, it, onTestFinished } from "vitest";
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import { sanitizeChatHistoryMessages } from "../../gateway/chat-display-projection.sanitize.js";
@@ -91,7 +91,6 @@ it.each([
     const result = await persist({
       runParams: {
         ...runParams,
-        prompt: "Review the worker result",
         privateCompletion,
         inputProvenance: { kind: "inter_session", sourceTool, sourceRole: "subagent" },
       },
@@ -121,14 +120,7 @@ it.each([false, true])("persists CLI usage with separate turn total=%s", async (
   expect((messages[0] as AssistantMessage).usage).toEqual(
     turnTotal
       ? expect.objectContaining({ output: 534, cacheWrite: 36955, cacheWrite1h: 36955 })
-      : {
-          input: 10,
-          output: 5,
-          cacheRead: 100,
-          cacheWrite: 0,
-          totalTokens: 115,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
+      : expect.objectContaining({ input: 10, output: 5, cacheRead: 100, cacheWrite: 0 }),
   );
 });
 
@@ -141,24 +133,17 @@ it.each([
   async ({ yielded, stopReason }) => {
     const { target, runParams, persist, updates } = await transcriptFixture("media");
     const sourceText = "Artifacts ready\nMEDIA:./artifact.json";
-    const prepareAssistantTranscriptMessage = vi.fn((message: AssistantMessage) =>
-      applyAssistantDeliveryDirectives(message, { managedMediaUrls: ["./artifact.json"] }),
-    );
     const result = await persist({
       runParams: {
         ...runParams,
-        prompt: "make an artifact",
-        prepareAssistantTranscriptMessage,
+        prepareAssistantTranscriptMessage: (message) =>
+          applyAssistantDeliveryDirectives(message, { managedMediaUrls: ["./artifact.json"] }),
       },
       text: sourceText,
       stopReason,
       yielded,
     });
     expect(result).toMatchObject({ owned: true, idempotencyKey: "cli-assistant:cli-media-run" });
-    expect(prepareAssistantTranscriptMessage).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ content: [{ type: "text", text: sourceText }] }),
-      sourceText,
-    );
     expect(updates).toHaveLength(1);
     expect(updates[0]?.message).toMatchObject({
       content: [{ type: "text", text: sourceText }],

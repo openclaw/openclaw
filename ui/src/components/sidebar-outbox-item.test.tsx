@@ -14,11 +14,11 @@ afterEach(() => {
 });
 
 it.each([
-  ["reconnecting", false, true, "Your message may not have arrived"],
+  ["reconnecting", false, true, "Your message needs review"],
   ["connected", false, false, "Your message wasn’t sent"],
-  ["connected", true, true, "Your command may not have run"],
+  ["connected", true, true, "Your message needs review"],
   ["connected", true, false, "Your command failed"],
-] as const)("reviews %s command=%s unconfirmed=%s: %s", (phase, command, unconfirmed, title) => {
+] as const)("reviews %s command=%s held=%s: %s", (phase, command, held, title) => {
   const request = vi.fn(async () => ({}));
   const harness = createGatewayHarness(client(request));
   harness.update({ phase });
@@ -28,9 +28,9 @@ it.each([
     id: "pending-1",
     sessionKey: "agent:writer:review",
     agentId: "writer",
-    unconfirmed,
+    held,
     command,
-    severity: unconfirmed ? "warning" : "error",
+    severity: held ? "warning" : "error",
     requiresAction: true,
     dismissal: { kind: "outbox", signature: "pending-1" },
   };
@@ -62,9 +62,7 @@ it.each([
   expect(link.getAttribute("href")).toBe("/team/chat/writer/review");
   const tooltip = container.querySelector<HTMLElement & { content: string }>("openclaw-tooltip");
   expect(container.querySelector(".sidebar-issues-panel__entity")?.textContent).toBe(title);
-  expect(tooltip?.content).toContain(
-    unconfirmed ? (command ? "may already have run" : "check whether it arrived") : "review it",
-  );
+  expect(tooltip?.content).toContain("review it");
   expect(container.querySelector("p, .sidebar-issues-panel__actions, button")).toBeNull();
   expect(container.querySelector(".sidebar-outbox-row__offline")?.textContent ?? null).toBe(
     phase === "reconnecting" ? "· Offline" : null,

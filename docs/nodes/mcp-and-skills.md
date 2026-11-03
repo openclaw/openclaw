@@ -41,9 +41,7 @@ Gateway:
 The headless node host starts these servers, lists their tools, and publishes
 the descriptors after connecting. Tool calls return to that node through
 `mcp.tools.call.v1`; the Gateway does not need matching MCP config or a JS
-plugin. OAuth and enterprise-managed MCP authorization are not supported by this
-node-hosted v1 path. Configure enterprise servers in `mcp.servers` on the Gateway
-and run `openclaw mcp login <server-name>` there.
+plugin. OAuth MCP servers are not supported by this node-hosted v1 path.
 
 Current node hosts declare the built-in `mcp.tools.call.v1` command family during
 their initial pairing even when no MCP server is configured. A node paired on an
@@ -97,6 +95,10 @@ its active OpenClaw state directory, so relative paths resolve on the node rathe
 than the Gateway machine. The publishing node must have approved `system.run`,
 and the agent's exec policy must allow `host=node`; otherwise the skill stays
 out of that agent's snapshot.
+
+Native Claude CLI turns receive selected node-hosted instructions through the
+session-scoped skills plugin, including the existing node execution guidance.
+Referenced scripts and binaries stay on the publishing node.
 
 Set `nodeHost.skills.enabled: false` on the node to stop publication. Gateway
 operators can ignore skills from every paired node with

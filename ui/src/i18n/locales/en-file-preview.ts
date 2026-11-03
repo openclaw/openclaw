@@ -17,8 +17,13 @@ const catalog = {
       showInFiles: "Show in Files",
       toggleTree: "Toggle file tree",
       unavailable: "Unable to open",
+      attachmentOffline: "You're offline. Reconnect, then open this attachment link again.",
+      attachmentUnavailable:
+        "This attachment is unavailable in this chat. Ask the sender to share it again.",
       outsideSessionBoundary: "This file is outside {session}'s workspace, and you can't open it.",
       assetsUnavailable: "Some assets couldn't be loaded ({count})",
+      cspPreviewUnsupported:
+        "This security policy or resource setup does not support relative resources in Preview. Use Source or Download for the original file.",
       previousMatch: "Previous match",
       nextMatch: "Next match",
       overwrite: "Overwrite",
@@ -30,6 +35,7 @@ const catalog = {
       readingMode: "Reading mode",
       syntaxHighlighting: "Syntax highlighting",
       wrapLines: "Wrap lines",
+      attachToSession: "Attach to session",
       fileActions: "File actions",
       moreFileActions: "More file actions",
       openInEditor: "Open in editor",

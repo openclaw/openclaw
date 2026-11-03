@@ -225,7 +225,7 @@ export async function runMatrixQaSetupCliJson(
 ) {
   const result = await cli.run(...args);
   const artifacts = await writeMatrixQaCliOutputArtifacts({ label, result, rootDir: cli.rootDir });
-  return { artifacts, payload: parseMatrixQaCliJson(result), result };
+  return { artifacts, payload: parseMatrixQaCliJson(result) };
 }
 
 export function assertMatrixQaCliSasMatches(params: {

@@ -14,6 +14,8 @@ export type MemoryFlushResult = {
 };
 
 export type MemoryFlushRunParams = {
+  /** Provider-confirmed pressure bypasses only the proactive threshold. */
+  recoveryContextTokenBudget?: number;
   /** Supplied only by required preflight, while this admitted input is unprocessed. */
   preflightAdmission?: UserTurnTranscriptAdmissionReceipt;
   cfg: OpenClawConfig;
@@ -27,7 +29,6 @@ export type MemoryFlushRunParams = {
   sessionKey?: string;
   runtimePolicySessionKey?: string;
   storePath?: string;
-  isHeartbeat: boolean;
   replyOperation?: ReplyOperation;
   abortSignal?: AbortSignal;
 };

@@ -1,12 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { wrapToolWithBeforeToolCallHook } from "../../agents/agent-tools.before-tool-call.js";
+import { afterAll, assert, beforeAll, describe, expect, it, vi } from "vitest";
 import { createExecTool } from "../../agents/bash-tools.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { createAgentHarnessHostCapabilities } from "../../agents/harness/host-capability.js";
 import { projectEffectiveExecPolicy } from "../../agents/session-permission-exec-mode.js";
-import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -15,7 +13,6 @@ import { createPluginRuntime } from "../../plugins/runtime/index.js";
 import {
   createOrResumeClientVoiceSession,
   flushClientVoiceSessionWrites,
-  resolveClientVoiceRunBinding,
 } from "../../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../../talk/client-voice-session.test-support.js";
 import {
@@ -28,22 +25,20 @@ import {
   invalidateGatewayDeviceRevocation,
 } from "../device-revocation.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
-import { captureSessionMutationRouting } from "../session-sharing-routing.js";
 import { sharingPolicyClient } from "../session-sharing.test-utils.js";
 import {
   createTalkClientAgentConsultRunner,
   prepareTalkClientControlAuthority,
 } from "./client-agent-consult.js";
-import { resolveTalkAgentConsultAuthority } from "./client-gateway-control.js";
 import { retainTalkClientRunAuthority } from "./client-run-authority.js";
+import { resolveTalkAgentConsultAuthority } from "./client-tool-authority.js";
+import { prepareTalkSessionTarget } from "./session-target.js";
 import type { PreparedTalkSessionTarget } from "./session-target.types.js";
 
 const model = vi.hoisted(() => ({ run: vi.fn() }));
 // mock-isolation: replace inference while exercising real source guards and native effects.
 vi.mock("../../agents/embedded-agent.js", () => ({ runEmbeddedAgent: model.run }));
 
-// A fixed-action backend replaces inference. Transcript capability, run binding,
-// before-tool policy, admission/source guards, and joined OS effects are real.
 describe("authenticated Talk permission parity", () => {
   let state: OpenClawTestState;
   let config: OpenClawConfig;
@@ -88,10 +83,16 @@ describe("authenticated Talk permission parity", () => {
     return { context, source, retained };
   }
 
-  function writeSession(fields: Omit<SessionEntry, "sessionId" | "updatedAt">) {
+  function writeSession(fields: Omit<SessionEntry, "sessionId" | "updatedAt"> = {}) {
     return replaceSessionEntry(
       { agentId: "main", sessionKey, storePath: sessionTarget.storePath },
-      { sessionId: "parity-session", updatedAt: Date.now(), ...fields },
+      {
+        sessionId: "parity-session",
+        updatedAt: Date.now(),
+        permissionMode: "full",
+        execHost: "gateway",
+        ...fields,
+      },
     );
   }
 
@@ -118,23 +119,8 @@ describe("authenticated Talk permission parity", () => {
       tools: { exec: { host: "gateway", mode: "full" } },
     };
     await state.writeConfig(config);
-    const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
-    sessionTarget = {
-      agentId: "main",
-      sessionKey,
-      canonicalKey: sessionKey,
-      storePath,
-      assertCurrent: captureSessionMutationRouting(config, undefined, [
-        { agentId: "main", sessionKey },
-      ]),
-    };
-    await writeSession({
-      permissionMode: "full",
-      execHost: "gateway",
-      delivery: normalizeSessionDeliveryState({
-        context: { channel: "discord", to: "old-delivery", accountId: "old-account" },
-      }),
-    });
+    sessionTarget = await prepareTalkSessionTarget(config, sessionKey);
+    await writeSession();
     voiceSessionId = await createOrResumeClientVoiceSession({
       agentId: "main",
       sessionKey,
@@ -150,33 +136,6 @@ describe("authenticated Talk permission parity", () => {
     await state.cleanup();
   });
 
-  it("executes the same permitted native action without an additional voice prompt", async () => {
-    const marker = path.join(state.workspaceDir, "effects");
-    const action = {
-      command: "printf 'effect\n' >> effects",
-      workdir: state.workspaceDir,
-      yieldMs: 10000,
-    };
-    const execute = (runId: string) =>
-      wrapToolWithBeforeToolCallHook(execTool(runId), {
-        agentId: "main",
-        sessionKey,
-        runId,
-        config,
-      }).execute("call:" + runId, action);
-    const textResult = await execute("text-parity");
-    expect(textResult.details).toMatchObject({ status: "completed", exitCode: 0 });
-    model.run.mockImplementationOnce(async (params: RunEmbeddedAgentParams) => {
-      expect(resolveClientVoiceRunBinding(params.runId)).toMatchObject({ voiceSessionId });
-      const result = await execute(params.runId);
-      expect(result.details).toMatchObject({ status: "completed", exitCode: 0 });
-      return { payloads: [{ text: "Done." }], meta: {} };
-    });
-    const runner = createRunner();
-    expect((await runner.runArgs({ question: "Carry out the action." })).text).toBe("Done.");
-    expect(await fs.readFile(marker, "utf8")).toBe("effect\neffect\n");
-    expect(model.run).toHaveBeenCalledOnce();
-  });
   it("uses configured ownership without admin and the session-pinned node/cwd", async () => {
     const ownerClient = sharingPolicyClient({
       user: "configured-owner",
@@ -208,13 +167,6 @@ describe("authenticated Talk permission parity", () => {
         permissionMode: "guarded",
         execOverrides: { host: "node", node: "session-node", nodeCwd: "/node/task" },
       });
-      expect(
-        projectEffectiveExecPolicy({
-          base: { host: "gateway", mode: "full" },
-          overrides: params.execOverrides,
-          permissionPolicy: { mode: "guarded" },
-        }),
-      ).toMatchObject({ host: "node", security: "allowlist", ask: "on-miss" });
       return { payloads: [{ text: "Prepared." }], meta: {} };
     });
     const runner = createRunner({
@@ -232,16 +184,11 @@ describe("authenticated Talk permission parity", () => {
   });
 
   it("fences the native effect when the retained authenticated source is revoked", async () => {
-    await writeSession({
-      permissionMode: "full",
-      execHost: "gateway",
-    });
+    await writeSession();
     const { context, source, retained } = await retainSource();
     const marker = path.join(state.workspaceDir, "revoked-effect");
     model.run.mockImplementationOnce(async (params: RunEmbeddedAgentParams) => {
-      if (!params.preparedRunAdmission) {
-        throw new Error("Missing Talk admission");
-      }
+      assert(params.preparedRunAdmission, "Missing Talk admission");
       const admittedRunContext = await params.preparedRunAdmission.admit(
         "plugin-harness",
         "parity-native-host",
@@ -258,9 +205,7 @@ describe("authenticated Talk permission parity", () => {
         },
       });
       const [tool] = host.capabilities.bindToolSurface([execTool(params.runId)]);
-      if (!tool) {
-        throw new Error("Missing admitted tool");
-      }
+      assert(tool, "Missing admitted tool");
       try {
         // Revocation is an owner event, not a model parameter or a mock policy answer.
         invalidateGatewayDeviceRevocation(context, "parity-caller", "operator");

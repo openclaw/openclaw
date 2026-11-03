@@ -1,6 +1,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { t } from "../../../i18n/index.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import { normalizeAttachmentContentBlock } from "../../../lib/chat/message-normalizer-attachments.ts";
@@ -8,6 +9,8 @@ import { chatItemGroups } from "../chat-agent-run-grouping.ts";
 import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
 import { isSessionActivityGroup } from "../chat-turn-boundary.ts";
 import { attachmentFailureReason } from "./chat-message-attachment-status.ts";
+
+registerChatComposerEnglish();
 
 registerChatMessageMetadataEnglish();
 
@@ -84,10 +87,7 @@ export function latestTranscriptAnnouncement(
       }
       for (const group of chatItemGroups(part).toReversed()) {
         if (isSessionActivityGroup(group)) {
-          const count = group.messages.reduce(
-            (total, entry) => total + (entry.duplicateCount ?? 1),
-            0,
-          );
+          const count = group.messages.length;
           const source = group.senderSession?.label ?? group.senderSession?.sessionKey;
           const label = t(
             source

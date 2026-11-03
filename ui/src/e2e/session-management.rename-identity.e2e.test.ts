@@ -53,7 +53,7 @@ suite.define(() => {
         } else {
           await gateway.resolveDeferred("sessions.patch");
         }
-        if (surface === "sidebar") {
+        if (surface !== "header") {
           const dialog = page.getByRole("dialog", { name: "Rename session", exact: true });
           await expect
             .poll(() => dialog.getByRole("alert").textContent())

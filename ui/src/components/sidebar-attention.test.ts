@@ -216,8 +216,14 @@ describe("sidebar attention refresh ownership", () => {
     return { element, provider, store, trigger };
   }
 
-  it("keeps the plain attention panel inside its top-layer menu surface", async () => {
+  it("prewarms without opening and keeps the attention panel inside its top-layer menu surface", async () => {
     const { element, trigger } = await mountAttention();
+    trigger.focus();
+    await vi.dynamicImportSettled();
+    flush();
+    expect(issues(element, "panel")).toBeNull();
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+
     trigger.click();
     await vi.dynamicImportSettled();
     flush();
@@ -319,7 +325,7 @@ describe("sidebar attention refresh ownership", () => {
     await waitForFast(() => expect(issues(element, "button__count")?.textContent).toBe("1"));
     await openPanel(element, trigger);
     const details = attention(element, "modelAuthExpired") as HTMLDetailsElement;
-    const first = element.querySelector<HTMLButtonElement>(".sidebar-issues-panel__dismiss-shown")!;
+    const first = element.querySelector<HTMLButtonElement>(".sidebar-issues-panel__more")!;
     const summary = details.querySelector("summary")!;
     const dismiss = summary.querySelector<HTMLButtonElement>("button")!;
     const wrap = (from: HTMLElement, shiftKey = false) => {
@@ -350,7 +356,17 @@ describe("sidebar attention refresh ownership", () => {
     flush();
     expect(attention(element, "modelAuthExpired")).toBeNull();
     wrap(issues(element, "panel__list")!);
-    expect(document.activeElement).toBe(element.querySelector(".sidebar-brand__icon[href]"));
+    expect(document.activeElement).toBe(first);
+
+    // Escape closes the open header menu alone and leaves focus on its trigger.
+    first.click();
+    await waitForFast(() => expect(first.getAttribute("aria-expanded")).toBe("true"));
+    first.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    );
+    await waitForFast(() => expect(first.getAttribute("aria-expanded")).toBe("false"));
+    expect(issues(element, "panel__list")).not.toBeNull();
+    expect(document.activeElement).toBe(first);
   });
 
   it.each([false, true])(
@@ -422,14 +438,10 @@ describe("sidebar attention refresh ownership", () => {
         ".sidebar-mention-row .sidebar-issues-panel__dismiss",
       )?.disabled,
     ).toBe(true);
-    expect(
-      element.querySelector<HTMLButtonElement>(".sidebar-issues-panel__dismiss-shown")?.disabled,
-    ).toBe(true);
+    expect(element.querySelector('[data-value="dismiss-shown"]')).toBeNull();
     harness.update(connected);
     await waitForFast(() =>
-      expect(
-        element.querySelector<HTMLButtonElement>(".sidebar-issues-panel__dismiss-shown")?.disabled,
-      ).toBe(false),
+      expect(element.querySelector('[data-value="dismiss-shown"]')).not.toBeNull(),
     );
     element.querySelector<HTMLAnchorElement>(".sidebar-mention-row a")!.click();
     expect(onNavigate).toHaveBeenCalledExactlyOnceWith(
@@ -612,9 +624,12 @@ describe("sidebar attention refresh ownership", () => {
         id: "selected",
         decision: "allow-once",
       });
+      await waitForFast(() =>
+        expect(element.querySelector<HTMLButtonElement>(decisionSelector)?.disabled).toBe(true),
+      );
       if (reopen) {
         element.dismissPanel();
-        flush();
+        await waitForFast(() => expect(issues(element, "panel")).toBeNull());
         trigger.click();
         await waitForFast(() =>
           expect(document.activeElement).toBe(issues(element, "panel__list")),

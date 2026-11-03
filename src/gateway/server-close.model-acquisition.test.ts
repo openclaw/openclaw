@@ -88,6 +88,10 @@ it("joins managed reload acquisition during Gateway close", async () => {
     };`,
   );
   try {
+    const postReadyMaintenance = vi
+      .spyOn(await import("./server-runtime-services.js"), "scheduleGatewayPostReadyMaintenance")
+      .mockImplementation(() => {});
+    restorers.push(() => postReadyMaintenance.mockRestore());
     const port = await fixture.reservePort();
     const server = await fixture.start(port);
     const kernel = fixture.kernels.get(port)!;

@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import { mediaTicketPayload } from "../../../test-helpers/control-ui-attachment-fixtures.ts";
 
 export const managedSource = (id: string = crypto.randomUUID()) =>
   `/api/chat/media/outgoing/agent%3Amain%3Amain/${id}/full`;
@@ -7,11 +8,7 @@ export const imageResponse = () =>
   new Response("png", { headers: { "Content-Type": "image/png" } });
 
 export function ticketResponse(mediaTicket = "image-ticket", expiresIn = 300_000) {
-  return Response.json({
-    available: true,
-    mediaTicket,
-    mediaTicketExpiresAt: new Date(Date.now() + expiresIn).toISOString(),
-  });
+  return Response.json(mediaTicketPayload(mediaTicket, expiresIn));
 }
 
 export function stubObjectUrls(

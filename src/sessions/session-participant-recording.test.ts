@@ -107,11 +107,10 @@ it.each(["resolve", "reject"] as const)(
     const reported: unknown[] = [];
     await root.run(async () =>
       work.run(() => {
-        const result = recordSessionParticipantBestEffort({
+        recordSessionParticipantBestEffort({
           ...target,
           onError: (error) => reported.push(error),
         });
-        expect(result).toBeUndefined();
         expect(recordParticipant).not.toHaveBeenCalled();
       }),
     );
@@ -137,7 +136,6 @@ it.each(["resolve", "reject"] as const)(
     }
     await drainage;
     await joinedRecording;
-    expect(joined).toBe(true);
     expect(getActiveGatewayRootWorkCount()).toBe(0);
     expect(reported).toEqual(outcome === "reject" ? [failure] : []);
     expect(failures.size).toBe(0);

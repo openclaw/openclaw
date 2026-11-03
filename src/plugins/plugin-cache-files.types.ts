@@ -12,6 +12,25 @@ export type PluginEntryCheck =
   | { ok: true; path: string; rootRealPath: string; exists: boolean }
   | RootFileOpenFailure;
 
+export type PluginStatFacts = Pick<
+  fs.Stats,
+  | "mode"
+  | "uid"
+  | "nlink"
+  | "dev"
+  | "ino"
+  | "size"
+  | "mtimeMs"
+  | "isFile"
+  | "isDirectory"
+  | "isSymbolicLink"
+>;
+
+export type PluginDirectoryEntry = Pick<
+  fs.Dirent,
+  "name" | "isFile" | "isDirectory" | "isSymbolicLink"
+>;
+
 export type PluginFileCacheEntry = (
   | {
       ok: true;
@@ -31,11 +50,11 @@ export type PluginPathCacheEntry = {
   exists?: boolean;
   realpath?: string | null;
   nativeRealpath?: string | null;
-  stat?: fs.Stats | null;
+  stat?: PluginStatFacts | null;
   statError?: unknown;
-  lstat?: fs.Stats | null;
+  lstat?: PluginStatFacts | null;
 };
 
 export type PluginDirectoryCacheEntry =
-  | { ok: true; entries: fs.Dirent[] }
+  | { ok: true; entries: PluginDirectoryEntry[] }
   | { ok: false; error: unknown };

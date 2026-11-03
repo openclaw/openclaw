@@ -32,7 +32,9 @@ vi.mock("../state/openclaw-state-worker-store.js", () => ({
 vi.mock("../state/openclaw-state-db.js", () =>
   mocks.forbid("openOpenClawStateDatabase", "runOpenClawStateWriteTransaction"),
 );
+// mock-isolation: Synthetic APNs admission must not inspect the real shared-state cache.
 vi.mock("../state/openclaw-state-db-cache.js", () => ({
+  openClawStateDatabaseCache: { getKnownOpenClawStateDatabaseIdentity: () => undefined },
   captureOpenClawStateDatabaseReadAdmission: (databasePath: string) => ({
     databasePath,
     identity: { key: `path:${databasePath}`, canonicalPath: databasePath },
@@ -42,10 +44,6 @@ vi.mock("../state/openclaw-state-db-cache.js", () => ({
 vi.mock("../state/openclaw-state-db-async-lifecycle.js", () => ({
   getOpenClawDatabaseMaintenanceScope: () => undefined,
 }));
-// mock-isolation: Worker-read forwarding must not decode or validate APNs rows on the host.
-vi.mock("./push-apns-relay-url.js", () =>
-  mocks.forbid("normalizeApnsRelayBaseUrl", "normalizePersistedApnsRelayBaseUrl"),
-);
 // mock-isolation: APNs rows are decoded in the worker, never on this host path.
 vi.mock("./kysely-sync.js", () =>
   mocks.forbid("executeSqliteQuerySync", "executeSqliteQueryTakeFirstSync", "getNodeSqliteKysely"),
@@ -115,24 +113,25 @@ it.each([false, new Error("cleanup refused")])(
     void ready.promise.catch(() => {});
     mocks.execute.mockReturnValue(ready.promise);
     const observed = { ...registration };
-    const completed = vi.fn();
+    let settled = false;
     const pending = clearApnsRegistrationIfCurrent({
       nodeId: " device-a ",
       registration: observed,
       baseDir: "/synthetic/apns-a",
     });
-    const outcome = pending.then(completed, (error: unknown) => error);
+    const outcome = pending
+      .catch((error: unknown) => error)
+      .finally(() => {
+        settled = true;
+      });
     observed.updatedAtMs += 1;
-    expect(completed).not.toHaveBeenCalled();
+    expect(settled).toBe(false);
     if (result instanceof Error) {
       ready.reject(result);
-      expect(await outcome).toBe(result);
-      expect(completed).not.toHaveBeenCalled();
     } else {
       ready.resolve(result);
-      await outcome;
-      expect(completed).toHaveBeenCalledWith(result);
     }
+    expect(await outcome).toBe(result);
     expectCommand("apns.registration.clearIfCurrent", {
       nodeId: "device-a",
       registration,

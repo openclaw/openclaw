@@ -2,12 +2,12 @@ import { expect, it } from "vitest";
 import type { CronPayload, CronPayloadPatch } from "../types.js";
 import { mergeCronPayload } from "./payload-merge.js";
 
-type MergeCase = {
-  label: string;
-  existing: CronPayload;
-  patch: CronPayloadPatch;
-  expected: CronPayload;
-};
+type MergeCase = [string, CronPayload, CronPayloadPatch, CronPayload];
+const event = { kind: "systemEvent", text: "before" } as const;
+const agent = { kind: "agentTurn", message: "after" } as const;
+const command = { kind: "command", argv: ["echo", "after"] } as const;
+const tools = { toolsAllow: ["read", "cron"] };
+const defaultTools = { ...tools, toolsAllowIsDefault: true };
 
 const agentPayload = {
   kind: "agentTurn",
@@ -31,77 +31,57 @@ const commandPayload = {
 } satisfies CronPayload;
 
 const mergeCases = [
-  {
-    label: "preserves systemEvent toolsAllow when omitted",
-    existing: { kind: "systemEvent", text: "before", toolsAllow: ["read", "cron"] },
-    patch: { kind: "systemEvent", text: "after" },
-    expected: { kind: "systemEvent", text: "after", toolsAllow: ["read", "cron"] },
-  },
-  {
-    label: "updates systemEvent toolsAllow",
-    existing: { kind: "systemEvent", text: "tick", toolsAllow: ["read", "cron"] },
-    patch: { kind: "systemEvent", toolsAllow: ["cron"] },
-    expected: { kind: "systemEvent", text: "tick", toolsAllow: ["cron"] },
-  },
-  {
-    label: "preserves toolsAllow from agentTurn to command",
-    existing: { kind: "agentTurn", message: "before", toolsAllow: ["read", "cron"] },
-    patch: { kind: "command", argv: ["echo", "after"] },
-    expected: { kind: "command", argv: ["echo", "after"], toolsAllow: ["read", "cron"] },
-  },
-  {
-    label: "systemEvent to agentTurn with overrides",
-    existing: { kind: "systemEvent", text: "before" },
-    patch: structuredClone(agentPayload),
-    expected: agentPayload,
-  },
-  {
-    label: "systemEvent to command with execution settings",
-    existing: { kind: "systemEvent", text: "before" },
-    patch: structuredClone(commandPayload),
-    expected: commandPayload,
-  },
-  {
-    label: "command to script with execution limits",
-    existing: { kind: "command", argv: ["echo", "before"] },
-    patch: { kind: "script", script: "return {};", timeoutSeconds: 30, toolBudget: 5 },
-    expected: { kind: "script", script: "return {};", timeoutSeconds: 30, toolBudget: 5 },
-  },
-  {
-    label: "installs a newly stamped default marker on command",
-    existing: { kind: "command", argv: ["echo", "before"] },
-    patch: { kind: "command", toolsAllow: ["read", "cron"], toolsAllowIsDefault: true },
-    expected: {
-      kind: "command",
-      argv: ["echo", "before"],
-      toolsAllow: ["read", "cron"],
-      toolsAllowIsDefault: true,
-    },
-  },
-  {
-    label: "clears toolsAllow explicitly across a kind change",
-    existing: { kind: "systemEvent", text: "before", toolsAllow: ["read", "cron"] },
-    patch: { kind: "agentTurn", message: "after", toolsAllow: null },
-    expected: { kind: "agentTurn", message: "after" },
-  },
-  {
-    label: "preserves default-cap provenance across a kind change",
-    existing: {
-      kind: "systemEvent",
-      text: "before",
-      toolsAllow: ["read", "cron"],
-      toolsAllowIsDefault: true,
-    },
-    patch: { kind: "agentTurn", message: "after" },
-    expected: {
-      kind: "agentTurn",
-      message: "after",
-      toolsAllow: ["read", "cron"],
-      toolsAllowIsDefault: true,
-    },
-  },
+  [
+    "preserves systemEvent toolsAllow when omitted",
+    { ...event, ...tools },
+    { kind: "systemEvent", text: "after" },
+    { ...event, text: "after", ...tools },
+  ],
+  [
+    "updates systemEvent toolsAllow",
+    { ...event, ...tools },
+    { kind: "systemEvent", toolsAllow: ["cron"] },
+    { ...event, toolsAllow: ["cron"] },
+  ],
+  [
+    "preserves toolsAllow from agentTurn to command",
+    { ...agent, message: "before", ...tools },
+    { ...command, argv: [...command.argv] },
+    { ...command, argv: [...command.argv], ...tools },
+  ],
+  ["systemEvent to agentTurn with overrides", event, structuredClone(agentPayload), agentPayload],
+  [
+    "systemEvent to command with execution settings",
+    event,
+    structuredClone(commandPayload),
+    commandPayload,
+  ],
+  [
+    "command to script with execution limits",
+    { kind: "command", argv: ["echo", "before"] },
+    { kind: "script", script: "return {};", timeoutSeconds: 30, toolBudget: 5 },
+    { kind: "script", script: "return {};", timeoutSeconds: 30, toolBudget: 5 },
+  ],
+  [
+    "installs a newly stamped default marker on command",
+    { kind: "command", argv: ["echo", "before"] },
+    { kind: "command", ...defaultTools },
+    { kind: "command", argv: ["echo", "before"], ...defaultTools },
+  ],
+  [
+    "clears toolsAllow explicitly across a kind change",
+    { ...event, ...tools },
+    { ...agent, toolsAllow: null },
+    agent,
+  ],
+  [
+    "preserves default-cap provenance across a kind change",
+    { ...event, ...defaultTools },
+    agent,
+    { ...agent, ...defaultTools },
+  ],
 ] satisfies MergeCase[];
 
-it.each(mergeCases)("$label", ({ existing, patch, expected }) => {
-  expect(mergeCronPayload(existing, patch)).toEqual(expected);
+it.each(mergeCases)("%s", (_label, existing, patch, expected) => {
+  expect(mergeCronPayload(structuredClone(existing), structuredClone(patch))).toEqual(expected);
 });

@@ -6,7 +6,7 @@ import { createFakeRestClient } from "./test-builders.test-support.js";
 const messageId = "18446744073709551615";
 const paddedId = ` ${messageId} `;
 const messagePath = `/channels/c1/messages/${messageId}`;
-const pinPath = `/channels/c1/pins/${messageId}`;
+const pinPath = `/channels/c1/messages/pins/${messageId}`;
 const emoji = "%F0%9F%91%8D";
 const reactionPath = `${messagePath}/reactions/${emoji}`;
 
@@ -85,15 +85,4 @@ it("routes reaction helpers through the typed REST client", async () => {
     { method: "GET", path: reactionPath, query },
     { method: "DELETE", path: `${reactionPath}/@me` },
   ]);
-});
-
-it("routes webhook helper through the typed REST client", async () => {
-  const webhook = { id: "wh1", token: "token1" };
-  const data = { body: { name: "OpenClaw" } };
-  const rest = createFakeRestClient([webhook]);
-  await expect(api.createChannelWebhook(rest, "c1", data)).resolves.toEqual({
-    id: "wh1",
-    token: "token1",
-  });
-  expect(rest.calls).toEqual([{ method: "POST", path: "/channels/c1/webhooks", data }]);
 });

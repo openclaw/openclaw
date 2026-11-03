@@ -152,7 +152,6 @@ describe("googlechat setup", () => {
 
   it.each([
     {
-      name: "token-file and trimmed webhook fields",
       input: {
         tokenFile: "/tmp/googlechat.json",
         audienceType: " app-url ",
@@ -162,18 +161,16 @@ describe("googlechat setup", () => {
       },
       patch: {
         serviceAccountFile: "/tmp/googlechat.json",
-        audienceType: "app-url" as const,
-        audience: "https://example.com/googlechat",
+        ...audienceConfig,
         webhookPath: "/googlechat",
         webhookUrl: "https://example.com/googlechat/hook",
       },
     },
     {
-      name: "inline token without token-file",
       input: { token: { client_email: "bot@example.com" } },
       patch: { serviceAccount: { client_email: "bot@example.com" } },
     },
-  ])("builds a patch from $name", ({ input, patch }) => {
+  ])("builds an account patch from $input", ({ input, patch }) => {
     expect(
       googlechatSetupAdapter.applyAccountConfig!({
         cfg: withGoogleChat({}),

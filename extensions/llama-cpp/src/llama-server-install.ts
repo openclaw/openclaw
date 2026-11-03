@@ -26,6 +26,7 @@ import {
   type LlamaServerAsset,
   type LlamaServerDependency,
 } from "./llama-server-assets.js";
+import { formatLlamaServerRuntimeError } from "./runtime-error.js";
 
 const MEBIBYTE = 1024 * 1024;
 const LLAMA_ARCHIVE_LIMITS = {
@@ -350,7 +351,7 @@ async function runServerCommand(
   args: string[],
   signal?: AbortSignal,
   timeoutMs = PROBE_TIMEOUT_MS,
-  formatError?: (error: Error, stderr: string) => Error,
+  formatError: (error: Error, stderr: string) => Error = formatRuntimeDependencyError,
 ): Promise<string> {
   return await new Promise((resolve, reject) => {
     execFile(
@@ -360,7 +361,9 @@ async function runServerCommand(
       (error, stdout, stderr) => {
         if (error) {
           reject(
-            formatError ? formatError(error, stderr) : new Error(error.message, { cause: error }),
+            signal?.aborted
+              ? toErrorObject(signal.reason, "Installation cancelled")
+              : formatError(error, stderr),
           );
         } else {
           resolve(`${stdout}${stderr}`.trim());
@@ -372,28 +375,17 @@ async function runServerCommand(
 
 function formatRuntimeDependencyError(error: unknown): Error {
   const detail = error instanceof Error ? error.message : String(error);
-  if (process.platform === "linux") {
-    return new Error(
-      `The verified llama-server build could not start. Install the OpenMP runtime (for example libgomp1 on Debian/Ubuntu or libgomp on Fedora), then rerun llama.cpp setup. Detail: ${detail}`,
-      { cause: error },
-    );
-  }
   if (process.platform === "win32") {
     return new Error(
       `The verified llama-server build could not start with its app-local Visual C++ runtime. Rerun llama.cpp setup to reinstall it, or configure a compatible llama-server manually. Detail: ${detail}`,
       { cause: error },
     );
   }
-  return new Error(`The verified llama-server build could not start: ${detail}`, { cause: error });
+  return formatLlamaServerRuntimeError(error);
 }
 
-async function queryServerVersion(command: string, signal?: AbortSignal): Promise<string> {
-  try {
-    return await runServerCommand(command, ["--version"], signal, VERSION_TIMEOUT_MS);
-  } catch (error) {
-    signal?.throwIfAborted();
-    throw formatRuntimeDependencyError(error);
-  }
+function queryServerVersion(command: string, signal?: AbortSignal): Promise<string> {
+  return runServerCommand(command, ["--version"], signal, VERSION_TIMEOUT_MS);
 }
 
 function validateServerVersionOutput(command: string, version: string): void {
@@ -439,118 +431,6 @@ type LlamaServerInstallOptions = {
   signal?: AbortSignal;
   onProgress?: LlamaDownloadProgress;
 };
-
-async function stageLlamaServerDependency(params: {
-  dependency: LlamaServerDependency;
-  index: number;
-  extractDir: string;
-  extractedRoot: string;
-  options: LlamaServerInstallOptions;
-}): Promise<void> {
-  const { dependency, extractDir, extractedRoot, index, options } = params;
-  options.signal?.throwIfAborted();
-  const dependencyArchive = path.join(extractDir, dependency.name);
-  await downloadVerifiedFile({
-    url: assetUrl(dependency),
-    destination: dependencyArchive,
-    expectedSha256: dependency.sha256,
-    expectedSize: dependency.archive === "vc-redist" ? dependency.size : undefined,
-    signal: options.signal,
-    onProgress: options.onProgress,
-  });
-  const dependencyExtractDir = path.join(extractDir, `dependency-${index}`);
-  await fsp.mkdir(dependencyExtractDir);
-  let dependencyRoot: string;
-  if (dependency.archive === "vc-redist") {
-    const { nestedCabinet, files } = dependency;
-    const systemRoot = process.env.SystemRoot;
-    if (!systemRoot || !path.win32.isAbsolute(systemRoot)) {
-      throw new Error("SystemRoot is unavailable; cannot extract the Visual C++ runtime");
-    }
-    const expandCommand = path.win32.join(systemRoot, "System32", "expand.exe");
-    const containerPath = path.join(dependencyExtractDir, "bundle.cab");
-    const nestedDir = path.join(dependencyExtractDir, "nested");
-    const filesDir = path.join(dependencyExtractDir, "files");
-    await Promise.all([
-      fsp.mkdir(nestedDir, { recursive: true }),
-      fsp.mkdir(filesDir, { recursive: true }),
-    ]);
-    const source = await fsp.open(dependencyArchive, "r");
-    try {
-      const stat = await source.stat();
-      if (!stat.isFile() || stat.size !== dependency.size) {
-        throw new Error(
-          `Visual C++ runtime bundle size mismatch: expected ${dependency.size}, got ${stat.size}`,
-        );
-      }
-      if (
-        dependency.containerOffset < 0 ||
-        dependency.containerSize < CAB_HEADER_SIZE ||
-        dependency.containerOffset + dependency.containerSize > stat.size
-      ) {
-        throw new Error("invalid Visual C++ runtime container bounds");
-      }
-      const header = Buffer.alloc(CAB_HEADER_SIZE);
-      const headerRead = await source.read(header, 0, header.length, dependency.containerOffset);
-      if (
-        headerRead.bytesRead !== header.length ||
-        header.subarray(0, 4).toString("ascii") !== "MSCF" ||
-        header.readUInt32LE(8) !== dependency.containerSize
-      ) {
-        throw new Error("Visual C++ runtime bundle does not contain the pinned cabinet");
-      }
-
-      await pipeline(
-        source.createReadStream({
-          start: dependency.containerOffset,
-          end: dependency.containerOffset + dependency.containerSize - 1,
-          autoClose: false,
-        }),
-        createWriteStream(containerPath, { flags: "wx", mode: 0o600 }),
-        { signal: options.signal },
-      );
-    } finally {
-      await source.close();
-    }
-    await runExpand(
-      expandCommand,
-      [`-F:${nestedCabinet}`, containerPath, nestedDir],
-      options.signal,
-    );
-    const nestedPath = path.join(nestedDir, nestedCabinet);
-    await assertRegularFile(nestedPath, `file ${nestedCabinet}`, "Visual C++ runtime");
-    for (const file of files) {
-      options.signal?.throwIfAborted();
-      await runExpand(expandCommand, [`-F:${file.source}`, nestedPath, filesDir], options.signal);
-      const sourcePath = path.join(filesDir, file.source);
-      await assertRegularFile(sourcePath, `file ${file.source}`, "Visual C++ runtime");
-      await fsp.copyFile(
-        sourcePath,
-        path.join(dependencyExtractDir, file.target),
-        fs.constants.COPYFILE_EXCL,
-      );
-    }
-    dependencyRoot = dependencyExtractDir;
-  } else {
-    dependencyRoot = await extractVerifiedArchive(
-      dependencyArchive,
-      dependencyExtractDir,
-      dependency,
-      dependency.files,
-    );
-  }
-  const files =
-    dependency.archive === "vc-redist"
-      ? dependency.files.map((file) => file.target)
-      : dependency.files;
-  for (const file of files) {
-    await fsp.copyFile(
-      path.join(dependencyRoot, file),
-      path.join(extractedRoot, file),
-      fs.constants.COPYFILE_EXCL,
-    );
-  }
-}
 
 function formatVcRuntimeFallbackError(startupError: unknown, fallbackError: unknown): Error {
   const startupDetail = startupError instanceof Error ? startupError.message : String(startupError);
@@ -604,6 +484,122 @@ async function installLlamaServer(
       asset.executable,
     );
     const extractedRoot = path.dirname(extractedCommand);
+    const stageDependency = async (
+      dependency: LlamaServerDependency,
+      index: number,
+    ): Promise<void> => {
+      options.signal?.throwIfAborted();
+      const dependencyArchive = path.join(extractDir, dependency.name);
+      await downloadVerifiedFile({
+        url: assetUrl(dependency),
+        destination: dependencyArchive,
+        expectedSha256: dependency.sha256,
+        expectedSize: dependency.archive === "vc-redist" ? dependency.size : undefined,
+        signal: options.signal,
+        onProgress: options.onProgress,
+      });
+      const dependencyExtractDir = path.join(extractDir, `dependency-${index}`);
+      await fsp.mkdir(dependencyExtractDir);
+      let dependencyRoot: string;
+      if (dependency.archive === "vc-redist") {
+        const { nestedCabinet, files } = dependency;
+        const systemRoot = process.env.SystemRoot;
+        if (!systemRoot || !path.win32.isAbsolute(systemRoot)) {
+          throw new Error("SystemRoot is unavailable; cannot extract the Visual C++ runtime");
+        }
+        const expandCommand = path.win32.join(systemRoot, "System32", "expand.exe");
+        const containerPath = path.join(dependencyExtractDir, "bundle.cab");
+        const nestedDir = path.join(dependencyExtractDir, "nested");
+        const filesDir = path.join(dependencyExtractDir, "files");
+        await Promise.all([
+          fsp.mkdir(nestedDir, { recursive: true }),
+          fsp.mkdir(filesDir, { recursive: true }),
+        ]);
+        const source = await fsp.open(dependencyArchive, "r");
+        try {
+          const stat = await source.stat();
+          if (!stat.isFile() || stat.size !== dependency.size) {
+            throw new Error(
+              `Visual C++ runtime bundle size mismatch: expected ${dependency.size}, got ${stat.size}`,
+            );
+          }
+          if (
+            dependency.containerOffset < 0 ||
+            dependency.containerSize < CAB_HEADER_SIZE ||
+            dependency.containerOffset + dependency.containerSize > stat.size
+          ) {
+            throw new Error("invalid Visual C++ runtime container bounds");
+          }
+          const header = Buffer.alloc(CAB_HEADER_SIZE);
+          const headerRead = await source.read(
+            header,
+            0,
+            header.length,
+            dependency.containerOffset,
+          );
+          if (
+            headerRead.bytesRead !== header.length ||
+            header.subarray(0, 4).toString("ascii") !== "MSCF" ||
+            header.readUInt32LE(8) !== dependency.containerSize
+          ) {
+            throw new Error("Visual C++ runtime bundle does not contain the pinned cabinet");
+          }
+
+          await pipeline(
+            source.createReadStream({
+              start: dependency.containerOffset,
+              end: dependency.containerOffset + dependency.containerSize - 1,
+              autoClose: false,
+            }),
+            createWriteStream(containerPath, { flags: "wx", mode: 0o600 }),
+            { signal: options.signal },
+          );
+        } finally {
+          await source.close();
+        }
+        await runExpand(
+          expandCommand,
+          [`-F:${nestedCabinet}`, containerPath, nestedDir],
+          options.signal,
+        );
+        const nestedPath = path.join(nestedDir, nestedCabinet);
+        await assertRegularFile(nestedPath, `file ${nestedCabinet}`, "Visual C++ runtime");
+        for (const file of files) {
+          options.signal?.throwIfAborted();
+          await runExpand(
+            expandCommand,
+            [`-F:${file.source}`, nestedPath, filesDir],
+            options.signal,
+          );
+          const sourcePath = path.join(filesDir, file.source);
+          await assertRegularFile(sourcePath, `file ${file.source}`, "Visual C++ runtime");
+          await fsp.copyFile(
+            sourcePath,
+            path.join(dependencyExtractDir, file.target),
+            fs.constants.COPYFILE_EXCL,
+          );
+        }
+        dependencyRoot = dependencyExtractDir;
+      } else {
+        dependencyRoot = await extractVerifiedArchive(
+          dependencyArchive,
+          dependencyExtractDir,
+          dependency,
+          dependency.files,
+        );
+      }
+      const files =
+        dependency.archive === "vc-redist"
+          ? dependency.files.map((file) => file.target)
+          : dependency.files;
+      for (const file of files) {
+        await fsp.copyFile(
+          path.join(dependencyRoot, file),
+          path.join(extractedRoot, file),
+          fs.constants.COPYFILE_EXCL,
+        );
+      }
+    };
     const dependencies = asset.dependencies ?? [];
     const windowsRuntimeDependencies: Array<{
       dependency: LlamaServerDependency;
@@ -613,13 +609,7 @@ async function installLlamaServer(
       if (dependency.archive === "vc-redist") {
         windowsRuntimeDependencies.push({ dependency, index });
       } else {
-        await stageLlamaServerDependency({
-          dependency,
-          index,
-          extractDir,
-          extractedRoot,
-          options,
-        });
+        await stageDependency(dependency, index);
       }
     }
     options.signal?.throwIfAborted();
@@ -632,13 +622,7 @@ async function installLlamaServer(
         options.signal?.throwIfAborted();
         try {
           for (const { dependency, index } of windowsRuntimeDependencies) {
-            await stageLlamaServerDependency({
-              dependency,
-              index,
-              extractDir,
-              extractedRoot,
-              options,
-            });
+            await stageDependency(dependency, index);
           }
         } catch (stagingError) {
           options.signal?.throwIfAborted();

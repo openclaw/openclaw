@@ -3,17 +3,21 @@ import { describe, expect, it } from "vitest";
 import { prepareFileEdit, type Edit } from "./edit-diff.js";
 import { prepareFileDiff } from "./file-diff.js";
 
-function prepareChangedEdit(content: string, edits: Edit[], path: string) {
-  const plan = prepareFileEdit(content, edits, path);
+function prepareChangedEdit(content: string, edits: Edit[]) {
+  const plan = prepareFileEdit(content, edits, "test.ts");
   if (!plan.changed) {
     throw new Error("Expected an edit plan that changes the file");
   }
   return plan;
 }
 
-function getMismatchMessage(content: string, edits: Edit[]): string {
+function getMismatchMessage(content: string, edit: string | Edit[]): string {
   try {
-    prepareFileEdit(content, edits, "test.ts");
+    prepareFileEdit(
+      content,
+      typeof edit === "string" ? [{ oldText: edit, newText: "" }] : edit,
+      "test.ts",
+    );
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
   }
@@ -24,7 +28,7 @@ describe("applyEditsToNormalizedContent", () => {
   it("shows the closest matching line with expected, found, and difference marker", () => {
     const message = getMismatchMessage(
       "line one\nthis is a test line\nanother line here\nconst value = 42;\nfinal line\n",
-      [{ oldText: "const value = 99;", newText: "" }],
+      "const value = 99;",
     );
 
     expect(message).toMatch(/near line 4 \(\d+% match\)/);
@@ -36,7 +40,7 @@ describe("applyEditsToNormalizedContent", () => {
   it("shows up to 3 best candidates sorted by similarity", () => {
     const message = getMismatchMessage(
       "function alpha() {}\nfunction beta() {}\nfunction bet() {}\nfunction delta() {}\n",
-      [{ oldText: "function betaa() {}", newText: "" }],
+      "function betaa() {}",
     );
 
     expect(message.match(/near line/g)).toHaveLength(3);
@@ -44,34 +48,32 @@ describe("applyEditsToNormalizedContent", () => {
   });
 
   it("uses the most meaningful oldText line for multiline diagnostics", () => {
-    const message = getMismatchMessage("header\nconst actualValue = 42;\nfooter\n", [
-      { oldText: "x\nconst actualValue = 99;\n", newText: "" },
-    ]);
+    const message = getMismatchMessage(
+      "header\nconst actualValue = 42;\nfooter\n",
+      "x\nconst actualValue = 99;\n",
+    );
 
     expect(message).toContain("near line 2");
     expect(message).toContain('expected: "const actualValue = 99;"');
   });
 
-  it("calls out indentation differences", () => {
-    const message = getMismatchMessage("      const value = 42;\n", [
-      { oldText: "            const value = 42;", newText: "" },
-    ]);
-
-    expect(message).toContain("indentation differs (expected 12 spaces, found 6 spaces)");
-  });
-
-  it("calls out escaping differences", () => {
-    const message = getMismatchMessage('const pattern = "\\bword\\b";\n', [
-      { oldText: 'const pattern = "\\\\bword\\\\b";', newText: "" },
-    ]);
-
-    expect(message).toContain("escaping differs (expected 4 backslashes, found 2)");
+  it.each([
+    [
+      "      const value = 42;\n",
+      "            const value = 42;",
+      "indentation differs (expected 12 spaces, found 6 spaces)",
+    ],
+    [
+      'const pattern = "\\bword\\b";\n',
+      'const pattern = "\\\\bword\\\\b";',
+      "escaping differs (expected 4 backslashes, found 2)",
+    ],
+  ])("explains diagnostic differences in %j", (content, oldText, expected) => {
+    expect(getMismatchMessage(content, oldText)).toContain(expected);
   });
 
   it("omits candidates below the similarity threshold", () => {
-    const message = getMismatchMessage("abc\nxyz\n123\n", [
-      { oldText: "completely different text here", newText: "" },
-    ]);
+    const message = getMismatchMessage("abc\nxyz\n123\n", "completely different text here");
 
     expect(message).toContain("Could not find the exact text");
     expect(message).not.toContain("Closest matching lines");
@@ -81,16 +83,17 @@ describe("applyEditsToNormalizedContent", () => {
     const content = `${Array.from({ length: 1000 }, () => "unrelated").join("\n")}\n${"x".repeat(
       200_000,
     )}const value = 42;`;
-    const message = getMismatchMessage(content, [{ oldText: "const value = 99;", newText: "" }]);
+    const message = getMismatchMessage(content, "const value = 99;");
 
     expect(message).not.toContain("const value = 42");
     expect(message.length).toBeLessThan(1000);
   });
 
   it("does not split surrogate pairs at the displayed line boundary", () => {
-    const message = getMismatchMessage(`${"x".repeat(119)}🙂found\n`, [
-      { oldText: `${"x".repeat(119)}🙂expected`, newText: "" },
-    ]);
+    const message = getMismatchMessage(
+      `${"x".repeat(119)}🙂found\n`,
+      `${"x".repeat(119)}🙂expected`,
+    );
 
     expect(message).toContain("Closest matching lines");
     expect(message).not.toContain("\\ud83d");
@@ -107,30 +110,20 @@ describe("applyEditsToNormalizedContent", () => {
 });
 
 describe("prepareFileDiff", () => {
-  it("numbers context lines from the new file after an insertion", () => {
-    const result = prepareFileDiff(
-      "example.txt",
+  it.each([
+    [
       "first\nthird\nfourth\n",
       "first\nsecond\nthird\nfourth\n",
-      { context: 2 },
-    );
-
-    expect(result).toMatchObject({
-      diff: " 1 first\n+2 second\n 3 third\n 4 fourth",
-      firstChangedLine: 2,
-    });
-  });
-
-  it("numbers context lines from the new file after a deletion", () => {
-    const result = prepareFileDiff(
-      "example.txt",
+      " 1 first\n+2 second\n 3 third\n 4 fourth",
+    ],
+    [
       "first\nsecond\nthird\nfourth\n",
       "first\nthird\nfourth\n",
-      { context: 2 },
-    );
-
-    expect(result).toMatchObject({
-      diff: " 1 first\n-2 second\n 2 third\n 3 fourth",
+      " 1 first\n-2 second\n 2 third\n 3 fourth",
+    ],
+  ])("numbers context after changing %j to %j", (original, content, diff) => {
+    expect(prepareFileDiff("example.txt", original, content, { context: 2 })).toMatchObject({
+      diff,
       firstChangedLine: 2,
     });
   });
@@ -155,76 +148,32 @@ describe("applyEditsToNormalizedContent uniqueness", () => {
   it("replaces an exactly unique match when trailing whitespace makes a sibling line fuzzy-identical", () => {
     const content = "foo();  \nfoo();\nbar();\n";
 
-    const result = prepareChangedEdit(
-      content,
-      [{ oldText: "foo();\n", newText: "baz();\n" }],
-      "test.ts",
-    );
+    const result = prepareChangedEdit(content, [{ oldText: "foo();\n", newText: "baz();\n" }]);
 
     expect(result.content).toBe("foo();  \nbaz();\nbar();\n");
   });
 });
 
 describe("fuzzy edit source-span mapping", () => {
-  it("maps smart-quote folds while preserving a smart-quote comment", () => {
-    const content =
-      "const label = \u201Chello\u201D; // keep \u201Ccomment\u201D \u2014 unchanged\n";
-    const result = prepareChangedEdit(
-      content,
-      [{ oldText: 'const label = "hello";', newText: "const label = 'hi';" }],
-      "test.ts",
-    );
-
-    expect(result.content).toBe(
-      "const label = 'hi'; // keep \u201Ccomment\u201D \u2014 unchanged\n",
-    );
-  });
-
-  it("allows a match that covers a complete NFKC expansion", () => {
-    const result = prepareChangedEdit(
-      "const value = \uFB01;\n",
-      [{ oldText: "fi", newText: "pair" }],
-      "test.ts",
-    );
-
-    expect(result.content).toBe("const value = pair;\n");
+  it.each<[string, string, string, string]>([
+    [
+      "label = “hello”; // “comment” — unchanged\n",
+      'label = "hello";',
+      "label = 'hi';",
+      "label = 'hi'; // “comment” — unchanged\n",
+    ],
+    ["value = \uFB01;\n", "fi", "pair", "value = pair;\n"],
+    ["cafe\u0301 = 1; // 🙂\n", "café = 1;", "cafe = 2;", "cafe = 2; // 🙂\n"],
+    ["value\u00A0= 1;  ", "value = 1;", "value = 2;", "value = 2;  "],
+    ["value\u00A0= 1;\r\nnext\r\n", "value = 1;", "value = 2;", "value = 2;\r\nnext\r\n"],
+  ])("maps fuzzy source spans in %j", (content, oldText, newText, expected) => {
+    expect(prepareChangedEdit(content, [{ oldText, newText }]).content).toBe(expected);
   });
 
   it("rejects a match ending inside an NFKC expansion", () => {
     expect(() =>
-      prepareChangedEdit("const value = \uFB01;\n", [{ oldText: "f", newText: "x" }], "test.ts"),
+      prepareChangedEdit("const value = \uFB01;\n", [{ oldText: "f", newText: "x" }]),
     ).toThrow(/ambiguous Unicode-normalization or trimmed-whitespace boundary/);
-  });
-
-  it("maps a complete combining sequence and preserves supplementary characters", () => {
-    const content = "const caf\u0065\u0301 = 1; // \u{1F642}\n";
-    const result = prepareChangedEdit(
-      content,
-      [{ oldText: "const caf\u00E9 = 1;", newText: "const cafe = 2;" }],
-      "test.ts",
-    );
-
-    expect(result.content).toBe("const cafe = 2; // \u{1F642}\n");
-  });
-
-  it("preserves trimmed bytes at EOF", () => {
-    const result = prepareChangedEdit(
-      "const value\u00A0= 1;  ",
-      [{ oldText: "const value = 1;", newText: "const value = 2;" }],
-      "test.ts",
-    );
-
-    expect(result.content).toBe("const value = 2;  ");
-  });
-
-  it("preserves CRLF while mapping a fuzzy Unicode span", () => {
-    const result = prepareChangedEdit(
-      "const value\u00A0= 1;\r\nnext\r\n",
-      [{ oldText: "const value = 1;", newText: "const value = 2;" }],
-      "test.ts",
-    );
-
-    expect(result.content).toBe("const value = 2;\r\nnext\r\n");
   });
 
   it.each(["fuzzy first", "exact first"])(
@@ -237,7 +186,6 @@ describe("fuzzy edit source-span mapping", () => {
       const result = prepareChangedEdit(
         "const a\u00A0= 1;\nconst b = 2;\n",
         order === "exact first" ? edits.toReversed() : edits,
-        "test.ts",
       );
 
       expect(result.content).toBe("const a = 3;\nconst b = 4;\n");
@@ -250,27 +198,16 @@ describe("applyEditsToNormalizedContent fuzzy uniqueness", () => {
     const content = "foo();  \nfoo();\t\nbar();\n";
 
     expect(() =>
-      prepareChangedEdit(content, [{ oldText: "foo();\n", newText: "baz();\n" }], "test.ts"),
+      prepareChangedEdit(content, [{ oldText: "foo();\n", newText: "baz();\n" }]),
     ).toThrow(/Found 2 occurrences/);
   });
 
-  it("rejects an oldText whose occurrences overlap", () => {
-    expect(() =>
-      prepareFileEdit(
-        "a();\na();\na();\n",
-        [{ oldText: "a();\na();", newText: "b();" }],
-        "test.ts",
-      ),
-    ).toThrow(/Found 2 occurrences/);
-  });
-
-  it("rejects a fuzzy oldText whose normalized occurrences overlap", () => {
-    expect(() =>
-      prepareFileEdit(
-        "a();\na(); \na();\n",
-        [{ oldText: "a();\na();\n", newText: "b();\n" }],
-        "test.ts",
-      ),
-    ).toThrow(/Found 2 occurrences/);
+  it.each([
+    ["a();\na();\na();\n", "a();\na();", "b();"],
+    ["a();\na(); \na();\n", "a();\na();\n", "b();\n"],
+  ])("rejects overlapping occurrences in %j", (content, oldText, newText) => {
+    expect(() => prepareFileEdit(content, [{ oldText, newText }], "test.ts")).toThrow(
+      /Found 2 occurrences/,
+    );
   });
 });

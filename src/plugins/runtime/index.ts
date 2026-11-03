@@ -2,6 +2,7 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { resolveSandboxWorkspaceAuthority } from "../../agents/sandbox/workspace-authority.js";
 import { withPreparedSessionCapabilityRead } from "../../agents/subagents/spawn/subagent-session-store.js";
+import { recordToolSkillUse } from "../../agents/tool-skill-use-scope.js";
 import { runWithLocalStateOwner } from "../../cli/local-state-owner.js";
 import { captureMemoryExactSessionReader } from "../../config/sessions/session-accessor.memory-exact-read.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
@@ -27,6 +28,7 @@ import {
   resolveNativePluginModelConfig,
 } from "../loader-runtime-load.js";
 import { warnPluginSdkDeprecation } from "../sdk-deprecation.js";
+import { getInProcessGatewayRequestContext } from "./gateway-request-scope.js";
 import { createRuntimeAgent } from "./runtime-agent.js";
 import { createRuntimeBase } from "./runtime-base.js";
 import { createRuntimeChannel } from "./runtime-channel.js";
@@ -35,8 +37,8 @@ import { createRuntimeMedia } from "./runtime-media.js";
 import { subscribeRuntimeSessionChanges } from "./session-changes.js";
 import type { PluginRuntimeFactory, PluginRuntime } from "./types.js";
 
-const loadTtsRuntime = createLazyRuntimeModule(() => import("../../plugin-sdk/tts-runtime.js"));
-const loadTtsRequestRuntime = createLazyRuntimeModule(() => import("../../tts/runtime-api.js"));
+const loadTtsRuntime = createLazyRuntimeModule(() => import("../../tts/tts.js"));
+const loadTtsRequestRuntime = createLazyRuntimeModule(() => import("../../tts/tts-request.js"));
 const loadMediaUnderstandingRuntime = createLazyRuntimeModule(
   () => import("../../media-understanding/runtime.js"),
 );
@@ -46,7 +48,7 @@ const loadGatewayPluginRuntime = createLazyRuntimeModule(
 
 function createRuntimeGateway(): PluginRuntime["gateway"] {
   return {
-    isAvailable: async () => (await loadGatewayPluginRuntime()).hasInProcessGatewayContext(),
+    isAvailable: async () => Boolean(getInProcessGatewayRequestContext()),
     request: async (method, params, options) => {
       const runtime = await loadGatewayPluginRuntime();
       return runtime.dispatchTrustedPluginGatewayMethod(method, params, options);
@@ -57,6 +59,8 @@ function createRuntimeGateway(): PluginRuntime["gateway"] {
       (await loadGatewayPluginRuntime()).readTrustedPluginSessionFacts(params),
     withSessionFacts: async (select, run) =>
       (await loadGatewayPluginRuntime()).withTrustedPluginSessionFacts(select, run),
+    appendAgentMessage: async (params) =>
+      (await loadGatewayPluginRuntime()).appendTrustedPluginAgentMessage(params),
     subscribeSessionChanges: subscribeRuntimeSessionChanges,
     withUserProfileIdentity: async (params, run) => {
       const captured = {
@@ -114,6 +118,7 @@ function createUnavailableSubagentRuntime(): PluginRuntime["subagent"] {
   return {
     complete: unavailable,
     forkSession: unavailable,
+    runForkedTurn: unavailable,
     run: unavailable,
     waitForRun: unavailable,
     getSessionMessages: unavailable,
@@ -300,7 +305,7 @@ export const createPluginRuntime: PluginRuntimeFactory = (
   _options = {},
   base = createRuntimeBase(),
 ) => {
-  const agent = createRuntimeAgent();
+  const agent = createRuntimeAgent(base.config);
   let modelAuth = _options.modelAuth;
   let modelConfig = _options.modelConfig;
   const runtime: PluginRuntime = {
@@ -324,6 +329,14 @@ export const createPluginRuntime: PluginRuntimeFactory = (
     nodes: _options.nodes ?? createUnavailableNodesRuntime(),
     sandbox: createRuntimeSandbox(agent),
     worktrees: createRuntimeWorktrees(),
+    skills: {
+      readUsage: async ({ skillFiles }) => {
+        const { isSkillUsageTracked, readSkillUsage } =
+          await import("../../skills/runtime/skill-usage.js");
+        return { tracked: isSkillUsageTracked(), usage: await readSkillUsage({}, skillFiles) };
+      },
+      recordUsed: recordToolSkillUse,
+    },
     system: base.system,
     media: createRuntimeMedia(),
     webSearch: {

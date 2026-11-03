@@ -159,7 +159,9 @@ export type VerifySetupInferenceResult =
     };
 
 export type CompleteSetupInferenceResult =
-  | (Omit<Extract<VerifySetupInferenceResult, { ok: true }>, "modelTarget"> & { text: string })
+  | (Omit<Extract<VerifySetupInferenceResult, { ok: true }>, "modelTarget"> & {
+      text: string;
+    })
   | Extract<VerifySetupInferenceResult, { ok: false }>;
 
 export type BoundVerifySetupInferenceResult =
@@ -505,7 +507,8 @@ export type StageContext = {
   routeAgentId: string;
   agentDir: string;
   workspace: string;
-  effects: { credentialsSaved: boolean };
+  /** Caller authority ends once configPersisted is set; saved activation then completes. */
+  effects: { credentialsSaved: boolean; configPersisted: boolean };
   beforePersistentEffect: (effect?: "credential") => Promise<void>;
 };
 

@@ -5,31 +5,25 @@ import { useExtensionInstallFixture } from "./extension-install.test-support.js"
 import {
   WINDOWS_OFFICIAL_ORIGIN,
   type WindowsManagementRequest,
-  type WindowsManagementResponse,
 } from "./extension-windows-contract.js";
 import { windowsFixture } from "./extension-windows.test-support.js";
 const localFixture = useExtensionInstallFixture();
 function setup() {
   const f = windowsFixture();
-  const manage = vi.fn(
-    async (_exe: string, request: WindowsManagementRequest): Promise<WindowsManagementResponse> => {
-      assert(request.context, "Explicit native context required");
-      f.prepare(request.context, request.expectedOrigins);
-      return request.action === "uninstall"
-        ? { ...f.response, registration: "missing" as const, mode: null, installation: null }
-        : f.response;
-    },
-  );
+  const manage = vi.fn(async (_exe: string, request: WindowsManagementRequest) => {
+    assert(request.context, "Explicit native context required");
+    f.prepare(request.context, request.expectedOrigins);
+    return request.action === "uninstall"
+      ? { ...f.response, registration: "missing" as const, mode: null, installation: null }
+      : f.response;
+  });
   const deps = {
     platform: "win32" as const,
     windowsNative: { platform: f.ops, context: f.context, executable: f.executable, manage },
   };
   const validate = () =>
     host.validateWindowsNativeContext(
-      {
-        ...f.installation,
-        expectedOrigins: [WINDOWS_OFFICIAL_ORIGIN],
-      },
+      { ...f.installation, expectedOrigins: [WINDOWS_OFFICIAL_ORIGIN] },
       deps,
     );
   return { ...f, manage, deps, validate };
@@ -73,7 +67,6 @@ it("keeps unreadable observation null instead of inventing missing/invalid", asy
   expect(result.registrations.every((r) => r.state === null)).toBe(true);
   expect(result.storeInstallRequests[0]?.state).toBeNull();
   expect(JSON.stringify(result)).not.toContain("private diagnostic");
-  expect(f.manage).toHaveBeenCalledTimes(1);
 });
 it("delegates uninstall/remove only to the same explicit context", async () => {
   const f = setup();
@@ -98,21 +91,15 @@ it.each<[string, (f: ReturnType<typeof setup>) => unknown]>([
   ["hash", (f) => f.files.set(f.installation.bindingPath, Buffer.from("{}"))],
   [
     "foreign-sid",
-    (f) =>
-      f.ops.identity.mockResolvedValue({
-        ...f.identity,
-        sid: "S-1-5-21-111-222-333-1002",
-      }),
+    (f) => f.ops.identity.mockResolvedValue({ ...f.identity, sid: "S-1-5-21-111-222-333-1002" }),
   ],
   ["extra-file", (f) => f.ops.listFiles.mockResolvedValue(["foreign"])],
   [
     "runtime-acl",
     (f) =>
-      f.ops.assertPath.mockImplementation(async (target) => {
-        if (target === f.context.nodePath) {
-          throw new Error("unsafe");
-        }
-      }),
+      f.ops.assertPath.mockImplementation(async (target) =>
+        assert.notEqual(target, f.context.nodePath),
+      ),
   ],
   [
     "context",
@@ -123,11 +110,7 @@ it.each<[string, (f: ReturnType<typeof setup>) => unknown]>([
   [
     "state-root",
     (f) => {
-      f.installation.manifestPath =
-        f.context.stateDir +
-        "\\browser\\native-messaging\\windows\\" +
-        f.installation.generation +
-        "\\ai.openclaw.browser_bootstrap.json";
+      f.installation.manifestPath = `${f.context.stateDir}\\browser\\native-messaging\\windows\\${f.installation.generation}\\ai.openclaw.browser_bootstrap.json`;
     },
   ],
 ])("rejects %s before credential work", async (_kind, corrupt) => {

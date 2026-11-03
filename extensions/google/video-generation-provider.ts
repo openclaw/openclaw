@@ -4,6 +4,7 @@ import {
   readErrorName,
 } from "openclaw/plugin-sdk/error-runtime";
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
+import { estimateBase64DecodedBytes } from "openclaw/plugin-sdk/media-runtime";
 import {
   createProviderOperationDeadline,
   executeProviderOperationWithRetry,
@@ -20,7 +21,6 @@ import {
   normalizeVideoGenerationDuration,
   type GeneratedVideoAsset,
   type VideoGenerationProvider,
-  type VideoGenerationRequest,
 } from "openclaw/plugin-sdk/video-generation";
 import { canonicalizeGoogleProviderBase64 } from "./base64.js";
 import { parseGeminiAuth } from "./gemini-auth.js";
@@ -33,7 +33,7 @@ import {
 import { resolveGoogleApiClientHeaders } from "./google-api-client-header.js";
 import { createGoogleGenAI, type GoogleGenAIClient } from "./google-genai-runtime.js";
 import { stripGoogleProviderPrefix } from "./model-id.js";
-import { resolveGoogleGenerativeAiApiOrigin } from "./provider-policy.js";
+import { resolveGoogleGenerativeAiSdkHttpOptions } from "./src/google-api-base-url.js";
 
 const DEFAULT_TIMEOUT_MS = 180_000;
 const POLL_INTERVAL_MS = 10_000;
@@ -43,7 +43,8 @@ const GOOGLE_VIDEO_EMPTY_RESULT_MESSAGE =
   "Google video generation response missing generated videos";
 
 function resolveGoogleVideoRestBaseUrl(configuredBaseUrl?: string): string {
-  return `${configuredBaseUrl ?? "https://generativelanguage.googleapis.com"}/v1beta`;
+  const { baseUrl, apiVersion } = resolveGoogleGenerativeAiSdkHttpOptions(configuredBaseUrl);
+  return `${baseUrl ?? "https://generativelanguage.googleapis.com"}${apiVersion ? `/${apiVersion}` : ""}`;
 }
 
 function parseVideoSize(size: string | undefined): { width: number; height: number } | undefined {
@@ -61,61 +62,6 @@ function parseVideoSize(size: string | undefined): { width: number; height: numb
     return undefined;
   }
   return { width, height };
-}
-
-function resolveAspectRatio(params: {
-  aspectRatio?: string;
-  size?: string;
-}): "16:9" | "9:16" | undefined {
-  const direct = normalizeOptionalString(params.aspectRatio);
-  if (direct === "16:9" || direct === "9:16") {
-    return direct;
-  }
-  const parsedSize = parseVideoSize(params.size);
-  if (!parsedSize) {
-    return undefined;
-  }
-  return parsedSize.width >= parsedSize.height ? "16:9" : "9:16";
-}
-
-function resolveResolution(params: {
-  resolution?: string;
-  size?: string;
-}): "720p" | "1080p" | undefined {
-  if (params.resolution === "720P") {
-    return "720p";
-  }
-  if (params.resolution === "1080P") {
-    return "1080p";
-  }
-  const parsedSize = parseVideoSize(params.size);
-  if (!parsedSize) {
-    return undefined;
-  }
-  const maxEdge = Math.max(parsedSize.width, parsedSize.height);
-  return maxEdge >= 1920 ? "1080p" : maxEdge >= 1280 ? "720p" : undefined;
-}
-
-function resolveInputImage(req: VideoGenerationRequest) {
-  const input = req.inputImages?.[0];
-  if (!input?.buffer) {
-    return undefined;
-  }
-  return {
-    imageBytes: input.buffer.toString("base64"),
-    mimeType: normalizeOptionalString(input.mimeType) || "image/png",
-  };
-}
-
-function resolveInputVideo(req: VideoGenerationRequest) {
-  const input = req.inputVideos?.[0];
-  if (!input?.buffer) {
-    return undefined;
-  }
-  return {
-    videoBytes: input.buffer.toString("base64"),
-    mimeType: normalizeOptionalString(input.mimeType) || "video/mp4",
-  };
 }
 
 function resolveGoogleGeneratedVideoFileDownloadUrl(params: {
@@ -260,9 +206,8 @@ export const googleVideoGenerationProvider: VideoGenerationProvider = {
     const apiKey = await resolveGoogleGenerationApiKey(req);
 
     const configuredUrl = normalizeOptionalString(req.cfg?.models?.providers?.google?.baseUrl);
-    const configuredBaseUrl = configuredUrl
-      ? resolveGoogleGenerativeAiApiOrigin(configuredUrl)
-      : undefined;
+    const httpOptions = resolveGoogleGenerativeAiSdkHttpOptions(configuredUrl);
+    const configuredBaseUrl = httpOptions.baseUrl;
     const restBaseUrl = resolveGoogleVideoRestBaseUrl(configuredBaseUrl);
     const authHeaders = {
       ...parseGeminiAuth(apiKey).headers,
@@ -278,8 +223,21 @@ export const googleVideoGenerationProvider: VideoGenerationProvider = {
       supportedDurationSeconds: GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS,
     });
     const model = normalizeOptionalString(req.model) || DEFAULT_GOOGLE_VIDEO_MODEL;
-    const aspectRatio = resolveAspectRatio({ aspectRatio: req.aspectRatio, size: req.size });
-    const resolution = resolveResolution({ resolution: req.resolution, size: req.size });
+    const requestedAspectRatio = normalizeOptionalString(req.aspectRatio);
+    const directAspectRatio =
+      requestedAspectRatio === "16:9" || requestedAspectRatio === "9:16"
+        ? requestedAspectRatio
+        : undefined;
+    const directResolution =
+      req.resolution === "720P" ? "720p" : req.resolution === "1080P" ? "1080p" : undefined;
+    const parsedSize = directAspectRatio && directResolution ? undefined : parseVideoSize(req.size);
+    const aspectRatio =
+      directAspectRatio ??
+      (parsedSize ? (parsedSize.width >= parsedSize.height ? "16:9" : "9:16") : undefined);
+    const maxEdge =
+      parsedSize && !directResolution ? Math.max(parsedSize.width, parsedSize.height) : 0;
+    const resolution =
+      directResolution ?? (maxEdge >= 1920 ? "1080p" : maxEdge >= 1280 ? "720p" : undefined);
     const hasReferenceInputs =
       (req.inputImages?.length ?? 0) > 0 || (req.inputVideos?.length ?? 0) > 0;
     const deadline = createProviderOperationDeadline({
@@ -289,7 +247,7 @@ export const googleVideoGenerationProvider: VideoGenerationProvider = {
     const client = createGoogleGenAI({
       apiKey,
       httpOptions: {
-        ...(configuredBaseUrl ? { baseUrl: configuredBaseUrl } : {}),
+        ...httpOptions,
         timeout: resolveProviderOperationTimeoutMs({
           deadline,
           defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
@@ -344,11 +302,23 @@ export const googleVideoGenerationProvider: VideoGenerationProvider = {
     let usedRestFallback = false;
     let operation;
     try {
+      const inputImage = req.inputImages?.[0];
+      const inputVideo = req.inputVideos?.[0];
       operation = await client.models.generateVideos({
         model: stripGoogleProviderPrefix(model),
         prompt: req.prompt,
-        image: resolveInputImage(req),
-        video: resolveInputVideo(req),
+        image: inputImage?.buffer
+          ? {
+              imageBytes: inputImage.buffer.toString("base64"),
+              mimeType: normalizeOptionalString(inputImage.mimeType) || "image/png",
+            }
+          : undefined,
+        video: inputVideo?.buffer
+          ? {
+              videoBytes: inputVideo.buffer.toString("base64"),
+              mimeType: normalizeOptionalString(inputVideo.mimeType) || "video/mp4",
+            }
+          : undefined,
         config: {
           ...(durationSeconds !== undefined ? { durationSeconds } : {}),
           ...(aspectRatio ? { aspectRatio } : {}),
@@ -400,14 +370,14 @@ export const googleVideoGenerationProvider: VideoGenerationProvider = {
           | { videoBytes?: string; uri?: string; mimeType?: string }
           | undefined;
         if (inline?.videoBytes) {
+          if (estimateBase64DecodedBytes(inline.videoBytes) > maxVideoBytes) {
+            throw new Error(`Google generated video download exceeds ${maxVideoBytes} bytes`);
+          }
           const canonicalVideo = canonicalizeGoogleProviderBase64(inline.videoBytes);
           if (!canonicalVideo) {
             throw new Error("Google video generation returned malformed base64 video data");
           }
           const buffer = Buffer.from(canonicalVideo, "base64");
-          if (buffer.length > maxVideoBytes) {
-            throw new Error(`Google generated video download exceeds ${maxVideoBytes} bytes`);
-          }
           return {
             buffer,
             mimeType: normalizeOptionalString(inline.mimeType) || "video/mp4",

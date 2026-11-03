@@ -54,7 +54,7 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.21.0"
+  NODE_VERSION: "24.22.1"
   PREFLIGHT_WORKFLOW_SHA: ${{ github.workflow_sha }}
 
 jobs:
@@ -149,6 +149,7 @@ jobs:
           sparse-checkout: |
             .github/actions/git-owner
             .github/actions/setup-node-env
+            .github/actions/setup-ripgrep
             scripts
 
       - name: Setup supported Node runtime
@@ -203,6 +204,9 @@ jobs:
         run: |
           exec python3 -I -S .release-harness/.github/actions/git-owner/owner.py \
             --policy .release-harness/.github/actions/git-owner/release-ancestry.py
+
+      - name: Setup ripgrep for source checks
+        uses: ./.release-harness/.github/actions/setup-ripgrep
 
       - name: Check source, test types, and architecture
         env:
@@ -820,6 +824,7 @@ jobs:
         if: ${{ inputs.npm_dist_tag == 'extended-stable' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          compression-level: 0
           name: openclaw-plugin-npm-preflight-${{ inputs.tag }}
           path: ${{ steps.plugin_npm_preflight.outputs.dir }}
           if-no-files-found: error

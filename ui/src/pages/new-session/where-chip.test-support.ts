@@ -1,6 +1,7 @@
 import { createComponent } from "solid-js";
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import type { DraftCloudProfile } from "./discovery.ts";
 import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
 import * as hosted from "./hosted-environments.ts";
@@ -29,32 +30,20 @@ export function pickerParams(
   presentation: PickerPresentation = {},
 ) {
   const state = resolveWhereChip({
-    environments: [
-      {
-        id: "node:runner",
-        type: "node",
-        label: "Build runner",
-        status: "available",
-        sessionHost: true,
-        workerSlots: { total: 2, available: 1 },
-      },
-      {
-        id: "node:alpha-device",
-        type: "node",
-        label: "Duplicate runner",
-        status: "available",
-        sessionHost: true,
-        workerSlots: { total: 1, available: 1 },
-      },
-      {
-        id: "node:beta-device",
-        type: "node",
-        label: "Duplicate runner",
-        status: "available",
-        sessionHost: true,
-        workerSlots: { total: 1, available: 1 },
-      },
-    ],
+    environments: (
+      [
+        ["runner", "Build runner", 2],
+        ["alpha-device", "Duplicate runner", 1],
+        ["beta-device", "Duplicate runner", 1],
+      ] as const
+    ).map(([id, label, total]) => ({
+      id: `node:${id}`,
+      label,
+      type: "node" as const,
+      status: "available" as const,
+      sessionHost: true,
+      workerSlots: { total, available: 1 },
+    })),
     cloudProfiles: [{ id: "aws", providerId: "crabbox" }],
     cloudProfileId: "",
     deviceId: "",
@@ -126,6 +115,11 @@ export function pickerParams(
   return { params, state };
 }
 
-export function renderPicker(...args: Parameters<typeof pickerParams>) {
-  return mountSolid(() => createComponent(WhereChip, pickerParams(...args))).container;
+export async function renderPicker(...args: Parameters<typeof pickerParams>) {
+  const { container } = mountSolid(() => createComponent(WhereChip, pickerParams(...args)));
+  await vi.dynamicImportSettled();
+  await waitForSolid(() =>
+    expect(container.querySelector(".new-session-page__environment-layout")).not.toBeNull(),
+  );
+  return container;
 }

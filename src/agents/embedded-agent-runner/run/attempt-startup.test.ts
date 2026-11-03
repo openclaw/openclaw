@@ -9,12 +9,15 @@ const prepare = (attempt: Parameters<typeof prepareEmbeddedSkills>[0]["attempt"]
     sandbox: null,
     sessionAgentId: "main",
   });
+const snapshot = () => ({ prompt: "skills prompt", skills: [] });
+const detached = { sessionPersistence: "detached", disableTools: true, config: {} } as const;
 
 const mocks = vi.hoisted(() => ({
   applySkillEnvOverrides: vi.fn(),
   applySkillEnvOverridesFromSnapshot: vi.fn(),
   mapSandboxSkillEntriesForPrompt: vi.fn(),
   prepareInstalledSkillCatalog: vi.fn(),
+  prepareWorkspaceSkills: vi.fn(async () => []),
 }));
 
 vi.mock("../../installed-skill-runtime.js", () => ({
@@ -26,12 +29,10 @@ vi.mock("../../../skills/runtime/env-overrides.js", () => ({
   applySkillEnvOverridesFromSnapshot: mocks.applySkillEnvOverridesFromSnapshot,
 }));
 
-vi.mock("../../../skills/runtime/embedded-run-entries.js", () => ({
-  resolveEmbeddedRunSkillEntries: vi.fn(() => ({
-    shouldLoadSkillEntries: true,
-    skillEntries: [],
-    loadSkillEntries: vi.fn(() => []),
-  })),
+// mock-isolation: inject skill entries without filesystem discovery while testing startup cleanup.
+vi.mock("../../../skills/loading/workspace-skill-loader.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../skills/loading/workspace-skill-loader.js")>()),
+  prepareWorkspaceSkills: mocks.prepareWorkspaceSkills,
 }));
 
 vi.mock("../sandbox-skills.js", async (importOriginal) => ({
@@ -41,6 +42,9 @@ vi.mock("../sandbox-skills.js", async (importOriginal) => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.prepareInstalledSkillCatalog.mockReset().mockReturnValue([]);
+  mocks.applySkillEnvOverrides.mockReturnValue(() => {});
+  mocks.applySkillEnvOverridesFromSnapshot.mockReturnValue(() => {});
 });
 
 it.each([false, true])(
@@ -56,20 +60,44 @@ it.each([false, true])(
     await expect(
       prepare({
         config: {},
-        skillsSnapshot: hasSnapshot ? { prompt: "skills prompt", skills: [] } : undefined,
+        skillsSnapshot: hasSnapshot ? snapshot() : undefined,
       }),
     ).rejects.toThrow("skill reader preparation failed");
     expect(restore).toHaveBeenCalledOnce();
-    expect(mocks.applySkillEnvOverridesFromSnapshot).toHaveBeenCalledTimes(hasSnapshot ? 1 : 0);
-    expect(mocks.applySkillEnvOverrides).toHaveBeenCalledTimes(hasSnapshot ? 0 : 1);
   },
 );
 
-it("does not load skills or apply their environment during settled finalization", async () => {
-  const prepared = await prepare({ operation: "settled-tool-finalization" });
-
-  expect(prepared).toMatchObject({ skillsPrompt: "", skillsSnapshotForRun: undefined });
+it.each([
+  { operation: "settled-tool-finalization" },
+  { ...detached, modelRun: true },
+  { ...detached, promptMode: "none" },
+] as const)("does not prepare skills or apply their environment for %j", async (attempt) => {
+  expect(await prepare(attempt)).toMatchObject({
+    skillsPrompt: "",
+    skillsSnapshotForRun: undefined,
+    codeModeSkills: [],
+  });
   for (const mock of Object.values(mocks)) {
     expect(mock).not.toHaveBeenCalled();
   }
 });
+
+it.each([
+  ["durable", true, true],
+  ["detached", false, true],
+  ["detached", true, false],
+] as const)(
+  "preserves skills (persistence=%s, raw=%s, disableTools=%s)",
+  async (sessionPersistence, modelRun, disableTools) => {
+    const prepared = await prepare({
+      sessionPersistence,
+      modelRun,
+      disableTools,
+      config: {},
+      skillsSnapshot: snapshot(),
+    });
+    prepared.restoreSkillEnv();
+
+    expect(prepared.skillsPrompt).toBe("skills prompt");
+  },
+);
