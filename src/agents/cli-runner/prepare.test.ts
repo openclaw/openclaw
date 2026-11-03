@@ -198,10 +198,9 @@ vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: vi.fn(() => null),
 }));
 
-vi.mock("../../tts/tts-settings.js", () => ({
-  buildTtsSystemPromptHint: vi.fn(() => undefined),
-  resolveModelOverridePolicy: vi.fn(),
-  setTtsMachinePrefsPathResolver: vi.fn(),
+vi.mock("../../tts/tts-settings.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../tts/tts-settings.js")>()),
+  buildTtsSystemPromptHintAsync: vi.fn(async () => undefined),
 }));
 
 vi.mock("../media-generation-task-status.js", () => ({
@@ -2141,6 +2140,26 @@ describe("prepareCliRunContext", () => {
       expect(context.systemPrompt).not.toContain("UNSELECTED-WORKSPACE");
     },
   );
+
+  it("uses the recorded worktree bootstrap instead of the configured checkout", async () => {
+    setCliRunnerPrepareTestDeps({ resolveBootstrapContextForRun: loadBootstrapContext });
+    const { dir, sessionTarget } = fixture.session;
+    const task = path.join(dir, "task");
+    fs.mkdirSync(task);
+    fs.writeFileSync(path.join(dir, "AGENTS.md"), "SHARED-RULE-MUST-NOT-LEAK");
+    fs.writeFileSync(path.join(dir, "SOUL.md"), "SHARED-SOUL-MUST-NOT-LEAK");
+    fs.writeFileSync(path.join(task, "AGENTS.md"), "BRANCH-RULE");
+    fs.writeFileSync(path.join(task, "SOUL.md"), "BRANCH-SOUL");
+    const context = await fixture.prepare({
+      config: { agents: { entries: { main: { workspace: dir } } } },
+      workspaceDir: dir,
+      cwd: task,
+      sessionEntry: { sessionId: sessionTarget.sessionId, updatedAt: 1, sessionRoot: task },
+    });
+    expect(context.systemPrompt).toContain("BRANCH-RULE");
+    expect(context.systemPrompt).toContain("BRANCH-SOUL");
+    expect(context.systemPrompt).not.toContain("MUST-NOT-LEAK");
+  });
 
   it("uses canonical repository skills for a managed worktree", async () => {
     const { dir } = fixture.session;

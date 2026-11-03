@@ -4,11 +4,13 @@ import { createMemo, For, Show } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import "../../components/tooltip.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { createMediaQuery } from "../../lib/reactive/platform.ts";
 import { parseSessionLog, prepareUsageDateRange } from "./helpers.ts";
 import { charsToTokens, formatUsageCost, formatUsageTokens } from "./metrics.ts";
 import { renderUsageRefreshStatus } from "./page-shell.tsx";
 import { createUsageRead, UsagePending, UsageReadStatus } from "./read-status.tsx";
 import type { SessionLogRole, UsageContextDetail, UsageProps, UsageSessionEntry } from "./types.ts";
+import { UsageLogFilterMenu } from "./view-log-filter-menu.tsx";
 import { SessionLogList, type SessionLogRow } from "./view-session-log-list.tsx";
 import { renderSessionSummary } from "./view-session-summary.tsx";
 import { deriveTimeSeries, TimeSeriesCompact } from "./view-timeseries.tsx";
@@ -93,10 +95,7 @@ export function SessionDetailPanel(props: {
     const usage = session.usage;
     const { timeSeriesCursorStart, timeSeriesCursorEnd } = detail;
 
-    const hasRange =
-      detail.timeSeries?.usageReport?.state !== "unavailable" &&
-      timeSeriesCursorStart !== null &&
-      timeSeriesCursorEnd !== null;
+    const hasRange = timeSeriesCursorStart !== null && timeSeriesCursorEnd !== null;
     const filteredUsage = series().filteredUsage;
     const headerStats = filteredUsage
       ? { totalTokens: filteredUsage.totalTokens, totalCost: filteredUsage.totalCost }
@@ -137,23 +136,12 @@ export function SessionDetailPanel(props: {
           {props.session.usage ? (
             <>
               <span>
-                <strong>
-                  {formatUsageTokens(
-                    state().headerStats.totalTokens,
-                    props.session.usage?.usageReport,
-                  )}
-                </strong>{" "}
+                <strong>{formatUsageTokens(state().headerStats.totalTokens)}</strong>{" "}
                 {normalizeLowercaseStringOrEmpty(t("usage.metrics.tokens"))}
                 {state().cursorIndicator}
               </span>
               <span>
-                <strong>
-                  {formatUsageCost(
-                    state().headerStats.totalCost,
-                    2,
-                    props.session.usage?.usageReport,
-                  )}
-                </strong>
+                <strong>{formatUsageCost(state().headerStats.totalCost)}</strong>
                 {state().cursorIndicator}
               </span>
             </>
@@ -289,10 +277,7 @@ function ContextPanel(props: {
           ...groups,
         ];
         const totalContextTokens = categories.reduce((sum, { tokens }) => sum + tokens, 0);
-        const inputTokens =
-          usage && usage.usageReport?.state !== "unavailable" && usage.totalTokens > 0
-            ? usage.input + usage.cacheRead
-            : 0;
+        const inputTokens = usage && usage.totalTokens > 0 ? usage.input + usage.cacheRead : 0;
         const contextDescription =
           inputTokens > 0
             ? `~${Math.min((totalContextTokens / inputTokens) * 100, 100).toFixed(0)}% ${t("usage.details.ofInput")}`
@@ -447,6 +432,7 @@ function SessionLogs(props: {
     () => props.detail.sessionLogsRead,
     () => props.detail.sessionLogsStatus.error,
   );
+  const phone = createMediaQuery("(max-width: 640px)");
   function SessionLogsContent(content: { loading: boolean }) {
     const state = createMemo(() => {
       const detail = props.detail;
@@ -467,7 +453,7 @@ function SessionLogs(props: {
       const showLogData = !initialLoading && !initialError && Boolean(logs?.length);
       const message = initialLoading ? "usage.loading.badge" : "usage.details.noMessages";
 
-      const normalizedQuery = normalizeLowercaseStringOrEmpty(filters.query);
+      const normalizedQuery = normalizeLowercaseStringOrEmpty(filters.query).normalize("NFC");
       const toolOptions = Array.from(
         new Set(parsedEntries.flatMap((entry) => entry.toolInfo.tools.map(([name]) => name))),
       ).toSorted((a, b) => a.localeCompare(b));
@@ -479,7 +465,9 @@ function SessionLogs(props: {
           (filters.tools.length === 0 ||
             entry.toolInfo.tools.some(([name]) => filters.tools.includes(name))) &&
           (!normalizedQuery ||
-            normalizeLowercaseStringOrEmpty(entry.cleanContent).includes(normalizedQuery)),
+            normalizeLowercaseStringOrEmpty(entry.cleanContent)
+              .normalize("NFC")
+              .includes(normalizedQuery)),
       );
       const hasActiveFilters =
         filters.roles.length > 0 || filters.tools.length > 0 || filters.hasTools || normalizedQuery;
@@ -527,48 +515,78 @@ function SessionLogs(props: {
             </div>
             <UsageReadStatus read={read}>{() => state().refreshStatus}</UsageReadStatus>
             <div class="usage-filters-inline session-log-filters">
-              <select
-                multiple
-                size="4"
-                aria-label={t("usage.details.filterByRole")}
-                onChange={(event) =>
-                  props.callbacks.onLogFiltersChange({
-                    roles: selectedLogFilterValues(event.currentTarget).filter(isSessionLogRole),
-                  })
-                }
-              >
-                <For each={SESSION_LOG_ROLES}>
-                  {([role, labelKey]) => (
-                    <>
-                      {" "}
-                      <option value={role} selected={state().roleSelected.has(role)}>
-                        {t(labelKey)}
-                      </option>{" "}
-                    </>
-                  )}
-                </For>
-              </select>
-              <select
-                multiple
-                size="4"
-                aria-label={t("usage.details.filterByTool")}
-                onChange={(event) =>
-                  props.callbacks.onLogFiltersChange({
-                    tools: selectedLogFilterValues(event.currentTarget),
-                  })
-                }
-              >
-                <For each={state().toolOptions}>
-                  {(tool) => (
-                    <>
-                      {" "}
-                      <option value={tool} selected={state().toolSelected.has(tool)}>
-                        {tool}
-                      </option>{" "}
-                    </>
-                  )}
-                </For>
-              </select>
+              {phone() ? (
+                <>
+                  <UsageLogFilterMenu
+                    id="usage-log-filter-role"
+                    label={t("usage.details.filterByRole")}
+                    options={SESSION_LOG_ROLES.map(([value, labelKey]) => ({
+                      value,
+                      label: t(labelKey),
+                    }))}
+                    selected={props.detail.logFilters.roles}
+                    onChange={(values) =>
+                      props.callbacks.onLogFiltersChange({
+                        roles: values.filter(isSessionLogRole),
+                      })
+                    }
+                  />
+                  <UsageLogFilterMenu
+                    id="usage-log-filter-tool"
+                    label={t("usage.details.filterByTool")}
+                    options={state().toolOptions.map((tool) => ({ value: tool, label: tool }))}
+                    selected={props.detail.logFilters.tools}
+                    onChange={(tools) => props.callbacks.onLogFiltersChange({ tools })}
+                  />
+                </>
+              ) : (
+                <>
+                  <select
+                    multiple
+                    size="4"
+                    aria-label={t("usage.details.filterByRole")}
+                    onChange={(event) =>
+                      props.callbacks.onLogFiltersChange({
+                        roles: selectedLogFilterValues(event.currentTarget).filter(
+                          isSessionLogRole,
+                        ),
+                      })
+                    }
+                  >
+                    <For each={SESSION_LOG_ROLES}>
+                      {([role, labelKey]) => (
+                        <>
+                          {" "}
+                          <option value={role} selected={state().roleSelected.has(role)}>
+                            {t(labelKey)}
+                          </option>{" "}
+                        </>
+                      )}
+                    </For>
+                  </select>
+                  <select
+                    multiple
+                    size="4"
+                    aria-label={t("usage.details.filterByTool")}
+                    onChange={(event) =>
+                      props.callbacks.onLogFiltersChange({
+                        tools: selectedLogFilterValues(event.currentTarget),
+                      })
+                    }
+                  >
+                    <For each={state().toolOptions}>
+                      {(tool) => (
+                        <>
+                          {" "}
+                          <option value={tool} selected={state().toolSelected.has(tool)}>
+                            {tool}
+                          </option>{" "}
+                        </>
+                      )}
+                    </For>
+                  </select>
+                </>
+              )}
               <label class="usage-filters-inline session-log-has-tools">
                 <input
                   type="checkbox"

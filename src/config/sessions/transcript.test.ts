@@ -12,9 +12,10 @@ import {
   OPENCLAW_TRANSCRIPT_ARTIFACT_API,
   isTranscriptOnlyOpenClawAssistantMessage,
 } from "../../shared/transcript-only-openclaw-assistant.js";
-import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
+import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
+import { recordCommittedCommandExchange } from "./command-transcript.js";
 import { resolveSessionTranscriptPathInDir } from "./paths.js";
 import {
   loadTranscriptEvents,
@@ -216,7 +217,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   }
   const latestText = () => readLatestAssistantTextFromSessionTranscript(transcriptScope());
 
-  it("appends replayable, redacted command exchanges exactly once without changing prior rows", async () => {
+  it("appends replayable, redacted committed and delivered command exchanges once without changing prior rows", async () => {
     await writeTranscriptStore();
     await appendMirror("Earlier reply");
     const before = await loadFixtureMessages();
@@ -228,7 +229,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       replyText: "Sign in at https://example.test/device?state=secret-state\nCode: EXAMPLE-CODE",
       replyId: "device-code",
     };
-    assertOk(await recordDeliveredCommandExchange(params));
+    assertOk(await recordCommittedCommandExchange(params));
     expect((await recordDeliveredCommandExchange(params)).ok).toBe(true);
     assertOk(
       await recordDeliveredCommandExchange({
@@ -326,7 +327,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
   it("uses the session key agent for configured session.store templates", async () => {
     const tempDir = sessionDirs.make();
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const environment = captureEnv(["OPENCLAW_STATE_DIR"]);
     const emitSpy = vi.spyOn(transcriptEvents, "emitSessionTranscriptUpdate");
     try {
       setTestEnvValue("OPENCLAW_STATE_DIR", path.join(tempDir, "default-state"));
@@ -375,11 +376,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       });
     } finally {
       emitSpy.mockRestore();
-      if (previousStateDir === undefined) {
-        deleteTestEnvValue("OPENCLAW_STATE_DIR");
-      } else {
-        setTestEnvValue("OPENCLAW_STATE_DIR", previousStateDir);
-      }
+      environment.restore();
     }
   });
 

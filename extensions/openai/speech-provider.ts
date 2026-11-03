@@ -1,4 +1,3 @@
-import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type { SpeechProviderPlugin, SpeechSynthesisRequest } from "openclaw/plugin-sdk/speech-core";
 import {
@@ -12,7 +11,10 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveOpenAIProviderConfigRecord } from "./realtime-provider-shared.js";
+import {
+  resolveOpenAIProviderConfigRecord,
+  resolveOpenAIRealtimeRequestHeaders,
+} from "./realtime-provider-shared.js";
 
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 
@@ -245,21 +247,14 @@ async function synthesizeOpenAISpeech(req: SpeechSynthesisRequest, responseForma
   const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
     await import("openclaw/plugin-sdk/ssrf-runtime");
 
-  const requestHeaders = omitNullRequestHeaders(
-    resolveProviderRequestHeaders({
-      provider: "openai",
-      baseUrl: config.baseUrl,
-      capability: "audio",
-      transport: "http",
-      defaultHeaders: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-    }),
-  ) ?? {
-    Authorization: `Bearer ${apiKey}`,
-    "Content-Type": "application/json",
-  };
+  const requestHeaders = resolveOpenAIRealtimeRequestHeaders(
+    { resolveProviderRequestHeaders },
+    config.baseUrl,
+    {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+  );
   const requestBody = JSON.stringify({
     model,
     input: text,

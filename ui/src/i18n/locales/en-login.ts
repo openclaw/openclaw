@@ -75,7 +75,8 @@ const enLogin = {
           "Ask a Gateway administrator to assign your profile a role, or to grant or restore your access.",
         stepFindProfile:
           "Administrators can find your profile with openclaw users list --json, then assign a role with users.setRole.",
-        stepReconnect: "This page reconnects on its own once access is granted.",
+        stepReconnect:
+          "Sign in as a different user, or choose Connect after an administrator grants access.",
       },
       authRequired: {
         title: "This Gateway expects its token",

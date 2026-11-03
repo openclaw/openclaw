@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { validateDecisionResultV2 } from "./result-validation.js";
 import { decodeSystemOneResponse, encodeSystemOneQuestions } from "./systemone-codec.js";
 import type { DecisionBatchV2 } from "./types-v2.js";
-import { validateDecisionResultV2 } from "./validation-v2.js";
 
 const batch: DecisionBatchV2 = {
   state: { type: "text", text: "Synthetic ticket" },

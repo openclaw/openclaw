@@ -776,81 +776,90 @@ it.each([false, true])("keeps partial worker evidence (%s)", (worktreeToolChurn)
   }
 });
 
-it("ranks allocating self bytes across stacks and preserves source-mapping uncertainty", async () => {
-  const root = temporary.make("survivor-leaf-rank-");
-  fs.mkdirSync(path.join(root, "dist"));
-  fs.mkdirSync(path.join(root, "src"));
-  fs.writeFileSync(path.join(root, "src/owner.ts"), "// fixture\nexport function allocate() {}\n");
-  const built = path.join(root, "dist/owner.js");
-  fs.writeFileSync(built, "//#region src/owner.ts\nfunction allocate() {}\n//#endregion\n");
-  const mapped = path.join(root, "dist/mapped.js");
-  fs.writeFileSync(mapped, "function mapped() {}\n//# sourceMappingURL=mapped.js.map\n");
-  fs.writeFileSync(
-    `${mapped}.map`,
-    JSON.stringify({
-      version: 3,
-      sourceRoot: "../src/",
-      sources: ["mapped.ts"],
-      names: [],
-      mappings: "AAAA",
-    }),
-  );
-  const leaf = (functionName: string, bytes: number, url = "", lineNumber = -1) => ({
-    id: 1,
-    selfSize: bytes,
-    callFrame: { functionName, url, lineNumber, columnNumber: 0 },
-    children: [] as unknown[],
-  });
-  const mib = 1024 ** 2;
-  const wrapper = leaf("wrapper", mib);
-  wrapper.children.push(leaf("allocate", 8 * mib, pathToFileURL(built).href, 1));
-  const head = leaf("root", 0);
-  head.children.push(
-    wrapper,
-    leaf("allocate", 4 * mib, pathToFileURL(built).href, 1),
-    leaf("mapped", 2 * mib, pathToFileURL(mapped).href, 0),
-    leaf("nativeLeaf", 3 * mib),
-  );
-  const capture = path.join(root, "capture.heapprofile");
-  fs.writeFileSync(capture, JSON.stringify({ head }));
-  const report = JSON.parse(
-    (
-      await executeFile(
-        process.execPath,
-        [
-          "scripts/perf/survivor-leaf-rank.mjs",
-          capture,
-          "--minutes",
-          "2",
-          "--source-root",
-          root,
-          "--format",
-          "json",
-        ],
-        { encoding: "utf8" },
-      )
-    ).stdout,
-  );
-  expect(report.totalSelfBytes).toBe(18 * mib);
-  expect(
-    report.rows.map((row: { functionName: string; survivorMiBPerMinute: number }) => [
-      row.functionName,
-      row.survivorMiBPerMinute,
-    ]),
-  ).toEqual([
-    ["allocate", 6],
-    ["nativeLeaf", 1.5],
-    ["mapped", 1],
-    ["wrapper", 0.5],
-  ]);
-  expect(report.rows[0]).toMatchObject({
-    source: { file: "src/owner.ts", line: 2 },
-    mapping: "region+unique-declaration (inferred)",
-    nodes: 2,
-  });
-  expect(report.rows[1]).toMatchObject({ mapping: "unmapped", source: { line: null } });
-  expect(report.rows[2]).toMatchObject({
-    mapping: "source-map",
-    source: { file: "src/mapped.ts", line: 1 },
-  });
-});
+it.each(["//#region", "//"])(
+  "ranks allocating self bytes across stacks and preserves source-mapping uncertainty (%s)",
+  async (label) => {
+    const root = temporary.make("survivor-leaf-rank-");
+    fs.mkdirSync(path.join(root, "dist"));
+    fs.mkdirSync(path.join(root, "src"));
+    fs.writeFileSync(
+      path.join(root, "src/owner.ts"),
+      "// fixture\nexport function allocate() {}\n",
+    );
+    const built = path.join(root, "dist/owner.js");
+    fs.writeFileSync(
+      built,
+      `${label} src/owner.ts\nfunction allocate() {}\n${label === "//#region" ? "//#endregion" : "// src/other.ts"}\n`,
+    );
+    const mapped = path.join(root, "dist/mapped.js");
+    fs.writeFileSync(mapped, "function mapped() {}\n//# sourceMappingURL=mapped.js.map\n");
+    fs.writeFileSync(
+      `${mapped}.map`,
+      JSON.stringify({
+        version: 3,
+        sourceRoot: "../src/",
+        sources: ["mapped.ts"],
+        names: [],
+        mappings: "AAAA",
+      }),
+    );
+    const leaf = (functionName: string, bytes: number, url = "", lineNumber = -1) => ({
+      id: 1,
+      selfSize: bytes,
+      callFrame: { functionName, url, lineNumber, columnNumber: 0 },
+      children: [] as unknown[],
+    });
+    const mib = 1024 ** 2;
+    const wrapper = leaf("wrapper", mib);
+    wrapper.children.push(leaf("allocate", 8 * mib, pathToFileURL(built).href, 1));
+    const head = leaf("root", 0);
+    head.children.push(
+      wrapper,
+      leaf("allocate", 4 * mib, pathToFileURL(built).href, 1),
+      leaf("mapped", 2 * mib, pathToFileURL(mapped).href, 0),
+      leaf("nativeLeaf", 3 * mib),
+    );
+    const capture = path.join(root, "capture.heapprofile");
+    fs.writeFileSync(capture, JSON.stringify({ head }));
+    const report = JSON.parse(
+      (
+        await executeFile(
+          process.execPath,
+          [
+            "scripts/perf/survivor-leaf-rank.mjs",
+            capture,
+            "--minutes",
+            "2",
+            "--source-root",
+            root,
+            "--format",
+            "json",
+          ],
+          { encoding: "utf8" },
+        )
+      ).stdout,
+    );
+    expect(report.totalSelfBytes).toBe(18 * mib);
+    expect(
+      report.rows.map((row: { functionName: string; survivorMiBPerMinute: number }) => [
+        row.functionName,
+        row.survivorMiBPerMinute,
+      ]),
+    ).toEqual([
+      ["allocate", 6],
+      ["nativeLeaf", 1.5],
+      ["mapped", 1],
+      ["wrapper", 0.5],
+    ]);
+    expect(report.rows[0]).toMatchObject({
+      source: { file: "src/owner.ts", line: 2 },
+      mapping: "region+unique-declaration (inferred)",
+      nodes: 2,
+    });
+    expect(report.rows[1]).toMatchObject({ mapping: "unmapped", source: { line: null } });
+    expect(report.rows[2]).toMatchObject({
+      mapping: "source-map",
+      source: { file: "src/mapped.ts", line: 1 },
+    });
+  },
+);

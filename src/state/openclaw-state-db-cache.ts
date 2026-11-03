@@ -5,8 +5,7 @@ import {
 } from "../infra/gateway-state-owner.js";
 import { registerNodeSqliteKyselyQueryErrorHandler } from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "../infra/node-sqlite.js";
-import type { EngineConnection } from "../infra/sql-connection.js";
-import { isPostgresSqlConnection } from "../infra/sql-connection.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import {
   isSqliteCorruptionError,
   isSqliteLockError,
@@ -339,42 +338,40 @@ function getCachedOpenClawStateDatabase(
   if (runtimeFailure) {
     throw runtimeFailure;
   }
-  return readCachedOpenClawStateDatabase(resolvedPath, options);
+  const database = readCachedOpenClawStateDatabase(resolvedPath, options?.readOnly === true);
+  if (database) {
+    touchStateDatabase(database);
+  }
+  return database;
 }
 
 function readCachedOpenClawStateDatabase(
   resolvedPath: string,
-  options?: { readOnly: true },
+  readOnly: boolean,
 ): OpenClawStateDatabase | undefined {
   const maintenance = getOpenClawDatabaseMaintenanceScope();
-  if (options?.readOnly) {
+  if (readOnly) {
     maintenance?.assertReadAdmission();
   } else {
     maintenance?.assertAdmission();
   }
   assertExistingOpenClawStateSchemaCacheAdmission(resolvedPath, stateDatabaseLifecycle);
   const database = cachedDatabases.get(resolvedPath);
-  if (database) {
-    if (borrowers.get(database.db)?.retiring) {
-      throw new Error(
-        `OpenClaw state database native borrower cleanup is pending: ${resolvedPath}`,
-      );
-    }
-    touchStateDatabase(database);
+  if (database && borrowers.get(database.db)?.retiring) {
+    throw new Error(`OpenClaw state database native borrower cleanup is pending: ${resolvedPath}`);
   }
   return database;
 }
 
-/** Prepared host facts retain admission; native transactions still expose their staged facts. */
+/** Fact checks retain admission, not idle handles; native transactions expose staged facts. */
 export function prepareOpenClawStateCachedRead(pathname: string) {
   const resolvedPath = resolveDatabasePath({ path: pathname });
-  const options = { readOnly: true } as const;
-  getCachedOpenClawStateDatabase(resolvedPath, options);
+  getCachedOpenClawStateDatabase(resolvedPath, { readOnly: true });
   // Terminal failures invalidate this admission before closing the native owner.
   const admission = asyncResources.capture(resolvedPath);
   return () => {
     admission.assertCurrent();
-    return readCachedOpenClawStateDatabase(resolvedPath, options);
+    return readCachedOpenClawStateDatabase(resolvedPath, true);
   };
 }
 
@@ -461,29 +458,28 @@ function recordOpenClawStateDatabaseLifecycleOpenError(pathname: string, error: 
   notifyOpenClawStateDatabaseLifecycle({ kind: "open-error", path: resolvedPath, error });
 }
 
-/** Reject a fresh shared-state open after known corruption until repair clears it. */
 function assertOpenClawStateDatabaseFreshOpenAllowedAtPath(
   pathname: string,
   env: NodeJS.ProcessEnv,
   onNativeCleanupFailure?: (error: OpenClawQuarantineReadCleanupError) => void,
+  refreshQuarantineIdentity?: true,
 ): void {
   assertOpenClawStateDatabaseOpenAllowed(pathname);
   let quarantineFailure: Error | undefined;
   try {
-    quarantineFailure = readOpenClawDatabaseQuarantineFailure("state", pathname, { env });
+    const options = { env, refreshIdentity: refreshQuarantineIdentity };
+    quarantineFailure = readOpenClawDatabaseQuarantineFailure("state", pathname, options);
   } catch (error) {
     if (!(error instanceof OpenClawQuarantineReadCleanupError)) {
       throw error;
     }
     onNativeCleanupFailure?.(error);
-    return;
   }
   if (quarantineFailure?.cause instanceof OpenClawQuarantineReadCleanupError) {
     onNativeCleanupFailure?.(quarantineFailure.cause);
   }
   if (quarantineFailure) {
-    // Another process can record quarantine. Revoke admitted owners without a
-    // process-local latch that could outlive the durable decision's generation.
+    // Revoke owners without a process-local latch that could outlive the durable decision.
     cacheAdmission.closeTerminalFailure(pathname, quarantineFailure);
     throw quarantineFailure;
   }

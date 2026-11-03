@@ -41,7 +41,7 @@ import {
   listWholeConfigFiles,
 } from "./ci-node-test-inventory.mts";
 import {
-  createUiRealGatewayTestShards,
+  UI_REAL_GATEWAY_TEST_CONFIG,
   hasSharedUiE2eInput,
   createSelectedNodeTestShardBundles,
   packNodeTestGroups,
@@ -115,12 +115,8 @@ const CHANGED_FILE_SECONDS_HINTS = new Map<string, number>([
   ["test/e2e/qa-lab/runtime/node-worker-launch-wire.e2e.test.ts", 104],
   ["test/e2e/qa-lab/plugins/workspace-node-files.e2e.test.ts", 91],
   ["test/e2e/gateway-transcripts-discord-capture.e2e.test.ts", 61],
-  ["test/gateway-session-resume-restart.e2e.test.ts", 196],
-  ["test/gateway-background-process-restart.e2e.test.ts", 120],
-  ["test/gateway-subagent-restart.e2e.test.ts", 118],
   // Same runs: serial case sums are relative file costs, not wrapper walls.
   ["src/infra/update-managed-service-handoff-lifecycle.test.ts", 92],
-  ["src/agents/agent-command.harness-compaction-custody.test.ts", 52],
   ["src/cli/update-cli/update-command-migrated.test.ts", 67],
   ["src/flows/doctor-health.managed-settlement.test.ts", 296],
   ["src/cli/update-cli.already-current.test.ts", 130],
@@ -183,14 +179,7 @@ export function hasUiE2eAffectingChange(
       ) ||
       hasImportGraphImpactOnTargets(
         relevantPaths,
-        [
-          ...uiE2eRealGatewayTestFiles,
-          ...new Set(
-            createUiRealGatewayTestShards([]).flatMap((shard) =>
-              shard.groups.flatMap((group) => group.configs),
-            ),
-          ),
-        ],
+        [...uiE2eRealGatewayTestFiles, UI_REAL_GATEWAY_TEST_CONFIG],
         cwd,
         { tooling: true, resolveAliases: true },
       )

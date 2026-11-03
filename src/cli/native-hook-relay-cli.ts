@@ -3,14 +3,17 @@ import {
   isNativeHookRelayBridgeStaleRegistrationError,
   renderNativeHookRelayUnavailableResponse,
 } from "../agents/harness/native-hook-relay-client.js";
+import { NATIVE_HOOK_INEXACT_NUMBER_PATHS_FIELD } from "../agents/harness/native-hook-relay-constants.js";
 import { invokeRemoteNativeHookRelay } from "../agents/harness/native-hook-relay-remote-client.js";
 import type { NativeHookRelayProcessResponse } from "../agents/harness/native-hook-relay-types.js";
+import { isJsonObject } from "../agents/harness/native-hook-relay-utils.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
 import { ADMIN_SCOPE } from "../gateway/operator-scopes.js";
 import { setSafeTimeout } from "../utils/timer-delay.js";
 import { parseTimeoutMsWithFallback } from "./parse-timeout.js";
 
 const MAX_NATIVE_HOOK_STDIN_BYTES = 1024 * 1024;
+const MAX_INEXACT_NUMBER_PATHS_LENGTH = 64 * 1024;
 
 /** User-facing flags for the native hook relay command. */
 export type NativeHookRelayCliOptions = Partial<
@@ -99,7 +102,12 @@ export async function runNativeHookRelayCli(opts: NativeHookRelayCliOptions): Pr
     let rawPayload: unknown;
     try {
       const rawInput = await readStreamText(stdin, MAX_NATIVE_HOOK_STDIN_BYTES, deadline);
-      rawPayload = rawInput.trim() ? JSON.parse(rawInput) : null;
+      if (!rawInput.trim()) {
+        rawPayload = null;
+      } else {
+        rawPayload =
+          event === "pre_tool_use" ? parsePreToolUseStdin(rawInput) : JSON.parse(rawInput);
+      }
     } catch (error) {
       if (isNativeHookRelayDeadlineError(error)) {
         return timedOut(error);
@@ -168,6 +176,47 @@ export async function runNativeHookRelayCli(opts: NativeHookRelayCliOptions): Pr
   } finally {
     deadline.dispose();
   }
+}
+
+/**
+ * Codex forwards the model's number text verbatim, and JSON.parse is the first
+ * lossy step. Only here can a rewrite still learn which tool arguments would
+ * change if it re-serialized them.
+ */
+function parsePreToolUseStdin(rawInput: string): unknown {
+  const inexactKeys = new Map<object, Set<string>>();
+  const payload: unknown = JSON.parse(
+    rawInput,
+    function (this: object, key, value: unknown, context?: { source?: string }) {
+      if (typeof value === "number" && context?.source !== JSON.stringify(value)) {
+        inexactKeys.set(this, (inexactKeys.get(this) ?? new Set()).add(key));
+      }
+      return value;
+    },
+  );
+  if (!isJsonObject(payload)) {
+    return payload;
+  }
+  const paths: string[][] = [];
+  const collectPaths = (value: unknown, path: string[]) => {
+    if (value === null || typeof value !== "object") {
+      return;
+    }
+    for (const [key, child] of Object.entries(value)) {
+      if (inexactKeys.get(value)?.has(key)) {
+        paths.push([...path, key]);
+      } else {
+        collectPaths(child, [...path, key]);
+      }
+    }
+  };
+  collectPaths(payload.tool_input, []);
+  const serializedPaths = JSON.stringify(paths);
+  return {
+    ...payload,
+    [NATIVE_HOOK_INEXACT_NUMBER_PATHS_FIELD]:
+      serializedPaths.length <= MAX_INEXACT_NUMBER_PATHS_LENGTH ? serializedPaths : null,
+  };
 }
 
 async function callGatewayLazy<T = Record<string, unknown>>(opts: CallGatewayOptions): Promise<T> {

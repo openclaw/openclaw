@@ -130,7 +130,7 @@ export function readAgentDatabaseClosedReceipt(
   return { receipt, identity, lease };
 }
 
-export async function publishAgentDatabaseCloseCheckpoint(
+async function publishAgentDatabaseCloseCheckpoint(
   pathname: string,
   closed: ReturnType<typeof readAgentDatabaseClosedReceipt>,
   assertCleanupOwned: () => void,

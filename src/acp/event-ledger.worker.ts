@@ -540,4 +540,6 @@ export const acpReplayOperations = {
       { operationLabel: "acp.replay.incomplete" },
     ),
   "acpReplay.read": (input: AcpReplayReadInput, { open }) => readSqliteReplay(open().db, input),
+  "acpReplay.sessionKey": (input: { sessionId: string }, { open }) =>
+    readSqliteSessionById(open().db, input.sessionId)?.session_key,
 } satisfies WorkerOperationHandlers<WorkerWriteOperationContext>;
