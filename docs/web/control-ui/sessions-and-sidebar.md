@@ -44,7 +44,7 @@ Pages always hides dashboards from
 archived sessions and has no archive toggle. To find archived sessions in the
 sidebar, use the **Sessions** filter instead. Hover or focus an icon for its name.
 The active agent's avatar sits at the top of the rail and opens the agent menu;
-in team mode it opens the workspace menu. The accented **+**, labeled **New session**,
+in team mode it opens the workspace menu. The accented **+**, labeled **New conversation**,
 sits directly below the avatar, separated from navigation by a divider. It stays in
 the same place in Pages, Sessions, and Users, even when the list is collapsed.
 It opens New session for the selected agent; in team mode, choose an agent from
@@ -70,7 +70,7 @@ the account-menu badge. The `dev` channel never shows new-update notifications.
 Home toggles the Home panel and shows the active agent’s Home activity and attention state.
 Home navigation and agent switching remain available before a Home session has loaded.
 For roles with `sessions.others: "none"`, opening Home first checks whether the
-Gateway can resolve that conversation. An unavailable Home offers **New session**
+Gateway can resolve that conversation. An unavailable Home offers **New conversation**
 without repeatedly requesting its transcript or sidebar ancestry. Home sessions
 that the caller can access still open normally; session visibility does not change.
 Home stays a navigation root regardless of its stored session ancestry.
@@ -114,8 +114,8 @@ participation and mentions. External catalog entries appear in **Involving me**
 only when their adopted OpenClaw conversation is in the Gateway-filtered list.
 Shared or imported catalog access alone does not establish involvement; use
 **All owners** to browse those sources. The separate filter button controls the
-remaining session filters. New session stays in the rail rather than moving
-into this header. In mobile chat, open navigation to reach **New session**
+remaining session filters. New conversation stays in the rail rather than moving
+into this header. In mobile chat, open navigation to reach **New conversation**
 in the rail; the conversation header reserves its two right-hand controls for
 **Session actions** and **Panels**. Other mobile pages keep an equivalent **+** in
 the page topbar while the drawer is closed. Opening the drawer moves that action
@@ -492,7 +492,7 @@ The top rail button becomes a neutral workspace identity with the configured Gat
 
 Agent avatars use the same precedence throughout the dashboard: an identity image (a data or same-origin URL), then the identity emoji, then a generated face. The face is stable for the agent ID, including after a rename, and uses crisp vector artwork in the sidebar, switcher, New conversation menu, identity chips, and chat. Configured workspace images also appear beside assistant replies after authenticated loading. A missing or failed image reveals the emoji or generated face. System agents always use the OpenClaw product mark, including in onboarding and custodian conversations; they never use a generated face. People keep their own profile images and initials.
 
-In both sidebar modes, **Home** stays at the bottom of the rail, not in Pages. Click a group header's avatar or name to open that agent's main chat; its separate expand/collapse control folds the group without navigating. The top **+**, labeled **New session**, opens a small agent menu with each agent's avatar and name, in the same order as the groups. Choosing an agent opens `/new?agent=<id>`. Each group's **+** opens that link directly. It appears when the header is hovered or contains keyboard focus, and stays available on touch devices. Turning team mode off restores chip mode and its direct **New session** button; Home remains in the rail.
+In both sidebar modes, **Home** stays at the bottom of the rail, not in Pages. Click a group header's avatar or name to open that agent's main chat; its separate expand/collapse control folds the group without navigating. The top **+**, labeled **New conversation**, opens a small agent menu with each agent's avatar and name, in the same order as the groups. Choosing an agent opens `/new?agent=<id>`. Each group's **+** opens that link directly. It appears when the header is hovered or contains keyboard focus, and stays available on touch devices. Turning team mode off restores chip mode and its direct **New conversation** button; Home remains in the rail.
 
 Choosing **Show all** defaults the shared page scope to **All agents**. Choosing a named agent tile leaves team mode and scopes pages to that agent. This sets a default once when the mode changes: you can select an individual agent afterward, and page navigation preserves your choice. Automations, Dashboards, Sessions, and Usage support all-agent views. Mixed-agent lists identify the agent on each row with an avatar and name where needed. Each identity chip includes the agent ID in its tooltip and screen-reader label, such as `Molty (agent:main)`, so agents with the same display name remain distinguishable. If no name is available, the label uses `agent:<id>`. In Settings, the agent selector below the sidebar title keeps the same target across Agents, Models, Memory, and Skills; global settings remain global. Skill Workshop uses the agent selected through chat. Open an agent's main chat from its group header to select it for Skill Workshop. Chat actions still target the conversation's agent.
 
