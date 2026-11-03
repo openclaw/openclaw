@@ -34,6 +34,7 @@ let env: NodeJS.ProcessEnv;
 
 beforeEach(() => {
   vi.useFakeTimers();
+  vi.spyOn(databaseProcessRole, "getDatabaseProcessRole").mockReturnValue("gateway");
   env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-idle-")) };
   opened.length = 0;
   // Exercise the real borrow/release owner without booting native workers for timer tests.
