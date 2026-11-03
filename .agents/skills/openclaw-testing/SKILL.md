@@ -117,6 +117,12 @@ raises, including scalar-only reconciliation, need approval. See the
 [cost budget](../../../docs/help/testing/writing-tests.md#cost-budget) for record
 format and pruning.
 
+For module mocks, follow the
+[fixture contract](../../../docs/help/testing/fixtures.md#module-mocks-and-export-completeness).
+When an isolation annotation retires an existing baseline entry, commit the annotation and corresponding baseline removal together.
+Inspect the full baseline diff because `--prune` scans the whole checkout.
+Verify the updated baseline with a guard run without `--prune`.
+
 ### Test failure policy
 
 - Failures = defects. Bounded reproduction attempt (same shard order first);

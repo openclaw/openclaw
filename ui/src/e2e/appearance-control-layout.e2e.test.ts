@@ -40,15 +40,15 @@ suite.define(() => {
         const themeIndex = headings.indexOf("Theme");
         expect(headings.slice(themeIndex, themeIndex + 3)).toEqual([
           "Theme",
-          "Accent color",
-          "Typography",
+          "Language and text",
+          "Chat",
         ]);
 
         const accent = page.locator("#settings-appearance-accent");
         const customPicker = accent.locator("[data-accent-custom]");
         const customSwatch = accent.locator(".settings-accent-swatch--custom");
         await polledAttribute(customPicker, "aria-describedby").toBe("settings-accent-status");
-        await polledText(accent.locator("#settings-accent-status")).toContain("Using Custom color");
+        await polledText(accent.locator("#settings-accent-status")).toContain("Custom color");
         await accent.locator('[data-accent-preset="slate"]').focus();
         await page.keyboard.press("Tab");
         await expect

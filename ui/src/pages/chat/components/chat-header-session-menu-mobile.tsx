@@ -34,6 +34,7 @@ export type HeaderSessionMenuMobileHost = {
 };
 
 const plainLabel = (label: string) => label.replace(/(?:…|\.{3})$/u, "");
+const normalizeSearch = (value: string) => value.toLocaleLowerCase().normalize("NFC");
 const isItem = (entry: MenuEntry): entry is MenuItem =>
   entry.kind !== "content" && entry.kind !== "group";
 
@@ -184,8 +185,7 @@ export function createMobileHeaderSessionMenu(options: {
       return [
         ...groups.filter(
           (entry) =>
-            isItem(entry) &&
-            entry.label.toLocaleLowerCase().includes(query().trim().toLocaleLowerCase()),
+            isItem(entry) && normalizeSearch(entry.label).includes(normalizeSearch(query().trim())),
         ),
         ...rows.filter((entry) => !groups.includes(entry)),
       ];
