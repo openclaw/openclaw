@@ -16,6 +16,13 @@ import {
   resetConfigRuntimeState,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import {
+  areDiagnosticsEnabledForProcess,
+  onTrustedInternalDiagnosticEvent,
+  setDiagnosticsEnabledForProcess,
+  waitForDiagnosticEventsDrained,
+  type DiagnosticEventPayload,
+} from "../../infra/diagnostic-events.js";
 import * as gitExec from "../../infra/git-exec.js";
 import * as gitWorker from "../../infra/git-worker.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
@@ -46,6 +53,7 @@ import { getRegistryWorktree } from "./registry.test-support.js";
 import { ManagedWorktreeService } from "./service.js";
 import { materializeManagedWorktreeFixture } from "./service.test-support.js";
 import { captureManagedWorktreeSnapshot } from "./snapshot-host.js";
+import type { ManagedWorktreeRecord } from "./types.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -155,11 +163,32 @@ describe("ManagedWorktreeService provisioned state", () => {
       paths: [".env.local", "dependencies/package/settings.local"],
       estimatedBytes: 8192,
     });
-    const created = await service.create({
-      repoRoot: repo,
-      name: "dependencies",
-      baseRef: "HEAD",
+    const phases: DiagnosticEventPayload[] = [];
+    const diagnosticsEnabled = areDiagnosticsEnabledForProcess();
+    setDiagnosticsEnabledForProcess(true);
+    const unsubscribe = onTrustedInternalDiagnosticEvent((event) => {
+      if (event.type === "diagnostic.phase.completed" && event.name === "worktree.preparation") {
+        phases.push(event);
+      }
     });
+    let created: ManagedWorktreeRecord;
+    try {
+      created = await service.create({ repoRoot: repo, name: "dependencies", baseRef: "HEAD" });
+      await waitForDiagnosticEventsDrained();
+    } finally {
+      unsubscribe();
+      setDiagnosticsEnabledForProcess(diagnosticsEnabled);
+    }
+    expect(phases).toEqual([
+      expect.objectContaining({
+        details: expect.objectContaining({
+          outcome: "returned",
+          provisionInspect: expect.any(Number),
+          provisionCopy: expect.any(Number),
+        }),
+      }),
+    ]);
+    expect(JSON.stringify(phases)).not.toContain("synthetic provisioned");
     expect(await getRegistryWorktreeProvisionedPaths(env, created.id)).toEqual(inspection.paths);
     expect(await fs.readFile(path.join(created.path, ".env.local"), "utf8")).toBe(
       "synthetic provisioned\n",

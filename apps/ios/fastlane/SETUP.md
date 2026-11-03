@@ -289,12 +289,18 @@ The collector takes one serial host sample approximately every 15 seconds. It re
 host CPU counters, load, memory compression and swap activity, memory-pressure
 level, and disk activity. It samples processes at most once a minute, recording
 at most twelve top CPU/RSS process rows. Process rows
-contain PIDs, parent PIDs and roles, state, CPU time, and RSS. Roles use a fixed
+contain PIDs, parent PIDs and roles, state, CPU time, recent CPU utilization, and RSS. Roles use a fixed
 allowlist plus bounded executable basenames from installed Apple simulator runtime
 system directories. Device data, app bundles, containers, and other unknown names
 remain `other`. Fixed origin categories distinguish runtime, Xcode,
 and host-system executable locations where recognizable. Grouped counts and CPU
 deltas cover every parsed process, including rows outside the top-process display.
+`cpuRecentPercent` is macOS `ps`'s decaying average over up to one minute of
+previous real time, available even for a first observation. It ranks CPU rows
+and groups independently of interval deltas; group values sum these estimates.
+It is neither instantaneous utilization nor an exact share of the host sample,
+and may exceed 100% for a multithreaded process. `cpuMs` is lifetime CPU time;
+`cpuDeltaMs` and `cpuPercent` require two successful observations.
 `cpuObservedCount` identifies rows with a previous observation. A failed `ps`
 probe leaves the summary null and resets that baseline. Intentionally skipped
 process samples retain the baseline for the next observation, with CPU deltas

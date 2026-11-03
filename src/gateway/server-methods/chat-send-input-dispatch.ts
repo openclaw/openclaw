@@ -22,6 +22,7 @@ import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveChatAbortDiagnosticReason } from "../chat-abort-diagnostics.js";
+import { acceptGatewayDeviceSourceAuthority } from "../device-revocation.js";
 import { runOutsideOperatorToolGatewayAuthority } from "../operator-tool-gateway-authority.js";
 import { readQueuedChatInputAdmission } from "../queued-chat-input-admission.js";
 import { invalidateSkillAuthoringForOtherRequester } from "../skill-library-authoring.js";
@@ -52,6 +53,7 @@ import { createGatewayChatUserTurnController } from "./chat-user-turn-recorder.j
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { publishCommittedSessionGoalChange } from "./session-goal-change.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const mediaDocumentContextLoader = createLazyImportLoader(
@@ -570,6 +572,9 @@ export async function handleChatSendWithStorage(
     admission.setDiscardAbandonedPreparedMedia(undefined);
     phase?.mark("response");
     admission.markInputAccepted();
+    if (readGatewayRequestMutationAuthority(handlerOptions).family === "worker") {
+      acceptGatewayDeviceSourceAuthority(hasCurrentClientAuthority);
+    }
     if (!admission.codexGoalAdmission) {
       respond(true, ackPayload, undefined, { runId: clientRunId });
     }

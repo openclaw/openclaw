@@ -49,8 +49,11 @@ call is active before acting.
 
 Caller transcripts during carrier playback and its 400 ms echo tail require
 detected caller speech or a provider barge-in. This prevents unconfirmed echo
-from becoming a new host caller turn. Audio still reaches the realtime provider,
-which owns its own speech detection and responses.
+from becoming a new host caller turn. During opening-greeting playback, caller
+audio and transcripts are withheld and provider barge-in cannot clear the greeting.
+Normal interruption resumes after the greeting response ends and carrier playback
+drains. Before greeting audio starts and on later turns, audio reaches the realtime
+provider, which owns its own speech detection and responses.
 
 ### GPT-Live
 

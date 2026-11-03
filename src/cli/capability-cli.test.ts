@@ -466,6 +466,7 @@ describe("capability cli", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
+    vi.restoreAllMocks();
   });
 
   beforeEach(() => {
@@ -1324,7 +1325,7 @@ describe("capability cli", () => {
     const { outputBase } = fixture;
 
     const writeFile = fs.writeFile.bind(fs);
-    const writeFileSpy = vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
+    vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
       const [filePath, data, options] = args;
       if (typeof filePath === "string" && Buffer.isBuffer(data) && data.equals(buffer)) {
         await writeFile(filePath, data.subarray(0, 17), options);
@@ -1333,15 +1334,10 @@ describe("capability cli", () => {
       await writeFile(...args);
     });
 
-    try {
-      await expect(generateImage("--output", outputBase)).rejects.toThrow("exit 1");
-
-      expectRuntimeErrorContains("injected buffered media write failure");
-      expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
-      await expectOutputFile(fixture, "existing-image");
-    } finally {
-      writeFileSpy.mockRestore();
-    }
+    await expect(generateImage("--output", outputBase)).rejects.toThrow("exit 1");
+    expectRuntimeErrorContains("injected buffered media write failure");
+    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+    await expectOutputFile(fixture, "existing-image");
   });
 
   it("blocks private-network url-only generated video downloads by default", async () => {
@@ -1682,80 +1678,79 @@ describe("capability cli", () => {
     expect(mocks.callGateway).not.toHaveBeenCalled();
   });
 
-  it("preserves Gateway TTS output when the final copy fails", async () => {
-    const tempDir = tempDirs.make("openclaw-tts-copy-fail-");
-    const sourcePath = path.join(tempDir, "source.mp3");
-    const outputDir = path.join(tempDir, "output");
-    const outputPath = path.join(outputDir, "speech.mp3");
-    await fs.mkdir(outputDir);
-    await fs.writeFile(sourcePath, Buffer.alloc(2_048, 0x41));
-    await fs.writeFile(outputPath, "existing-speech");
-    await fs.chmod(outputPath, 0o640);
-
-    mocks.callGateway.mockResolvedValueOnce({
-      audioPath: sourcePath,
-      provider: "openai",
-      outputFormat: "mp3",
-      voiceCompatible: false,
-    } as never);
-
-    const writeFile = fs.writeFile.bind(fs);
-    const writeFileSpy = vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
-      const [destination, data] = args;
-      if (
-        typeof destination === "string" &&
-        destination.startsWith(outputDir) &&
-        Buffer.isBuffer(data)
-      ) {
-        await writeFile(destination, data.subarray(0, 17));
-        throw new Error("injected TTS copy failure");
+  it.each(["normal", "copy-failure", "interrupted-existing", "interrupted-absent"])(
+    "keeps TTS publication and source custody for %s",
+    async (mode) => {
+      const fixture = await outputFixture(".wav", "existing-speech");
+      const sourcePath = path.join(tempDirs.make("tts-source-"), "source.wav");
+      const wav = Buffer.alloc(64);
+      wav.write("RIFF", 0, "ascii");
+      wav.writeUInt32LE(56, 4);
+      wav.write("WAVEfmt ", 8, "ascii");
+      await fs.writeFile(sourcePath, wav);
+      if (mode === "interrupted-absent") {
+        await fs.rm(fixture.outputPath);
       }
-      await writeFile(...args);
-    });
-
-    try {
-      await expect(
-        convertTts("--gateway", "--voice", "alloy", "--output", outputPath),
-      ).rejects.toThrow("exit 1");
-
+      mocks.callGateway.mockResolvedValueOnce({
+        audioPath: sourcePath,
+        provider: "google",
+        outputFormat: "wav",
+        voiceCompatible: false,
+      });
+      const scope = new AsyncWorkScope();
+      const readFile = fs.readFile.bind(fs);
+      vi.spyOn(fs, "readFile").mockImplementationOnce(async () => {
+        const buffer = await readFile(sourcePath);
+        if (mode.startsWith("interrupted")) {
+          scope.beginClose(new Error("command interrupted"));
+        }
+        return buffer;
+      });
+      const writeFile = fs.writeFile.bind(fs);
+      vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
+        const [destination, data] = args;
+        if (
+          mode === "copy-failure" &&
+          typeof destination === "string" &&
+          destination.startsWith(fixture.dir) &&
+          Buffer.isBuffer(data)
+        ) {
+          await writeFile(destination, data.subarray(0, 17));
+          throw new Error("injected TTS copy failure");
+        }
+        await writeFile(...args);
+      });
+      const requested = `${fixture.outputBase}.mp3`;
+      const running = scope.track(() =>
+        convertTts("--gateway", "--voice", "alloy", "--output", requested),
+      );
+      if (mode === "copy-failure") {
+        await expect(running).rejects.toThrow("exit 1");
+        expectRuntimeErrorContains("injected TTS copy failure");
+      } else {
+        await running;
+      }
       expect(firstGatewayCall()?.method).toBe("tts.convert");
       expect(firstGatewayCall()?.params?.provider).toBeUndefined();
       expect(firstGatewayCall()?.params?.voiceId).toBe("alloy");
-
-      expectRuntimeErrorContains("injected TTS copy failure");
-      expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
-      expect(await fs.readFile(outputPath, "utf8")).toBe("existing-speech");
-      if (process.platform !== "win32") {
-        expect((await fs.stat(outputPath)).mode & 0o777).toBe(0o640);
+      if (mode === "normal") {
+        expect(firstJsonOutput()).toMatchObject({
+          outputs: [{ path: fixture.outputPath, format: "wav" }],
+        });
+        expect(await fs.readFile(fixture.outputPath)).toEqual(wav);
+      } else {
+        expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+        if (mode === "interrupted-absent") {
+          expect(await fs.readdir(fixture.dir)).toEqual([]);
+        } else {
+          await expectOutputFile(fixture, "existing-speech");
+        }
       }
-      expect(await fs.readdir(outputDir)).toEqual(["speech.mp3"]);
-    } finally {
-      writeFileSpy.mockRestore();
-    }
-  });
-
-  it("names TTS output after the audio format the provider returned", async () => {
-    const tempDir = tempDirs.make("openclaw-tts-output-ext-");
-    const sourcePath = path.join(tempDir, "source.wav");
-    const wav = Buffer.alloc(64);
-    wav.write("RIFF", 0, "ascii");
-    wav.writeUInt32LE(56, 4);
-    wav.write("WAVEfmt ", 8, "ascii");
-    await fs.writeFile(sourcePath, wav);
-    mocks.callGateway.mockResolvedValueOnce({
-      audioPath: sourcePath,
-      provider: "google",
-      outputFormat: "wav",
-      voiceCompatible: false,
-    } as never);
-
-    await convertTts("--gateway", "--output", path.join(tempDir, "speech.mp3"));
-
-    const written = path.join(tempDir, "speech.wav");
-    expect(firstJsonOutput()).toMatchObject({ outputs: [{ path: written, format: "wav" }] });
-    expect(await fs.readFile(written)).toEqual(wav);
-    await expect(fs.access(path.join(tempDir, "speech.mp3"))).rejects.toThrow();
-  });
+      await expect(fs.access(requested)).rejects.toThrow();
+      expect(await fs.readFile(sourcePath)).toEqual(wav);
+      await scope.drain();
+    },
+  );
 
   registerEmbeddingCapabilityCliTests({
     embedBatch: mocks.embedBatch,

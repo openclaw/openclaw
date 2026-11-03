@@ -57,7 +57,6 @@ type OperatorSource = {
     device: object | undefined,
     access: object | null | undefined,
     ingress: object | undefined,
-    invocation: object | undefined,
   ];
   membership: string | undefined;
   token: object;
@@ -384,7 +383,6 @@ export async function captureGatewayOperatorRunAuthority(input: {
       (params.hasCurrentClientAuthority ? {} : undefined),
     sourceAuthority,
     ingressPrincipal,
-    params.invocationAuthority,
   ];
   let releaseSource: (() => void) | undefined;
   let references = 1;
@@ -605,6 +603,7 @@ export async function captureGatewayOperatorRunAuthority(input: {
       rolePolicy: prepareRunRolePolicy(capturedSourcePolicy),
       readCurrentRoleFacts: assertProfileCurrent,
       source: source.token,
+      invocation: params.invocationAuthority,
       signal: revocation.signal,
       retain: () => {
         assertCurrent();
