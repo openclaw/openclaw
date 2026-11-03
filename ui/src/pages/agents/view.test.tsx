@@ -408,9 +408,7 @@ describe("renderAgents", () => {
     expect(tabs.slice(-2)).toEqual([t("agents.tabs.cronJobs"), t("agents.tabs.memory")]);
     await vi.dynamicImportSettled();
     await waitForSolid(() =>
-      expect(
-        container.querySelector("openclaw-agent-memory-panel .agent-memory-panel__header"),
-      ).not.toBeNull(),
+      expect(container.querySelector("openclaw-agent-memory-panel .dreams-page")).not.toBeNull(),
     );
     await waitForSolid(() =>
       expect(request).toHaveBeenCalledWith("doctor.memory.status", { agentId: "beta" }),
