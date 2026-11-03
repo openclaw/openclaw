@@ -4380,7 +4380,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   min-height: 274px;
 }
 
-.chat-controls__model-option[data-chat-model-auth-blocked] {
+.chat-controls__model-option:disabled {
   opacity: 0.42;
   color: var(--muted);
   cursor: default;
@@ -4418,6 +4418,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   border-radius: 6px;
   background: var(--bg-hover);
   font-size: 11px;
+  white-space: nowrap;
   pointer-events: auto;
   user-select: text;
 }
