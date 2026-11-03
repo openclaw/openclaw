@@ -76,3 +76,24 @@ it("suppresses adopted wakes for retired and ineligible sessions", async () => {
     }
   });
 });
+
+it("adopts completion for visible spawned sessions", async () => {
+  await withOpenClawTestState({ label: "durable-exec-visible" }, async (state) => {
+    setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
+    openOpenClawStateDatabase({ env: state.env });
+    const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+    const sessionKey = "agent:main:dashboard:visible";
+    writeSessionEntry(database, sessionKey, {
+      sessionId: "visible",
+      updatedAt: Date.now(),
+      createdVia: "spawn",
+      spawnDepth: 1,
+      spawnedBy: "agent:main:main",
+    });
+    const process = createProcessSessionFixture({ id: "visible", backgrounded: true });
+    Object.assign(process, { agentId: "main", sessionKey, notifyOnExit: true });
+    await prepareAdoptedDurableProcessNotification(process, "visible");
+    expect(process.notifySessionTarget?.sessionId).toBe("visible");
+    expect(process.notifyOnExit).toBe(true);
+  });
+});

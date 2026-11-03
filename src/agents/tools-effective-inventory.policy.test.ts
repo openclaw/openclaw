@@ -233,10 +233,23 @@ describe("tool access diagnostics", () => {
     tools?: OpenClawConfig["tools"];
     inheritedToolDeny?: string[];
     available: boolean;
+    /** Built-in sub-agent denies or a configured allowlist exclude gateway and session tools. */
+    coordinationToolsExcluded?: boolean;
   }>([
     { name: "visible spawn", kind: "dashboard", createdVia: "spawn", available: true },
-    { name: "hidden helper", kind: "subagent", createdVia: "spawn", available: false },
-    { name: "unstamped dashboard child", kind: "dashboard", available: false },
+    {
+      name: "hidden helper",
+      kind: "subagent",
+      createdVia: "spawn",
+      available: false,
+      coordinationToolsExcluded: true,
+    },
+    {
+      name: "unstamped dashboard child",
+      kind: "dashboard",
+      available: false,
+      coordinationToolsExcluded: true,
+    },
     {
       name: "configured subagent deny",
       kind: "dashboard",
@@ -250,6 +263,7 @@ describe("tool access diagnostics", () => {
       createdVia: "spawn",
       tools: { subagents: { tools: { allow: ["read"] } } },
       available: false,
+      coordinationToolsExcluded: true,
     },
     {
       name: "inherited deny",
@@ -258,7 +272,7 @@ describe("tool access diagnostics", () => {
       inheritedToolDeny: ["message"],
       available: false,
     },
-  ])("resolves message availability for $name", async (scenario) => {
+  ])("resolves message and session tool availability for $name", async (scenario) => {
     const dir = sessionDirs.make();
     const sessionKey = `agent:assistant:${scenario.kind}:child`;
     const storePath = path.join(dir, "agents/assistant/sessions/sessions.json");
@@ -292,7 +306,7 @@ describe("tool access diagnostics", () => {
       scenario.available ? "available" : "excluded",
     );
     for (const tool of ["gateway", "session_status", "sessions_send", "conversations_send"]) {
-      expect(toolNames).not.toContain(tool);
+      expect(toolNames.includes(tool), tool).toBe(!scenario.coordinationToolsExcluded);
     }
   });
 });
