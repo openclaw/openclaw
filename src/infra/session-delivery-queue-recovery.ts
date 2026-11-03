@@ -66,11 +66,9 @@ async function finalizeSessionDeliverySettlement(params: {
     phase = `${params.outcome} finalization`;
     await (params.outcome === "recovered"
       ? completeSessionDelivery(params.entry.id, params.queueContext)
-      : moveSessionDeliveryToFailed(
-          params.entry.id,
-          params.queueContext,
-          params.keepFailedReceipt ? { keepFailedReceipt: true } : undefined,
-        ));
+      : moveSessionDeliveryToFailed(params.entry.id, params.queueContext, {
+          keepFailedReceipt: params.keepFailedReceipt,
+        }));
     return true;
   } catch (error) {
     params.log.error(`session delivery: ${phase} failed for ${params.entry.id}: ${String(error)}`);

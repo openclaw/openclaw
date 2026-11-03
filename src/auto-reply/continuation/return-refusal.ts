@@ -42,6 +42,8 @@ export async function refuseContinuationReturnDelivery(
     return;
   }
   // One write from the pending row to its receipt, with no settlement marked first: if it is lost,
-  // the row stays pending and replay refuses it again (authority epochs never come back).
+  // the row stays pending and replay decides it again (authority epochs never come back). Accepted
+  // edge: a boundary that removes the row between the load and this write makes the write fail
+  // visibly; the next boundary to see the return finds no row.
   await moveSessionDeliveryToFailed(deliveryId, context, { keepFailedReceipt: true });
 }

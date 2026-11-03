@@ -42,8 +42,9 @@ describe.skipIf(!mixedAgentConnection)("PostgreSQL receipt deadlines", () => {
           ]) {
             upsert({ queueName, status: "completed", entry: receipt }, database);
           }
+          // A failed receipt's deadline falls between the bounded and ordinary ones.
           const failed = {
-            ...entry("failed", nowMs - 30 * 86_400_000 + 10),
+            ...entry("failed", nowMs - 30 * 86_400_000 + 8),
             recoveryState: "failed_receipt",
           };
           upsert({ queueName, status: "failed", entry: failed }, database);
@@ -51,11 +52,12 @@ describe.skipIf(!mixedAgentConnection)("PostgreSQL receipt deadlines", () => {
         pruneAt();
         pruneAt(6);
         expect(load("bounded-sooner")).toBeNull();
-        expect(load("ordinary")).not.toBeNull();
+        expect([load("failed"), load("ordinary")]).not.toContain(null);
         pruneAt(10);
-        expect([load("ordinary"), load("failed")]).not.toContain(null);
+        expect(load("failed")).toBeNull();
+        expect(load("ordinary")).not.toBeNull();
         pruneAt(11);
-        expect([load("ordinary"), load("failed")]).toEqual([null, null]);
+        expect(load("ordinary")).toBeNull();
         expect(load("bounded-huge")).not.toBeNull();
         prune(database);
         expect(load("bounded-huge")).not.toBeNull();
