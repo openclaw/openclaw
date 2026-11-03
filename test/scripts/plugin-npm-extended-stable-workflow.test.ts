@@ -729,7 +729,12 @@ ${policy}`,
 
   it.each([
     ["canonical protected recovery", {}, true, ""],
-    ["non-protected workflow ref", { workflowRef: "refs/heads/main" }, false, "--ref release-publish/"],
+    [
+      "non-protected workflow ref",
+      { workflowRef: "refs/heads/main" },
+      false,
+      "--ref release-publish/",
+    ],
     [
       "tooling outside current main",
       { toolingReachable: false },
@@ -790,13 +795,16 @@ ${policy}`,
       false,
       "requires publish_scope=selected with an explicit plugin list",
     ],
-  ] as const)("enforces regular OIDC recovery boundary: %s", (_name, overrides, admitted, error) => {
-    const result = runTrustedPublisherPreflightPolicy(overrides);
-    expect(result.status, result.stderr).toBe(admitted ? 0 : 1);
-    if (!admitted) {
-      expect(result.stderr).toContain(error);
-    }
-  });
+  ] as const)(
+    "enforces regular OIDC recovery boundary: %s",
+    (_name, overrides, admitted, error) => {
+      const result = runTrustedPublisherPreflightPolicy(overrides);
+      expect(result.status, result.stderr).toBe(admitted ? 0 : 1);
+      if (!admitted) {
+        expect(result.stderr).toContain(error);
+      }
+    },
+  );
 
   it("binds preflight to an exact source SHA without release-publish approval", () => {
     const preview = workflow().jobs?.preview_plugins_npm;
@@ -1003,6 +1011,8 @@ ${policy}`,
             RELEASE_CANDIDATE_BRANCH: "",
             SOURCE_REF: "a".repeat(40),
             NPM_DIST_TAG: "default",
+            PUBLISH_SCOPE: "selected",
+            RELEASE_PLUGINS: "@openclaw/example",
           },
         },
       );
