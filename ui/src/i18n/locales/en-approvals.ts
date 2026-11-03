@@ -53,7 +53,7 @@ const enApprovals = {
   approvalPage: {
     brandName: "OpenClaw",
     eyebrow: "Operator approval",
-    loadingTitle: "Loading approval",
+    loadingTitle: "Loading approval…",
     loadingDescription: "Checking the current approval state with the Gateway.",
     unavailableTitle: "Approval unavailable",
     unavailableDescription:

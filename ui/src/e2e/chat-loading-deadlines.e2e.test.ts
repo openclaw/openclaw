@@ -218,10 +218,12 @@ suite.define(() => {
         expect(await gateway.getSocketCount()).toBe(1);
         expect(await composer.inputValue()).toBe(draft);
         if (method === "chat.startup") {
-          expect(await page.locator(".chat-history-error").textContent()).toContain("timed out");
+          expect(await page.locator(".chat-history-error").textContent()).toContain(
+            "Couldn’t load the conversation in time.",
+          );
           expect(await retry.isEnabled()).toBe(true);
           expect(
-            await page.getByRole("button", { name: "Loading chat", exact: true }).count(),
+            await page.getByRole("button", { name: "Loading conversation…", exact: true }).count(),
           ).toBe(0);
           const send = page.locator(".chat-send-btn--send");
           expect(await send.isEnabled()).toBe(true);

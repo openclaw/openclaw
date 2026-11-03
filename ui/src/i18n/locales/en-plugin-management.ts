@@ -206,7 +206,7 @@ const enPluginManagement = {
       search: "Search settings",
       navigation: "Settings sections",
       other: "Other",
-      noMatches: "No matching settings.",
+      noMatches: "No settings match your search.",
       empty: "This plugin has no configurable settings.",
       permissions: "Permissions",
       actions: "Actions for {name}",

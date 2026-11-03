@@ -87,7 +87,7 @@ describe("cron view run history", () => {
         const onRefresh = vi.fn();
         const container = await renderView({ runsState, runsQuery, onRefresh });
         expect(container.textContent).not.toContain("No runs yet");
-        expect(container.textContent).not.toContain("No matching runs.");
+        expect(container.textContent).not.toContain("No runs match your filters.");
         expect(container.querySelector('[data-test-id="cron-runs-loading"]') !== null).toBe(
           runsState === "pending",
         );
@@ -115,7 +115,9 @@ describe("cron view run history", () => {
     expect(empty.querySelector(".cron-empty-state")?.textContent).toContain("No runs yet");
 
     const filtered = await renderView({ runsQuery: "fail" });
-    expect(filtered.querySelector(".cron-runs__empty")?.textContent).toContain("No matching runs.");
+    expect(filtered.querySelector(".cron-runs__empty")?.textContent).toContain(
+      "No runs match your filters.",
+    );
   });
 
   it("redacts and escapes server-provided suppression text in run facts", async () => {

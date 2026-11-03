@@ -56,7 +56,7 @@ const enTranscripts = {
     search: "Search",
     clearSearch: "Clear search",
     searchResults: "Matching utterances for “{query}” across this transcript, loaded in pages.",
-    noMatches: "No matching utterances.",
+    noMatches: "No utterances match your search.",
     noUtterances: "No utterances have been saved in this transcript.",
     download: { markdown: "Download Markdown", jsonl: "Download JSONL" },
     exportError:

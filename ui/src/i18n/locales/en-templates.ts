@@ -26,7 +26,7 @@ const enTemplates = {
     categoryOther: "Other",
     search: "Search Templates",
     searchPlaceholder: "Search Templates",
-    loading: "Loading Templates...",
+    loading: "Loading templates…",
     empty: "No Templates found.",
     unavailable: "ClawHub discovery is unavailable. Try again.",
     disabled: "Templates is disabled. Enable it in Settings → Labs to explore Templates.",
@@ -68,7 +68,7 @@ const enTemplates = {
     reviewTitle: "Review before adding",
     reviewDescription: "This Template needs permission to add the following plugins or skills.",
     version: "Version {version}",
-    contentsLoading: "Loading Template contents",
+    contentsLoading: "Loading template contents…",
     noVersion: "This Template has no published release yet.",
   },
   templatesTrustWarning: {

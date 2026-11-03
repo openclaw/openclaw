@@ -125,7 +125,7 @@ const enNewSessionSetup = {
     browserUp: "Parent folder",
     browserUse: "Use this folder",
     browserEmpty: "No subfolders",
-    browserNoMatches: "No matching folders",
+    browserNoMatches: "No folders match your search.",
     browserLoadFailed: "Couldn't list that folder.",
     hiddenFolder: "Hidden folder",
     worktreeUnavailable: "Selected folder is not a Git checkout",
@@ -196,7 +196,7 @@ const enNewSessionSetup = {
     remoteSourceUnavailable:
       "This folder cannot provide a Git checkout. Select New workspace to start empty, or choose a repository.",
     environmentSearchPlaceholder: "Search environments",
-    environmentSearchEmpty: "No matching environments",
+    environmentSearchEmpty: "No environments match your search.",
     gatewayHost: "Gateway host",
     device: "Device",
     environmentDetails: "Show details for {name}",

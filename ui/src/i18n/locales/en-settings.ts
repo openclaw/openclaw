@@ -90,7 +90,7 @@ const enSettings = {
       emoji: "Emoji",
       chooseEmoji: "Choose emoji",
       searchEmoji: "Search emoji…",
-      noEmojiMatches: "No matching emoji",
+      noEmojiMatches: "No emoji match your search.",
       chooseAvatar: "Edit avatar",
       avatarPicker: "Avatar picker",
       avatarPreview: "Avatar preview",

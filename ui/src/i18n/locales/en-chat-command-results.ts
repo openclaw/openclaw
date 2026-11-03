@@ -16,7 +16,7 @@ const enChatCommandResults = {
         failed: "Compaction failed.",
         failedWithReason: "Compaction failed: {reason}",
         tokenSummary: " ({before} -> {after} tokens)",
-        succeeded: "Context compacted successfully",
+        succeeded: "Context compacted",
         skipped: "Compaction skipped.",
         skippedWithReason: "Compaction skipped: {reason}",
       },
