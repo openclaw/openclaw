@@ -101,6 +101,7 @@ export function LazyElementModal(props: {
 export function LazyViewError(props: {
   actionLabel?: string;
   error: unknown;
+  hideDetail?: boolean;
   onClose?: (event: Event) => void;
   onRetry: (event: Event) => void;
   retryRef?: (element: HTMLButtonElement) => void;
@@ -134,7 +135,7 @@ export function LazyViewError(props: {
             </button>
           </>
         }
-        detail={formatUiError(props.error)}
+        detail={props.hideDetail ? undefined : formatUiError(props.error)}
         inline={props.inline ?? Boolean(props.render)}
         stale={props.stale}
       />

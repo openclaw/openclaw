@@ -2257,17 +2257,26 @@ openclaw-approvals-page .data-table-pagination__info {
   min-height: 28px;
   margin-inline-start: 24px;
   padding: 0 9px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   color: var(--text);
 }
 
 .settings-sidebar__subitem:hover {
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  background: var(--surface-hover);
 }
 
 .settings-sidebar__subitem--active {
   color: var(--text-strong);
-  background: color-mix(in srgb, var(--accent-subtle) 72%, transparent);
+  background: var(--surface-selected);
+}
+
+.settings-sidebar__subitem--active:hover {
+  background: var(--surface-selected-hover);
+}
+
+/* One selected row: the section you jumped to, not it and its page. */
+.settings-sidebar__item--active:not(:hover):has(~ .settings-sidebar__subitem--active) {
+  background: transparent;
 }
 
 .settings-sidebar__subitem-label {
