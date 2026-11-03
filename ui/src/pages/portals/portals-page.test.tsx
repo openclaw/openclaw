@@ -34,7 +34,12 @@ const portal = {
   createdAtMs: 1_000,
 } satisfies Protocol.PortalSummary;
 type Request = (method: string, params: Record<string, unknown>) => Promise<unknown>;
-function createContext(methods: string[] | null, request: Request, scopes = ["operator.write"]) {
+function createContext(
+  methods: string[] | null,
+  request: Request,
+  scopes = ["operator.write"],
+  gatewayUrl = "wss://gateway.example.test:18789/control",
+) {
   const requestMock = vi.fn(request);
   const { gateway, publish, publishEvent } = createApplicationGateway();
   const hello = gatewayHelloForMethods(methods ?? [], scopes);
@@ -49,7 +54,7 @@ function createContext(methods: string[] | null, request: Request, scopes = ["op
     hello,
     sessionKey: "main",
   });
-  gateway.connection.gatewayUrl = "wss://gateway.example.test:18789/control";
+  gateway.connection.gatewayUrl = gatewayUrl;
   return {
     context: { gateway } as unknown as ApplicationContext,
     updateSnapshot,
@@ -560,6 +565,36 @@ it("does not publish a late probe from the previous Gateway", async () => {
   expectText(page).toContain("Portal not reachable from this browser");
   expect(probePortalReachable).toHaveBeenCalledTimes(2);
 });
+it("treats a .localhost gateway as this machine instead of requiring remote ingress", async () => {
+  probePortalReachable.mockResolvedValue("reachable");
+  const source = createContext(
+    ["portal.list", "ui.command.result"],
+    async (method) =>
+      method === "portal.list"
+        ? portalResponse({
+            ...portal,
+            publicUrl: "http://127.0.0.1:43123/",
+            url: "http://127.0.0.1:43123/?openclaw_portal=synthetic",
+          })
+        : { ok: true },
+    ["operator.write"],
+    "ws://openclaw.localhost:18789/control",
+  );
+
+  const { page } = await mountPage(source.context, portal.id);
+  toggle(page, { portalId: portal.id, requestId: "request-one" });
+
+  // The reported symptom: a loopback portal behind a .localhost gateway was reported as
+  // needing remote ingress instead of being probed from this browser.
+  // The reported symptom: a loopback portal behind a .localhost gateway was reported as
+  // needing remote ingress instead of being decided from this browser.
+  await waitForSolid(() =>
+    expectReceipt(source, "request-one", "new-tab-required", "new-tab-required"),
+  );
+  expect(page.textContent).not.toContain("Remote portal ingress required");
+  expect(page.textContent).not.toContain("Remote portal ingress required");
+});
+
 it.each([
   ["http://127.0.0.1:43123/", "reachable", "blocked", "remote-ingress-required"],
   ["http://preview.example.test:43123/", "reachable", "new-tab-required", "new-tab-required"],
