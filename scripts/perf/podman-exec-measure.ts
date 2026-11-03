@@ -4,17 +4,20 @@
  *   --root /absolute/scratch/run-a --commands 20 --report report.json
  * Run >=5 serial A/B pairs plus A/A controls with the same command count. Use
  * --source-root for a pinned baseline checkout and --verify-binding on the fix.
+ * --compare-source BASE prepares both sources once, then interleaves their turns
+ * through IPC. Pass the same source twice for A/A; retain both arms' raw reports.
  * --cpu-profile captures only warm main-thread execution. Preparation is reported separately;
  * measured turns run both shell and exec-spec paths through real child processes.
  * Workspace/database size does not affect this path: no workspace scan occurs.
  * This qualifies spawn overhead, not Podman/btrfs or full Gateway turn latency.
  */
 import assert from "node:assert/strict";
+import { fork, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { getHeapStatistics } from "node:v8";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.ts";
@@ -27,6 +30,8 @@ const { values } = parseArgs({
     turns: { type: "string", default: "5" },
     report: { type: "string", default: "report.json" },
     "source-root": { type: "string", default: process.cwd() },
+    "compare-source": { type: "string" },
+    worker: { type: "boolean", default: false },
     "verify-binding": { type: "boolean", default: false },
     "cpu-profile": { type: "boolean", default: false },
   },
@@ -38,6 +43,127 @@ const turns = Number(values.turns);
 assert(Number.isSafeInteger(commands) && commands > 0);
 assert(Number.isSafeInteger(turns) && turns > 0);
 fs.mkdirSync(root);
+type Metrics = Awaited<ReturnType<typeof measure>>["metrics"];
+type WorkerMessage = { kind: "ready"; preparation: Metrics } | { kind: "sample"; metrics: Metrics };
+
+function nextMessage(child: ChildProcess): Promise<WorkerMessage> {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return Promise.reject(new Error("Measurement child already exited"));
+  }
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      child.off("message", received);
+      child.off("error", failed);
+      child.off("exit", exited);
+    };
+    const received = (message: WorkerMessage) => {
+      cleanup();
+      resolve(message);
+    };
+    const failed = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    const exited = (code: number | null) =>
+      failed(new Error(`Measurement child exited before replying (${code})`));
+    child.once("message", received);
+    child.once("error", failed);
+    child.once("exit", exited);
+  });
+}
+
+async function compareSources() {
+  const children: Array<{ child: ChildProcess; exited: Promise<number | null> }> = [];
+  const arms: Array<{ sourceRoot: string; preparation: Metrics; samples: Metrics[] }> = [];
+  try {
+    for (const [index, sourceRoot] of [
+      values["compare-source"]!,
+      values["source-root"]!,
+    ].entries()) {
+      const child = fork(
+        fileURLToPath(import.meta.url),
+        [
+          "--worker",
+          "--root",
+          path.join(root, index === 0 ? "baseline" : "candidate"),
+          "--source-root",
+          sourceRoot,
+          "--commands",
+          String(commands),
+          "--turns",
+          String(turns),
+          ...(values["cpu-profile"] ? ["--cpu-profile"] : []),
+          ...(index === 1 && values["verify-binding"] ? ["--verify-binding"] : []),
+        ],
+        { stdio: ["ignore", "ignore", "inherit", "ipc"] },
+      );
+      children.push({
+        child,
+        exited: new Promise((resolve) => {
+          child.once("exit", resolve);
+        }),
+      });
+      const ready = await nextMessage(child);
+      assert(ready.kind === "ready");
+      arms.push({ sourceRoot, preparation: ready.preparation, samples: [] });
+    }
+    for (let turn = 0; turn < turns; turn++) {
+      for (const [index, { child }] of children.entries()) {
+        const reply = nextMessage(child);
+        child.send("turn");
+        const sample = await reply;
+        assert(sample.kind === "sample");
+        arms[index]!.samples.push(sample.metrics);
+      }
+    }
+    // Keep both prepared owners alive until the last measured turn has finished.
+    for (const { child } of children) {
+      child.send("finish");
+    }
+    for (const { exited } of children) {
+      assert.equal(await exited, 0);
+    }
+    const report = {
+      order: "AB",
+      pairs: turns,
+      commandsPerTurn: commands * 2,
+      baseline: arms[0],
+      candidate: arms[1],
+    };
+    fs.writeFileSync(path.resolve(root, values.report!), JSON.stringify(report, null, 2));
+    console.log(JSON.stringify(report));
+  } finally {
+    for (const { child } of children) {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill();
+      }
+    }
+    await Promise.all(children.map(({ exited }) => exited));
+  }
+}
+
+async function waitForCommand(expected: "turn" | "finish") {
+  assert(process.connected, "Measurement coordinator disconnected");
+  const command = await new Promise<unknown>((resolve, reject) => {
+    const received = (message: unknown) => {
+      process.off("disconnect", disconnected);
+      resolve(message);
+    };
+    const disconnected = () => {
+      process.off("message", received);
+      reject(new Error("Measurement coordinator disconnected"));
+    };
+    process.once("message", received);
+    process.once("disconnect", disconnected);
+  });
+  assert.equal(command, expected);
+}
+
+if (values["compare-source"]) {
+  assert(!values.worker);
+  await compareSources();
+  process.exit(0);
+}
 const workspace = path.join(root, "workspace");
 const bin = path.join(root, "bin");
 for (const directory of [workspace, bin, path.join(root, "tmp")]) {
@@ -239,8 +365,14 @@ try {
   profiler?.connect();
   await profiler?.post("Profiler.enable");
   await profiler?.post("Profiler.start");
+  if (values.worker) {
+    process.send!({ kind: "ready", preparation: prepared.metrics });
+  }
   const samples = [];
   for (let turn = 0; turn < turns; turn++) {
+    if (values.worker) {
+      await waitForCommand("turn");
+    }
     global.gc?.();
     samples.push(
       (
@@ -252,6 +384,12 @@ try {
         })
       ).metrics,
     );
+    if (values.worker) {
+      process.send!({ kind: "sample", metrics: samples.at(-1) });
+    }
+  }
+  if (values.worker) {
+    await waitForCommand("finish");
   }
   if (profiler) {
     const { profile } = await profiler.post("Profiler.stop");
@@ -296,4 +434,7 @@ try {
   await (
     await import(source("src/shared/global-singleton.ts"))
   ).drainGlobalSingletonLifecycleState();
+  if (process.connected) {
+    process.disconnect?.();
+  }
 }
