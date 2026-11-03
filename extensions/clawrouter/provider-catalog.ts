@@ -147,6 +147,7 @@ function parseCatalogInput(value: unknown): Array<"text" | "image"> | undefined 
 }
 
 function parseCatalogProvider(value: unknown): CatalogProvider | undefined {
+  // SAFETY: readCatalogRows constructs every cached row with its parsed HTTP-offer array.
   const envelope = value as { provider: unknown; nativeHttpOffers: ClawRouterCapabilityOffer[] };
   const row = asOptionalRecord(envelope.provider);
   const id = normalizeOptionalString(row?.id);
