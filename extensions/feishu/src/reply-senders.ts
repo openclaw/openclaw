@@ -24,6 +24,7 @@ import {
   createFeishuReplyDeliveryResult,
   mergeFeishuReplyDeliveryResults,
   type FeishuReplyDeliveryResult,
+  type FeishuReplyDeliveryResultWithFinalization,
   type FeishuReplyDeliverySource,
 } from "./reply-delivery-result.js";
 import { getFeishuRuntime } from "./runtime.js";
@@ -34,6 +35,17 @@ import {
   type CardHeaderConfig,
 } from "./send.js";
 import { combineFeishuStreamText, formatReasoningPrefix } from "./streaming-update.js";
+
+/**
+ * A block's post or card: its text, its delivery and where it came from. A fallback card reports
+ * a failure after its first chunk through its own block, and a card the close recovered for the
+ * opening prose was created after every post that preceded that close.
+ */
+export type FeishuBlockPostDelivery = [
+  string,
+  Promise<FeishuReplyDeliveryResult>,
+  ("fallback" | "close")?,
+];
 
 type FeishuReplySenderContext = {
   core: ReturnType<typeof getFeishuRuntime>;
@@ -50,8 +62,12 @@ type FeishuReplySenderContext = {
   requiredMentionTargets?: MentionTarget[];
   markVisibleReplySent: () => void;
   deliveredFinalTexts: Set<string>;
-  blockPostDeliveries: [string, Promise<FeishuReplyDeliveryResult>, "fallback"?][];
+  blockPostDeliveries: FeishuBlockPostDelivery[];
   rememberStreamingSettlement: (content: string, result: FeishuReplyDeliveryResult) => void;
+  /** Hands a block post's receipt to the close, or nothing when an earlier block awaits it. */
+  settleWithClose: (
+    result: FeishuReplyDeliveryResult,
+  ) => FeishuReplyDeliveryResultWithFinalization | undefined;
   tableNeedsPostPath: (value: string) => boolean;
   answerTableNeedsPostPath: (value: string) => boolean;
   resolveCardChrome: () => { header?: CardHeaderConfig; note?: string };
@@ -270,6 +286,11 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
     if (matchingBlocks?.length) {
       return (async () => {
         const accepted: FeishuReplyDeliveryResult[] = [];
+        // The walk matches the card the close recovered for the opening prose first, since its
+        // text comes first, but that card was created after every post it passes, so on the
+        // block route its receipt follows theirs. Off keeps its receipts in walk order.
+        const recovered: FeishuReplyDeliveryResult[] = [];
+        const byCreation = answerTableNeedsPostPath(blockAnswerText);
         let remaining = blockAnswerText;
         let answerComplete = false;
         let fallbackFailure: unknown;
@@ -295,9 +316,10 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
               block = error.deliveryResult;
               fallbackFailure = error.cause ?? error;
             }
-            accepted.push(block);
+            (origin === "close" && byCreation ? recovered : accepted).push(block);
             remaining = remaining.slice(blockText.length).replace(/^\s*\n/u, "");
           }
+          accepted.push(...recovered.splice(0));
           if (accepted.length === 0) {
             return await send();
           }
@@ -336,7 +358,11 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
           }
           throw createFeishuPartialReplyDeliveryError(
             partial && error instanceof Error ? (error.cause ?? error) : error,
-            mergeFeishuReplyDeliveryResults([...accepted, ...(partial ? [partial] : [])]),
+            mergeFeishuReplyDeliveryResults([
+              ...accepted,
+              ...recovered,
+              ...(partial ? [partial] : []),
+            ]),
           );
         }
         const settled = mergeFeishuReplyDeliveryResults(accepted);
@@ -356,6 +382,9 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
   };
 
   let leadingPreview = false;
+  // Set beside it: the first post left previewed prose on the card on the block route, so that
+  // post reports the close that settles the prose and the tail.
+  let previewAdoptsClose = false;
   const leadingBlockProse = (answer: string, reasoning = "") => {
     const first = blockPostDeliveries[0];
     const at = leadingPreview && first ? answer.indexOf(first[0]) : -1;
@@ -377,7 +406,8 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
       // The card is the prose's receipt whenever it shows accepted content, and a close
       // that failed around that content is reported after the rest of the answer went
       // out. A card that shows nothing it can vouch for hands the prose to a card of
-      // its own at the head of the receipts, which can repeat what the card still shows.
+      // its own, which can repeat what the card still shows. The walk matches that card
+      // first, and the block route reports it where it was created.
       settle: async (result: FeishuReplyDeliveryResult, error?: unknown) => {
         if (result.visibleReplySent && result.finalTextAccepted !== false) {
           blockPostDeliveries.unshift([text, Promise.resolve(result)]);
@@ -386,7 +416,7 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
         const recovered = sendChunkedTextReply({ text, useCard: true, infoKind: "block" }).then(
           (card) => mergeFeishuReplyDeliveryResults([result, card]),
         );
-        blockPostDeliveries.unshift([text, recovered]);
+        blockPostDeliveries.unshift([text, recovered, "close"]);
         void recovered.catch(() => undefined);
         return {
           result: await recovered,
@@ -434,6 +464,7 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
         !tableNeedsPostPath(before) &&
         chunkFeishuCardMarkdown(cardChunkOptions(before)).length === 1,
       );
+      previewAdoptsClose = leadingPreview && answerTableNeedsPostPath(text);
     }
     // Prose between posts has no earlier editable message. Put it ahead of the next
     // table now, rather than trying to repair its position after that table is sent.
@@ -448,6 +479,23 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
       answer:
         at >= 0 || preview.includes(text) ? preview : [preview, text].filter(Boolean).join("\n\n"),
     };
+  };
+
+  // With the opening prose and the tail only previewed, the first post is the only caller the
+  // close can report to. Its text is already in the chat, so the completion carries its receipt
+  // alone and never asks the close for a recovery of it.
+  const settleBlockPost = (results: FeishuReplyDeliveryResult[], infoKind?: string) => {
+    const settled = mergeFeishuReplyDeliveryResults(results);
+    const deferred =
+      infoKind === "block" &&
+      previewAdoptsClose &&
+      blockPostDeliveries.length === 1 &&
+      settled.visibleReplySent
+        ? ctx.settleWithClose(
+            createFeishuReplyDeliveryResult({ results: [settled], visibleReplySent: true }),
+          )
+        : undefined;
+    return deferred ? { ...settled, finalization: deferred.finalization } : settled;
   };
 
   const sendMediaReplies = async (
@@ -600,6 +648,7 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
     leadingBlockProse,
     sendChunkedTextReply,
     sendPostReply,
+    settleBlockPost,
     sendMediaReplies,
     ensureNoVisibleReplyFallback,
     ensureVisibleStreamingDelivery,

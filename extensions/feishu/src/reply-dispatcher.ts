@@ -40,7 +40,7 @@ import {
   type FeishuReplyDeliveryResultWithFinalization,
 } from "./reply-delivery-result.js";
 import { streamingStartBackoffUntilByAccount } from "./reply-dispatcher-state.js";
-import { createFeishuReplySenders } from "./reply-senders.js";
+import { createFeishuReplySenders, type FeishuBlockPostDelivery } from "./reply-senders.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { sendCardFeishu } from "./send.js";
 import type { FeishuStreamingSession } from "./streaming-card.js";
@@ -271,7 +271,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   // Partial previews are replaceable; only committed final text may precede an error notice.
   let hasStreamingFinalText = false;
   const deliveredFinalTexts = new Set<string>();
-  const blockPostDeliveries: [string, Promise<FeishuReplyDeliveryResult>, "fallback"?][] = [];
+  const blockPostDeliveries: FeishuBlockPostDelivery[] = [];
   type StreamingDisposition = "closed" | "discarded";
   type StreamingCloseOutcome = {
     disposition: StreamingDisposition;
@@ -369,10 +369,13 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     }
     // Answer snapshots and mirrored blocks share authored text until display. Both arrival
     // orders must compare and merge that representation, never a rendered table.
+    // The block route compares only after this message has streamed a snapshot: a block with
+    // no partial of its own right after an assistant-message boundary is the new message's
+    // text even when it equals the tail of the message before it.
     if (
       nextText === lastPartial ||
       (mode === "delta" &&
-        (tableMode === "off" || answerTableNeedsPostPath(streamText)) &&
+        (tableMode === "off" || (lastPartial !== "" && answerTableNeedsPostPath(streamText))) &&
         coreBlockStreamingEnabled &&
         streamText.endsWith(`\n\n${nextText}`))
     ) {
@@ -679,6 +682,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     leadingBlockProse,
     sendChunkedTextReply,
     sendPostReply,
+    settleBlockPost,
     sendMediaReplies,
     ensureNoVisibleReplyFallback,
     ensureVisibleStreamingDelivery,
@@ -701,6 +705,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     rememberStreamingSettlement: (content, result) => {
       lastStreamingSettlement = { disposition: "closed", result, content };
     },
+    // The close settles previewed prose the card keeps and the tail it posts. A block post
+    // that leaves that prose on the card takes the close's receipt unless an earlier block,
+    // streamed to the card, already awaits it.
+    settleWithClose: (result) =>
+      pendingStreamingDeliveries.length > 0 ? undefined : deferStreamingDelivery(result, "block"),
     tableNeedsPostPath,
     answerTableNeedsPostPath,
     resolveCardChrome,
@@ -1223,9 +1232,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 tableNeedsPost
                   ? await prepareBlockPost(streamText, text)
                   : undefined;
-              if (post) {
-                streamText = post.answer;
-              }
+              streamText = post?.answer ?? streamText;
               await collectDelivery(
                 sendPostReply(post?.text ?? text, info?.kind, firstChunkMentions, {
                   authoredText: post?.text ?? authoredFallbackText,
@@ -1254,8 +1261,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           }
           // No content override here either. A fallback whose conversion the cut could not
           // carry sends the authored prose instead, and the merge already reports what the
-          // senders accepted rather than what this branch asked them for.
-          return mergeFeishuReplyDeliveryResults(deliveredResults);
+          // senders accepted rather than what this branch asked them for. A post that left
+          // previewed prose on the card also settles with the close.
+          return settleBlockPost(deliveredResults, info?.kind);
         }
         const matchingClosingStream =
           inFlightStreamingClose !== undefined && closingStreamingText === text;

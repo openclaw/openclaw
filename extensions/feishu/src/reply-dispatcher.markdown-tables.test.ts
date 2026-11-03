@@ -37,6 +37,7 @@ const {
   sendStructuredCardFeishuMock,
   settleWithoutPreviewCard,
   streamingInstances,
+  streamingUpdateTexts,
   tableCfg,
   tableMarkdown,
   toTypingDispatcherOptions,
@@ -215,6 +216,142 @@ describe("createFeishuReplyDispatcher markdown table modes", () => {
     const receipts = (await Promise.all(settled)).map((delivered) => delivered?.messageIds);
     expect(receipts).toEqual([ids, ["om-1"], ids, ...(settle === "final" ? [ids] : [])]);
   });
+
+  // A block with no partial of its own right after an assistant-message boundary is the new
+  // message's text even when it equals the previewed tail of the message before it, while a block
+  // equal to the tail its own message previewed is still the mirror the close posts once.
+  it.each(
+    undrawableTableShapes.flatMap(({ shape, text, posted }) =>
+      (["tail", "table"] as const).map((boundary) => [shape, boundary, text, posted] as const),
+    ),
+  )(
+    "dedupes a %s block tail only within its assistant message, boundary before the %s",
+    async (_, boundary, table, posted) => {
+      createBlockTableHarness(tableCfg("block"));
+      const { visible, watch } = trackChat();
+      const reader = [{ openId: "ou_reader", name: "Reader", key: "@reader" }];
+      const harness = { accountId: "main", cfg: tableCfg("block"), mentionTargets: reader };
+      const { result, options } = createDispatcherHarness(harness);
+      const opening = "Reading the roster.";
+      const tail = "Roster complete.";
+      if (boundary === "table") {
+        result.replyOptions.onPartialReply?.({ text: opening });
+        result.replyOptions.onAssistantMessageStart?.();
+      }
+      result.replyOptions.onPartialReply?.({ text: table });
+      const post = await options.deliver({ text: table }, { kind: "block" });
+      result.replyOptions.onPartialReply?.({ text: `${table}\n\n${tail}` });
+      if (boundary === "tail") {
+        result.replyOptions.onAssistantMessageStart?.();
+      }
+      const block = await options.deliver({ text: tail }, { kind: "block" });
+      watch();
+      await options.onIdle?.();
+      // A block without a partial of its own appends as a delta, so the new tail follows the old.
+      const chat =
+        boundary === "tail"
+          ? [
+              ["om-1", posted, reader],
+              ["om-2", `${tail}${tail}`, reader],
+            ]
+          : [
+              ["om_stream", opening, undefined],
+              ["om-1", posted, reader],
+              ["om-2", tail, reader],
+            ];
+      expect(visible().map(({ id, text, mentions }) => [id, text, mentions])).toEqual(chat);
+      // A table post under a card that keeps previewed prose settles with the close as well.
+      expect(post?.messageIds).toEqual(["om-1"]);
+      expect((await post?.finalization)?.messageIds).toEqual(
+        boundary === "table" ? chat.map(([id]) => id) : undefined,
+      );
+      expect((await block?.finalization)?.messageIds).toEqual(chat.map(([id]) => id));
+    },
+  );
+
+  // With the opening prose and the tail only previewed, the table post is the only caller, so its
+  // receipt settles with the close that keeps the prose card and posts the tail.
+  it.each(
+    undrawableTableShapes.flatMap(({ shape, text, posted }) =>
+      (["idle", "final"] as const).map((settle) => [shape, settle, text, posted] as const),
+    ),
+  )(
+    "settles a previewed reply around a %s block table through its post, %s",
+    async (_, settle, table, posted) => {
+      createBlockTableHarness(tableCfg("block"));
+      const { visible, watch } = trackChat();
+      const reader = [{ openId: "ou_reader", name: "Reader", key: "@reader" }];
+      const harness = { accountId: "main", cfg: tableCfg("block"), mentionTargets: reader };
+      const { result, options } = createDispatcherHarness(harness);
+      const parts = ["Here is the roster for the team.", table, "Roster complete."];
+      result.replyOptions.onPartialReply?.({ text: parts[0] });
+      watch();
+      result.replyOptions.onPartialReply?.({ text: parts.slice(0, 2).join("\n\n") });
+      const post = await options.deliver({ text: table }, { kind: "block" });
+      result.replyOptions.onPartialReply?.({ text: parts.join("\n\n") });
+      const final =
+        settle === "final"
+          ? await options.deliver({ text: parts.join("\n\n") }, { kind: "final" })
+          : undefined;
+      await options.onIdle?.();
+      const ids = ["om_stream", "om-1", "om-2"];
+      expect(visible().map(({ id, text, mentions }) => [id, text, mentions])).toEqual([
+        [ids[0], parts[0], undefined],
+        [ids[1], posted, reader],
+        [ids[2], parts[2], reader],
+      ]);
+      expect(post?.messageIds).toEqual(["om-1"]);
+      expect((await post?.finalization)?.messageIds).toEqual(ids);
+      if (settle === "final") {
+        expect(final?.messageIds).toEqual(ids);
+      }
+    },
+  );
+
+  // The card the close recovers for rejected opening prose is created after the table post, so
+  // the settled receipts name the post before it.
+  it.each(undrawableTableShapes.map(({ shape, text, posted }) => [shape, text, posted] as const))(
+    "orders a recovered prose card after the %s block table post",
+    async (_, table, posted) => {
+      createBlockTableHarness(tableCfg("block"));
+      const { cardEntry, visible, watch } = trackChat();
+      const reader = [{ openId: "ou_reader", name: "Reader", key: "@reader" }];
+      const harness = { accountId: "main", cfg: tableCfg("block"), mentionTargets: reader };
+      const { result, options } = createDispatcherHarness(harness);
+      const parts = ["Here is the roster for the team.", table, "Roster complete."];
+      const settled: Promise<unknown>[] = [];
+      for (const [index, text] of parts.entries()) {
+        result.replyOptions.onPartialReply?.({ text: parts.slice(0, index + 1).join("\n\n") });
+        if (index === 0) {
+          watch();
+        }
+        const delivery = await options.deliver({ text }, { kind: "block" });
+        settled.push(
+          (delivery?.finalization ?? Promise.resolve(delivery)).then(
+            (delivered) => delivered?.messageIds,
+            (error: unknown) => ({
+              rejected: isChannelPartialDeliveryError(error) && error.deliveryResult.messageIds,
+            }),
+          ),
+        );
+      }
+      requireStreamingInstance().closeWithResult.mockImplementationOnce(async () => {
+        cardEntry.text = streamingUpdateTexts().at(-1) ?? "";
+        throw new Error("note token rejected");
+      });
+      const ids = ["om-1", "oc-1", "om-2"];
+      await expect(options.onIdle?.()).rejects.toMatchObject({
+        deliveryResult: { messageIds: ids },
+      });
+      expect(visible().map(({ id, text }) => [id, text])).toEqual([
+        ["om_stream", parts[0]],
+        ["om-1", posted],
+        ["oc-1", parts[0]],
+        ["om-2", parts[2]],
+      ]);
+      expect(await Promise.all(settled)).toEqual([{ rejected: ids }, ["om-1"], { rejected: ids }]);
+    },
+  );
 
   it.each(
     undrawableTableShapes.flatMap(({ shape, text, posted }) =>
