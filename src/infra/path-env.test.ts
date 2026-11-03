@@ -225,6 +225,27 @@ describe("ensureOpenClawCliOnPath", () => {
     }
   });
 
+  it("preserves significant spaces in an external mise data directory", () => {
+    const { tmp, appCli } = setupAppCliRoot("case-mise-spaces");
+    const miseDataDir = path.join(tmp, "mise ");
+    const exactShims = path.join(miseDataDir, "shims");
+    const trimmedShims = path.join(tmp, "mise", "shims");
+    setDir(exactShims);
+    setDir(trimmedShims);
+    resetBootstrapEnv();
+    process.env.MISE_DATA_DIR = miseDataDir;
+
+    const updated = bootstrapPath({
+      execPath: appCli,
+      cwd: path.join(tmp, "workspace"),
+      homeDir: tmp,
+      platform: "linux",
+    });
+
+    expectPathsAfter(updated, "/usr/bin", [exactShims]);
+    expect(updated).not.toContain(trimmedShims);
+  });
+
   it("only appends project-local node_modules/.bin when enabled via the environment", () => {
     const { tmp, appCli } = setupAppCliRoot("case-project-local");
     const localBinDir = path.join(tmp, "node_modules", ".bin");
@@ -383,6 +404,9 @@ describe("ensureOpenClawCliOnPath", () => {
 
   it("ignores relative package-manager env roots", () => {
     const { tmp, appCli } = setupAppCliRoot("case-package-manager-relative");
+    for (const dir of [".", "bin", "npm-prefix/bin", "trojan/shims", "trojan-bin"]) {
+      setDir(path.join(tmp, dir));
+    }
     resetBootstrapEnv("/usr/bin:/bin");
     process.env.PNPM_HOME = ".";
     process.env.NPM_CONFIG_PREFIX = "npm-prefix";

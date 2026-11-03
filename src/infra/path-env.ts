@@ -144,13 +144,14 @@ function candidateBinDirs(existingPathParts: ReadonlySet<string>): {
   if (npmPrefix) {
     append.push(path.join(npmPrefix, "bin"));
   }
-  const miseDataDir = normalizeTrustedPackageManagerRoot({
-    value: resolveMiseDataDir({ homeDir, platform }),
+  // Validate the complete candidate so significant spaces in the data root survive.
+  const miseShims = normalizeTrustedPackageManagerRoot({
+    value: path.join(resolveMiseDataDir({ homeDir, platform }), "shims"),
     cwd,
     homeDir,
   });
-  if (miseDataDir) {
-    append.push(path.join(miseDataDir, "shims"));
+  if (miseShims) {
+    append.push(miseShims);
   }
   if (platform === "darwin") {
     append.push(
