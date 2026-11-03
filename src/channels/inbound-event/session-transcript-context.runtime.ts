@@ -144,7 +144,7 @@ export async function mergeSessionTranscriptContext(params: {
     limit,
     // A session-generated window must retain delivered close-outs alongside
     // their questions. Native channel windows already own their delivery history.
-    ...(windows.length === 0 && options?.chatWindow === true
+    ...(windows.length === 0
       ? { includeCronDirectDeliveryContext: true, includeMessageToolSourceReplies: true }
       : {}),
     ...((options?.beforeTimestampMs ?? params.ctx.Timestamp) !== undefined
