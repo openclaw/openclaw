@@ -395,6 +395,15 @@ openclaw-appearance-background .settings-background-preview .session-background_
   column-gap: var(--space-5);
 }
 
+.settings-section__header[hidden] {
+  display: none;
+}
+
+/* With no heading or description to sit beside, the help keeps the heading's place at the end. */
+.settings-section__header:not(:has(.settings-section__heading, .settings-section__copy)) {
+  justify-content: flex-end;
+}
+
 .settings-section__heading {
   margin: 0;
   font-size: var(--control-ui-text-xs);

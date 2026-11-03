@@ -224,6 +224,9 @@ export function Config(props: ConfigProps) {
       analysis,
       unsupportedActivePaths,
       rawAvailable,
+      activeTabLabel: showSectionTabs
+        ? topTabs.find((tab) => tab.key === props.activeSection)?.label
+        : undefined,
       openRaw: showModeToggle && rawAvailable ? () => props.onFormModeChange("raw") : undefined,
       rawDraftPending,
       formMode,
@@ -457,6 +460,7 @@ export function Config(props: ConfigProps) {
         value={props.formValue}
         embedded={props.embeddedEditor === true || state().showSetup}
         rawAvailable={state().rawAvailable}
+        repeatedHeadings={[props.navRootLabel, state().activeTabLabel]}
         onOpenRaw={state().openRaw}
         disabled={state().formBusy || !props.formValue || !state().mutationAllowed}
         unsupportedPaths={state().analysis.unsupportedPaths}
