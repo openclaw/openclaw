@@ -591,17 +591,53 @@ describe("observed browser dialogs", () => {
     observed.cleanup();
   });
 
-  it("does not arm next-dialog responses when the expiry would overflow Date bounds", () => {
+  it("answers the armed prompt when wall time jumps before the elapsed deadline", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    vi.setSystemTime(0);
+    const { arm, observe, emitAll: emit, dialogs } = observedPage();
+    const observed = observe();
+    const dialog = createDialog({ type: "prompt" });
+    arm({ accept: true, promptText: "synthetic answer", timeoutMs: 1000 });
+    await vi.advanceTimersByTimeAsync(999);
+    vi.setSystemTime(60_000);
+    emit("dialog", dialog);
+    await Promise.resolve();
+
+    expect(dialog.accept).toHaveBeenCalledWith("synthetic answer");
+    expect(observed.signal.aborted).toBe(false);
+    expect(dialogs()).toMatchObject({
+      pending: [],
+      recent: [{ id: "d1", type: "prompt", closedBy: "armed" }],
+    });
+    observed.cleanup();
+  });
+
+  it("expires armed responses by elapsed time even at Date bounds", async () => {
     vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     vi.spyOn(Date, "now").mockReturnValue(MAX_DATE_TIMESTAMP_MS);
-    const { arm, emitAll: emit, dialogs } = observedPage();
-    const dialog = createDialog({ type: "alert", message: "Still pending" });
+    const { arm, observe, emitAll: emit, dialogs } = observedPage();
+    const first = createDialog({ type: "alert", message: "Still armed" });
     arm({ accept: false, timeoutMs: 1000 });
-    emit("dialog", dialog);
-    expect(dialog.dismiss).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(999);
+    emit("dialog", first);
+    await Promise.resolve();
+    expect(first.dismiss).toHaveBeenCalledOnce();
+    expect(dialogs()).toMatchObject({
+      pending: [],
+      recent: [{ id: "d1", closedBy: "armed" }],
+    });
+
+    const observed = observe();
+    const expired = createDialog({ type: "alert", message: "Still pending" });
+    arm({ accept: false, timeoutMs: 1000 });
+    await vi.advanceTimersByTimeAsync(1000);
+    emit("dialog", expired);
+    expect(expired.dismiss).not.toHaveBeenCalled();
+    expect(observed.signal.aborted).toBe(true);
     expect(dialogs().pending).toMatchObject([
-      { id: "d1", type: "alert", message: "Still pending" },
+      { id: "d2", type: "alert", message: "Still pending" },
     ]);
+    observed.cleanup();
   });
 
   it("keeps a newer dialog pending after the interrupted dialog was handled remotely", async () => {

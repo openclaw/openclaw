@@ -1,0 +1,2 @@
+# Accepted dialog arms survive wall-clock corrections and still expire by elapsed time.
+36
