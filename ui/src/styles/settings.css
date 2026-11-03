@@ -1668,6 +1668,32 @@ textarea.settings-input {
   }
 }
 
+/* Between the phone layout and the docked sidebar, every settings page shares one gutter and
+   one column, so the title stays put from page to page. */
+@media not all and (max-width: 640px) {
+  .shell--settings.shell--mobile-nav:not(.shell--floating-header) {
+    .content:not(.content--custodian) {
+      --content-inline-padding: var(--space-6);
+      --settings-header-inline-padding: 0;
+      padding: var(--space-6) var(--space-6) var(--space-7);
+    }
+
+    .content .content-header,
+    .settings-page,
+    .settings-workspace,
+    .config-content,
+    .config-lead,
+    .config-content-callout {
+      max-width: none;
+      padding-inline: 0;
+    }
+
+    .content .content-header .page-title {
+      font-size: 26px;
+    }
+  }
+}
+
 @media (max-width: 640px) {
   .settings-page {
     padding-inline: var(--space-3);
