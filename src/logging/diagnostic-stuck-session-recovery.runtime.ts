@@ -1,5 +1,6 @@
 import { getActiveNativeAttempt } from "../agents/embedded-agent-runner/run-state.js";
 import { reconcileSessionControllerDiagnosticState } from "../sessions/session-controller.state.js";
+import { recordRecoveryClassification } from "../sessions/session-recovery-classification.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 import { diagnosticLogger as diag } from "./diagnostic-runtime.js";
 import {
@@ -50,6 +51,9 @@ export async function recoverStuckDiagnosticSession(
       });
     }
     const state = operation.watchdog.snapshot();
+    // Semantic cause the recovery acted on (e.g. blocked_tool_call), falling back
+    // to the watchdog decision reason when no attention classification was supplied.
+    const recoveryReason = params.classification?.classification ?? decision.reason;
     const outcome: StuckSessionRecoveryOutcome =
       state.recovery?.status === "settled" && decision.action === "stop"
         ? {
@@ -60,6 +64,7 @@ export async function recoverStuckDiagnosticSession(
             drained: true,
             forceCleared: false,
             released: 0,
+            reason: recoveryReason,
           }
         : decision.action === "blocked" || state.recovery?.status === "blocked"
           ? {
@@ -82,6 +87,11 @@ export async function recoverStuckDiagnosticSession(
                     ? "stale_session_state"
                     : "active_reply_work",
             };
+    if (outcome.status === "aborted" && recoveryReason) {
+      // Surface the semantic cause on the operation so cron run finalization can
+      // include it in the run history instead of a cause-free literal.
+      recordRecoveryClassification(operation, recoveryReason);
+    }
     return reportOutcome(outcome);
   } catch (error) {
     return reportOutcome({

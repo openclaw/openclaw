@@ -52,8 +52,14 @@ export async function finalizeCronRun(params: {
   settleUsage: (contextTokens: number) => Promise<CronRunTelemetry["usage"]>;
   markCronRunSessionCleanupHandled: () => void;
   beforeSessionDelete: () => void;
+  /**
+   * Semantic cause a stuck-session recovery acted on (e.g. `blocked_tool_call`),
+   * recorded on the operation. Surfaced in the run history when the embedded run
+   * was aborted without a descriptive error message. Optional.
+   */
+  recoveryClassification?: string;
 }): Promise<RunCronAgentTurnResult> {
-  const { prepared, execution } = params;
+  const { prepared, execution, recoveryClassification } = params;
   const finalRunResult = execution.runResult;
   const replyDisposition = finalRunResult.meta?.terminalReply?.disposition ?? "empty";
   const pendingContinuation = hasPendingAutomationContinuation(finalRunResult.meta);
@@ -203,7 +209,14 @@ export async function finalizeCronRun(params: {
   });
   if (finalRunResult.meta?.aborted === true && !cronPayloadOutcome.hasFatalErrorPayload) {
     const metaErrorMessage = normalizeOptionalString(finalRunResult.meta.error?.message);
-    const error = metaErrorMessage ?? "cron isolated agent run aborted";
+    // Prefer a descriptive cause: the embedded run's error message, else the
+    // semantic recovery classification (e.g. blocked_tool_call) recorded when the
+    // run was killed for a stuck session, else a cause-free literal.
+    const error =
+      metaErrorMessage ||
+      (recoveryClassification && recoveryClassification.trim().length > 0
+        ? recoveryClassification
+        : "cron isolated agent run aborted");
     await cleanupRunSession("cron-delete-after-run-aborted");
     return prepared.withRunSession({
       status: "error",
