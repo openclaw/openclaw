@@ -1,0 +1,8 @@
+# PR #173026: net regression-test LF growth over main ac12958aeb0e.
+# Covers requester final-answer obligations, silent-child settlement,
+# detached progress custody and HTTP delivery outcomes, and Stop cleanup.
+# Boundary compositions exercise distinct consumers; helper-only coverage
+# cannot detect missing requester continuation or transport receipt ordering.
+# Exact native delta: 2031 added - 231 removed = 1800 lines.
+# Does not fund or reconcile the inherited 291-line main deficit.
+1800
