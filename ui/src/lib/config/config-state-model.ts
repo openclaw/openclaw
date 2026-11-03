@@ -49,6 +49,8 @@ export function createInitialConfigState(
     configSaving: false,
     configApplying: false,
     configAutoSaveStatus: initialConfigValue<ConfigAutoSaveStatus>("idle"),
+    /** A form autosave waits on its debounce or behind another write. */
+    configAutoSaveScheduled: false,
     configRecoveryError: initialConfigValue<string | null>(null),
     configNeedsApply: false,
     configApplyPromptHeld: false,

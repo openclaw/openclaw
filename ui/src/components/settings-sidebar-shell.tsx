@@ -68,10 +68,8 @@ function useSaveIndicatorProps(host: () => ShellViewHost) {
         runtimeConfig.connected &&
         runtimeConfig.configNeedsApply &&
         !runtimeConfig.configApplyPromptHeld,
-      pending:
-        runtimeConfig.connected &&
-        runtimeConfig.configFormDirty &&
-        runtimeConfig.configFormMode === "form",
+      // A dirty draft whose autosave is blocked has no save coming, so it never reads as one.
+      pending: runtimeConfig.connected && runtimeConfig.configAutoSaveScheduled,
       savedNotice: runtimeConfig.configSavedNotice,
       saving: runtimeConfig.configSaving,
       applying: runtimeConfig.configApplying,
