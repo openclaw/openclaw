@@ -12,6 +12,8 @@ sidebarTitle: "Chat"
 
 How the chat pane behaves: session controls, the composer, and how the transcript renders.
 
+Session sharing distinguishes owners, members, and viewers. A read-only session does not grant permission to send messages. Starting suggested tasks requires admin access; reconnect first if the Gateway is disconnected. Public sharing asks **Make this session public?** before publishing. Review the conversation and images for private information: disabling public access cannot recall downloaded copies.
+
 An existing session with an empty transcript shows **No messages yet** and keeps
 the composer available. The agent welcome and recent chats appear only on the
 **New session** page. If no model is configured, the existing session's composer

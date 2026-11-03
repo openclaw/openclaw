@@ -184,7 +184,9 @@ const catalog = {
       dismiss: "Dismiss {title}",
       started: "Task started",
       startUnconfirmed: registerChatSessionEnglish.catalog.chat.taskSuggestions.startUnconfirmed,
-      adminRequired: "Administrator access is required to start suggested tasks.",
+      adminRequired: registerChatSessionEnglish.catalog.chat.taskSuggestions.adminRequired,
+      reconnectRequired: registerChatSessionEnglish.catalog.chat.taskSuggestions.reconnectRequired,
+      unavailable: registerChatSessionEnglish.catalog.chat.taskSuggestions.unavailable,
     },
     skillLearned: {
       label: "Learned",
