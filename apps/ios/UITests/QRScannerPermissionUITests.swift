@@ -43,7 +43,7 @@ final class QRScannerPermissionUITests: XCTestCase {
         let app = try self.openScannerWithUndecidedCameraAccess()
         defer { app.terminate() }
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-        let allow = springboard.buttons["Allow"]
+        let allow = springboard.buttons["Allow"].firstMatch
         XCTAssertTrue(allow.waitForExistence(timeout: 8))
         allow.tap()
 
