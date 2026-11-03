@@ -53,6 +53,12 @@ backup.
 
 ## Update implementation contract
 
+During captured SQLite migrations, candidate Doctor reads current update authority
+through private snapshots. It does not retain an independent WAL reader that can
+block its own next migration's exclusive lock. Exec approvals policy, local socket
+credentials, and verified rollback attribution retain their existing checks. This
+repair requires the candidate Doctor; the installed updater needs no change.
+
 Gateway cleanup preserves retired managed npm plugin generations referenced by
 absolute or home-relative paths in startup or current configuration. This keeps
 explicit executable pins working after an update without rewriting their settings.
