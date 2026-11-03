@@ -6,9 +6,9 @@ const enModelSetup = {
     discovery: {
       title: "On this Gateway",
       description:
-        "Find existing connections or prepare a local model for {agent}. Using a model here changes this agent, not the global defaults.",
+        "Find an account or set up a local model for {agent}. This changes only this agent’s model.",
       useForAgent: "Test & use for this agent",
-      connectForAgent: "Connect & use for this agent",
+      connectForAgent: "Add account for this agent",
       connectProvider: "Connect provider",
       returnToModels: "Return to Models",
       otherSoftware: "Other detected software",
@@ -38,13 +38,13 @@ const enModelSetup = {
       providerUnavailable: "{provider} isn’t responding.",
     },
     access: {
-      adminRequired: "Model setup requires operator.admin access.",
+      adminRequired: "You need admin access to set up a model.",
       gatewayTooOld: "The Gateway is running an older OpenClaw version",
     },
     candidates: {
-      title: "Found on this Gateway",
+      title: "Available models",
       recommended: "Recommended",
-      credentialsReady: "Credentials ready",
+      credentialsReady: "Account ready",
       detected: "Detected",
       testAndUse: "Test & use",
       retry: "Retry test",

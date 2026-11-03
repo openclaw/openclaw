@@ -2650,7 +2650,7 @@ describe("chat welcome", () => {
       modelSetupRequired: true,
       onModelSetup,
     });
-    expect(container.textContent).toContain("No AI provider configured");
+    expect(container.textContent).toContain("No model set up");
     expect(container.querySelector(".agent-chat__suggestions")).toBeNull();
     container.querySelector<HTMLButtonElement>(".agent-chat__welcome button")?.click();
     expect(onModelSetup).toHaveBeenCalledOnce();

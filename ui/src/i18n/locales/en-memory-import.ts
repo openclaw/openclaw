@@ -6,22 +6,23 @@ const enMemoryImport = {
   onboarding: {
     memoryImport: {
       title: en.onboarding.memoryImport.title,
-      body: "OpenClaw found memory from other coding assistants. Import it into your agent workspace?",
+      body: "OpenClaw found memory from other coding agents. Import it into your agent’s workspace?",
       plannedCount: "{count} ready to import",
       alreadyImported: "Already imported: {count}",
       sourceUnavailable: "Source path unavailable",
       import: "Import",
-      skip: "Skip",
+      skip: "Skip for now",
       reviewDetails: "Review details",
       importingProvider: "Importing…",
-      providerResult: "Migrated {migrated}, skipped {skipped}",
+      providerResult: "Imported {migrated}, skipped {skipped}",
       providerIncomplete:
-        "Migrated {migrated}, skipped {skipped}, {errors} failed, {conflicts} conflicts",
-      providerError: "Import failed: {error}",
-      connectionChanged: "Skipped: the Gateway connection changed during the import",
-      unknownError: "Request failed",
+        "Imported {migrated}, skipped {skipped}, {errors} failed, {conflicts} conflicts",
+      providerError: "Couldn’t import memory. Try again. {error}",
+      connectionChanged:
+        "Import skipped because the Gateway connection changed. Reconnect and try again.",
+      unknownError: "No error details available",
       doneTitle: "Memory import finished",
-      doneBody: "Migrated {migrated}, skipped {skipped}. You can continue setting up OpenClaw.",
+      doneBody: "Imported {migrated}, skipped {skipped}. Continue setting up OpenClaw.",
     },
   },
   memoryImport: {
