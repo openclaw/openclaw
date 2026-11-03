@@ -133,7 +133,12 @@ it.each(["native", "manifest"] as const)(
             expect(
               registry.decisionProviders.some((entry) => entry.host.provider.id === "clawrouter"),
             ).toBe(true);
-            await using prepared = await harness.prepareDecisionRuntime(cfg, "clawrouter", modelId);
+            await using prepared = await harness.prepareDecisionRuntime(
+              cfg,
+              "clawrouter",
+              modelId,
+              "live",
+            );
             const selected = prepared.snapshot.modelCatalog.entries.find(
               (entry) => entry.provider === "clawrouter" && entry.id === modelId,
             );
