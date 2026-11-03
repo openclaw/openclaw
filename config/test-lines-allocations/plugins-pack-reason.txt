@@ -1,0 +1,2 @@
+# Regression subtests check plugins pack names an existing --out artifact, a missing manifest and a missing root instead of the generic failure.
+28
