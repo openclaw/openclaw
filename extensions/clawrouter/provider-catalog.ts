@@ -144,8 +144,8 @@ function parseCatalogProvider(value: unknown): CatalogProvider | undefined {
     row?.allowed === true &&
     row.executable === true &&
     Array.isArray(row.offers) &&
-    row.offers.some((value) => {
-      const offer = asOptionalRecord(value);
+    row.offers.some((offerValue) => {
+      const offer = asOptionalRecord(offerValue);
       return (
         offer?.modelId === "clawrouter/fusion" &&
         offer.endpoint === "chat_completions" &&
@@ -164,8 +164,8 @@ function parseCatalogProvider(value: unknown): CatalogProvider | undefined {
       ? row.routes.map(parseCatalogRoute).filter((route): route is CatalogRoute => Boolean(route))
       : [],
     models: isFusion
-      ? models.filter((value) => {
-          const model = asOptionalRecord(value);
+      ? models.filter((modelValue) => {
+          const model = asOptionalRecord(modelValue);
           return (
             fusionGranted &&
             model?.id === "clawrouter/fusion" &&
