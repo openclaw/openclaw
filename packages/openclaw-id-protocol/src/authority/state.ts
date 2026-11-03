@@ -43,8 +43,6 @@ export type OwnerDeviceRecord = {
 export type MemberRecord = {
   role: MemberRole;
   peer_keys: IrohEndpointKey[];
-  /** Signed issued_at of the change that added each peer key. Admission does not move this. */
-  added_at: Partial<Record<IrohEndpointKey, UnixSeconds>>;
   /** Last tunnel admission per peer key (or when it was added), unix seconds. */
   last_seen: Partial<Record<IrohEndpointKey, UnixSeconds>>;
 };
@@ -73,6 +71,11 @@ export type AuthorityState = {
   owner_devices: Record<KeyFingerprint, OwnerDeviceRecord>;
   members: Record<string, MemberRecord>;
   invites: Record<string, InviteRecord>;
+  /**
+   * Signatures of revocations that already removed a listed key.
+   * The same bytes must not remove a later approval. A new signature still revokes.
+   */
+  applied_revocations: readonly string[];
 };
 
 /** Side effects the Gateway must perform after a write. */
@@ -160,6 +163,7 @@ export function linkClaw(
       owner_devices: {},
       members: {},
       invites: {},
+      applied_revocations: [],
     },
   };
 }

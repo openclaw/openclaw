@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { fingerprint } from "../keys.js";
+import { fingerprint, type IrohEndpointKey } from "../keys.js";
 import { signStatement } from "../statements/envelope.js";
+import {
+  MAX_MEMBER_PEER_KEYS,
+  MAX_MEMBERS,
+  MAX_OWNER_DEVICES,
+  type MembershipTarget,
+} from "../statements/types.js";
 import { parseStatement } from "../statements/validate.js";
 import { buildWorld, certBody, signChange, worldKey, WORLD_NOW } from "../testing/world.js";
 import { dropInactive, nextInactivityDrop, recordSeen } from "./allowlist.js";
@@ -130,7 +136,7 @@ describe("revocation", () => {
     const world = await buildWorld();
     const cert = await signStatement(
       "OwnerDeviceCert",
-      { ...certBody(world.device2), issued_at: WORLD_NOW },
+      { ...certBody(world.device2), issued_at: WORLD_NOW + 120 },
       world.device1.signer,
     );
     const replaced = await apply(
@@ -144,7 +150,7 @@ describe("revocation", () => {
         target_kind: "peer_key",
         reason: "test",
         root_epoch: 1,
-        issued_at: WORLD_NOW - 5,
+        issued_at: WORLD_NOW + 1,
       },
       world.device1.signer,
     );
@@ -178,7 +184,7 @@ describe("revocation", () => {
         target_kind: "peer_key",
         reason: "test",
         root_epoch: 1,
-        issued_at: WORLD_NOW - 9,
+        issued_at: WORLD_NOW + 1,
       },
       world.device1.signer,
     );
@@ -240,10 +246,83 @@ describe("inactivity", () => {
     expect(dropInactive(world.state, WORLD_NOW + 11, windows)?.state.owner_devices).toEqual({});
   });
 
+  it("drops a member peer key after 30 idle days and keeps an active one", async () => {
+    const world = await buildWorld();
+    const extra = await worldKey("extra");
+    const added = await apply(
+      world.state,
+      await signChange(world.state, world.device1.signer, {
+        op: "add",
+        account_id: "acct_bob",
+        role: "viewer",
+        peer_keys: [world.invitee.peer, extra.peer],
+        invite_id: null,
+      }),
+    );
+    const active = recordSeen(added.state, extra.peer, WORLD_NOW + 20 * DAY)!;
+    const fresh = recordSeen(active, world.device1.peer, WORLD_NOW + 20 * DAY)!;
+    const all = recordSeen(fresh, world.device2.peer, WORLD_NOW + 20 * DAY)!;
+    const dropped = dropInactive(all, WORLD_NOW + 31 * DAY)!;
+    expect(dropped.peers).toEqual([world.invitee.peer]);
+    expect(dropped.state.members.acct_bob?.peer_keys).toEqual([extra.peer]);
+  });
+
   it("moves last_seen only past the resolution and ignores unknown keys", async () => {
     const world = await buildWorld();
     expect(recordSeen(world.state, world.device1.peer, WORLD_NOW + 60)).toBeNull();
     expect(recordSeen(world.state, world.mallory.peer, WORLD_NOW + 7200)).toBeNull();
+  });
+});
+
+describe("caps", () => {
+  it(`refuses a ${MAX_OWNER_DEVICES + 1}th owner device`, async () => {
+    const world = await buildWorld();
+    let state = world.state;
+    for (let index = 2; index < MAX_OWNER_DEVICES; index += 1) {
+      const result = await approve(state, world.device1, await worldKey(`owner-${index}`));
+      if (!result.ok) {
+        throw new Error(result.detail);
+      }
+      state = result.state;
+    }
+    expect(Object.keys(state.owner_devices)).toHaveLength(MAX_OWNER_DEVICES);
+    const refused = await approve(state, world.device1, await worldKey("one-too-many"));
+    expect(refused).toMatchObject({ ok: false, code: "limit_reached", state });
+  });
+
+  it(`refuses a ${MAX_MEMBERS + 1}th member and a ${MAX_MEMBER_PEER_KEYS + 1}th member browser`, async () => {
+    const world = await buildWorld();
+    const add = (state: AuthorityState, account: string, peers: IrohEndpointKey[]) =>
+      signChange(state, world.device1.signer, {
+        op: "add",
+        account_id: account,
+        role: "viewer",
+        peer_keys: peers,
+        invite_id: null,
+      } satisfies MembershipTarget);
+    let state = world.state;
+    for (let index = 0; index < MAX_MEMBERS; index += 1) {
+      const key = await worldKey(`member-${index}`);
+      state = (await apply(state, await add(state, `acct_${index}`, [key.peer]))).state;
+    }
+    const extra = await worldKey("member-extra");
+    await expect(
+      submitStatement(state, await add(state, "acct_extra", [extra.peer]), tunnel),
+    ).resolves.toMatchObject({ ok: false, code: "limit_reached" });
+    const browsers = await Promise.all(
+      Array.from({ length: MAX_MEMBER_PEER_KEYS }, (_, index) => worldKey(`browser-${index}`)),
+    );
+    await expect(
+      submitStatement(
+        state,
+        await add(
+          state,
+          "acct_0",
+          browsers.map((key) => key.peer),
+        ),
+        tunnel,
+      ),
+    ).resolves.toMatchObject({ ok: false, code: "limit_reached" });
   });
 });
 

@@ -115,52 +115,17 @@ async function applyOwnerStatement(
   );
 }
 
-// A current approval newer than this statement supersedes it. Re-adding a device
-// signs a new certificate. A browser records the signed issued_at of the add,
-// not the Gateway clock. A captured revocation must not delete that later
-// approval. An unknown target changes nothing.
-function ownerApprovalSupersedes(
-  state: AuthorityState,
-  fp: KeyFingerprint,
-  issuedAt: UnixSeconds,
-): boolean {
-  const issued = state.owner_devices[fp]?.cert.body.issued_at;
-  return issued !== undefined && issued > issuedAt;
-}
-
-function memberPeerApprovalSupersedes(
-  state: AuthorityState,
-  key: IrohEndpointKey,
-  issuedAt: UnixSeconds,
-): boolean {
-  for (const member of Object.values(state.members)) {
-    if (!member.peer_keys.includes(key)) {
-      continue;
-    }
-    const added = member.added_at[key];
-    return added !== undefined && added > issuedAt;
-  }
-  return false;
-}
-
-async function ownerDevicesForPeerRevocation(
+// Every owner device (with the devices it approved) that holds a peer key with this fingerprint.
+async function ownerDevicesWithPeer(
   state: AuthorityState,
   target: KeyFingerprint,
-  issuedAt: UnixSeconds,
 ): Promise<KeyFingerprint[]> {
   const found = new Set<KeyFingerprint>();
   for (const [fp, record] of Object.entries(state.owner_devices)) {
-    if (record.cert.body.issued_at > issuedAt) {
-      continue;
-    }
     const peerFps = await Promise.all(record.cert.body.peer_keys.map((key) => fingerprint(key)));
-    if (!peerFps.includes(target)) {
-      continue;
-    }
-    // This owner is current, so every device it approved is removed with it.
-    // SAFETY: owner_devices is keyed by KeyFingerprint; Object.entries widens keys to string.
-    for (const each of approvalDescendants(state, fp as KeyFingerprint)) {
-      found.add(each);
+    if (peerFps.includes(target)) {
+      // SAFETY: owner_devices is keyed by KeyFingerprint; Object.entries widens keys to string.
+      approvalDescendants(state, fp as KeyFingerprint).forEach((each) => found.add(each));
     }
   }
   return [...found];
@@ -168,35 +133,30 @@ async function ownerDevicesForPeerRevocation(
 
 // Removes the revoked key now. An owner device goes with every device it approved
 // (computed from approved_by); a peer key leaves its member, or takes its owner device
-// (and that device's approvals) with it. An unknown or superseded target changes nothing.
+// (and that device's approvals) with it. The same signed bytes are remembered so they
+// cannot remove a later approval. A different signature still revokes, whatever the
+// signer's clock says. An unknown target changes nothing and is not remembered.
 async function applyRevocation(
   state: AuthorityState,
   revocation: SignedStatement<"Revocation">,
 ): Promise<AuthorityResult> {
-  const issuedAt = revocation.body.issued_at;
-  const target = revocation.body.target_fp;
-  if (
-    revocation.body.target_kind === "owner_device" &&
-    ownerApprovalSupersedes(state, target, issuedAt)
-  ) {
+  if (state.applied_revocations.includes(revocation.sig)) {
     return applied(state);
   }
+  const target = revocation.body.target_fp;
   const devices =
     revocation.body.target_kind === "owner_device"
       ? approvalDescendants(state, target)
-      : await ownerDevicesForPeerRevocation(state, target, issuedAt);
+      : await ownerDevicesWithPeer(state, target);
   const owners = withoutOwnerDevices(state, devices);
   const memberPeers =
-    revocation.body.target_kind === "peer_key"
-      ? (await memberPeersWithFp(state, target)).filter(
-          (key) => !memberPeerApprovalSupersedes(state, key, issuedAt),
-        )
-      : [];
+    revocation.body.target_kind === "peer_key" ? await memberPeersWithFp(state, target) : [];
   const removed = [...new Set([...owners.peers, ...memberPeers])];
   if (devices.length === 0 && memberPeers.length === 0) {
     return applied(state);
   }
-  return applied(withoutMemberPeerKeys(owners.state, memberPeers), [
+  const next = withoutMemberPeerKeys(owners.state, memberPeers);
+  return applied({ ...next, applied_revocations: [...next.applied_revocations, revocation.sig] }, [
     { type: "disconnect", peer_keys: removed },
     { type: "invalidate_tokens", peer_keys: removed },
     { type: "publish_snapshot" },
@@ -226,13 +186,7 @@ async function applyMembershipChange(
   if (body.seq !== state.seq + 1) {
     return refuse(state, "seq_conflict", `expected seq ${state.seq + 1}`);
   }
-  const result = await applyTarget(
-    { ...state, seq: body.seq },
-    body.target,
-    authority,
-    context,
-    body.issued_at,
-  );
+  const result = await applyTarget({ ...state, seq: body.seq }, body.target, authority, context);
   return result.ok ? result : { ...result, state };
 }
 
@@ -242,11 +196,10 @@ async function applyTarget(
   target: SignedStatement<"MembershipChange">["body"]["target"],
   authority: Authority,
   context: WriteContext,
-  issuedAt: UnixSeconds,
 ): Promise<AuthorityResult> {
   switch (target.op) {
     case "add":
-      return addMember(state, target, issuedAt, context.now);
+      return addMember(state, target, context.now);
     case "remove": {
       const member = state.members[target.account_id];
       if (!member) {
@@ -318,7 +271,6 @@ function applyRemovalOfPeer(state: AuthorityState, peer: IrohEndpointKey): Autho
 function addMember(
   state: AuthorityState,
   target: Extract<SignedStatement<"MembershipChange">["body"]["target"], { op: "add" }>,
-  approvedAt: UnixSeconds,
   now: UnixSeconds,
 ): AuthorityResult {
   const existing = state.members[target.account_id];
@@ -334,19 +286,10 @@ function addMember(
     );
   }
   const lastSeen = { ...existing?.last_seen };
-  const addedAt = { ...existing?.added_at };
   for (const key of target.peer_keys) {
-    if (!existing?.peer_keys.includes(key)) {
-      addedAt[key] = approvedAt;
-    }
     lastSeen[key] ??= now;
   }
-  const member: MemberRecord = {
-    role: target.role,
-    peer_keys: peerKeys,
-    added_at: addedAt,
-    last_seen: lastSeen,
-  };
+  const member: MemberRecord = { role: target.role, peer_keys: peerKeys, last_seen: lastSeen };
   if (target.invite_id === null) {
     return applied({ ...state, members: { ...state.members, [target.account_id]: member } }, [
       { type: "publish_snapshot" },
