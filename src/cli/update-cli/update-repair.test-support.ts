@@ -32,7 +32,7 @@ vi.mock("../../infra/update-triage.js", () => ({
   prepareUpdateFailureTriage: async () => async () => ({ status: "completed", hint: "" }),
 }));
 
-export const pluginResult: ProducedPluginUpdateResult = {
+const pluginResult: ProducedPluginUpdateResult = {
   assessment: { kind: "no-payload-repair" },
   status: "ok",
   changed: false,

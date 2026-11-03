@@ -2,7 +2,7 @@
 // provider-portable schema shape.
 import { describe, expect, it } from "vitest";
 import { HEARTBEAT_RESPONSE_TOOL_NAME } from "../../auto-reply/heartbeat-tool-response.js";
-import { createHeartbeatResponseTool } from "./heartbeat-response-tool.js";
+import { createHeartbeatResponseTool } from "./heartbeat-response-tool.test-support.js";
 
 function readSchemaProperty(schema: unknown, key: string): Record<string, unknown> {
   const root = schema as { properties?: Record<string, unknown> };

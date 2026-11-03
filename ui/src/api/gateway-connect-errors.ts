@@ -103,10 +103,7 @@ export function notifyBrowserWebSocketError(
   }
 }
 
-export function enrichProtocolMismatchDetails(
-  message: string | undefined,
-  details: unknown,
-): unknown {
+function enrichProtocolMismatchDetails(message: string | undefined, details: unknown): unknown {
   if (readConnectErrorDetailCode(details) === ConnectErrorDetailCodes.PROTOCOL_MISMATCH) {
     return details;
   }

@@ -31,7 +31,7 @@ const callAuthorities = resolveGlobalSingleton<AsyncLocalStorage<() => void>>(
 );
 
 /** Caller-owned liveness check that MCP tools/call re-runs immediately before server I/O. */
-export function getSessionMcpToolCallAuthority(): (() => void) | undefined {
+function getSessionMcpToolCallAuthority(): (() => void) | undefined {
   return callAuthorities.getStore();
 }
 

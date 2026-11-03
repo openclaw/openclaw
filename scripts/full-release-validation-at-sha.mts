@@ -796,7 +796,7 @@ function preflightCandidateSigningProvenance(
 // pnpm release:candidate applies these gates after validation finishes; check
 // them first so an unpublishable candidate never spends a validation run.
 // Extended-stable publication does not use that checklist.
-export function validatePublishCandidateChangelog(
+function validatePublishCandidateChangelog(
   targetSha: string,
   targetContextRef: string,
   targetVersion: string,

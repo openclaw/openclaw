@@ -1,9 +1,6 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { SkillLibraryAuthoringCapability } from "../../skills/library/authoring.js";
-import {
-  resetStableCliSkillAuthoringForTest,
-  resolveStableCliSkillAuthoring,
-} from "./stable-skill-authoring.js";
+import { resolveStableCliSkillAuthoring } from "./stable-skill-authoring.js";
 
 const human = (
   defaultTarget: "workspace" | "personal",
@@ -17,8 +14,6 @@ const human = (
     throw new Error("live grant must not be reached from an internal turn");
   },
 });
-
-afterEach(() => resetStableCliSkillAuthoringForTest());
 
 describe("resolveStableCliSkillAuthoring", () => {
   it("passes through sessions that never had a human authoring grant", () => {

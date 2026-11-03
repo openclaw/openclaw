@@ -10,7 +10,7 @@ import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
 import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
 import type { AgentSessionEvent } from "./sessions/index.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
-import { createHeartbeatResponseTool } from "./tools/heartbeat-response-tool.js";
+import { createHeartbeatResponseTool } from "./tools/heartbeat-response-tool.test-support.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
 
 function harness(params: Omit<Parameters<typeof createSubscribedSessionHarness>[0], "runId"> = {}) {

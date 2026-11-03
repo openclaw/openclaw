@@ -253,7 +253,7 @@ async function readPendingApprovals(
   });
 }
 
-export async function observePublication(
+async function observePublication(
   ctx: ReleaseContext,
   deadlineAt?: number,
 ): Promise<PublicationWatchSnapshot> {

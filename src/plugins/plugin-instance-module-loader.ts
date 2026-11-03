@@ -135,12 +135,6 @@ function retainedNativeEsmLocation(target: RetainedNativeEsmTarget) {
   };
 }
 
-/** Whether a load would reuse an already captured and retained native ESM artifact. */
-export function hasRetainedNativeEsmArtifact(target: RetainedNativeEsmTarget): boolean {
-  const location = retainedNativeEsmLocation(target);
-  return location !== undefined && location.entries.get(location.key)?.artifact !== undefined;
-}
-
 function retainedNativeEsmFor(
   params: PluginInstanceModuleLoaderParams,
 ): RetainedNativeEsm | undefined {
