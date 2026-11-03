@@ -7,6 +7,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
+import { captureSessionRecipientAuthority } from "../../config/sessions/session-accessor.js";
+import { isSessionRecipientAuthorityCurrentInWorker } from "../../config/sessions/session-recipient-authority-current.js";
 import { testing as sessionBindingTesting } from "../../infra/outbound/session-binding-service.js";
 import { resetSystemEventsForTest } from "../../infra/system-events.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
@@ -17,7 +19,7 @@ import {
   useContinuationCustodyTestState,
 } from "../continuation/custody/custody.test-support.js";
 import { consumePendingDelegates, enqueuePendingDelegate } from "../continuation/delegate-store.js";
-import type { PendingContinuationWork } from "../continuation/work-flow-state.js";
+import { decodeWorkState, type PendingContinuationWork } from "../continuation/work-flow-state.js";
 import { enqueuePendingWorkReplacing } from "../continuation/work-replacement-store.js";
 import { consumePendingWork } from "../continuation/work-store.js";
 import {
@@ -265,6 +267,8 @@ describe("initSessionState browser tab cleanup", () => {
         updatedAt: Date.now(),
       },
     });
+    const scope = { agentId: "main", sessionKey, storePath };
+    const recipientAuthority = await captureSessionRecipientAuthority(scope);
     const work = await enqueuePendingWork({
       sessionKey,
       hop: 1,
@@ -272,6 +276,7 @@ describe("initSessionState browser tab cleanup", () => {
       electedAt: Date.now(),
       dueAt: Date.now() + 60_000,
       maxChainLength: 8,
+      recipientAuthority,
     });
     const delegate = await enqueuePendingDelegate(sessionKey, {
       task: "delegate after inline reset",
@@ -292,8 +297,12 @@ describe("initSessionState browser tab cleanup", () => {
     });
 
     expect(result.isNewSession).toBe(true);
-    expect((await readCustodyRecordForTest(work.flowId))?.status).toBe("queued");
+    const kept = await readCustodyRecordForTest(work.flowId);
+    expect(kept?.status).toBe("queued");
     expect((await readCustodyRecordForTest(delegate.recordId))?.status).toBe("queued");
+    // The same-owner /new leaves the epoch the kept wake is bound to current.
+    expect(decodeWorkState(kept!)?.recipientAuthority).toEqual(recipientAuthority);
+    expect(await isSessionRecipientAuthorityCurrentInWorker(scope, recipientAuthority)).toBe(true);
   });
 });
 
