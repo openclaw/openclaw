@@ -1,3 +1,4 @@
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
@@ -133,12 +134,17 @@ async function runShortTermDreamingPromotion(params: {
     import("./short-term-promotion.js"),
   ]);
   for (const { agentId, agentIds, workspaceDir } of workspaces) {
+    const workspaceFileMode =
+      (params.cfg && agentId
+        ? resolveAgentConfig(params.cfg, agentId)?.workspaceFileMode
+        : undefined) ?? params.cfg?.agents?.defaults?.workspaceFileMode;
     const sweepNowMs = Date.now();
     let phaseResult: Awaited<ReturnType<typeof runDreamingSweepPhases>>;
     try {
       phaseResult = await runDreamingSweepPhases({
         agentId,
         workspaceDir,
+        workspaceFileMode,
         pluginConfig,
         cfg: params.cfg,
         logger: params.logger,
@@ -195,6 +201,7 @@ async function runShortTermDreamingPromotion(params: {
           agentId,
           workspaceAgentIds: agentIds,
           workspaceDir,
+          workspaceFileMode,
           candidates,
           limit: params.config.limit,
           minScore: params.config.minScore,
@@ -269,6 +276,7 @@ async function runShortTermDreamingPromotion(params: {
         const deepHasContent = repair.changed || applied.applied > 0 || hasReportableRejections;
         await writeDeepDreamingReport({
           workspaceDir,
+          workspaceFileMode,
           bodyLines: reportLines,
           hasContent: deepHasContent,
           nowMs: sweepNowMs,
@@ -313,6 +321,7 @@ async function runShortTermDreamingPromotion(params: {
     if (!params.subagent) {
       await appendFallbackNarrativeEntry({
         workspaceDir,
+        workspaceFileMode,
         data,
         nowMs: sweepNowMs,
         timezone: lastNarrative.timezone,
@@ -325,6 +334,7 @@ async function runShortTermDreamingPromotion(params: {
         timeoutMs: params.narrativeTimeoutMs,
         subagent: params.subagent,
         workspaceDir,
+        workspaceFileMode,
         data,
         nowMs: sweepNowMs,
         timezone: lastNarrative.timezone,

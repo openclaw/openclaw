@@ -14,7 +14,7 @@ import {
 } from "../../test/helpers/gateway-integration-fixtures.js";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import type { ConfiguredProviderLocalServiceTarget } from "../agents/provider-local-service-target.js";
-import type { EmbeddingProviderCreateOptions } from "./embedding-providers.js";
+import type { EmbeddingProviderCreateOptions } from "./embedding-provider-types.js";
 import { openAICompatibleEmbeddingProviderAdapter } from "./openai-compatible-embedding-provider.js";
 
 async function createProvider(options: Partial<EmbeddingProviderCreateOptions> = {}) {

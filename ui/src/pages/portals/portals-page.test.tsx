@@ -386,6 +386,25 @@ it("waits for machine startup and an explicitly opened app", async () => {
   await waitForTitle(page, "Seeded app");
   expect(page.requestedEnvironmentId).toBeNull();
 });
+it("pauses machine startup polling in a hidden browser tab and catches up on return", async () => {
+  usePollingTimers();
+  let environment = machine("pending-machine");
+  let visibility: DocumentVisibilityState = "visible";
+  vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+  const source = createContext(["environments.status"], async () => environment);
+  const { page } = await mountPage(source.context, undefined, environment.id);
+  await waitForText(page, "Starting your machine");
+  visibility = "hidden";
+  document.dispatchEvent(new Event("visibilitychange"));
+  await expectNoPolling(source);
+  environment = { ...environment, status: "available" };
+  visibility = "visible";
+  document.dispatchEvent(new Event("visibilitychange"));
+  await waitForText(page, "Waiting for your application");
+  expect(callsTo(source, "environments.status")).toHaveLength(2);
+  await expectNoPolling(source);
+  page.remove();
+});
 it("loads only the final environment from same-turn target writes", async () => {
   const environment = machine("final-machine", "available");
   const source = createContext(["portal.list", "environments.status"], async (method) =>

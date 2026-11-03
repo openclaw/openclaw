@@ -26,7 +26,7 @@ struct PersonalGatewayAuthenticationTests {
             personalTailscaleAuthentication: personal)
     }
 
-    private func personalConfig(url: URL) -> GatewayConnectConfig {
+    private func personalConfig(url: URL, personal: Bool = true) -> GatewayConnectConfig {
         let stableID = "personal-auth-\(UUID().uuidString)"
         let options = GatewayConnectOptions(
             role: "operator", scopes: [], caps: [], commands: [], permissions: [:],
@@ -36,7 +36,7 @@ struct PersonalGatewayAuthenticationTests {
         return GatewayConnectConfig(
             url: url, stableID: stableID, tls: nil, token: "synthetic-shared-token",
             bootstrapToken: nil, password: nil, nodeOptions: options,
-            personalTailscaleAuthentication: true)
+            personalTailscaleAuthentication: personal)
     }
 
     private func connectPersonalOperator(model: NodeAppModel, config: GatewayConnectConfig) async throws {
@@ -338,6 +338,200 @@ struct PersonalGatewayAuthenticationTests {
                 #expect(body?.contains("Personal sign-in changed") == true)
                 #expect(fixture.respond(to: rpc, payload: ["profile": ["id": "synthetic-person-a"]]))
                 #expect(await hasSignedResultTask.value == false)
+            }
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func `live operator roster does not require an offline cache`(personal: Bool) async throws {
+        let stateDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("personal-roster-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: stateDirectory) }
+        try await DeviceIdentityStore.withStateDirectory(stateDirectory) {
+            let fixture = try await NativeGatewayWebSocketFixture.start(
+                issuedDeviceTokens: [], authMethod: personal ? "tailscale" : "token",
+                recoveryScope: self.personalRecoveryScope, manualResponseMethods: ["sessions.list"])
+            defer { fixture.stop() }
+            let config = self.personalConfig(url: fixture.url(), personal: personal)
+            let model = NodeAppModel(audioAdmissionInitiallyAllowed: false)
+            try await self.withConnectedPersonalOperator(model: model, config: config) {
+                if personal {
+                    model.adoptPersonalChatOwner(scope: self.personalRecoveryScope, stableID: config.effectiveStableID)
+                    #expect(model.chatTranscriptCacheGatewayID == nil)
+                    #expect(model.makeChatOfflineStore() == nil)
+                }
+                let reply = Task { @MainActor in
+                    let rpc = try await fixture.waitForRPC(method: "sessions.list")
+                    return fixture.respond(to: rpc, payload: [
+                        "count": 1, "totalCount": 1, "hasMore": false,
+                        "sessions": [["key": "agent:main:roster-proof", "label": "Live roster proof"]],
+                    ])
+                }
+                var roster: ChatSessionRosterSnapshot?
+                var failure: String?
+                do {
+                    roster = try await model.loadChatSessionRoster(limit: 200)
+                } catch {
+                    failure = error.localizedDescription
+                }
+                reply.cancel()
+                let replied = await reply.result
+                #expect(failure == nil)
+                #expect(roster?.sessions.map(\.key) == ["agent:main:roster-proof"])
+                #expect(roster?.isCached == false)
+                #expect(roster?.isComplete == true)
+                if roster != nil {
+                    switch replied {
+                    case let .success(accepted):
+                        #expect(accepted)
+                    case let .failure(error):
+                        Issue.record(error)
+                    }
+                }
+                if personal {
+                    #expect(model.chatTranscriptCacheGatewayID == nil)
+                    #expect(model.makeChatOfflineStore() == nil)
+                    #expect(await model.loadCachedChatSessions(gatewayID: nil, agentID: nil) == [])
+                } else {
+                    #expect(model.chatTranscriptCacheGatewayID == config.effectiveStableID)
+                }
+            }
+        }
+    }
+
+    @Test(arguments: ["person", "agent", "route"])
+    func `personal roster rejects a response after its live owner changes`(retirement: String) async throws {
+        let stateDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("personal-roster-retired-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: stateDirectory) }
+        try await DeviceIdentityStore.withStateDirectory(stateDirectory) {
+            let fixture = try await NativeGatewayWebSocketFixture.start(
+                issuedDeviceTokens: [], authMethod: "tailscale", recoveryScope: self.personalRecoveryScope,
+                manualResponseMethods: ["sessions.list"])
+            defer { fixture.stop() }
+            let config = self.personalConfig(url: fixture.url())
+            let model = NodeAppModel(audioAdmissionInitiallyAllowed: false)
+            try await self.withConnectedPersonalOperator(model: model, config: config) {
+                model.adoptPersonalChatOwner(scope: self.personalRecoveryScope, stableID: config.effectiveStableID)
+                let load = Task { @MainActor in try await model.loadChatSessionRoster(limit: 200) }
+                do {
+                    let rpc = try await fixture.waitForRPC(method: "sessions.list")
+                    switch retirement {
+                    case "person":
+                        model.adoptPersonalChatOwner(scope: "successor-person", stableID: config.effectiveStableID)
+                    case "agent":
+                        model.setSelectedAgentId("successor-agent")
+                    default:
+                        await model.operatorSession.disconnect()
+                    }
+                    let replied = fixture.respond(to: rpc, payload: [
+                        "sessions": [["key": "agent:main:retired-person", "label": "Retired result"]],
+                        "hasMore": false,
+                    ])
+                    if retirement != "route" { #expect(replied) }
+                    switch await load.result {
+                    case .success:
+                        Issue.record("A retired live owner must not publish its roster or a cached replacement")
+                    case let .failure(error):
+                        #expect(error is CancellationError)
+                    }
+                    #expect(model.chatTranscriptCacheGatewayID == nil)
+                    #expect(model.makeChatOfflineStore() == nil)
+                } catch {
+                    load.cancel()
+                    await model.operatorSession.disconnect()
+                    _ = await load.result
+                    throw error
+                }
+            }
+        }
+    }
+
+    @Test
+    func `personal roster keeps real response errors and refuses disconnected live reads`() async throws {
+        let stateDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("personal-roster-error-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: stateDirectory) }
+        try await DeviceIdentityStore.withStateDirectory(stateDirectory) {
+            let fixture = try await NativeGatewayWebSocketFixture.start(
+                issuedDeviceTokens: [], authMethod: "tailscale", recoveryScope: self.personalRecoveryScope,
+                manualResponseMethods: ["sessions.list"])
+            defer { fixture.stop() }
+            let config = self.personalConfig(url: fixture.url())
+            let model = NodeAppModel(audioAdmissionInitiallyAllowed: false)
+            try await self.withConnectedPersonalOperator(model: model, config: config) {
+                model.adoptPersonalChatOwner(scope: self.personalRecoveryScope, stableID: config.effectiveStableID)
+                let reply = Task { @MainActor in
+                    let rpc = try await fixture.waitForRPC(method: "sessions.list")
+                    return fixture.respond(to: rpc, payload: ["sessions": "invalid-roster"])
+                }
+                var responseError: (any Error)?
+                do {
+                    _ = try await model.loadChatSessionRoster(limit: 200)
+                    Issue.record("An authoritative malformed response must remain an error")
+                } catch {
+                    responseError = error
+                }
+                reply.cancel()
+                _ = await reply.result
+                #expect(responseError is DecodingError)
+                await model.operatorSession.disconnect()
+                do {
+                    _ = try await model.loadChatSessionRoster(limit: 200, allowCachedFallback: false)
+                    Issue.record("A disconnected route must not manufacture a live roster")
+                } catch {
+                    #expect((error as NSError).domain == NSURLErrorDomain)
+                    #expect((error as NSError).code == URLError.Code.notConnectedToInternet.rawValue)
+                }
+                #expect(model.chatTranscriptCacheGatewayID == nil)
+                #expect(model.makeChatOfflineStore() == nil)
+            }
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func `personal live agent metadata is independent of offline cache and retires with its person`(
+        changesPerson: Bool) async throws
+    {
+        let stateDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("personal-agent-metadata-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: stateDirectory) }
+        try await DeviceIdentityStore.withStateDirectory(stateDirectory) {
+            let fixture = try await NativeGatewayWebSocketFixture.start(
+                issuedDeviceTokens: [], authMethod: "tailscale", recoveryScope: self.personalRecoveryScope,
+                manualResponseMethods: ["config.get", "users.prefs.get", "agents.list"])
+            defer { fixture.stop() }
+            let config = self.personalConfig(url: fixture.url())
+            let model = NodeAppModel(audioAdmissionInitiallyAllowed: false)
+            try await self.withConnectedPersonalOperator(model: model, config: config) {
+                model.adoptPersonalChatOwner(scope: self.personalRecoveryScope, stableID: config.effectiveStableID)
+                let refresh = Task { @MainActor in await model.refreshGatewayOverviewIfConnected() }
+                do {
+                    let branding = try await fixture.waitForRPC(method: "config.get")
+                    #expect(fixture.respond(to: branding, payload: [
+                        "config": ["session": ["mainKey": "home", "scope": "per-sender"]],
+                    ]))
+                    let preferences = try await fixture.waitForRPC(method: "users.prefs.get")
+                    #expect(fixture.respond(to: preferences, payload: [:]))
+                    let agents = try await fixture.waitForRPC(method: "agents.list")
+                    if changesPerson {
+                        model.adoptPersonalChatOwner(scope: "successor-person", stableID: config.effectiveStableID)
+                    }
+                    #expect(fixture.respond(to: agents, payload: [
+                        "scope": "per-sender", "mainKey": "home", "defaultId": "roster-agent",
+                        "agents": [["id": "roster-agent", "name": "Live agent"]],
+                    ]))
+                    await refresh.value
+                    #expect((model.gatewayDefaultAgentId == "roster-agent") == !changesPerson)
+                    #expect(model.gatewayAgents.contains { $0.id == "roster-agent" } == !changesPerson)
+                    #expect(model.chatTranscriptCacheGatewayID == nil)
+                    #expect(model.makeChatOfflineStore() == nil)
+                } catch {
+                    refresh.cancel()
+                    await model.operatorSession.disconnect()
+                    await refresh.value
+                    throw error
+                }
             }
         }
     }

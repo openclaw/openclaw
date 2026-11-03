@@ -5,13 +5,15 @@ import {
   GATEWAY_CLIENT_NAMES,
   resolveGatewayConnectScopes,
   resolveModelCatalogConnect,
+  selectGatewayConnectAuth,
   MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
-  selectGatewayConnectAuth,
   type ConnectParams,
   type GatewayConnectAuthSelection,
   type GatewayClientMode,
   type GatewayClientName,
+  type GatewayProtocolRequestTiming,
+  type EventFrame,
   type HelloOk,
 } from "@openclaw/gateway-client/browser";
 import {
@@ -36,7 +38,35 @@ import {
   loadOrCreateDeviceIdentity,
   signDevicePayload,
 } from "../lib/nodes/index.ts";
-import { GatewayRequestError, isTrustedRetryEndpoint } from "./gateway-connect-errors.ts";
+import {
+  GatewayRequestError,
+  isTrustedRetryEndpoint,
+  type GatewayBrowserCloseInfo,
+} from "./gateway-connect-errors.ts";
+
+export type GatewayControlUiPluginTab = NonNullable<HelloOk["controlUiTabs"]>[number];
+export type GatewayControlUiPluginWidgetKind = NonNullable<HelloOk["controlUiWidgetKinds"]>[number];
+export type GatewayHelloOk = Omit<HelloOk, "server" | "features" | "snapshot" | "policy"> & {
+  server?: Partial<HelloOk["server"]>;
+  features?: Partial<HelloOk["features"]>;
+  snapshot?: Partial<HelloOk["snapshot"]>;
+  policy?: Partial<HelloOk["policy"]>;
+};
+
+export type GatewayBrowserClientOptions = GatewayBrowserConnectOptions & {
+  /** Local identity admitted by boot-record; never sent to the server. */
+  offlineRecoveryScope?: string;
+  onHello?: (hello: GatewayHelloOk) => void;
+  onEvent?: (evt: EventFrame) => void;
+  onClose?: (info: GatewayBrowserCloseInfo) => void;
+  onConnecting?: () => void;
+  onReconnectScheduled?: (delayMs: number) => void;
+  onGap?: (info: { expected: number; received: number }) => void;
+  onRequestTiming?: (timing: GatewayProtocolRequestTiming) => void;
+  onRecoveryScopeChange?: () => void;
+};
+
+export type GatewayEventListener = (evt: EventFrame) => void;
 
 export type GatewayBrowserConnectOptions = {
   /** Keep complete roster messages for event listeners already present at connect. */
@@ -124,43 +154,6 @@ export class NativeGatewayHelloAdmission {
   }
 }
 
-export function selectBrowserGatewayConnectAuth({
-  opts,
-  remoteIngress,
-  role,
-  deviceId,
-  pendingDeviceTokenRetry,
-}: {
-  opts: GatewayBrowserConnectOptions;
-  remoteIngress: boolean;
-  role: string;
-  deviceId: string;
-  pendingDeviceTokenRetry: boolean;
-}): GatewayConnectAuthSelection {
-  if (remoteIngress) {
-    return {};
-  }
-  const storedEntry = loadDeviceAuthToken({ deviceId, gatewayUrl: opts.url, role });
-  const storedScopes = storedEntry?.scopes ?? [];
-  const storedTokenCanRead =
-    role !== CONTROL_UI_OPERATOR_ROLE ||
-    roleScopesAllow({
-      role,
-      requestedScopes: ["operator.sessions.read"],
-      allowedScopes: storedScopes,
-    });
-  return selectGatewayConnectAuth({
-    token: opts.token,
-    bootstrapToken: opts.bootstrapToken,
-    password: opts.password,
-    storedToken: storedTokenCanRead ? storedEntry?.token : undefined,
-    storedScopes,
-    pendingDeviceTokenRetry,
-    trustedDeviceTokenRetry: isTrustedRetryEndpoint(opts.url),
-    preferBootstrapToken: true,
-  });
-}
-
 function browserDeviceFamily(): string | undefined {
   if (navigator.platform !== "MacIntel") {
     return undefined;
@@ -179,6 +172,40 @@ export async function deriveLegacyV4RecoveryScope(material: string | undefined):
   } catch {
     return "";
   }
+}
+
+export function selectBrowserGatewayConnectAuth(
+  opts: GatewayBrowserConnectOptions,
+  params: { role: string; deviceId: string },
+  remoteIngress: boolean,
+  pendingDeviceTokenRetry: boolean,
+): GatewayConnectAuthSelection {
+  if (remoteIngress) {
+    return {};
+  }
+  const storedEntry = loadDeviceAuthToken({
+    deviceId: params.deviceId,
+    gatewayUrl: opts.url,
+    role: params.role,
+  });
+  const storedScopes = storedEntry?.scopes ?? [];
+  const storedTokenCanRead =
+    params.role !== CONTROL_UI_OPERATOR_ROLE ||
+    roleScopesAllow({
+      role: params.role,
+      requestedScopes: ["operator.sessions.read"],
+      allowedScopes: storedScopes,
+    });
+  return selectGatewayConnectAuth({
+    token: opts.token,
+    bootstrapToken: opts.bootstrapToken,
+    password: opts.password,
+    storedToken: storedTokenCanRead ? storedEntry?.token : undefined,
+    storedScopes: storedEntry?.scopes,
+    pendingDeviceTokenRetry,
+    trustedDeviceTokenRetry: isTrustedRetryEndpoint(opts.url),
+    preferBootstrapToken: true,
+  });
 }
 
 export async function buildBrowserGatewayConnectPlan({
@@ -342,7 +369,7 @@ export async function buildBrowserGatewayConnectPlan({
           "inline-widgets",
           "model-selection-policy",
           "model-wait-status",
-          ...(!isNativeMobileHost() ? ["ui-commands"] : []),
+          ...(!isNativeMobileHost() ? ["ui-agent-github-settings", "ui-commands"] : []),
           "ultrafast",
           "usage-refreshing",
         ],

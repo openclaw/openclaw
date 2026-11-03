@@ -34,8 +34,8 @@ const {
   mockBlockedChatReply,
   sendChatAndExpectStarted,
   settleGatewayFixture,
-  waitForConnectWork,
   waitForAgentRunDrained,
+  waitForConnectWork,
   withMainSessionStore,
 } = gatewaySuite;
 
@@ -109,37 +109,48 @@ async function startAgent(runId: string, sessionKey = "main") {
   ).toMatchObject({ ok: true, payload: { status: "accepted" } });
 }
 
-test("fixture cleanup joins the exact retained chat.send root", async () => {
-  const admission = await import("../process/gateway-work-admission.js");
-  const lease = admission.tryBeginGatewayRootWorkAdmission("ws:chat.send");
-  if (!lease) {
-    throw new Error("Expected admitted request fixture");
-  }
-  const release = createDeferred();
-  let retained: Promise<unknown> | undefined;
-  let joined: Promise<void> | undefined;
-  let settled = false;
-  try {
-    await lease.run(async () => {
-      retained = admission.runWithRetainedGatewayRootWork(() => release.promise);
-    });
-    lease.release();
-    joined = waitForConnectWork();
-    void joined.then(() => {
-      settled = true;
-    });
-    await Promise.resolve();
-    expect(settled).toBe(false);
-    release.resolve();
-    await joined;
-    expect(getActiveGatewayRootWorkCount()).toBe(0);
-  } finally {
-    release.resolve();
-    lease.release();
-    await retained;
-    await joined;
-  }
-});
+test.each(["ws:chat.send", "ws:preauth"] as const)(
+  "fixture cleanup joins the exact %s work",
+  async (origin) => {
+    const admission = await import("../process/gateway-work-admission.js");
+    const lease =
+      origin === "ws:chat.send" ? admission.tryBeginGatewayRootWorkAdmission(origin) : undefined;
+    if (origin === "ws:chat.send" && !lease) {
+      throw new Error("Expected admitted request fixture");
+    }
+    const release = createDeferred();
+    let retained: Promise<unknown> | undefined;
+    let joined: Promise<void> | undefined;
+    let settled = false;
+    try {
+      if (lease) {
+        await lease.run(async () => {
+          retained = admission.runWithRetainedGatewayRootWork(() => release.promise);
+        });
+        lease.release();
+      } else {
+        retained = admission.runWithGatewayIndependentRootWorkAdmission(
+          () => release.promise,
+          origin,
+        );
+      }
+      joined = waitForConnectWork();
+      void joined.then(() => {
+        settled = true;
+      });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      release.resolve();
+      await joined;
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    } finally {
+      release.resolve();
+      lease?.release();
+      await retained;
+      await joined;
+    }
+  },
+);
 
 test.for([
   { field: "verboseLevel", message: "/verbose full", thinking: undefined, scoped: true },

@@ -37,7 +37,7 @@ export type PluginNodeCapabilityClient = {
 };
 
 /** Prepare credentials before publication; the returned commit only swaps owned records. */
-export function prepareClientPluginNodeCapabilities(params: {
+function prepareClientPluginNodeCapabilities(params: {
   client: PluginNodeCapabilityClient;
   surfaces: readonly PluginNodeCapabilitySurface[];
   changedPluginIds: ReadonlySet<string>;
@@ -320,20 +320,19 @@ export function normalizePluginNodeCapabilityScopedUrl(
     };
   }
   const prefix = `${PLUGIN_NODE_CAPABILITY_PATH_PREFIX}/`;
-  let scopedPath = false;
+  const scopedPath = url.pathname.startsWith(prefix);
   let malformedScopedPath = false;
   let capabilityFromPath: string | undefined;
   let rewrittenUrl: string | undefined;
 
-  if (url.pathname.startsWith(prefix)) {
-    scopedPath = true;
+  if (scopedPath) {
     const remainder = url.pathname.slice(prefix.length);
     const slashIndex = remainder.indexOf("/");
     if (slashIndex <= 0) {
       malformedScopedPath = true;
     } else {
       const encodedCapability = remainder.slice(0, slashIndex);
-      const canonicalPath = remainder.slice(slashIndex) || "/";
+      const canonicalPath = remainder.slice(slashIndex);
       let decoded: string | undefined;
       try {
         decoded = decodeURIComponent(encodedCapability);
@@ -341,7 +340,8 @@ export function normalizePluginNodeCapabilityScopedUrl(
         malformedScopedPath = true;
       }
       capabilityFromPath = normalizeOptionalString(decoded);
-      if (!capabilityFromPath || !canonicalPath.startsWith("/")) {
+      // Leading separators can become an authority when handlers reparse or decode the path.
+      if (!capabilityFromPath || /^\/(?:\/|%2f|%5c)/i.test(canonicalPath)) {
         malformedScopedPath = true;
       } else {
         url.pathname = canonicalPath;

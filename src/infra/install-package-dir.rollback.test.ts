@@ -20,6 +20,8 @@ import {
   normalizeComparablePath,
   updateOptions,
 } from "./install-package-dir.test-support.js";
+import * as packageFilesystem from "./package-update-filesystem.js";
+import * as retry from "./retry.js";
 
 async function expectText(directory: string, expected: string, name = "marker.txt") {
   await expect(fs.readFile(path.join(directory, name), "utf8")).resolves.toBe(expected);
@@ -210,6 +212,50 @@ describe("installPackageDir rollback", () => {
         await expectText(backup, "old");
         await expectText(backup, "keep config", "openclaw.plugin.json");
         await expectMissing(path.join(targetDir, "openclaw.plugin.json"));
+      }
+    },
+  );
+
+  it.each(["transient", "persistent", "rejected hardlinks"] as const)(
+    "retries a Windows plugin backup rename held by a scanner: %s",
+    async (scenario) => {
+      const [move, runRetry] = [packageFilesystem.movePackageRoot, retry.retryAsync];
+      vi.spyOn(packageFilesystem, "movePackageRoot").mockImplementation((from, to, options) =>
+        move(from, to, { ...options, platform: "win32" }),
+      );
+      vi.spyOn(retry, "retryAsync").mockImplementation((fn, options) =>
+        runRetry(fn, { ...(typeof options === "object" ? options : {}), sleep: async () => {} }),
+      );
+      const { sourceDir, targetDir } = await createFixture("windows-held");
+      const rename = fs.rename.bind(fs);
+      let denied = 0;
+      vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+        if (samePath(from, targetDir) && (scenario === "persistent" || denied < 2)) {
+          denied++;
+          throw ioError("EPERM: plugin file is in use", "EPERM");
+        }
+        return rename(from, to);
+      });
+      const warn = vi.fn();
+      const result = await installPackageDir({
+        ...updateOptions(sourceDir, targetDir),
+        logger: { warn },
+        // Rejected hardlinks always publish fs-safe's fresh copy instead of renaming.
+        sourceHardlinks: scenario === "rejected hardlinks" ? undefined : "package-manager",
+      });
+      const backups = await fs.readdir(
+        path.join(path.dirname(targetDir), ".openclaw-install-backups"),
+      );
+      expect(backups).toEqual([]);
+      if (scenario !== "persistent") {
+        expect(result).toEqual({ ok: true });
+        await expectText(targetDir, "new");
+        expect([warn.mock.calls.length, denied]).toEqual(
+          scenario === "transient" ? [2, 2] : [0, 0],
+        );
+      } else {
+        expectFailure(result, "plugin backup rename failed after 16 attempts", "stop the Gateway");
+        await expectText(targetDir, "old");
       }
     },
   );

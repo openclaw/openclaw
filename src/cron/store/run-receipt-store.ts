@@ -210,6 +210,7 @@ export function finishCronRunReceiptInDatabase(params: {
   handle: CronRunReceiptHandle;
   pendingReceiptId: string | undefined;
   status: Exclude<CronRunReceiptStatus, "running">;
+  executionPending?: boolean;
   finishedAtMs: number;
   error?: string;
 }): boolean {
@@ -218,8 +219,9 @@ export function finishCronRunReceiptInDatabase(params: {
     query(params.database)
       .updateTable("cron_run_receipts")
       .set({
-        status: params.status,
-        finished_at_ms: params.finishedAtMs,
+        // A recorded timeout retains the unique active-job fence until execution settles.
+        status: params.executionPending ? "running" : params.status,
+        finished_at_ms: params.executionPending ? null : params.finishedAtMs,
         error_text: params.error ?? null,
       })
       .where("receipt_id", "=", params.handle.receiptId)

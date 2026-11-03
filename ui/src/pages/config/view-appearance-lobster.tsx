@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For, Show } from "solid-js";
+import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import {
   BUILTIN_THEMES,
   resolveThemeBranding,
@@ -51,7 +51,7 @@ export function LobsterPetSection(props: ConfigProps) {
       {(_visible) => {
         const [artworkReady, setArtworkReady] = createSignal(false);
         let gallery!: HTMLDivElement;
-        // Keep labels and fixed-size cells; create the SVGs only when needed.
+        // Keep labels and fixed-size cells; create artwork and tooltip owners only when needed.
         createIntersectionObserver(
           () => (artworkReady() ? [] : [gallery]),
           (entries) => {
@@ -103,6 +103,8 @@ export function LobsterPetSection(props: ConfigProps) {
                     <div class="lobsterdex" ref={(element) => (gallery = element)}>
                       <For each={LOBSTER_PET_PALETTES}>
                         {(palette) => {
+                          let cell!: HTMLSpanElement;
+                          let tooltip: HTMLElementTagNameMap["openclaw-tooltip"] | undefined;
                           const look = canonicalLobsterLook(palette);
                           const entry = createMemo(() => dexEntries().get(palette.id));
                           const seen = () => entry() !== undefined;
@@ -127,9 +129,22 @@ export function LobsterPetSection(props: ConfigProps) {
                               .filter((line): line is string => line !== null)
                               .join("\n"),
                           );
+                          const revealOnFocus = () => {
+                            if (artworkReady()) {
+                              return;
+                            }
+                            setArtworkReady(true);
+                            // The first focus arrived before the tooltip could listen.
+                            onSettled(() => {
+                              if (cell.matches(":focus")) {
+                                tooltip?.previewForAnchor(cell, "", "focus");
+                              }
+                            });
+                          };
                           return (
-                            <openclaw-tooltip>
+                            <>
                               <span
+                                ref={(element) => (cell = element)}
                                 class={[
                                   "lobsterdex__mini",
                                   `lobster-pet--palette-${palette.id}`,
@@ -139,6 +154,7 @@ export function LobsterPetSection(props: ConfigProps) {
                                 tabindex={0}
                                 role="img"
                                 aria-label={ariaLabel()}
+                                onFocusIn={revealOnFocus}
                               >
                                 <Show when={artworkReady()}>
                                   <LobsterSvg look={look} standalone />
@@ -149,12 +165,19 @@ export function LobsterPetSection(props: ConfigProps) {
                                   </span>
                                 ) : undefined}
                               </span>
-                              <span slot="content" class="lobsterdex__tooltip">
-                                <strong>{displayName()}</strong>
-                                <span>{loreLine()}</span>
-                                {visitedLine() ? <span>{visitedLine()}</span> : undefined}
-                              </span>
-                            </openclaw-tooltip>
+                              <Show when={artworkReady()}>
+                                <openclaw-tooltip
+                                  ref={(element) => (tooltip = element)}
+                                  prop:anchor={cell}
+                                >
+                                  <span slot="content" class="lobsterdex__tooltip">
+                                    <strong>{displayName()}</strong>
+                                    <span>{loreLine()}</span>
+                                    {visitedLine() ? <span>{visitedLine()}</span> : undefined}
+                                  </span>
+                                </openclaw-tooltip>
+                              </Show>
+                            </>
                           );
                         }}
                       </For>

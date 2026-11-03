@@ -61,6 +61,8 @@ import { inspectCurrentConversationBindingRecordInDatabase } from "../infra/outb
 import { readOutboundDeliveriesInDatabase } from "../infra/outbound/delivery-queue-storage.kernel.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
+import { readUpdateRunAdmissionCommand } from "../infra/update-run-admission.read.js";
+import { isUpdateRunAdmissionReadCommand } from "../infra/update-run-admission.types.js";
 import {
   readInterruptedUpdateCandidate,
   readUpdateRunStatusInDatabase,
@@ -69,9 +71,9 @@ import {
   readUpdateRuns,
 } from "../infra/update-run-read.kernel.js";
 import {
-  inspectUpdateRunReconciliation,
-  readUpdateRunReconciliationCandidates,
-} from "../infra/update-run-reconciliation.read.js";
+  canCollectPluginSourceSnapshotsInDatabase,
+  inspectPluginCohortRecoveryRows,
+} from "../infra/update-run-recovery-store.js";
 import {
   pluginBlobLookupInDatabase,
   pluginBlobEntriesInDatabase,
@@ -298,18 +300,8 @@ export function readOpenClawStateDatabaseCommand(
       runs: readUpdateRuns(db, command.input),
     };
   }
-  if (command.type === "updateRuns.reconciliationCandidates") {
-    return {
-      type: command.type,
-      candidates: readUpdateRunReconciliationCandidates(db, command.input),
-    };
-  }
-  if (command.type === "updateRuns.reconciliationCandidate") {
-    const run = tableExists(db, "update_runs") ? readUpdateRunRecord(db, command.runId) : undefined;
-    return {
-      type: command.type,
-      candidate: run ? inspectUpdateRunReconciliation(db, run, {}) : undefined,
-    };
+  if (isUpdateRunAdmissionReadCommand(command)) {
+    return readUpdateRunAdmissionCommand(db, command);
   }
   if (command.type === "updateRuns.status") {
     return {
@@ -327,6 +319,18 @@ export function readOpenClawStateDatabaseCommand(
     return {
       type: command.type,
       run: readInterruptedUpdateCandidate(db),
+    };
+  }
+  if (command.type === "updateRuns.pluginCohortRecoveries") {
+    return {
+      type: command.type,
+      pairs: runSqliteReadSnapshotSync(db, () => inspectPluginCohortRecoveryRows(db)),
+    };
+  }
+  if (command.type === "updateRuns.pluginSnapshotCollection") {
+    return {
+      type: command.type,
+      allowed: runSqliteReadSnapshotSync(db, () => canCollectPluginSourceSnapshotsInDatabase(db)),
     };
   }
   if (command.type === "exec-approvals.read") {

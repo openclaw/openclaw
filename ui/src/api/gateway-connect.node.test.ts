@@ -7,6 +7,7 @@ import {
 } from "@openclaw/gateway-client/browser";
 import { describe, expect, it, vi } from "vitest";
 import * as nodes from "../lib/nodes/index.ts";
+import * as connectPlanOwner from "./gateway-connect-plan.ts";
 import { startConnect, useHandshakeHarness } from "./gateway-handshake.test-support.ts";
 import { getLatestWebSocket, MockWebSocket, wsInstances } from "./gateway-socket.test-support.ts";
 import type {
@@ -261,12 +262,26 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
       GATEWAY_CLIENT_CAPS.INLINE_WIDGETS,
       GATEWAY_CLIENT_CAPS.MODEL_SELECTION_POLICY,
       GATEWAY_CLIENT_CAPS.MODEL_WAIT_STATUS,
+      GATEWAY_CLIENT_CAPS.UI_AGENT_GITHUB_SETTINGS,
       GATEWAY_CLIENT_CAPS.UI_COMMANDS,
       GATEWAY_CLIENT_CAPS.ULTRAFAST,
       GATEWAY_CLIENT_CAPS.USAGE_REFRESHING,
     ]);
     expect(connectFrame.params?.scopes).toEqual([...CONTROL_UI_OPERATOR_SCOPES]);
   });
+
+  it.each(["ios", "android"])(
+    "does not offer agent UI commands from native %s",
+    async (platform) => {
+      Object.assign(window, {
+        __OPENCLAW_NATIVE_EMBED__: { platform, formFactor: "phone" },
+      });
+      const { connectFrame } = await startConnect(createClient({ token: "shared-auth-token" }));
+
+      expect(connectFrame.params.caps).not.toContain(GATEWAY_CLIENT_CAPS.UI_COMMANDS);
+      expect(connectFrame.params.caps).not.toContain(GATEWAY_CLIENT_CAPS.UI_AGENT_GITHUB_SETTINGS);
+    },
+  );
 
   it("leaves the native-auth capability list unchanged", async () => {
     client = createClient({
@@ -333,6 +348,67 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
   });
 
   describe("native personal-auth admission", () => {
+    it("does not let a retired device grant clear a successor's personal admission", async () => {
+      const held = Promise.withResolvers<void>();
+      const oldPlanReady = Promise.withResolvers<void>();
+      const buildPlan = connectPlanOwner.buildBrowserGatewayConnectPlan;
+      let firstPlan = true;
+      vi.spyOn(connectPlanOwner, "buildBrowserGatewayConnectPlan").mockImplementation(
+        async (input) => {
+          const plan = await buildPlan(input);
+          if (firstPlan) {
+            firstPlan = false;
+            oldPlanReady.resolve();
+            await held.promise;
+          }
+          return plan;
+        },
+      );
+      let firstChallenge = true;
+      client = createClient({
+        nativeConnectAuth: async (challenge) => {
+          const reply = await nativeConnectAuth(challenge);
+          if (firstChallenge) {
+            firstChallenge = false;
+            return {
+              ...reply,
+              auth: { deviceToken: "retired-device-grant" },
+              expectedHelloAuth: undefined,
+            };
+          }
+          return reply;
+        },
+      });
+      client.start();
+      const first = getLatestWebSocket();
+      first.emitOpen();
+      first.emitConnectChallenge({ nonce: "old-socket", ts: 1_800_000_000_000 });
+      await vi.advanceTimersByTimeAsync(0);
+      await oldPlanReady.promise;
+      first.emitClose(1006, "replaced");
+      await vi.advanceTimersByTimeAsync(1_000);
+      const { ws, connectFrame } = await startConnect(client);
+      held.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(first.sent).toEqual([]);
+      const listener = vi.fn();
+      const remove = client.addEventListener(listener);
+      const blockedRequest = client.request("gateway.info").catch(() => undefined);
+      await Promise.resolve();
+      expect(ws.sent.map((raw) => JSON.parse(raw).method)).toEqual(["connect"]);
+      ws.emitMessage({ type: "event", event: "chat", payload: { state: "delta" }, seq: 1 });
+      expect(listener).not.toHaveBeenCalled();
+      emitNativeHello(ws, connectFrame.id, {
+        method: "tailscale",
+        recoveryScope: "tailscale-account-a",
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(client.connected).toBe(true);
+      expect(client.recoveryScope).toBe("tailscale-account-a");
+      await blockedRequest;
+      remove();
+    });
+
     it.each([
       { method: "token", recoveryScope: "tailscale-account-a" },
       { method: "tailscale", recoveryScope: "tailscale-account-b" },

@@ -11,6 +11,7 @@ import {
   clampDreamDiaryContextEntry,
   FALLBACK_NARRATIVE,
 } from "./dreaming-dreams-file.js";
+import type { WorkspaceFileMode } from "./workspace-file-mode.js";
 
 export type DreamingCompletion = Pick<PluginRuntime["subagent"], "complete">;
 
@@ -80,6 +81,7 @@ function formatFallbackWriteFailure(err: unknown): string {
 
 export async function appendFallbackNarrativeEntry(params: {
   workspaceDir: string;
+  workspaceFileMode?: WorkspaceFileMode;
   data: NarrativePhaseData;
   nowMs: number;
   timezone?: string;
@@ -89,6 +91,7 @@ export async function appendFallbackNarrativeEntry(params: {
   try {
     await appendNarrativeEntry({
       workspaceDir: params.workspaceDir,
+      workspaceFileMode: params.workspaceFileMode,
       // Raw snippets and promotions are pre-processing memory staging fragments.
       // Keep fallback diary text generic so DREAMS.md never leaks staging content.
       narrative: FALLBACK_NARRATIVE,
@@ -184,6 +187,7 @@ export type DreamNarrativeRequest = {
   timeoutMs: number;
   subagent: DreamingCompletion;
   workspaceDir: string;
+  workspaceFileMode?: WorkspaceFileMode;
   data: NarrativePhaseData;
   nowMs?: number;
   timezone?: string;
@@ -240,6 +244,7 @@ async function generateAndAppendDreamNarrative(
     }
     const dreamsPath = await appendNarrativeEntry({
       workspaceDir: params.workspaceDir,
+      workspaceFileMode: params.workspaceFileMode,
       narrative,
       nowMs,
       timezone: params.timezone,

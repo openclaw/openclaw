@@ -1,6 +1,6 @@
 import { AsyncResource } from "node:async_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { expect, it } from "vitest";
+import { expect, it, onTestFinished } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { PluginInstanceUnavailableError } from "./plugin-instance-error.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
@@ -19,11 +19,45 @@ import {
   markPluginRecordBorrowed,
   markPluginRegistryActive,
 } from "./registry-lifecycle.js";
+import { disposePluginRegistryInstances } from "./runtime.js";
 import { getPluginRuntimeGatewayRequestScope as getScope } from "./runtime/gateway-request-scope.js";
 
 class RetainedRegistry {
   readonly fixtureLabel = "RetainedRegistry";
 }
+
+it("releases completed reload preludes while disposed instance signals remain reachable", async () => {
+  const stackTraceLimit = Error.stackTraceLimit;
+  Reflect.set(Error, "stackTraceLimit", 50);
+  onTestFinished(() => {
+    Reflect.set(Error, "stackTraceLimit", stackTraceLimit);
+  });
+  class ReloadRegistry {
+    readonly fixtureLabel = "ReloadRegistry";
+  }
+  async function retire() {
+    const { record, instance } = createOwnedInstance("retirement-stack");
+    const registry = selectRegistry(record, "retired", new ReloadRegistry());
+    expect(
+      (await disposePluginRegistryInstances(registry, undefined, { cfg: {} })).failures,
+    ).toEqual([]);
+    return instance;
+  }
+  const retired = [];
+  for (let generation = 0; generation < 20; generation++) {
+    retired.push(await retire());
+  }
+  // Inspect before error matchers render the lazy abort stack and hide the retained callback.
+  await expectLiveObjects(ReloadRegistry, 0);
+  for (const instance of retired) {
+    expect(instance.owner?.registry).toBeUndefined();
+    expect(instance.lifecycle.signal.aborted).toBe(true);
+    expect(instance.lifecycle.signal.reason).toMatchObject({
+      message: "Plugin retirement-stack is retiring",
+    });
+    expect(() => instance.run(() => "late")).toThrow(PluginInstanceUnavailableError);
+  }
+});
 
 it("keeps owner work independent of its caller and follows adopted registry custody", async () => {
   const { record, instance } = createOwnedInstance("owner-work");

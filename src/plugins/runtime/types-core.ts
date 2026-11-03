@@ -275,6 +275,17 @@ export type PluginRuntimeCore = {
     resolveCliBackendDispatchEligibility: typeof import("../../agents/embedded-agent-runner/cli-backend-dispatch-eligibility.js").resolveEmbeddedCliBackendDispatchEligibility;
     resolveCliBackendDispatchEligibilityAsync: typeof import("../../agents/embedded-agent-runner/cli-backend-dispatch-eligibility.js").resolveEmbeddedCliBackendDispatchEligibilityAsync;
     ensureAgentWorkspace: typeof import("./runtime-agent-workspace.js").ensurePluginAgentWorkspace;
+    /**
+     * Explain whether named tools reach an agent (configured policy) or one session
+     * (adds its model, harness and sandbox), naming the stage and config path that
+     * removed each blocked tool. Read-only; uses the current runtime config.
+     */
+    explainToolAvailability: (
+      params: Omit<
+        import("../../agents/tool-availability-explanation.js").ExplainToolAvailabilityParams,
+        "config"
+      >,
+    ) => Promise<import("../../agents/tool-availability-explanation.js").ToolAvailabilityReport>;
     session: {
       resolveStorePath: typeof import("../../config/sessions/paths.js").resolveSessionStorePathCore;
       createSessionEntry: (
@@ -355,6 +366,7 @@ export type PluginRuntimeCore = {
       listSessionEntries: (
         params?: Partial<Omit<RuntimeSessionStoreReadParams, "sessionKey">> & {
           readOnly?: boolean;
+          projection?: "full" | "list";
           /** Restrict results to exact persisted keys while retaining canonical listing validation. */
           sessionKeys?: readonly string[];
           /** Set false to skip derived participant identities and counts when reading metadata. */
@@ -438,6 +450,10 @@ export type PluginRuntimeCore = {
     captureSessionEventTarget: typeof import("./runtime-session-events.js").captureSessionEventTarget;
     enqueueSessionEvent: typeof import("./runtime-session-events.js").enqueueSessionEvent;
     enqueueSystemEvent: typeof import("./system-events.js").enqueueSystemEventFromSdk;
+    /** Current generation of a session; a later `postSessionNotice` skips it once reset or replaced. */
+    captureSessionGeneration: typeof import("./runtime-session-notice.js").capturePluginSessionGeneration;
+    /** Post this plugin's background notice to the session generation it observed. */
+    postSessionNotice: typeof import("./runtime-session-notice.js").postPluginSessionNotice;
     runCommandWithTimeout: typeof import("../../process/exec.js").runCommandWithTimeout;
     formatNativeDependencyHint: typeof import("./native-deps.js").formatNativeDependencyHint;
   };
@@ -473,7 +489,7 @@ export type PluginRuntimeCore = {
     ) => Promise<import("../../image-generation/runtime-types.js").GenerateImageRuntimeResult>;
     listProviders: (
       params?: RuntimeProviderListParams,
-    ) => import("../../image-generation/types.js").ImageGenerationProvider[];
+    ) => import("../../image-generation/provider-types.js").ImageGenerationProvider[];
   };
   videoGeneration: {
     generate: (
@@ -481,7 +497,7 @@ export type PluginRuntimeCore = {
     ) => Promise<import("../../video-generation/runtime-types.js").GenerateVideoRuntimeResult>;
     listProviders: (
       params?: RuntimeProviderListParams,
-    ) => import("../../video-generation/types.js").VideoGenerationProvider[];
+    ) => import("../../video-generation/provider-types.js").VideoGenerationProvider[];
   };
   musicGeneration: {
     generate: (
@@ -489,7 +505,7 @@ export type PluginRuntimeCore = {
     ) => Promise<import("../../music-generation/runtime-types.js").GenerateMusicRuntimeResult>;
     listProviders: (
       params?: RuntimeProviderListParams,
-    ) => import("../../music-generation/types.js").MusicGenerationProvider[];
+    ) => import("../../music-generation/provider-types.js").MusicGenerationProvider[];
   };
   webSearch: {
     /** @deprecated Await listProvidersAsync so discovery policy is prepared off-thread. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */

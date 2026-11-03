@@ -265,7 +265,7 @@ describe("MemoryImportPage", () => {
         ),
       );
       [...page.querySelectorAll<HTMLButtonElement>("button")]
-        .find((button) => button.textContent?.trim() === "Refresh")
+        .find((button) => button.getAttribute("aria-label") === "Refresh")
         ?.click();
       await waitForButton(page, "import-provider-button");
       expect(request.mock.calls.filter(([method]) => method === "agents.list")).toHaveLength(2);
@@ -291,7 +291,7 @@ describe("MemoryImportPage", () => {
         ),
       );
       [...page.querySelectorAll<HTMLButtonElement>("button")]
-        .find((button) => button.textContent?.trim() === "Refresh")
+        .find((button) => button.getAttribute("aria-label") === "Refresh")
         ?.click();
       await waitForMemoryImport(() => expect(page.textContent).toContain("/tmp/openclaw-writer"));
       expect(request.mock.calls.filter(([method]) => method === "agents.list")).toHaveLength(4);
@@ -342,7 +342,7 @@ describe("MemoryImportPage", () => {
     expect(page.textContent).not.toContain("sk-1234567890abcdef");
 
     const refresh = [...page.querySelectorAll<HTMLButtonElement>("button")].find(
-      (button) => button.textContent?.trim() === "Refresh",
+      (button) => button.getAttribute("aria-label") === "Refresh",
     );
     if (!refresh) {
       throw new Error("expected Refresh button");

@@ -1,0 +1,3 @@
+# A retired native plan must not release events before its successor is admitted.
+# The test controls completion after plan construction and exercises a real reconnect.
+56

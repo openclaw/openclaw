@@ -1611,8 +1611,14 @@ final class NodeAppModel {
 
     private func refreshBrandingFromGateway(shouldApply: () -> Bool = { true }) async {
         do {
-            guard let sourceGatewayID = self.chatTranscriptCacheGatewayID,
+            let sourceAuthorityGeneration = self.operatorAuthorityGeneration
+            let sourceAgentID = self.chatDeliveryAgentId
+            guard self.isOperatorGatewayConnected,
+                  let sourceGatewayID = self.activeGatewayConnectConfig?.effectiveStableID,
                   let sourceRoute = await operatorGateway.currentRoute(ifGatewayID: sourceGatewayID)
+            else { return }
+            guard self.operatorAuthorityGeneration == sourceAuthorityGeneration,
+                  self.chatDeliveryAgentId == sourceAgentID
             else { return }
             let res = try await operatorGateway.request(
                 method: "config.get",
@@ -1626,8 +1632,11 @@ final class NodeAppModel {
             let scope = (session?["scope"] as? String) ?? "per-sender"
             let accentHex = ColorHexSupport.gatewayUserAccentHex(configUI: config["ui"] as? [String: Any])
             let profileAccentHex = await self.fetchProfileAccentHex(ifCurrentRoute: sourceRoute)
-            guard shouldApply(),
-                  GatewayStableIdentifier.matches(self.chatTranscriptCacheGatewayID, sourceGatewayID)
+            guard await self.operatorGateway.currentRoute(ifGatewayID: sourceGatewayID) == sourceRoute,
+                  shouldApply(), self.isOperatorGatewayConnected,
+                  self.operatorAuthorityGeneration == sourceAuthorityGeneration,
+                  GatewayStableIdentifier.matches(self.activeGatewayConnectConfig?.effectiveStableID, sourceGatewayID),
+                  self.chatDeliveryAgentId == sourceAgentID
             else { return }
             self.mainSessionBaseKey = mainKey
             self.gatewaySessionScope = scope
@@ -1657,11 +1666,16 @@ final class NodeAppModel {
 
     private func refreshAgentsFromGateway(shouldApply: () -> Bool = { true }) async {
         do {
-            guard let sourceGatewayID = self.chatTranscriptCacheGatewayID,
-                  let sourceStore = self.makeChatOfflineStore(),
-                  GatewayStableIdentifier.matches(sourceStore.gatewayID, sourceGatewayID),
+            let sourceAuthorityGeneration = self.operatorAuthorityGeneration
+            let sourceAgentID = self.chatDeliveryAgentId
+            guard self.isOperatorGatewayConnected,
+                  let sourceGatewayID = self.activeGatewayConnectConfig?.effectiveStableID,
                   let sourceRoute = await operatorGateway.currentRoute(ifGatewayID: sourceGatewayID)
             else { return }
+            guard self.operatorAuthorityGeneration == sourceAuthorityGeneration,
+                  self.chatDeliveryAgentId == sourceAgentID
+            else { return }
+            let sourceStore = self.makeChatOfflineStore()
             let request = OpenClawChatGatewayRequests.agentsList(timeoutMs: 8000)
             let res = try await operatorGateway.request(
                 request,
@@ -1671,8 +1685,11 @@ final class NodeAppModel {
                 scope: decoded.scope.value as? String,
                 mainSessionKey: decoded.mainkey,
                 defaultAgentID: decoded.defaultid)
-            guard shouldApply(),
-                  GatewayStableIdentifier.matches(self.chatTranscriptCacheGatewayID, sourceGatewayID)
+            guard await self.operatorGateway.currentRoute(ifGatewayID: sourceGatewayID) == sourceRoute,
+                  shouldApply(), self.isOperatorGatewayConnected,
+                  self.operatorAuthorityGeneration == sourceAuthorityGeneration,
+                  GatewayStableIdentifier.matches(self.activeGatewayConnectConfig?.effectiveStableID, sourceGatewayID),
+                  self.chatDeliveryAgentId == sourceAgentID
             else { return }
             self.gatewayDefaultAgentId = decoded.defaultid
             self.gatewayAgents = decoded.agents
@@ -1687,7 +1704,9 @@ final class NodeAppModel {
                 self.focusedChatSessionKey = nil
             }
             self.synchronizeTalkSessionKey()
-            if let routingIdentity {
+            if let routingIdentity, let sourceStore,
+               GatewayStableIdentifier.matches(self.chatTranscriptCacheGatewayID, sourceStore.gatewayID)
+            {
                 await sourceStore.storeSessionRoutingIdentity(routingIdentity)
             }
         } catch {

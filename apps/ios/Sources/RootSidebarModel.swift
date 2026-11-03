@@ -94,13 +94,15 @@ extension NodeAppModel {
         archived: Bool = false,
         allowCachedFallback: Bool = true) async throws -> ChatSessionRosterSnapshot
     {
-        let sourceGatewayID = self.chatTranscriptCacheGatewayID
+        let sourceCacheGatewayID = self.chatTranscriptCacheGatewayID
+        let sourceGatewayID = self.activeGatewayConnectConfig?.effectiveStableID
+        let sourceAuthorityGeneration = self.operatorAuthorityGeneration
         let sourceAgentID = self.chatDeliveryAgentId
         guard self.isLocalChatFixtureEnabled || self.isOperatorGatewayConnected else {
             guard allowCachedFallback else { throw URLError(.notConnectedToInternet) }
             return await ChatSessionRosterSnapshot(
                 sessions: archived ? [] : self.loadCachedChatSessions(
-                    gatewayID: sourceGatewayID,
+                    gatewayID: sourceCacheGatewayID,
                     agentID: sourceAgentID),
                 isCached: true,
                 isComplete: false)
@@ -108,6 +110,7 @@ extension NodeAppModel {
 
         do {
             let snapshot: ChatSessionRosterSnapshot
+            var sourceRoute: GatewayNodeSessionRoute?
             if self.isLocalChatFixtureEnabled {
                 let response = try await self.makeChatTransport().listSessions(limit: limit, archived: archived)
                 snapshot = ChatSessionRosterSnapshot(
@@ -119,10 +122,14 @@ extension NodeAppModel {
                 guard let sourceGatewayID,
                       let route = await self.operatorSession.currentRoute(ifGatewayID: sourceGatewayID)
                 else { throw URLError(.notConnectedToInternet) }
+                sourceRoute = route
 
                 // Every page belongs to one physical authenticated Gateway route;
                 // reconnects and gateway switches must never splice two rosters.
                 snapshot = try await ChatSessionRosterSnapshot.collect { offset in
+                    guard self.operatorAuthorityGeneration == sourceAuthorityGeneration,
+                          self.chatDeliveryAgentId == sourceAgentID
+                    else { throw CancellationError() }
                     let request = OpenClawChatGatewayRequests.sessionsList(
                         limit: limit,
                         search: nil,
@@ -130,38 +137,60 @@ extension NodeAppModel {
                         agentID: sourceAgentID,
                         offset: offset)
                     let data = try await self.operatorSession.request(request, ifCurrentRoute: route)
+                    guard self.operatorAuthorityGeneration == sourceAuthorityGeneration,
+                          self.chatDeliveryAgentId == sourceAgentID
+                    else { throw CancellationError() }
                     return try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: data)
                 }
-                guard GatewayStableIdentifier.matches(self.chatTranscriptCacheGatewayID, sourceGatewayID),
+                guard await self.operatorSession.currentRoute(ifGatewayID: sourceGatewayID) == route,
+                      self.isOperatorGatewayConnected,
+                      self.operatorAuthorityGeneration == sourceAuthorityGeneration,
+                      GatewayStableIdentifier.matches(
+                          self.activeGatewayConnectConfig?.effectiveStableID,
+                          sourceGatewayID),
                       self.chatDeliveryAgentId == sourceAgentID
                 else {
                     throw CancellationError()
                 }
             }
 
-            if !archived {
-                // An interrupted page must not replace a more complete offline roster.
-                if snapshot.isComplete {
-                    await self.storeCachedChatSessions(
-                        snapshot.sessions,
-                        gatewayID: sourceGatewayID,
-                        agentID: sourceAgentID)
-                    if let sourceGatewayID,
-                       !GatewayStableIdentifier.matches(self.chatTranscriptCacheGatewayID, sourceGatewayID) ||
-                       self.chatDeliveryAgentId != sourceAgentID
-                    {
-                        throw CancellationError()
-                    }
+            // An interrupted page must not replace a more complete offline roster.
+            if !archived, snapshot.isComplete, let sourceCacheGatewayID {
+                await self.storeCachedChatSessions(
+                    snapshot.sessions,
+                    gatewayID: sourceCacheGatewayID,
+                    agentID: sourceAgentID)
+                if !GatewayStableIdentifier.matches(self.chatTranscriptCacheGatewayID, sourceCacheGatewayID) ||
+                    self.chatDeliveryAgentId != sourceAgentID
+                {
+                    throw CancellationError()
                 }
+            }
+            if let sourceRoute, let sourceGatewayID {
+                guard await self.operatorSession.currentRoute(ifGatewayID: sourceGatewayID) == sourceRoute,
+                      self.isOperatorGatewayConnected,
+                      self.operatorAuthorityGeneration == sourceAuthorityGeneration,
+                      GatewayStableIdentifier.matches(
+                          self.activeGatewayConnectConfig?.effectiveStableID,
+                          sourceGatewayID),
+                      self.chatDeliveryAgentId == sourceAgentID
+                else { throw CancellationError() }
             }
             return snapshot
         } catch is CancellationError {
             throw CancellationError()
         } catch {
-            guard allowCachedFallback, !archived else { throw error }
+            guard self.operatorAuthorityGeneration == sourceAuthorityGeneration,
+                  self.chatDeliveryAgentId == sourceAgentID
+            else { throw CancellationError() }
+            guard allowCachedFallback, !archived, let sourceCacheGatewayID else { throw error }
             let cached = await self.loadCachedChatSessions(
-                gatewayID: sourceGatewayID,
+                gatewayID: sourceCacheGatewayID,
                 agentID: sourceAgentID)
+            guard self.operatorAuthorityGeneration == sourceAuthorityGeneration,
+                  GatewayStableIdentifier.matches(self.chatTranscriptCacheGatewayID, sourceCacheGatewayID),
+                  self.chatDeliveryAgentId == sourceAgentID
+            else { throw CancellationError() }
             guard !cached.isEmpty else { throw error }
             return ChatSessionRosterSnapshot(sessions: cached, isCached: true, isComplete: false)
         }
@@ -214,7 +243,7 @@ final class RootSidebarModel {
     private(set) var cronJobs: [CronJob] = []
     private(set) var isRefreshing = false
     private(set) var sessionErrorText: String?
-    private(set) var isSessionRosterComplete = true
+    private(set) var isSessionRosterComplete = false
     private var rosterGeneration = 0
     private var sessionObserverVisibility = false
     private var sessionObserverSync: Task<Void, Never>?
@@ -251,6 +280,7 @@ final class RootSidebarModel {
         mainSessionKey: String,
         activeAgentID: String?,
         groups: [OpenClawChatSessionGroup],
+        rosterIsComplete: Bool = false,
         sessionRoutingContract: String? = nil,
         now: Date = .now) -> [ChatSessionSidebarModel.Section]
     {
@@ -260,19 +290,18 @@ final class RootSidebarModel {
             mainSessionKey: mainSessionKey,
             activeAgentID: activeAgentID,
             sessionRoutingContract: sessionRoutingContract)
-        let selectedIsSnoozed = sessions.contains {
-            $0.key == selectedSessionKey && $0.isSnoozed(at: now)
-        }
+        let selectedIsHidden = sessions.first { $0.key == selectedSessionKey }
+            .map { $0.isArchived || $0.isSnoozed(at: now) } ?? rosterIsComplete
         // Resolve aliases before keeping the selected automation reachable.
         let isSearching = !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let browsingSessions = sessions.filter {
-            !$0.isSnoozed(at: now) && (isSearching || $0.key == selectedSessionKey ||
+            !$0.isArchived && !$0.isSnoozed(at: now) && (isSearching || $0.key == selectedSessionKey ||
                 !OpenClawChatSessionListVisibility.isAutomationSession($0))
         }
         return ChatSessionSidebarModel.sections(
             sessions: browsingSessions,
-            // The shared sidebar otherwise creates a placeholder for a missing selected row.
-            currentSessionKey: selectedIsSnoozed ? "" : currentSessionKey,
+            // Keep missing-selection placeholders only until the active roster is complete.
+            currentSessionKey: selectedIsHidden ? "" : currentSessionKey,
             mainSessionKey: mainSessionKey,
             activeAgentID: activeAgentID,
             groups: groups,

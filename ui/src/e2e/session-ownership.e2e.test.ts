@@ -56,7 +56,10 @@ function ownerSessions(visibility: "draft" | "shared" | "read-only", single = fa
 }
 
 async function newPage(width = 1200) {
-  const context = await suite.newBrowserContext({ viewport: { height: 800, width } });
+  const context = await suite.newBrowserContext({
+    reducedMotion: "reduce",
+    viewport: { height: 800, width },
+  });
   activePage = await context.newPage();
   return activePage;
 }
@@ -730,8 +733,7 @@ suite.define(() => {
 
     await page.goto(`${suite.server?.baseUrl ?? ""}new`);
     // Playwright check()/isChecked() support role="switch" buttons via aria-checked.
-    const draftToggle = page.getByRole("switch", { name: "Draft", exact: true });
-    await page.locator(".new-session-page__composer .agent-chat__composer-footer").hover();
+    const draftToggle = page.getByRole("switch", { name: /^Draft:/ });
     await draftToggle.waitFor();
 
     await draftToggle.check();
@@ -1004,7 +1006,7 @@ suite.define(() => {
       if (!refused) {
         await expectBrowser(notice).toBeVisible();
       }
-      await expectBrowser(page.locator(".new-session-page__visibility--draft")).toHaveAttribute(
+      await expectBrowser(page.locator(".new-session-page__draft-toggle")).toHaveAttribute(
         "aria-checked",
         "true",
       );

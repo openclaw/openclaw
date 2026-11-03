@@ -13,8 +13,10 @@ import { withSqliteReaderOwner } from "../infra/sqlite-reader-lifecycle.js";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { serveOwnedWorkerTasks } from "../infra/worker-task-server.js";
 import { ownedWorkerBytes } from "../infra/worker-transfer-bytes.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { pluginMetadataReadOperations } from "../plugins/plugin-metadata-state.read.worker.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
+import { openDoctorStateSchemaReadAdmission } from "./openclaw-state-db-doctor-schema.js";
 import {
   closeRetainedOpenClawStateReadConnections,
   openOpenClawStateReadConnection,
@@ -31,6 +33,8 @@ import type {
   OpenClawStateReadResult,
 } from "./openclaw-state-read.types.js";
 import { encodeOpenClawStateWorkerError } from "./openclaw-state-worker-error.js";
+
+const log = createSubsystemLogger("sqlite/transaction");
 
 const read: WorkerTaskHandler<OpenClawStateReadReply> = async function read(
   message,
@@ -131,7 +135,9 @@ const read: WorkerTaskHandler<OpenClawStateReadReply> = async function read(
       const locationArgs = [
         input.databasePath,
         input.location,
-        undefined,
+        command.type === "updateRuns.recoveryAdmission"
+          ? openDoctorStateSchemaReadAdmission
+          : undefined,
         input.expectedIdentity,
         input.snapshotRoot,
         true,
@@ -271,8 +277,11 @@ const read: WorkerTaskHandler<OpenClawStateReadReply> = async function read(
     };
     const selection = input.context.databaseEngineSelection ?? getDatabaseEngineSelection();
     const execute = () =>
-      withSqliteReaderOwner({ operation: input.command.type, ownerKind: "worker" }, () =>
-        runWithSqliteWorkerStateContext(input.context, executeRead),
+      withSqliteReaderOwner(
+        { operation: input.command.type, ownerKind: "worker" },
+        () => runWithSqliteWorkerStateContext(input.context, executeRead),
+        undefined,
+        log,
       );
     const run = () =>
       input.postgresSnapshot

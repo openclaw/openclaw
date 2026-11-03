@@ -33,9 +33,15 @@ const ChatDetailsProgress = lazy(() => import("./chat-details-progress.tsx"), {
 const ChatDetailsSession = lazy(() => import("./chat-details-session.tsx"), {
   export: "ChatDetailsSession",
 });
-const ChatDetailsDesktopComposition = lazy(() => import("./chat-details-session.tsx"), {
-  export: "ChatDetailsDesktopComposition",
-});
+const ChatDetailsDesktopComposition = lazy(
+  async () => {
+    const module = await import("./chat-details-session.tsx");
+    // Fill the inspector once; a nested lazy body must not push down cached Automations.
+    await module.preloadChatDetailsEnvironment();
+    return module;
+  },
+  { export: "ChatDetailsDesktopComposition" },
+);
 const ChatDetailsMobileHostContent = lazy(() => import("../chat-details-mobile-host-content.tsx"), {
   export: "ChatDetailsMobileHostContent",
 });
@@ -125,7 +131,7 @@ export function ChatDetails(props: ChatDetailsViewProps) {
   const opened = () =>
     isPresented() &&
     (props.mobileHost
-      ? props.mobileHost.open &&
+      ? (props.mobileHost.open || props.mobileHost.exiting) &&
         !props.mobileHost.suspended &&
         props.mobileHost.destination.area === "details" &&
         (!props.mobileHost.destination.page || Boolean(props.mobileHost.destination.page.details))
@@ -492,7 +498,8 @@ export function ChatDetails(props: ChatDetailsViewProps) {
     mountSurface(layout);
     position(layout);
   };
-  createResizeObserver(
+  // Parent snapshots may change while these native observation targets stay the same.
+  const resizeTargets = createMemo(
     () =>
       [
         props.elements?.pane,
@@ -501,8 +508,13 @@ export function ChatDetails(props: ChatDetailsViewProps) {
         props.elements?.footer,
         props.elements?.getComposerInput?.(),
       ].filter((element): element is HTMLElement => Boolean(element)),
-    reposition,
+    {
+      lazy: true,
+      equals: (before, after) =>
+        before.length === after.length && before.every((el, i) => el === after[i]),
+    },
   );
+  createResizeObserver(resizeTargets, reposition);
   onSettled(() => {
     props.setRef({ open: openFrom, close: () => close(true) });
     const pane = layoutElements()?.pane;
