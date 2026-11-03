@@ -81,22 +81,25 @@ export function ChannelConfigActions(params: { channelId: string; props: Channel
   const saving = () => isSavingChannelConfig(params.channelId, params.props);
   return (
     <Show when={params.props.configEdits[params.channelId]}>
-      <button
-        class="btn btn--sm"
-        type="button"
-        disabled={saving()}
-        onClick={() => params.props.onConfigDiscard(params.channelId)}
-      >
-        {t("channels.config.discard")}
-      </button>
-      <button
-        class="btn btn--sm primary"
-        type="submit"
-        form={channelConfigFormId(params.channelId)}
-        disabled={!params.props.channels.connected || saving()}
-      >
-        {saving() ? t("common.saving") : t("common.save")}
-      </button>
+      {/* One unit, so a narrow footer wraps the decision together instead of splitting it. */}
+      <div class="channels-detail__decide">
+        <button
+          class="btn btn--sm"
+          type="button"
+          disabled={saving()}
+          onClick={() => params.props.onConfigDiscard(params.channelId)}
+        >
+          {t("channels.config.discard")}
+        </button>
+        <button
+          class="btn btn--sm primary"
+          type="submit"
+          form={channelConfigFormId(params.channelId)}
+          disabled={!params.props.channels.connected || saving()}
+        >
+          {saving() ? t("common.saving") : t("common.save")}
+        </button>
+      </div>
     </Show>
   );
 }
