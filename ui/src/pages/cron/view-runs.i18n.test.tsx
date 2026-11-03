@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import type { CronRunLogEntry } from "../../api/types.ts";
 import { i18n } from "../../i18n/index.ts";
 import { formatCompactTokenCount } from "../../lib/format.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -7,7 +8,11 @@ import { createCronViewProps, createCronViewRun } from "./view.test-support.ts";
 
 afterEach(() => vi.restoreAllMocks());
 
-it.each([
+it.each<{
+  usage: NonNullable<CronRunLogEntry["usage"]>;
+  key: string;
+  params: Record<string, string>;
+}>([
   {
     usage: { total_tokens: 1234 },
     key: "cron.runEntry.tokens",
