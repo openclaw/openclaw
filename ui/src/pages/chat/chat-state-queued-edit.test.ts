@@ -51,8 +51,8 @@ function createControllerFixture(withClient = false) {
 
 it.each([
   [conflict, conflict, null, null],
-  [conflict, storageError, null, storageError],
-  [historyError, storageError, historyError, storageError],
+  [conflict, storageError(), null, storageError()],
+  [historyError, storageError(), historyError, storageError()],
 ] as const)(
   "clears only edit feedback (%s, %s)",
   (lastError, chatError, expectedLastError, expectedChatError) => {

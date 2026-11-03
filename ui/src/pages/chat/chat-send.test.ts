@@ -118,8 +118,7 @@ type ExecuteSlashCommand = typeof executeSlashCommand;
 type TestChatHost = ReturnType<typeof makeChatHost>;
 
 const startupOptions = { startup: true, awaitHistory: true, deferBranches: true };
-const storageError =
-  "Couldn’t save this message for reconnecting. Free browser storage or reconnect before sending.";
+const storageError = "Couldn’t save this message. Free browser storage or reconnect to send it.";
 
 function admitItem(
   host: TestChatHost,

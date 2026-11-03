@@ -148,7 +148,7 @@ suite.define(() => {
         if (legacyScope) {
           await page
             .getByText(
-              "Couldn’t save the recovery request. Your goal update wasn’t sent. Free browser storage and try again.",
+              "Couldn’t save the recovery request. Free browser storage and try again. Your goal update wasn’t sent.",
             )
             .waitFor();
           expect(await gateway.getRequests(method)).toHaveLength(0);

@@ -198,7 +198,7 @@ const enChatSession = {
       inComposer: "Answer above the message box.",
       archived: "No longer pending",
       archivedReason: "The conversation moved on. You can still answer this question.",
-      sendFailed: "Couldn’t send your answer. Your draft is saved. Try again.",
+      sendFailed: "Couldn’t send your answer. Your draft is still here. Try again.",
       queued: "Answer queued",
       sending: "Sending answer…",
       sent: "Answer sent",

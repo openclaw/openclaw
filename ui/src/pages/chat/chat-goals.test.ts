@@ -447,7 +447,7 @@ describe("Goal control requests", () => {
     expect
       .soft(renderedError)
       .toBe(
-        "Couldn’t save the recovery request. Your goal update wasn’t sent. Free browser storage and try again.",
+        "Couldn’t save the recovery request. Free browser storage and try again. Your goal update wasn’t sent.",
       );
     expect.soft(host.request).not.toHaveBeenCalled();
     expect.soft(sessionStorage.length).toBe(0);

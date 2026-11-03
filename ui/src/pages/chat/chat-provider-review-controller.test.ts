@@ -244,7 +244,9 @@ it("requires explicit safe review, retains the pause, and retries status without
   await waitForSolid(() => expect(f.text()).toContain("Checking continuation status"));
   firstRefresh.resolve({ status: "failed", error: "Disconnected during refresh" });
   await firstRefresh.promise;
-  await waitForSolid(() => expect(f.text()).toContain("Couldn’t refresh the continuation status."));
+  await waitForSolid(() =>
+    expect(f.text()).toContain("Couldn’t check whether continuation was accepted."),
+  );
   expect(f.text()).not.toContain("Waiting for the provider to accept it.");
   f.expectPaused(true);
   expect(f.refresh).toHaveBeenCalledTimes(1);
@@ -255,7 +257,7 @@ it("requires explicit safe review, retains the pause, and retries status without
   secondRefresh.resolve({ status: "refreshed" });
   await secondRefresh.promise;
   await waitForSolid(() => expect(f.text()).toContain("Waiting for the provider to accept it."));
-  expect(f.text()).not.toContain("Couldn’t refresh the continuation status");
+  expect(f.text()).not.toContain("Couldn’t check whether continuation was accepted");
   f.expectPaused(true);
   f.setRow({ providerReview: undefined });
   f.publishSource();

@@ -171,14 +171,13 @@ const catalog = {
       voiceTranscript: "Voice transcript",
     },
     queue: {
-      storageFailed:
-        "Couldn’t save this message for reconnecting. Free browser storage or reconnect before sending.",
+      storageFailed: "Couldn’t save this message. Free browser storage or reconnect to send it.",
       draftStorageFailed:
-        "Couldn’t save the previous draft. It’s still available in this tab. Free browser storage and try again.",
+        "Couldn’t save the previous draft. Keep this tab open or copy it before reloading.",
       reviewEdit: "Review edit",
       reloadBlocked: "Save or cancel your queued message edit before reloading.",
       memoryOnlyReloadBlocked:
-        "A pending message is only saved in this tab. Keep this tab open until it is sent, or copy it before discarding it and reloading.",
+        "This pending message is only saved in this tab. Keep it open until the message is sent, or copy it before discarding and reloading.",
       memoryOnlyReview: "Review pending input",
       memoryOnlyTitle: "Unsent pending message",
       memoryOnlyDescription:
@@ -186,17 +185,17 @@ const catalog = {
       memoryOnlyText: "Message text",
       memoryOnlyDiscard: "Discard local copy and refresh",
       memoryOnlyChanged:
-        "The pending input changed or is being edited. It has not been discarded; review the current input before refreshing.",
+        "The pending input changed or is being edited. Review it before refreshing. It hasn’t been discarded.",
       memoryOnlyUnavailable:
-        "Couldn’t open the pending input. It’s still saved in this tab. Try Review pending input again.",
+        "Couldn’t open the pending input. It’s saved in this tab. Try Review pending input again.",
       connectionPending: "Finishing connection recovery. Try sending again when it is ready.",
       editSourceChanged:
-        "This queued message changed while you were editing. Your edit is still here. Copy it, cancel the edit, and review the queue before trying again.",
+        "The queued message changed. Your edit is still here. Copy it, cancel editing, then review the queue and try again.",
       editStorageFailed:
-        "Your edit could not be saved in this browser. Keep this tab open and copy your edit before freeing browser storage, then try again.",
-      full: "The message queue is full. Wait for a queued message to send or remove one, then try again.",
+        "Couldn’t save your edit. Keep this tab open. Copy your edit, free browser storage, then try again.",
+      full: "Couldn’t queue this message. Wait for one to send or remove one, then try again.",
       initialTurnPending:
-        "The initial message is unresolved. Reconnect if needed, then review it before sending another message.",
+        "The first message is unresolved. Reconnect if needed, then review it before sending another.",
       notSent: "Not sent",
       retry: "Retry",
       retryQueuedMessage: "Retry queued message",
