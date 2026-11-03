@@ -188,9 +188,12 @@ CLI registrar. Preserve exact descriptors and Commander forwarding.
 Source qualification covers metadata registration, the session CLI owner, SDK
 entry/lazy-value behavior, host selection/registration callers and causal history.
 The independent static import-closure test excludes dynamic imports and does not
-prove module evaluation. Native baseline, an actual metadata-owner eager-import
-control on original and candidate, clean proof, focused checks and fresh review
-remain pending. No module-evaluation fault result is claimed yet.
+prove module evaluation. Untouched native main and the clean candidate each pass
+the existing case. An actual metadata-owner eager import passes the original and
+fails only the repaired pre-callback module-evaluation check. Owner and test bytes
+restore exactly. Both related suites pass all19 cases; focused typecheck, lint,
+format, MDX and test-line checks pass. Fresh review and current-head CI remain
+pending.
 
 Production, shared scalar, imports, helpers and exports are unchanged. Four
 additional test lines receive exact separate allocation credit. No declaration,
