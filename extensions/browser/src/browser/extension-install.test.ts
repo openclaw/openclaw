@@ -108,10 +108,10 @@ describe("native host registration", () => {
 
   it("guides first-time setup when no browser user-data directory exists", async () => {
     const value = await fixture();
-    const status = await value.install({
-      deps: withAdvancingInstallClock(value.deps),
-    });
+    const deps = withAdvancingInstallClock(value.deps);
+    const status = await value.install({ deps });
 
+    expect(deps.now()).toBe(1_000);
     expect(status.manualSetupRequired).toBe(true);
     expect(status.registrations.every((entry) => entry.state === "missing")).toBe(true);
     expect(status.issues).toEqual([expect.stringContaining("No native host was pre-registered.")]);

@@ -7,26 +7,16 @@ import type { TelegramContext } from "./types.js";
 const requireRecord = createRequireRecord("record", "expected-label-record");
 
 export function makeCtx(
-  mediaField: "voice" | "audio" | "photo" | "video" | "document" | "animation" | "sticker",
+  mediaField: "audio" | "video" | "document" | "sticker",
   getFile: TelegramContext["getFile"],
   opts?: { file_name?: string; mime_type?: string },
 ): TelegramContext {
   const filename = opts?.file_name ? { file_name: opts.file_name } : {};
   const mime = opts?.mime_type ? { mime_type: opts.mime_type } : {};
   const media = {
-    voice: { file_id: "v1", duration: 5, file_unique_id: "u1", ...mime },
     audio: { file_id: "a1", duration: 5, file_unique_id: "u2", ...filename, ...mime },
-    photo: [{ file_id: "p1", width: 100, height: 100 }],
     video: { file_id: "vid1", duration: 10, file_unique_id: "u3", ...filename },
     document: { file_id: "d1", file_unique_id: "u4", ...filename, ...mime },
-    animation: {
-      file_id: "an1",
-      duration: 3,
-      file_unique_id: "u5",
-      width: 200,
-      height: 200,
-      ...filename,
-    },
     sticker: {
       file_id: "stk1",
       file_unique_id: "ustk1",

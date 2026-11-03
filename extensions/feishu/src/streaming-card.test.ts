@@ -690,8 +690,6 @@ describe("FeishuStreamingSession", () => {
     expect(settingsBodies).toHaveLength(1);
     const summary = readSummary(settingsBodies[0]);
     expect(summary).toBe(`${"a".repeat(46)}...`);
-    expect(summary).not.toContain("\uD83D");
-    expect(summary.charCodeAt(summary.length - 4)).not.toBe(0xd83d);
   });
 
   it.each([

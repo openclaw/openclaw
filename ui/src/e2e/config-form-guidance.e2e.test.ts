@@ -65,11 +65,14 @@ suite.define(() => {
       await page.getByRole("button", { name: "Meta", exact: true }).click();
 
       const policyRow = page.locator(".settings-row").filter({ hasText: "Group policy" });
-      await expect.poll(() => policyRow.getByRole("radio").count()).toBe(4);
-      await expect.poll(() => policyRow.getByText("open", { exact: true }).count()).toBe(1);
-      await expect.poll(() => policyRow.getByText("allowlist", { exact: true }).count()).toBe(1);
-      await expect.poll(() => policyRow.getByText("disabled", { exact: true }).count()).toBe(1);
-      await expect.poll(() => policyRow.getByText("allowall", { exact: true }).count()).toBe(1);
+      await expect
+        .poll(() =>
+          policyRow
+            .locator("select option")
+            .allTextContents()
+            .then((labels) => labels.map((label) => label.trim())),
+        )
+        .toEqual(expect.arrayContaining(["Open", "Allowlist", "Disabled", "Allowall"]));
       await expect
         .poll(() => page.getByText("Unsupported schema node. Use Raw mode.").count())
         .toBe(0);
@@ -170,15 +173,13 @@ suite.define(() => {
       await page.getByRole("link", { name: "Notifications", exact: true }).click();
       await page.getByRole("heading", { name: "Push notifications", exact: true }).waitFor();
 
-      const section = page.locator("#settings-communications-notifications");
+      const statusRow = page
+        .locator("#settings-communications-notifications .settings-row")
+        .filter({ has: page.getByText("Status", { exact: true }) });
       await expect.poll(() => page.locator(".config-toolbar").count()).toBe(0);
       await expect.poll(() => page.getByText("Saved", { exact: true }).count()).toBe(0);
-      await expect
-        .poll(() => section.locator(".settings-section__header .settings-status").count())
-        .toBe(1);
-      await expect
-        .poll(() => section.locator(".settings-section__header").textContent())
-        .toContain("Ready");
+      await expect.poll(() => statusRow.locator(".settings-status").count()).toBe(1);
+      await expect.poll(() => statusRow.textContent()).toContain("Ready");
 
       await capture(page, "05-notifications-ready-aligned.png", true);
     });

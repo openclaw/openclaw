@@ -136,6 +136,9 @@ const enPluginManagement = {
     },
   },
   pluginsPage: {
+    recommendedPrompts: {
+      label: "Recommended prompts",
+    },
     compatibilityDeprecatedDated:
       "Uses OpenClaw APIs that retire on {date}. It keeps working until then; check for a plugin update.",
     compatibilityDeprecatedUndated:
@@ -336,9 +339,14 @@ const enPluginManagement = {
       edit: "Edit",
       connected: "Connected",
       configured: "Configured",
-      editAccount: "Edit {name} connection",
       editCredential: "Edit {name}",
       connectAccount: "Sign in to {name}",
+      signOut: "Sign out",
+      signOutAccount: "Sign out of {name}",
+      signOutConfirmTitle: "Sign out of {name}?",
+      signOutUnavailable: "Sign-out could not open. Your account is still connected; try again.",
+      signOutConfirmMessage:
+        "OpenClaw removes the saved sign-in for {name}. Its tools stop working until you sign in again.",
       configure: "Configure",
       configureCredential: "Configure {name}",
       connect: "Sign in",
@@ -515,6 +523,7 @@ const enPluginManagement = {
     disabled: "Disabled",
     available: "Available",
     needsAttention: "Needs attention",
+    needsSetup: "Needs setup",
     included: "Included",
     global: "Global",
     workspace: "Workspace",

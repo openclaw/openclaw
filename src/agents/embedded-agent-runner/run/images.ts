@@ -187,9 +187,6 @@ async function loadMediaFromRef(
       )?.prepareTurnAttachments,
     );
   const sandbox = gatewayAttachment ? undefined : options.sandbox;
-  const localRoots = gatewayAttachment
-    ? [getMediaDir()]
-    : (options.localRoots ?? (options.workspaceOnly ? [options.workspaceDir] : undefined));
   try {
     let targetPath = ref.resolved;
 
@@ -227,6 +224,13 @@ async function loadMediaFromRef(
       targetPath = path.resolve(ref.workspaceDir ?? options.workspaceDir, targetPath);
     }
 
+    // Sandbox reads own their boundary; only host reads need the host allowlist.
+    const localRoots = sandbox
+      ? undefined
+      : gatewayAttachment
+        ? [getMediaDir()]
+        : ((typeof options.localRoots === "function" ? options.localRoots() : options.localRoots) ??
+          (options.workspaceOnly ? [options.workspaceDir] : undefined));
     const media = sandbox
       ? await loadWebMediaRaw(targetPath, {
           maxBytes: options.maxBytes,
@@ -467,7 +471,7 @@ type PromptMediaOptions = {
   maxBytes?: number;
   maxDimensionPx?: number;
   workspaceOnly?: boolean;
-  localRoots?: readonly string[];
+  localRoots?: readonly string[] | (() => readonly string[]);
   sandbox?: { root: string; bridge: SandboxFsBridge };
   provider?: boolean;
   signal?: AbortSignal;

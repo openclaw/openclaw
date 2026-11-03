@@ -243,7 +243,7 @@ suite.define(() => {
             expect.stringContaining("Plugins"),
           ]),
         );
-      const clearOverrides = dropdown.getByRole("menuitem", { name: /4 changes for this session/ });
+      const clearOverrides = dropdown.getByRole("menuitem", { name: /4 changes in this chat/ });
       await expect.poll(() => clearOverrides.isVisible()).toBe(true);
       await expect.poll(() => webSearchItem(dropdown).isVisible()).toBe(true);
       const skillsRoot = dropdown.getByRole("menuitem", { name: /^Skills/ });
@@ -671,7 +671,7 @@ suite.define(() => {
             true,
           );
           expect(
-            await composer.getByRole("button", { name: "Write a message to send." }).isDisabled(),
+            await composer.getByRole("button", { name: "Type a message first." }).isDisabled(),
           ).toBe(true);
           expect(await gateway.getRequests("chat.send")).toHaveLength(0);
           expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
@@ -772,17 +772,17 @@ suite.define(() => {
           webSearchItem(menu).evaluate((node) => node.getAttribute("aria-checked") === "true"),
         )
         .toBe(false);
-      await expect.poll(() => tooltipTitleText(webSearchItem(menu))).toContain("clear");
+      await expect.poll(() => tooltipTitleText(webSearchItem(menu))).toContain("remove");
       await gateway.setOnline(false);
       await expect.poll(() => webSearchItem(menu).isDisabled()).toBe(true);
       await expect
         .poll(() => tooltipTitleText(webSearchItem(menu)))
-        .toContain("Connect to the gateway");
+        .toContain("Reconnect to change tools");
       await forceCapabilitySelection(webSearchItem(menu));
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
       await gateway.setOnline(true);
       await expect.poll(() => webSearchItem(menu).isDisabled()).toBe(false);
-      await expect.poll(() => tooltipTitleText(webSearchItem(menu))).toContain("clear");
+      await expect.poll(() => tooltipTitleText(webSearchItem(menu))).toContain("remove");
       await webSearchItem(menu).click();
       await expect
         .poll(() => latestToolOverrides(gateway))

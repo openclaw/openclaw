@@ -231,7 +231,6 @@ type EnglishCatalog = TranslationMap & {
       | "workspaceLabel"
       | "branchLabel"
       | "runsOn"
-      | "machineLabel"
       | "machineCpu"
       | "machineMemory"
       | "more"
@@ -391,6 +390,7 @@ const startupEnglish = {
     connected: "Connected",
     refresh: "Refresh",
     retry: "Retry",
+    helpFor: "Help for {section}",
     staleData: "Showing stale data.",
     reload: "Reload",
     reset: "Reset",
@@ -453,7 +453,6 @@ const startupEnglish = {
     publicKey: "Public Key",
     probeOk: "Connection check passed",
     probeFailed: "Connection check failed",
-    reloadConfig: "Reload Config",
     multiSelect: {
       addCustom: "Add “{value}”",
       noMatches: "No matches",
@@ -513,7 +512,6 @@ const startupEnglish = {
     workspaceLabel: "Workspace",
     branchLabel: "Branch",
     runsOn: "Runs on {providerId} · {profileId}",
-    machineLabel: "Machine",
     machineCpu: "{cpu} vCPU",
     machineMemory: "{memory} GB",
     more: "+{count} more",
@@ -823,11 +821,8 @@ const startupEnglish = {
     context: {},
     identity: {},
     overview: {
-      title: {},
-      subtitle: {},
       selectedSkills: "{count} selected",
-      allSkills: "all skills",
-      unsavedConfig: {},
+      allSkills: "All skills",
       modelSelection: {},
       primaryModel: {},
       primaryModelDefault: {},
@@ -1072,7 +1067,7 @@ const startupEnglish = {
     labs: "Labs",
     updates: "Updates",
     about: "About",
-    aiAgents: "Agent Defaults",
+    aiAgents: "Agent defaults",
     modelSetup: "Model Setup",
     memoryImport: "Import Memory",
     security: "Privacy & Security",
@@ -1190,12 +1185,8 @@ const startupEnglish = {
     install: "Install",
   },
   labsPage: {
-    intro:
-      "Labs contains experimental capabilities that may change, break, or disappear between releases.",
-    sectionTitle: "Experimental features",
     sectionDescription:
       "Changes save without restarting the Gateway. Code Mode and Tool Search apply to future agent runs.",
-    documentation: "Documentation",
     restartRequired: "Gateway restart required.",
     saveErrorTitle: "Could not update feature",
     saveFailed: "The feature setting could not be saved.",
@@ -1321,6 +1312,7 @@ const startupEnglish = {
       chooseAvatar: "Choose image",
       displayName: "Display name",
       linkedEmails: "Linked emails",
+      attribution: "Attribution",
     },
     modelAccounts: {},
   },
@@ -1537,7 +1529,7 @@ const startupEnglish = {
       automationEnabled: "Enabled",
     },
     agentDatabaseWarming: "This agent is still starting. Retry in a moment.",
-    historyRequestTimedOut: "Chat history request timed out. Retry to load the conversation.",
+    historyRequestTimedOut: "Couldn’t load the conversation in time. Try again.",
     clawhub: {},
     modelAccounts: {
       section: "Account",
@@ -1555,7 +1547,7 @@ const startupEnglish = {
       retrying: "Retrying…",
       retryingIn: "Retrying in {seconds}s",
       tryingFallback: "Trying fallback model…",
-      failedTitle: "Unable to finish this reply",
+      failedTitle: "Couldn’t finish this reply",
       failedRepeatCount: "{count} times",
       failedHelp: "Automatic recovery has stopped. Check any completed work before trying again.",
       tryAgain: "Try again",
@@ -1586,9 +1578,9 @@ const startupEnglish = {
     sessionsPaused: "{count} paused",
     sessionPausedNote: "{name} is paused",
     sessionsPausedNote: "{count} sessions are paused",
-    handoffResumed: "Resumed · {duration} Later",
-    handoffSessionsOne: "1 Session",
-    handoffSessions: "{count} Sessions",
+    handoffResumed: "Resumed · {duration} later",
+    handoffSessionsOne: "1 session",
+    handoffSessions: "{count} sessions",
     handoffSessionStatus: {
       attention: "Needs your input",
       paused: "Paused",
@@ -1750,7 +1742,6 @@ const startupEnglish = {
     skillLearned: {},
     progressLabels: {},
     turnRecap: {
-      doneIn: "Done in {duration}",
       tokens: "{count} output tokens",
       tokensOne: "1 output token",
     },
@@ -1761,9 +1752,8 @@ const startupEnglish = {
       loading: "Loading skills…",
     },
     splitView: {
-      chooseConversation: "Choose a conversation",
-      missingOwner:
-        "Select this pane, then choose Home or a conversation in the sidebar to restore it.",
+      chooseConversation: "Choose a session",
+      missingOwner: "Select this pane, then choose Home or a session in the sidebar to restore it.",
       open: "Open split view",
       splitRight: "Split right",
       splitDown: "Split down",
@@ -1812,7 +1802,7 @@ const startupEnglish = {
     runControls: {
       newSession: "New session",
       newSessionWorktree: "New session in worktree",
-      exportChat: "Export chat",
+      exportChat: "Export conversation",
       queue: "Queue",
       queueMessage: "Queue message",
       stop: "Stop",
@@ -1842,6 +1832,7 @@ const startupEnglish = {
       unattributedSender: "Message",
       toolSender: "Tool",
       errorSender: "Error",
+      agentName: "Agent",
     },
     mediaPlayer: {},
     youtube: {},
@@ -1945,7 +1936,7 @@ const startupEnglish = {
       modelLocked: "Locked",
       modelLockedLabel: "Model selection controlled for this session",
       lockedSessionModel: "Session model",
-      thinkingLevel: "Chat thinking level",
+      thinkingLevel: "Effort",
     },
     permissions: {},
     toolCards: {

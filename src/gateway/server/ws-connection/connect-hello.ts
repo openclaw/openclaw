@@ -21,7 +21,12 @@ import { formatErrorMessage as formatError } from "../../../infra/errors.js";
 import { commitPresence } from "../../../infra/system-presence.js";
 import { getGatewaySuspendAdmissionPhase } from "../../../process/gateway-work-admission.js";
 import { hasMultipleResidentSessionSharingIdentities } from "../../../state/user-profile-list.js";
-import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../../../version.js";
+import {
+  resolveRuntimeServiceBuildId,
+  resolveRuntimeServiceCommit,
+  resolveRuntimeServiceBuiltAt,
+  resolveRuntimeServiceVersion,
+} from "../../../version.js";
 import { resolveChatAttachmentPolicy } from "../../chat-attachment-policy.js";
 import { resolveControlUiIdentity } from "../../control-ui-identity.js";
 import {
@@ -135,6 +140,11 @@ export async function sendGatewayHello(
     revisionProjector: buildRequestContext().configRevisionProjector,
     sessionRowProjection,
   });
+  if (scopes.includes(ADMIN_SCOPE)) {
+    // What this process runs with, which startup flags can set apart from the config file.
+    snapshot.authMode = resolvedAuth.mode;
+    Object.assign(snapshot, context.handler.gatewayExposure);
+  }
   const cachedHealth = getHealthCache();
   if (cachedHealth && !connectParams.caps?.includes(GATEWAY_CLIENT_CAPS.HELLO_HEALTH_ON_DEMAND)) {
     snapshot.health = connectParams.caps?.includes(GATEWAY_CLIENT_CAPS.HEALTH_SUMMARY)
@@ -165,6 +175,8 @@ export async function sendGatewayHello(
     ? ("configured" as const)
     : ("bundled" as const);
   const serverBuildId = resolveRuntimeServiceBuildId();
+  const serverCommit = resolveRuntimeServiceCommit();
+  const serverBuiltAt = resolveRuntimeServiceBuiltAt();
   const rolePolicy =
     role === "operator"
       ? resolveOperatorRolePolicy(context.handler.getClient(), context.configSnapshot)
@@ -177,6 +189,8 @@ export async function sendGatewayHello(
     server: {
       version: resolveRuntimeServiceVersion(process.env),
       ...(serverBuildId ? { buildId: serverBuildId } : {}),
+      ...(serverCommit ? { commit: serverCommit } : {}),
+      ...(serverBuiltAt ? { builtAt: serverBuiltAt } : {}),
       bootId,
       controlUiBuildSource,
       connId,
@@ -190,6 +204,7 @@ export async function sendGatewayHello(
         GATEWAY_SERVER_CAPS.AGENT_SESSION_ID_CREATE,
         SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY,
         GATEWAY_SERVER_CAPS.BOARD_WIDGET_PUT_CANVAS_DOC,
+        GATEWAY_SERVER_CAPS.CHAT_INPUT_CUSTODY,
         GATEWAY_SERVER_CAPS.CHAT_SEND_ROUTING_CONTRACT,
         // Configured UI roots may serve an older route contract than this Gateway.
         ...(controlUiBuildSource === "bundled" &&

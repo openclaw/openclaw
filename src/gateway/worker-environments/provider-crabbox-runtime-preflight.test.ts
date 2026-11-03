@@ -101,119 +101,160 @@ describe("Crabbox runtime preflight cleanup", () => {
     vi.restoreAllMocks();
   });
 
-  it("routes disconnected admission through the registered provider without allocating or syncing", async () => {
-    support.getDevelopmentProfile().provider = "crabbox";
-    const settings = { ...PROFILE, provider: "azure-sandbox", warmImage: false };
-    const environmentId = "registered-node-resume";
-    const leaseId = "cbx_registered_resume";
-    const store = support.testState.store;
-    await store.createIntent({
-      environmentId,
-      providerId: "crabbox",
-      profileId: "development",
-      provisionOperationId: "registered-resume-operation",
-      profileSnapshot: {
-        settings,
-        runtimePreparation: {
-          source: "empty",
-          contractVersion: 2,
-          key: "c".repeat(64),
-          cacheKey: "d".repeat(64),
-          target: { machineClass: "standard", platform: "linux" },
-          artifacts: {
-            nodeBootstrapSha256: "b".repeat(64),
-            enabledPluginIds: [],
-            workerBundleHash: support.BUNDLE_HASH,
-            workerArchiveSha256: "e".repeat(64),
-            openclawVersion: "2026.7.2",
-            protocolFeatures: [],
+  it.each(["allowed", "revoked", "cancelled"] as const)(
+    "routes disconnected admission through the registered provider: %s",
+    async (authority) => {
+      support.getDevelopmentProfile().provider = "crabbox";
+      const settings = { ...PROFILE, provider: "azure-sandbox", warmImage: false };
+      const environmentId = "registered-node-resume";
+      const leaseId = "cbx_registered_resume";
+      const store = support.testState.store;
+      await store.createIntent({
+        environmentId,
+        providerId: "crabbox",
+        profileId: "development",
+        provisionOperationId: "registered-resume-operation",
+        profileSnapshot: {
+          settings,
+          runtimePreparation: {
+            source: "empty",
+            contractVersion: 2,
+            key: "c".repeat(64),
+            cacheKey: "d".repeat(64),
+            target: { machineClass: "standard", platform: "linux" },
+            artifacts: {
+              nodeBootstrapSha256: "b".repeat(64),
+              enabledPluginIds: [],
+              workerBundleHash: support.BUNDLE_HASH,
+              workerArchiveSha256: "e".repeat(64),
+              openclawVersion: "2026.7.2",
+              protocolFeatures: [],
+            },
           },
         },
-      },
-    });
-    await store.transition({ environmentId, from: "requested", to: "provisioning" });
-    await store.transition({
-      environmentId,
-      from: "provisioning",
-      to: "ready",
-      patch: {
-        ...support.readyPatch(environmentId),
-        leaseId,
-        nodeDeviceId: "node-1",
-        sharedHost: false,
-      },
-    });
-    const environment = await store.transition({
-      environmentId,
-      from: "ready",
-      to: "attached",
-      patch: support.attachedPatch(environmentId, REQUEST.sessionId),
-    });
-    const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
-    const placement = await seedActivePlacement(placements, {
-      environmentId,
-      ownerEpoch: environment.ownerEpoch,
-    });
-    if (placement.state !== "active") {
-      throw new Error("Expected an active fixture placement");
-    }
-    const admittedEnvironment = expectDefined(
-      store.get(environmentId),
-      "admitted fixture environment",
-    );
-    const { nodeRegistry, nodeWorkerSupervisorTransport } = createNodeRegistryRuntime(
-      () => new NodeRegistry(),
-    );
-    const calls: string[] = [];
-    vi.spyOn(processRuntime, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
-      if (argv[1] === "--version") {
-        return commandResult({ stdout: "999.0.0" });
-      }
-      if (argv[1] === "heartbeat") {
-        return commandResult();
-      }
-      calls.push(argv[1]!);
-      expect(argv[argv.indexOf("--id") + 1]).toBe(leaseId);
-      if (argv[1] === "inspect") {
-        return commandResult({
-          stdout: JSON.stringify({ id: leaseId, state: "running", ready: true }),
-        });
-      }
-      expect(argv[1]).toBe("run");
-      expect(argv).toContain("--no-sync");
-      expect(argv).toContain("--no-hydrate");
-      expect(options).toMatchObject({ input: expect.stringContaining("--resume-device") });
-      nodeRegistry.register(createWorkerSupervisorNodeClient("resumed"), {
-        pairingIdentity: "identity-a",
-        pairingGeneration: "generation-a",
       });
-      updateNodeRunnerInventory({
-        registry: nodeRegistry,
-        nodeId: "node-1",
-        connId: "resumed",
-        declaration: {
-          protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-          workerHost: { enabled: true, capacity: { total: 1, available: 1 } },
+      await store.transition({ environmentId, from: "requested", to: "provisioning" });
+      await store.transition({
+        environmentId,
+        from: "provisioning",
+        to: "ready",
+        patch: {
+          ...support.readyPatch(environmentId),
+          leaseId,
+          nodeDeviceId: "node-1",
+          sharedHost: false,
         },
       });
-      return commandResult();
-    });
-    const service = support.createService(await registerProvider());
-    const waiter = createWorkerRuntimeRefreshWaiter({
-      environments: service,
-      isStopping: () => false,
-      hasCurrentRunner: (deviceId) => nodeWorkerSupervisorTransport.hasCurrentRunner(deviceId),
-    });
-    waiter.bind((nodeId, options) => waitForNodeWorkerSupervisor(nodeRegistry, nodeId, options));
-    try {
-      await waiter.wait({ placement, signal: new AbortController().signal, assertCurrent() {} });
-      expect(nodeWorkerSupervisorTransport.hasCurrentRunner("node-1")).toBe(true);
-      expect(calls).toEqual(["inspect", "run"]);
-      expect(store.get(environmentId)).toEqual(admittedEnvironment);
-    } finally {
-      nodeRegistry.unregister("resumed");
-    }
-  });
+      const environment = await store.transition({
+        environmentId,
+        from: "ready",
+        to: "attached",
+        patch: support.attachedPatch(environmentId, REQUEST.sessionId),
+      });
+      const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
+      const placement = await seedActivePlacement(placements, {
+        environmentId,
+        ownerEpoch: environment.ownerEpoch,
+      });
+      if (placement.state !== "active") {
+        throw new Error("Expected an active fixture placement");
+      }
+      const admittedEnvironment = expectDefined(
+        store.get(environmentId),
+        "admitted fixture environment",
+      );
+      const { nodeRegistry, nodeWorkerSupervisorTransport } = createNodeRegistryRuntime(
+        () => new NodeRegistry(),
+      );
+      const calls: string[] = [];
+      const controller = new AbortController();
+      let current = true;
+      vi.spyOn(processRuntime, "runCommandWithTimeout").mockImplementation(
+        async (argv, options) => {
+          if (argv[1] === "--version") {
+            return commandResult({ stdout: "999.0.0" });
+          }
+          if (argv[1] === "heartbeat") {
+            return commandResult();
+          }
+          calls.push(argv[1]!);
+          expect(argv[argv.indexOf("--id") + 1]).toBe(leaseId);
+          if (argv[1] === "inspect") {
+            return commandResult({
+              stdout: JSON.stringify({ id: leaseId, state: "running", ready: true }),
+            });
+          }
+          expect(argv[1]).toBe("run");
+          expect(argv).toContain("--no-sync");
+          expect(argv).toContain("--no-hydrate");
+          if (typeof options === "number") {
+            throw new Error("Expected options for an owned Crabbox command");
+          }
+          expect(options.killGraceMs).toBe(20_000);
+          expect(options.timeoutMs).toBeGreaterThan(0);
+          expect(options.timeoutMs).toBeLessThanOrEqual(120_000);
+          if (
+            typeof options.input === "string" &&
+            options.input.includes("CRABBOX_NODE_RESUME_INSPECT_SCRIPT")
+          ) {
+            expect(options.input).not.toContain("launchNodeProcess");
+            if (authority === "revoked") {
+              current = false;
+            }
+            if (authority === "cancelled") {
+              controller.abort();
+            }
+            return commandResult();
+          }
+          expect(options).toMatchObject({ input: expect.stringContaining("--resume-device") });
+          nodeRegistry.register(createWorkerSupervisorNodeClient("resumed"), {
+            pairingIdentity: "identity-a",
+            pairingGeneration: "generation-a",
+          });
+          updateNodeRunnerInventory({
+            registry: nodeRegistry,
+            nodeId: "node-1",
+            connId: "resumed",
+            declaration: {
+              protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+              workerHost: { enabled: true, capacity: { total: 1, available: 1 } },
+            },
+          });
+          return commandResult();
+        },
+      );
+      const service = support.createService(await registerProvider());
+      const waiter = createWorkerRuntimeRefreshWaiter({
+        environments: service,
+        isStopping: () => false,
+        hasCurrentRunner: (deviceId) => nodeWorkerSupervisorTransport.hasCurrentRunner(deviceId),
+      });
+      waiter.bind((nodeId, options) => waitForNodeWorkerSupervisor(nodeRegistry, nodeId, options));
+      try {
+        const waiting = waiter.wait({
+          placement,
+          signal: controller.signal,
+          assertCurrent() {
+            if (!current) {
+              throw new Error("Resume authority revoked");
+            }
+          },
+        });
+        if (authority === "allowed") {
+          await waiting;
+          expect(nodeWorkerSupervisorTransport.hasCurrentRunner("node-1")).toBe(true);
+          expect(calls).toEqual(["inspect", "run", "run"]);
+        } else {
+          await expect(waiting).rejects.toThrow();
+          expect(nodeWorkerSupervisorTransport.hasCurrentRunner("node-1")).toBe(false);
+          expect(calls).toEqual(["inspect", "run"]);
+        }
+        expect(store.get(environmentId)).toEqual(admittedEnvironment);
+      } finally {
+        nodeRegistry.unregister("resumed");
+      }
+    },
+  );
 
   it("retries retained retirement periodically with no reserves or environments", async () => {
     writeConfigMachineState("plugins.bundledDiscovery", "compat");

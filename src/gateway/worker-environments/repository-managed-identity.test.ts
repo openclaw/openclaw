@@ -3,7 +3,6 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import { clearGitHubCredentialVerificationCache } from "../../agents/github-oauth-client.js";
-import { resolveManagedGitHubProfileDir } from "../../agents/github-tool-identity.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
@@ -30,7 +29,10 @@ import { REQUEST } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { prepareRepositoryGitHubIdentity } from "./repository-github-identity.js";
-import { createRepositoryPolicySource } from "./repository-policy-node.test-support.js";
+import {
+  createManagedRepositoryProfile,
+  createRepositoryPolicySource,
+} from "./repository-policy-node.test-support.js";
 import * as support from "./service.test-support.js";
 import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
@@ -101,19 +103,12 @@ for (const kind of ["pat", "oauth", "native"] as const) {
         ? {}
         : { gateway: { repositoryIntegration: "repository-policy" } }),
     };
-    const env = { OPENCLAW_STATE_DIR: root };
-    const profileDir = resolveManagedGitHubProfileDir({
+    await createManagedRepositoryProfile({
       agentId: "main",
-      scope: "system",
       profileId,
-      env,
+      stateDir: root,
+      token: "synthetic-managed-credential",
     });
-    await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
-    await fs.writeFile(
-      path.join(profileDir, "hosts.yml"),
-      "github.com:\n  oauth_token: synthetic-managed-credential\n",
-      { mode: 0o600 },
-    );
     const profile = ensureProfileForEmail("managed-policy@example.invalid");
     support.testState.releaseTurnOwners.push((await prepareUserProfileCatalog()).release);
     const builder = createTestPluginRegistry();
@@ -144,7 +139,8 @@ for (const kind of ["pat", "oauth", "native"] as const) {
     });
     api.registerRepositoryIntegration({
       version: 1,
-      preparedCapacity: "image",
+      // This fixture exercises source preparation; image-only claims are covered separately.
+      preparedCapacity: "repository",
       resolveConnectionIdentity: () => undefined,
       async withIdentity(context, run) {
         policyCalls++;

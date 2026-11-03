@@ -25,6 +25,7 @@ export interface ControlUiMockGatewayScenario
   awaitInitialRoster?: boolean;
   nativePlugins?: readonly NativeControlUiPluginFixture[];
   pluginAssetsRequireAuth?: boolean;
+  pluginSurfaceUrls?: Record<string, string>;
   attachmentMaxBytes?: number;
   agentModel?: string | null;
   assistantAgentId?: string;
@@ -74,6 +75,9 @@ export interface ControlUiMockGatewayScenario
   updateSchedule?: UpdateScheduleState | null;
   controlUiBuildSource?: "bundled" | "configured";
   serverVersion?: string;
+  /** Startup-bound Gateway commit and build time; empty values are omitted from hello. */
+  serverCommit?: string;
+  serverBuiltAt?: string;
   featureEvents?: string[];
   featureMethods?: string[];
   /** Simulate a legacy Gateway that predates the advertised method catalog. */
@@ -130,13 +134,24 @@ export interface ControlUiMockGatewayScenario
   workspaceGit?: boolean;
 }
 
+type ControlUiPluginHello = Required<
+  Pick<
+    ControlUiMockGatewayScenario,
+    "controlUiTabs" | "controlUiWidgetKinds" | "controlUiLinkReaders" | "pluginSurfaceUrls"
+  >
+>;
+
 export type NormalizedControlUiMockGatewayScenario = Required<
   Omit<
     ControlUiMockGatewayScenario,
-    "nativePlugins" | "awaitInitialRoster" | "bootstrapPreferences"
+    "nativePlugins" | "awaitInitialRoster" | "bootstrapPreferences" | keyof ControlUiPluginHello
   >
 > &
-  Pick<ControlUiMockGatewayScenario, "bootstrapPreferences">;
+  Pick<ControlUiMockGatewayScenario, "bootstrapPreferences"> & {
+    controlUiPluginHello: ControlUiPluginHello;
+    /** Running-Gateway identity in hello; unset commit and build time are omitted. */
+    serverRelease: { version: string; commit?: string; builtAt?: string };
+  };
 
 const DEFAULT_MOCK_MAX_PAYLOAD_BYTES = 25 * 1024 * 1024;
 const DEFAULT_MOCK_ATTACHMENT_MAX_BYTES = Math.floor(
@@ -176,9 +191,12 @@ export function normalizeScenario(
     assistantAgentId: scenario.assistantAgentId?.trim() || defaultAgentId,
     assistantName: scenario.assistantName?.trim() || "OpenClaw",
     basePath,
-    controlUiTabs: scenario.controlUiTabs ?? [],
-    controlUiWidgetKinds: scenario.controlUiWidgetKinds ?? [],
-    controlUiLinkReaders: scenario.controlUiLinkReaders ?? [],
+    controlUiPluginHello: {
+      controlUiTabs: scenario.controlUiTabs ?? [],
+      controlUiWidgetKinds: scenario.controlUiWidgetKinds ?? [],
+      controlUiLinkReaders: scenario.controlUiLinkReaders ?? [],
+      pluginSurfaceUrls: scenario.pluginSurfaceUrls ?? {},
+    },
     allowedSessionVisibilities: scenario.allowedSessionVisibilities ?? [
       "shared",
       "read-only",
@@ -203,6 +221,13 @@ export function normalizeScenario(
     updateSchedule: scenario.updateSchedule ?? null,
     controlUiBuildSource: scenario.controlUiBuildSource ?? "bundled",
     serverVersion: scenario.serverVersion?.trim() || sharedBuildInfo?.version || "e2e",
+    serverCommit: scenario.serverCommit ?? "",
+    serverBuiltAt: scenario.serverBuiltAt ?? "",
+    serverRelease: {
+      version: scenario.serverVersion?.trim() || sharedBuildInfo?.version || "e2e",
+      ...(scenario.serverCommit ? { commit: scenario.serverCommit } : {}),
+      ...(scenario.serverBuiltAt ? { builtAt: scenario.serverBuiltAt } : {}),
+    },
     ...normalizeControlUiMockAuth(scenario),
     featureEvents: scenario.featureEvents ?? [],
     // Baseline scenarios represent a current Gateway. Tests for unsupported or

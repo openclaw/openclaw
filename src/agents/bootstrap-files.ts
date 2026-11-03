@@ -13,6 +13,7 @@ import { rememberBoundedKey } from "../infra/dedupe.js";
 import { isMemoryOriginEligibleForAutomaticInjection } from "../memory-host-sdk/host/types.js";
 import { classifyActiveMemoryWorkspacePaths } from "../plugins/memory-runtime.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { settleCurrentReadPreparations } from "../shared/current-read-authority.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
 import type { BootstrapContextRunKind } from "./bootstrap-mode.js";
@@ -199,10 +200,24 @@ async function resolveIneligibleAutomaticMemoryFiles(params: {
   const origins = new Map(
     classificationResult.classifications.map((entry) => [entry.relativePath, entry.originClass]),
   );
-  return candidates.filter(
-    (_file, index) =>
-      !isMemoryOriginEligibleForAutomaticInjection(origins.get(relativePaths[index]!)),
-  );
+  return candidates.filter((_file, index) => {
+    const relativePath = relativePaths[index]!;
+    const originClass = origins.get(relativePath);
+    if (isMemoryOriginEligibleForAutomaticInjection(originClass)) {
+      return false;
+    }
+    // Quarantine persists across turns: report each excluded file once per process.
+    const warningKey = `memory-provenance-exclusion\u0000${resolveUserPath(params.workspaceDir)}\u0000${relativePath}\u0000${originClass ?? ""}`;
+    if (
+      params.warn &&
+      rememberBoundedKey(seenBootstrapWarnings, warningKey, BOOTSTRAP_WARNING_DEDUPE_LIMIT)
+    ) {
+      params.warn(
+        `excluding ${relativePath} from automatic memory context: memory provenance is ${originClass ?? "unclassified"}; run \`openclaw doctor\` for the last recorded write`,
+      );
+    }
+    return true;
+  });
 }
 
 /** Resolves hook-adjusted, session-filtered bootstrap files for a run. */
@@ -268,19 +283,14 @@ async function resolveBootstrapFiles(
     chatType: params.chatType,
     workspaceDir: params.workspaceDir,
   };
-  const workspaceSetupCompleted = await isWorkspaceSetupCompletedForContext(
-    params.workspaceDir,
-    params.readOnlyState,
-  );
-  const rawFiles = await loadWorkspaceBootstrapFiles(params.workspaceDir);
+  const [workspaceSetupCompleted, rawFiles, personalFile] = await settleCurrentReadPreparations([
+    isWorkspaceSetupCompletedForContext(params.workspaceDir, params.readOnlyState),
+    loadWorkspaceBootstrapFiles(params.workspaceDir),
+    loadPersonalUserBootstrapFile(params.workspaceDir, params.bootstrapUserProfileId, params.warn),
+  ] as const);
   for (const file of rawFiles) {
     file.origin = { kind: "agent-workspace", rootPath: resolveUserPath(params.workspaceDir) };
   }
-  const personalFile = await loadPersonalUserBootstrapFile(
-    params.workspaceDir,
-    params.bootstrapUserProfileId,
-    params.warn,
-  );
   const userIndex = rawFiles.findIndex((file) => file.name === DEFAULT_USER_FILENAME);
   if (personalFile) {
     rawFiles.splice(userIndex < 0 ? rawFiles.length : userIndex + 1, 0, personalFile);

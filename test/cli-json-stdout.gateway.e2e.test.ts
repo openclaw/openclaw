@@ -142,8 +142,8 @@ it.each([
     expect(result.status, result.stderr).toBe(1);
     expectCleanOutput(result.stdout, result.stderr);
     expectCliError(result.stdout, message);
-    expect(result.stderr).toContain("[openclaw] The CLI command failed.");
-    expect(result.stderr).not.toContain(message);
+    expect(result.stderr).toContain(message);
+    expect(result.stderr).not.toContain("[openclaw] The CLI command failed.");
     if ("tty" in testCase) {
       expect(result.stderr).toContain("\u001B[?25h");
     }

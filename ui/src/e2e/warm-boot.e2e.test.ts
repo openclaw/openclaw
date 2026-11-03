@@ -402,7 +402,7 @@ suite.define(() => {
             }
           }, seeded.cacheKey),
         )
-        .toBe(13);
+        .toBe(14);
       await page.reload();
       await gateway.waitForRequest("connect");
       await gateway.resolveDeferred("connect");

@@ -1,7 +1,10 @@
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { WorkerTaskError } from "@openclaw/worker-runtime";
 import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
-import type { SqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import {
+  formatSqliteSessionFileMarker,
+  type SqliteSessionFileMarker,
+} from "../config/sessions/legacy-sqlite-marker.js";
 import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { iterateSessionColdRecords } from "../config/sessions/session-cold-storage-chunks.js";
 import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
@@ -16,9 +19,10 @@ import {
 } from "./session-cost-usage-cache.kernel.js";
 import {
   listUsageCountedTranscriptSources,
-  resolveUsageCostTranscriptSources,
+  readUsageCostTranscriptSourceStats,
   resolveUsageCostTranscriptFiles,
   resolveUsageCostTranscriptPaths,
+  resolveUsageCostTranscriptSourcePath,
 } from "./session-cost-usage-collection.js";
 import {
   decodeUsageCostPartition,
@@ -111,29 +115,24 @@ export async function executeUsageCostWorker(
     control,
     target,
     readStore,
+    readCheckpoint: (marker) => {
+      if (operation.kind !== "refresh") {
+        return undefined;
+      }
+      const database = target(marker.agentId, marker.storePath);
+      const checkpoint = byPath.get(
+        formatSqliteSessionFileMarker({ ...marker, storePath: database.path }),
+      )?.envelope?.checkpoint;
+      return checkpoint?.kind === "sqlite" ? checkpoint : undefined;
+    },
   });
   if (operation.kind === "inventory") {
-    const selected = operation.sessionFiles;
-    if (!selected) {
-      const files = await listUsageCountedTranscriptSources(location.agentId, {
-        ...access,
-        storePath: location.storePath,
-        minMtimeMs: operation.minMtimeMs,
-        statistics: false,
-      });
-      return {
-        kind: "inventory",
-        files: files.map(({ kind, sourcePath, sessionId, mtimeMs }) => ({
-          kind,
-          sourcePath,
-          sessionId,
-          mtimeMs,
-        })),
-      };
-    }
-    const files = (await resolveUsageCostTranscriptSources(selected, access)).filter(
-      (file) => file !== undefined,
-    );
+    const files = await listUsageCountedTranscriptSources(location.agentId, {
+      ...access,
+      storePath: location.storePath,
+      minMtimeMs: operation.minMtimeMs,
+      statistics: false,
+    });
     return {
       kind: "inventory",
       files: files.map((file) => ({
@@ -146,22 +145,16 @@ export async function executeUsageCostWorker(
   }
 
   // Resolve keys before synchronously capturing the report's bounded cache inputs.
-  const selectedFiles =
-    operation.kind === "refresh" && operation.sessionFiles
-      ? await resolveUsageCostTranscriptFiles(operation.sessionFiles, access)
-      : [];
   const sessionPaths =
     operation.kind === "sessions"
       ? await resolveUsageCostTranscriptPaths(
           operation.sessions.map((session) => session.sessionFile),
           access,
         )
-      : undefined;
-  const selectedPaths = sessionPaths
-    ? sessionPaths.filter((file) => file !== undefined)
-    : operation.kind === "refresh" && operation.sessionFiles
-      ? selectedFiles.flatMap((file) => (file ? [file.filePath] : []))
-      : undefined;
+      : operation.kind === "refresh" && operation.sessionFiles
+        ? await resolveUsageCostTranscriptPaths(operation.sessionFiles, access)
+        : undefined;
+  const selectedPaths = sessionPaths?.filter((file) => file !== undefined);
   const cacheDatabase = input.databases.find(
     (entry) => entry.path === location.databasePath && entry.agentId === location.agentId,
   );
@@ -351,14 +344,64 @@ export async function executeUsageCostWorker(
   }
 
   const rows = await readMetadata();
-  const byPath = new Map(rows.map((row) => [row.key, row]));
+  const byPath = new Map(
+    rows.map((row) => [
+      row.key,
+      {
+        row,
+        envelope: decodeUsageCostRollupEnvelope(row.valueJson, operation.pricingFingerprint),
+      },
+    ]),
+  );
+  const selectedFiles = operation.sessionFiles
+    ? await resolveUsageCostTranscriptFiles(operation.sessionFiles, access)
+    : [];
 
   const requestedFiles = selectedFiles.filter((file) => file !== undefined);
   if (requestedFiles.length !== (operation.sessionFiles?.length ?? 0)) {
     throw new WorkerTaskError("A requested usage transcript is unavailable", "unavailable");
   }
-  const files = operation.sessionFiles ? requestedFiles : await inventory(operation.sessionsDir);
+  const sources = operation.sessionFiles
+    ? []
+    : await listUsageCountedTranscriptSources(location.agentId, {
+        ...access,
+        storePath: location.storePath,
+        sessionsDir: operation.sessionsDir,
+        statistics: false,
+      });
+  const sourcesByPath = new Map(
+    sources.map((source) => [resolveUsageCostTranscriptSourcePath(source), source]),
+  );
+  // Read upgrade gaps before selecting expensive inputs; old live sources still own cache rows.
+  const quarterGaps = await readCacheOrEmpty(
+    (db) =>
+      listUsageCostQuarterGapsInDatabase(
+        db,
+        operation.sessionFiles ? requestedFiles.map((file) => file.filePath) : undefined,
+      ),
+    () => new Set<string>(),
+  );
+  const minMtimeMs = operation.sessionFiles ? undefined : operation.startMs;
+  const selectedSources = [...sourcesByPath].filter(
+    ([filePath, source]) =>
+      !(minMtimeMs !== undefined && source.mtimeMs < minMtimeMs) || quarterGaps.has(filePath),
+  );
+  const files = operation.sessionFiles
+    ? requestedFiles
+    : await readUsageCostTranscriptSourceStats(
+        selectedSources.map(([, source]) => source),
+        access,
+      );
   const filesByPath = new Map(files.map((file) => [file.filePath, file]));
+  const livePaths = new Set(sourcesByPath.keys());
+  // Selected sources can disappear or change archive identity during expansion.
+  // Reconcile before pruning; unexpected read errors have already aborted without writes.
+  for (const [filePath] of selectedSources) {
+    livePaths.delete(filePath);
+  }
+  for (const file of files) {
+    livePaths.add(file.filePath);
+  }
   let pruned = false;
   if (!operation.sessionFiles) {
     let batch: UsageCostWorkerHostEffects["prune-rows"]["input"] = [];
@@ -371,7 +414,7 @@ export async function executeUsageCostWorker(
       batchBytes = 0;
     };
     for (const row of rows) {
-      if (filesByPath.has(row.key)) {
+      if (livePaths.has(row.key)) {
         continue;
       }
       const value = new TextEncoder().encode(row.valueJson);
@@ -388,17 +431,6 @@ export async function executeUsageCostWorker(
       await sendBatch();
     }
   }
-  // Partitions written before quarter rows existed, or by a build without them,
-  // derive their report rows from the stored partition instead of a transcript scan.
-  const quarterGaps = await readCacheOrEmpty(
-    (db) =>
-      listUsageCostQuarterGapsInDatabase(
-        db,
-        operation.sessionFiles ? [...filesByPath.keys()] : undefined,
-      ),
-    () => new Set<string>(),
-  );
-  const minMtimeMs = operation.sessionFiles ? undefined : operation.startMs;
   const rebuildByPath = new Map(operation.rebuildRows?.map((row) => [row.key, row]));
   const stale = [];
   for (const file of filesByPath.values()) {
@@ -407,10 +439,9 @@ export async function executeUsageCostWorker(
     if (old && !gap) {
       continue;
     }
-    const row = byPath.get(file.filePath);
-    const envelope = row
-      ? decodeUsageCostRollupEnvelope(row.valueJson, operation.pricingFingerprint)
-      : undefined;
+    const cached = byPath.get(file.filePath);
+    const row = cached?.row;
+    const envelope = cached?.envelope;
     const invalid = rebuildByPath.get(file.filePath);
     const rebuild =
       row &&

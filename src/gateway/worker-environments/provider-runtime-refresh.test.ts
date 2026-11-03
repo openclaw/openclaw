@@ -393,6 +393,8 @@ describe("worker environment runtime upgrades", () => {
               }),
             ],
       );
+      // Recovery probes durable Git refs; own the workspace instead of discovering a parent.
+      await gitInit(testState.root);
       const fixture = await createHarness(testState.stateDb, restarted.placements, {
         workspacePath: testState.root,
       });
@@ -471,6 +473,7 @@ describe("worker environment runtime upgrades", () => {
           expect(publicationAuthority).toContain(false);
           expect(publicationAuthority).not.toContain(true);
         }
+        expect(recovery.reportWorkspaceResultRecoveryFailure).not.toHaveBeenCalled();
         expect(h.install).toHaveBeenCalledTimes(unchanged ? 0 : 1);
         expect(h.destroy).toHaveBeenCalledOnce();
         expect(h.provision).not.toHaveBeenCalled();

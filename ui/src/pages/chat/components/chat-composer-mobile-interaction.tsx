@@ -51,6 +51,11 @@ export function createComposerMobileInteraction(
     setEditing(next);
   };
   const mobileEditing = createMemo(() => mobileComposer() && editing());
+  // Leaving the editor with a typed draft keeps the open surface and its controls;
+  // only an empty composer rests as the one-line capsule.
+  const mobileResting = createMemo(
+    () => mobileComposer() && !editing() && !context().visibleDraft.trim(),
+  );
   const editingTransition = createMemo(
     () => ({
       editing: mobileEditing(),
@@ -282,5 +287,5 @@ export function createComposerMobileInteraction(
       props.onComposerEditingChange?.(false);
     };
   });
-  return { mobileEditing, keyboardNavigation, lifecycle };
+  return { mobileEditing, mobileResting, keyboardNavigation, lifecycle };
 }
