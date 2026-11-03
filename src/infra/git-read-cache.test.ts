@@ -159,8 +159,8 @@ describe("typed Git read ownership", () => {
     await drainGlobalSingletonLifecycleState();
   });
 
-  it("rechecks a non-Git folder on a later request when its parent becomes a checkout", async () => {
-    vi.useFakeTimers();
+  it.each([0, -3_600_000])("retries discovery after wall step %i", async (step) => {
+    vi.useFakeTimers({ toFake: ["Date", "performance"] });
     onTestFinished(() => drainGlobalSingletonLifecycleState());
     const operation = {
       type: "repository.branches" as const,
@@ -172,13 +172,13 @@ describe("typed Git read ownership", () => {
     await runGitReadOperation(operation, { snapshot: true, onRefresh: initial.resolve });
     await initial.promise;
     expect(await runGitReadOperation(operation, { snapshot: true })).toEqual(notGit);
-
     // Git init in an ancestor does not notify the nested folder's metadata watch.
     const ready = {
       branches: [{ name: "main", kind: "local" as const }],
       repositoryStatus: "git" as const,
     };
     const held = holdRead("repository.branches", ready);
+    vi.setSystemTime(Date.now() + step);
     await vi.advanceTimersByTimeAsync(5_001);
     expect(workerCalls("repository.branches")).toHaveLength(1);
     const refreshed = createDeferredCore();
@@ -191,53 +191,6 @@ describe("typed Git read ownership", () => {
         root: "/new-checkout",
         gitDir: "/new-checkout/.git",
         commonDir: "/new-checkout/.git",
-      },
-    };
-    held.resolve(discovered);
-    await refreshed.promise;
-    expect(await runGitReadOperation(operation, { snapshot: true })).toEqual(ready);
-    expect(workerCalls("repository.branches")).toHaveLength(2);
-  });
-
-  it("rechecks a non-Git branch folder on the monotonic retry clock despite wall-clock rollback", async () => {
-    vi.useFakeTimers();
-    onTestFinished(() => drainGlobalSingletonLifecycleState());
-    // The branch retry deadline is process-local, so it must follow the monotonic clock.
-    const nowSpy = vi.spyOn(performance, "now");
-    onTestFinished(() => nowSpy.mockRestore());
-    let monotonic = 1_000;
-    nowSpy.mockImplementation(() => monotonic);
-    const operation = {
-      type: "repository.branches" as const,
-      input: { repoRoot: "/branch-not-git-clock", includeRepositoryStatus: true },
-    };
-    const notGit = { branches: [], repositoryStatus: "not_git" as const };
-    gitRead.mockResolvedValueOnce(notGit);
-    const initial = createDeferredCore();
-    await runGitReadOperation(operation, { snapshot: true, onRefresh: initial.resolve });
-    await initial.promise;
-    expect(await runGitReadOperation(operation, { snapshot: true })).toEqual(notGit);
-    expect(workerCalls("repository.branches")).toHaveLength(1);
-
-    // A wall-clock correction must not postpone the retry deadline.
-    vi.setSystemTime(Date.now() - 3_600_000);
-    monotonic += 5_001; // five seconds of monotonic time elapse independently of the wall clock
-    expect(workerCalls("repository.branches")).toHaveLength(1);
-    const ready = {
-      branches: [{ name: "main", kind: "local" as const }],
-      repositoryStatus: "git" as const,
-    };
-    const held = holdRead("repository.branches", ready);
-    const refreshed = createDeferredCore();
-    expect(
-      await runGitReadOperation(operation, { snapshot: true, onRefresh: refreshed.resolve }),
-    ).toEqual({ ...notGit, refreshing: true });
-    const discovered = {
-      ...ready,
-      observation: {
-        root: "/branch-not-git-clock",
-        gitDir: "/branch-not-git-clock/.git",
-        commonDir: "/branch-not-git-clock/.git",
       },
     };
     held.resolve(discovered);
