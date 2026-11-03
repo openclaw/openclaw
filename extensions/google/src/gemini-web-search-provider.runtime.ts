@@ -223,7 +223,6 @@ export async function executeGeminiSearch(
       normalizeOptionalString(geminiConfig?.providerBaseUrl),
   );
   const operatorHeaders = resolveGeminiWebSearchHeaders(geminiConfig);
-  const headersCacheKey = sha256Hex(JSON.stringify([apiKey, operatorHeaders]));
   const cacheKey = buildSearchCacheKey([
     "gemini",
     query,
@@ -232,7 +231,7 @@ export async function executeGeminiSearch(
     freshness,
     dateAfter,
     dateBefore,
-    headersCacheKey,
+    sha256Hex(JSON.stringify([apiKey, operatorHeaders])),
   ]);
   const cacheTtlMs = resolveSearchCacheTtlMs(searchConfig);
   const cached = readCachedSearchPayload(cacheKey, cacheTtlMs);
@@ -249,8 +248,7 @@ export async function executeGeminiSearch(
   const signal = context?.signal;
   const endpoint = `${baseUrl}/models/${model}:generateContent`;
   const googleSearch = timeRangeFilter === undefined ? {} : { timeRangeFilter };
-  const requestHeaders = {
-    ...operatorHeaders,
+  const providerHeaders = {
     "Content-Type": "application/json",
     "x-goog-api-key": apiKey,
     ...resolveGoogleApiClientHeaders({
@@ -260,6 +258,10 @@ export async function executeGeminiSearch(
       transport: "http",
     }),
   };
+  const requestHeaders = new Headers(operatorHeaders);
+  for (const [name, value] of Object.entries(providerHeaders)) {
+    requestHeaders.set(name, value);
+  }
 
   const result = await withTrustedWebSearchEndpoint(
     {

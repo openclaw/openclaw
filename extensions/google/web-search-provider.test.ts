@@ -168,23 +168,33 @@ describe("google web search provider", () => {
     expect(parseGeminiFetchBody(mockFetch).tools).toEqual([{ google_search: {} }]);
   });
 
-  it("sends operator headers while keeping provider-owned headers authoritative", async () => {
-    const mockFetch = installGeminiFetch();
-    const tool = createGeminiToolWithHeaders({
-      "X-Routing-Target": "staging",
-      "X-Gateway-Token": "resolved-gateway-token",
-      "X-Goog-Api-Key": "operator-value",
-    });
+  it.each([undefined, "https://ai-gateway.vercel.sh/v1beta"])(
+    "sends operator headers while keeping provider-owned headers authoritative at %s",
+    async (baseUrl) => {
+      const mockFetch = installGeminiFetch();
+      const tool = createGeminiTool({
+        baseUrl,
+        headers: {
+          "X-Routing-Target": "staging",
+          "X-Gateway-Token": "resolved-gateway-token",
+          "X-Goog-Api-Key": "operator-value",
+          "X-Title": "operator-title",
+          "HTTP-Referer": "https://operator.example/",
+        },
+      });
 
-    await tool?.execute({ query: "OpenClaw operator headers" });
+      await tool?.execute({ query: "OpenClaw operator headers" });
 
-    expect(getFetchHeaders(mockFetch)).toMatchObject({
-      "content-type": "application/json",
-      "x-gateway-token": "resolved-gateway-token",
-      "x-goog-api-key": "AIza-plugin-test",
-      "x-routing-target": "staging",
-    });
-  });
+      expect(getFetchHeaders(mockFetch)).toMatchObject({
+        "content-type": "application/json",
+        "x-gateway-token": "resolved-gateway-token",
+        "x-goog-api-key": "AIza-plugin-test",
+        "x-routing-target": "staging",
+        "x-title": baseUrl ? "OpenClaw" : "operator-title",
+        "http-referer": baseUrl ? "https://openclaw.ai" : "https://operator.example/",
+      });
+    },
+  );
 
   it("partitions cached Gemini results by operator headers", async () => {
     const mockFetch = installGeminiFetch();
