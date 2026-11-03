@@ -98,11 +98,20 @@ final class ChatProTabRecoveryControlsTests: XCTestCase {
             ingress: ingress,
             now: { fixture.now })
 
-        // The gate is entered only from inside the injected retry delay, so awaiting it proves
-        // the failing probe reached the retry boundary; `hasPendingConnectionHandoff` turns true
-        // synchronously, before the probe runs, and would prove nothing on its own. This is the
-        // same signal the other ingress suites await, and `defer { retryGate.release() }` unwinds it.
-        await retryGate.waitUntilStarted()
+        // The gate is entered only from inside the injected retry delay, so its own start signal
+        // proves the failing probe reached the retry boundary; `hasPendingConnectionHandoff` turns
+        // true synchronously, before the probe runs, and would prove nothing on its own. This is
+        // the same signal the other ingress suites await, and `defer { retryGate.release() }`
+        // unwinds it. Read with a deadline for the same reason the composer walk below has one:
+        // a fixture that never reaches the boundary must fail the regression instead of hanging
+        // the suite until the lane's execution allowance kills it.
+        let retryDeadline = Date(timeIntervalSinceNow: 30)
+        while !retryGate.started, Date() < retryDeadline {
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertTrue(
+            retryGate.started,
+            "Automatic preflight must reach its retry boundary while the saved endpoint stays unreachable.")
         XCTAssertTrue(
             controller.hasPendingConnectionHandoff,
             "Automatic preflight must keep its handoff pending while the endpoint stays unreachable.")
