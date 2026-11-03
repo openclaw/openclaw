@@ -584,7 +584,7 @@ describe("cross-OS manual gateway lane evidence", () => {
       mocks.runCommand.mockImplementationOnce(realProcess.runCommand);
       mocks.runOpenClaw.mockImplementationOnce(realRuntime.runOpenClaw);
       const running = runUpgradeLane(upgradeParams());
-      await vi.advanceTimersByTimeAsync(1_320_000);
+      await vi.advanceTimersByTimeAsync(2_520_000);
       expect(spawnSync).toHaveBeenCalledWith(
         expect.stringMatching(/taskkill\.exe$/u),
         ["/PID", "4242", "/T", "/F"],
@@ -627,7 +627,7 @@ describe("cross-OS manual gateway lane evidence", () => {
       vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       mocks.runOpenClaw.mockRejectedValueOnce(
         new Error(
-          "Command timed out: C:\\prefix\\node_modules\\openclaw\\openclaw.mjs update --tag http://127.0.0.1:49951/openclaw-candidate.tgz --yes --json --no-restart --timeout 600",
+          "Command timed out: C:\\prefix\\node_modules\\openclaw\\openclaw.mjs update --tag http://127.0.0.1:49951/openclaw-candidate.tgz --yes --json --no-restart --timeout 1200",
         ),
       );
       mocks.installPackageSpec
@@ -685,7 +685,7 @@ describe("cross-OS manual gateway lane evidence", () => {
       npmLogPath = join(npmLogsDir, "2026-08-29T00_00_00_000Z-debug-0.log");
       writeFileSync(npmLogPath, "0 error code ETIMEDOUT\n1 error token=updater-secret\n");
       throw new Error(
-        "Command timed out: C:\\prefix\\node_modules\\openclaw\\openclaw.mjs update --tag http://127.0.0.1:49951/openclaw-candidate.tgz --yes --json --no-restart --timeout 600",
+        "Command timed out: C:\\prefix\\node_modules\\openclaw\\openclaw.mjs update --tag http://127.0.0.1:49951/openclaw-candidate.tgz --yes --json --no-restart --timeout 1200",
       );
     });
     mocks.installPackageSpec
@@ -792,7 +792,7 @@ describe("cross-OS manual gateway lane evidence", () => {
       mocks.runOpenClaw.mockResolvedValueOnce(unsettledExit).mockImplementationOnce(async () => {
         if (retryOutcome === "timeout") {
           throw new Error(
-            "Command timed out: C:\\prefix\\node_modules\\openclaw\\openclaw.mjs update --tag http://127.0.0.1:49951/openclaw-candidate.tgz --yes --json --no-restart --timeout 600",
+            "Command timed out: C:\\prefix\\node_modules\\openclaw\\openclaw.mjs update --tag http://127.0.0.1:49951/openclaw-candidate.tgz --yes --json --no-restart --timeout 1200",
           );
         }
         if (retryOutcome === "success") {
