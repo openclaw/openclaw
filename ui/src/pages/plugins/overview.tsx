@@ -15,6 +15,7 @@ import type {
   PluginsInspectResult,
 } from "../../lib/plugins/index.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { CapabilityIcon, PLUGIN_CAPABILITY_FAMILIES } from "./capability-icons.tsx";
 import { formatCompactCount } from "./catalog-results.tsx";
 import { ExtensionIcon } from "./extension-icons.tsx";
 import { renderPluginAuthor, renderPluginOfficialBadge } from "./plugin-card.tsx";
@@ -402,37 +403,16 @@ function renderPluginMcpServers(
   );
 }
 
-// Runtime plumbing is intentionally absent: the overview describes user capabilities.
-const overviewContractFamilies = [
-  "speechProviders",
-  "realtimeTranscriptionProviders",
-  "realtimeVoiceProviders",
-  "mediaUnderstandingProviders",
-  "imageGenerationProviders",
-  "videoGenerationProviders",
-  "musicGenerationProviders",
-  "embeddingProviders",
-  "webSearchProviders",
-  "webFetchProviders",
-  "webContentExtractors",
-  "documentExtractors",
-  "transcriptSourceProviders",
-  "migrationProviders",
-] as const;
-
 function renderPluginDeclaredCapabilities(
   contracts: Readonly<Record<string, readonly string[]>> | undefined,
 ): JSX.Element {
   return renderPluginCapabilitySection(
     t("pluginsPage.detailCapabilities"),
-    overviewContractFamilies
-      .filter((family) => contracts?.[family]?.length)
-      .map((family) => `capabilityFamilies.${family}`)
-      .map((key) => ({
-        name: t(`pluginsPage.${key}.name`),
-        description: t(`pluginsPage.${key}.description`),
-      })),
-    () => <Icon name="layers" />,
+    PLUGIN_CAPABILITY_FAMILIES.filter((family) => contracts?.[family]?.length).map((family) => ({
+      icon: () => <CapabilityIcon family={family} />,
+      name: t(`pluginsPage.capabilityFamilies.${family}.name`),
+      description: t(`pluginsPage.capabilityFamilies.${family}.description`),
+    })),
   );
 }
 
