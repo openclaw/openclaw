@@ -46,8 +46,10 @@ function ttsConfig(raw: Record<string, unknown>) {
 export function buildClawRouterSpeechProvider(
   context: Pick<PluginCapabilityCatalogContext, "resolveApiKeyForProvider" | "fetchWithSsrFGuard">,
 ): SpeechProviderPlugin {
-  async function resolveAuth(cfg: SpeechSynthesisRequest["cfg"], raw: Record<string, unknown>) {
-    const config = readConfig(raw, "tts.providers.clawrouter");
+  async function resolveAuth(
+    cfg: SpeechSynthesisRequest["cfg"],
+    config: ReturnType<typeof readConfig>,
+  ) {
     const baseUrl = normalizeClawRouterApiBaseUrl(
       config.baseUrl ?? cfg.models?.providers?.clawrouter?.baseUrl,
     );
@@ -138,10 +140,7 @@ export function buildClawRouterSpeechProvider(
       await import("openclaw/plugin-sdk/ssrf-runtime");
     const { resolveGeneratedMediaMaxBytes } =
       await import("openclaw/plugin-sdk/media-generation-runtime");
-    const { baseUrl, headers } = await resolveAuth(req.cfg, {
-      ...req.providerConfig,
-      model: config.model,
-    });
+    const { baseUrl, headers } = await resolveAuth(req.cfg, config);
     const responseFormat = telephony
       ? "pcm"
       : (config.responseFormat ?? (req.target === "voice-note" ? "opus" : "mp3"));
@@ -220,7 +219,7 @@ export function buildClawRouterSpeechProvider(
     // Readiness is credential availability, not a grant: the service authorizes each POST.
     isConfiguredAsync: async ({ cfg, providerConfig }) => {
       try {
-        await resolveAuth(cfg ?? {}, providerConfig);
+        await resolveAuth(cfg ?? {}, readConfig(providerConfig, "tts.providers.clawrouter"));
         return true;
       } catch {
         return false;
