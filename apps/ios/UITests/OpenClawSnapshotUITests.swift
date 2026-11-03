@@ -328,6 +328,53 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(disclosure.exists)
     }
 
+    func testSidebarUtilityDestinationSelectionDark() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone sidebar only")
+        self.launchApp(
+            for: Self.controlScreenshotTarget,
+            appearance: "dark",
+            additionalArguments: ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"])
+        let app = try XCTUnwrap(self.app)
+        let controls = [
+            app.buttons["All Sessions…"],
+            app.buttons["RootTabs.Sidebar.GatewaySettings"],
+            app.buttons["RootTabs.Sidebar.Destination.settings"],
+        ]
+        self.tapSidebarReveal(in: app)
+        self.waitForHittable(true, of: app.buttons["RootTabs.Sidebar.Hide"])
+        let initialImage = try XCTUnwrap(app.screenshot().image.cgImage)
+        let unselected = try controls.map {
+            try self.sidebarBackgroundBrightness(of: $0, in: initialImage, appFrame: app.frame)
+        }
+
+        for (index, destination) in [
+            ("All Sessions…", "sessions"), ("Add Gateway", "gateway"),
+            ("Settings", "settings"), ("Overview", "overview"),
+        ].enumerated() {
+            try self.selectSidebarDestination(destination.0)
+            self.waitForValue("ready:\(destination.1)", of: self.readinessMarker(in: app))
+            self.tapSidebarReveal(in: app)
+            self.waitForHittable(true, of: app.buttons["RootTabs.Sidebar.Hide"])
+            self.attachScreenshot(named: "sidebar-selection-dark-\(destination.1)")
+            let image = try XCTUnwrap(app.screenshot().image.cgImage)
+            for (controlIndex, control) in controls.enumerated() {
+                let brightness = try self.sidebarBackgroundBrightness(of: control, in: image, appFrame: app.frame)
+                if controlIndex == index {
+                    XCTAssertGreaterThan(
+                        brightness,
+                        unselected[controlIndex] + 4,
+                        "Active destination has no background")
+                } else {
+                    XCTAssertEqual(
+                        brightness,
+                        unselected[controlIndex],
+                        accuracy: 2,
+                        "Inactive destination stays highlighted")
+                }
+            }
+        }
+    }
+
     func testSidebarOverviewNavigation() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone sidebar only")
         self.launchApp(for: ScreenshotTarget(
@@ -2663,6 +2710,33 @@ extension OpenClawSnapshotUITests {
         }
         XCTAssertTrue(gatewaySettings.waitForExistence(timeout: 3), file: file, line: line)
         gatewaySettings.tap()
+    }
+
+    private func sidebarBackgroundBrightness(
+        of element: XCUIElement,
+        in image: CGImage,
+        appFrame: CGRect) throws -> Double
+    {
+        XCTAssertTrue(element.isHittable)
+        let frame = element.frame
+        let scaleX = CGFloat(image.width) / appFrame.width
+        let scaleY = CGFloat(image.height) / appFrame.height
+        // Sample empty space above the label, away from the rounded corners.
+        let crop = CGRect(
+            x: (frame.midX - appFrame.minX) * scaleX,
+            y: (frame.minY + 4 - appFrame.minY) * scaleY,
+            width: 3, height: 3)
+        let sample = try XCTUnwrap(image.cropping(to: crop))
+        var pixel = [UInt8](repeating: 0, count: 4)
+        try pixel.withUnsafeMutableBytes { buffer in
+            let context = try XCTUnwrap(CGContext(
+                data: buffer.baseAddress, width: 1, height: 1,
+                bitsPerComponent: 8, bytesPerRow: 4,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            context.draw(sample, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+        }
+        return Double(Int(pixel[0]) + Int(pixel[1]) + Int(pixel[2])) / 3
     }
 
     private func assertElementHasRenderedContent(
