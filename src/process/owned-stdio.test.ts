@@ -53,10 +53,21 @@ describe("owned stdio startup cleanup", () => {
         throw original;
       });
       try {
-        await expect(createOwnedStdioProcess({ argv: ["server"] })).rejects.toMatchObject({
-          constructor: OwnedStdioCleanupError,
-          cause: original,
-        });
+        const error = await createOwnedStdioProcess({ argv: ["server"] }).then(
+          () => undefined,
+          (failure: unknown) => failure,
+        );
+        expect(error).toBeInstanceOf(OwnedStdioCleanupError);
+        // The startup failure leads; cleanup uncertainty and the next step follow it.
+        expect((error as Error).message).toMatch(
+          /^startup failed after admission; stdio startup cleanup also did not confirm closure, so restart the Gateway before retrying$/,
+        );
+        expect(((error as Error).cause as AggregateError).errors).toEqual([
+          original,
+          expect.objectContaining({
+            message: outcome === "rejected" ? "owner lost" : expect.stringContaining("within 5s"),
+          }),
+        ]);
       } finally {
         cleanup.resolve();
       }

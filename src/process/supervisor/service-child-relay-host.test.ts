@@ -173,6 +173,31 @@ it.each(["dispatch-revoked", "post-dispatch", "prepared-current", "prepared-revo
   },
 );
 
+it("reports a Linux startup failure ahead of its unconfirmed cleanup", async () => {
+  const stub = mockWritableRelay("linux");
+  const outcome = startRelay().then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  const { emit } = relayPeer(stub);
+  emit({ type: "startup-error", anchorPid: 1235, error: "spawn synthetic-command ENOENT" });
+  // A closing receipt without native extinction cannot certify cleanup.
+  emit({ type: "closing", reason: "lineage-lost", descendantsReaped: undefined });
+  stub.control.destroy();
+  stub.lineage.end();
+  stub.disconnectMock();
+  stub.emitExit(1);
+  const error = await outcome;
+  expect(error).toBeInstanceOf(AggregateError);
+  expect((error as AggregateError).message).toBe("spawn synthetic-command ENOENT");
+  expect((error as AggregateError).errors).toEqual([
+    expect.objectContaining({ message: "spawn synthetic-command ENOENT" }),
+    expect.objectContaining({
+      message: expect.stringContaining("service child cleanup identity lost"),
+    }),
+  ]);
+});
+
 it("bounds a refused launch when the waiting anchor never answers its cancel", async () => {
   clock();
   const stub = mockWritableRelay();
@@ -188,8 +213,15 @@ it("bounds a refused launch when the waiting anchor never answers its cancel", a
   relayPeer(stub).emit({ type: "prepared" });
   await nextTurn();
   await vi.advanceTimersByTimeAsync(GRACEFUL_CANCEL_TIMEOUT_MS * 2);
-  // Without the anchor's receipt the refusal cannot prove extinction, so cleanup stays fenced.
-  expect(await outcome).toMatchObject({ message: expect.stringContaining("hard deadline") });
+  // Without the anchor's receipt the refusal cannot prove extinction, so cleanup stays fenced
+  // and its failure follows the refusal that caused it.
+  expect(await outcome).toMatchObject({
+    message: "launch authority revoked",
+    errors: [
+      expect.objectContaining({ message: "launch authority revoked" }),
+      expect.objectContaining({ message: expect.stringContaining("hard deadline") }),
+    ],
+  });
 });
 
 it("checks input authority after readiness before writing private stdin", async () => {
