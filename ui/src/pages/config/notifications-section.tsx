@@ -16,12 +16,7 @@ import type {
   WebPushNotificationPreferences,
 } from "../../../../packages/gateway-protocol/src/schema/push.js";
 import { Icon } from "../../components/solid/icon.tsx";
-import {
-  SettingsPage,
-  SettingsRow,
-  SettingsStatus,
-  SettingsValue,
-} from "../../components/solid/settings-ui.tsx";
+import { SettingsPage, SettingsRow, SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiError, formatUiExternalText, UserFacingError } from "../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
@@ -49,16 +44,9 @@ export type NotificationsSectionProps = Pick<
   | "onWebPushSetDevicePreferences"
 >;
 
-function NotificationActions(props: { children: JSX.Element }) {
-  return (
-    <div class="settings-row">
-      <div class="settings-row__control">{props.children}</div>
-    </div>
-  );
-}
 function NotificationSection(props: {
   title: string;
-  status: JSX.Element;
+  status?: JSX.Element;
   description?: JSX.Element;
   children: JSX.Element;
 }) {
@@ -66,7 +54,9 @@ function NotificationSection(props: {
     <section class="settings-section" id={COMMUNICATION_SETTINGS_TARGET_IDS.notifications}>
       <div class="settings-section__header">
         <h2 class="settings-section__heading">{props.title}</h2>
-        <div class="settings-section__actions">{props.status}</div>
+        <Show when={props.status}>
+          <div class="settings-section__actions">{props.status}</div>
+        </Show>
       </div>
       {props.description}
       <div class="settings-group">{props.children}</div>
@@ -132,10 +122,7 @@ function NativeNotificationSection(props: {
     return presentTest(pending, retired);
   };
   return (
-    <NotificationSection
-      title={t("configView.notifications.nativeTitle")}
-      status={<SettingsStatus kind={status().kind} label={status().label} />}
-    >
+    <NotificationSection title={t("configView.notifications.nativeTitle")}>
       <span class="sr-only" role="status" aria-live="polite">
         {testAnnouncement()}
       </span>
@@ -146,37 +133,39 @@ function NativeNotificationSection(props: {
             ? t("configView.notifications.nativeBlockedHint")
             : undefined
         }
-        control={<SettingsValue value={status().label} />}
-      />
-      <Show
-        when={
-          props.native.permission === "notDetermined" ||
-          props.native.permission === "denied" ||
-          props.native.permission === "granted"
-        }
-      >
-        <NotificationActions>
-          {props.native.permission === "granted" ? (
-            <button class="btn" disabled={testPending()} onClick={() => void sendTest()}>
-              <Icon name={testPending() ? "loader" : "send"} />
-              {testPending()
-                ? t("configView.notifications.sendingTest")
-                : t("configView.notifications.sendTest")}
-            </button>
-          ) : (
-            <button
-              class={["btn", { primary: props.native.permission === "notDetermined" }]}
-              onClick={() => props.actions.onNativeNotificationsRequestPermission?.()}
+        control={
+          <>
+            <SettingsStatus kind={status().kind} label={status().label} />
+            <Show
+              when={
+                props.native.permission === "notDetermined" ||
+                props.native.permission === "denied" ||
+                props.native.permission === "granted"
+              }
             >
-              {t(
-                props.native.permission === "notDetermined"
-                  ? "configView.notifications.enable"
-                  : "configView.notifications.openSystemSettings",
+              {props.native.permission === "granted" ? (
+                <button class="btn" disabled={testPending()} onClick={() => void sendTest()}>
+                  <Icon name={testPending() ? "loader" : "send"} />
+                  {testPending()
+                    ? t("configView.notifications.sendingTest")
+                    : t("configView.notifications.sendTest")}
+                </button>
+              ) : (
+                <button
+                  class={["btn", { primary: props.native.permission === "notDetermined" }]}
+                  onClick={() => props.actions.onNativeNotificationsRequestPermission?.()}
+                >
+                  {t(
+                    props.native.permission === "notDetermined"
+                      ? "configView.notifications.enable"
+                      : "configView.notifications.openSystemSettings",
+                  )}
+                </button>
               )}
-            </button>
-          )}
-        </NotificationActions>
-      </Show>
+            </Show>
+          </>
+        }
+      />
       <Show
         when={testPending()}
         fallback={
@@ -264,42 +253,37 @@ function WebPushSection(props: {
     registered() ||
     props.push.subscription === "vapid-mismatch" ||
     props.push.subscription === "local";
-  const permissionLabel = () =>
-    t(
-      props.push.permission === "granted"
-        ? "configView.notifications.granted"
-        : props.push.permission === "denied"
-          ? "configView.notifications.denied"
-          : props.push.permission === "default"
-            ? "configView.notifications.notRequested"
-            : "configView.notifications.unsupported",
-    );
-  const subscriptionLabel = () =>
-    t(
-      registered()
-        ? "configView.notifications.subscribed"
-        : props.push.subscription === "unknown"
-          ? "configView.notifications.checking"
-          : props.push.subscription === "local"
-            ? "configView.notifications.localSubscription"
-            : "configView.notifications.notSubscribed",
-    );
   const statusLabel = () =>
     t(
       !props.push.supported
         ? "configView.notifications.unsupported"
-        : !props.push.canManage
-          ? "configView.notifications.unavailable"
-          : props.push.permission === "denied"
-            ? "configView.notifications.blocked"
-            : registered()
-              ? "configView.notifications.subscribed"
-              : props.push.subscription === "vapid-mismatch"
-                ? "configView.notifications.unavailable"
-                : props.push.subscription === "unknown"
-                  ? "configView.notifications.checking"
-                  : "configView.notifications.ready",
+        : props.push.subscription === "local"
+          ? "configView.notifications.localSubscription"
+          : !props.push.canManage
+            ? "configView.notifications.unavailable"
+            : props.push.permission === "denied"
+              ? "configView.notifications.blocked"
+              : registered()
+                ? "configView.notifications.subscribed"
+                : props.push.subscription === "vapid-mismatch"
+                  ? "configView.notifications.unavailable"
+                  : props.push.subscription === "unknown"
+                    ? "configView.notifications.checking"
+                    : "configView.notifications.ready",
     );
+  const statusHint = () => {
+    if (props.push.permission === "denied") {
+      return t("configView.notifications.blockedHint");
+    }
+    if (props.push.supported && !props.push.canManage) {
+      return t(
+        props.actions.connected
+          ? "configView.notifications.gatewayAccessRequired"
+          : "configView.notifications.gatewayDisconnected",
+      );
+    }
+    return undefined;
+  };
   const statusKind = () =>
     !props.push.supported || !props.push.canManage
       ? "muted"
@@ -312,7 +296,6 @@ function WebPushSection(props: {
     <>
       <NotificationSection
         title={t("configView.notifications.title")}
-        status={<SettingsStatus kind={statusKind()} label={statusLabel()} />}
         description={
           props.push.permission === "install-required" ? (
             <p class="settings-section__desc">{t("configView.notifications.iosInstallRequired")}</p>
@@ -320,92 +303,59 @@ function WebPushSection(props: {
         }
       >
         <SettingsRow
-          title={t("configView.notifications.browserSupport")}
-          control={
-            <SettingsValue
-              value={t(
-                props.push.supported
-                  ? "configView.notifications.available"
-                  : "configView.notifications.notSupported",
-              )}
-            />
-          }
-        />
-        <SettingsRow
-          title={t("configView.notifications.permission")}
-          description={
-            props.push.permission === "denied"
-              ? t("configView.notifications.blockedHint")
-              : undefined
-          }
-          control={<SettingsValue value={permissionLabel()} />}
-        />
-        <SettingsRow
           title={t("configView.notifications.status")}
+          description={statusHint()}
           control={
-            <SettingsStatus kind={registered() ? "ok" : "muted"} label={subscriptionLabel()} />
+            <>
+              <SettingsStatus kind={statusKind()} label={statusLabel()} />
+              <Show
+                when={
+                  props.push.supported &&
+                  props.push.permission !== "denied" &&
+                  (props.push.canManage || hasSubscription())
+                }
+              >
+                {hasSubscription() ? (
+                  <>
+                    <button
+                      class="btn"
+                      disabled={busy() || !props.actions.connected}
+                      onClick={() => submit(props.actions.onWebPushUnsubscribe?.())}
+                    >
+                      <Icon name="x" /> {t("configView.notifications.unsubscribe")}
+                    </button>
+                    <Show when={registered() && props.push.canManage}>
+                      <button
+                        class="btn"
+                        disabled={busy() || !props.actions.connected}
+                        onClick={() => submit(props.actions.onWebPushTest?.())}
+                      >
+                        <Icon name="send" /> {t("configView.notifications.sendTest")}
+                      </button>
+                    </Show>
+                  </>
+                ) : (
+                  <Show when={props.push.canManage}>
+                    <button
+                      class="btn primary"
+                      disabled={busy() || !props.actions.connected}
+                      onClick={() => submit(props.actions.onWebPushSubscribe?.())}
+                    >
+                      <Show when={busy()}>
+                        <Icon name="loader" />
+                      </Show>
+                      {t(
+                        busy()
+                          ? "configView.notifications.subscribing"
+                          : "configView.notifications.enable",
+                      )}
+                    </button>
+                  </Show>
+                )}
+              </Show>
+            </>
           }
         />
-        <Show when={props.push.supported && !props.push.canManage}>
-          <SettingsRow
-            title={t("configView.notifications.gatewayAccess")}
-            description={t(
-              props.actions.connected
-                ? "configView.notifications.gatewayAccessRequired"
-                : "configView.notifications.gatewayDisconnected",
-            )}
-            control={
-              <SettingsStatus kind="muted" label={t("configView.notifications.unavailable")} />
-            }
-          />
-        </Show>
-        <Show
-          when={
-            props.push.supported &&
-            props.push.permission !== "denied" &&
-            (props.push.canManage || hasSubscription())
-          }
-        >
-          <NotificationActions>
-            {hasSubscription() ? (
-              <>
-                <button
-                  class="btn"
-                  disabled={busy() || !props.actions.connected}
-                  onClick={() => submit(props.actions.onWebPushUnsubscribe?.())}
-                >
-                  <Icon name="x" /> {t("configView.notifications.unsubscribe")}
-                </button>
-                <Show when={registered() && props.push.canManage}>
-                  <button
-                    class="btn"
-                    disabled={busy() || !props.actions.connected}
-                    onClick={() => submit(props.actions.onWebPushTest?.())}
-                  >
-                    <Icon name="send" /> {t("configView.notifications.sendTest")}
-                  </button>
-                </Show>
-              </>
-            ) : (
-              <Show when={props.push.canManage}>
-                <button
-                  class="btn primary"
-                  disabled={busy() || !props.actions.connected}
-                  onClick={() => submit(props.actions.onWebPushSubscribe?.())}
-                >
-                  <Show when={busy()}>
-                    <Icon name="loader" />
-                  </Show>
-                  {t(
-                    busy()
-                      ? "configView.notifications.subscribing"
-                      : "configView.notifications.enable",
-                  )}
-                </button>
-              </Show>
-            )}
-          </NotificationActions>
-        </Show>
         <Show when={props.push.error}>
           <div class="settings-row">
             <div class="settings-row__text">

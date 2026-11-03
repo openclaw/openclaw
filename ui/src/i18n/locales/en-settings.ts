@@ -1775,8 +1775,6 @@ const enSettings = {
       blocked: "Blocked",
       ready: "Ready",
       browserSupport: "Browser support",
-      available: "Available",
-      notSupported: "Not supported",
       permission: "Permission",
       status: "Status",
       unsubscribe: "Unsubscribe",
