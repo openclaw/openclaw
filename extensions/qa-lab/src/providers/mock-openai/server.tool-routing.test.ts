@@ -722,6 +722,54 @@ describe("subagent-handoff", () => {
         expect(JSON.stringify(unrelated)).not.toContain(result);
       },
     );
+
+    it("accepts the direct settled wake projected by the Codex runtime", async () => {
+      const server = await startMockServer();
+      const request = (input: unknown[]) =>
+        expectNonStreamingResponsesJson(server, {
+          model: "gpt-5.6-luna",
+          tools,
+          input,
+        });
+      const spawned = await request([user(kickoff)]);
+      const call = outputToolCall(spawned, "sessions_spawn");
+      const accepted = makeToolOutputWithCallId(
+        outputToolCallId(call, "spawn"),
+        JSON.stringify({
+          status: "accepted",
+          childSessionKey: "agent:qa:subagent:child",
+          runId: "child-run",
+        }),
+      );
+      const waiting = await request([user(kickoff), call, accepted]);
+      const yieldCall = outputToolCall(waiting, "sessions_yield");
+      const yielded = makeToolOutputWithCallId(
+        outputToolCallId(yieldCall, "yield"),
+        JSON.stringify({ status: "yielded" }),
+      );
+      const completed = await request([
+        user(kickoff),
+        call,
+        accepted,
+        yieldCall,
+        yielded,
+        user(settled),
+      ]);
+
+      expect(outputItems(completed).some((item) => item.type === "function_call")).toBe(false);
+      expect(outputText(completed)).toContain(result);
+
+      const staleWake = await request([
+        user(kickoff),
+        call,
+        accepted,
+        yieldCall,
+        yielded,
+        user("Start an unrelated request."),
+        user(settled),
+      ]);
+      expect(outputText(staleWake)).not.toContain(result);
+    });
   });
 
   // Captured smoke-ci surface: exec is a shell tool, not Code Mode (no wait).

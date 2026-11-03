@@ -426,6 +426,12 @@ export async function resolveSessionMutationAuthorizationAsync(
           }
         },
         retain,
+        retainForRun: () => ({
+          // Published facts stay live without repeating history preparation or transport admission.
+          assertCurrent: () =>
+            (authorization.assertAdmittedInputCurrent ?? authorization.assertCurrent)(),
+          release: retain(),
+        }),
         release: () => {
           if (!transferred) {
             releaseRequest();

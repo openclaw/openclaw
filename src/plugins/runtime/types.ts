@@ -340,6 +340,27 @@ export type PluginRuntime = PluginRuntimeCore & {
       ownerId: string;
     }) => Promise<boolean>;
   };
+  /** Core-owned per-skill usage, keyed by SKILL.md path; written for every demonstrated skill use. */
+  skills: {
+    /**
+     * Usage for the given SKILL.md paths, keyed by the paths as given. Files without recorded
+     * use are absent. When `tracked` is false this process does not persist skill use, so an
+     * absent entry is not evidence that the skill went unused.
+     */
+    readUsage: (params: { skillFiles: readonly string[] }) => Promise<{
+      tracked: boolean;
+      usage: ReadonlyMap<string, { useCount: number; lastUsedAtMs: number }>;
+    }>;
+    /**
+     * Records one read of an absolute SKILL.md path by the executing tool call. Run, session,
+     * and agent attribution come from that call. Returns false outside a live tool execution.
+     */
+    recordUsed: (params: {
+      skillFile: string;
+      skillName: string;
+      skillSource?: "bundled" | "workspace";
+    }) => boolean;
+  };
   channel: PluginRuntimeChannel;
 };
 

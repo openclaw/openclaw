@@ -46,11 +46,11 @@ export type ExecDockerRawResult = SandboxBackendCommandResult;
 
 export function buildSandboxContainerEngineArgv(engine: SandboxContainerEngine, args: string[]) {
   const argv = [engine.command, ...(engine.globalArgs ?? []), ...args];
-  // Empty global args identify a bound local Podman target; discovery and remote
+  // Explicit native mode identifies a bound local Podman target; discovery and remote
   // clients do not launch container processes on this host.
   if (
     engine.id !== "podman" ||
-    engine.globalArgs?.length !== 0 ||
+    engine.globalArgs?.[0] !== "--remote=false" ||
     process.platform !== "linux" ||
     process.getuid?.() === 0
   ) {

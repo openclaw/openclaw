@@ -137,7 +137,15 @@ export function controlUiPluginDistributionsPlugin(repoRoot: string, inputs: Set
         if (build.directory !== `dist/control-ui/${generation}`) {
           throw new Error(`Incomplete or invalid packaged native UI generation for ${id}`);
         }
-        const revision = pluginControlUiRevision(controlUi, uiCapabilities, build.assets);
+        if (controlUi.panelIcon) {
+          consume(path.join(rootDir, controlUi.panelIcon));
+        }
+        const revision = pluginControlUiRevision(
+          controlUi,
+          uiCapabilities,
+          build.assets,
+          build.panelIcon?.dataUrl,
+        );
         const urls = new Map<string, string>();
         for (const [name, asset] of build.assets) {
           consume(path.join(rootDir, build.directory, name));
