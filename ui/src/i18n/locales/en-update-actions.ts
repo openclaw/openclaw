@@ -5,8 +5,8 @@ import { en } from "./en.ts";
 // cannot leave an update failure without its host-side recovery command.
 const enUpdateActions = {
   updates: {
-    adminRequired: "Administrator access is required to change update settings or start an update.",
-    refreshFailed: "Could not refresh. Check your connection and try again.",
+    adminRequired: "You need admin access to change update settings or start an update.",
+    refreshFailed: "Couldn’t refresh. Check your connection and try again.",
     campaign: en.updates.campaign,
     holdOneHour: "Hold 1 h",
     reviewUpdate: "Review update",
@@ -88,7 +88,7 @@ const enUpdateActions = {
     sidebar: {
       campaignTarget: "{status} · {target}",
       checking: "Checking for updates…",
-      checkFailed: "Could not check the latest update. Try again.",
+      checkFailed: "Couldn’t check for updates. Try again.",
       updating: "Updating Gateway…",
       availableTitle: "Update available",
       availableBadge: "Available",

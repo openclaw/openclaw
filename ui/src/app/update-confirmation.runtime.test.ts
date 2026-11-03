@@ -379,10 +379,10 @@ it.each([
   if (action === "Review update") {
     await stream.push({
       failure,
-      readError: "Could not check for updates: timeout",
+      readError: "Couldn’t check for updates: timeout",
     });
     expect(modal.textContent).toContain(failure);
-    expect(modal.textContent).toContain("Could not check for updates: timeout");
+    expect(modal.textContent).toContain("Couldn’t check for updates: timeout");
   }
   expect(onReviewUpdate).not.toHaveBeenCalled();
   findButton(action).click();
@@ -711,7 +711,7 @@ it.each([
       await statusOperation;
       flush();
       expect(modal.textContent).toContain(
-        "Could not check for updates: Status refresh unavailable",
+        "Couldn’t check for updates: Status refresh unavailable",
       );
       expect(modal.textContent).not.toContain("Status refreshed.");
       await waitForSolid(() => expect(findButton("Check status").disabled).toBe(false));
@@ -724,7 +724,7 @@ it.each([
       expect(findButton("Checking status…")).toBe(check);
       expect(check.disabled).toBe(true);
       expect(modal.textContent).toContain(
-        "Could not check for updates: Status refresh unavailable",
+        "Couldn’t check for updates: Status refresh unavailable",
       );
       expect(modal.textContent).not.toContain("Status refreshed.");
       expect(modal.querySelector(".update-run-view")).toBe(view);
@@ -733,7 +733,7 @@ it.each([
       await statusOperation;
       flush();
       await waitForSolid(() => expect(findButton("Check status").disabled).toBe(false));
-      expect(modal.textContent).not.toContain("Could not check for updates");
+      expect(modal.textContent).not.toContain("Couldn’t check for updates");
       expect(modal.querySelector(".update-run-view")).toBe(view);
       expect(view.textContent).toBe(reportText);
       harness.update({ phase: "connecting", client: null });

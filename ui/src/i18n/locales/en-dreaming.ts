@@ -19,7 +19,7 @@ const enDreaming = {
         "The nightly dreaming sweep will stop for every configured agent, not just this one. Memories already written stay; nothing new gets promoted. This applies right away.",
       disableConfirm: "Turn off dreaming",
       saving: "Saving…",
-      failed: "Could not apply change. Check your connection and try again.",
+      failed: "Couldn’t apply the change. Check your connection and try again.",
     },
     status: {
       promotedSuffix: "promoted today",
@@ -92,9 +92,9 @@ const enDreaming = {
         "This archives derived dream cache files and rebuilds them from clean inputs. Your dream diary stays untouched.",
       confirmDedupeDescription:
         "This rewrites DREAMS.md and removes only exact duplicate diary entries.",
-      archivePathCopied: "Archive path copied.",
-      archivePathCopyFailed: "Could not copy archive path.",
-      updateFailed: "Could not update dreaming settings.",
+      archivePathCopied: "Path copied",
+      archivePathCopyFailed: "Couldn’t copy the path. Try again.",
+      updateFailed: "Couldn’t update dreaming settings. Try again.",
       unsupportedPlugin: 'Selected memory plugin "{pluginId}" does not support dreaming settings.',
       configHashMissing: "Config hash missing; refresh and retry.",
     },
@@ -105,7 +105,7 @@ const enDreaming = {
       insightsTab: "Imported insights",
       wikiTab: "Memory wiki",
       insightsExplainer:
-        "Imported chats by topic, to review before any of it becomes durable memory.",
+        "Imported conversations by topic, to review before any of it becomes durable memory.",
       wikiExplainer:
         "Compiled pages, claims, open questions, and contradictions the system can search.",
       copyArchivePath: "Copy archive path",
@@ -148,8 +148,8 @@ const enDreaming = {
         openQuestions: "{count} open questions",
         contradictionOne: "{count} contradiction",
         contradictions: "{count} contradictions",
-        chatOne: "{count} chat",
-        chats: "{count} chats",
+        chatOne: "{count} conversation",
+        chats: "{count} conversations",
         sensitive: "{count} sensitive",
         signalOne: "{count} signal",
         signals: "{count} signals",

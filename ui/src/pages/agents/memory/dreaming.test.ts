@@ -521,8 +521,8 @@ describe("dreaming controller", () => {
   });
 
   it.each([
-    { copied: true, kind: "success", text: "Archive path copied." },
-    { copied: false, kind: "error", text: "Could not copy archive path." },
+    { copied: true, kind: "success", text: "Path copied" },
+    { copied: false, kind: "error", text: "Couldn’t copy the path. Try again." },
   ])("reports clipboard result: $kind", async ({ copied, kind, text }) => {
     const { state } = createState();
     state.dreamDiaryActionArchivePath = "/tmp/openclaw/archive";

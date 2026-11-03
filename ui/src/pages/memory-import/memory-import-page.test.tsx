@@ -189,7 +189,7 @@ describe("MemoryImportPage", () => {
 
     expect(page.textContent).toContain("Connect to the gateway to import memory.");
     expect(page.querySelector(".memory-import")).toBeNull();
-    expect(page.textContent).not.toContain("Memory import requires operator.admin access.");
+    expect(page.textContent).not.toContain("You need admin access to import memories.");
     expect(request).not.toHaveBeenCalled();
 
     context.gateway.snapshot.phase = "connected";
@@ -322,7 +322,7 @@ describe("MemoryImportPage", () => {
 
     flush();
     expect(request).not.toHaveBeenCalled();
-    expect(page.textContent).toContain("Memory import requires operator.admin access.");
+    expect(page.textContent).toContain("You need admin access to import memories.");
   });
 
   it("keeps a failed plan stable until the operator explicitly refreshes", async () => {

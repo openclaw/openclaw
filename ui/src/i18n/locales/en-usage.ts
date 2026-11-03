@@ -198,7 +198,7 @@ const enUsage = {
       filtered: "(filtered)",
       close: "Close session details",
       noTimeline: "No timeline data",
-      loadFailed: "Could not load {detail}: {error}",
+      loadFailed: "Couldn’t load {detail}: {error}",
       noDataInRange: "No data in range",
       usageOverTime: "Usage Over Time",
       rangeStart: "Range start",

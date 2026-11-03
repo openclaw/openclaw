@@ -14,7 +14,7 @@ import { SidebarUpdateCard, type SidebarUpdateCardProps } from "./sidebar-update
 
 let originalWebkit: PropertyDescriptor | undefined;
 const checkFailure = "Could not check the latest update";
-const reconnectFailure = "Could not refresh. Check your connection and try again.";
+const reconnectFailure = "Couldn’t refresh. Check your connection and try again.";
 async function settle() {
   await Promise.resolve();
   flush();

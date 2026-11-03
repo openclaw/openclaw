@@ -63,7 +63,7 @@ const checkFailure = {
   text: "Could not check for updates: timeout",
 } as const;
 const restartPending =
-  "Update installed. A gateway restart is already in progress; status will refresh after it reconnects.";
+  "Update installed. The Gateway is already restarting; status will refresh after it reconnects.";
 const gitSchedule = (git: NonNullable<NonNullable<UpdateScheduleState["install"]>["git"]>) =>
   ({ channel: "dev", autoEnabled: false, install: { kind: "git", git } }) as const;
 

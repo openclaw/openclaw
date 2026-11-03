@@ -6,7 +6,7 @@ const enMemoryImport = {
   onboarding: {
     memoryImport: {
       title: en.onboarding.memoryImport.title,
-      body: "OpenClaw found memory from other coding assistants. Import it into your agent workspace?",
+      body: "OpenClaw found memory from other coding agents. Import it into your agent workspace?",
       plannedCount: "{count} ready to import",
       alreadyImported: "Already imported: {count}",
       sourceUnavailable: "Source path unavailable",
@@ -17,7 +17,7 @@ const enMemoryImport = {
       providerResult: "Migrated {migrated}, skipped {skipped}",
       providerIncomplete:
         "Migrated {migrated}, skipped {skipped}, {errors} failed, {conflicts} conflicts",
-      providerError: "Import failed: {error}",
+      providerError: "Couldn’t import memories: {error}",
       connectionChanged: "Skipped: the Gateway connection changed during the import",
       unknownError: "Request failed",
       doneTitle: "Memory import finished",
@@ -58,7 +58,7 @@ const enMemoryImport = {
     confirmBackup: "OpenClaw creates a verified pre-import backup before copying memory.",
     confirmImport: "Import memory",
     disconnected: "Connect to the gateway to import memory.",
-    adminRequired: "Memory import requires operator.admin access.",
+    adminRequired: "You need admin access to import memories.",
     title: "Import assistant memory",
     subtitle:
       "Review Codex consolidated memory and Claude Code auto-memory before copying it into OpenClaw.",
