@@ -914,7 +914,7 @@ it("loads replacement sources and clears sensitive reveal state", async () => {
   viewState.revealedSensitivePaths.add("gateway.auth.token");
   state.configProps().onViewStateChange();
   flush();
-  Object.assign(context, { runtimeConfig: second });
+  completeConfigContext(Object.assign(context, { runtimeConfig: second }));
   publishConfigSource(context.gateway);
   await waitForSolid(() => expect(second.ensureSchemaLoaded).toHaveBeenCalledOnce());
 
