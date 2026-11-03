@@ -6,7 +6,10 @@ import type { MemoryAudience } from "../plugins/memory-provider-types.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { SkillSnapshot } from "../skills/types.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
-import type { AgentRunClientContext, AgentRunMessageContext } from "./command/shared-types.js";
+import type {
+  AgentRunClientContext,
+  AgentRunMessageContext,
+} from "./command/execution-context.types.js";
 import type { PreparedPairedComputerUse } from "./computer-use-node-capabilities.js";
 import type { resolveConversationQuestionInputMode } from "./conversation-capability-profile.js";
 import type { ConversationRecallContext } from "./conversation-recall.types.js";
