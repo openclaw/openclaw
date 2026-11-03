@@ -40,9 +40,12 @@ function expectFenceChunkInvariant(text: string, cuts: readonly number[]) {
   expect(state?.open !== undefined).toBe(covers(oneShot, text.length - 1));
 }
 
-const seeded = (seed: number) => () => {
-  seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648;
-  return seed / 2_147_483_648;
+const seeded = (seed: number) => {
+  let state = seed;
+  return () => {
+    state = (state * 1_103_515_245 + 12_345) % 2_147_483_648;
+    return state / 2_147_483_648;
+  };
 };
 
 describe("scanFenceSpans chunk invariance", () => {
@@ -83,7 +86,10 @@ describe("scanFenceSpans chunk invariance", () => {
     ];
     for (let iteration = 0; iteration < 120; iteration += 1) {
       const body = ["code", "const a = 1;", "`inline`", ""][Math.floor(random() * 4)] ?? "code";
-      const text = shapes[Math.floor(random() * shapes.length)]!(body);
+      const shape =
+        shapes[Math.floor(random() * shapes.length)] ??
+        ((b: string) => `a\n  \`\`\`\n${b}\n\`\`\`\ntail\n`);
+      const text = shape(body);
       const cuts = [1 + Math.floor(random() * (text.length - 1))];
       expectFenceChunkInvariant(text, cuts);
     }
