@@ -26,8 +26,10 @@ import {
   createCollectionFocus,
   getSensitiveRenderState,
   CollectionRemoveButton,
+  ConfigFieldHelp,
+  configRowCopy,
   FieldRow,
-  renderSchemaDefaultDescription,
+  schemaDefaultValueText,
   type CollectionRowFocus,
   type ConfigNodeRenderer,
   type ConfigNodeRenderParams,
@@ -102,7 +104,9 @@ type CollectionProps = {
 export function ConfigObject(props: CollectionProps): JSX.Element {
   const object = createMemo(() => resolveConfigObjectFields(props.params), { lazy: true });
   // Native details owns user toggles; refresh its default only when the depth policy changes.
-  const initiallyOpen = createMemo(() => props.params.path.length <= 2);
+  const initiallyOpen = createMemo(
+    () => props.params.path.length <= 2 && !props.params.collapseObjects,
+  );
   // Keep editors after first opening so closing a disclosure preserves drafts and focus targets.
   const [hasOpened, setHasOpened] = createSignal(false);
   const meta = createMemo(
@@ -112,6 +116,7 @@ export function ConfigObject(props: CollectionProps): JSX.Element {
     },
     { lazy: true },
   );
+  const copy = createMemo(() => configRowCopy({ label: meta().label, help: meta().help }));
   const fields = () => (
     <>
       <For each={object().fields} keyed={(field) => String(field.path.at(-1))}>
@@ -130,7 +135,7 @@ export function ConfigObject(props: CollectionProps): JSX.Element {
       fallback={fields()}
     >
       <details
-        class="cfg-object cfg-block"
+        class={["cfg-object cfg-block", { "cfg-object--quiet": props.params.collapseObjects }]}
         open={initiallyOpen()}
         onToggle={(event) => {
           if (event.currentTarget.open) {
@@ -140,12 +145,18 @@ export function ConfigObject(props: CollectionProps): JSX.Element {
       >
         <summary class="settings-row cfg-object__summary">
           <div class="settings-row__text">
-            <span class="settings-row__title">{meta().label}</span>
-            <Show when={meta().help}>
-              <span class="settings-row__desc">{meta().help}</span>
+            <span class="settings-row__title">
+              {meta().label}
+              <Show when={copy().hasHelp}>
+                <ConfigFieldHelp path={props.params.path} label={meta().label} help={meta().help} />
+              </Show>
+            </span>
+            <Show when={copy().summary}>
+              <span class="settings-row__desc config-field__summary">{copy().summary}</span>
             </Show>
           </div>
           <div class="settings-row__control">
+            {props.params.summarizeObject?.(props.params.path, props.params.value)}
             <span class="settings-row__chevron cfg-object__chevron">
               <Icon name="chevronRight" />
             </span>
@@ -184,9 +195,9 @@ function resolveArrayContent(params: ConfigNodeRenderParams, rows: ConfigFormArr
       : undefined;
   const arrayValue = arraySource ?? [];
   const arraySourceIdentity = arraySource ?? UNSET_ARRAY_SOURCE_IDENTITY;
-  const defaultDescription = getSensitiveRenderState({ ...params, value: arrayValue }).isRedacted
+  const defaultText = getSensitiveRenderState({ ...params, value: arrayValue }).isRedacted
     ? undefined
-    : renderSchemaDefaultDescription(schema, value);
+    : schemaDefaultValueText(schema);
   const rowIdentities = rows.read(arrayValue);
   const patch = (nextValue: unknown[], identities: readonly symbol[]) =>
     rows.patch(nextValue, identities, (next) => onPatch(path, next));
@@ -296,7 +307,8 @@ function resolveArrayContent(params: ConfigNodeRenderParams, rows: ConfigFormArr
     showLabel,
     showHeaderMeta,
     childSearchCriteria,
-    defaultDescription,
+    defaultText,
+    copy: configRowCopy({ label, help, defaultValue: defaultText }),
     rowIdentities,
     patch,
     minimumItems,
@@ -429,7 +441,8 @@ export function ConfigArray(props: CollectionProps): JSX.Element {
           label={resolveFieldMeta(props.params.path, props.params.schema, props.params.hints).label}
           showLabel={true}
           control={undefined}
-          error={t("configForm.unsupportedArray")}
+          unsupported={t("configForm.unsupportedArray")}
+          onOpenRaw={props.params.onOpenRaw}
         />
       }
     >
@@ -438,13 +451,41 @@ export function ConfigArray(props: CollectionProps): JSX.Element {
           <div class="settings-row">
             <div class="settings-row__text">
               <Show when={current().showLabel}>
-                <span class="settings-row__title">{current().label}</span>
+                <span class="settings-row__title">
+                  {current().label}
+                  <Show when={current().showHeaderMeta && current().copy.hasHelp}>
+                    <ConfigFieldHelp
+                      path={props.params.path}
+                      label={current().label}
+                      help={current().help}
+                      defaultValue={current().defaultText}
+                    />
+                  </Show>
+                </span>
               </Show>
-              <Show when={current().showHeaderMeta && current().help}>
-                <span class="settings-row__desc">{current().help}</span>
-              </Show>
-              <Show when={current().showHeaderMeta && current().defaultDescription}>
-                <span class="settings-row__desc">{current().defaultDescription}</span>
+              <Show
+                when={
+                  current().showHeaderMeta &&
+                  (current().copy.summary || (!current().showLabel && current().copy.hasHelp))
+                }
+              >
+                <span
+                  class={
+                    current().showLabel
+                      ? "settings-row__desc config-field__summary"
+                      : "settings-row__desc"
+                  }
+                >
+                  {current().copy.summary}
+                  <Show when={!current().showLabel && current().copy.hasHelp}>
+                    <ConfigFieldHelp
+                      path={props.params.path}
+                      label={current().label}
+                      help={current().help}
+                      defaultValue={current().defaultText}
+                    />
+                  </Show>
+                </span>
               </Show>
             </div>
             <div class="settings-row__control">

@@ -18,6 +18,7 @@ import {
 import { splitConfigSchemaByTier } from "./config-form.tiers.ts";
 import { Icon } from "./solid/icon.tsx";
 import { Popover, type PopoverHandle } from "./solid/popover.tsx";
+import { SettingsDisclosure } from "./solid/settings-disclosure.tsx";
 import { SettingsEmpty, SettingsPage, LearnMoreLink } from "./solid/settings-ui.tsx";
 
 export function ConfigTierGroups(props: ConfigTierGroupsProps): SolidJSX.Element {
@@ -30,16 +31,20 @@ export function ConfigTierGroups(props: ConfigTierGroupsProps): SolidJSX.Element
   );
   return (
     <div class="config-tier-groups">
-      <Show when={split().common || props.commonPrelude}>
+      <Show when={split().common || props.commonPrelude || props.flat}>
         <div class="settings-group">
           {props.commonPrelude}
           <Show when={split().common}>{(node) => props.renderTier(node)}</Show>
+          <Show when={props.flat ? split().advanced : null}>
+            {(node) => props.renderTier(node)}
+          </Show>
         </div>
       </Show>
-      <Show when={split().advanced}>
+      <Show when={props.flat ? null : split().advanced}>
         {(node) => (
-          <details
+          <SettingsDisclosure
             class="config-advanced-disclosure"
+            title={t("configForm.advancedSettings")}
             open={props.revealAdvanced}
             onToggle={(event) => {
               const disclosure = event.currentTarget;
@@ -55,13 +60,8 @@ export function ConfigTierGroups(props: ConfigTierGroupsProps): SolidJSX.Element
               }
             }}
           >
-            <summary class="settings-section__heading config-advanced-disclosure__summary">
-              {t("configForm.advancedSettings")}
-            </summary>
-            <Show when={props.revealAdvanced}>
-              <div class="settings-group">{props.renderTier(node)}</div>
-            </Show>
-          </details>
+            <Show when={props.revealAdvanced}>{props.renderTier(node)}</Show>
+          </SettingsDisclosure>
         )}
       </Show>
     </div>
@@ -76,6 +76,7 @@ type Section = {
 
 function ConfigSection(props: { section: Section; form: ConfigFormProps }): SolidJSX.Element {
   const hints = createMemo(() => props.form.uiHints);
+  const curated = () => props.form.curatedSections?.[String(props.section.path[0])];
   const meta = createMemo(() => {
     getLocale();
     const { path, node } = props.section;
@@ -104,14 +105,14 @@ function ConfigSection(props: { section: Section; form: ConfigFormProps }): Soli
       ? undefined
       : hintForPath(props.section.path.slice(0, 1), props.form.uiHints)?.docsUrl;
   const docsTriggerId = () => `settings-section-help-${props.section.id}`;
-  const revealAdvanced = () =>
-    props.form.showAdvanced === true ||
-    props.form.forceAdvancedSection === props.section.path[0] ||
-    Boolean(props.form.searchQuery);
+  // A search result or deep link has to land on open rows.
+  const revealTarget = () =>
+    props.form.forceAdvancedSection === props.section.path[0] || Boolean(props.form.searchQuery);
+  const revealAdvanced = () => props.form.showAdvanced === true || revealTarget();
   return (
     <section class="settings-section" id={props.section.id}>
       <div class="settings-section__header">
-        <h2 class="settings-section__heading">{meta().label}</h2>
+        <h2 class="settings-section__heading">{curated()?.label ?? meta().label}</h2>
         <Show when={props.form.sectionActions || docsUrl()}>
           <div class="settings-section__actions">
             {props.form.sectionActions}
@@ -161,10 +162,11 @@ function ConfigSection(props: { section: Section; form: ConfigFormProps }): Soli
           </div>
         </Show>
       </div>
-      <Show when={meta().description}>
+      <Show when={curated() ? null : meta().description}>
         <p class="settings-section__desc">{meta().description}</p>
       </Show>
       <ConfigTierGroups
+        flat={Boolean(curated())}
         schema={props.section.node}
         path={props.section.path}
         hints={hints()}
@@ -186,15 +188,19 @@ function ConfigSection(props: { section: Section; form: ConfigFormProps }): Soli
               path: props.section.path,
               hints: props.form.uiHints,
               rawAvailable: props.form.rawAvailable ?? true,
+              onOpenRaw: props.form.onOpenRaw,
               unsupported: new Set(props.form.unsupportedPaths ?? []),
               disabled: props.form.disabled ?? false,
               showLabel: false,
               showHeaderMeta: true,
+              collapseObjects: Boolean(curated()) && !revealTarget(),
+              summarizeObject: curated()?.summarizeObject,
               searchCriteria: parseConfigSearchQuery(props.form.searchQuery ?? ""),
               revealSensitive: props.form.revealSensitive ?? false,
               maskSensitive: props.form.maskSensitive,
               isSensitivePathRevealed: props.form.isSensitivePathRevealed,
               onToggleSensitivePath: props.form.onToggleSensitivePath,
+              secretFields: props.form.secretFields,
               onPatch: props.form.onPatch,
               onRemove: props.form.onRemove,
             }}

@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -160,5 +161,67 @@ it.concurrent.for([
       const rows = database.prepare("SELECT value FROM observations ORDER BY value").all();
       expect(rows).toEqual([{ value: 42 }, { value: 99 }]);
     });
+  },
+);
+
+it.for([
+  { leak: false, exitCode: 0, status: 0, signal: null, terminated: false },
+  { leak: true, exitCode: 0, status: null, signal: "SIGTERM", terminated: true },
+  // A non-zero status can be a supervisor's restart instruction, so it is only reported.
+  { leak: true, exitCode: 7, status: 7, signal: null, terminated: false },
+])(
+  "bounds a leaked handle after settled finalization (leak=$leak, exitCode=$exitCode)",
+  ({ leak, exitCode, status, signal, terminated }, { expect }) => {
+    if (terminated && process.platform === "win32") {
+      return;
+    }
+    const script = `
+      import { createServer } from "node:net";
+      import { setTimeout as delay } from "node:timers/promises";
+      import { requestSettledExitWatchdog, runCliWithExitFinalization } from ${JSON.stringify(new URL("./one-shot-exit.ts", import.meta.url).href)};
+      process.on("SIGTERM", () => {});
+      if (${leak}) {
+        const server = createServer().listen(0, "127.0.0.1");
+        // The leak outlives the watchdog; only an unterminated child closes it later.
+        setTimeout(() => server.close(), 1_500).unref();
+      }
+      await runCliWithExitFinalization({
+        run: async () => {
+          process.exitCode = ${exitCode};
+          requestSettledExitWatchdog(200);
+        },
+        // Finalization longer than the watchdog proves it is armed only afterwards.
+        finalize: async () => {
+          await delay(400);
+          process.stdout.write("finalized\\n");
+        },
+        onError: (error) => { throw error; },
+      });
+    `;
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "--input-type=module", "--eval", script],
+      {
+        cwd: path.resolve("."),
+        encoding: "utf8",
+        env: { ...process.env, VITEST: undefined },
+        killSignal: "SIGKILL",
+        timeout: 5_000,
+      },
+    );
+    const diagnostics = JSON.stringify(result);
+    expect(result.error, diagnostics).toBeUndefined();
+    expect(result.stdout, diagnostics).toContain("finalized");
+    expect(result.signal, diagnostics).toBe(signal);
+    expect(result.status, diagnostics).toBe(status);
+    if (leak) {
+      // Resource names are runtime diagnostics; Bun reports fewer handle types than Node.
+      expect(result.stderr, diagnostics).toContain(
+        "command settled but the process is still alive after 200ms; active resources:",
+      );
+      expect(result.stderr.includes("; terminating"), diagnostics).toBe(terminated);
+    } else {
+      expect(result.stderr, diagnostics).not.toContain("still alive");
+    }
   },
 );

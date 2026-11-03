@@ -387,7 +387,7 @@ suite.define(() => {
         await waitForControlUiRoute(page, { pathname, routeId: route });
         await expect
           .poll(() => readShellInsets(route), { message: `${route} settings shell alignment` })
-          .toEqual({ contentPaddingInline: 12, topbarPaddingInline: 16 });
+          .toEqual({ contentPaddingInline: 12, topbarPaddingInline: 12 });
       }
 
       for (const route of mobileStandaloneSettingsPageRoutes) {
@@ -508,7 +508,7 @@ suite.define(() => {
         columnLeft: 12,
         columnRightInset: 12,
         contentPaddingInline: 0,
-        topbarPaddingInline: 16,
+        topbarPaddingInline: 12,
       });
 
       await page.setViewportSize({ height: 900, width: 1440 });

@@ -99,7 +99,7 @@ A successful upload returns the stable Beam id and a relative Control UI URL:
 }
 ```
 
-Restricted Visitor uploads additionally return `"canView": false`. The URL is a receipt for sharing with a Gateway operator, not permission for the publisher to open the catalog. Other successful receipts may omit `canView`.
+Restricted Visitor uploads additionally return `"canView": true`: the current publishing Visitor can open their own retained snapshot while their invitation remains active. The URL is not public access or authorization, and other guests cannot use it to read the snapshot. Other successful receipts may omit `canView`.
 
 The returned URL uses the session title slug followed by a 12-character lowercase
 hexadecimal id prefix, matching regular session links. The id remains authoritative:
@@ -145,7 +145,7 @@ The catalog is intentionally shared across the Gateway operator domain. Every cl
 
 A restricted guest with `operator.sessions.write`, a durable verified OpenClaw profile, and a current Visitor Access invitation can publish a new row or refresh only a row they initially published. The receiver records the immutable initial publisher separately from mutable uploader attribution; neither field is accepted from the request body. Staff updates preserve that owner. Older live rows without an initial publisher cannot be claimed by a guest, even when their uploader attribution matches. Deletion or expiry ends that retained row; re-upload creates a new row under the normal creation rules.
 
-Guest publication does not grant catalog listing, reading, deletion, or continuation. Current identity, role, transport, and the original Visitor grant are rechecked after awaited work and at state-write admission. Revoking and reinviting a visitor cannot revive an in-flight request captured under the old grant. Ownership and both creation quotas are checked in one worker-owned state transaction. Limit refusals return `429`; foreign or ownerless retained-row updates return `403`. Stale uploads to an owned row keep the normal success receipt without refreshing retention.
+Guest publication does not grant shared catalog listing, foreign or ownerless snapshot reading, deletion, or continuation. The Beam link uses separate `beam.owned.list` and `beam.owned.read` methods, admitted with the existing `operator.sessions.write` scope and a current verified Visitor grant. They expose only rows whose immutable initial publisher matches the authenticated profile, omit uploader profile attribution, and disable continuation and deletion. Staff continue using the shared operator catalog. Current identity, role, transport, and the original Visitor grant are rechecked after awaited work and at state-write admission. Revoking and reinviting a visitor cannot revive an in-flight request captured under the old grant. Ownership and both creation quotas are checked in one worker-owned state transaction. Limit refusals return `429`; foreign or ownerless retained-row updates return `403`. Stale uploads to an owned row keep the normal success receipt without refreshing retention.
 
 Uploader attribution alone does not change access. OpenClaw operator scopes are not tenant isolation; use a separate Gateway when sessions must be isolated between teams or machines.
 

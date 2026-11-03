@@ -8,7 +8,8 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import { assertSessionForkRunSucceeded, prepareSessionFork } from "./session-fork-run.js";
+import { assertSessionForkRunSucceeded } from "./session-fork-result.js";
+import { prepareSessionFork } from "./session-fork-run.js";
 
 let state: OpenClawTestState;
 const model = { provider: "openai", model: "gpt-test" };

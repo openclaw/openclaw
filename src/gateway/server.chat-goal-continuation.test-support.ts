@@ -70,9 +70,8 @@ export function registerGoalAutomaticContinuationCases(
     });
   });
 
-  // A background exec completion is admitted as a session-event turn. Its Goal
-  // successor must outlive that event's occurrence, signal, and one-shot delivery,
-  // while keeping an explicitly silent completion's delivery restriction.
+  // Admit the completion before ending the first turn. Goal successors outlive the
+  // event's signal and one-shot delivery but retain its explicit delivery restriction.
   const completeExecDuringFirstTurn = (
     onEventTurn: () => Promise<void>,
     event: { deliver?: false } = {},
@@ -83,12 +82,13 @@ export function registerGoalAutomaticContinuationCases(
       prompts.push(params.prompt);
       delivery.push(getAgentRunContext(params.runId)?.sessionEventDelivery);
       if (runEmbeddedAgent.mock.calls.length === 1) {
-        enqueueSessionEventForHost("Background exec completed", {
+        const receipt = enqueueSessionEventForHost("Background exec completed", {
           ...scope(),
           ...event,
           source: "exec",
           sourceTurnId: "exec:goal-background",
         });
+        expect(await receipt.accepted).toEqual({ ok: true });
       } else if (runEmbeddedAgent.mock.calls.length >= 2) {
         await onEventTurn();
       }
@@ -350,7 +350,10 @@ export function registerGoalAutomaticContinuationCases(
     await expectDrained();
     expect(runEmbeddedAgent).toHaveBeenCalledTimes(testCase.stopCall);
     const stoppedEntry = loadSessionEntry(scope());
-    expect(stoppedEntry?.goal?.status).toBe("active");
+    expect(stoppedEntry?.goal).toMatchObject({
+      status: "paused",
+      lastStatusNote: "Paused after Stop. Resume to continue.",
+    });
     expect(stoppedEntry?.abortedLastRun).toBe(true);
     const goal = stoppedEntry?.goal;
     const request = {

@@ -10,6 +10,7 @@ import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { readOpenClawAgentDatabase } from "../../state/openclaw-agent-db-readonly-open.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { SessionMetadataUnavailableError } from "../../state/session-metadata-unavailable-error.js";
 import type { ExactSessionEntry } from "./session-accessor.sqlite-contract.js";
 import {
   loadSessionEntrySnapshot,
@@ -156,7 +157,11 @@ export function readExactSessionEntryCandidatesInDatabase(
     }
     let result: Result<ExactSessionEntry | undefined, unknown>;
     try {
-      const entry = readOpenClawAgentDatabase(database, () => readPrepared(sessionKey)).value;
+      const read = readOpenClawAgentDatabase(database, () => readPrepared(sessionKey));
+      if (!read.found) {
+        throw new SessionMetadataUnavailableError(read.reason);
+      }
+      const entry = read.value;
       result = ok(entry ? { sessionKey, entry } : undefined);
     } catch (error) {
       result = err(error);
