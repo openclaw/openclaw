@@ -13,6 +13,7 @@ import {
   normalizeBotFrameworkServiceUrl,
 } from "./bot-framework-service-url.js";
 import {
+  PUBLIC_MSTEAMS_SERVICE_URL,
   resolveMSTeamsSdkCloudOptions,
   validateMSTeamsProactiveServiceUrlBoundary,
 } from "./cloud.js";
@@ -101,6 +102,8 @@ export async function resolveMSTeamsSendContext(params: {
     }
     return finalize("user", trimmed);
   })();
+  const sdkCloudOptions = resolveMSTeamsSdkCloudOptions(msteamsCfg);
+  const { app } = await loadMSTeamsSdkWithAuth(creds, sdkCloudOptions);
   const found = await (async (): Promise<{
     conversationId: string;
     ref: StoredConversationReference;
@@ -110,9 +113,43 @@ export async function resolveMSTeamsSendContext(params: {
       return ref ? { conversationId: recipient.id, ref } : null;
     }
     const preferred = await store.findPreferredDmByUserId(recipient.id);
-    return preferred
-      ? { conversationId: preferred.conversationId, ref: preferred.reference }
-      : null;
+    if (preferred) {
+      return { conversationId: preferred.conversationId, ref: preferred.reference };
+    }
+    // Teams opens (or returns) the 1:1 chat for any user who has the app installed,
+    // so a user target does not need an earlier inbound message.
+    const serviceUrl =
+      sdkCloudOptions.serviceUrl ??
+      (await store.list()).find((entry) =>
+        isAllowedBotFrameworkServiceUrl(entry.reference.serviceUrl),
+      )?.reference.serviceUrl ??
+      (sdkCloudOptions.cloud === "Public" ? PUBLIC_MSTEAMS_SERVICE_URL : undefined);
+    if (!serviceUrl) {
+      return null;
+    }
+    const tenantId = creds.tenantId;
+    const connectorUrl = normalizeBotFrameworkServiceUrl(serviceUrl);
+    const created = await app.api
+      .fromServiceUrl({ serviceUrl: connectorUrl })
+      .conversations.create({
+        isGroup: false,
+        members: [{ id: recipient.id }],
+        tenantId,
+        channelData: { tenant: { id: tenantId } },
+      });
+    // Teams user ids carry a "29:" prefix; anything else is an AAD object id.
+    const aadObjectId = recipient.id.includes(":") ? undefined : recipient.id;
+    const ref: StoredConversationReference = {
+      user: { id: recipient.id, ...(aadObjectId ? { aadObjectId } : {}) },
+      agent: { id: `28:${creds.appId}` },
+      conversation: { id: created.id, conversationType: "personal", tenantId },
+      tenantId,
+      ...(aadObjectId ? { aadObjectId } : {}),
+      channelId: "msteams",
+      serviceUrl: connectorUrl,
+    };
+    await store.upsert(created.id, ref);
+    return { conversationId: created.id, ref };
   })();
 
   if (!found) {
@@ -161,8 +198,6 @@ export async function resolveMSTeamsSendContext(params: {
       );
     }
   }
-  const sdkCloudOptions = resolveMSTeamsSdkCloudOptions(msteamsCfg);
-  const { app } = await loadMSTeamsSdkWithAuth(creds, sdkCloudOptions);
   validateMSTeamsProactiveServiceUrlBoundary({
     cloud: sdkCloudOptions.cloud,
     conversationId,
