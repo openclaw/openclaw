@@ -21,8 +21,8 @@ import type { PublicationSessionIdentity } from "./github-publication-session.ty
 import { readSharedGitHubPublication } from "./github-publication-shared-read.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 import { resolveGitHubRepositoryTarget } from "./github-repository-target.js";
-import type { RepositoryPublicationProvider } from "./repository-publication-contract.js";
 import type {
+  RepositoryPublicationProvider,
   RepositoryPublicationTarget,
   RepositoryPublicationPublisher,
 } from "./repository-publication-contract.js";

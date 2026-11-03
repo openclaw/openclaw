@@ -97,7 +97,7 @@ it("keeps update lint advisory as a configured plugin disappears and recovers", 
       ]);
       expect(JSON.stringify(output.warnings)).toContain("openclaw doctor --fix");
     }
-    if (getHealthCheck("codex/managed-app-server")) {
+    if (state === "healthy" || getHealthCheck("codex/managed-app-server")) {
       const probesBefore = fs.readFileSync(path.join(root, "probes"), {
         encoding: "utf8",
         flag: "a+",
@@ -114,5 +114,78 @@ it("keeps update lint advisory as a configured plugin disappears and recovers", 
         expect(selectedOutput.warnings).toMatchObject([pluginWarning]);
       }
     }
+  }
+});
+
+it("reports failed non-GitHub health registration through the ordinary lint selectors", async () => {
+  const root = tempDirs.make("openclaw-lint-declared-plugin-");
+  const pluginId = "example-repositories";
+  const checkId = `plugins/${pluginId}/doctor-health`;
+  const discardedCheckId = `${pluginId}/partial`;
+  const probe = path.join(root, "unexpected-detect");
+  fs.writeFileSync(
+    path.join(root, "package.json"),
+    JSON.stringify({ name: `@openclaw/${pluginId}`, type: "commonjs" }),
+  );
+  fs.writeFileSync(
+    path.join(root, "api.js"),
+    `module.exports.registerDoctorHealthChecks = (host) => {
+      host.registerHealthCheck({
+        id: ${JSON.stringify(discardedCheckId)}, kind: "plugin", description: "Incomplete check",
+        async detect() {
+          require("node:fs").writeFileSync(${JSON.stringify(probe)}, "unexpected");
+          return [];
+        }
+      });
+      throw new Error("synthetic registration failure");
+    };`,
+  );
+  mocks.readConfigFileSnapshot.mockResolvedValue({
+    exists: true,
+    valid: true,
+    config: {
+      agents: { defaults: { workspace: root } },
+      plugins: { allow: [pluginId], entries: { [pluginId]: { enabled: true } } },
+    },
+    path: path.join(root, "openclaw.json"),
+  });
+  vi.spyOn(pluginRegistry, "loadPluginManifestRegistryForPluginRegistry").mockReturnValue({
+    plugins: [
+      createPluginManifestRecordFixture({
+        id: pluginId,
+        origin: "global",
+        trustedOfficialInstall: true,
+        doctorHealthChecks: true,
+        rootDir: root,
+      }),
+    ],
+    diagnostics: [],
+  });
+  vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+  vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(root, "openclaw.json"));
+  vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "0");
+  vi.stubEnv("OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE", "1");
+  const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+  for (const severityMin of ["warning", "error"] as const) {
+    const exitCode = await runDoctorLintCli(runtime, {
+      json: true,
+      severityMin,
+      onlyIds: [checkId],
+    });
+    const output = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
+    expect(output).toMatchObject({ checksRun: 1, ok: severityMin === "error" });
+    const findings = severityMin === "warning" ? output.findings : output.warnings;
+    expect(findings).toMatchObject([
+      {
+        checkId,
+        source: pluginId,
+        severity: "warning",
+        message: expect.stringContaining("synthetic registration failure"),
+      },
+    ]);
+    expect(exitCode).toBe(severityMin === "warning" ? 1 : 0);
+    expect(getHealthCheck(checkId)).toBeUndefined();
+    expect(getHealthCheck(discardedCheckId)).toBeUndefined();
+    expect(fs.existsSync(probe)).toBe(false);
   }
 });

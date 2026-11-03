@@ -58,6 +58,24 @@ export function listExtensionHealthChecksForDoctor(
         : check,
     );
   }
+  for (const finding of unavailablePlugins) {
+    if (
+      seenIds.has(finding.checkId) ||
+      (finding.source !== undefined && checks.some((check) => check.source === finding.source)) ||
+      finding.checkId.startsWith("core/doctor/") ||
+      coreIds.has(finding.checkId)
+    ) {
+      continue;
+    }
+    seenIds.add(finding.checkId);
+    checks.push({
+      id: finding.checkId,
+      kind: "plugin",
+      description: finding.message,
+      ...(finding.source !== undefined ? { source: finding.source } : {}),
+      detect: async () => [finding],
+    });
+  }
   return checks;
 }
 

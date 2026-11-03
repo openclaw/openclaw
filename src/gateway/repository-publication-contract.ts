@@ -9,6 +9,7 @@ import type { SessionGitHubPullRequestBinding } from "../config/sessions/types.j
 import type { PublicationSessionIdentity } from "./github-publication-availability.js";
 import type { GitHubPublicationRequesterV2 } from "./github-publication-requester.js";
 import type { RepositoryPublicationContentHostV1 } from "./repository-publication-content-contract.js";
+import type { RepositoryPublicationFailure } from "./repository-publication-errors.js";
 import type { RepositoryPublicationGitTransfer } from "./repository-publication-git-transfer.js";
 import type { RepositoryWorkerIdentityTransfer } from "./repository-worker-identity-transfer.js";
 
@@ -81,7 +82,6 @@ export type RepositoryPublicationRemoteFacts = {
   parentCommit: string;
 };
 export type { RepositoryPublicationFailure } from "./repository-publication-errors.js";
-import type { RepositoryPublicationFailure } from "./repository-publication-errors.js";
 
 export type RepositoryPublicationPersonalAction = {
   owner: string;

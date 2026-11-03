@@ -52,6 +52,7 @@ import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import { SESSION_READ_SCOPE, SESSION_WRITE_SCOPE } from "./operator-scopes.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "./server-methods.js";
+import type { RespondFn } from "./server-methods/response-types.js";
 import { sessionsFilesHandlers } from "./server-methods/sessions-files.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { createContext as createGatewayContext } from "./server-plugin-in-process-dispatch.test-support.js";
@@ -642,7 +643,7 @@ async function preparePullRequest(params: {
       backend: { id: "docker" } as never,
     },
   });
-  const respond = vi.fn();
+  const respond = vi.fn<RespondFn>();
   await withGatewayToolCallerIdentity(
     {
       agentId: "main",
@@ -668,6 +669,11 @@ async function preparePullRequest(params: {
         respond,
       }),
   );
+  expect(respond).toHaveBeenCalledOnce();
+  const [ok, , error] = respond.mock.calls[0]!;
+  if (!ok) {
+    throw new Error(error?.message);
+  }
   return respond;
 }
 
@@ -796,7 +802,12 @@ it("refuses another guest and lost access before binding, PR import and earlier 
         },
       };
       setRuntimeConfigSnapshot(cfg);
-      const guest = (await ensureCanonicalUserProfileForEmail("adoption-guest@example.test")).id;
+      const guest = (
+        await syncCanonicalGitHubIdentity({
+          identity: { accountId: 9, login: "guest" },
+          authenticationAlias: { kind: "email", email: "adoption-guest@example.test" },
+        })
+      ).id;
       const other = (await ensureCanonicalUserProfileForEmail("adoption-other@example.test")).id;
       const admin = (await ensureCanonicalUserProfileForEmail("adoption-admin@example.test")).id;
       await setCanonicalUserProfileRole(admin, "admin");
@@ -858,8 +869,8 @@ it("refuses another guest and lost access before binding, PR import and earlier 
       const allocateWorkspace = allocation.prepareSessionWorktree;
       const allocate = vi.spyOn(allocation, "prepareSessionWorktree");
       try {
-        // Another guest fails the publication requester; an admin passes it but is not the owner.
-        await expect(prepare(otherClient)).rejects.toThrow("no longer authorized");
+        // The Gateway audience rejects a viewing guest; an admin reaches the owner check.
+        await expect(prepare(otherClient)).rejects.toThrow("session is shared for this connection");
         await expect(prepare(adminClient)).rejects.toThrow(
           "Only the person who started this conversation",
         );

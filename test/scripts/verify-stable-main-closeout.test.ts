@@ -554,6 +554,7 @@ describe("verify-stable-main-closeout", () => {
 
   it("records a withdrawn 2026.9.6 macOS appcast from the main commit lookup", () => {
     const version = "2026.9.6";
+    const repository = "fixture-owner/closeout";
     const fixture = closeoutFixture(
       version,
       false,
@@ -566,7 +567,7 @@ describe("verify-stable-main-closeout", () => {
       bin,
       "gh",
       `
-const expected = 'repos/openclaw/openclaw/commits?sha=${sha}&path=appcast.xml&per_page=100';
+const expected = 'repos/${repository}/commits?sha=${sha}&path=appcast.xml&per_page=100';
 if (process.argv[2] !== 'api' || process.argv[3] !== expected || process.env.WITHDRAWAL_LOOKUPS !== 'allowed') {
   throw new Error('Unexpected GitHub operation: ' + process.argv.slice(2).join(' '));
 }
@@ -582,6 +583,7 @@ process.stdout.write(JSON.stringify([
         ...process.env,
         PATH: `${bin}:${process.env.PATH}`,
         WITHDRAWAL_LOOKUPS: lookups,
+        GITHUB_REPOSITORY: repository,
       });
 
     const initial = run("allowed");

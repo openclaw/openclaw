@@ -191,6 +191,16 @@ it("uses qualified oxlint instead of a stale canonical bin in a code-only worktr
 function cliFixture(cliSource: string) {
   const donor = createToolingDependencyFixture(tempDirs.make("openclaw-line-cap-admission-"));
   const { env } = installLineCapToolingFixture(donor.checkout);
+  git(
+    donor.tooling,
+    "remote",
+    "set-url",
+    "origin",
+    execFileSync("git", ["remote", "get-url", "origin"], {
+      cwd: donor.checkout,
+      encoding: "utf8",
+    }).trim(),
+  );
   const root = fixture(2, "warn", [], donor.checkout);
   const manifest = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
   donor.writePackage("tsx", "export {};", manifest.devDependencies.tsx);

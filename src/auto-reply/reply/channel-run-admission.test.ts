@@ -2,6 +2,7 @@ import { assert, expect, it, onTestFinished, vi } from "vitest";
 import { createChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
 import { createAgentHarnessHostCapabilities } from "../../agents/harness/host-capability.js";
 import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
+import * as gatewayTools from "../../agents/tools/gateway.js";
 import {
   configureExecutionIdentityAdmissionSink,
   type ExecutionIdentityAdmissionWork,
@@ -13,6 +14,7 @@ import {
 } from "../../channels/message-access/admission-evidence.js";
 import { prepareGatewayLocalUserIngress } from "../../gateway/local-user-ingress.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
+import { createContext } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { prepareChannelRunAdmission } from "./channel-run-admission.js";
@@ -140,32 +142,60 @@ it.each(["unresolved", "forged"] as const)(
   },
 );
 
-it("rejects a retired Gateway binding before host tool I/O", async () => {
-  const runId = "run-without-gateway-context";
-  const current: { value?: GatewayRequestContext } = {};
-  const prepared = prepare({
-    cfg: {},
-    runId,
-    onAdmitted: (context) => bindGatewayContextResolver(context, () => current.value),
-  });
-  const admittedRunContext = await prepared.admit("plugin-harness", "channel-harness");
-  const host = createAgentHarnessHostCapabilities({
-    attempt: { runId, admittedRunContext },
-    pluginId: "codex",
-  });
-
-  onTestFinished(() => {
-    host.close();
-    resetAgentRunRegistryForTest();
-  });
-  expect(() => host.capabilities.preparedEnvironment?.()).toThrow("no longer active");
-  current.value = {} as GatewayRequestContext;
-  expect(() => host.capabilities.assertActive()).toThrow("no longer active");
-  await host.runWithScope(async () => {
-    expect(getGatewayToolCallerIdentity()?.gatewayContextResolver?.()).toBeUndefined();
+it.each([false, true])(
+  "rejects a retired Gateway binding before host tool I/O (initiallyLive=%s)",
+  async (initiallyLive) => {
+    const runId = "run-without-gateway-context";
+    const current: { value?: GatewayRequestContext } = {
+      value: initiallyLive ? createContext() : undefined,
+    };
+    const prepared = prepare({
+      cfg: {},
+      runId,
+      onAdmitted: (context) => bindGatewayContextResolver(context, () => current.value),
+    });
+    const admittedRunContext = await prepared.admit("plugin-harness", "channel-harness");
+    const createHost = () =>
+      createAgentHarnessHostCapabilities({
+        attempt: {
+          runId,
+          admittedRunContext,
+          agentId: "main",
+          sessionKey: "agent:main:channel-admission",
+        },
+        pluginId: "codex",
+      });
+    onTestFinished(resetAgentRunRegistryForTest);
+    const io = vi.spyOn(gatewayTools, "callGatewayTool").mockResolvedValue(undefined);
+    onTestFinished(() => io.mockRestore());
+    if (!initiallyLive) {
+      expect(createHost).toThrow("no longer active");
+      expect(io).not.toHaveBeenCalled();
+      return;
+    }
+    const host = createHost();
+    onTestFinished(host.close);
+    expect(() => host.capabilities.preparedEnvironment?.()).not.toThrow();
+    current.value = undefined;
     expect(() => host.capabilities.preparedEnvironment?.()).toThrow("no longer active");
-  });
-});
+    current.value = createContext();
+    expect(() => host.capabilities.assertActive()).toThrow("no longer active");
+    await host.runWithScope(async () => {
+      expect(getGatewayToolCallerIdentity()?.gatewayContextResolver?.()).toBeUndefined();
+      expect(() => host.capabilities.preparedEnvironment?.()).toThrow("no longer active");
+      await expect(
+        host.capabilities.requestApproval({
+          title: "Synthetic approval",
+          description: "Must not reach Gateway I/O",
+          severity: "info",
+          toolName: "synthetic",
+          timeoutMs: 1000,
+        }),
+      ).rejects.toThrow("no longer active");
+    });
+    expect(io).not.toHaveBeenCalled();
+  },
+);
 
 it("consumes once across fallback admission and closes the exact prepared owner", async () => {
   const { identityWork, decisions, evidence: createEvidence, envelope } = captureAdmission();

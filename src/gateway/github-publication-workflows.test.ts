@@ -499,10 +499,19 @@ it("cannot reintroduce a workflow after a remote reset following the last observ
   await fs.writeFile(workspace.file("artifact.txt"), "guest change\n");
   const transport = mocks.runCommand.getMockImplementation()!;
   let pushes = 0;
-  mocks.runCommand.mockImplementation(async (args, options) => {
-    if (args.includes("ls-remote")) {
+  mocks.runCommand.mockImplementation(async (args: string[], options) => {
+    const matchingRef = args.find((arg) => arg.includes("/git/matching-refs/heads/"));
+    if (matchingRef) {
+      const requestedBranch = decodeURIComponent(matchingRef.split("/heads/")[1]!);
+      const observed = await workspace.git(
+        "ls-remote",
+        "--refs",
+        remote,
+        `refs/heads/${requestedBranch}`,
+      );
+      const sha = observed.split(/\s+/u)[0];
       return commandResult(
-        await workspace.git("ls-remote", "--refs", remote, `refs/heads/${BRANCH}`),
+        JSON.stringify(sha ? [{ ref: `refs/heads/${requestedBranch}`, object: { sha } }] : []),
       );
     }
     if (args.includes("push")) {

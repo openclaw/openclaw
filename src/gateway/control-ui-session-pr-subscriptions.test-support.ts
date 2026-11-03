@@ -186,7 +186,7 @@ export function createTestControlUiSessionPrSubscriptions(options: Options) {
       return await selected.withSource(run);
     },
     invalidate() {},
-    subscribeChanges: readChanges.subscribeChanges,
+    subscribeChanges: (...args) => readChanges.subscribeChanges(...args),
     installPresentation: () => () => {},
   };
   const serviceScheduler = createPluginServiceScheduler(scheduler).scheduler;

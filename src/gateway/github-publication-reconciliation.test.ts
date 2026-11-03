@@ -147,10 +147,10 @@ it("recovers independent worktrees while preserving each worktree's publication 
         arg.startsWith("repos/openclaw/openclaw/git/matching-refs/heads/"),
       );
       if (matchingRef) {
-        const branch = decodeURIComponent(matchingRef.split("/heads/")[1]!);
-        const sha = remoteHeads.get(branch);
+        const requestedBranch = decodeURIComponent(matchingRef.split("/heads/")[1]!);
+        const sha = remoteHeads.get(requestedBranch);
         return commandResult(
-          JSON.stringify(sha ? [{ ref: `refs/heads/${branch}`, object: { sha } }] : []),
+          JSON.stringify(sha ? [{ ref: `refs/heads/${requestedBranch}`, object: { sha } }] : []),
         );
       }
       const observed = argv.map((arg) => pullRequests.get(arg)).find(Boolean);

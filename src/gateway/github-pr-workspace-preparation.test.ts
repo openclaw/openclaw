@@ -148,7 +148,7 @@ describe("existing PR preparation through the registered agent action", () => {
         };
       }
       await expect(refresh(condition === "revoked recovery")).rejects.toThrow(
-        /verified|permission|revoked|access|changed|unavailable/i,
+        /verified|permission|revoked|access|changed|unavailable|authorized/i,
       );
       expect(revoked).toBe(!privatePr);
       expect(await snapshot()).toEqual(before);
