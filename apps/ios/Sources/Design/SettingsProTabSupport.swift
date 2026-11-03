@@ -354,6 +354,7 @@ enum SettingsDiagnosticIssue: String, Equatable, CaseIterable {
     case discoveryUnavailable
     case talkConfigMissing
     case notificationsUnavailable
+    case notificationRegistrationUnavailable
 }
 
 enum SettingsDiagnostics {
@@ -361,13 +362,15 @@ enum SettingsDiagnostics {
         gatewayConnected: Bool,
         discoveredGatewayCount: Int,
         talkConfigLoaded: Bool,
-        notificationsAllowed: Bool) -> [SettingsDiagnosticIssue]
+        notificationsAllowed: Bool,
+        pushRegistrationDegraded: Bool = false) -> [SettingsDiagnosticIssue]
     {
         var issues: [SettingsDiagnosticIssue] = []
         if !gatewayConnected { issues.append(.gatewayOffline) }
         if discoveredGatewayCount == 0 { issues.append(.discoveryUnavailable) }
         if gatewayConnected, !talkConfigLoaded { issues.append(.talkConfigMissing) }
         if !notificationsAllowed { issues.append(.notificationsUnavailable) }
+        if pushRegistrationDegraded { issues.append(.notificationRegistrationUnavailable) }
         return issues
     }
 }

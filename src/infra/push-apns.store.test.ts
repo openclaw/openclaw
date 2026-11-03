@@ -6,12 +6,15 @@ import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { persistDevicePairingStoreState } from "./device-pairing-store.js";
 import { resolveNodePairingGeneration, type PairedDevice } from "./device-pairing.js";
+import { requireNodeSqlite } from "./node-sqlite.js";
 import {
   ApnsRegistrationPairingChangedError,
   clearApnsRegistrationIfCurrent,
   loadApnsRegistration,
   registerApnsRegistration,
+  sendApnsAlert,
 } from "./push-apns.js";
+import { mockApnsRelayFetch } from "./push-apns.relay.test-support.js";
 import * as workerAdmission from "./sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
 
@@ -104,11 +107,90 @@ function queryRegistration(table: string, nodeId = "ios-node-1") {
 
 afterEach(async () => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
   await closeStateDatabaseForTest();
   await tempDirs.cleanup();
 });
 
 describe("push APNs registration store", () => {
+  it("upgrades an older registration without replacing credentials or assuming delivery health", async () => {
+    const original = await registerRelay();
+    const databasePath = openOpenClawStateDatabase({ env: databaseEnv() }).path;
+    await closeStateDatabaseForTest();
+    const { DatabaseSync } = requireNodeSqlite();
+    const older = new DatabaseSync(databasePath);
+    try {
+      older.exec("ALTER TABLE apns_registrations DROP COLUMN relay_rejection_reason");
+    } finally {
+      older.close();
+    }
+    // Upgrade admission starts from an unseen physical store, not an external mutation
+    // of a database whose schema this process already admitted.
+    baseDir = await tempDirs.make("openclaw-push-apns-upgrade-copy-");
+    const copiedDatabasePath = path.join(baseDir, "state", "openclaw.sqlite");
+    await fs.mkdir(path.dirname(copiedDatabasePath), { recursive: true });
+    await fs.copyFile(databasePath, copiedDatabasePath);
+    const { updatedAtMs: _version, ...credentials } = original;
+    await expect(registerRelay()).resolves.toMatchObject(credentials);
+    expect(queryRegistration("apns_registrations", original.nodeId)).toMatchObject({
+      relay_rejection_reason: null,
+    });
+  });
+
+  it("retains relay rejection across reconnect and restart without poisoning a replacement or peer", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", baseDir);
+    const peer = await registerRelay({ nodeId: "healthy-peer", relayHandle: "peer-handle" });
+    const direct = await registerDirect();
+    const rejected = await registerRelay();
+    if (rejected.transport !== "relay") {
+      throw new Error("expected relay registration");
+    }
+    const send = mockApnsRelayFetch({
+      ok: false,
+      status: 410,
+      reason: "Unregistered",
+      environment: "production",
+    });
+    const push = () =>
+      sendApnsAlert({
+        nodeId: rejected.nodeId,
+        registration: rejected,
+        relayConfig: { baseUrl: "https://relay.openclaw.test", timeoutMs: 2500 },
+        title: "Synthetic recovery test",
+        body: "Only the fixture device",
+      });
+    await expect(push()).resolves.toMatchObject({ status: 410, reason: "Unregistered" });
+    await closeStateDatabaseForTest();
+    await expect(registerRelay()).resolves.toMatchObject({
+      relayRejection: { status: 410, reason: "Unregistered" },
+    });
+    await expect(load("healthy-peer")).resolves.toEqual(peer);
+    await expect(load()).resolves.toEqual(direct);
+    const replacement = await registerRelay({
+      relayHandle: "renewed-handle",
+      sendGrant: "renewed-grant",
+    });
+    // A late result for the old enrollment must not mark the replacement rejected.
+    await push();
+    await expect(load(rejected.nodeId)).resolves.toEqual(replacement);
+    expect(replacement).not.toHaveProperty("relayRejection");
+    if (replacement.transport !== "relay") {
+      throw new Error("expected relay registration");
+    }
+    send.mockImplementation(async () => Response.json({ ok: true, status: 200 }));
+    await expect(
+      sendApnsAlert({
+        nodeId: replacement.nodeId,
+        registration: replacement,
+        relayConfig: { baseUrl: "https://relay.openclaw.test", timeoutMs: 2500 },
+        title: "Synthetic recovery test",
+        body: "Only the fixture device",
+      }),
+    ).resolves.toMatchObject({ ok: true, status: 200 });
+  });
+
   it("round-trips direct and sandbox relay fields including relay origin", async () => {
     const relay = await registerRelay({
       environment: "sandbox",

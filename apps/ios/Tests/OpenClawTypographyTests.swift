@@ -22,6 +22,10 @@ struct RootSidebarTypographyTests {
 }
 
 struct OpenClawTypographyTests {
+    @Test func notificationRecoveryActionUsesBrandedTypography() throws {
+        let source = try String(contentsOf: Self.sourceURL("Design/SettingsProTabActions.swift"), encoding: .utf8)
+        #expect(source.contains("Text(\"Retry notification setup\")\n                        .font(OpenClawType.subheadSemiBold)"))
+    }
     @Test func `About support links use the branded shared row`() throws {
         let settings = try String(contentsOf: Self.sourceURL("Design/SettingsProTabSections.swift"), encoding: .utf8)
         let supportRow = try Self.extract(settings, from: "title: \"Support\"", to: "!)")

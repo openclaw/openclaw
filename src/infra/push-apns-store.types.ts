@@ -21,6 +21,7 @@ export type RelayApnsRegistration = {
   updatedAtMs: number;
   relayOrigin?: string;
   tokenDebugSuffix?: string;
+  relayRejection?: { status: 410; reason: "Unregistered" };
 };
 
 /** Stored APNs registration for either direct device tokens or official relay handles. */

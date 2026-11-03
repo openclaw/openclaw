@@ -7,6 +7,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ChannelApprovalKind } from "./approval-types.js";
 import { loadOrCreateProcessDeviceIdentityAsync } from "./device-identity-async.js";
 import { signDevicePayload } from "./device-identity.js";
@@ -21,6 +22,7 @@ import {
 } from "./push-apns-http2.js";
 import { apnsSendInvalidatedError, requireCurrentApnsSend } from "./push-apns-send-current.js";
 import {
+  captureApnsRelayRejectionRecorder,
   isLikelyApnsToken,
   isValidApnsTopic,
   normalizeApnsToken,
@@ -514,6 +516,13 @@ async function sendApnsPush(
   if (transport.registration.transport === "relay") {
     const relayParams = transport as RelayApnsTransportParams;
     const registration = relayParams.registration;
+    const recordRejection = captureApnsRelayRejectionRecorder(registration);
+    if (registration.relayRejection) {
+      return toPushResult({
+        registration,
+        response: { ok: false, ...registration.relayRejection },
+      });
+    }
     const gatewayIdentity = await loadOrCreateProcessDeviceIdentityAsync();
     await requireCurrentApnsSend(lifecycleControls);
     const signedAtMs = Date.now();
@@ -586,13 +595,28 @@ async function sendApnsPush(
         ? Math.trunc(body.status)
         : response.status;
     const environment = parseRelayEnvironment(body.environment);
+    const reason = normalizeOptionalString(body.reason);
+    if (
+      status === 410 &&
+      reason === "Unregistered" &&
+      (!environment || environment === registration.environment)
+    ) {
+      try {
+        await recordRejection();
+      } catch {
+        // Keep the original typed delivery failure even when durable feedback is unavailable.
+        createSubsystemLogger("gateway/push").warn(
+          "Could not record relay rejection; reconnect the affected app and retry notification setup.",
+        );
+      }
+    }
     return toPushResult({
       registration,
       response: {
         ok: typeof body.ok === "boolean" ? body.ok : response.ok && status >= 200 && status < 300,
         status,
         apnsId: normalizeOptionalString(body.apnsId),
-        reason: normalizeOptionalString(body.reason),
+        reason,
         ...(environment ? { environment } : {}),
         tokenSuffix: normalizeOptionalString(body.tokenSuffix),
       },

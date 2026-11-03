@@ -694,7 +694,20 @@ async function handlePreparedNodeEvent(
         return undefined;
       }
       const result = await registerNodeApnsEvent(ctx, nodeId, obj, opts);
-      return result === "pairing-changed" ? pairingChangedResult(evt.event) : undefined;
+      if (result === "pairing-changed") {
+        return pairingChangedResult(evt.event);
+      }
+      return {
+        ok: true,
+        event: evt.event,
+        handled: result === "registered",
+        reason:
+          result === "apns-unregistered"
+            ? "apns_unregistered"
+            : result === "registered"
+              ? "registered"
+              : "invalid_registration",
+      };
     }
     case NODE_HOST_STATS_EVENT: {
       const obj = parseNodeEventPayload(evt.payloadJSON);

@@ -18,7 +18,7 @@ export async function registerNodeApnsEvent(
   nodeId: string,
   obj: Record<string, unknown>,
   authority: NodeApnsRegistrationAuthority | undefined,
-): Promise<"pairing-changed" | undefined> {
+): Promise<"pairing-changed" | "apns-unregistered" | "registered" | "invalid-registration"> {
   const transport = normalizeLowercaseStringOrEmpty(obj.transport) || "direct";
   const topic = typeof obj.topic === "string" ? obj.topic : "";
   const environment = obj.environment;
@@ -37,11 +37,11 @@ export async function registerNodeApnsEvent(
         ctx.logGateway.warn(
           `push relay register rejected node=${nodeId}: gateway identity mismatch`,
         );
-        return undefined;
+        return "invalid-registration";
       }
     }
     authority?.assertApnsRegistrationCurrent?.();
-    await registerApnsRegistration({
+    const registration = await registerApnsRegistration({
       nodeId,
       ...(transport === "relay"
         ? {
@@ -61,6 +61,10 @@ export async function registerNodeApnsEvent(
         ? { assertCurrent: authority.assertApnsRegistrationCurrent }
         : {}),
     });
+    authority?.assertApnsRegistrationCurrent?.();
+    return registration.transport === "relay" && registration.relayRejection
+      ? "apns-unregistered"
+      : "registered";
   } catch (err) {
     if (err instanceof ApnsRegistrationPairingChangedError) {
       ctx.logGateway.warn(
@@ -70,5 +74,5 @@ export async function registerNodeApnsEvent(
     }
     ctx.logGateway.warn(`push apns register failed node=${nodeId}: ${formatForLog(err)}`);
   }
-  return undefined;
+  return "invalid-registration";
 }

@@ -811,6 +811,7 @@ CREATE TABLE IF NOT EXISTS apns_registrations (
   environment TEXT NOT NULL,
   distribution TEXT,
   token_debug_suffix TEXT,
+  relay_rejection_reason TEXT,
   updated_at_ms INTEGER NOT NULL
 ) STRICT;
 

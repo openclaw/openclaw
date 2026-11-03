@@ -2,6 +2,12 @@ import Testing
 @testable import OpenClaw
 
 @Suite struct SettingsNetworkingHelpersTests {
+    @Test func permissionDoesNotHideRejectedPushRegistration() {
+        #expect(SettingsDiagnostics.issues(
+            gatewayConnected: true, discoveredGatewayCount: 1, talkConfigLoaded: true,
+            notificationsAllowed: true, pushRegistrationDegraded: true) == [.notificationRegistrationUnavailable])
+    }
+
     @Test func diagnosticsIssuesNameEachReviewerVisibleCheck() {
         #expect(
             SettingsDiagnostics.issues(

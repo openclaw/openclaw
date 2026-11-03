@@ -62,7 +62,7 @@ private struct PushRelayRegisterRequest: Encodable {
     var simulatorProof: PushRelaySimulatorProofPayload?
 }
 
-struct PushRelayRegisterResponse: Decodable {
+struct PushRelayRegisterResponse: Decodable, Sendable {
     var relayHandle: String
     var sendGrant: String
     var expiresAtMs: Int64?
@@ -88,7 +88,7 @@ private func pushRelayBase64URL(_ data: Data) -> String {
         .replacingOccurrences(of: "=", with: "")
 }
 
-struct PushRelayRegistrationInput {
+struct PushRelayRegistrationInput: Sendable {
     var installationId: String
     var bundleId: String
     var appVersion: String
@@ -100,8 +100,15 @@ struct PushRelayRegistrationInput {
     var gatewayIdentity: PushRelayGatewayIdentity
 }
 
+protocol PushRelayRegistering: Sendable {
+    var normalizedBaseURLString: String { get }
+    func register(
+        _ input: PushRelayRegistrationInput,
+        isCurrent: @escaping @Sendable () async -> Bool) async throws -> PushRelayRegisterResponse
+}
+
 /// The client is constructed once and used behind PushRegistrationManager actor isolation.
-final class PushRelayClient: @unchecked Sendable {
+final class PushRelayClient: PushRelayRegistering, @unchecked Sendable {
     private let baseURL: URL
     private let session: URLSession
     private let jsonDecoder = JSONDecoder()
@@ -120,7 +127,11 @@ final class PushRelayClient: @unchecked Sendable {
         return absolute
     }
 
-    func register(_ input: PushRelayRegistrationInput) async throws -> PushRelayRegisterResponse {
+    func register(
+        _ input: PushRelayRegistrationInput,
+        isCurrent: @escaping @Sendable () async -> Bool = { true }) async throws -> PushRelayRegisterResponse
+    {
+        guard await isCurrent() else { throw CancellationError() }
         let challenge: PushRelayChallengeResponse
         do {
             challenge = try await self.fetchChallenge()
@@ -148,6 +159,7 @@ final class PushRelayClient: @unchecked Sendable {
             proofPolicy: input.proofPolicy.rawValue)
         let appAttest: PushRelayAppAttestPayload?
         do {
+            guard await isCurrent() else { throw CancellationError() }
             appAttest = try await self.createAppAttestProofIfNeeded(
                 proofPolicy: input.proofPolicy,
                 challenge: challenge.challenge,
@@ -187,6 +199,7 @@ final class PushRelayClient: @unchecked Sendable {
         let data: Data
         let response: URLResponse
         do {
+            guard await isCurrent() else { throw CancellationError() }
             (data, response) = try await self.session.data(for: request)
         } catch {
             GatewayDiagnostics.pushRelay.failed("register request", error: error)

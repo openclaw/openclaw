@@ -586,6 +586,11 @@ final class NodeAppModel {
     private var apnsDeviceTokenHex: String?
     private var apnsLastRegisteredTokenHex: String?
     private var apnsLastRegisteredGatewayStableID: String?
+    var pushRegistrationHealth: PushRegistrationHealth = .notPublished
+    private var apnsRegistrationInFlight = false
+    private var apnsRegistrationRequested = false
+    private var apnsTokenRefreshContinuation: CheckedContinuation<String, Error>?
+    private var apnsTokenRefreshTimeoutTask: Task<Void, Never>?
     @ObservationIgnored private let pushRegistrationManager = PushRegistrationManager()
 
     var operatorSession: GatewayNodeSession {
@@ -3648,6 +3653,7 @@ extension NodeAppModel {
         self.synchronizeTalkSessionKey()
         self.apnsLastRegisteredTokenHex = nil
         self.apnsLastRegisteredGatewayStableID = nil
+        self.pushRegistrationHealth = .notPublished
         self.chatSessionRoutingRestoreTask = Task { [weak self] in
             guard !Task.isCancelled,
                   GatewayStableIdentifier.matches(self?.connectedGatewayID, stableID)
@@ -7248,15 +7254,65 @@ extension NodeAppModel {
         guard !tokenHex.isEmpty else { return }
         self.apnsDeviceTokenHex = tokenHex
         UserDefaults.standard.set(tokenHex, forKey: Self.apnsDeviceTokenUserDefaultsKey)
+        if let continuation = self.apnsTokenRefreshContinuation {
+            self.apnsTokenRefreshContinuation = nil
+            self.apnsTokenRefreshTimeoutTask?.cancel()
+            continuation.resume(returning: tokenHex)
+            return
+        }
         Task { [weak self] in
             await self?.registerAPNsTokenIfNeeded()
         }
     }
 
+    func handleAPNsRegistrationFailure() {
+        guard let continuation = self.apnsTokenRefreshContinuation else { return }
+        self.apnsTokenRefreshContinuation = nil
+        self.apnsTokenRefreshTimeoutTask?.cancel()
+        continuation.resume(throwing: PushRelayError.relayMisconfigured("APNs registration failed. Retry notification setup."))
+    }
+
+    private func refreshAPNsDeviceToken() async throws -> String {
+        try await withCheckedThrowingContinuation { continuation in
+            self.apnsTokenRefreshContinuation = continuation
+            self.apnsTokenRefreshTimeoutTask = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(15))
+                guard !Task.isCancelled else { return }
+                self?.handleAPNsRegistrationFailure()
+            }
+            UIApplication.shared.registerForRemoteNotifications()
+        }
+    }
+
+    func retryPushRegistration() async {
+        await self.registerAPNsTokenIfNeeded(manualRecovery: true)
+    }
+
+    private func isPushRegistrationRouteCurrent(_ route: GatewayNodeSessionRoute) async -> Bool {
+        guard self.gatewayConnected, self.operatorConnected,
+              await self.canPublishAPNsRegistration()
+        else { return false }
+        return await self.nodeGateway.currentRoute() == route
+    }
+
     private func registerAPNsTokenIfNeeded(
-        shouldContinue: @MainActor @Sendable () -> Bool = { true }) async
+        shouldContinue: @MainActor @Sendable () -> Bool = { true },
+        manualRecovery: Bool = false) async
     {
         guard shouldContinue() else { return }
+        guard !self.apnsRegistrationInFlight else {
+            if !manualRecovery { self.apnsRegistrationRequested = true }
+            return
+        }
+        // Node/operator reconnects and APNs callbacks share this publication/enrollment owner.
+        self.apnsRegistrationInFlight = true
+        defer {
+            self.apnsRegistrationInFlight = false
+            if self.apnsRegistrationRequested {
+                self.apnsRegistrationRequested = false
+                Task { [weak self] in await self?.registerAPNsTokenIfNeeded() }
+            }
+        }
         let usesRelayTransport = await pushRegistrationManager.usesRelayTransport
         guard shouldContinue() else { return }
         guard await self.canPublishAPNsRegistration(usesRelayTransport: usesRelayTransport) else { return }
@@ -7268,7 +7324,7 @@ extension NodeAppModel {
             return
         }
         guard let nodeRoute = await nodeGateway.currentRoute(), shouldContinue() else { return }
-        guard let token = apnsDeviceTokenHex?.trimmingCharacters(in: .whitespacesAndNewlines),
+        guard var token = apnsDeviceTokenHex?.trimmingCharacters(in: .whitespacesAndNewlines),
               !token.isEmpty
         else {
             if usesRelayTransport {
@@ -7309,24 +7365,77 @@ extension NodeAppModel {
             } else {
                 gatewayIdentity = nil
             }
-            let payloadJSON = try await pushRegistrationManager.makeGatewayRegistrationPayload(
+            var payloadJSON = try await pushRegistrationManager.makeGatewayRegistrationPayload(
                 apnsTokenHex: token,
                 topic: topic,
-                gatewayIdentity: gatewayIdentity)
-            guard shouldContinue() else { return }
-            let published = await nodeGateway.sendEvent(
-                event: "push.apns.register",
-                payloadJSON: payloadJSON,
-                ifCurrentRoute: nodeRoute)
-            guard published, shouldContinue() else { return }
+                gatewayIdentity: gatewayIdentity,
+                isCurrent: { [weak self] in await self?.isPushRegistrationRouteCurrent(nodeRoute) == true })
+            guard await nodeGateway.currentRoute() == nodeRoute, shouldContinue(),
+                  await self.canPublishAPNsRegistration(usesRelayTransport: usesRelayTransport)
+            else { return }
+            if usesRelayTransport {
+                var rejected = await pushRegistrationManager.isRejected(payloadJSON: payloadJSON)
+                if !rejected {
+                    let result = try await nodeGateway.requestEventResult(
+                        event: "push.apns.register", payloadJSON: payloadJSON, ifCurrentRoute: nodeRoute)
+                    guard await nodeGateway.currentRoute() == nodeRoute, shouldContinue() else { return }
+                    guard let result else {
+                        self.pushRegistrationHealth = .gatewayUpgradeRequired
+                        return
+                    }
+                    rejected = result.reason == "apns_unregistered"
+                    if !rejected, !result.handled {
+                        self.pushRegistrationHealth = .needsRetry
+                        return
+                    }
+                    if rejected { try await pushRegistrationManager.recordRejection(payloadJSON: payloadJSON) }
+                }
+                if rejected {
+                    self.pushRegistrationHealth = .needsRetry
+                    guard try await pushRegistrationManager.beginRecovery(
+                        payloadJSON: payloadJSON, manual: manualRecovery)
+                    else { return }
+                    guard await nodeGateway.currentRoute() == nodeRoute, shouldContinue(),
+                          await self.canPublishAPNsRegistration()
+                    else { return }
+                    self.pushRegistrationHealth = .recovering
+                    token = try await self.refreshAPNsDeviceToken()
+                    guard await nodeGateway.currentRoute() == nodeRoute, shouldContinue(),
+                          await self.canPublishAPNsRegistration()
+                    else { return }
+                    payloadJSON = try await pushRegistrationManager.makeGatewayRegistrationPayload(
+                        apnsTokenHex: token, topic: topic, gatewayIdentity: gatewayIdentity,
+                        forceRelayRenewal: true,
+                        isCurrent: { [weak self] in await self?.isPushRegistrationRouteCurrent(nodeRoute) == true })
+                    guard await nodeGateway.currentRoute() == nodeRoute, shouldContinue(),
+                          await self.canPublishAPNsRegistration()
+                    else { return }
+                    let result = try await nodeGateway.requestEventResult(
+                        event: "push.apns.register", payloadJSON: payloadJSON, ifCurrentRoute: nodeRoute)
+                    guard await nodeGateway.currentRoute() == nodeRoute, shouldContinue() else { return }
+                    if result?.reason == "apns_unregistered" {
+                        try await pushRegistrationManager.recordRejection(payloadJSON: payloadJSON)
+                    }
+                    guard result?.handled == true else {
+                        self.pushRegistrationHealth = result == nil ? .gatewayUpgradeRequired : .needsRetry
+                        return
+                    }
+                }
+            } else {
+                let published = await nodeGateway.sendEvent(
+                    event: "push.apns.register", payloadJSON: payloadJSON, ifCurrentRoute: nodeRoute)
+                guard published, shouldContinue() else { return }
+            }
             self.apnsLastRegisteredTokenHex = token
             self.apnsLastRegisteredGatewayStableID = gatewayStableID
+            self.pushRegistrationHealth = .publishedUnverified
             if usesRelayTransport {
                 GatewayDiagnostics.pushRelay.stage("gateway registration event published")
             }
         } catch {
-            self.pushWakeLogger.error(
-                "APNs registration publish failed: \(error.localizedDescription, privacy: .public)")
+            guard await nodeGateway.currentRoute() == nodeRoute, shouldContinue() else { return }
+            self.pushRegistrationHealth = .needsRetry
+            self.pushWakeLogger.error("APNs registration failed; retry notification setup in Diagnostics.")
             if usesRelayTransport {
                 GatewayDiagnostics.pushRelay.failed("registration", error: error)
             }

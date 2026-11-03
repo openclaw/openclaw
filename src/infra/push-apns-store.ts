@@ -175,6 +175,9 @@ const relayApnsRegistrationSchema = z.object({
   updatedAtMs: apnsUpdatedAtSchema,
   relayOrigin: z.unknown().optional(),
   tokenDebugSuffix: z.unknown().optional().transform(normalizeTokenDebugSuffix),
+  relayRejection: z
+    .object({ status: z.literal(410), reason: z.literal("Unregistered") })
+    .optional(),
 });
 const canonicalApnsRegistrationSchema = z.union([
   directApnsRegistrationSchema,
@@ -224,6 +227,9 @@ export function apnsRegistrationFromRow(row: ApnsRegistrationRow): ApnsRegistrat
       environment: row.environment,
       distribution: row.distribution ?? undefined,
       tokenDebugSuffix: row.token_debug_suffix ?? undefined,
+      ...(row.relay_rejection_reason === "Unregistered"
+        ? { relayRejection: { status: 410, reason: "Unregistered" } }
+        : {}),
       updatedAtMs: row.updated_at_ms,
     },
     normalizePersistedApnsRelayBaseUrl,
@@ -244,6 +250,7 @@ export function apnsRegistrationFromRow(row: ApnsRegistrationRow): ApnsRegistrat
     canonical.environment !== row.environment ||
     canonical.distribution !== row.distribution ||
     canonical.token_debug_suffix !== row.token_debug_suffix ||
+    canonical.relay_rejection_reason !== (row.relay_rejection_reason ?? null) ||
     canonical.updated_at_ms !== row.updated_at_ms
   ) {
     throw new Error("non-canonical APNs registration row");
@@ -449,4 +456,16 @@ export async function clearApnsRegistrationIfCurrent(params: {
   };
   const { executeOpenClawStateWorker } = await import("../state/openclaw-state-worker-store.js");
   return executeOpenClawStateWorker(context, { type: "apns.registration.clearIfCurrent", input });
+}
+
+/** Capture the original physical store before relay I/O; record only a matching enrollment. */
+export function captureApnsRelayRejectionRecorder(registration: ApnsRegistration) {
+  const context = captureOpenClawStateWorkerContext(apnsStateDatabaseOptions());
+  return async (): Promise<boolean> => {
+    const { executeOpenClawStateWorker } = await import("../state/openclaw-state-worker-store.js");
+    return executeOpenClawStateWorker(context, {
+      type: "apns.registration.rejectRelayIfCurrent",
+      input: registration,
+    });
+  };
 }
