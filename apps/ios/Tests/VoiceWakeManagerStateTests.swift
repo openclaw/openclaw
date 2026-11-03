@@ -229,17 +229,17 @@ private actor VoiceWakeCommandBarrier {
                 deliveries.append(command)
                 if command == "fresh" { fresh.open() }
             }
-            func receive(_ command: String, generation: UInt64) throws {
+            @MainActor func receive(_ command: String, generation: UInt64) throws {
                 let transcript = "openclaw " + command
-                manager._test_handleRecognitionCallback(
+                try manager._test_handleRecognitionCallback(
                     transcript: transcript,
                     segments: [
                         WakeWordSegment(
                             text: "openclaw", start: 0, duration: 0.2,
-                            range: try #require(transcript.range(of: "openclaw"))),
+                            range: #require(transcript.range(of: "openclaw"))),
                         WakeWordSegment(
                             text: command, start: 0.8, duration: 0.2,
-                            range: try #require(transcript.range(of: command))),
+                            range: #require(transcript.range(of: command))),
                     ],
                     errorText: nil,
                     recognitionGeneration: generation)
