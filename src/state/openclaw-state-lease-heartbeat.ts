@@ -698,6 +698,7 @@ export function startOpenClawStateLeaseHeartbeat(
   };
   return {
     ready: ready.promise,
+    expiryObservation: shared,
     assertRunning,
     verify: () => request("verify"),
     renew: () => request("renew"),

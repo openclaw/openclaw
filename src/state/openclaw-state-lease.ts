@@ -132,10 +132,7 @@ async function runStateLeaseOwnerInScope<T>(
   let startingHeartbeat: ReturnType<typeof startOpenClawStateLeaseHeartbeat> | undefined;
   let timerHeartbeat: ReturnType<typeof startOpenClawStateLeaseTimer> | undefined;
   let asyncOwnership: { verify(): Promise<number>; renew(): Promise<number> } | undefined;
-  const expiryObservation =
-    invocation.kind === "worker" || validated.heartbeat === "worker"
-      ? createLeaseHeartbeatState()
-      : undefined;
+  let expiryObservation = invocation.kind === "worker" ? createLeaseHeartbeatState() : undefined;
   const workerStorage =
     invocation.kind === "worker"
       ? createOpenClawStateLeaseWorkerStorage(invocation.context, validated.processBound)
@@ -494,6 +491,7 @@ async function runStateLeaseOwnerInScope<T>(
               heartbeatStopped = false;
             },
           });
+          expiryObservation ??= started.expiryObservation;
           startingHeartbeat = started;
           if (validated.signal?.aborted || leaseLost.signal.aborted) {
             stopWorker();
