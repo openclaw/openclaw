@@ -128,6 +128,32 @@ describe("Gateway service readiness", () => {
   });
 
   it.each([
+    {
+      outcome: "plugin-errors",
+      message: "Gateway start failed: activated plugins reported load errors.",
+    },
+    { outcome: "auth-rejected", message: "Gateway start failed: the Gateway rejected" },
+    { outcome: "port-held", message: "Gateway port 18789 is held by another process." },
+    { outcome: "timeout", message: "Gateway start timed out after 45s" },
+  ])("reports $outcome as what actually happened", async ({ outcome, message }) => {
+    waitForGatewayHealthyRestart.mockResolvedValue({
+      healthy: false,
+      staleGatewayPids: [],
+      runtime: { status: "running", pid: 4242 },
+      portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+      waitOutcome: outcome,
+      elapsedMs: 9_000,
+    });
+
+    await expect(
+      checkGatewayServiceReadiness({ service: service as never, deadlineCapMs: 45_000 }),
+    ).resolves.toMatchObject({
+      ready: false,
+      failure: [expect.stringContaining(message), expect.any(Array)],
+    });
+  });
+
+  it.each([
     { preserveDefinition: false, updateMarker: undefined },
     { preserveDefinition: true, updateMarker: "1" },
   ])(
