@@ -34,7 +34,7 @@ function source() {
   const digests = JSON.parse(env.WINDOWS_NODE_INSTALLER_DIGESTS ?? "null");
   requireValue(
     digests !== null &&
-      isDeepStrictEqual(Object.keys(digests).sort(), INSTALLERS) &&
+      isDeepStrictEqual(Object.keys(digests).toSorted(), INSTALLERS) &&
       INSTALLERS.every((name) => /^sha256:[a-f0-9]{64}$/iu.test(digests[name])),
     "Windows approval requires exactly the two pinned installer digests.",
   );
@@ -51,7 +51,7 @@ function readApproval(path) {
   const approval = JSON.parse(readFileSync(path, "utf8"));
   validateReleaseApprovalReceipt(approval.release);
   requireValue(
-    isDeepStrictEqual(Object.keys(approval).sort(), [
+    isDeepStrictEqual(Object.keys(approval).toSorted(), [
       "release",
       "signedTagObjectSha",
       "source",
@@ -209,7 +209,7 @@ function verifyWriter() {
 function verifyFiles(directory) {
   const selectedSource = source();
   requireValue(
-    isDeepStrictEqual(readdirSync(directory).sort(), [...INSTALLERS, MANIFEST].sort()),
+    isDeepStrictEqual(readdirSync(directory).toSorted(), [...INSTALLERS, MANIFEST].toSorted()),
     "Windows writer requires exactly the verified installers and checksum manifest.",
   );
   const manifest = INSTALLERS.map((name) => {

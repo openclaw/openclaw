@@ -222,21 +222,36 @@ process.stdout.write(JSON.stringify(output));
         cwd,
       },
     );
-    if (scenario.startsWith("late-"))
+    if (scenario.startsWith("late-")) {
       assert.equal(JSON.parse(readFileSync(approvalPath, "utf8")).source, null);
-    if (scenario === "wait-tag")
+    }
+    if (scenario === "wait-tag") {
       command(process.execPath, [SCRIPT, "verify", "--approval", approvalPath], { env, cwd });
-    if (["tag", "wait-tag"].includes(scenario))
+    }
+    if (["tag", "wait-tag"].includes(scenario)) {
       git("--git-dir", state.remote, "update-ref", "refs/tags/" + TAG, other);
-    if (scenario === "tag-object")
+    }
+    if (scenario === "tag-object") {
       git("--git-dir", state.remote, "update-ref", "refs/tags/" + TAG, replacement);
-    if (scenario === "source") env.WINDOWS_NODE_TAG = "v0.6.4";
-    if (scenario === "tuple") env.RELEASE_PUBLISH_RUN_ID = "124";
-    if (scenario === "missing") rmSync(approvalPath);
-    if (scenario === "bytes") writeFileSync(join(assets, NAMES[0]), "modified installer");
-    if (scenario === "manifest")
+    }
+    if (scenario === "source") {
+      env.WINDOWS_NODE_TAG = "v0.6.4";
+    }
+    if (scenario === "tuple") {
+      env.RELEASE_PUBLISH_RUN_ID = "124";
+    }
+    if (scenario === "missing") {
+      rmSync(approvalPath);
+    }
+    if (scenario === "bytes") {
+      writeFileSync(join(assets, NAMES[0]), "modified installer");
+    }
+    if (scenario === "manifest") {
       writeFileSync(join(assets, "OpenClawCompanion-SHA256SUMS.txt"), "modified manifest\n");
-    if (scenario === "extra") writeFileSync(join(assets, "unapproved.exe"), "extra");
+    }
+    if (scenario === "extra") {
+      writeFileSync(join(assets, "unapproved.exe"), "extra");
+    }
     const result = spawnSync(
       process.execPath,
       [SCRIPT, "publish", "--approval", approvalPath, "--assets", assets],
