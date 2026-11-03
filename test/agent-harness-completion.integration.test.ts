@@ -1,14 +1,14 @@
 import { beforeEach, expect, it, vi } from "vitest";
-import type { AgentHarnessCompletionCustody as CompletionCustody } from "../agents/agent-harness-completion-custody.js";
-import type { AgentHarnessCompletionScope as CompletionScope } from "../agents/agent-harness-completion-scope.js";
+import type { AgentHarnessCompletionCustody as CompletionCustody } from "../src/agents/agent-harness-completion-custody.js";
+import type { AgentHarnessCompletionScope as CompletionScope } from "../src/agents/agent-harness-completion-scope.js";
 import {
   assertHarnessCompletionSourceAdmission as assertAdmission,
   createAgentHarnessCompletionScope,
-} from "../agents/agent-harness-completion-scope.js";
-import { buildAnnounceIdempotencyKey } from "../agents/announce-idempotency.js";
-import { buildAgentInternalEventContext } from "../agents/internal-events.js";
-import type * as AnnounceRuntime from "../agents/subagents/announce/subagent-announce-delivery.runtime.js";
-import { SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION } from "../agents/subagents/completion/subagent-completion-instructions.js";
+} from "../src/agents/agent-harness-completion-scope.js";
+import { buildAnnounceIdempotencyKey } from "../src/agents/announce-idempotency.js";
+import { buildAgentInternalEventContext } from "../src/agents/internal-events.js";
+import type * as AnnounceRuntime from "../src/agents/subagents/announce/subagent-announce-delivery.runtime.js";
+import { SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION } from "../src/agents/subagents/completion/subagent-completion-instructions.js";
 
 const mocks = vi.hoisted(() => ({
   deliver: vi.fn(),
@@ -26,18 +26,18 @@ const mocks = vi.hoisted(() => ({
   ),
 }));
 // mock-isolation: Keep process-global custody and Gateway continuation state outside this fixture.
-vi.mock("../agents/agent-harness-completion-custody.js", () => ({
+vi.mock("../src/agents/agent-harness-completion-custody.js", () => ({
   captureAgentHarnessCompletionCustody: vi.fn(),
   createAgentHarnessCompletionEventSink: vi.fn(),
   runWithAgentHarnessCompletionCustody: mocks.runWithCustody,
 }));
-vi.mock("../agents/subagents/announce/subagent-announce-delivery.js", () => ({
+vi.mock("../src/agents/subagents/announce/subagent-announce-delivery.js", () => ({
   deliverSubagentAnnouncement: mocks.deliver,
   loadRequesterSessionEntry: mocks.loadRequester,
   isInternalAnnounceRequesterSession: () => false,
 }));
 vi.mock(
-  "../agents/subagents/announce/subagent-announce-delivery.runtime.js",
+  "../src/agents/subagents/announce/subagent-announce-delivery.runtime.js",
   async (importOriginal) => ({
     ...(await importOriginal<typeof AnnounceRuntime>()),
     captureRequesterSessionEntryCurrent: async (sessionKey: string, agentId?: string) => ({
@@ -46,16 +46,16 @@ vi.mock(
     }),
   }),
 );
-vi.mock("../agents/subagents/announce/subagent-announce-origin.js", () => ({
+vi.mock("../src/agents/subagents/announce/subagent-announce-origin.js", () => ({
   resolveAnnounceOrigin: () => ({ channel: "test", to: "requester" }),
   resolveSubagentCompletionOrigin: mocks.resolveCompletionOrigin,
 }));
-import * as completionSdk from "./agent-harness-completion.js";
+import * as completionSdk from "../src/plugin-sdk/agent-harness-completion.js";
 import {
   deliverAgentHarnessCompletion,
   isDurableAgentHarnessCompletionDelivery,
   type AgentHarnessCompletionDelivery,
-} from "./agent-harness-completion.js";
+} from "../src/plugin-sdk/agent-harness-completion.js";
 
 const source = {
   requesterSessionKey: "main",
@@ -139,7 +139,7 @@ it.each([undefined, " Keep the review private; send any visible update with the 
 
 it("delivers a detached Codex parent's native review result with shared outcome guidance", async () => {
   const { loadCodexNativeSubagentMonitorTestFixture } =
-    await import("../../extensions/codex/test-api.js");
+    await import("../extensions/codex/test-api.js");
   const { createClient, createRuntime, CodexNativeSubagentMonitor, notifyChildStarted } =
     await loadCodexNativeSubagentMonitorTestFixture();
   const client = createClient();
