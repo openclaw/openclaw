@@ -58,6 +58,7 @@ it("keeps confirmation when the authorization response omits its decision", asyn
   expect(dispatchPrompt.mock.calls[0]?.[3]).toBe(confirmPrompt);
 });
 it.each([
+  ["data.query", { queryName: "" }, "widget host request queryName is required"],
   ["prompt.send", { text: "Forged" }, "active user interaction"],
   ["state.emit", { payload: "x".repeat(8_193) }, "exceeds 8192"],
   ["action.run", { action: "example.resolve", params: "bad" }, "widget action params are invalid"],
@@ -107,6 +108,7 @@ it("rate-limits varying state payloads at the trusted host", async () => {
   await expect(emit({ count: 13 })).resolves.toEqual({ ok: true });
 });
 it.each([
+  ["data.query", { queryName: "main-ci" }, "board.data.read"],
   ["data.read", { bindingId: "health", params: { probe: false } }, "board.data.read"],
   ["action.run", { action: "example.resolve", params: { eventId: "event-1" } }, "board.action"],
   ["cron.trigger", { jobId: "job-1" }, "board.action"],

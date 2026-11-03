@@ -161,6 +161,11 @@ export class BoardWidgetBridgeOwner {
       }
       case "state.emit":
         return await this.emitState(params.payload);
+      case "data.query":
+        return await this.options.client.request("board.data.read", {
+          ticket: this.options.ticket,
+          queryName: requiredString(params, "queryName"),
+        });
       case "data.read":
       case "action.run": {
         const read = request.method === "data.read";

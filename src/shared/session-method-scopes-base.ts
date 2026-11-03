@@ -90,13 +90,14 @@ export function resolveSessionMethodScope(
   method: string,
   params?: unknown,
 ): SessionOperatorScope | undefined {
-  // Only this repository-scoped read has an approved session-audience contract.
-  // Other host bindings keep their broad operator scope. Ticket, visibility and
-  // exact widget grants are enforced by the Gateway before data delivery.
+  // Session readers can invoke only stored named queries. The closed RPC schema
+  // rejects overrides; the Gateway checks the definition and live grant at delivery.
   if (
     method === "board.data.read" &&
     isRecord(params) &&
-    params.bindingId === "github.actions.runs"
+    typeof params.queryName === "string" &&
+    typeof params.ticket === "string" &&
+    Object.keys(params).every((key) => key === "ticket" || key === "queryName")
   ) {
     return "operator.sessions.read";
   }

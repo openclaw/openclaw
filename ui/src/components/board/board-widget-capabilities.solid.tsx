@@ -28,7 +28,10 @@ export function BoardPendingCapabilities(props: {
       </div>
       <strong>{t("board.widget.needsApproval")}</strong>
       <Show
-        when={groups().some(([, values]) => values.length > 0)}
+        when={
+          !props.widget.declared?.queries?.length &&
+          groups().some(([, values]) => values.length > 0)
+        }
         fallback={
           <Show
             when={props.widget.declaredSummary?.length}
@@ -88,14 +91,18 @@ export function BoardGrantedCapabilities(props: {
   widget: BoardWidget;
   presentation?: "tooltip" | "details";
 }) {
-  const capabilities = createMemo(() => [
-    ...(props.widget.declared?.netOrigins ?? []).map((origin) =>
-      t("board.widget.networkCapability", { capability: origin }),
-    ),
-    ...(props.widget.declared?.tools ?? []).map((tool) =>
-      t("board.widget.toolCapability", { capability: tool }),
-    ),
-  ]);
+  const capabilities = createMemo(() =>
+    props.widget.declared?.queries?.length
+      ? (props.widget.declaredSummary ?? [])
+      : [
+          ...(props.widget.declared?.netOrigins ?? []).map((origin) =>
+            t("board.widget.networkCapability", { capability: origin }),
+          ),
+          ...(props.widget.declared?.tools ?? []).map((tool) =>
+            t("board.widget.toolCapability", { capability: tool }),
+          ),
+        ],
+  );
   return (
     <Show when={props.widget.grantState === "granted" && capabilities().length > 0}>
       <Show
