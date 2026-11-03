@@ -542,7 +542,9 @@ export function ProfilePage() {
               class="profile-refresh"
               label={view().identityLoading ? t("common.refreshing") : t("common.refresh")}
               busy={view().identityLoading}
-              disabled={!view().identityReady || identityBusy() !== null || view().channelIdentityBusy}
+              disabled={
+                !view().identityReady || identityBusy() !== null || view().channelIdentityBusy
+              }
               onClick={() => state.refreshManually()}
             />
           </Show>
