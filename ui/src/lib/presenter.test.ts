@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 // Control UI tests cover cron schedule presentation.
 import { contextBudgetStatusFixture } from "../../../src/config/sessions/context-budget.test-support.js";
 import type { CronJob } from "../api/types.ts";
@@ -41,7 +41,28 @@ describe("formatCronSchedule", () => {
         }).format(value),
       )
       .join(" ");
-    expect(formatCronSchedule(job({ kind: "every", everyMs: 90_001 }))).toBe(`Every ${expected}`);
+    expect(formatCronSchedule(job({ kind: "every", everyMs: 90_001 }))).toBe(
+      i18n.t("cronSchedule.every", { duration: expected }),
+    );
+  });
+
+  it("reads schedule wording from the locale catalog", () => {
+    const translate = i18n.t.bind(i18n);
+    vi.spyOn(i18n, "t").mockImplementation((key, params) =>
+      key.startsWith("cronSchedule.")
+        ? `<${key} ${Object.values(params ?? {}).join("|")}>`
+        : translate(key, params),
+    );
+    try {
+      expect(formatCronSchedule(job({ kind: "cron", expr: "0 9 * * *", tz: "UTC" }))).toBe(
+        "<cronSchedule.withTimeZone <cronSchedule.cron 0 9 * * *>|UTC>",
+      );
+      expect(formatCronSchedule(job({ kind: "at", at: "not-a-date" }))).toBe(
+        "<cronSchedule.at not-a-date>",
+      );
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 
   it("formats cron schedules", () => {

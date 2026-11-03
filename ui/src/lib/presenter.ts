@@ -54,25 +54,30 @@ export function formatCronSchedule(job: Pick<CronJob, "schedule">) {
   const s = job.schedule;
   if (s.kind === "at") {
     const atMs = Date.parse(s.at);
-    return Number.isFinite(atMs) ? `At ${formatMs(atMs)}` : `At ${s.at}`;
+    return t("cronSchedule.at", { time: Number.isFinite(atMs) ? formatMs(atMs) : s.at });
   }
   if (s.kind === "every") {
     const duration = resolveExactDurationParts(s.everyMs)?.map(formatUnit).join(" ");
-    return `Every ${duration ?? t("common.na")}`;
+    return t("cronSchedule.every", { duration: duration ?? t("common.na") });
   }
   if (s.kind === "on-exit") {
     // on-exit jobs carry a watched command (+ optional cwd), not a cron expr;
     // without this branch they fall through and render "Cron undefined".
-    return `On exit: ${s.command}${s.cwd ? ` (cwd: ${s.cwd})` : ""}`;
+    return withCwd(t("cronSchedule.onExit", { command: s.command }), s.cwd);
   }
   if (s.kind === "event") {
     const name = typeof s.options.name === "string" ? s.options.name : s.source;
-    return `Event: ${name}`;
+    return t("cronSchedule.event", { name });
   }
   if (s.kind === "stream") {
-    return `Stream: ${s.command.join(" ")}${s.cwd ? ` (cwd: ${s.cwd})` : ""}`;
+    return withCwd(t("cronSchedule.stream", { command: s.command.join(" ") }), s.cwd);
   }
-  return `Cron ${s.expr}${s.tz ? ` (${s.tz})` : ""}`;
+  const value = t("cronSchedule.cron", { expr: s.expr });
+  return s.tz ? t("cronSchedule.withTimeZone", { value, timeZone: s.tz }) : value;
+}
+
+function withCwd(value: string, cwd: string | undefined) {
+  return cwd ? t("cronSchedule.withCwd", { value, cwd }) : value;
 }
 
 export function formatCronPayload(job: CronJob) {
