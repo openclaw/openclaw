@@ -4,7 +4,11 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawnSyncMock = vi.hoisted(() => vi.fn());
-const testState = vi.hoisted(() => ({ zonePath: "" }));
+const testState = vi.hoisted(() => ({
+  zonePath: "",
+  resolvedDomain: "openclaw.internal." as string | null,
+  tailnetIPv4: "100.64.0.1" as string | undefined,
+}));
 const domain = "openclaw.internal";
 
 vi.mock("node:child_process", async () => {
@@ -15,16 +19,20 @@ vi.mock("node:child_process", async () => {
 });
 
 // mock-isolation: DNS setup uses only synthetic zone paths and never writes an operator zone.
-vi.mock("../infra/widearea-dns.js", () => ({
-  getWideAreaZonePath: () => testState.zonePath,
-  normalizeWideAreaDomain: (d: string) => d,
-  replaceWideAreaZoneFile: vi.fn(),
-  resolveWideAreaDiscoveryDomain: () => "openclaw.internal.",
-}));
+// Domain validation is pure, so it stays real.
+vi.mock("../infra/widearea-dns.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/widearea-dns.js")>();
+  return {
+    getWideAreaZonePath: () => testState.zonePath,
+    normalizeWideAreaDomain: actual.normalizeWideAreaDomain,
+    replaceWideAreaZoneFile: vi.fn(),
+    resolveWideAreaDiscoveryDomain: () => testState.resolvedDomain,
+  };
+});
 
 // mock-isolation: Fixed Tailnet addresses keep setup independent of host network state.
 vi.mock("../infra/tailnet.js", () => ({
-  pickPrimaryTailnetIPv4: () => "100.64.0.1",
+  pickPrimaryTailnetIPv4: () => testState.tailnetIPv4,
   pickPrimaryTailnetIPv6: () => undefined,
 }));
 
@@ -40,6 +48,8 @@ import { replaceWideAreaZoneFile } from "../infra/widearea-dns.js";
 import { defaultRuntime } from "../runtime.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { registerDnsCli } from "./dns-cli.js";
+import { ExpectedCliError } from "./expected-cli-error.js";
+import { formatCliFailureLines } from "./failure-output.js";
 
 function spawnOk(stdout = "") {
   return { stdout, stderr: "", pid: 1, output: [], status: 0, signal: null };
@@ -163,5 +173,68 @@ describe("dns-cli probe bounds", () => {
         ? "brew --prefix failed: timed out after 15 seconds (signal SIGKILL)"
         : "sudo brew services restart coredns failed: signal SIGTERM",
     );
+  });
+});
+
+describe("dns setup refusals", () => {
+  beforeEach(() => {
+    spawnSyncMock.mockReset();
+    vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
+    vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    testState.resolvedDomain = "openclaw.internal.";
+    testState.tailnetIPv4 = "100.64.0.1";
+    vi.restoreAllMocks();
+  });
+
+  it.each([
+    {
+      name: "no domain configured",
+      args: [],
+      platform: "darwin",
+      state: { resolvedDomain: null },
+      message: "No wide-area domain configured. Set discovery.wideArea.domain or pass --domain.",
+    },
+    {
+      name: "an invalid --domain",
+      args: ["--domain", "not_a.domain!"],
+      platform: "darwin",
+      state: {},
+      message: "wide-area discovery domain must be a valid DNS name",
+    },
+    {
+      name: "--apply off macOS",
+      args: ["--domain", domain, "--apply"],
+      platform: "linux",
+      state: {},
+      message: "dns setup is currently supported on macOS only",
+    },
+    {
+      name: "--apply without a tailnet IP",
+      args: ["--domain", domain, "--apply"],
+      platform: "darwin",
+      state: { tailnetIPv4: undefined },
+      message: "no tailnet IP detected; check that Tailscale is running on this machine",
+    },
+  ] as const)("prints the reason for $name instead of a generic failure", async (testCase) => {
+    Object.assign(testState, testCase.state);
+    const program = new Command().exitOverride();
+    registerDnsCli(program);
+    const error = await withMockedPlatform(testCase.platform, () =>
+      program.parseAsync(["node", "openclaw", "dns", "setup", ...testCase.args]),
+    ).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(ExpectedCliError);
+    expect(
+      formatCliFailureLines({
+        title: "The CLI command failed.",
+        error,
+        argv: ["node", "openclaw", "dns", "setup"],
+        env: {},
+      }),
+    ).toEqual([testCase.message]);
+    expect(spawnSyncMock).not.toHaveBeenCalled();
   });
 });
