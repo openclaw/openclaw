@@ -85,9 +85,9 @@ async function openStore(
   return gateway;
 }
 
-async function openDialog(page: Page, label: string) {
+async function openDialog(page: Page, label: string, title = label) {
   await button(page, label).click();
-  return modal(page, label);
+  return modal(page, title);
 }
 
 async function rowAction(page: Page, name: string, action: "edit" | "delete") {
@@ -180,14 +180,14 @@ suite.define(() => {
         await button(dialog, "Cancel").click();
       }
       await rowAction(page, "SERVICE_API_KEY", "edit");
-      await reject(modal(page, "Edit"));
+      await reject(modal(page, "Edit secret"));
 
       const protectedBulk = await openDialog(page, "Bulk Add");
       await bulkValue(protectedBulk).fill("EMPTY_API_KEY=\nEMPTY_ENV=");
       await protectedBulk.getByText("1 protected secret detected").waitFor();
       await reject(protectedBulk, "EMPTY_API_KEY: Enter a value.");
 
-      const secret = await openDialog(page, "Add");
+      const secret = await openDialog(page, "Add", "Add secret");
       await field(secret, "Name").fill("SERVICE_API_KEY");
       await field(secret, "Value").fill("super-secret-material");
       await secret.locator('textarea[name="allowed-hosts"]').fill("api.example.com");
@@ -198,7 +198,7 @@ suite.define(() => {
       );
       expect(await page.content()).not.toContain("super-secret-material");
 
-      const addEnv = await openDialog(page, "Add");
+      const addEnv = await openDialog(page, "Add", "Add secret");
       await field(addEnv, "Name").fill("EMPTY_ENV");
       await addEnv.getByText(/The agent can print, transmit, or persist it/u).waitFor();
       await button(addEnv, "Save").click();
@@ -242,7 +242,7 @@ suite.define(() => {
         });
         const deletions = () => gateway.getRequests("secrets.store.delete");
         const entryRow = await rowAction(page, "SERVICE_URL", "delete");
-        const confirmation = modal(page, "Delete");
+        const confirmation = modal(page, "Delete SERVICE_URL?");
         await confirmation.getByText("Delete SERVICE_URL?", { exact: true }).waitFor();
         const original = await gatewayIdentity(page);
         expect(original.clientInstanceId).toBeDefined();

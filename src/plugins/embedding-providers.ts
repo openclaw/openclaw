@@ -13,7 +13,6 @@ import {
 
 export type {
   EmbeddingProviderAdapter,
-  EmbeddingProviderCreateOptions,
   RegisteredEmbeddingProvider,
 } from "./embedding-provider-types.js";
 

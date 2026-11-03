@@ -34,12 +34,11 @@ import {
 } from "../../lib/skills-shared.ts";
 import { SkillStatusChips } from "../skills/skill-status.tsx";
 import type { AgentsPageView } from "./agents-page-state.ts";
-import { AgentConfigButtons, type AgentConfigActions } from "./config-actions.tsx";
-import { AgentPanelAction } from "./panel-ui.tsx";
+import { AgentPanelAction, type AgentConfigState } from "./panel-ui.tsx";
 
 registerSettingsEnglish();
 
-type AgentSkillsProps = AgentConfigActions &
+type AgentSkillsProps = AgentConfigState &
   AgentsPageView["agentSkills"] &
   Pick<AgentsPageView, "readData"> & {
     agentId: string;
@@ -230,13 +229,11 @@ function AgentSkillsContent(
               disabled={!params.canPatchConfig || !params.explicit || !configReady()}
               onClick={() => params.onClear()}
             />
-            <AgentConfigButtons {...params}>
-              <AgentPanelAction
-                label={params.pending ? t("common.loading") : t("common.refresh")}
-                disabled={params.pending}
-                onClick={params.onRefresh}
-              />
-            </AgentConfigButtons>
+            <AgentPanelAction
+              label={params.pending ? t("common.loading") : t("common.refresh")}
+              disabled={params.pending}
+              onClick={params.onRefresh}
+            />
           </>
         }
       >

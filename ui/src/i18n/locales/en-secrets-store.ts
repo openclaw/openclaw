@@ -14,6 +14,8 @@ const enSecretsStore = {
     actions: "Actions",
     add: "Add",
     edit: "Edit",
+    addDialogTitle: "Add secret",
+    editDialogTitle: "Edit secret",
     bulk: "Bulk Add",
     protectedSecret: en.secretsStore.protectedSecret,
     protectedSecretHint:
@@ -38,6 +40,7 @@ const enSecretsStore = {
     warnings: "{count} runtime warnings.",
     partial: "{saved}/{total}: {error}",
     confirmDelete: "Delete {name}?",
+    confirmDeleteMessage: "The stored value can't be recovered.",
     deleted: "Deleted {name}.",
     deleteFailed: "The secret was not deleted. Reload the list and try again.",
   },

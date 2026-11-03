@@ -1,6 +1,7 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createBeamRequestHandler } from "./src/http.js";
 import { createBeamMirrorService } from "./src/mirror.js";
+import { createBeamOwnedViewHandler } from "./src/owned-view.js";
 import { createBeamSessionCatalog } from "./src/session-catalog.js";
 import { createBeamStore } from "./src/store.js";
 
@@ -11,6 +12,16 @@ export default definePluginEntry({
   register(api) {
     const store = createBeamStore(api.runtime);
     api.registerSessionCatalog(createBeamSessionCatalog(store));
+    for (const operation of ["list", "read"] as const) {
+      api.registerGatewayMethod(
+        `beam.owned.${operation}`,
+        createBeamOwnedViewHandler(store, operation),
+        {
+          scope: "operator.sessions.write",
+          profileAccess: "required",
+        },
+      );
+    }
     api.registerService(store.catalogService);
     api.registerHttpRoute({
       path: "/api/v1/beam/sessions",

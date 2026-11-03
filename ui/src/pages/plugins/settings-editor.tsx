@@ -51,6 +51,7 @@ export function pluginSettingsNodeOptions(model: PluginSettingsEditorModel) {
     commitOnBlur: true,
     maskSensitive: true,
     rawAvailable: false,
+    secretFields: model.configSecretFields,
     onPatch: model.onConfigPatch,
     onRemove: model.onConfigRemove,
   };

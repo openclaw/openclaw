@@ -195,6 +195,11 @@ function CuratedField(props: { settings: CuratedSettingsProps; spec: CuratedSett
               placeholder={defaultValue()}
               onChange={(event) => {
                 const input = event.currentTarget;
+                if (input.validity.badInput) {
+                  // Browsers sanitize unfinished numbers to empty, not a deliberate clear.
+                  input.value = text();
+                  return;
+                }
                 const next = input.value.trim();
                 if (!next) {
                   props.settings.onPatch(props.spec.path, undefined);

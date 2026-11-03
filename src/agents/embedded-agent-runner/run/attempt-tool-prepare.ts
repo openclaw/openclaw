@@ -365,8 +365,8 @@ export async function prepareEmbeddedAttemptToolBase(params: {
         skillWorkshop: {
           // A background fork credits its tool changes to the session it reviews.
           reviewOf: readSessionForkSource(attempt.inputProvenance),
-          libraryAuthoring: attempt.skillLibraryAuthoring,
         },
+        skillLibraryAuthoring: attempt.skillLibraryAuthoring,
         modelCompat: extractModelCompat(attempt.model),
         delegationCapability: attempt.delegationCapability,
         modelAuthMode: await resolveModelAuthModeAsync(
