@@ -148,8 +148,9 @@ it("fails an incognito session's continue_work election visibly and elects nothi
         ),
       );
       expect(await workRecords()).toHaveLength(0);
-      // Released once by the failed capture, never retained: releasing every retained custody adds nothing.
+      // The failed election released it; releasing every retained custody adds nothing.
       expect(operatorReleases).toHaveLength(1);
+      expect(operatorReleases[0]).toHaveBeenCalledOnce();
       resetContinuationWorkDispatchForTests();
       expect(operatorReleases[0]).toHaveBeenCalledOnce();
       // Kept by design: the runner cannot tell how many of a failed batch's records committed, so
