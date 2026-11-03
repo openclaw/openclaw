@@ -714,6 +714,11 @@ more batches."), fall back to halving the rejected batch. Successful slices
 retain their input order and cache entries. A single input that still exceeds a
 per-input limit fails the pass and is reported.
 
+If an ordinary indexing request reaches its embedding watchdog timeout, OpenClaw
+halves the batch instead of resending the same request. Smaller successful slices
+retain their input order and cache entries. A single input that still times out
+fails the pass and is reported. Provider-owned timeout budgets stay unchanged.
+
 ---
 
 <a id="session-memory-search-experimental" />
