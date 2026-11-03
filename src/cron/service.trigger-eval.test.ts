@@ -586,6 +586,37 @@ describe("cron trigger evaluation", () => {
   });
 });
 
+describe("cron trigger startup", () => {
+  it("evaluates a condition added before the scheduler starts instead of deferring it as missed work", async () => {
+    const evaluateCronTrigger = vi.fn<Evaluator>(async () => evaluated(false));
+    const { storePath } = await makeStorePath();
+    const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
+      nowMs: () => Date.now(),
+      storePath,
+      cronEnabled: true,
+      cronConfig: { triggers: { enabled: true } },
+      log: logger,
+      enqueueSystemEvent: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      evaluateCronTrigger,
+    });
+    try {
+      // The Gateway accepts cron.add while its scheduler start is still pending.
+      const job = await cron.add(
+        watcher({ sessionTarget: "main", payload: { kind: "systemEvent", text: "quiet" } }),
+      );
+      vi.setSystemTime(job.state.nextRunAtMs! + 5_000);
+      await cron.start();
+      await vi.waitFor(() => expect(evaluateCronTrigger).toHaveBeenCalledOnce());
+      expect(cron.getJob(job.id)?.state).toMatchObject({ triggerEvalCount: 1 });
+    } finally {
+      cron.stop();
+      await cron.waitForIdle();
+    }
+  });
+});
+
 describe("cron webhook optional output", () => {
   installHarnessCleanup();
   it.each([
