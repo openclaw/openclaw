@@ -48,9 +48,9 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Menu selector scoping cuts streaming style CPU by 28% in 20 paired runs.
-  // Measured 1,280,610 B plus 64 B headroom; includes #191106's accepted overage.
-  chatBootJsGzipBytes: 1_280_674,
+  // First-visit co-location improves Sessions/Cron by 7–8%, accepting 205 B in Chat.
+  // Measured 1,280,999 B plus the existing 64 B build-variance headroom.
+  chatBootJsGzipBytes: 1_281_063,
   newBootJsGzipBytes: 797_395,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.

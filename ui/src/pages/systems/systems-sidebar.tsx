@@ -53,7 +53,7 @@ function shortId(id: string): string {
   return id.slice(id.lastIndexOf(":") + 1, id.lastIndexOf(":") + 7);
 }
 
-export function systemKind(row: SystemsInventoryRow): "host" | "worker" | "node" | "device" {
+function systemKind(row: SystemsInventoryRow): "host" | "worker" | "node" | "device" {
   if (row.environment.id === "gateway") {
     return "host";
   }

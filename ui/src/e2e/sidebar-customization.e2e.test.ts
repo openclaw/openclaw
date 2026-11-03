@@ -432,7 +432,7 @@ suite.define(() => {
         )
         .toBe("page");
       const settingsLinks = settingsSidebar.locator(".settings-sidebar__item");
-      expect(await trimmedTextContents(settingsLinks)).not.toContain("Agent Defaults");
+      expect(await trimmedTextContents(settingsLinks)).not.toContain("Agent defaults");
       await expect
         .poll(() =>
           settingsSearch.evaluate((input) => {
