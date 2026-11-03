@@ -92,6 +92,8 @@ export function ModelPicker(props: ModelPickerParams & { windowed?: boolean }) {
     title: props.title,
     placement: props.placement,
     searchable: true,
+    // The model picker's phone form belongs to its own overhaul.
+    phoneSheet: false,
     windowed: props.windowed ? renderWindowSizer : undefined,
     searchPlaceholder: props.searchPlaceholder,
     groupBy: props.groupByProvider

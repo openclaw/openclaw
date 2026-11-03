@@ -35,7 +35,6 @@ import {
   resolveSessionProfileId,
   projectSessionPeople,
   projectSessionPeopleFacet,
-  resolveSessionListProfileReference,
 } from "./session-identity-projection.js";
 import type { SessionEntryPair } from "./session-list-order.js";
 import { addSessionListSearchModelFields } from "./session-list-search-fields.js";
@@ -43,6 +42,7 @@ import type {
   SessionListModelFactsLookup,
   SessionListTargetLookup,
 } from "./session-list-target.js";
+import { resolveProfileActivitySelection } from "./session-profile-activity-policy.js";
 import type {
   SessionActorProfileIdentity,
   SessionListActiveRunProjector,
@@ -107,6 +107,8 @@ export type SessionListFilterParams = {
     target: NonNullable<ReturnType<SessionListTargetLookup>>,
   ) => boolean;
   restrictProfileReferences?: boolean;
+  /** Undefined permits other profiles; null is an unidentified session-only caller. */
+  profileActivityViewerId?: string | null;
   involvingActorId?: string;
   ownerFirstActorId?: string;
   projectActiveRun?: SessionListActiveRunProjector;
@@ -204,6 +206,9 @@ export function filterSessionEntries(
       }
     : undefined;
   const involvingActorId = normalizeOptionalString(params.involvingActorId);
+  const activityViewerId = params.profileActivityViewerId
+    ? resolveSessionProfileId(params.profileActivityViewerId, identities)
+    : params.profileActivityViewerId;
 
   // Person references resolve before candidate filters; ordinary reads need no roster copy.
   const visibleEntries: SessionEntryPair[] = [];
@@ -224,6 +229,9 @@ export function filterSessionEntries(
   const allowedProfileIds =
     opts.involvingProfileId && params.restrictProfileReferences ? new Set<string>() : undefined;
   if (allowedProfileIds) {
+    if (activityViewerId) {
+      allowedProfileIds.add(activityViewerId);
+    }
     for (const [, entry] of visibleEntries) {
       const owner = projectOwner(entry, identities, cfg, configuredAgentIds)?.actor;
       for (const person of projectPeople(entry, identities, owner)) {
@@ -231,18 +239,16 @@ export function filterSessionEntries(
       }
     }
   }
-  const profileReference = opts.involvingProfileId
-    ? resolveSessionListProfileReference(
-        opts.involvingProfileId,
-        visibleEntries,
-        identities,
-        allowedProfileIds,
-      )
-    : undefined;
-  if (profileReference && !profileReference.ok) {
-    throw new Error("Person link is ambiguous. Use a longer profile ID in the Activity URL.");
-  }
-  const selectedProfileId = profileReference?.value;
+  const selectedProfileId = resolveProfileActivitySelection({
+    viewerId: activityViewerId,
+    creatorId,
+    ownerId,
+    relationProfileId: profileRelation?.profileId,
+    reference: opts.involvingProfileId,
+    entries: visibleEntries,
+    identities,
+    allowedProfileIds,
+  });
 
   const candidateEntries = opts.involvingProfileId
     ? visibleEntries.filter(([, entry]) => matchesSessionArchiveFilter(entry, opts.archived))
@@ -531,7 +537,10 @@ export function filterSessionEntries(
     if (profileRelation?.relationship === "involving" && !relationKeys?.has(key)) {
       continue;
     }
-    if (effectiveOwner) {
+    if (
+      effectiveOwner &&
+      (activityViewerId === undefined || effectiveOwner.identity?.id === activityViewerId)
+    ) {
       addSessionOwnerFacetIdentity(ownerFacet, effectiveOwner);
     }
     if (creatorId && resolveSessionCreatorActor(entry.createdActor)?.id !== creatorId) {
@@ -546,11 +555,15 @@ export function filterSessionEntries(
     }
     if (opts.includePeople || opts.involvingProfileId) {
       const associated = projectPeople(entry, identities, effectiveOwner);
-      peopleSessionCount += 1;
+      const facetPeople =
+        activityViewerId === undefined
+          ? associated
+          : associated.filter((person) => person.identity.id === activityViewerId);
+      peopleSessionCount += Number(activityViewerId === undefined || facetPeople.length > 0);
       peopleIncomplete ||=
         (entry.participantCount ?? entry.participants?.length ?? 0) >= MAX_SESSION_PARTICIPANTS ||
         entry.participants?.some((participant) => participant.identity.type === "legacy") === true;
-      for (const person of associated) {
+      for (const person of facetPeople) {
         const existing = people.get(person.identity.id);
         if (existing) {
           existing.identity = person.identity;
@@ -568,7 +581,7 @@ export function filterSessionEntries(
         }
       }
       if (pulsePeople) {
-        for (const person of associated) {
+        for (const person of facetPeople) {
           pulsePeople.add(person.identity.id);
         }
       }
@@ -576,7 +589,8 @@ export function filterSessionEntries(
     if (
       ownerSessionCounts &&
       entry.archivedAt === undefined &&
-      effectiveOwner?.identity?.type === "profile"
+      effectiveOwner?.identity?.type === "profile" &&
+      (activityViewerId === undefined || effectiveOwner.identity.id === activityViewerId)
     ) {
       const profileId = effectiveOwner.identity.id;
       const counts = ownerSessionCounts.get(profileId) ?? { profileId, open: 0, running: 0 };
