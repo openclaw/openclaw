@@ -476,8 +476,8 @@ try {
     }
     answer();
   } else if (tool === "sleep") {
-    assert(args.length === 1 && ["2", "5", "10"].includes(args[0]));
-    state.calls.push({ tool, action: "wait" });
+    assert(args.length === 1 && /^[1-9][0-9]*$/u.test(args[0]) && Number(args[0]) <= 60);
+    state.calls.push({ tool, action: "wait", delay: Number(args[0]) });
     answer();
   } else if (tool === "minisign") {
     state.calls.push({ tool, action: "verify" });
@@ -1731,7 +1731,7 @@ it.each(["stale public bytes", "wrong uploaded bytes", "asset replaced"])(
       expect(result.stderr).toContain(`asset=${uploaded.id}`);
       expect(result.stderr).toContain(`expected=${hash(f.bytes(channel, "latest.json"))}`);
       expect(result.stderr).toContain(`observed=${hash(staleBytes)}`);
-      expect(f.state().calls.filter((call) => call.tool === "sleep")).toHaveLength(3);
+      expect(f.state().calls.filter((call) => call.tool === "sleep")).toHaveLength(7);
     } else if (failure === "wrong uploaded bytes") {
       expect(f.state().calls.some((call) => call.tool === "sleep")).toBe(false);
     }

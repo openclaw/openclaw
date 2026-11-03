@@ -1500,11 +1500,26 @@ describe("combined security review entry point", () => {
     },
     ...[
       { name: "missing CI", runs: [] },
-      { name: "unfinished CI", runs: [{ ...run, status: "in_progress" }] },
+      {
+        name: "unfinished CI",
+        runs: [{ ...run, status: "in_progress" }],
+        current: { ...run, status: "in_progress" },
+      },
       { name: "another workflow", runs: [{ ...run, path: ".github/workflows/forged.yml" }] },
       { name: "stale head", runs: [{ ...run, head_sha: "d".repeat(40) }] },
-      { name: "newer unfinished CI", runs: [run, { ...run, id: 11, status: "queued" }] },
-    ].map(({ name, runs }) => ({ name, routes: listedRuns(runs), outcome: "pending" })),
+      {
+        name: "newer unfinished CI",
+        runs: [run, { ...run, id: 11, status: "queued" }],
+        current: { ...run, id: 11, status: "queued" },
+      },
+    ].map(({ name, runs, current }) => ({
+      name,
+      routes: {
+        ...listedRuns(runs),
+        ...(current ? { [`GET ${actions}/runs/${current.id}`]: current } : {}),
+      },
+      outcome: "pending",
+    })),
     ...["failure", "skipped"].map((conclusion) => ({
       name: `${conclusion} gate`,
       routes: { [jobsPath]: { ...jobs, jobs: [{ ...jobs.jobs[0], conclusion }] } },

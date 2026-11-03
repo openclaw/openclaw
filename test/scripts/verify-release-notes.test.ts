@@ -101,12 +101,6 @@ function git(cwd: string, args: string[], extraEnv: Record<string, string> = {})
   }).trim();
 }
 
-function commitAll(cwd: string, message: string, extraEnv: Record<string, string> = {}): string {
-  git(cwd, ["add", "."]);
-  git(cwd, ["commit", "--allow-empty", "-qm", message], extraEnv);
-  return git(cwd, ["rev-parse", "HEAD"]);
-}
-
 function runVerifier(
   cwd: string,
   {
