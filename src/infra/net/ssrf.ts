@@ -583,9 +583,9 @@ export async function resolvePinnedHostnameWithPolicy(
   if (!skipPrivateNetworkChecks) {
     // Phase 2: re-check DNS answers so public hostnames cannot pivot to private targets.
     assertAllowedResolvedAddressesOrThrow(results, params.policy);
-  } else if (!isPrivateNetworkAllowedByPolicy(params.policy)) {
-    // Exact-host trust may allow RFC1918/tailnet/private-DNS provider targets, but
-    // it must not turn metadata/link-local DNS rebinding into an implicit allow.
+  } else {
+    // Private allow and exact-host trust may keep RFC1918 and tailnet targets, but
+    // metadata and non-exempt link-local DNS answers stay blocked.
     assertAllowedTrustedHostnameResolvedAddressesOrThrow(results, normalized, params.policy);
   }
 
@@ -638,7 +638,7 @@ function resolvePinnedDispatcherLookup(
   }));
   if (!shouldSkipPrivateNetworkChecks(pinned.hostname, policy)) {
     assertAllowedResolvedAddressesOrThrow(records, policy);
-  } else if (!isPrivateNetworkAllowedByPolicy(policy)) {
+  } else {
     assertAllowedTrustedHostnameResolvedAddressesOrThrow(records, pinned.hostname, policy);
   }
   return createPinnedLookup({
