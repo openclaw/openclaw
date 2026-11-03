@@ -64,7 +64,13 @@ async function mountWaitingGate(lastError = "", code: string | null = null) {
   });
   element.querySelector<HTMLButtonElement>(".login-gate__browser-pair-start")!.click();
   await settle();
-  expect(element.querySelector(".login-gate__browser-pair-code")?.textContent).toBe("ABCD-EFGH");
+  // The pairing card holds one way in: the sign-in form waits on the first card.
+  expect(element.querySelector("#login-gate-url")).toBeNull();
+  element.querySelector<HTMLButtonElement>(".login-gate__browser-pair-get")!.click();
+  await settle();
+  expect(element.querySelector(".login-gate__browser-pair-code")?.textContent).toContain(
+    "ABCD-EFGH",
+  );
   return { element, collect, onBrowserPaired, onConnect, approve: hold.resolve };
 }
 
@@ -77,16 +83,6 @@ async function expectRetired(gate: WaitingGate) {
   await vi.advanceTimersByTimeAsync(10_000);
   expect(gate.onBrowserPaired).not.toHaveBeenCalled();
   expect(gate.collect).toHaveBeenCalledTimes(1);
-}
-
-function typeGatewayUrl(gate: WaitingGate) {
-  const input = gate.element.querySelector<HTMLInputElement>("#login-gate-url")!;
-  input.value = `${gatewayUrl}/edited`;
-  input.dispatchEvent(new Event("input", { bubbles: true }));
-}
-
-function replaceGatewayTarget(gate: WaitingGate) {
-  gate.element.props = { ...gate.element.props, gatewayUrl: `${gatewayUrl}/replaced` };
 }
 
 describe("browser pairing", () => {
@@ -105,14 +101,13 @@ describe("browser pairing", () => {
     gate.approve();
     await settle();
     expect(gate.onBrowserPaired).toHaveBeenCalledWith("bootstrap", gatewayUrl);
+    // Connection progress and errors show on the sign-in card.
+    expect(gate.element.querySelector("#login-gate-url")).not.toBeNull();
   });
 
-  it.each([
-    ["the Gateway URL is edited", typeGatewayUrl],
-    ["the Gateway target is replaced from outside", replaceGatewayTarget],
-  ])("retires a waiting attempt when %s", async (_name, change) => {
+  it("retires a waiting attempt when the Gateway target is replaced from outside", async () => {
     const gate = await mountWaitingGate();
-    change(gate);
+    gate.element.props = { ...gate.element.props, gatewayUrl: `${gatewayUrl}/replaced` };
     await expectRetired(gate);
     expect(gate.element.querySelector(".login-gate__browser-pair-code")).toBeNull();
   });
@@ -120,13 +115,13 @@ describe("browser pairing", () => {
   it.each([
     ["the form", "", null],
     ["the status view", "pairing required", "PAIRING_REQUIRED"],
-  ])("retires a waiting attempt on a manual connect from %s", async (_, error, code) => {
+  ])("goes back to sign-in from pairing opened on %s", async (_, error, code) => {
     const gate = await mountWaitingGate(error, code);
+    gate.element.querySelector<HTMLButtonElement>(".login-gate__browser-pair-back")!.click();
+    await expectRetired(gate);
     const status = gate.element.querySelector('.login-gate__body[data-kind="pairing-required"]');
     expect(status !== null).toBe(error !== "");
-    gate.element.querySelector<HTMLButtonElement>(".login-gate__connect")!.click();
-    await expectRetired(gate);
-    expect(gate.onConnect).toHaveBeenCalledTimes(1);
+    expect(gate.element.querySelector("#login-gate-url")).not.toBeNull();
   });
 
   it("stops polling when the gate is removed", async () => {

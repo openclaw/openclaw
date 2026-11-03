@@ -35,8 +35,12 @@ const enLogin = {
     runOnHost: "Run on this computer",
     browserPair: {
       action: "Pair this browser",
+      open: "Pair with a code instead",
+      back: "Sign in with URL and secret",
+      intro: "No token or link needed. Get a code here, then approve it on the Gateway host.",
+      getCode: "Get a code",
       waiting: "Waiting for approval. Keep this page open.",
-      browserId: "Browser ID {id}",
+      identity: "Code {code} · Browser ID {id}",
       failure: {
         declined: "This request was declined on the Gateway host.",
         expired: "This code expired. Pair this browser again for a new one.",

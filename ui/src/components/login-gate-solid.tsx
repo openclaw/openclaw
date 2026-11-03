@@ -29,8 +29,8 @@ import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.
 import type { JSX as SolidJSX } from "../types/solid-elements.d.ts";
 import {
   createLoginGateBrowserPair,
-  LoginGateBrowserPair,
-  type LoginGateBrowserPairModel,
+  LoginGateBrowserPairCard,
+  LoginGateBrowserPairLink,
 } from "./login-gate-browser-pair.tsx";
 import {
   type LoginFailureFeedback,
@@ -66,7 +66,7 @@ export type LoginGateElement = SolidBridgeElement<BridgeProps>;
 type ViewProps = {
   model: LoginGateProps;
   cancelRefresh: () => void;
-  pair: LoginGateBrowserPairModel;
+  openPairCard: () => void;
 };
 const STATUS_ICONS: Record<LoginFailureFeedback["tone"], IconName> = {
   pending: "shieldEllipsis",
@@ -151,7 +151,6 @@ function LoginForm(
     props.feedback?.placement === "form" ? props.feedback.field : undefined;
   const connect = () => {
     props.cancelRefresh();
-    props.pair.cancel();
     props.model.onConnect();
   };
   const submitOnEnter = (event: KeyboardEvent) => {
@@ -234,7 +233,7 @@ function LoginForm(
 function BrowserPairSlot(props: ViewProps) {
   return (
     <Show when={canPairBrowserWithGateway(props.model.gatewayUrl)}>
-      <LoginGateBrowserPair pair={props.pair} />
+      <LoginGateBrowserPairLink onOpen={props.openPairCard} />
     </Show>
   );
 }
@@ -334,7 +333,6 @@ function StatusBody(
           class="btn login-gate__connect"
           onClick={() => {
             props.cancelRefresh();
-            props.pair.cancel();
             props.model.onConnect();
           }}
         >
@@ -431,10 +429,15 @@ function LoginGateContent(model: () => LoginGateProps, host: LoginGateElement): 
     loadingValue: undefined,
   });
   const [refreshing, setRefreshing] = createOptimistic(false);
+  const [pairCardOpen, setPairCardOpen] = createSignal(false);
   const pair = createLoginGateBrowserPair({
     basePath: () => normalizeBasePath(model().resourceBasePath),
     gatewayUrl: () => model().gatewayUrl,
-    onPaired: (bootstrapToken, gatewayUrl) => model().onBrowserPaired(bootstrapToken, gatewayUrl),
+    onPaired: (bootstrapToken, gatewayUrl) => {
+      // Connection progress and errors belong to the sign-in card.
+      setPairCardOpen(false);
+      model().onBrowserPaired(bootstrapToken, gatewayUrl);
+    },
   });
   const [now, setNow] = createSignal(Date.now());
   useVisiblePoll(1_000, () => setNow(Date.now()), {
@@ -580,28 +583,35 @@ function LoginGateContent(model: () => LoginGateProps, host: LoginGateElement): 
           <span class="login-gate__brand-name">{branding().brandName}</span>
         </header>
         <Show
-          when={feedback()?.placement === "status" ? feedback() : null}
+          when={pairCardOpen() && canPairBrowserWithGateway(model().gatewayUrl)}
           fallback={
-            <FormBody
-              model={model()}
-              feedback={feedback()}
-              cancelRefresh={cancelRefresh}
-              pair={pair}
-            />
+            <Show
+              when={feedback()?.placement === "status" ? feedback() : null}
+              fallback={
+                <FormBody
+                  model={model()}
+                  feedback={feedback()}
+                  cancelRefresh={cancelRefresh}
+                  openPairCard={() => setPairCardOpen(true)}
+                />
+              }
+            >
+              {(value) => (
+                <StatusBody
+                  model={model()}
+                  feedback={value()}
+                  cancelRefresh={cancelRefresh}
+                  openPairCard={() => setPairCardOpen(true)}
+                  refreshing={refreshing()}
+                  readRefreshOutcome={refreshOutcome}
+                  onRefresh={() => void refreshPage()}
+                  now={now()}
+                />
+              )}
+            </Show>
           }
         >
-          {(value) => (
-            <StatusBody
-              model={model()}
-              feedback={value()}
-              cancelRefresh={cancelRefresh}
-              pair={pair}
-              refreshing={refreshing()}
-              readRefreshOutcome={refreshOutcome}
-              onRefresh={() => void refreshPage()}
-              now={now()}
-            />
-          )}
+          <LoginGateBrowserPairCard pair={pair} onBack={() => setPairCardOpen(false)} />
         </Show>
         {model().onOpenGatewaySettings && (
           <footer class="login-gate__recovery">
