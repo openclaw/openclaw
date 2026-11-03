@@ -238,7 +238,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: approved shared automation tool-default selection before policy and approval.
       // +2: reconcile the accepted public entrypoint inventory after the cron budget update.
       // +1: settled execution lifecycle classifiers for plugin subscribers (#192413).
-      162,
+      // +1: maintainer-approved browser-extension-host subpath for plugin-requested extension hosting (#191921, approved by Josh Lehman, 2026-11-03).
+      163,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -315,7 +316,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: channel display-mention and mention-adapter types (#192473).
       // +1: shared plugin-owned Control UI message translation.
       // +1: GatewayIngressPrincipalRecovery on gateway-ingress (#193098).
-      3865,
+      // +5: the same browser-extension-host contract types and registration entrypoint (#191921).
+      3870,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -369,7 +371,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: the same plugin-command continuation classifier.
       // +2: the same settled execution lifecycle classifiers (#192413).
       // +1: the same Control UI message translator.
-      2235,
+      // +2: the same browser-extension-host registration callables (#191921).
+      2237,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
