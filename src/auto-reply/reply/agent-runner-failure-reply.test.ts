@@ -255,3 +255,26 @@ it("preserves local capacity guidance through provider-looking wrappers without 
   expect(knownReply(provider)?.text).not.toContain("local workers");
   expect(knownReply(provider)).toBeDefined();
 });
+
+it("forwards a subscription usage window and its reset time instead of the generic break copy", () => {
+  // Claude CLI reports its subscription window as a rolling hour window, not a calendar day/week.
+  // Both kinds name a reset time, so the reply must carry it: "try again in a few minutes" is
+  // wrong by hours or days when the window has not reset yet.
+  expect(externalReply(new Error("429 You've hit your 5-hour limit · resets 3pm"))).toEqual({
+    text: "⚠️ You've hit your 5-hour limit · resets 3pm",
+    isGenericRunnerFailure: false,
+  });
+  expect(
+    externalReply(new Error("429 You have reached your weekly limit; resets Monday 09:00 UTC")),
+  ).toEqual({
+    text: "⚠️ You have reached your weekly limit; resets Monday 09:00 UTC",
+    isGenericRunnerFailure: false,
+  });
+});
+
+it("keeps the generic break copy for a rate limit that names no usage window", () => {
+  expect(externalReply(new Error("429 You are being rate limited, slow down"))).toEqual({
+    text: "⚠️ The AI service needs a short break. Please try again in a few minutes.",
+    isGenericRunnerFailure: false,
+  });
+});
