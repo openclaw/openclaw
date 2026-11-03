@@ -1,0 +1,3 @@
+# Reuse the device read-only lifecycle case for true, false, and absent
+# roleAllowsAdmin; test closed scope details with visible token identity/status.
+15

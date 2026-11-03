@@ -23,7 +23,7 @@ const enRouteSubtitles = {
     skills: "Manage your agent skills",
     plugins: "Extend your Claw with tools",
     skillWorkshop: "Skills your agent learned, recent changes, and undo.",
-    devices: "Paired devices, pairing approvals, and exec bindings.",
+    devices: "Paired devices and command approvals.",
     templates: "Explore and add official Templates.",
     cloudWorkers: "Repository snapshots and machines for cloud sessions.",
     chat: "Gateway chat for quick interventions.",

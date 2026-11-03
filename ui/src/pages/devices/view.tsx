@@ -52,10 +52,16 @@ export function DevicesView(props: DevicesProps) {
           <div class="callout info" role="note">
             {t(
               !props.canManagePairing && !props.canAdmin
-                ? "devices.readOnly.pairingAndAdminRequired"
+                ? props.roleAllowsAdmin === true
+                  ? "devices.readOnly.browserPairingAndAdminRequired"
+                  : "devices.readOnly.pairingAndAdminRequired"
                 : !props.canManagePairing
-                  ? "devices.readOnly.pairingRequired"
-                  : "devices.readOnly.adminRequired",
+                  ? props.roleAllowsAdmin === true
+                    ? "devices.readOnly.browserPairingRequired"
+                    : "devices.readOnly.pairingRequired"
+                  : props.roleAllowsAdmin === true
+                    ? "devices.readOnly.browserAdminRequired"
+                    : "devices.readOnly.adminRequired",
             )}
           </div>
         ) : undefined}

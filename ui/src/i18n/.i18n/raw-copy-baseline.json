@@ -411,13 +411,6 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/devices/view-exec-approvals.tsx",
-      "text": "exec host=gateway/node"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
       "path": "ui/src/pages/new-session/cloud-target-view.tsx",
       "text": "openclaw config set nodeHost.workerRuns.enabled true"
     },

@@ -78,6 +78,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
   const [devicesRead, setDevicesRead] = createSignal<InventoryReadReceipt | null>(null);
   let canManagePairing = false;
   let canAdmin = false;
+  let roleAllowsAdmin: boolean | undefined;
   let canRead = true;
   let configGateway: ApplicationContext["gateway"] | null = null;
   let configClient: ApplicationGatewaySnapshot["client"] = null;
@@ -374,6 +375,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
       return;
     }
     const auth = snapshot.hello?.auth ?? null;
+    roleAllowsAdmin = auth?.roleAllowsAdmin;
     const nextRead = hasOperatorReadAccess(auth);
     const nextAdmin = hasOperatorAdminAccess(auth);
     const nextPairing = !auth || hasOperatorPairingAccess(auth);
@@ -646,6 +648,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
       canPairDevice: canAdmin,
       canManagePairing,
       canAdmin,
+      roleAllowsAdmin,
       configForm: bindingConfig(config),
       configLoading: config.configLoading,
       configSaving: config.configSaving,
