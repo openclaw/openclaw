@@ -35,8 +35,9 @@ const enTerminal = {
     sessionAttached: "attached",
     attachSession: "Attach session",
     attachFailed: "Couldn’t connect to this terminal session. Try again.",
-    deliveryFailed: en.terminal.deliveryFailed,
-    inputPaused: en.terminal.inputPaused,
+    deliveryFailed:
+      "Couldn’t confirm input delivery. Check the terminal before reconnecting and trying again.",
+    inputPaused: "Couldn’t send input while disconnected. Reconnect to try again.",
     startCancelled: en.terminal.startCancelled,
     connecting: "Connecting to session…",
     connectionTimedOut: "Session did not connect within 30 seconds.",

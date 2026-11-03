@@ -12,6 +12,9 @@ import type {
 import { readNonEmptyStringPreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
 import { BoundedBuffer } from "../../../../src/shared/bounded-buffer.ts";
 import { t } from "../../i18n/index.ts";
+import { registerTerminalEnglish } from "../../i18n/locales/en-terminal.ts";
+
+registerTerminalEnglish();
 
 type TerminalRequestOptions = { timeoutMs?: number | null; signal?: AbortSignal };
 
