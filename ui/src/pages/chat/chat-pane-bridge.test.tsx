@@ -142,6 +142,9 @@ it("opens provider findings through the mounted pane's first rendered frame", as
     providerReview: review,
   }).render({ active: true });
   const dialog = () => view.container.querySelector("openclaw-modal-dialog");
+  await view.pane.updateComplete;
+  // The first frame starts the lazy review host; wait for its module before querying it.
+  await vi.dynamicImportSettled();
   const reviewButton = await waitForSolid(() =>
     expectDefined(
       view.container.querySelector<HTMLButtonElement>(".chat-provider-review button"),
