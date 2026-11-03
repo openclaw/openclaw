@@ -581,8 +581,11 @@ test.skipIf(process.platform === "win32")(
       `  '-e', 'setTimeout(() => { require("node:fs").writeFileSync(${JSON.stringify(detachedMarker)}, "done"); process.exit(0); }, 700)',`,
       "], { detached: true, stdio: 'ignore' });",
       "child.unref();",
-      'process.stdout.write("DETACHED_STARTED");',
-      "process.exit(7);",
+      "child.once('error', (error) => { process.stderr.write(String(error)); process.exit(1); });",
+      "child.once('spawn', () => {",
+      '  process.stdout.write("DETACHED_STARTED");',
+      "  process.exit(7);",
+      "});",
     ].join(" ");
     const started = await tool.execute("start", {
       command: `${currentNodeEvalCommand(wrapper)} & echo "started"`,
