@@ -300,13 +300,13 @@ describe("tool access diagnostics", () => {
       agentDir: dir,
       modelApi: null,
     });
-    const toolNames = result.groups.flatMap((group) => group.tools.map((tool) => tool.id));
-    expect(toolNames.includes("message")).toBe(scenario.available);
+    const toolNames = new Set(result.groups.flatMap((group) => group.tools.map((tool) => tool.id)));
+    expect(toolNames.has("message")).toBe(scenario.available);
     expect(result.toolAccess?.tools.find((tool) => tool.id === "message")?.status).toBe(
       scenario.available ? "available" : "excluded",
     );
     for (const tool of ["gateway", "session_status", "sessions_send", "conversations_send"]) {
-      expect(toolNames.includes(tool), tool).toBe(!scenario.coordinationToolsExcluded);
+      expect(toolNames.has(tool), tool).toBe(!scenario.coordinationToolsExcluded);
     }
   });
 });

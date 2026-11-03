@@ -33,11 +33,16 @@ export function registerSessionsSpawnVisibleDepthTests({
         parentSessionKey: "agent:main:main",
       },
     );
-    const callGateway = vi.fn<NonNullable<SpawnOptions["callGateway"]>>();
+    const gateway: { call: NonNullable<SpawnOptions["callGateway"]> } = {
+      call: async () => {
+        throw new Error("Unexpected Gateway call");
+      },
+    };
+    const callGateway = vi.spyOn(gateway, "call");
     const spawn = (maxSpawnDepth: number) =>
       createTool({
         agentSessionKey: childKey,
-        callGateway,
+        callGateway: gateway.call,
         registerRun: vi.fn(),
         countActiveRuns: () => 0,
         config: {
