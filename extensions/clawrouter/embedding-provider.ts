@@ -156,6 +156,18 @@ export const clawrouterEmbeddingProvider: EmbeddingProviderAdapter = {
           headers: Object.fromEntries(context.headers),
           ssrfPolicy: mergeSsrFPolicies(client.ssrfPolicy, context.ssrfPolicy),
           model: wireModel,
+          fetchImpl:
+            offer.routeKind === "manifest"
+              ? async (input, init) => {
+                  if (typeof init?.body !== "string") {
+                    throw new Error("ClawRouter manifest embeddings require a JSON request body");
+                  }
+                  return (client.fetchImpl ?? fetch)(input, {
+                    ...init,
+                    body: JSON.stringify({ body: JSON.parse(init.body) }),
+                  });
+                }
+              : client.fetchImpl,
         },
         batchQueryInputs: true,
         errorPrefix: "ClawRouter embeddings failed",

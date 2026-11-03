@@ -30,7 +30,9 @@ describe("registered ClawRouter memory embeddings", () => {
       const body = bytes.length
         ? (JSON.parse(bytes.toString()) as Record<string, unknown>)
         : undefined;
-      const inputs = Array.isArray(body?.input) ? body.input : [];
+      const payload =
+        routeKind === "manifest" ? (body?.body as Record<string, unknown> | undefined) : body;
+      const inputs = Array.isArray(payload?.input) ? payload.input : [];
       calls.push({ path: request.url ?? "", auth: request.headers.authorization, body });
       response.setHeader("Content-Type", "application/json");
       response.end(
@@ -144,10 +146,15 @@ describe("registered ClawRouter memory embeddings", () => {
         {
           path: route(),
           auth: "Bearer synthetic-router-key",
-          body: {
-            model: kind === "unified" ? options.model : "text-embedding-3-small",
-            input: ["first", "second"],
-          },
+          body:
+            kind === "manifest"
+              ? {
+                  body: { model: "text-embedding-3-small", input: ["first", "second"] },
+                }
+              : {
+                  model: kind === "unified" ? options.model : "text-embedding-3-small",
+                  input: ["first", "second"],
+                },
         },
       ]);
       expect(provider!.model).toBe(options.model);
