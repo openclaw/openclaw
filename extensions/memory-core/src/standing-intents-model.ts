@@ -174,8 +174,36 @@ export function tokenizeIntentText(text: string): string[] {
   return text.toLowerCase().match(/[\p{L}\p{N}_-]+/gu) ?? [];
 }
 
+/** Scripts written without spaces between words; `unicode61` tokenizes a whole run as one token. */
+const UNSPACED_SCRIPT_TERM =
+  /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
+
+export function needsLiteralIntentCandidates(promptText: string): boolean {
+  return UNSPACED_SCRIPT_TERM.test(promptText);
+}
+
+/**
+ * A trigger entry matches when every unspaced-script term appears literally inside the prompt and
+ * every other term is its own prompt word. Word equality cannot address the interior of an unspaced
+ * CJK prompt, while substring matching would break word boundaries for scripts that do use spacing.
+ */
+export function triggerKeywordMatchesPrompt(
+  keyword: string,
+  promptTokens: ReadonlySet<string>,
+  promptText: string,
+): boolean {
+  const terms = tokenizeIntentText(keyword);
+  return (
+    terms.length > 0 &&
+    terms.every((term) =>
+      UNSPACED_SCRIPT_TERM.test(term) ? promptText.includes(term) : promptTokens.has(term),
+    )
+  );
+}
+
 export type StandingIntentMatchInput = {
   promptTokens: string[];
+  promptText: string;
   ftsQuery: import("openclaw/plugin-sdk/database-engine-worker-runtime").TextQuery;
   channelScopes: string[];
   senderScope?: string;
@@ -223,6 +251,7 @@ export function prepareStandingIntentMatch(params: {
       : undefined;
   return {
     promptTokens,
+    promptText: params.prompt.toLowerCase(),
     ftsQuery: { kind: "any", clauses: promptTokens.map((text) => ({ kind: "phrase", text })) },
     channelScopes,
     senderScope: storedSenderScope,

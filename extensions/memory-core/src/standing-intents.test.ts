@@ -411,6 +411,20 @@ describe("standing intents", () => {
     });
   });
 
+  // Unspaced scripts match literally; a row reachable through both candidate lanes fires once.
+  it.each([
+    ["会议", "明天上午的会议改到下午三点", 1],
+    ["版本 release", "新版本 release 已发布", 1],
+    ["release", "prerelease notes", 0],
+    ["café", "caféine booster", 0],
+    ["café", "un café serré", 1],
+    ["release", "release notes 🙂", 1],
+  ] as const)("matches %j only on turns containing its terms", async (keyword, prompt, fires) => {
+    const intent = await createKeywordIntent(keyword, { nowMs: 100 });
+    expect(await matchIds({ prompt, nowMs: 1_000 })).toEqual(fires ? [intent.id] : []);
+    expect((await list(1_000)).find((row) => row.id === intent.id)?.fireCount).toBe(fires);
+  });
+
   it("does not consume fire budgets for intents that do not fit hidden context", async () => {
     const intents: Awaited<ReturnType<typeof createStandingIntent>>[] = [];
     for (let index = 0; index < 3; index += 1) {
