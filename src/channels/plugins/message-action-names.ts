@@ -111,6 +111,7 @@ const CHANNEL_MESSAGE_ACTION_DEFINITIONS = [
   { name: "category-delete", ...NO_CONVERSATION_READ },
   { name: "topic-create", ...GUARDED_ACTION },
   { name: "topic-edit", ...GUARDED_ACTION },
+  { name: "topic-delete", ...GUARDED_ACTION },
   { name: "voice-status", ...RETRIEVAL },
   { name: "event-list", ...RETRIEVAL },
   { name: "event-create", ...NO_CONVERSATION_READ },

@@ -11,5 +11,6 @@ export const TELEGRAM_MESSAGE_ACTION_MAP = {
   sticker: "sendSticker",
   "sticker-search": "searchSticker",
   "topic-create": "createForumTopic",
+  "topic-delete": "deleteForumTopic",
   "topic-edit": "editForumTopic",
 } as const satisfies Partial<Record<ChannelMessageActionName, string>>;

@@ -12,6 +12,7 @@ export {
   unpinMessageTelegram,
 } from "./send-actions.js";
 export {
+  deleteForumTopicTelegram,
   editForumTopicTelegram,
   renameForumTopicTelegram,
   createForumTopicTelegram,

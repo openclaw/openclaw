@@ -63,6 +63,28 @@ export async function editForumTopicTelegram(
   );
 }
 
+const TELEGRAM_GENERAL_FORUM_TOPIC_ID = 1;
+
+/** Requires the bot's can_delete_messages permission. Deletes the topic and all of its messages. */
+export async function deleteForumTopicTelegram(
+  chatIdInput: string | number,
+  messageThreadIdInput: string | number,
+  opts: TelegramMessageActionOpts,
+): Promise<{ ok: true; chatId: string; messageThreadId: number }> {
+  return withTelegramMessageAction(
+    chatIdInput,
+    messageThreadIdInput,
+    opts,
+    async ({ api, chatId, messageId: messageThreadId, request }) => {
+      if (messageThreadId === TELEGRAM_GENERAL_FORUM_TOPIC_ID) {
+        throw new Error("Telegram General forum topic (thread 1) cannot be deleted");
+      }
+      await request(() => api.deleteForumTopic(chatId, messageThreadId), "deleteForumTopic");
+      return { ok: true as const, chatId, messageThreadId };
+    },
+  );
+}
+
 export async function renameForumTopicTelegram(
   chatIdInput: string | number,
   messageThreadIdInput: string | number,
