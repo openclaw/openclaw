@@ -157,6 +157,7 @@ packages/normalization-core/src/utf16-slice.ts
 packages/plugin-package-contract/package.json
 packages/plugin-package-contract/src/categories.ts
 packages/plugin-package-contract/src/index.ts
+packages/plugin-package-contract/src/recommended-prompts.ts
 packages/retry/package.json
 packages/retry/src/index.ts
 packages/session-url-contract/package.json
