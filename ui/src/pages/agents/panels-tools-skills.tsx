@@ -250,7 +250,7 @@ export function AgentTools(
           title={t("agentTools.title")}
           description={
             <>
-              {t("agentTools.subtitle")}
+              {t("agentTools.subtitle")}{" "}
               <span class="mono">
                 {t("agentTools.enabledSummary", {
                   enabled: String(enabledCount()),

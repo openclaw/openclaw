@@ -689,8 +689,15 @@ describe("config form renderer", () => {
 
     if (!hasDocs) {
       expect(container.querySelector(".settings-section__help-button")).toBeNull();
+      expect(texts(".settings-section__desc")).toEqual([
+        "Gateway server settings (port, auth, binding)",
+      ]);
       return;
     }
+    expect(container.querySelector(".settings-section__desc")).toBeNull();
+    expect(query(".settings-section__help-panel p", HTMLElement).textContent?.trim()).toBe(
+      "Gateway server settings (port, auth, binding)",
+    );
     const button = query(".settings-section__help-button", HTMLButtonElement);
     expect(button.getAttribute("aria-label")).toBe("Help for Gateway");
     const tooltip = expectElement(button.closest("openclaw-tooltip"), "section help tooltip");
