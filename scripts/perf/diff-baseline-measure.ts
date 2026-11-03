@@ -17,7 +17,7 @@ import os from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
-import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
+import { startCollectedHeapSampling, sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -87,12 +87,7 @@ try {
   }
   global.gc();
   if (values.allocations) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 32768,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 32768);
   }
   const cpuBefore = process.cpuUsage();
   const samples: number[] = [];

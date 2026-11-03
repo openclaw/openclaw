@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { PluginInstanceUnavailableError } from "./plugin-instance-error.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
 import { createPluginValueInstances } from "./plugin-instance-owned-values.js";
 import type {
@@ -165,6 +166,35 @@ export function hasCurrentPluginInstanceAuthority(pluginId: string): boolean {
     !instance.owner?.revoked &&
     !instance.lifecycle.signal.aborted
   );
+}
+
+/**
+ * Captures the plugin instance carrying runtime scope for a multi-step effect: its registry
+ * record (manifest facts) and a guard that throws once that instance is replaced, revoked,
+ * or disposed, or when called from another instance's scope. Undefined outside a plugin call.
+ */
+export function captureCurrentPluginInstanceAuthority():
+  | { record: PluginRecord; assertCurrent: () => void }
+  | undefined {
+  // SAFETY: PluginInstance is the only producer of this private invocation scope.
+  const instance = pluginInstanceInvocation.getStore()?.instance as
+    | PluginInstanceHandle
+    | undefined;
+  const record = instance?.owner?.record;
+  if (!instance || !record) {
+    return undefined;
+  }
+  return {
+    record,
+    assertCurrent: () => {
+      if (
+        pluginInstanceInvocation.getStore()?.instance !== instance ||
+        !hasCurrentPluginInstanceAuthority(instance.pluginId)
+      ) {
+        throw new PluginInstanceUnavailableError(instance.pluginId);
+      }
+    },
+  };
 }
 
 /** Direct SDK registrars retain the same owner as registrations made through api. */

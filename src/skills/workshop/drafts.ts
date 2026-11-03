@@ -6,21 +6,21 @@ import { ignoreMissingPath } from "../../infra/errno.js";
 import { removePathWithinRoot } from "../../infra/fs-safe-remove.js";
 import { pathExists, root } from "../../infra/fs-safe.js";
 import {
-  assertInsideSkillsRoot,
-  MAX_WORKSPACE_SKILL_SUPPORT_FILE_BYTES,
-} from "../lifecycle/workspace-skill-write.js";
-import { parseSkillFrontmatter } from "../loading/frontmatter.js";
+  listSkillDirFiles,
+  MAX_SKILL_SUPPORT_FILE_BYTES,
+  readSkillDirFile,
+  resolveSkillDir,
+  SKILL_FILE,
+  splitSkillFrontmatter,
+} from "../lifecycle/skill-authoring.js";
 import type { WorkshopChange } from "./changes.kernel.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
 import {
   EXISTING_SKILL_NAME_PATTERN,
-  listSkillFiles,
   mutateSkill,
   NEW_SKILL_NAME_PATTERN,
-  normalizeSkillFilePath,
-  readSkillFile,
-  SKILL_FILE,
-  validateSkillFile,
+  normalizeWorkshopFilePath,
+  validateWorkshopSkillFile,
   WorkshopWriteError,
   publishSkillOverlay,
   type WorkshopMutationContext,
@@ -55,20 +55,16 @@ function resolveDraftDir(config: OpenClawConfig, agentId: string, id: string): s
 
 async function readDraft(draftsDir: string, id: string): Promise<WorkshopDraft | undefined> {
   const draftDir = path.join(draftsDir, id);
-  const content = await readSkillFile(draftDir, SKILL_FILE).catch(() => null);
+  const content = await readSkillDirFile(draftDir, SKILL_FILE).catch(() => null);
   if (content === null) {
     return undefined;
   }
-  let frontmatter: Record<string, string> = {};
-  try {
-    frontmatter = parseSkillFrontmatter(content);
-  } catch {
-    // A draft with broken frontmatter still lists; view shows the file.
-  }
+  // A draft with broken frontmatter still lists; view shows the file.
+  const { frontmatter } = splitSkillFrontmatter(content);
   const reason = (
     await fs.readFile(path.join(draftDir, REASON_FILE), "utf8").catch(() => "")
   ).trim();
-  const { files, updatedAtMs } = await listSkillFiles(draftDir);
+  const { files, updatedAtMs } = await listSkillDirFiles(draftDir);
   return {
     id,
     skillName: frontmatter.name?.trim() || id,
@@ -111,7 +107,7 @@ export async function saveWorkshopDraft(
       `Invalid skill name "${params.name}": use lowercase letters, digits, or hyphens (e.g. "deploy-staging").`,
     );
   }
-  validateSkillFile(config, params.name, SKILL_FILE, params.content);
+  validateWorkshopSkillFile(config, params.name, SKILL_FILE, params.content);
   if ((await listWorkshopDrafts(config, agentId)).length >= MAX_DRAFTS) {
     throw new WorkshopWriteError(
       `${MAX_DRAFTS} drafts are already waiting for review. Save nothing; the user reviews drafts with /learn drafts.`,
@@ -121,7 +117,7 @@ export async function saveWorkshopDraft(
   const id = `${params.name.slice(0, 60).replace(/-+$/u, "")}-${randomUUID().slice(0, 8)}`;
   await fs.mkdir(draftsDir, { recursive: true });
   // A symlinked .drafts must not carry writes outside the Workshop directory.
-  assertInsideSkillsRoot(resolveWorkshopSkillsDir(config, agentId), draftsDir, "drafts directory");
+  resolveSkillDir(resolveWorkshopSkillsDir(config, agentId), path.basename(draftsDir));
   const drafts = await root(draftsDir);
   const write = async (filePath: string, content: string) =>
     await drafts.write(`${id}/${filePath}`, content, {
@@ -150,8 +146,8 @@ export async function viewWorkshopDraft(
   if (!draft) {
     throw new WorkshopWriteError(`No draft "${id}". Call action=list to see drafts.`);
   }
-  const file = normalizeSkillFilePath(filePath);
-  const content = await readSkillFile(draftDir, file);
+  const file = normalizeWorkshopFilePath(filePath);
+  const content = await readSkillDirFile(draftDir, file);
   if (content === null) {
     throw new WorkshopWriteError(
       `${file} does not exist in draft "${id}". Files: ${draft.files.join(", ")}.`,
@@ -220,10 +216,10 @@ export async function applyWorkshopDraft(
         maxBytes:
           file === SKILL_FILE
             ? resolveSkillWorkshopConfig(ctx.config).maxSkillBytes
-            : MAX_WORKSPACE_SKILL_SUPPORT_FILE_BYTES,
+            : MAX_SKILL_SUPPORT_FILE_BYTES,
       })
     ).buffer;
-    validateSkillFile(ctx.config, name, file, content.toString("utf8"));
+    validateWorkshopSkillFile(ctx.config, name, file, content.toString("utf8"));
     const liveContent = await fs.readFile(path.join(skillDir, file)).catch(() => null);
     if (!liveContent?.equals(content)) {
       files.push([file, content]);

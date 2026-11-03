@@ -387,12 +387,12 @@ function enqueueSessionEventAttempt(
         ownership.cancel();
       }
       releaseOperatorAuthority?.();
-      releaseOperatorAuthority = undefined;
       if (!accepted) {
         acceptance.resolve(
           readmittedReceipt?.accepted ?? {
             ok: false,
             error: failure ? String(failure) : "Session event was cancelled before acceptance",
+            cause: failure instanceof Error ? failure : undefined,
           },
         );
       }

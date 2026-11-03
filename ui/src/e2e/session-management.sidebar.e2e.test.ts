@@ -322,7 +322,7 @@ suite.define(() => {
           .toBeLessThanOrEqual(0);
       };
       const hiddenActionCounts = async () => ({
-        confirms: await page.locator("openclaw-modal-dialog .exec-approval-actions").count(),
+        confirms: await page.locator("openclaw-modal-actions").count(),
         nativeDialogs: nativeDialogs.length,
         patches: (await gateway.getRequests("sessions.patch")).length,
         personalPins: await sidebar
@@ -464,6 +464,8 @@ suite.define(() => {
       await page.keyboard.press("ContextMenu");
       const menu = page.getByRole("menu", { name: "Actions for Research notes" });
       await menu.waitFor({ state: "visible" });
+      await captureUiProof(suite, page, "session-context-menu.png", menu);
+      expect(await menu.getByText(/^Last active /).count()).toBe(0);
 
       await expect
         .poll(() =>

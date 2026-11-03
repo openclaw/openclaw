@@ -56,6 +56,39 @@ describe("cron view list pane", () => {
     expect(onJobsFiltersChange).toHaveBeenCalledWith({ cronJobsEnabledFilter: "disabled" });
   });
 
+  it("keeps the phone scope and create action available", async () => {
+    const scope = document.createElement("span");
+    scope.dataset.testId = "phone-scope";
+    const onOpenCreate = vi.fn();
+    const phone = await renderView({
+      phoneLayout: true,
+      toolbarScope: scope,
+      canCreate: true,
+      onOpenCreate,
+    });
+    expect(phone.querySelector(testId("phone-scope"))).not.toBeNull();
+    expect(phone.querySelectorAll(testId("cron-new-task"))).toHaveLength(1);
+    getElement(phone, testId("cron-new-task"), HTMLElement).click();
+    expect(onOpenCreate).toHaveBeenCalledOnce();
+  });
+
+  it("preserves the complete schedule text with and without a time zone", async () => {
+    const container = await renderView({
+      jobs: [
+        createJob("zoned", {
+          schedule: { kind: "cron", expr: "0 9 * * *", tz: "America/Sao_Paulo" },
+        }),
+        createJob("unzoned", { schedule: { kind: "cron", expr: "0 18 * * *" } }),
+      ],
+    });
+    const zoned = getElement(container, testId("cron-row-zoned"), HTMLElement);
+    expect(text(zoned, ".cron-table__schedule .cron-table__cell-value")).toBe(
+      "Cron 0 9 * * * (America/Sao_Paulo)",
+    );
+    const unzoned = getElement(container, testId("cron-row-unzoned"), HTMLElement);
+    expect(text(unzoned, ".cron-table__schedule .cron-table__cell-value")).toBe("Cron 0 18 * * *");
+  });
+
   it("renders table rows with independent native buttons for opening tasks", async () => {
     const onSelectJob = vi.fn();
     const job = createJob("job-1", {
@@ -120,6 +153,34 @@ describe("cron view list pane", () => {
 });
 
 describe("cron view editor", () => {
+  it("previews agent-turn Markdown safely while preserving the editable prompt", async () => {
+    const payloadText =
+      '# Weekly digest\n\n- **Garden**\n\n<script>alert(1)</script>\n<img src=x onerror="alert(1)">\n[unsafe](javascript:alert(1))';
+    const job = createJob("markdown-prompt", {
+      sessionTarget: "isolated",
+      payload: { kind: "agentTurn", message: payloadText },
+    });
+    const container = await renderView({
+      editingJob: job,
+      form: { ...DEFAULT_CRON_FORM, payloadKind: "agentTurn", payloadText },
+    });
+    const preview = getElement(container, ".cron-editor .chat-text", HTMLDivElement);
+    expect(preview.querySelector("h1")?.textContent).toBe("Weekly digest");
+    expect(preview.querySelector("li strong")?.textContent).toBe("Garden");
+    expect(preview.querySelector('script, [onerror], a[href^="javascript:"]')).toBeNull();
+    expect(getElement(container, "#cron-payload-text", HTMLTextAreaElement).value).toBe(
+      payloadText,
+    );
+    for (const form of [
+      { payloadKind: "agentTurn" as const, payloadText: "  " },
+      { payloadKind: "systemEvent" as const, payloadText: "# Event" },
+      { payloadKind: "script" as const, payloadLocked: true, payloadText: "# Source" },
+      { payloadKind: "command" as const, payloadLocked: true, payloadText: "# Source" },
+    ]) {
+      expect((await renderEditor(form)).querySelector(".cron-editor .chat-text")).toBeNull();
+    }
+  });
+
   it("falls back to configured channel labels when metadata has no label", async () => {
     const container = await renderEditor(
       {

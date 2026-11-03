@@ -48,7 +48,7 @@ function mountLibrary(library: SkillLibraryModel, dialogsOnly = false) {
 }
 function buttonIn(container: Element, label: string) {
   return [...container.querySelectorAll<HTMLButtonElement>("button")].find(
-    (button) => button.textContent?.trim() === label,
+    (button) => button.textContent?.trim() === label || button.getAttribute("aria-label") === label,
   )!;
 }
 function reconnect(context: Pick<ReturnType<typeof harness>, "library" | "connection">) {
@@ -114,7 +114,7 @@ it.each([
     await waitForFast(() =>
       expect(mounted.container.querySelector(".settings-row")).not.toBeNull(),
     );
-    const dialog = mounted.container.querySelector(".skill-reader-dialog")!;
+    const dialog = mounted.container.querySelector(".skill-library-dialog")!;
     const { dialog: nativeDialog } = await getRenderedModalDialog(mounted.container);
     const row = mounted.container.querySelector(".settings-row")!;
     const button = (label: string) => buttonIn(dialog, label);
@@ -150,7 +150,7 @@ it.each([
         expect(draft.entry!.revision).toBe(receipt.entry.revision);
       });
     }
-    expect(mounted.container.querySelector(".skill-reader-dialog")).toBe(dialog);
+    expect(mounted.container.querySelector(".skill-library-dialog")).toBe(dialog);
     expect(mounted.container.querySelector(".settings-row")).toBe(row);
   },
 );
@@ -180,7 +180,7 @@ it.each(["files", "clawhub"])(
     }
     const mounted = mountLibrary(library);
     flush();
-    const dialog = mounted.container.querySelector(".skill-reader-dialog")!;
+    const dialog = mounted.container.querySelector(".skill-library-dialog")!;
     const submit = dialog.querySelector<HTMLButtonElement>('button[type="submit"]')!;
     const reading = createDeferred<ArrayBuffer>();
     const imported = createDeferred<SkillsLibraryReceipt>();
@@ -194,7 +194,7 @@ it.each(["files", "clawhub"])(
         : library.importClawHub("imported-skill", "@fixture/calendar");
     await waitForFast(() => {
       expect(submit.disabled).toBe(true);
-      expect(submit.textContent).toContain("Loading");
+      expect(submit.textContent).toContain("Importing");
     });
     if (kind === "files") {
       reading.resolve(new TextEncoder().encode("# Imported skill").buffer);
@@ -249,7 +249,10 @@ it.each(["detail", "list"] as const)(
       detail
         ? { ...existingSkill(), content: text }
         : { ...libraryList(false), entries: [libraryEntry({ description: text })] };
-    const item = () => view.container.querySelector(detail ? "textarea" : ".settings-row");
+    const item = () =>
+      view.container.querySelector(
+        detail ? "textarea" : ".settings-row:not(.settings-loading-skeleton__row)",
+      );
     const locked = () =>
       detail
         ? view.container.querySelector<HTMLTextAreaElement>("textarea")?.readOnly
@@ -265,11 +268,13 @@ it.each(["detail", "list"] as const)(
     flush();
     expect(item()).toBeNull();
     if (detail) {
-      expect(view.container.querySelector(".skill-reader-dialog")).toBeNull();
+      expect(view.container.querySelector(".skill-library-dialog")).toBeNull();
       await run();
       expect(request).toHaveBeenCalledTimes(1);
     } else {
-      expect(view.container.querySelector('[role="status"]')?.textContent).toContain("Loading");
+      expect(view.container.querySelector('[role="status"]')?.getAttribute("aria-label")).toContain(
+        "Loading",
+      );
       library.create();
       expect(library.state.draft).toBeNull();
       view.container.querySelector<HTMLInputElement>('input[name="library-search"]')!.focus();
