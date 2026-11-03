@@ -37,6 +37,8 @@ Rich Telegram surfaces: formatted messages, inline keyboards, agent message acti
 
     A table followed by a quote, list, heading, code block, or paragraph stays a separate block. Tables authored inside a quote or list stay inside that container, including when they are its final content.
 
+    For collapsible content, use `<details><summary>` for a titled section, or `<blockquote expandable>` for a quote Telegram shows collapsed to its first lines. An expandable quote holds one text: lines, paragraphs, inline formatting, Markdown list items (as bullet lines), and a `<cite>` credit. A quote that also contains HTML lists, tables, headings, code blocks, media, or nested quotes is sent as an ordinary quote with that structure. Markdown `>` quotes and `<blockquote>` without the attribute stay ordinary quotes.
+
     Default: off, for client compatibility — some current Desktop, Web, Android, and third-party clients render accepted rich messages as unsupported. Keep this off unless every client used with the bot can render them. `/status` shows whether the current session has rich messages on or off.
 
     Link previews are on by default. `channels.telegram.linkPreview: false` disables automatic entity detection for rich text. OpenClaw explicitly marks bare URLs so they remain tappable, except URLs containing `&`, which stay plain to avoid Telegram's query-separator encoding issue. Use a labeled Markdown link for those URLs.

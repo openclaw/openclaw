@@ -20,7 +20,7 @@ export const telegramAgentPrompt: NonNullable<ChannelPlugin["agentPrompt"]> = {
           'Supported: headings, tables (markdown, or `<table>` HTML for caption/colspan/rowspan/align), block/pull quotes (`<aside>` + `<cite>`), `<details><summary>` (+`open`), dividers `<hr/>`, sup/sub/mark/spoilers, code, anchors `<a name="x"></a>` + `<a href="#x">label</a>`, custom emoji `<tg-emoji emoji-id="...">`, maps `<tg-map lat="" long="" zoom=""/>`, collages/slideshows `<tg-collage>`/`<tg-slideshow>`, block media e.g. `<img src="https://..."/>` (+`<figure>`/`<figcaption>`).',
           "Math: `<tg-math>` inline, `<tg-math-block>` block; never `$...$`/`\\(...\\)`.",
           "Not MarkdownV2/parse_mode.",
-          "Lists, checklists, and inline formatting: Markdown (`- item`, `1. item`, `- [ ]`, `- [x]`, `**bold**`, `*italic*`, inline code, `[label](url)`) so Control UI also renders them; HTML only for supported rich features without Markdown equivalents. Collapse=`<details>` (not expandable blockquote).",
+          "Lists, checklists, and inline formatting: Markdown (`- item`, `1. item`, `- [ ]`, `- [x]`, `**bold**`, `*italic*`, inline code, `[label](url)`) so Control UI also renders them; HTML only for supported rich features without Markdown equivalents. Collapse: `<details>` for titled sections; `<blockquote expandable>` for a long text-only quote.",
           "Media https URLs only, block-level only, captions/credits when useful; buttons plain text; normal files via attachments.",
         ],
       };
