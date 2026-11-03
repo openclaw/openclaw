@@ -1,8 +1,10 @@
 // Covers core message-action send fallback, TTS application, and durable send
 // policy after plugin preparation is absent.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { mockFirstRecordArg } from "../../test-utils/mock-call-assertions.js";
 import { runMessageAction } from "./message-action-runner.js";
@@ -100,79 +102,87 @@ describe("runMessageAction core send routing", () => {
     });
   });
 
-  it("denies a same-provider cross-conversation send by default", async () => {
+  it.each([
+    { name: "delivers another conversation by default", target: "channel:C999" },
+    { name: "refuses another conversation when confined", target: "channel:C999", confine: true },
+    { name: "delivers its own conversation when confined", target: "channel:C123", confine: true },
+  ])("group turn send $name", async ({ target, confine }) => {
     const sendText = registerSlackTextPlugin();
-    await expect(
-      runMessageAction({
-        cfg: slackConfig,
-        action: "send",
-        params: {
-          channel: "slack",
-          target: "channel:C999",
-          message: "unsolicited cross-chat probe",
-        },
-        toolContext: {
-          currentChannelProvider: "slack",
-          currentChannelId: "channel:C123",
-        },
-        dryRun: false,
-      }),
-    ).rejects.toMatchObject({
-      reasonCode: "message_cross_context_denied",
-      policyRef: "message-cross-context:target",
-    });
-    expect(sendText).not.toHaveBeenCalled();
-  });
-
-  it("allows a same-provider cross-conversation send when explicitly opted in", async () => {
-    const sendText = registerSlackTextPlugin();
-    const result = await runMessageAction({
+    const send = runMessageAction({
       cfg: {
         ...slackConfig,
-        tools: { message: { crossContext: { allowWithinProvider: true } } },
-      } as OpenClawConfig,
-      action: "send",
-      params: {
-        channel: "slack",
-        target: "channel:C999",
-        message: "opted-in cross-chat probe",
+        tools: { message: { crossContext: confine ? { confineChatTypes: ["group"] } : {} } },
       },
+      action: "send",
+      params: { channel: "slack", target, message: "group turn probe" },
       toolContext: {
         currentChannelProvider: "slack",
         currentChannelId: "channel:C123",
+        currentChatType: "group",
+        skipCrossContextDecoration: true,
       },
       dryRun: false,
     });
-    expect(result.kind).toBe("send");
-    expect(sendText).toHaveBeenCalledOnce();
+    if (confine && target === "channel:C999") {
+      await expect(send).rejects.toMatchObject({
+        message: expect.stringContaining("confineChatTypes keeps group turns"),
+        reasonCode: "message_cross_context_denied",
+        policyRef: "message-cross-context:target",
+      });
+      expect(sendText).not.toHaveBeenCalled();
+      return;
+    }
+    await expect(send).resolves.toMatchObject({ kind: "send", channel: "slack", to: target });
     expect(mockFirstRecordArg(sendText, "send text")).toMatchObject({
-      to: "channel:C999",
-      text: "opted-in cross-chat probe",
+      to: target,
+      text: "group turn probe",
     });
   });
 
-  it("keeps allowing same-conversation sends by default", async () => {
-    const sendText = registerSlackTextPlugin();
-    const result = await runMessageAction({
-      cfg: slackConfig,
-      action: "send",
-      params: {
-        channel: "slack",
-        target: "channel:C123",
-        message: "same-chat probe",
-      },
-      toolContext: {
-        currentChannelProvider: "slack",
-        currentChannelId: "channel:C123",
-      },
-      dryRun: false,
+  it.each([
+    { name: "the chat id with the current topic id", params: { threadId: "42" } },
+    { name: "the chat id inheriting the current topic", params: {} },
+    { name: "the current topic target", params: { target: "-1001234567890:topic:42" } },
+    { name: "the chat id with another topic id", params: { threadId: "99" }, denied: true },
+    { name: "another topic target", params: { target: "-1001234567890:topic:99" }, denied: true },
+    { name: "the top-level chat", params: { topLevel: true }, denied: true },
+  ])("judges a restricted Telegram topic turn sending to $name by its topic", async (scenario) => {
+    const { telegramPlugin } = await loadBundledPluginFacade<{ telegramPlugin: ChannelPlugin }>({
+      pluginId: "telegram",
+      artifactBasename: "api.ts",
     });
-    expect(result.kind).toBe("send");
-    expect(sendText).toHaveBeenCalledOnce();
-    expect(mockFirstRecordArg(sendText, "send text")).toMatchObject({
-      to: "channel:C123",
-      text: "same-chat probe",
-    });
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "telegram", plugin: telegramPlugin, source: "test" }]),
+    );
+    // Both the chat-type confinement and the existing same-provider switch share this check.
+    for (const crossContext of [
+      { confineChatTypes: ["group" as const] },
+      { allowWithinProvider: false },
+    ]) {
+      const send = runMessageAction({
+        cfg: {
+          channels: { telegram: { botToken: "123:test" } },
+          tools: { message: { crossContext } },
+        },
+        action: "send",
+        params: {
+          channel: "telegram",
+          target: "-1001234567890",
+          message: "topic probe",
+          ...scenario.params,
+        },
+        toolContext: {
+          currentChannelProvider: "telegram",
+          currentChannelId: "telegram:-1001234567890:topic:42",
+          currentThreadTs: "42",
+          currentChatType: "group",
+        },
+        dryRun: true,
+      });
+      await (scenario.denied
+        ? expect(send).rejects.toMatchObject({ reasonCode: "message_cross_context_denied" })
+        : expect(send).resolves.toMatchObject({ kind: "send", dryRun: true }));
+    }
   });
 
   it("accepts Telegram numeric forum topic targets through plugin-owned grammar", async () => {

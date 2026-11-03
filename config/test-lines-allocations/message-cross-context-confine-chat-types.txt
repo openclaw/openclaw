@@ -1,0 +1,2 @@
+# Opt-in message cross-context confinement by chat type and thread-aware same-conversation checks.
+177

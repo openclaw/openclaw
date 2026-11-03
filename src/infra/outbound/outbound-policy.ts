@@ -1,5 +1,6 @@
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveAgentConfig } from "../../agents/agent-scope-config.js";
+import { readToolStringParam } from "../../agents/tools/common.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { resolveChannelMessageActionFacts } from "../../channels/plugins/message-action-names.js";
 import type {
@@ -11,6 +12,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MessageToolsConfig } from "../../config/types.tools.js";
 import type { MessagePresentation } from "../../interactive/payload.js";
 import { MessageActionDeniedError } from "./message-action-denial.js";
+import { resolveAndApplyOutboundThreadId } from "./message-action-threading.js";
 import { normalizeTargetForProvider } from "./target-normalization.js";
 import { formatTargetDisplay, lookupDirectoryDisplay } from "./target-resolver.js";
 
@@ -52,6 +54,35 @@ function isCrossContextTarget(params: {
   return !currentTargets.some(
     (currentTarget) => normalizeTarget(params.channel, currentTarget) === normalizedTarget,
   );
+}
+
+/** Names the conversation a guarded action reaches when its channel keeps threads in that identity. */
+function resolveThreadedTarget(params: {
+  channel: ChannelId;
+  target: string;
+  args: Record<string, unknown>;
+  toolContext?: ChannelThreadingToolContext;
+  cfg: OpenClawConfig;
+}): string {
+  const threading = getChannelPlugin(params.channel)?.threading;
+  if (!threading?.resolveCurrentChannelId) {
+    return params.target;
+  }
+  // Delivery applies explicit and inherited thread ids after this check; judge the same
+  // destination on a copy so policy never writes action params.
+  const threadId = resolveAndApplyOutboundThreadId(
+    { ...params.args },
+    {
+      cfg: params.cfg,
+      to: params.target,
+      accountId: readToolStringParam(params.args, "accountId"),
+      toolContext: params.toolContext,
+      resolveAutoThreadId: threading.resolveAutoThreadId,
+    },
+  );
+  return threadId
+    ? (threading.resolveCurrentChannelId({ to: params.target, threadId }) ?? params.target)
+    : params.target;
 }
 
 function mergeMessagePolicy<T extends object>(global: T | undefined, agent: T | undefined) {
@@ -137,20 +168,25 @@ export function enforceCrossContextPolicy(params: {
     return;
   }
 
-  const messageConfig = resolveEffectiveMessageToolsConfig(params);
+  const crossContext = resolveEffectiveMessageToolsConfig(params)?.crossContext;
   // Doctor moves the shipped allowCrossContextSend flag into this canonical policy.
   // Runtime must not keep a second legacy interpretation path here.
   const currentProvider = params.toolContext?.currentChannelProvider;
-  // Fail closed: an omitted allowWithinProvider denies same-provider cross-chat sends
-  // until the operator explicitly opts in (see #190557).
-  const allowWithinProvider = messageConfig?.crossContext?.allowWithinProvider === true;
-  const allowAcrossProviders = messageConfig?.crossContext?.allowAcrossProviders !== false;
+  // Confinement keys on the host-reported conversation kind; turns without one are not confined.
+  const chatType = params.toolContext?.currentChatType;
+  const confined =
+    chatType !== undefined && crossContext?.confineChatTypes?.includes(chatType) === true;
+  const confinedReason = confined
+    ? ` tools.message.crossContext.confineChatTypes keeps ${chatType} turns in their current conversation.`
+    : "";
+  const allowWithinProvider = !confined && crossContext?.allowWithinProvider !== false;
+  const allowAcrossProviders = !confined && crossContext?.allowAcrossProviders !== false;
 
   // Provider mismatch is stronger than target mismatch; normalize targets only within one provider.
   if (currentProvider && currentProvider !== params.channel) {
     if (!allowAcrossProviders) {
       throw new MessageActionDeniedError(
-        `Cross-context messaging denied: action=${params.action} target provider "${params.channel}" while bound to "${currentProvider}".`,
+        `Cross-context messaging denied: action=${params.action} target provider "${params.channel}" while bound to "${currentProvider}".${confinedReason}`,
         "message_cross_context_denied",
         "message-cross-context:provider",
       );
@@ -173,22 +209,29 @@ export function enforceCrossContextPolicy(params: {
     params.action === "thread-reply" || params.action === "thread-create"
       ? ["channelId", "to"]
       : ["to", "channelId"];
-  let target: string | undefined;
+  let requestedTarget: string | undefined;
   for (const key of targetKeys) {
     if (typeof params.args[key] === "string") {
-      target = params.args[key];
+      requestedTarget = params.args[key];
       break;
     }
   }
-  if (
-    !target ||
-    !isCrossContextTarget({ channel: params.channel, target, toolContext: params.toolContext })
-  ) {
+  if (!requestedTarget) {
+    return;
+  }
+  const target = resolveThreadedTarget({
+    channel: params.channel,
+    target: requestedTarget,
+    args: params.args,
+    toolContext: params.toolContext,
+    cfg: params.cfg,
+  });
+  if (!isCrossContextTarget({ channel: params.channel, target, toolContext: params.toolContext })) {
     return;
   }
 
   throw new MessageActionDeniedError(
-    `Cross-context messaging denied: action=${params.action} target="${target}" while bound to "${currentTarget}" (channel=${params.channel}).`,
+    `Cross-context messaging denied: action=${params.action} target="${target}" while bound to "${currentTarget}" (channel=${params.channel}).${confinedReason}`,
     "message_cross_context_denied",
     "message-cross-context:target",
   );
