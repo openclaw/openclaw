@@ -12,6 +12,19 @@ async function applyAcrossProcess(request: AgentDatabaseReaderRequest): Promise<
   await closeWorkerTaskPoolResources(encodeAgentDatabaseReaderRequest(request));
 }
 
+/** Offline file repair must also join readers retained in other worker isolates. */
+export async function closeOpenClawAgentDatabaseReaders(
+  databasePaths: readonly string[],
+): Promise<void> {
+  await applyAcrossProcess({
+    kind: "close",
+    candidates: [...new Set(databasePaths.map((pathname) => path.resolve(pathname)))].map(
+      (pathname) => ({ path: pathname }),
+    ),
+    deleted: false,
+  });
+}
+
 /** Deletion closes the databases everywhere and refuses reopening them until the agent returns. */
 export async function closeDeletedAgentDatabases(
   agentId: string,

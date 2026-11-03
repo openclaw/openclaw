@@ -4,6 +4,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getMemorySearchManager } from "../../extensions/memory-core/runtime-api.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { createClientCredentialMigrationFixture } from "../infra/client-credential-migration.test-support.js";
@@ -16,6 +17,7 @@ import {
 import { readSqliteReaderDiagnosticsForPath } from "../infra/sqlite-reader-lifecycle.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import { isSqlitePathOnBtrfs } from "../infra/sqlite-wal-filesystem.js";
+import { readMemorySearchManagerStatus } from "../memory-host-sdk/host/types.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -178,6 +180,24 @@ it.skipIf(process.platform !== "linux")(
             );
             for (const agent of agents) {
               loadPersistedAuthProfileStore(path.dirname(agent.path));
+            }
+            // Doctor's recall probe closes its manager, but the shared retrieval
+            // worker can still retain readers for several memory-enabled agents.
+            for (const agentId of ["main", "secondary"]) {
+              const result = await getMemorySearchManager({
+                cfg: { memory: { search: { provider: "none" } } },
+                agentId,
+                purpose: "status",
+              });
+              expect(result.error).toBeUndefined();
+              expect(result.manager).not.toBeNull();
+              try {
+                expect(await readMemorySearchManagerStatus(result.manager!)).toMatchObject({
+                  backend: "builtin",
+                });
+              } finally {
+                await result.manager?.close?.();
+              }
             }
             const preflight = await prepareDoctorDatabasePreflight({
               cfg: { agents: { entries: { main: {}, secondary: {} } } },

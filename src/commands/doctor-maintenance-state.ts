@@ -11,6 +11,7 @@ import {
   DoctorMaintenanceRefusalError,
 } from "../infra/update-doctor-result.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
+import { closeOpenClawAgentDatabaseReaders } from "../state/openclaw-agent-db-readers.js";
 import {
   createOpenClawDatabaseMaintenanceScope,
   getOpenClawDatabaseMaintenanceScope,
@@ -326,6 +327,7 @@ export async function createDoctorMaintenanceState(options: {
         return await owner!.run(async () => {
           // Agent admission writes through shared state; retain that owner after drainage.
           await closeOpenClawStateDatabaseByPathAsync(databasePath);
+          await closeOpenClawAgentDatabaseReaders(paths);
           await assertDoctorAgentLeaseAdmission(selectedEnv, options.signal);
           return repairDoctorSqliteNoCow({
             paths,
