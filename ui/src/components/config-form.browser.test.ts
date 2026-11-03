@@ -286,7 +286,9 @@ describe("config form renderer", () => {
       ).toEqual([subsection ? "Auth" : "Gateway"]);
       if (subsection) {
         expect(container.querySelector(".cfg-object")).toBeNull();
-        expect(texts(".settings-row__title")).toEqual(["Token"]);
+        expect(
+          texts(".settings-row:not(.settings-disclosure__summary) .settings-row__title"),
+        ).toEqual(["Token"]);
       } else {
         expect(container.querySelector(".settings-section__desc")?.textContent?.trim()).toBe(
           "Gateway server settings (port, auth, binding)",
@@ -519,7 +521,10 @@ describe("config form renderer", () => {
       searchQuery: "tag:advanced",
     });
     expect(texts(".settings-section__heading")[0]).toBe("Gateway");
-    expect(texts(".settings-row__title")).toEqual(["Auth", "Token"]);
+    expect(texts(".settings-row:not(.settings-disclosure__summary) .settings-row__title")).toEqual([
+      "Auth",
+      "Token",
+    ]);
   });
 
   it("supports SecretInput unions in additionalProperties maps", () => {

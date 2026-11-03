@@ -501,23 +501,16 @@ openclaw-appearance-background .settings-background-preview .session-background_
   border-color: color-mix(in srgb, var(--danger) 35%, var(--border) 65%);
 }
 
-/* Lives here rather than config.css because every schema-driven surface
- * (config pages and the channel detail forms) renders the same split. */
-
-.config-advanced-disclosure {
-  margin-top: var(--space-5);
+.settings-disclosure__summary {
+  list-style: none;
 }
 
-.config-tier-groups > .config-advanced-disclosure:first-child {
-  margin-top: 0;
+.settings-disclosure__summary::-webkit-details-marker {
+  display: none;
 }
 
-.config-advanced-disclosure__summary {
-  cursor: var(--cursor-action);
-}
-
-.config-advanced-disclosure > .settings-group {
-  margin-top: var(--space-3);
+.settings-disclosure[open] > .settings-disclosure__summary .settings-disclosure__chevron {
+  transform: rotate(90deg);
 }
 
 .settings-row {
