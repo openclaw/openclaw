@@ -187,7 +187,7 @@ export function mergeProviderModels(
     const family = explicitModel.family ?? (catalogRouteMatches ? implicitModel.family : undefined);
     const contextSelection = explicitModel.contextWindows
       ? explicitModel
-      : modelTransportRoutesMatch(catalogRoute, configuredRoute)
+      : catalogRouteMatches
         ? implicitModel
         : undefined;
 

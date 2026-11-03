@@ -33,10 +33,8 @@ export function normalizeCatalogRouteBaseUrl(value: string | undefined): string 
   return url.toString();
 }
 
-function normalizeBaseUrl(value: unknown, api: string): string {
-  return typeof value === "string"
-    ? (normalizeCatalogRouteBaseUrl(normalizeModelTransportBaseUrl(api, value.trim())) ?? "")
-    : "";
+function normalizeBaseUrl(value: string, api: string): string {
+  return normalizeCatalogRouteBaseUrl(normalizeModelTransportBaseUrl(api, value)) ?? "";
 }
 
 export function modelTransportRoutesMatch(
@@ -45,11 +43,19 @@ export function modelTransportRoutesMatch(
 ): boolean {
   const catalogApi = normalizeApi(catalogRoute.api);
   const configuredApi = normalizeApi(configuredRoute.api) || catalogApi;
-  const catalogBaseUrl = normalizeBaseUrl(catalogRoute.baseUrl, catalogApi);
-  return (
-    configuredApi === catalogApi &&
-    (normalizeBaseUrl(configuredRoute.baseUrl, configuredApi) || catalogBaseUrl) === catalogBaseUrl
-  );
+  if (configuredApi !== catalogApi) {
+    return false;
+  }
+  const catalogUrl = typeof catalogRoute.baseUrl === "string" ? catalogRoute.baseUrl.trim() : "";
+  const configuredUrl =
+    typeof configuredRoute.baseUrl === "string" ? configuredRoute.baseUrl.trim() : "";
+  // Catalog rows commonly inherit the same endpoint. Equality needs no URL objects;
+  // distinct spellings still use canonical transport normalization below.
+  if (!configuredUrl || configuredUrl === catalogUrl) {
+    return true;
+  }
+  const catalogBaseUrl = normalizeBaseUrl(catalogUrl, catalogApi);
+  return (normalizeBaseUrl(configuredUrl, configuredApi) || catalogBaseUrl) === catalogBaseUrl;
 }
 
 /** Returns one unambiguous physical catalog route for destructive config cleanup. */
