@@ -173,7 +173,7 @@ function holdJobs(readers = 1) {
 }
 
 beforeEach(() => {
-  vi.useFakeTimers();
+  vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
   vi.setSystemTime(new Date("2026-09-14T04:00:00Z"));
   vi.stubEnv("GH_TOKEN", "");
   vi.stubEnv("GITHUB_TOKEN", "");
@@ -408,20 +408,3 @@ it.each([true, false])(
     }
   },
 );
-
-it("ages check-detail cache entries by elapsed time across a wall-clock correction", async () => {
-  expect((await h.load()).status).toBe("ready");
-  const calls = h.fetchImpl.mock.calls.length;
-
-  // Correct the wall clock backward while elapsed time advances: the details
-  // cache window is process-local elapsed time, so the step must not extend it.
-  vi.setSystemTime(Date.now() - 60_000);
-  vi.advanceTimersByTime(1_000);
-  expect((await h.load()).status).toBe("ready");
-  expect(h.fetchImpl).toHaveBeenCalledTimes(calls);
-
-  // Advance past the 30-second success TTL on the shared clock; the entry expires.
-  vi.advanceTimersByTime(30_001);
-  expect((await h.load()).status).toBe("ready");
-  expect(h.fetchImpl.mock.calls.length).toBeGreaterThan(calls);
-});

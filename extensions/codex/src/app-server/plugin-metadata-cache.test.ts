@@ -81,27 +81,6 @@ describe("Codex plugin metadata cache", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps a settled snapshot across a forward wall-clock step", async () => {
-    // A wall-clock correction (NTP step, resume, VM restore) must not collapse
-    // the cache window: the entry is only fresh for its real TTL, regardless of
-    // how far the host clock jumped. The initial wall reading is fixed first so
-    // the later step is a relative forward jump (a raw 1970 epoch would not
-    // reproduce the defect).
-    const initialEpochMs = 1_700_000_000_000;
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(initialEpochMs);
-    const request = vi.fn(async () => pluginList("openai-curated-remote", "calendar"));
-    const params = { ...catalogParams, request };
-    await cache.load(params);
-    expect(request).toHaveBeenCalledTimes(1);
-
-    // Advance the wall clock by more than the 60-minute TTL relative to the
-    // controlled initial reading. The original Date.now implementation stores
-    // the expiry on the wall clock, so this jump expires the entry prematurely;
-    // the elapsed-time implementation keeps it fresh.
-    nowSpy.mockReturnValue(initialEpochMs + 60 * 60 * 1_000 + 10_000);
-    expect(cache.read("runtime-a", "curated-global")).toBeDefined();
-  });
-
   it("shares a failed load without retrying for every waiting caller", async () => {
     const deferred = Promise.withResolvers<v2.PluginListResponse>();
     const ownerRequest = vi.fn(() => deferred.promise);

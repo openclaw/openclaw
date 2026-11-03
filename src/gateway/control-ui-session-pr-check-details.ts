@@ -182,7 +182,8 @@ export async function loadControlUiSessionPullRequestChecks(
     };
     pending.promise = load()
       .then((result) => {
-        pending.expiresAt = monotonicNow() + Math.max(CHECK_DETAILS_CACHE_MS, result.retryAfterMs ?? 0);
+        pending.expiresAt =
+          monotonicNow() + Math.max(CHECK_DETAILS_CACHE_MS, result.retryAfterMs ?? 0);
         return result;
       })
       .finally(() => {
