@@ -187,7 +187,7 @@ it.each([
       idleHangupMs,
       bridge: { close },
     });
-    request.onTranscript("assistant", "Hello, is anyone there?", true);
+    request.onTranscript?.("assistant", "Hello, is anyone there?", true);
     request.onAudio(Buffer.alloc(160, 0x00));
     await vi.advanceTimersByTimeAsync(0);
     await sendFrames(ws, loudFrames);
@@ -214,7 +214,7 @@ it.each(["extended outbound", "inbound"])(
       call: kind === "inbound" ? makeCall("CA-inbound") : outbound({}),
       idleHangupMs: kind === "inbound" ? undefined : 60_000,
     });
-    request.onTranscript("assistant", "Hello", true);
+    request.onTranscript?.("assistant", "Hello", true);
     for (let elapsed = 0; elapsed < 31_000; elapsed += 1_000) {
       await sendFrames(ws, 1, 0xff);
       await vi.advanceTimersByTimeAsync(1_000);
