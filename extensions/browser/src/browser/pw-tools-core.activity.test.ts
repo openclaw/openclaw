@@ -74,6 +74,18 @@ it("caps article text at the hard limit", async () => {
   });
 });
 
+it.each([
+  [2, "A", true],
+  [3, "A😀", true],
+  [4, "A😀B", false],
+] as const)(
+  "keeps extracted text well-formed at a %i-character cap",
+  async (maxChars, text, truncated) => {
+    installTextPage({ article: "A😀B" });
+    expect(await readText({ ...target, maxChars })).toEqual({ text, truncated });
+  },
+);
+
 it("filters by URL or resource type and clears the full network buffer", async () => {
   harness.setPwToolsCoreCurrentPage({});
   const byUrl = { id: "1", url: "https://x/fetch", resourceType: "document" };
