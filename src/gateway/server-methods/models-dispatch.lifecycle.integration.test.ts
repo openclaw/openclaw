@@ -4,7 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { text as readText } from "node:stream/consumers";
 import { expect, it, vi } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
-import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest, withTestTimeout } from "../../../test/helpers/promise.js";
 import {
   noteRuntimeAuthProfileStorePersistedMutation,
   clearRuntimeAuthProfileStoreSnapshotCore,
@@ -698,13 +698,9 @@ it("recovers a failed credential publication through dispatch without crossing a
             stateChanged: true,
             profileIds: ["opencode:default"],
           });
-          expect(
-            await withTestTimeout(
-              failed.promise,
-              20_000,
-              "Expected scoped auth-read publication failure",
-            ),
-          ).toBeInstanceOf(AuthProfileStoreUnreadableError);
+          expect(await withinTest(failed.promise, signal)).toBeInstanceOf(
+            AuthProfileStoreUnreadableError,
+          );
           await expect(
             fixture.send("account-a-only", "r11-other-" + fixture.requests.length, "other"),
           ).resolves.toMatchObject({ status: "ok" });
