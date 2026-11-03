@@ -1230,7 +1230,8 @@ final class OpenClawSnapshotUITests: XCTestCase {
             XCTAssertTrue(text.contains("exec"), "Rendered tool title was not recognized: \(text)")
             XCTAssertFalse(text.contains("outcome unknown"), "Step still uses the fallback title: \(text)")
             XCTAssertEqual(
-                text.contains("no result"), showsUnknown,
+                text.contains("no result"),
+                showsUnknown,
                 "Visible unknown-outcome cue is wrong for \(command): \(text)")
         }
         self.attachScreenshot(named: "step-labels-expanded")
@@ -2619,8 +2620,8 @@ extension OpenClawSnapshotUITests {
         let dismissalText = try XCTUnwrap(
             transcript.staticTexts.allElementsBoundByIndex.first { candidate in
                 guard candidate.isHittable,
-                      candidate.buttons.count == 0,
-                      candidate.links.count == 0
+                      !candidate.buttons.firstMatch.exists,
+                      !candidate.links.firstMatch.exists
                 else {
                     return false
                 }

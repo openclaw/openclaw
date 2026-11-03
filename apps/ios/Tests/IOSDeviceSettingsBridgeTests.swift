@@ -156,8 +156,11 @@ struct IOSDeviceSettingsBridgeTests {
         let settings = try #require(URL(string: "https://gateway.example:8443/openclaw/settings/device"))
         func trusted(_ source: URL?, mainFrame: Bool = true, hostingView: Bool = true) -> Bool {
             IOSDeviceSettingsBridge.isTrustedSource(
-                source, webViewURL: settings, gatewayURL: gateway,
-                isMainFrame: mainFrame, isHostingWebView: hostingView)
+                source,
+                webViewURL: settings,
+                gatewayURL: gateway,
+                isMainFrame: mainFrame,
+                isHostingWebView: hostingView)
         }
         #expect(trusted(settings))
         #expect(!trusted(settings, mainFrame: false))
@@ -174,8 +177,11 @@ struct IOSDeviceSettingsBridgeTests {
             #expect(!trusted(URL(string: value)))
         }
         #expect(!IOSDeviceSettingsBridge.isTrustedSource(
-            settings, webViewURL: URL(string: "https://other.example/"), gatewayURL: gateway,
-            isMainFrame: true, isHostingWebView: true))
+            settings,
+            webViewURL: URL(string: "https://other.example/"),
+            gatewayURL: gateway,
+            isMainFrame: true,
+            isHostingWebView: true))
     }
 
     @Test func `failed provisional navigation restores only the retained document with fresh authority`() {
