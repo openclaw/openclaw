@@ -918,6 +918,13 @@ openclaw-plugins-page
   text-decoration: none;
 }
 
+/* The phone header's Back already goes up a level. The settings editor keeps its
+   breadcrumb: nothing else there names the plugin. */
+.shell--settings.shell--floating-header
+  :is(.plugin-catalog-detail > .plugins-settings-breadcrumb, .plugins-settings-back) {
+  display: none;
+}
+
 .plugins-settings-breadcrumb {
   display: flex;
   align-items: center;
