@@ -463,7 +463,7 @@ export async function loadSkillCard(state: SkillsState, skillKey: string) {
   }
 }
 
-export async function loadClawHubSecurityVerdicts(state: SkillsState, report: SkillStatusReport) {
+async function loadClawHubSecurityVerdicts(state: SkillsState, report: SkillStatusReport) {
   const client = state.client;
   const isCurrentAgent = captureSkillsAgentScope(state);
   retireSkillsRead(state.clawhubVerdictsRead);

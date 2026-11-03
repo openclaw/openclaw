@@ -285,6 +285,17 @@ configuration. Workspace bootstrap reads and skill preparation belong to the
 separate `attempt.bootstrap` and `attempt.skills` stages; plugin tool factories
 run in `attempt.tool-base`.
 
+Dependency builder retirement appears under
+`detail.attempt.setup.sandbox.workspace_selection.prepare.reconcile.dependency.retire`.
+Its fixed sub-stages separate registry lookup, builder processing, lock acquisition,
+retirement claim, engine target validation, identity inspection, `kill`, `wait`,
+and terminal-state `verify`. Physical `remove` belongs to housekeeping.
+`verify.attempts` counts verification calls in that report window; it is a count,
+not milliseconds. Each call performs one inspect, with no OpenClaw polling or
+backoff. Engine-internal polling and cleanup waits remain inside their command's
+elapsed time. These fields use the existing slow-send line without enabling
+timeline logging; parent and child durations overlap.
+
 Managed worktree preparation emits one info-level `managed worktree preparation`
 record on return or failure. `kind=managed` covers checkout creation;
 `kind=sandbox` covers a managed guest projection through backend readiness,
@@ -795,8 +806,13 @@ at 90%. The main thread's V8 `heap_size_limit` is the primary signal
 limit (`worker_heap_threshold`), including process-wide heap flag overrides. RSS
 includes every worker and native allocation, so `rss_threshold` uses the smaller of
 physical RAM and the process/cgroup memory constraint, independently of V8 heap
-limits. Unknown limits are omitted; Bun's compatibility heap metadata is not treated
-as a V8 limit. RSS growth alone does not indicate pressure.
+limits. On Node/Linux with a positive process constraint below physical RAM,
+`process_memory_threshold` also checks the remaining constrained allowance using
+`process.availableMemory()`. Its `usedBytes` is the constraint minus that remaining
+allowance, not process RSS: cgroup charges can exhaust headroom before RSS reaches
+the same 80%/90% thresholds. This signal follows heap and RSS priority within each
+severity. Unknown limits are omitted; Bun's compatibility heap metadata is not
+treated as a V8 limit. RSS growth alone does not indicate pressure.
 
 Warning and critical journal lines and diagnostic events retain the measured
 `usedBytes`, `limitBytes`, and `thresholdBytes`; worker pressure also identifies

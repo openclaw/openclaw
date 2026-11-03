@@ -17,7 +17,6 @@ import {
   loadSkills,
   loadSkillCard,
   loadClawHubDetail,
-  loadClawHubSecurityVerdicts,
   refreshSkills,
   reconcileSkillsAgentId,
   saveSkillApiKey,
@@ -124,12 +123,15 @@ describe("loadSkills", () => {
       const pending = createDeferred<unknown>();
       request.mockReturnValue(pending.promise);
       state.skillsReport = createSkillCardReport("1.2.3");
-      const task =
-        kind === "inventory"
-          ? loadSkills(state)
-          : kind === "verdicts"
-            ? loadClawHubSecurityVerdicts(state, state.skillsReport)
-            : loadSkillCard(state, "agentreceipt");
+      if (kind === "verdicts") {
+        request.mockResolvedValueOnce(state.skillsReport);
+      }
+      const task = kind === "card" ? loadSkillCard(state, "agentreceipt") : loadSkills(state);
+      if (kind === "verdicts") {
+        await waitForFast(() =>
+          expect(request).toHaveBeenCalledWith("skills.securityVerdicts", { agentId: "main" }),
+        );
+      }
       const completion =
         kind === "inventory"
           ? state.skillsRead?.completion

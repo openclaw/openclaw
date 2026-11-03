@@ -218,7 +218,8 @@ suite.define(() => {
         expect(await gateway.getSocketCount()).toBe(1);
         expect(await composer.inputValue()).toBe(draft);
         if (method === "chat.startup") {
-          expect(await page.locator(".chat-history-error").textContent()).toContain("timed out");
+          const errorText = await page.locator(".chat-history-error").textContent();
+          expect(errorText).toContain("Couldn’t load the conversation in time. Try again.");
           expect(await retry.isEnabled()).toBe(true);
           expect(
             await page.getByRole("button", { name: "Loading chat", exact: true }).count(),

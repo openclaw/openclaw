@@ -489,6 +489,9 @@ async function updateCommandInternal(
 
     const execution = await executeMutableUpdate({
       ...target,
+      ...(packageInstallTarget
+        ? { updateInstallKind: "package" as const, packageInstallTarget }
+        : { updateInstallKind: "git" as const }),
       callerLegacyConfigPlan: initialization?.callerLegacyConfigPlan,
       installKind,
       timeoutMs,

@@ -246,11 +246,6 @@ div.chat-thread:where(.chat-thread--annotations) {
 @media (hover: none),
   (max-width: 768px),
   (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-  /* Touch targets grow up over their own group, never into the turn gap. */
-  .chat-group {
-    --chat-touch-target: 44px;
-  }
-
   .chat-group,
   .chat-notice {
     --chat-turn-gap: 12px;
@@ -426,14 +421,10 @@ div.chat-thread:where(.chat-thread--annotations) {
   display: flex;
   flex: 0 0 auto;
   /* Reserve the native menu's hit area before its session descriptor arrives. */
-  min-width: calc(var(--chat-pane-header-icon-size) * var(--chat-pane-menu-count, 1));
+  min-width: var(--chat-pane-header-icon-size);
   min-height: var(--chat-pane-header-icon-size);
   align-items: center;
   gap: 0;
-
-  & > openclaw-chat-pane-versions-menu {
-    margin-inline-start: auto;
-  }
 }
 
 .chat-pane__header:not(.chat-pane__header--mobile)
