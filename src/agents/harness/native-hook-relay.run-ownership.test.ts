@@ -24,7 +24,11 @@ it("denies a retired run's hook when its successor reuses the native thread cred
       runId: "run-1",
       requireForegroundTurn: true,
       allowedEvents: ["pre_tool_use"],
-      runBeforeToolCall: async () => ({ blocked: true, reason: "First run denies this tool" }),
+      runBeforeToolCall: async () => ({
+        blocked: true,
+        kind: "veto",
+        reason: "First run denies this tool",
+      }),
     });
     await first.ready;
     first.bindForegroundTurn("native-thread-1", "retired-turn-1");

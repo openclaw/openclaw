@@ -193,7 +193,9 @@ export async function resolveNativeHookRelayInvocationBinding(
       throw new Error(NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR);
     }
   };
-  assertExecutionAdmissionCurrent();
+  if (foregroundTurn !== undefined) {
+    assertExecutionAdmissionCurrent();
+  }
   const assertActive = () => {
     signal?.throwIfAborted();
     assertExecutionAdmissionCurrent();

@@ -383,7 +383,6 @@ export async function prepareCodexAttemptTurnRequest(
       acceptedTurnId = startedTurn.turn.id;
       recordCodexTurnForkSettings(turnClient, turnStartParams);
       resources.nativeProcessAuthority?.bindTurn(turnClient, threadId, acceptedTurnId);
-      resourceState.nativeHookRelay?.bindForegroundTurn(threadId, acceptedTurnId);
       assertTurnCurrent();
       resourceState.nativeSubagentMonitor?.bindTurn(acceptedTurnId, modelMapping);
       // Fitting may drop or truncate references; only acknowledge the complete block.
@@ -403,6 +402,7 @@ export async function prepareCodexAttemptTurnRequest(
         error.name = "AbortError";
         throw error;
       }
+      resourceState.nativeHookRelay?.bindForegroundTurn(threadId, acceptedTurnId);
       await continuation?.accept(acceptedTurnId);
       return { turn: startedTurn, upstreamUserText };
     } catch (error) {

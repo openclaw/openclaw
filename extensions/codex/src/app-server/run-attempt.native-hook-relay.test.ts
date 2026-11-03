@@ -141,7 +141,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
         events: ["post_tool_use", "before_agent_finalize"],
       },
     });
-    await harness.waitForMethod("turn/start");
+    await run.waitForTurnAccepted();
     const startRequest = threadRequest(harness);
     const startConfig = (startRequest as { config?: Record<string, unknown> } | undefined)?.config;
     expect(startConfig?.["hooks.PostToolUse"]).not.toEqual([]);
@@ -213,7 +213,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const closeHostCapabilities = await bindProductionHarnessHostCapabilitiesForTest(params);
 
     const run = runCodexAppServerAttempt(params, preToolUse);
-    await harness.waitForMethod("turn/start");
+    await run.waitForTurnAccepted();
     const startRequest = threadRequest(harness);
     expect(startRequest).toMatchObject({ approvalPolicy: "never" });
     const relayId = extractRelayIdFromThreadRequest(startRequest);
@@ -292,7 +292,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
 
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const run = runCodexAppServerAttempt(params, preToolUse);
-    await harness.waitForMethod("turn/start");
+    await run.waitForTurnAccepted();
     const response = await harness.handleServerRequest({
       id: "request-command-policy-unattended",
       method: "item/commandExecution/requestApproval",
@@ -337,7 +337,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
       createLoopRelayParams(sessionFile, workspaceDir),
       preToolUse,
     );
-    await harness.waitForMethod("turn/start");
+    await run.waitForTurnAccepted();
 
     const relayId = extractRelayIdFromThreadRequest(threadRequest(harness));
     const registration = nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId);
@@ -393,7 +393,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
       const firstParams = createLoopRelayParams(sessionFile, workspaceDir);
       firstParams.sandboxSessionKey = "agent:main:policy";
       const firstRun = runCodexAppServerAttempt(firstParams, preToolUse);
-      await firstHarness.waitForMethod("turn/start");
+      await firstRun.waitForTurnAccepted();
       await firstHarness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
       await firstRun;
 
@@ -425,7 +425,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
         secondParams.sessionKey = "agent:main:session-2";
       }
       const secondRun = runCodexAppServerAttempt(secondParams, preToolUse);
-      await secondHarness.waitForMethod("turn/start");
+      await secondRun.waitForTurnAccepted();
 
       const secondThreadRequest = threadRequest(
         secondHarness,
@@ -477,7 +477,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
       createLoopRelayParams(sessionFile, workspaceDir),
       preToolUse,
     );
-    await harness.waitForMethod("turn/start");
+    await run.waitForTurnAccepted();
 
     const resumeRequest = threadRequest(harness, "thread/resume");
     const relayId = extractRelayIdFromThreadRequest(resumeRequest);
@@ -532,7 +532,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
       preToolUse,
     );
     try {
-      await harness.waitForMethod("turn/start");
+      await run.waitForTurnAccepted();
       const resume = threadRequest(harness, "thread/resume");
       expect(extractGenerationFromThreadRequest(resume)).toBe(generation);
       const relayId = extractRelayIdFromThreadRequest(resume);
@@ -594,7 +594,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
         createLoopRelayParams(sessionFile, workspaceDir),
         preToolUse,
       );
-      await harness.waitForMethod("turn/start");
+      await run.waitForTurnAccepted();
       const start = threadRequest(harness);
       const relayId = extractRelayIdFromThreadRequest(start);
       const currentGeneration = extractGenerationFromThreadRequest(start);
