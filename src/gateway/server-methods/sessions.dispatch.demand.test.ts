@@ -162,7 +162,6 @@ async function withDemandFixture(
     // Preserve the real admission/ACK; the simulated node has not published a physical launch yet.
     vi.spyOn(chatDispatch, "startChatDispatch").mockImplementation(async (turn) => {
       heldTurns.set(turn.session.entry!.sessionId, turn);
-      return Promise.resolve();
     });
     const sessionKey = (id: string) => `agent:main:${id}`;
     const invoke = async (
