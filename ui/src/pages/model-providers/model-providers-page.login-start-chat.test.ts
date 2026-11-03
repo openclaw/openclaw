@@ -100,7 +100,9 @@ it.each([
         creation.resolve(null);
         await waitForSolid(() => expect(button.disabled).toBe(false));
         expect(startChat()).toBe(button);
-        expect(page.querySelector(".model-setup-wizard")?.textContent).toContain("Request failed");
+        expect(page.querySelector(".model-setup-wizard")?.textContent).toContain(
+          "Couldn’t complete the request",
+        );
       }
     } else {
       await waitForSolid(() =>

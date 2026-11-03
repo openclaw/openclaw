@@ -13,7 +13,9 @@ Open **Settings → Models** in the Control UI to add, replace, or remove provid
 API keys. The page and `openclaw models auth paste-api-key` use the same credential
 writer: key material stays in the auth store, and configured providers reference
 the saved profile. Environment-provided keys remain managed by the Gateway
-process environment. The page shows credential sources without revealing keys.
+process environment. The page shows account sources without revealing keys.
+Use **Test access** to check whether a provider account can use its models.
+You can view Models without admin access, but only admins can change model settings.
 
 Saving a key and refreshing the catalog are separate outcomes. If refresh fails,
 the saved key remains; follow the reported recovery step. Removing a stored key

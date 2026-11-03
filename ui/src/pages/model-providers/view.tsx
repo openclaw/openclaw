@@ -146,11 +146,14 @@ function ModelReadiness(props: ModelProvidersViewProps) {
   );
 }
 
-function renderProviderNoticeRow(text: string) {
+function renderProviderNoticeRow(text: string, detail?: string) {
   return (
     <div class="settings-row" role="alert">
       <div class="settings-row__text">
         <span class="settings-row__desc provider-usage__error">{text}</span>
+        <Show when={detail && detail !== text}>
+          <span class="settings-row__desc">{detail}</span>
+        </Show>
       </div>
     </div>
   );
@@ -248,7 +251,7 @@ function ProviderAccess(props: ModelProvidersViewProps) {
         <Show when={props.error}>
           {(error) => (
             <SettingsGroup>
-              {renderProviderNoticeRow(error())}
+              {renderProviderNoticeRow(t("modelProviders.configUnavailable"), error())}
               <button
                 type="button"
                 class="btn btn--sm"

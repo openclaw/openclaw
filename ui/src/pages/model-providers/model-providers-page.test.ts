@@ -494,7 +494,7 @@ describe("ModelProvidersPage agent scope", () => {
     expect(page.view.props.keyEditorProvider).toBeNull();
     expect(page.view.props.messages.openai).toEqual({
       kind: "success",
-      text: "Secret saved.",
+      text: "API key saved.",
       warning: "Authentication refresh failed. Provider refresh failed.",
     });
     await page.updateComplete;
@@ -571,7 +571,7 @@ describe("ModelProvidersPage agent scope", () => {
 
   it.each([
     ["another provider fails", "ready", undefined],
-    ["the added provider fails", "unavailable", "More models could not be discovered."],
+    ["the added provider fails", "unavailable", "Couldn’t load more models. Try again."],
   ] as const)("provider-add feedback warns only when %s", async (_case, ownStatus, warning) => {
     const { context, runtimeConfig, request } = createHarness("main");
     const originalRequest = request.getMockImplementation()!;
@@ -773,7 +773,11 @@ describe("ModelProvidersPage agent scope", () => {
         agentId: "main",
       }),
     );
-    await vi.waitFor(() => expect(toast.toast?.message).toBe("Priority could not be saved"));
+    await vi.waitFor(() =>
+      expect(toast.toast?.message).toBe(
+        "Couldn’t complete the request. Try again. Priority could not be saved",
+      ),
+    );
     await toast.updateComplete;
     await vi.dynamicImportSettled();
     await vi.waitFor(() =>
