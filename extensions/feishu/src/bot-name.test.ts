@@ -19,20 +19,25 @@ describe("resolveFeishuBotName", () => {
   });
   afterEach(() => vi.useRealTimers());
 
-  it.each(["ordinary", "forward", "rewind"] as const)("caches the bot name across %s time", async (clock) => {
-    vi.useFakeTimers({ toFake: ["Date", "performance"] });
-    requestMock.mockResolvedValue({ code: 0, data: { bots: { ou_peer: { name: "Peer Bot" } } } });
-    const resolve = () => resolveFeishuBotName({ account, openId: "ou_peer", log });
-    await expect(resolve()).resolves.toBe("Peer Bot");
-    await expect(resolve()).resolves.toBe("Peer Bot");
-    expect(requestMock).toHaveBeenCalledTimes(1);
-    if (clock === "rewind") {
-      vi.advanceTimersByTime(10 * 60_000 + 1);
-    }
-    vi.setSystemTime(Date.now() + (clock === "forward" ? 3_600_000 : clock === "rewind" ? -3_600_000 : 0));
-    await expect(resolve()).resolves.toBe("Peer Bot");
-    expect(requestMock).toHaveBeenCalledTimes(clock === "rewind" ? 2 : 1);
-  });
+  it.each(["ordinary", "forward", "rewind"] as const)(
+    "caches the bot name across %s time",
+    async (clock) => {
+      vi.useFakeTimers({ toFake: ["Date", "performance"] });
+      requestMock.mockResolvedValue({ code: 0, data: { bots: { ou_peer: { name: "Peer Bot" } } } });
+      const resolve = () => resolveFeishuBotName({ account, openId: "ou_peer", log });
+      await expect(resolve()).resolves.toBe("Peer Bot");
+      await expect(resolve()).resolves.toBe("Peer Bot");
+      expect(requestMock).toHaveBeenCalledTimes(1);
+      if (clock === "rewind") {
+        vi.advanceTimersByTime(10 * 60_000 + 1);
+      }
+      vi.setSystemTime(
+        Date.now() + (clock === "forward" ? 3_600_000 : clock === "rewind" ? -3_600_000 : 0),
+      );
+      await expect(resolve()).resolves.toBe("Peer Bot");
+      expect(requestMock).toHaveBeenCalledTimes(clock === "rewind" ? 2 : 1);
+    },
+  );
 
   it.each([
     ["rejected missing-scope requests", true, 99991672],
@@ -43,7 +48,9 @@ describe("resolveFeishuBotName", () => {
     vi.useFakeTimers({ toFake: ["Date", "performance"] });
     vi.setSystemTime(0);
     if (rejects) {
-      requestMock.mockRejectedValue(Object.assign(new Error("lookup unavailable"), { response: { data: { code } } }));
+      requestMock.mockRejectedValue(
+        Object.assign(new Error("lookup unavailable"), { response: { data: { code } } }),
+      );
     } else {
       requestMock.mockResolvedValue({ code, msg: "lookup unavailable" });
     }
@@ -54,8 +61,13 @@ describe("resolveFeishuBotName", () => {
       expect(requestMock).toHaveBeenCalledTimes(index + 1);
       vi.advanceTimersByTime(60_001);
     }
-    requestMock.mockResolvedValueOnce({ code: 0, data: { bots: { ou_available: { name: "Available" } } } });
-    await expect(resolveFeishuBotName({ account, openId: "ou_available", log })).resolves.toBe("Available");
+    requestMock.mockResolvedValueOnce({
+      code: 0,
+      data: { bots: { ou_available: { name: "Available" } } },
+    });
+    await expect(resolveFeishuBotName({ account, openId: "ou_available", log })).resolves.toBe(
+      "Available",
+    );
     expect(requestMock).toHaveBeenCalledTimes(11);
   });
 
