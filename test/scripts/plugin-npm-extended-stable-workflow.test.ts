@@ -30,6 +30,7 @@ type Step = {
   "working-directory"?: string;
 };
 type Job = {
+  env?: Record<string, string>;
   name?: string;
   environment?: string;
   if?: string;
@@ -69,11 +70,7 @@ function step(job: Job | undefined, name: string): Step {
 }
 
 function runPublishBranchPolicy(prelude: string, env: Record<string, string>, cwd = process.cwd()) {
-  const guard = step(
-    workflow().jobs?.preview_plugins_npm,
-    "Validate ref is on a trusted publish branch",
-  );
-  const policy = guard.run!.split("<<'PYTHON'\n")[1]!.split("\nPYTHON")[0];
+  const policy = readFileSync("scripts/plugin-npm-release-admission.py", "utf8");
   return spawnSync("python3", ["-c", `${prelude}${policy}`], {
     cwd,
     encoding: "utf8",
@@ -823,26 +820,36 @@ it("binds preflight to an exact source SHA without release-publish approval", ()
     WORKFLOW_REF: "${{ github.ref }}",
     WORKFLOW_SHA: "${{ github.workflow_sha }}",
   });
-  expect(trusted.run).toContain(
+  expect(readFileSync("scripts/plugin-npm-release-admission.py", "utf8")).toContain(
     'if os.environ["TRUSTED_PUBLISHER_PREFLIGHT"] == "true" and not preflight:',
   );
-  expect(trusted.run).toContain("trusted_publisher_preflight requires preflight_only=true");
-  expect(trusted.run).toContain('re.fullmatch(r"[0-9a-fA-F]{40}", source_ref)');
-  expect(trusted.run).toContain(
+  expect(readFileSync("scripts/plugin-npm-release-admission.py", "utf8")).toContain(
+    "trusted_publisher_preflight requires preflight_only=true",
+  );
+  expect(readFileSync("scripts/plugin-npm-release-admission.py", "utf8")).toContain(
+    're.fullmatch(r"[0-9a-fA-F]{40}", source_ref)',
+  );
+  expect(readFileSync("scripts/plugin-npm-release-admission.py", "utf8")).toContain(
     'exact_ref_match(\n        "HEAD",\n        f"{source_ref}^{{commit}}"',
   );
-  expect(trusted.run).toContain(
+  expect(readFileSync("scripts/plugin-npm-release-admission.py", "utf8")).toContain(
     "Plugin npm preflight must not include a release publish parent run tuple.",
   );
-  expect(trusted.run).toContain("preflight must not include release_candidate_branch");
-  expect(trusted.run).toContain(
+  expect(readFileSync("scripts/plugin-npm-release-admission.py", "utf8")).toContain(
+    "preflight must not include release_candidate_branch",
+  );
+  expect(readFileSync("scripts/plugin-npm-release-admission.py", "utf8")).toContain(
     "Plugin npm preflight target must be reachable from main or release/*.",
   );
-  expect(trusted.run).toContain("if not preflight:");
-  expect(trusted.run).toContain(
+  expect(readFileSync("scripts/plugin-npm-release-admission.py", "utf8")).toContain(
+    "if not preflight:",
+  );
+  expect(readFileSync("scripts/plugin-npm-release-admission.py", "utf8")).toContain(
     "Extended-stable plugin publication requires release_candidate_branch=",
   );
-  expect(trusted.run).not.toContain("refs/heads/tideclaw/alpha/");
+  expect(readFileSync("scripts/plugin-npm-release-admission.py", "utf8")).not.toContain(
+    "refs/heads/tideclaw/alpha/",
+  );
   const requirement = trusted.env?.REQUIRE_NPM_PUBLISH_ENVIRONMENT;
   if (requirement === undefined) {
     throw new Error("npm-publish tag requirement is missing.");
@@ -1088,9 +1095,9 @@ it("runs one trusted-publisher exchange job directly after selected-package plan
   });
   expect(step(oidc, "Setup trusted Node").with?.["node-version"]).toBe("${{ env.NODE_VERSION }}");
   const exchange = step(oidc, "Verify npm trusted-publisher exchange");
-  expect(exchange.env?.PLUGIN_MATRIX).toBe("${{ needs.preview_plugins_npm.outputs.all_matrix }}");
+  expect(oidc?.env?.PLUGIN_MATRIX).toBe("${{ needs.preview_plugins_npm.outputs.all_matrix }}");
   expect(exchange.run).toContain(
-    'import { preflightNpmTrustedPublisher } from "./scripts/npm-trusted-publisher-preflight.mjs"',
+    'import { preflightNpmTrustedPublisher } from "./.release-tooling/scripts/npm-trusted-publisher-preflight.mjs"',
   );
   expect(exchange.run).toContain("JSON.parse(process.env.PLUGIN_MATRIX)");
   expect(exchange.run).toContain("selection must be a non-empty array");
