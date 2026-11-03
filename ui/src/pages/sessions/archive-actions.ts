@@ -126,7 +126,7 @@ export function createSessionsArchive(host: {
           ),
         });
         showToast({
-          severity: "error",
+          severity: "success",
           message: t("sessionsView.sessionArchived"),
           actionLabel: t("common.undo"),
           onAction: () => {
