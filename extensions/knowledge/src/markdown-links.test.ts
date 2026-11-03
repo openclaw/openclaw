@@ -174,6 +174,40 @@ it("current path, title, alias and old ID paths resolve; ambiguity never chooses
   alex.path = "people/renamed.md";
   expect(resolveLinks(source, [alex])[2]!.id).toBe("a");
 });
+it("keeps encoded filename hashes distinct from native and wiki fragments", () => {
+  const hash = record("hash", "Hash plan", "notes/plan#v2.md"),
+    plain = record("plain", "Plain plan", "notes/plan.md"),
+    space = record("space", "Space plan", "notes/plan space.md");
+  const hrefs = [
+    "plan%23v2.md",
+    "plan%23v2.md#Details",
+    "plan%20space.md",
+    "plan.md",
+    "plan.md#Details",
+  ];
+  const source = record(
+    "source",
+    "Source",
+    "notes/source.md",
+    hrefs.map((href) => `[plan](${href})`).join(" ") + " [[Plain plan#Details]]",
+  );
+  const records = [source, hash, plain, space];
+  expect(resolveLinks(source, records)).toEqual([
+    { href: "plan%23v2.md", status: "resolved", id: "hash" },
+    { href: "plan%23v2.md#Details", status: "resolved", id: "hash" },
+    { href: "plan%20space.md", status: "resolved", id: "space" },
+    { href: "plan.md", status: "resolved", id: "plain" },
+    { href: "plan.md#Details", status: "resolved", id: "plain" },
+    { href: "#wiki=Plain%20plan%23Details", status: "resolved", id: "plain" },
+  ]);
+  const scan: ScanResult = { records, ontology: null, sources: [], issues: [], checkedAt: "" };
+  expect(
+    connections(scan, { id: "hash", direction: "backlinks" }).connections.map(
+      ({ record }) => record.id,
+    ),
+  ).toEqual(["source"]);
+});
+
 it("derived backlinks deduplicate passages, reflect edits, exclude unavailable records and do not replace relationships", () => {
   const a = record("a", "Alex", "people/alex.md"),
     s = record(
