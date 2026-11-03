@@ -141,3 +141,34 @@ it("retires contained cache entries without evicting sibling roots", () => {
     retireWorkspaceFileCache(siblingRoot);
   }
 });
+
+it("accounts for the prepared identity prompt while retaining the raw avatar", () => {
+  const workspaceRoot = tempDirs.make("openclaw-identity-prompt-cache-test-");
+  const identityPath = path.join(workspaceRoot, "IDENTITY.md");
+  const oldest = path.join(workspaceRoot, "oldest");
+  const recent = path.join(workspaceRoot, "recent");
+  const raw = `- Avatar: data:image/png;base64,${"A".repeat(2 * 1024 * 1024)}\n${"x".repeat(1024 * 1024)}`;
+  try {
+    writeWorkspaceFileCache({ filePath: identityPath, content: raw, identity: "avatar" });
+    writeWorkspaceFileCache({
+      filePath: oldest,
+      content: "é".repeat(2 * 1024 * 1024),
+      identity: "oldest",
+    });
+    writeWorkspaceFileCache({
+      filePath: recent,
+      content: "é".repeat(2 * 1024 * 1024),
+      identity: "recent",
+    });
+
+    const prompt = readWorkspaceFileCache(identityPath, "avatar", "IDENTITY.md");
+
+    expect(prompt).toBe(`- Avatar: [inline image omitted]\n${"x".repeat(1024 * 1024)}`);
+    expect(readWorkspaceFileCache(oldest, "oldest")).toBeUndefined();
+    expect(readWorkspaceFileCache(recent, "recent")).toBeDefined();
+    expect(readWorkspaceFileCache(identityPath, "avatar")).toBe(raw);
+    expect(readWorkspaceFileCache(identityPath, "avatar", "IDENTITY.md")).toBe(prompt);
+  } finally {
+    retireWorkspaceFileCache(workspaceRoot);
+  }
+});
