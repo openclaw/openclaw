@@ -84,12 +84,12 @@ function registerNodeToolElicitation(
   const caller = getGatewayToolCallerIdentity();
   const assertCurrent = captureGatewayToolCallerAssertion();
   if (!caller || !assertCurrent || caller.sessionKey !== sessionKey) {
-    return;
+    return undefined;
   }
   const registry = getInProcessGatewayRequestContext(caller.gatewayContextResolver)?.nodeRegistry;
   const node = registry?.get(nodeId);
   if (!registry || !node) {
-    return;
+    return undefined;
   }
   assertCurrent();
   const id = randomUUID();
