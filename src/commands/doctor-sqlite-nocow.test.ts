@@ -259,6 +259,50 @@ it.skipIf(process.platform !== "linux")(
 );
 
 it.skipIf(process.platform !== "linux")(
+  "keeps the original store and warns when a retained reader cannot be closed",
+  async () => {
+    await withOpenClawTestState(
+      { scenario: "external-service", label: "doctor-nocow-reader-close-failure" },
+      async () => {
+        await useNativeTools(
+          (command) => !["lsattr", "getfacl", "setfacl", "mv"].includes(command),
+        );
+        const maintenance = await beginDoctorMaintenance({
+          options: { repair: true, nonInteractive: true, workspaceSuggestions: false },
+          root: null,
+          runtime: { log() {}, error() {}, exit() {} },
+        });
+        let retained: DatabaseSync | undefined;
+        const unregister = registerAgentDatabaseReaderCloser(() => {
+          throw new Error("synthetic reader close failure");
+        });
+        try {
+          const agentPath = await maintenance!.run(
+            async () => openOpenClawAgentDatabase({ agentId: "main" }).path,
+          );
+          retained = new DatabaseSync(agentPath, { readOnly: true });
+          retained.prepare("SELECT count(*) FROM sqlite_master").get();
+          const original = fs.statSync(agentPath).ino;
+          await maintenance!.repairSqliteNoCow([agentPath]);
+          expect(maintenance!.warnings.join("\n")).toMatch(
+            /readers could not be closed[\s\S]*synthetic reader close failure[\s\S]*store files are open/u,
+          );
+          expect(fs.statSync(agentPath).ino).toBe(original);
+          // The maintenance scope was restored, so Doctor can keep using its stores.
+          expect(
+            await maintenance!.run(async () => openOpenClawAgentDatabase({ agentId: "main" }).path),
+          ).toBe(agentPath);
+        } finally {
+          unregister();
+          retained?.close();
+          await maintenance?.release();
+        }
+      },
+    );
+  },
+);
+
+it.skipIf(process.platform !== "linux")(
   "keeps admission descriptors when an unknown native handle blocks NOCOW repair",
   async () => {
     seedDatabase();
