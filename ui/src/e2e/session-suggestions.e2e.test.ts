@@ -403,7 +403,7 @@ suite.define(() => {
         await expect(previewBubble).toHaveText(visible);
       }
       await expect(typingRow.locator(".agent-chat__typing-preview-label")).toHaveText("Owner");
-      await expect(typingRow.locator(".agent-chat__typing-state")).toHaveText("is typing...");
+      await expect(typingRow.locator(".agent-chat__typing-state")).toHaveText("is typing…");
       await expect(typingRow.locator(".agent-chat__typing-bubble")).toHaveCount(0);
       const activeBox = await previewBubble.boundingBox();
       await page.clock.runFor(10_000);

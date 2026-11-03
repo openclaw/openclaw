@@ -13,7 +13,7 @@ import { admitEmbeddedContextEngine } from "../../agents/embedded-agent-runner/r
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
 import { acquireAgentRunPreparedModelRuntime } from "../../agents/prepared-model-runtime.js";
-import { createLibrarySkillWorkshopTool } from "../../agents/tools/skill-workshop-tool-library.js";
+import { createSkillLibraryTool } from "../../agents/tools/skill-library-tool.js";
 import { registerAgentRunDelegatedAuthorityClosedHandler } from "../../infra/agent-run-registry.js";
 import { logInfo } from "../../logger.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
@@ -320,12 +320,12 @@ export async function executeWorkerTurn(
           return false;
         }
       };
-      const skillWorkshop = turn.skillLibraryAuthoring
-        ? createLibrarySkillWorkshopTool({
-            ...turn.skillLibraryAuthoring,
-            defaultTarget: "personal",
-          })
-        : undefined;
+      // Worker turns author only the personal library, never Workshop.
+      const skillLibraryAuthoring = turn.skillLibraryAuthoring && {
+        ...turn.skillLibraryAuthoring,
+        defaultTarget: "personal" as const,
+      };
+      const skillLibrary = skillLibraryAuthoring && createSkillLibraryTool(skillLibraryAuthoring);
       toolRuntime = createWorkerGatewayToolRuntime({
         assertCurrent: assertToolSurfaceCurrent,
         signal,
@@ -348,7 +348,7 @@ export async function executeWorkerTurn(
               inheritedToolPolicySource: capabilityProfile.policy.inheritedToolPolicySource,
               inheritedToolDenylist: capabilityProfile.policy.inheritedToolPolicyForSpawn?.deny,
               delegatedToolPolicyActive: Boolean(capabilityProfile.policy.delegatedToolPolicy),
-              skillWorkshop,
+              skillLibrary,
               portalAvailable,
               prepareTools: async (adapters) => {
                 const prepared = await createOpenClawCodingToolsInternalAsync(
@@ -374,6 +374,8 @@ export async function executeWorkerTurn(
                     modelContextWindowTokens: toolPolicy.modelContextWindowTokens,
                     runtimeToolAllowlist: turn.toolsAllow,
                     skillWorkshop: undefined,
+                    // Suppresses Workshop; the skill_library adapter replaces this tool by name.
+                    skillLibraryAuthoring,
                     computerTransport: null,
                   },
                   undefined,

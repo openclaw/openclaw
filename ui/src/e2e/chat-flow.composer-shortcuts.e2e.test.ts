@@ -97,9 +97,9 @@ suite.define(() => {
       .waitFor({ timeout: 10_000 });
 
     await page.goto(`${suite.server.baseUrl}settings/appearance`);
-    const shortcutSelect = page.locator("[data-settings-send-shortcut]");
-    await shortcutSelect.selectOption("modifier-enter");
-    expect(await shortcutSelect.inputValue()).toBe("modifier-enter");
+    const modifierShortcut = page.locator('[data-test-id="send-shortcut-modifier-enter"]');
+    await modifierShortcut.click();
+    expect(await modifierShortcut.locator("input").isChecked()).toBe(true);
 
     await page.goto(`${suite.server.baseUrl}chat`);
     await composer.waitFor({ state: "visible", timeout: 10_000 });
@@ -306,7 +306,7 @@ suite.define(() => {
       if (!inheritsQueueMode) {
         await followUp.selectOption(followUpMode);
       }
-      await page.locator("[data-settings-send-shortcut]").selectOption("enter");
+      await page.locator('[data-test-id="send-shortcut-enter"]').click();
       await page.goto(`${suite.server.baseUrl}chat`);
 
       const initialText = "keep the shortcut run active";

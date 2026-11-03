@@ -49,9 +49,11 @@ suite.define(() => {
     const chat = page.locator("openclaw-select-picker:has(#settings-font-chat)");
     const preview = page.locator(".settings-typography-preview");
     await preview.waitFor();
-    expect(await ui.locator("..").locator("..").textContent()).toContain(
-      "Stored in this browser only",
-    );
+    expect(
+      await page
+        .locator("#settings-appearance-typography > .settings-section__scope")
+        .textContent(),
+    ).toContain("Stored in this browser only");
     await page.evaluate(() => document.fonts.ready);
     const families = () =>
       preview.evaluate((panel) => {

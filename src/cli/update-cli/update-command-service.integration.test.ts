@@ -34,7 +34,7 @@ import type { UpdateCommandOptions } from "./shared.js";
 import { expectNoCalls as expectUncalled } from "./update-boundary.test-support.js";
 import { registerGenerationRecoveryTests } from "./update-command-generation.test-support.js";
 import { registerRestartOutcomeTests } from "./update-command-restart-outcome.test-support.js";
-import { stubNodeRuntime } from "./update-command-runtime-recovery.test-support.js";
+import { getNodeRuntimeFixture } from "./update-command-runtime-recovery.test-support.js";
 import type { UpdateServiceDefinitionRecovery } from "./update-command-service-context-types.js";
 import { assertGatewayServiceManagementAllowedForUpdate } from "./update-command-service-plan.js";
 import {
@@ -267,6 +267,7 @@ vi.mock("../daemon-cli/lifecycle-audit.js", () => ({
   createGatewayLifecycleMutationAudit: vi.fn(),
 }));
 
+let serviceNodeRunner: string;
 let root: string;
 let configPath: string;
 let run: NonNullable<UpdateCommandOptions["run"]>;
@@ -281,7 +282,7 @@ function fixtureSystemdTarget() {
 }
 const writeConfig = (version: string) => writeRecoveryConfig(configPath, version);
 const gatewayArgs = (port = "19305") => [
-  process.execPath,
+  serviceNodeRunner,
   path.join(root, "dist", "index.js"),
   "gateway",
   "--port",
@@ -336,7 +337,8 @@ afterAll(() => inspectionWorkers.close());
 beforeEach(async () => {
   vi.clearAllMocks();
   mocks.exit.mockReset();
-  stubNodeRuntime();
+  // Select the simulated service runtime without changing real worker and broker runtimes.
+  serviceNodeRunner = getNodeRuntimeFixture().execPath;
   mockProcessPlatform("linux");
   ({ root, configPath, envSnapshot, servingOwner } = await createServiceActivationFixture());
   const runEnv = { ...process.env };
@@ -491,7 +493,7 @@ describe("preserved update activation with real version guards", () => {
     }
   });
 
-  registerRestartOutcomeTests(() => ({ root, run, mocks, servingOwner }));
+  registerRestartOutcomeTests(() => ({ root, run, mocks, servingOwner, serviceNodeRunner }));
 
   it.each(preservedActivationCases)(
     "handles $phase $denial denial for $mode activation ($outcome; json=$json)",
@@ -676,12 +678,12 @@ describe("preserved update activation with real version guards", () => {
     expectUncalled(repair, mocks.restart, mocks.health);
   });
 
-  registerRecoveryTests(() => ({ root, configPath, run, mocks }));
+  registerRecoveryTests(() => ({ root, configPath, run, mocks, serviceNodeRunner }));
 
   registerGenerationRecoveryTests(() => ({ root, configPath, mocks }));
 
-  registerInstallRootTransitionTests(() => ({ root, run, mocks }));
-  registerPackageRootRollbackTests(() => ({ root, run, mocks }));
+  registerInstallRootTransitionTests(() => ({ root, run, mocks, serviceNodeRunner }));
+  registerPackageRootRollbackTests(() => ({ root, run, mocks, serviceNodeRunner }));
 
   it.each(["metadata", "profile", "unit"])(
     "pins writable service identity across %s changes",
@@ -731,7 +733,7 @@ describe("preserved update activation with real version guards", () => {
     },
   );
 
-  registerPluginMaintenanceTests(() => ({ root, run, mocks, writeConfig }));
+  registerPluginMaintenanceTests(() => ({ root, run, mocks, writeConfig, serviceNodeRunner }));
 
   it.each(["missing", "uninspectable", "disappeared after inspection"])(
     "does not fall through to an unmanaged listener when the selected service is %s",

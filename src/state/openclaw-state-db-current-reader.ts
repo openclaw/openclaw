@@ -9,6 +9,7 @@ import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { assertTransactionUsable, runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
 import { getStateDatabaseSchemaConnection } from "../infra/state-database-maintenance.js";
+import { hasUpdateDoctorMigrationCapture } from "../infra/update-doctor-migration-attribution.js";
 import {
   getOpenClawDatabaseMaintenanceResourceScope,
   getOpenClawDatabaseMaintenanceScope,
@@ -59,9 +60,12 @@ export function createOpenClawStateCurrentWarmReader<T>(
       if (!scope?.ownsSchemaMaintenance || (bound && bound.scope !== scope)) {
         return { available: false };
       }
-      // A shared schema owner needs native exclusion for nested repairs. Do not
+      // Shared schema owners and captured migrations need native exclusion. Do not
       // pin an independent WAL reader; the caller retains its fresh snapshot fallback.
-      if (getStateDatabaseSchemaConnection(pathname)) {
+      if (
+        getStateDatabaseSchemaConnection(pathname) ||
+        (!isStatePostgres() && hasUpdateDoctorMigrationCapture())
+      ) {
         bound?.close();
         return { available: false };
       }
