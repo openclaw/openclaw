@@ -2244,8 +2244,17 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 }
 
 .chat-controls__model-menu {
+  --chat-composer-menu-row-height: 36px;
+  --chat-composer-menu-row-padding: 0 10px;
+  --chat-composer-menu-row-gap: 8px;
+  --menu-item-radius: 12px;
+
   width: min(400px, calc(100vw - 24px));
-  max-height: min(480px, var(--auto-size-available-height, calc(100vh - 96px)));
+  min-height: 0;
+  max-height: inherit;
+  padding: 8px;
+  gap: 8px;
+  box-shadow: none;
   border-radius: var(--chat-composer-radius, var(--menu-radius));
   background: var(--card);
 }
@@ -2463,8 +2472,10 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   display: flex;
   align-items: center;
   gap: 7px;
-  margin: 8px;
-  padding: 0 10px;
+  flex: none;
+  height: 36px;
+  margin: 0;
+  padding: 0 12px;
   border: 0;
   border-radius: calc(var(--chat-composer-radius, 25px) - 8px);
   background: color-mix(in srgb, var(--text) 3%, transparent);
@@ -2490,6 +2501,10 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   font-size: 12px;
 }
 
+.chat-controls__model-refresh-details > span:last-child {
+  display: none;
+}
+
 .chat-controls__model-search {
   width: 100%;
   min-width: 0;
@@ -2500,7 +2515,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   background: transparent;
   color: var(--text);
   font: inherit;
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .chat-controls__locked-model {
@@ -2695,7 +2710,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 .chat-controls__model-virtual-row {
   position: absolute;
   inset: 0 0 auto;
-  padding-bottom: 2px;
+  padding-bottom: 0;
 }
 
 .chat-controls__model-virtual-row .chat-controls__model-option {
@@ -2795,7 +2810,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 }
 
 .chat-controls__model-search-wrap:focus-within
-  ~ .chat-controls__model-options
+  ~ .chat-controls__model-browser
   .chat-controls__model-option-action
   kbd {
   opacity: 0;
@@ -2841,8 +2856,8 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   align-items: center;
   gap: 4px;
   flex: 0 0 auto;
-  font-size: 9px;
-  font-weight: 700;
+  font-size: 11px;
+  font-weight: 400;
   line-height: 1;
 }
 
@@ -4065,7 +4080,8 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   grid-template-columns: 36px minmax(0, 1fr);
   gap: 8px;
   min-height: 0;
-  padding: 0 8px 8px;
+  flex: 1 1 auto;
+  padding: 0;
   overflow: hidden;
 }
 
@@ -4109,12 +4125,15 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 }
 
 .chat-controls__model-pane {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
 }
 
 .chat-controls__model-pane .chat-controls__model-options {
+  min-height: 0;
   max-height: 340px;
   padding: 0;
 }
@@ -4235,4 +4254,44 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 
 .chat-controls__account-popover > .chat-controls__model-option {
   order: 0;
+}
+
+/* The trigger supplies horizontal alignment; the composer supplies the lower edge. */
+.agent-chat__input {
+  anchor-name: --chat-model-composer;
+  anchor-scope: --chat-model-composer;
+}
+
+.chat-controls__model-picker > .chat-picker-overlay {
+  --oc-overlay-max-height: 480px;
+  border-radius: var(--chat-composer-radius, 25px);
+  background: var(--card);
+  box-shadow: var(--menu-shadow);
+  overflow: hidden;
+}
+
+.agent-chat__input .chat-controls__model-picker > .chat-picker-overlay {
+  bottom: calc(anchor(--chat-model-composer top, 0px) + 8px);
+  margin-bottom: 0;
+}
+
+.chat-controls__model-option-action .shortcut-kbd {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  color: var(--muted);
+  font-family: var(--font-body);
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 16px;
+}
+
+.chat-controls__model-menu .chat-controls__provider-settings {
+  width: 28px;
+  height: 28px;
+  border-radius: 10px;
 }
