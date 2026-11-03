@@ -1,5 +1,6 @@
+import { randomUUID } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { updateContinuationRecords } from "./custody/custody-store.js";
+import { createContinuationRecord, updateContinuationRecords } from "./custody/custody-store.js";
 import type { ContinuationRecord } from "./custody/custody-store.types.js";
 import {
   custodyStateForTest,
@@ -7,11 +8,16 @@ import {
   readCustodyRecordForTest,
   useContinuationCustodyTestState,
 } from "./custody/custody.test-support.js";
-import { encodeWorkState, type PendingContinuationWork } from "./work-flow-state.js";
+import {
+  decodeWorkState,
+  encodeWorkState,
+  type PendingContinuationWork,
+} from "./work-flow-state.js";
 import {
   enqueuePendingWorkReplacing,
   rollbackPendingWorkReplacement,
 } from "./work-replacement-store.js";
+import { consumePendingWork, requeuePendingWork } from "./work-store.js";
 import { enqueuePendingWork } from "./work-store.test-support.js";
 
 // A concurrent writer lands between an election's snapshot read and its
@@ -469,5 +475,69 @@ describe("continuation work replacement store", () => {
       }),
     ).toEqual({ applied: true, unresolvedCreatedFlowIds: [], unrestoredPriorFlowIds: [] });
     expect(await readCustodyRecordForTest(parked.flowId)).toEqual(restored);
+  });
+});
+
+// karmaterminal/openclaw#1271: the optional `recipientAuthority` work-state field.
+describe("continuation work recipient-authority codec", () => {
+  /** Writes state JSON verbatim, as the build that wrote it would have. */
+  async function writeRaw(sessionKey: string, state: Record<string, unknown>) {
+    const created = await createContinuationRecord({
+      recordId: randomUUID(),
+      kind: "work",
+      ownerSessionKey: sessionKey,
+      status: "queued",
+      phase: "Queued for same-session continuation wake",
+      createdAt: Number(state.electedAt),
+      dueAt: Number(state.dueAt),
+      stateJson: JSON.stringify(state),
+    });
+    if (created.outcome !== "created") {
+      throw new Error("expected a raw continuation work record");
+    }
+    return created.record;
+  }
+  const oldShape = (sessionKey: string, electedAt: number) => ({
+    kind: "continuation_work",
+    sessionKey,
+    hop: 1,
+    delayMs: 0,
+    electedAt,
+    dueAt: electedAt,
+    maxChainLength: 8,
+    reason: "written before the binding existed",
+  });
+
+  it("keeps the binding through the store's own rewrites and reads the old shape unchanged", async () => {
+    const now = Date.now();
+    const authority = { state: "bound" as const, epoch: randomUUID() };
+    const work = createWork({
+      sessionKey: "agent:main:codec",
+      reason: "bound",
+      electedAt: now,
+      parked: false,
+    });
+    const bound = await enqueuePendingWork({ ...work, recipientAuthority: authority });
+    expect(await requeuePendingWork(bound!, { dueAt: now + 5_000, summary: "retry" })).toBe(true);
+    const rewritten = (await readCustodyRecordForTest(bound!.flowId!))!;
+    expect(custodyStateForTest(rewritten).recipientAuthority).toEqual(authority);
+    expect(decodeWorkState(rewritten)?.recipientAuthority).toEqual(authority);
+
+    const legacy = await writeRaw("agent:main:codec-old", oldShape("agent:main:codec-old", now));
+    expect(decodeWorkState(legacy)).toEqual(oldShape("agent:main:codec-old", now));
+  });
+
+  it("fails a malformed binding closed instead of reading the record as unbound", async () => {
+    const now = Date.now() - 1;
+    const record = await writeRaw("agent:main:codec-malformed", {
+      ...oldShape("agent:main:codec-malformed", now),
+      recipientAuthority: { state: "bound", epoch: "not-an-epoch" },
+    });
+    expect(decodeWorkState(record)).toBeUndefined();
+    expect(await consumePendingWork("agent:main:codec-malformed")).toEqual([]);
+    expect(await readCustodyRecordForTest(record.recordId)).toMatchObject({
+      status: "failed",
+      phase: "Rejected invalid continuation work payload",
+    });
   });
 });
