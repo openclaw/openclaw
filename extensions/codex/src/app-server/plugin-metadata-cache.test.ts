@@ -68,7 +68,7 @@ describe("Codex plugin metadata cache", () => {
   it("expires settled snapshots after the freshness window", async () => {
     // Upstream refreshes its remote catalog in the background; a settled
     // negative must not deny a configured plugin for the process lifetime.
-    using now = vi.spyOn(Date, "now").mockReturnValue(0);
+    using now = vi.spyOn(performance, "now").mockReturnValue(0);
     const request = vi.fn(async () => pluginList("openai-curated-remote", "calendar"));
     const params = { ...catalogParams, request };
 
