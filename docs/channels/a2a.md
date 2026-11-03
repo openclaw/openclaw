@@ -161,6 +161,7 @@ task failed. This does not change error reporting on human-facing channels.
 | `replyTimeoutMs`             | number   | `120000` | Maximum blocking reply wait; allowed range is `5000` to `600000` milliseconds. |
 | `rateLimitPerMinute`         | number   | `30`     | Sliding-window request limit per peer; `0` disables the limit.                 |
 | `exposeAgents`               | string[] | all      | Agent IDs advertised as Agent Card skills.                                     |
+| `localIngressOnly`           | boolean  | `false`  | Accept only direct loopback requests, including Agent Card discovery.          |
 | `peers`                      | object   | `{}`     | Trusted peers keyed by lowercase names up to 64 characters.                    |
 | `peers.<name>.token`         | string   | required | Bearer token required when this peer sends requests to OpenClaw.               |
 | `peers.<name>.url`           | string   | -        | Peer JSON-RPC endpoint for outbound messages.                                  |
@@ -180,7 +181,16 @@ binding, and the stable peer binding takes precedence over broader A2A account o
 
 ## Security
 
-Agent Card discovery is intentionally public: anyone who can reach the gateway can read the instance description and exposed agent IDs. Use `exposeAgents` to limit disclosure, and expose the gateway through HTTPS when it is reachable over an untrusted network.
+By default, Agent Card discovery is intentionally public: anyone who can reach the gateway can read the instance description and exposed agent IDs. Use `exposeAgents` to limit disclosure, and expose the gateway through HTTPS when it is reachable over an untrusted network.
+
+Set `channels.a2a.localIngressOnly: true` to restrict both discovery paths and
+`/a2a/v1` to direct loopback connections. The plugin checks the socket peer address,
+including IPv4, IPv6, and IPv4-mapped IPv6 loopback addresses. Non-loopback requests
+and requests carrying `Forwarded`, `X-Forwarded-For`, `X-Forwarded-Host`,
+`X-Forwarded-Proto`, or `X-Real-IP` return HTTP 403, even if the header is empty.
+This setting defaults to `false` and does not affect outbound peer requests.
+A local relay that strips these headers is indistinguishable from a direct local
+client; keep such relays from exposing these routes when using this restriction.
 
 Every JSON-RPC request requires a configured peer bearer token. There is no unauthenticated mode. Each authenticated peer is also the sender identity used for normal OpenClaw channel ingress policy. Use different high-entropy tokens for each peer, keep tokens out of source control, and rotate tokens by updating the gateway environment and restarting.
 
