@@ -540,12 +540,21 @@ export async function snapshotUpdateCandidateState(
   let copiedCredentials: string | undefined;
   const { createUpdateCandidateExecApprovalsProjection } =
     await import("./update-candidate-exec-approvals.js");
+  const { createUpdateCandidateSecretCredentialProjection } =
+    await import("./update-candidate-secret-credentials.js");
   const targetPath = (source: string) =>
     path.join(
       resolveUpdateCandidateStatePath(sourceRoot, input.targetStateDir, path.dirname(source)),
       path.basename(source),
     );
   const execApprovals = createUpdateCandidateExecApprovalsProjection(sourceRoot, targetPath);
+  // Boot-time exec SecretRefs resolve against the rehearsal state root, so their
+  // provider prerequisites must travel with the copy or startup validation fails.
+  const secretCredentials = createUpdateCandidateSecretCredentialProjection(
+    sourceRoot,
+    targetPath,
+    input.config,
+  );
   // Physical copies dedupe on projection identity; the published versions
   // keep every raw alias so released rollback baselines still match.
   const files = await collectSupplementalStateDatabasePaths(
@@ -707,6 +716,8 @@ export async function snapshotUpdateCandidateState(
   }
   input.onProgress?.({ phase: "execution approvals snapshot", path: sourceRoot });
   await execApprovals.copySources();
+  input.onProgress?.({ phase: "secret credential snapshot", path: sourceRoot });
+  await secretCredentials.copySources();
   const versions = publishStateDatabaseVersions(files, inspected, input);
   const pluginCodeLinks: UpdateCandidatePluginCodeLink[] = [];
   input.onProgress?.({ phase: "plugin snapshot", path: sourceRoot });
