@@ -207,85 +207,99 @@ export function repairCanonicalSqliteIndexes(
   return [...repairIndexes].map((index) => index.name).toSorted();
 }
 
-/** Explicit maintenance only: preserve the damaged image before rebuilding derived indexes. */
-export function repairSqliteIndexCorruption(
+type SqliteIndexCorruptionPlan = {
+  indexes: string[];
+  fts: boolean;
+};
+
+type IndexCorruptionInspectionOptions = {
+  ftsSchemas?: readonly string[];
+  ftsOnly?: boolean;
+};
+
+/** The maintenance owner keeps exclusive custody until the inspected plan is applied. */
+export function inspectSqliteIndexCorruption(
   database: DatabaseSync,
   pathname: string,
-  options: {
-    backup: () => void;
-    assertCurrent: () => void;
-    ftsSchemas?: readonly string[];
-    ftsOnly?: boolean;
-  },
+  options: IndexCorruptionInspectionOptions,
+): SqliteIndexCorruptionPlan {
+  return runSqliteSchemaReadSnapshotSync(database, () => {
+    const names = new Set<string>();
+    // Inspect every finding: SQLite's default 100-row limit can hide later damage.
+    const findings = readSqliteIntegrityFindings(database);
+    const ftsTables = classifySqliteFtsIntegrityFindings(
+      database,
+      findings,
+      options.ftsSchemas ?? [],
+    );
+    if (options.ftsOnly && !ftsTables) {
+      throw new Error("Startup repair requires only canonical FTS integrity findings");
+    }
+    for (const finding of ftsTables ? [] : findings) {
+      if (finding === "ok") {
+        continue;
+      }
+      const match =
+        typeof finding === "string"
+          ? /^(?:row \d+ missing from index|wrong # of entries in index|non-unique entry in index) (.+)$/u.exec(
+              finding,
+            )
+          : null;
+      const name = match?.[1];
+      if (!name) {
+        throw new Error(`Unrecognized SQLite integrity finding: ${String(finding)}`);
+      }
+      names.add(name);
+    }
+    const tables = new Set<string>();
+    for (const name of names) {
+      const index = database
+        .prepare("SELECT tbl_name FROM main.sqlite_schema WHERE type = 'index' AND name = ?")
+        .get(name);
+      if (typeof index?.tbl_name !== "string") {
+        throw new Error(`SQLite index repair refused unknown index ${name} for ${pathname}.`);
+      }
+      tables.add(index.tbl_name);
+    }
+    for (const table of tables) {
+      const statement = database.prepare(
+        `SELECT * FROM main.${quoteSqliteIdentifier(table)} NOT INDEXED`,
+      );
+      statement.setReadBigInts(true);
+      const rows = statement.iterate();
+      while (!rows.next().done) {
+        // Reading every value also verifies overflow pages without using a damaged index.
+      }
+    }
+    return { indexes: ftsTables ?? [...names].toSorted(), fts: ftsTables !== undefined };
+  });
+}
+
+function runIndexCorruptionRepair(
+  database: DatabaseSync,
+  pathname: string,
+  inspect: () => SqliteIndexCorruptionPlan,
+  options: { backup: () => void; assertCurrent: () => void },
 ): string[] {
   let repaired: string[] = [];
   return runSqliteImmediateTransactionSync(
     database,
     () => {
-      const names = new Set<string>();
-      // Inspect every finding: SQLite's default 100-row limit can hide later damage.
-      const findings = readSqliteIntegrityFindings(database);
-      const ftsTables = classifySqliteFtsIntegrityFindings(
-        database,
-        findings,
-        options.ftsSchemas ?? [],
-      );
-      if (options.ftsOnly && !ftsTables) {
-        throw new Error("Startup repair requires only canonical FTS integrity findings");
-      }
-      for (const finding of ftsTables ? [] : findings) {
-        if (finding === "ok") {
-          continue;
-        }
-        const match =
-          typeof finding === "string"
-            ? /^(?:row \d+ missing from index|wrong # of entries in index|non-unique entry in index) (.+)$/u.exec(
-                finding,
-              )
-            : null;
-        const name = match?.[1];
-        if (!name) {
-          throw new Error(`Unrecognized SQLite integrity finding: ${String(finding)}`);
-        }
-        names.add(name);
-      }
-      if (names.size === 0 && !ftsTables) {
+      const plan = inspect();
+      if (plan.indexes.length === 0) {
         return [];
       }
-
-      const tables = new Set<string>();
-      for (const name of names) {
-        const index = database
-          .prepare("SELECT tbl_name FROM main.sqlite_schema WHERE type = 'index' AND name = ?")
-          .get(name);
-        if (typeof index?.tbl_name !== "string") {
-          throw new Error(`SQLite index repair refused unknown index ${name} for ${pathname}.`);
-        }
-        tables.add(index.tbl_name);
-      }
-      for (const table of tables) {
-        const statement = database.prepare(
-          `SELECT * FROM main.${quoteSqliteIdentifier(table)} NOT INDEXED`,
-        );
-        statement.setReadBigInts(true);
-        const rows = statement.iterate();
-        while (!rows.next().done) {
-          // Reading every value also verifies overflow pages without using a damaged index.
-        }
-      }
-
       options.backup();
-      repaired = ftsTables ?? [...names].toSorted();
+      repaired = plan.indexes;
       for (const name of repaired) {
         const identifier = quoteSqliteIdentifier(name);
         database.exec(
-          ftsTables
+          plan.fts
             ? `INSERT INTO main.${identifier}(${identifier}) VALUES('rebuild')`
             : `REINDEX main.${identifier}`,
         );
       }
-      // Foreign-key checks use parent indexes, so corrupt keys can look like
-      // missing parent rows until REINDEX. Real violations still roll back repair.
+      // Real foreign-key violations still roll the repair back after parent indexes are rebuilt.
       assertSqliteIntegrity(database, pathname);
       return repaired;
     },
@@ -299,6 +313,38 @@ export function repairSqliteIndexCorruption(
         commit();
       },
     },
+  );
+}
+
+/** Apply a preserved plan only while its original maintenance owner is still current. */
+export function applySqliteIndexCorruptionRepair(
+  database: DatabaseSync,
+  pathname: string,
+  plan: SqliteIndexCorruptionPlan,
+  assertCurrent: () => void,
+): string[] {
+  return runIndexCorruptionRepair(
+    database,
+    pathname,
+    () => {
+      assertCurrent();
+      return plan;
+    },
+    { backup: () => {}, assertCurrent },
+  );
+}
+
+/** Synchronous SDK/native startup callers retain one transaction through preservation. */
+export function repairSqliteIndexCorruption(
+  database: DatabaseSync,
+  pathname: string,
+  options: IndexCorruptionInspectionOptions & { backup: () => void; assertCurrent: () => void },
+): string[] {
+  return runIndexCorruptionRepair(
+    database,
+    pathname,
+    () => inspectSqliteIndexCorruption(database, pathname, options),
+    options,
   );
 }
 

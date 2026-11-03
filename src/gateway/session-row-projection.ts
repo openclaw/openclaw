@@ -450,6 +450,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     env,
     state: () => ({
       cfg,
+      stores,
       disposed,
       topologyDirty: topologyDirty || !profiles.isUserProfileCatalogReady(profileCatalogPath),
       registryPrepared: Boolean(inOwnerContext(subagents.snapshotIdentity)),

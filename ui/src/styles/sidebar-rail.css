@@ -521,12 +521,6 @@
   fill: currentColor;
 }
 
-.sidebar-pages__heading {
-  padding: 6px 8px;
-  color: var(--muted);
-  font-size: var(--font-size-sm);
-}
-
 /* Match the 44px session toolbar centerline without changing drawer or native clearance. */
 .shell:not(.shell--mobile-nav) .sidebar-rail {
   padding-top: calc((44px - var(--sidebar-rail-control-size)) / 2);
@@ -711,14 +705,6 @@ html.openclaw-native-macos:not(.openclaw-native-web-chrome)
   margin: 0;
   padding: 4px 8px;
   gap: 6px;
-}
-
-.sidebar-session-toolbar__collapse {
-  margin-inline-start: auto;
-}
-
-.sidebar-session-toolbar .sidebar-session-toolbar__collapse {
-  margin-inline-start: 0;
 }
 
 /* A growing section toggle would cover the row's empty space, which must stay

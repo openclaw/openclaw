@@ -84,15 +84,17 @@ import {
 } from "./code-mode-control-tools.js";
 import { createGatewayToolPolicyAssertion } from "./gateway-tool-policy.js";
 import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
-import { markToolExecutionRefused } from "./tool-effect-receipt.js";
-import { buildToolMutationState } from "./tool-mutation.js";
-import { normalizeToolPolicyName } from "./tool-policy.js";
+import {
+  markToolExecutionNotStarted as registerTrustedToolNoStartError,
+  markToolExecutionRefused,
+} from "./tool-effect-receipt.js";
 import {
   formatToolExecutionErrorMessage,
   isTrustedToolExecutionPreflightError,
   protectNetworkToolExecutionError,
-  registerTrustedToolNoStartError,
-} from "./tool-result-error.js";
+} from "./tool-execution-error.js";
+import { buildToolMutationState } from "./tool-mutation.js";
+import { normalizeToolPolicyName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 

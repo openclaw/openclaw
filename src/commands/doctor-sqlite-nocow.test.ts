@@ -538,10 +538,10 @@ describe("Doctor NOCOW recovery identities", () => {
     return readTarget().plannedMoves[0]!.archivePath;
   }
 
-  function retire() {
+  async function retire() {
     return retireSessionSqliteRecovery({
       env,
-      preview: inspectSessionSqliteRecovery({ cfg: {}, env }),
+      preview: await inspectSessionSqliteRecovery({ cfg: {}, env }),
       readConfig: async () => ({}),
       confirm: async () => true,
     });

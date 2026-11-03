@@ -299,22 +299,25 @@ deltas cover every parsed process, including rows outside the top-process displa
 probe leaves the summary null and resets that baseline. Intentionally skipped
 process samples retain the baseline for the next observation, with CPU deltas
 covering the full interval. They have empty process rows, a null summary and
-process interval, and an explicit `not-due` probe outcome. After the first `ps`
-timeout, process polling stops for the rest of the run with a
-`disabled-after-timeout` outcome; host metrics continue. The first stalled probe
-can still delay host samples until it returns.
+process interval, and an explicit `not-due` probe outcome. A timed-out process
+scan does not block host sampling. While its output closure is still pending,
+subsequent due scans report `pending-after-timeout` without starting another
+process. Once it closes, process polling can resume at its normal cadence with
+a fresh CPU baseline. Late probe output is discarded.
 The collector never exports arguments, environment values, paths, or application
 content. Fixed phase labels correlate samples with builds, simulator startup,
 Gateway preparation, native tests, screenshots, archiving, and upload.
 
-Each native observation requests termination after two seconds. A starved runner
-can delay process termination and output closure beyond that deadline. Samples
-record their start/end timestamps and phases plus each probe's elapsed wall time;
+Each native observation stops waiting and requests termination after two seconds.
+A starved runner can delay timer delivery, process termination and output closure;
+the collector does not wait for closure or overlap copies of the same probe.
+Samples record their start/end timestamps and phases plus each probe's wait time;
 slow samples can span phases and must not be treated as instantaneous snapshots.
 Collection is independent of the workload, never overlaps or catches up after a
 slow sample, and stops at a 4 MiB output limit. Missing observations remain
 diagnostics, not release failures.
-The footer records collector Node CPU time and RSS; native observation subprocess
+The footer records collector Node CPU time, RSS, and cumulative probe wait time
+(`commandWallMs`); native observation subprocess
 CPU is excluded. RSS is not physical memory footprint, CPU deltas miss processes
 that start and exit between samples, and sparse sampling cannot establish a
 continuous peak. Interpret memory pressure and swap activity alongside free memory.

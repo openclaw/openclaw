@@ -742,7 +742,7 @@ plain code without interactive controls.
 ## Chat behavior
 
 Active-run progress stays in the transcript rather than repeating a **Working…**
-row inside the composer. The composer keeps its **Stop generating** control and
+row inside the composer. The composer keeps its **Stop** control and
 screen-reader run announcements; subagent-wait details remain above it.
 
 The model picker displays your selected preference, even while a reply is sending,

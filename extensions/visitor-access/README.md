@@ -38,7 +38,10 @@ account. Enable the plugin in the source-built Gateway configuration:
 }
 ```
 
-Enabling the plugin or changing its configuration applies through plugin hot reload;
+Changes to `maxVisitors` and `defaultTtlDays` apply to the running service without
+replacing the plugin or waiting for active turns. Existing grants keep their expiry;
+lowering the limit prevents new invitations and bounds list output, without revoking grants.
+Enabling the plugin or changing its Cloudflare settings uses plugin hot replacement;
 no Gateway restart is required.
 Do not retarget `accountId`, `appId`, `policyName`, or the OIDC account-ID mapping while grants exist: the
 durable records belong to that policy, and changing targets could leave the old
