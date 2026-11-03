@@ -1100,6 +1100,14 @@ openclaw-toast-host[data-toast-placement="shell"] .app-toast-lane--top-center {
 
     openclaw-toast-host[data-toast-placement] .app-toast-lanes {
       top: max(
+        calc(20px + var(--safe-area-top)),
+        calc(anchor(--openclaw-top-notices bottom, 0px) + 8px)
+      );
+    }
+
+    /* Only the shell placement sits under the shell chrome. */
+    openclaw-toast-host[data-toast-placement="shell"] .app-toast-lanes {
+      top: max(
         var(--app-toast-shell-top, calc(20px + var(--safe-area-top))),
         calc(anchor(--openclaw-top-notices bottom, 0px) + 8px)
       );
