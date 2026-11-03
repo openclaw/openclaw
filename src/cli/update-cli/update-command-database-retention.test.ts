@@ -52,6 +52,7 @@ function captureExecution(
     managedServiceRootRedirect: null,
     recoveryState: { triageTarget: { env } },
     prepareMutableUpdate: async () => {},
+    onLocalTuiGateAcquired: () => {},
   };
 }
 

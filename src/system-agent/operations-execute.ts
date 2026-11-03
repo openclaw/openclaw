@@ -602,11 +602,11 @@ export async function executeSystemAgentOperation(
         return { applied: false, message: setupNotice };
       }
       const session = agentId ? buildAgentMainSessionKey({ agentId }) : undefined;
-      const { runTui } = await import("../tui/tui.js");
+      const { runNestedTuiAfterUpdateGate } = await import("../tui/tui-update-gate.js");
       // A reachable Gateway owns the state lock, so embedded mode would fail during hatch.
       // Keep embedded mode only as the no-Gateway fallback for standalone sessions.
       const useEmbeddedTui = !overview.gateway.reachable;
-      const result = await runTui({
+      const launched = await runNestedTuiAfterUpdateGate({
         local: useEmbeddedTui,
         session,
         deliver: false,
@@ -615,6 +615,13 @@ export async function executeSystemAgentOperation(
           ? { message: t("wizard.finalize.bootstrapHatchMessage") }
           : {}),
       });
+      if (launched.status === "updated") {
+        const message =
+          "OpenClaw updated before chat opened. Run `openclaw tui` with the updated CLI.";
+        runtime.log(message);
+        return { applied: false, message };
+      }
+      const result = launched.value;
       if (result?.exitReason === "return-to-system-agent") {
         runtime.log(
           result.systemAgentMessage

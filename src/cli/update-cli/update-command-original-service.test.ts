@@ -86,6 +86,18 @@ vi.mock("../../daemon/service.js", async (original) => ({
     readRuntime: async () => ({ status: mocks.running ? "running" : "stopped" }),
   }),
 }));
+// mock-isolation: Native process discovery is covered by its real-child suite, not service fixtures.
+vi.mock(import("../../infra/local-tui-processes.js"), async (original) => ({
+  ...(await original()),
+  preflightLocalTuiProcessesBeforeUpdate: () => {},
+  announceLocalTuiUpdate: async () => ({ pid: 99, release: async () => {} }),
+  quiesceLocalTuiProcessesBeforeUpdate: async () => ({
+    lockPath: "test-local-tui-update-gate",
+    stopped: [],
+    warnings: [],
+    release: async () => {},
+  }),
+}));
 vi.mock("./update-command-service.js", async (original) => ({
   ...(await original<typeof import("./update-command-service.js")>()),
   maybeStopManagedServiceBeforeMutableUpdate: mocks.stop,
@@ -184,6 +196,7 @@ function executePackageUpdate(
     managedServiceRootRedirect: null,
     managedServiceRoot: rootA,
     recoveryState: { triageTarget: { env: state.env } },
+    onLocalTuiGateAcquired: vi.fn(),
     prepareMutableUpdate: async () => fence.assertCurrent(),
   });
 }

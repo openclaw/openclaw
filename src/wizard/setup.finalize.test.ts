@@ -193,7 +193,12 @@ vi.mock("../../packages/terminal-core/src/restore.js", () => ({
 }));
 
 // mock-isolation: Onboarding handoff fixtures isolate the interactive terminal graph.
-vi.mock("../tui/tui.js", () => ({ runTui }));
+// mock-isolation: Exercise the owning handoff without importing an interactive TUI.
+vi.mock("../tui/tui-update-gate.js", () => ({
+  runNestedTuiAfterUpdateGate: async (
+    options: Parameters<typeof import("../tui/tui.js").runTui>[0],
+  ) => ({ status: "ran", value: await runTui(options) }),
+}));
 
 // mock-isolation: Finalization controls readiness outcomes without probing live provider accounts.
 vi.mock("../commands/auth-choice.model-check.js", () => ({

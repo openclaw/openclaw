@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import type { StartupConfigPreflightOptions } from "../../commands/startup-config-preflight.js";
 import { setVerbose } from "../../globals.js";
+import { parseOpenClawProcessTitle } from "../../infra/openclaw-installation-id.js";
 import type { LogLevel } from "../../logging/levels.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveCliArgvInvocation } from "../argv-invocation.js";
@@ -59,7 +60,10 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     // Every CLI invocation presents as `openclaw` in process listings instead of `node`; only the
     // long-running Gateway takes a distinct title (see gateway-cli/run-loop.ts), so lock readers and
     // operators can tell it apart from ordinary commands.
-    if (process.title !== CLI_NAME) {
+    if (
+      process.title !== CLI_NAME &&
+      parseOpenClawProcessTitle(process.title)?.name !== "openclaw-tui"
+    ) {
       process.title = CLI_NAME;
     }
     const argv = process.argv;

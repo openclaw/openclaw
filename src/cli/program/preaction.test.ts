@@ -139,6 +139,12 @@ describe("registerPreActionHooks", () => {
     banner: emitCliBannerMock,
   });
 
+  it("preserves the installation-scoped TUI identity through command preparation", async () => {
+    process.title = "openclaw-tui@0123456789abcdef";
+    await runPreAction("status");
+    expect(process.title).toBe("openclaw-tui@0123456789abcdef");
+  });
+
   it("runs gateway pre-bootstrap before full-CLI gateway bootstrap", async () => {
     prepareGatewayMock.mockResolvedValueOnce(false);
     const gatewayRunCommand = resolveActionCommand(["gateway", "run"]);

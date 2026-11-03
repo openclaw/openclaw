@@ -33,7 +33,12 @@ vi.mock("../wizard/clack-prompter.js", async (importOriginal) => ({
 // mock-isolation: Exercise remote RPC adapters without initializing the local setup and config owners.
 vi.mock("./onboard-guided.js", () => ({ runGuidedOnboarding: mocks.runGuidedOnboarding }));
 // mock-isolation: Remote onboarding records its handoff without loading the local terminal runtime.
-vi.mock("../tui/tui.js", () => ({ runTui: mocks.runTui }));
+// mock-isolation: Exercise the owning handoff without importing an interactive TUI.
+vi.mock("../tui/tui-update-gate.js", () => ({
+  runNestedTuiAfterUpdateGate: async (
+    options: Parameters<typeof import("../tui/tui.js").runTui>[0],
+  ) => ({ status: "ran", value: await mocks.runTui(options) }),
+}));
 
 vi.mock("../infra/device-identity-async.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/device-identity-async.js")>()),

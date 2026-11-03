@@ -23,6 +23,12 @@ import { resolveSystemAgentVerifiedInferenceState } from "./verified-inference.j
 const verifiedInferenceMocks = vi.hoisted(() => ({
   preparedBindings: new WeakMap<object, OpenClawConfig>(),
 }));
+const runNestedTuiAfterUpdateGate = vi.hoisted(() => vi.fn());
+
+vi.mock("../tui/tui-update-gate.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../tui/tui-update-gate.js")>()),
+  runNestedTuiAfterUpdateGate,
+}));
 
 vi.mock("../commands/channels/add.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../commands/channels/add.js")>()),
@@ -209,6 +215,19 @@ describe("runSystemAgentTui", () => {
       },
     );
     expect(runTui).not.toHaveBeenCalled();
+  });
+
+  it("reports when an update interrupts the setup shell", async () => {
+    const verified = await createVerifiedTuiOptions({ loadOverview: async () => overview });
+    const runtime = createRuntime();
+    runtime.error = vi.fn();
+    runNestedTuiAfterUpdateGate.mockResolvedValueOnce({ status: "updated" });
+
+    await runSystemAgentTui(verified, runtime);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "OpenClaw updated before setup opened. Run `openclaw setup` again with the updated CLI.",
+    );
   });
 
   it("runs OpenClaw inside the shared TUI shell", async () => {

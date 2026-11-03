@@ -38,6 +38,7 @@ import {
   handoffUpdateFromGateway,
   parkForegroundUpdateForActivation,
 } from "./update-command-handoff.js";
+import { preflightUpdateLocalTui, stopAfterTuiGate } from "./update-command-local-tui.js";
 import {
   captureOwnedManagedUpdateContext,
   readUpdateCandidateSource,
@@ -212,7 +213,7 @@ export async function executeMutableUpdate(
         ? [params.root, resolveGitInstallDir()]
         : [params.root]
       : null;
-  const stopManagedServiceBeforeMutableUpdate = async (
+  const stopManagedService = async (
     mutationRoots: readonly string[] = [params.root],
     phase: "inspect" | "prepare" = "prepare",
   ) => {
@@ -379,7 +380,7 @@ export async function executeMutableUpdate(
         // Explicit artifacts acquire their version before rehearsal or activation.
         await preflightPlugins(await readPackageVersion(root));
         if (deferredFamilyPreparation) {
-          await stopManagedServiceBeforeMutableUpdate(gitMutationRoots ?? undefined, "inspect");
+          await stopManagedService(gitMutationRoots ?? undefined, "inspect");
         }
         await prepareMutableUpdate(ownedManagedUpdateContext?.env ?? admission?.managedEnv);
         if (params.updateInstallKind === "git") {
@@ -511,7 +512,7 @@ export async function executeMutableUpdate(
     });
     if (!servicePrepared) {
       await waitForCurrent();
-      await stopManagedServiceBeforeMutableUpdate(roots);
+      await stopAfterTuiGate(params, roots, assertExecutionCurrent, stopManagedService);
       // Preparation can hold Windows recovery custody without stopping a process.
       servicePrepared = true;
     }
@@ -551,6 +552,7 @@ export async function executeMutableUpdate(
     getDoctorContext,
   };
   try {
+    preflightUpdateLocalTui(params.root);
     admission = await inspectUpdateDatabaseContexts({
       ...databaseContextOptions,
       roots: gitMutationRoots ?? [params.root],
@@ -565,7 +567,7 @@ export async function executeMutableUpdate(
         await preflightPlugins(params.packageTargetVersion ?? null);
       }
       if (!deferredFamilyPreparation) {
-        await stopManagedServiceBeforeMutableUpdate(undefined, "inspect");
+        await stopManagedService(undefined, "inspect");
       }
       if (!stagedPluginAdmission && !deferredFamilyPreparation) {
         await prepareMutableUpdate(admission?.managedEnv);
@@ -629,7 +631,7 @@ export async function executeMutableUpdate(
           assertExecutionCurrent();
           admittedTargetSchemaVersions = target.schemaVersions;
           if (!gitContextPrepared && !deferredFamilyPreparation) {
-            await stopManagedServiceBeforeMutableUpdate(gitMutationRoots ?? undefined, "inspect");
+            await stopManagedService(gitMutationRoots ?? undefined, "inspect");
             await prepareMutableUpdate(admission?.managedEnv);
             // Revalidation retains activation's stop and recovery state.
             gitContextPrepared = true;

@@ -1119,8 +1119,8 @@ async function runCliWithPreparedOutputMode(
         await setupWizardCommand(bareRootLaunchTarget.classic ? { classic: true } : {});
         return;
       }
-      const { runTui } = await import("../tui/tui.js");
-      await runTui({
+      const { runTuiAfterUpdateGate } = await import("../tui/tui-update-gate.js");
+      await runTuiAfterUpdateGate({
         deliver: false,
         ...(bareRootLaunchTarget.local
           ? { local: true }

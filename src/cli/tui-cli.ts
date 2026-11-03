@@ -58,9 +58,9 @@ export async function runTuiCliAction(
         gateway,
       })
     : undefined;
-  const { runTui } = await import("../tui/tui.js");
+  const { runTuiAfterUpdateGate } = await import("../tui/tui-update-gate.js");
   const { url, token, password, tlsFingerprint } = resolved?.gateway ?? {};
-  await runTui({
+  await runTuiAfterUpdateGate({
     local: isLocal,
     ...(url ? { boundGateway: { url, token, password, tlsFingerprint } } : gateway),
     session: resolved?.sessionKey ?? opts.session,

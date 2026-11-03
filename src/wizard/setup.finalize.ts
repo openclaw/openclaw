@@ -47,7 +47,7 @@ import {
 import { formatWindowsGatewayFirewallGuidance } from "../infra/windows-gateway-firewall-diagnostics.js";
 import { ExitError, type RuntimeEnv } from "../runtime.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
-import { runTui } from "../tui/tui.js";
+import { runNestedTuiAfterUpdateGate } from "../tui/tui-update-gate.js";
 import { resolveUserPath } from "../utils.js";
 import { listConfiguredWebSearchProviders } from "../web-search/runtime.js";
 import { t } from "./i18n/index.js";
@@ -919,7 +919,7 @@ export async function finalizeSetupWizard(
       }
       restoreTerminalState("pre-setup tui", { resumeStdinIfPaused: false });
       try {
-        await runTui({
+        const tuiResult = await runNestedTuiAfterUpdateGate({
           ...(gatewayProbe.ok
             ? {
                 config: nextConfig,
@@ -950,10 +950,18 @@ export async function finalizeSetupWizard(
             : undefined,
           initialMessageTimeoutMs: HATCH_TUI_TIMEOUT_MS,
         });
+        launchedTui = tuiResult.status === "ran";
+        if (tuiResult.status === "updated") {
+          await prompter.note(
+            t("wizard.finalize.tuiUpdatedBeforeLaunch", {
+              command: formatCliCommand("openclaw tui"),
+            }),
+            t("wizard.finalize.tuiUpdatedBeforeLaunchTitle"),
+          );
+        }
       } finally {
         restoreTerminalState("post-setup tui", { resumeStdinIfPaused: false });
       }
-      launchedTui = true;
     }
 
     return { launchedTui };
