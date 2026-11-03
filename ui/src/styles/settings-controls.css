@@ -285,7 +285,6 @@ select.settings-select {
 @media (max-width: 640px) {
   :root {
     --settings-touch-control-height: var(--settings-control-height);
-    --logs-toolbar-height: var(--settings-control-height);
     --row-action-size: 32px;
   }
 
@@ -345,7 +344,7 @@ select.settings-select {
     min-height: var(--settings-control-height);
   }
 
-  :root .btn:is(.cron-job-menu__trigger, .device-entry__menu-trigger, .secrets-store__menu-trigger),
+  :root .btn:is(.cron-job-menu__trigger, .secrets-store__menu-trigger),
   :root .plugin-editor__menu .btn.btn--icon,
   :root openclaw-sessions-page td .icon-btn[aria-haspopup="menu"] {
     width: var(--row-action-size);

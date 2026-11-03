@@ -248,6 +248,7 @@ Notes:
 
 - `tts status` only supports `--gateway` (it reflects gateway-managed TTS state).
 - Local and loopback-Gateway `tts convert --output` copies stage beside the destination and replace it only after success; a failed copy leaves an existing file unchanged.
+- If interruption is accepted before the output copy begins, `tts convert` leaves the requested destination unchanged. Completed synthesis audio remains in the media store for its normal lifetime.
 - Remote-Gateway `tts convert --output` is rejected before requesting speech synthesis.
 - Use `tts convert --provider <id>` when selecting a provider without overriding its model.
 - `--channel <id>` is an output-format hint, not a delivery request. Local conversion
@@ -287,6 +288,9 @@ openclaw infer web providers --agent <id> --json
 ```
 
 `web providers` lists available, configured, and selected providers for search and fetch.
+
+Interrupting web search or fetch forwards cancellation to the request and suppresses
+late provider results and failures.
 
 ## Embedding
 

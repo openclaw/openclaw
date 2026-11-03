@@ -673,71 +673,81 @@ describe("external shared-state ownership", () => {
     ).toBeDefined();
   });
 
-  it("fences a claim made immediately before dangling Workshop index repair", () => {
-    const env = createEnv();
-    const databasePath = openOpenClawStateDatabase({ env }).path;
-    closeOpenClawStateDatabaseForTest();
-    const { DatabaseSync } = requireNodeSqlite();
-    createDanglingSkillWorkshopReviewIndex(databasePath);
+  it.each(["SDK sync", "Doctor async"] as const)(
+    "fences a claim made immediately before dangling Workshop index repair (%s)",
+    async (reader) => {
+      const env = createEnv();
+      const databasePath = openOpenClawStateDatabase({ env }).path;
+      closeOpenClawStateDatabaseForTest();
+      const { DatabaseSync } = requireNodeSqlite();
+      createDanglingSkillWorkshopReviewIndex(databasePath);
 
-    const originalExec = Object.getOwnPropertyDescriptor(DatabaseSync.prototype, "exec")?.value as
-      | ((this: import("node:sqlite").DatabaseSync, sql: string) => void)
-      | undefined;
-    if (!originalExec) {
-      throw new Error("DatabaseSync.exec descriptor is unavailable");
-    }
-    let immediateTransactionCount = 0;
-    const exec = vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(function (
-      this: import("node:sqlite").DatabaseSync,
-      sql: string,
-    ) {
-      if (sql === "BEGIN IMMEDIATE" && ++immediateTransactionCount === 1) {
-        const claimant = new DatabaseSync(databasePath);
-        try {
-          claimant.enableDefensive?.(false);
-          claimant.exec("PRAGMA writable_schema = ON;");
-          claimant
-            .prepare(
-              `INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
-               VALUES (?, ?, ?)`,
-            )
-            .run(
-              STATE_SUPERVISION_KEY,
-              JSON.stringify({
-                version: 1,
-                mode: "external",
-                managerId: "race-manager",
-                claimedAt: 1,
-              }),
-              1,
-            );
-        } finally {
-          claimant.close();
-        }
+      const originalExec = Object.getOwnPropertyDescriptor(DatabaseSync.prototype, "exec")
+        ?.value as ((this: import("node:sqlite").DatabaseSync, sql: string) => void) | undefined;
+      if (!originalExec) {
+        throw new Error("DatabaseSync.exec descriptor is unavailable");
       }
-      return originalExec.call(this, sql);
-    });
+      let immediateTransactionCount = 0;
+      const exec = vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(function (
+        this: import("node:sqlite").DatabaseSync,
+        sql: string,
+      ) {
+        if (sql === "BEGIN IMMEDIATE" && ++immediateTransactionCount === 1) {
+          const claimant = new DatabaseSync(databasePath);
+          try {
+            claimant.enableDefensive?.(false);
+            claimant.exec("PRAGMA writable_schema = ON;");
+            claimant
+              .prepare(
+                `INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
+               VALUES (?, ?, ?)`,
+              )
+              .run(
+                STATE_SUPERVISION_KEY,
+                JSON.stringify({
+                  version: 1,
+                  mode: "external",
+                  managerId: "race-manager",
+                  claimedAt: 1,
+                }),
+                1,
+              );
+          } finally {
+            claimant.close();
+          }
+        }
+        return originalExec.call(this, sql);
+      });
 
-    try {
-      expect(() => repairOpenClawStateDatabaseSchema({ env })).toThrow(OpenClawStateOwnershipError);
-    } finally {
-      exec.mockRestore();
-    }
-    expect(immediateTransactionCount).toBe(1);
+      try {
+        if (reader === "Doctor async") {
+          await expect(prepareOpenClawStateDatabaseSchema({ env }, "doctor")).rejects.toThrow(
+            OpenClawStateOwnershipError,
+          );
+        } else {
+          expect(() => repairOpenClawStateDatabaseSchema({ env })).toThrow(
+            OpenClawStateOwnershipError,
+          );
+        }
+      } finally {
+        exec.mockRestore();
+      }
+      expect(immediateTransactionCount).toBe(1);
 
-    const verify = new DatabaseSync(databasePath, { readOnly: true });
-    try {
-      verify.enableDefensive?.(false);
-      verify.exec("PRAGMA writable_schema = ON;");
-      expect(
-        verify
-          .prepare("SELECT rootpage FROM sqlite_schema WHERE type = 'index' AND name = ?")
-          .get("idx_skill_workshop_collection_reviews_workspace_time"),
-      ).toBeDefined();
-    } finally {
-      verify.close();
-    }
-  });
+      const verify = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        verify.enableDefensive?.(false);
+        verify.exec("PRAGMA writable_schema = ON;");
+        expect(
+          verify
+            .prepare("SELECT rootpage FROM sqlite_schema WHERE type = 'index' AND name = ?")
+            .get("idx_skill_workshop_collection_reviews_workspace_time"),
+        ).toBeDefined();
+      } finally {
+        verify.close();
+      }
+    },
+  );
 
   it("fences a claim made during a canonical current-schema cold open", () => {
     const env = createEnv();

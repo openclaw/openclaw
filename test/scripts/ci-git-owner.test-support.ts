@@ -309,6 +309,12 @@ export async function runCiGitStep(options: {
         ]) {
           write(path.join(directory, ".git/preexisting.lock"), "not invocation-owned\n");
         }
+        if (isWorkflow("plugin-npm-release")) {
+          write(
+            path.join(workspace, ".release-tooling/scripts/plugin-npm-release-admission.py"),
+            read("scripts/plugin-npm-release-admission.py"),
+          );
+        }
         if (pluginRelease) {
           write(path.join(workspace, "package.json"), '{"version":"2026.8.33"}\n');
         }

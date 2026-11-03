@@ -79,10 +79,10 @@ describe("Firecrawl payloads", () => {
     }
   });
 
-  it("keeps the requested target when provider redirect metadata is hostile", async () => {
-    const data = { markdown: "safe", metadata: { sourceURL: "file:///etc/passwd" } };
-    const result = await scrape({ data });
-    expect(result.finalUrl).toBe("https://example.com/requested");
+  it.each([undefined, url + "/final"])("projects safe URLs: %s", async (resolved) => {
+    const metadata = { sourceURL: resolved ? url : "file:///etc/passwd", url: resolved };
+    const result = await scrape({ data: { markdown: "safe", metadata } });
+    expect(result.finalUrl).toBe(resolved ?? url);
   });
 
   it("rejects responses without usable content", async () => {

@@ -1,8 +1,7 @@
 /* @vitest-environment jsdom */
 
 import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { URL as NodeURL } from "node:url";
 import vm from "node:vm";
 import { afterEach, expect, it, vi } from "vitest";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
@@ -32,13 +31,8 @@ async function mountAttachment(
   return panel;
 }
 
-const workerProgram = fs.readFileSync(
-  path.join(
-    path.dirname(fileURLToPath(import.meta.url)),
-    "../../../../public/pdf-preview-worker.js",
-  ),
-  "utf8",
-);
+const workerUrl = new NodeURL("../../../../public/pdf-preview-worker.js", import.meta.url);
+const workerProgram = fs.readFileSync(workerUrl, "utf8");
 
 function stubObjectUrls() {
   // jsdom has no Worker. Keep its URL API separate: reverting to app-created PDF URLs must fail.
@@ -85,13 +79,12 @@ function stubObjectUrls() {
     }
   }
   vi.stubGlobal("Worker", TestWorker);
-  class TestURL extends URL {}
-  Object.defineProperty(TestURL, "createObjectURL", {
-    value: () => {
+  class TestURL extends URL {
+    static override createObjectURL(): never {
       throw new Error("The PDF preview must not create its URL in the app document realm");
-    },
-  });
-  Object.defineProperty(TestURL, "revokeObjectURL", { value: revokeObjectURL });
+    }
+    static override revokeObjectURL = revokeObjectURL;
+  }
   vi.stubGlobal("URL", TestURL);
   return { createObjectURL, revokeObjectURL };
 }
@@ -254,7 +247,13 @@ it.each(["unchanged", "changed", "failed", "identity", "oversized"] as const)(
       .mockResolvedValueOnce(new Response(bytes))
       .mockReturnValueOnce(refreshed.promise);
     vi.stubGlobal("fetch", fetchMock);
-    const panel = await mountAttachment({ sourceIdentity: "attachment:brief" });
+    const download = async () => ({ url: source, filename: "brief.pdf" });
+    const file = { path: "brief.pdf", download };
+    const panel = await mountAttachment({
+      src: change === "unchanged" ? undefined : source,
+      sourceIdentity: "attachment:brief",
+      file: change === "unchanged" ? file : undefined,
+    });
     const query = (selector: string) => panel.querySelector(selector);
     const readerSource = () => query("iframe")?.getAttribute("src");
     const expectSource = (src: string) => waitForSolid(() => expect(readerSource()).toBe(src));
@@ -263,9 +262,10 @@ it.each(["unchanged", "changed", "failed", "identity", "oversized"] as const)(
 
     panel.content = {
       ...panel.content,
-      src: "/__openclaw__/assistant-media?mediaTicket=renewed",
+      src: change === "unchanged" ? undefined : "/__openclaw__/assistant-media?mediaTicket=renewed",
       sourceIdentity: change === "identity" ? "attachment:other" : "attachment:brief",
       sizeBytes: change === "oversized" ? PDF_PREVIEW_MAX_BYTES + 1 : undefined,
+      file: change === "unchanged" ? { ...file, download: () => file.download() } : undefined,
     };
     await panel.updateComplete;
     await waitForSolid(() => {

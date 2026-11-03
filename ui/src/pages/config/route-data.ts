@@ -14,6 +14,7 @@ export const APPEARANCE_SETTINGS_TARGET_IDS = {
   textSize: "settings-appearance-text-size",
   sidebar: "settings-appearance-sidebar",
   chat: "settings-appearance-chat",
+  devices: "settings-appearance-devices",
   sessionSources: "settings-session-sources",
   connection: "settings-appearance-connection",
 } as const;
