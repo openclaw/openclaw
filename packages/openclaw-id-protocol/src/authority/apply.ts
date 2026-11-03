@@ -391,7 +391,19 @@ async function addOwnerDevice(
     approved_by: verified.authority.kind === "root" ? "root" : await fingerprint(cert.signer),
     last_seen: context.now,
   };
-  const events: AuthorityEvent[] = [{ type: "publish_snapshot" }];
+  // A re-add replaces the device's peer keys: tear down every old key the new cert drops.
+  const dropped = (existing?.cert.body.peer_keys ?? []).filter(
+    (key) => !cert.body.peer_keys.includes(key),
+  );
+  const events: AuthorityEvent[] = [
+    ...(dropped.length > 0
+      ? [
+          { type: "disconnect" as const, peer_keys: dropped },
+          { type: "invalidate_tokens" as const, peer_keys: dropped },
+        ]
+      : []),
+    { type: "publish_snapshot" },
+  ];
   if (authority.kind === "root" && context.channel === "mailbox") {
     events.push({ type: "notify_owners", event: "kit_used", ref: fp });
   }
@@ -460,7 +472,8 @@ async function applyRootRotation(
 
 /**
  * Local-operator ceremony (spec section 8.3): pins a new root R' for this claw, clears a
- * freeze, and starts a new epoch. Refused for anything but direct loopback.
+ * freeze, and starts a new epoch, ending every earlier owner device's sessions and tokens.
+ * Refused for anything but direct loopback.
  */
 export function repinRoot(
   state: AuthorityState,
@@ -471,6 +484,8 @@ export function repinRoot(
     return refuse(state, "not_local_operator", "root ceremonies need direct loopback");
   }
   const epoch = nextRootEpoch(state);
+  // The new epoch makes every owner certificate inactive: end those devices' sessions and tokens.
+  const ended = ownerDevicePeerKeys(state);
   return applied(
     {
       ...state,
@@ -478,7 +493,11 @@ export function repinRoot(
       anchor: { root_pub: rootPub, root_epoch: epoch },
       root_history: { ...state.root_history, [epoch]: rootPub },
     },
-    [{ type: "publish_snapshot" }],
+    [
+      { type: "disconnect", peer_keys: ended },
+      { type: "invalidate_tokens", peer_keys: ended },
+      { type: "publish_snapshot" },
+    ],
   );
 }
 
