@@ -1,6 +1,6 @@
-import type { AutofillApprovalSnapshot } from "./autofill-contract.js";
+import type { AutofillApprovalSnapshot } from "../approval-contract.js";
+import type { AutofillRequest } from "./autofill-contract.js";
 import type { AutofillClock } from "./autofill-poll.js";
-import type { AutofillRequest } from "./autofill-service.js";
 
 /** Ephemeral private-link custody, never persisted with the durable request reference. */
 export class AutofillApprovalLinks {

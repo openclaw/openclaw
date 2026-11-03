@@ -3,6 +3,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, expect, it, vi } from "vitest";
 import { BrowserAutofillExtension } from "./autofill-browser.js";
 
+const authority = { assertCurrent() {} };
 const credentials = { accessToken: "synthetic-access", integrationKey: "synthetic-key" };
 const pending = { success: true, result: { path: "status", state: "pending", resolved: [] } };
 const fill = { success: true, result: { status: "fill_submitted" } };
@@ -111,11 +112,14 @@ it("reserves before launch and reuses the worker across the polling window, clos
 it("passes secrets only as arguments and locks mapping, mode, fill, and release together", async () => {
   const s = setup();
   expect(
-    await s.adapter.fillCredential({
-      ...credentials,
-      resourcePath: "private-reference",
-      tab: { targetId: "tab", profile: "owner" },
-    }),
+    await s.adapter.fillCredential(
+      {
+        ...credentials,
+        resourcePath: "private-reference",
+        tab: { targetId: "tab", profile: "owner" },
+      },
+      authority,
+    ),
   ).toEqual(fill);
   expect(s.events).toEqual(["lock", "resolve", "enable", "fill", "disable", "unlock"]);
   expect(s.worker.agenticAutofill.v1.fillCredential).toHaveBeenCalledWith({
@@ -127,11 +131,14 @@ it("passes secrets only as arguments and locks mapping, mode, fill, and release 
     expect(s.calls.map(({ source }) => source).join("\n")).not.toContain(secret);
   }
   expect(
-    await s.adapter.fillCredential({
-      ...credentials,
-      resourcePath: "reference",
-      tab: { targetId: "tab", profile: "other" },
-    }),
+    await s.adapter.fillCredential(
+      {
+        ...credentials,
+        resourcePath: "reference",
+        tab: { targetId: "tab", profile: "other" },
+      },
+      authority,
+    ),
   ).toMatchObject({ success: false, error: { code: "invalidTabId" } });
   await s.adapter.close();
 });
@@ -154,10 +161,13 @@ it("does not call autofill when initialization fails or the API is absent", asyn
   const s = setup();
   s.worker.initialization.v1.whenSettled.mockResolvedValue("failed");
   expect(
-    await s.adapter.createAccessRequest({
-      ...credentials,
-      requests: { version: 2, goal: "test", entries: [] },
-    }),
+    await s.adapter.createAccessRequest(
+      {
+        ...credentials,
+        requests: { version: 2, goal: "test", entries: [] },
+      },
+      authority,
+    ),
   ).toEqual({ success: false, error: { code: "extensionNotReady" } });
   expect(s.worker.agenticAutofill.v1.createAccessRequest).not.toHaveBeenCalled();
   s.worker.initialization.v1.whenSettled.mockResolvedValue("ready");
@@ -184,10 +194,13 @@ it("normalizes documented omitted version and null unrequested entry IDs", async
     },
   });
   expect(
-    await s.adapter.createAccessRequest({
-      ...credentials,
-      requests: { version: 2, goal: "test", entries: [] },
-    }),
+    await s.adapter.createAccessRequest(
+      {
+        ...credentials,
+        requests: { version: 2, goal: "test", entries: [] },
+      },
+      authority,
+    ),
   ).toMatchObject({ success: true, result: { accessRequest: { version: 2 } } });
   s.worker.agenticAutofill.v1.getAccessRequestStatus.mockResolvedValue({
     success: true,
@@ -210,11 +223,14 @@ it("never fills after failed mode enable and never reflects host errors", async 
   const s = setup();
   s.worker.agenticMode.v1.enable.mockResolvedValueOnce({ success: false } as { success: boolean });
   expect(
-    await s.adapter.fillCredential({
-      ...credentials,
-      resourcePath: "opaque",
-      tab: { targetId: "tab" },
-    }),
+    await s.adapter.fillCredential(
+      {
+        ...credentials,
+        resourcePath: "opaque",
+        tab: { targetId: "tab" },
+      },
+      authority,
+    ),
   ).toEqual({ success: false, error: { code: "internal" } });
   expect(s.worker.agenticAutofill.v1.fillCredential).not.toHaveBeenCalled();
   const bad = new BrowserAutofillExtension(
@@ -240,10 +256,13 @@ it("renews failed attachments and lost sessions without retrying an uncertain re
   s.worker.agenticAutofill.v1.createAccessRequest.mockRejectedValueOnce(new Error("uncertain"));
   expect(
     (
-      await s.adapter.createAccessRequest({
-        ...credentials,
-        requests: { version: 2, goal: "test", entries: [] },
-      })
+      await s.adapter.createAccessRequest(
+        {
+          ...credentials,
+          requests: { version: 2, goal: "test", entries: [] },
+        },
+        authority,
+      )
     ).success,
   ).toBe(false);
   expect(s.worker.agenticAutofill.v1.createAccessRequest).toHaveBeenCalledOnce();
@@ -261,11 +280,14 @@ it("does not close an active fill when another caller cannot enter its profile",
     await finish.promise;
     return fill;
   });
-  const operation = s.adapter.fillCredential({
-    ...credentials,
-    resourcePath: "opaque",
-    tab: { targetId: "tab" },
-  });
+  const operation = s.adapter.fillCredential(
+    {
+      ...credentials,
+      resourcePath: "opaque",
+      tab: { targetId: "tab" },
+    },
+    authority,
+  );
   await filling.promise;
   vi.spyOn(s.session, "callInServiceWorker").mockRejectedValueOnce(new Error("profile busy"));
   expect((await s.adapter.readiness()).success).toBe(false);
@@ -312,5 +334,97 @@ it("does not discard a new attachment when an old overlapping call fails late", 
   expect((await s.adapter.readiness()).success).toBe(true);
   expect(s.registration.openSession).toHaveBeenCalledTimes(2);
   expect(replacement.close).not.toHaveBeenCalled();
+  await s.adapter.close();
+});
+
+it.each(["register", "attach", "initialize", "resolve", "enable"] as const)(
+  "rejects canceled and revoked fills during %s and releases the tab",
+  async (step) => {
+    for (const reason of ["cancel", "revoke"] as const) {
+      const s = setup();
+      const entered = createDeferred<void>();
+      const resume = createDeferred<void>();
+      const controller = new AbortController();
+      let current = true;
+      const invocation = {
+        signal: controller.signal,
+        assertCurrent() {
+          if (!current) {
+            throw new Error("revoked");
+          }
+        },
+      };
+      const pause = async () => {
+        entered.resolve();
+        await resume.promise;
+      };
+      if (step === "register") {
+        s.register.mockImplementationOnce(async () => {
+          await pause();
+          return s.registration;
+        });
+      }
+      if (step === "attach") {
+        s.registration.openSession.mockImplementationOnce(async () => {
+          await pause();
+          return s.session;
+        });
+      }
+      if (step === "initialize") {
+        s.worker.initialization.v1.whenSettled.mockImplementationOnce(async () => {
+          await pause();
+          return "ready";
+        });
+      }
+      if (step === "resolve") {
+        vi.spyOn(s.session, "resolveChromeTabId").mockImplementationOnce(async () => {
+          await pause();
+          return 42;
+        });
+      }
+      if (step === "enable") {
+        s.worker.agenticMode.v1.enable.mockImplementationOnce(async () => {
+          await pause();
+          return { success: true };
+        });
+      }
+      const filling = s.adapter.fillCredential(
+        { ...credentials, resourcePath: "opaque", tab: { targetId: "tab" } },
+        invocation,
+      );
+      await entered.promise;
+      if (reason === "cancel") {
+        controller.abort();
+      } else {
+        current = false;
+      }
+      resume.resolve();
+      expect((await filling).success).toBe(false);
+      expect(s.worker.agenticAutofill.v1.fillCredential).not.toHaveBeenCalled();
+      expect(s.worker.agenticMode.v1.disable).toHaveBeenCalledTimes(step === "enable" ? 1 : 0);
+      if (step === "resolve" || step === "enable") {
+        expect(s.events.at(-1)).toBe("unlock");
+      }
+      await s.adapter.close();
+    }
+  },
+);
+
+it("rejects request creation when invocation authority is lost during initialization", async () => {
+  const s = setup();
+  const controller = new AbortController();
+  s.worker.initialization.v1.whenSettled.mockImplementationOnce(async () => {
+    controller.abort();
+    return "ready";
+  });
+  expect(
+    (
+      await s.adapter.createAccessRequest(
+        { ...credentials, requests: { version: 2, goal: "test", entries: [] } },
+        { ...authority, signal: controller.signal },
+      )
+    ).success,
+  ).toBe(false);
+  expect(s.worker.agenticAutofill.v1.createAccessRequest).not.toHaveBeenCalled();
   await s.adapter.close();
 });

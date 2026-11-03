@@ -2,7 +2,7 @@
 import { render } from "@solidjs/web";
 import { defineControlUiPlugin, type ControlUiHost } from "openclaw/plugin-sdk/control-ui";
 import { createSignal, For, Show } from "solid-js";
-import type { AutofillApprovalSnapshot } from "../src/autofill-contract.js";
+import type { AutofillApprovalSnapshot } from "../approval-contract.js";
 import { brandLogoDark, brandLogoLight, brandMark } from "./brand-mark.js";
 import "./approval.css";
 

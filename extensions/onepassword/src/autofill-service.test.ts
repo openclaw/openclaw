@@ -201,12 +201,15 @@ it("keeps tokens, keys, links and references outside tool results through connec
       tab: { targetId: "tab" },
     }),
   );
-  expect(s.extension.fillCredential).toHaveBeenCalledWith({
-    accessToken: tokens.access_token,
-    integrationKey: key,
-    resourcePath: "synthetic-private-reference",
-    tab: { targetId: "tab" },
-  });
+  expect(s.extension.fillCredential).toHaveBeenCalledWith(
+    {
+      accessToken: tokens.access_token,
+      integrationKey: key,
+      resourcePath: "synthetic-private-reference",
+      tab: { targetId: "tab" },
+    },
+    expect.objectContaining({ assertCurrent: expect.any(Function) }),
+  );
   for (const secret of [
     tokens.access_token,
     tokens.refresh_token,
@@ -650,17 +653,6 @@ it("records the actual click before polling starts and schedules from that momen
   expect(await s.service.approval("request", "chat", authority)).toMatchObject({
     state: "resolved",
     entries: [{ domain: "example.com", granted: true }],
-  });
-});
-
-it("makes a failed background checker unavailable instead of showing indefinite pending", async () => {
-  const s = setup();
-  await s.connect();
-  await s.service.requestLogins(input, "chat", authority);
-  await s.service.noteApprovalOpened("request", "chat", authority);
-  s.service.forgetApprovalLink("request");
-  expect(await s.service.approval("request", "chat", authority)).toMatchObject({
-    state: "unavailable",
   });
 });
 

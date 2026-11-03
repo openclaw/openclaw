@@ -5,7 +5,11 @@ import {
   type ExtensionHostSession,
 } from "openclaw/plugin-sdk/browser-extension-host";
 import { z } from "zod";
-import type { AgenticAutofillExtension, ExtResult } from "./autofill-contract.js";
+import type {
+  AgenticAutofillExtension,
+  AutofillAuthority,
+  ExtResult,
+} from "./autofill-contract.js";
 
 // This declaration describes the vendor global inside serialized worker functions only.
 declare const api: {
@@ -150,10 +154,13 @@ export class BrowserAutofillExtension implements AgenticAutofillExtension {
 
   private async call<T>(
     run: (session: ExtensionHostSession) => Promise<ExtResult<T>>,
+    authority?: AutofillAuthority,
   ): Promise<ExtResult<T>> {
     let attachment: AutofillAttachment | undefined;
     try {
+      this.assertCurrent(authority);
       await this.start();
+      this.assertCurrent(authority);
       if (this.closed || !this.registration) {
         throw new Error("Extension unavailable");
       }
@@ -164,7 +171,10 @@ export class BrowserAutofillExtension implements AgenticAutofillExtension {
       };
       attachment.users += 1;
       const session = await attachment.session;
-      return (await this.initialized(session))
+      this.assertCurrent(authority);
+      const initialized = await this.initialized(session);
+      this.assertCurrent(authority);
+      return initialized
         ? await run(session)
         : { success: false, error: { code: "extensionNotReady" } };
     } catch {
@@ -186,17 +196,26 @@ export class BrowserAutofillExtension implements AgenticAutofillExtension {
     }
   }
 
+  private assertCurrent(authority?: AutofillAuthority): void {
+    authority?.signal?.throwIfAborted();
+    authority?.assertCurrent();
+  }
+
   /** Tokens and keys are argument values, never captured in serialized function source. */
-  async createAccessRequest(p: Parameters<AgenticAutofillExtension["createAccessRequest"]>[0]) {
-    return await this.call(async (session) =>
-      parseResult(
+  async createAccessRequest(
+    p: Parameters<AgenticAutofillExtension["createAccessRequest"]>[0],
+    authority: AutofillAuthority,
+  ) {
+    return await this.call(async (session) => {
+      this.assertCurrent(authority);
+      return parseResult(
         created,
         await session.callInServiceWorker(
           (args: typeof p) => api.agenticAutofill!.v1.createAccessRequest(args),
           p,
         ),
-      ),
-    );
+      );
+    }, authority);
   }
 
   /** Reuse the attached worker while the owner waits for approval. */
@@ -215,53 +234,63 @@ export class BrowserAutofillExtension implements AgenticAutofillExtension {
   }
 
   /** Keep tab mapping, Agentic Mode, fill/submit, and mode release inside the browser lock. */
-  async fillCredential(p: Parameters<AgenticAutofillExtension["fillCredential"]>[0]) {
+  async fillCredential(
+    p: Parameters<AgenticAutofillExtension["fillCredential"]>[0],
+    authority: AutofillAuthority,
+  ) {
     if (p.tab.profile && p.tab.profile !== this.options.browserProfile) {
       return { success: false, error: { code: "invalidTabId" } } as const;
     }
-    return await this.call((session) =>
-      session.withExclusiveTab(p.tab, async () => {
-        const tabId = await session.resolveChromeTabId(p.tab);
-        const enabled = mode.safeParse(
-          await session.callInServiceWorker(
-            (args: { tabId: number }) => api.agenticMode!.v1.enable(args),
-            { tabId },
-          ),
-        );
-        if (!enabled.success) {
-          return internal;
-        }
-        if (!enabled.data.success) {
-          return enabled.data;
-        }
-        let result: unknown;
-        let released: boolean;
-        try {
-          const { accessToken, integrationKey, resourcePath } = p;
-          result = await session.callInServiceWorker(
-            (args: {
-              accessToken: string;
-              integrationKey: string;
-              resourcePath: string;
-              tabId: number;
-            }) => api.agenticAutofill!.v1.fillCredential(args),
-            { accessToken, integrationKey, resourcePath, tabId },
-          );
-        } finally {
-          // Avoid a duplicate enable on multi-page sign-in; release only our own tab scope.
-          const disabled = mode.safeParse(
+    return await this.call(
+      (session) =>
+        session.withExclusiveTab(p.tab, async () => {
+          this.assertCurrent(authority);
+          const tabId = await session.resolveChromeTabId(p.tab);
+          this.assertCurrent(authority);
+          const enabled = mode.safeParse(
             await session.callInServiceWorker(
-              (args: { tabId: number }) => api.agenticMode!.v1.disable(args),
+              (args: { tabId: number }) => api.agenticMode!.v1.enable(args),
               { tabId },
             ),
           );
-          released = disabled.success && disabled.data.success;
-        }
-        if (!released) {
-          throw new Error("Agentic Mode release failed");
-        }
-        return parseResult(filled, result);
-      }),
+          if (!enabled.success) {
+            return internal;
+          }
+          if (!enabled.data.success) {
+            return enabled.data;
+          }
+          let result: unknown;
+          let released: boolean;
+          try {
+            // Mode may have been enabled while this invocation was canceled or revoked.
+            // Keep this check inside the release scope so cancellation still disables it.
+            this.assertCurrent(authority);
+            const { accessToken, integrationKey, resourcePath } = p;
+            result = await session.callInServiceWorker(
+              (args: {
+                accessToken: string;
+                integrationKey: string;
+                resourcePath: string;
+                tabId: number;
+              }) => api.agenticAutofill!.v1.fillCredential(args),
+              { accessToken, integrationKey, resourcePath, tabId },
+            );
+          } finally {
+            // Avoid a duplicate enable on multi-page sign-in; release only our own tab scope.
+            const disabled = mode.safeParse(
+              await session.callInServiceWorker(
+                (args: { tabId: number }) => api.agenticMode!.v1.disable(args),
+                { tabId },
+              ),
+            );
+            released = disabled.success && disabled.data.success;
+          }
+          if (!released) {
+            throw new Error("Agentic Mode release failed");
+          }
+          return parseResult(filled, result);
+        }),
+      authority,
     );
   }
 

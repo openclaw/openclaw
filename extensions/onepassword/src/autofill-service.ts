@@ -3,10 +3,11 @@ import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-run
 import { AutofillApprovalLinks } from "./autofill-approval-links.js";
 import { autofillBrowserGuidance } from "./autofill-browser.js";
 import type {
-  AccessRequest,
   AccessRequestInput,
   AccessRequestStatus,
   AgenticAutofillExtension,
+  AutofillAuthority,
+  AutofillRequest,
   ExtResult,
 } from "./autofill-contract.js";
 import { accessRequestInputSchema, decodeConnectionPath } from "./autofill-input.js";
@@ -28,21 +29,12 @@ export type AutofillConnection = {
   expiresAt: number;
   statusNotBefore?: number;
 };
-export type AutofillRequest = {
-  connectionPath: string;
-  integrationKeyFingerprint: string;
-  scope: string;
-  request: AccessRequest;
-  status: AccessRequestStatus;
-  openedAt?: number;
-  pollingEnded?: boolean;
-};
 type Store<T> = Pick<PluginStateKeyedStore<T, 2>, "lookup" | "register" | "delete" | "entries">;
 export type AutofillStores = {
   connections: Store<AutofillConnection>;
   requests: Store<AutofillRequest>;
 };
-export type AutofillAuthority = { assertCurrent(): void; signal?: AbortSignal };
+export type { AutofillAuthority, AutofillRequest } from "./autofill-contract.js";
 type ServiceOptions = {
   stores: AutofillStores;
   relay: Pick<AutofillRelayClient, "create" | "pickup" | "refresh" | "revoke">;
@@ -437,11 +429,14 @@ export class AutofillService {
       const connection = await this.connection(path, authority);
       this.assertCurrent(authority);
       const created = unwrap(
-        await this.options.extension.createAccessRequest({
-          accessToken: connection.accessToken,
-          integrationKey: connection.integrationKey,
-          requests: parsed.data,
-        }),
+        await this.options.extension.createAccessRequest(
+          {
+            accessToken: connection.accessToken,
+            integrationKey: connection.integrationKey,
+            requests: parsed.data,
+          },
+          authority,
+        ),
       );
       this.assertCurrent(authority);
       const record: AutofillRequest = {
@@ -753,12 +748,15 @@ export class AutofillService {
         throw new AutofillError("requestNotFound");
       }
       const result = unwrap(
-        await this.options.extension.fillCredential({
-          accessToken: connection.accessToken,
-          integrationKey: connection.integrationKey,
-          resourcePath: grant.reference,
-          tab,
-        }),
+        await this.options.extension.fillCredential(
+          {
+            accessToken: connection.accessToken,
+            integrationKey: connection.integrationKey,
+            resourcePath: grant.reference,
+            tab,
+          },
+          authority,
+        ),
       );
       return {
         state: result.status,
