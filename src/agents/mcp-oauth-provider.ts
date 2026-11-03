@@ -20,6 +20,8 @@ export type McpOAuthConfig = {
   scope?: unknown;
   redirectUrl?: unknown;
   clientMetadataUrl?: unknown;
+  clientId?: unknown;
+  clientSecret?: unknown;
 };
 
 export type McpOAuthLoginLifecycle = {
@@ -154,6 +156,25 @@ export async function createMcpOAuthClientProvider(params: {
     }
     return prepared;
   };
+  const staticClientId = normalizeOptionalString(config.clientId);
+  const staticClientSecret = normalizeOptionalString(config.clientSecret);
+  // A server without dynamic client registration can only be used with a
+  // client id provisioned out of band. Returning it here stops the SDK from
+  // attempting registration.
+  const staticClientInformation = () => {
+    if (!staticClientId) {
+      return undefined;
+    }
+    return {
+      client_id: staticClientId,
+      ...(staticClientSecret
+        ? {
+            client_secret: staticClientSecret,
+            token_endpoint_auth_method: "client_secret_basic" as const,
+          }
+        : { token_endpoint_auth_method: "none" as const }),
+    };
+  };
   const assertAuthorizationRedirectAllowed = () => {
     params.login?.assertCurrent();
     if (params.allowAuthorizationRedirect !== true) {
@@ -199,6 +220,11 @@ export async function createMcpOAuthClientProvider(params: {
       return randomUUID();
     },
     async clientInformation() {
+      const fixedClient = staticClientInformation();
+      if (fixedClient) {
+        params.login?.assertCurrent();
+        return fixedClient;
+      }
       const store = await readStore();
       params.login?.assertCurrent();
       // The SDK can replace a mismatched client before requesting authorization.
@@ -225,6 +251,9 @@ export async function createMcpOAuthClientProvider(params: {
       return clientInformation;
     },
     async saveClientInformation(clientInformation) {
+      if (staticClientInformation()) {
+        return;
+      }
       await updateStore({ kind: "clientInformation", clientInformation });
       params.login?.assertCurrent();
     },

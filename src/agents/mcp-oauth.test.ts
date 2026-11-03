@@ -190,6 +190,17 @@ describe("MCP OAuth provider", () => {
     authMock.mockReset();
   });
 
+  itWithHome("uses a configured client id instead of registering", async () => {
+    await withMcpOAuthProviderForTest(
+      { identity: REMOTE_IDENTITY, config: { clientId: "static-client" } },
+      async (provider) => {
+        expect((await provider.clientInformation())?.client_id).toBe("static-client");
+        await provider.saveClientInformation({ client_id: "registered-client" });
+        expect((await provider.clientInformation())?.client_id).toBe("static-client");
+      },
+    );
+  });
+
   itWithHome("reuses a valid session without persisting a redirect", async () => {
     await saveTokens(makeTokens("stored-access", "stored-refresh"));
     const before = await readStore();

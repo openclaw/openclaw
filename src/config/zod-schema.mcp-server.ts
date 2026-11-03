@@ -44,6 +44,8 @@ export const McpServerSchema = z
         scope: z.string().trim().min(1).optional(),
         redirectUrl: HttpUrlSchema.optional(),
         clientMetadataUrl: McpOAuthClientMetadataUrlSchema.optional(),
+        clientId: z.string().trim().min(1).optional(),
+        clientSecret: z.string().trim().min(1).optional(),
       })
       .optional(),
     sslVerify: z.boolean().optional(),
