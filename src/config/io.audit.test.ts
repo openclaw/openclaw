@@ -129,7 +129,15 @@ it("redacts structured audit records before persistence", async () => {
   const record = finalizeConfigWriteAuditRecord({
     base: {
       ...createAuditRecordBase(path.join(home, ".openclaw", "openclaw.json")),
-      argv: ["openclaw", "--password", "audit-password"],
+      argv: [
+        "openclaw",
+        "config",
+        "set",
+        "--expect-current-json",
+        "null",
+        "channels.slack.token",
+        "audit-password",
+      ],
       execArgv: ["--api-key", "audit-api-key"],
       suspicious: [
         "provider returned ya29.fake-access-token-with-enough-length",
@@ -140,16 +148,6 @@ it("redacts structured audit records before persistence", async () => {
     err: Object.assign(new Error("payload contained abcd-efgh-ijkl-mnop"), { code: "EFAIL" }),
   });
 
-  const before = structuredClone(record);
-  const sanitized = sanitizeConfigAuditRecord(record);
-  assert(sanitized.event === "config.write");
-  expect(sanitized.argv).toEqual(["openclaw", "--password", "***"]);
-  expect(sanitized.execArgv).toEqual(["--api-key", "***"]);
-  sanitized.argv.push("changed");
-  sanitized.execArgv.push("changed");
-  sanitized.suspicious.push("changed");
-  expect(record).toEqual(before);
-
   const deps = { env: {}, homedir: () => home };
   await appendConfigAuditRecord({ ...deps, record });
   const raw = JSON.stringify(listConfigAuditRecordsForTests(deps));
@@ -158,6 +156,24 @@ it("redacts structured audit records before persistence", async () => {
   expect(raw).not.toContain("abcd-efgh-ijkl-mnop");
   expect(raw).not.toContain("audit-password");
   expect(raw).not.toContain("audit-api-key");
+
+  const before = structuredClone(record);
+  const sanitized = sanitizeConfigAuditRecord(record);
+  assert(sanitized.event === "config.write");
+  expect(sanitized.argv).toEqual([
+    "openclaw",
+    "config",
+    "set",
+    "--expect-current-json",
+    "null",
+    "channels.slack.token",
+    "***",
+  ]);
+  expect(sanitized.execArgv).toEqual(["--api-key", "***"]);
+  sanitized.argv.push("changed");
+  sanitized.execArgv.push("changed");
+  sanitized.suspicious.push("changed");
+  expect(record).toEqual(before);
 });
 
 it("caps caller-supplied processInfo argv at 8 entries before redaction", () => {
@@ -188,6 +204,34 @@ it.each([
   redactionCase("openclaw config set --batch-json", '[{"path":"token","value":"secret"}]'),
 ])("redacts %j in persisted audit process info", (argv, expected) => {
   expect(createAuditRecordBase("/tmp/openclaw.json", [...argv]).argv).toEqual(expected);
+});
+
+it.each([
+  { options: ["--json"] },
+  { options: ["--strict-json"] },
+  { options: ["--expect-current-json", "null"] },
+  { options: ["--expect-current-json=null"] },
+  { options: ["--json", "--expect-current-json", "null"] },
+])("classifies config set values by path with options $options in every order", ({ options }) => {
+  for (const [configPath, value, expected] of [
+    ["channels.slack.token", '"synthetic-secret"', "***"],
+    ["gateway.port", "19002", "19002"],
+    ["agents.defaults.maxTokens", "2000", "2000"],
+  ] as const) {
+    for (const index of [0, 1, 2]) {
+      const args: string[] = [configPath, value];
+      const redacted: string[] = [configPath, expected];
+      args.splice(index, 0, ...options);
+      redacted.splice(index, 0, ...options);
+      const record = createAuditRecordBase("/tmp/openclaw.json", [
+        "openclaw",
+        "config",
+        "set",
+        ...args,
+      ]);
+      expect(record.argv).toEqual(["openclaw", "config", "set", ...redacted]);
+    }
+  }
 });
 
 it("redacts historical config audit entries while preserving file and directory modes", async () => {

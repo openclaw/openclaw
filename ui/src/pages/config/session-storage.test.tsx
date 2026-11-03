@@ -76,9 +76,9 @@ it("retains expanded agent inventory rows across refreshes and updates reordered
   const initial = inventory(7);
   initial.agents.push({ ...initial.agents[0]!, agentId: "research", hotTranscripts: 3 });
   const { page, request, reply } = await mount(initial);
-  const disclosure = page.querySelector<HTMLDetailsElement>("details.settings-row--stacked")!;
+  const disclosure = page.querySelector<HTMLDetailsElement>("details.settings-disclosure")!;
   disclosure.open = true;
-  const rows = [...disclosure.querySelectorAll(".settings-row")];
+  const rows = [...disclosure.querySelectorAll(".settings-subrows .settings-row")];
 
   const updated = structuredClone(initial);
   updated.agents[0]!.hotTranscripts = 11;
@@ -86,7 +86,10 @@ it("retains expanded agent inventory rows across refreshes and updates reordered
   request.mockImplementation(reply("sessions.storage.status", async () => updated));
   click(page, "Refresh");
   await waitText(page, "14 uncompressed");
-  expect([...disclosure.querySelectorAll(".settings-row")]).toEqual([rows[1], rows[0]]);
+  expect([...disclosure.querySelectorAll(".settings-subrows .settings-row")]).toEqual([
+    rows[1],
+    rows[0],
+  ]);
   expect(rows[0]?.textContent).toContain("11 uncompressed");
   expect(disclosure.open).toBe(true);
 });

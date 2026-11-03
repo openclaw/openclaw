@@ -191,7 +191,9 @@ export function copySourceFile(
       destination: { rootPath: path.dirname(targetPath), absolutePath: targetPath },
       expectedSourceIdentity: source.identity,
       sourceHardlinks: "allow",
-      clone: "auto",
+      // Reflinks lock the source inode and add shared extents to live databases.
+      // Inspection preserves source artifacts, not physical extent sharing.
+      clone: "never",
       mode: 0o600,
     });
     try {
@@ -450,7 +452,7 @@ async function copyPreparedLocation(
       const { sourcePath, targetPath, expectedSourceIdentity } = step.value;
       const source = openPinnedFile(sourcePath, expectedSourceIdentity);
       try {
-        await copySqliteFile(sourcePath, targetPath, source.identity);
+        await copySqliteFile(sourcePath, targetPath, source.identity, { clone: "never" });
       } finally {
         try {
           assertPinnedIdentityUnchanged(source);
@@ -654,7 +656,7 @@ export function prepareSqliteReadOnlyLocationSyncInProcess(
   );
 }
 
-/** Artifact-preserving acquisition with native CoW where supported, in the isolated child. */
+/** Artifact-preserving byte copy in the isolated child, without source extent sharing. */
 export function prepareSqliteReadOnlyCopyInProcess(
   pathname: string,
   stagingRoot?: SqliteSnapshotDestination,
