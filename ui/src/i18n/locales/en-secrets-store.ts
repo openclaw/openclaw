@@ -41,6 +41,7 @@ const enSecretsStore = {
     warnings: "{count} runtime warnings.",
     partial: "{saved}/{total}: {error}",
     confirmDelete: "Delete {name}?",
+    confirmDeleteBody: "This can’t be undone.",
     deleted: "Deleted {name}.",
     deleteFailed: "The secret was not deleted. Reload the list and try again.",
   },

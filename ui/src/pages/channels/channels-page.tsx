@@ -447,10 +447,10 @@ export function ChannelsPage() {
   /** Resolves true once the channel has nothing unsaved; false keeps the user editing. */
   async function resolveUnsavedConfig(channelId: string) {
     const choice = await showConfirmChoiceDialog({
-      title: t("channels.config.unsavedTitle"),
-      message: t("channels.config.unsavedMessage", {
+      title: t("channels.config.unsavedTitle", {
         channel: resolveChannelLabel(viewProps(), channelId),
       }),
+      message: t("channels.config.unsavedMessage"),
       confirmLabel: t("common.save"),
       alternativeLabel: t("channels.config.discard"),
       cancelLabel: t("channels.config.keepEditing"),

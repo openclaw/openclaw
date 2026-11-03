@@ -55,6 +55,7 @@ const enSessionOrganization = {
     actionRequiresConnection: en.sessionsView.actionRequiresConnection,
     actionRequiresScope: en.sessionsView.actionRequiresScope,
     actionRequiresOwnership: en.sessionsView.actionRequiresOwnership,
+    removePreservedWorktreeTitle: "Remove worktree {branch}?",
     deletePreservedReasons: {
       "owner-mismatch": "owned elsewhere",
       busy: "live run or cleanup active",
@@ -90,8 +91,7 @@ const enSessionOrganization = {
     snoozeTomorrowTime: en.sessionsView.snoozeTomorrowTime,
     sessionArchived: "Session archived",
     deleteAllArchived: "Delete all archived…",
-    deleteAllArchivedConfirm:
-      "Delete {count} archived sessions and their transcripts? Any attached workers will be stopped safely first.",
+    deleteAllArchivedTitle: "Delete {count} archived sessions?",
     activeTooltip: "Loads sessions updated in the last {count} minutes.",
     limitTooltip: "Max sessions to load.",
     globalTooltip: "Include global sessions.",
@@ -236,16 +236,18 @@ const enSessionOrganization = {
       "Group created, but the move was skipped because the list changed. Move from the row menu.",
     stopCloudWorkerConfirm: sharedSessions.stopCloudWorkerConfirm,
     stopCloudWorkerConfirmAction: sharedSessions.stopCloudWorkerConfirmAction,
+    stopCloudWorkerBody: sharedSessions.stopCloudWorkerBody,
     stopCloudWorkerStale:
       'Gateway connection replaced before the cloud worker for "{session}" was stopped. Try again.',
+    deleteSessionTitle: "Delete “{session}”?",
     deleteSessionConfirm:
-      'Delete "{session}" and its transcript? Any attached worker will be stopped safely first.',
+      "This also deletes its transcript. Any attached worker stops safely first.",
+    deleteSessionsTitle: "Delete {count} sessions?",
     deleteSessionsConfirm:
-      "Delete {count} sessions and their transcripts? Any attached workers will be stopped safely first.",
-    deleteSelectedConfirmOne:
-      "Delete 1 session?\n\nStop any attached worker safely, then delete the session entry and archive its transcript.",
+      "This also deletes their transcripts. Any attached workers stop safely first.",
+    deleteSelectedConfirmOne: "Any attached worker stops safely first. Its transcript is archived.",
     deleteSelectedConfirm:
-      "Delete {count} sessions?\n\nStop any attached workers safely, then delete the session entries and archive their transcripts.",
+      "Any attached workers stop safely first. Their transcripts are archived.",
     archiveSessionTitle: "Also archive nested sessions?",
     archiveSessionNestedOne:
       '"{session}" has 1 directly nested session. If you archive only this session, that nested session moves to the top level.',
@@ -255,7 +257,6 @@ const enSessionOrganization = {
     archiveSessionNestedOffline:
       'Archive only "{session}"? Its directly nested sessions move to the top level. Reconnect to archive the complete subtree.',
     archiveAllSessions: "Archive all ({count})",
-    automationPauseTitle: "Pause automations?",
     automationPauseArchiveOne: 'Archiving "{session}" pauses its automations.',
     automationPauseArchiveOther:
       "Automations are bound to {count} of these conversations. Archiving a conversation pauses its automations.",
@@ -270,8 +271,10 @@ const enSessionOrganization = {
       "Archive a persistent conversation and its children, not a hidden worker run.",
     archiveRunningSessions:
       "This selection contains active work. Archiving stops work in the selected sessions.",
+    archiveSessionPrompt: "Archive “{session}”?",
+    archiveSessionsPrompt: "Archive {count} sessions?",
     archiveRunningSessionConfirm:
-      "Archive {session}? Active work in this session will be stopped. Other conversations are not archived.",
+      "Active work in this session stops. Other sessions aren’t archived.",
     archiveTreeChanged:
       "The session tree changed. Nothing was archived. Open the menu and try again.",
     sessionMovedToTopLevel: "Session moved to top level",
@@ -313,7 +316,7 @@ const enSessionOrganization = {
     groupDefaultsStale: en.sessionsView.groupDefaultsStale,
     renameGroupTitle: 'Rename group "{group}"',
     groupNameLabel: "Group name",
-    deleteGroupTitle: 'Delete group "{group}"',
+    deleteGroupTitle: "Delete group “{group}”?",
     deleteGroupConfirm: "The group is removed. Its sessions move back to the session list.",
     deleteGroupStale: 'Gateway connection replaced before "{group}" was deleted. Try again.',
     dragSessionHint: "Drag session to move between groups",
@@ -343,7 +346,9 @@ const enSessionOrganization = {
     restorable: "Restorable",
     restore: "Restore",
     confirmDelete: "Snapshot and delete {name}?",
-    confirmForceDelete: "Snapshot failed: {error}\n\nDelete without a snapshot?",
+    confirmDeleteBody: "OpenClaw saves a safety snapshot first.",
+    confirmForceDeleteTitle: "Delete without a snapshot?",
+    confirmForceDelete: "Snapshot failed: {error}\n\nUncommitted changes are lost.",
   },
 } satisfies TranslationMap;
 

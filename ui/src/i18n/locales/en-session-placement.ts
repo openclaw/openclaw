@@ -25,8 +25,10 @@ const enSessionPlacement = {
     waitingForDevice: "Waiting for device to reconnect; retry after it returns.",
     continueOnGatewayMenu: "Continue on Gateway…",
     continueOnGatewayAction: "Continue on Gateway",
+    continueOnGatewayTitle: "Continue “{session}” on the Gateway?",
     continueOnGatewayConfirm:
-      'Continue "{session}" on the Gateway? Unsynced device files and in-flight work may be lost. OpenClaw will continue from the last Gateway-synced state and will not replay the interrupted turn.',
+      "Unsynced device files and in-flight work may be lost. OpenClaw continues from the last Gateway-synced state and won’t replay the interrupted turn.",
+    discardWorkspaceTitle: "Discard unsynced changes?",
     discardWorkspaceDeleteConfirm:
       'The device for "{session}" is offline and has changes that have not synced. Reconnect it to keep those changes. To delete this session now, discard unsynced device files and in-flight work, then retry deletion once. The last Gateway-synced workspace is used; interrupted work is not replayed.',
     discardWorkspaceDeleteAction: "Discard changes and delete",

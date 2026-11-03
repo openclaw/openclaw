@@ -296,8 +296,8 @@ export function CloudWorkersPage() {
     if (
       !canManage() ||
       !(await showConfirmDialog({
-        title: t("cloudWorkersPage.deleteTitle"),
-        message: t("cloudWorkersPage.deleteConfirm", { profile: profile.id }),
+        title: t("cloudWorkersPage.deleteTitle", { profile: profile.id }),
+        message: t("cloudWorkersPage.deleteConfirm"),
         confirmLabel: t("common.delete"),
         danger: true,
       }))

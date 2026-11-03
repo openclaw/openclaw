@@ -5,6 +5,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -28,6 +29,7 @@ const hello = {
   policy: { hasMultipleSessionSharingIdentities: true },
   auth: { role: "operator", scopes: ["operator.read"] },
 } satisfies NonNullable<ApplicationGatewaySnapshot["hello"]>;
+vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
 beforeEach(() => i18n.setLocale("en"));
 afterEach(() => {
   vi.restoreAllMocks();
@@ -172,17 +174,17 @@ it("preserves a conflicting draft, confirms reload, and keeps it when reload fai
   await save(element, "My draft");
   expect(value(element)).toBe("My draft");
   expect(alert(element)?.textContent).toContain("changed since read");
-  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  const confirm = vi.mocked(showConfirmDialog).mockResolvedValue(false);
   button(element, "Reload").click();
   await idle(element);
   expect(request).toHaveBeenCalledTimes(2);
-  confirm.mockReturnValue(true);
+  confirm.mockResolvedValue(true);
   button(element, "Reload").click();
+  await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3));
   await idle(element);
   expect(value(element)).toBe("My draft");
   button(element, "Reload").click();
-  await idle(element);
-  expect(value(element)).toBe("External edit");
+  await vi.waitFor(() => expect(value(element)).toBe("External edit"));
   expect(button(element, "Reload")).toBeUndefined();
 });
 

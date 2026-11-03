@@ -41,6 +41,7 @@ const enSessionOrganizationShared = {
     stopCloudWorker: "Stop cloud worker…",
     stopCloudWorkerConfirm: 'Stop the cloud worker for "{session}"?',
     stopCloudWorkerConfirmAction: "Stop worker",
+    stopCloudWorkerBody: "Any work running on it stops.",
     deleteSessionStale: 'Gateway connection replaced before "{session}" was deleted. Try again.',
     newGroupPrompt: "New group name",
     newGroupTitle: "New group",

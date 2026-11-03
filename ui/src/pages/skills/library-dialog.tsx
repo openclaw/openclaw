@@ -19,7 +19,7 @@ export function LibraryDialog(props: {
       onModal-cancel={(event: Event) => {
         // Native dismissal must not bypass the library's busy and discard checks.
         event.preventDefault();
-        props.library.close();
+        void props.library.close();
       }}
     >
       <form
@@ -56,7 +56,7 @@ export function LibraryDialog(props: {
             class="btn btn--icon btn--ghost"
             aria-label={t("common.close")}
             disabled={busy()}
-            onClick={() => props.library.close()}
+            onClick={() => void props.library.close()}
           >
             <Icon name="x" />
           </button>
