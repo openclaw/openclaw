@@ -1,0 +1,2 @@
+# A replied Telegram bot photo must reach the provider request inspectable and tied to the bot's self label (#57278).
+213
