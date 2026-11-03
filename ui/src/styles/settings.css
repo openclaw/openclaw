@@ -715,10 +715,6 @@ openclaw-appearance-background .settings-background-preview .session-background_
   display: none;
 }
 
-.settings-group--danger {
-  border-color: color-mix(in srgb, var(--danger) 35%, var(--border) 65%);
-}
-
 .settings-disclosure__summary {
   list-style: none;
 }
