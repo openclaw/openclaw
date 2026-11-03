@@ -83,7 +83,7 @@ describe("Telegram message effects over HTTP", () => {
             },
           },
         };
-        if ("rejection" in testCase) {
+        if ("rejection" in testCase && testCase.rejection !== undefined) {
           fixture.rejections.push(testCase.rejection);
         }
         const sendParams = {
@@ -98,7 +98,7 @@ describe("Telegram message effects over HTTP", () => {
                 : await telegramPlugin.actions!.prepareSendPayload!({
                     ctx: { channel: "telegram", action: "send", cfg, params: sendParams },
                     to,
-                    payload: testCase.prepared,
+                    payload: testCase.prepared!,
                   });
             await expect(
               sendDurableMessageBatch({
