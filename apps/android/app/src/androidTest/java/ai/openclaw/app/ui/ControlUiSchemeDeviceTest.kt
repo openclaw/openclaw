@@ -91,7 +91,7 @@ class ControlUiSchemeDeviceTest {
     val url = gatewayControlPageBaseUrl(routed, tls)
     val text = loadControlPage(routed, url, certificateFingerprint())
     File(proofDirectory(), "https-discovered.txt").writeText("url=$url\npage=$text\n")
-    assertTrue(text, text.startsWith("https://$host:${server.port}") && text.contains("wss://$host:${server.port}") && text.contains("NATIVE_AUTH"))
+    assertTrue(text, text.startsWith("https://$host:${server.port}") && text.contains("wss://$host:${server.port}") && showsInstalledNativeAuth(text))
   }
 
   @Test fun manualLanCleartextLoadsHttpAndInstallsAuth() {
@@ -109,8 +109,11 @@ class ControlUiSchemeDeviceTest {
     val url = gatewayControlPageBaseUrl(routed, tls)
     val text = loadControlPage(routed, url, fingerprint = null)
     File(proofDirectory(), "http-manual-lan.txt").writeText("url=$url\npage=$text\n")
-    assertTrue(text, text.startsWith("http://$host:${server.port}") && text.contains("ws://$host:${server.port}") && text.contains("NATIVE_AUTH"))
+    assertTrue(text, text.startsWith("http://$host:${server.port}") && text.contains("ws://$host:${server.port}") && showsInstalledNativeAuth(text))
   }
+
+  // "NO_NATIVE_AUTH" contains the substring "NATIVE_AUTH".
+  private fun showsInstalledNativeAuth(text: String): Boolean = "NO_NATIVE_AUTH" !in text && " NATIVE_AUTH" in text
 
   private fun loadControlPage(
     endpoint: GatewayEndpoint,
@@ -138,7 +141,7 @@ class ControlUiSchemeDeviceTest {
       }
       val seen = AtomicReference("")
       val deadline = System.nanoTime() + 20_000_000_000L
-      while (System.nanoTime() < deadline && "NATIVE_AUTH" !in seen.get()) {
+      while (System.nanoTime() < deadline && !showsInstalledNativeAuth(seen.get())) {
         val latch = CountDownLatch(1)
         scenario.onActivity { activity ->
           val webView = findWebView(activity.findViewById(android.R.id.content))
@@ -163,7 +166,7 @@ class ControlUiSchemeDeviceTest {
       }
       seen.set("")
       val paintDeadline = System.nanoTime() + 20_000_000_000L
-      while (System.nanoTime() < paintDeadline && "NATIVE_AUTH" !in seen.get()) {
+      while (System.nanoTime() < paintDeadline && !showsInstalledNativeAuth(seen.get())) {
         val latch = CountDownLatch(1)
         scenario.onActivity { activity ->
           val webView = findWebView(activity.findViewById(android.R.id.content))
