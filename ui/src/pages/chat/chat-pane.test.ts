@@ -275,9 +275,12 @@ describe("chat pane header state", () => {
 
     pane.handleHeaderMenuAction("copy-path", workspaceSession, "/src/openclaw", "feature/header");
 
-    await vi.waitFor(() => expect(state.chatError).toBe("Copy failed"));
+    await vi.waitFor(() => expect(state.chatError).toBe("Couldn’t copy. Try again."));
     flush();
-    expect(errors()).toEqual({ lastError: "Copy failed", chatError: "Copy failed" });
+    expect(errors()).toEqual({
+      lastError: "Couldn’t copy. Try again.",
+      chatError: "Couldn’t copy. Try again.",
+    });
   });
 
   it("does not query gateway-local branches for exec-node sessions", async () => {

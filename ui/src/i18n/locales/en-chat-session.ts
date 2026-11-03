@@ -166,7 +166,7 @@ const enChatSession = {
       resetDescription: "The conversation context resets. Your dashboard stays.",
     },
     taskSuggestions: {
-      copyPromptFailed: "Couldn't copy the prompt to the clipboard",
+      copyPromptFailed: "Couldn’t copy the prompt. Try again.",
       startUnconfirmed: "Couldn't confirm the task started. Retry checks the same task.",
     },
     view: {
@@ -199,7 +199,7 @@ const enChatSession = {
       inComposer: "Answer above the message box.",
       archived: "No longer pending",
       archivedReason: "The conversation moved on. You can still answer this question.",
-      sendFailed: "Could not send your answer. Your draft is preserved.",
+      sendFailed: "Couldn’t send your answer. Your draft is preserved. Try again.",
       queued: "Answer queued",
       sending: "Sending answer…",
       sent: "Answer sent",
@@ -222,7 +222,7 @@ const enChatSession = {
     },
     thread: {
       search: "Search messages",
-      searchPlaceholder: "Search messages...",
+      searchPlaceholder: "Search messages…",
       closeSearch: "Close search",
       loading: "Loading chat",
       showEarlier: "Show earlier",

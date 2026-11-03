@@ -631,7 +631,7 @@ describe("ChatComposerCapabilityHost", () => {
     props().onOpenToolAccess?.("github");
     await vi.waitFor(() => expect(props().toolsEffectiveError).toBe(true));
 
-    expect(props().toolAccessMutationBlockedReason).toBe("Couldn’t load tools.");
+    expect(props().toolAccessMutationBlockedReason).toBe("Couldn’t load tools. Try again.");
 
     props().onOpenToolAccess?.("github");
     await vi.waitFor(() => expect(props().toolsEffectiveResult).not.toBeNull());

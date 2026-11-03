@@ -56,7 +56,7 @@ const catalog = {
         },
         enabledCount: "{count} on",
         loadingSkills: "Loading skills…",
-        skillsLoadFailed: "Couldn’t load skills.",
+        skillsLoadFailed: "Couldn’t load skills. Try again.",
         noSkills: "No skills available.",
         noConnectors: "No MCP servers configured.",
         depsMissing: "Missing dependencies",

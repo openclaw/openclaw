@@ -118,9 +118,9 @@ const enModelControls = {
         "{runtime} will run on the Gateway host under its own permissions. OpenClaw’s optional native tool and sandbox restrictions, including workspace-only restrictions, will not be enforced for this harness. Only this chat is changed; other chats and global configuration stay unchanged. OpenClaw-hosted tools keep their own policy checks.",
       retryMessage: "Continue will retry the message you just sent.",
       chooseAnother: "Choose another model to keep this chat’s current execution restrictions.",
-      failed: "Could not change this chat’s execution permissions: {error}",
+      failed: "Couldn’t change this session’s execution permissions. Try again. {error}",
       refreshFailed:
-        "The model and permissions were saved, but refreshing this chat failed: {error}",
+        "Couldn’t refresh this session. The model and permissions were saved. Reload to see the change. {error}",
       reasons: {
         "sandbox-required": "{runtime} cannot run because this chat requires a sandbox.",
         sandbox: "{runtime} uses native tools that cannot run inside the OpenClaw sandbox.",
@@ -141,8 +141,9 @@ const enModelControls = {
       defaultWithMode: "Default ({mode})",
       fullRequiresAdmin: "Only admins can turn on Full access.",
       requiresAdmin: "Requires admin access.",
-      updateFailed: "Couldn't change permissions: {error}",
-      refreshFailed: "Permissions saved, but this chat didn't refresh. Reload to see the change.",
+      updateFailed: "Couldn’t change permissions. Try again. {error}",
+      refreshFailed:
+        "Couldn’t refresh this session. Permissions were saved. Reload to see the change.",
       modes: {
         "read-only": {
           label: "Read only",

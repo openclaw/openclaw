@@ -407,8 +407,10 @@ describe("login gate failure recovery", () => {
       new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: " " }),
     );
 
-    await vi.waitFor(() => expect(button?.getAttribute("aria-label")).toBe("Copy failed"));
-    expect(status.textContent).toBe("Copy failed");
+    await vi.waitFor(() =>
+      expect(button?.getAttribute("aria-label")).toBe("Couldn’t copy. Try again."),
+    );
+    expect(status.textContent).toBe("Couldn’t copy. Try again.");
     expect(writeText).toHaveBeenCalledExactlyOnceWith("openclaw status");
     expect(execCommand).toHaveBeenCalledOnce();
   });
@@ -426,8 +428,8 @@ describe("login gate failure recovery", () => {
     buttons[1]?.click();
 
     await vi.waitFor(() => {
-      expect(buttons[0]?.getAttribute("aria-label")).toBe("Copied!");
-      expect(buttons[1]?.getAttribute("aria-label")).toBe("Copied!");
+      expect(buttons[0]?.getAttribute("aria-label")).toBe("Copied");
+      expect(buttons[1]?.getAttribute("aria-label")).toBe("Copied");
     });
     expect(writeText.mock.calls).toEqual([["openclaw status"], ["openclaw gateway run"]]);
     expect(buttons[2]?.getAttribute("aria-label")).toBe("Copy command");
@@ -438,7 +440,7 @@ describe("login gate failure recovery", () => {
     );
     for (const [index, button] of buttons.slice(0, 2).entries()) {
       expect(retained[index]).toBe(button);
-      expect(retained[index]?.getAttribute("aria-label")).toBe("Copied!");
+      expect(retained[index]?.getAttribute("aria-label")).toBe("Copied");
     }
   });
 
@@ -454,7 +456,9 @@ describe("login gate failure recovery", () => {
     const { command, button, status } = copyControls(element);
 
     command?.click();
-    await vi.waitFor(() => expect(button?.getAttribute("aria-label")).toBe("Copy failed"));
+    await vi.waitFor(() =>
+      expect(button?.getAttribute("aria-label")).toBe("Couldn’t copy. Try again."),
+    );
     const failedReset = schedule.mock.calls.find(([, delay]) => delay === 2_000)?.[0];
     if (typeof failedReset !== "function") {
       throw new Error("Expected the failed copy feedback to schedule its reset");
@@ -467,12 +471,12 @@ describe("login gate failure recovery", () => {
     failedReset();
     expect(status.hidden).toBe(true);
     finishCopy();
-    await vi.waitFor(() => expect(button?.getAttribute("aria-label")).toBe("Copied!"));
+    await vi.waitFor(() => expect(button?.getAttribute("aria-label")).toBe("Copied"));
     expect(status.hidden).toBe(false);
 
     failedReset();
-    expect(button?.getAttribute("aria-label")).toBe("Copied!");
-    expect(status.textContent).toBe("Copied!");
+    expect(button?.getAttribute("aria-label")).toBe("Copied");
+    expect(status.textContent).toBe("Copied");
 
     const successfulReset = schedule.mock.calls.find(([, delay]) => delay === 1_500)?.[0];
     if (typeof successfulReset !== "function") {

@@ -567,7 +567,7 @@ describe("handleSendChat immediate local commands", () => {
           ? [
               expect.objectContaining({
                 role: "system",
-                content: "There are no messages to export yet.",
+                content: "No messages to export yet.",
               }),
             ]
           : [],
