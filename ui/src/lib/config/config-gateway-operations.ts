@@ -87,6 +87,8 @@ export type RuntimeConfigExternalMutationResult<T> =
       ok: false;
       reason: "conflict" | "error" | "rejected" | "suspended" | "unavailable";
       error: string;
+      /** With `saveStatus`: whether the shared save status shows this failure. */
+      reported?: boolean;
     };
 
 export type RuntimeConfigExternalMutationOptions<T = unknown> = {

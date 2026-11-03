@@ -172,8 +172,9 @@ export async function saveIdentityDraft(params: {
       },
     );
     if (!mutation.ok) {
-      // A refused or failed write is reported by the shared save status, with the edit kept.
-      if (staleClient || mutation.reason === "unavailable" || mutation.reason === "suspended") {
+      // A failure the shared save status shows keeps the edit for its Retry. The status
+      // stays with a paused or conflicted form, so the block reports anything else.
+      if (staleClient || !mutation.reported) {
         throw new Error(mutation.error);
       }
       return;
