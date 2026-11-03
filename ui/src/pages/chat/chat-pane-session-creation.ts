@@ -19,10 +19,6 @@ import { isExpiredIncognitoSession, setChatError } from "./chat-history-state.ts
 import { createChatModelSetupBanner } from "./chat-model-setup.ts";
 import { resolveChatPaneParentSession } from "./chat-pane-header-identity.ts";
 import { ChatPaneRetainedPresentation } from "./chat-pane-retained-presentation.ts";
-import {
-  NEW_SESSION_ACTIVE_RUN_MESSAGE,
-  NEW_SESSION_LIST_LOADING_MESSAGE,
-} from "./chat-pane-shared.ts";
 import { canCreateChatSession } from "./chat-state-route.ts";
 
 /** Creates or resets a conversation while guarding its asynchronous ownership. */
@@ -178,11 +174,11 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
     const isCurrent = () =>
       this.isConnectionScopeCurrent(scope) && this.context.sessions === sessions;
     if (!canCreateChatSession(state)) {
-      setChatError(state, NEW_SESSION_ACTIVE_RUN_MESSAGE);
+      setChatError(state, t("chat.sendErrors.newSessionBusy"));
       return false;
     }
     if (state.sessionsLoading) {
-      setChatError(state, NEW_SESSION_LIST_LOADING_MESSAGE);
+      setChatError(state, t("chat.sendErrors.newSessionLoading"));
       return false;
     }
     const initialAccess = readCreateAccess();

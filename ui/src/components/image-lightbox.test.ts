@@ -270,6 +270,9 @@ it.each([false, true])(
         expect(button(modal, ".image-quality-status button").textContent).toBe("Retry"),
       );
       expect(image.src).toBe("blob:preview");
+      expect(modal.querySelector(".image-quality-status")?.textContent).toContain(
+        "Couldn’t load a sharper image. Try again.",
+      );
       button(modal, ".image-quality-status button").click();
     } else {
       full.resolve(original);
@@ -426,7 +429,7 @@ it.each(["open", "closed", "reopened"] as const)(
     expect(toast.active).toBe(state === "open");
     expect(toast.toast).toEqual(
       state === "open"
-        ? expect.objectContaining({ message: "Could not download this image. Try again." })
+        ? expect.objectContaining({ message: "Couldn’t download this image. Try again." })
         : null,
     );
     if (state === "open") {
