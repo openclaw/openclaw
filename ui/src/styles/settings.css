@@ -2301,13 +2301,13 @@ openclaw-approvals-page .data-table-pagination__info {
 }
 
 .settings-sidebar__subitem {
+  padding-block: 4px;
+}
+
+.settings-sidebar__subitem-text {
   display: flex;
-  align-items: center;
-  min-height: 28px;
-  margin-inline-start: 24px;
-  padding: 0 9px;
-  border-radius: var(--radius-md);
-  color: var(--text);
+  flex-direction: column;
+  min-width: 0;
 }
 
 .settings-sidebar__subitem:hover {
@@ -2328,12 +2328,22 @@ openclaw-approvals-page .data-table-pagination__info {
   background: transparent;
 }
 
-.settings-sidebar__subitem-label {
-  font-size: calc(12.5px * var(--control-ui-text-scale));
-  font-weight: 500;
+.settings-sidebar__subitem-label,
+.settings-sidebar__subitem-page {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.settings-sidebar__subitem-label {
+  font-size: calc(13px * var(--control-ui-text-scale));
+  font-weight: 500;
+}
+
+.settings-sidebar__subitem-page {
+  color: var(--muted);
+  font-size: calc(11.5px * var(--control-ui-text-scale));
+  opacity: 0.8;
 }
 
 .settings-sidebar__footer {
