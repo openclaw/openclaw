@@ -240,6 +240,7 @@ export function SearchProviderRow(
           context={props.context}
           gateway={props.gateway}
           getPresentationLifetime={props.getPresentationLifetime}
+          secretFields={props.secretFields}
           canEdit={props.canEdit}
           busy={props.busy}
           commit={(path, value) =>
