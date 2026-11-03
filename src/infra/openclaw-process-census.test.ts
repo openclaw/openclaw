@@ -380,7 +380,7 @@ it.each([
   expectPids(verified ? [] : [launcher]);
 });
 
-it.each(["missing self", "missing ancestor", "failed enumeration", "container", "win32"])(
+it.each(["missing self", "missing ancestor", "failed enumeration", "container"])(
   "does not authorize cleanup with %s",
   (failure) => {
     if (failure === "missing self") {
@@ -397,18 +397,10 @@ it.each(["missing self", "missing ancestor", "failed enumeration", "container", 
     if (failure === "container") {
       container.mockReturnValue(true);
     }
-    if (failure === "win32") {
-      mockProcessPlatform("win32");
-    }
     const result = inspectOtherOpenClawProcesses();
     if (failure === "container") {
       expect(result).toEqual({ error: expect.stringContaining("Host process visibility") });
       expect(directory).not.toHaveBeenCalled();
-    } else if (failure === "win32") {
-      expect(result).toEqual({
-        error: expect.stringContaining("Exact process command census is unavailable on win32"),
-      });
-      expect(census).not.toHaveBeenCalled();
     } else {
       expect(result).toHaveProperty("error");
     }

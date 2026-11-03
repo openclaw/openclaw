@@ -181,7 +181,7 @@ suite.define(() => {
       });
       await page.getByRole("alert").filter({ hasText: "Your draft is preserved" }).waitFor();
       expect(await page.getByLabel("SKILL.md", { exact: true }).inputValue()).toBe(draft);
-      const form = page.locator("form.skill-reader-dialog");
+      const form = page.locator("form.skill-library-dialog");
       expect(await form.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(
         true,
       );
@@ -198,7 +198,7 @@ suite.define(() => {
       expect(await importer.getByRole("status").allTextContents()).toEqual([]);
       expect(
         await importer
-          .locator(".skill-reader-dialog__body")
+          .locator(".oc-dialog__body")
           .evaluate((element) => element.scrollWidth <= element.clientWidth + 1),
       ).toBe(true);
       await importer.getByLabel("Skill name", { exact: true }).fill("abandoned-import");

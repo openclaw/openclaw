@@ -57,6 +57,7 @@ const includeSnapshot = {
 };
 
 async function openForm(page: Page, current: Record<string, unknown> = snapshot) {
+  await page.clock.install();
   const gateway = await installMockGateway(page, {
     featureMethods: [...defaultControlUiFeatureMethods, "config.patch", "config.set"],
     methodResponses: {
@@ -95,10 +96,11 @@ suite.define(() => {
       const saveBox = (await save.boundingBox())!;
       expect(saveBox.x).toBeGreaterThanOrEqual(field.x + field.width);
       expect(saveBox.height).toBe(field.height);
-      await page.waitForTimeout(1500);
+      await page.clock.runFor(1500);
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
 
+      await page.clock.resume();
       const level = page.getByRole("textbox", { name: "Level", exact: true });
       await level.fill("debug");
       await gateway.waitForRequest("config.set");
@@ -160,7 +162,7 @@ suite.define(() => {
       await token.fill(PARTIAL);
       await token.fill("");
       await expect.poll(() => save.count()).toBe(0);
-      await page.waitForTimeout(1200);
+      await page.clock.runFor(1200);
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
 
@@ -192,7 +194,7 @@ suite.define(() => {
         await page.keyboard.press("Enter");
         expect(await token.inputValue()).toBe("");
         expect(await page.getByRole("button", { name: "Save: Api Token" }).count()).toBe(0);
-        await page.waitForTimeout(1200);
+        await page.clock.runFor(1200);
         expect(await gateway.getRequests("config.patch")).toHaveLength(0);
         expect(await gateway.getRequests("config.set")).toHaveLength(0);
       });

@@ -299,7 +299,7 @@ describe("config form renderer", () => {
       };
       for (const [locale, expectedLabel, expectedHelp] of [
         ["tr", translated, translatedHelp],
-        ["en", label, help],
+        ["en", field ? "Gateway token" : label, help],
       ] as const) {
         await i18n.setLocale(locale);
         renderForm(analysis, props);
@@ -361,7 +361,7 @@ describe("config form renderer", () => {
       revealSensitive: false,
     });
 
-    for (const label of ["Encrypt Key", "Private Key", "FOO"]) {
+    for (const label of ["Encrypt key", "Private key", "FOO"]) {
       const input = query(`input[aria-label='${label}']`, HTMLInputElement);
       expect(input).toMatchObject({ readOnly: true, value: "" });
       expect(input.classList.contains("cfg-redacted")).toBe(true);
@@ -493,7 +493,7 @@ describe("config form renderer", () => {
     });
     const checkbox = query('.settings-toggle__input[role="switch"]', HTMLInputElement);
     const row = expectElement(checkbox.closest(".settings-row"), "toggle row");
-    const label = wildcard ? "Plugin Enabled" : "Beta";
+    const label = wildcard ? "Plugin enabled" : "Beta";
     expect(row.tagName).toBe("DIV");
     expect(row.querySelector(".settings-row__title")?.textContent?.trim()).toBe(label);
     expect(
@@ -517,7 +517,7 @@ describe("config form renderer", () => {
     });
 
     expect(container.querySelector('.settings-toggle__input[role="switch"]')).toBeNull();
-    const select = query('select[aria-label="Automations Enabled"]', HTMLSelectElement);
+    const select = query('select[aria-label="Automations enabled"]', HTMLSelectElement);
     expect(select.selectedOptions[0]?.textContent?.trim()).toBe("Default: On");
     expect(onPatch).not.toHaveBeenCalled();
     edit(select, "1", "change");
@@ -689,8 +689,15 @@ describe("config form renderer", () => {
 
     if (!hasDocs) {
       expect(container.querySelector(".settings-section__help-button")).toBeNull();
+      expect(texts(".settings-section__desc")).toEqual([
+        "Gateway server settings (port, auth, binding)",
+      ]);
       return;
     }
+    expect(container.querySelector(".settings-section__desc")).toBeNull();
+    expect(query(".settings-section__help-panel p", HTMLElement).textContent?.trim()).toBe(
+      "Gateway server settings (port, auth, binding)",
+    );
     const button = query(".settings-section__help-button", HTMLButtonElement);
     expect(button.getAttribute("aria-label")).toBe("Help for Gateway");
     const tooltip = expectElement(button.closest("openclaw-tooltip"), "section help tooltip");

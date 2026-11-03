@@ -220,11 +220,6 @@
   border-radius: max(var(--field-radius), var(--radius-md));
 }
 
-.plugin-catalog-results__empty {
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-}
-
 .plugin-catalog-chips {
   display: flex;
   flex-wrap: wrap;
@@ -860,17 +855,6 @@
   color: var(--danger);
 }
 
-/* The inventory header is already inside the padded settings page. Its page
-   owner must override the outer-header inset regardless of lazy stylesheet order. */
-openclaw-plugins-page
-  .settings-page.oc-app-surface:has(> .plugins-settings-content)
-  > .content-header--settings {
-  width: 100%;
-  max-width: none;
-  margin-inline: 0;
-  padding-inline: 0;
-}
-
 .plugins-settings-content {
   display: flex;
   min-width: 0;
@@ -1498,10 +1482,6 @@ openclaw-plugins-page
 }
 
 @media (max-width: 640px) {
-  .settings-page.oc-app-surface:has(> .plugins-settings-content) {
-    padding-top: 0;
-  }
-
   openclaw-skills-page .plugins-toolbar--fields {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
