@@ -86,6 +86,7 @@ import { WorkerTranscriptCommitClient } from "./worker-rpc-transcript-client.js"
 import {
   registerWorkerBackgroundExecLifecycleTests,
   registerWorkerExecEnvironmentFinalizationTests,
+  registerWorkerManagedExecLifecycleTests,
 } from "./worker-runtime-background-exec.suite.js";
 import { registerWorkerGitHubFailureTests } from "./worker-runtime-github-failures.suite.js";
 import { registerWorkerNativeInferenceTests } from "./worker-runtime-native-inference.suite.js";
@@ -1355,123 +1356,13 @@ it.each(["oversized-text", "oversized-error"] as const)(
   },
 );
 
-it.each(["running", "completed", "cancelled", "ordinary-yield"] as const)(
-  "keeps completed-turn commands controllable in the managed environment (%s)",
-  async (scenario) => {
-    const processState = scenario === "ordinary-yield" ? "running" : scenario;
-    const { gateway, launch, workspaceDir } = await setup({
-      inferencePlans: [
-        "background-tool",
-        "text",
-        ...(processState === "cancelled" ? ["hold" as const] : []),
-        "process-poll",
-        ...(processState === "completed" ? [] : ["process-kill" as const]),
-        "text",
-      ],
-      ...(processState === "completed"
-        ? { backgroundCommand: `${JSON.stringify(process.execPath)} finish-on-release.cjs` }
-        : {}),
-      ...(scenario === "ordinary-yield" ? { backgroundYieldMs: 10 } : {}),
-    });
-    const releaseBackground = createDeferred();
-    let completionServer: Server | undefined;
-    if (processState === "completed") {
-      completionServer = createServer((_request, response) => {
-        void releaseBackground.promise.then(() => response.end("background-finished"));
-      });
-      const listening = once(completionServer, "listening");
-      completionServer.listen(0, "127.0.0.1");
-      await listening;
-      const address = completionServer.address();
-      if (!address || typeof address === "string") {
-        throw new Error("background completion server did not allocate a TCP port");
-      }
-      // An explicit response also releases a child that starts after the turn finishes.
-      // Filesystem watch notifications can be lost while this shared machine is busy.
-      await writeFile(
-        path.join(workspaceDir, "finish-on-release.cjs"),
-        `require('node:http').get('http://127.0.0.1:${address.port}', response => response.pipe(process.stdout));`,
-      );
-    }
-    const { send, cancel, waitResults, results, settled, scopeKey, close } = managedCommand();
-
-    try {
-      send(launch);
-      await waitResults(1);
-      expect(results[0]).toMatchObject({
-        turnId: launch.assignment.turnId,
-        result: { status: "completed" },
-        retainWorker: true,
-      });
-      const running = workerSessions();
-      expect(running).toHaveLength(1);
-      const sessionId = running[0]!.id;
-      const messages = gateway.messages;
-      expect(messages.at(-1)).toMatchObject({
-        role: "assistant",
-        content: [{ type: "text", text: expect.stringContaining("still running") }],
-      });
-      expect(JSON.stringify(messages.at(-1))).toContain(sessionId);
-      expect(gateway.inferenceRequests).toHaveLength(2);
-      expect(
-        gateway.liveEventRequests.findLast(({ event }) => event.kind === "assistant"),
-      ).toMatchObject({ event: { payload: { text: expect.stringContaining("still running") } } });
-      expect(settled).not.toHaveBeenCalled();
-      if (processState === "completed") {
-        releaseBackground.resolve();
-        await waitForExecScope(scopeKey);
-        await waitForFast(() => expect(workerSessions()).toHaveLength(0));
-        expect(settled).not.toHaveBeenCalled();
-      }
-
-      const nextTurnId = send(nextTurn(launch, gateway, 2));
-      if (processState === "cancelled") {
-        await waitForFast(() => expect(gateway.inferenceRequests).toHaveLength(3), {
-          timeout: 30_000,
-        });
-        cancel(nextTurnId);
-        await waitResults(2);
-        expect(results[1]).toMatchObject({
-          result: { status: "failed", reason: "turn-failed" },
-          retainWorker: true,
-        });
-        send(nextTurn(launch, gateway, 3));
-      }
-      const turnCount = processState === "cancelled" ? 3 : 2;
-      await waitResults(turnCount);
-      expect(gateway.connectionCount).toBe(turnCount);
-      const processResults = gateway.messages.filter(
-        (message) => message.role === "toolResult" && message.toolName === "process",
-      );
-      if (processState !== "completed") {
-        expect(processResults).toMatchObject([
-          { details: { status: "running", sessionId } },
-          { details: { status: "completed" } },
-        ]);
-      } else {
-        expect(processResults).toMatchObject([
-          {
-            content: [{ type: "text", text: expect.stringContaining("background-finished") }],
-            details: { status: "completed", exitCode: 0 },
-          },
-        ]);
-        expect(results[1]?.retainWorker).toBe(false);
-      }
-    } finally {
-      releaseBackground.resolve();
-      try {
-        await close();
-      } finally {
-        if (completionServer) {
-          await new Promise<void>((resolve, reject) => {
-            completionServer.close((error) => (error ? reject(error) : resolve()));
-          });
-        }
-      }
-    }
-    expect(workerSessions()).toHaveLength(0);
-  },
-);
+registerWorkerManagedExecLifecycleTests({
+  setup,
+  managedCommand,
+  nextTurn,
+  workerSessions,
+  waitForFast,
+});
 
 registerWorkerExecEnvironmentFinalizationTests({
   runExecProcess,

@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { sessionPlacementRecoveryExactStorageKey } from "../lib/sessions/session-placement-recovery-storage-key.ts";
 import {
@@ -13,6 +13,7 @@ import {
 import { makeChatHost } from "../pages/chat/chat-host.test-support.ts";
 import { applyChatPendingInputs, getChatPendingInputs } from "../pages/chat/chat-pending-inputs.ts";
 import { admitChatSubmission, reduceChatSessionProjection } from "../pages/chat/history-merge.ts";
+import { restoreMocksAndGlobals } from "../test-helpers/mock-cleanup.ts";
 import {
   createPlacementStartupHarness,
   readStartupRecovery,
@@ -68,10 +69,7 @@ describe("application session placement startup", () => {
     sessionStorage.clear();
   });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-  });
+  afterEach(() => restoreMocksAndGlobals());
 
   it("keeps empty connections lazy until a memory-only Start", async () => {
     const moduleLoad = createDeferred<RuntimeModule>();

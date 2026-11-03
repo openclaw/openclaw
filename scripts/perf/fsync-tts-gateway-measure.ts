@@ -7,8 +7,13 @@ import { constants, monitorEventLoopDelay, PerformanceObserver } from "node:perf
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import workerThreads from "node:worker_threads";
-import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
+import {
+  GATEWAY_GC_TRACE_MARKER,
+  writeGatewayGcTraceMarker,
+  readGatewayGcTrace,
+} from "../lib/gateway-bench-profile.ts";
 import { BASE_GATEWAY_BENCH_CONFIG, createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
+import { recordGcCollections } from "../lib/perf-gc-collections.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -94,14 +99,9 @@ if (values.baseline) {
   });
 }
 const profilePath = path.join(directory, "main-isolate");
-const marker = (phase: string) =>
-  fs.writeSync(
-    1,
-    `${GATEWAY_GC_TRACE_MARKER}${JSON.stringify({ phase, pid: process.pid, profilePath })}\n`,
-  );
-marker("identify-start");
+writeGatewayGcTraceMarker("identify-start", profilePath);
 global.gc();
-marker("identify-stop");
+writeGatewayGcTraceMarker("identify-stop", profilePath);
 // Give every isolate the same injected storage delay; counts stay in this fixture's buffer.
 const workerProbe = new Int32Array(new SharedArrayBuffer(4 * Int32Array.BYTES_PER_ELEMENT));
 workerThreads.setEnvironmentData("openclaw.synthetic-tts-fsync", {
@@ -197,15 +197,9 @@ const loop = monitorEventLoopDelay({ resolution: 10 });
 const collections: Array<{ kind: number; ms: number }> = [];
 let begin = Infinity;
 let end = Infinity;
-const observer = new PerformanceObserver((entries) => {
-  for (const entry of entries.getEntries()) {
-    if (entry.startTime < begin || entry.startTime >= end) {
-      continue;
-    }
-    const detail = entry.toJSON().detail as { kind: number };
-    collections.push({ kind: detail.kind, ms: entry.duration });
-  }
-});
+const observer = new PerformanceObserver((entries) =>
+  recordGcCollections(entries.getEntries(), collections, begin, end),
+);
 observer.observe({ entryTypes: ["gc"] });
 function distribution(samples: number[]) {
   const sorted = samples.toSorted((a, b) => a - b);
@@ -283,7 +277,7 @@ try {
   loop.enable();
   const cpuStart = process.cpuUsage();
   const mainCpuStart = process.threadCpuUsage();
-  marker("heap-start");
+  writeGatewayGcTraceMarker("heap-start", profilePath);
   begin = performance.now();
   measuring = true;
   Atomics.store(workerProbe, 0, 1);
@@ -296,7 +290,7 @@ try {
   end = performance.now();
   measuring = false;
   Atomics.store(workerProbe, 0, 0);
-  marker("heap-stop");
+  writeGatewayGcTraceMarker("heap-stop", profilePath);
   const cpu = process.cpuUsage(cpuStart);
   const mainCpu = process.threadCpuUsage(mainCpuStart);
   loop.disable();

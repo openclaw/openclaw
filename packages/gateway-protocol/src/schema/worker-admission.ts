@@ -70,6 +70,8 @@ export const WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE = "worker-execution-conte
 export const WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE = "worker-execution-authority-v1";
 export const WORKER_LINEAGE_START_PROTOCOL_FEATURE = "worker-lineage-start-v1";
 export const WORKER_NATIVE_PROCESS_OWNER_PROTOCOL_FEATURE = "worker-native-process-owner-v1";
+// V1 workers couple an inherited native owner to Linux subreaper ownership.
+export const WORKER_NATIVE_PROCESS_OWNER_V2_PROTOCOL_FEATURE = "worker-native-process-owner-v2";
 export const NODE_WORKER_IDLE_RETENTION_PROTOCOL_FEATURE = "node-worker-idle-retention-v1";
 export const NODE_WORKER_PROCESS_CHANGES_PROTOCOL_FEATURE = "node-worker-process-changes-v1";
 export const WORKER_LOCAL_INFERENCE_PROTOCOL_FEATURE = "worker-local-inference-v1";
@@ -87,6 +89,7 @@ export const WORKER_PROTOCOL_FEATURES = [
   WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
   WORKER_LINEAGE_START_PROTOCOL_FEATURE,
   WORKER_NATIVE_PROCESS_OWNER_PROTOCOL_FEATURE,
+  WORKER_NATIVE_PROCESS_OWNER_V2_PROTOCOL_FEATURE,
   NODE_WORKER_IDLE_RETENTION_PROTOCOL_FEATURE,
   NODE_WORKER_PROCESS_CHANGES_PROTOCOL_FEATURE,
   WORKER_COMPUTER_PROTOCOL_FEATURE,
@@ -458,7 +461,14 @@ const WorkerLiveLifecycleTerminalCommonProperties = {
   stopReason: Type.Optional(WorkerIdentifierSchema),
   yielded: Type.Optional(Type.Literal(true)),
   timeoutPhase: Type.Optional(
-    Type.Enum(["queue", "preflight", "provider", "post_turn", "gateway_draining"]),
+    Type.Enum([
+      "queue",
+      "preflight",
+      "provider",
+      "tool_execution",
+      "post_turn",
+      "gateway_draining",
+    ]),
   ),
   providerStarted: Type.Optional(Type.Boolean()),
   aborted: Type.Optional(Type.Boolean()),

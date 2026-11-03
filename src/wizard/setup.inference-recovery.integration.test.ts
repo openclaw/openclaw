@@ -257,7 +257,16 @@ it("wizard recovery restores serialized model defaults after provider canonicali
     ...providerConfig("example", provider),
   });
   const failure = new Error("activation refused");
-  const target = createWizardInferenceConfigTarget(writeWizardConfigFile);
+  // The real wizard commits only changes from its captured runtime merge base.
+  const mergeBase = materializeRuntimeConfig(before);
+  const target = createWizardInferenceConfigTarget(async (next, options) => {
+    const committed = await writeWizardConfigFile(next, { ...options, mergeBase });
+    const persisted = (await readSetupConfigFileSnapshot()).sourceConfig;
+    expect(persisted.security).toBeUndefined();
+    expect(persisted.tools).toBeUndefined();
+    expect(persisted.messages?.queue).toBeUndefined();
+    return committed;
+  });
   await expect(rejectActivation(target, candidate, failure)).rejects.toBe(failure);
   expect((await target.read()).config.models?.providers).toEqual(before.models?.providers);
 });

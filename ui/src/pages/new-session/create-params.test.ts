@@ -62,6 +62,7 @@ function expectParams(input: Partial<Draft>, output: object) {
     contextWindow: input.contextWindow ?? "",
     thinkingLevel: input.thinkingLevel ?? "",
     fastMode: input.fastMode,
+    cyberAccessProgram: input.cyberAccessProgram,
   });
   try {
     expect(
@@ -94,6 +95,7 @@ describe("buildSelectedSessionCreateParams", () => {
     contextWindow: "200k",
     thinkingLevel: "high",
     fastMode: true,
+    cyberAccessProgram: "daybreak_blue" as const,
   };
   const toolOverrides = {
     mcpServers: { github: false },
@@ -156,7 +158,7 @@ describe("buildSelectedSessionCreateParams", () => {
       { message: "", attachments },
       { message: "", attachments },
     ],
-    ["includes model, context-window, thinking, and fast overrides", overrides, overrides],
+    ["includes model, context-window, thinking, fast, and access overrides", overrides, overrides],
     [
       "includes capability overrides in the atomic create request",
       { toolOverrides },
@@ -169,6 +171,7 @@ describe("buildSelectedSessionCreateParams", () => {
         contextWindow: "200k",
         thinkingLevel: "medium",
         fastMode: true,
+        cyberAccessProgram: "daybreak_blue",
         catalogId: "claude",
       },
       { catalogId: "claude" },

@@ -1,3 +1,8 @@
+import {
+  appendToolLoopWarning,
+  attachInternalToolExecutionPreparer,
+  InternalToolLoopBlocked,
+} from "../../packages/agent-core/src/internal-hooks.js";
 /**
  * Owns tool preparation/finalization, adjusted-param replay state, terminal
  * results, diagnostics around execution, and wrapper metadata.
@@ -80,18 +85,16 @@ import {
 import { createGatewayToolPolicyAssertion } from "./gateway-tool-policy.js";
 import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import {
-  appendToolLoopWarning,
-  attachInternalToolExecutionPreparer,
-} from "./runtime/internal-hooks.js";
-import { markToolExecutionRefused } from "./tool-effect-receipt.js";
-import { buildToolMutationState } from "./tool-mutation.js";
-import { normalizeToolPolicyName } from "./tool-policy.js";
+  markToolExecutionNotStarted as registerTrustedToolNoStartError,
+  markToolExecutionRefused,
+} from "./tool-effect-receipt.js";
 import {
   formatToolExecutionErrorMessage,
   isTrustedToolExecutionPreflightError,
   protectNetworkToolExecutionError,
-  registerTrustedToolNoStartError,
-} from "./tool-result-error.js";
+} from "./tool-execution-error.js";
+import { buildToolMutationState } from "./tool-mutation.js";
+import { normalizeToolPolicyName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
@@ -451,13 +454,7 @@ export function wrapToolWithBeforeToolCallHook(
       }
       const eventBase = buildEventBase(executeParams);
       const recordProgress = captureDiagnosticToolProgress(eventBase);
-      recordToolExecutionStarted(toolCallId, ctx?.runId);
-      const liveness = startToolExecutionLiveness(
-        eventBase,
-        hookOptions.emitDiagnostics,
-        signal,
-        ctx?.watchdogAttempt,
-      );
+      let liveness: ReturnType<typeof startToolExecutionLiveness> | undefined;
       const startedAt = Date.now();
       let completed = false;
       try {
@@ -472,6 +469,13 @@ export function wrapToolWithBeforeToolCallHook(
               assertGatewayToolPolicy(executeParams);
               admitExecution?.();
               onImplementationStart?.();
+              recordToolExecutionStarted(toolCallId, ctx?.runId);
+              liveness = startToolExecutionLiveness(
+                eventBase,
+                hookOptions.emitDiagnostics,
+                signal,
+                ctx?.watchdogAttempt,
+              );
               recordAdjustedParamsForToolCall(toolCallId, executeParams, ctx?.runId);
               return liveness.run(() => (execute as ForwardedToolExecution)(...args));
             });
@@ -481,6 +485,7 @@ export function wrapToolWithBeforeToolCallHook(
         } catch (error) {
           throw hookOptions.protectNetworkErrors !== false &&
             tool.resultContentSource === "network" &&
+            !(error instanceof InternalToolLoopBlocked) &&
             getBeforeToolCallFailureDisposition(error) === undefined
             ? protectNetworkToolExecutionError(error, "Tool execution failed.", signal)
             : error;
@@ -542,6 +547,10 @@ export function wrapToolWithBeforeToolCallHook(
         // Keep loop hashes and diagnostics on the raw outcome; this note is model feedback only.
         return outcome.loopWarning ? appendToolLoopWarning(result, outcome.loopWarning) : result;
       } catch (err) {
+        if (err instanceof InternalToolLoopBlocked) {
+          recordPreExecutionDisposition(executeParams, "blocked", "tool-loop", "tool-loop");
+          throw err;
+        }
         if (hookOptions.emitDiagnostics) {
           emitTrustedDiagnosticEventWithPrivateData(
             {
@@ -570,7 +579,7 @@ export function wrapToolWithBeforeToolCallHook(
         });
         throw err;
       } finally {
-        liveness.close(completed);
+        liveness?.close(completed);
       }
     },
   };

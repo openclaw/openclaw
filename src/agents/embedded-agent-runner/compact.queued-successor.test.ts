@@ -3,7 +3,7 @@ import { realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -106,12 +106,11 @@ function expectPostCompactionCalls(count = 0) {
 }
 
 async function waitForCheckpoint(checkpoint: Promise<unknown>, pending: Promise<unknown>) {
-  await Promise.race([
+  await awaitGateBeforeSettlement(
     checkpoint,
-    pending.then(() => {
-      throw new Error("Queued compaction settled before the checkpoint");
-    }),
-  ]);
+    pending,
+    "Queued compaction settled before the checkpoint",
+  );
 }
 const compactParams = (abortSignal?: AbortSignal) => ({
   ...target(),

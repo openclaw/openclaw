@@ -3,8 +3,8 @@ import { action, createMemo, createOptimistic, createSignal, refresh } from "sol
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatToolLabelsEnglish } from "../../../i18n/locales/en-chat-tool-labels.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
+import { projectBoardWidgetNames } from "../../../lib/reactive/board-pins.ts";
 import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
-import { projectSource } from "../../../lib/reactive/projection.ts";
 import { showToast } from "../../../lib/toast.ts";
 
 registerEnglishCatalog(registerChatToolLabelsEnglish);
@@ -17,19 +17,14 @@ export type WidgetPinTarget = {
 };
 
 export function WidgetPinButton(props: { target: WidgetPinTarget; title?: string }) {
-  const ownerPinned = createMemo(() =>
-    projectSource(props.target.board.snapshot$, {
-      read: (snapshot) =>
-        snapshot.value.widgets.some((widget) => widget.name === props.target.name),
-      subscribe: (snapshot, notify) => snapshot.subscribe(notify),
-      equality: Object.is,
-    }),
-  );
-  const [pinned, setPinned] = createOptimistic(() => ownerPinned().read());
+  const names = createMemo(() => projectBoardWidgetNames(props.target.board.snapshot$));
+  const isPinned = () => names().read().has(props.target.name);
+  const ownerPinned = createMemo(isPinned);
+  const [pinned, setPinned] = createOptimistic(ownerPinned);
   const [saving, setSaving] = createOptimistic(false);
   const [attempt, setAttempt] = createSignal<Promise<void> | undefined>(() => {
     // Authoritative pin changes retire feedback from an earlier attempt.
-    ownerPinned().read();
+    ownerPinned();
     return undefined;
   });
   let admitted = false;
@@ -81,11 +76,11 @@ export function WidgetPinButton(props: { target: WidgetPinTarget; title?: string
       aria-label={label()}
       onClick={() => {
         // Solid writes flush later; admission still prevents two same-task clicks.
-        if (admitted || ownerPinned().read()) {
+        const target = props.target;
+        if (admitted || projectBoardWidgetNames(target.board.snapshot$).read().has(target.name)) {
           return;
         }
         admitted = true;
-        const target = props.target;
         const title = props.title?.trim();
         const identity = { name: target.name, ...(title ? { title } : {}) };
         const completion = target.mcpApp

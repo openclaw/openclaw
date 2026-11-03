@@ -71,7 +71,9 @@ suite.define(() => {
             // A Home dock is suppressed while that same conversation owns the page.
             await page.goto(`${suite.server.baseUrl}new`);
             await openProgressHomeDock(page);
-            await gateway.waitForRequest("chat.startup", { match: { sessionKey } });
+            await gateway.waitForRequest("sessions.messages.subscribe", {
+              match: { key: sessionKey },
+            });
           }
           const disclosure =
             placement === "details"
@@ -92,9 +94,8 @@ suite.define(() => {
                 const icon = marker.getBoundingClientRect();
                 const bounds = text.getBoundingClientRect();
                 const line = Number.parseFloat(getComputedStyle(text).lineHeight);
-                const markerLine = row.closest("[data-desktop-details]") ? bounds.height : line;
                 return {
-                  delta: Math.abs(icon.top + icon.height / 2 - (bounds.top + markerLine / 2)),
+                  delta: Math.abs(icon.top + icon.height / 2 - (bounds.top + line / 2)),
                   lines: bounds.height / line,
                 };
               }),
@@ -171,7 +172,7 @@ suite.define(() => {
         // Keep the Home identity, but release its full-page presentation before docking.
         await page.goto(`${suite.server.baseUrl}new`);
         await openProgressHomeDock(page);
-        await gateway.waitForRequest("chat.startup", { match: { sessionKey } });
+        await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: sessionKey } });
         const home = page.locator("openclaw-home-session");
         const disclosure = home.locator('[data-progress-card-placement="composer"]');
         await disclosure.waitFor();

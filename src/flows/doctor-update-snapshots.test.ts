@@ -33,12 +33,7 @@ function packageRoot(...segments: string[]) {
 }
 
 beforeEach(async () => {
-  globalRoot = path.join(
-    dirs.make("doctor-update-snapshots-"),
-    "operator's prefix",
-    "lib",
-    "node_modules",
-  );
+  globalRoot = path.join(dirs.make("snapshots-"), "operator's prefix", "lib", "node_modules");
   await fs.mkdir(path.join(globalRoot, "openclaw"), { recursive: true });
   packageRoot("openclaw");
 });

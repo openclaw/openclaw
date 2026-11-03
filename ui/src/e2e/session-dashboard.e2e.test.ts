@@ -2,7 +2,7 @@ import { once } from "node:events";
 import { WORKBOARD_STATUSES, type WorkboardCard } from "@openclaw/workboard-contract";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/server-capabilities.js";
 import { SANDBOX_HOST_PATH } from "../../../src/agents/sandbox-host.js";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
@@ -141,6 +141,52 @@ function workboardCardsListResponse(cards: WorkboardCard[]) {
 
 suite.define(() => {
   const canvasView = useCanvasSandboxFixture();
+  it("reveals granted widget permissions with the keyboard", async () => {
+    const { page, close } = await createProofContext();
+    await setupDashboard(page, {
+      methodResponses: {
+        "board.get": {
+          ...boardSnapshot,
+          widgets: [
+            {
+              ...boardSnapshot.widgets[0]!,
+              grantState: "granted",
+              declared: { netOrigins: ["https://example.com"], tools: ["sessions.list"] },
+            },
+          ],
+        },
+      },
+    });
+    try {
+      await openDashboard(page);
+      const widget = page.locator('[data-test-id="board-widget"]');
+      const badge = widget.locator('[data-test-id="board-capabilities-granted"]');
+      const tooltip = badge.locator("..").getByRole("tooltip");
+      await widget.focus();
+      await badge.waitFor({ state: "visible" });
+      await page.keyboard.press("Tab");
+      expect(await badge.evaluate((element) => element.matches(":focus"))).toBe(true);
+      await tooltip.waitFor({ state: "visible" });
+      expect(await tooltip.textContent()).toContain("https://example.com");
+      expect(await tooltip.textContent()).toContain("sessions.list");
+      await page.keyboard.press("Escape");
+      await tooltip.waitFor({ state: "hidden" });
+      expect(await badge.evaluate((element) => element.matches(":focus"))).toBe(true);
+      await page.keyboard.press("Enter");
+      await tooltip.waitFor({ state: "visible" });
+      await page.keyboard.press("Escape");
+      await tooltip.waitFor({ state: "hidden" });
+      await page.keyboard.press("Tab");
+      expect(
+        await widget
+          .locator(".board-widget__menu-trigger")
+          .evaluate((element) => element.matches(":focus")),
+      ).toBe(true);
+    } finally {
+      await close();
+    }
+  });
+
   it("keeps widget documents in standards mode and cancels self-navigation", async () => {
     const sandboxHost = createSandboxHostHttpServer();
     sandboxHost.listen(0, "127.0.0.1");

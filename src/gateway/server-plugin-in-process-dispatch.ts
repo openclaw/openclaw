@@ -45,6 +45,7 @@ export {
   runWithOperatorToolGatewayContinuationContext,
   withOperatorToolGatewayAuthority,
 } from "./server-plugin-in-process-authority.js";
+export { captureOperatorToolGatewayRequestContinuationContext } from "./server-plugin-in-process-request-continuation.js";
 
 /** Authorizes a sessionless agent execution against its captured Gateway and caller. */
 export async function prepareInProcessAgentExecution(input: PrepareInProcessAgentExecutionOptions) {

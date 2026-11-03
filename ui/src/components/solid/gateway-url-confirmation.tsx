@@ -1,3 +1,4 @@
+import "../../styles/connection-surfaces.css";
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import {
   children,

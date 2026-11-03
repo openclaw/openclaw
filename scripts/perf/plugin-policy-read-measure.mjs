@@ -1,4 +1,10 @@
 // Warm plugin policy reads; run on the approved benchmark host with an isolated HOME.
+// node-policy exercises resolveNodeCommandAllowlist with 40 wrapped plugin descriptors.
+// Build each arm with --build ROOT BUNDLE, then run with --expose-gc:
+// BUNDLE extensions/codex/index.ts node-policy timing|allocation OUTPUT '' '' 100000
+// Compare CPU/allocation per operation and admissions (warm target: zero), using
+// alternating arms. Timing tails are batch averages; real RPC tails use the Gateway
+// memory-soak workload with --node-policy-churn, not this owner microbenchmark.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -28,6 +34,8 @@ if (process.argv[2] === "--build") {
       import { normalizePluginsConfig, resolveEffectiveEnableState, resolveLivePluginConfigObject } from './src/plugin-sdk/plugin-config-runtime.js';
       export { prepareRuntimePluginsConfig } from './src/plugins/config-state.js';
       export { createPluginInstanceBindings } from './src/plugins/plugin-instance-bindings.js';
+      export { resolveNodeCommandAllowlist } from './src/gateway/node-command-policy.js';
+      export { PLUGIN_REGISTRY_STATE } from './src/plugins/runtime-state-key.js';
       export const codexResolverHash = ${JSON.stringify(hash)};
       export function createCodexResolver(api) { ${resolver} return resolvePluginConfig; }
     `,
@@ -48,9 +56,9 @@ const [bundle, indexFile, workload, mode, output, ready, start, count = "200000"
   process.argv.slice(2);
 assert(
   bundle && indexFile && output,
-  "Usage: BUNDLE CODEX_INDEX config|bindings timing|allocation OUTPUT [READY START COUNT]",
+  "Usage: BUNDLE CODEX_INDEX config|bindings|node-policy timing|allocation OUTPUT [READY START COUNT]",
 );
-assert(["config", "bindings"].includes(workload));
+assert(["config", "bindings", "node-policy"].includes(workload));
 assert(["timing", "allocation"].includes(mode));
 assert(global.gc, "Run with --expose-gc");
 assert(
@@ -91,7 +99,11 @@ const current = () => {
 };
 // Metadata reads need no execution lease; real instance lifecycle behavior is covered by its tests.
 const instance = { pluginId: "synthetic", lifecycle: { signal: new AbortController().signal } };
-const run = (fn) => fn();
+let admissions = 0;
+const run = (fn) => {
+  admissions++;
+  return fn();
+};
 const bindings = owner.createPluginInstanceBindings({
   instance,
   enter: (_, fn) => fn(),
@@ -108,23 +120,35 @@ const policies = Array.from({ length: 40 }, (_, i) =>
     defaultPlatforms: ["linux", "darwin"],
   }),
 );
+globalThis[owner.PLUGIN_REGISTRY_STATE] = {
+  activeRegistry: {
+    nodeHostCommands: [],
+    nodeInvokePolicies: policies.map((policy) => ({ policy })),
+  },
+  activeVersion: 1,
+};
+const node = { platform: "linux", deviceFamily: "Linux" };
 let checksum = 0;
 const operation =
-  workload === "config"
+  workload === "node-policy"
     ? () => {
-        assert.equal(resolveConfig(current), payload);
-        checksum++;
+        checksum += owner.resolveNodeCommandAllowlist({}, node).size;
       }
-    : () => {
-        for (const policy of policies) {
-          if (policy.dangerous !== true && policy.defaultPlatforms.includes("linux")) {
-            checksum += policy.commands[0].length;
-          }
-          if (policy.dangerous === true) {
-            checksum += policy.commands.length;
-          }
+    : workload === "config"
+      ? () => {
+          assert.equal(resolveConfig(current), payload);
+          checksum++;
         }
-      };
+      : () => {
+          for (const policy of policies) {
+            if (policy.dangerous !== true && policy.defaultPlatforms.includes("linux")) {
+              checksum += policy.commands[0].length;
+            }
+            if (policy.dangerous === true) {
+              checksum += policy.commands.length;
+            }
+          }
+        };
 for (let i = 0; i < 2000; i++) {
   operation();
 }
@@ -140,6 +164,7 @@ global.gc();
 await turn();
 checksum = 0;
 reads = 0;
+admissions = 0;
 const gc = [];
 const observer = new PerformanceObserver((list) => {
   for (const e of list.getEntries()) {
@@ -204,7 +229,10 @@ const kinds = Object.fromEntries(
     ];
   }),
 );
-assert.equal(checksum, workload === "config" ? operations : operations * 320);
+assert.equal(
+  checksum,
+  operations * (workload === "config" ? 1 : workload === "node-policy" ? 34 : 320),
+);
 if (workload === "config") {
   assert.equal(reads, operations);
 }
@@ -217,6 +245,7 @@ fs.writeFileSync(
       mode,
       operations,
       checksum,
+      admissions,
       sourceHash: resolverHash,
       bundleHash: createHash("sha256").update(fs.readFileSync(bundle)).digest("hex"),
       wallMs,

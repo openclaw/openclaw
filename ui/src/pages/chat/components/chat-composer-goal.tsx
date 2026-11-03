@@ -1,4 +1,11 @@
-import { For, Show, createSignal } from "solid-js";
+import { For, Show } from "solid-js";
+import {
+  formatGoalDetail,
+  formatGoalElapsed,
+  formatGoalStatusLabel,
+  formatGoalUsage,
+  goalElapsedMs,
+} from "../../../../../src/shared/session-goal-display.js";
 import type { SessionGoal } from "../../../api/types.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
@@ -6,14 +13,7 @@ import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
 import { registerChatGoalsEnglish } from "../../../i18n/locales/en-chat-goals.ts";
 import type { ChatGoalAction, ChatGoalRecovery } from "../../../lib/chat/chat-types.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { createInterval } from "../../../lib/reactive/timers.ts";
-import {
-  formatGoalDetail,
-  formatGoalElapsed,
-  formatGoalStatusLabel,
-  formatGoalUsage,
-  goalElapsedMs,
-} from "../../../lib/session-goal.ts";
+import { readVisibleTime } from "../../../lib/reactive/visible-clock.ts";
 
 registerEnglishCatalog(registerChatGoalsEnglish);
 
@@ -35,14 +35,9 @@ const goalStatusIcons = {
   complete: "check",
 } as const;
 
-// Keep the one-second clock local to its span; it must not invalidate the composer.
+// Keep the shared clock local to its span; it must not invalidate the composer.
 function GoalElapsed(props: { goal: SessionGoal; class?: string }) {
-  // Resuming samples the current clock before the next interval tick.
-  const [now, setNow] = createSignal(() => (props.goal.status === "active" ? Date.now() : 0));
-  createInterval(
-    () => setNow(Date.now()),
-    () => (props.goal.status === "active" ? 1000 : undefined),
-  );
+  const now = () => (props.goal.status === "active" ? readVisibleTime(1_000) : 0);
   return <span class={props.class}>{formatGoalElapsed(goalElapsedMs(props.goal, now()))}</span>;
 }
 
@@ -50,6 +45,7 @@ type ChatGoalProps = {
   goal?: SessionGoal;
   expanded: boolean;
   canAct: boolean;
+  resumeBusy?: boolean;
   resumeRecovery?: ChatGoalRecovery;
   connected?: boolean;
   onGoalAction?: (goalId: string, action: ChatGoalAction) => void;
@@ -67,7 +63,7 @@ const goalActionIcons = {
 
 type GoalPresentationProps = Pick<
   ChatGoalProps,
-  "canAct" | "resumeRecovery" | "connected" | "onGoalAction" | "onGoalEdit"
+  "canAct" | "resumeBusy" | "resumeRecovery" | "connected" | "onGoalAction" | "onGoalEdit"
 > & { goal: SessionGoal };
 
 /** Shared eligibility and callbacks; the parent supplies native write availability. */
@@ -100,11 +96,19 @@ export function ChatGoalActions(props: GoalPresentationProps) {
         {(action) => (
           <>
             {visibleAction(action) ? (
-              <openclaw-tooltip content={t(`chat.goals.${action}`)}>
+              <openclaw-tooltip
+                content={t(
+                  action === "resume" && props.resumeBusy
+                    ? "chat.goals.busy"
+                    : `chat.goals.${action}`,
+                )}
+              >
                 <button
                   class={["agent-chat__goal-action", `agent-chat__goal-${action}`]}
                   type="button"
                   aria-label={t(`chat.goals.${action}`)}
+                  disabled={action === "resume" && props.resumeBusy}
+                  style={{ opacity: action === "resume" && props.resumeBusy ? 0.5 : undefined }}
                   onClick={() => {
                     if (action === "edit") {
                       props.onGoalEdit?.(props.goal);
@@ -214,6 +218,7 @@ function GoalCard(props: Omit<ChatGoalProps, "goal"> & { goal: SessionGoal }) {
           <ChatGoalActions
             goal={props.goal}
             canAct={props.canAct}
+            resumeBusy={props.resumeBusy}
             resumeRecovery={props.resumeRecovery}
             connected={props.connected}
             onGoalAction={props.onGoalAction}
@@ -256,6 +261,7 @@ export function ChatGoal(props: ChatGoalProps) {
         goal={props.goal!}
         expanded={props.expanded}
         canAct={props.canAct}
+        resumeBusy={props.resumeBusy}
         resumeRecovery={props.resumeRecovery}
         connected={props.connected}
         onGoalAction={props.onGoalAction}

@@ -4,7 +4,8 @@ import type {
   ControlUiLinkReaderDescriptor,
 } from "../../../src/shared/control-ui-link-reader.js";
 import { createDeferred } from "../../../test/helpers/promise.ts";
-import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { restorePropertyDescriptor } from "../test-helpers/property-descriptor.ts";
 import { waitForSolid as waitForFast } from "../test-helpers/solid-settle.ts";
 import {

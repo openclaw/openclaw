@@ -145,7 +145,7 @@ describe("CommandPalette pending searches", () => {
       const list = vi.fn(() => deferred.promise);
       const { palette, query, queryAll } = await mountSearch({}, list);
       await enterQuery(palette, "zzfixtureunique");
-      const results = query('[role="listbox"]')!;
+      const results = query('.cmd-palette__results[role="listbox"]')!;
       expect(results.getAttribute("aria-busy")).toBe("true");
       expect(palette.textContent).not.toMatch(/Searching sessions|No results/);
       await vi.advanceTimersByTimeAsync(199);
@@ -185,25 +185,25 @@ describe("CommandPalette pending searches", () => {
     palette.onSelectSession = undefined;
     await enterQuery(palette, "");
     expect(findPaletteOption(palette, "Plugins")).toBeDefined();
-    expect(query('[role="listbox"]')?.getAttribute("aria-busy")).toBe("false");
+    expect(query('.cmd-palette__results[role="listbox"]')?.getAttribute("aria-busy")).toBe("false");
     await enterQuery(palette, "zzcatalog");
     expect(palette.textContent).not.toContain("Searching commands");
     await vi.advanceTimersByTimeAsync(200);
     expect(palette.textContent).toContain("Searching commands");
-    expect(query('[role="listbox"]')?.getAttribute("aria-busy")).toBe("true");
+    expect(query('.cmd-palette__results[role="listbox"]')?.getAttribute("aria-busy")).toBe("true");
     expect(palette.textContent).not.toMatch(/Searching sessions|No results/);
     const input = paletteInput(palette);
     setInputValue(input, "z");
     await palette.updateComplete;
-    expect(query('[role="listbox"]')?.getAttribute("aria-busy")).toBe("true");
+    expect(query('.cmd-palette__results[role="listbox"]')?.getAttribute("aria-busy")).toBe("true");
     expect(palette.textContent).not.toContain("No results");
     catalog.resolve({ models: [{ id: "fixture", provider: "fixture", name: "zzcatalog model" }] });
     await settlePalette(palette);
     expect(findPaletteOption(palette, "zzcatalog model")).toBeDefined();
-    expect(query('[role="listbox"]')?.getAttribute("aria-busy")).toBe("false");
+    expect(query('.cmd-palette__results[role="listbox"]')?.getAttribute("aria-busy")).toBe("false");
     await searchPalette(palette, "zzmissing");
     expect(palette.textContent).toContain("No results");
-    expect(query('[role="listbox"]')?.getAttribute("aria-busy")).toBe("false");
+    expect(query('.cmd-palette__results[role="listbox"]')?.getAttribute("aria-busy")).toBe("false");
     expect(request).toHaveBeenCalledOnce();
     expect(list).not.toHaveBeenCalled();
   });
@@ -237,19 +237,23 @@ describe("CommandPalette pending searches", () => {
         expect(findPaletteOption(palette, "Plugins")).toBeDefined();
         expect(findPaletteOption(palette, "New session", true)).toBeUndefined();
         expect(palette.textContent).toContain("Searching commands");
-        expect(query('[role="listbox"]')?.getAttribute("aria-busy")).toBe("true");
+        expect(query('.cmd-palette__results[role="listbox"]')?.getAttribute("aria-busy")).toBe(
+          "true",
+        );
       } finally {
         catalog.resolve({ models: [], plugins: [] });
       }
       await settlePalette(palette);
-      expect(query('[role="listbox"]')?.getAttribute("aria-busy")).toBe("false");
+      expect(query('.cmd-palette__results[role="listbox"]')?.getAttribute("aria-busy")).toBe(
+        "false",
+      );
     },
   );
 
   it.each([
     ["partial", {}, "Transcript search unavailable"],
     ["model failure", {}, "Model search unavailable"],
-    ["indexing", { indexing: true }, "Indexing older messages — search again shortly."],
+    ["indexing", { indexing: true }, "Results may be incomplete — search again shortly."],
     ["archived", { archivedTranscriptsExcluded: 2 }, "archived"],
   ] as const)(
     "does not announce empty success for %s transcript results",
@@ -295,7 +299,7 @@ describe("CommandPalette pending searches", () => {
     setInputValue(input, "zznew");
     old.resolve(createSessionResult("agent:main:old", "zzold match"));
     await settlePalette(palette, 0);
-    expect(query('[role="listbox"]')?.getAttribute("aria-busy")).toBe("true");
+    expect(query('.cmd-palette__results[role="listbox"]')?.getAttribute("aria-busy")).toBe("true");
     expect(queryAll('[role="option"]')).toHaveLength(0);
     pressKey(input, "Enter");
     expect(list).toHaveBeenCalledTimes(2);
@@ -308,7 +312,7 @@ describe("CommandPalette pending searches", () => {
     await settlePalette(palette, 0);
     expect(palette.textContent).not.toContain("zzold match");
     expect(findPaletteOption(palette, "zznew match")).toBeDefined();
-    expect(query('[role="listbox"]')?.getAttribute("aria-busy")).toBe("false");
+    expect(query('.cmd-palette__results[role="listbox"]')?.getAttribute("aria-busy")).toBe("false");
     pressKey(input, "Enter");
     expect(palette.onSelectSession).toHaveBeenCalledExactlyOnceWith("agent:main:new");
   });
@@ -336,10 +340,14 @@ describe("CommandPalette pending searches", () => {
       }
       await palette.updateComplete;
       if (action === "short-query") {
-        expect(query('[role="listbox"]')?.getAttribute("aria-busy")).toBe("true");
+        expect(query('.cmd-palette__results[role="listbox"]')?.getAttribute("aria-busy")).toBe(
+          "true",
+        );
         await vi.advanceTimersByTimeAsync(200);
       }
-      expect(query('[role="listbox"]')?.getAttribute("aria-busy")).toBe("false");
+      expect(query('.cmd-palette__results[role="listbox"]')?.getAttribute("aria-busy")).toBe(
+        "false",
+      );
       deferred.resolve(createSessionResult("agent:main:stale", "zzfixtureunique stale"));
       await settlePalette(palette, 0);
       expect(palette.textContent).not.toContain("Searching sessions");
@@ -366,13 +374,17 @@ describe("CommandPalette session search", () => {
     const { palette } = await mountSearch({ methods: ["sessions.search"], request }, list);
     await searchPalette(palette, "needle");
     expect(list).toHaveBeenCalledOnce();
-    expect(palette.querySelector('[role="listbox"]')?.getAttribute("aria-busy")).toBe("true");
+    expect(
+      palette.querySelector('.cmd-palette__results[role="listbox"]')?.getAttribute("aria-busy"),
+    ).toBe("true");
     expect(palette.textContent).not.toContain("No results");
     transcript.resolve(
       transcriptResult(contextOnly, "The needle appears only in the conversation body."),
     );
     await settlePalette(palette, 0);
-    expect(palette.querySelector('[role="listbox"]')?.getAttribute("aria-busy")).toBe("false");
+    expect(
+      palette.querySelector('.cmd-palette__results[role="listbox"]')?.getAttribute("aria-busy"),
+    ).toBe("false");
     const items = [...palette.querySelectorAll<HTMLElement>(".cmd-palette__item")];
     expect(items).toHaveLength(2);
     expect(items[0]?.textContent).toContain("needle");

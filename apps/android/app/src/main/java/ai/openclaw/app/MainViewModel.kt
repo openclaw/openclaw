@@ -22,6 +22,7 @@ import ai.openclaw.app.chat.MessageSpeechState
 import ai.openclaw.app.chat.SessionBranch
 import ai.openclaw.app.chat.SessionDiffSnapshot
 import ai.openclaw.app.chat.SessionForkResult
+import ai.openclaw.app.chat.SessionGroupCatalogSnapshot
 import ai.openclaw.app.chat.SessionRewindResult
 import ai.openclaw.app.chat.defaultChatThinkingLevelSelection
 import ai.openclaw.app.chat.resolveChatComposerOwner
@@ -539,6 +540,16 @@ class MainViewModel internal constructor(
   val modelAuthProviders: StateFlow<List<GatewayModelProviderSummary>> = runtimeState(initial = emptyList()) { it.modelAuthProviders }
   val modelFavorites: StateFlow<List<String>> = prefs.modelFavorites
   val modelRecents: StateFlow<List<String>> = prefs.modelRecents
+  internal val sessionGroupCatalog: StateFlow<SessionGroupCatalogSnapshot> =
+    runtimeState(initial = SessionGroupCatalogSnapshot()) { it.chat.sessionGroupCatalog }
+  internal val sessionRosterHasMore: StateFlow<Boolean> = runtimeState(initial = false) { it.chat.sessionRosterHasMore }
+  internal val sessionRosterLoadingMore: StateFlow<Boolean> = runtimeState(initial = false) { it.chat.sessionRosterLoadingMore }
+  internal val sessionRosterLoadFailed: StateFlow<Boolean> = runtimeState(initial = false) { it.chat.sessionRosterLoadFailed }
+
+  internal fun refreshSessionGroups() = ensureRuntime().chat.refreshSessionGroups()
+
+  internal suspend fun loadMoreChatSessions(): Boolean = ensureRuntime().chat.loadMoreSessions()
+
   val sessionCustomGroups: StateFlow<List<String>> = prefs.sessionCustomGroups
   val sidebarPageOrder: StateFlow<List<String>> = prefs.sidebarPageOrder
   val sidebarVisiblePages: StateFlow<List<String>> = prefs.sidebarVisiblePages

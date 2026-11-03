@@ -79,3 +79,30 @@ it("does not dispatch a Scheduled Task command after its lease is lost", async (
 
   expect([helper.spawn.mock.calls, helper.appendLog.mock.calls]).toEqual([[], []]);
 });
+
+it.each([9_000, 1024 * 1024 + 1])(
+  "preserves complete launchd inspections or refuses overflow (%i characters)",
+  async (size) => {
+    const helper = createHelper(0);
+    const completed = helper.run("launchctl", ["print", "gui/501/ai.openclaw.gateway"]);
+    const header = "gui/501/ai.openclaw.gateway = {\n";
+    const body = "x".repeat(size);
+    helper.child.stdout.emit("data", header);
+    helper.child.stdout.emit("data", body);
+    helper.child.stdout.emit("data", "\n\tpid = 4242\n}\n");
+    helper.child.stderr.emit("data", "native diagnostic");
+    helper.child.emit("close", 0);
+    const result = await completed;
+    if (size > 1024 * 1024) {
+      expect(result).toEqual(
+        output(1, "launchctl print exceeded the inspection output limit\nnative diagnostic"),
+      );
+    } else {
+      expect(result).toEqual({
+        code: 0,
+        stdout: header + body + "\n\tpid = 4242\n}\n",
+        stderr: "native diagnostic",
+      });
+    }
+  },
+);

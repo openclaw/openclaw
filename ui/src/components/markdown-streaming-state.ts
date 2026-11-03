@@ -20,16 +20,14 @@ export type StreamingMarkdownCursor = {
   openFence: FenceMarker | null;
 };
 
-type StreamingMarkdownCacheEntry = {
-  cursor: StreamingMarkdownCursor;
-  markdown: string;
-  rawTail: boolean;
-  result: StreamingMarkdownSplit;
-};
-
 type StreamingMarkdownState = {
   input?: { source: string; normalized: string };
-  split?: StreamingMarkdownCacheEntry;
+  split?: {
+    cursor: StreamingMarkdownCursor;
+    markdown: string;
+    rawTail: boolean;
+    result: StreamingMarkdownSplit;
+  };
   rendered?: { options: string; markdown: string; html: string; hasHtml: boolean };
 };
 const streamingCache = new Map<string, StreamingMarkdownState>();

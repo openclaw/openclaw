@@ -1,8 +1,13 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import { createMemo, lazy, Show } from "solid-js";
+import { createMemo, lazy, onSettled, Show } from "solid-js";
 import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ConfigSnapshot, GatewaySessionRow, ToolsEffectiveResult } from "../../api/types.ts";
+import type {
+  ConfigSnapshot,
+  GatewaySessionRow,
+  SessionsListResult,
+  ToolsEffectiveResult,
+} from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import type { McpServerForm } from "../../components/mcp-server-form.ts";
@@ -15,28 +20,28 @@ import {
   MCP_SERVER_NAME_PATTERN,
   parseMcpTarget,
   patchMcpServers,
-  summarizeMcpServers,
 } from "../../lib/config/mcp-servers.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
-import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { canCallGatewayMethod, canPresentGatewayMethod } from "../../lib/gateway-methods.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import {
   scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
-} from "../../lib/sessions/index.ts";
+} from "../../lib/sessions/navigation.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { nextBooleanToolOverrides } from "../../lib/sessions/tool-overrides.ts";
-import { refreshCurrentChatSessionList } from "./chat-session.ts";
+import { showToast } from "../../lib/toast.ts";
+import { refreshCurrentChatSessionList, type ChatModelSettingsHost } from "./chat-session.ts";
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
-import type { ChatPageHost } from "./chat-state-host.ts";
-import type { ChatComposerCapabilityMenuProps } from "./components/chat-composer-plus-menu.types.ts";
 import { ChatLazyBoundary } from "./components/chat-lazy-boundary.tsx";
 import {
   ComposerSkillCatalog,
+  composerMcpServers,
   composerWebSearchBaseEnabled,
 } from "./composer-capability-catalog.ts";
+import type { ChatComposerCapabilityMenuProps } from "./composer-capability-types.ts";
 import { ComposerLibrarySession } from "./composer-library-session.ts";
 import { hasDirectSessionRun } from "./run-lifecycle.ts";
 
@@ -54,6 +59,14 @@ const ComposerAddServerDialog = lazy(
 );
 
 type ComposerMcpServerScope = "session" | "everywhere";
+
+type ComposerCapabilityState = ChatModelSettingsHost &
+  Parameters<typeof hasDirectSessionRun>[0] & {
+    client: GatewayBrowserClient | null;
+    connectionEpoch: number;
+    basePath: string;
+    sessionsResult: SessionsListResult | null;
+  };
 
 function activeConfigFingerprint(
   snapshot: ConfigSnapshot | null,
@@ -95,7 +108,7 @@ export class ChatComposerCapabilityHost {
 
   private effectiveToolsKeys(
     context: ApplicationContext,
-    state: ChatPageHost,
+    state: ComposerCapabilityState,
     agentId: string,
   ): string {
     const requestKey = buildToolsEffectiveRequestKey(
@@ -115,10 +128,14 @@ export class ChatComposerCapabilityHost {
 
   private loadEffectiveTools(
     context: ApplicationContext,
-    state: ChatPageHost,
+    state: ComposerCapabilityState,
     agentId: string,
     refresh = false,
   ): void {
+    if (!canCallGatewayMethod(context.gateway.snapshot, "tools.effective", "operator.read")) {
+      this.retireEffectiveTools();
+      return;
+    }
     const client = state.client;
     const sessionKey = state.sessionKey;
     const cacheKey = this.effectiveToolsKeys(context, state, agentId);
@@ -143,6 +160,7 @@ export class ChatComposerCapabilityHost {
       this.client === client &&
       state.client === client &&
       state.connected &&
+      canCallGatewayMethod(context.gateway.snapshot, "tools.effective", "operator.read") &&
       this.connectionEpoch === connectionEpoch &&
       state.connectionEpoch === connectionEpoch &&
       state.sessionKey === sessionKey &&
@@ -174,7 +192,13 @@ export class ChatComposerCapabilityHost {
       });
   }
 
-  private trackRunSettlement(state: ChatPageHost): void {
+  private retireEffectiveTools() {
+    this.effectiveTools = null;
+    this.effectiveToolsErrorKey = null;
+    this.effectiveToolsRequest = null;
+  }
+
+  private trackRunSettlement(state: ComposerCapabilityState): void {
     const runActive = hasDirectSessionRun(state);
     if (this.runActive && !runActive && this.runSessionKey === state.sessionKey) {
       this.settledRuns += 1;
@@ -185,7 +209,7 @@ export class ChatComposerCapabilityHost {
 
   private async patch(
     context: ApplicationContext,
-    state: ChatPageHost,
+    state: ComposerCapabilityState,
     next: SessionToolOverrides | null,
   ): Promise<string | undefined> {
     if (!state.connected || !state.client) {
@@ -250,7 +274,7 @@ export class ChatComposerCapabilityHost {
 
   private addServerBlockedReason(
     context: ApplicationContext,
-    state: ChatPageHost,
+    state: ComposerCapabilityState,
     session: GatewaySessionRow | undefined,
     scope: ComposerMcpServerScope,
   ): string | null {
@@ -271,7 +295,7 @@ export class ChatComposerCapabilityHost {
   }
 
   private async loadCurrentSessionOverrides(
-    state: ChatPageHost,
+    state: ComposerCapabilityState,
     sessionKey: string,
     agentId: string | undefined,
   ) {
@@ -300,7 +324,7 @@ export class ChatComposerCapabilityHost {
 
   private async submitAddServer(
     context: ApplicationContext,
-    state: ChatPageHost,
+    state: ComposerCapabilityState,
     session: GatewaySessionRow | undefined,
     form: McpServerForm,
   ): Promise<void> {
@@ -362,7 +386,7 @@ export class ChatComposerCapabilityHost {
 
   dialogView(
     context: ApplicationContext,
-    state: ChatPageHost,
+    state: ComposerCapabilityState,
     session: GatewaySessionRow | undefined,
   ) {
     return {
@@ -405,20 +429,14 @@ export class ChatComposerCapabilityHost {
     };
   }
 
-  props(
-    context: ApplicationContext,
-    state: ChatPageHost,
-    session: GatewaySessionRow | undefined,
-    agentId: string,
-  ): ChatComposerCapabilityMenuProps {
+  // Keep admitted reads and dialogs current after the menu closes, without building menu props.
+  synchronize(state: ComposerCapabilityState, agentId: string): () => boolean {
     if (this.client !== state.client || this.connectionEpoch !== state.connectionEpoch) {
       this.client = state.client;
       this.connectionEpoch = state.connectionEpoch;
       this.skillCatalog.synchronize(state.client, state.connectionEpoch);
       this.patchTokens.clear();
-      this.effectiveTools = null;
-      this.effectiveToolsErrorKey = null;
-      this.effectiveToolsRequest = null;
+      this.retireEffectiveTools();
     }
     this.trackRunSettlement(state);
     const client = state.client;
@@ -434,6 +452,16 @@ export class ChatComposerCapabilityHost {
         ? { client, connectionEpoch, sessionKey, agentId, isCurrent: current }
         : null,
     );
+    return current;
+  }
+
+  props(
+    context: ApplicationContext,
+    state: ComposerCapabilityState,
+    session: GatewaySessionRow | undefined,
+    agentId: string,
+  ): ChatComposerCapabilityMenuProps {
+    const current = this.synchronize(state, agentId);
     const canWriteLibrary = canCallGatewayMethod(
       context.gateway.snapshot,
       "skills.library.activate",
@@ -445,8 +473,14 @@ export class ChatComposerCapabilityHost {
     const runtimeConfig = currentDisplayRuntimeConfig(context.runtimeConfig.state);
     const access = readGatewayOperatorAccess(context.gateway.snapshot);
     const gatewayAvailable = state.connected && Boolean(state.client);
-    const effectiveToolsAvailable =
-      isGatewayMethodAdvertised(context.gateway.snapshot, "tools.effective") === true;
+    const effectiveToolsAvailable = canPresentGatewayMethod(
+      context.gateway.snapshot,
+      "tools.effective",
+      "operator.read",
+    );
+    if (!effectiveToolsAvailable) {
+      this.retireEffectiveTools();
+    }
     const effectiveToolsKey = effectiveToolsAvailable
       ? this.effectiveToolsKeys(context, state, agentId)
       : null;
@@ -488,7 +522,10 @@ export class ChatComposerCapabilityHost {
       basePath: state.basePath,
       skills: this.skillCatalog.rows(agentId, session?.toolOverrides),
       skillsRead: this.skillCatalog.read(agentId),
-      mcpServers: summarizeMcpServers(runtimeConfig) ?? [],
+      ...composerMcpServers(runtimeConfig, {
+        auth: context.gateway.snapshot.hello?.auth ?? null,
+        loading: context.runtimeConfig.state.configLoading,
+      }),
       toolsEffectiveResult,
       toolsEffectiveLoading,
       toolsEffectiveError,
@@ -502,7 +539,6 @@ export class ChatComposerCapabilityHost {
         loading: this.library.loading,
         busy: this.library.busy,
         error: this.library.error,
-        notice: this.library.notice,
         canWrite: canWriteLibrary,
         onReload: () => {
           if (current()) {
@@ -516,7 +552,11 @@ export class ChatComposerCapabilityHost {
         },
         onActivate: (action, skillId, revision) => {
           if (current() && canWriteLibrary) {
-            void this.library.activate(action, skillId, revision);
+            void this.library.activate(action, skillId, revision).then((message) => {
+              if (message && current()) {
+                showToast({ message });
+              }
+            });
           }
         },
       },
@@ -544,14 +584,14 @@ export class ChatComposerCapabilityHost {
           return;
         }
         if (
-          (view === "skills" || view.startsWith("library:")) &&
+          (view === "skills" || view === "libraries" || view.startsWith("library:")) &&
           !this.library.result &&
           !this.library.loading &&
           !this.library.error
         ) {
           void this.library.load();
         }
-        if (effectiveToolsAvailable && view.startsWith("tools:")) {
+        if (effectiveToolsAvailable && view === "connectors") {
           this.loadEffectiveTools(context, state, agentId);
         }
       },
@@ -573,6 +613,15 @@ export class ChatComposerCapabilityHost {
         : {}),
     };
   }
+}
+
+export function ChatComposerCapabilityInitializer(props: {
+  initialize: (create: () => ChatComposerCapabilityHost) => void;
+}) {
+  onSettled(() => {
+    props.initialize(() => new ChatComposerCapabilityHost());
+  });
+  return null;
 }
 
 export type ChatComposerCapabilityDialogsProps = {

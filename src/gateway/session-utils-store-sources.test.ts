@@ -343,6 +343,15 @@ it("retains source preparation until directory or registry ownership changes", a
     expect(warm.request).toEqual(first.request);
     expect([realpath, stat, readdir].map((spy) => spy.mock.calls)).toEqual([[], [], []]);
 
+    // Registry commits publish their own revision; file activity must not rescan agent paths.
+    for (const entry of observedDirectories) {
+      if (entry.active && entry.directory === path.dirname(params.registryPath)) {
+        entry.notify(path.basename(params.registryPath));
+      }
+    }
+    expect([realpath, stat, readdir].map((spy) => spy.mock.calls.length)).toEqual([0, 0, 0]);
+    await Promise.resolve();
+
     const directory = observedDirectories.find(
       (entry) => entry.active && entry.directory === path.dirname(main.path),
     );

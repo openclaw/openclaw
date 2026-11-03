@@ -101,13 +101,14 @@ describe("cli-session helpers", () => {
   );
 
   it("rebinds only omitted receipts across binding-preserving resets", () => {
+    const omitted = receipt({
+      localSessionId: "old-local-session",
+      userTurnDisposition: "omitted",
+    });
     const bindings = {
       "claude-cli": {
         sessionId: "claude-session",
-        reseedReceipt: receipt({
-          localSessionId: "old-local-session",
-          userTurnDisposition: "omitted",
-        }),
+        reseedReceipt: omitted,
       },
       "other-cli": {
         sessionId: "other-session",
@@ -118,10 +119,7 @@ describe("cli-session helpers", () => {
     expect(rebindCliSessionReseedReceiptsForReset(bindings, "new-local-session")).toEqual({
       "claude-cli": {
         sessionId: "claude-session",
-        reseedReceipt: receipt({
-          localSessionId: "new-local-session",
-          userTurnDisposition: "omitted",
-        }),
+        reseedReceipt: { ...omitted, localSessionId: "new-local-session" },
       },
       "other-cli": bindings["other-cli"],
     });
@@ -407,35 +405,27 @@ describe("cli-session helpers", () => {
 
   it("preserves reusable bindings for aborts and clears only invalid sessions", () => {
     const abort = Object.assign(new Error("aborted"), { name: "AbortError" });
-
     const binding = { sessionId: "reused" };
-    const forkBinding = { sessionId: "fork-source", forkNextResume: true as const };
+    const clears = (
+      overrides: Partial<Parameters<typeof shouldClearFailedCliSessionBinding>[0]> = {},
+    ) => shouldClearFailedCliSessionBinding({ error: abort, binding, ...overrides });
 
-    expect(shouldClearFailedCliSessionBinding({ error: abort, binding })).toBe(false);
-    expect(shouldClearFailedCliSessionBinding({ error: abort, binding: forkBinding })).toBe(false);
+    expect(clears()).toBe(false);
+    expect(clears({ binding: { sessionId: "fork-source", forkNextResume: true } })).toBe(false);
+    expect(clears({ bindingReplacedDuringRun: true })).toBe(true);
     expect(
-      shouldClearFailedCliSessionBinding({
-        error: abort,
-        binding: { sessionId: "replacement" },
-        bindingReplacedDuringRun: true,
-      }),
-    ).toBe(true);
-    expect(
-      shouldClearFailedCliSessionBinding({
+      clears({
         error: new FailoverError("session expired", {
           reason: "session_expired",
           provider: "claude-cli",
           model: "claude-opus-4-8",
         }),
-        binding,
         hasNewGeneratedMediaTask: true,
       }),
     ).toBe(false);
     expect(resolveCliSessionClearReason(abort)).toBe("AbortError");
-    expect(
-      shouldClearFailedCliSessionBinding({ error: new Error("provider failed"), binding }),
-    ).toBe(false);
-    expect(shouldClearFailedCliSessionBinding({ error: abort })).toBe(false);
+    expect(clears({ error: new Error("provider failed") })).toBe(false);
+    expect(clears({ binding: undefined })).toBe(false);
   });
 
   it.each(["format", "auth", "session_expired"] as const)(

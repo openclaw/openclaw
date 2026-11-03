@@ -5,7 +5,7 @@ import {
   INTERRUPTED_SETTINGS_WAIT_ERROR,
   sameQueuedDeliveryVersion,
 } from "../../lib/chat/outbox-store-codec.ts";
-import { visibleSessionMatches } from "../../lib/sessions/index.ts";
+import { visibleSessionMatches } from "../../lib/sessions/navigation.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import {
@@ -138,7 +138,8 @@ export function finishChatDeliveryAdmission(
   if (!current) {
     return "failed";
   }
-  if (current.sendState === "held") {
+  // Preparation can yield after the drain's edit check; revalidate before dispatch.
+  if (current.sendState === "held" || isQueuedMessageBeingEdited(host, current.id)) {
     return "pending";
   }
   if (isExpiredIncognitoSession(host, route)) {

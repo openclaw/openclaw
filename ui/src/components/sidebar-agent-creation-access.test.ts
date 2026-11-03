@@ -16,14 +16,29 @@ describe("sidebar agent creation access", () => {
     {
       name: "read-only browser",
       hello: gatewayHelloForMethods(["agents.create"], ["operator.read"]),
+      reason: "You need operator.admin to perform this action",
     },
-    { name: "missing method", hello: gatewayHelloForMethods([]) },
-    { name: "unpaired browser", hello: null },
-  ])("explains unavailable creation for a $name and updates after reconnect", async ({ hello }) => {
+    {
+      name: "missing method",
+      hello: gatewayHelloForMethods([]),
+      reason: "This Gateway does not support agent creation",
+    },
+    {
+      name: "disconnected browser with a previous handshake",
+      hello: gatewayHelloForMethods(["agents.create"]),
+      phase: "reconnecting" as const,
+      reason: "Connect to the Gateway to perform this action",
+    },
+    {
+      name: "unpaired browser",
+      hello: null,
+      reason: "Connect to the Gateway to perform this action",
+    },
+  ])("explains $name and recovers", async ({ hello, phase, reason }) => {
     const request = vi.fn().mockResolvedValue({});
     // SAFETY: This sidebar fixture uses only request; the harness supplies Gateway state.
     const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
-    gateway.publish({ hello });
+    gateway.publish({ hello, phase: phase ?? "connected" });
     const { sidebar, context } = await mountSidebar(
       gateway.gateway,
       createSessions("main", ["agent:main:main"]),
@@ -36,25 +51,21 @@ describe("sidebar agent creation access", () => {
     await sidebar.updateComplete;
     const create = sidebar.querySelector<HTMLButtonElement>('[data-value="command:new-agent"]');
     expect(create).not.toBeNull();
-    expect(create?.disabled).toBe(true);
+    expect(create?.disabled).toBe(false);
     expect(create?.getAttribute("aria-disabled")).toBe("true");
-    const reason = document.getElementById(create?.getAttribute("aria-describedby") ?? "");
-    expect(reason?.textContent).toContain("agents.create");
-    expect(reason?.textContent).toContain("operator.admin");
-    expect(reason?.textContent).toContain("Pair");
-    expect(reason?.textContent).toContain("reconnect");
-    expect(create?.contains(reason)).toBe(true);
-    expect(create?.hasAttribute("title")).toBe(false);
+    expect(create?.textContent?.trim()).toBe("Create new agent");
+    expect(create?.getAttribute("title")).toBe(reason);
+    expect(create?.getAttribute("aria-description")).toBe(reason);
     create?.click();
     expect(request.mock.calls.some(([method]) => method === "agents.create")).toBe(false);
     expect(context.navigate).not.toHaveBeenCalled();
     expect(context.chatSubmissions.creation).toBeUndefined();
 
-    gateway.publish({ hello: gatewayHelloForMethods(["agents.create"]) });
+    gateway.publish({ hello: gatewayHelloForMethods(["agents.create"]), phase: "connected" });
     await vi.waitFor(() => {
       expect(create?.disabled).toBe(false);
-      expect(create?.hasAttribute("aria-describedby")).toBe(false);
-      expect(reason?.isConnected).toBe(false);
+      expect(create?.hasAttribute("aria-description")).toBe(false);
+      expect(create?.hasAttribute("title")).toBe(false);
     });
   });
 });

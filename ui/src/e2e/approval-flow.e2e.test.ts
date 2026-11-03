@@ -1,6 +1,7 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { chatSessionListResponse } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -42,12 +43,44 @@ async function openChat(options: Parameters<typeof installMockGateway>[1] = {}) 
 }
 
 suite.define(() => {
-  it("keeps approvals passive until the Inbox opens the full queue", async () => {
-    const { page, request } = await openChat({ sessionKey: activeSessionKey });
-    await request("approval-inline", "echo inline", 1_000);
+  it("keeps approvals passive through detail review and queued decisions", async () => {
+    const currentSession = {
+      key: activeSessionKey,
+      label: "Main",
+      kind: "direct",
+      updatedAt: 1_000,
+    };
+    const sourceSession = {
+      key: "agent:main:other",
+      label: "Review navigation",
+      kind: "direct",
+      updatedAt: 2_000,
+      worktree: { id: "review", branch: "review/navigation", repoRoot: "/projects/atlas" },
+      spawnedCwd: "/projects/atlas-review",
+    };
+    const sessions = [currentSession, sourceSession];
+    const { page, gateway, request } = await openChat({ sessionKey: activeSessionKey, sessions });
+    const initial = approval("approval-inline", "echo inline", 1_000);
+    await gateway.emitGatewayEvent("exec.approval.requested", {
+      ...initial,
+      request: { ...initial.request, host: "sandbox", resolvedPath: "/usr/bin/echo" },
+    });
 
     await inlineApproval(page, "approval-inline").waitFor();
+    expect(
+      await inlineApproval(page, "approval-inline")
+        .locator(".exec-approval-prompt .exec-approval-host")
+        .count(),
+    ).toBe(0);
     expect(await page.locator("openclaw-modal-dialog").count()).toBe(0);
+    await inlineApproval(page, initial.id)
+      .getByRole("button", { name: "Request details", exact: true })
+      .click();
+    const details = page.getByRole("dialog", { name: "Request details", exact: true });
+    await details.getByText("/usr/bin/echo", { exact: true }).waitFor();
+    expect(await gateway.getRequests("exec.approval.resolve")).toHaveLength(0);
+    await page.keyboard.press("Escape");
+    await details.waitFor({ state: "hidden" });
 
     await request("approval-other", "echo other", 2_000, "agent:main:other");
 
@@ -61,6 +94,41 @@ suite.define(() => {
     await inboxPanel.locator('[data-approval-id="approval-other"]').waitFor();
     await expect.poll(() => inboxPanel.locator("[data-approval-id]").count()).toBe(2);
     await inboxPanel.getByRole("tab", { name: "Approvals 2" }).waitFor();
+    await page.keyboard.press("Escape");
+    await inlineApproval(page, "approval-inline")
+      .getByRole("button", { name: "1 more pending" })
+      .click();
+    const modal = page.locator("openclaw-exec-approval .exec-approval-card");
+    await modal.locator(".exec-approval-list__item", { hasText: "echo other" }).click();
+    await expect.poll(() => modal.getAttribute("data-approval-id")).toBe("approval-other");
+    expect(await modal.locator(".exec-approval-title").textContent()).toContain(
+      "Review navigation",
+    );
+    const renamed = { ...sourceSession, label: "Review navigation updated", updatedAt: Date.now() };
+    await gateway.setSessionsListResponse(chatSessionListResponse([currentSession, renamed]));
+    await gateway.emitGatewayEvent("sessions.changed", { agentId: "main", reason: "update" });
+    await expect
+      .poll(() => modal.locator(".exec-approval-title").textContent(), { timeout: 15_000 })
+      .toContain("Review navigation updated");
+    await page.keyboard.press("Escape");
+    await page.locator("openclaw-modal-dialog").waitFor({ state: "hidden" });
+    await inlineApproval(page, "approval-inline")
+      .getByRole("button", { name: "1 more pending" })
+      .click();
+    await expect
+      .poll(() => modal.locator(".exec-approval-title").textContent())
+      .toContain("Review navigation updated");
+    expect(await gateway.getRequests("exec.approval.resolve")).toHaveLength(0);
+    await gateway.deferNext("exec.approval.resolve", { id: "approval-other" });
+    const allow = modal.getByRole("button", { name: "Allow once", exact: true });
+    await allow.click();
+    const decision = await gateway.waitForRequest("exec.approval.resolve");
+    expect(decision.params).toEqual({ id: "approval-other", decision: "allow-once" });
+    await expect.poll(() => allow.isDisabled()).toBe(true);
+    await gateway.resolveDeferred("exec.approval.resolve");
+    await expect.poll(() => modal.getAttribute("data-approval-id")).toBe("approval-inline");
+    await expect.poll(() => modal.getByRole("button", { name: /echo other/ }).count()).toBe(0);
+    expect(await modal.locator(".exec-approval-source").count()).toBe(0);
   });
 
   it("keeps no-auth Inbox approvals readable while blocking decisions", async () => {
@@ -70,6 +138,9 @@ suite.define(() => {
     });
 
     await request("approval-review-only", "echo review only", 1_000);
+    const card = inlineApproval(page, "approval-review-only");
+    await card.getByText("View only", { exact: true }).waitFor();
+    expect(await card.locator(".exec-approval-actions button").count()).toBe(0);
 
     await approvalInboxButton(page).click();
     const inboxPanel = approvalInboxPanel(page);
@@ -77,9 +148,7 @@ suite.define(() => {
     await expect
       .poll(() => inboxRow.locator(".sidebar-approval-row__command").textContent())
       .toContain("echo review only");
-    await inboxRow
-      .getByText("Review only. Sign in with approval access to record a decision.", { exact: true })
-      .waitFor();
+    await inboxRow.getByText("You don’t have permission to approve.", { exact: true }).waitFor();
     expect(
       await inboxRow
         .locator(".sidebar-approval-row__actions button")

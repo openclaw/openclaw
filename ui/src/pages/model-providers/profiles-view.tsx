@@ -12,6 +12,7 @@ import { showToast } from "../../lib/toast.ts";
 import { AccountLimits, type AccountUsageScope } from "./account-usage.tsx";
 import { modelProviderErrorMessage } from "./config-mutation.ts";
 import type { ModelProviderCard, ModelProviderPendingLogout } from "./data.ts";
+import { isAccessTokenExpiry, profileAuthProblem } from "./view-status.tsx";
 
 registerEnglishCatalog(registerSettingsEnglish);
 
@@ -82,7 +83,16 @@ function profileMeta(profile: ProviderProfile): string {
     parts.push(profile.displayName);
   }
   if (profile.expiry) {
-    parts.push(t("modelProviders.expiresIn", { time: profile.expiry.label }));
+    parts.push(
+      t(
+        profile.type === "oauth"
+          ? profile.status === "expired"
+            ? "modelProviders.accessTokenExpired"
+            : "modelProviders.accessTokenExpiresIn"
+          : "modelProviders.expiresIn",
+        { time: profile.expiry.label },
+      ),
+    );
   }
   if (profile.lastUsedAt) {
     parts.push(
@@ -106,11 +116,26 @@ function profileInitials(identity: string): string {
 
 /** `quiet` drops a healthy status where the surrounding row already reports one. */
 function profileStatus(profile: ProviderProfile, providerAuthRejected: boolean, quiet = false) {
-  const status =
-    profile.externallyManaged && (profile.status === "expired" || profile.status === "expiring")
-      ? "ok"
-      : profile.status;
-  switch (status) {
+  const problem = profileAuthProblem(profile);
+  if (problem) {
+    return <SettingsStatus kind="danger" label={t(problem)} />;
+  }
+  if (
+    isAccessTokenExpiry(profile) ||
+    (profile.externallyManaged && (profile.status === "expired" || profile.status === "expiring"))
+  ) {
+    return quiet && !providerAuthRejected ? undefined : (
+      <SettingsStatus
+        kind="muted"
+        label={t(
+          profile.externallyManaged
+            ? "modelProviders.status.managedExternally"
+            : "modelProviders.status.configured",
+        )}
+      />
+    );
+  }
+  switch (profile.status) {
     case "ok":
       if (quiet && !providerAuthRejected) {
         return undefined;
@@ -324,6 +349,9 @@ function ProfileIdentity(props: { profile: ProviderProfile; identity: string }) 
       <div class="model-providers__profile-copy">
         <strong title={props.profile.profileId}>{props.identity}</strong>
         {meta() ? <span>{meta()}</span> : undefined}
+        {isAccessTokenExpiry(props.profile) ? (
+          <span>{t("modelProviders.accessTokenExpiryHelp")}</span>
+        ) : undefined}
       </div>
     </>
   );

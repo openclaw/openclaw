@@ -2,6 +2,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { INTERNAL_SESSION_PATH_PARAM } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { loadCatalogShareRouteFromLocation } from "./route-loader-catalog-share.ts";
 import { loadRoute, routeLocation } from "./route-loading.test-support.ts";
 
 const fullId = "0123456789abcdef0123456789abcdef";
@@ -38,21 +40,11 @@ function beamCatalog(sessions: Array<{ threadId: string; name: string }>, nextCu
       {
         id: "beam",
         label: "Beam",
-        capabilities: { continueSession: false, archive: false },
         shareRoute: SHARE_ROUTE,
         hosts: [
           {
             hostId: "gateway",
-            label: "Beamed sessions",
-            kind: "gateway",
-            connected: true,
-            sessions: sessions.map((session) => ({
-              ...session,
-              status: "live",
-              archived: false,
-              canContinue: false,
-              canArchive: false,
-            })),
+            sessions,
             ...(nextCursor ? { nextCursor } : {}),
           },
         ],
@@ -64,6 +56,35 @@ const loadCatalog = (result: unknown, path = "/beam/0123456789ab") =>
   loadRoute(catalogContext(vi.fn(async () => result)), path);
 
 describe("catalog share route resolution", () => {
+  it("does not request a catalog after cancellation during deferred resolver loading", async () => {
+    const request = vi.fn(async () => beamCatalog([{ threadId: fullId, name: "Canceled Beam" }]));
+    const abort = new AbortController();
+    const pending = loadCatalogShareRouteFromLocation(
+      catalogContext(request),
+      routeLocation("/beam/0123456789ab"),
+      abort.signal,
+    );
+    abort.abort();
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    expect(request).not.toHaveBeenCalled();
+  });
+  it("resolves a Visitor owned Beam link without requesting the operator catalog", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method !== "beam.owned.list") {
+        throw new Error("missing scope: operator.read");
+      }
+      return beamCatalog([{ threadId: fullId, name: "Owned synthetic Beam" }]);
+    });
+    const context = catalogContext(request);
+    context.gateway.snapshot.hello = gatewayHelloForMethods(
+      ["beam.owned.list", "beam.owned.read"],
+      ["operator.sessions.write"],
+    );
+    await expect(loadRoute(context, "/beam/0123456789ab")).resolves.toMatchObject({
+      kind: "session",
+      sessionKey: `agent:research:catalog:beam:gateway:${fullId}`,
+    });
+  });
   it("resolves an external-style provider descriptor without catalog-specific UI policy", async () => {
     const result = beamCatalog([{ threadId: fullId, name: "External session" }]);
     const catalog = {
@@ -119,33 +140,25 @@ describe("catalog share route resolution", () => {
 
   it("keeps ambiguity, invalid ids, and disabled route owners visible", async () => {
     const ids = ["0123456789ab00000000000000000000", "0123456789abffffffffffffffffffff"];
-    const request = vi.fn(async (_method: string, params: Record<string, unknown>) =>
-      beamCatalog(
-        params.search === "0123456789ab"
-          ? ids.map((threadId, index) => ({
-              threadId,
-              name: `Candidate ${String(index + 1)}`,
-            }))
-          : [],
-        params.search === "0123456789ab" ? "more" : undefined,
-      ),
+    const ambiguous = beamCatalog(
+      ids.map((threadId) => ({ threadId, name: "Candidate" })),
+      "more",
     );
-    const context = catalogContext(request);
 
-    await expect(loadRoute(context, "/beam/candidate-0123456789ab")).resolves.toMatchObject({
+    await expect(loadCatalog(ambiguous, "/beam/candidate-0123456789ab")).resolves.toMatchObject({
       kind: "ambiguous",
       shortId: "0123456789ab",
       candidates: [{ href: `/beam/candidate-${ids[0]}` }, { href: `/beam/candidate-${ids[1]}` }],
       truncated: true,
     });
 
-    await expect(loadRoute(context, "/beam/aaaaaaaaaaaa")).resolves.toMatchObject({
+    await expect(loadCatalog(beamCatalog([]), "/beam/aaaaaaaaaaaa")).resolves.toMatchObject({
       kind: "missing-session",
       currentSessionHref: "/chat/research",
       sessionsHref: "/sessions",
     });
 
-    await expect(loadRoute(context, "/beam/ABCDEF012345")).resolves.toMatchObject({
+    await expect(loadCatalog(ambiguous, "/beam/ABCDEF012345")).resolves.toMatchObject({
       kind: "route-error",
       message: "This Beam share URL is invalid.",
     });

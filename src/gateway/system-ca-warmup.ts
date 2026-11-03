@@ -81,8 +81,7 @@ async function warmMacOSSystemCaOffMainThread(options: SystemCaWarmupOptions = {
         `macOS CA warmup timed out after ${SYSTEM_CA_WARMUP_TIMEOUT_MS}ms; gateway startup will continue and trust settings will load lazily`,
         true,
       );
-    }, SYSTEM_CA_WARMUP_TIMEOUT_MS);
-    timeout.unref?.();
+    }, SYSTEM_CA_WARMUP_TIMEOUT_MS).unref();
 
     // A wedged trustd lookup must not keep an otherwise stopped gateway process alive.
     worker.unref();

@@ -74,3 +74,6 @@ Message-only source replies also use the restricted tool surface. Lightweight
 bootstrap turns and tool-disabled internal turns additionally set the project-
 document budget to zero. These modes are separate inputs even when their final
 thread configuration overlaps.
+
+For supported checks before inference, see
+[Codex pre-turn verification](/plugins/codex-harness/commands#verify-tool-access-before-a-codex-turn).

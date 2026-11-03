@@ -38,6 +38,7 @@ async function screenshot(page: Page, name: string) {
   if (!captureUiProof) {
     return;
   }
+  await page.bringToFront();
   const identity = page.locator("#settings-profile-identity");
   const frame = await takeControlUiScreenshotFrame(
     page,
@@ -128,6 +129,52 @@ suite.define(() => {
     screenshot,
     captureUiProof,
     getProofDir: () => proofDir,
+  });
+
+  it("keeps keyboard editing and retry available after a rejected display-name save", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const gateway = await openProfilePage(page);
+      const input = page.getByRole("textbox", { name: "Display name", exact: true });
+      const save = page.locator(".identity-name-control button");
+      await expect(input).toBeEnabled();
+      await gateway.deferNext("users.setDisplayName");
+      await input.fill("Keyboard Draft");
+      await input.press("Enter");
+      const first = await gateway.waitForRequest("users.setDisplayName");
+      expect(first.params).toEqual({ profileId: testProfile.id, displayName: "Keyboard Draft" });
+      await expect(save).toBeDisabled();
+      await page.keyboard.press("Enter");
+      expect(await gateway.getRequests("users.setDisplayName")).toHaveLength(1);
+
+      await gateway.rejectDeferred("users.setDisplayName", {
+        message: "Synthetic profile name save rejected",
+      });
+      await expect(page.locator(".identity-error")).toContainText(
+        "Synthetic profile name save rejected",
+      );
+      await expect(save).toBeEnabled();
+      await expect(input).toHaveValue("Keyboard Draft");
+      await screenshot(page, "display-name-rejected.png");
+      await expect(input).toBeFocused();
+
+      await page.keyboard.press("End");
+      await page.keyboard.type(" retry");
+      await expect(input).toHaveValue("Keyboard Draft retry");
+      await gateway.deferNext("users.setDisplayName");
+      await page.keyboard.press("Enter");
+      const retry = await gateway.waitForRequest("users.setDisplayName", { after: 1 });
+      expect(retry.params).toEqual({
+        profileId: testProfile.id,
+        displayName: "Keyboard Draft retry",
+      });
+      const profile = { ...testProfile, displayName: "Keyboard Draft retry" };
+      await gateway.setMethodResponse("users.self", { profile });
+      await gateway.resolveDeferred("users.setDisplayName", { profile });
+      await expect(save).toHaveText("Save");
+      await expect(input).toHaveValue(profile.displayName);
+      await expect(save).toBeDisabled();
+      expect(await gateway.getRequests("users.setDisplayName")).toHaveLength(2);
+    });
   });
 
   it("shows the personal connection context without exposing credential fields", async () => {
@@ -231,6 +278,7 @@ suite.define(() => {
       await page.goto(new URL(profilePath, suite.server.baseUrl).href);
       const chooser = page.locator(".identity-avatar-control > button");
       await expect(chooser).toHaveAccessibleName("Choose image");
+      await expect(chooser).toBeEnabled();
       await chooser.focus();
       await expect(chooser).toBeFocused();
       const [fileChooser] = await Promise.all([
@@ -249,6 +297,68 @@ suite.define(() => {
         avatarRevision: revision,
       });
       await expect(chooser).toBeEnabled();
+    });
+  });
+  it("links and disconnects Discord below linked emails without changing GitHub identity", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const account = { accountId: "team", available: true, senderIds: [] as string[] };
+      const gateway = await openProfilePage(page, {
+        "users.channelIdentity": { status: "ready", accounts: [account] },
+      });
+      const rows = page.locator("#settings-profile-identity .settings-row");
+      const discord = rows.filter({
+        has: page.locator(".settings-row__title", { hasText: "Discord account" }),
+      });
+      await expect(discord.getByRole("button", { name: "Connect Discord" })).toBeEnabled();
+      const titles = await rows.locator(".settings-row__title").allTextContents();
+      expect(titles.indexOf("Discord account")).toBe(titles.indexOf("Linked emails") + 1);
+      expect(titles.indexOf("GitHub account")).toBe(titles.indexOf("Discord account") + 1);
+      await screenshot(page, "20-discord-disconnected.png");
+      await page.context().route("https://discord.example/**", (route) =>
+        route.fulfill({
+          body: "Synthetic Discord consent — no live OAuth",
+          contentType: "text/plain",
+        }),
+      );
+      const afterStart = await gateway.deferNext("users.channelIdentity", { action: "start" });
+      await discord.getByRole("button", { name: "Connect Discord" }).click();
+      await gateway.waitForRequest("users.channelIdentity", {
+        match: { action: "start" },
+        after: afterStart,
+      });
+      await gateway.setMethodResponse("users.channelIdentity", {
+        status: "linked",
+        accounts: [{ ...account, senderIds: ["123456789012345678"] }],
+      });
+      await gateway.resolveDeferred("users.channelIdentity", {
+        status: "pending",
+        requestId: "test-request",
+        authorizationUrl: "https://discord.example/consent",
+      });
+      await expect(discord).toContainText("Verified");
+      await expect(discord).toContainText("123456789012345678");
+      await screenshot(page, "21-discord-linked.png");
+      await gateway.setMethodResponse("users.channelIdentity", {
+        status: "ready",
+        accounts: [account],
+      });
+      await discord.getByRole("button", { name: "Disconnect", exact: true }).click();
+      await expect(discord.getByRole("button", { name: "Connect Discord" })).toBeEnabled();
+      const afterError = await gateway.deferNext("users.channelIdentity", { action: "start" });
+      await discord.getByRole("button", { name: "Connect Discord" }).click();
+      await gateway.waitForRequest("users.channelIdentity", {
+        match: { action: "start" },
+        after: afterError,
+      });
+      await gateway.rejectDeferred("users.channelIdentity", {
+        code: "INVALID_REQUEST",
+        message: "Discord sign-in is unavailable. Try again.",
+      });
+      await expect(discord.getByRole("alert")).toContainText("Try again");
+      await screenshot(page, "22-discord-error.png");
+      expect(
+        await page.locator("body").evaluate((element) => element.scrollWidth),
+      ).toBeLessThanOrEqual(1280);
     });
   });
 });

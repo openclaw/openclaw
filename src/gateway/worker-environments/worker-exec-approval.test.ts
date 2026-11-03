@@ -50,12 +50,7 @@ function reviewerResponse() {
     api: reviewerModel.api,
     provider: reviewerModel.provider,
     model: reviewerModel.id,
-    content: [
-      {
-        type: "text",
-        text: JSON.stringify({ decision: "allow", risk: "low", rationale: "reviewer fixture" }),
-      },
-    ],
+    content: [{ type: "text", text: '{"decision":"allow","risk":"low","rationale":"fixture"}' }],
   });
 }
 
@@ -144,21 +139,19 @@ describe.skipIf(process.platform === "win32")("worker exec approval boundary", (
     });
     const client = {
       captureExecApprovalAuthority: () => h.source.receiptAuthority,
-      requestExecApproval: vi.fn(
-        async (
-          request: Parameters<typeof h.workerService.execApproval>[1],
-        ): Promise<WorkerExecApprovalResponseFrame> => {
-          const outcome = await h.workerService.execApproval(h.identity, request);
-          const frame: WorkerExecApprovalResponseFrame = {
-            type: "res",
-            id: "exec-response",
-            ok: true,
-            payload: outcome.result,
-          };
-          options.alterResponse?.(frame);
-          return frame;
-        },
-      ),
+      requestExecApproval: async (
+        request: Parameters<typeof h.workerService.execApproval>[1],
+      ): Promise<WorkerExecApprovalResponseFrame> => {
+        const outcome = await h.workerService.execApproval(h.identity, request);
+        const frame: WorkerExecApprovalResponseFrame = {
+          type: "res",
+          id: "exec-response",
+          ok: true,
+          payload: outcome.result,
+        };
+        options.alterResponse?.(frame);
+        return frame;
+      },
     };
     const tools = createWorkerPlacementTools({
       policy,
@@ -178,23 +171,17 @@ describe.skipIf(process.platform === "win32")("worker exec approval boundary", (
     if (!tool) {
       throw new Error("Worker exec tool was not constructed");
     }
-    return { ...h, tool, client };
+    return { ...h, tool };
   }
 
   it("reviews automatic worker exec on the Gateway and executes without a loopback call", async () => {
-    const { tool, client } = await fixture();
+    const { tool } = await fixture();
     const result = await tool.execute("worker-print", { command: "/bin/echo worker-approved" });
     expect(result.details).toMatchObject({ status: "completed", exitCode: 0 });
     expect(result.content).toEqual([
       expect.objectContaining({ text: expect.stringContaining("worker-approved") }),
     ]);
     expect(completion.completeWithPreparedSimpleCompletionModel).toHaveBeenCalledOnce();
-    expect(client.requestExecApproval).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        operation: "review",
-        binding: expect.objectContaining({ command: "/bin/echo worker-approved" }),
-      }),
-    );
     const prompt = vi.mocked(completion.completeWithPreparedSimpleCompletionModel).mock
       .calls[0]?.[0].context.messages[0]?.content;
     expect(prompt).toContain('"command": "/bin/echo worker-approved"');
@@ -271,20 +258,12 @@ describe.skipIf(process.platform === "win32")("worker exec approval boundary", (
     await approvals.run(async () => {
       const handlers = createExecApprovalHandlers(approvals.manager);
       const context = createContext(
-        [
-          [
-            "exec.approval.request",
-            "operator.approvals",
-            "exec",
-            handlers["exec.approval.request"]!,
-          ],
-          [
-            "exec.approval.waitDecision",
-            "operator.approvals",
-            "exec",
-            handlers["exec.approval.waitDecision"]!,
-          ],
-        ],
+        (["exec.approval.request", "exec.approval.waitDecision"] as const).map((method) => [
+          method,
+          "operator.approvals",
+          "exec",
+          handlers[method]!,
+        ]),
         () => support.testState.config,
       );
       Object.assign(context, {

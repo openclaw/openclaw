@@ -3,6 +3,7 @@ import {
   GatewayProtocolRequestError,
   retainGatewayResponsePayload,
 } from "../../../packages/gateway-client/src/protocol-request.js";
+import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
 import type { GatewayService } from "../../daemon/service.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
@@ -17,7 +18,7 @@ type PortListenerKind = ReturnType<
 export const inspectPortUsage =
   vi.fn<(port: number, options?: { probeHosts?: readonly string[] }) => Promise<PortUsage>>();
 export const monotonicClock = { nowMs: 0 };
-export const sleep = vi.fn(async (ms: number) => {
+export const sleep = vi.fn(async (ms: number, _signal?: AbortSignal) => {
   monotonicClock.nowMs += ms;
 });
 export const classifyPortListener = vi.fn<(_listener: unknown) => PortListenerKind>(
@@ -27,6 +28,33 @@ export const callGateway = vi.fn<(opts: CallGatewayOptions) => Promise<unknown>>
 
 export function gatewayResponseError(message: string): GatewayProtocolRequestError {
   const error = new GatewayProtocolRequestError({ code: "UNAVAILABLE", message });
+  retainGatewayResponsePayload(error, undefined);
+  return error;
+}
+
+export function gatewayProtocolMismatchError(): GatewayClientRequestError {
+  const error = new GatewayClientRequestError({
+    code: "INVALID_REQUEST",
+    message: "protocol mismatch",
+    details: {
+      code: "PROTOCOL_MISMATCH",
+      clientMinProtocol: 5,
+      clientMaxProtocol: 5,
+      expectedProtocol: 4,
+      minimumProbeProtocol: 3,
+    },
+  });
+  retainGatewayResponsePayload(error, undefined);
+  return error;
+}
+
+export function gatewayVerifiedUserRequiredError(): GatewayClientRequestError {
+  const error = new GatewayClientRequestError({
+    code: "NOT_PAIRED",
+    message:
+      "operator role policies require a verified user identity for this authentication method; reconnect through the trusted proxy or Tailscale, or use the shared gateway token/password",
+    details: { code: "AUTH_VERIFIED_USER_REQUIRED" },
+  });
   retainGatewayResponsePayload(error, undefined);
   return error;
 }
@@ -153,7 +181,7 @@ vi.mock("../../utils.js", async () => {
   const actual = await vi.importActual<typeof import("../../utils.js")>("../../utils.js");
   return {
     ...actual,
-    sleep: (ms: number) => sleep(ms),
+    sleep: (ms: number, signal?: AbortSignal) => sleep(ms, signal),
   };
 });
 

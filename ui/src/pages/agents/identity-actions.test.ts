@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createApplicationConfigCapability } from "../../app/config.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -54,12 +55,9 @@ function saveOptions(
 describe("agent identity actions", () => {
   it("keeps an accepted generated avatar when an older upload finishes", async () => {
     const state = host();
-    let resolveUpload!: (value: avatarImage.AvatarDataUrlResult) => void;
-    fileToAvatarDataUrlMock.mockReturnValueOnce(
-      new Promise((resolve) => {
-        resolveUpload = resolve;
-      }),
-    );
+    const { promise: pendingAvatar, resolve: resolveUpload } =
+      createDeferred<avatarImage.AvatarDataUrlResult>();
+    fileToAvatarDataUrlMock.mockReturnValueOnce(pendingAvatar);
     selectIdentityAvatar(state, new File(["image"], "avatar.png", { type: "image/png" }));
     setIdentityAvatar(state, "data:image/webp;base64,YXZhdGFy");
     resolveUpload({ ok: true, dataUrl: "data:image/png;base64,b2xk" });
@@ -89,12 +87,9 @@ describe("agent identity actions", () => {
     expect((await state.identityOutcome)?.error).toBe(uploadsDisabledMessage());
 
     config.current.uploadsEnabled = true;
-    let resolveAvatar!: (value: avatarImage.AvatarDataUrlResult) => void;
-    fileToAvatarDataUrlMock.mockReturnValueOnce(
-      new Promise((resolve) => {
-        resolveAvatar = resolve;
-      }),
-    );
+    const { promise: pendingAvatar, resolve: resolveAvatar } =
+      createDeferred<avatarImage.AvatarDataUrlResult>();
+    fileToAvatarDataUrlMock.mockReturnValueOnce(pendingAvatar);
     selectIdentityAvatar(state, {} as File, config);
     config.current.uploadsEnabled = false;
     resolveAvatar({ ok: true, dataUrl: "data:image/png;base64,aA==" });
@@ -131,12 +126,9 @@ describe("agent identity actions", () => {
   });
 
   it("drops an avatar decode that completes after the selected agent resets", async () => {
-    let resolveAvatar!: (value: avatarImage.AvatarDataUrlResult) => void;
-    fileToAvatarDataUrlMock.mockReturnValueOnce(
-      new Promise((resolve) => {
-        resolveAvatar = resolve;
-      }),
-    );
+    const { promise: pendingAvatar, resolve: resolveAvatar } =
+      createDeferred<avatarImage.AvatarDataUrlResult>();
+    fileToAvatarDataUrlMock.mockReturnValueOnce(pendingAvatar);
     const state = host();
 
     selectIdentityAvatar(state, {} as File);
@@ -298,10 +290,7 @@ describe("agent identity actions", () => {
   it("preserves edits made while an autosave is in flight", async () => {
     const state = host();
     state.identityDraft.name = "First name";
-    let release!: () => void;
-    const pending = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+    const { promise: pending, resolve: release } = createDeferred();
     const runExternalMutation = vi.fn(async () => {
       await pending;
       return { ok: true as const, value: {}, refresh: { ok: true as const } };

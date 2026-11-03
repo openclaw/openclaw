@@ -112,7 +112,9 @@ function listTranscriptInstancesFromDatabase(params: {
   }
   const rows = executeSqliteQuerySync(
     params.database.db,
-    query.orderBy("transcript_updated_at", "desc").orderBy("session_id", "asc"),
+    query
+      .orderBy("transcript_updated_at", (order) => order.desc().nullsLast())
+      .orderBy("session_id", "asc"),
   ).rows;
   const currentEntries =
     params.currentEntries ??

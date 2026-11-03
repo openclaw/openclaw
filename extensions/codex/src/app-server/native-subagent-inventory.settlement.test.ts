@@ -6,17 +6,34 @@ import { fixture } from "./native-subagent-inventory.test-support.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import {
   agentMessage,
-  childTurnCompletedNotification,
   closeAgentNotification,
   createClient,
-  directSpawnItem,
-  itemNotification,
   turnStartedNotification,
   threadRead,
 } from "./native-subagent-monitor.test-support.js";
 import { setupRunAttemptTestHooks } from "./run-attempt-test-harness.js";
 
 setupRunAttemptTestHooks();
+
+async function observationFixture() {
+  const f = await fixture();
+  const client = createClient();
+  const parent = await f.register(client);
+  await parent.ready;
+  const request = {
+    client: client.client,
+    agentId: f.identity.agentId,
+    sessionKey: f.identity.sessionKey,
+    sessionId: f.identity.sessionId,
+    lifecycleRevision: f.historyOwner().lifecycleRevision,
+    storePath: resolveStorePath(undefined, { agentId: f.identity.agentId }),
+    parentThreadId: "parent-thread",
+    historyOwner: f.historyOwner(),
+    assertCurrent: vi.fn(),
+  };
+  const read = () => codexNativeSubagentMonitorRuntime.readNativeSubagents(request);
+  return { f, client, parent, request, read };
+}
 
 function observeAssignment(
   store: Awaited<ReturnType<typeof fixture>>["store"],
@@ -131,15 +148,10 @@ it("settles delayed close writes without consuming a replacement monitor's resum
   await unregister;
   first.closeCaller();
 
+  expect.soft(earlyUnregister).toBe(false);
   expect
-    .soft({
-      earlyUnregister,
-      assignments: await f.assignments(),
-    })
-    .toMatchObject({
-      earlyUnregister: false,
-      assignments: [{ runId: "codex-thread:child-thread", nativeTurnId: "resumed-turn" }],
-    });
+    .soft(await f.assignments())
+    .toMatchObject([{ runId: "codex-thread:child-thread", nativeTurnId: "resumed-turn" }]);
   await nextClient.completeTurn({
     turnId: "resumed-turn",
     status: "completed",
@@ -160,33 +172,12 @@ it("settles delayed close writes without consuming a replacement monitor's resum
 });
 
 it("reads direct and nested native observations only for the registered physical requester", async () => {
-  const f = await fixture();
-  const client = createClient();
-  const parent = await f.register(client);
-  await parent.ready;
+  const { f, client, parent, request, read } = await observationFixture();
   parent.bindTurn("parent-turn");
-  const request = {
-    client: client.client,
-    agentId: f.identity.agentId,
-    sessionKey: f.identity.sessionKey,
-    sessionId: f.identity.sessionId,
-    lifecycleRevision: f.historyOwner().lifecycleRevision,
-    storePath: resolveStorePath(undefined, { agentId: f.identity.agentId }),
-    parentThreadId: "parent-thread",
-    historyOwner: f.historyOwner(),
-    assertCurrent: vi.fn(),
-  };
-  const read = () => codexNativeSubagentMonitorRuntime.readNativeSubagents(request);
   expect(read()).toEqual({ coverage: "live", children: [], truncated: false });
-  await client.notify(itemNotification(directSpawnItem("v2", "parent-thread", "child-thread")));
+  await client.spawn();
   await client.notify(turnStartedNotification("child-turn"));
-  await client.notify(
-    itemNotification(
-      directSpawnItem("v2", "child-thread", "nested-thread"),
-      "child-turn",
-      "child-thread",
-    ),
-  );
+  await client.spawn("nested-thread", "child-turn", "v2", "child-thread");
   await client.notify(turnStartedNotification("nested-turn", { threadId: "nested-thread" }));
   expect(read()).toEqual({
     coverage: "live",
@@ -208,14 +199,12 @@ it("reads direct and nested native observations only for the registered physical
       codexNativeSubagentMonitorRuntime.readNativeSubagents({ ...request, ...changed }),
     ).toBeUndefined();
   }
-  await client.notify(childTurnCompletedNotification({ status: "completed" }));
-  await client.notify(
-    childTurnCompletedNotification({
-      status: "interrupted",
-      threadId: "nested-thread",
-      turnId: "nested-turn",
-    }),
-  );
+  await client.completeTurn({ status: "completed" });
+  await client.completeTurn({
+    status: "interrupted",
+    threadId: "nested-thread",
+    turnId: "nested-turn",
+  });
   expect(read()?.children).toEqual([
     { id: "child-thread", label: "/root/child-thread", status: "completed" },
     { id: "nested-thread", label: "/root/nested-thread", status: "interrupted" },
@@ -232,23 +221,9 @@ it("reads direct and nested native observations only for the registered physical
 });
 
 it("does not create an observation owner after an idle parent is pruned", async () => {
-  const f = await fixture();
-  const client = createClient();
-  const parent = await f.register(client);
-  await parent.ready;
-  const request = {
-    client: client.client,
-    agentId: f.identity.agentId,
-    sessionKey: f.identity.sessionKey,
-    sessionId: f.identity.sessionId,
-    lifecycleRevision: f.historyOwner().lifecycleRevision,
-    storePath: resolveStorePath(undefined, { agentId: f.identity.agentId }),
-    parentThreadId: "parent-thread",
-    historyOwner: f.historyOwner(),
-    assertCurrent() {},
-  };
-  expect(codexNativeSubagentMonitorRuntime.readNativeSubagents(request)?.coverage).toBe("live");
+  const { client, parent, read } = await observationFixture();
+  expect(read()?.coverage).toBe("live");
   await parent.unregister();
-  expect(codexNativeSubagentMonitorRuntime.readNativeSubagents(request)).toBeUndefined();
+  expect(read()).toBeUndefined();
   client.close();
 });

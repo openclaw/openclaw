@@ -201,11 +201,13 @@ export function createCodexAttemptServerRequestController(
         name: call.tool,
         arguments: call.arguments,
       });
+      const hideFromChannelProgress = toolBridge.hideFromChannelProgressForTool(call.tool);
       projector?.recordDynamicToolCall({
         callId: call.callId,
         namespace: call.namespace,
         tool: call.tool,
         arguments: call.arguments,
+        hideFromChannelProgress,
       });
       emitExecutionPhaseOnce(`tool:${call.callId}`, {
         phase: "tool_execution_started",
@@ -217,7 +219,8 @@ export function createCodexAttemptServerRequestController(
       });
       const toolArgs = asCodexToolArguments(call.arguments);
       const commandBearing = isCodexCommandBearingToolCall(call.tool, toolArgs);
-      const shouldEmitDynamicToolProgress = shouldEmitTranscriptToolProgress(call.tool);
+      const shouldEmitDynamicToolProgress =
+        shouldEmitTranscriptToolProgress(call.tool) && hideFromChannelProgress !== true;
       if (shouldEmitDynamicToolProgress) {
         const activity = projectAgentToolActivity({
           toolCallId: call.callId,

@@ -1,9 +1,6 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
-import {
-  preparePublishedModelCatalogOwnerIdentity,
-  resolvePublishedModelCatalogOwner,
-} from "../agents/prepared-model-catalog-owner.js";
+import { preparePublishedModelCatalogOwnerIdentity } from "../agents/prepared-model-catalog-owner.js";
 import type { PublishedModelCatalogOwnerCandidate } from "../agents/prepared-model-catalog.types.js";
 import { bindPreparedModelRuntimeAuth } from "../agents/prepared-model-runtime-auth.js";
 import {
@@ -13,6 +10,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as currentPluginMetadata from "../plugins/current-plugin-metadata-state.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import {
@@ -21,7 +19,8 @@ import {
 } from "./server-model-catalog-auth.js";
 import {
   createPreparedGatewayModelCatalog,
-  readPreparedGatewayModelMetadata,
+  readPreparedGatewayModelCatalogMetadata,
+  readPreparedGatewaySessionRowPolicy,
 } from "./server-model-catalog-view.js";
 import {
   loadGatewayModelCatalogSnapshot,
@@ -43,12 +42,7 @@ const snapshot: ModelCatalogSnapshot = {
 function ownerConfig(agentId = "main", extra: OpenClawConfig = {}): OpenClawConfig {
   return {
     ...extra,
-    agents: {
-      ...extra.agents,
-      entries: {
-        [agentId]: { agentDir, workspace: workspaceDir },
-      },
-    },
+    agents: { ...extra.agents, entries: { [agentId]: { agentDir, workspace: workspaceDir } } },
   };
 }
 
@@ -102,8 +96,44 @@ function rowFacts(
 }
 
 describe("gateway prepared model catalog", () => {
+  it("omits row comparison work for display reads while retaining eager projection snapshots", () => {
+    let reads = 0;
+    let contextTokens = 8_192;
+    const entry = {
+      provider: "fixture",
+      id: "model",
+      name: "Model",
+      get contextTokens() {
+        reads++;
+        return contextTokens;
+      },
+    };
+    const input = {
+      entries: [entry],
+      routeVariants: [entry],
+      pluginRegistry: createEmptyPluginRegistry(),
+      metadataSnapshot: createPluginMetadataSnapshotFixture(),
+    };
+    const display = createPreparedGatewayModelCatalog({
+      ...input,
+      includeSessionRowPolicy: false,
+    });
+    expect(reads).toBe(0);
+    expect(display.entries).toBe(input.entries);
+    expect(display.routeVariants).toBe(input.routeVariants);
+    expect(display.pluginRegistry).toBe(input.pluginRegistry);
+    expect(readPreparedGatewayModelCatalogMetadata(display)).toBe(input.metadataSnapshot);
+    expect(readPreparedGatewaySessionRowPolicy(display)).toBeUndefined();
+
+    const projection = createPreparedGatewayModelCatalog(input);
+    contextTokens = 16_384;
+    expect(readPreparedGatewaySessionRowPolicy(projection)).toMatchObject({
+      entries: [{ data: { contextTokens: 8_192 } }],
+      routeVariants: [{ data: { contextTokens: 8_192 } }],
+    });
+  });
+
   it("keeps a prepared metadata miss separate from the current runtime generation", async () => {
-    const capturedMetadata = createPluginMetadataSnapshotFixture();
     const currentMetadata = createPluginMetadataSnapshotFixture({
       plugins: [
         {
@@ -114,15 +144,12 @@ describe("gateway prepared model catalog", () => {
         },
       ],
     });
-    const catalogFor = (metadataSnapshot?: typeof capturedMetadata) =>
-      createPreparedGatewayModelCatalog({ entries: [], metadataSnapshot });
-    const absent = catalogFor();
-    const present = catalogFor(capturedMetadata);
-    const current = catalogFor(currentMetadata);
+    const absent = createPreparedGatewayModelCatalog({ entries: [] });
+    const current = createPreparedGatewayModelCatalog({
+      entries: [],
+      metadataSnapshot: currentMetadata,
+    });
     withPluginRuntimeGenerationScope({ metadataSnapshot: currentMetadata }, () => {
-      expect(readPreparedGatewayModelMetadata({})).toBe(currentMetadata);
-      expect(readPreparedGatewayModelMetadata({}, absent)).toBeNull();
-      expect(readPreparedGatewayModelMetadata({}, present)).toBe(capturedMetadata);
       const entry = {
         sessionId: "prepared-catalog",
         updatedAt: 1,
@@ -238,13 +265,6 @@ describe("gateway prepared model catalog", () => {
         workspaceDir: shared ? "/tmp/worker-workspace" : workspaceDir,
       };
       await expect(project).resolves.toMatchObject(expected);
-      const resolved = resolvePublishedModelCatalogOwner(candidate);
-      expect(
-        resolvePublishedModelCatalogOwner({
-          ...resolved,
-          catalogOwner: { ...resolved.catalogOwner },
-        }),
-      ).toEqual(resolved);
     },
   );
 

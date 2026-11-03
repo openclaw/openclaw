@@ -1,4 +1,5 @@
 import type { SystemChangesListResult } from "@openclaw/gateway-protocol";
+import { Portal } from "@solidjs/web";
 import {
   createMemo,
   createSignal,
@@ -10,10 +11,16 @@ import {
   onSettled,
   Show,
 } from "solid-js";
+import { type ShellLayoutOwner, shellLayoutOwnerForHost } from "../../app/shell-layout-owner.ts";
 import "../../components/openclaw-mascot.tsx";
 import type { SidebarAttentionElementAttributes } from "../../components/sidebar-attention-element.ts";
+import { Icon } from "../../components/solid/icon.tsx";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
-import { channelSnapshotHasActiveChannel } from "../../lib/channels/index.ts";
+import "../../components/tooltip.ts";
+import {
+  channelSnapshotHasActiveChannel,
+  createChannelCapability,
+} from "../../lib/channels/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
@@ -37,8 +44,9 @@ const SidebarAttention = lazy(() => import("../../components/sidebar-attention.t
 const propertyReceipts = new WeakMap<HTMLElement, (key: keyof Props) => void>();
 function CustodianPageContent(props: Props, host: SolidBridgeElement<Props>) {
   const context = useApplication();
+  const channelCapability = context.acquireChannels(createChannelCapability);
   const gateway = projectGateway(context.gateway);
-  const channels = projectChannels(context.channels);
+  const channels = projectChannels(channelCapability);
   const store = projectOwner(host.store, (source) => source);
   const presentation = createCustodianActions(() => host.store);
   const historyAvailable = createMemo(() => {
@@ -75,9 +83,21 @@ function CustodianPageContent(props: Props, host: SolidBridgeElement<Props>) {
     historyOwner();
     return null;
   });
+  // Setup mode keeps its row for Exit setup, so History stays beside it.
+  const [shellLayout, setShellLayout] = createSignal<ShellLayoutOwner>();
+  const topbarSlot = createMemo(() =>
+    !props.onboarding ? shellLayout()?.headerActionsSlot() : undefined,
+  );
+  function toggleHistory() {
+    const open = !historyOpen();
+    setHistoryOpen(open);
+    if (open && !historyOwner().busy) {
+      loadHistory(true);
+    }
+  }
   let disposed = false;
   function refreshChannelInventory() {
-    const state = context.channels.state;
+    const state = channelCapability.state;
     if (
       host.onboarding &&
       !host.store.channelOnboardingNudgeClosed &&
@@ -86,10 +106,11 @@ function CustodianPageContent(props: Props, host: SolidBridgeElement<Props>) {
       !state.channelsLoading &&
       !state.channelsError
     ) {
-      void context.channels.refresh(false);
+      void channelCapability.refresh(false);
     }
   }
   onSettled(() => {
+    setShellLayout(() => shellLayoutOwnerForHost(host));
     propertyReceipts.set(host, (key) => {
       presentation.retire();
       if (key === "store") {
@@ -120,7 +141,7 @@ function CustodianPageContent(props: Props, host: SolidBridgeElement<Props>) {
         props.onboarding &&
         !props.store.channelOnboardingNudgeClosed
       ) {
-        void context.channels.refresh(false);
+        void channelCapability.refresh(false);
       }
     },
   });
@@ -205,7 +226,7 @@ function CustodianPageContent(props: Props, host: SolidBridgeElement<Props>) {
           <Errored
             fallback={(_error, reset) =>
               channelError(false, () => {
-                void context.channels.refresh(false);
+                void channelCapability.refresh(false);
                 reset();
               })
             }
@@ -233,7 +254,10 @@ function CustodianPageContent(props: Props, host: SolidBridgeElement<Props>) {
     <section
       class={[
         "custodian custodian--page",
-        { "custodian--setup-required": store.read().setupRequired },
+        {
+          "custodian--setup-required": store.read().setupRequired,
+          "custodian--actions-in-topbar": topbarSlot() !== undefined,
+        },
       ]}
     >
       <header
@@ -263,18 +287,12 @@ function CustodianPageContent(props: Props, host: SolidBridgeElement<Props>) {
               </Loading>
             </Errored>
           </Show>
-          <Show when={historyAvailable()}>
+          <Show when={historyAvailable() && !topbarSlot()}>
             <button
               class="btn btn--ghost custodian__history-toggle"
               type="button"
               aria-expanded={historyOpen() ? "true" : "false"}
-              onClick={() => {
-                const open = !historyOpen();
-                setHistoryOpen(open);
-                if (open && !historyOwner().busy) {
-                  loadHistory(true);
-                }
-              }}
+              onClick={toggleHistory}
             >
               {t("custodian.history.button")}
             </button>
@@ -286,6 +304,23 @@ function CustodianPageContent(props: Props, host: SolidBridgeElement<Props>) {
           </Show>
         </div>
       </header>
+      <Show when={historyAvailable() ? topbarSlot() : undefined}>
+        {(slot) => (
+          <Portal mount={slot()}>
+            <openclaw-tooltip prop:content={t("custodian.history.button")}>
+              <button
+                class="custodian__history-toggle custodian__history-toggle--topbar"
+                type="button"
+                aria-label={t("custodian.history.button")}
+                aria-expanded={historyOpen() ? "true" : "false"}
+                onClick={toggleHistory}
+              >
+                <Icon name="history" />
+              </button>
+            </openclaw-tooltip>
+          </Portal>
+        )}
+      </Show>
       <CustodianSurface
         class="custodian__column"
         store={props.store}

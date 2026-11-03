@@ -64,15 +64,12 @@ afterEach(async () => {
   await state.cleanup();
 });
 
-function client(profileId?: string): GatewayClient {
-  const result: GatewayClient = {
-    connId: "requester-browser",
+function client(profileId?: string, connId = "requester-browser"): GatewayClient {
+  return {
+    connId,
     connect: gatewayConnect(["operator.write"], { id: GATEWAY_CLIENT_IDS.CONTROL_UI, mode: "ui" }),
+    ...(profileId ? { authenticatedUserProfile: gatewayProfile(profileId) } : {}),
   };
-  if (profileId) {
-    result.authenticatedUserProfile = gatewayProfile(profileId);
-  }
-  return result;
 }
 
 function runtimeIdentity(profileId?: string): AgentRuntimeIdentity {
@@ -293,10 +290,7 @@ it("lists descriptive choices and inspects a plugin definition without exposing 
 
 it("imports and applies in one durable profile mutation, preserving other preferences and notifying only that profile", async () => {
   seedPreferences({ "ui.accent": "#aabbcc", "ui.fontFamily": "serif" });
-  const options = broadcastOptions([
-    client(requesterId),
-    { ...client(otherId), connId: "other-browser" },
-  ]);
+  const options = broadcastOptions([client(requesterId), client(otherId, "other-browser")]);
   const branding = {
     mascot: "none",
     brandName: "Mission Control",
@@ -443,24 +437,17 @@ it("preserves independent concurrent imports and atomically settles competing se
     }
     preferences(expected);
 
+    const applied = {
+      id: `applied-${round}`,
+      definition: themeDefinition({ name: `Applied ${round}` }),
+      apply: true,
+      mode: "dark",
+    };
     const choices = [
-      {
-        method: "themes.import" as const,
-        params: {
-          id: `applied-${round}`,
-          definition: themeDefinition({ name: `Applied ${round}` }),
-          apply: true,
-          mode: "dark",
-        },
-        selectedId: `user/applied-${round}`,
-      },
-      {
-        method: "themes.set" as const,
-        params: { id: "rose", mode: "dark" },
-        selectedId: "rose",
-      },
-    ];
-    const contenders = [...choices.slice(round), ...choices.slice(0, round)];
+      { method: "themes.import", params: applied },
+      { method: "themes.set", params: { id: "rose", mode: "dark" } },
+    ] as const;
+    const contenders = round ? choices.toReversed() : choices;
     const selections = await withConcurrentPreferenceSnapshots(contenders.length, () =>
       Promise.all(contenders.map(({ method, params }) => invoke(method, params))),
     );
@@ -468,7 +455,8 @@ it("preserves independent concurrent imports and atomically settles competing se
     expect(winners).toHaveLength(1);
     const winnerIndex = expectDefined(winners[0], "winning theme mutation index");
     const winner = expectDefined(contenders[winnerIndex], "winning theme mutation");
-    expected["ui.theme"] = winner.selectedId;
+    const selectedId = winner.method === "themes.import" ? `user/${applied.id}` : "rose";
+    expected["ui.theme"] = selectedId;
     expected["ui.themeMode"] = "dark";
     if (winner.method === "themes.import") {
       expected[`ui.themeDefinition.${winner.params.id}`] = winner.params.definition;
@@ -476,21 +464,21 @@ it("preserves independent concurrent imports and atomically settles competing se
     for (const [index, result] of selections.entries()) {
       expect(result).toMatchObject(
         index === winnerIndex
-          ? success({ current: { id: winner.selectedId, mode: "dark" }, application: "saved" })
+          ? success({ current: { id: selectedId, mode: "dark" }, application: "saved" })
           : messageError("Appearance changed"),
       );
     }
     preferences(expected);
     preferences({}, otherId);
     await expectRpc(invoke("themes.list", {}), {
-      current: { id: winner.selectedId, mode: "dark" },
+      current: { id: selectedId, mode: "dark" },
       themes: expect.arrayContaining(
         ids.map((id) => expect.objectContaining({ id: `user/${id}` })),
       ),
     });
     await expectRpc(invoke("themes.get", {}), {
-      current: { id: winner.selectedId, mode: "dark" },
-      theme: { id: winner.selectedId },
+      current: { id: selectedId, mode: "dark" },
+      theme: { id: selectedId },
     });
   }
 });
@@ -500,8 +488,8 @@ it("reads and writes through a merged profile alias and notifies both identities
   linkEmail("requester@example.test", otherId);
   const clients = [
     client(requesterId),
-    { ...client(otherId), connId: "canonical-browser" },
-    { ...client(unrelatedId), connId: "unrelated-browser" },
+    client(otherId, "canonical-browser"),
+    client(unrelatedId, "unrelated-browser"),
   ];
   const options = broadcastOptions(clients);
   const definition = themeDefinition();

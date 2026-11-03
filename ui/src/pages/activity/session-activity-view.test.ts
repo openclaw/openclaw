@@ -2,6 +2,7 @@
 
 import { createComponent } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionActivityPulse } from "../../../../src/shared/session-types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
 import type { PresenceViewer } from "../../lib/presence-users.ts";
@@ -21,14 +22,20 @@ const renderSessionActivityViewSolid = mountSolid<ReturnType<typeof props>>(
 );
 
 function find(selector: string, root: ParentNode = container) {
-  return root.querySelector(selector);
+  return root.querySelector<HTMLElement>(selector);
 }
-function all(selector: string, root: ParentNode = container) {
-  return root.querySelectorAll(selector);
+function all<T extends Element = HTMLElement>(selector: string, root: ParentNode = container) {
+  return root.querySelectorAll<T>(selector);
 }
 
 const text = (selector: string, root: ParentNode | null | undefined = container) =>
   root?.querySelector(selector)?.textContent;
+const texts = (selector: string, root: ParentNode = container) =>
+  Array.from(all(selector, root), (element) => element.textContent);
+const attr = (selector: string, name: string, root: ParentNode = container) =>
+  find(selector, root)?.getAttribute(name);
+const sessionSelector = (key: string, selector = "") =>
+  `[data-activity-session="${key}"] ${selector}`.trim();
 
 function profile(id: string, overrides: Partial<PresenceViewer> = {}) {
   return {
@@ -53,7 +60,6 @@ let container: HTMLDivElement;
 function show(input: Parameters<typeof props>[0] = {}, target = container) {
   renderSessionActivityViewSolid(props(input), target);
 }
-
 beforeEach(() => {
   container = document.createElement("div");
   document.body.replaceChildren(container);
@@ -75,109 +81,90 @@ describe("session activity semantics", () => {
   });
 
   it.each([
-    ["24h", "Last 24 hours", 25, new Date(2026, 0, 2), { hour: "numeric" }],
-    ["7d", "Last 7 days", 8, new Date(2026, 0, 8), { month: "short", day: "numeric" }],
-    ["all", "All time", 12, new Date(2026, 11, 1), { month: "short" }],
-  ] as const)("renders the %s pulse with aligned labels", (time, label, count, last, format) => {
-    const since = new Date(2026, 0, 1).getTime();
-    const hourly = time === "24h";
-    const buckets = Array.from({ length: count }, () => 1);
-    if (hourly) {
-      buckets.fill(0);
-      buckets[10] = 12;
-      buckets[24] = 3;
-    }
-    const input = props({ filters: { personId: null, query: "", time } });
-    input.result!.activityPulse = {
-      since,
-      until:
-        time === "24h"
-          ? last.getTime() + 3_600_000
-          : new Date(
-              last.getFullYear(),
-              last.getMonth() + (time === "all" ? 1 : 0),
-              last.getDate() + (time === "all" ? 0 : 1),
-            ).getTime(),
-      buckets,
-      sessions: 38,
-      ...(hourly ? { started: 12, people: 6 } : {}),
-      running: hourly ? 3 : 0,
-    };
-    show(input);
-    const bars = all(".activity-pulse__bar");
-    const formatter = new Intl.DateTimeFormat(undefined, format);
-    expect(text(".activity-pulse__heading")?.trim()).toBe(label);
-    expect(bars).toHaveLength(count);
-    expect(bars[count - 1]?.getAttribute("data-bucket")).toBe("current");
-    expect(bars[count - 1]?.getAttribute("title")).toBe(
-      formatter.format(last) + (hourly ? " · 3 sessions" : " · 1 session"),
-    );
-    const labels = all(".activity-pulse__axis > span > span");
-    expect(labels).toHaveLength(hourly ? 5 : 3);
-    expect(labels[labels.length - 1]?.textContent).toBe(formatter.format(last));
-    if (hourly) {
-      expect(text(".activity-pulse__stats")?.replace(/\s+/g, " ").trim()).toBe(
-        "38 sessions · 12 started · 6 people · 3 running now",
-      );
-      expect(find(".activity-pulse__running")).not.toBeNull();
-      expect(find('[role="img"]')?.getAttribute("aria-label")).toBe(
-        "Last 24 hours: 38 sessions; busiest " + formatter.format(new Date(2026, 0, 1, 10)),
-      );
-      expect(bars[10]?.getAttribute("style")).toContain("100%");
-      expect(bars[24]?.getAttribute("style")).toContain("25%");
-    } else {
-      expect(find(".activity-pulse__running")).toBeNull();
-    }
-    show();
-    expect(find(".activity-pulse")).toBeNull();
-  });
-
-  it.each([
-    [0, "0 sessions", "0 people", false],
-    [1, "1 session", "1 person", false],
-    [1, "1 session", "1+ people", true],
-  ] as const)("renders count %i (%s, %s, incomplete=%s)", (count, sessions, people, incomplete) => {
-    const input = props({ filters: { personId: null, query: "", time: "all" } });
-    input.result!.peopleIncomplete = incomplete;
-    input.result!.activityPulse = {
-      since: new Date(2026, 0, 1).getTime(),
-      until: new Date(2027, 0, 1).getTime(),
-      buckets: [count, 0],
-      sessions: count,
-      people: count,
-      running: 0,
-    };
-    show(input);
-    const period = new Intl.DateTimeFormat(undefined, { month: "short" }).format(
-      new Date(2026, 0, 1),
-    );
-    expect(text(".activity-pulse__stats")?.replace(/\s+/g, " ").trim()).toBe(
-      sessions + " · " + people + " · 0 running now",
-    );
-    expect(find('[role="img"]')?.getAttribute("aria-label")).toBe(
-      "All time: " + sessions + "; busiest " + period,
-    );
-    expect(find(".activity-pulse__bar")?.getAttribute("title")).toBe(period + " · " + sessions);
-    expect(all(".activity-pulse__stats > span")[1]?.hasAttribute("title")).toBe(incomplete);
-    const note = find('.activity-feed__people-panel [role="status"]');
-    if (incomplete) {
-      expect(note?.textContent).toContain(
-        "People and counts describe visible recorded session associations",
-      );
-      expect(all(".activity-pulse__stats > span")[1]?.getAttribute("title")).toBe(
-        "People and counts describe visible recorded session associations; retained history and this people list may be incomplete.",
-      );
-      expect(find(".activity-feed__people-panel")?.lastElementChild).toBe(note);
-      expect(text(".activity-feed__main")).not.toContain(
-        "People and counts describe visible recorded session associations",
-      );
-      input.result!.peopleIncomplete = false;
+    ["24h", 38, false, "38 sessions · 12 started · 6 people · 3 running now"],
+    ["7d", 0, false, "0 sessions · 0 people · 0 running now"],
+    ["all", 1, false, "1 session · 1 person · 0 running now"],
+    ["all", 1, true, "1 session · 1+ people · 0 running now"],
+  ] as const)(
+    "renders the %s pulse (sessions=%i, incomplete=%s)",
+    (time, count, incomplete, stats) => {
+      const periods = {
+        "24h": [25, new Date(2026, 0, 2), { hour: "numeric" }, "Last 24 hours"],
+        "7d": [8, new Date(2026, 0, 8), { month: "short", day: "numeric" }, "Last 7 days"],
+        all: [12, new Date(2026, 11, 1), { month: "short" }, "All time"],
+      } satisfies Record<string, [number, Date, Intl.DateTimeFormatOptions, string]>;
+      const [length, last, format, label] = periods[time];
+      const hourly = time === "24h";
+      const buckets: number[] = Array.from({ length }, () => (count === 0 ? 0 : 1));
+      if (hourly) {
+        buckets.fill(0);
+        buckets[10] = 12;
+        buckets[24] = 3;
+      }
+      const input = props({ filters: { personId: null, query: "", time } });
+      Object.assign(input.result!, {
+        peopleIncomplete: incomplete,
+        activityPulse: {
+          since: new Date(2026, 0, 1).getTime(),
+          until: new Date(2027, 0, 1).getTime(),
+          buckets,
+          sessions: count,
+          people: hourly ? 6 : count,
+          running: hourly ? 3 : 0,
+          ...(hourly ? { started: 12 } : {}),
+        } satisfies SessionActivityPulse,
+      });
       show(input);
-      expect(find('.activity-feed__people-panel [role="status"]')).toBeNull();
-    } else {
-      expect(note).toBeNull();
-    }
-  });
+      const formatter = new Intl.DateTimeFormat(undefined, format);
+      const bars = all(".activity-pulse__bar");
+      const labels = all(".activity-pulse__axis > span > span");
+      expect(text(".activity-pulse__heading")?.trim()).toBe(label);
+      expect(bars).toHaveLength(length);
+      expect(bars[length - 1]?.getAttribute("data-bucket")).toBe("current");
+      const bucketCount = hourly ? "3 sessions" : count === 0 ? "0 sessions" : "1 session";
+      expect(bars[length - 1]?.getAttribute("title")).toBe(
+        formatter.format(last) + " · " + bucketCount,
+      );
+      expect(labels).toHaveLength(hourly ? 5 : 3);
+      expect(labels[labels.length - 1]?.textContent).toBe(formatter.format(last));
+      expect(text(".activity-pulse__stats")?.replace(/\s+/g, " ").trim()).toBe(stats);
+      const peak = new Date(2026, 0, 1, hourly ? 10 : 0);
+      expect(attr('[role="img"]', "aria-label")).toBe(
+        label +
+          ": " +
+          (count === 1 ? "1 session" : count + " sessions") +
+          "; busiest " +
+          formatter.format(peak),
+      );
+      expect(find(".activity-pulse__running") !== null).toBe(hourly);
+      if (hourly) {
+        expect(bars[10]?.getAttribute("style")).toContain("100%");
+        expect(bars[24]?.getAttribute("style")).toContain("25%");
+      } else if (count === 0) {
+        expect(bars[0]?.getAttribute("style")).toContain("0%");
+      }
+      const note = find('.activity-feed__people-panel [role="status"]');
+      expect(all(".activity-pulse__stats > span")[hourly ? 2 : 1]?.hasAttribute("title")).toBe(
+        incomplete,
+      );
+      if (incomplete) {
+        const warning = "People and counts describe visible recorded session associations";
+        expect(note?.textContent).toContain(warning);
+        expect(all(".activity-pulse__stats > span")[1]?.getAttribute("title")).toBe(
+          warning + "; retained history and this people list may be incomplete.",
+        );
+        expect(find(".activity-feed__people-panel")?.lastElementChild).toBe(note);
+        expect(text(".activity-feed__main")).not.toContain(warning);
+        input.result!.peopleIncomplete = false;
+        show(input);
+        expect(find('.activity-feed__people-panel [role="status"]')).toBeNull();
+      } else {
+        expect(note).toBeNull();
+      }
+      show();
+      expect(find(".activity-pulse")).toBeNull();
+    },
+  );
 
   it("shows the list footer when matching sessions exceed the visible rows", () => {
     const input = props({ rows: [row("Visible session", { id: "owner" }, Date.now())] });
@@ -418,9 +405,10 @@ describe("session activity people filter", () => {
     )!;
     expect(details.open).toBe(false);
     expect(text("summary", details)?.trim()).toBe("Connection details · 6");
-    expect(
-      [...all(".activity-feed__connection-summary span")].map((span) => span.textContent),
-    ).toEqual(["Mac · Web app", "Mac16,6 · Windows"]);
+    expect(texts(".activity-feed__connection-summary span")).toEqual([
+      "Mac · Web app",
+      "Mac16,6 · Windows",
+    ]);
     const groups = all(".activity-feed__connection");
     expect(groups).toHaveLength(4);
     expect(groups[0]?.textContent).toContain("3 connections");
@@ -511,11 +499,7 @@ describe("session activity people filter", () => {
     container.querySelector<HTMLButtonElement>('[data-activity-person=""]')?.click();
     expect(trigger?.getAttribute("aria-expanded")).toBe("false");
 
-    expect(onFiltersChange).toHaveBeenCalledWith({
-      personId: null,
-      query: "release",
-      time: "30d",
-    });
+    expect(onFiltersChange).toHaveBeenCalledWith({ personId: null, query: "release", time: "30d" });
   });
 });
 
@@ -557,14 +541,7 @@ describe("session activity automation grouping", () => {
       { filters: { personId: null, query: "Automation", time: "7d" as const } },
       {
         filters: { personId: "owner", query: "", time: "7d" as const },
-        presenceViewers: [
-          {
-            id: "owner",
-            identity: { type: "profile" as const, id: "owner" },
-            name: "Owner",
-            watchedSessions: [],
-          },
-        ],
+        presenceViewers: [profile("owner", { name: "Owner" })],
       },
     ]) {
       show({ rows: [automationOne, automationTwo], ...filteredProps });
@@ -587,45 +564,35 @@ describe("session activity live status", () => {
       runId,
       updatedAt: now,
     });
-    const rows = [
-      row("Digest run", owner, now, {
-        activeRunIds: ["fallback-run", "digest run:a/b"],
-        hasActiveRun: true,
-        observerDigest: digest("digest run:a/b"),
+    const rows = (
+      [
+        ["Digest run", ["fallback-run", "digest run:a/b"], "digest run:a/b", true],
+        ["Stale digest", ["current-run"], "ended-run", true],
+        ["Active run fallback", ["fallback run:a/b"], null, true],
+        ["Inactive run", ["inactive-run"], "inactive-run", undefined],
+      ] satisfies [string, string[], string | null, boolean | undefined][]
+    ).map(([key, activeRunIds, digestId, hasActiveRun], index) =>
+      row(key, owner, now - index * 500, {
+        activeRunIds,
+        hasActiveRun,
+        ...(digestId ? { observerDigest: digest(digestId) } : {}),
+        ...(key === "Inactive run" ? { status: "running" } : {}),
       }),
-      row("Stale digest", owner, now - 500, {
-        activeRunIds: ["current-run"],
-        hasActiveRun: true,
-        observerDigest: digest("ended-run"),
-      }),
-      row("Active run fallback", owner, now - 1_000, {
-        activeRunIds: ["fallback run:a/b"],
-        hasActiveRun: true,
-      }),
-      row("Inactive run", owner, now - 2_000, {
-        activeRunIds: ["inactive-run"],
-        status: "running",
-        observerDigest: digest("inactive-run"),
-      }),
-    ];
+    );
     show({ context: input.context, rows });
     expect(
-      [...container.querySelectorAll<HTMLAnchorElement>(".activity-feed__inspect-run")].map(
-        (link) => link.getAttribute("href"),
-      ),
+      Array.from(all(".activity-feed__inspect-run"), (link) => link.getAttribute("href")),
     ).toEqual(["/control/activity?view=run&run=digest%20run%3Aa%2Fb"]);
-    const active = find('[data-activity-session="Digest run"]')!;
-    expect(active.querySelector(".activity-feed__run-dot")).not.toBeNull();
-    expect(active.querySelector(".activity-feed__session-headline")?.textContent?.trim()).toBe(
+    const active = find(sessionSelector("Digest run"))!;
+    expect(find(".activity-feed__run-dot", active)).not.toBeNull();
+    expect(text(".activity-feed__session-headline", active)?.trim()).toBe(
       "Waiting on a fake approval",
     );
-    expect(
-      active.querySelector(".activity-feed__session-headline")?.getAttribute("data-health"),
-    ).toBe("waiting-on-user");
+    expect(attr(".activity-feed__session-headline", "data-health", active)).toBe("waiting-on-user");
     expect(active.textContent).toContain("Owner");
     for (const key of ["Stale digest", "Active run fallback", "Inactive run"]) {
-      expect(find(`[data-activity-session="${key}"] .activity-feed__session-headline`)).toBeNull();
+      expect(find(sessionSelector(key, ".activity-feed__session-headline"))).toBeNull();
     }
-    expect(find('[data-activity-session="Inactive run"] .activity-feed__run-dot')).toBeNull();
+    expect(find(sessionSelector("Inactive run", ".activity-feed__run-dot"))).toBeNull();
   });
 });

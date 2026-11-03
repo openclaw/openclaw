@@ -9,11 +9,12 @@ export function historicalIndexOrderingPort(
   descriptor: PortDescriptor,
   version: number,
   postgres: string,
+  policy: "sqlite" | "schema-nullability" = "sqlite",
 ): PortDescriptor {
   return {
     ...descriptor,
     version,
-    postData: withLegacyPostgresIndexOrdering(descriptor.postData),
+    postData: withLegacyPostgresIndexOrdering(descriptor.postData, policy, descriptor.preData),
     inspectSqliteSource: undefined,
     migrateSqliteSource: undefined,
     admit(file, input) {
@@ -29,7 +30,7 @@ export function historicalIndexOrderingPort(
             id: descriptor.id,
             version,
             sqlite: descriptor.sqlite,
-            postgres: withLegacyPostgresIndexOrdering(postgres),
+            postgres: withLegacyPostgresIndexOrdering(postgres, policy),
           },
           existingOnly: true,
           inspectSqlite: () => ({

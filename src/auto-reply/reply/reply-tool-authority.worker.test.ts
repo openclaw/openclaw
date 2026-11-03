@@ -344,6 +344,7 @@ it.each(["execution", "separate"] as const)(
 
 it.each([
   "unrelated deletion",
+  "model fallback",
   "revoked policy",
   "reassigned session",
   "deleted requester",
@@ -414,14 +415,15 @@ it.each([
                       { env: state.env },
                     );
                   } else {
-                    await patchSessionEntryCore(scope, () =>
-                      change === "revoked policy"
-                        ? { inheritedToolDeny: ["exec"] }
-                        : {
-                            sessionId: "replacement-requester",
-                            spawnedBy: "agent:main:other-parent",
-                          },
-                    );
+                    const patches = {
+                      "model fallback": { model: "fallback", modelProvider: "fallback" },
+                      "revoked policy": { inheritedToolDeny: ["exec"] },
+                      "reassigned session": {
+                        sessionId: "replacement-requester",
+                        spawnedBy: "agent:main:other-parent",
+                      },
+                    } satisfies Record<typeof change, Partial<SessionEntry>>;
+                    await patchSessionEntryCore(scope, () => patches[change]);
                   }
                   interleaved = true;
                 }
@@ -433,7 +435,7 @@ it.each([
               toolAuthorityOverlay: toolAuthorityOverlay(run),
             });
             expect(interleaved).toBe(true);
-            if (change === "unrelated deletion") {
+            if (change === "unrelated deletion" || change === "model fallback") {
               expect(result).toEqual({ status: "accepted" });
               expect(queueMessage).toHaveBeenCalledOnce();
             } else {
@@ -465,7 +467,7 @@ it.each(["current", "revoked policy", "reassigned session"] as const)(
         spawnDepth: 1,
         inheritedToolPolicyVersion: 1,
         inheritedToolAllow: ["read", "exec"],
-        model: "previous-model",
+        inheritedToolDeny: [],
       });
       const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
       const source = new AbortController();
@@ -486,7 +488,7 @@ it.each(["current", "revoked policy", "reassigned session"] as const)(
             return (async () => {
               // The child inherits stale capability facts before host preparation, not
               // just before a replay of an already-prepared authority snapshot.
-              await patchSessionEntryCore(scope, () => ({ model: "current-model" }));
+              await patchSessionEntryCore(scope, () => ({ inheritedToolDeny: ["write"] }));
               await expect(
                 submit(async (prepared) => {
                   const handle = createEmbeddedRunHandle({

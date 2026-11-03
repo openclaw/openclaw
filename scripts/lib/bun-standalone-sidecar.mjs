@@ -11,7 +11,7 @@ export function isStandalonePrivateDocumentation(name) {
   );
 }
 
-/** Disk resources have owners; compiled modules never become a second code distribution. */
+/** Disk resources have owners; loose host modules never become a second code distribution. */
 export function standaloneResourceCategory(name, declaredPluginAssets = new Set()) {
   if (
     name.split("/").includes(".source-module-urls") ||
@@ -40,6 +40,9 @@ export function standaloneResourceCategory(name, declaredPluginAssets = new Set(
   }
   if (name.startsWith("dist/assets/")) {
     return "runtimeAssets";
+  }
+  if (/^dist\/worker-artifacts\/[a-f0-9]{64}\.tar\.gz$/.test(name)) {
+    return "workerBundles";
   }
   if (/^dist\/bundled\/[^/]+\/HOOK\.md$/.test(name)) {
     return "hookMetadata";

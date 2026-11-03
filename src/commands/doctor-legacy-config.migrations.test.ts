@@ -17,21 +17,13 @@ import { normalizeCompatibilityConfigValues } from "./doctor/shared/legacy-confi
 import { LEGACY_CONFIG_MIGRATIONS } from "./doctor/shared/legacy-config-migrations.js";
 import { collectBlockedLegacyOpenAICodexProviderPlan } from "./doctor/shared/legacy-config-migrations.runtime.models.js";
 import { repairStaleAgentModelRefs } from "./doctor/shared/stale-agent-model-ref-repair.js";
+import { createTestModelDefinition } from "./test-runtime-config-helpers.js";
 
 function makeModel(
   id: string,
   overrides: Partial<ModelDefinitionConfig> = {},
 ): ModelDefinitionConfig {
-  return {
-    id,
-    name: id,
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128_000,
-    maxTokens: 32_000,
-    ...overrides,
-  };
+  return createTestModelDefinition(id, { contextWindow: 128_000, maxTokens: 32_000, ...overrides });
 }
 
 function normalizeProviders(providers: unknown) {
@@ -468,10 +460,7 @@ describe("normalizeCompatibilityConfigValues", () => {
             },
             models: {
               "claude-cli/claude-opus-4-7": { alias: "Legacy Opus" },
-              "anthropic/claude-opus-4-7": {
-                alias: "Canonical Opus",
-                agentRuntime: { id: "openclaw" },
-              },
+              "anthropic/claude-opus-4-7": { alias: "Canonical Opus" },
               "claude-cli/claude-sonnet-4-6": { alias: "Sonnet" },
             },
             modelPolicy: {
@@ -493,7 +482,7 @@ describe("normalizeCompatibilityConfigValues", () => {
         models: {
           "anthropic/claude-opus-4-7": {
             alias: "Canonical Opus",
-            agentRuntime: { id: "openclaw" },
+            agentRuntime: { id: "claude-cli" },
           },
           "anthropic/claude-sonnet-4-6": {
             alias: "Sonnet",
@@ -628,14 +617,17 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.changes).toEqual(["Removed legacy skills.entries.nano-banana-pro."]);
   });
 
-  it("removes nano-banana from skills.allowBundled during migration", () => {
-    const res = normalizeCompatibilityConfigValues({
-      skills: { allowBundled: ["peekaboo", "nano-banana-pro"] },
-    });
+  it.each([{ retained: [] }, { retained: ["peekaboo"] }])(
+    "keeps skills.allowBundled restrictive after removing nano-banana ($retained)",
+    ({ retained }) => {
+      const res = normalizeCompatibilityConfigValues({
+        skills: { allowBundled: [...retained, "nano-banana-pro"] },
+      });
 
-    expect(res.config.skills?.allowBundled).toEqual(["peekaboo"]);
-    expect(res.changes).toEqual(["Removed nano-banana-pro from skills.allowBundled."]);
-  });
+      expect(res.config.skills?.allowBundled).toEqual(retained);
+      expect(res.changes).toEqual(["Removed nano-banana-pro from skills.allowBundled."]);
+    },
+  );
 
   it("migrates legacy web search provider config to plugin-owned config paths", () => {
     const res = normalizeCompatibilityConfigValues({

@@ -9,7 +9,30 @@ import { resolveBrowserConfig, resolveProfile } from "./browser/config.js";
 import { getBrowserProfileCapabilities } from "./browser/profile-capabilities.js";
 
 describe("browser tool schema", () => {
-  const fullSchema = createBrowserToolSchema(resolveBrowserToolCapabilities());
+  const fullSchema = createBrowserToolSchema(resolveBrowserToolCapabilities({ canJudge: true }));
+  it("reuses interleaved capability variants without reordering provider enums", () => {
+    const capabilities = resolveBrowserToolCapabilities({ canJudge: true });
+    const variants = [
+      capabilities,
+      { ...capabilities, actions: capabilities.actions.toReversed() },
+      { ...capabilities, actKinds: capabilities.actKinds.toReversed() },
+      { ...capabilities, tabBound: true },
+      { ...capabilities, supportsNativeSnapshots: false },
+    ];
+    const schemas = variants.map(createBrowserToolSchema);
+    expect(new Set(schemas).size).toBe(variants.length);
+    for (const [index, variant] of variants.entries()) {
+      const schema = createBrowserToolSchema({
+        ...variant,
+        actions: [...variant.actions],
+        actKinds: [...variant.actKinds],
+      });
+      expect(schema).toBe(schemas[index]);
+      expect(schema.properties.action).toMatchObject({ enum: variant.actions });
+      expect(schema.properties.request.properties.kind).toMatchObject({ enum: variant.actKinds });
+    }
+  });
+
   it("advertises the viewport resize maximum on nested and flattened act params", () => {
     const dimension = { maximum: ACT_MAX_VIEWPORT_DIMENSION };
     const resize = { width: dimension, height: dimension };
@@ -37,6 +60,7 @@ describe("browser tool schema", () => {
 
   it("hides Playwright-only actions for an existing-session binding", () => {
     const capabilities = resolveBrowserToolCapabilities({
+      canJudge: true,
       tabBound: true,
       profileCapabilities: {
         supportsBatchActions: false,
@@ -48,7 +72,16 @@ describe("browser tool schema", () => {
         supportsEmulation: false,
       },
     });
-    const hidden = ["requests", "errors", "text", "emulate", "pdf", "download", "waitfordownload"];
+    const hidden = [
+      "requests",
+      "errors",
+      "text",
+      "judge",
+      "emulate",
+      "pdf",
+      "download",
+      "waitfordownload",
+    ];
     for (const action of hidden) {
       expect(capabilities.actions).not.toContain(action);
     }
@@ -75,11 +108,13 @@ describe("browser tool schema", () => {
     const profile = expectDefined(resolveProfile(resolved, "lightweight"), "Lightpanda profile");
     const capabilities = resolveBrowserToolCapabilities({
       tabBound: true,
+      canJudge: true,
       profileCapabilities: getBrowserProfileCapabilities(profile),
     });
     const schema = createBrowserToolSchema(capabilities);
     expect(Value.Check(schema, { action: "screenshot" })).toBe(false);
     expect(Value.Check(schema, { action: "text" })).toBe(true);
+    expect(Value.Check(schema, { action: "judge" })).toBe(true);
     expect(Value.Check(schema, { action: "act", request: { kind: "batch" } })).toBe(false);
     expect(Value.Check(schema, { action: "act", kind: "clickCoords" })).toBe(false);
     expect(schema.properties).not.toHaveProperty("selector");

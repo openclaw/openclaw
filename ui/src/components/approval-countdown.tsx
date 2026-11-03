@@ -1,27 +1,23 @@
-import { createSignal, onSettled } from "solid-js";
+import { createMemo } from "solid-js";
 import { registerApprovalsEnglish } from "../i18n/locales/en-approvals.ts";
 import { formatCountdown } from "../lib/format.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
+import { readVisibleTime } from "../lib/reactive/visible-clock.ts";
 import type { JSX as SolidJSX } from "../types/solid-elements.d.ts";
 
 registerEnglishCatalog(registerApprovalsEnglish);
 
 export function approvalRemainingLabel(expiresAtMs: number, nowMs: number): string {
   return expiresAtMs > nowMs
-    ? t("execApproval.expiresIn", { time: formatCountdown(expiresAtMs, nowMs, true) })
+    ? t("execApproval.expiresIn", { time: formatCountdown(expiresAtMs, nowMs) })
     : t("execApproval.expired");
 }
 
-export function useApprovalClock(onTick?: (nowMs: number) => void) {
-  const [now, setNow] = createSignal(Date.now());
-  onSettled(() => {
-    const timer = setInterval(() => {
-      const time = Date.now();
-      setNow(time);
-      onTick?.(time);
-    }, 1_000);
-    return () => clearInterval(timer);
-  });
+export function readApprovalTime(expiresAtMs: number): number {
+  const now = Date.now();
+  if (expiresAtMs > now) {
+    readVisibleTime(1_000);
+  }
   return now;
 }
 
@@ -31,28 +27,22 @@ export function ApprovalCountdown(
     "class" | "role" | "aria-label" | "aria-hidden" | "title"
   > & { expiresAtMs: number; compact?: boolean },
 ) {
-  let host: HTMLElement | undefined;
-  const now = useApprovalClock((time) => {
-    if (!props.compact) {
-      host
-        ?.closest("openclaw-modal-dialog")
-        ?.setAttribute("description", approvalRemainingLabel(props.expiresAtMs, time));
-    }
-  });
+  const now = createMemo(() => readApprovalTime(props.expiresAtMs));
   return (
     <openclaw-approval-countdown
-      ref={(element) => {
-        host = element;
-      }}
       style={{ display: "contents" }}
       class={props.class}
+      data-urgent={props.expiresAtMs - now() < 60_000 ? "true" : undefined}
       role={props.role}
-      aria-label={props["aria-label"]}
+      aria-label={
+        props["aria-label"] ??
+        (props.role === "timer" ? approvalRemainingLabel(props.expiresAtMs, now()) : undefined)
+      }
       aria-hidden={props["aria-hidden"]}
       title={props.title}
     >
       {props.compact
-        ? formatCountdown(props.expiresAtMs, now(), true)
+        ? formatCountdown(props.expiresAtMs, now())
         : approvalRemainingLabel(props.expiresAtMs, now())}
     </openclaw-approval-countdown>
   );

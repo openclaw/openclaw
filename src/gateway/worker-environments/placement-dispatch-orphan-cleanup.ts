@@ -21,13 +21,19 @@ import {
 
 type UnavailableTarget = WorkerPlacementWorkspaceUnavailableError["target"];
 
+/** Shared by the retry queue and unresolved set; notification scans reuse the record. */
+type PendingWorkspaceLookup = {
+  placement: WorkerSessionPlacementIdentity;
+  target: UnavailableTarget | undefined;
+  /** Publications during resolution leave the item eligible for the next sweep. */
+  dirty: boolean;
+};
+
 /** One startup pass of orphan-ref cleanup: workspace roots resolved once, completed roots remembered. */
 export type PendingWorkspaceResultOrphanCleanup = {
-  placements: WorkerSessionPlacementIdentity[];
+  placements: PendingWorkspaceLookup[];
   initialDiscoveryPending: boolean;
-  unresolved: Map<WorkerSessionPlacementIdentity, UnavailableTarget | undefined>;
-  /** Publications during resolution leave the item eligible for the next sweep. */
-  dirty: Set<WorkerSessionPlacementIdentity>;
+  unresolved: Set<PendingWorkspaceLookup>;
   /** sessionId → workspace root, or null when the placement has no local root to clean. */
   rootsBySession: Map<string, string | null>;
   completedRoots: Set<string>;
@@ -36,25 +42,26 @@ export type PendingWorkspaceResultOrphanCleanup = {
 export function subscribeWorkspaceResultOrphanChanges(
   getPass: () => PendingWorkspaceResultOrphanCleanup | undefined,
 ): () => void {
-  const wake = (matches: (target?: UnavailableTarget) => boolean) => {
-    const pass = getPass();
-    if (!pass) {
-      return;
-    }
-    for (const [identity, target] of pass.unresolved) {
-      if (matches(target)) {
-        pass.dirty.add(identity);
-        if (target) {
-          pass.unresolved.set(identity, undefined);
-          pass.placements.push(identity);
+  const wake = (
+    pass: PendingWorkspaceResultOrphanCleanup,
+    matches: (target?: UnavailableTarget) => boolean,
+  ) => {
+    for (const lookup of pass.unresolved) {
+      if (matches(lookup.target)) {
+        lookup.dirty = true;
+        if (lookup.target) {
+          lookup.target = undefined;
+          pass.placements.push(lookup);
         }
       }
     }
   };
   const stopSessions = sessionChanges.subscribeFacts((change) => {
+    const pass = getPass();
     if (
-      !sessionChangeScopeAffectsStoredRows(change) &&
-      !("all" in change && change.scope === "config")
+      !pass?.unresolved.size ||
+      (!sessionChangeScopeAffectsStoredRows(change) &&
+        !("all" in change && change.scope === "config"))
     ) {
       return;
     }
@@ -73,6 +80,7 @@ export function subscribeWorkspaceResultOrphanChanges(
     // A resolving item has not captured its physical store/canonical key yet.
     // Keyed publications carry the logical agent, which may share another agent's store.
     wake(
+      pass,
       (target) =>
         !target ||
         ((!("sessionKey" in change) || change.sessionKey === target.sessionKey) &&
@@ -81,11 +89,12 @@ export function subscribeWorkspaceResultOrphanChanges(
     );
   });
   const stopWorktrees = worktreeRegistryPublication.subscribeFacts((change) => {
+    const pass = getPass();
     // A bare settlement may be a rollback; committed/unknown facts precede it.
-    if (change.kind !== "committed" && change.kind !== "unknown") {
+    if (!pass?.unresolved.size || (change.kind !== "committed" && change.kind !== "unknown")) {
       return;
     }
-    wake((target) => {
+    wake(pass, (target) => {
       if (target && !target.worktreeId) {
         return false;
       }
@@ -136,18 +145,18 @@ export async function cleanupPendingWorkspaceResultOrphans(
     if (deps.isShuttingDown?.()) {
       return false;
     }
-    const placement = pass.placements.shift()!;
-    pass.dirty.delete(placement);
+    const lookup = pass.placements.shift()!;
+    const { placement } = lookup;
+    lookup.dirty = false;
     try {
       const workspace = await deps.resolveWorkspace(placement);
       rootsBySession.set(placement.sessionId, workspace.kind === "local" ? workspace.path : null);
-      pass.unresolved.delete(placement);
-      pass.dirty.delete(placement);
+      pass.unresolved.delete(lookup);
     } catch (error) {
-      if (error instanceof WorkerPlacementWorkspaceUnavailableError && !pass.dirty.has(placement)) {
-        pass.unresolved.set(placement, error.target);
+      if (error instanceof WorkerPlacementWorkspaceUnavailableError && !lookup.dirty) {
+        lookup.target = error.target;
       } else {
-        pass.placements.push(placement);
+        pass.placements.push(lookup);
       }
     }
   }

@@ -65,22 +65,7 @@ export class NodeWorkerChildLifecycle {
   private readonly processObservations = new NodeWorkerProcessObservations();
 
   observeProcesses(input: NodeWorkerProcessInput, signal?: AbortSignal) {
-    const owner = [...this.owners.values()].find(
-      (entry) =>
-        entry.binding.environmentId === input.environmentId &&
-        entry.binding.gatewayNamespace === input.gatewayNamespace,
-    );
-    if (!owner || owner.state !== "running" || this.options.isClosed()) {
-      throw new Error(
-        "Retained worker process observation unavailable; start a new turn and retry.",
-      );
-    }
-    return this.processObservations.request(
-      owner,
-      input,
-      () => !this.options.isClosed() && this.owners.get(owner.launchId) === owner,
-      signal,
-    );
+    return this.processObservations.observe(input, signal, this.owners, this.options);
   }
 
   constructor(private readonly options: NodeWorkerChildLifecycleOptions) {
@@ -148,6 +133,7 @@ export class NodeWorkerChildLifecycle {
     const sensitiveValues = nodeWorkerLaunchSecrets(
       params.descriptor,
       this.options.nativeInferenceSnapshot,
+      this.options.managedIdentityTransport,
     );
     const scrubber = createNodeWorkerCredentialScrubber(sensitiveValues);
     // Turn cancellation can beat the child's admission retry deadline. Retain the
@@ -380,7 +366,11 @@ export class NodeWorkerChildLifecycle {
       await this.stopChild(active, signal.aborted ? "cancelled" : "interrupted");
       return (await this.options.turns.get(claim.launchId)) ?? admitted.receipt;
     }
-    const secrets = nodeWorkerLaunchSecrets(descriptor, this.options.nativeInferenceSnapshot);
+    const secrets = nodeWorkerLaunchSecrets(
+      descriptor,
+      this.options.nativeInferenceSnapshot,
+      this.options.managedIdentityTransport,
+    );
     for (const value of secrets) {
       registerSecretValueForRedaction(value);
     }

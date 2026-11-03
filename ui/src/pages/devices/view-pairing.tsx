@@ -1,3 +1,4 @@
+import "../../styles/device-pair-setup.css";
 import { action, createOptimistic, For, Show, until } from "solid-js";
 import { handleCopyButton } from "../../components/copy-button-state.ts";
 import "../../components/modal-dialog.tsx";

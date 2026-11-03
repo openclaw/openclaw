@@ -3,16 +3,14 @@ import { formatDurationCompact, formatDurationHuman } from "../lib/format-durati
 import { i18nRevision } from "../lib/reactive/i18n.ts";
 import { readVisibleTime } from "../lib/reactive/visible-clock.ts";
 
-type ElapsedTimeProps = {
+export function ElapsedTime(props: {
   class?: string;
   startMs?: number | null;
   endMs?: number | null;
   minimumUnit?: "second" | "minute";
   singleUnit?: boolean;
   includeSeconds?: boolean;
-};
-
-export function ElapsedTime(props: ElapsedTimeProps) {
+}) {
   const label = createMemo(() => {
     i18nRevision();
     if (props.startMs == null) {

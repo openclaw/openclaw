@@ -1,4 +1,3 @@
-// Auth-choice model check tests cover warnings for mismatched model and auth config.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createApiKeyCredential,
@@ -54,60 +53,39 @@ const chatGPTRoute = {
   baseUrl: "https://chatgpt.com/backend-api/codex",
 } satisfies Pick<ModelCatalogEntry, "api" | "baseUrl">;
 
-function catalogEntry(
-  id: string,
-  name: string,
-  route: Pick<ModelCatalogEntry, "api" | "baseUrl">,
-): ModelCatalogEntry {
-  return { id, name, provider: "openai", ...route };
-}
-
 describe("warnIfModelConfigLooksOff", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     ensureAuthProfileStore.mockReturnValue({ version: 1, profiles: {} });
   });
 
-  it("accepts pending auth profiles collected by the current setup transaction", async () => {
-    const config = modelConfig("anthropic/claude-sonnet-4-6");
-    const pendingAuthProfiles = [
-      {
-        profileId: "anthropic:default",
-        credential: createApiKeyCredential("anthropic", "test-anthropic-key"),
-      },
-    ];
-
-    expect(
-      await resolveDefaultModelAuthStatus(config, { env: {}, pendingAuthProfiles }),
-    ).toMatchObject({
-      status: "ready",
-    });
-    await warnIfModelConfigLooksOff(config, prompter, {
-      env: {},
-      pendingAuthProfiles,
-    });
-
-    expect(note).not.toHaveBeenCalled();
-  });
-
-  it("does not use pending auth profiles from a different provider", async () => {
-    const config = modelConfig("anthropic/claude-sonnet-4-6");
-
-    await warnIfModelConfigLooksOff(config, prompter, {
-      env: {},
-      pendingAuthProfiles: [
-        {
-          profileId: "openai:default",
-          credential: createApiKeyCredential("openai", "test-openai-key"),
-        },
-      ],
-    });
-
-    expect(note).toHaveBeenCalledWith(
-      'No auth configured for provider "anthropic". The agent may fail until credentials are added. Run `openclaw models auth login --provider anthropic`, `openclaw configure`, or set an API key env var.',
-      "Model check",
-    );
-  });
+  it.each(["anthropic", "openai"])(
+    "checks pending %s credentials against the model provider",
+    async (provider) => {
+      const config = modelConfig("anthropic/claude-sonnet-4-6");
+      const options = {
+        env: {},
+        pendingAuthProfiles: [
+          {
+            profileId: `${provider}:default`,
+            credential: createApiKeyCredential(provider, "test-key"),
+          },
+        ],
+      };
+      expect(await resolveDefaultModelAuthStatus(config, options)).toMatchObject({
+        status: provider === "anthropic" ? "ready" : "missing",
+      });
+      await warnIfModelConfigLooksOff(config, prompter, options);
+      if (provider === "anthropic") {
+        expect(note).not.toHaveBeenCalled();
+      } else {
+        expect(note).toHaveBeenCalledWith(
+          'No auth configured for provider "anthropic". The agent may fail until credentials are added. Run `openclaw models auth login --provider anthropic`, `openclaw configure`, or set an API key env var.',
+          "Model check",
+        );
+      }
+    },
+  );
 
   it("keeps custom OpenAI-compatible provider auth separate from Codex OAuth profiles", async () => {
     useSubscription("openai:default");
@@ -180,7 +158,12 @@ describe("warnIfModelConfigLooksOff", () => {
         useSubscription();
       }
       const config = modelConfig(`openai/${model}`);
-      const catalog = routes.map((route) => catalogEntry(canonical, canonical, route));
+      const catalog = routes.map((route) => ({
+        id: canonical,
+        name: canonical,
+        provider: "openai",
+        ...route,
+      }));
       const { observedRoutes } = resolveDefaultModelCatalogFacts(
         config,
         catalog.slice(0, 1),

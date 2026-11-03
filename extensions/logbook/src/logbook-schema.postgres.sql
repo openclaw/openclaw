@@ -71,9 +71,9 @@ CREATE INDEX "idx_logbook_batches_pending" ON "batches" (("start_ms") ASC, ("id"
 
 CREATE INDEX "idx_logbook_cards_day" ON "cards" (("day") ASC, ("start_ms") ASC);
 
-CREATE INDEX "idx_logbook_cards_keyframe" ON "cards" (("keyframe_id") ASC NULLS FIRST) WHERE "keyframe_id" IS NOT NULL;
+CREATE INDEX "idx_logbook_cards_keyframe" ON "cards" (("keyframe_id") ASC) WHERE "keyframe_id" IS NOT NULL;
 
-CREATE INDEX "idx_logbook_frames_batch" ON "frames" (("batch_id") ASC NULLS FIRST, ("captured_at_ms") ASC) WHERE "batch_id" IS NOT NULL;
+CREATE INDEX "idx_logbook_frames_batch" ON "frames" (("batch_id") ASC, ("captured_at_ms") ASC) WHERE "batch_id" IS NOT NULL;
 
 CREATE INDEX "idx_logbook_frames_captured_at" ON "frames" (("captured_at_ms") ASC);
 

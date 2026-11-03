@@ -20,8 +20,10 @@ import type { ReplyPayload } from "../types.js";
 import { deliverFollowupDecision, resolveFollowupDeliveryDecision } from "./followup-delivery.js";
 import { createDefaults, createTurn } from "./followup-delivery.test-helpers.js";
 import { collectRuntimeMetadata } from "./queue/delivery-context.js";
-import { STALLED_TURN_NOTICE_TEXT } from "./stalled-turn-recovery.js";
 import { createMockReplyOperation } from "./test-helpers.js";
+
+const STALLED_TURN_NOTICE_TEXT =
+  "⚠️ This turn was interrupted because it stopped making progress. Please try again.";
 
 const outbound = vi.hoisted(() => vi.fn());
 

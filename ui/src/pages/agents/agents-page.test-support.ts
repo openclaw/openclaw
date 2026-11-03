@@ -1,11 +1,13 @@
 import { flush } from "solid-js";
 import { afterEach, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type { AgentsFilesListResult, AgentsListResult } from "../../api/types.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { createGatewayMetadataObserver } from "../../app/gateway-observers.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
+import { createChannelCapability } from "../../lib/channels/index.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import { createInitialConfigState } from "../../lib/config/config-state-model.ts";
 import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
@@ -20,6 +22,8 @@ const AGENTS_PAGE_GATEWAY_HELLO = gatewayHelloForMethods([
   "agents.update",
   "cron.list",
   "cron.status",
+  "tools.effective",
+  "tools.catalog",
 ]);
 
 const pages = new Set<() => void>();
@@ -48,6 +52,7 @@ function fillMissing(target: object, defaults: object) {
 
 export function completeContext(context: ApplicationContext) {
   const subscribe = () => () => {};
+  const channels = context.acquireChannels?.(createChannelCapability) ?? { state: {}, subscribe };
   const defaultAgents = agentsCapability(async () => ({
     agentId: "main",
     workspace: "",
@@ -64,7 +69,7 @@ export function completeContext(context: ApplicationContext) {
     },
     sessions: context.sessions ?? { state: { result: null, modelOverrides: {} }, subscribe },
     runtimeConfig: context.runtimeConfig ?? { state: createInitialConfigState(), subscribe },
-    channels: context.channels ?? { state: {}, subscribe },
+    acquireChannels: () => channels,
     config: context.config ?? { current: { assistantIdentity: {} }, subscribe },
     navigation: context.navigation ?? { snapshot: { pinnedAgentIds: [] }, subscribe },
     router: context.router ?? {
@@ -78,7 +83,7 @@ export function completeContext(context: ApplicationContext) {
     context.agentIdentity,
     context.sessions,
     context.runtimeConfig,
-    context.channels,
+    channels,
     context.config,
     context.navigation,
   ]) {
@@ -106,7 +111,7 @@ export function completeContext(context: ApplicationContext) {
     state: context.runtimeConfig.state ?? createInitialConfigState(),
     ensureLoaded: context.runtimeConfig.ensureLoaded ?? (async () => {}),
   });
-  fillMissing(context.channels, { state: context.channels.state ?? {} });
+  fillMissing(channels, { state: channels.state ?? {} });
   if (!gatewayListeners.has(context.gateway)) {
     const listeners = new Set<GatewayListener>();
     const subscribeGateway = context.gateway.subscribe.bind(context.gateway);
@@ -139,6 +144,7 @@ export function createAgentsPage(context: ApplicationContext, routeData?: Agents
   return {
     identitySavePending: state.identitySavePending,
     read: () => state.read(),
+    data: () => state.read().readData(),
     setRouteData(next?: AgentsRouteData) {
       state.setRouteData(next);
       flush();
@@ -184,8 +190,15 @@ export function emitCatalogChanged(currentGateway: ApplicationContext["gateway"]
   if (client) {
     invalidateChatMetadataStore(client);
   }
+  emitGatewayEvent(currentGateway, { type: "event", event: "chat.metadata.changed", payload: {} });
+}
+
+export function emitGatewayEvent(
+  currentGateway: ApplicationContext["gateway"],
+  event: GatewayEventFrame,
+) {
   for (const listener of eventListeners.get(currentGateway) ?? []) {
-    listener({ type: "event", event: "chat.metadata.changed", payload: {} });
+    listener(event);
   }
 }
 
@@ -230,12 +243,9 @@ export function settingsSelection(
   return selection;
 }
 
-export const agentsList: AgentsListResult = {
-  defaultId: "main",
-  mainKey: "main",
-  scope: "per-sender",
+export const agentsList: AgentsListResult = makeBootRoster({
   agents: [{ id: "main", name: "Main" }],
-};
+});
 
 export function agentsRouteData(
   _currentGateway: ApplicationContext["gateway"],
@@ -281,6 +291,7 @@ export function pageContext(
   },
 ): ApplicationContext {
   const subscribe = vi.fn(() => () => undefined);
+  const channels = { state: {}, subscribe };
   return {
     gateway: currentGateway,
     agents,
@@ -302,7 +313,7 @@ export function pageContext(
         state: { result: null, modelOverrides: {} },
         subscribe,
       } as unknown as ApplicationContext["sessions"]),
-    channels: { subscribe },
+    acquireChannels: () => channels,
     runtimeConfig: { subscribe },
   } as unknown as ApplicationContext;
 }

@@ -1,3 +1,4 @@
+import { stripInlineLinks } from "@openclaw/normalization-core/markdown-plain-text";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   RAW_TEXT_TAGS,
@@ -8,6 +9,7 @@ import {
   readRawTextBounds,
   skipRawTextElement,
 } from "../../../packages/markdown-core/src/html-scanner.js";
+import { findMarkdownCodeRegions } from "../../../packages/markdown-core/src/markdown-code-regions.js";
 import { stripInvisibleUnicode } from "../../infra/unicode-visibility.js";
 import { decodeHtmlEntities } from "../../shared/html-entities.js";
 import { readHtmlAttribute } from "./web-fetch-attributes.js";
@@ -64,6 +66,7 @@ type RenderContext =
   | { kind: "pre"; parts: string[] };
 
 type RenderState = {
+  linksAsText?: boolean;
   title?: string;
   preBlocks: string[];
 };
@@ -161,7 +164,7 @@ function closeContext(context: RenderContext, parent: RenderContext, state: Rend
       return;
     case "anchor":
       parent.parts.push(
-        context.href && label
+        !state.linksAsText && context.href && label
           ? `[${label}](${escapePreMarkerText(context.href)})`
           : label || escapePreMarkerText(context.href || ""),
       );
@@ -219,10 +222,13 @@ function pushContext(
   stack.push(context);
 }
 
-export function htmlToMarkdown(html: string): { text: string; title?: string } {
+export function htmlToMarkdown(
+  html: string,
+  options?: { linksAsText?: boolean },
+): { text: string; title?: string } {
   const root: RenderContext = { kind: "root", parts: [] };
   const stack: RenderContext[] = [root];
-  const state: RenderState = { preBlocks: [] };
+  const state: RenderState = { preBlocks: [], linksAsText: options?.linksAsText };
   const tableRowCellCounts: number[] = [];
 
   for (let i = 0; i < html.length;) {
@@ -349,7 +355,7 @@ export function htmlToMarkdown(html: string): { text: string; title?: string } {
   };
 }
 
-export function normalizeWhitespace(value: string): string {
+function normalizeWhitespace(value: string): string {
   return value
     .replace(/\r/g, "")
     .replace(/[ \t]+\n/g, "\n")
@@ -366,21 +372,83 @@ function readBacktickRunEnd(value: string, start: number): number {
   return end;
 }
 
+/**
+ * Inline code ownership is decided on the original Markdown, not on the prose that is
+ * left after fenced blocks are removed. The shared parser knows that backticks inside a
+ * link or image destination are not code delimiters, that code inside an image label is
+ * alt text, and that a span wrapping a fence-looking run is still one literal span.
+ * Hiding those ranges up front keeps their content literal without nesting the
+ * placeholders that fenced blocks already own.
+ */
+function createInlineCodeHider(markdown: string, codeBlocks: string[]) {
+  const regions = findMarkdownCodeRegions(markdown).filter((region) => !region.block);
+  const insideInline = (index: number): boolean =>
+    regions.some((region) => index >= region.start && index < region.end);
+  const emit = (from: number, to: number): string => {
+    let out = "";
+    let cursor = from;
+    for (const region of regions) {
+      if (region.end <= from || region.start >= to) {
+        continue;
+      }
+      const start = Math.max(region.start, from);
+      const end = Math.min(region.end, to);
+      if (start > cursor) {
+        out += markdown.slice(cursor, start).replaceAll("\0", "\0\0");
+      }
+      if (start === region.start && end === region.end) {
+        const delimiter = readBacktickRunEnd(markdown, region.start) - region.start;
+        const literal = markdown.slice(region.start + delimiter, region.end - delimiter);
+        if (literal) {
+          out += `\0${codeBlocks.length}\0`;
+          codeBlocks.push(literal);
+        }
+      } else {
+        // Only a fence boundary can split a region; keep that slice verbatim.
+        out += markdown.slice(start, end).replaceAll("\0", "\0\0");
+      }
+      cursor = end;
+    }
+    if (cursor < to) {
+      out += markdown.slice(cursor, to).replaceAll("\0", "\0\0");
+    }
+    return out;
+  };
+  return { insideInline, emit };
+}
+
 export function markdownToText(markdown: string): string {
   const codeBlocks: string[] = [];
+  const inline = createInlineCodeHider(markdown, codeBlocks);
   let text = "";
   const opener = /`{3,}|(?:^|\n) {0,3}(~{3,})/g;
   let pos = 0;
   while (pos < markdown.length) {
-    opener.lastIndex = pos;
-    const opening = opener.exec(markdown);
+    // A fence-looking run inside an inline code span is literal content, not a fence.
+    let opening: RegExpExecArray | null = null;
+    let searchFrom = pos;
+    while (searchFrom < markdown.length) {
+      opener.lastIndex = searchFrom;
+      const candidate = opener.exec(markdown);
+      if (!candidate) {
+        break;
+      }
+      const candidateIsTilde = candidate[1] !== undefined;
+      const candidateOpen =
+        candidate.index + (candidateIsTilde && candidate[0].startsWith("\n") ? 1 : 0);
+      if (!inline.insideInline(candidateOpen)) {
+        opening = candidate;
+        break;
+      }
+      searchFrom = candidateOpen + 1;
+    }
     if (!opening) {
-      text += markdown.slice(pos).replaceAll("\0", "\0\0");
+      text += inline.emit(pos, markdown.length);
       break;
     }
     const isTilde = opening[1] !== undefined;
     const open = opening.index + (isTilde && opening[0].startsWith("\n") ? 1 : 0);
-    text += markdown.slice(pos, open).replaceAll("\0", "\0\0");
+    text += inline.emit(pos, open);
     const afterOpen = opening.index + opening[0].length;
     const fenceLength = opening[1]?.length ?? afterOpen - open;
     let close: { start: number; end: number } | undefined;
@@ -417,7 +485,7 @@ export function markdownToText(markdown: string): string {
     if (!close && !isTilde) {
       const lineStart = markdown.lastIndexOf("\n", open) + 1;
       if (firstLineEnd === -1 || !/^[ \t]*$/.test(markdown.slice(lineStart, open))) {
-        text += markdown.slice(open).replaceAll("\0", "\0\0");
+        text += inline.emit(open, markdown.length);
         break;
       }
     }
@@ -440,8 +508,7 @@ export function markdownToText(markdown: string): string {
     text += lineEnd;
     pos = close?.end ?? markdown.length;
   }
-  text = text.replace(/!\[[^\]]*]\([^)]+\)/g, "");
-  text = text.replace(/\[([^\]]+)]\([^)]+\)/g, "$1");
+  text = stripInlineLinks(text, { images: "omit" });
   text = text.replace(/`([^`]+)`/g, "$1");
   text = text.replace(/^#{1,6}\s+/gm, "");
   text = text.replace(/^[^\S\n]*[-*+]\s+/gm, "");
@@ -470,7 +537,9 @@ export async function extractBasicHtmlContent(params: {
   extractMode: ExtractMode;
 }): Promise<{ text: string; title?: string } | null> {
   const cleanHtml = await sanitizeHtml(params.html);
-  const rendered = htmlToMarkdown(cleanHtml);
+  // HTML labels are literal text, not authored Markdown. Do not serialize destinations
+  // only to parse them back out in text mode. Keep Markdown rendering unchanged.
+  const rendered = htmlToMarkdown(cleanHtml, { linksAsText: params.extractMode === "text" });
   const text =
     stripInvisibleUnicode(
       params.extractMode === "text" ? markdownToText(rendered.text) : rendered.text,

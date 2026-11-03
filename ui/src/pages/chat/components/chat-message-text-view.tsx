@@ -31,10 +31,11 @@ import { hydrateLinkFavicons, releaseLinkFavicons } from "../link-favicon-loader
 import type { MarkdownMedia } from "./chat-message-media-markdown.ts";
 import { messageOverflowRef, shouldCollapseUserMessage } from "./chat-message-overflow.ts";
 import {
-  type DuplicateSuffix,
   type MessageTextOptions,
   prepareMessageMarkdown,
 } from "./chat-message-text-preparation.ts";
+import { ChatRowDisplayContext } from "./chat-row-display-context.ts";
+import { registerChatSearchTextBlock } from "./chat-search-highlight.ts";
 
 export type { AssistantMessageDisclosure } from "./chat-message-text-preparation.ts";
 
@@ -74,19 +75,15 @@ export type MessageMarkdownProps = {
   messageKey: string;
   options: MessageTextOptions;
   markdownOptions: MarkdownRenderOptions;
-  duplicateSuffix?: DuplicateSuffix;
   media?: MarkdownMedia;
 };
 
 export function MessageMarkdown(props: MessageMarkdownProps) {
-  // A cold tab can join a remote reply before the live runtime is ready. Keep
-  // that reply in one mutable island so loading cannot repartition its DOM.
-  const initialStreamingRuntime = loadStreamingMarkdown.peek();
   const streaming = createMemo(
     () =>
       props.options.isStreaming
         ? (loadStreamingMarkdown.peek() ?? loadStreamingMarkdown())
-        : undefined,
+        : loadStreamingMarkdown.peek(),
     { loadingValue: undefined },
   );
   const presentation = createMemo(() =>
@@ -95,9 +92,8 @@ export function MessageMarkdown(props: MessageMarkdownProps) {
       props.messageKey,
       props.options,
       props.markdownOptions,
-      props.duplicateSuffix,
       latest(streaming)?.toStreamingMarkdownDomParts,
-      !initialStreamingRuntime && props.options.isStreaming,
+      props.options.isStreaming && !latest(streaming),
     ),
   );
   return (
@@ -245,6 +241,7 @@ export function MarkdownContent(props: MarkdownContentProps) {
   // Its callbacks mount media with this context; the reconciler retires each root.
   const solidOwner = getOwner();
   const presented = useContext(ContentPresentation);
+  const display = useContext(ChatRowDisplayContext);
   const fragment = document.createDocumentFragment();
   const roots = new Map<
     HTMLElement,
@@ -298,7 +295,7 @@ export function MarkdownContent(props: MarkdownContentProps) {
       connected,
       onUpdate: props.onUpdate,
     };
-  });
+  }, display);
   markdown(fragment);
   return Array.from(fragment.childNodes);
 }
@@ -326,6 +323,7 @@ export function MarkdownText(
           props.elementRef?.(node);
           return () => releaseLinkFavicons(node);
         }),
+        registerElementRef(registerChatSearchTextBlock),
       ]}
     >
       <MarkdownContent {...props} onUpdate={hydrate()} />

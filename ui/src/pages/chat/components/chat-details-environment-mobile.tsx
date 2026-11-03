@@ -18,16 +18,13 @@ import {
 registerEnglishCatalog(registerChatSessionEnglish);
 registerEnglishCatalog(registerChatDetailsEnglish);
 
-export type ChatDetailsEnvironmentMobileProps = Omit<
-  ChatDetailsEnvironmentProps,
-  "details" | "expanded" | "onExpandedChange"
-> & {
-  details: Pick<ChatDetailsProps, "detailsWorkspace" | "selectedSession">;
-  placement?: ChatPanePlacementProps;
-};
-
 /** A controlled leaf: the mobile host owns routes, facts, and retained state. */
-export function ChatDetailsEnvironmentMobile(props: ChatDetailsEnvironmentMobileProps) {
+export function ChatDetailsEnvironmentMobile(
+  props: Omit<ChatDetailsEnvironmentProps, "details" | "expanded" | "onExpandedChange"> & {
+    details: Pick<ChatDetailsProps, "detailsWorkspace" | "selectedSession">;
+    placement?: ChatPanePlacementProps;
+  },
+) {
   const visible = createDocumentVisibility();
   const requestUncommitted = createMemo(() =>
     props.presented && visible() ? props.onRequestUncommitted : undefined,

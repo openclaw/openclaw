@@ -1,5 +1,10 @@
 import { normalizeModelCostConfig } from "@openclaw/llm-core";
 import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
+import { normalizeModelCompat } from "../plugins/provider-model-compat.js";
+import {
+  buildFamilyForwardCompatModel,
+  buildFirstTemplateModel,
+} from "../plugins/provider-model-construction.js";
 import {
   buildAnthropicReplayPolicyForModel,
   buildGoogleGeminiReplayPolicy,
@@ -12,9 +17,26 @@ import {
   sanitizeGoogleGeminiReplayHistory,
   sanitizeGoogleGeminiReplayHistoryAsync,
 } from "../plugins/provider-replay-helpers.js";
+import type { ProviderRuntimeModel as ConstructedProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import { definePluginEntry } from "./plugin-entry.js";
 import type { ProviderReplayPolicyContext, ProviderRuntimeModel } from "./plugin-entry.js";
+
+export { matchesExactOrPrefix } from "../plugins/provider-model-id-match.js";
+
+// Cold catalog completion consumes these results without runner normalization.
+// Keep its constructed-model contract separate from policy-free metadata construction.
+export function cloneFirstTemplateModel(
+  params: Parameters<typeof buildFirstTemplateModel>[0],
+): ConstructedProviderRuntimeModel | undefined {
+  return buildFirstTemplateModel(params, normalizeModelCompat);
+}
+
+export function resolveFamilyForwardCompatModel(
+  params: Parameters<typeof buildFamilyForwardCompatModel>[0],
+): ConstructedProviderRuntimeModel | undefined {
+  return buildFamilyForwardCompatModel(params, normalizeModelCompat);
+}
 
 export { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 export {
@@ -160,11 +182,8 @@ export type {
 } from "@openclaw/model-catalog-core/model-catalog-types";
 export { isCloudModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 export { parseModelRef } from "../agents/model-selection-normalize.js";
-export type {
-  BedrockDiscoveryConfig,
-  ModelCompatConfig,
-  ModelDefinitionConfig,
-} from "../config/types.models.js";
+export type { BedrockDiscoveryConfig, ModelDefinitionConfig } from "../config/types.models.js";
+export type { ModelCompatConfig } from "../config/zod-schema.model-compat.js";
 export type {
   ProviderEndpointClass,
   ProviderEndpointResolution,
@@ -273,11 +292,6 @@ export {
   createMoonshotThinkingWrapper,
   resolveMoonshotThinkingType,
 } from "../llm/providers/stream-wrappers/moonshot-thinking.js";
-export {
-  cloneFirstTemplateModel,
-  matchesExactOrPrefix,
-  resolveFamilyForwardCompatModel,
-} from "../plugins/provider-model-helpers.js";
 
 export {
   isClaudeAdaptiveThinkingDefaultModelId,

@@ -2,7 +2,7 @@ import type { AgentHarness, AgentHarnessRegistrationOptions } from "../agents/ha
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
-import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
+import type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hook-types.js";
 import type { StorageProvider } from "../storage/types.js";
 import type {
@@ -94,10 +94,12 @@ import type {
 import type { OpenClawPluginNodeHostCommand } from "./types.node-host.js";
 import type { WebFetchProviderPlugin, WebSearchProviderPlugin } from "./web-provider-types.js";
 
-type ChannelPlugin = import("../channels/plugins/types.plugin.js").ChannelPlugin;
 type AnyChannelPlugin = import("../channels/plugins/types.plugin.js").AnyChannelPlugin;
 
-type ChannelPluginForGatewayVersion<Version extends 1 | 2> = Omit<ChannelPlugin, "gateway"> & {
+type ChannelPluginForGatewayVersion<Version extends 1 | 2> = Omit<
+  import("../channels/plugins/types.plugin.js").ChannelPlugin,
+  "gateway"
+> & {
   gateway?: Extract<NonNullable<AnyChannelPlugin["gateway"]>, { apiVersion?: Version }>;
 };
 
@@ -170,34 +172,11 @@ type OpenClawPluginSessionControlsApi = {
   registerControlUiDescriptor: (descriptor: PluginControlUiDescriptor) => void;
 };
 
-type OpenClawPluginSessionApi = {
-  state: OpenClawPluginSessionStateApi;
-  workflow: OpenClawPluginSessionWorkflowApi;
-  controls: OpenClawPluginSessionControlsApi;
-};
-
 type OpenClawPluginAgentEventsApi = {
   /** Subscribe to sanitized agent events through the host-owned plugin lifecycle. */
   registerAgentEventSubscription: (subscription: PluginAgentEventSubscriptionRegistration) => void;
   /** Emit a host-routed, plugin-attributed event for workflow/UI subscribers. */
   emitAgentEvent: (params: PluginAgentEventEmitParams) => PluginAgentEventEmitResult;
-};
-
-type OpenClawPluginAgentApi = {
-  /** Optional; requires contracts.subagentProfiles and native-subagent-profiles-v1. */
-  registerSubagentProfile?: (
-    profile: import("./subagent-profile.types.js").PluginSubagentProfile,
-  ) => void;
-  events: OpenClawPluginAgentEventsApi;
-};
-
-type OpenClawPluginRunContextApi = {
-  /** Store namespaced, JSON-compatible data for the active run. Cleared on run end/error. */
-  setRunContext: (patch: PluginRunContextPatch) => boolean;
-  /** Read namespaced plugin data for a run. */
-  getRunContext: (params: PluginRunContextGetParams) => PluginJsonValue | undefined;
-  /** Clear one namespace or all namespaces this plugin owns for a run. */
-  clearRunContext: (params: { runId: string; namespace?: string }) => void;
 };
 
 type OpenClawPluginLifecycleApi = Partial<
@@ -242,11 +221,28 @@ export type OpenClawPluginApi = {
    * Grouped facade over the existing flat session-related plugin API.
    * Flat methods remain supported for compatibility.
    */
-  session: OpenClawPluginSessionApi;
+  session: {
+    state: OpenClawPluginSessionStateApi;
+    workflow: OpenClawPluginSessionWorkflowApi;
+    controls: OpenClawPluginSessionControlsApi;
+  };
   /** Grouped facade for agent-event workflow seams. */
-  agent: OpenClawPluginAgentApi;
+  agent: {
+    /** Optional; requires contracts.subagentProfiles and native-subagent-profiles-v1. */
+    registerSubagentProfile?: (
+      profile: import("./subagent-profile.types.js").PluginSubagentProfile,
+    ) => void;
+    events: OpenClawPluginAgentEventsApi;
+  };
   /** Grouped facade for run-scoped plugin scratch state. */
-  runContext: OpenClawPluginRunContextApi;
+  runContext: {
+    /** Store namespaced, JSON-compatible data for the active run. Cleared on run end/error. */
+    setRunContext: (patch: PluginRunContextPatch) => boolean;
+    /** Read namespaced plugin data for a run. */
+    getRunContext: (params: PluginRunContextGetParams) => PluginJsonValue | undefined;
+    /** Clear one namespace or all namespaces this plugin owns for a run. */
+    clearRunContext: (params: { runId: string; namespace?: string }) => void;
+  };
   /** Grouped facade for plugin-owned lifecycle cleanup hooks. */
   lifecycle: OpenClawPluginLifecycleApi;
   registerTool: (
@@ -272,6 +268,7 @@ export type OpenClawPluginApi = {
   };
   /**
    * Register a gateway RPC method for this plugin.
+   * Return a payload for automatic completion, or call `respond(...)` explicitly.
    *
    * Reserved core admin namespaces (`config.*`, `exec.approvals.*`,
    * `wizard.*`, `update.*`) always normalize to `operator.admin` even if a
@@ -279,7 +276,7 @@ export type OpenClawPluginApi = {
    */
   registerGatewayMethod: (
     method: string,
-    handler: GatewayRequestHandler,
+    handler: (opts: GatewayRequestHandlerOptions) => unknown,
     opts?: {
       scope?: OperatorScope;
       profileAccess?: "independent" | "required";
@@ -289,6 +286,10 @@ export type OpenClawPluginApi = {
       shareInvalidationEvents?: readonly string[];
       shareMaxAgeMs?: number;
     },
+  ) => void;
+  /** Register repository preparation policy, selected by gateway.repositoryIntegration. */
+  registerRepositoryIntegration: (
+    integration: import("./repository-integration.types.js").RepositoryIntegration,
   ) => void;
   /** Add a plugin-owned lifetime requirement to authenticated person admission. */
   registerGatewayAccessPolicy: (policy: PluginGatewayAccessPolicy) => void;
@@ -386,8 +387,8 @@ export type OpenClawPluginApi = {
   /** Register a versioned typed decision executor declared in the manifest. */
   registerDecisionProvider: (
     provider:
-      | import("../decisions/types.js").DecisionProviderV1
-      | import("../decisions/types-v2.js").DecisionProviderV2,
+      | import("../decisions/provider-types.js").DecisionProviderV1
+      | import("../decisions/provider-types.js").DecisionProviderV2,
   ) => void;
   /** Register a compaction provider (pluggable summarization backend). */
   registerCompactionProvider: (

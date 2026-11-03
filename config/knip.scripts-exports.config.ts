@@ -40,6 +40,19 @@ const repositoryToolEntries = [
   "scripts/check-openclaw-package-tarball.mts!",
 ] as const;
 
+const sourceTestConsumerEntries = [
+  "src/scripts/docs-link-audit.test.ts!",
+  "src/scripts/ci-changed-scope.contract-fixtures.test.ts!",
+  "src/scripts/ci-changed-scope.control-ui.test.ts!",
+  "src/scripts/ci-changed-scope.git-owner.test.ts!",
+  "src/scripts/ci-changed-scope.native-i18n.test.ts!",
+  "src/scripts/ci-changed-scope.test.ts!",
+  "src/scripts/ci-changed-scope.windows.test.ts!",
+  "src/scripts/ci-ios-screenshot-scope.test.ts!",
+  "src/plugins/prune-docker-plugin-dist.test.ts!",
+  "src/infra/package-update-activation-lifetime.test.ts!",
+] as const;
+
 const config = {
   compilers: productionConfig.compilers,
   ignoreWorkspaces: [
@@ -107,6 +120,7 @@ const config = {
       entry: [
         ...scriptEntries,
         ...repositoryToolEntries,
+        ...sourceTestConsumerEntries,
         ".agents/skills/**/scripts/**/*.{js,mjs,cjs,ts,mts,cts}!",
         "scripts/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
         "test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
@@ -126,6 +140,7 @@ const config = {
         "skills/**/*.{js,mjs,cjs,ts,mts,cts}!",
         "scripts/**/*.{js,mjs,cjs,ts,mts,cts}!",
         "test/**/*.{js,mjs,cjs,ts,mts,cts}!",
+        ...sourceTestConsumerEntries,
         "src/cli/cli-process-child.test-helpers{,.test}.ts!",
         "src/gateway/worker-environments/node-bootstrap-artifact.ts!",
         "src/infra/package-dist-inventory.ts!",

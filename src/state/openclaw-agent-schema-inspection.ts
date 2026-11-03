@@ -7,12 +7,9 @@ import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
 import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
-import {
-  readSqliteSchemaHeader,
-  readSqliteWriterAppVersion,
-} from "../infra/sqlite-schema-header.js";
+import { readSqliteSchemaHeader } from "../infra/sqlite-schema-header.js";
 import { readMainTableList } from "../infra/sqlite-strict.js";
-import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
+import { readSqliteUserVersion, readSqliteWriterAppVersion } from "../infra/sqlite-user-version.js";
 import { configureSqliteReadOnlyPragmas } from "../infra/sqlite-wal.js";
 import { isValidAgentId } from "../routing/session-key.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
@@ -38,6 +35,7 @@ export type AgentSchemaInspectionInput = {
   verifyCurrentSchemaShape?: boolean;
   inspectOwnership?: boolean;
   requireStartupMigrationReadiness?: boolean;
+  allowClosedWal?: boolean;
   deferRuntimeIntegrity?: boolean;
   startupIntegrityVerification?: { verifiedAt: number };
   inspectEmptyStore?: boolean;
@@ -45,6 +43,8 @@ export type AgentSchemaInspectionInput = {
 
 export type AgentSchemaInspection = {
   version: number;
+  /** Exact current shape without repair; not an integrity verdict or writable admission. */
+  readReady?: true;
   integrityGateOutcome?: "cached" | "healthy";
   preparationPending?: true;
   writerAppVersion?: string;
@@ -141,6 +141,7 @@ export function inspectAgentDatabaseSchema(
   const version = readSqliteUserVersion(database);
   const inspection: AgentSchemaInspection = { version };
   let checkingShape = false;
+  let migrationPending = true;
   try {
     if (version > input.supportedVersion) {
       const writerAppVersion = readSqliteWriterAppVersion(database);
@@ -152,7 +153,7 @@ export function inspectAgentDatabaseSchema(
       inspection.agentSchemaMeta = readExistingAgentSchemaMeta(database);
     }
     if (input.requireStartupMigrationReadiness) {
-      const migrationPending =
+      migrationPending =
         version !== input.supportedVersion ||
         hasPendingCurrentVersionAgentDatabaseMigration(database);
       if (input.startupIntegrityVerification !== undefined && !migrationPending) {
@@ -197,6 +198,8 @@ export function inspectAgentDatabaseSchema(
       });
       if (needsIndexRepair) {
         inspection.preparationPending = true;
+      } else if (!migrationPending && version === input.supportedVersion) {
+        inspection.readReady = true;
       }
     }
     return inspection;

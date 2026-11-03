@@ -48,8 +48,12 @@ function transferableManifestInput(command: GitWorkerCommand): ArrayBuffer[] {
     return [command.input.payload.buffer];
   }
   switch (command.type) {
+    case "workspace.manifest.paths":
     case "workspace.manifest.parse":
       return [command.input.raw.buffer];
+    case "workspace.manifest.base-refresh":
+      return [command.input.baseRaw.buffer];
+    case "workspace.manifest.equal":
     case "workspace.manifest.pair":
       return [command.input.baseRaw.buffer, command.input.currentRaw.buffer];
     case "workspace.manifest.stage-input":
@@ -176,6 +180,54 @@ export async function captureWorkspaceSnapshot(params: WorkspaceCaptureArguments
   return await captureWorkspace("workspace.manifest.snapshot", params);
 }
 
+/** Keep complete source inventories in the worker; only the staged document returns. */
+export async function prepareWorkspaceBaseRefresh(
+  input: Omit<
+    WorkspaceManifestComputationOperations["workspace.manifest.base-refresh"]["input"],
+    "baseRaw" | "hashes"
+  > & { baseRaw: string },
+  signal?: AbortSignal,
+) {
+  signal?.throwIfAborted();
+  const hashes = captureHashes();
+  return hashes.accept(
+    await computeWorkspaceManifest(
+      {
+        type: "workspace.manifest.base-refresh",
+        input: {
+          ...input,
+          baseRaw: new TextEncoder().encode(input.baseRaw),
+          hashes: hashes.hashes,
+        },
+      },
+      signal,
+    ),
+  );
+}
+
+export async function workspaceSnapshotsEqual(
+  left: { rawManifest: string; manifestRef: string },
+  right: { rawManifest: string; manifestRef: string },
+  buildCacheInputs?: string[],
+  signal?: AbortSignal,
+) {
+  signal?.throwIfAborted();
+  const encoder = new TextEncoder();
+  return await computeWorkspaceManifest(
+    {
+      type: "workspace.manifest.equal",
+      input: {
+        baseRaw: encoder.encode(left.rawManifest),
+        baseRef: left.manifestRef,
+        currentRaw: encoder.encode(right.rawManifest),
+        currentRef: right.manifestRef,
+        buildCacheInputs,
+      },
+    },
+    signal,
+  );
+}
+
 export async function captureWorkspaceManifestDocument(params: WorkspaceCaptureArguments) {
   return await captureWorkspace("workspace.manifest.document", params);
 }
@@ -240,6 +292,25 @@ export async function decodeWorkspaceManifest(
   );
 }
 
+export async function workspaceManifestPaths(
+  document: { rawManifest: string; manifestRef: string },
+  buildCacheInputs: string[],
+  signal?: AbortSignal,
+) {
+  signal?.throwIfAborted();
+  return await computeWorkspaceManifest(
+    {
+      type: "workspace.manifest.paths",
+      input: {
+        raw: new TextEncoder().encode(document.rawManifest),
+        expectedRef: document.manifestRef,
+        buildCacheInputs,
+      },
+    },
+    signal,
+  );
+}
+
 export async function serializeWorkspaceManifest(
   manifest: WorkerWorkspaceManifest,
   signal?: AbortSignal,
@@ -257,6 +328,7 @@ export async function overlayWorkspaceManifest(
 }
 
 export async function parseWorkspaceManifestPair(input: {
+  buildCacheInputs?: string[];
   baseRaw: string;
   baseRef: string;
   currentRaw: string;
@@ -268,6 +340,7 @@ export async function parseWorkspaceManifestPair(input: {
     input: {
       baseRef: input.baseRef,
       currentRef: input.currentRef,
+      buildCacheInputs: input.buildCacheInputs,
       baseRaw: encoder.encode(input.baseRaw),
       currentRaw: encoder.encode(input.currentRaw),
     },
@@ -348,6 +421,7 @@ export async function prepareWorkspaceStageInput(input: WorkspaceStageInput<stri
             currentManifestRef: input.currentManifestRef,
             baseManifestRaw: encoder.encode(input.baseManifestRaw),
             currentManifestRaw: encoder.encode(input.currentManifestRaw),
+            existingObjects: input.existingObjects,
           }),
     },
   });

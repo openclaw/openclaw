@@ -16,6 +16,7 @@ import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx
 import { registerChatOutputsEnglish } from "../../../i18n/locales/en-chat-outputs.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { observeResize } from "../../../lib/reactive/observers.ts";
 import {
   hasChatDesktopOutputs,
   type ChatOutputsDashboard,
@@ -34,11 +35,9 @@ function OutputName(props: { text: string }) {
       viewport.toggleAttribute("data-overflow", content.scrollWidth > viewport.clientWidth);
     };
     // Observe both boxes: font/text changes can overflow without resizing the row.
-    const observer = new ResizeObserver(measure);
-    observer.observe(viewport);
-    observer.observe(content);
+    const stopResize = observeResize([viewport, content], measure);
     measure();
-    return () => observer.disconnect();
+    return stopResize;
   });
   return (
     <span class="chat-outputs__name" ref={(element) => (viewport = element)}>

@@ -83,7 +83,7 @@ export function readExactSessionEntryFactsInDatabase(
           builder.ref("added_at"),
         ]),
         [builder.ref("identity_id")],
-        "native",
+        "not-null",
       ).as("records"),
     )
     .whereRef("session_members.session_key", "=", "session_nodes.session_key")

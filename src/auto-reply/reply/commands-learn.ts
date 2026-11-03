@@ -1,18 +1,12 @@
 // Handles /learn by turning the command into a turn that writes Workshop skills and/or memory.
-import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
-import { detectNodeClaudePlacement } from "../../agents/cli-runner/prepare-claude.js";
 import { prepareConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
-import { selectAgentHarness } from "../../agents/harness/selection.js";
-import { agentHarnessExposesOpenClawTools } from "../../agents/harness/tool-surface.js";
-import {
-  isCliRuntimeAliasForProvider,
-  resolveCliRuntimeExecutionProvider,
-} from "../../agents/model-runtime-aliases.js";
-import { supportsModelTools } from "../../agents/model-tool-support.js";
 import { resolveSandboxRuntimeStatusAsync } from "../../agents/sandbox/runtime-status.js";
+import { explainToolPolicyAvailability } from "../../agents/tool-availability-explanation.js";
+import { resolveRunToolSurfaceBlock } from "../../agents/tool-availability-session-gates.runtime.js";
 import { isToolAllowedByPolicyName } from "../../agents/tool-policy-match.js";
-import { resolveConfiguredModelCompat } from "../../agents/tools-effective-inventory.js";
 import { getMemoryLearnContribution } from "../../plugins/memory-state.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
+import { listWorkshopDrafts, type WorkshopDraft } from "../../skills/workshop/drafts.js";
 import { WorkshopWriteError } from "../../skills/workshop/library.js";
 import {
   describeWorkshopReviewUndo,
@@ -23,11 +17,8 @@ import {
 import {
   SKILL_AUTHORING_STANDARDS_PROMPT,
   SKILL_DO_NOT_CAPTURE_PROMPT,
+  SKILL_LEARNING_METHOD_PROMPT,
 } from "../../skills/workshop/skill-authoring-standards.js";
-import {
-  resolveAllowedPluginToolNames,
-  resolveSkillWorkshopToolPolicyAvailability,
-} from "../../skills/workshop/tool-policy-diagnostic.js";
 import { applyCommandTextToParams } from "./command-context-rewrite.js";
 import {
   commandReply,
@@ -74,7 +65,8 @@ function buildLearnPrompt(request: string, media: LearnMedia): string {
   }
   if (media.workshop) {
     lines.push(
-      `Write ${memory ? "skills " : ""}with skill_workshop: list and view related skills first, patch the one that covers this class of task, and create a new skill only when none does. When related skills cover the same class of task, merge them into one umbrella skill: patch the survivor, then archive the rest with absorbed_into. Put reusable scripts under scripts/ and reference them from the step that runs them. Pass a short reason.`,
+      `Write ${memory ? "skills " : ""}with skill_workshop: list and view related skills first, and make the fewest changes that cover what you found. Put reusable scripts under scripts/ and reference them from the step that runs them. Pass a short reason.`,
+      SKILL_LEARNING_METHOD_PROMPT,
     );
   }
   lines.push(...media.memoryGuidance);
@@ -91,6 +83,26 @@ function buildLearnPrompt(request: string, media: LearnMedia): string {
   return lines.join("\n");
 }
 
+/**
+ * Builds the /learn drafts turn over the drafts the command selected. The agent proposes and
+ * the user approves: nothing is saved until the user answers, and undecided drafts stay.
+ */
+function buildDraftReviewPrompt(drafts: readonly WorkshopDraft[], focus: string): string {
+  const listed = drafts.map((draft) => ({ id: draft.id, skill: draft.skillName }));
+  return [
+    "The user asked you to review Skill Workshop drafts: changes background reviews proposed but did not apply.",
+    `Drafts to review (JSON): ${JSON.stringify(listed)}. Review only these.`,
+    ...(focus ? [`User focus (JSON string): ${JSON.stringify(focus)}`] : []),
+    "",
+    "View each draft with skill_workshop action=view draft=<id>, and view the live skill it would change. Judge the drafts together by the method below: most are local fixes, and related drafts merge into one change.",
+    SKILL_LEARNING_METHOD_PROMPT,
+    "Do not save anything yet. Show the user each change you would make (the skill, what changes, which drafts it uses) and each draft you would drop and why, then ask which to save.",
+    "When the user answers, save the approved changes with create or patch and a short reason, discard the drafts the user approved or rejected, and leave drafts the user did not decide on for a later review.",
+    "",
+    SKILL_AUTHORING_STANDARDS_PROMPT,
+  ].join("\n");
+}
+
 const LEARN_COMMAND_PREFIX = "/learn";
 const SKILL_WORKSHOP_TOOL_NAME = "skill_workshop";
 const SKILL_WORKSHOP_UNAVAILABLE_REPLY =
@@ -101,7 +113,13 @@ const LEARN_UNAVAILABLE_REPLY =
 // Only this exact form undoes; any other "/learn undo ..." text stays a learn request.
 const UNDO_PATTERN = /^undo\s+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 
-type LearnCommand = { kind: "learn"; request: string } | { kind: "undo"; reviewId: string };
+// "/learn drafts [skill] [focus]" reviews drafts; other text after "drafts" is a learn request.
+const DRAFTS_PATTERN = /^drafts(?:[\s;:,]+(.*))?$/is;
+
+type LearnCommand =
+  | { kind: "learn"; request: string }
+  | { kind: "undo"; reviewId: string }
+  | { kind: "drafts"; args: string };
 
 function parseLearnCommand(raw: string): LearnCommand | null {
   const request = matchSlashCommandToken(raw, LEARN_COMMAND_PREFIX);
@@ -109,7 +127,31 @@ function parseLearnCommand(raw: string): LearnCommand | null {
     return null;
   }
   const reviewId = UNDO_PATTERN.exec(request)?.[1];
-  return reviewId ? { kind: "undo", reviewId: reviewId.toLowerCase() } : { kind: "learn", request };
+  if (reviewId) {
+    return { kind: "undo", reviewId: reviewId.toLowerCase() };
+  }
+  const drafts = DRAFTS_PATTERN.exec(request);
+  if (drafts) {
+    return { kind: "drafts", args: drafts[1]?.trim() ?? "" };
+  }
+  return { kind: "learn", request };
+}
+
+/**
+ * Selects the drafts a /learn drafts turn reviews. A first word naming a drafted skill narrows
+ * the review to that skill's drafts; the rest is the user's focus.
+ */
+async function startDraftReview(params: HandleCommandsParams, args: string) {
+  const drafts = await listWorkshopDrafts(params.cfg, params.agentId);
+  const [first = ""] = args.split(/\s+/, 1);
+  const skill = drafts.some((draft) => draft.skillName === first) ? first : undefined;
+  const selected = skill ? drafts.filter((draft) => draft.skillName === skill) : drafts;
+  if (selected.length === 0) {
+    return commandReply("No Skill Workshop drafts are waiting for review.");
+  }
+  const focus = (skill ? args.slice(first.length) : args).replace(/^[\s;:,]+/, "").trim();
+  applyCommandTextToParams(params, buildDraftReviewPrompt(selected, focus));
+  return { shouldContinue: true };
 }
 
 /**
@@ -146,55 +188,16 @@ async function resolveLearnMedia(params: HandleCommandsParams): Promise<LearnMed
   }
 
   try {
-    const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
-    const runtimeOverride = targetSessionEntry?.agentRuntimeOverride;
-    const cliProvider = isCliRuntimeAliasForProvider({
-      provider: params.provider,
-      runtime: runtimeOverride,
-      cfg: params.cfg,
-    })
-      ? runtimeOverride
-      : resolveCliRuntimeExecutionProvider({
-          provider: params.provider,
-          cfg: params.cfg,
-          agentId: params.agentId,
-          modelId: params.model,
-          authProfileId: targetSessionEntry?.authProfileOverride,
-        });
-    if (cliProvider) {
-      const cliBackend = resolveCliBackendConfig(cliProvider, params.cfg, {
-        agentId: params.agentId,
-      });
-      if (!cliBackend?.bundleMcp) {
-        return NO_LEARN_MEDIA;
-      }
-      if (
-        detectNodeClaudePlacement({
-          backendId: cliBackend.id,
-          execHost: targetSessionEntry?.execHost,
-          execNode: targetSessionEntry?.execNode,
-        })
-      ) {
-        return NO_LEARN_MEDIA;
-      }
-    } else {
-      const harness = selectAgentHarness({
-        provider: params.provider,
-        modelId: params.model,
+    if (
+      resolveRunToolSurfaceBlock({
         config: params.cfg,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
-      });
-      if (!agentHarnessExposesOpenClawTools(harness.id)) {
-        return NO_LEARN_MEDIA;
-      }
-    }
-    const modelCompat = resolveConfiguredModelCompat({
-      cfg: params.cfg,
-      modelProvider: params.provider,
-      modelId: params.model,
-    });
-    if (modelCompat && !supportsModelTools({ compat: modelCompat })) {
+        provider: params.provider,
+        model: params.model,
+        sessionEntry: params.sessionStore?.[params.sessionKey] ?? params.sessionEntry,
+      })
+    ) {
       return NO_LEARN_MEDIA;
     }
     const capabilityProfile = await prepareConversationCapabilityProfile({
@@ -216,20 +219,23 @@ async function resolveLearnMedia(params: HandleCommandsParams): Promise<LearnMed
       groupId: params.sessionEntry?.groupId,
       groupChannel: params.sessionEntry?.groupChannel ?? params.ctx.GroupChannel,
       groupSpace: params.sessionEntry?.space ?? params.ctx.GroupSpace,
+      // Manifest tool-profile grants (for example a memory plugin's tools) match real runs.
+      pluginMetadataSnapshot: await resolvePluginMetadataSnapshotAsync({ config: params.cfg }),
     });
-    const workshop =
-      runtimeAllows(SKILL_WORKSHOP_TOOL_NAME) &&
-      resolveSkillWorkshopToolPolicyAvailability({
-        config: params.cfg,
-        conversationCapabilityProfile: capabilityProfile,
-      }).available;
-    const memoryTools = memoryLearn
-      ? resolveAllowedPluginToolNames({
+    const allowedNames = (toolNames: readonly string[], pluginId?: string) =>
+      new Set(
+        explainToolPolicyAvailability({
           config: params.cfg,
           conversationCapabilityProfile: capabilityProfile,
-          pluginId: memoryLearn.pluginId,
-          toolNames: memoryLearn.toolNames.filter(runtimeAllows),
+          toolNames: toolNames.filter(runtimeAllows),
+          ...(pluginId ? { pluginId } : {}),
         })
+          .filter((tool) => tool.available)
+          .map((tool) => tool.name),
+      );
+    const workshop = allowedNames([SKILL_WORKSHOP_TOOL_NAME]).size > 0;
+    const memoryTools = memoryLearn
+      ? allowedNames(memoryLearn.toolNames, memoryLearn.pluginId)
       : new Set<string>();
     const memoryGuidance =
       memoryLearn && memoryTools.size > 0
@@ -298,6 +304,11 @@ export const handleLearnCommand: CommandHandler = defineAuthorizedTextCommand(
       return commandReply(
         getMemoryLearnContribution() ? LEARN_UNAVAILABLE_REPLY : SKILL_WORKSHOP_UNAVAILABLE_REPLY,
       );
+    }
+    if (command.kind === "drafts") {
+      return media.workshop
+        ? startDraftReview(params, command.args)
+        : commandReply(SKILL_WORKSHOP_UNAVAILABLE_REPLY);
     }
 
     applyCommandTextToParams(params, buildLearnPrompt(command.request, media));

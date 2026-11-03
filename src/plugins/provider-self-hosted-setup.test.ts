@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { cancelTrackedResponse } from "../../test/helpers/provider-http.js";
-import type { ModelDefinitionConfig } from "../config/types.models.js";
+import { buildCatalogModel as expectedModel } from "../plugin-sdk/provider-catalog.test-support.js";
 import { discoverOpenAICompatibleLocalModels } from "./provider-self-hosted-discovery.js";
 import { configureOpenAICompatibleSelfHostedProviderNonInteractive } from "./provider-self-hosted-setup.js";
 import type { ProviderAuthMethodNonInteractiveContext } from "./types.js";
@@ -97,22 +97,6 @@ function expectNoCredentialWrites(ctx: ProviderAuthMethodNonInteractiveContext) 
   expect(upsertAuthProfileWithLockOrThrow).not.toHaveBeenCalled();
   expect(ctx.runtime.error).not.toHaveBeenCalled();
   expect(ctx.runtime.exit).not.toHaveBeenCalled();
-}
-
-function expectedModel(
-  id: string,
-  overrides: Partial<ModelDefinitionConfig> = {},
-): ModelDefinitionConfig {
-  return {
-    id,
-    name: id,
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128000,
-    maxTokens: 8192,
-    ...overrides,
-  };
 }
 
 function readPrimaryModel(config: Awaited<ReturnType<typeof configureSelfHostedTestProvider>>) {

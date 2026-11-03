@@ -26,6 +26,7 @@ import { SESSIONS_LIST_OWNER_LIMIT } from "../shared/session-list-limits.js";
 import type { SessionOwnerFacetIdentity } from "../shared/session-types.js";
 import { sortAndLimitBy } from "../shared/sort-and-limit.js";
 import { resolveUserProfileReference } from "../state/user-profile-list.js";
+import type { UserProfileIdentity } from "../state/user-profiles.types.js";
 import { buildControlUiResourcePath } from "./control-ui-contract.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import {
@@ -259,6 +260,31 @@ export function projectSessionParticipants(
   return participants;
 }
 
+/** Match canonical owners or profile participants, never mentions or display-reference prefixes. */
+export function filterSessionEntriesByProfile<T extends { entry: SessionEntry }>(params: {
+  entries: T[];
+  profile: UserProfileIdentity | undefined;
+}): T[] {
+  const profile = params.profile;
+  if (!profile) {
+    return [];
+  }
+  return params.entries.filter(({ entry }) => {
+    const owner = entry.owner?.actor;
+    const ownerId = owner
+      ? owner.type === "human"
+        ? normalizeOptionalString(owner.id)
+        : undefined
+      : sessionCreatorProfileId(entry.createdActor);
+    return (
+      (ownerId !== undefined && profile.aliases.has(ownerId)) ||
+      (entry.participants ?? []).some(
+        ({ identity }) => identity.type === "profile" && profile.aliases.has(identity.id),
+      )
+    );
+  });
+}
+
 /** Participation, creation, and responsibility are associations, never access grants. */
 export function projectSessionPeople(
   entry: SessionEntry,
@@ -301,10 +327,13 @@ export function resolveSessionListProfileReference(
   if (identities.get(reference) && (!allowedProfileIds || allowedProfileIds.has(exact))) {
     return ok(exact);
   }
-  const prefix = /^[0-9a-f]{8,32}$/.test(reference);
+  // Compare retained IDs directly; normalizing each association allocates per visible row.
+  const prefix = /^[0-9a-f]{8,32}$/.test(reference)
+    ? new RegExp(`^-*${reference.split("").join("-*")}`, "i")
+    : undefined;
   const matches = new Set<string>();
   const matchesReference = (id: string | undefined) => {
-    if (id && prefix && id.replaceAll("-", "").toLowerCase().startsWith(reference)) {
+    if (id && prefix?.test(id)) {
       matches.add(resolveSessionProfileId(id, identities));
     }
     return id === reference;

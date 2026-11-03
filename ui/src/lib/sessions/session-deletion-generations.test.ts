@@ -35,7 +35,7 @@ describe("session deletion generation ownership", () => {
     },
   );
 
-  it("uses the admitted bootstrap list to establish a fresh replacement", async () => {
+  it("uses the first admitted bootstrap list to establish a fresh replacement", async () => {
     const coordinator = createConnectionBootstrapCoordinator();
     const h = createSessionDeletionHarness(coordinator);
     const synchronize = () =>
@@ -49,7 +49,6 @@ describe("session deletion generation ownership", () => {
       stop();
       coordinator.reset();
     });
-    await h.refresh();
     h.publish(false);
     coordinator.setForegroundRoute(undefined);
     h.publish(true);

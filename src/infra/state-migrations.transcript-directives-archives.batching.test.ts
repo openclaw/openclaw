@@ -70,6 +70,9 @@ function fixture(count = 3) {
   });
   const authority = {
     signal: new AbortController().signal,
+    assertCurrent(): void {
+      authority.assertOwned();
+    },
     assertOwned() {
       checks += 1;
       if (checks === failAtCheck) {
@@ -360,7 +363,12 @@ describe("canonical transcript archive batch transactions", () => {
     await f.rewrite({ onArchive: undefined });
     const transactionsBeforeRecovery = f.transactions;
     const warnings = await runWithAgentDatabaseMaintenanceAuthority(
-      { signal: new AbortController().signal, assertOwned() {}, assertOwnedInTransaction() {} },
+      {
+        signal: new AbortController().signal,
+        assertCurrent() {},
+        assertOwned() {},
+        assertOwnedInTransaction() {},
+      },
       f.pathname,
       () =>
         recoverTranscriptArchivePublication({

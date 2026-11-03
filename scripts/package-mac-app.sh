@@ -6,6 +6,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/plistbuddy.sh"
+source "$ROOT_DIR/scripts/lib/mac-pnpm.sh"
 source "$ROOT_DIR/scripts/lib/swift-toolchain.sh"
 source "$ROOT_DIR/scripts/lib/build-metadata.sh"
 source "$ROOT_DIR/scripts/lib/mac-app-bundle.sh"
@@ -197,30 +198,6 @@ trap cleanup_package_build EXIT
 trap 'interrupt_package_build INT 130' INT
 trap 'interrupt_package_build TERM 143' TERM
 trap 'interrupt_package_build HUP 129' HUP
-
-PNPM_CMD=()
-
-resolve_pnpm_cmd() {
-  if command -v corepack >/dev/null 2>&1 && (cd "$ROOT_DIR" && corepack pnpm --version >/dev/null 2>&1); then
-    PNPM_CMD=(corepack pnpm)
-    return 0
-  fi
-
-  if command -v pnpm >/dev/null 2>&1; then
-    PNPM_CMD=(pnpm)
-    return 0
-  fi
-
-  echo "ERROR: pnpm is not on PATH and corepack pnpm is unavailable. Install pnpm or run with Node/Corepack on PATH." >&2
-  exit 1
-}
-
-run_pnpm() {
-  if [[ "${#PNPM_CMD[@]}" -eq 0 ]]; then
-    resolve_pnpm_cmd
-  fi
-  (cd "$ROOT_DIR" && "${PNPM_CMD[@]}" "$@")
-}
 
 merge_framework_machos() {
   local primary="$1"

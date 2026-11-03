@@ -175,6 +175,11 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
     },
     { id: "amazon-bedrock", enabledByDefault: true, providers: ["amazon-bedrock"] },
     { id: "brave", origin: "global", contracts: { webSearchProviders: ["brave"] } },
+    {
+      id: "default-search",
+      enabledByDefault: true,
+      contracts: { webSearchProviders: ["default-search"] },
+    },
     { id: "codex", providers: ["codex"], activation: { onAgentHarnesses: ["codex"] } },
     {
       id: "activation-only-channel-plugin",
@@ -1005,6 +1010,38 @@ describe("resolveGatewayStartupPluginPlanFromRegistry", () => {
       config: effectiveConfig,
       activationSourceConfig: rawConfig,
       expected: ["browser", "brave"],
+    });
+  });
+
+  it.each([
+    [
+      "starts explicitly enabled search owners for auto-detection",
+      undefined,
+      ["browser", "brave", "memory-core"],
+    ],
+    ["keeps search owners lazy behind a pinned provider", "tavily", ["browser", "memory-core"]],
+    ["keeps search owners lazy while web search is disabled", false, ["browser", "memory-core"]],
+  ] as const)("%s", (_name, search, expected) => {
+    expectStartupPluginIds({
+      config: {
+        channels: {},
+        ...(search === undefined
+          ? {}
+          : {
+              tools: {
+                web: { search: search === false ? { enabled: false } : { provider: search } },
+              },
+            }),
+        plugins: { entries: { brave: { enabled: true } } },
+      } as OpenClawConfig,
+      expected,
+    });
+  });
+
+  it("keeps default-enabled search owners lazy for auto-detection", () => {
+    expectStartupPluginIds({
+      config: { channels: {} } as OpenClawConfig,
+      expected: ["browser", "memory-core"],
     });
   });
 

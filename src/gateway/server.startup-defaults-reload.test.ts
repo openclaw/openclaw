@@ -8,20 +8,13 @@ import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { startGatewayServerCore } from "./server-start.js";
 import { captureGatewayKernel } from "./server.capture-kernel.test-support.js";
+import { createPluginEnabledGatewayTestEnv } from "./test-helpers.env.js";
 
 it("preserves computed defaults from cold startup through a live config reload", async () => {
   const token = "provider-defaults-startup-token";
   const state = await createOpenClawTestState({
     label: "provider-defaults-reload",
-    env: {
-      OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-    },
+    env: createPluginEnabledGatewayTestEnv(),
   });
   const sourceConfig: OpenClawConfig = {
     agents: {

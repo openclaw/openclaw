@@ -26,6 +26,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { runWithModelFallback } from "../../model-fallback-runner.js";
 import { resolveRequesterToolPolicies } from "../../requester-tool-policy.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
 import {
@@ -234,6 +235,18 @@ describe("persisted subagent capability lookups", () => {
       expect(retained.read()).toBe(1);
       writeEntries(storePath, { [key]: makeEntry("nested-child", { spawnDepth: 2 }) });
       expect(() => retained.read()).toThrow("Session capability metadata changed");
+      const run = vi.fn(async () => retained.read());
+      await expect(
+        runWithModelFallback({
+          cfg: undefined,
+          provider: "fixture-provider",
+          model: "fixture-model",
+          manifestPlugins: [],
+          fallbacksOverride: ["fixture-next/fixture-model"],
+          run,
+        }),
+      ).rejects.toThrow("Session capability metadata changed");
+      expect(run).toHaveBeenCalledOnce();
     } finally {
       retained.release();
     }
@@ -243,7 +256,7 @@ describe("persisted subagent capability lookups", () => {
     "bounds capability refresh after %s intervening publications",
     async (changes) => {
       const { storePath, key } = fixture("subagent-capability-refresh-");
-      const entry = makeEntry("child", { inheritedToolDeny: ["exec"], model: "initial" });
+      const entry = makeEntry("child", { inheritedToolDeny: ["exec"] });
       writeEntries(storePath, { [key]: entry });
       const readEntries = sessionEntryReads.withSessionEntriesFromStoreInWorker;
       let reads = 0;
@@ -252,7 +265,9 @@ describe("persisted subagent capability lookups", () => {
           const result = await readEntries(...args);
           reads += 1;
           if (reads <= changes) {
-            writeEntries(storePath, { [key]: { ...entry, model: "updated-" + reads } });
+            writeEntries(storePath, {
+              [key]: { ...entry, inheritedToolDeny: ["exec", "tool-" + reads] },
+            });
           }
           return result;
         },
@@ -264,7 +279,7 @@ describe("persisted subagent capability lookups", () => {
       } else {
         const prepared = await pending;
         try {
-          expect(prepared.read()).toEqual(["exec"]);
+          expect(prepared.read()).toEqual(["exec", "tool-1"]);
           writeEntries(storePath, { [key]: { ...entry, inheritedToolDeny: ["exec", "write"] } });
           // A new preparation may read new policy, but cannot renew this retained guard.
           await expect(withPreparedRead(() => prepared.read())).rejects.toThrow(

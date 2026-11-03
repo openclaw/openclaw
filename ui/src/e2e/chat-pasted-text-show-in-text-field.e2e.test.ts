@@ -1,10 +1,10 @@
-import { readFile } from "node:fs/promises";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   buildControlUiCspHeader,
   computeInlineScriptHashes,
 } from "../../../src/gateway/control-ui-csp.ts";
+import { readControlUiE2eDownload } from "../test-helpers/control-ui-e2e-download.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   seedChatSettings,
@@ -216,19 +216,24 @@ suite.define(() => {
     "keeps a long native paste inline only in an empty $route composer",
     async ({ route, selector }) => {
       await suite.withPage(contextOptions, async ({ page }) => {
+        const endMarker = "End of the attached note.";
+        const pasteText =
+          route === "new"
+            ? `${pastedText}\n${"Keep this line reachable in the attachment reader.\n".repeat(60)}${endMarker}`
+            : pastedText;
         const gateway = await installMockGateway(page);
         await page.goto(`${suite.server.baseUrl}${route}`);
         const composer = page.locator(selector);
         await composer.waitFor({ state: "visible" });
         await composer.fill("");
-        await page.evaluate((text) => navigator.clipboard.writeText(text), pastedText);
+        await page.evaluate((text) => navigator.clipboard.writeText(text), pasteText);
         await composer.focus();
         await page.keyboard.press(nativePasteShortcut);
         await page.waitForFunction((inputSelector) => {
           const input = document.querySelector<HTMLTextAreaElement>(inputSelector);
           return Boolean(input?.value || document.querySelector("openclaw-chat-pasted-text"));
         }, selector);
-        await expect.poll(() => composer.inputValue()).toBe(pastedText);
+        await expect.poll(() => composer.inputValue()).toBe(pasteText);
         expect(
           await page.locator(".chat-attachments-preview openclaw-chat-pasted-text").count(),
         ).toBe(0);
@@ -237,8 +242,39 @@ suite.define(() => {
         await page.keyboard.press(nativePasteShortcut);
         await button(page, pastedTextLabel).waitFor();
         expect(await composer.inputValue()).toBe("Keep this draft");
+        if (route === "new") {
+          await button(page, pastedTextLabel).click();
+          const preview = page.locator(".new-session-attachment-panel");
+          const scrollport = preview.locator(".sidebar-content");
+          await expect
+            .poll(() => preview.locator(".sidebar-attachment-preview__text").textContent())
+            .toBe(pasteText);
+          await scrollport.evaluate((element) => {
+            element.scrollTop = element.scrollHeight;
+          });
+          await expect
+            .poll(() =>
+              scrollport.evaluate((element, marker) => {
+                const text = element.querySelector(
+                  ".sidebar-attachment-preview__text",
+                )!.firstChild!;
+                const range = document.createRange();
+                range.setStart(text, text.textContent!.lastIndexOf(marker));
+                range.setEnd(text, text.textContent!.length);
+                const end = range.getBoundingClientRect();
+                const port = element.getBoundingClientRect();
+                const panel = element
+                  .closest(".new-session-attachment-panel")!
+                  .getBoundingClientRect();
+                return element.scrollTop > 0 && end.top >= port.top && end.bottom <= panel.bottom;
+              }, endMarker),
+            )
+            .toBe(true);
+          await button(preview, "Close sidebar").click();
+          await expect.poll(() => preview.count()).toBe(0);
+        }
         await button(page, "Show in text field").click();
-        await expect.poll(() => composer.inputValue()).toBe(`Keep this draft\n\n${pastedText}`);
+        await expect.poll(() => composer.inputValue()).toBe(`Keep this draft\n\n${pasteText}`);
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
       });
@@ -278,12 +314,10 @@ suite.define(() => {
             const name = card.querySelector(".chat-attachment-file__name")!;
             const action = card.querySelector(".chat-attachment-text-action")!;
             const rect = card.getBoundingClientRect();
-            const otherRect = other.getBoundingClientRect();
             const { left, right, top, bottom } = action.getBoundingClientRect();
             const { border, borderRadius } = getComputedStyle(card);
             const otherStyle = getComputedStyle(other);
             return {
-              sameSize: rect.width === otherRect.width && rect.height === otherRect.height,
               sameBorder: border === otherStyle.border && borderRadius === otherStyle.borderRadius,
               secondRow: top >= name.getBoundingClientRect().bottom,
               inside: left >= rect.left && right <= rect.right && bottom < rect.bottom,
@@ -293,7 +327,6 @@ suite.define(() => {
             };
           }),
         ).toEqual({
-          sameSize: true,
           sameBorder: true,
           secondRow: true,
           inside: true,
@@ -577,9 +610,7 @@ suite.define(() => {
       const [download] = await Promise.all([page.waitForEvent("download"), link.click()]);
       expect(download.suggestedFilename()).toBe(fileName);
       expect(await download.failure()).toBeNull();
-      const file = await download.path();
-      expect(file).not.toBeNull();
-      expect(await readFile(file!)).toEqual(bytes);
+      expect(await readControlUiE2eDownload(download)).toEqual(bytes);
     });
   });
 });

@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { writeJsonFile as writeJson } from "../../test/helpers/temp-repo.js";
 import type { PluginModuleLoaderFactory } from "../plugins/plugin-module-loader-cache.js";
 import type { OpenClawPluginApi } from "../plugins/types.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
@@ -37,11 +38,6 @@ afterEach(() => {
 
 function stubPluginModuleLoaderJitiFactory(createJiti: PluginModuleLoaderFactory): void {
   loaderGlobals[pluginModuleLoaderJitiFactoryOverrideKey] = createJiti;
-}
-
-function writeJson(targetPath: string, value: unknown): void {
-  fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-  fs.writeFileSync(targetPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
 function writeFile(root: string, name: string, contents: string) {

@@ -75,11 +75,15 @@ async function settled(page: Page, expected = () => true) {
   flush();
   await page.updateComplete;
 }
-async function click(page: Page, label: string, expected?: () => boolean) {
-  const buttons = [...page.querySelectorAll("button")];
-  const button = buttons.find((entry) => entry.textContent?.trim() === label);
+function findButton(root: HTMLElement, label: string) {
+  const button = [...root.querySelectorAll("button")].find(
+    (entry) => entry.textContent?.trim() === label,
+  );
   expect(button).toBeDefined();
-  button!.click();
+  return button!;
+}
+async function click(page: Page, label: string, expected?: () => boolean) {
+  findButton(page, label).click();
   await settled(page, expected);
 }
 
@@ -95,11 +99,11 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it.each([true, false])("activates alternatives only on success (%s)", async (ok) => {
+it.each([true, false])("presents a held activation and its outcome (success=%s)", async (ok) => {
   const setup = createDeferred<SetupAutoResult>();
+  const activation = createDeferred<{ ok: boolean; error?: string }>();
   const request = setupRequest(() => setup.promise, {
-    "openclaw.setup.activate": () =>
-      ok ? { ok, modelRef: alternative.modelRef } : { ok, error: "Local model is offline" },
+    "openclaw.setup.activate": () => activation.promise,
   });
   const { context } = setupContext(request);
   const { page } = await mountPage(context);
@@ -110,24 +114,7 @@ it.each([true, false])("activates alternatives only on success (%s)", async (ok)
   await settled(page);
   text(page).toContain("Using ChatGPT (openai/gpt-5.5) on gateway.test");
   text(page).toContain(reply.reply);
-  await click(page, "Local model");
-  expectRpc(request, "activate", { kind: "ollama" });
-  text(page).toContain(ok ? "Using Local model (ollama/qwen3) on gateway.test" : "Using ChatGPT");
-  if (!ok) {
-    alertText(page).toContain("Local model is offline");
-  }
-  expect(request.mock.calls.filter(([method]) => method === "openclaw.setup.auto")).toHaveLength(1);
-});
-
-it.each([true, false])("presents a held activation and its outcome (success=%s)", async (ok) => {
-  const activation = createDeferred<{ ok: boolean; error?: string }>();
-  const request = setupRequest(() => result(), {
-    "openclaw.setup.activate": () => activation.promise,
-  });
-  const { page } = await mountSetup(request);
-  const button = [...page.querySelectorAll("button")].find(
-    (entry) => entry.textContent?.trim() === "Local model",
-  )!;
+  const button = findButton(page, "Local model");
   button.click();
   button.click();
   await waitForFast(() => expect(page.querySelector(".custodian-setup__progress")).not.toBeNull());
@@ -142,7 +129,9 @@ it.each([true, false])("presents a held activation and its outcome (success=%s)"
   ).toBe(true);
   activation.resolve(ok ? { ok } : { ok, error: "Local model is offline" });
   await settled(page);
-  text(page).toContain(ok ? "Using Local model" : "Using ChatGPT");
+  expectRpc(request, "activate", { kind: "ollama" });
+  text(page).toContain(ok ? "Using Local model (ollama/qwen3) on gateway.test" : "Using ChatGPT");
+  expect(request.mock.calls.filter(([method]) => method === "openclaw.setup.auto")).toHaveLength(1);
   if (!ok) {
     alertText(page).toContain("Local model is offline");
   }
@@ -154,9 +143,7 @@ it("retires a held activation when the visible store is replaced", async () => {
     "openclaw.setup.activate": () => activation.promise,
   });
   const { page } = await mountSetup(request);
-  [...page.querySelectorAll("button")]
-    .find((entry) => entry.textContent?.trim() === "Local model")!
-    .click();
+  findButton(page, "Local model").click();
   await waitForFast(() => expect(page.store.autoSetup.pending).toBe(true));
   page.store = new CustodianSessionStore();
   await settled(page, () => page.store.autoSetup.ready);
@@ -205,9 +192,7 @@ it("activates an alternative from the standalone compact onboarding surface", as
   provider.append(surface);
   await surface.updateComplete;
   await waitForFast(() => expect(surface.textContent).toContain("Using ChatGPT"));
-  [...surface.querySelectorAll("button")]
-    .find((entry) => entry.textContent?.trim() === "Local model")!
-    .click();
+  findButton(surface, "Local model").click();
   await waitForFast(() => expect(surface.textContent).toContain("Using Local model"));
   expectRpc(request, "activate", { kind: "ollama" });
 });
@@ -344,9 +329,7 @@ it("retires a user retry on same-client ownership replacement", async () => {
     return calls === 2 ? retry.promise : { ...result(), selected: alternative };
   });
   const { page, setGatewayToken, setGatewaySnapshot } = await mountSetup(request);
-  [...page.querySelectorAll("button")]
-    .find((entry) => entry.textContent?.trim() === "Retry")!
-    .click();
+  findButton(page, "Retry").click();
   await waitForSolid(() => expect(page.querySelector(".custodian-setup__progress")).not.toBeNull());
   setGatewayToken("synthetic-replacement-owner");
   setGatewaySnapshot({});
@@ -377,22 +360,20 @@ it("keeps cancellation available during an answer and resumes after protected ca
   );
   const { page } = await mountSetup(request);
   await click(page, "Sign in with ChatGPT");
-  const getButton = (label: string) =>
-    [...page.querySelectorAll("button")].find((entry) => entry.textContent?.trim() === label)!;
-  getButton("Yes").click();
-  await waitForSolid(() => expect(getButton("Yes").disabled).toBe(true));
-  expect(getButton("Cancel").disabled).toBe(false);
-  getButton("Cancel").click();
-  await waitForSolid(() => expect(getButton("Cancel").disabled).toBe(true));
+  findButton(page, "Yes").click();
+  await waitForSolid(() => expect(findButton(page, "Yes").disabled).toBe(true));
+  expect(findButton(page, "Cancel").disabled).toBe(false);
+  findButton(page, "Cancel").click();
+  await waitForSolid(() => expect(findButton(page, "Cancel").disabled).toBe(true));
   cancellation.resolve({ status: "running" });
-  await waitForSolid(() => expect(getButton("Cancel").disabled).toBe(false));
+  await waitForSolid(() => expect(findButton(page, "Cancel").disabled).toBe(false));
   answer.resolve({
     done: false,
     step: { id: "confirm-again", type: "confirm", message: "Ready now?" },
   });
   await settled(page);
   text(page).toContain("Ready now?");
-  expect(getButton("Yes").disabled).toBe(false);
+  expect(findButton(page, "Yes").disabled).toBe(false);
 });
 
 it("persists dismissal across a new custodian store", async () => {

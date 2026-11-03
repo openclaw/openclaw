@@ -11,13 +11,12 @@ registerMcpAppEnglish();
 const CatalogView = lazy(() => import("./mcp-app-catalog-view.tsx"), {
   export: "McpAppCatalogView",
 });
-type McpAppCatalogProps = {
+export function McpAppCatalog(props: {
   sessionKey?: string;
   agentId?: string;
   surface?: "global" | "thread" | "sidebar" | "file";
   filePath?: string;
-};
-export function McpAppCatalog(props: McpAppCatalogProps) {
+}) {
   let host!: HTMLElement;
   const context = useApplication();
   const surface = () => props.surface ?? "global";

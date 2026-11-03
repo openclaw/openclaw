@@ -343,7 +343,11 @@ function registerToolSearchCatalog(params: {
     params.mode === "reuse" &&
     existing &&
     metadata &&
-    stableStringify(metadata.toolExecutionAllow) === stableStringify(toolExecutionAllow) &&
+    (metadata.toolExecutionAllow === toolExecutionAllow ||
+      (metadata.toolExecutionAllow !== undefined &&
+        toolExecutionAllow !== undefined &&
+        metadata.toolExecutionAllow.length === toolExecutionAllow.length &&
+        metadata.toolExecutionAllow.every((name, index) => name === toolExecutionAllow[index]))) &&
     sameCatalogDescriptors(existing.entries, entries)
       ? rebindCatalogExecutors(existing.entries, entries)
       : undefined;

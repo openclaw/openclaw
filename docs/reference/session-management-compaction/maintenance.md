@@ -36,6 +36,16 @@ that export or fail because of it. Retry the deletion after resolving the file
 error to publish the retained archive, even if the deleted session is already
 absent.
 
+Archive admission allows at most 128 outstanding claims. Archive and transcript
+reconciliation tasks request retirement after three minutes. Their FIFO slots,
+database leases, and temporary files remain owned until the worker physically
+exits. If retirement is still pending after five seconds, a Gateway running under
+a verified native service can request a fresh-process restart. A second recovery
+within five minutes is report-only; unmanaged or unsupported deployments are
+always report-only. If archiving reports overload, let pending work finish before
+retrying. If it remains stuck without automatic recovery, restart through the
+service owner before retrying.
+
 Archiving a session changes its visibility and retention metadata while keeping
 its transcript rows in SQLite. Converting reclaimed history to a transcript
 archive replaces those rows with a compressed transcript blob in SQLite's
@@ -153,16 +163,51 @@ until the history is restored.
 Low-level synchronous transcript APIs instead return a
 restore-required error while a transcript is cold; their callers must await
 asynchronous restoration first. Storage and usage inventory can count cold
-transcripts without restoring them. Text search excludes cold transcript contents and
+transcripts without restoring them. Usage refreshes and exact-range reports read
+verified archive chunks directly when existing rollups cannot answer the request;
+they keep transcript payloads cold and store results in the existing usage cache.
+Full raw-transcript reads, exact event matching, message-presence checks, and
+latest-assistant text reads also consume verified archive chunks without restoring
+payloads. Matching preserves newest-first selection and active-branch membership;
+a stale active projection still uses restoration and reconciliation. These reads
+verify the entire archive before returning a result, so corruption cannot look
+like missing history. Repeated reads decompress the archive again rather than
+keeping its payload resident. Conversation writes, indexed chat pages, model-context
+reads, and activity-summary generation retain their existing restoration path.
+Archive/unarchive notifications check recap freshness before loading a transcript;
+a current recap does not trigger restoration. New activity and terminal runs still
+request recap work.
+Text search excludes cold transcript contents and
 reports how many archived transcripts it excluded; restored transcripts become
 searchable again. Import and cross-store repair refuse cold transcripts that
 have not been restored, rather than copying an incomplete history.
 
 After restoration, the running Gateway keeps that transcript hot for 24 hours
 to avoid repeatedly extracting recently viewed history. This cooldown is local
-to the process and resets when it restarts. Transcripts whose uncompressed
-JSONL, including restoration metadata, exceeds 64 MiB stay in SQLite; the bound
-limits restoration memory and worker time.
+to the process and resets when it restarts. Large transcript windows use ordered,
+independently checksummed chunks. Each uncompressed JSONL file, including its
+restoration metadata, is bounded to 64 MiB. Reads and restores process one chunk
+at a time; the window leaves SQLite only after every chunk is durable and verified.
+Restore preparation verifies the chunk manifest and compressed hashes before write
+admission. The transaction decodes each chunk once, consuming one record at a time;
+invalid records or mismatched totals roll back the entire restoration. Restore
+requests share the existing archive-worker queue across agent stores.
+One large window can exceed the normal background byte budget because its removal
+is atomic; the worker yields between windows.
+
+Selection reads window metadata and transcript endpoints. The worker checks event sizes
+only when preparation reaches that window within the pass's byte budget, outside the
+batch selection transaction. Commit protection reads selected window owners and
+cross-generation references; unrelated canonical entries stay encoded.
+
+Before building an archive, the worker checks the largest original event. An event above
+64 MiB skips envelope preparation and leaves the transcript in SQLite, while
+the batch continues with later candidates. The warning includes the session ID
+and a lower bound on the envelope bytes. Oversized rejections have a process-local
+24-hour cooldown to avoid repeated size checks and warnings; after a restart,
+the worker checks the stored byte counts again without unpacking known-oversized
+events. An event whose encoded envelope and restore metadata cannot fit one chunk
+also stays in SQLite. Existing single-file archives remain readable unchanged.
 
 The worker writes, syncs, and verifies an immutable archive before a guarded
 transaction records its location and removes the corresponding transcript
@@ -182,7 +227,7 @@ passes, including later passes with no new archive candidates. Physical
 database size therefore shrinks gradually; readers can delay reclamation.
 Use Doctor's offline `compact` operation when a full rewrite is needed.
 
-If an archive is missing or its recorded size or hash does not match, reading
+If any archive chunk is missing or its recorded size or hash does not match, reading
 or restoring that transcript fails explicitly. OpenClaw does not substitute an
 empty transcript. Restore the matching file from a backup, or restore a
 complete supported database backup; a checksum cannot reconstruct deleted
@@ -202,7 +247,10 @@ Settings reports these moves separately from newly archived transcripts.
 Direct database replication needs the `cold/` files as well; see
 [backing up cold transcripts](/install/backups#cold-transcript-backups).
 
-Cold storage uses [agent schema 20](/reference/database-schemas/agent-schema-history#cold-transcript-storage).
+Cold storage began with [agent schema 20](/reference/database-schemas/agent-schema-history#cold-transcript-storage);
+chunked windows require [agent schema 37](/reference/database-schemas/agent-schema-history#agent-schema-37).
+The forward migration adds an empty chunk table without rewriting existing
+transcript or archive rows. PostgreSQL agent stores use the same chunk contract.
 Use the supported update path and a verified pre-upgrade backup. An older
 build must not open a database after cold payloads have moved out of its event
 table, so lowering the schema marker is not a downgrade procedure.
