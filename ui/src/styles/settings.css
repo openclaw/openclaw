@@ -842,7 +842,7 @@ openclaw-appearance-background .settings-background-preview .session-background_
   justify-content: flex-start;
 }
 
-@media (min-width: 769px) {
+@media not all and (max-width: 640px) {
   .settings-row--stacked-on-narrow,
   .settings-row--stacked-on-narrow .settings-row__control {
     width: auto;
@@ -1424,7 +1424,7 @@ textarea.settings-input {
 /* Narrow screens stack the Recovery row, so its actions get the full width.
    Whole buttons wrap and grow to fill each line; the primary retry leads on
    its own line. Wide screens keep the single right-aligned row. */
-@media (max-width: 768px) {
+@media (max-width: 640px) {
   .updates-recovery-actions {
     display: flex;
     flex-wrap: wrap;
@@ -1668,6 +1668,32 @@ textarea.settings-input {
   }
 }
 
+/* Between the phone layout and the docked sidebar, every settings page shares one gutter and
+   one column, so the title stays put from page to page. */
+@media not all and (max-width: 640px) {
+  .shell--settings.shell--mobile-nav:not(.shell--floating-header) {
+    .content:not(.content--custodian) {
+      --content-inline-padding: var(--space-6);
+      --settings-header-inline-padding: 0;
+      padding: var(--space-6) var(--space-6) var(--space-7);
+    }
+
+    .content .content-header,
+    .settings-page,
+    .settings-workspace,
+    .config-content,
+    .config-lead,
+    .config-content-callout {
+      max-width: none;
+      padding-inline: 0;
+    }
+
+    .content .content-header .page-title {
+      font-size: 26px;
+    }
+  }
+}
+
 @media (max-width: 640px) {
   .settings-page {
     padding-inline: var(--space-3);
@@ -1821,15 +1847,10 @@ textarea.settings-input {
     }
 
     .settings-section__help-button {
-      position: relative;
-      min-width: 16px;
-      min-height: 16px;
-
-      &::after {
-        content: "";
-        position: absolute;
-        inset: -14px;
-      }
+      /* Reserve the touch target inline so it cannot overflow or cover adjacent actions. */
+      min-width: 44px;
+      min-height: 44px;
+      margin-block: -14px;
     }
 
     .settings-segmented > .settings-segmented__btn {

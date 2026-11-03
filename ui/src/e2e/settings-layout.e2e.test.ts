@@ -63,10 +63,8 @@ const settingsGuidanceLinks: ReadonlyArray<{ route: string; container: string; s
 const sectionAlignmentRoutes = [
   "appearance",
   "cloud-workers",
-  "labs",
   "mcp",
   "secrets",
-  "security",
   "talk",
   "updates",
 ] as const;
@@ -653,6 +651,78 @@ suite.define(() => {
         }
         await page.setViewportSize({ height: 900, width: 1440 });
       }
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("gives Settings one gutter and no new session between phone and sidebar", async () => {
+    const context = await suite.browser.newContext({
+      ...createDarkDesktopControlUiContextOptions(),
+      viewport: { height: 900, width: 768 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, { methodResponses: emptyDeviceResponses });
+
+    try {
+      for (const route of ["appearance", "devices"] as const) {
+        const pathname = pathForRoute(route);
+        await page.goto(new URL(pathname, suite.server.baseUrl).toString());
+        await waitForControlUiRoute(page, { pathname, routeId: route });
+        await page.locator("main.content .page-title").waitFor();
+        for (const width of [641, 768, 900]) {
+          await page.setViewportSize({ height: 900, width });
+          await expect
+            .poll(
+              () =>
+                page.evaluate(() => {
+                  const title = document.querySelector<HTMLElement>("main.content .page-title");
+                  const rect = title?.getBoundingClientRect();
+                  return rect && [Math.round(rect.left), Math.round(rect.top)];
+                }),
+              { message: `${route} at ${width}` },
+            )
+            .toEqual([24, 86]);
+          expect(await page.locator(".topbar-search").count()).toBe(1);
+          expect(await page.locator(".header-new-session").count()).toBe(0);
+        }
+        await page.setViewportSize({ height: 900, width: 768 });
+      }
+
+      const pathname = pathForRoute("usage");
+      await page.goto(new URL(pathname, suite.server.baseUrl).toString());
+      await waitForControlUiRoute(page, { pathname, routeId: "usage" });
+      await page.locator(".header-new-session").waitFor();
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("switches the floating header, rows and controls together at 640", async () => {
+    const context = await suite.browser.newContext({
+      ...createDarkDesktopControlUiContextOptions(),
+      viewport: { height: 900, width: 640 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page);
+
+    try {
+      const pathname = pathForRoute("connection");
+      await page.goto(new URL(pathname, suite.server.baseUrl).toString());
+      await waitForControlUiRoute(page, { pathname, routeId: "connection" });
+      await page.locator(".settings-row--stacked-on-narrow").first().waitFor();
+      const read = () =>
+        page.evaluate(() => ({
+          floating: document.querySelector(".shell--floating-header") !== null,
+          control: getComputedStyle(document.documentElement)
+            .getPropertyValue("--settings-control-height")
+            .trim(),
+          row: getComputedStyle(document.querySelector(".settings-row--stacked-on-narrow")!)
+            .flexDirection,
+        }));
+      await expect.poll(read).toEqual({ floating: true, control: "38px", row: "column" });
+      await page.setViewportSize({ height: 900, width: 641 });
+      await expect.poll(read).toEqual({ floating: false, control: "32px", row: "row" });
     } finally {
       await context.close();
     }

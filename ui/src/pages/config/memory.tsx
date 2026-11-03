@@ -6,7 +6,6 @@ import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
   LearnMoreLink,
-  SettingsDefaultDescription,
   SettingsRow,
   SettingsSection,
   SettingsStatus,
@@ -202,15 +201,6 @@ function EngineSection(props: MemoryViewProps) {
   );
   const blocked = () =>
     props.engineDisabled || (props.catalog.kind === "ready" && !props.catalog.mutationAllowed);
-  const defaultEngine = () =>
-    engineOptions().find((option) => option.id === DEFAULT_MEMORY_ENGINE_ID)?.label ??
-    t("memoryPage.engine.openClawMemory");
-  const defaultDescription = (
-    <SettingsDefaultDescription
-      value={defaultEngine()}
-      overridden={props.engineSelection.kind !== "default"}
-    />
-  );
   const available = () => engineOptions().length > 0;
   const options = () => [
     ...engineOptions().map((option) => ({
@@ -229,11 +219,7 @@ function EngineSection(props: MemoryViewProps) {
       <>
         <SettingsRow
           title={t("memoryPage.engine.rowTitle")}
-          description={
-            <>
-              {!available() && t("memoryPage.engine.catalogUnavailable")} {defaultDescription}
-            </>
-          }
+          description={<>{!available() && t("memoryPage.engine.catalogUnavailable")}</>}
           control={
             available() ? (
               <SettingsSelect
@@ -450,7 +436,7 @@ export function Memory(props: MemoryViewProps) {
           <div class="hub-page-header__title">
             <h1 class="page-title">{t("tabs.memory")}</h1>
             <div class="page-subtitle">
-              {t("memoryPage.intro")} <LearnMoreLink url={MEMORY_DOCS_URL} />
+              {t("subtitles.memory")} <LearnMoreLink url={MEMORY_DOCS_URL} />
             </div>
           </div>
           <div class="hub-page-header__tabs">

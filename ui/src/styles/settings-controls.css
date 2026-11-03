@@ -173,7 +173,7 @@ select.settings-select:not([multiple]) {
   }
 }
 
-@media (max-width: 768px) {
+@media (max-width: 640px) {
   .settings-segmented__btn[data-compact-label] {
     font-size: 0;
   }
