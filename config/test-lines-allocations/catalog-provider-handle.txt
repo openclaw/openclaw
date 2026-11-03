@@ -1,0 +1,2 @@
+# Catalog normalization preserves identity changes and transport fallback.
+80
