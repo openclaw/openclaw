@@ -16,6 +16,43 @@ function hasItem(list: unknown, index: string | number): boolean {
   return Array.isArray(list) && typeof index === "number" && index < list.length;
 }
 
+const sameValue = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right);
+
+/**
+ * A secret inside a list takes its row from the form, which shows the draft, while the patch
+ * rewrites the saved list. They agree only when the draft's list is the saved one or only adds
+ * rows after it; otherwise the value could land on another row.
+ */
+export function secretRowMatchesSavedList(params: {
+  base: Record<string, unknown>;
+  draft: Record<string, unknown> | null | undefined;
+  path: ConfigPath;
+}): boolean {
+  let base: unknown = params.base;
+  let draft: unknown = params.draft ?? params.base;
+  for (const [index, segment] of params.path.entries()) {
+    if (Array.isArray(base) || Array.isArray(draft)) {
+      // A list only the draft has goes out whole from the draft, so its rows are the form's.
+      if (!Array.isArray(base) || sameValue(base, draft)) {
+        return true;
+      }
+      const saved = base;
+      return (
+        typeof segment === "number" &&
+        Array.isArray(draft) &&
+        draft.length > saved.length &&
+        saved.every((item, row) => sameValue(item, (draft as unknown[])[row]))
+      );
+    }
+    if (index === params.path.length - 1) {
+      return true;
+    }
+    base = isRecord(base) ? base[String(segment)] : undefined;
+    draft = isRecord(draft) ? draft[String(segment)] : undefined;
+  }
+  return true;
+}
+
 /**
  * A merge patch carrying one field and nothing else from the saved config.
  * Whatever the saved config doesn't hold yet comes from the draft, so a new entry

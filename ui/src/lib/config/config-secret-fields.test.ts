@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import { showToast } from "../toast.ts";
 import { configSecretFields } from "./config-secret-fields.ts";
+
+vi.mock("../toast.ts", () => ({ showToast: vi.fn() }));
 
 function fixture() {
   const routerListeners = new Set<(state: { location: { pathname: string } }) => void>();
@@ -85,6 +88,30 @@ describe("configSecretFields", () => {
     }
     expect(fields.read(path)).toBeUndefined();
     expect(changed).toHaveBeenCalled();
+    // The edit is dropped, and the person is told which field lost it.
+    expect(vi.mocked(showToast)).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "configForm.secretDroppedOnConnectionChange" }),
+    );
+  });
+
+  it("refuses a secret in a list while unsaved rows moved under it", async () => {
+    const { context, fields, request } = fixture();
+    const rulePath = ["hooks", "rules", 0, "token"];
+    const rules = [{ name: "a" }, { name: "b" }];
+    // SAFETY: The fixture's snapshot and draft only need the members the owner reads.
+    context.runtimeConfig.state.configSnapshot = {
+      hash: "h1",
+      config: { hooks: { rules } },
+    } as never;
+    // Row a was removed in the draft, so the field typed on row 0 belongs to b.
+    context.runtimeConfig.state.configForm = { hooks: { rules: [rules[1]] } } as never;
+    fields.hold(rulePath, "abc", "Token");
+    await expect(fields.save(rulePath, "abc")).resolves.toEqual({
+      ok: false,
+      error: "configForm.draftRejected",
+    });
+    expect(request).not.toHaveBeenCalled();
+    expect(fields.read(rulePath)).toBe("abc");
   });
 
   it("retries once against the latest config after a conflict", async () => {

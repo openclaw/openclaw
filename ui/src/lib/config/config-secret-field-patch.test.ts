@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildSecretFieldPatch } from "./config-secret-field-patch.ts";
+import { buildSecretFieldPatch, secretRowMatchesSavedList } from "./config-secret-field-patch.ts";
 
 describe("buildSecretFieldPatch", () => {
   const base = {
@@ -74,5 +74,50 @@ describe("buildSecretFieldPatch", () => {
     ).toEqual({
       hooks: { rules: [{ token: "__OPENCLAW_REDACTED__" }, { name: "new", token: "abc" }] },
     });
+  });
+});
+
+describe("secretRowMatchesSavedList", () => {
+  const R = "__OPENCLAW_REDACTED__";
+  const base = {
+    hooks: {
+      rules: [
+        { name: "a", token: R },
+        { name: "b", token: R },
+      ],
+    },
+  };
+  const at = (rules: unknown[], row: number) =>
+    secretRowMatchesSavedList({
+      base,
+      draft: { hooks: { rules } },
+      path: ["hooks", "rules", row, "token"],
+    });
+
+  it("matches while the draft's list is the saved one, or only adds rows", () => {
+    expect(at(base.hooks.rules, 1)).toBe(true);
+    expect(at([...base.hooks.rules, { name: "c" }], 2)).toBe(true);
+    expect(at([...base.hooks.rules, { name: "c" }], 1)).toBe(true);
+    expect(
+      secretRowMatchesSavedList({ base, draft: null, path: ["hooks", "rules", 0, "token"] }),
+    ).toBe(true);
+    expect(
+      secretRowMatchesSavedList({ base, draft: base, path: ["gateway", "auth", "token"] }),
+    ).toBe(true);
+  });
+
+  it("refuses when unsaved rows moved, vanished or changed", () => {
+    const [a, b] = base.hooks.rules;
+    expect(
+      secretRowMatchesSavedList({
+        base,
+        draft: { hooks: {} },
+        path: ["hooks", "rules", 0, "token"],
+      }),
+    ).toBe(false);
+    expect(at([b], 0)).toBe(false);
+    expect(at([b, a], 0)).toBe(false);
+    expect(at([{ name: "new" }, a, b], 1)).toBe(false);
+    expect(at([{ ...a, name: "renamed" }, b], 1)).toBe(false);
   });
 });

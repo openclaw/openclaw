@@ -9,7 +9,7 @@ import { REDACTED_SENTINEL } from "../config-form-utils.ts";
 import { listen } from "../reactive/listener.ts";
 import { showToast } from "../toast.ts";
 import type { ConfigPatchAck } from "./config-draft-model.ts";
-import { buildSecretFieldPatch } from "./config-secret-field-patch.ts";
+import { buildSecretFieldPatch, secretRowMatchesSavedList } from "./config-secret-field-patch.ts";
 import { resolveEditableSnapshotConfig } from "./config-state-model.ts";
 
 type ConfigPath = Array<string | number>;
@@ -99,11 +99,24 @@ function createConfigSecretFields(context: SecretFieldsContext): ConfigSecretFie
   };
   const currentScope = () => gatewayPresentationScope(context.gateway).key;
   // A different Gateway never inherits a secret typed for the previous one.
+  // The edit is dropped, never carried over, and the person is told which field lost it.
   const syncScope = () => {
     if (entries.size > 0 && scope !== currentScope()) {
+      const dropped = [...entries.values()];
       entries.clear();
       notify();
+      for (const entry of dropped) {
+        showToast({
+          message: t("configForm.secretDroppedOnConnectionChange", { field: entry.label }),
+          durationMs: 12_000,
+        });
+      }
     }
+  };
+  // Draft rows that moved or vanished would put the value on another saved row.
+  const rowsMatch = (path: ConfigPath) => {
+    const base = resolveEditableSnapshotConfig(runtime.state.configSnapshot);
+    return !base || secretRowMatchesSavedList({ base, draft: runtime.state.configForm, path });
   };
   const writable = (path: ConfigPath) =>
     canWriteOver(runtime.state.configSnapshot, path, entries.get(fieldKey(path))?.baseline);
@@ -184,7 +197,9 @@ function createConfigSecretFields(context: SecretFieldsContext): ConfigSecretFie
       {
         // Checked against the snapshot the patch is built from, right before it goes out.
         canDispatch: () =>
-          (scope === undefined || scope === currentScope()) && writable(path) !== false,
+          (scope === undefined || scope === currentScope()) &&
+          writable(path) !== false &&
+          rowsMatch(path),
         configWriteAck: (ack) => ack,
       },
     );
@@ -229,6 +244,9 @@ function createConfigSecretFields(context: SecretFieldsContext): ConfigSecretFie
       if (writable(path) === false) {
         return refuse(path);
       }
+      if (!rowsMatch(path)) {
+        return { ok: false, error: t("configForm.draftRejected") };
+      }
       let result = await write(path, value);
       if (!result.ok && result.reason === "conflict") {
         // Only this field goes out, so the latest saved config can safely take it.
@@ -237,6 +255,9 @@ function createConfigSecretFields(context: SecretFieldsContext): ConfigSecretFie
       }
       if (!result.ok && writable(path) === false) {
         return refuse(path);
+      }
+      if (!result.ok && !rowsMatch(path)) {
+        return { ok: false, error: t("configForm.draftRejected") };
       }
       return result.ok ? { ok: true } : { ok: false, error: result.error };
     },
