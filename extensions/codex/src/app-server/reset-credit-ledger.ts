@@ -269,5 +269,65 @@ export function createCodexResetCreditLedger(deps: LedgerDeps) {
     return readLedger(await deps.store.lookup(CODEX_RESET_LEDGER_KEY));
   }
 
-  return { claim, settle, inspect };
+  /**
+   * Cross-process waiters observe the durable result rather than acquiring an
+   * independent spend claim. The caller MUST recheck authorized account health
+   * after "settled"; it is not a credential or replay authorization.
+   */
+  async function waitForPending(options: {
+    timeoutMs: number;
+    signal?: AbortSignal;
+    pollMs?: number;
+  }): Promise<"settled" | "uncertain" | "timeout" | "aborted"> {
+    const { timeoutMs, signal } = options;
+    const pollMs = options.pollMs ?? 200;
+    if (
+      !Number.isSafeInteger(timeoutMs) ||
+      timeoutMs < 1 ||
+      timeoutMs > 60_000 ||
+      !Number.isSafeInteger(pollMs) ||
+      pollMs < 10 ||
+      pollMs > 5_000
+    ) {
+      return "timeout";
+    }
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (signal?.aborted) {
+        return "aborted";
+      }
+      const ledger = await inspect();
+      const pending = ledger.attempts.find(
+        (a) => a.status === "pending" || a.status === "uncertain",
+      );
+      if (!pending) {
+        return "settled";
+      }
+      if (pending.status === "uncertain") {
+        return "uncertain";
+      }
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        break;
+      }
+      await new Promise<void>((resolve) => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const finish = () => {
+          if (timer) {
+            clearTimeout(timer);
+          }
+          signal?.removeEventListener("abort", finish);
+          resolve();
+        };
+        timer = setTimeout(finish, Math.min(pollMs, remaining));
+        signal?.addEventListener("abort", finish, { once: true });
+        if (signal?.aborted) {
+          finish();
+        }
+      });
+    }
+    return signal?.aborted ? "aborted" : "timeout";
+  }
+
+  return { claim, settle, inspect, waitForPending };
 }
