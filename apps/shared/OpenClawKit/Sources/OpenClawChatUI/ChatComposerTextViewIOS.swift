@@ -7,6 +7,7 @@ import UniformTypeIdentifiers
 @MainActor
 struct ChatComposerTextViewIOS: UIViewRepresentable {
     @Environment(\.isEnabled) private var effectiveEnvironmentEnabled
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Binding var text: String
     var focusRequested: Bool
     var isEnabled: Bool
@@ -30,6 +31,7 @@ struct ChatComposerTextViewIOS: UIViewRepresentable {
         let textView = ChatComposerTextViewIOSFactory.makeConfiguredTextView()
         textView.delegate = context.coordinator
         textView.text = self.text
+        self.configureFont(textView)
         self.configureInputHandlers(textView)
         return textView
     }
@@ -38,6 +40,7 @@ struct ChatComposerTextViewIOS: UIViewRepresentable {
         context.coordinator.parent = self
         context.coordinator.scheduleInteractionUpdate(textView)
         self.configureInputHandlers(textView)
+        self.configureFont(textView)
 
         // Publishing native input can re-enter SwiftUI with the previous rendered value.
         guard !context.coordinator.isReportingTextChange else { return }
@@ -62,6 +65,15 @@ struct ChatComposerTextViewIOS: UIViewRepresentable {
         textView.onHistoryUp = self.onHistoryUp
         textView.onHistoryDown = self.onHistoryDown
         textView.onPasteImageAttachment = self.onPasteImageAttachment
+    }
+
+    private func configureFont(_ textView: ChatComposerUITextView) {
+        let traits = UITraitCollection(preferredContentSizeCategory: UIContentSizeCategory(self.dynamicTypeSize))
+        let font = OpenClawChatTypography.bodyUIFont(compatibleWith: traits)
+        if textView.font != font {
+            textView.font = font
+            textView.invalidateIntrinsicContentSize()
+        }
     }
 
     func sizeThatFits(
