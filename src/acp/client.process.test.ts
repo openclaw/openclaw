@@ -17,11 +17,18 @@ const handshakeError = {
   message: "fixture newSession failure",
   data: { stage: "newSession" },
 };
-type ServerMode = "handshake-failure" | "SIGTERM" | "exit-0" | "quit-7" | "eof-pending";
+type ServerMode =
+  | "handshake-failure"
+  | "initialize-cancel"
+  | "newSession-cancel"
+  | "SIGTERM"
+  | "exit-0"
+  | "quit-7"
+  | "eof-pending";
 
 afterEach(() => fixture.cleanup());
 
-function runCase(mode: ServerMode, code = 0, diagnostic?: string) {
+function runCase(mode: ServerMode, code = 0, diagnostic?: string, signal?: "SIGINT" | "SIGTERM") {
   return fixture.run(async () => {
     const handshake = mode === "handshake-failure";
     const dir = fixture.createTempDir("openclaw-acp-client-process-test-");
@@ -39,9 +46,10 @@ const mode = ${JSON.stringify(mode)};
 const send = (payload) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...payload }) + "\\n");
 fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
 let pendingPromptReply;
-if (mode === "handshake-failure" || mode === "quit-7" || mode === "eof-pending") {
+if (mode === "handshake-failure" || mode === "quit-7" || mode === "eof-pending" || mode.endsWith("-cancel")) {
   process.on("SIGTERM", () => {
     fs.writeFileSync(${JSON.stringify(termFile)}, "SIGTERM");
+    if (mode.endsWith("-cancel")) process.exit(0);
     if (mode === "quit-7") process.exit(7);
     pendingPromptReply?.();
     pendingPromptReply = undefined;
@@ -53,10 +61,18 @@ lines.on("line", (line) => {
   const reply = (payload) => send({ id, ...payload });
   const endTurn = () => reply({ result: { stopReason: "end_turn" } });
   if (method === "initialize") {
+    if (mode === "initialize-cancel") {
+      process.stderr.write("ACP_FIXTURE_PENDING:initialize\\n");
+      return;
+    }
     reply({ result: {
       protocolVersion: params.protocolVersion, agentCapabilities: { loadSession: false },
     } });
   } else if (method === "session/new") {
+    if (mode === "newSession-cancel") {
+      process.stderr.write("ACP_FIXTURE_PENDING:newSession\\n");
+      return;
+    }
     reply(mode === "handshake-failure" ? { error: ${JSON.stringify(handshakeError)} }
       : { result: { sessionId: "process-status-fixture" } });
   } else if (method === "session/prompt") {
@@ -115,7 +131,13 @@ setInterval(() => {}, 60_000);
       timeoutMs: handshake ? 18_000 : DEFAULT_VITEST_TEST_TIMEOUT_MS - 20_000,
       signal: cancellation.signal,
       onReady(child) {
-        child.stderr!.on("data", stderr.append);
+        child.stderr!.on("data", (chunk) => {
+          stderr.append(chunk);
+          if (signal && !quitSent && stderr.text().includes("ACP_FIXTURE_PENDING:")) {
+            quitSent = true;
+            child.kill(signal);
+          }
+        });
         child.stdin!.on("error", (error) => cancellation.abort(error));
         child.stdout!.on("data", (chunk) => {
           stdout.append(chunk);
@@ -143,11 +165,15 @@ setInterval(() => {}, 60_000);
     if (handshake) {
       const error = JSON.parse(stdout.text().match(/ACP_CLIENT_ERROR:(.*)/)?.[1] ?? "null");
       expect(error).toMatchObject({ name: "RequestError", ...handshakeError, serverAlive: false });
+    } else if (signal) {
+      expect(quitSent).toBe(true);
+      expect(stdout.text()).not.toContain("OpenClaw ACP client");
+      expect(stdout.text()).not.toContain("> ");
     } else {
       expect(await readFile(promptFile, "utf8")).toBe("status marker");
       expect(stdout.text()).toContain(`Agent exited with ${diagnostic}`);
     }
-    if (clientQuits || (handshake && process.platform !== "win32")) {
+    if (clientQuits || signal || (handshake && process.platform !== "win32")) {
       expect(await readFile(termFile, "utf8")).toBe("SIGTERM");
     }
     if (eof) {
@@ -172,4 +198,13 @@ it.skipIf(process.platform === "win32").each([
   { mode: "eof-pending", code: 0, diagnostic: "signal SIGKILL" },
 ] as const)("preserves the client outcome for $mode", ({ mode, code, diagnostic }) =>
   runCase(mode, code, diagnostic),
+);
+
+it.skipIf(process.platform === "win32").each([
+  { mode: "initialize-cancel", signal: "SIGTERM", code: 143 },
+  { mode: "initialize-cancel", signal: "SIGINT", code: 130 },
+  { mode: "newSession-cancel", signal: "SIGTERM", code: 143 },
+  { mode: "newSession-cancel", signal: "SIGINT", code: 130 },
+] as const)("joins startup cancellation for $mode and $signal", ({ mode, signal, code }) =>
+  runCase(mode, code, undefined, signal),
 );
