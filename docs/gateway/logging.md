@@ -139,6 +139,25 @@ their structured file-log record, with cause and error-code details when
 available. Long summaries are truncated. The record retains its write timing
 and store fields.
 
+### Slow SQLite transcript hydration
+
+Slow `sessions.transcript-hydration.*` read transactions and
+`session.lifecycle.delete` include native statement attribution on the existing
+slow-hold warning. `statementExecutionMs` sums native execution calls;
+`callbackOtherMs` is the remaining callback wall time, including JavaScript,
+statement preparation, GC, and scheduling. Neither is CPU time. Hydration also
+reports `callbackGcMs` from the current isolate's native GC sampler on Node;
+absence means unavailable, while zero means no observed collection. GC overlaps
+the statement/other wall times and must not be added to them or subtracted from
+both. It cannot locate a collection within a particular statement.
+
+The warning keeps thread identity before its bounded statement summary. The
+summary ranks five groups by total time from at most 32 retained SQL shapes plus
+an overflow group, reports omitted-group count, and identifies the globally
+slowest statement separately. Statement IDs hash normalized SQL; no SQL text or
+bindings are logged. `rows` counts returned rows (`get`/`all`) or consumed iterator
+rows, including early close; it is not the number of rows SQLite scanned.
+
 ### SQLite snapshot cleanup
 
 Failed removal of a temporary read-only SQLite snapshot is recorded once by its
