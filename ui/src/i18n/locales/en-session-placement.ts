@@ -10,7 +10,7 @@ const enSessionPlacement = {
     moveShowLess: "Show less",
     placementFactService: "Service",
     placementFactProfile: "Profile",
-    placementFactMachine: "Machine",
+    placementFactMachine: "Device",
     placementFactState: "State",
     placementFactDisk: "Disk",
     placementFactInference: "Inference",
@@ -26,7 +26,7 @@ const enSessionPlacement = {
     continueOnGatewayMenu: "Continue on Gateway…",
     continueOnGatewayAction: "Continue on Gateway",
     continueOnGatewayConfirm:
-      'Continue "{session}" on the Gateway? Unsynced device files and in-flight work may be lost. OpenClaw will continue from the last Gateway-synced state and will not replay the interrupted turn.',
+      'Continue "{session}" on the Gateway? Unsynced device files and in-flight work may be lost. OpenClaw will continue from the last Gateway-synced state and will not replay the interrupted reply.',
     discardWorkspaceDeleteConfirm:
       'The device for "{session}" is offline and has changes that have not synced. Reconnect it to keep those changes. To delete this session now, discard unsynced device files and in-flight work, then retry deletion once. The last Gateway-synced workspace is used; interrupted work is not replayed.',
     discardWorkspaceDeleteAction: "Discard changes and delete",
@@ -54,14 +54,14 @@ const enSessionPlacement = {
     repositoryWorkerRequiredPrompt:
       "Choose a device or cloud worker before sending another message in this repository session.",
     moveSessionRequiredProfile:
-      "This Gateway requires its configured worker profile and machine defaults.",
+      "This Gateway requires its configured cloud profile and device defaults.",
     moveToCloud: "Move to cloud…",
     retrySessionMove: "Retry move",
-    moveLocalSessionBusy: "Wait for the active turn to finish before moving this session.",
+    moveLocalSessionBusy: "Wait for the active reply to finish before moving this session.",
     moveSessionWorkspaceRequired:
       "Moving requires a session-owned worktree or repository workspace.",
     dispatchLocalSessionNotice:
-      "Continue the same session on a configured cloud worker or device. The active turn must finish before moving.",
+      "Continue the same session on a configured cloud worker or device. The active reply must finish before moving.",
     dispatchSessionTitle: "Choose a worker",
     dispatchSessionDescription: 'Choose where "{session}" should continue.',
     dispatchSessionNotice:
@@ -72,10 +72,10 @@ const enSessionPlacement = {
     syncingCloudFiles: "Worker · syncing files",
     syncingCloudFilesComposer: "Send now; your message starts automatically after workspace sync.",
     syncingCloudFilesDetail: "Finalizing worker workspace",
-    failedSessionTitle: "Runner failed",
+    failedSessionTitle: "Couldn’t continue the session",
     failedSessionRestartPrompt: "Restart this session to continue.",
-    failedSessionStopPrompt: "Stop the failed worker before restarting this session.",
-    failedSessionUnavailable: "This session's runner failed and cannot accept messages.",
+    failedSessionStopPrompt: "Stop this session before restarting it.",
+    failedSessionUnavailable: "This session stopped and can’t accept messages.",
   },
 } satisfies TranslationMap;
 

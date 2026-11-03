@@ -426,7 +426,7 @@ it.each(["open", "closed", "reopened"] as const)(
     expect(toast.active).toBe(state === "open");
     expect(toast.toast).toEqual(
       state === "open"
-        ? expect.objectContaining({ message: "Could not download this image. Try again." })
+        ? expect.objectContaining({ message: "Couldn’t download this image. Try again." })
         : null,
     );
     if (state === "open") {

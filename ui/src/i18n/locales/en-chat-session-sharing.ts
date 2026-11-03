@@ -17,7 +17,7 @@ const catalog = {
       copyPublicLink: "Copy public link",
       publicConfirmTitle: "Make this session world-readable?",
       publicConfirmMessage:
-        "Anyone with the public link can read existing and future conversation text, including all user and assistant messages and progress, plus tool names, short argument summaries, and images without signing in.\n\nReasoning, tool-result text, and private dashboards stay hidden. Image contents are not redacted. Review for private information before sharing; disabling access cannot recall downloaded copies.",
+        "Anyone with the public link can read existing and future conversation text, including all user and agent messages and progress, plus tool names, short argument summaries, and images without signing in.\n\nReasoning, tool-result text, and private dashboards stay hidden. Image contents are not redacted. Review for private information before sharing; disabling access cannot recall downloaded copies.",
       publicConfirmEnable: "Make public",
       publicEnabled: "Public access enabled. Copy the public link from Session sharing.",
       publicDisabled: "Public access disabled.",

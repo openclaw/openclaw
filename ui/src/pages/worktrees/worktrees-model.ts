@@ -178,7 +178,8 @@ export class WorktreesModel {
       }
       const reason = result.snapshotError ?? "";
       const force = await showConfirmDialog({
-        message: t("worktrees.confirmForceDelete", { error: reason }),
+        title: t("worktrees.confirmForceDelete"),
+        message: t("worktrees.confirmForceDeleteDetails", { error: reason }),
         confirmLabel: t("common.delete"),
         danger: true,
       });

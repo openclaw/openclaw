@@ -5,15 +5,15 @@ const enChatGoals = {
   chat: {
     goals: {
       composerMode: "Goal",
-      sessionChanged: "Conversation changed. Cancel and select Goal again.",
+      sessionChanged: "Session changed. Cancel and select Goal again.",
       start: "Start goal",
       save: "Save goal",
       startHint: "Describe what “done” looks like.",
-      editHint: "Save without starting a run.",
+      editHint: "Save without starting a reply.",
       objectivePlaceholder: "What should this goal accomplish?",
       cancel: "Cancel goal entry",
       offline: "Reconnect to manage goals.",
-      busy: "Wait for this run to finish. Your draft is unchanged.",
+      busy: "Wait for this reply to finish. Your draft is unchanged.",
       annotationUnsupported: "Send or remove browser annotations first. Your draft is unchanged.",
       actionPending: "Wait for the pending goal action.",
       invalidRequest: "Goal update is invalid. Check the objective and try again.",
@@ -32,7 +32,7 @@ const enChatGoals = {
       admissionImmutable: "Retry or remove this request. Editing requires a new goal.",
       replaceTitle: "Replace goal objective?",
       replaceMessage: "Update the objective without changing the goal’s status.",
-      replaceRunningMessage: "Interrupt this turn, update the objective, then resume the goal.",
+      replaceRunningMessage: "Interrupt this reply, update the objective, then resume the goal.",
       replace: "Replace objective",
       goalChanged:
         "The goal changed while confirmation was open. Review it and try again. Your draft is unchanged.",

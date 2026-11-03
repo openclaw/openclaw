@@ -148,7 +148,7 @@ suite.define(() => {
       }
       for (let attempt = 0; attempt < failures; attempt += 1) {
         await downloadButton.click();
-        const error = page.getByText("Could not download this image. Try again.", {
+        const error = page.getByText("Couldn’t download this image. Try again.", {
           exact: true,
         });
         await error.waitFor({ state: "visible" });

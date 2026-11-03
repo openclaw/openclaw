@@ -150,7 +150,7 @@ suite.define(() => {
       } else {
         await item
           .getByText(
-            "Your role limits access. Device approval cannot grant administrator access. If you need more access, ask a Gateway administrator to change your role, then reconnect.",
+            "Your role limits access. Device approval cannot grant admin access. If you need more access, ask a Gateway admin to change your role, then reconnect.",
             { exact: true },
           )
           .waitFor();

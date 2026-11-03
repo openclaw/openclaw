@@ -9,22 +9,22 @@ const enSidebarAttention = {
       guidance:
         "This browser has limited access. Manage it with openclaw devices on the Gateway or from Devices on an admin browser.",
       roleGuidance:
-        "Your role limits access. Device approval cannot grant administrator access. If you need more access, ask a Gateway administrator to change your role, then reconnect.",
+        "Your role limits access. Device approval cannot grant admin access. If you need more access, ask a Gateway admin to change your role, then reconnect.",
       roleState: "Access follows your role",
       status: "Limited access",
-      inboxState: "Administrator access required",
+      inboxState: "Admin access required",
       showDetails: "Show limited access details",
       closeDetails: "Close limited access details",
       request: "Request admin",
-      requesting: "Requesting administrator access…",
+      requesting: "Requesting admin access…",
       requestingAction: "Requesting…",
       pending:
         "Approve this browser by running {command} on the Gateway or from Devices on an admin browser. Retry reattaches to the request; Cancel stops waiting.",
       retry: "Retry",
       cancel: "Cancel",
-      rejected: "The administrator access request was rejected.",
-      expired: "The administrator access request expired.",
-      error: "Administrator access request failed: {error}",
+      rejected: "The admin access request was rejected.",
+      expired: "The admin access request expired.",
+      error: "Couldn’t request admin access. Try again. Details: {error}",
     },
   },
   attention: {
@@ -61,7 +61,7 @@ const enSidebarAttention = {
       loading: "Loading mentions…",
       unavailable: "Sign in and connect to the Gateway to see your mentions.",
       refresh: "Refresh mentions",
-      error: "Mentions could not be updated. Refresh or try dismissing again.",
+      error: "Couldn’t update mentions. Refresh or try dismissing again.",
     },
     outbox: {
       conversation: "Conversation",

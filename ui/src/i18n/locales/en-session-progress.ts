@@ -15,7 +15,7 @@ const enSessionProgress = {
       label: "Refresh task progress",
       retry: "Retry progress refresh",
       pending: "Refreshing task progress…",
-      failed: "Could not refresh. Previous update kept.",
+      failed: "Couldn’t refresh progress. Try again. Previous update kept.",
       timeout: "No new update yet. The request may still be running.",
       updated: "Task progress updated",
     },

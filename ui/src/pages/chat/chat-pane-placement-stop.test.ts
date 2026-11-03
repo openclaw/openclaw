@@ -142,8 +142,8 @@ describe("chat pane startup worker copy", () => {
 describe("chat pane worker stop", () => {
   it.each([
     [0, "device", "Runs on device", "Stop device worker…"],
-    [0, "profile", "Runs on Cloud", "Stop cloud worker…"],
-    [2, "profile", "device-service · device-profile", "Stop cloud worker…"],
+    [0, "profile", "Runs on Cloud", "Stop cloud device…"],
+    [2, "profile", "device-service · device-profile", "Stop cloud device…"],
     [3, undefined, "Runs on worker", "Stop worker…"],
   ] as const)("presents startup worker %s/%s", (index, targetKind, label, stopLabel) => {
     const placement = startupPlacements[index];

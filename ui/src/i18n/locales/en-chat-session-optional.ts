@@ -196,7 +196,7 @@ const catalog = {
       undo: "Undo",
       undoing: "Undoing…",
       undone: "Undone",
-      undoError: "Could not undo: {error}",
+      undoError: "Couldn’t undo. Try again. Details: {error}",
     },
     youtube: {
       provider: "YouTube",

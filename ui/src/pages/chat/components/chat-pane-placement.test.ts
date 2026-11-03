@@ -71,7 +71,7 @@ it.each(["profile", "device"] as const)(
 it.each([
   ["available", "starting", "profile", "Runs on device", "Move session…", "Stop device worker…"],
   ["offline", "failed", "profile", "Device offline", "Continue on Gateway…", "Stop device worker…"],
-  [undefined, "failed", "device", "Runs on Cloud", "Move session…", "Stop cloud worker…"],
+  [undefined, "failed", "device", "Runs on Cloud", "Move session…", "Stop cloud device…"],
 ] as const)(
   "renders %s ownership ahead of %s %s startup intent",
   async (status, phase, targetKind, label, moveLabel, stopLabel) => {

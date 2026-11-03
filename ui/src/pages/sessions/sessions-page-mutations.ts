@@ -202,7 +202,7 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
 
   function confirmMutation(
     message: string,
-    options: { confirmLabel?: string; signal?: AbortSignal } = {},
+    options: { title?: string; details?: string; confirmLabel?: string; signal?: AbortSignal } = {},
   ) {
     return showConfirmDialog({
       message,
@@ -357,7 +357,9 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
     const scope = captureRequestScope();
     if (
       !scope ||
-      !(await confirmMutation(t("sessionsView.stopCloudWorkerConfirm", { session: label }), {
+      !(await confirmMutation(t("sessionsView.stopCloudWorkerDescription"), {
+        title: t("sessionsView.stopCloudWorkerConfirm"),
+        details: t("sessionsView.stopCloudWorkerTarget", { session: label }),
         confirmLabel: t("sessionsView.stopCloudWorkerConfirmAction"),
         signal: scope.signal,
       })) ||

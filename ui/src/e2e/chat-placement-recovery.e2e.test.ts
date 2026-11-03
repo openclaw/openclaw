@@ -36,7 +36,7 @@ async function openFailure(page: Page, message: string) {
   await failure.locator("summary").click();
   const details = failure.getByLabel("Error details", { exact: true });
   await details.waitFor();
-  expect(await details.textContent()).toBe(`Runner failed: ${message}`);
+  expect(await details.textContent()).toBe(`Couldn’t continue the session: ${message}`);
   return failure;
 }
 function expectSameSession(page: Page, key: string) {

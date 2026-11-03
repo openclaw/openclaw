@@ -29,7 +29,7 @@ const enSessionOrganization = {
     personalGroupInSection: "In this section",
     personalGroupAdded: "Added",
     personalGroupLoading: "Loading sessions…",
-    personalGroupLoadFailed: "Couldn't load sessions.",
+    personalGroupLoadFailed: "Couldn’t load sessions. Try again.",
     personalGroupRetry: "Try again",
     personalGroupMore: "Showing the most recent matches. Search to find others.",
     personalGroupHint: "Adding a session doesn't move it from its group.",
@@ -171,7 +171,7 @@ const enSessionOrganization = {
     runErrorUnknown: en.sessionsView.runErrorUnknown,
     attentionRequired: en.sessionsView.attentionRequired,
     openSession: en.sessionsView.openSession,
-    openFailed: "Could not open this session. Try again.",
+    openFailed: "Couldn’t open this session. Try again.",
     model: "Model",
     provider: en.sessionsView.provider,
     runtime: "Runtime",
@@ -235,6 +235,8 @@ const enSessionOrganization = {
     newGroupMoveSkipped:
       "Group created, but the move was skipped because the list changed. Move from the row menu.",
     stopCloudWorkerConfirm: sharedSessions.stopCloudWorkerConfirm,
+    stopCloudWorkerDescription: sharedSessions.stopCloudWorkerDescription,
+    stopCloudWorkerTarget: sharedSessions.stopCloudWorkerTarget,
     stopCloudWorkerConfirmAction: sharedSessions.stopCloudWorkerConfirmAction,
     stopCloudWorkerStale:
       'Gateway connection replaced before the cloud worker for "{session}" was stopped. Try again.',
@@ -309,7 +311,7 @@ const enSessionOrganization = {
     moveToGroup: "Move session to a group",
     groupOptions: en.sessionsView.groupOptions,
     newSessionInGroup: en.sessionsView.newSessionInGroup,
-    groupDefaultsFailed: "Could not save the group defaults.",
+    groupDefaultsFailed: "Couldn’t save the group defaults. Try again.",
     groupDefaultsStale: en.sessionsView.groupDefaultsStale,
     renameGroupTitle: 'Rename group "{group}"',
     groupNameLabel: "Group name",
@@ -343,7 +345,9 @@ const enSessionOrganization = {
     restorable: "Restorable",
     restore: "Restore",
     confirmDelete: "Snapshot and delete {name}?",
-    confirmForceDelete: "Snapshot failed: {error}\n\nDelete without a snapshot?",
+    confirmForceDelete: "Delete without a snapshot?",
+    confirmForceDeleteDetails:
+      "Couldn’t create a safety snapshot. Deleting now won’t preserve a snapshot for recovery.\n\nDetails: {error}",
   },
 } satisfies TranslationMap;
 

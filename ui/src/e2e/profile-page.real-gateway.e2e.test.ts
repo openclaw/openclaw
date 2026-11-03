@@ -231,7 +231,7 @@ suite.define(() => {
             const access = page.locator("#settings-profile-access");
             await access
               .getByText(
-                "Your role limits access. Device approval cannot grant administrator access. If you need more access, ask a Gateway administrator to change your role, then reconnect.",
+                "Your role limits access. Device approval cannot grant admin access. If you need more access, ask a Gateway admin to change your role, then reconnect.",
                 { exact: true },
               )
               .waitFor();
