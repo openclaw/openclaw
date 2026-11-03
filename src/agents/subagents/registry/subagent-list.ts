@@ -172,17 +172,11 @@ function buildChildSessionIndex(
   return childSessionsByController;
 }
 
-/**
- * A private parent turn settles its child's delivery once it processes the result.
- * Only recorded visible-final evidence shows the requester's user received it.
- */
+/** Settlement records when a private parent turn consumed the result without user delivery. */
 export function resolveSubagentDeliveryStatus(entry: SubagentRunRecord) {
-  const delivery = entry.delivery;
-  return delivery?.status === "delivered" &&
-    entry.completionTarget === "parent" &&
-    !delivery.requesterVisibleFinal
+  return entry.delivery?.status === "delivered" && entry.delivery.consumedPrivately
     ? "consumed_privately"
-    : delivery?.status;
+    : entry.delivery?.status;
 }
 
 export function buildSubagentList(params: {

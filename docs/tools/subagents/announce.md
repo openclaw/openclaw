@@ -117,10 +117,10 @@ Set `completionTarget: "parent"` on `sessions_spawn` to return the result in a
 private turn of the original requester session. The parent reviews the result,
 continues unfinished work, and settles the reviewed input. Private processing
 may finish silently; it does not by itself satisfy
-an outstanding user reply. Once the private turn processes the result, the run
-records delivery as `delivered`. The parent's later runtime context and the
-`subagents` tool report it as `consumed_privately` instead, unless that turn sent
-its final reply to the source conversation.
+an outstanding user reply. Once the parent turn that processes the result
+finishes, the run records delivery as `delivered`. The parent's later runtime
+context and the `subagents` tool report it as `consumed_privately` instead, unless
+that turn's final reply reached the source conversation.
 OpenClaw does not automatically send the child result, parent final, or
 generated media to a channel. The parent can still choose to send a message
 through its permitted tools. When the requester has no current conversation or

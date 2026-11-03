@@ -9,6 +9,7 @@ import { createDeferredCore } from "../../../shared/deferred.js";
 import * as sessionEntryRuntime from "../announce/subagent-announce-delivery.runtime.js";
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
 import { SUBAGENT_ENDED_REASON_COMPLETE } from "./subagent-lifecycle-events.js";
+import { resolveSubagentDeliveryStatus } from "./subagent-list.js";
 import * as cleanupPolicy from "./subagent-registry-cleanup.js";
 import {
   mutateLifecycleRun,
@@ -167,6 +168,23 @@ export function registerLifecycleDeliveryReceiptCases({
     expect(cleanupBrowserSessionsForLifecycleEnd).not.toHaveBeenCalled();
     expect(warn).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ["parent", undefined, "consumed_privately"],
+    ["parent", true, "delivered"],
+    [undefined, undefined, "delivered"],
+  ] as const)(
+    "settles completionTarget=%s visibleFinal=%s as %s",
+    async (completionTarget, requesterVisibleFinalDelivered, label) => {
+      const { entry, controller } = createReceiptFixture(
+        { delivered: true, path: "direct", requesterVisibleFinalDelivered },
+        "delivered",
+        { completionTarget },
+      );
+      await completeAndJoinCleanup(controller, entry, visibleCompletion);
+      expect(resolveSubagentDeliveryStatus(readLifecycleRun(entry))).toBe(label);
+    },
+  );
 
   it.each<[string, Partial<SubagentAnnounceDeliveryResult>, string, string]>([
     [
