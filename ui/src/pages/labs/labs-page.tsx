@@ -25,7 +25,6 @@ import {
   currentConfigObject,
   resolveEditableSnapshotConfig,
 } from "../../lib/config/config-state-model.ts";
-import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
@@ -310,14 +309,7 @@ export function LabsPage() {
                     <br />
                     {t("labsPage.decisionAssistance.optedIn")}
                   </>
-                ) : null}{" "}
-                <a
-                  href={props.feature.docsUrl}
-                  target={EXTERNAL_LINK_TARGET}
-                  rel={buildExternalLinkRel()}
-                >
-                  {t("labsPage.documentation")}
-                </a>
+                ) : null}
               </>
             }
           />
