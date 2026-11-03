@@ -165,6 +165,26 @@ describe("prepared model catalog view", () => {
     ]);
   });
 
+  it("drops fallback rows for providers whose account discovery was accepted", () => {
+    const cfg: OpenClawConfig = { agents: { defaults: { models: { "qwen/pinned": {} } } } };
+    const captured = {
+      ...snapshot([row("qwen", "live")]),
+      acceptedDiscoveryOrigins: [{ provider: "QWEN" }],
+      staticEntries: [row("qwen", "retired"), row("qwen", "pinned"), row("other", "seed")],
+    };
+    const choices = (acceptedDiscoveryOrigins?: { provider: string }[]) =>
+      prepare({
+        cfg: {},
+        snapshot: { ...captured, acceptedDiscoveryOrigins },
+        view: "default",
+      }).catalog.map(({ provider, id }) => `${provider}/${id}`);
+    expect(choices([{ provider: "QWEN" }])).toEqual(["qwen/live", "other/seed"]);
+    expect(choices([])).toEqual(["qwen/live", "qwen/retired", "qwen/pinned", "other/seed"]);
+    expect(
+      prepare({ cfg, snapshot: captured, view: "default" }).catalog.map(({ id }) => id),
+    ).toEqual(["live", "pinned"]);
+  });
+
   it("sorts authored inventory independently of picker allowlists, using canonical route metadata", () => {
     const cfg: OpenClawConfig = {
       agents: { defaults: { models: { "custom/allowlisted": {} } } },

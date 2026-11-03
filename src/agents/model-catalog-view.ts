@@ -236,12 +236,21 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
           id: params.retainedModel.model,
         })
       : undefined;
+    // Accepted account discovery replaces fallback membership for its provider.
+    const discovered = new Set(
+      (params.snapshot.acceptedDiscoveryOrigins ?? []).map(({ provider }) =>
+        normalizeProviderId(provider),
+      ),
+    );
     for (const entry of params.snapshot.staticEntries) {
       const key = keyOf(entry);
+      const explicit = policy.configuredKeys.has(key) || key === retainedKey;
       const include =
         params.view === "configured"
-          ? policy.configuredKeys.has(key) || key === retainedKey
-          : policy.allows({ provider: entry.provider, model: entry.id });
+          ? explicit
+          : explicit ||
+            (!discovered.has(normalizeProviderId(entry.provider)) &&
+              policy.allows({ provider: entry.provider, model: entry.id }));
       if (!seen.has(key) && include) {
         seen.add(key);
         catalog.push(entry);
