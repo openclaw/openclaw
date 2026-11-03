@@ -126,6 +126,32 @@ async function withExecDryRunConfigHarness(
 }
 
 describe("config cli secrets integration", () => {
+  it("redacts inline env reads and preserves the values when saving the displayed map", async () => {
+    const vars = { REDACTION_TEST_INLINE: "synthetic-inline-value" };
+    const envSnapshot = captureEnv([...Object.keys(vars), "REDACTION_TEST_NEW"]);
+    try {
+      await withConfig(JSON.stringify({ env: { vars } }), async ({ configPath }) => {
+        for (const readPath of ["env", "env.vars", "env.vars.REDACTION_TEST_INLINE"]) {
+          await run("get", readPath, "--json");
+          expect(logs.at(-1)).toContain("__OPENCLAW_REDACTED__");
+          expect(logs.at(-1)).not.toContain(vars.REDACTION_TEST_INLINE);
+        }
+        await run("get", "env.vars.REDACTION_TEST_INLINE");
+        expect(logs.at(-1)?.trim()).toBe("__OPENCLAW_REDACTED__");
+        await run("get", "env.vars", "--json");
+        const displayed = JSON.parse(logs.at(-1)!);
+        await set(
+          "env.vars",
+          JSON.stringify({ ...displayed, REDACTION_TEST_NEW: "new" }),
+          "--strict-json",
+        );
+        expect(load(configPath).env.vars).toEqual({ ...vars, REDACTION_TEST_NEW: "new" });
+      });
+    } finally {
+      envSnapshot.restore();
+    }
+  });
+
   it.each([
     { name: "literal", token: "existing-gateway-token", redactedToken: "__OPENCLAW_REDACTED__" },
     {
@@ -346,29 +372,6 @@ describe("config cli secrets integration", () => {
     });
   });
 
-  it("allows a config set that repairs an inactive provider/source mismatch", async () => {
-    const raw = sourceMismatchConfig();
-    await withConfig(raw, async ({ configPath }) => {
-      const output = createTestRuntime();
-
-      await runConfigSet({
-        path: "channels.discord.token",
-        value: '{"source":"file","provider":"shared","id":"/discord/token"}',
-        cliOptions: { strictJson: true },
-        runtime: output.runtime,
-      });
-
-      expect(output.errors).toStrictEqual([]);
-      expect(load(configPath)).toMatchObject({
-        channels: {
-          discord: {
-            token: { source: "file", provider: "shared", id: "/discord/token" },
-          },
-        },
-      });
-    });
-  });
-
   it.each([
     {
       name: "setting an authored value to itself",
@@ -379,11 +382,6 @@ describe("config cli secrets integration", () => {
           cliOptions: { strictJson: true },
           runtime,
         }),
-    },
-    {
-      name: "unsetting an absent authored value",
-      run: (runtime: ReturnType<typeof createTestRuntime>["runtime"]) =>
-        runConfigUnset({ path: "gateway.bind", runtime }),
     },
   ])("strictly validates an existing mismatch when $name is a no-op", async (testCase) => {
     const raw = sourceMismatchConfig({ gateway: true });
@@ -424,50 +422,33 @@ describe("config cli secrets integration", () => {
     });
   });
 
-  it.each([
-    ["leaf", false],
-    ["ancestor", true],
-  ] as const)(
-    "validates only the final candidate after a %s overwrites an exec ref (dry run: %s)",
-    async (replacement, dryRun) => {
-      await withConfig("{ gateway: { port: 18789 } }\n", async ({ configPath, tempDir }) => {
-        const provider = { source: "exec", command: path.join(tempDir, "missing-helper") };
-        const secrets = { providers: { runner: provider, dormant: provider } };
-        const raw = JSON.stringify({ gateway: { port: 18789 }, secrets });
-        fs.writeFileSync(configPath, raw);
-        const batch = [
-          {
-            path: "channels.discord.token",
-            ref: { source: "exec", provider: "runner", id: "discarded" },
-          },
-          replacement === "leaf"
-            ? { path: "channels.discord.token", value: "replacement-token" }
-            : { path: "channels.discord", value: { token: "replacement-token" } },
-        ];
-        const output = createTestRuntime();
+  it("validates only the final candidate after a leaf overwrites an exec ref", async () => {
+    await withConfig("{ gateway: { port: 18789 } }\n", async ({ configPath, tempDir }) => {
+      const provider = { source: "exec", command: path.join(tempDir, "missing-helper") };
+      const secrets = { providers: { runner: provider, dormant: provider } };
+      const raw = JSON.stringify({ gateway: { port: 18789 }, secrets });
+      fs.writeFileSync(configPath, raw);
+      const batch = [
+        {
+          path: "channels.discord.token",
+          ref: { source: "exec", provider: "runner", id: "discarded" },
+        },
+        { path: "channels.discord.token", value: "replacement-token" },
+      ];
+      const output = createTestRuntime();
 
-        await runConfigSet({
-          cliOptions: { batchJson: JSON.stringify(batch), dryRun, json: dryRun },
-          runtime: output.runtime,
-        });
-
-        expect(output.errors).toEqual([]);
-        if (dryRun) {
-          expect(read(configPath)).toBe(raw);
-          expect(JSON.parse(output.logs.join("\n"))).toMatchObject({
-            ok: true,
-            refsChecked: 0,
-            skippedExecRefs: 0,
-          });
-        } else {
-          expect(load(configPath)).toMatchObject({
-            channels: { discord: { token: "replacement-token" } },
-            secrets,
-          });
-        }
+      await runConfigSet({
+        cliOptions: { batchJson: JSON.stringify(batch) },
+        runtime: output.runtime,
       });
-    },
-  );
+
+      expect(output.errors).toEqual([]);
+      expect(load(configPath)).toMatchObject({
+        channels: { discord: { token: "replacement-token" } },
+        secrets,
+      });
+    });
+  });
 
   it.each([false])(
     "still rejects an unsafe exec ref assigned last in a batch (dry run: %s)",

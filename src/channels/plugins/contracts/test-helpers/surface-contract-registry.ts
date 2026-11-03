@@ -24,6 +24,7 @@ const threadingContractPluginIds = new Set<ChannelId>([
   "msteams",
   "slack",
   "telegram",
+  "x",
   "zalo",
   "zalouser",
 ]);

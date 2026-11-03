@@ -6,7 +6,6 @@ import {
   configureMemoryWikiCompiledCacheStore,
   createMemoryWikiCompiledCacheStore,
   deactivateMemoryWikiCompiledCacheOwnersExcept,
-  reconcileMemoryWikiCompiledCacheOwner,
   resolveMemoryWikiCompiledCacheOwnerId,
 } from "./src/compiled-cache.js";
 import { memoryWikiConfigSchema } from "./src/config-schema.js";
@@ -30,6 +29,7 @@ import {
   createWikiPromptSectionBuilder,
   createWikiPromptSectionPreparer,
 } from "./src/prompt-section.js";
+import { closeMemoryWikiQueryReader } from "./src/query-reader.js";
 import {
   configureMemoryWikiSourceSyncStateStore,
   createMemoryWikiSourceSyncStateStore,
@@ -80,8 +80,7 @@ export default definePluginEntry({
   configSchema: memoryWikiConfigSchema,
   register(api) {
     const config = resolveMemoryWikiConfig(api.pluginConfig);
-    const getAppConfig = () =>
-      (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig | undefined;
+    const getAppConfig = () => api.runtime.config.current() as OpenClawConfig;
     const resolveConfig: MemoryWikiConfigResolver = (agentId, appConfig = getAppConfig()) =>
       resolveMemoryWikiAgentConfig({ config, appConfig, agentId });
     const resolveToolContext = (agentId?: string) => {
@@ -150,9 +149,6 @@ export default definePluginEntry({
               identity.vaultGeneration,
               identity.compiledCachePublicationId,
             );
-            await reconcileMemoryWikiCompiledCacheOwner(activeConfig, () =>
-              loadMemoryWikiValidatedVaultIdentity(activeConfig.vault.path),
-            );
             activeOwnerIds.add(resolveMemoryWikiCompiledCacheOwnerId(activeConfig));
           }
           deactivateMemoryWikiCompiledCacheOwnersExcept(activeOwnerIds);
@@ -172,6 +168,7 @@ export default definePluginEntry({
         deactivateMemoryWikiCompiledCacheOwnersExcept(new Set());
         await waitForMemoryWikiImportedSourceSyncs();
         deactivateMemoryWikiCompiledCacheOwnersExcept(new Set());
+        await closeMemoryWikiQueryReader();
       },
     });
 
@@ -180,8 +177,6 @@ export default definePluginEntry({
     api.registerMemoryCorpusSupplement(createWikiCorpusSupplement({ resolveConfig, getAppConfig }));
     registerMemoryWikiGatewayMethods({
       api,
-      config,
-      appConfig: api.config,
       getAppConfig,
       resolveConfig,
       resolveSourceSyncSignal: () => sourceSyncAbortController?.signal,
@@ -194,18 +189,38 @@ export default definePluginEntry({
       ["wiki_get", createWikiGetTool],
     ] as const) {
       api.registerTool(
-        (ctx) => {
-          const resolved = resolveToolContext(ctx.agentId);
-          if (!resolved) {
-            return null;
-          }
-          return createTool(resolved.config, resolved.appConfig, {
-            agentId: resolved.config.agentId ?? ctx.agentId,
-            agentSessionKey: ctx.sessionKey,
-            sandboxed: ctx.sandboxed,
-            conversationRecall: ctx.conversationRecall,
-            ...(resolved.signal ? { signal: resolved.signal } : {}),
-          });
+        {
+          contextVersion: 2,
+          create: (ctx) => {
+            const resolved = resolveToolContext(ctx.agentId);
+            if (!resolved) {
+              return null;
+            }
+            return createTool(resolved.config, resolved.appConfig, {
+              agentId: resolved.config.agentId ?? ctx.agentId,
+              agentSessionKey: ctx.sessionKey,
+              sandboxed: ctx.sandboxed,
+              conversationRecall: ctx.conversationRecall,
+              memoryContext: {
+                authority: ctx.sessionKey
+                  ? {
+                      kind: "session",
+                      conversationRecall: ctx.conversationRecall,
+                      sessionKey: ctx.sessionKey,
+                      sessionId: ctx.sessionId,
+                      sandboxed: ctx.sandboxed === true,
+                      audience: ctx.memoryAudience,
+                    }
+                  : { kind: "host", operation: "memory-wiki.tool" },
+                assertCurrent() {
+                  ctx.assertInvocationCurrent();
+                  ctx.assertMemoryAudienceCurrent?.();
+                },
+                ...(resolved.signal ? { signal: resolved.signal } : {}),
+              },
+              ...(resolved.signal ? { signal: resolved.signal } : {}),
+            });
+          },
         },
         { name },
       );

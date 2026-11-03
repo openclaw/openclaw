@@ -1,3 +1,5 @@
+import { consumeResponseBytes } from "@openclaw/normalization-core";
+
 export async function readResponseBytesWithinLimit(
   response: Response,
   maxBytes: number,
@@ -21,23 +23,19 @@ export async function readResponseBytesWithinLimit(
   const chunks: Uint8Array[] = [];
   let totalBytes = 0;
   try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      const remaining = maxBytes - totalBytes;
-      if (value.byteLength > remaining && !options.truncate) {
-        await reader.cancel().catch(() => undefined);
-        return null;
-      }
-      const chunk = value.byteLength > remaining ? value.slice(0, remaining) : value;
-      chunks.push(chunk);
-      totalBytes += chunk.byteLength;
-      if (options.truncate && totalBytes === maxBytes) {
-        await reader.cancel().catch(() => undefined);
-        break;
-      }
+    const result = await consumeResponseBytes({
+      maxBytes,
+      stopAtLimit: options.truncate,
+      skipEmptyChunks: false,
+      read: () => reader.read(),
+      onChunk: (chunk) => {
+        chunks.push(chunk);
+        totalBytes += chunk.byteLength;
+      },
+      onLimit: () => reader.cancel().catch(() => undefined),
+    });
+    if (result.truncated && !options.truncate) {
+      return null;
     }
   } finally {
     reader.releaseLock();

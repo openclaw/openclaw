@@ -5,7 +5,7 @@ import SwiftUI
 import Testing
 @testable import OpenClawChatUI
 
-@Suite(.serialized)
+@Suite(.serialized, .testWaitLimit)
 @MainActor
 struct NativeConversationViewModelTests {
     @Test func `probing and web modes keep roster but never use native conversation owners`() async throws {

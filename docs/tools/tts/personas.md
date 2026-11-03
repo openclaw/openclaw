@@ -9,7 +9,7 @@ read_when:
 
 ## Personas
 
-A **persona** is a stable spoken identity that can be applied deterministically
+A **persona** is a stable spoken identity that can be applied consistently
 across providers. It can prefer one provider, define provider-neutral prompt
 intent, and carry provider-specific bindings for voices, models, prompt
 templates, seeds, and voice settings.
@@ -78,7 +78,7 @@ templates, seeds, and voice settings.
 
 ### Persona resolution
 
-The active persona is selected deterministically:
+The active persona is selected in this order:
 
 1. `/tts persona <id>` local preference, if set.
 2. `tts.persona`, if set.
@@ -102,7 +102,7 @@ For each provider attempt, OpenClaw merges configs in this order:
 ### Custom persona shaping
 
 Provider-neutral `personas.<id>.prompt.*` config is retired. Doctor removes
-those fields and points to the speech-provider seam. Put built-in provider
+those fields and points to the speech-provider API. Put built-in provider
 settings under `personas.<id>.providers.<provider>` (for example Google
 `personaPrompt` or OpenAI `instructions`). For custom shaping, implement a
 speech provider plugin with `prepareSynthesis(ctx)` and return adjusted text,

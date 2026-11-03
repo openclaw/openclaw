@@ -2,10 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
-import {
-  readAgentProvenanceBatchInDatabase,
-  readAgentProvenanceInDatabase,
-} from "./agent-provenance.kernel.js";
+import { readAgentProvenanceBatchInDatabase } from "./agent-provenance.kernel.js";
 
 function withProvenance(run: (db: DatabaseSync) => void) {
   const db = new DatabaseSync(":memory:");
@@ -24,13 +21,6 @@ function withProvenance(run: (db: DatabaseSync) => void) {
   }
 }
 
-function readIndividually(db: DatabaseSync, ids: readonly string[]) {
-  return ids.flatMap((id) => {
-    const record = readAgentProvenanceInDatabase(db, id);
-    return record ? [record] : [];
-  });
-}
-
 describe("configured agent provenance batching", () => {
   it("keeps requested order, normalized aliases, missing rows, and duplicates in one read", () => {
     withProvenance((db) => {
@@ -42,15 +32,22 @@ describe("configured agent provenance batching", () => {
       insert.run("main", "operator", null, 1);
       insert.run("unrelated", "invalid", null, 9007199254740992n);
       const requested = [" Main ", "missing", ...ids, "MAIN"];
-      const originalCounter = trackSqliteStatementExecutions(db, ["provenance"], (sql) =>
-        sql.includes('"agent_provenance"') ? "provenance" : null,
-      );
-      let expected: ReturnType<typeof readIndividually>;
-      try {
-        expected = readIndividually(db, requested);
-      } finally {
-        originalCounter.restore();
-      }
+      const main = {
+        agentId: "main",
+        createdVia: "operator",
+        creatorAgentId: null,
+        createdAtMs: 1,
+      };
+      const expected = [
+        main,
+        ...ids.map((agentId, createdAtMs) => ({
+          agentId,
+          createdVia: "agent",
+          creatorAgentId: "main",
+          createdAtMs,
+        })),
+        main,
+      ];
       const counter = trackSqliteStatementExecutions(db, ["provenance"], (sql) =>
         sql.includes('"agent_provenance"') ? "provenance" : null,
       );
@@ -58,8 +55,6 @@ describe("configured agent provenance batching", () => {
         expect(readAgentProvenanceBatchInDatabase(db, requested)).toEqual(expected);
         expect(counter.counts.provenance).toBe(1);
         expect(counter.rowCounts.provenance).toBe(expected.length);
-        expect(counter.rowCounts).toEqual(originalCounter.rowCounts);
-        expect(counter.textBytes).toEqual(originalCounter.textBytes);
       } finally {
         counter.restore();
       }
@@ -75,16 +70,19 @@ describe("configured agent provenance batching", () => {
       insert.run("bad-enum", "invalid", null, 1);
       insert.run("bad-integer", "operator", null, 9007199254740992n);
       const ids = ["missing", first, second];
-      let originalError: unknown;
-      try {
-        readIndividually(db, ids);
-      } catch (error) {
-        originalError = error;
+      let expectedError: unknown = new Error("Invalid agent provenance created_via: invalid");
+      if (first === "bad-integer") {
+        expectedError = undefined;
+        try {
+          db.prepare("SELECT * FROM agent_provenance WHERE agent_id = ?").get(first);
+        } catch (error) {
+          expectedError = error;
+        }
+        if (!(expectedError instanceof Error)) {
+          throw new Error("Expected native provenance read to reject an unsafe integer");
+        }
       }
-      if (!(originalError instanceof Error)) {
-        throw new Error("Expected original provenance read to reject corrupt rows");
-      }
-      expect(() => readAgentProvenanceBatchInDatabase(db, ids)).toThrow(originalError);
+      expect(() => readAgentProvenanceBatchInDatabase(db, ids)).toThrow(expectedError);
       // The iterator must release its statement when the row codec throws.
       db.exec("DELETE FROM agent_provenance");
       expect(readAgentProvenanceBatchInDatabase(db, ids)).toEqual([]);

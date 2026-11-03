@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createPermissionBridge, type CopilotPermissionPolicy } from "./permission-bridge.js";
 
 const REJECT_ALL_FEEDBACK =
-  "copilot agent runtime: no permission policy installed (fail-closed default)";
+  "copilot agent runtime: no permission policy installed (denied by default)";
 function makeRequest(): SdkPermissionRequest {
   return {
     canOfferSessionApproval: false,

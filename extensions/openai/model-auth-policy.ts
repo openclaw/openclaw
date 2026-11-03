@@ -49,9 +49,12 @@ export function resolveModelAuthPolicy(
   const subscription = ctx.mode === "oauth" || ctx.mode === "token";
   const apiKey = ctx.mode === "api-key" || ctx.mode === "api_key";
   const codex = api === "openai-chatgpt-responses";
-  // Custom embedding servers own their bearer-token contract.
+  // Codex OAuth can authorize embeddings; the distinct SIWC grant is rejected above.
+  // Other bearer profiles require a custom embedding server's token contract.
   const requiresApiKey =
-    ctx.capability === "embedding" && classifyOpenAIBaseUrl(ctx.baseUrl) !== "custom";
+    ctx.capability === "embedding" &&
+    ctx.mode !== "oauth" &&
+    classifyOpenAIBaseUrl(ctx.baseUrl) !== "custom";
   return {
     authRequirement: subscription
       ? "subscription"

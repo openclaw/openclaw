@@ -1,3 +1,4 @@
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import { expect, it, vi } from "vitest";
 
 const configWriterLoaded = vi.hoisted(() => vi.fn());

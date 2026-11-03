@@ -1,20 +1,31 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fixtureReceiptClientSource } from "../../test/helpers/fixture-receipts.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 
-export async function writeForkingNoOutputScript(dir: string): Promise<string> {
+export async function writeForkingNoOutputScript(
+  dir: string,
+  receiptEndpoint: string,
+): Promise<string> {
   const scriptPath = path.join(dir, "fork-no-output.sh");
+  const childPath = path.join(dir, "fork-no-output.mjs");
   // The descendant publishes its PID after installing its keepalive, so callers
   // can trigger the idle deadline only after a live process tree is ready. It
   // stays silent: later output refreshes the idle timer and cancels a deadline
   // the caller already fired.
   await fs.writeFile(
-    scriptPath,
+    childPath,
     [
-      "#!/bin/sh",
-      '"$NODE_BINARY" -e \'setInterval(() => {}, 1000); require("node:fs").writeFileSync(process.env.PID_FILE, String(process.pid));\' &',
-      "wait",
+      fixtureReceiptClientSource(receiptEndpoint),
+      'import { writeFileSync } from "node:fs";',
+      "setInterval(() => {}, 1000);",
+      "writeFileSync(process.env.PID_FILE, String(process.pid));",
+      'sendReceipt(process.env.PID_FILE, "ready");',
     ].join("\n"),
+  );
+  await fs.writeFile(
+    scriptPath,
+    ["#!/bin/sh", `"$NODE_BINARY" ${JSON.stringify(childPath)} &`, "wait"].join("\n"),
     "utf8",
   );
   await fs.chmod(scriptPath, 0o700);
@@ -36,26 +47,6 @@ export async function waitForPidToExit(pid: number, timeoutMs = 2000): Promise<b
 
 export async function readPidFile(pidPath: string): Promise<number> {
   return Number((await fs.readFile(pidPath, "utf8")).trim());
-}
-
-export async function waitForPidFile(pidPath: string, timeoutMs = 5_000): Promise<number> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      const pid = await readPidFile(pidPath);
-      if (Number.isInteger(pid) && pid > 0) {
-        return pid;
-      }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw error;
-      }
-    }
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 25);
-    });
-  }
-  throw new Error(`Timed out waiting for pid file: ${pidPath}`);
 }
 
 export function killPidIfAlive(pid: number | undefined): void {

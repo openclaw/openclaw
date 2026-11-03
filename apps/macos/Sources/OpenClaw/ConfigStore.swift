@@ -30,28 +30,43 @@ enum ConfigStore {
         var isCurrent: Bool {
             self.origin.isCurrent
         }
+
+        var selection: Selection {
+            self.origin.selection
+        }
+    }
+
+    /// The Gateway source a document or a user's choice belongs to. Anything taken under one
+    /// selection never applies to another.
+    struct Selection: Equatable {
+        fileprivate let revision: UInt64?
+        fileprivate let mode: AppState.ConnectionMode
+        fileprivate let localURL: URL
+
+        @MainActor
+        static func current(gateway: GatewayConnection = .shared) -> Selection {
+            Selection(
+                revision: gateway.selectedEndpointRevision,
+                mode: AppStateStore.shared.connectionMode,
+                localURL: OpenClawPaths.configURL)
+        }
     }
 
     @MainActor
     fileprivate final class Origin {
         let gateway: GatewayConnection
-        let revision: UInt64?
-        let mode: AppState.ConnectionMode
-        let localURL: URL
+        let selection: Selection
         var allowsLocalFallback: Bool
         var lease: GatewayConnection.ServerLease?
 
         init(gateway: GatewayConnection) {
             self.gateway = gateway
-            self.revision = gateway.selectedEndpointRevision
-            self.mode = AppStateStore.shared.connectionMode
-            self.localURL = OpenClawPaths.configURL
-            self.allowsLocalFallback = self.mode != .remote
+            self.selection = .current(gateway: gateway)
+            self.allowsLocalFallback = self.selection.mode != .remote
         }
 
         var selectionIsCurrent: Bool {
-            self.gateway.selectedEndpointRevision == self.revision &&
-                AppStateStore.shared.connectionMode == self.mode && OpenClawPaths.configURL == self.localURL
+            Selection.current(gateway: self.gateway) == self.selection
         }
 
         var isCurrent: Bool {
@@ -72,19 +87,11 @@ enum ConfigStore {
         #endif
     }
 
-    private actor OverrideStore {
-        var overrides = Overrides()
-
-        func setOverride(_ overrides: Overrides) {
-            self.overrides = overrides
-        }
-    }
-
-    private static let overrideStore = OverrideStore()
+    @MainActor private static var overrides = Overrides()
     @MainActor
     static func load(gateway: GatewayConnection = .shared) async -> Document {
         let origin = Origin(gateway: gateway)
-        let overrides = await self.overrideStore.overrides
+        let overrides = self.overrides
         if let isRemoteMode = overrides.isRemoteMode {
             origin.allowsLocalFallback = await !isRemoteMode()
         }
@@ -127,8 +134,7 @@ enum ConfigStore {
         let origin = document.origin
         guard origin.isCurrent else { throw self.sourceChanged() }
         if let error = document.readError { throw error }
-        let overrides = await self.overrideStore.overrides
-        guard origin.isCurrent else { throw self.sourceChanged() }
+        let overrides = self.overrides
         if !origin.allowsLocalFallback {
             if let save = overrides.saveRemote {
                 try await save(document.root)
@@ -209,11 +215,7 @@ enum ConfigStore {
         }
         guard let lease = document.origin.lease, document.isCurrent else { throw self.sourceChanged() }
         let data = try JSONSerialization.data(withJSONObject: document.root, options: [.prettyPrinted, .sortedKeys])
-        guard let raw = String(data: data, encoding: .utf8) else {
-            throw NSError(domain: "ConfigStore", code: 1, userInfo: [
-                NSLocalizedDescriptionKey: "Failed to encode config.",
-            ])
-        }
+        let raw = String(bytes: data, encoding: .utf8)!
         var params: [String: AnyCodable] = ["raw": AnyCodable(raw)]
         if let hash = document.hash { params["baseHash"] = AnyCodable(hash) }
         _ = try await document.origin.gateway.request(
@@ -224,12 +226,12 @@ enum ConfigStore {
     }
 
     #if DEBUG
-    static func _testSetOverrides(_ overrides: Overrides) async {
-        await self.overrideStore.setOverride(overrides)
+    @MainActor static func _testSetOverrides(_ overrides: Overrides) async {
+        self.overrides = overrides
     }
 
-    static func _testClearOverrides() async {
-        await self.overrideStore.setOverride(.init())
+    @MainActor static func _testClearOverrides() async {
+        self.overrides = .init()
     }
 
     #endif

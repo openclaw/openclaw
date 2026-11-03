@@ -1,4 +1,3 @@
-// Lists expected shell environment keys for config validation.
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { listKnownChannelEnvVarNames } from "../secrets/channel-env-vars.js";
 import { listKnownProviderAuthEnvVarNamesCore } from "../secrets/provider-env-vars.js";

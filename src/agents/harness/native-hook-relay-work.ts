@@ -54,6 +54,7 @@ export async function drainNativeHookRelayWork(params: {
   policyReady: Promise<void>;
   bridge: NativeHookRelayBridgeRegistration;
   readRenewal: () => Promise<void>;
+  postToolUseWork: Set<Promise<void>>;
 }): Promise<void> {
   let renewal: Promise<void>;
   let failure: { error: unknown } | undefined;
@@ -67,14 +68,30 @@ export async function drainNativeHookRelayWork(params: {
     } catch (error) {
       failure ??= { error };
     }
+    const observations = [...params.postToolUseWork];
+    const results = await Promise.allSettled(observations);
+    for (const [index, result] of results.entries()) {
+      params.postToolUseWork.delete(observations[index]!);
+      if (result.status === "rejected") {
+        failure ??= { error: result.reason };
+      }
+    }
     try {
       await drainNativeHookRelayBridge(params.bridge);
     } catch (error) {
       failure ??= { error };
     }
-  } while (renewal !== params.readRenewal());
+  } while (renewal !== params.readRenewal() || params.postToolUseWork.size > 0);
   if (failure) {
     throw failure.error;
+  }
+}
+
+function assertNativeHookRelayRegistrationCurrent(
+  registration: ActiveNativeHookRelayRegistration,
+): void {
+  if (relays.get(registration.relayId) !== registration || Date.now() > registration.expiresAtMs) {
+    throw new Error("native hook relay registration is inactive");
   }
 }
 
@@ -83,9 +100,7 @@ export function assertNativeHookRelayForegroundCurrent(
   lifetime: { foregroundOpen: boolean; foregroundToken: symbol },
   foregroundToken: symbol,
 ): void {
-  if (relays.get(registration.relayId) !== registration || Date.now() > registration.expiresAtMs) {
-    throw new Error("native hook relay registration is inactive");
-  }
+  assertNativeHookRelayRegistrationCurrent(registration);
   registration.signal?.throwIfAborted();
   registration.assertActive?.();
   if (!lifetime.foregroundOpen || lifetime.foregroundToken !== foregroundToken) {
@@ -109,21 +124,14 @@ export async function resolveNativeHookRelayInvocationBinding(
   // Gateway fallback shares policy readiness without depending on HTTP locator publication.
   await racePromiseWithAbortSignal(lifetime.policyReady, signal);
   signal?.throwIfAborted();
-  if (relays.get(registration.relayId) !== registration || Date.now() > registration.expiresAtMs) {
-    throw new Error("native hook relay registration is inactive");
-  }
+  assertNativeHookRelayRegistrationCurrent(registration);
   const claim = lifetime.retention?.readClaim(rawPayload);
   if (claim && event === "pre_tool_use" && lifetime.retained && lifetime.retention) {
     const retained = lifetime.retained;
     const retention = lifetime.retention;
     let assertAdmission: (() => boolean) | undefined;
     const assertRetainedAuthority = () => {
-      if (
-        relays.get(registration.relayId) !== registration ||
-        Date.now() > registration.expiresAtMs
-      ) {
-        throw new Error("native hook relay registration is inactive");
-      }
+      assertNativeHookRelayRegistrationCurrent(registration);
       registration.signal?.throwIfAborted();
       retained.assertActive();
       if (assertAdmission && !assertAdmission()) {
@@ -156,6 +164,8 @@ export async function resolveNativeHookRelayInvocationBinding(
       registration: {
         ...registration,
         assertActive,
+        // Retained child custody replaces the foreground execution policy owner.
+        assertActiveAsync: undefined,
         runBeforeToolCall: retained.runBeforeToolCall,
         signal,
       },

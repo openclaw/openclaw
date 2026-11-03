@@ -55,6 +55,9 @@ export function createQaRunnerRuntime(): PluginRuntime {
         readSessionUpdatedAt({ sessionKey }: { sessionKey: string }) {
           return sessions.has(sessionKey) ? Date.now() : undefined;
         },
+        async readSessionUpdatedAtAsync({ sessionKey }: { sessionKey: string }) {
+          return sessions.has(sessionKey) ? Date.now() : undefined;
+        },
         recordInboundSession({ sessionKey }: { sessionKey: string }) {
           sessions.add(sessionKey);
         },

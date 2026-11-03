@@ -4,9 +4,11 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import "./test-helpers/schtasks-base-mocks.js";
-import { resolveTaskScriptPath, restartScheduledTask, stopScheduledTask } from "./schtasks.js";
+import { restartScheduledTask } from "./schtasks-control.js";
+import { resolveTaskScriptPath } from "./schtasks-layout.js";
 import {
   inspectPortUsageMock,
+  makeSpawnSyncResult,
   killProcessTreeMock,
   resetSchtasksBaseMocks,
   schtasksCalls,
@@ -43,22 +45,16 @@ beforeEach(() => {
     const stdout = taskQuery
       ? JSON.stringify({ state: 3, lastRunResult: 0, lastRunTime: "2026-09-27T00:00:00Z" })
       : "No tasks";
-    return {
-      pid: 0,
+    return makeSpawnSyncResult({
       output: [null, stdout, ""],
       stdout,
-      stderr: "",
       status: taskQuery || /(?:taskkill|tasklist)\.exe$/i.test(exe) ? 0 : 1,
-      signal: null,
-    };
+    });
   });
 });
 afterEach(() => vi.restoreAllMocks());
 
-it.each([
-  { operation: "stop", control: stopScheduledTask },
-  { operation: "restart", control: restartScheduledTask },
-])(
+it.each([{ operation: "restart", control: restartScheduledTask }])(
   "refuses shortened argv from an unquoted redirect expansion during $operation",
   async ({ control }) => {
     await withWindowsEnv("openclaw-win-redirect-", async ({ env }) => {

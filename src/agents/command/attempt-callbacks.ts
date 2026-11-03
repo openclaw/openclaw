@@ -1,13 +1,18 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import type { AgentMessage } from "../runtime/index.js";
 
 export type AgentAttemptLifecycleState = {
-  currentTurnUserMessagePersisted: boolean;
   lifecycleError?: string;
   lifecycleErrorObservation?: Record<string, unknown>;
   lifecycleFinishing: boolean;
   lifecycleEnded: boolean;
 };
+
+export function resetAgentAttemptLifecycle(state: AgentAttemptLifecycleState): void {
+  state.lifecycleError = undefined;
+  state.lifecycleErrorObservation = undefined;
+  state.lifecycleFinishing = false;
+  state.lifecycleEnded = false;
+}
 
 type AgentAttemptLifecycleEvent = {
   stream: string;
@@ -30,12 +35,16 @@ export function createAgentAttemptLifecycleCallbacks(
   state: AgentAttemptLifecycleState,
   onRuntimeTurnStarted?: () => void | Promise<void>,
 ): {
-  onUserMessagePersisted: (message: Extract<AgentMessage, { role: "user" }>) => void;
+  onAttemptStart: () => void;
+  onAttemptTerminalReplaced: () => void;
   onAgentEvent: (evt: AgentAttemptLifecycleEvent) => void | Promise<void>;
 } {
   return {
-    onUserMessagePersisted: () => {
-      state.currentTurnUserMessagePersisted = true;
+    onAttemptStart: () => resetAgentAttemptLifecycle(state),
+    onAttemptTerminalReplaced: () => {
+      if (!state.lifecycleEnded) {
+        resetAgentAttemptLifecycle(state);
+      }
     },
     onAgentEvent: (evt) => {
       if (evt.stream !== "lifecycle" || typeof evt.data?.phase !== "string") {
@@ -44,10 +53,7 @@ export function createAgentAttemptLifecycleCallbacks(
       if (evt.data.phase === "start") {
         // A same-candidate retry replaces deferred terminal state from the
         // preceding attempt; retaining it would abort a recovered run.
-        state.lifecycleError = undefined;
-        state.lifecycleErrorObservation = undefined;
-        state.lifecycleFinishing = false;
-        state.lifecycleEnded = false;
+        resetAgentAttemptLifecycle(state);
         return onRuntimeTurnStarted?.();
       }
       if (typeof evt.data.error === "string" && evt.data.error.trim()) {

@@ -20,10 +20,16 @@ export function withUpdateStateInspectionWork<T>(
   return retainSnapshotWork(work, () => stop());
 }
 
-export function finishStateInspection<T>(
+export async function withStateInspectionCleanup<T>(
   stagingRoot: string,
-  outcome: { value: T } | { cause: unknown },
-): T {
+  inspect: () => Promise<T>,
+): Promise<T> {
+  let outcome: { value: T } | { cause: unknown };
+  try {
+    outcome = { value: await inspect() };
+  } catch (cause) {
+    outcome = { cause };
+  }
   if ("cause" in outcome && hasCommandProcessCleanupError(outcome.cause)) {
     // Command settlement failed. Keep the bytes for the existing snapshot
     // reclaimer instead of registering another exit/signal deletion attempt.

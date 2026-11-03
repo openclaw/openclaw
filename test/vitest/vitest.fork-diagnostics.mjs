@@ -1,7 +1,9 @@
-import { subscribe } from "node:diagnostics_channel";
+import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import path from "node:path";
 import { isMainThread } from "node:worker_threads";
+
+const workerChannel = channel("worker_threads");
 
 // Loaded before the fork's tests so blocked teardown cannot hide its last synchronous wait.
 if (isMainThread && process.send && process.report.directory) {
@@ -20,7 +22,7 @@ if (isMainThread && process.send && process.report.directory) {
     return Reflect.apply(exit, this, args);
   };
   const workers = new Set();
-  subscribe("worker_threads", ({ worker }) => {
+  workerChannel.subscribe(({ worker }) => {
     workers.add(worker);
     worker.once("exit", () => workers.delete(worker));
   });

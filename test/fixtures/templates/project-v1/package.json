@@ -1,0 +1,8 @@
+{
+  "name": "golden-template",
+  "version": "1.0.0",
+  "type": "module",
+  "openclaw": {
+    "template": "CLAW.md"
+  }
+}

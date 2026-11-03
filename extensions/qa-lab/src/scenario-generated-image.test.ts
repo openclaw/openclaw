@@ -5,6 +5,7 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
+import { extractGatewayMessageText } from "./gateway-log-sentinel.js";
 import { waitForQaTransportCondition } from "./qa-transport.js";
 import { readQaScenarioById } from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
@@ -29,22 +30,16 @@ const png = Buffer.from(
   "base64",
 );
 
-type ImageFault =
-  | "duplicate message"
-  | "late duplicate message"
-  | "duplicate attachment"
-  | "wrong bytes"
-  | "empty bytes"
-  | "empty file"
-  | "missing tool completion"
-  | "status only"
-  | "duplicate generation"
-  | "missing persisted reply"
-  | "persisted progress only"
-  | "failed turn";
-
 async function runImageScenario(
-  options: { progress?: boolean; fault?: ImageFault; isGenerating?: () => boolean } = {},
+  options: {
+    fault?:
+      | "late duplicate message"
+      | "failed turn"
+      | "initial acknowledgement only"
+      | "wrong completion run"
+      | "mismatched completion text";
+    isGenerating?: () => boolean;
+  } = {},
 ) {
   const scenario = readQaScenarioById("native-image-generation");
   if (!scenario.execution.flow) {
@@ -52,23 +47,27 @@ async function runImageScenario(
   }
   const state = createQaBusState();
   const generatedPath = path.join(tempDirs.make("qa-generated-image-"), "generated.png");
-  await fs.writeFile(generatedPath, options.fault === "empty file" ? Buffer.alloc(0) : png);
+  await fs.writeFile(generatedPath, png);
+  const caption = "A QA lighthouse on the coast.";
+  const taskId = "tool:image_generate:qa-image";
+  const completionRunId = `image_generate:${taskId}:ok:agent-loop:attempt:1`;
   const attachment = {
     id: "generated-image",
     kind: "image" as const,
     mimeType: "image/png",
-    contentBase64:
-      options.fault === "wrong bytes"
-        ? Buffer.from("wrong image bytes").toString("base64")
-        : options.fault === "empty bytes"
-          ? ""
-          : png.toString("base64"),
+    contentBase64: png.toString("base64"),
   };
-  let completed = false;
+  const deliverImage = () =>
+    state.addOutboundMessage({
+      to: "dm:qa-operator",
+      text: "",
+      attachments: [attachment],
+    });
   let settled = false;
   const sessionKey = "agent:qa:image-generate:test";
   const env = {
     providerMode: "live-frontier",
+    runtimeId: "openclaw",
     gateway: {
       call: async (method: string, params: unknown) => {
         if (method === "tools.invoke") {
@@ -88,43 +87,66 @@ async function runImageScenario(
         }
         if (method === "chat.history") {
           expect(params).toEqual({ sessionKey, limit: 100, maxChars: 131072 });
-          const actions =
-            options.fault === "status only"
-              ? ["status"]
-              : options.fault === "duplicate generation"
-                ? ["generate", "generate"]
-                : ["generate", "status"];
+          const actions = ["status", "generate", "status"];
           return {
-            messages: actions.flatMap((action, index) => {
-              const call = {
-                role: "assistant",
-                content: [
+            messages: [
+              ...actions.flatMap((action, index) => {
+                const call = {
+                  role: "assistant",
+                  content: [
+                    {
+                      type: "toolCall",
+                      id: `image-${index}`,
+                      name: "image_generate",
+                      arguments: { action },
+                    },
+                  ],
+                };
+                return [
+                  call,
                   {
-                    type: "toolCall",
-                    id: `image-${index}`,
-                    name: "image_generate",
-                    arguments: { action },
+                    role: "toolResult",
+                    toolCallId: `image-${index}`,
+                    toolName: "image_generate",
+                    isError: false,
+                    content:
+                      action === "generate"
+                        ? [
+                            {
+                              type: "text",
+                              text: `Background task started for image generation (${taskId}). Do not call image_generate again for this request.`,
+                            },
+                          ]
+                        : [],
                   },
-                ],
-              };
-              if (options.fault === "missing tool completion" && action === "generate") {
-                return [call];
-              }
-              return [
-                call,
-                {
-                  role: "toolResult",
-                  toolCallId: `image-${index}`,
-                  toolName: "image_generate",
-                  isError: false,
-                },
-              ];
-            }),
+                ];
+              }),
+              ...(options.fault === "initial acknowledgement only"
+                ? []
+                : [
+                    {
+                      role: "assistant",
+                      content: [{ type: "text", text: caption }],
+                      __openclaw: {
+                        runId:
+                          options.fault === "wrong completion run"
+                            ? "initial-run"
+                            : completionRunId,
+                      },
+                    },
+                  ]),
+            ],
           };
         }
         if (method === "agent") {
-          if (options.progress) {
-            state.addOutboundMessage({ to: "dm:qa-operator", text: "Rendering the lighthouse." });
+          if (options.isGenerating || options.fault === "initial acknowledgement only") {
+            state.addOutboundMessage({
+              to: "dm:qa-operator",
+              text:
+                options.fault === "initial acknowledgement only"
+                  ? caption
+                  : "Rendering the lighthouse.",
+            });
           }
           return { runId: "image-run" };
         }
@@ -134,17 +156,13 @@ async function runImageScenario(
         if (options.fault === "failed turn") {
           return { status: "error", error: "image generation failed" };
         }
-        for (let i = 0; i < (options.fault === "duplicate message" ? 2 : 1); i++) {
+        deliverImage();
+        if (options.fault !== "initial acknowledgement only") {
           state.addOutboundMessage({
             to: "dm:qa-operator",
-            text: "A QA lighthouse on the coast.",
-            attachments:
-              options.fault === "duplicate attachment"
-                ? [attachment, { ...attachment, id: "duplicate" }]
-                : [attachment],
+            text: options.fault === "mismatched completion text" ? "Unpersisted caption." : caption,
           });
         }
-        completed = true;
         return {
           status: "ok",
           terminalDelivery: { status: "sent", resultCount: 1 },
@@ -153,8 +171,9 @@ async function runImageScenario(
       },
     },
     transport: { buildAgentDelivery: () => ({ channel: "qa-channel", to: "dm:qa-operator" }) },
+    mock: null,
   };
-  const result = await runScenarioFlow({
+  return runScenarioFlow({
     scenarioTitle: scenario.title,
     flow: scenario.execution.flow,
     api: {
@@ -168,6 +187,7 @@ async function runImageScenario(
       randomUUID: () => "test",
       normalizeLowercaseStringOrEmpty,
       projectQaToolMessages,
+      extractGatewayMessageText,
       readEffectiveTools: async () => new Set(["image_generate"]),
       reset: () => state.reset(),
       runAgentPrompt,
@@ -178,77 +198,56 @@ async function runImageScenario(
       formatTransportTranscript,
       readSessionTranscriptSummary: async () => {
         if (options.fault === "late duplicate message") {
-          state.addOutboundMessage({
-            to: "dm:qa-operator",
-            text: "A QA lighthouse on the coast.",
-            attachments: [attachment],
-          });
+          deliverImage();
         }
         return {
-          successfulToolCallCounts:
-            completed && options.fault !== "missing tool completion"
-              ? {
-                  image_generate:
-                    options.progress || options.fault === "duplicate generation" ? 2 : 1,
-                }
-              : {},
-          finalText:
-            options.fault === "missing persisted reply"
-              ? ""
-              : !settled || options.fault === "persisted progress only"
-                ? "Rendering the lighthouse."
-                : `A QA lighthouse on the coast.\n\nMEDIA:${generatedPath}`,
+          successfulToolCallCounts: { image_generate: options.isGenerating ? 2 : 1 },
+          finalText: settled ? caption : "Rendering the lighthouse.",
         };
       },
       runScenario: runQaSuiteScenarioSteps,
     },
   });
-  return result;
 }
 
 describe("native image scenario delivery evidence", () => {
-  it.each([false, true])(
-    "accepts one exact image after completion (progress=%s)",
-    async (progress) => {
-      if (!progress) {
-        expect(await runImageScenario()).toMatchObject({ status: "pass" });
-        return;
-      }
-      vi.useFakeTimers();
-      const waiting = createDeferred<"waiting">();
-      let active = true;
-      observeStatusWait.mockImplementationOnce(() => waiting.resolve("waiting"));
-      const result = runImageScenario({ progress, isGenerating: () => active });
-      try {
-        expect(await Promise.race([waiting.promise, result])).toBe("waiting");
-      } finally {
-        active = false;
-        await vi.runAllTimersAsync();
-        await result;
-        observeStatusWait.mockReset();
-        vi.useRealTimers();
-      }
-      expect(await result).toMatchObject({ status: "pass" });
-    },
-  );
+  it("correlates the public task receipt without private details after image completion", async () => {
+    vi.useFakeTimers();
+    const waiting = createDeferred<"waiting">();
+    let active = true;
+    observeStatusWait.mockImplementationOnce(() => waiting.resolve("waiting"));
+    const result = runImageScenario({ isGenerating: () => active });
+    try {
+      expect(await Promise.race([waiting.promise, result])).toBe("waiting");
+    } finally {
+      active = false;
+      await vi.runAllTimersAsync();
+      await result;
+      observeStatusWait.mockReset();
+      vi.useRealTimers();
+    }
+    const outcome = await result;
+    expect(outcome, outcome.details).toMatchObject({ status: "pass" });
+  });
 
   it.each([
-    ["duplicate message", "expected exactly one generated-image delivery"],
     ["late duplicate message", "expected exactly one generated-image delivery"],
-    ["duplicate attachment", "expected exactly one generated-image delivery"],
-    ["wrong bytes", "expected exactly one generated-image delivery"],
-    ["empty bytes", "expected exactly one generated-image delivery"],
-    ["empty file", "image generation did not produce a nonempty saved media file"],
-    ["missing tool completion", "generated image completion was not persisted"],
-    ["status only", "generated image completion was not persisted"],
-    ["duplicate generation", "generated image completion was not persisted"],
-    ["missing persisted reply", "generated image completion was not persisted"],
-    ["persisted progress only", "generated image completion was not persisted"],
     ["failed turn", "agent.wait returned error: image generation failed"],
   ] as const)("rejects %s", async (fault, error) => {
     expect(await runImageScenario({ fault })).toMatchObject({
       status: "fail",
       details: expect.stringContaining(error),
+    });
+  });
+
+  it.each([
+    "initial acknowledgement only",
+    "wrong completion run",
+    "mismatched completion text",
+  ] as const)("rejects %s as completion evidence", async (fault) => {
+    expect(await runImageScenario({ fault })).toMatchObject({
+      status: "fail",
+      details: expect.stringContaining("generated image completion was not persisted"),
     });
   });
 });

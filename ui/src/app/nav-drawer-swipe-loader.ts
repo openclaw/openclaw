@@ -34,12 +34,7 @@ export class NavDrawerSwipeLoader {
     this.owner?.disconnect();
   }
 
-  opened(): boolean {
-    this.owner?.opened();
-    return Boolean(this.owner);
-  }
-
-  closed(): void {
-    this.owner?.closed();
+  reset(): void {
+    this.owner?.reset();
   }
 }

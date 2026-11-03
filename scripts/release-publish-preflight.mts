@@ -349,24 +349,6 @@ export async function runReleasePublishPreflight(
           pluginSdkApiAcknowledgement: sealedInputs.pluginSdkApiAcknowledgement,
         };
       }
-      for (const consumer of [
-        "publisher",
-        ...(options.publishOpenclawNpm === false ? [] : ["core-npm"]),
-        ...(!options.tag.includes("-beta.") && options.publishOpenclawNpm !== false
-          ? ["stable-closeout"]
-          : []),
-      ] as const) {
-        rows.push(
-          ...evaluateReleasePublishGates({
-            manifest,
-            consumer: consumer as "publisher" | "core-npm" | "stable-closeout",
-            releaseTag: options.tag,
-            npmDistTag: options.npmDistTag,
-            expectedSha: sourceSha,
-            expectedReleaseProfile: options.releaseProfile,
-          }),
-        );
-      }
       if (run && sourceSha && SHA.test(toolingSha)) {
         await check(
           "validation.provenance",
@@ -435,14 +417,33 @@ export async function runReleasePublishPreflight(
                 "authenticated candidate evidence",
               );
               const evidence = requirePreflightRecord(prior.evidence, "strict candidate evidence");
-              return validateFullReleaseValidationEvidence({
+              const validated = validateFullReleaseValidationEvidence({
                 ...validationOptions,
                 getWorkflowSource: (sha: string) => client.getWorkflowSource(sha),
                 validateEvidenceReuseStrictly: () => evidence,
               });
+              return { ...validated, evidence };
             }
             return authenticateFullReleaseValidationEvidence(validationOptions, client);
           },
+        );
+      }
+      for (const consumer of [
+        "publisher",
+        ...(options.publishOpenclawNpm === false ? [] : ["core-npm"]),
+        ...(!options.tag.includes("-beta.") && options.publishOpenclawNpm !== false
+          ? ["stable-closeout"]
+          : []),
+      ] as const) {
+        rows.push(
+          ...evaluateReleasePublishGates({
+            manifest,
+            consumer: consumer as "publisher" | "core-npm" | "stable-closeout",
+            releaseTag: options.tag,
+            npmDistTag: options.npmDistTag,
+            expectedSha: sourceSha,
+            expectedReleaseProfile: options.releaseProfile,
+          }),
         );
       }
     }

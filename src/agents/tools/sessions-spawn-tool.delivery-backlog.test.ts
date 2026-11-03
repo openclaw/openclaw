@@ -42,6 +42,7 @@ describe("sessions_spawn with retained completion deliveries", () => {
       const gateway = { call: callInProcessGatewayTool };
       const callGateway = vi.spyOn(gateway, "call").mockResolvedValue({
         key: "agent:main:dashboard:new-child",
+        sessionId: "new-child",
         runStarted: true,
         runId: "run-visible",
       });

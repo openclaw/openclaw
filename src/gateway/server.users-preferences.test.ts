@@ -2,7 +2,9 @@ import { expect, test } from "vitest";
 import { writeConfigFile } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import type { OperatorScope } from "./operator-scopes.js";
 import {
+  browserProxyAuth,
   connectReq,
   CONTROL_UI_CLIENT,
   installGatewayTestHooks,
@@ -16,33 +18,20 @@ installGatewayTestHooks({ scope: "suite" });
 
 test("named preferences stay profile-scoped over authenticated multi-agent Gateway RPC", async () => {
   const origin = "https://preferences.example.test";
-  const auth = {
-    mode: "trusted-proxy" as const,
-    trustedProxy: {
-      userHeader: "x-forwarded-user",
-      requiredHeaders: ["x-forwarded-proto"],
-      allowLoopback: true,
-    },
-  };
+  const scopes: OperatorScope[] = ["operator.read", "operator.write"];
+  const controlUi = { allowedOrigins: [origin] };
+  const readerRole = { agents: "*" as const, scopes, sessions: { others: "none" as const } };
+  const auth = browserProxyAuth();
   testState.gatewayAuth = auth;
-  testState.gatewayControlUi = { allowedOrigins: [origin] };
+  testState.gatewayControlUi = controlUi;
   await writeConfigFile(
     {
       agents: { ownership: "explicit", entries: { research: {}, review: {} } },
       gateway: {
         auth,
         trustedProxies: ["127.0.0.1"],
-        controlUi: { allowedOrigins: [origin] },
-        roles: {
-          default: "reader",
-          definitions: {
-            reader: {
-              agents: "*",
-              scopes: ["operator.read", "operator.write"],
-              sessions: { others: "none" },
-            },
-          },
-        },
+        controlUi,
+        roles: { default: "reader", definitions: { reader: readerRole } },
       },
     },
     { allowedAgentRosterRemovals: ["main"] },
@@ -59,59 +48,42 @@ test("named preferences stay profile-scoped over authenticated multi-agent Gatew
         skipDefaultAuth: true,
         client: CONTROL_UI_CLIENT,
         prePairDevice: true,
-        scopes: ["operator.read", "operator.write"],
+        scopes,
         browserOrigin: origin,
       });
-      expect(connected.ok, JSON.stringify(connected.error)).toBe(true);
-      expect(connected.payload).toMatchObject({
-        auth: { method: "trusted-proxy", scopes: ["operator.read", "operator.write"] },
-      });
-      const entries = {
-        "ui.theme": "dark",
-        "agent:research:dashboard:incognito-preference": "personal",
-      };
-      const reader = ensureProfileForEmail("preferences-reader@example.test");
-      expect(await rpcReq(socket, "users.self", {})).toMatchObject({
+      expect(connected, JSON.stringify(connected.error)).toMatchObject({
         ok: true,
-        payload: { profile: { id: reader.id } },
+        payload: { auth: { method: "trusted-proxy", scopes } },
       });
+      const privateKey = "agent:research:dashboard:incognito-preference";
+      const entries = { "ui.theme": "dark", [privateKey]: "personal" };
+      const reader = ensureProfileForEmail("preferences-reader@example.test");
       expect(await rpcReq(socket, "users.prefs.set", { entries })).toMatchObject({ ok: true });
       expect(await rpcReq(socket, "users.prefs.get", {})).toMatchObject({
         ok: true,
         payload: { status: "ok", entries },
       });
-      for (const [key, value] of Object.entries(entries)) {
-        expect.soft(await rpcReq(socket, "users.prefs.get", { keys: [key] })).toMatchObject({
-          ok: true,
-          payload: { status: "ok", entries: { [key]: value } },
-        });
-      }
-      const ownKey = "agent:research:own";
-      await upsertSessionEntryCore(
-        { agentId: "research", sessionKey: ownKey },
-        {
-          sessionId: "own-session",
-          updatedAt: 1,
-          createdActor: { type: "human", source: "profile", id: reader.id },
-        },
-      );
-      expect(await rpcReq(socket, "sessions.preview", { keys: [ownKey] })).toMatchObject({
+      expect.soft(await rpcReq(socket, "users.prefs.get", { keys: [privateKey] })).toMatchObject({
         ok: true,
+        payload: { status: "ok", entries: { [privateKey]: "personal" } },
       });
-      const other = ensureProfileForEmail("foreign-owner@example.test");
-      const key = "agent:research:foreign";
-      await upsertSessionEntryCore(
-        { agentId: "research", sessionKey: key },
-        {
-          sessionId: "foreign-session",
-          updatedAt: 1,
-          createdActor: { type: "human", source: "profile", id: other.id },
-        },
-      );
-      expect(await rpcReq(socket, "sessions.preview", { keys: [key] })).toMatchObject({
-        ok: false,
-        error: { code: "INVALID_REQUEST" },
-      });
+      const foreign = ensureProfileForEmail("foreign-owner@example.test");
+      const denied = { ok: false, error: { code: "INVALID_REQUEST" } };
+      for (const [name, owner, expected] of [
+        ["own", reader, { ok: true }],
+        ["foreign", foreign, denied],
+      ] as const) {
+        const key = `agent:research:${name}`;
+        await upsertSessionEntryCore(
+          { agentId: "research", sessionKey: key },
+          {
+            sessionId: `${name}-session`,
+            updatedAt: 1,
+            createdActor: { type: "human", source: "profile", id: owner.id },
+          },
+        );
+        expect(await rpcReq(socket, "sessions.preview", { keys: [key] })).toMatchObject(expected);
+      }
     } finally {
       socket.close();
     }

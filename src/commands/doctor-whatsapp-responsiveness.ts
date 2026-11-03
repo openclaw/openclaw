@@ -1,15 +1,11 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
-import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import type { StatusSummary } from "../status/summary.js";
 
-type LocalTuiProcess = {
-  pid: number;
-  command: string;
-};
+type LocalTuiProcess = NonNullable<ReturnType<typeof parsePsPidLine>>;
 
 const LOCAL_TUI_SUBCOMMANDS = new Set(["chat", "terminal", "tui"]);
 const WHATSAPP_RESPONSIVENESS_CHECK_ID = "core/doctor/whatsapp-responsiveness";
@@ -24,7 +20,7 @@ function isLocalTuiCommand(command: string): boolean {
   return executable === "openclaw" && LOCAL_TUI_SUBCOMMANDS.has(argv[1] ?? "");
 }
 
-function parsePsPidLine(line: string): LocalTuiProcess | null {
+function parsePsPidLine(line: string) {
   const match = line.match(/^\s*(\d+)\s+(.+)$/);
   if (!match) {
     return null;
@@ -53,17 +49,14 @@ function listLocalTuiProcesses(): LocalTuiProcess[] {
   if (ps.error || ps.status !== 0 || typeof ps.stdout !== "string") {
     return [];
   }
-  const seen = new Set<number>();
-  const processes: LocalTuiProcess[] = [];
+  const processes = new Map<number, LocalTuiProcess>();
   for (const line of ps.stdout.split(/\r?\n/)) {
     const proc = parsePsPidLine(line);
-    if (!proc || seen.has(proc.pid)) {
-      continue;
+    if (proc && !processes.has(proc.pid)) {
+      processes.set(proc.pid, proc);
     }
-    seen.add(proc.pid);
-    processes.push(proc);
   }
-  return processes;
+  return [...processes.values()];
 }
 
 function hasWhatsappEnabled(cfg: OpenClawConfig): boolean {
@@ -71,11 +64,8 @@ function hasWhatsappEnabled(cfg: OpenClawConfig): boolean {
   if (!whatsapp || whatsapp.enabled === false) {
     return false;
   }
-  const accounts = whatsapp.accounts;
-  if (accounts && Object.keys(accounts).length > 0) {
-    return Object.values(accounts).some((account) => account?.enabled !== false);
-  }
-  return true;
+  const accounts = Object.values(whatsapp.accounts ?? {});
+  return accounts.length === 0 || accounts.some((account) => account?.enabled !== false);
 }
 
 /** Collects read-only structured findings for WhatsApp responsiveness pressure. */
@@ -84,12 +74,7 @@ export function collectWhatsappResponsivenessHealthFindings(params: {
   status?: Pick<StatusSummary, "eventLoop"> | null;
   listLocalTuiProcesses?: () => LocalTuiProcess[];
 }): readonly HealthFinding[] {
-  if (!hasWhatsappEnabled(params.cfg)) {
-    return [];
-  }
-
-  const eventLoop = params.status?.eventLoop;
-  if (eventLoop?.degraded !== true) {
+  if (!hasWhatsappEnabled(params.cfg) || params.status?.eventLoop?.degraded !== true) {
     return [];
   }
 
@@ -102,6 +87,8 @@ export function collectWhatsappResponsivenessHealthFindings(params: {
     {
       checkId: WHATSAPP_RESPONSIVENESS_CHECK_ID,
       severity: "warning",
+      category: "recommended",
+      docsUrl: "https://docs.openclaw.ai/gateway/diagnostics",
       message:
         "Gateway reports pressure, and local TUI clients were detected. This snapshot does not identify the source of the pressure.",
       path: "channels.whatsapp",
@@ -112,21 +99,4 @@ export function collectWhatsappResponsivenessHealthFindings(params: {
       )} before deciding whether to close clients.`,
     },
   ];
-}
-
-/** Renders the same advisory observations as the opt-in health check. */
-export function noteWhatsappResponsivenessHealth(
-  params: Parameters<typeof collectWhatsappResponsivenessHealthFindings>[0],
-): void {
-  const findings = collectWhatsappResponsivenessHealthFindings(params);
-  if (findings.length > 0) {
-    note(
-      findings
-        .map((finding) =>
-          [finding.message, `Local TUI pids: ${finding.target}`, finding.fixHint].join("\n"),
-        )
-        .join("\n\n"),
-      "WhatsApp responsiveness",
-    );
-  }
 }

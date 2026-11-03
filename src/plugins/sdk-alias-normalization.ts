@@ -5,6 +5,11 @@ const JITI_NORMALIZED_ALIAS_SYMBOL = Symbol.for("pathe:normalizedAlias");
 const JITI_ALIAS_ROOT_SENTINELS = new Set<string | undefined>(["/", "\\", undefined]);
 const JITI_CONCRETE_ALIAS_TARGET_PATTERN = /^(?:[A-Za-z]:[/\\]|[/\\])/;
 
+export function sanitizeJitiCachePathSegment(value: string): string {
+  const normalized = value.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
+  return normalized.length > 0 ? normalized : "unknown";
+}
+
 export function createJitiAliasContentCacheKey(aliasMap: Record<string, string>) {
   return Object.entries(aliasMap)
     .toSorted(([left], [right]) => left.localeCompare(right))
@@ -71,9 +76,8 @@ export function normalizePluginLoaderAliasMapForJiti(
   }
   const normalizedAliasMap = Object.fromEntries(
     Object.entries(aliasMap)
-      .map((entry) => ({ entry, depth: entry[0].split("/").length }))
-      .toSorted((left, right) => right.depth - left.depth)
-      .map(({ entry }) => entry),
+      .map(([key, target]) => [key.replaceAll("\\", "/"), target] as const)
+      .toSorted(([left], [right]) => right.split("/").length - left.split("/").length),
   );
   const aliasKeys = Object.keys(normalizedAliasMap);
   for (const aliasKey of aliasKeys) {

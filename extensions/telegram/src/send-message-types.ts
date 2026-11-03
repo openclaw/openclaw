@@ -26,6 +26,8 @@ export type TelegramSendOpts = {
   api?: TelegramApiOverride;
   retry?: RetryConfig;
   textMode?: "markdown" | "html";
+  /** Per-message link-preview override for literal copied content. */
+  linkPreview?: boolean;
   tableMode?: MarkdownTableMode;
   textLimit?: number;
   chunkMode?: ChunkMode;
@@ -72,7 +74,7 @@ export type TelegramApiCallOpts = Pick<
 >;
 
 export type TelegramThreadedSendOpts = TelegramApiCallOpts &
-  Pick<TelegramSendOpts, "replyToMessageId" | "messageThreadId">;
+  Pick<TelegramSendOpts, "replyToMessageId" | "messageThreadId" | "assertPlatformSendAuthorized">;
 
 export type TelegramMessageActionOpts = TelegramApiCallOpts &
   Pick<TelegramSendOpts, "signal" | "assertPlatformSendAuthorized"> & { notify?: boolean };

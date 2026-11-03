@@ -33,7 +33,7 @@ read_when:
 - Harness: `pnpm test:live:media image`
 - Scope:
   - Enumerates every registered image-generation provider plugin
-  - Uses already-exported provider env vars before probing
+  - Uses already-exported provider env vars before checking
   - Uses live/env API keys ahead of stored auth profiles by default, so stale test keys in SQLite auth stores do not mask real shell credentials
   - Skips providers with no usable auth/profile/model
   - Runs each configured provider through the shared image-generation runtime:
@@ -81,7 +81,7 @@ request. Plugin dependencies are expected to be present before runtime load.
 - Scope:
   - Exercises the shared bundled music-generation provider path
   - Currently covers `fal`, `google`, `minimax`, and `openrouter`
-  - Uses already-exported provider env vars before probing
+  - Uses already-exported provider env vars before checking
   - Uses live/env API keys ahead of stored auth profiles by default, so stale test keys in SQLite auth stores do not mask real shell credentials
   - Skips providers with no usable auth/profile/model
   - Runs both declared runtime modes when available:
@@ -103,7 +103,7 @@ request. Plugin dependencies are expected to be present before runtime load.
   - Exercises the shared bundled video-generation provider path across `alibaba`, `byteplus`, `deepinfra`, `fal`, `google`, `minimax`, `openrouter`, `pixverse`, `qwen`, `runway`, `together`, `vydra`, `xai`
   - Defaults to the release-safe smoke path: one text-to-video request per provider, one-second lobster prompt, and a per-provider operation cap from `OPENCLAW_LIVE_VIDEO_GENERATION_TIMEOUT_MS` (`180000` by default)
   - Skips FAL by default because provider-side queue latency can dominate release time; pass `OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS="fal"` (or clear the skip list) to run it explicitly
-  - Uses already-exported provider env vars before probing
+  - Uses already-exported provider env vars before checking
   - Uses live/env API keys ahead of stored auth profiles by default, so stale test keys in SQLite auth stores do not mask real shell credentials
   - Skips providers with no usable auth/profile/model
   - Runs only `generate` by default

@@ -49,12 +49,6 @@ export async function settleFailedRequesterRun(
   } catch {
     return error;
   }
-  if (
-    params.abortSignal?.aborted ||
-    getActiveAgentRunDelegatedAuthority(instance)?.operationalRunInstance !== instance
-  ) {
-    return error;
-  }
   try {
     await settleRequesterRun(params, { meta: { durationMs: 0 } }, () => {
       assertCurrent?.();
@@ -112,14 +106,7 @@ export async function settleRequesterRun(
       }
     },
   };
-  assertCurrent();
-  params.abortSignal?.throwIfAborted();
-  if (
-    instance &&
-    getActiveAgentRunDelegatedAuthority(instance)?.operationalRunInstance !== instance
-  ) {
-    throw createSessionPlacementSettlementClosedAbortError();
-  }
+  requester.assertCurrent();
   try {
     if (result.meta.continuationPending) {
       // The outbox transfers this batch only after its waiting status is delivered.

@@ -62,7 +62,6 @@ internal class SafeWebFetcher(
       var currentUrl =
         originalUrl
           .toHttpUrlOrNull()
-          ?.takeIf(::isSafeWebUrl)
           ?.takeIf(hostPolicy)
           ?: return@withContext null
       val deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis)
@@ -79,7 +78,7 @@ internal class SafeWebFetcher(
         val call = client.newCall(request)
         call.timeout().timeout(remainingNanos, TimeUnit.NANOSECONDS)
 
-        val response = call.executeCancellable() ?: return@withContext null
+        val response = call.readCancellable(onCancelledResult = Response::close) { call.execute() } ?: return@withContext null
         response.use {
           if (it.isRedirect) {
             if (redirects >= SAFE_WEB_MAX_REDIRECTS) return@withContext null
@@ -91,7 +90,7 @@ internal class SafeWebFetcher(
           val contentTypeName = "${contentType.type}/${contentType.subtype}".lowercase(Locale.US)
           if (contentTypeName !in allowedContentTypes) return@withContext null
 
-          val bytes = call.awaitBodyRead { readBody(it.body, maxBytes, rejectOversizedBody) } ?: return@withContext null
+          val bytes = call.readCancellable { readBody(it.body, maxBytes, rejectOversizedBody) } ?: return@withContext null
           return@withContext SafeWebBody(
             url = currentUrl,
             bytes = bytes,
@@ -158,12 +157,7 @@ internal class SafeRemoteImageStore(
         }
     }
 
-  suspend fun get(url: String): RemoteImageResult {
-    cache.get(url)?.let { return it }
-    val result = fetcher(url)
-    cache.put(url, result)
-    return result
-  }
+  suspend fun get(url: String): RemoteImageResult = cache.get(url) ?: fetcher(url).also { cache.put(url, it) }
 }
 
 internal fun decodeRemoteImageBitmap(
@@ -184,7 +178,7 @@ internal fun decodeRemoteImageBitmap(
       0,
       bytes.size,
       BitmapFactory.Options().apply {
-        inSampleSize = remoteImageSampleSize(bounds.outWidth, bounds.outHeight, maxDimension)
+        inSampleSize = imageSampleSize(bounds.outWidth, bounds.outHeight, maxDimension, maxSample = 1 shl 30)
         inPreferredConfig = Bitmap.Config.ARGB_8888
       },
     )
@@ -204,15 +198,15 @@ private fun remoteImageContentType(bytes: ByteArray): String? =
     else -> null
   }
 
-private fun remoteImageSampleSize(
+internal fun imageSampleSize(
   width: Int,
   height: Int,
   maxDimension: Int,
+  maxSample: Int,
 ): Int {
+  if (width <= 0 || height <= 0 || maxDimension <= 0) return 1
   var sample = 1
-  while (max(width / sample, height / sample) > maxDimension && sample <= Int.MAX_VALUE / 2) {
-    sample *= 2
-  }
+  while (max(width / sample, height / sample) > maxDimension && sample < maxSample) sample *= 2
   return sample
 }
 
@@ -223,9 +217,7 @@ internal fun resolveRedirect(
 ): HttpUrl? =
   location
     ?.let(baseUrl::resolve)
-    ?.takeIf { isSafeWebUrl(it) && hostPolicy(it) }
-
-private fun isSafeWebUrl(url: HttpUrl): Boolean = url.scheme == "http" || url.scheme == "https"
+    ?.takeIf(hostPolicy)
 
 internal fun isPubliclyRoutableHost(url: HttpUrl): Boolean {
   val host = url.host.trimEnd('.').lowercase(Locale.US)
@@ -344,36 +336,24 @@ internal val safePublicHttpClient: OkHttpClient =
 private val safeRemoteImageFetcher = SafeRemoteImageFetcher()
 internal val safeRemoteImageStore = SafeRemoteImageStore(fetcher = safeRemoteImageFetcher::fetch)
 
-private suspend fun Call.executeCancellable(): Response? =
+private suspend fun <T> Call.readCancellable(
+  onCancelledResult: ((T) -> Unit)? = null,
+  block: () -> T?,
+): T? =
   suspendCancellableCoroutine { continuation ->
     continuation.invokeOnCancellation { cancel() }
-    val response =
+    val result =
       try {
-        execute()
+        block()
       } catch (_: IOException) {
         null
       }
-    if (response != null) {
-      continuation.resume(response) { _, cancelledResponse, _ ->
-        cancelledResponse.close()
+    if (result != null && onCancelledResult != null) {
+      continuation.resume(result) { _, cancelledResult, _ ->
+        onCancelledResult(cancelledResult)
       }
     } else if (continuation.isActive) {
-      continuation.resume(null)
-    }
-  }
-
-private suspend fun <T> Call.awaitBodyRead(block: () -> T?): T? =
-  suspendCancellableCoroutine { continuation ->
-    continuation.invokeOnCancellation { cancel() }
-    try {
-      val result = block()
-      if (continuation.isActive) {
-        continuation.resume(result)
-      }
-    } catch (_: IOException) {
-      if (continuation.isActive) {
-        continuation.resume(null)
-      }
+      continuation.resume(result)
     }
   }
 

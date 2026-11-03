@@ -1,4 +1,3 @@
-// Parses gateway process command lines for process discovery.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -13,7 +12,7 @@ import {
 } from "../daemon/runtime-binary.js";
 import { isLegacyPluginSourceCaptureName } from "../plugins/plugin-source-capture-path.js";
 import { getRootOptionAwareCommandPath } from "./cli-root-options.js";
-import type { GatewayOwnerLeaseIdentity } from "./gateway-owner-lease.js";
+import type { GatewayOwnerLeaseIdentity } from "./gateway-owner-lease.types.js";
 import { resolveDiagnosticProcessEnv } from "./process-env.js";
 
 function normalizeProcArg(arg: string): string {
@@ -44,6 +43,7 @@ export type OpenClawArgvClassification =
       kind: "openclaw";
       entryIndex?: number;
       packageIdentity?: { root: string; entrypoint: string };
+      artifactPath?: string;
     }
   | { kind: "other" }
   | {
@@ -52,24 +52,33 @@ export type OpenClawArgvClassification =
       reason: string;
     };
 
-/** Only absent nested manifests permit ancestor lookup; unreadable identities stay unresolved. */
-export function readProcessPackageIdentity(directory: string, searchParents = false) {
+type ProcessPackageIdentity =
+  | { kind: "package"; name: string; scripts: Record<string, unknown> }
+  | { kind: "absent" }
+  | { kind: "unknown"; reason: string };
+
+/** Exhausted lookup proves absence; unreadable identities stay unresolved. */
+export function readProcessPackageIdentity(
+  directory: string,
+  searchParents = false,
+): ProcessPackageIdentity {
   for (let current = directory; ;) {
     let manifest: unknown;
     try {
       manifest = JSON.parse(fs.readFileSync(path.join(current, "package.json"), "utf8"));
     } catch (error) {
       const parent = path.dirname(current);
-      if (
-        searchParents &&
-        extractErrorCode(error) === "ENOENT" &&
-        parent !== current &&
-        path.basename(current) !== "node_modules"
-      ) {
+      if (searchParents && extractErrorCode(error) === "ENOENT") {
+        if (parent === current) {
+          return { kind: "absent" };
+        }
+        if (path.basename(current) === "node_modules") {
+          return { kind: "unknown", reason: "could not read package identity" };
+        }
         current = parent;
         continue;
       }
-      throw new Error("could not read package identity", { cause: error });
+      return { kind: "unknown", reason: "could not read package identity" };
     }
     if (
       !isRecord(manifest) ||
@@ -77,9 +86,13 @@ export function readProcessPackageIdentity(directory: string, searchParents = fa
       !manifest.name.trim() ||
       manifest.name !== manifest.name.trim()
     ) {
-      throw new Error("package identity has no valid name");
+      return { kind: "unknown", reason: "package identity has no valid name" };
     }
-    return { name: manifest.name, scripts: isRecord(manifest.scripts) ? manifest.scripts : {} };
+    return {
+      kind: "package",
+      name: manifest.name,
+      scripts: isRecord(manifest.scripts) ? manifest.scripts : {},
+    };
   }
 }
 
@@ -139,8 +152,7 @@ export function readProcessWorkingDirectories(pids: readonly number[]): Map<numb
           const candidate = /^p(\d+)$/.exec(field);
           pid = candidate && requested.has(Number(candidate[1])) ? Number(candidate[1]) : undefined;
         } else if (pid !== undefined && field.startsWith("n") && path.isAbsolute(field.slice(1))) {
-          if (directories.has(pid)) {
-            directories.delete(pid);
+          if (directories.delete(pid)) {
             ambiguous.add(pid);
           } else if (!ambiguous.has(pid)) {
             directories.set(pid, field.slice(1));
@@ -186,9 +198,14 @@ function classifyEntrypoint(
     !path.extname(script)
   ) {
     const pkg = readProcessPackageIdentity(opts.cwd, true);
-    const task = pkg.scripts[script];
+    if (pkg.kind === "unknown") {
+      return { kind: "unclassified", cause: "package-identity", reason: pkg.reason };
+    }
+    const task = pkg.kind === "package" ? pkg.scripts[script] : undefined;
     if (typeof task === "string" && task.trim()) {
-      return pkg.name === "openclaw" ? { kind: "openclaw" } : { kind: "other" };
+      return pkg.kind === "package" && pkg.name === "openclaw"
+        ? { kind: "openclaw" }
+        : { kind: "other" };
     }
   }
   const identity = classifyOpenClawEntrypointPath(script, opts);
@@ -204,7 +221,11 @@ export function classifyOpenClawEntrypointPath(
   > = {},
 ): OpenClawArgvClassification {
   const normalized = normalizeProcArg(script);
-  if (!opts.requirePackageIdentity && /(?:^|\/)openclaw\.mjs$/.test(normalized)) {
+  if (
+    !opts.requirePackageIdentity &&
+    !opts.inspectPackage &&
+    /(?:^|\/)openclaw\.mjs$/.test(normalized)
+  ) {
     return { kind: "openclaw" };
   }
   const entrypoints = [...ENTRY_CANDIDATES, ...(opts.additionalEntrypoints ?? [])];
@@ -229,7 +250,7 @@ export function classifyOpenClawEntrypointPath(
       !opts.requirePackageIdentity &&
       referencesRetainedArtifact(resolved)
     ) {
-      return { kind: "openclaw" };
+      return { kind: "openclaw", artifactPath: resolved };
     }
     const stat =
       opts.requirePackageIdentity || opts.inspectPackage ? fs.statSync(resolved) : undefined;
@@ -245,6 +266,9 @@ export function classifyOpenClawEntrypointPath(
     return { kind: "unclassified", cause: "script", reason: "could not resolve script" };
   }
   const resolvedNormalized = normalizeProcArg(resolved);
+  if (!opts.requirePackageIdentity && /(?:^|\/)openclaw\.mjs$/.test(normalized)) {
+    return { kind: "openclaw" };
+  }
   const entry = directory
     ? undefined
     : entrypoints.find((candidate) => resolvedNormalized.endsWith(`/${candidate}`));
@@ -256,23 +280,21 @@ export function classifyOpenClawEntrypointPath(
     : directory
       ? resolved
       : path.dirname(resolved);
-  try {
-    const identity = readProcessPackageIdentity(root, !entry && !directory);
-    return identity.name === "openclaw"
-      ? {
-          kind: "openclaw",
-          ...(opts.requirePackageIdentity
-            ? { packageIdentity: { root: path.resolve(root), entrypoint: resolved } }
-            : {}),
-        }
-      : { kind: "other" };
-  } catch (error) {
-    return {
-      kind: "unclassified",
-      cause: "package-identity",
-      reason: error instanceof Error ? error.message : String(error),
-    };
+  const identity = readProcessPackageIdentity(
+    root,
+    (opts.inspectPackage && !opts.requirePackageIdentity) || (!entry && !directory),
+  );
+  if (identity.kind === "unknown") {
+    return { kind: "unclassified", cause: "package-identity", reason: identity.reason };
   }
+  return identity.kind === "package" && identity.name === "openclaw"
+    ? {
+        kind: "openclaw",
+        ...(opts.requirePackageIdentity
+          ? { packageIdentity: { root: path.resolve(root), entrypoint: resolved } }
+          : {}),
+      }
+    : { kind: "other" };
 }
 
 export function parseProcCmdline(raw: string): string[] {
